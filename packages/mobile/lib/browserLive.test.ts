@@ -1,5 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { BrowserLiveClient } from "./browserLive";
 import { browserJPEGDataURI, browserLiveURL, containBrowserFrame, decodeBrowserFrame } from "./browserLiveProtocol";
+
+vi.mock("./config", () => ({
+	authHeaders: (config: { password: string }) => ({ Authorization: `Bearer ${config.password}` }),
+}));
+
+afterEach(() => vi.unstubAllGlobals());
+
+function encodedFrame(): ArrayBuffer {
+	const bytes = new Uint8Array(25);
+	const view = new DataView(bytes.buffer);
+	bytes[0] = 1;
+	bytes[1] = 1;
+	view.setBigUint64(2, 7n);
+	view.setBigUint64(10, 123n);
+	view.setUint16(18, 640);
+	view.setUint16(20, 360);
+	bytes.set([0xff, 0xd8, 0xff], 22);
+	return bytes.buffer;
+}
 
 describe("browser live transport", () => {
 	it("builds the authenticated listener URL without putting the password in it", () => {
@@ -10,18 +30,52 @@ describe("browser live transport", () => {
 	});
 
 	it("decodes the versioned binary JPEG envelope", () => {
-		const bytes = new Uint8Array(25);
-		const view = new DataView(bytes.buffer);
-		bytes[0] = 1;
-		bytes[1] = 1;
-		view.setBigUint64(2, 7n);
-		view.setBigUint64(10, 123n);
-		view.setUint16(18, 640);
-		view.setUint16(20, 360);
-		bytes.set([0xff, 0xd8, 0xff], 22);
-		const frame = decodeBrowserFrame(bytes.buffer);
+		const frame = decodeBrowserFrame(encodedFrame());
 		expect(frame).toMatchObject({ sequence: 7n, capturedAtMs: 123n, width: 640, height: 360 });
 		expect([...new Uint8Array(frame.jpeg)]).toEqual([0xff, 0xd8, 0xff]);
+	});
+
+	it("restores an open stream when a valid frame follows a recoverable host error", async () => {
+		class FakeWebSocket {
+			static readonly OPEN = 1;
+			static instance: FakeWebSocket;
+			readonly readyState = FakeWebSocket.OPEN;
+			binaryType = "";
+			onopen: (() => void) | null = null;
+			onerror: (() => void) | null = null;
+			onclose: (() => void) | null = null;
+			onmessage: ((event: { data: unknown }) => void) | null = null;
+
+			constructor() {
+				FakeWebSocket.instance = this;
+			}
+
+			send() {}
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		const statuses: Array<{ status: string; message?: string }> = [];
+		const frames: bigint[] = [];
+		const client = new BrowserLiveClient(
+			{ host: "192.168.1.5", httpPort: "3011", muxPort: "3012", password: "secret" },
+			"worker/a",
+			{
+				onStatus: (status, message) => statuses.push({ status, message }),
+				onState: () => {},
+				onFrame: (frame) => frames.push(frame.sequence),
+			},
+		);
+
+		client.connect();
+		FakeWebSocket.instance.onopen?.();
+		FakeWebSocket.instance.onmessage?.({ data: JSON.stringify({ type: "error", message: "Desktop input is busy" }) });
+		await Promise.resolve();
+		expect(statuses.at(-1)).toEqual({ status: "error", message: "Desktop input is busy" });
+
+		FakeWebSocket.instance.onmessage?.({ data: encodedFrame() });
+		await Promise.resolve();
+		expect(statuses.at(-1)).toEqual({ status: "open", message: undefined });
+		expect(frames).toEqual([7n]);
 	});
 
 	it("fits the desktop frame without stretching it", () => {

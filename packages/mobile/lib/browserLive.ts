@@ -77,7 +77,6 @@ export class BrowserLiveClient {
 			const message = JSON.parse(data) as { type?: string; payload?: BrowserLiveState; code?: string; message?: string };
 			if (message.type === "state" && message.payload) this.handlers.onState(message.payload);
 			if (message.type === "error") {
-				this.reportedError = true;
 				this.handlers.onStatus("error", message.message ?? message.code ?? "Browser host error");
 			}
 			return;
@@ -87,6 +86,14 @@ export class BrowserLiveClient {
 			: typeof Blob !== "undefined" && data instanceof Blob
 				? await data.arrayBuffer()
 				: null;
-		if (buffer) this.handlers.onFrame(decodeBrowserFrame(buffer));
+		if (buffer) {
+			const frame = decodeBrowserFrame(buffer);
+			// Host errors can be recoverable while the WebSocket remains connected.
+			// A later valid frame proves the stream is healthy again, so remove the
+			// blocking error state without forcing the user to reconnect.
+			this.reportedError = false;
+			this.handlers.onStatus("open");
+			this.handlers.onFrame(frame);
+		}
 	}
 }
