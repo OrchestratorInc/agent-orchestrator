@@ -320,6 +320,18 @@ func TestBuildInteractiveRestoresClaudeConversationFromDurableConfig(t *testing.
 	}
 }
 
+func TestBuildInteractiveClaudeDefaultEffortUsesProviderDefault(t *testing.T) {
+	command, err := (HarnessBuilder{DataDir: t.TempDir()}).BuildInteractive(worker.LaunchContext{
+		SessionID: "session-1", Harness: "claude-code", Mode: "standard", Model: "claude-sonnet", ReasoningEffort: "default",
+	}, worker.CredentialResponse{Provider: "claude-code", CredentialType: "api_key", Secret: "secret"}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(command.Args, "--effort") {
+		t.Fatalf("default is not a native effort: %#v", command.Args)
+	}
+}
+
 func TestBuildInteractiveUsesConfiguredDurableCodexHomeOnRestore(t *testing.T) {
 	codexHome := filepath.Join(t.TempDir(), "codex")
 	t.Setenv("CODEX_HOME", codexHome)

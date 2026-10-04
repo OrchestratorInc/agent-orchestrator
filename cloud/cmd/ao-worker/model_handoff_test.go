@@ -61,3 +61,18 @@ func TestInteractiveLaunchSettingsAppliesClaudeChatSelection(t *testing.T) {
 		t.Fatalf("Claude handoff launch = %+v, %v", launch, err)
 	}
 }
+
+func TestInteractiveLaunchSettingsRestoresClaudeNativeSelection(t *testing.T) {
+	dataDir := t.TempDir()
+	project := filepath.Join(dataDir, "claude", "projects", "test-project")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "native-claude.jsonl"), []byte(`{"type":"assistant","timestamp":"2026-10-04T01:00:00Z","message":{"model":"claude-native","effort":"high"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	launch, err := interactiveLaunchSettings(worker.LaunchContext{Harness: "claude-code", Model: "original-model"}, dataDir, "native-claude", "", "")
+	if err != nil || launch.Model != "claude-native" || launch.ReasoningEffort != "high" {
+		t.Fatalf("launch = %+v, %v", launch, err)
+	}
+}

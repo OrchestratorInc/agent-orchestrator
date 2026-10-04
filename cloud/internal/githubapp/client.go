@@ -980,15 +980,34 @@ func (c *Client) statusReadToken(
 	if installationID <= 0 || repositoryID <= 0 {
 		return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
 	}
-	response, err := c.createInstallationToken(ctx, installationID, map[string]any{
+	permissions := map[string]string{
+		"contents": "read", "pull_requests": "read", "checks": "read", "statuses": "read",
+	}
+	request := map[string]any{
 		"repository_ids": []int64{repositoryID},
-		"permissions": map[string]string{
-			"contents":      "read",
-			"pull_requests": "read",
-			"checks":        "read",
-			"statuses":      "read",
-		},
-	})
+		"permissions":    permissions,
+	}
+	response, err := c.createInstallationToken(ctx, installationID, request)
+	var permissionErr *HTTPError
+	if errors.As(err, &permissionErr) && permissionErr.StatusCode == http.StatusUnprocessableEntity &&
+		strings.Contains(permissionErr.Message, "The permissions requested are not granted to this installation") {
+		// Installations may not have approved newer optional check permissions.
+		// Keep the same repository scope and never request write access or an
+		// unrestricted token when retrying with their actual grants.
+		installation, lookupErr := c.GetInstallation(ctx, installationID)
+		if lookupErr != nil {
+			return installationAccessToken{}, lookupErr
+		}
+		for name := range permissions {
+			if granted := installation.Permissions[name]; granted != "read" && granted != "write" {
+				delete(permissions, name)
+			}
+		}
+		if permissions["contents"] == "" || permissions["pull_requests"] == "" {
+			return installationAccessToken{}, errors.New("GitHub installation requires Contents and Pull requests read access to refresh PR status")
+		}
+		response, err = c.createInstallationToken(ctx, installationID, request)
+	}
 	if err != nil {
 		return installationAccessToken{}, err
 	}

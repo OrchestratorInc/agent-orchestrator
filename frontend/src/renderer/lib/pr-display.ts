@@ -222,11 +222,20 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 			statusRows.push(cardStatus("ci", "pr.card.checksPassing", "success", undefined, [], prChecksUrl(pr)));
 		} else if (pr.ci.state === "failing") {
 			statusRows.push(cardStatus("ci", "pr.card.checksFailing", "error", undefined, [], prChecksUrl(pr)));
+		} else if (pr.mergeability.reasons.includes("github_checks_unavailable")) {
+			statusRows.push(cardStatus("ci", "pr.card.checksUnavailable", "warning", undefined, [], prChecksUrl(pr)));
 		} else if (pr.ci.state === "pending" || pr.ci.state === "unknown") {
 			statusRows.push(cardStatus("ci", pr.ci.state === "pending" ? "pr.card.checksPending" : "pr.card.checksLoading", "neutral", undefined, [], prChecksUrl(pr), true));
 		}
 		statusRows.push(cardStatus("review", "pr.card.reviewStatus", reviewTone(pr.review.decision, pr.review.hasUnresolvedHumanComments), reviewStatusDetail(pr)));
 		const mergeable = prCanMerge(pr);
+		if (pr.mergeability.reasons.includes("github_checks_unavailable")) {
+			return { primary, supporting, statusRows, readiness: {
+				label: appI18n.t("pr.merge.accessLost"),
+				detail: appI18n.t("pr.merge.checksUnavailableDetail"),
+				tone: "warning",
+			} };
+		}
 		if (hasLostGitHubAccess(pr)) {
 			return { primary, supporting, statusRows, readiness: {
 				label: appI18n.t("pr.merge.accessLost"),
@@ -257,6 +266,7 @@ function cardStatus(
 		| "pr.card.mergeUnavailable"
 		| "pr.card.checksPending"
 		| "pr.card.checksLoading"
+		| "pr.card.checksUnavailable"
 		| "pr.card.draft"
 		| "pr.card.readyToMerge"
 		| "pr.card.reviewApproved"
@@ -313,8 +323,8 @@ export function prSummaryParts(pr: SessionPRSummary): PRSummaryPart[] {
 		{
 			key: "ci",
 			label: appI18n.t("pr.section.ci"),
-			status: ciLabel(pr.ci.state),
-			summary: ciSummary(pr),
+			status: pr.mergeability.reasons.includes("github_checks_unavailable") ? appI18n.t("pr.card.checksUnavailable") : ciLabel(pr.ci.state),
+			summary: pr.mergeability.reasons.includes("github_checks_unavailable") ? appI18n.t("pr.merge.checksUnavailableDetail") : ciSummary(pr),
 			links: ciLinks(pr),
 			linkTotal: pr.ci.state === "failing" ? pr.ci.failingChecks.length : 0,
 			overflowLabel: pr.ci.state === "failing" ? overflowLabel(pr.ci.failingChecks.length, 3, "check") : undefined,

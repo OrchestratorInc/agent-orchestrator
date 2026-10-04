@@ -802,6 +802,8 @@
 	"pr.merge.checking": "Checking",
 	"pr.merge.checkingDetail": "Waiting for the latest checks and review state.",
 	"pr.merge.checkingReadiness": "Checking merge readiness",
+	"pr.card.checksUnavailable": "Checks unavailable",
+	"pr.merge.checksUnavailableDetail": "GitHub did not return complete CI status. Verify the GitHub App has Checks and Commit statuses read access.",
 	"pr.merge.accessLost": "Status unavailable",
 	"pr.merge.accessLostDetail": "GitHub access to this repository is unavailable, so merge readiness cannot be checked.",
 	"pr.merge.conflict": "Conflict",

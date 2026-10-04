@@ -135,8 +135,12 @@ func (s *Server) startSessionInterfaceTransition(w http.ResponseWriter, r *http.
 		return
 	}
 	if (input.Model != "" || input.ReasoningEffort != "") &&
-		(target != domain.SessionInterfaceTUI || session.Harness != "codex" || len(input.Model) > 128 || len(input.ReasoningEffort) > 32) {
-		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "model and reasoningEffort are supported for Codex Chat to terminal handoff only.")
+		target != domain.SessionInterfaceTUI {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "model and reasoningEffort are supported for Chat to terminal handoff only.")
+		return
+	}
+	if err := validateChatTurnSettings(input.Model, input.ReasoningEffort, "", ""); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
 	transition, err := s.store.StartSessionInterfaceTransition(

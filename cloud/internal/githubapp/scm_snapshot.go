@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -174,11 +176,31 @@ func (c *Client) FetchPullRequestSnapshotWithToken(ctx context.Context, token, o
 					Conclusion: strings.ToLower(run.Conclusion), URL: run.HTMLURL,
 				})
 			}
-			if len(snapshot.Checks) > 0 {
+			// Check runs alone are not the complete CI result: integrations such
+			// as CodeRabbit can publish only commit statuses. Never report passing
+			// unless both sources were readable.
+			var statuses struct {
+				State      string `json:"state"`
+				TotalCount int    `json:"total_count"`
+			}
+			statusErr := c.userJSON(ctx, token, http.MethodGet,
+				"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/commits/"+url.PathEscape(snapshot.Observation.HeadSHA)+"/status", nil, &statuses)
+			if statusErr == nil {
 				rollup := "SUCCESS"
+				if statuses.TotalCount > 0 {
+					switch strings.ToLower(statuses.State) {
+					case "success":
+					case "failure", "error":
+						rollup = "FAILURE"
+					default:
+						rollup = "PENDING"
+					}
+				}
 				for _, check := range snapshot.Checks {
 					if check.Status != "completed" || check.Conclusion == "" {
-						rollup = "PENDING"
+						if rollup != "FAILURE" {
+							rollup = "PENDING"
+						}
 						break
 					}
 				}

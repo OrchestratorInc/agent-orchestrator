@@ -74,7 +74,7 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		mocks.status = { supported: true, targetMode: "chat" };
 	});
 
-	it.each(["codex", "claude-code"] as const)("preserves %s model and effort when leaving Cloud Chat", async (provider) => {
+	it.each(["codex", "claude-code", "cursor"] as const)("preserves %s model and effort when leaving Cloud Chat", async (provider) => {
 		mocks.status = { supported: true, targetMode: "tui" };
 		localStorage.setItem(`cloud-chat-settings:org-1:session-1:${provider}`, JSON.stringify({
 			model: "selected-model", reasoningEffort: "high",

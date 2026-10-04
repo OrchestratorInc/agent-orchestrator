@@ -398,15 +398,21 @@ func interactiveLaunchSettings(launch worker.LaunchContext, dataDir, nativeConve
 		launch.ReasoningEffort = selectedEffort
 		return launch, nil
 	}
-	if launch.Harness != "codex" {
-		return launch, nil
-	}
 	if launch.AgentSessionID == "" {
 		return launch, nil
 	}
-	model, effort, err := workerexec.CodexConversationSettingsAfter(dataDir, launch.AgentSessionID, launch.SelectionAt)
+	var model, effort string
+	var err error
+	switch launch.Harness {
+	case "codex":
+		model, effort, err = workerexec.CodexConversationSettingsAfter(dataDir, launch.AgentSessionID, launch.SelectionAt)
+	case "claude-code":
+		model, effort, err = workerexec.ClaudeConversationSettingsAfter(dataDir, launch.AgentSessionID, launch.SelectionAt)
+	default:
+		return launch, nil
+	}
 	if err != nil {
-		return launch, fmt.Errorf("read Codex conversation settings: %w", err)
+		return launch, fmt.Errorf("read %s conversation settings: %w", launch.Harness, err)
 	}
 	if model != "" {
 		launch.Model = model

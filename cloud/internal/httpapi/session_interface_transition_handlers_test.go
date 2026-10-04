@@ -49,13 +49,17 @@ func (f *interfaceTransitionHTTPStore) StartSessionInterfaceTransition(
 	return f.transition, f.startErr
 }
 
-func TestStartSessionInterfaceTransitionPreservesPendingCodexSelection(t *testing.T) {
-	store := &interfaceTransitionHTTPStore{session: domain.Session{Harness: "codex", Interface: domain.SessionInterfaceChat}}
-	server := &Server{store: store}
-	recorder := httptest.NewRecorder()
-	server.startSessionInterfaceTransition(recorder, transitionRequest(http.MethodPost, "/", `{"targetMode":"tui","policy":"drain","model":"gpt-selected","reasoningEffort":"high"}`))
-	if recorder.Code != http.StatusAccepted || store.startSettings.Model != "gpt-selected" || store.startSettings.ReasoningEffort != "high" {
-		t.Fatalf("pending Chat selection lost: code=%d settings=%+v", recorder.Code, store.startSettings)
+func TestStartSessionInterfaceTransitionPreservesPendingSelection(t *testing.T) {
+	for _, harness := range []string{"codex", "claude-code", "cursor"} {
+		t.Run(harness, func(t *testing.T) {
+			store := &interfaceTransitionHTTPStore{session: domain.Session{Harness: harness, Interface: domain.SessionInterfaceChat}}
+			server := &Server{store: store}
+			recorder := httptest.NewRecorder()
+			server.startSessionInterfaceTransition(recorder, transitionRequest(http.MethodPost, "/", `{"targetMode":"tui","policy":"drain","model":"gpt-selected","reasoningEffort":"high"}`))
+			if recorder.Code != http.StatusAccepted || store.startSettings.Model != "gpt-selected" || store.startSettings.ReasoningEffort != "high" {
+				t.Fatalf("pending Chat selection lost: code=%d settings=%+v", recorder.Code, store.startSettings)
+			}
+		})
 	}
 }
 

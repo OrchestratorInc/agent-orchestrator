@@ -82,6 +82,11 @@ func (b HarnessBuilder) BuildInteractive(
 	credential worker.CredentialResponse,
 	workspace string,
 ) (Command, error) {
+	// Chat uses "default" to reset an explicit selection. Native commands
+	// express the provider default by omitting the effort argument.
+	if launch.ReasoningEffort == "default" {
+		launch.ReasoningEffort = ""
+	}
 	if credential.Provider != launch.Harness ||
 		strings.TrimSpace(credential.Secret) == "" {
 		return Command{}, errors.New("credential does not match the selected harness")

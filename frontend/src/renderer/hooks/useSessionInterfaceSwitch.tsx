@@ -300,7 +300,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 			pendingAttachments: decision.kind === "confirmed" ? decision.pendingAttachments : undefined,
 		});
 		try {
-			const selected = chatToTerminal && session?.cloud && (session.provider === "codex" || session.provider === "claude-code")
+			const selected = chatToTerminal && session?.cloud
 				? readCloudTurnSettings(`cloud-chat-settings:${session.cloud.orgId}:${session.id}:${session.provider}`)
 				: undefined;
 			const response = await interfaceSwitch.start({

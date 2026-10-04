@@ -242,6 +242,9 @@ func toPullRequestSummaryResponse(pr domain.PullRequest, snapshot domain.PullReq
 	createdAt := pr.CreatedAt
 	review := pullRequestReviewResponse(pr, snapshot)
 	reasons := []string{}
+	if pr.CIState == contract.CIUnknown && !pr.ObservedAt.IsZero() {
+		reasons = append(reasons, "github_checks_unavailable")
+	}
 	if review.HasUnresolvedHumanComments {
 		reasons = append(reasons, "unresolved_comments")
 	}
