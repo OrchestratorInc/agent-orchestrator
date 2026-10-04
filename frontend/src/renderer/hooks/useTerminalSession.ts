@@ -33,6 +33,13 @@ export type AttachableTerminal = {
 	cols: number;
 	rows: number;
 	/**
+	 * False until cols/rows come from measuring the terminal's laid-out slot.
+	 * Before that they are xterm's constructor default, which must never be
+	 * claimed as the PTY's size: a shell started at it lays out its first prompt
+	 * for the wrong width.
+	 */
+	hasMeasuredGrid: boolean;
+	/**
 	 * `done` fires once this exact chunk has been parsed into the buffer (xterm's
 	 * own write callback). The attachment uses it to reveal the pane at the
 	 * replay's final scroll position instead of guessing with a timer.
@@ -802,10 +809,12 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		// stream, but its stale off-screen grid must not resize the shared PTY.
 		// Zero dimensions mean "attach without claiming a size"; the first
 		// visible fit emits the authoritative grid after activation.
-		const visible = optionsRef.current.isVisible !== false;
-		r.needsVisibleSizeSync = !visible;
-		const openCols = visible ? terminal.cols : 0;
-		const openRows = visible ? terminal.rows : 0;
+		// The same applies before the terminal has measured its slot: the first
+		// measurement publishes the grid instead (see onVisibleSize).
+		const claimsSize = optionsRef.current.isVisible !== false && terminal.hasMeasuredGrid;
+		r.needsVisibleSizeSync = !claimsSize;
+		const openCols = claimsSize ? terminal.cols : 0;
+		const openRows = claimsSize ? terminal.rows : 0;
 		mux.open(handle, openCols, openRows);
 		r.lastPublishedGrid =
 			openCols > 0 && openRows > 0 ? { cols: openCols, rows: openRows } : null;

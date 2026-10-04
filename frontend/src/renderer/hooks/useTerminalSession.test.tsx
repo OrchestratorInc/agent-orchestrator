@@ -125,6 +125,7 @@ function createFakeTerminal(): FakeTerminal {
 		showLatestOutput: () => {
 			terminal.latestOutputRequests += 1;
 		},
+		hasMeasuredGrid: true,
 		prepareForActivation: async () => undefined,
 		requestActivationFocus: () => undefined,
 		notifyCursorColorScheme: () => undefined,
@@ -164,6 +165,7 @@ function setup({
 	attachedSession = session as WorkspaceSession | undefined,
 	isVisible = true,
 	inputDisabled = false,
+	hasMeasuredGrid = true,
 } = {}) {
 	const muxes: FakeMux[] = [];
 	const createMux = () => {
@@ -194,6 +196,7 @@ function setup({
 		{ initialProps, wrapper },
 	);
 	const terminal = createFakeTerminal();
+	terminal.hasMeasuredGrid = hasMeasuredGrid;
 	let detach: () => void = () => undefined;
 	act(() => {
 		detach = view.result.current.attach(terminal);
@@ -344,6 +347,18 @@ describe("useTerminalSession", () => {
 		act(() => view.result.current.syncVisibleSize(terminal.cols, terminal.rows));
 
 		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 132, 47]]);
+	});
+
+	// A tab opened and immediately covered by the next one attaches before it
+	// has measured its slot. Claiming xterm's default grid would start the shell
+	// at the wrong width; its first measurement sizes it instead.
+	it("claims no size until the terminal has measured its slot", () => {
+		const { view, muxes } = setup({ hasMeasuredGrid: false });
+		expect(muxes[0].opens).toEqual([["handle-1", 0, 0]]);
+		act(() => muxes[0].emitOpened("handle-1"));
+
+		act(() => view.result.current.syncVisibleSize(80, 24));
+		expect(muxes[0].resizes).toEqual([["handle-1", 80, 24]]);
 	});
 
 	it("publishes each grid in a drag as it happens and does not re-send the settled grid", () => {
