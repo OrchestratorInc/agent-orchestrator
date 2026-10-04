@@ -2034,6 +2034,14 @@ textarea,
 	filter: drop-shadow(0 7px 20px rgb(0 0 0 / 0.28));
 }
 
+.ao-startup-eyes {
+	fill: transparent;
+}
+
+:root[data-theme="light"] .ao-startup-eyes {
+	fill: #000;
+}
+
 .ao-startup-status {
 	display: inline-block;
 	animation: ao-startup-status-in 240ms ease-out;
