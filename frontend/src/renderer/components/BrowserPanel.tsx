@@ -474,6 +474,8 @@ export function BrowserPanelView({
 	const findStateRef = useRef(findState);
 	findStateRef.current = findState;
 	const [findOpen, setFindOpen] = useState(false);
+	const findOpenRef = useRef(findOpen);
+	findOpenRef.current = findOpen;
 	const [findQuery, setFindQuery] = useState("");
 	const historyMenuRef = useRef<HTMLDivElement>(null);
 	const historyRequestGenerationRef = useRef(0);
@@ -594,13 +596,19 @@ export function BrowserPanelView({
 	);
 	useEffect(() => {
 		if (findOpenRequest <= 0) return;
+		if (findOpenRef.current) {
+			setFindOpen(false);
+			setFindQuery("");
+			void stopFindInPage(true);
+			return;
+		}
 		setFindOpen(true);
 		setFindQuery(findStateRef.current.query);
 		requestAnimationFrame(() => {
 			findInputRef.current?.focus();
 			findInputRef.current?.select();
 		});
-	}, [findOpenRequest]);
+	}, [findOpenRequest, stopFindInPage]);
 	useEffect(() => {
 		if (!findOpen || findState.tabId !== activeTabId) return;
 		setFindQuery(findState.query);

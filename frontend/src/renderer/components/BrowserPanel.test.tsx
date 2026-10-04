@@ -349,7 +349,7 @@ describe("BrowserPanel", () => {
 		expect(input).not.toHaveFocus();
 	});
 
-	it("opens find-in-page, searches as text changes, and supports keyboard navigation", async () => {
+	it("toggles find-in-page, searches as text changes, and supports keyboard navigation", async () => {
 		let focusFrame: FrameRequestCallback | undefined;
 		vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
 			focusFrame = callback;
@@ -376,9 +376,26 @@ describe("BrowserPanel", () => {
 		await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
 		expect(hookState.findInPage).toHaveBeenLastCalledWith("alpha", false, false);
 
-		await userEvent.keyboard("{Escape}");
+		hookState.findOpenRequest = 2;
+		view.rerender(
+			<TooltipProvider>
+				<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />
+			</TooltipProvider>,
+		);
 		expect(screen.queryByRole("search")).not.toBeInTheDocument();
 		expect(hookState.stopFindInPage).toHaveBeenCalledWith(true);
+
+		hookState.findOpenRequest = 3;
+		view.rerender(
+			<TooltipProvider>
+				<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />
+			</TooltipProvider>,
+		);
+		expect(await screen.findByRole("textbox", { name: "Find in page" })).toBeInTheDocument();
+		act(() => focusFrame?.(0));
+		await userEvent.keyboard("{Escape}");
+		expect(screen.queryByRole("search")).not.toBeInTheDocument();
+		expect(hookState.stopFindInPage).toHaveBeenCalledTimes(2);
 	});
 
 	it("supports consecutive address-bar navigations after refocusing", async () => {
