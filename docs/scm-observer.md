@@ -76,24 +76,53 @@ identity resolution and alias collapse:
    persists a baseline row before the first detail fetch.
 2. **Observer refresh** (the rest of `Poll`): batch GraphQL detail fetches,
    review-thread refreshes, and terminal reconciliation update existing rows.
-3. **Explicit claim** (`ao session claim-pr`, `spawn --claim-pr`, Claude Code
-   creation hooks): resolves a PR ref against the project origin and claims the
+3. **Explicit claim** (`ao session claim-pr`, `spawn --claim-pr`, shared `gh`
+   wrapper): resolves a PR ref against the project origin and claims the
    row for a session, including takeover rules for terminated owners.
 
-Claude Code's `PostToolUse` hook provides a best-effort registration fast path
-for successful Bash `gh pr create` calls. It accepts a standalone command or
-`cd <literal-path> && gh pr create ...`, with one GitHub PR URL as the complete
-stdout result. Failed/interrupted/background calls, scripts, pipelines, and
-output that only mentions a URL are not registration evidence. The CLI parses
-the shell command without executing it and sends the ref to the existing daemon
-claim endpoint with takeover disabled and a five-second deadline. Provider and
-repository validation stay in the daemon. Review-session hooks never claim PRs.
-Failures go to stderr and `$AO_DATA_DIR/hooks.log`, without failing the hook.
+AO's common launch setup puts an AO-owned `gh` executable alias on every
+harness's PATH (Chat and terminal sessions, including Windows). It forwards
+arguments, stdin, stdout, stderr, and the real command's exit code. Successful
+`gh pr create` with exactly one github.com PR URL on stdout triggers the existing
+daemon claim endpoint, with takeover disabled and a five-second deadline.
+Shell pipelines, redirects, and scripts work because interception happens at the
+executable boundary; no harness-specific shell parser is involved. The daemon
+still verifies provider facts, repository membership, and session ownership.
 
-This fast path currently covers Claude Code and github.com only. Polling remains
-unchanged for every harness and is still needed for unsupported command forms,
-API/MCP/browser creation, and missed hooks. This does not relax workspace claim
-validation or allow claiming an already merged/closed PR.
+Registration is attempted **once**. There is no retry queue and no automatic
+retry, including on HTTP 5xx or connection failure. A registration failure keeps
+`gh`'s successful exit status, but prints a warning with the API code/request ID
+and a manual `ao session claim-pr` command, and appends it to
+`$AO_DATA_DIR/hooks.log`. Server faults follow the daemon's existing Sentry policy
+(telemetry enabled; 503 excluded); expected rejections and daemon-unavailable
+errors remain visible in stderr/local logs. No new telemetry transport is added.
+
+Review sessions do not auto-claim. Interactive terminal stdout is passed through
+without capture to preserve gh's prompts/TTY behavior. This fast path covers
+new or restarted sessions using bare `gh` on PATH and github.com only. Absolute
+paths to the real gh, replaced PATHs, aliases that bypass gh, API/MCP/browser PR
+creation, and already-running sessions remain dependent on polling or explicit
+claiming. Draft PRs can be attached; normal derived status rules still apply.
+Already merged/closed PRs are rejected by the existing claim service. Workspace
+child-repository and foreign-repository rules remain those of explicit claims.
+
+### End-to-end validation
+
+`go test -tags e2e ./internal/cli/...` runs the native executable alias through
+common PATH installation with a fake gh and a loopback server, verifying stream
+and exit preservation, a renamed PR branch, one claim, and visible 502 failure.
+The claim contract test also runs proxy registration through real HTTP
+controllers, the claim service, and SQLite, and verifies that it does not change
+the workspace branch or HEAD. CI runs native CLI tests on Linux/macOS/Windows.
+
+For a live smoke check, start a new worker with this build, use its shell tool to
+run `gh pr create --repo <registered-repo> --head <unrelated-branch> --base <base>
+--title <title> --body <body>` with captured stdout, and confirm the returned PR
+appears on that session. Repeat with another harness and a workspace child
+repository. A non-draft PR should leave Building according to normal derived
+status rules. Test a failed create and `gh pr view` to confirm neither attaches
+anything. A stopped daemon should produce a warning/local log and preserve exit
+0 after successful creation; restart it and use the printed claim command.
 
 The **read model** (`ListPRSummaries`) groups rows through `pr_url_alias` so a
 PR observed under multiple URLs renders as one card, then derives the summary
