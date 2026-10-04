@@ -81,14 +81,13 @@ func newCueTestServer(t *testing.T, svc controllers.CueService) *httptest.Server
 
 func sampleCue() domain.Cue {
 	return domain.Cue{
-		ID:          "cue-def456",
-		ProjectID:   "portfolio",
-		Name:        "Run Tests",
-		Description: "Run the test suite",
-		Type:        domain.CueTypeCommand,
-		Command:     "pnpm test",
-		CreatedAt:   time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC),
-		UpdatedAt:   time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC),
+		ID:        "cue-def456",
+		ProjectID: "portfolio",
+		Name:      "Run Tests",
+		Type:      domain.CueTypeCommand,
+		Command:   "pnpm test",
+		CreatedAt: time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -125,6 +124,9 @@ func TestCuesAPI_GetReturnsCue(t *testing.T) {
 	if status != http.StatusOK || svc.gotCueID != "cue-def456" || !strings.Contains(string(body), `"id":"cue-def456"`) {
 		t.Fatalf("status=%d cueID=%q body=%s", status, svc.gotCueID, body)
 	}
+	if strings.Contains(string(body), `"description"`) {
+		t.Fatalf("cue still exposes description: %s", body)
+	}
 }
 
 func TestCuesAPI_CreatePersistsDefinition(t *testing.T) {
@@ -132,7 +134,7 @@ func TestCuesAPI_CreatePersistsDefinition(t *testing.T) {
 	srv := newCueTestServer(t, svc)
 
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/projects/portfolio/cues",
-		`{"name":"Run Tests","description":"Run the test suite","type":"command","command":"pnpm test"}`)
+		`{"name":"Run Tests","type":"command","command":"pnpm test"}`)
 	if status != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", status, body)
 	}
@@ -140,7 +142,7 @@ func TestCuesAPI_CreatePersistsDefinition(t *testing.T) {
 		t.Errorf("project = %q, want portfolio", svc.gotProject)
 	}
 	if svc.gotCreateIn.Name != "Run Tests" || svc.gotCreateIn.Type != domain.CueTypeCommand ||
-		svc.gotCreateIn.Command != "pnpm test" || svc.gotCreateIn.Description != "Run the test suite" {
+		svc.gotCreateIn.Command != "pnpm test" {
 		t.Errorf("create input = %+v", svc.gotCreateIn)
 	}
 	var resp struct {
@@ -193,7 +195,7 @@ func TestCuesAPI_UpdateReplacesDefinition(t *testing.T) {
 	srv := newCueTestServer(t, svc)
 
 	body, status, _ := doRequest(t, srv, "PATCH", "/api/v1/cues/cue-def456",
-		`{"name":"Run Tests","description":"d","type":"agent","prompt":"Run the test suite and fix failures."}`)
+		`{"name":"Run Tests","type":"agent","prompt":"Run the test suite and fix failures."}`)
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", status, body)
 	}

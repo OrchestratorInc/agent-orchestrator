@@ -222,11 +222,10 @@ func projectCueID(r *http.Request) domain.ProjectID {
 
 func cueInput(req CueDefinitionRequest) cuesvc.Input {
 	return cuesvc.Input{
-		Name:        req.Name,
-		Description: req.Description,
-		Type:        domain.CueType(req.Type),
-		Command:     req.Command,
-		Prompt:      req.Prompt,
+		Name:    req.Name,
+		Type:    domain.CueType(req.Type),
+		Command: req.Command,
+		Prompt:  req.Prompt,
 	}
 }
 
@@ -240,14 +239,13 @@ func cueResponses(in []domain.Cue) []CueResponse {
 
 func cueResponse(cue domain.Cue) CueResponse {
 	return CueResponse{
-		ID:          string(cue.ID),
-		ProjectID:   string(cue.ProjectID),
-		Name:        cue.Name,
-		Description: cue.Description,
-		Type:        string(cue.Type),
-		Command:     cue.Command,
-		Prompt:      cue.Prompt,
-		CreatedAt:   cue.CreatedAt,
-		UpdatedAt:   cue.UpdatedAt,
+		ID:        string(cue.ID),
+		ProjectID: string(cue.ProjectID),
+		Name:      cue.Name,
+		Type:      string(cue.Type),
+		Command:   cue.Command,
+		Prompt:    cue.Prompt,
+		CreatedAt: cue.CreatedAt,
+		UpdatedAt: cue.UpdatedAt,
 	}
 }

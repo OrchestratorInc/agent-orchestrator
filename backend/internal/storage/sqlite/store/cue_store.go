@@ -19,15 +19,14 @@ func (s *Store) InsertCue(ctx context.Context, cue domain.Cue) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	err := s.qw.InsertCue(ctx, gen.InsertCueParams{
-		ID:          cue.ID,
-		ProjectID:   cue.ProjectID,
-		Name:        cue.Name,
-		Description: cue.Description,
-		Type:        cue.Type,
-		Command:     cue.Command,
-		Prompt:      cue.Prompt,
-		CreatedAt:   cue.CreatedAt,
-		UpdatedAt:   cue.UpdatedAt,
+		ID:        cue.ID,
+		ProjectID: cue.ProjectID,
+		Name:      cue.Name,
+		Type:      cue.Type,
+		Command:   cue.Command,
+		Prompt:    cue.Prompt,
+		CreatedAt: cue.CreatedAt,
+		UpdatedAt: cue.UpdatedAt,
 	})
 	if err != nil {
 		if isSQLiteUnique(err) {
@@ -74,13 +73,12 @@ func (s *Store) UpdateCue(ctx context.Context, cue domain.Cue) (domain.Cue, bool
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	row, err := s.qw.UpdateCue(ctx, gen.UpdateCueParams{
-		Name:        cue.Name,
-		Description: cue.Description,
-		Type:        cue.Type,
-		Command:     cue.Command,
-		Prompt:      cue.Prompt,
-		UpdatedAt:   cue.UpdatedAt,
-		ID:          cue.ID,
+		Name:      cue.Name,
+		Type:      cue.Type,
+		Command:   cue.Command,
+		Prompt:    cue.Prompt,
+		UpdatedAt: cue.UpdatedAt,
+		ID:        cue.ID,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Cue{}, false, nil
@@ -113,14 +111,13 @@ func isSQLiteForeignKey(err error) bool {
 
 func cueFromGen(row gen.Cue) domain.Cue {
 	return domain.Cue{
-		ID:          row.ID,
-		ProjectID:   row.ProjectID,
-		Name:        row.Name,
-		Description: row.Description,
-		Type:        row.Type,
-		Command:     row.Command,
-		Prompt:      row.Prompt,
-		CreatedAt:   row.CreatedAt,
-		UpdatedAt:   row.UpdatedAt,
+		ID:        row.ID,
+		ProjectID: row.ProjectID,
+		Name:      row.Name,
+		Type:      row.Type,
+		Command:   row.Command,
+		Prompt:    row.Prompt,
+		CreatedAt: row.CreatedAt,
+		UpdatedAt: row.UpdatedAt,
 	}
 }
