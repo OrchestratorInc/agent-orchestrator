@@ -12,7 +12,8 @@
  */
 
 import { memo, useEffect, useRef, useState } from "react";
-import { KeyRound, Plug, TriangleAlert } from "lucide-react";
+import { Button } from "../ui/button";
+import { KeyRound, Plug, TriangleAlert, X } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import type { ConversationAccount, ConversationThreadState, McpServer } from "../../types/conversation";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
