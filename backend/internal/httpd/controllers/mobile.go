@@ -441,7 +441,20 @@ func (b *BridgeService) securePairingStatus(on, bridgeUp bool) SecurePairingStat
 		}
 		return sp
 	}
+	// The phone gives endpoint refresh five seconds. Both Tailscale reads have
+	// their own three-second limit, so doing them in sequence can time out the
+	// phone even when both succeed. They only read local Tailscale state and do
+	// not depend on each other.
+	var targetC chan int
+	if bridgeUp && serveErr == nil {
+		targetC = make(chan int, 1)
+		go func() { targetC <- b.serveTarget() }()
+	}
 	info := b.queryTS()
+	target := 0
+	if targetC != nil {
+		target = <-targetC
+	}
 	switch {
 	case info.Name == "":
 		sp.Reason = "no_cli"
@@ -459,7 +472,7 @@ func (b *BridgeService) securePairingStatus(on, bridgeUp bool) SecurePairingStat
 		sp.Reason = "serve_failed"
 		return sp
 	}
-	if b.serveTarget() != b.LAN.BoundPort() {
+	if target != b.LAN.BoundPort() {
 		sp.Reason = "port_mismatch"
 		return sp
 	}

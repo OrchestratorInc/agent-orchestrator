@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
@@ -800,6 +801,49 @@ func TestMobileAdvertisesTheSecurePairingProxy(t *testing.T) {
 	// The legacy singular field keeps naming the address, not the proxy.
 	if got := b.Status().TailscaleHost; got != "100.72.46.7" {
 		t.Errorf("TailscaleHost = %q, want the tailnet address", got)
+	}
+}
+
+func TestMobileEndpointRefreshChecksTailscaleConcurrently(t *testing.T) {
+	b := newSecureBridge(t, tsUp, func() int { return 3011 })
+	if _, err := b.SetSecurePairing(true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	b.PickLANHosts = func() []string { return nil }
+	b.PickTailscaleHosts = func() []string { return nil }
+
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	b.QueryTS = func() mobilebridge.TailscaleInfo {
+		started <- "status"
+		<-release
+		return tsUp
+	}
+	b.ServeTarget = func() int {
+		started <- "serve"
+		<-release
+		return 3011
+	}
+	result := make(chan []mobilebridge.Endpoint, 1)
+	go func() { result <- b.AdvertisedEndpoints() }()
+
+	// Each CLI call can take three seconds, but the phone abandons refresh
+	// after five. Both calls must be in flight together for the result to fit.
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			close(release)
+			t.Fatal("endpoint refresh waited for one Tailscale check before starting the other")
+		}
+	}
+	close(release)
+	got := <-result
+	if len(got) != 1 || got[0] != (mobilebridge.Endpoint{Kind: mobilebridge.KindTailscale, Host: tsUp.Name, Port: 443, Secure: true}) {
+		t.Fatalf("endpoints = %+v, want the verified TLS proxy", got)
 	}
 }
 
