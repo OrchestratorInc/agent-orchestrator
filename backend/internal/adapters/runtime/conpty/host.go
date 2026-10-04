@@ -10,8 +10,10 @@ package conpty
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -387,7 +389,9 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 	switch msgType {
 	case MsgTerminalInput:
 		if _, alive := h.cfg.PTY.ExitCode(); !alive {
-			_, _ = h.cfg.PTY.Write(payload)
+			if n, err := h.cfg.PTY.Write(payload); err != nil {
+				fmt.Fprintf(os.Stderr, "pty-host [%s]: input: wrote %d of %d bytes: %v\n", h.cfg.SessionID, n, len(payload), err)
+			}
 		}
 
 	case MsgResize:

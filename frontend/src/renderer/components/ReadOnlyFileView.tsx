@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { type FileContents, type LineAnnotation } from "@pierre/diffs";
 import { File } from "@pierre/diffs/react";
 import { getApiBaseUrl } from "../lib/api-client";
+import { useHostConnection } from "../hooks/useHostConnection";
+import { sessionUiKey } from "../lib/hosts";
 import type { WorkspaceDiffScope, WorkspaceFileDetail } from "../hooks/useSessionWorkspaceFiles";
 import { useUiStore } from "../stores/ui-store";
 import { FileAnnotationComposer, LineFeedbackButtonControl, PanelMessage, type FileAnnotationModel } from "./WorkspaceDiffView";
@@ -15,9 +17,11 @@ function formatBytes(bytes: number): string {
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function workspaceRawImageUrl(sessionId: string, path: string, side: "before" | "after"): string {
+function workspaceRawImageUrl(sessionId: string, path: string, side: "before" | "after", hostId?: string, remoteBaseUrl?: string): string | undefined {
+	const base = hostId ? remoteBaseUrl : getApiBaseUrl();
+	if (base === undefined) return undefined;
 	const query = new URLSearchParams({ path, side });
-	return `${getApiBaseUrl()}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/file/blob?${query}`;
+	return `${base}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/file/blob?${query}`;
 }
 
 // Renders an untouched (unmodified) workspace file: an agent didn't write
@@ -27,42 +31,59 @@ export function ReadOnlyFileView({
 	annotation,
 	detail,
 	editing = false,
+	onContentReady,
 	onEditChange,
+	onRevealLineConsumed,
 	revealLine,
 	scope = "combined",
 	sessionId,
+	hostId,
 	side = "after",
 }: {
 	annotation: FileAnnotationModel;
 	detail: WorkspaceFileDetail;
 	editing?: boolean;
+	onContentReady?: () => void;
 	onEditChange?: (content: string) => void;
+	onRevealLineConsumed?: (requestKey: number) => void;
 	revealLine?: { line: number; requestKey: number };
 	scope?: WorkspaceDiffScope;
 	sessionId: string;
+	hostId?: string;
 	side?: "before" | "after";
 }) {
 	const { t } = useTranslation();
+	const { baseUrl: remoteBaseUrl } = useHostConnection(hostId);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const pendingRevealRef = useRef(revealLine);
+	const consumedRevealRequestKeysRef = useRef(new Set<number>());
 	const editorInstanceId = useId();
 	const gutterHover = usePersistentGutterUtility(containerRef);
 	const revealRequestedLine = useCallback(() => {
 		const target = pendingRevealRef.current;
 		if (!target) return;
+		if (consumedRevealRequestKeysRef.current.has(target.requestKey)) {
+			pendingRevealRef.current = undefined;
+			return;
+		}
 		const diffsContainer = containerRef.current?.querySelector("diffs-container");
 		const line = diffsContainer?.shadowRoot?.querySelector<HTMLElement>(`[data-line="${target.line}"]`);
 		if (!line) return;
 		line.scrollIntoView({ block: "center" });
+		consumedRevealRequestKeysRef.current.add(target.requestKey);
 		pendingRevealRef.current = undefined;
-	}, []);
+		onRevealLineConsumed?.(target.requestKey);
+	}, [onRevealLineConsumed]);
 	useEffect(() => {
+		if (!revealLine || consumedRevealRequestKeysRef.current.has(revealLine.requestKey)) {
+			pendingRevealRef.current = undefined;
+			return;
+		}
 		pendingRevealRef.current = revealLine;
-		if (!revealLine) return;
 		const frame = requestAnimationFrame(revealRequestedLine);
 		return () => cancelAnimationFrame(frame);
-	}, [revealLine, revealRequestedLine]);
+	}, [revealLine?.line, revealLine?.requestKey, revealRequestedLine]);
 	if (detail.binary) {
 		if (detail.imageMediaType) {
 			return (
@@ -70,7 +91,7 @@ export function ReadOnlyFileView({
 					<img
 						alt={detail.path}
 						className="max-h-[70vh] max-w-full object-contain"
-						src={workspaceRawImageUrl(sessionId, detail.path, side)}
+						src={workspaceRawImageUrl(sessionId, detail.path, side, hostId, remoteBaseUrl)}
 					/>
 				</div>
 			);
@@ -118,7 +139,7 @@ export function ReadOnlyFileView({
 			<File<"feedback">
 				disableWorkerPool={typeof Worker === "undefined"}
 				edit={editing}
-				editStateKey={`${sessionId}:${detail.path}:file:${editorInstanceId}`}
+				editStateKey={`${sessionUiKey(sessionId, hostId)}:${detail.path}:file:${editorInstanceId}`}
 				editorOptions={{
 					onAttach: (editor) => requestAnimationFrame(() => editor.focus({ lineNumber: "first-visible" })),
 					ownsVerticalViewport: true,
@@ -131,6 +152,7 @@ export function ReadOnlyFileView({
 					lineHoverHighlight: "line",
 					onPostRender: () => {
 						gutterHover.restoreAfterRender();
+						onContentReady?.();
 						revealRequestedLine();
 					},
 					overflow: "wrap",

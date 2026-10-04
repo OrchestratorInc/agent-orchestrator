@@ -395,19 +395,22 @@ type ConversationModelReroute struct {
 }
 
 // ConversationAccount is the provider account a conversation runs under.
-//
-// ReauthRequiredAt is the load-bearing field. A long-lived chat session outlives
-// its credentials, and a provider that cannot refresh them stops answering for a
-// reason that has nothing to do with the request. Recording the moment the
-// provider asked for fresh credentials is what lets a client say "sign in again"
-// instead of showing an unexplained failed turn.
 type ConversationAccount struct {
+	// AuthenticationState is unknown until the provider supplies failure or success evidence.
+	AuthenticationState string     `json:"authenticationState,omitempty"`
+	AuthVerifiedAt      *time.Time `json:"authVerifiedAt,omitempty"`
+	// Failure evidence survives recovery; current credential demand is separate below.
+	LastAuthFailureAt     *time.Time `json:"lastAuthFailureAt,omitempty"`
+	LastAuthFailureReason string     `json:"lastAuthFailureReason,omitempty"`
+	AuthFailureID         string     `json:"authFailureId,omitempty"`
+	// AuthChangedAt fences success from a turn started before an account/auth-mode change.
+	AuthChangedAt *time.Time `json:"authChangedAt,omitempty"`
 	// AuthMode is the provider's name for how it authenticates (chatgpt, apikey...).
 	AuthMode string `json:"authMode,omitempty"`
 	// PlanLabel is the account tier the provider reports.
 	PlanLabel string `json:"planLabel,omitempty"`
 	// ReauthRequiredAt is when the provider last asked for credentials AO does not
-	// hold. Nil means it never has.
+	// hold. Nil means there is no current demand.
 	ReauthRequiredAt *time.Time `json:"reauthRequiredAt,omitempty"`
 	// ReauthReason is the provider's stated reason, e.g. "unauthorized".
 	ReauthReason string `json:"reauthReason,omitempty"`
@@ -642,6 +645,7 @@ type ConversationMessage struct {
 	// ClientMessageID is the caller-supplied idempotency key for user messages.
 	// A retry carrying the same key must not create a second provider turn.
 	ClientMessageID     string    `json:"clientMessageId,omitempty"`
+	ClientPayloadHash   string    `json:"-"`
 	DeliveryContentJSON string    `json:"-"`
 	CreatedAt           time.Time `json:"createdAt"`
 	UpdatedAt           time.Time `json:"updatedAt"`
@@ -713,6 +717,9 @@ var ErrSessionNotProvisioning = errors.New("session is not provisioning")
 // named against. It lives here rather than in the storage layer so a controller and
 // an HTTP handler can both recognize it without importing SQLite.
 var ErrNoConversationTurn = errors.New("conversation turn not found")
+
+// ErrClientMessageConflict refuses reuse of a delivery ID for different content.
+var ErrClientMessageConflict = errors.New("client message id belongs to a different message")
 
 // ErrNoConversationBranch reports a branch id outside the named conversation.
 var ErrNoConversationBranch = errors.New("conversation branch not found")
