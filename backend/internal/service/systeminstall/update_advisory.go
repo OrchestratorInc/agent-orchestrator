@@ -21,11 +21,15 @@ import (
 type UpdateStatus string
 
 const (
-	UpdateStatusUnknown      UpdateStatus = "unknown"
-	UpdateStatusCurrent      UpdateStatus = "current"
+	// UpdateStatusUnknown means AO could not establish update availability.
+	UpdateStatusUnknown UpdateStatus = "unknown"
+	// UpdateStatusCurrent means the installed release matches the package source.
+	UpdateStatusCurrent UpdateStatus = "current"
+	// UpdateStatusBehindLatest means a newer package release is available.
 	UpdateStatusBehindLatest UpdateStatus = "behind_latest"
 )
 
+// UpdateAdvisory is the daemon's non-mutating comparison for one harness.
 type UpdateAdvisory struct {
 	AgentID        string       `json:"agentId"`
 	Status         UpdateStatus `json:"status"`
@@ -113,7 +117,7 @@ func (s *Service) UpdateAdvisory(ctx context.Context, target Target) (UpdateAdvi
 		return advisory, nil
 	}
 	parsedLatest := versionPattern.FindStringSubmatch(latest)
-	if parsedLatest == nil || parsedLatest[0] != strings.TrimPrefix(latest, "v") && parsedLatest[0] != latest {
+	if parsedLatest == nil || parsedLatest[0] != latest {
 		return advisory, nil
 	}
 	advisory.LatestVersion = latest
@@ -212,7 +216,7 @@ func latestAvailableVersion(commands ports.CommandRunner) func(context.Context, 
 	return func(ctx context.Context, method, pkg string, cask bool) (string, error) {
 		switch method {
 		case "npm":
-			request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://registry.npmjs.org/"+url.PathEscape(pkg)+"/latest", nil)
+			request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://registry.npmjs.org/"+url.PathEscape(pkg)+"/latest", http.NoBody)
 			if err != nil {
 				return "", err
 			}
@@ -220,7 +224,7 @@ func latestAvailableVersion(commands ports.CommandRunner) func(context.Context, 
 			if err != nil {
 				return "", err
 			}
-			defer response.Body.Close()
+			defer func() { _ = response.Body.Close() }()
 			if response.StatusCode != http.StatusOK {
 				return "", fmt.Errorf("npm registry status %d", response.StatusCode)
 			}
