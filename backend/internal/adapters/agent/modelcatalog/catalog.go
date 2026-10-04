@@ -203,6 +203,7 @@ type Discoverer struct {
 	CodexModels       CodexModelListFunc
 	ACPOptions        map[string]ACPOptionListFunc
 	ClaudeModels      ClaudeModelListFunc
+	ClaudeCatalog     func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error)
 	ClaudeFingerprint ClaudeFingerprintFunc
 	ClaudeIdentity    func(context.Context, ports.AgentModelDiscoveryRequest) (string, bool)
 }
@@ -230,10 +231,17 @@ type ClaudeFingerprintFunc func(context.Context, ports.AgentModelDiscoveryReques
 // Discover uses the agent-owned model surface configured for this adapter.
 func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
 	if request.AgentID == "claude-code" {
-		catalog, err := discoverClaudeCatalog(ctx, request, d.ClaudeModels)
-		if identity, ok := d.CatalogIdentityFingerprint(ctx, request); ok {
-			catalog.InputFingerprint = identity
+		list := d.ClaudeModels
+		identity := ""
+		if d.ClaudeCatalog != nil {
+			list = func(ctx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+				reported, err := d.ClaudeCatalog(ctx, request)
+				identity = reported.InputFingerprint
+				return reported.Models, err
+			}
 		}
+		catalog, err := discoverClaudeCatalog(ctx, request, list)
+		catalog.InputFingerprint = identity
 		return catalog, err
 	}
 	if request.AgentID == "muse" {

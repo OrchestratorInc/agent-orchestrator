@@ -1004,3 +1004,33 @@ func TestProviderCatalogIdentityFingerprintDoesNotTreatUnknownAsChange(t *testin
 		})
 	}
 }
+
+func TestProviderCatalogKeepsDiscoveryCredentialWhenAccountChanges(t *testing.T) {
+	clearClaudeCredentialEnv(t)
+	InvalidateAuthCache()
+	t.Cleanup(InvalidateAuthCache)
+	env := map[string]string{"ANTHROPIC_API_KEY": "account-a"}
+	server := withStubValidator(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "account-a" {
+			t.Errorf("discovery used a different account")
+		}
+		env["ANTHROPIC_API_KEY"] = "account-b"
+		_, _ = w.Write([]byte(`{"data":[{"id":"account-a-model"}]}`))
+	})
+	env["ANTHROPIC_BASE_URL"] = server.URL
+	previous := claudeModelAuthReport
+	t.Cleanup(func() { claudeModelAuthReport = previous })
+	calls := 0
+	claudeModelAuthReport = func(context.Context, string, string, map[string]string) (claudeAuthReport, bool) {
+		calls++
+		return claudeAuthReport{APIProvider: "gateway"}, true
+	}
+	catalog, err := ProviderCatalog(context.Background(), "claude", "", env)
+	if err != nil || calls != 1 || len(catalog.Models) != 1 || catalog.Models[0].ID != "account-a-model" || catalog.InputFingerprint == "" {
+		t.Fatalf("catalog=%+v, error=%v, auth resolutions=%d", catalog, err, calls)
+	}
+	current, conclusive := ProviderCatalogIdentityFingerprint(context.Background(), "claude", "", env)
+	if !conclusive || current == catalog.InputFingerprint {
+		t.Fatal("catalog from account A was tagged with account B's identity")
+	}
+}

@@ -1068,13 +1068,6 @@ func TestCatalogFingerprintIgnoresUnrelatedProjectConfig(t *testing.T) {
 	}
 }
 
-// TestACPOnlyHarnessReportsDiscoveryFailure guards the difference between the
-// two ACP harnesses. Cline keeps configured provider selections, so an ACP
-// failure falls back to those. DeepSeek Harness has no second source, and the
-// generic path answers with an empty catalog and no error — which the caller
-// stores as a successful discovery, parking the picker until the next calendar
-// day and skipping the retry ladder. The error has to survive instead.
-
 func TestCodexCatalogFingerprintTracksCredentialAndConfigInputs(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
@@ -1157,18 +1150,17 @@ func TestClaudeNativeExtrasChangeCatalogFingerprint(t *testing.T) {
 	}
 }
 
-func TestClaudeColdDiscoveryCarriesConclusiveIdentity(t *testing.T) {
-	for _, conclusive := range []bool{false, true} {
-		d := Discoverer{ClaudeIdentity: func(context.Context, ports.AgentModelDiscoveryRequest) (string, bool) {
-			return "account-scope", conclusive
+func TestClaudeColdDiscoveryCarriesCapturedIdentity(t *testing.T) {
+	for _, discoveryErr := range []error{nil, errors.New("discovery failed")} {
+		d := Discoverer{ClaudeCatalog: func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
+			return ports.AgentModelCatalog{InputFingerprint: "account-scope", Models: []ports.AgentModelInfo{{ID: "captured-model"}}}, discoveryErr
+		}, ClaudeIdentity: func(context.Context, ports.AgentModelDiscoveryRequest) (string, bool) {
+			t.Fatal("cold discovery must not independently resolve another credential")
+			return "", false
 		}}
 		catalog, err := d.Discover(context.Background(), claudeRequest(t))
-		want := ""
-		if conclusive {
-			want = "account-scope"
-		}
-		if err != nil || catalog.InputFingerprint != want {
-			t.Fatalf("conclusive=%t, fingerprint=%q, error=%v", conclusive, catalog.InputFingerprint, err)
+		if !errors.Is(err, discoveryErr) || catalog.InputFingerprint != "account-scope" || len(catalog.Models) == 0 {
+			t.Fatalf("catalog=%+v, error=%v", catalog, err)
 		}
 	}
 }

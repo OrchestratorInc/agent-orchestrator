@@ -496,11 +496,19 @@ func providerCatalogIdentity(ctx context.Context, localFingerprint string, resol
 // An error means the provider could not be asked. Callers must fall back to
 // their static list rather than presenting an empty picker.
 func ProviderModels(ctx context.Context, binary, workingDir string, env map[string]string) ([]ports.AgentModelInfo, error) {
+	catalog, err := ProviderCatalog(ctx, binary, workingDir, env)
+	return catalog.Models, err
+}
+
+// ProviderCatalog binds models to the credential used to discover them.
+func ProviderCatalog(ctx context.Context, binary, workingDir string, env map[string]string) (ports.AgentModelCatalog, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, agentcreds.DefaultTimeout)
 	defer cancel()
 	resolved := (&Plugin{}).resolveProviderContext(probeCtx, binary, workingDir, env, claudeModelAuthReport)
+	catalog := ports.AgentModelCatalog{AgentID: "claude-code"}
+	catalog.InputFingerprint, _ = providerCatalogIdentity(probeCtx, ProviderCatalogFingerprint(ctx, binary, workingDir, env), resolved)
 	if !resolved.providerOK {
-		return nil, errors.New("claude-code: model discovery: configured provider is unsupported")
+		return catalog, errors.New("claude-code: model discovery: configured provider is unsupported")
 	}
 	result := agentcreds.Result{}
 	if resolved.found {
@@ -516,10 +524,10 @@ func ProviderModels(ctx context.Context, binary, workingDir string, env map[stri
 		claudeAuthCache.put(result)
 	}
 	if result.State != agentcreds.StateValid && len(result.Models) == 0 {
-		return nil, fmt.Errorf("claude-code: model discovery: %s", result.Detail)
+		return catalog, fmt.Errorf("claude-code: model discovery: %s", result.Detail)
 	}
 	if len(result.Models) == 0 {
-		return nil, errors.New("claude-code: provider reported no Claude models")
+		return catalog, errors.New("claude-code: provider reported no Claude models")
 	}
 
 	models := make([]ports.AgentModelInfo, 0, len(result.Models))
@@ -528,5 +536,6 @@ func ProviderModels(ctx context.Context, binary, workingDir string, env map[stri
 			ID: model.ID, Label: model.DisplayName, Efforts: model.Efforts,
 		})
 	}
-	return models, nil
+	catalog.Models = models
+	return catalog, nil
 }
