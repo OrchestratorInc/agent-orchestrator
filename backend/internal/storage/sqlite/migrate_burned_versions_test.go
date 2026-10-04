@@ -178,6 +178,7 @@ var shippedMigrations = map[int64]string{
 	172: "0172_client_task_requests.sql",
 	173: "0173_chat_client_payload_hash.sql",
 	174: "0174_remove_cue_description.sql",
+	175: "0175_worktree_startup_cues.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

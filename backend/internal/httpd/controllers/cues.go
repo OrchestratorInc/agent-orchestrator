@@ -100,6 +100,11 @@ func (c *CuesController) create(w http.ResponseWriter, r *http.Request) {
 	if !decodeCueBody(w, r, &req, 128<<10) {
 		return
 	}
+	if req.RunOnWorktreeCreation && requestscope.IsLAN(r.Context()) {
+		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "CUE_COMMAND_LOOPBACK_REQUIRED", "Startup command cues must be configured on the owning desktop", nil)
+		return
+	}
+
 	cue, err := c.Svc.Create(r.Context(), projectCueID(r), cueInput(req))
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -119,6 +124,11 @@ func (c *CuesController) update(w http.ResponseWriter, r *http.Request) {
 	if !decodeCueBody(w, r, &req, 128<<10) {
 		return
 	}
+	if req.RunOnWorktreeCreation && requestscope.IsLAN(r.Context()) {
+		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "CUE_COMMAND_LOOPBACK_REQUIRED", "Startup command cues must be configured on the owning desktop", nil)
+		return
+	}
+
 	cueID, err := url.PathUnescape(chi.URLParam(r, "cueId"))
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "CUE_ID_INVALID", "Invalid cue id", nil)
@@ -222,10 +232,13 @@ func projectCueID(r *http.Request) domain.ProjectID {
 
 func cueInput(req CueDefinitionRequest) cuesvc.Input {
 	return cuesvc.Input{
-		Name:    req.Name,
-		Type:    domain.CueType(req.Type),
-		Command: req.Command,
-		Prompt:  req.Prompt,
+		RunOnWorktreeCreation: req.RunOnWorktreeCreation,
+		StartupShell:          req.StartupShell,
+		StartupTimeoutSeconds: req.StartupTimeoutSeconds,
+		Name:                  req.Name,
+		Type:                  domain.CueType(req.Type),
+		Command:               req.Command,
+		Prompt:                req.Prompt,
 	}
 }
 
@@ -239,13 +252,16 @@ func cueResponses(in []domain.Cue) []CueResponse {
 
 func cueResponse(cue domain.Cue) CueResponse {
 	return CueResponse{
-		ID:        string(cue.ID),
-		ProjectID: string(cue.ProjectID),
-		Name:      cue.Name,
-		Type:      string(cue.Type),
-		Command:   cue.Command,
-		Prompt:    cue.Prompt,
-		CreatedAt: cue.CreatedAt,
-		UpdatedAt: cue.UpdatedAt,
+		ID:                    string(cue.ID),
+		ProjectID:             string(cue.ProjectID),
+		RunOnWorktreeCreation: cue.RunOnWorktreeCreation,
+		StartupShell:          cue.StartupShell,
+		StartupTimeoutSeconds: cue.StartupTimeoutSeconds,
+		Name:                  cue.Name,
+		Type:                  string(cue.Type),
+		Command:               cue.Command,
+		Prompt:                cue.Prompt,
+		CreatedAt:             cue.CreatedAt,
+		UpdatedAt:             cue.UpdatedAt,
 	}
 }

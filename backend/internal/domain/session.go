@@ -224,7 +224,8 @@ type SessionRecord struct {
 	// ProvisionError explains a failed start in the user's terms. It is kept on
 	// the row rather than discarded with it, because the user is already looking
 	// at the session by the time the start can fail.
-	ProvisionError string `json:"provisionError,omitempty"`
+	ProvisionError string         `json:"provisionError,omitempty"`
+	StartupCue     *StartupCueRun `json:"startupCue,omitempty"`
 }
 
 // SessionProvisionState is a session's start-up progress.

@@ -35,10 +35,13 @@ type CueDraft = {
 	type: CueType;
 	command: string;
 	prompt: string;
+	runOnWorktreeCreation: boolean;
+	startupShell: string;
+	startupTimeoutMinutes: number;
 };
 
 function emptyDraft(): CueDraft {
-	return { name: "", type: "command", command: "", prompt: "" };
+	return { name: "", type: "command", command: "", prompt: "", runOnWorktreeCreation: false, startupShell: "", startupTimeoutMinutes: 10 };
 }
 
 function draftFromDTO(cue: CueDTO): CueDraft {
@@ -47,6 +50,9 @@ function draftFromDTO(cue: CueDTO): CueDraft {
 		type: cueType(cue),
 		command: cue.command ?? "",
 		prompt: cue.prompt ?? "",
+		runOnWorktreeCreation: cue.runOnWorktreeCreation ?? false,
+		startupShell: cue.startupShell ?? "",
+		startupTimeoutMinutes: (cue.startupTimeoutSeconds ?? 600) / 60,
 	};
 }
 
@@ -119,6 +125,13 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 		};
 		if (draft.type === "command") {
 			input.command = draft.command;
+			if (draft.runOnWorktreeCreation && (!Number.isFinite(draft.startupTimeoutMinutes) || draft.startupTimeoutMinutes < 1 / 60 || draft.startupTimeoutMinutes > 1440)) {
+				setFormError(t("cues.startupTimeoutInvalid"));
+				return;
+			}
+			input.runOnWorktreeCreation = draft.runOnWorktreeCreation;
+			input.startupShell = draft.startupShell;
+			input.startupTimeoutSeconds = Math.round(draft.startupTimeoutMinutes * 60);
 		} else {
 			input.prompt = draft.prompt;
 		}
@@ -219,7 +232,7 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 										<div className="flex items-baseline gap-2 text-sm leading-5 text-foreground">
 											<span className="truncate font-medium">{cue.name}</span>
 											<span className="shrink-0 text-xs text-settings-muted">
-												{cueKind === "agent" ? t("cues.typeName.agent") : t("cues.typeName.command")}
+												{cue.runOnWorktreeCreation ? t("cues.startupSelected") : cueKind === "agent" ? t("cues.typeName.agent") : t("cues.typeName.command")}
 											</span>
 										</div>
 									</div>
@@ -288,7 +301,7 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 					triggerClassName="w-fit self-start"
 					menuAlign="start"
 					menuClassName="border-0! shadow-md!"
-					onChange={(type) => setDraft((current) => ({ ...current, type }))}
+					onChange={(type) => setDraft((current) => ({ ...current, type, runOnWorktreeCreation: type === "command" && current.runOnWorktreeCreation }))}
 				/>
 			</div>
 
@@ -307,6 +320,29 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 					className="settings-field-control min-h-(--size-textarea-min) resize-none overflow-y-auto py-2.5 rounded-md! disabled:cursor-not-allowed disabled:opacity-50"
 				/>
 			</div>
+
+			{command ? <div className="flex flex-col gap-3">
+				<label className="flex items-center gap-2 text-sm">
+					<input type="checkbox" checked={draft.runOnWorktreeCreation}
+						onChange={(event) => setDraft((d) => ({ ...d, runOnWorktreeCreation: event.target.checked }))} />
+					{t("cues.runOnWorktreeCreation")}
+				</label>
+				{draft.runOnWorktreeCreation ? <>
+					<p className="text-xs text-settings-muted">{t("cues.startupSelectionHelp")}</p>
+					<label className="flex flex-col gap-1.5 settings-field-label">
+						{t("cues.startupShell")}
+						<SettingsOptionMenu aria-label={t("cues.startupShell")} value={draft.startupShell}
+							options={[{ value: "", label: t("cues.platformShell") }, ...["sh", "bash", "zsh", "fish", "cmd.exe", "powershell.exe", "pwsh"].map((shell) => ({ value: shell, label: shell }))]}
+							onChange={(startupShell) => setDraft((d) => ({ ...d, startupShell }))} />
+					</label>
+					<label className="flex flex-col gap-1.5 settings-field-label" htmlFor="cue-startup-timeout">
+						{t("cues.startupTimeout")}
+						<input id="cue-startup-timeout" type="number" min={1/60} max={1440} step="any"
+							className="settings-field-control h-(--size-settings-action-height) rounded-md!"
+							value={draft.startupTimeoutMinutes} onChange={(event) => setDraft((d) => ({ ...d, startupTimeoutMinutes: Number(event.target.value) }))} />
+					</label>
+				</> : null}
+			</div> : null}
 
 			{formError ? (
 				<p role="alert" className="text-caption leading-4 text-error">

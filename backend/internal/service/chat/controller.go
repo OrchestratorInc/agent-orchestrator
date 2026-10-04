@@ -204,7 +204,9 @@ type Controller struct {
 
 	// sendMu serializes command dispatch so only one operation mutates the
 	// provider conversation at a time.
-	sendMu sync.Mutex
+	sendMu               sync.Mutex
+	startupInputHeld     func(context.Context) (bool, error)
+	startupCueConfigured func(context.Context) (bool, error)
 	// configMu serializes live provider setting changes. Each response replaces
 	// the complete option catalog and updates durable next-turn settings, so
 	// concurrent writes could otherwise persist an older catalog last.
@@ -1431,7 +1433,11 @@ func (c *Controller) sendLocked(
 		return domain.ConversationTurn{}, nil
 	}
 
-	if queueWhenBusy && c.busy() {
+	held, holdErr := c.startupHeld(ctx)
+	if holdErr != nil {
+		return domain.ConversationTurn{}, holdErr
+	}
+	if held || (queueWhenBusy && c.busy()) {
 		// AppendUserMessage wrote it as queued, which is exactly where it belongs
 		// until the running turn ends. drain picks it up from there.
 		return domain.ConversationTurn{
@@ -1444,6 +1450,26 @@ func (c *Controller) sendLocked(
 		}, nil
 	}
 
+	// After startup releases, a concurrent new send must not overtake the
+	// opening turn already waiting in the durable queue.
+	if c.startupCueConfigured != nil {
+		configured, err := c.startupCueConfigured(ctx)
+		if err != nil {
+			return domain.ConversationTurn{}, err
+		}
+		if configured {
+			first, err := c.store.NextQueuedTurn(ctx, c.conversation.ID)
+			if err != nil {
+				return domain.ConversationTurn{}, err
+			}
+			if first.TurnID != turnID {
+				if err := c.drainLocked(ctx, true); err != nil {
+					return domain.ConversationTurn{}, err
+				}
+				return domain.ConversationTurn{ID: turnID, ConversationID: c.conversation.ID, HandledBySessionID: c.sessionID, State: domain.TurnStateQueued, RequestedAt: now}, nil
+			}
+		}
+	}
 	return c.dispatch(ctx, turnID, msg, now)
 }
 
@@ -1682,6 +1708,13 @@ func (c *Controller) dispatch(
 	// the user's behalf: a queued message draining, or a relay from `ao send`. A
 	// setting that only applied when the user pressed send would silently stop
 	// applying exactly when they were not watching.
+	held, err := c.startupHeld(ctx)
+	if err != nil {
+		return domain.ConversationTurn{}, err
+	}
+	if held {
+		return domain.ConversationTurn{ID: turnID, ConversationID: c.conversation.ID, HandledBySessionID: c.sessionID, State: domain.TurnStateQueued, RequestedAt: requestedAt}, nil
+	}
 	msg.Settings = c.turnSettings()
 	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
 	// A provider can accept this turn and then lose its SQLite binding to ENOSPC.
@@ -1792,6 +1825,10 @@ func (c *Controller) drain(ctx context.Context) error {
 // allowDispatch gates sending the next queued turn. A pending Stop cutoff forces
 // it true so messages typed after Stop still send.
 func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) error {
+	held, err := c.startupHeld(ctx)
+	if err != nil || held {
+		return err
+	}
 	c.mu.Lock()
 	cutoff := c.cancelQueuedAt
 	c.cancelQueuedAt = time.Time{}
@@ -3691,4 +3728,11 @@ func (c *Controller) reportActivity(
 		c.log.Debug("chat activity signal rejected",
 			"session", c.sessionID, "event", event, "error", err)
 	}
+}
+
+func (c *Controller) startupHeld(ctx context.Context) (bool, error) {
+	if c.startupInputHeld == nil {
+		return false, nil
+	}
+	return c.startupInputHeld(ctx)
 }

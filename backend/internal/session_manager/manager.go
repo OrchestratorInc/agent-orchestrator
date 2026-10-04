@@ -383,10 +383,11 @@ type conversationSettingsStore interface {
 // Manager coordinates internal session spawn, restore, kill, and cleanup over
 // the outbound ports. User-facing read-model assembly lives in the service package.
 type Manager struct {
-	runtime   runtimeController
-	agents    ports.AgentResolver
-	workspace ports.Workspace
-	store     Store
+	runtime              runtimeController
+	agents               ports.AgentResolver
+	workspace            ports.Workspace
+	store                Store
+	startupDeliveryLocks sync.Map
 	// agentSwitchReporting supplies the exact authorization snapshot immediately
 	// before each failure-aware store transaction. Nil is fail-closed.
 	agentSwitchReporting ports.AgentSwitchReportingPolicy
@@ -1193,6 +1194,17 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
 	}
 
+	if projectKind != domain.ProjectKindScratch {
+		if err := m.prepareStartupCue(ctx, id, domain.ProjectID(project.ID)); err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+			return domain.SessionRecord{}, 0, 0, err
+		}
+	}
+	rec, err = m.getRecord(ctx, id)
+	if err != nil {
+		return domain.SessionRecord{}, 0, 0, err
+	}
+
 	// CLI agents receive the prompt as text and cannot consume inline binary
 	// data, so any pasted/dropped images are written into the worktree and
 	// referenced by path in the prompt. Done after provisioning (so the worktree
@@ -1290,6 +1302,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPromptDelivery, err)
 	}
 	afterStartPrompt := prompt
+	if rec.StartupCue.HoldsInput() {
+		delivery = ports.PromptDeliveryAfterStart
+	}
 	if delivery == ports.PromptDeliveryAfterStart {
 		afterStartPrompt, err = buildAfterStartPrompt(ctx, agent, launchCfg)
 		if err != nil {
@@ -1297,6 +1312,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPromptDelivery, err)
 		}
 		launchCfg.Prompt = ""
+	}
+	if rec.StartupCue.HoldsInput() && afterStartPrompt != "" {
+		if store, ok := m.store.(startupCueStore); ok {
+			if _, err := store.EnqueueStartupCueMessage(ctx, id, "startup-initial:"+string(id), afterStartPrompt); err != nil {
+				return domain.SessionRecord{}, 0, 0, err
+			}
+		}
 	}
 	argv, err := agent.GetLaunchCommand(ctx, launchCfg)
 	if err != nil {
@@ -1377,7 +1399,29 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
 	}
-	if delivery == ports.PromptDeliveryAfterStart && afterStartPrompt != "" {
+	if rec.StartupCue.HoldsInput() {
+		m.startStartupCue(id, project, ws.Path, func(releaseCtx context.Context) error {
+			if afterStartPrompt != "" {
+				if err := m.deliverAfterStartPrompt(releaseCtx, agent, launchCfg, handle, id, afterStartPrompt); err != nil {
+					return err
+				}
+				if store, ok := m.store.(startupCueStore); ok {
+					messages, err := store.ListStartupCueMessages(releaseCtx, id)
+					if err != nil {
+						return err
+					}
+					for _, msg := range messages {
+						if msg.ClientMessageID == "startup-initial:"+string(id) {
+							if err := store.MarkStartupCueMessageDelivered(releaseCtx, msg.ID); err != nil {
+								return err
+							}
+						}
+					}
+				}
+			}
+			return m.drainStartupCueMessages(releaseCtx, id)
+		})
+	} else if delivery == ports.PromptDeliveryAfterStart && afterStartPrompt != "" {
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, id, afterStartPrompt); err != nil {
 			runtimeDestroyed := m.destroySpawnRuntimeAfterFailure(ctx, handle)
 			workspaceDestroyed := m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, rec, ws, workspaceProject, runtimeDestroyed)
@@ -3452,6 +3496,9 @@ func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 	// "starting" after a restart has no one left to finish it, so say so rather
 	// than leaving a session that spins forever.
 	if err == nil {
+		if recoverErr := m.recoverStartupCues(ctx, recs); recoverErr != nil {
+			return recoverErr
+		}
 		m.startupProvisioningRetries, err = m.failInterruptedProvisioningRecords(ctx, recs)
 		if err != nil {
 			m.logger.Warn("reconcile: interrupted session starts could not be settled", "error", err)
@@ -3517,6 +3564,15 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 	}
 	if err := m.RestoreAll(ctx); err != nil {
 		return err
+	}
+	if records, err := m.store.ListAllSessions(ctx); err == nil {
+		for _, rec := range records {
+			if !rec.IsTerminated && rec.StartupCue != nil && !rec.StartupCue.HoldsInput() && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI {
+				if err := m.drainStartupCueMessages(ctx, rec.ID); err != nil {
+					m.logger.Warn("startup cue: recover held messages", "sessionID", rec.ID, "error", err)
+				}
+			}
+		}
 	}
 	if err := m.deliverAllTransitionMessages(ctx); err != nil {
 		m.logger.Error("reconcile: transition-message delivery deferred for retry", "error", err)
@@ -4210,6 +4266,30 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 // retries. Ordinary callers leave it empty; the outbox preserves the key across
 // restart, rollback, and even a second overlapping handoff.
 func (m *Manager) send(ctx context.Context, id domain.SessionID, message, clientMessageID string, authoredByUser bool) error {
+	if store, ok := m.store.(startupCueStore); ok {
+		rec, found, err := m.store.GetSession(ctx, id)
+		if err != nil {
+			return err
+		}
+		if found && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && rec.StartupCue != nil {
+			releaseDelivery := m.lockStartupDelivery(id)
+			defer releaseDelivery()
+			rec, _, err = m.store.GetSession(ctx, id)
+			if err != nil {
+				return err
+			}
+			if rec.StartupCue.HoldsInput() {
+				if clientMessageID == "" {
+					clientMessageID = "startup-cue:" + m.newLaunchID()
+				}
+				queued, err := store.EnqueueStartupCueMessage(ctx, id, clientMessageID, message)
+				if err != nil || queued {
+					return err
+				}
+			}
+		}
+	}
+
 	// A controller transition deliberately has a short interval with no writer.
 	// Queue internal/lifecycle sends durably instead of racing either controller
 	// or dropping coordination work; the transition worker drains this outbox
@@ -5361,6 +5441,22 @@ func (m *Manager) provisionWorkspace(ctx context.Context, project domain.Project
 	return runPostCreate(ctx, workspacePath, project.Config.PostCreate)
 }
 
+// runPostCreate preserves the historical project setup contract while sharing
+// shell execution, environment construction, and output handling with cues.
+func runPostCreate(ctx context.Context, workspacePath string, commands []string) error {
+	for _, command := range commands {
+		command = strings.TrimSpace(command)
+		if command == "" {
+			continue
+		}
+		result := runWorkspaceCommand(ctx, command, "", workspacePath, nil, 0)
+		if result.Err != nil {
+			return fmt.Errorf("postCreate %q: %w: %s", command, result.Err, strings.TrimSpace(result.Output))
+		}
+	}
+	return nil
+}
+
 // applySymlinks links each repo-relative path into the workspace. A source that
 // does not exist is skipped (symlinks are a convenience for optional files like
 // .env); a real link failure aborts. Paths must be repo-relative with no
@@ -5411,29 +5507,6 @@ func safeRelPath(rel string) (string, error) {
 		}
 	}
 	return clean, nil
-}
-
-// runPostCreate runs each post-create command in the workspace via the platform
-// shell, so OS-agnostic commands like "pnpm install" work. A non-zero exit
-// aborts the spawn with the command output.
-func runPostCreate(ctx context.Context, workspacePath string, commands []string) error {
-	for _, command := range commands {
-		command = strings.TrimSpace(command)
-		if command == "" {
-			continue
-		}
-		var cmd *exec.Cmd
-		if runtime.GOOS == "windows" {
-			cmd = aoprocess.CommandContext(ctx, "cmd", "/c", command)
-		} else {
-			cmd = aoprocess.CommandContext(ctx, "sh", "-c", command)
-		}
-		cmd.Dir = workspacePath
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("postCreate %q: %w: %s", command, err, strings.TrimSpace(string(out)))
-		}
-	}
-	return nil
 }
 
 // preLauncher is an optional Agent capability: a step the manager runs before
@@ -5551,7 +5624,11 @@ func (m *Manager) deliverAfterStartPrompt(ctx context.Context, agent ports.Agent
 	// into success would report a spawn/restore that never delivered its prompt.
 	var outcome sessionguard.Outcome
 	var err error
-	if m.SessionMutationInProgress(id) {
+	rec, _, readErr := m.store.GetSession(ctx, id)
+	if readErr != nil {
+		return readErr
+	}
+	if m.SessionMutationInProgress(id) || (rec.StartupCue != nil && rec.StartupCue.DeliveryHeld) {
 		outcome, err = m.messenger.DeliverUnderMutation(ctx, id, prompt)
 	} else {
 		outcome, err = m.messenger.Deliver(ctx, id, prompt)

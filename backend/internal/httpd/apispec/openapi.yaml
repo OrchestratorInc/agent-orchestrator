@@ -10500,6 +10500,8 @@ components:
           - mergeable
           - merged
           type: string
+        startupCue:
+          $ref: '#/components/schemas/StartupCueRun'
         status:
           enum:
           - working
@@ -11299,6 +11301,14 @@ components:
             when saving command cues.
           maxLength: 16384
           type: string
+        runOnWorktreeCreation:
+          type: boolean
+        startupShell:
+          type: string
+        startupTimeoutSeconds:
+          maximum: 86400
+          minimum: 1
+          type: integer
         type:
           description: 'Cue kind: command sends to a project- or session-scoped shell
             terminal; agent sends an authored prompt. Definition body limit: 128 KiB.'
@@ -11329,6 +11339,14 @@ components:
           type: string
         prompt:
           type: string
+        runOnWorktreeCreation:
+          type: boolean
+        startupShell:
+          type: string
+        startupTimeoutSeconds:
+          maximum: 86400
+          minimum: 1
+          type: integer
         type:
           type: string
         updatedAt:
@@ -14477,6 +14495,54 @@ components:
       - ok
       - sessionId
       - transition
+      type: object
+    StartupCueRun:
+      properties:
+        command:
+          type: string
+        completedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        cueId:
+          type: string
+        deliveryHeld:
+          type: boolean
+        error:
+          type: string
+        exitCode:
+          type:
+          - "null"
+          - integer
+        name:
+          type: string
+        output:
+          type: string
+        shell:
+          type: string
+        startedAt:
+          format: date-time
+          type: string
+        state:
+          enum:
+          - pending
+          - running
+          - succeeded
+          - failed
+          - interrupted
+          - cancelled
+          type: string
+        timeoutSeconds:
+          type: integer
+      required:
+      - cueId
+      - name
+      - command
+      - shell
+      - timeoutSeconds
+      - state
+      - startedAt
       type: object
     SteerConversationRequest:
       properties:

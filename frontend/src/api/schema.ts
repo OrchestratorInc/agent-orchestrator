@@ -3507,6 +3507,7 @@ export interface components {
             reviewerHarness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
             /** @enum {string} */
             scmStatus?: "pr_open" | "draft" | "ci_failed" | "review_pending" | "changes_requested" | "commented" | "approved" | "mergeable" | "merged";
+            startupCue?: components["schemas"]["StartupCueRun"];
             /** @enum {string} */
             status: "working" | "pr_open" | "draft" | "ci_failed" | "review_pending" | "changes_requested" | "commented" | "approved" | "mergeable" | "merged" | "needs_input" | "exited" | "idle" | "terminated" | "no_signal";
             /** @enum {string} */
@@ -3802,6 +3803,9 @@ export interface components {
             name: string;
             /** @description Agent instruction for an agent cue. At most 16384 bytes; cleared when saving command cues. */
             prompt?: string;
+            runOnWorktreeCreation?: boolean;
+            startupShell?: string;
+            startupTimeoutSeconds?: number;
             /** @description Cue kind: command sends to a project- or session-scoped shell terminal; agent sends an authored prompt. Definition body limit: 128 KiB. */
             type: string;
         };
@@ -3816,6 +3820,9 @@ export interface components {
             name: string;
             projectId: string;
             prompt?: string;
+            runOnWorktreeCreation?: boolean;
+            startupShell?: string;
+            startupTimeoutSeconds?: number;
             type: string;
             /** Format: date-time */
             updatedAt: string;
@@ -5005,6 +5012,23 @@ export interface components {
             ok: boolean;
             sessionId: string;
             transition: components["schemas"]["SessionInterfaceTransition"];
+        };
+        StartupCueRun: {
+            command: string;
+            /** Format: date-time */
+            completedAt?: null | string;
+            cueId: string;
+            deliveryHeld?: boolean;
+            error?: string;
+            exitCode?: null | number;
+            name: string;
+            output?: string;
+            shell: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** @enum {string} */
+            state: "pending" | "running" | "succeeded" | "failed" | "interrupted" | "cancelled";
+            timeoutSeconds: number;
         };
         SteerConversationRequest: {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];

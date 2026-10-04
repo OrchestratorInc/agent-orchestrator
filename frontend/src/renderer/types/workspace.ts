@@ -1,3 +1,4 @@
+import type { components } from "../../api/schema";
 import { attentionZone as presentationAttentionZone } from "../lib/session-presentation";
 import {
 	AGENT_OPTIONS,
@@ -131,6 +132,7 @@ export type WorkspaceSession = {
 	provisionState?: "provisioning" | "ready" | "failed";
 	/** Why a failed start stopped, in the daemon's words. */
 	provisionError?: string;
+ startupCue?: components["schemas"]["StartupCueRun"];
 	/** Durable runtime fact from the daemon; independent of the derived SCM-aware status. */
 	isTerminated?: boolean;
 	/** Whether the cloud worker has a current control-plane connection. */

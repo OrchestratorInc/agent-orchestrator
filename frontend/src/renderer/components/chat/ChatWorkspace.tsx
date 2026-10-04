@@ -1,3 +1,4 @@
+import { StartupCueBanner } from "../StartupCueBanner";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 /**
  * The Chat surface for a session whose persisted mode is `chat`.
@@ -1485,6 +1486,7 @@ function ChatWorkspaceContent({
 								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
 							>
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
+								<StartupCueBanner sessionId={uiSessionId} run={session?.startupCue} />
 								<ChatComposer
 									key={`${draftScopeKey}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
 									queuedDock={composerQueuedDock}
@@ -1507,7 +1509,7 @@ function ChatWorkspaceContent({
 									commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 									settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
 									busy={busy}
-									willQueue={Boolean(turn) || session?.provisionState === "provisioning"}
+									willQueue={Boolean(turn) || session?.provisionState === "provisioning" || session?.startupCue?.state === "pending" || session?.startupCue?.state === "running"}
 									disabled={(snapshot.controller.state === "stopped" || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
 									// Switch/reconnect status is the topbar spinner beside ⋮ — not composer text.
 									disabledPlaceholder={

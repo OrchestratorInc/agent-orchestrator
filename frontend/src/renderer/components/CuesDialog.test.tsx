@@ -414,7 +414,7 @@ test("session creation saves and closes without running, changing history, or na
 	fireEvent.change(screen.getByLabelText("Command"), { target: { value: "  npm test\n" } });
 	fireEvent.click(screen.getByRole("button", { name: "Create" }));
 	await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-	expect(cues.createCue).toHaveBeenCalledExactlyOnceWith("project", { name: "Tests", type: "command", command: "  npm test\n" });
+	expect(cues.createCue).toHaveBeenCalledExactlyOnceWith("project", { name: "Tests", type: "command", command: "  npm test\n", runOnWorktreeCreation: false, startupShell: "", startupTimeoutSeconds: 600 });
 	expect(cues.invokeCue).not.toHaveBeenCalled();
 	expect(readLastRunCue("project")).toBe("");
 	expect(openProjectSettings).not.toHaveBeenCalled();
@@ -456,4 +456,24 @@ test("the creation modal supports agent cues and returns focus to the session bu
 	expect(cues.createCue).toHaveBeenCalledExactlyOnceWith("project", { name: "Review", type: "agent", prompt: "  Review changes\n" });
 	await waitFor(() => expect(screen.getByRole("button", { name: "Run a cue" })).toHaveFocus());
 	expect(cues.invokeCue).not.toHaveBeenCalled();
+});
+
+
+test("command startup selection saves its shell and timeout without running", async () => {
+ setup(<CuesSettings projectId="project" />);
+ fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+ fireEvent.click(screen.getByRole("checkbox", { name: "Run on worktree creation" }));
+ expect(screen.getByText(/Only one cue can run/)).toBeInTheDocument();
+ fireEvent.change(screen.getByLabelText("Timeout (minutes)"), { target: { value: "2" } });
+ fireEvent.click(screen.getByRole("button", { name: "Save" }));
+ await waitFor(() => expect(cues.updateCue).toHaveBeenCalledWith("cue-1", expect.objectContaining({ runOnWorktreeCreation: true, startupShell: "", startupTimeoutSeconds: 120 })));
+ expect(cues.invokeCue).not.toHaveBeenCalled();
+ expect(toast).not.toHaveBeenCalled();
+});
+
+test("agent cues do not offer startup selection", async () => {
+ vi.mocked(cues.fetchProjectCues).mockResolvedValue([{ ...cue, type: "agent", prompt: "Review", command: undefined }]);
+ setup(<CuesSettings projectId="project" />);
+ fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+ expect(screen.queryByRole("checkbox", { name: "Run on worktree creation" })).toBeNull();
 });

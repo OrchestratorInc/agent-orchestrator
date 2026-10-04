@@ -723,6 +723,7 @@ func mapListAllSessionsRows(rows []gen.ListAllSessionsRow) []domain.SessionRecor
 
 func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 	return domain.SessionRecord{
+		StartupCue:                decodeStartupCue(row.StartupCueJson),
 		Revision:                  row.Revision,
 		ID:                        row.ID,
 		ProjectID:                 projectIDValue(row.ProjectID),

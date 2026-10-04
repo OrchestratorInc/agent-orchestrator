@@ -382,14 +382,17 @@ type ConversationTurn struct {
 }
 
 type Cue struct {
-	ID        domain.CueID
-	ProjectID domain.ProjectID
-	Name      string
-	Type      domain.CueType
-	Command   string
-	Prompt    string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID                    domain.CueID
+	ProjectID             domain.ProjectID
+	Name                  string
+	Type                  domain.CueType
+	Command               string
+	Prompt                string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	RunOnWorktreeCreation bool
+	StartupShell          string
+	StartupTimeoutSeconds int64
 }
 
 type ModelUsageEvent struct {
@@ -677,6 +680,7 @@ type Session struct {
 	ClientRequestID                  string
 	ClientRequestHash                string
 	ClientRequestCommitted           bool
+	StartupCueJson                   string
 }
 
 type SessionCleanupFact struct {
@@ -738,6 +742,14 @@ type ShellTerminal struct {
 	SessionID                 sql.NullString
 	Transient                 bool
 	PreviewCapabilityVerifier string
+}
+
+type StartupCueMessage struct {
+	ID              int64
+	SessionID       string
+	Message         string
+	ClientMessageID string
+	Delivered       int64
 }
 
 type TelemetryEvent struct {

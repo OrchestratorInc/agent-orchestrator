@@ -17,6 +17,8 @@ sql:
           - pr
           - ci
         overrides:
+          - column: "cues.run_on_worktree_creation"
+            go_type: "bool"
           - column: "change_log.project_id"
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"

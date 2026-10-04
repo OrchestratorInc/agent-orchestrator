@@ -1,3 +1,4 @@
+import { StartupCueBanner } from "./StartupCueBanner";
 import {
 	ArrowRight,
 	CheckCircle2,
@@ -327,7 +328,7 @@ export function CenterPane({
 		presentation?.lockAgentTerminal && !presentation.allowSourceInput,
 	);
 	const workerInputDisabled =
-		target.kind === "worker" && (agentInputDisabled || switchLocksWorkerInput || handoffDialogOpen);
+		target.kind === "worker" && (agentInputDisabled || switchLocksWorkerInput || handoffDialogOpen || session?.startupCue?.state === "pending" || session?.startupCue?.state === "running" || session?.startupCue?.deliveryHeld === true);
 	const shownPresentation =
 		presentation?.outcome === "failure" && dismissedFailureSwitchId === agentSwitch?.id
 			? undefined
@@ -741,6 +742,7 @@ export function CenterPane({
 			onWheelCapture={handleWheelZoom}
 		>
 			{isFullscreen ? terminalTopbar : <SessionTopbarPortal>{terminalTopbar}</SessionTopbarPortal>}
+			{target.kind === "worker" && session ? <StartupCueBanner sessionId={session.id} run={session.startupCue} /> : null}
 			<div
 				aria-label={t("terminal.panelAria", { title: activeTerminalLabel })}
 				className="relative min-h-0 flex-1"
