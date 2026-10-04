@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
@@ -120,5 +120,37 @@ describe("SessionFileWorkspace", () => {
 		contentReady = true;
 		fireEvent.click(screen.getByRole("button", { name: "content ready" }));
 		expect(scroll.scrollTop).toBe(320);
+	});
+
+	it("finishes restoration at the reachable offset when a file becomes shorter", async () => {
+		const { rerender } = render(<SessionFileWorkspace annotation={annotation} path="src/Shorter.tsx" sessionId="shorter-scroll-session" split={false} />);
+		const scroll = screen.getByTestId("session-file-scroll");
+		let maxScrollTop = 500;
+		let scrollTop = 0;
+		Object.defineProperties(scroll, {
+			clientHeight: { configurable: true, get: () => 100 },
+			scrollHeight: { configurable: true, get: () => maxScrollTop + 100 },
+			scrollTop: {
+				configurable: true,
+				get: () => scrollTop,
+				set: (value: number) => { scrollTop = Math.min(value, maxScrollTop); },
+			},
+		});
+		scroll.scrollTop = 500;
+		fireEvent.scroll(scroll);
+
+		rerender(<SessionFileWorkspace annotation={annotation} path="src/Other.tsx" sessionId="shorter-scroll-session" split={false} />);
+		maxScrollTop = 200;
+		rerender(<SessionFileWorkspace annotation={annotation} path="src/Shorter.tsx" sessionId="shorter-scroll-session" split={false} />);
+		expect(scroll.scrollTop).toBe(200);
+
+		fireEvent.click(screen.getByRole("button", { name: "content ready" }));
+		await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+		scroll.scrollTop = 100;
+		fireEvent.scroll(scroll);
+
+		rerender(<SessionFileWorkspace annotation={annotation} path="src/Other.tsx" sessionId="shorter-scroll-session" split={false} />);
+		rerender(<SessionFileWorkspace annotation={annotation} path="src/Shorter.tsx" sessionId="shorter-scroll-session" split={false} />);
+		expect(scroll.scrollTop).toBe(100);
 	});
 });

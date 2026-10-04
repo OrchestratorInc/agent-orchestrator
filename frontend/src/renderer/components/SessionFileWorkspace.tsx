@@ -47,20 +47,24 @@ export function SessionFileWorkspace({
 		(requestKey: number) => onInitialLineConsumed?.(path, requestKey),
 		[onInitialLineConsumed, path],
 	);
-	const restoreScrollPosition = useCallback(() => {
+	const restoreScrollPosition = useCallback((finish = false) => {
 		const scroll = scrollRef.current;
 		const target = pendingScrollRestoreRef.current;
 		if (!scroll || target == null) return;
-		scroll.scrollTop = target;
-		if (scroll.scrollTop === target) pendingScrollRestoreRef.current = null;
-	}, []);
+		const restoredTarget = finish ? Math.min(target, Math.max(0, scroll.scrollHeight - scroll.clientHeight)) : target;
+		scroll.scrollTop = restoredTarget;
+		if (finish || scroll.scrollTop === target) {
+			pendingScrollRestoreRef.current = null;
+			rememberFileScrollPosition(scrollKey, scroll.scrollTop);
+		}
+	}, [scrollKey]);
 	const handleContentReady = useCallback(() => {
 		restoreScrollPosition();
 		if (pendingScrollRestoreRef.current == null) return;
 		if (restoreFrameRef.current !== null) cancelAnimationFrame(restoreFrameRef.current);
 		restoreFrameRef.current = requestAnimationFrame(() => {
 			restoreFrameRef.current = null;
-			restoreScrollPosition();
+			restoreScrollPosition(true);
 		});
 	}, [restoreScrollPosition]);
 	useEffect(
