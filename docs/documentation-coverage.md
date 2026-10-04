@@ -52,6 +52,21 @@ routes. It is still a partial API inventory. Issue #6220 tracks the remaining
 route groups and a coverage check; generating client types alone does not prove
 that every server route is represented.
 
+## Local reader preview
+
+The final wording pass makes the built-in Unreal Agent exception consistent in
+Installation, Quickstart, and Built-in capabilities. Connect Mobile starts with
+pairing, puts protocol details below the steps, and explains the iPhone Tailscale
+limitation before setup advice. Cloud archive and restore instructions are
+separate actions. Both guides keep their testing limitations in expandable notes.
+
+The production docs build and TypeScript check passed after these edits. All
+1,499 internal links resolved. No pages or existing section anchors were lost,
+including those in the previous PR export. The mobile and Cloud pages rendered
+at a 397-pixel browser width without horizontal overflow or captured console
+warnings or errors. The mobile verification note expanded successfully. These
+are documentation-preview checks, not native mobile or Cloud acceptance tests.
+
 ## Homebrew verification
 
 The existing [AgentWrapper tap](https://github.com/AgentWrapper/homebrew-tap/blob/main/Casks/agent-orchestrator.rb) contains version `0.13.3`. Its arm64 and x64 SHA-256 values match the corresponding official release assets. The old GitHub release URL redirects to `Untrivial-ai/agent-orchestrator` and returned HTTP 200. A new tap name is not needed for this documentation change.
