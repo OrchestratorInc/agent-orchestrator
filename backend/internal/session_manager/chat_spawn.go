@@ -261,6 +261,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 				ProviderConversationID:    started.ProviderConversationID,
 				ControllerGeneration:      started.ControllerGeneration,
 				BrowserCapabilityVerifier: in.record.Metadata.BrowserCapabilityVerifier,
+				CouncilGroupID:            in.record.Metadata.CouncilGroupID,
 				Model:                     agentConfig.Model,
 				Effort:                    agentConfig.Effort,
 			}

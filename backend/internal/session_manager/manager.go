@@ -1349,6 +1349,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		Prompt:                    prompt,
 		LatestUserPrompt:          prompt,
 		BrowserCapabilityVerifier: rec.Metadata.BrowserCapabilityVerifier,
+		CouncilGroupID:            rec.Metadata.CouncilGroupID,
 		// The user-visible resolved selection is Model for regular harnesses and
 		// Mode for adapters whose catalog is a mode list (e.g. Amp). If an explicit
 		// Model override exists it wins; otherwise fall back to the resolved Mode.
@@ -2999,6 +3000,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		AgentSessionID:            rec.Metadata.AgentSessionID,
 		Prompt:                    rec.Metadata.Prompt,
 		BrowserCapabilityVerifier: rec.Metadata.BrowserCapabilityVerifier,
+		CouncilGroupID:            rec.Metadata.CouncilGroupID,
 	}
 	// Bind an exact native resume to the target launch immediately. Passive Codex
 	// resumes do not necessarily emit SessionStart until the next user turn, and
