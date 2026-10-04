@@ -1185,7 +1185,8 @@ button.settings-row-bar {
    its text, which reads as a stray half-width box once it sits in a menu. */
 @utility menu-search-input {
 	width: 100%;
-	height: var(--size-settings-action-height);
+	/* Match DropdownMenuItem's text-control line height, py-1.5, and border. */
+	height: calc(var(--line-height-row) + (var(--space-1_5) * 2) + 2px);
 	border: 1px solid var(--color-border-settings-input);
 	border-radius: var(--radius-md);
 	background-color: var(--color-bg-settings-input);
