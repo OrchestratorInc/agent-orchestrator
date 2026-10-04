@@ -41,6 +41,8 @@ export const aoBridge: AoBridge =
 			onFontSizeShortcut: () => () => undefined,
 		},
 		window: {
+			getZoomFactor: async () => 1,
+			onZoomFactor: () => () => undefined,
 			isMaximized: async () => false,
 			onMaximized: () => () => undefined,
 			isFullScreen: async () => false,
@@ -265,8 +267,10 @@ export const aoBridge: AoBridge =
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,
-			probe: async () => "offline" as const,
-			request: async () => ({ status: 0, body: null }),
+			connect: async () => { throw new Error("remote hosts need the desktop app"); },
+			disconnect: async () => undefined,
+			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
+			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 		},
 		cloud: {
 			getSession: async () => null,

@@ -26,7 +26,7 @@ func TestMain(m *testing.M) {
 func TestDarwinPTYConnStreamsResizesAndReportsExit(t *testing.T) {
 	conn, err := newConPTY(t.TempDir(), "/bin/sh", []string{
 		"-c", `printf 'ready\n'; IFS= read -r line; printf 'received:%s\n' "$line"; exit 7`,
-	})
+	}, initialConPTYColumns, initialConPTYRows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestDarwinDefaultSpawnHostEndToEnd(t *testing.T) {
 	addr, hostPID, err := defaultSpawnHost(ctx, "spawn-e2e", t.TempDir(), []string{
 		"env", "AO_PREFIX_VALUE=prefix", "/bin/sh", "-c",
 		`printf '\033[c'; sleep 0.05; printf 'ready:%s:%s\n' "$AO_DIRECT_PTY_TEST" "$AO_PREFIX_VALUE"; IFS= read -r line; printf 'received:%s\n' "$line"; sleep 30`,
-	}, map[string]string{"AO_DIRECT_PTY_TEST": "works"})
+	}, map[string]string{"AO_DIRECT_PTY_TEST": "works"}, false)
 	if err != nil {
 		cancel()
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestDarwinDefaultSpawnHostEndToEnd(t *testing.T) {
 func TestDarwinPTYCloseReapsTermIgnoringProcessGroup(t *testing.T) {
 	conn, err := newConPTY(t.TempDir(), "/bin/sh", []string{
 		"-c", `trap '' TERM; (trap '' TERM; printf 'child-ready\n'; sleep 30) & wait`,
-	})
+	}, initialConPTYColumns, initialConPTYRows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,5 +160,40 @@ func TestDarwinPTYCloseReapsTermIgnoringProcessGroup(t *testing.T) {
 	}
 	if darwinProcessGroupAlive(pgid) {
 		t.Fatalf("process group %d survived PTY close", pgid)
+	}
+}
+
+// An interactive shell ignores SIGTERM. Closing must not wait out the full
+// grace for it: AO closes a terminal the way a closing terminal window would.
+func TestDarwinPTYCloseDoesNotWaitOutAShellThatIgnoresSIGTERM(t *testing.T) {
+	conn, err := newConPTY(t.TempDir(), "/bin/sh", []string{"-c", `trap '' TERM; printf 'ready\n'; while :; do sleep 1; done`}, initialConPTYColumns, initialConPTYRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := make(chan struct{})
+	go func() {
+		buf := make([]byte, 64)
+		for {
+			n, err := conn.Read(buf)
+			if n > 0 && strings.Contains(string(buf[:n]), "ready") {
+				close(ready)
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shell did not start")
+	}
+	started := time.Now()
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed >= darwinPTYCloseGrace {
+		t.Fatalf("Close took %s; a SIGTERM-ignoring shell waited out the %s grace", elapsed, darwinPTYCloseGrace)
 	}
 }

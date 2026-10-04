@@ -114,6 +114,11 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	"CHAT_INTERFACE_TRANSITION",
 ]);
 
+// Native image blocks are persisted with the chat turn and sent to the provider.
+// Larger attachments still reach the agent through their staged workspace paths.
+const MAX_NATIVE_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
+
 /**
  * Tell the agent to open the attached files. Mirrors the wording spawn uses for a task
  * brief, so the same instruction reaches the agent whether a file was attached at
@@ -152,6 +157,7 @@ export const ChatComposer = memo(function ChatComposer({
 	onStageAttachments,
 	nativeImages,
 	onSteer,
+	showSteerButton,
 	onInterrupt,
 	canSteer,
 	sendPending,
@@ -177,6 +183,9 @@ export const ChatComposer = memo(function ChatComposer({
 	autoFocus = true,
 	draftSessionId,
 	draftSessionIncarnation,
+	assetBaseUrl,
+	remoteHost = false,
+	assetSessionId,
 	acceptedClientMessageIds,
 }: {
 	onSend: (
@@ -216,6 +225,8 @@ export const ChatComposer = memo(function ChatComposer({
 	 * cannot steer and the choice is never offered.
 	 */
 	onSteer?: (text: string, attachments?: FileAttachmentPayload[], clientMessageId?: string, recoverOnly?: boolean) => Promise<ChatSteerOutcome | void>;
+	/** Expose steering as a separate action while a Cloud turn is running. */
+	showSteerButton?: boolean;
 	/** Stop the turn already running when there is no draft to send. */
 	onInterrupt?: () => void;
 	/** A turn is actually running, so there is something to steer into. */
@@ -260,6 +271,12 @@ export const ChatComposer = memo(function ChatComposer({
 	draftSessionId?: string;
 	/** Immutable daemon identity for this exact incarnation of the session id. */
 	draftSessionIncarnation?: string;
+	/** Host-specific proxy origin for staged attachment reads. */
+	assetBaseUrl?: string;
+	/** The session belongs to a remote host, even if its proxy is disconnected. */
+	remoteHost?: boolean;
+	/** Daemon wire session ID when draft storage uses a host-scoped identity. */
+	assetSessionId?: string;
 	/** Client ids already present in daemon-authoritative conversation history. */
 	acceptedClientMessageIds?: ReadonlySet<string>;
 }) {
@@ -1010,7 +1027,7 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 
-		const attachmentPayloads = await fileAttachments.toSettledPayload();
+		await fileAttachments.toSettledPayload();
 		// A replacement hook can still have staging work owned by the old surface.
 		if (fileAttachments.hasPendingReads()) return;
 		const settledAttachments = fileAttachments.getAttachments();
@@ -1043,21 +1060,32 @@ export const ChatComposer = memo(function ChatComposer({
 		// Ordinary delivery reserves its exact draft before these staged reads await.
 		// Queue editors use their existing owner/revision CAS before mutation.
 		const attachmentScope = queuedDraftScope ?? draftScope;
-		let nativePayloads = sendNativeImages
-			? attachmentPayloads.filter((attachment) => isSupportedImageAttachment(attachment.mimeType))
-			: [];
+		const retainedNativeImageCount = visibleRetainedAttachments.filter((item) => item.contentType === "image").length;
+		let nativeImageBytes = 0;
+		const nativeImageAttachments = settledAttachments.filter((attachment) => {
+			// Retained image sizes are server-owned and unknown here. Keep new images
+			// as workspace files so an edit cannot exceed the native 25 MiB budget.
+			if (!sendNativeImages || retainedNativeImageCount > 0 || !isSupportedImageAttachment(attachment.mimeType) ||
+				attachment.bytes > MAX_NATIVE_IMAGE_BYTES ||
+				nativeImageBytes + attachment.bytes > MAX_NATIVE_IMAGES_BYTES) return false;
+			nativeImageBytes += attachment.bytes;
+			return true;
+		});
+		let nativePayloads = nativeImageAttachments.flatMap(({ mimeType, data }) =>
+			data ? [{ mimeType, data }] : []);
 		const restoreNativePayloads = async (): Promise<boolean> => {
 			if (!attachmentScope || !sendNativeImages || recoveringDelivery?.kind === "steer" || recoveringDelivery?.state === "accepted") return true;
 			const restored: FileAttachmentPayload[] = [];
 			try {
-				for (const attachment of settledAttachments) {
-					if (!isSupportedImageAttachment(attachment.mimeType)) continue;
+				for (const attachment of nativeImageAttachments) {
 					if (attachment.data) {
 						restored.push({ mimeType: attachment.mimeType, data: attachment.data });
 						continue;
 					}
 					if (!attachment.stagedPath) throw new Error("Missing staged attachment");
-					const response = await fetch(attachmentURL(getApiBaseUrl(), attachmentScope.sessionId, attachment.stagedPath));
+					const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
+					if (assetOrigin === undefined) throw new Error("Remote host disconnected");
+					const response = await fetch(attachmentURL(assetOrigin, assetSessionId ?? attachmentScope.sessionId, attachment.stagedPath));
 					if (!response.ok) throw new Error("Could not read staged attachment");
 					const blob = await response.blob();
 					const data = await new Promise<string>((resolve, reject) => {
@@ -1077,7 +1105,7 @@ export const ChatComposer = memo(function ChatComposer({
 		};
 		if ((!draftScope || savingQueuedEdit) && !await restoreNativePayloads()) return;
 
-		if (savingQueuedEdit && nativePayloads.length + visibleRetainedAttachments.filter((item) => item.contentType === "image").length > MAX_ATTACHMENTS) {
+		if (savingQueuedEdit && nativePayloads.length + retainedNativeImageCount > MAX_ATTACHMENTS) {
 			setSendError(`You can attach up to ${MAX_ATTACHMENTS} images.`);
 			return;
 		}
@@ -1419,9 +1447,10 @@ export const ChatComposer = memo(function ChatComposer({
 				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
 				onClick={(e) => {
 					if (controlsDisabled) return;
+					// The focusable context tooltip must keep its focus on click.
 					if (
 						e.target === e.currentTarget ||
-						!(e.target as HTMLElement).closest("button, a, [role='option'], ul")
+						!(e.target as HTMLElement).closest("button, a, [role='option'], [data-context-meter], ul")
 					) {
 						editor.current?.focus();
 					}
@@ -1456,8 +1485,9 @@ export const ChatComposer = memo(function ChatComposer({
 					<ul className="flex flex-wrap gap-1.5" aria-label="Attached files">
 						{[...visibleRetainedAttachments, ...fileAttachments.attachments].map((file) => {
 							const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
-							const preview = file.dataUrl ?? (path && IMAGE_ATTACHMENT_PATH.test(path)
-								? attachmentURL(getApiBaseUrl(), boundarySessionId ?? "", path) : undefined);
+							const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
+							const preview = file.dataUrl ?? (path && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
+								? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
 							return (
 							<li
 								key={file.id}
@@ -1594,6 +1624,11 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 
 					<div role="group" aria-label="Send message controls" className="flex h-7 shrink-0 items-center">
+						{showSteerButton && canSteerDraft && (hasText || staged) ? (
+							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true)} aria-label="Steer into running turn" className="h-7 px-2 text-xs">
+								Steer
+							</Button>
+						) : null}
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<span className="inline-flex">

@@ -202,6 +202,43 @@ const chatSession = {
 } satisfies WorkspaceSession;
 
 describe("HumanMessage attachments", () => {
+	it("loads a remote session's staged image from its proxy, not the local daemon", () => {
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			items: [humanMessage("See image\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-remote.png")],
+			latestSequence: 1,
+		};
+		render(<ChatWorkspace snapshot={snapshot} assetBaseUrl="http://127.0.0.1:4000/token-a" />);
+		expect(screen.getByRole("img", { name: "attachment-remote.png" })).toHaveAttribute(
+			"src",
+			`http://127.0.0.1:4000/token-a/api/v1/sessions/${encodeURIComponent(snapshot.sessionId)}/preview/files/.ao/attachments/attachment-remote.png`,
+		);
+	});
+
+	it("does not read an offline remote session's image from the laptop daemon", () => {
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			items: [humanMessage("See image\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-remote.png")],
+			latestSequence: 1,
+		};
+		render(<ChatWorkspace snapshot={snapshot} remoteHostId="box-a" />);
+		expect(screen.queryByRole("img", { name: "attachment-remote.png" })).not.toBeInTheDocument();
+		expect(screen.getByText("attachment-remote.png")).toBeInTheDocument();
+	});
+
+	it("keeps offline remote preview links classified as remote", () => {
+		const assistant = chatFixture.items.find((item): item is ConversationMessage => item.kind === "message" && item.role === "assistant");
+		if (!assistant) throw new Error("Fixture needs an assistant message");
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			items: [{ ...assistant, id: "offline-preview", sequence: 1, text: "[preview](http://localhost:5173)" }],
+			latestSequence: 1,
+		};
+		render(<ChatWorkspace snapshot={snapshot} remoteHostId="box-a" />);
+		expect(screen.getByText("preview")).toBeInTheDocument();
+		expect(screen.queryByRole("link", { name: "preview" })).not.toBeInTheDocument();
+	});
+
 	it("hides appended worker report context from the human message", async () => {
 		const text =
 			"Please continue\n\n<ao-worker-reports>\nReports since your previous turn:\n\n[done] ao://sessions/project/worker\nFinished\n</ao-worker-reports>";
@@ -293,6 +330,17 @@ describe("HumanMessage attachments", () => {
 
 		expect(screen.queryByRole("img")).not.toBeInTheDocument();
 		expect(document.body.textContent).toContain(text);
+	});
+
+	it("linkifies session URLs without parsing the human message as Markdown", () => {
+		const text = "Notes:\n- fix *bug*\nao://sessions/proj/sess\n> write test";
+		const { container } = render(<HumanMessage message={humanMessage(text)} sessionId="ao-1" />);
+
+		const paragraph = container.querySelector(".cursor-chat-human-message > p");
+		expect(paragraph).toHaveClass("whitespace-pre-wrap");
+		expect(paragraph?.textContent).toBe(text);
+		expect(screen.getByRole("link", { name: "ao://sessions/proj/sess" })).toBeInTheDocument();
+		expect(container.querySelector("ul, blockquote, em")).toBeNull();
 	});
 });
 
@@ -507,6 +555,30 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("tab", { name: "Orchestrator · Codex · Working" })).toBeInTheDocument();
 	});
 
+	it("shows live provider context usage beside the composer settings", () => {
+		const reported = {
+			...idleSnapshot(chatFixture),
+			usage: {
+				contextUsed: 18_055,
+				contextWindow: 258_400,
+				inputTokens: 18_050,
+				outputTokens: 5,
+				cachedTokens: 0,
+				totalTokens: 18_055,
+			},
+		};
+		const view = render(<ChatWorkspace snapshot={reported} />);
+		const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;
+		const gauge = within(composer).getByRole("progressbar", { name: "Context window used" });
+		expect(gauge).toHaveAttribute("aria-valuetext", "18,055 / 258,400 tokens (7%)");
+		gauge.focus();
+		fireEvent.click(gauge.querySelector("svg") as SVGSVGElement);
+		expect(gauge).toHaveFocus();
+
+		view.rerender(<ChatWorkspace snapshot={{ ...reported, usage: { ...reported.usage, contextUsed: 129_200 } }} />);
+		expect(within(composer).getByRole("progressbar", { name: "Context window used" })).toHaveAttribute("aria-valuetext", "129,200 / 258,400 tokens (50%)");
+	});
+
 	it("refreshes the owning workspace after renaming the primary chat tab", async () => {
 		const user = userEvent.setup();
 		const onSessionRenamed = vi.fn().mockResolvedValue(undefined);
@@ -528,7 +600,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(onSessionRenamed).toHaveBeenCalledOnce();
 	});
 
-	it("clears the fixed titlebar nav when the sidebar is collapsed, like the terminal session", () => {
+	it("keeps titlebar clearance attached throughout sidebar expansion and collapse", () => {
 		useUiStore.setState({ isSidebarOpen: false });
 		const { rerender } = render(<ChatWorkspace snapshot={chatFixture} />);
 
@@ -539,7 +611,7 @@ describe("ChatWorkspace timeline", () => {
 		useUiStore.setState({ isSidebarOpen: true });
 		rerender(<ChatWorkspace snapshot={chatFixture} />);
 
-		expect(screen.getByTestId("session-terminal-region")).not.toHaveClass(
+		expect(screen.getByTestId("session-terminal-region")).toHaveClass(
 			"session-topbar-titlebar-clearance-mac",
 		);
 	});
@@ -1139,6 +1211,22 @@ describe("ChatWorkspace timeline", () => {
 		expect(onLinkOpen).toHaveBeenCalledWith("http://localhost:5173");
 	});
 
+	it.each([
+		["human", "user"],
+		["automation", "user"],
+		["daemon", "user"],
+		["provider", "assistant"],
+	] as const)("activates session links from %s messages", async (origin, role) => {
+		const snapshot = structuredClone(chatFixtureSettled);
+		const template = snapshot.items.find((item): item is ConversationMessage => item.kind === "message");
+		if (!template) throw new Error("fixture has no message");
+		snapshot.items = [{ ...template, id: `link-${origin}`, origin, role, text: "ao://sessions/project/session", streaming: false }];
+		const onSessionLinkOpen = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} onSessionLinkOpen={onSessionLinkOpen} />);
+		await userEvent.setup().click(screen.getByRole("link"));
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
+	});
+
 	it("offers real recovery actions when the controller stops", async () => {
 		const user = userEvent.setup();
 		const resume = vi.fn();
@@ -1160,6 +1248,56 @@ describe("ChatWorkspace timeline", () => {
 		await user.click(screen.getByRole("button", { name: "Open shell" }));
 		expect(resume).toHaveBeenCalledOnce();
 		expect(openShell).toHaveBeenCalledOnce();
+	});
+
+	// An asynchronous spawn puts the session on screen before its agent exists.
+	// That is not a controller that stopped, and the composer has to stay open:
+	// what the user types while it starts is queued, not lost.
+	it("explains a session that is still starting and keeps it typeable", () => {
+		const snapshot = {
+			...chatFixtureSettled,
+			controller: { state: "connecting" as const },
+			turns: [
+				...chatFixtureSettled.turns,
+				{ id: "queued-start", state: "queued" as const, requestedAt: "2026-08-15T00:00:00Z" },
+			],
+		};
+		render(
+			<ChatWorkspace
+				snapshot={snapshot}
+				session={{ ...chatSession, provisionState: "provisioning" }}
+				onResumeAgent={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByRole("status")).toHaveTextContent("Starting Codex…");
+		expect(screen.queryByText(/^Working for /)).not.toBeInTheDocument();
+		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
+	});
+
+	it("offers retry for a failed start without reporting a crash", async () => {
+		const user = userEvent.setup();
+		const resume = vi.fn();
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{
+					...chatSession,
+					provisionState: "failed",
+					provisionError: "spawn mer-1: create workspace: branch already checked out",
+				}}
+				onResumeAgent={resume}
+			/>,
+		);
+
+		const banner = screen.getByRole("alert");
+		expect(banner).toHaveTextContent("This session could not be started");
+		expect(banner).toHaveTextContent("branch already checked out");
+		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Retry start" }));
+		expect(resume).toHaveBeenCalledOnce();
 	});
 
 	it("shows connecting during the controller gap, then restores the composer when ready", () => {
@@ -1686,6 +1824,37 @@ describe("ChatWorkspace timeline", () => {
 });
 
 describe("automation reports", () => {
+	it("keeps queued browser feedback visible while the agent is busy", () => {
+		const snapshot: ConversationSnapshot = {
+			...chatFixture,
+			turns: [
+				...chatFixture.turns,
+				{ id: "queued-feedback", state: "queued", requestedAt: "2026-09-28T12:00:00Z" },
+			],
+			items: [
+				...chatFixture.items,
+				{
+					kind: "message",
+					id: "queued-feedback-message",
+					turnId: "queued-feedback",
+					sequence: 15,
+					revision: 0,
+					role: "user",
+					origin: "automation",
+					text: "<browser_annotations>\nBrowser feedback\nPage: Example\nURL: https://example.com/\nAnnotations: 1\n\nAnnotation 1 (comment):\nTarget: button\nComment: Make this clearer.\n\n</browser_annotations>",
+					streaming: false,
+					createdAt: "2026-09-28T12:00:00Z",
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		expect(screen.getByText("Browser feedback")).toBeInTheDocument();
+		expect(screen.getByText("1 annotation on Example")).toBeInTheDocument();
+		expect(screen.getByText("Make this clearer.")).toBeInTheDocument();
+	});
+
 	it("renders browser annotation transport as a compact feedback card", () => {
 		const source = chatFixture.items.find((item) => item.id === "m-4") as ConversationMessage;
 		const message: ConversationMessage = {
@@ -1700,6 +1869,7 @@ Annotation 1 (adjustment):
 Target: div.badge
 Selector: body > div.badge
 Dimensions: 120×24
+Element text: "New"
 Requested visual changes:
 - Text color: "rgb(0, 0, 0)" → "#d7193f"
 - Background: "transparent" → "#32c873"
@@ -1717,6 +1887,7 @@ Task: Address the feedback below according to its wording. Visual adjustments ar
 		expect(screen.getByText("1 annotation on Google")).toBeInTheDocument();
 		expect(screen.getByText("2 visual changes")).toBeInTheDocument();
 		expect(screen.getByText("div.badge")).toBeInTheDocument();
+		expect(screen.getByText("New")).toBeInTheDocument();
 		expect(screen.getByText("1 reference screenshot")).toBeInTheDocument();
 		expect(screen.queryByText(/body > div\.badge/)).not.toBeInTheDocument();
 		expect(screen.queryByText(/Task: Address/)).not.toBeInTheDocument();
@@ -1751,6 +1922,18 @@ Task: Address the feedback below according to its wording. Visual adjustments ar
 		render(<OriginMessage message={message} />);
 		expect(screen.getByText(/Checks failed on the base branch/)).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Show full report" })).not.toBeInTheDocument();
+	});
+
+	it("linkifies session URLs without parsing an origin preview as Markdown", () => {
+		const source = chatFixture.items.find((item) => item.id === "m-4") as ConversationMessage;
+		const text = "Notes:\n- fix *bug*\nao://sessions/proj/sess\n> write test";
+		const { container } = render(<OriginMessage message={{ ...source, text }} />);
+
+		const paragraph = container.querySelector(".cursor-chat-origin-message > p");
+		expect(paragraph).toHaveClass("whitespace-pre-wrap");
+		expect(paragraph?.textContent).toBe(text);
+		expect(screen.getByRole("link", { name: "ao://sessions/proj/sess" })).toBeInTheDocument();
+		expect(container.querySelector("ul, blockquote, em")).toBeNull();
 	});
 });
 
@@ -2047,6 +2230,28 @@ describe("ChatWorkspace message actions", () => {
 
 		render(<ChatWorkspace snapshot={sessionB} onSend={vi.fn()} />);
 		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("session B draft");
+	});
+
+	it("keeps renderer drafts separate for two hosts with the same daemon session ID", async () => {
+		const snapshot = idleSnapshot();
+		const session = { ...chatSession, createdAt: "2026-08-25T09:00:00.000Z" };
+		const a = `host-A:${snapshot.sessionId}`;
+		const b = `host-B:${snapshot.sessionId}`;
+		const first = render(<ChatWorkspace snapshot={snapshot} session={session} uiSessionId={a} onSend={vi.fn()} />);
+		await typeInLexicalEditor(screen.getByLabelText("Message the agent"), "draft on A");
+		first.unmount();
+
+		const second = render(<ChatWorkspace snapshot={snapshot} session={session} uiSessionId={b} onSend={vi.fn()} />);
+		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("");
+		await typeInLexicalEditor(screen.getByLabelText("Message the agent"), "draft on B");
+		second.unmount();
+
+		const restored = render(<ChatWorkspace snapshot={snapshot} session={session} uiSessionId={a} onSend={vi.fn()} />);
+		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("draft on A");
+		restored.unmount();
+
+		render(<ChatWorkspace snapshot={snapshot} session={session} uiSessionId={b} onSend={vi.fn()} />);
+		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("draft on B");
 	});
 
 	it("lets only the newest daemon session incarnation own restored drafts", async () => {

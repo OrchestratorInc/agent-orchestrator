@@ -86,6 +86,9 @@ const WIRE = {
 		at: "2026-08-03T00:00:01Z",
 	},
 	account: {
+		authenticationState: "required",
+		authFailureId: "auth-failure-1",
+		lastAuthFailureReason: "expired",
 		authMode: "chatgpt",
 		planLabel: "Pro",
 		reauthRequiredAt: "2026-08-03T00:00:02Z",
@@ -764,6 +767,9 @@ describe("useConversation snapshot mapping", () => {
 			at: "2026-08-03T00:00:01Z",
 		});
 		expect(snapshot.account?.reauthRequiredAt).toBe("2026-08-03T00:00:02Z");
+		expect(snapshot.account?.authenticationState).toBe("required");
+		expect(snapshot.account?.authFailureId).toBe("auth-failure-1");
+		expect(snapshot.account?.lastAuthFailureReason).toBe("expired");
 		expect(snapshot.threadState).toEqual({
 			status: "system_error",
 			waitingOn: ["user_input"],
@@ -820,6 +826,24 @@ describe("useConversation snapshot mapping", () => {
 });
 
 describe("conversation branching commands", () => {
+	it("marks only attachment-bearing conversation writes as uploads", async () => {
+		postMock.mockResolvedValue({ data: {}, error: undefined });
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+		const image = { mimeType: "image/png", data: "YQ==" };
+
+		await act(async () => {
+			await result.current.send({ text: "plain" });
+			await result.current.send({ text: "image", attachments: [image] });
+			await result.current.steer("image", [image]);
+			await result.current.editQueuedTurn("turn-1", "image", { attachments: [image] });
+		});
+
+		expect(postMock.mock.calls[0][1].headers).toBeUndefined();
+		for (const [, options] of postMock.mock.calls.slice(1)) {
+			expect(options.headers).toEqual({ "X-AO-Attachment-Upload": "1" });
+		}
+	});
+
 	it("threads caller-owned idempotency ids through send, steer, and inline edit", async () => {
 		postMock.mockResolvedValue({ data: {}, error: undefined });
 		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
@@ -933,6 +957,7 @@ describe("steering refusals", () => {
 			"/api/v1/sessions/{sessionId}/conversation/steer",
 			{
 				params: { path: { sessionId: "ao-1" } },
+				headers: { "X-AO-Attachment-Upload": "1" },
 				body: {
 					text: "inspect this",
 					attachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],

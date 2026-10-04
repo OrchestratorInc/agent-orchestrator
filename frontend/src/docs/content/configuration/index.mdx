@@ -57,6 +57,7 @@ The primary daemon listener is always loopback-only and unauthenticated. Its bin
 | `AO_REQUEST_TIMEOUT` | `60s` | REST request timeout |
 | `AO_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown deadline |
 | `AO_ALLOWED_ORIGINS` | packaged desktop origin | Additional trusted browser origins |
+| `AO_TRACKER_INTAKE` | `off` | Enables the issue-intake observer; a project's own `trackerIntake` cannot enable it alone |
 
 Do not set `HOST=0.0.0.0` or proxy the primary daemon to a network. For phone access, use the separate authenticated listener created by **Connect Mobile**. See [Remote access](/configuration/remote-access).
 

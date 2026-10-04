@@ -13,6 +13,18 @@ const state = vi.hoisted(() => ({
 	lifecycle: [] as string[],
 	linkHandler: null as null | ((event: MouseEvent, uri: string) => void),
 	queueViewportSyncOnOpen: false,
+	sessionLinkProvider: null as null | {
+		provideLinks: (
+			line: number,
+			callback: (
+				links?: Array<{
+					text: string;
+					range: { start: { x: number; y: number }; end: { x: number; y: number } };
+					activate: (event: MouseEvent) => void;
+				}>,
+			) => void,
+		) => void;
+	},
 	searchAddon: null as null | {
 		clearDecorations: ReturnType<typeof vi.fn>;
 		findNext: ReturnType<typeof vi.fn>;
@@ -22,23 +34,35 @@ const state = vi.hoisted(() => ({
 	mouseMoveListener: vi.fn(),
 	lastTerminal: null as null | {
 		write(data: Uint8Array, done?: () => void): void;
+		cols: number;
 		keyHandler?: (event: KeyboardEvent) => boolean;
 		wheelHandler?: (event: WheelEvent) => boolean;
 		selection: string;
 		options: Record<string, unknown>;
-		cols: number;
+		rows: number;
+		dimensions?: { css: { cell: { width: number; height: number } } };
+		resize: ReturnType<typeof vi.fn>;
 		modes: { bracketedPasteMode: boolean; mouseTrackingMode: string };
 		buffer: {
 			active: {
 				baseY: number;
 				type: string;
 				viewportY: number;
+				length: number;
+				getNullCell: () => {
+					chars: string;
+					width: number;
+					getChars: () => string;
+					getWidth: () => number;
+				};
 				getLine: (
 					row: number,
 				) =>
 					| {
 							translateToString: (trimRight: boolean, startColumn?: number, endColumn?: number) => string;
 							isWrapped: boolean;
+							length?: number;
+							getCell?: (column: number, cell: { chars: string; width: number }) => unknown;
 					  }
 					| undefined;
 			};
@@ -60,6 +84,7 @@ const state = vi.hoisted(() => ({
 		focus: ReturnType<typeof vi.fn>;
 		selectAll: ReturnType<typeof vi.fn>;
 		dataListeners: Set<(data: string) => void>;
+		renderListeners: Set<() => void>;
 		csiHandlers: Array<{
 			callback: (params: (number | number[])[]) => boolean | Promise<boolean>;
 			id: { final: string; intermediates?: string; prefix?: string };
@@ -88,6 +113,8 @@ vi.mock("@xterm/xterm", () => ({
 		options: Record<string, unknown>;
 		cols = 80;
 		rows = 24;
+		dimensions?: { css: { cell: { width: number; height: number } } };
+		resize = vi.fn((cols: number, rows: number) => { this.cols = cols; this.rows = rows; });
 		selection = "";
 		keyHandler?: (event: KeyboardEvent) => boolean;
 		wheelHandler?: (event: WheelEvent) => boolean;
@@ -101,6 +128,17 @@ vi.mock("@xterm/xterm", () => ({
 				baseY: 0,
 				type: "normal",
 				viewportY: 0,
+				length: 1,
+				getNullCell: () => ({
+					chars: "",
+					width: 1,
+					getChars() {
+						return this.chars;
+					},
+					getWidth() {
+						return this.width;
+					},
+				}),
 				getLine: (row: number) => this.bufferLines[row],
 			},
 		};
@@ -116,6 +154,7 @@ vi.mock("@xterm/xterm", () => ({
 		focus = vi.fn();
 		selectAll = vi.fn();
 		dataListeners = new Set<(data: string) => void>();
+		renderListeners = new Set<() => void>();
 		csiHandlers: Array<{
 			callback: (params: (number | number[])[]) => boolean | Promise<boolean>;
 			id: { final: string; intermediates?: string; prefix?: string };
@@ -183,8 +222,9 @@ vi.mock("@xterm/xterm", () => ({
 		onResize() {
 			return { dispose: () => undefined };
 		}
-		onRender() {
-			return { dispose: () => undefined };
+		onRender(listener: () => void) {
+			this.renderListeners.add(listener);
+			return { dispose: () => this.renderListeners.delete(listener) };
 		}
 		onScroll(listener: () => void) {
 			this.scrollListeners.add(listener);
@@ -210,14 +250,18 @@ vi.mock("@xterm/xterm", () => ({
 		attachCustomWheelEventHandler(listener: (event: WheelEvent) => boolean) {
 			this.wheelHandler = listener;
 		}
+		registerLinkProvider(provider: typeof state.sessionLinkProvider) {
+			state.sessionLinkProvider = provider;
+			return { dispose: () => undefined };
+		}
 		unicode = { activeVersion: "" };
 	},
 }));
 
 vi.mock("@xterm/addon-fit", () => ({
 	FitAddon: class FakeFitAddon {
-		fit() {
-			state.fit();
+		proposeDimensions() {
+			return state.fit();
 		}
 	},
 }));
@@ -252,10 +296,6 @@ vi.mock("@xterm/addon-web-links", () => ({
 	},
 }));
 
-vi.mock("@xterm/addon-canvas", () => ({
-	CanvasAddon: class FakeCanvasAddon {},
-}));
-
 vi.mock("@xterm/addon-webgl", () => ({
 	WebglAddon: class FakeWebglAddon {
 		onContextLoss() {}
@@ -274,13 +314,55 @@ function setNavigatorPlatform(platform: string) {
 	});
 }
 
+type TestBufferCell = { chars: string; width: number };
+
+function asciiCells(text: string): TestBufferCell[] {
+	return [...text].map((chars) => ({ chars, width: 1 }));
+}
+
+function testBufferLine(cells: TestBufferCell[], isWrapped = false) {
+	return {
+		isWrapped,
+		length: cells.length,
+		getCell(column: number, target: { chars: string; width: number }) {
+			const cell = cells[column];
+			if (!cell) return undefined;
+			target.chars = cell.chars;
+			target.width = cell.width;
+			return target;
+		},
+		translateToString(trimRight: boolean, startColumn = 0, endColumn = cells.length) {
+			const text = cells
+				.slice(startColumn, endColumn)
+				.filter((cell) => cell.width > 0)
+				.map((cell) => cell.chars || " ")
+				.join("");
+			return trimRight ? text.trimEnd() : text;
+		},
+	};
+}
+
 describe("XtermTerminal", () => {
+	it("reports visible text only after xterm renders nonblank cells", () => {
+		const onVisibleContent = vi.fn();
+		render(<XtermTerminal onVisibleContent={onVisibleContent} theme="dark" />);
+		const terminal = state.lastTerminal!;
+		terminal.bufferLines = [{ translateToString: () => "   ", isWrapped: false }];
+		act(() => terminal.renderListeners.forEach((listener) => listener()));
+		expect(onVisibleContent).not.toHaveBeenCalled();
+		terminal.bufferLines = [{ translateToString: () => "Codex", isWrapped: false }];
+		act(() => terminal.renderListeners.forEach((listener) => listener()));
+		expect(onVisibleContent).toHaveBeenCalledTimes(1);
+		act(() => terminal.renderListeners.forEach((listener) => listener()));
+		expect(onVisibleContent).toHaveBeenCalledTimes(1);
+	});
 	beforeEach(() => {
 		state.fit.mockReset();
 		state.lifecycle.length = 0;
 		state.lastTerminal = null;
 		state.linkHandler = null;
 		state.queueViewportSyncOnOpen = false;
+		state.sessionLinkProvider = null;
 		state.searchAddon = null;
 		state.mouseMoveListener.mockClear();
 		setNavigatorPlatform("Linux x86_64");
@@ -288,6 +370,40 @@ describe("XtermTerminal", () => {
 		window.ao!.clipboard.readText = vi.fn().mockResolvedValue("");
 		window.ao!.terminal.setFocused = vi.fn();
 		window.ao!.terminal.onFontSizeShortcut = () => () => undefined;
+	});
+
+	// FitAddon proposes its 2-column minimum for a host with no layout box (a
+	// tab parked before it was laid out). Adopting it would start the shell at
+	// 2 columns.
+	it("never adopts a fitted grid from a host with no layout box", async () => {
+		state.fit.mockReturnValue({ cols: 2, rows: 5 });
+		let terminal!: AttachableTerminal;
+		render(<XtermTerminal theme="dark" onReady={(ready) => { terminal = ready; }} />);
+
+		act(() => { window.dispatchEvent(new Event("resize")); });
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 60)); });
+
+		expect(state.lastTerminal!.resize).not.toHaveBeenCalledWith(2, 5);
+		expect(terminal.hasMeasuredGrid).toBe(false);
+	});
+
+	it("publishes its first measured grid even when it equals xterm's default", async () => {
+		const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+		const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+		try {
+			let terminal!: AttachableTerminal;
+			const onVisibleSize = vi.fn();
+			render(<XtermTerminal theme="dark" onVisibleSize={onVisibleSize} onReady={(ready) => { terminal = ready; }} />);
+			const { cols, rows } = state.lastTerminal!;
+			state.fit.mockReturnValue({ cols, rows });
+
+			await waitFor(() => expect(onVisibleSize).toHaveBeenCalledWith(cols, rows));
+			expect(terminal.hasMeasuredGrid).toBe(true);
+			expect(state.lastTerminal!.resize).not.toHaveBeenCalled();
+		} finally {
+			width.mockRestore();
+			height.mockRestore();
+		}
 	});
 
 	it("coalesces live terminal resize observer deliveries into the next frame", () => {
@@ -311,6 +427,8 @@ describe("XtermTerminal", () => {
 			writable: true,
 			value: CapturingResizeObserver,
 		});
+		const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+		const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
 		try {
 			render(
 				<div data-terminal-live-resize="true">
@@ -328,6 +446,8 @@ describe("XtermTerminal", () => {
 			act(() => frames.shift()?.(performance.now()));
 			expect(state.fit).toHaveBeenCalledTimes(1);
 		} finally {
+			width.mockRestore();
+			height.mockRestore();
 			requestAnimationFrameSpy.mockRestore();
 			Object.defineProperty(window, "ResizeObserver", {
 				configurable: true,
@@ -335,6 +455,45 @@ describe("XtermTerminal", () => {
 				value: originalResizeObserver,
 			});
 		}
+	});
+
+	it.each([
+		["Linux x86_64", 100],
+		["MacIntel", 99],
+	])("resizes before paint from the observer box on %s without reading layout", (platform, cols) => {
+		setNavigatorPlatform(platform);
+		const callbacks: ResizeObserverCallback[] = [];
+		const original = window.ResizeObserver;
+		class CapturingResizeObserver implements ResizeObserver {
+			constructor(callback: ResizeObserverCallback) { callbacks.push(callback); }
+			disconnect() {}
+			observe() {}
+			unobserve() {}
+		}
+		window.ResizeObserver = CapturingResizeObserver;
+		try {
+			const { container, rerender } = render(<XtermTerminal theme="dark" />);
+			const host = container.querySelector(".terminal-xterm-host")!;
+			const terminal = state.lastTerminal!;
+			terminal.dimensions = { css: { cell: { width: 8, height: 16 } } };
+			const entry = (width: number, height = 640) => [{ target: host, contentRect: { width, height } }] as ResizeObserverEntry[];
+			const styleSpy = vi.spyOn(window, "getComputedStyle");
+			const rectSpy = vi.spyOn(host, "getBoundingClientRect");
+			state.fit.mockClear();
+			try {
+				act(() => callbacks.at(-1)?.(entry(800.9), {} as ResizeObserver));
+				expect(terminal.resize).toHaveBeenLastCalledWith(cols, 40);
+				act(() => callbacks.at(-1)?.(entry(801), {} as ResizeObserver));
+				act(() => callbacks.at(-1)?.(entry(0, 0), {} as ResizeObserver));
+				expect(terminal.resize).toHaveBeenCalledTimes(1);
+				expect(state.fit).not.toHaveBeenCalled();
+				expect(styleSpy).not.toHaveBeenCalled();
+				expect(rectSpy).not.toHaveBeenCalled();
+			} finally { styleSpy.mockRestore(); rectSpy.mockRestore(); }
+			rerender(<XtermTerminal theme="dark" isVisible={false} />);
+			act(() => callbacks.at(-1)?.(entry(1000), {} as ResizeObserver));
+			expect(terminal.resize).toHaveBeenCalledTimes(1);
+		} finally { window.ResizeObserver = original; }
 	});
 
 	it("finishes retained activation when xterm emits no render event", async () => {
@@ -521,6 +680,121 @@ describe("XtermTerminal", () => {
 		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
 	});
 
+	it("restores focus when the cache requests activation focus", async () => {
+		let terminal: AttachableTerminal | undefined;
+		render(<XtermTerminal theme="dark" onReady={(ready) => { terminal = ready; }} />);
+		state.lastTerminal!.focus.mockClear();
+
+		act(() => terminal!.requestActivationFocus());
+
+		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
+	});
+
+	it("respects an explicit focus opt-out when the cache requests activation focus", () => {
+		vi.useFakeTimers();
+		try {
+			let terminal: AttachableTerminal | undefined;
+			render(<XtermTerminal focusRequested={false} theme="dark" onReady={(ready) => { terminal = ready; }} />);
+			state.lastTerminal!.focus.mockClear();
+
+			act(() => terminal!.requestActivationFocus());
+			act(() => vi.runOnlyPendingTimers());
+
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("rechecks the focus opt-out before a queued activation focus runs", () => {
+		vi.useFakeTimers();
+		try {
+			let terminal: AttachableTerminal | undefined;
+			const onReady = (ready: AttachableTerminal) => { terminal = ready; };
+			const { rerender } = render(<XtermTerminal focusRequested theme="dark" onReady={onReady} />);
+			act(() => vi.runOnlyPendingTimers());
+			state.lastTerminal!.focus.mockClear();
+
+			act(() => terminal!.requestActivationFocus());
+			rerender(<XtermTerminal focusRequested={false} theme="dark" onReady={onReady} />);
+			act(() => vi.runOnlyPendingTimers());
+
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not steal focus from a dialog when the cache requests activation focus", () => {
+		vi.useFakeTimers();
+		try {
+			let terminal: AttachableTerminal | undefined;
+			render(<XtermTerminal theme="dark" onReady={(ready) => { terminal = ready; }} />);
+			state.lastTerminal!.focus.mockClear();
+			const dialog = document.createElement("div");
+			dialog.setAttribute("role", "dialog");
+			dialog.dataset.state = "open";
+			const dialogInput = document.createElement("input");
+			dialog.appendChild(dialogInput);
+			document.body.appendChild(dialog);
+			dialogInput.focus();
+
+			act(() => terminal!.requestActivationFocus());
+			act(() => vi.runAllTimers());
+
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+			dialog.remove();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("allows a tab close button marked as a tab action to hand focus to the terminal", async () => {
+		const { rerender } = render(<XtermTerminal theme="dark" />);
+		const topbar = document.createElement("div");
+		topbar.dataset.testid = "session-workspace-topbar";
+		const close = document.createElement("button");
+		close.setAttribute("data-terminal-tab-action", "true");
+		topbar.appendChild(close);
+		document.body.appendChild(topbar);
+		close.focus();
+		state.lastTerminal!.focus.mockClear();
+
+		rerender(<XtermTerminal focusRequested theme="dark" />);
+
+		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
+		topbar.remove();
+	});
+
+	it("does not steal focus from other topbar buttons like the session-actions trigger", async () => {
+		const frames: FrameRequestCallback[] = [];
+		const requestAnimationFrameSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			frames.push(callback);
+			return frames.length;
+		});
+		try {
+			const { rerender } = render(<XtermTerminal theme="dark" />);
+			const topbar = document.createElement("div");
+			topbar.dataset.testid = "session-workspace-topbar";
+			// ⋮ trigger and embedded shell chrome are plain buttons in the
+			// topbar with no opt-in marker — they must keep focus.
+			const actionsTrigger = document.createElement("button");
+			actionsTrigger.setAttribute("data-session-actions-trigger", "");
+			topbar.appendChild(actionsTrigger);
+			document.body.appendChild(topbar);
+			actionsTrigger.focus();
+			state.lastTerminal!.focus.mockClear();
+
+			rerender(<XtermTerminal focusRequested theme="dark" />);
+			act(() => frames.splice(0).forEach((callback) => callback(performance.now())));
+
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+			topbar.remove();
+		} finally {
+			requestAnimationFrameSpy.mockRestore();
+		}
+	});
+
 	it("updates the live terminal palette when the named color theme changes", () => {
 		const style = document.createElement("style");
 		style.textContent = `
@@ -588,7 +862,7 @@ describe("XtermTerminal", () => {
 	it("does not reserve width for the hidden terminal scrollbar outside macOS", () => {
 		const { container } = render(<XtermTerminal theme="dark" />);
 
-		expect(state.lastTerminal!._core.viewport.scrollBarWidth).toBe(0);
+		expect(state.lastTerminal!.options.scrollbar).toEqual({ showScrollbar: false, width: 7 });
 		expect(container.querySelector(".terminal-scrollbar")).toBeNull();
 	});
 
@@ -596,7 +870,7 @@ describe("XtermTerminal", () => {
 		setNavigatorPlatform("MacIntel");
 		const { container } = render(<XtermTerminal theme="dark" />);
 
-		expect(state.lastTerminal!._core.viewport.scrollBarWidth).toBe(7);
+		expect(state.lastTerminal!.options.scrollbar).toEqual({ showScrollbar: true, width: 7 });
 		expect(container.querySelector(".terminal-xterm-host--mac")).not.toBeNull();
 		expect(container.querySelector(".terminal-scrollbar")).not.toBeNull();
 	});
@@ -2345,6 +2619,123 @@ describe("XtermTerminal", () => {
 		expect(onLinkOpen).toHaveBeenCalledWith("http://localhost:3000");
 		expect(open).not.toHaveBeenCalled();
 		open.mockRestore();
+	});
+
+	it.each(["plain", "OSC 8"])("activates %s session links inside AO", (kind) => {
+		const onSessionLinkOpen = vi.fn();
+		render(<XtermTerminal onSessionLinkOpen={onSessionLinkOpen} theme="dark" />);
+		state.lastTerminal!.modes.mouseTrackingMode = "none";
+		const osc = state.lastTerminal!.options.linkHandler as {
+			activate: (event: MouseEvent, uri: string) => void;
+		};
+		if (kind === "OSC 8") {
+			osc.activate({} as MouseEvent, "ao://sessions/project/session");
+		} else {
+			state.lastTerminal!.buffer.active.getLine = () =>
+				testBufferLine(asciiCells("ao://sessions/project/session"));
+			state.sessionLinkProvider!.provideLinks(1, (links) =>
+				links![0]!.activate({} as MouseEvent),
+			);
+		}
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
+	});
+
+	it("requires Ctrl for a session link while an application captures mouse input", () => {
+		const onSessionLinkOpen = vi.fn();
+		render(<XtermTerminal onSessionLinkOpen={onSessionLinkOpen} theme="dark" />);
+		state.lastTerminal!.modes.mouseTrackingMode = "any";
+		const handler = (state.lastTerminal!.options.linkHandler as {
+			activate: (event: MouseEvent, uri: string) => void;
+		}).activate;
+		handler({ ctrlKey: false } as MouseEvent, "ao://sessions/project/session");
+		expect(onSessionLinkOpen).not.toHaveBeenCalled();
+		handler({ ctrlKey: true } as MouseEvent, "ao://sessions/project/session");
+		expect(onSessionLinkOpen).toHaveBeenCalledTimes(1);
+	});
+
+	it("routes malformed AO OSC links to in-app feedback without external dispatch", () => {
+		const open = vi.spyOn(window, "open").mockReturnValue(null);
+		const onSessionLinkOpen = vi.fn();
+		render(<XtermTerminal onSessionLinkOpen={onSessionLinkOpen} theme="dark" />);
+		state.lastTerminal!.modes.mouseTrackingMode = "none";
+		const handler = (state.lastTerminal!.options.linkHandler as {
+			activate: (event: MouseEvent, uri: string) => void;
+		}).activate;
+		handler({} as MouseEvent, "ao://sessions/project/session/kill");
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session/kill");
+		expect(open).not.toHaveBeenCalled();
+		open.mockRestore();
+	});
+
+	it("detects a session URL wrapped across terminal rows without consuming punctuation", () => {
+		const onSessionLinkOpen = vi.fn();
+		render(<XtermTerminal onSessionLinkOpen={onSessionLinkOpen} theme="dark" />);
+		state.lastTerminal!.modes.mouseTrackingMode = "none";
+		state.lastTerminal!.cols = 16;
+		const rows = ["ao://sessions/pr", "oject/session)."];
+		state.lastTerminal!.buffer.active.length = rows.length;
+		state.lastTerminal!.buffer.active.getLine = (line) =>
+			line >= rows.length
+				? undefined
+				: testBufferLine(asciiCells(rows[line]!), line === 1);
+		state.sessionLinkProvider!.provideLinks(2, (links) => {
+			expect(links?.[0]?.text).toBe("ao://sessions/project/session");
+			expect(links?.[0]?.range).toEqual({
+				start: { x: 1, y: 1 },
+				end: { x: 13, y: 2 },
+			});
+			links?.[0]?.activate({} as MouseEvent);
+		});
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
+	});
+
+	it.each([
+		{
+			name: "wide",
+			prefix: [{ chars: "中", width: 2 }, { chars: "", width: 0 }, { chars: " ", width: 1 }],
+			expected: { start: { x: 4, y: 1 }, end: { x: 20, y: 1 } },
+		},
+		{
+			name: "combining",
+			prefix: [{ chars: "e\u0301", width: 1 }, { chars: " ", width: 1 }],
+			expected: { start: { x: 3, y: 1 }, end: { x: 19, y: 1 } },
+		},
+	])("maps a session link after $name characters to terminal cells", ({ prefix, expected }) => {
+		render(<XtermTerminal onSessionLinkOpen={vi.fn()} theme="dark" />);
+		const line = testBufferLine([
+			...prefix,
+			...asciiCells("ao://sessions/p/s"),
+			{ chars: "", width: 1 },
+		]);
+		state.lastTerminal!.buffer.active.length = 1;
+		state.lastTerminal!.buffer.active.getLine = (row) => (row === 0 ? line : undefined);
+
+		state.sessionLinkProvider!.provideLinks(1, (links) => {
+			expect(links?.[0]?.range).toEqual(expected);
+		});
+	});
+
+	it("maps a wrapped session link with a wide character prefix to terminal cells", () => {
+		render(<XtermTerminal onSessionLinkOpen={vi.fn()} theme="dark" />);
+		state.lastTerminal!.cols = 10;
+		const rows = [
+			testBufferLine([
+				{ chars: "中", width: 2 },
+				{ chars: "", width: 0 },
+				{ chars: " ", width: 1 },
+				...asciiCells("ao://se"),
+			]),
+			testBufferLine(asciiCells("ssions/p/s"), true),
+		];
+		state.lastTerminal!.buffer.active.length = rows.length;
+		state.lastTerminal!.buffer.active.getLine = (row) => rows[row];
+
+		state.sessionLinkProvider!.provideLinks(2, (links) => {
+			expect(links?.[0]?.range).toEqual({
+				start: { x: 4, y: 1 },
+				end: { x: 10, y: 2 },
+			});
+		});
 	});
 
 	it.each([

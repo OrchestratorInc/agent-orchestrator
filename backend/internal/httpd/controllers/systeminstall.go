@@ -22,6 +22,7 @@ type Installer interface {
 	AgentPlans(ctx context.Context) ([]systeminstall.AgentPlan, error)
 	AgentJobs(ctx context.Context) ([]systeminstall.Job, error)
 	Verify(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
+	UpdateAdvisory(ctx context.Context, target systeminstall.Target) (systeminstall.UpdateAdvisory, error)
 }
 
 // SystemInstallController owns the system prerequisite and agent harness install routes.
@@ -35,9 +36,27 @@ func (c *SystemInstallController) Register(r chi.Router) {
 	r.Get("/system/install/{target}", c.status)
 	r.Get("/agents/installers", c.agentPlans)
 	r.Get("/agents/install-jobs", c.agentJobs)
+	r.Get("/agents/{agent}/update-advisory", c.updateAdvisory)
 	r.Post("/agents/{agent}/install", c.startAgent)
 	r.Get("/agents/{agent}/install", c.agentStatus)
 	r.Post("/agents/{agent}/verify", c.verifyAgent)
+}
+
+func (c *SystemInstallController) updateAdvisory(w http.ResponseWriter, r *http.Request) {
+	if c.Installer == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/agents/{agent}/update-advisory")
+		return
+	}
+	target, ok := parseAgentInstallTarget(w, r)
+	if !ok {
+		return
+	}
+	advisory, err := c.Installer.UpdateAdvisory(r.Context(), target)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, advisory)
 }
 
 func (c *SystemInstallController) agentPlans(w http.ResponseWriter, r *http.Request) {

@@ -29,6 +29,7 @@ type fakeInstaller struct {
 	agentJobs     []systeminstall.Job
 	verifyJob     systeminstall.Job
 	verifyErr     error
+	advisory      systeminstall.UpdateAdvisory
 }
 
 func (f *fakeInstaller) Start(_ context.Context, target systeminstall.Target) (systeminstall.Job, error) {
@@ -63,6 +64,11 @@ func (f *fakeInstaller) Verify(_ context.Context, target systeminstall.Target) (
 	return f.verifyJob, f.verifyErr
 }
 
+func (f *fakeInstaller) UpdateAdvisory(_ context.Context, target systeminstall.Target) (systeminstall.UpdateAdvisory, error) {
+	f.lastTarget = target
+	return f.advisory, nil
+}
+
 func TestAgentInstallRoutes(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	installer := &fakeInstaller{
@@ -95,6 +101,21 @@ func TestAgentInstallRoutes(t *testing.T) {
 	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/agents/not-real/install", "")
 	if status != http.StatusBadRequest || !strings.Contains(string(body), `"code":"UNKNOWN_AGENT_INSTALL_TARGET"`) {
 		t.Fatalf("POST /agents/not-real/install = %d, body=%s", status, body)
+	}
+}
+
+func TestAgentUpdateAdvisoryRoute(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	installer := &fakeInstaller{advisory: systeminstall.UpdateAdvisory{AgentID: "codex", Status: systeminstall.UpdateStatusBehindLatest, CurrentVersion: "1.2.3", LatestVersion: "1.3.0", Source: "npm"}}
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Installer: installer}, httpd.ControlDeps{}))
+	defer srv.Close()
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/agents/codex/update-advisory", "")
+	if status != http.StatusOK || installer.lastTarget != systeminstall.TargetCodex || !strings.Contains(string(body), `"status":"behind_latest"`) || !strings.Contains(string(body), `"latestVersion":"1.3.0"`) {
+		t.Fatalf("status=%d target=%q body=%s", status, installer.lastTarget, body)
+	}
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/agents/not-real/update-advisory", "")
+	if status != http.StatusBadRequest || !strings.Contains(string(body), `"code":"UNKNOWN_AGENT_INSTALL_TARGET"`) {
+		t.Fatalf("invalid target status=%d body=%s", status, body)
 	}
 }
 
@@ -169,6 +190,24 @@ func TestPostSystemInstall(t *testing.T) {
 	}
 	if installer.startCalls != 1 {
 		t.Fatalf("startCalls = %d, want 1", installer.startCalls)
+	}
+}
+
+func TestPostSystemInstallAcceptsOpenCodeV2WithReplacementNotice(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	installer := &fakeInstaller{startJob: systeminstall.Job{
+		Target: systeminstall.TargetOpencodeV2, Status: systeminstall.StatusInstalling,
+		Notice: "Installing OpenCode 2 at the default location replaces the default OpenCode 1 `opencode` executable.",
+	}}
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Installer: installer}, httpd.ControlDeps{}))
+	defer srv.Close()
+
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/system/install/opencode-v2", "")
+	if status != http.StatusAccepted || installer.lastTarget != systeminstall.TargetOpencodeV2 {
+		t.Fatalf("POST /system/install/opencode-v2 = %d target=%q body=%s", status, installer.lastTarget, body)
+	}
+	if !strings.Contains(string(body), `"notice":"Installing OpenCode 2`) {
+		t.Fatalf("body missing replacement notice: %s", body)
 	}
 }
 

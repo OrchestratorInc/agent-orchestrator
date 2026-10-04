@@ -799,6 +799,14 @@ describe("steering", () => {
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
+	it("offers an explicit steer action for a running Cloud turn", async () => {
+		const { onSend, onSteer, field } = renderSteerable({ showSteerButton: true });
+		await typeInComposer(field, "change course");
+		await userEvent.click(screen.getByRole("button", { name: "Steer into running turn" }));
+		await waitFor(() => expect(onSteer).toHaveBeenCalledWith("change course"));
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
 	it("steers on Ctrl+Enter, so the chord exists off macOS too", async () => {
 		const { onSend, onSteer, field } = renderSteerable();
 
@@ -1535,6 +1543,22 @@ describe("attachments", () => {
 		]);
 	});
 
+	it("sends an image above the native limit by workspace path", async () => {
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/large.png"]);
+		const { onSend, field } = renderComposer({ onStageAttachments: stage, nativeImages: true });
+		const largeImage = png("large.png");
+		Object.defineProperty(largeImage, "size", { value: 11 * 1024 * 1024 });
+
+		fireEvent.paste(field, { clipboardData: clipboardData([largeImage]) });
+		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
+		await typeInComposer(field, "inspect this");
+		await userEvent.keyboard("{Enter}");
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		expect(onSend.mock.calls[0]?.[0]).toContain(".ao/attachments/large.png");
+		expect(onSend.mock.calls[0]?.[1]).toBeUndefined();
+	});
+
 	it("stages non-images by path without sending them as native image blocks", async () => {
 		const stage = vi.fn().mockResolvedValue([
 			".ao/attachments/attachment-native.png",
@@ -2139,10 +2163,12 @@ it("does not dispatch a restored image after its session incarnation was replace
 });
 
 
-it("restores an image thumbnail from its durable path after the composer remounts", async () => {
-	const sessionId = "composer-restored-thumbnail";
+it.each([
+	{ name: "local", draftSessionId: "composer-restored-thumbnail" },
+	{ name: "remote", draftSessionId: "host-a:composer-restored-thumbnail", assetSessionId: "composer-restored-thumbnail", assetBaseUrl: "http://127.0.0.1:4000/token-a" },
+])("restores a $name image thumbnail from its durable path after the composer remounts", async ({ draftSessionId, assetSessionId, assetBaseUrl }) => {
 	const path = ".ao/attachments/restored-thumbnail.png";
-	const props = { onSend: vi.fn(), draftSessionId: sessionId,
+	const props = { onSend: vi.fn(), draftSessionId, assetSessionId, assetBaseUrl,
 		onStageAttachments: vi.fn().mockResolvedValue([path]) };
 	const view = render(<ChatComposer {...props} />);
 	fireEvent.paste(screen.getByLabelText("Message the agent"), { clipboardData: clipboardData([png()]) });
@@ -2151,9 +2177,9 @@ it("restores an image thumbnail from its durable path after the composer remount
 		.toHaveAttribute("src", expect.stringContaining("data:image/png;base64,"));
 	view.unmount();
 	// A new renderer only has persisted descriptors, never cached image bytes.
-	purgeFileAttachmentsForSession(sessionId);
+	purgeFileAttachmentsForSession(draftSessionId);
 	render(<ChatComposer {...props} />);
 	expect(screen.getByRole("list", { name: "Attached files" }).querySelector("img"))
-		.toHaveAttribute("src", attachmentURL(getApiBaseUrl(), sessionId, path));
+		.toHaveAttribute("src", attachmentURL(assetBaseUrl ?? getApiBaseUrl(), assetSessionId ?? draftSessionId, path));
 	expect(props.onStageAttachments).toHaveBeenCalledOnce();
 });

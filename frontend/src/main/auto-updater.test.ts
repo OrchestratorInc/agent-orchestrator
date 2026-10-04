@@ -2880,9 +2880,17 @@ describe("startAutoUpdates", () => {
       feature: null,
     });
     await first.module.checkForUpdatesNow(stateDir);
-    first.updaterEvents.get("update-downloaded")?.({ version: "2.1.0-nightly.1" });
+    first.updaterEvents.get("update-downloaded")?.({
+      version: "2.1.0-nightly.1",
+      releaseNotes: "Run &lt;ao update&gt; safely\nImproved update reliability",
+    });
     // The persist is fire-and-forget real I/O; flushing microtasks cannot land it.
     await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(JSON.parse(readFileSync(nodePath.join(stateDir, "staged-update.json"), "utf8")))
+      .toMatchObject({
+        version: "2.1.0-nightly.1",
+        releaseNotes: "Run <ao update> safely\nImproved update reliability",
+      });
 
     // A fresh process: module state is gone, only the file survives.
     const second = await importAutoUpdaterKeepingStagedFile({
@@ -2892,7 +2900,10 @@ describe("startAutoUpdates", () => {
       feature: null,
     });
     await second.module.startAutoUpdates(stateDir);
-    expect(second.module.getUpdateStatus().staged).toMatchObject({ version: "2.1.0-nightly.1" });
+    expect(second.module.getUpdateStatus()).toMatchObject({
+      releaseNotes: "Run <ao update> safely\nImproved update reliability",
+      staged: { version: "2.1.0-nightly.1" },
+    });
 
     // And the switch that follows is now recognised as stranding it.
     const autoDownloadAtCheck: boolean[] = [];
@@ -2904,6 +2915,114 @@ describe("startAutoUpdates", () => {
       settings: { enabled: false, channel: "latest", nightlyAck: false, feature: null },
     });
     expect(autoDownloadAtCheck).toEqual([true]);
+  });
+
+  it("backfills notes when an older staged record rediscovers the same nightly", async () => {
+    const version = "1.0.1-nightly.202608231517";
+    const stagedAt = Date.now() - 60_000;
+    writeFileSync(nodePath.join(stateDir, "staged-update.json"), JSON.stringify({
+      version,
+      stagedAt,
+      channel: "nightly",
+    }));
+    const resourcesPath = mkdtempSync(nodePath.join(os.tmpdir(), "ao-staged-nightly-notes-"));
+    writeFileSync(
+      nodePath.join(resourcesPath, "app-update.yml"),
+      "provider: github\nowner: Untrivial-ai\nrepo: agent-orchestrator\n",
+    );
+    const originalResourcesPath = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+    Object.defineProperty(process, "resourcesPath", { configurable: true, value: resourcesPath });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify([{
+          tag_name: `v${version}`,
+          draft: false,
+          prerelease: true,
+          body: "<ul><li>Fixed the restart dialog</li><li>Improved update reliability</li></ul>",
+          assets: [{ name: "nightly-linux.yml" }],
+        }]), { status: 200 }),
+      ),
+    );
+
+    try {
+      const harness = await importAutoUpdaterKeepingStagedFile({
+        enabled: false,
+        channel: "nightly",
+        nightlyAck: true,
+        feature: null,
+      });
+      await harness.module.startAutoUpdates(stateDir);
+
+      expect(harness.module.getUpdateStatus()).toMatchObject({
+        releaseNotes: "Fixed the restart dialog\nImproved update reliability",
+        staged: { version, stagedAt },
+      });
+      expect(harness.autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(JSON.parse(readFileSync(nodePath.join(stateDir, "staged-update.json"), "utf8")))
+        .toMatchObject({
+          version,
+          stagedAt,
+          releaseNotes: "Fixed the restart dialog\nImproved update reliability",
+        });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalResourcesPath) {
+        Object.defineProperty(process, "resourcesPath", originalResourcesPath);
+      } else {
+        Reflect.deleteProperty(process, "resourcesPath");
+      }
+      rmSync(resourcesPath, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps staged notes when a later check offers a newer build", async () => {
+    const { module, updaterEvents, statusMessages } = await importAutoUpdater();
+    await module.checkForUpdatesNow(stateDir);
+    updaterEvents.get("update-downloaded")?.({
+      version: "2.0.0",
+      releaseNotes: "Staged release notes",
+    });
+
+    updaterEvents.get("update-available")?.({
+      version: "2.1.0",
+      releaseNotes: "Newer offered release notes",
+    });
+    expect(statusMessages().at(-1)?.payload).toMatchObject({
+      state: "available",
+      version: "2.1.0",
+      releaseNotes: "Staged release notes",
+      staged: { version: "2.0.0" },
+    });
+
+    updaterEvents.get("checking-for-update")?.();
+    expect(statusMessages().at(-1)?.payload).toMatchObject({
+      state: "checking",
+      releaseNotes: "Staged release notes",
+      staged: { version: "2.0.0" },
+    });
+    expect(module.getUpdateStatus()).toMatchObject({
+      state: "checking",
+      releaseNotes: "Staged release notes",
+      staged: { version: "2.0.0" },
+    });
+  });
+
+  it("keeps staged records without release notes backward compatible", async () => {
+    writeFileSync(nodePath.join(stateDir, "staged-update.json"), JSON.stringify({
+      version: "2.1.0",
+      stagedAt: Date.now(),
+      channel: "latest",
+    }));
+
+    const harness = await importAutoUpdaterKeepingStagedFile();
+    await harness.module.startAutoUpdates(stateDir);
+
+    expect(harness.module.getUpdateStatus()).toMatchObject({
+      staged: { version: "2.1.0" },
+    });
+    expect(harness.module.getUpdateStatus()).not.toHaveProperty("releaseNotes");
   });
 
   it("drops persisted provenance once that build is the running version", async () => {
@@ -2934,7 +3053,7 @@ describe("startAutoUpdates", () => {
     expect(harness.module.getUpdateStatus().staged).toBeUndefined();
   });
 
-  it("retains an older staged build from another channel", async () => {
+  it("drops an older staged build from another channel", async () => {
     writeFileSync(nodePath.join(stateDir, "staged-update.json"), JSON.stringify({
       version: "0.12.10-nightly.1",
       stagedAt: Date.now(),
@@ -2947,9 +3066,9 @@ describe("startAutoUpdates", () => {
     );
     await harness.module.startAutoUpdates(stateDir);
 
-    expect(harness.module.getUpdateStatus().staged).toMatchObject({
-      version: "0.12.10-nightly.1",
-    });
+    expect(harness.module.getUpdateStatus().staged).toBeUndefined();
+    expect(harness.autoUpdater.autoInstallOnAppQuit).toBe(false);
+    await expect(harness.module.quitAndInstallUpdate()).rejects.toThrow(/Check for updates/);
   });
 
   // Regression: electron-updater keeps its request open when a download stops
@@ -3749,15 +3868,35 @@ describe("channel downgrade safety", () => {
     });
   }
 
-  it.each([false, true])("honors saved Stable on startup and later checks (automatic download %s)", async (enabled) => {
+  it.each([
+    { settings: nightly, installed: "0.13.0", offered: "0.13.1-nightly.202609221741" },
+    { settings: stable, installed: "0.13.1-nightly.202609221741", offered: "0.13.1" },
+  ])("allows $installed to switch to newer $offered", async ({ settings, installed, offered }) => {
+    const h = await importAutoUpdater(settings, { version: installed });
+    serveVersion(h, offered, installed);
+    await h.module.startAutoUpdates(stateDir);
+    expect(h.module.getUpdateStatus()).toMatchObject({ state: "available", version: offered });
+    expect(h.autoUpdater.allowDowngrade).toBe(false);
+  });
+
+  it("waits when Nightly is older than installed Stable", async () => {
+    const h = await importAutoUpdater(nightly, { version: "0.13.0" });
+    serveVersion(h, "0.13.0-nightly.202609141844", "0.13.0");
+    await h.module.startAutoUpdates(stateDir);
+    expect(h.module.getUpdateStatus().state).toBe("unsupported");
+    expect(h.autoUpdater.allowDowngrade).toBe(false);
+  });
+
+  it.each([false, true])("waits for a newer Stable on startup and later checks (automatic download %s)", async (enabled) => {
     const h = await importAutoUpdater({ ...stable, enabled }, { version: running });
     serveVersion(h, "0.12.10");
     await h.module.startAutoUpdates(stateDir);
-    expect(h.module.getUpdateStatus()).toMatchObject({ state: enabled ? "downloading" : "available", version: "0.12.10" });
+    expect(h.module.getUpdateStatus()).toMatchObject({ state: "unsupported", message: expect.stringContaining("older than the installed build") });
     expect(h.autoUpdater.autoDownload).toBe(enabled);
     await h.module.checkForUpdatesNow(stateDir);
-    expect(h.module.getUpdateStatus()).toMatchObject({ state: enabled ? "downloading" : "available", version: "0.12.10" });
-    expect(h.autoUpdater.allowDowngrade).toBe(true);
+    expect(h.module.getUpdateStatus().state).toBe("unsupported");
+    expect(h.autoUpdater.allowDowngrade).toBe(false);
+    expect(h.autoUpdater.downloadUpdate).not.toHaveBeenCalled();
   });
 
   it("retains a saved channel switch after its first check fails", async () => {
@@ -3770,9 +3909,10 @@ describe("channel downgrade safety", () => {
     expect(h.module.getUpdateStatus().state).toBe("error");
     serveVersion(h, "0.12.10");
     await h.module.checkForUpdatesNow(stateDir);
-    expect(h.module.getUpdateStatus()).toMatchObject({ state: "available", version: "0.12.10" });
+    expect(h.module.getUpdateStatus()).toMatchObject({ state: "unsupported", checkedAt: expect.any(Number) });
+    expect(h.module.getUpdateStatus().checkError).toBeUndefined();
     await h.module.startAutoUpdates(stateDir);
-    expect(h.module.getUpdateStatus()).toMatchObject({ state: "available", version: "0.12.10" });
+    expect(h.module.getUpdateStatus().state).toBe("unsupported");
   });
 
   it("stops allowing downgrades after relaunching into the selected Stable channel", async () => {
@@ -3819,12 +3959,13 @@ describe("channel downgrade safety", () => {
     expect(h.autoUpdater.allowDowngrade).toBe(false);
   });
 
-  it("allows an explicit channel switch when the preference was saved before checking", async () => {
+  it("keeps an explicit channel switch pending until its release is newer", async () => {
     const h = await importAutoUpdater(stable, { version: running });
     serveVersion(h, "0.12.10");
     await h.module.setUpdateSettings(stateDir, stable);
     await h.module.checkForUpdatesNow(stateDir, { settings: stable });
-    expect(h.module.getUpdateStatus()).toMatchObject({ state: "available", version: "0.12.10" });
+    expect(h.module.getUpdateStatus().state).toBe("unsupported");
+    expect(h.autoUpdater.allowDowngrade).toBe(false);
   });
 
   it("returns an installed feature build home after its pin is retired", async () => {
@@ -3832,14 +3973,14 @@ describe("channel downgrade safety", () => {
     const h = await importAutoUpdater(stable, { version: installed });
     serveVersion(h, "0.12.10", installed);
     await h.module.startAutoUpdates(stateDir);
-    expect(h.module.getUpdateStatus()).toMatchObject({ state: "available", version: "0.12.10" });
+    expect(h.module.getUpdateStatus().state).toBe("unsupported");
   });
 
-  it("permits an explicit return home from nightly", async () => {
+  it("waits for a newer home release when returning from nightly", async () => {
     const h = await importAutoUpdater(stable, { version: running });
     serveVersion(h, "0.12.10");
     await h.module.returnToHome(stateDir);
-    expect(h.module.getUpdateStatus()).toMatchObject({ state: "available", version: "0.12.10" });
+    expect(h.module.getUpdateStatus().state).toBe("unsupported");
   });
 
   it("does not permit a same-channel settings check to downgrade nightly", async () => {

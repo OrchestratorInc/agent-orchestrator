@@ -27,6 +27,7 @@ import {
 import { reconcileFeaturePin } from "./feature-builds";
 import { evaluateEscalation } from "./escalation-evaluator";
 import {
+  boundPlainReleaseNotes,
   isNetErrorMessage,
   normalizeReleaseNotes,
   updateFailureOutcome,
@@ -158,20 +159,17 @@ async function reconcileAndPersist(
 // checkForUpdates.
 //
 // When settings.feature is set, the feed tracks the pr<N> prerelease channel
-// (e.g. "pr2270") with allowPrerelease enabled. Downgrades require a channel
-// transition, including one saved on an earlier launch. Otherwise falls back to the home
-// channel logic (latest vs nightly).
+// (e.g. "pr2270") with allowPrerelease enabled. Otherwise it uses the home
+// channel (latest vs nightly). An older binary cannot safely read a database
+// already migrated by this one, so a channel switch must wait for a newer build.
 export function configureFeed(
   settings: Pick<UpdateSettings, "channel" | "feature">,
 ): void {
-  // A saved channel choice remains intent until the running build reaches it.
-  // Assign after channel: electron-updater's channel setter enables downgrades.
-  const allowDowngrade = isChannelTransition(settings);
   if (settings.feature !== null && settings.feature !== undefined) {
     // Feature build: pin to the pr<N> semver prerelease identifier channel.
     autoUpdater.channel = `pr${settings.feature.pr}`;
     autoUpdater.allowPrerelease = true;
-    autoUpdater.allowDowngrade = allowDowngrade;
+    autoUpdater.allowDowngrade = false;
     return;
   }
 
@@ -182,7 +180,7 @@ export function configureFeed(
   // release and looks for nightly-mac.yml there, which 404s. Enable prerelease
   // scanning on the nightly channel only; stable must never pull prereleases.
   autoUpdater.allowPrerelease = channel === "nightly";
-  autoUpdater.allowDowngrade = allowDowngrade;
+  autoUpdater.allowDowngrade = false;
 }
 
 let lastStatus: UpdateStatus = { state: "idle" };
@@ -194,6 +192,9 @@ let lastCheckError: string | undefined;
 // re-evaluated every 30 minutes while the update sits uninstalled. stateDir is
 // captured from whichever entry point wired the events (both receive it).
 let stagedVersion: string | undefined;
+// Sanitized notes for stagedVersion. Kept separate from the current offer so a
+// newer check cannot pair its changelog with the build awaiting restart.
+let stagedReleaseNotes: string | undefined;
 // A persisted stamp is not an installer handoff in this process. In particular,
 // MacUpdater has no native feed/server after relaunch until it downloads again.
 let stagedInCurrentProcess = false;
@@ -402,9 +403,7 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
 function isNativeInstallReady(): boolean {
   return process.platform !== "darwin" || (stagedInCurrentProcess && nativeReadyVersion !== undefined && nativeReadyVersion === stagedVersion);
 }
-// Release notes for the build currently on offer or staged, already
-// sanitized. Held here because only the updater events carry it, and the
-// renderer needs it on every subsequent status too, not just the one event.
+// Sanitized release notes for the build currently on offer.
 let offeredReleaseNotes: string | undefined;
 // Notes resolved out-of-band for a feed whose provider cannot carry them.
 // Used only as a fallback, so a provider that does supply notes always wins.
@@ -609,7 +608,10 @@ function broadcast(
     ...(lastCheckError ? { checkError: lastCheckError } : {}),
     // Only on statuses that actually describe a build on offer: "not-available"
     // carrying notes for a build the user already has would read as news.
-    ...(describesAnOffer && offeredReleaseNotes !== undefined && status.releaseNotes === undefined
+    ...(describesAnOffer &&
+      !hasStagedBuild() &&
+      offeredReleaseNotes !== undefined &&
+      status.releaseNotes === undefined
       ? { releaseNotes: offeredReleaseNotes }
       : {}),
     ...(consecutiveAutomaticNetFailures >= STALE_CHECK_NUDGE_THRESHOLD
@@ -652,7 +654,7 @@ function broadcastUpdaterStatus(status: UpdateStatus): void {
 }
 
 function broadcastCompletedCheck(status: UpdateStatus): void {
-  if (status.state !== "error" && status.state !== "unsupported") {
+  if (status.state !== "error") {
     lastCheckedAtMs = Date.now();
     lastCheckError = undefined;
   }
@@ -879,7 +881,7 @@ async function fetchNightlyImportant(
  * transient checking/available/not-available state cannot make the sidebar's
  * restart row disappear mid-check. Empty when nothing is staged.
  */
-function stagedStamp(): Pick<UpdateStatus, "staged"> {
+function stagedStamp(): Pick<UpdateStatus, "staged" | "releaseNotes"> {
   if (stagedAtMs === undefined) return {};
   return {
     staged: {
@@ -888,6 +890,7 @@ function stagedStamp(): Pick<UpdateStatus, "staged"> {
       escalated: stagedEscalated,
       ...(isNativeInstallReady() ? {} : { ready: false }),
     },
+    ...(stagedReleaseNotes === undefined ? {} : { releaseNotes: stagedReleaseNotes }),
   };
 }
 
@@ -913,10 +916,12 @@ let stagedPersistenceQueue: Promise<unknown> = Promise.resolve();
 /** Persist in event order without blocking updater events. */
 function persistStagedBuild(stateDir: string | undefined): void {
   if (stateDir === undefined || stagedVersion === undefined || stagedAtMs === undefined) return;
+  const releaseNotes = stagedReleaseNotes;
   const payload = `${JSON.stringify({
     version: stagedVersion,
     stagedAt: stagedAtMs,
     channel: stagedChannel,
+    ...(releaseNotes === undefined ? {} : { releaseNotes }),
   })}\n`;
   // mkdir first: this can be the earliest write into the state dir on a fresh
   // install, and writeUpdateSettings is not guaranteed to have run yet.
@@ -936,39 +941,67 @@ function forgetPersistedStagedBuild(stateDir: string | undefined): void {
 /**
  * Reload provenance for a build staged by an earlier run.
  *
- * Discards it when the running build already matches, or supersedes a staged
- * build from the same channel. In both cases nothing remains pending. An older
- * build from another channel can still be an intentional channel transition.
+ * Discards it when the running build already matches or supersedes the staged
+ * build. An older binary cannot safely read a database migrated by this one.
  * Unreadable provenance is also discarded because inventing it is worse than
  * having none.
  */
 function restoreStagedBuild(stateDir: string): void {
   // Synchronous on purpose. Awaiting a real filesystem read here would push the
-  // launch-time update check behind an I/O turn for a file that is a few dozen
-  // bytes and read exactly once per process.
-  let raw: { version?: unknown; stagedAt?: unknown; channel?: unknown };
+  // launch-time update check behind an I/O turn for a small file read exactly
+  // once per process.
+  let raw: {
+    version?: unknown;
+    stagedAt?: unknown;
+    channel?: unknown;
+    releaseNotes?: unknown;
+  };
   try {
     raw = JSON.parse(readFileSync(stagedUpdateFile(stateDir), "utf8")) as typeof raw;
   } catch {
     return;
   }
+  const olderStaged = typeof raw.version === "string" &&
+    semver.valid(raw.version) !== null &&
+    semver.valid(app.getVersion()) !== null &&
+    semver.lt(raw.version, app.getVersion());
   if (
     typeof raw.version !== "string" ||
     typeof raw.stagedAt !== "number" ||
     !Number.isFinite(raw.stagedAt) ||
     raw.version === app.getVersion() ||
-    (raw.channel === installedUpdateChannel() &&
-      semver.valid(raw.version) !== null &&
-      semver.valid(app.getVersion()) !== null &&
-      semver.lt(raw.version, app.getVersion()))
+    olderStaged
   ) {
-    forgetPersistedStagedBuild(stateDir);
+    if (olderStaged) discardStagedBuild();
+    else forgetPersistedStagedBuild(stateDir);
     return;
   }
   stagedVersion = raw.version;
   stagedAtMs = raw.stagedAt;
   stagedChannel = typeof raw.channel === "string" ? raw.channel : undefined;
+  stagedReleaseNotes = boundPlainReleaseNotes(
+    typeof raw.releaseNotes === "string" ? raw.releaseNotes : undefined,
+  );
   stagedEscalated = false;
+}
+
+/** Refresh notes only when they describe the build that is already staged. */
+function refreshStagedReleaseNotes(
+  version: string | undefined,
+  notes: Parameters<typeof normalizeReleaseNotes>[0],
+): void {
+  if (
+    version === undefined ||
+    stagedVersion === undefined ||
+    (version !== stagedVersion &&
+      (semver.valid(version) === null ||
+        semver.valid(stagedVersion) === null ||
+        !semver.eq(version, stagedVersion)))
+  ) return;
+  const releaseNotes = normalizeReleaseNotes(notes) ?? directFeedReleaseNotes;
+  if (releaseNotes === undefined || releaseNotes === stagedReleaseNotes) return;
+  stagedReleaseNotes = releaseNotes;
+  persistStagedBuild(escalationStateDir);
 }
 
 /** The feed channel a settings object resolves to. Mirrors configureFeed. */
@@ -986,6 +1019,18 @@ function installedUpdateChannel(): string {
 
 function isChannelTransition(settings: Pick<UpdateSettings, "channel" | "feature">): boolean {
   return effectiveChannel(settings) !== installedUpdateChannel();
+}
+
+function unavailableChannelStatus(version?: string): UpdateStatus {
+  if (version && isChannelTransition(lastAppliedUpdateSettings) &&
+      semver.valid(version) && semver.valid(app.getVersion()) &&
+      semver.lt(version, app.getVersion())) {
+    return {
+      state: "unsupported",
+      message: "This channel's latest release is older than the installed build. AO will switch when a newer release is available.",
+    };
+  }
+  return { state: "not-available" };
 }
 
 /**
@@ -1044,6 +1089,7 @@ function discardStagedBuild(): void {
   stagedInCurrentProcess = false;
   forgetPersistedStagedBuild(escalationStateDir);
   offeredReleaseNotes = undefined;
+  stagedReleaseNotes = undefined;
   directFeedReleaseNotes = undefined;
   stagedVersion = undefined;
   stagedInCurrentProcess = false;
@@ -1159,6 +1205,7 @@ async function checkForUpdatesWithDeadline(): Promise<UpdateCheckOutcome> {
  * Applied to both background and renderer-requested checks.
  */
 function settleCheckStatus(result: UpdateCheckOutcome): void {
+  refreshStagedReleaseNotes(result?.updateInfo?.version, result?.updateInfo?.releaseNotes);
   if (lastStatus.state !== "checking") return;
   const version = result?.updateInfo?.version;
   if (result?.isUpdateAvailable === true && version !== undefined) {
@@ -1166,7 +1213,7 @@ function settleCheckStatus(result: UpdateCheckOutcome): void {
     return;
   }
   broadcastCompletedCheck(
-    hasStagedBuild() ? stagedDownloadedStatus() : { state: "not-available" },
+    hasStagedBuild() ? stagedDownloadedStatus() : unavailableChannelStatus(version),
   );
 }
 
@@ -1179,6 +1226,7 @@ function settleCheckStatus(result: UpdateCheckOutcome): void {
 function broadcastDiscoveredAvailable(): void {
   const discovered = directFeedDiscoveredAvailable;
   if (discovered === undefined) return;
+  refreshStagedReleaseNotes(discovered.version, discovered.notes);
   if (
     lastStatus.state === "available" ||
     lastStatus.state === "downloading" ||
@@ -1433,6 +1481,7 @@ function clearUnrecoverableRememberedBuild(): void {
   stagedVersion = undefined;
   stagedAtMs = undefined;
   stagedChannel = undefined;
+  stagedReleaseNotes = undefined;
   stagedEscalated = false;
   stagedRequestId = undefined;
   stopEscalationTimer();
@@ -1760,6 +1809,7 @@ function wireUpdaterEvents(): void {
     // A manual re-check reports the already-staged build as merely "available"
     // (autoDownload is off on that path). It is still in cache and installs on
     // quit, so keep the richer downloaded status instead of hiding the row.
+    refreshStagedReleaseNotes(info?.version, info?.releaseNotes);
     if (stagedAtMs !== undefined && info?.version === stagedVersion) {
       broadcastCompletedCheck(stagedDownloadedStatus());
       return;
@@ -1784,12 +1834,12 @@ function wireUpdaterEvents(): void {
   autoUpdater.on("update-cancelled", () => {
     clearDownloadStallWatchdog();
   });
-  autoUpdater.on("update-not-available", () => {
+  autoUpdater.on("update-not-available", (info) => {
     // A successful check proves the network stack is healthy.
     consecutiveAutomaticNetFailures = 0;
     consecutiveAutomaticCheckFailures = 0;
     failingChecksPublished = false;
-    broadcastCompletedCheck({ state: "not-available" });
+    broadcastCompletedCheck(unavailableChannelStatus(info?.version));
     // The staged build outlives a "nothing newer" answer (e.g. after a channel
     // switch); follow up so the restart row returns.
     if (stagedAtMs !== undefined)
@@ -1832,6 +1882,7 @@ function wireUpdaterEvents(): void {
     // Resetting stagedAtMs there would mean the latest-channel 48h escalation rule
     // could never fire, because the clock is only ever minutes old.
     const restaged = stagedAtMs !== undefined && info?.version === stagedVersion;
+    const previousStagedReleaseNotes = stagedReleaseNotes;
     stagedVersion = info?.version;
     stagedInCurrentProcess = true;
     if (process.platform === "darwin" && stagedVersion) {
@@ -1844,8 +1895,11 @@ function wireUpdaterEvents(): void {
       beginNativePreparation(stagedVersion, archiveBytes || undefined);
     }
     stagedChannel = autoUpdater.channel ?? undefined;
-    offeredReleaseNotes =
-      normalizeReleaseNotes(info?.releaseNotes) ?? offeredReleaseNotes ?? directFeedReleaseNotes;
+    stagedReleaseNotes =
+      normalizeReleaseNotes(info?.releaseNotes) ??
+      (info?.version === offeredUpdateVersion ? offeredReleaseNotes : undefined) ??
+      (info?.version === directFeedDiscoveredAvailable?.version ? directFeedReleaseNotes : undefined) ??
+      (restaged ? previousStagedReleaseNotes : undefined);
     if (!restaged) {
       stagedAtMs = Date.now();
       stagedEscalated = false;
@@ -2042,6 +2096,7 @@ export function getUpdateStatus(): UpdateStatus {
     ...stagedStamp(),
     ...(lastCheckError ? { checkError: lastCheckError } : {}),
     ...(offeredReleaseNotes !== undefined && lastStatus.releaseNotes === undefined &&
+      !hasStagedBuild() &&
       (lastStatus.state === "available" || lastStatus.state === "downloading" || lastStatus.state === "downloaded")
       ? { releaseNotes: offeredReleaseNotes }
       : {}),

@@ -28,10 +28,17 @@ func (f *fakeBridge) Enable() (MobileStatusResponse, error) {
 	r.Password = "abcd1234"
 	return r, nil
 }
-func (f *fakeBridge) Disable() error { f.enabled = false; return nil }
+func (f *fakeBridge) EnableLANOnly() (MobileStatusResponse, error)    { return f.Enable() }
+func (f *fakeBridge) EnableTunnelOnly() (MobileStatusResponse, error) { return f.Enable() }
+func (f *fakeBridge) Disable() error                                  { f.enabled = false; return nil }
 func (f *fakeBridge) Regenerate() (MobileStatusResponse, error) {
 	r := f.Status()
 	r.Password = "wxyz5678"
+	return r, nil
+}
+func (f *fakeBridge) SetKeepAwake(on bool) (MobileStatusResponse, error) {
+	r := f.Status()
+	r.KeepAwake.Enabled = on
 	return r, nil
 }
 func (f *fakeBridge) SetSecurePairing(on bool) (MobileStatusResponse, error) {
@@ -45,9 +52,19 @@ type fakeLAN struct {
 	running   bool
 	hash      string
 	stopCalls int
+	bindHost  string
 }
 
-func (f *fakeLAN) Start(port int) (int, error) { f.running = true; return port, nil }
+func (f *fakeLAN) Start(port int) (int, error) {
+	f.running = true
+	f.bindHost = "0.0.0.0"
+	return port, nil
+}
+func (f *fakeLAN) StartLoopback(port int) (int, error) {
+	f.running = true
+	f.bindHost = "127.0.0.1"
+	return port, nil
+}
 func (f *fakeLAN) Stop(ctx context.Context) error {
 	f.stopCalls++
 	f.running = false
@@ -266,6 +283,9 @@ func TestSecurePairingOffClearsProxy(t *testing.T) {
 	cleared := 0
 	b := newSecureBridge(t, tsUp, func() int { return 3011 })
 	b.ClearServe = func() error { cleared++; return nil }
+	if _, err := b.SetSecurePairing(false); err != nil || cleared != 0 {
+		t.Fatalf("turning off unused secure pairing cleared an unrelated Serve route: clears=%d err=%v", cleared, err)
+	}
 	if _, err := b.SetSecurePairing(true); err != nil {
 		t.Fatal(err)
 	}

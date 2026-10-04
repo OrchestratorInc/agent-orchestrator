@@ -201,6 +201,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newStartCommand(ctx))
 	root.AddCommand(newStopCommand(ctx))
 	root.AddCommand(newStatusCommand(ctx))
+	root.AddCommand(newRemoteHostCommand(ctx))
 	root.AddCommand(newDoctorCommand(ctx))
 	root.AddCommand(newAgentCommand(ctx))
 	root.AddCommand(newSpawnCommand(ctx))
@@ -211,6 +212,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newHooksCommand(ctx))
 	root.AddCommand(newAgentProcessCommand(ctx))
 	root.AddCommand(newChatHostCommand())
+	root.AddCommand(newUnrealProviderCommand())
 	root.AddCommand(newLaunchCommand(ctx))
 	root.AddCommand(newPtyHostCommand())
 	root.AddCommand(newCodexLoginCommand(ctx))
@@ -222,6 +224,8 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newOrchestratorCommand(ctx))
 	root.AddCommand(newPRCommand(ctx))
 	root.AddCommand(newReviewCommand(ctx))
+	root.AddCommand(newAutomationCommand(ctx))
+	root.AddCommand(newCueCommand(ctx))
 	root.AddCommand(newCompletionCommand())
 	root.AddCommand(newVersionCommand())
 
@@ -242,7 +246,7 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 	// "ao completion"/"ao help" are shell setup and self-documentation.
 	// "ao pty-host" and "ao agent-process" are internal runtime processes.
 	// None reflect user activity.
-	case "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise":
+	case "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise":
 		return false
 	default:
 		return true
