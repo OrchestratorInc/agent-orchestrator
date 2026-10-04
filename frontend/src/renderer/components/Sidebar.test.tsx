@@ -32,6 +32,7 @@ import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 import { useUiStore } from "../stores/ui-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
+import type { RemoteHost } from "../hooks/useRemoteHosts";
 
 type DragOverTestEvent = {
 	active: {
@@ -76,7 +77,7 @@ const {
 		getMock: vi.fn(),
 		postMock: vi.fn(),
 		navigateMock: vi.fn(),
-		mockParams: { projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
+		mockParams: { hostId: undefined as string | undefined, projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
 		renameSessionMock: vi.fn().mockResolvedValue(undefined),
 		spawnMock: vi.fn(),
 		resumeOrchestratorMock: vi.fn(),
@@ -163,6 +164,10 @@ vi.mock("../lib/bridge", async (importOriginal) => {
 		},
 	};
 });
+
+vi.mock("../hooks/useSettings", () => ({
+	useSettings: () => ({ settings: { trackerIntakeEnabled: true }, isLoading: false, error: undefined }),
+}));
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
@@ -295,6 +300,11 @@ function renderSidebar({
 	onRemoveProject = vi.fn().mockResolvedValue(undefined) as RemoveProjectHandler,
 	seedAgents = true,
 	workspaces = [workspace],
+	remoteHosts = [],
+	remoteWorkspaces = [],
+	onCreateRemoteProject = vi.fn().mockResolvedValue(undefined),
+	onInitializeRemoteProject = vi.fn().mockResolvedValue(undefined),
+	onRemoveRemoteProject = vi.fn().mockResolvedValue(undefined),
 	initialOpen = true,
 	topbarOffset = "toolbar",
 	expandedProjectIds,
@@ -306,6 +316,11 @@ function renderSidebar({
 	onRemoveProject?: RemoveProjectHandler;
 	seedAgents?: boolean;
 	workspaces?: WorkspaceSummary[];
+	remoteHosts?: RemoteHost[];
+	remoteWorkspaces?: WorkspaceSummary[];
+	onCreateRemoteProject?: (hostId: string, input: CreateProjectInput) => Promise<void>;
+	onInitializeRemoteProject?: (hostId: string, path: string) => Promise<void>;
+	onRemoveRemoteProject?: (hostId: string, projectId: string) => Promise<void>;
 	initialOpen?: boolean;
 	topbarOffset?: "toolbar" | "titlebar" | "trafficLights" | "session";
 	expandedProjectIds?: string[];
@@ -337,12 +352,30 @@ function renderSidebar({
 						onInitializeProject={onInitializeProject}
 						onRemoveProject={onRemoveProject}
 						workspaces={workspaces}
+						remoteHosts={remoteHosts}
+						remoteWorkspaces={remoteWorkspaces}
+						onCreateRemoteProject={onCreateRemoteProject}
+						onInitializeRemoteProject={onInitializeRemoteProject}
+						onRemoveRemoteProject={onRemoveRemoteProject}
 					/>
 				</SidebarProvider>
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
 	return onRemoveProject;
+}
+
+function mockAgentReadinessResponse(response: {
+	data: { agents: ReturnType<typeof agentReadiness>[] };
+	error: undefined;
+} | Promise<{
+	data: { agents: ReturnType<typeof agentReadiness>[] };
+	error: undefined;
+}>) {
+	const fallback = getMock.getMockImplementation();
+	getMock.mockImplementation((path: string) =>
+		path === "/api/v1/agents/readiness" ? Promise.resolve(response) : fallback?.(path),
+	);
 }
 
 /** Projects restore their persisted disclosure state. */
@@ -477,6 +510,7 @@ beforeEach(() => {
 	checkUpdateMock.mockReset().mockResolvedValue(undefined);
 	mockParams.projectId = undefined;
 	mockParams.sessionId = undefined;
+	mockParams.hostId = undefined;
 });
 
 afterEach(() => {
@@ -484,6 +518,62 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
+	it("creates local or remote projects from the header button", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [],
+			remoteHosts: [
+				{ hostId: "box-a", label: "Host A", url: "http://box-a:3011", status: "connected" },
+				{ hostId: "box-b", label: "Host B", url: "http://box-b:3011", status: "connected" },
+			],
+		});
+
+		await user.click(screen.getByRole("button", { name: "New project" }));
+		const chooser = await screen.findByRole("dialog");
+		expect(screen.queryByRole("button", { name: "Add project on Host B" })).not.toBeInTheDocument();
+		await user.click(within(chooser).getByRole("combobox", { name: "Machine" }));
+		await user.click(screen.getByRole("option", { name: "Host B" }));
+		expect(screen.getByRole("dialog")).toBe(chooser);
+		expect(within(chooser).getByRole("combobox", { name: "Machine" })).toHaveTextContent("Host B");
+		await user.click(within(chooser).getByRole("combobox", { name: "Machine" }));
+		await user.click(screen.getByRole("option", { name: "This computer" }));
+		expect(screen.getByRole("dialog")).toBe(chooser);
+	});
+
+	it("lists remote projects beside local and Cloud projects with host-qualified sessions", () => {
+		mockParams.hostId = "box-b";
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "proj-1-1";
+		const remoteSession = (hostId: string, title: string): WorkspaceSession => ({
+			...session, hostId, title,
+		});
+		renderSidebar({
+			workspaces: [{ ...workspace, sessions: [session] }],
+			remoteHosts: [
+				{ hostId: "box-a", label: "Host A", url: "http://box-a:3001", status: "connected" },
+				{ hostId: "box-b", label: "Host B", url: "http://box-b:3001", status: "connected" },
+			],
+			remoteWorkspaces: [
+				{ ...workspace, hostId: "box-a", sessions: [remoteSession("box-a", "Task on A")] },
+				{ ...workspace, hostId: "box-b", sessions: [remoteSession("box-b", "Task on B")] },
+			],
+		});
+
+		const projects = screen.getByTestId("sidebar-projects-scroller");
+		expect(within(projects).getByText("Host A")).toBeInTheDocument();
+		expect(within(projects).getByText("Host B")).toBeInTheDocument();
+		expect(screen.queryByText("Remote hosts")).not.toBeInTheDocument();
+		const remoteSessions = within(projects).getAllByTestId("remote-session-row");
+		expect(remoteSessions).toHaveLength(2);
+		expect(remoteSessions[0]).not.toHaveAttribute("aria-current");
+		expect(remoteSessions[1]).toHaveAttribute("aria-current", "page");
+		fireEvent.click(remoteSessions[0]);
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/host/$hostId/project/$projectId/session/$sessionId",
+			params: { hostId: "box-a", projectId: "proj-1", sessionId: "proj-1-1" },
+		});
+	});
+
 	it("shows the cloud sign-in entry point while signed out", () => {
 		cloudSessionState.configured = true;
 		renderSidebar();
@@ -761,6 +851,36 @@ describe("Sidebar", () => {
 		const request = useUiStore.getState().newTaskRequest;
 		expect(request?.projectId).toBe("proj-1");
 		expect(request?.nonce ?? 0).toBeGreaterThan(before);
+	});
+
+	it("opens the standalone board from the Scratchpad archived sessions action", () => {
+		renderSidebar({
+			workspaces: [
+				{
+					id: STANDALONE_WORKSPACE_ID,
+					name: "Scratchpad",
+					kind: STANDALONE_PROJECT_KIND,
+					path: "",
+					sessions: [
+						{
+							...session,
+							id: "adhoc-archived",
+							title: "archived",
+							workspaceId: STANDALONE_WORKSPACE_ID,
+							workspaceName: "Scratchpad",
+							isTerminated: true,
+							status: "terminated",
+						},
+					],
+				},
+			],
+		});
+
+		const archiveAction = screen.getByRole("button", { name: "Archived sessions" }).closest("[data-scratchpad-archive-action]");
+		expect(archiveAction).toHaveClass("opacity-0", "scale-[0.8]");
+		fireEvent.click(screen.getByRole("button", { name: "Archived sessions" }));
+
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/sessions" });
 	});
 
 	it("opens a new ad hoc agent directly from the ad hoc row action", async () => {
@@ -1379,7 +1499,7 @@ describe("Sidebar", () => {
 		const user = userEvent.setup();
 		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
-		getMock.mockResolvedValueOnce({
+		mockAgentReadinessResponse({
 			data: {
 				agents: [
 					agentReadiness("goose", "Goose"),
@@ -1832,7 +1952,7 @@ describe("Sidebar", () => {
 		const user = userEvent.setup();
 		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
-		getMock.mockResolvedValueOnce({
+		mockAgentReadinessResponse({
 			data: {
 				agents: [
 					agentReadiness("claude-code", "Claude Code"),
@@ -1872,7 +1992,7 @@ describe("Sidebar", () => {
 			data: { agents: ReturnType<typeof agentReadiness>[] };
 			error: undefined;
 		}) => void;
-		getMock.mockReturnValueOnce(
+		mockAgentReadinessResponse(
 			new Promise((resolve) => {
 				resolveAgents = resolve;
 			}),
@@ -2156,6 +2276,74 @@ describe("Sidebar", () => {
 		expect(screen.getByRole("button", { name: "Show 4 more projects" })).toBeInTheDocument();
 	});
 
+	it("keeps the active project row at the top of the scroller", () => {
+		mockParams.projectId = "proj-1";
+		const other: WorkspaceSummary = {
+			...workspace,
+			id: "proj-2",
+			name: "Project Two",
+			path: "/repo/project-two",
+		};
+
+		renderSidebar({ workspaces: [workspace, other] });
+
+		const activeRow = document.querySelector('[data-project-drag-row][data-project-id="proj-1"]');
+		expect(activeRow).toHaveClass("sticky", "top-0", "z-20", "bg-sidebar");
+	});
+
+	it("caps each project's agent list at 6 until its Show more is clicked", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: Array.from({ length: 9 }, (_, index) => ({
+						...session,
+						id: `proj-1-${index + 1}`,
+						title: `Agent ${index + 1}`,
+						// Descending so sortedWorkerSessions keeps the fixture order.
+						updatedAt: `2026-06-${30 - index}T00:00:00Z`,
+					})),
+				},
+			],
+		});
+
+		const list = screen.getByTestId("session-list-proj-1");
+		expect(within(list).getByText("Agent 6")).toBeInTheDocument();
+		expect(screen.queryByText("Agent 7")).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Show 3 more agents" }));
+
+		expect(screen.getByText("Agent 7")).toBeInTheDocument();
+		expect(screen.getByText("Agent 9")).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Show fewer agents" }));
+
+		expect(screen.queryByText("Agent 7")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
+	});
+
+	it("lifts a project's agent cap when the open session sits past it", () => {
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "proj-1-8";
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: Array.from({ length: 9 }, (_, index) => ({
+						...session,
+						id: `proj-1-${index + 1}`,
+						title: `Agent ${index + 1}`,
+						updatedAt: `2026-06-${30 - index}T00:00:00Z`,
+					})),
+				},
+			],
+		});
+
+		expect(screen.getByText("Agent 8")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show fewer agents" })).toBeInTheDocument();
+	});
+
 	it("fits the project list to content up to the full available height", async () => {
 		const user = userEvent.setup();
 		const manyProjects = Array.from({ length: 14 }, (_, index) => ({
@@ -2233,20 +2421,16 @@ describe("Sidebar", () => {
 		).toBe(`${SIDEBAR_MIN_WIDTH}px`);
 	});
 
-	it("persists the clamped width on pointer-up (sync apply during drag)", async () => {
+	it("persists the latest clamped width on pointer-up before the queued frame", () => {
 		renderSidebar();
-
 		const resizeHandle = screen.getByTestId("resize-handle");
-
+		const gap = document.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')!;
+		const initialWidth = gap.style.getPropertyValue("--ao-sidebar-w");
 		fireEvent.pointerDown(resizeHandle, { clientX: SIDEBAR_DEFAULT_WIDTH });
 		fireEvent.pointerMove(window, { clientX: SIDEBAR_MIN_WIDTH + 5 });
-		expect(
-			document
-				.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')
-				?.style.getPropertyValue("--ao-sidebar-w"),
-		).toBe(`${SIDEBAR_MIN_WIDTH + 5}px`);
-
+		expect(gap.style.getPropertyValue("--ao-sidebar-w")).toBe(initialWidth);
 		fireEvent.pointerUp(window);
+		expect(gap.style.getPropertyValue("--ao-sidebar-w")).toBe(`${SIDEBAR_MIN_WIDTH + 5}px`);
 		expect(window.localStorage.getItem("ao-sidebar-w")).toBe(String(SIDEBAR_MIN_WIDTH + 5));
 	});
 
@@ -2548,9 +2732,9 @@ describe("Sidebar", () => {
 		expect(postMock).not.toHaveBeenCalled();
 
 		const dialog = await screen.findByRole("dialog", {
-			name: "Are you sure you want to archive fix login?",
+			name: "Are you sure you want to archive this session?",
 		});
-		expect(dialog).toHaveTextContent("You can always restore fix login from the Archive section later.");
+		expect(dialog).toHaveTextContent("You can always restore it from the Archive section later.");
 		fireEvent.click(within(dialog).getByRole("button", { name: "No" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 		expect(postMock).not.toHaveBeenCalled();
@@ -2724,6 +2908,36 @@ describe("Sidebar", () => {
 				params: { projectId: "proj-1", sessionId: "proj-1-1" },
 			}),
 		);
+	});
+
+	it("keeps pinned sessions with the same ID distinct across local and two hosts", () => {
+		mockParams.hostId = "box-b";
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "shared";
+		const pinned = { ...session, id: "shared", title: "shared task", isPinned: true, pinnedAt: "2026-06-30T01:00:00Z" };
+		renderSidebar({
+			workspaces: [{ ...workspace, sessions: [pinned] }],
+			remoteHosts: [
+				{ hostId: "box-a", label: "Host A", url: "http://box-a:3011", status: "connected" },
+				{ hostId: "box-b", label: "Host B", url: "http://box-b:3011", status: "connected" },
+			],
+			remoteWorkspaces: [
+				{ ...workspace, hostId: "box-a", sessions: [{ ...pinned, hostId: "box-a" }] },
+				{ ...workspace, hostId: "box-b", sessions: [{ ...pinned, hostId: "box-b" }] },
+			],
+		});
+		const list = screen.getByTestId("pinned-session-list");
+		const hostA = within(list).getByText("Host A").closest<HTMLElement>("[data-session-row]")!;
+		const hostB = within(list).getByText("Host B").closest<HTMLElement>("[data-session-row]")!;
+		const local = within(list).getByRole("button", { name: "Open shared task" });
+		expect(within(hostA).getByRole("button", { name: "Open shared task · Host A" })).not.toHaveAttribute("aria-current");
+		expect(within(hostB).getByRole("button", { name: "Open shared task · Host B" })).toHaveAttribute("aria-current", "page");
+		fireEvent.click(within(hostA).getByRole("button", { name: "Open shared task · Host A" }));
+		expect(navigateMock).toHaveBeenLastCalledWith({ to: "/host/$hostId/project/$projectId/session/$sessionId", params: { hostId: "box-a", projectId: "proj-1", sessionId: "shared" } });
+		fireEvent.click(within(hostB).getByRole("button", { name: "Open shared task · Host B" }));
+		expect(navigateMock).toHaveBeenLastCalledWith({ to: "/host/$hostId/project/$projectId/session/$sessionId", params: { hostId: "box-b", projectId: "proj-1", sessionId: "shared" } });
+		fireEvent.click(local);
+		expect(navigateMock).toHaveBeenLastCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "proj-1", sessionId: "shared" } });
 	});
 
 	it("shifts to the adjacent session when killing an active pinned session with multiple remaining sessions", async () => {

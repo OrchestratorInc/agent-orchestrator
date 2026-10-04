@@ -58,9 +58,13 @@ vi.mock("./ProjectSettingsForm", () => ({
 }));
 
 vi.mock("./GlobalSettingsForm", () => ({
-	GlobalSettingsForm: ({ focusAgentId, section }: { focusAgentId?: string; section: string }) => (
-		<div data-focus-agent={focusAgentId} data-testid="global-settings-section">{section}</div>
+	GlobalSettingsForm: ({ focusAgentId, hostId, section }: { focusAgentId?: string; hostId?: string; section: string }) => (
+		<div data-focus-agent={focusAgentId} data-host={hostId} data-testid="global-settings-section">{section}</div>
 	),
+}));
+
+vi.mock("./CuesDialog", () => ({
+	CuesSettings: ({ projectId }: { projectId: string }) => <div data-testid="project-cues-settings">{projectId}</div>,
 }));
 
 // The dialog reads the cloud gate to decide whether the Cloud nav page exists;
@@ -69,12 +73,18 @@ vi.mock("../hooks/useCloudGate", () => ({
 	useCloudGate: () => ({ cloudEnabled: false, localEnabled: true }),
 }));
 
+// The dialog reads the cloud session email to gate the 11x-only Coder page.
+// Signed out here, so that page is never visible.
+vi.mock("../lib/cloud-session", () => ({
+	useCloudSession: () => ({ status: "unauthenticated", session: null }),
+}));
+
 describe("SettingsDialog", () => {
 	beforeEach(() => {
 		postMock.mockReset().mockImplementation((path: string) => path === "/api/v1/agents/codex/accounts/ensure"
 			? Promise.resolve({ data: accountsResponse })
 			: Promise.resolve({ data: { operationId: "login-1", status: "cancelled" } }));
-		useUiStore.setState({ settingsModal: null });
+		useUiStore.setState({ developerMode: false, settingsModal: null });
 	});
 
 	function renderSettingsDialog() {
@@ -105,6 +115,27 @@ describe("SettingsDialog", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("Display name must be 100 characters or fewer");
 	});
 
+	it("keeps cue management in project settings without the project save action", async () => {
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+
+		const cuesSection = await screen.findByRole("button", { name: "Cues" });
+		expect(cuesSection.querySelector(".lucide-play")).not.toBeNull();
+		await userEvent.click(cuesSection);
+
+		expect(screen.getByTestId("project-cues-settings")).toHaveTextContent("proj-1");
+		expect(cuesSection).toHaveAttribute("aria-current", "page");
+		expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+	});
+
+	it("opens project settings on the cues page when the caller asks for it", async () => {
+		useUiStore.getState().openProjectSettings("proj-1", { section: "cues" });
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("project-cues-settings")).toHaveTextContent("proj-1");
+		expect(screen.getByRole("button", { name: "Cues" })).toHaveAttribute("aria-current", "page");
+	});
+
 	it("opens the requested global settings page", async () => {
 		useUiStore.getState().openGlobalSettings("mobile");
 		renderSettingsDialog();
@@ -117,6 +148,24 @@ describe("SettingsDialog", () => {
 		));
 	});
 
+	it("shows Remote hosts with Developer mode on even while the connection switch is off", async () => {
+		useUiStore.setState({ developerMode: true, remoteHosts: false });
+		useUiStore.getState().openGlobalSettings("remoteHosts");
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("remoteHosts");
+		expect(screen.getByRole("button", { name: "Remote hosts" })).toHaveAttribute("aria-current", "page");
+	});
+
+	it("hides Remote hosts and redirects its settings page when Developer mode is off", async () => {
+		useUiStore.setState({ developerMode: false, remoteHosts: true });
+		useUiStore.getState().openGlobalSettings("remoteHosts");
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
+		expect(screen.queryByRole("button", { name: "Remote hosts" })).not.toBeInTheDocument();
+	});
+
 	it("keeps the settings surface above its blurred backdrop", async () => {
 		useUiStore.getState().openGlobalSettings("mobile");
 		renderSettingsDialog();
@@ -124,7 +173,21 @@ describe("SettingsDialog", () => {
 		const overlay = screen.getByTestId("settings-dialog-overlay");
 		const dialog = await screen.findByRole("dialog");
 		expect(overlay).toHaveClass("dialog-overlay");
-		expect(dialog).toHaveClass("z-[calc(var(--z-overlay)+1)]");
+		// Keep the scrim below Settings so Chromium never composites its backdrop
+		// blur over the dialog at fractional display scaling. Settings itself stays
+		// on z-overlay: later-portaled confirms and menus can still paint above it.
+		expect(overlay).toHaveClass("z-[calc(var(--z-overlay)-1)]");
+		expect(dialog).toHaveClass("z-overlay");
+		expect(dialog).not.toHaveClass("z-[calc(var(--z-overlay)+1)]");
+	});
+
+	it("keeps the backdrop blur on the layer below settings", async () => {
+		useUiStore.getState().openGlobalSettings("mobile");
+		renderSettingsDialog();
+
+		const overlay = screen.getByTestId("settings-dialog-overlay");
+		expect(overlay).toHaveClass("dialog-overlay");
+		expect(overlay.style.backdropFilter).toBe("");
 	});
 
 	it("opens Harness and forwards its agent focus target without redirecting to Codex Accounts", async () => {
@@ -136,6 +199,14 @@ describe("SettingsDialog", () => {
 		expect(form).toHaveAttribute("data-focus-agent", "claude-code");
 		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("aria-current", "page");
 		expect(screen.getByRole("button", { name: "Subscriptions" })).not.toHaveAttribute("aria-current", "page");
+	});
+
+	it("forwards the remote host from a Manage agents action to Harness", async () => {
+		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "codex", hostId: "box-a" });
+		renderSettingsDialog();
+		const form = await screen.findByTestId("global-settings-section");
+		expect(form).toHaveAttribute("data-focus-agent", "codex");
+		expect(form).toHaveAttribute("data-host", "box-a");
 	});
 
 	it("does not replay the Harness focus target after navigating away during the same modal opening", async () => {
@@ -175,12 +246,12 @@ describe("SettingsDialog", () => {
 		expect(screen.queryByRole("button", { name: "Downloads" })).not.toBeInTheDocument();
 	});
 
-	it("falls back to General when Cloud is unavailable", async () => {
-		useUiStore.getState().openGlobalSettings("cloud");
+	it("falls back to General when the Coder page is unavailable", async () => {
+		useUiStore.getState().openGlobalSettings("coder11x");
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
-		expect(screen.queryByRole("button", { name: "Cloud" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Coder" })).not.toBeInTheDocument();
 	});
 
 	it("closes Settings without cancelling daemon-owned account login work", async () => {
@@ -225,6 +296,23 @@ describe("SettingsDialog", () => {
 		fireEvent.keyDown(nestedItem, { key: "Escape" });
 		expect(useUiStore.getState().settingsModal).not.toBeNull();
 		nestedMenu.remove();
+
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+	});
+
+	it("stays open when Escape cancels an inline edit inside it", async () => {
+		useUiStore.getState().openGlobalSettings("browserProfiles");
+		renderSettingsDialog();
+
+		const dialog = await screen.findByRole("dialog");
+		const inlineEdit = document.createElement("input");
+		inlineEdit.setAttribute("data-settings-inline-edit", "");
+		dialog.append(inlineEdit);
+		inlineEdit.focus();
+		fireEvent.keyDown(inlineEdit, { key: "Escape" });
+		expect(useUiStore.getState().settingsModal).not.toBeNull();
+		inlineEdit.remove();
 
 		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());

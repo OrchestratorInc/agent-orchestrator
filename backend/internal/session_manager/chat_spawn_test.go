@@ -1276,7 +1276,7 @@ func TestChatSpawnDelegatedTaskUsesOneTaskTurnAndStartupTitleInstruction(t *test
 	if len(launcher.started) != 1 {
 		t.Fatalf("started %d controllers, want one", len(launcher.started))
 	}
-	for _, want := range []string{"$AO_SESSION_ID", "at most 20 characters"} {
+	for _, want := range []string{"$AO_SESSION_ID", "at most 20 characters", "If self-renaming is unavailable, continue implementation; the provisional display name remains the fallback."} {
 		if !strings.Contains(launcher.started[0].SystemPrompt, want) {
 			t.Fatalf("startup system prompt missing %q:\n%s", want, launcher.started[0].SystemPrompt)
 		}

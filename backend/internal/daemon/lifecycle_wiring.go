@@ -11,6 +11,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/fx/herdr"
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/container/dockerreap"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer"
@@ -52,6 +53,7 @@ type lifecycleStack struct {
 	autoReviewDone <-chan struct{}
 	scmDone        <-chan struct{}
 	trackerDone    <-chan struct{}
+	herdr          *herdr.Server
 	automationDone <-chan struct{}
 }
 
@@ -59,7 +61,7 @@ type lifecycleStack struct {
 // reaper. The goroutine stops when ctx is cancelled; Stop waits for it to drain.
 // The messenger is the per-daemon agent messenger the LCM uses to nudge agents
 // in response to SCM observations (CI failure, review feedback, merge conflict).
-func startLifecycle(ctx context.Context, store *sqlite.Store, runtime ports.Runtime, messenger ports.AgentMessenger, notifier notificationSink, telemetry ports.EventSink, agents ports.AgentResolver, logger *slog.Logger) *lifecycleStack {
+func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, runtime ports.Runtime, messenger ports.AgentMessenger, notifier notificationSink, telemetry ports.EventSink, agents ports.AgentResolver, logger *slog.Logger) *lifecycleStack {
 	lcm := lifecycle.New(store, messenger,
 		lifecycle.WithNotificationSink(notifier),
 		lifecycle.WithTelemetry(telemetry),
@@ -70,11 +72,18 @@ func startLifecycle(ctx context.Context, store *sqlite.Store, runtime ports.Runt
 	)
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger})
 	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger})
+	herdrServer, err := herdr.Start(ctx, dataDir, lcm, logger)
+	if err != nil {
+		// fx treats reporting as best effort; an occupied or unavailable socket
+		// must not prevent the daemon or ordinary agent sessions from starting.
+		logger.Warn("fx Herdr listener unavailable", "error", err)
+	}
 	return &lifecycleStack{
 		LCM:           lcm,
 		runtimeReaper: rp,
 		reaperDone:    rp.Start(ctx),
 		activityDone:  activityPoller.Start(ctx),
+		herdr:         herdrServer,
 	}
 }
 
@@ -145,6 +154,9 @@ func activeTurnSteering(agents ports.AgentResolver) func(domain.AgentHarness) bo
 // Stop waits for the reaper goroutine to exit. The caller must cancel the ctx
 // passed to startLifecycle before calling Stop.
 func (l *lifecycleStack) Stop() {
+	if l.herdr != nil {
+		l.herdr.Stop()
+	}
 	<-l.reaperDone
 	if l.activityDone != nil {
 		<-l.activityDone
@@ -239,7 +251,7 @@ func telemetryEmitsSpawned(cfg config.Config) bool {
 // (issue #2685). The returned service is mounted at httpd APIDeps.Sessions.
 // It also returns the manager so the caller can wire Reconcile into the boot
 // sequence.
-func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.Runtime, store *sqlite.Store, lcm *lifecycle.Manager, messenger ports.AgentMessenger, telemetry ports.EventSink, agents ports.AgentResolver, agentReadiness ports.AgentReadinessProvider, previewLifecycle sessionmanager.PreviewLifecycle, browserLifecycle sessionmanager.BrowserLifecycle, browserCapabilities sessionmanager.BrowserCapabilityIssuer, chat sessionmanager.ChatLauncher, defaults sessionmanager.SessionModeDefaults, reportingPolicy ports.AgentSwitchReportingPolicy, tracker ports.Tracker, codexOperationGate ports.CodexOperationGate, log *slog.Logger) (*sessionsvc.Service, reviewsvc.Manager, sessionLifecycle, error) {
+func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.Runtime, store *sqlite.Store, lcm *lifecycle.Manager, messenger ports.AgentMessenger, telemetry ports.EventSink, notifications notificationSink, agents ports.AgentResolver, agentReadiness ports.AgentReadinessProvider, previewLifecycle sessionmanager.PreviewLifecycle, browserLifecycle sessionmanager.BrowserLifecycle, browserCapabilities sessionmanager.BrowserCapabilityIssuer, chat sessionmanager.ChatLauncher, defaults sessionmanager.SessionModeDefaults, reportingPolicy ports.AgentSwitchReportingPolicy, tracker ports.Tracker, codexOperationGate ports.CodexOperationGate, log *slog.Logger) (*sessionsvc.Service, reviewsvc.Manager, sessionLifecycle, error) {
 	gitWS, err := gitworktree.New(gitworktree.Options{
 		// Per-session worktrees live under the data dir, so a single AO_DATA_DIR
 		// override moves all durable per-user state together.
@@ -296,16 +308,17 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		githubIdentity = scmProvider
 	}
 	sessionSvc := sessionsvc.NewWithDeps(sessionsvc.Deps{
-		Manager:        mgr,
-		Store:          store,
-		PRClaimer:      store,
-		SCM:            scmProvider,
-		DataDir:        cfg.DataDir,
-		Tracker:        tracker,
-		Telemetry:      telemetry,
-		Logger:         log,
-		AgentReadiness: agentReadiness,
-		GithubIdentity: githubIdentity,
+		Manager:           mgr,
+		Store:             store,
+		PRClaimer:         store,
+		SCM:               scmProvider,
+		DataDir:           cfg.DataDir,
+		Tracker:           tracker,
+		Telemetry:         telemetry,
+		Logger:            log,
+		BackgroundContext: ctx,
+		AgentReadiness:    agentReadiness,
+		GithubIdentity:    githubIdentity,
 		// no_signal only makes sense for harnesses with complete lifecycle signal
 		// coverage; partial callbacks cannot prove that silence is abnormal.
 		SignalCapable: activitydispatch.FullySupportsHarness,
@@ -332,6 +345,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	reviewOpts := []reviewsvc.Option{
 		reviewsvc.WithLifecycleReducer(lcm),
 		reviewsvc.WithTelemetry(telemetry),
+		reviewsvc.WithNotificationSink(notifications),
 		reviewsvc.WithCodexAccountOperationGate(codexOperationGate),
 	}
 	if scmProvider != nil {
@@ -468,6 +482,8 @@ func (r reviewerAgentAuth) AuthStatus(ctx context.Context, harness domain.Review
 	switch snapshot.Authentication.State {
 	case domain.AgentAuthenticationAuthorized, domain.AgentAuthenticationNotApplicable:
 		return ports.AgentAuthStatusAuthorized, true, nil
+	case domain.AgentAuthenticationConfigured:
+		return ports.AgentAuthStatusConfigured, true, nil
 	case domain.AgentAuthenticationUnauthorized:
 		return ports.AgentAuthStatusUnauthorized, true, nil
 	default:
@@ -535,6 +551,7 @@ type chatLauncher struct{ svc *chatsvc.Service }
 var _ sessionmanager.ChatLauncher = chatLauncher{}
 var _ interface {
 	RunBackgroundTask(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
+	RelayUserAuthoredChatTurn(context.Context, domain.SessionID, string) (string, error)
 	ArmChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	PrepareChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	AbortChatHandoff(domain.SessionID)
@@ -619,6 +636,10 @@ func (c chatLauncher) StartChatTurn(ctx context.Context, id domain.SessionID, te
 
 func (c chatLauncher) RelayChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
 	return c.svc.RelayChatTurn(ctx, id, text)
+}
+
+func (c chatLauncher) RelayUserAuthoredChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
+	return c.svc.RelayUserAuthoredChatTurn(ctx, id, text)
 }
 
 func (c chatLauncher) RelayChatTurnWithID(

@@ -41,20 +41,22 @@ type APIDeps struct {
 	Import             controllers.ImportService
 	Directories        controllers.DirectoryBrowserService
 	ShellTerminals     controllers.ShellTerminalService
+	Cues               controllers.CueService
 	// Conversations is nil until a Chat driver is wired; the controller then
 	// answers 501 rather than panicking, matching the other optional surfaces.
 	Conversations controllers.ConversationService
 	// Settings is the daemon-owned preference surface.
-	Settings            controllers.SettingsService
-	DevImport           controllers.DevImportService
-	CDC                 cdc.Source
-	Events              cdcSubscriber
-	Telemetry           ports.EventSink
-	Mobile              *controllers.MobileController
-	Browser             controllers.BrowserService
-	PreviewServer       controllers.ManagedPreviewServer
-	SessionCapabilities controllers.SessionCapabilityValidator
-	SystemChecks        controllers.SystemChecker
+	Settings                 controllers.SettingsService
+	DevImport                controllers.DevImportService
+	CDC                      cdc.Source
+	Events                   cdcSubscriber
+	Telemetry                ports.EventSink
+	Mobile                   *controllers.MobileController
+	Browser                  controllers.BrowserService
+	PreviewServer            controllers.ManagedPreviewServer
+	SessionCapabilities      controllers.SessionCapabilityValidator
+	ShellPreviewCapabilities controllers.ShellPreviewCapabilityValidator
+	SystemChecks             controllers.SystemChecker
 	// HostID is this machine's stable, machine-bound identity, served by the
 	// unauthenticated GET /api/v1/identity probe so a phone can confirm which
 	// machine answered before presenting a credential.
@@ -127,6 +129,7 @@ type API struct {
 	imports       *controllers.ImportController
 	fs            *controllers.FSController
 	shellTerms    *controllers.ShellTerminalsController
+	cues          *controllers.CuesController
 	conversations *controllers.ConversationsController
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
@@ -162,12 +165,13 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Mgr: deps.Projects,
 		},
 		sessions: &controllers.SessionsController{
-			Svc:           deps.Sessions,
-			Activity:      deps.Activity,
-			Usage:         deps.UsageHooks,
-			Attachments:   attachmentstore.New(cfg.DataDir),
-			PreviewServer: deps.PreviewServer,
-			Capabilities:  deps.SessionCapabilities,
+			Svc:                      deps.Sessions,
+			Activity:                 deps.Activity,
+			Usage:                    deps.UsageHooks,
+			Attachments:              attachmentstore.New(cfg.DataDir),
+			PreviewServer:            deps.PreviewServer,
+			Capabilities:             deps.SessionCapabilities,
+			ShellPreviewCapabilities: deps.ShellPreviewCapabilities,
 		},
 		automations:   &controllers.AutomationsController{Svc: deps.Automations},
 		desktop:       &controllers.DesktopWorkspaceController{Svc: deps.DesktopWorkspaces},
@@ -180,6 +184,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		imports:       &controllers.ImportController{Svc: deps.Import},
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
+		cues:          &controllers.CuesController{Svc: deps.Cues},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
@@ -239,6 +244,7 @@ func (a *API) Register(root chi.Router) {
 			a.imports.Register(r)
 			a.fs.Register(r)
 			a.shellTerms.Register(r)
+			a.cues.Register(r)
 			a.conversations.Register(r)
 			a.settings.Register(r)
 			a.dev.Register(r)

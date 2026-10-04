@@ -27,6 +27,7 @@ const maxDisplayNameLen = 100
 // Store is the read-only persistence surface needed to assemble controller-facing session read models.
 type Store interface {
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
+	GetSessionByClientRequestID(ctx context.Context, id string) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
 	GetActiveAgentSwitch(ctx context.Context, sessionID domain.SessionID) (domain.AgentSwitch, bool, error)
@@ -46,6 +47,7 @@ type Store interface {
 	ListCurrentHeadReviewRunsForSession(ctx context.Context, id domain.SessionID) ([]domain.CurrentHeadReviewRun, error)
 	ListCurrentHeadReviewRunsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.CurrentHeadReviewRun, error)
 	ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error)
+	ListReportedPRURLs(ctx context.Context, id domain.SessionID) ([]string, error)
 	ListSessionWorktrees(ctx context.Context, id domain.SessionID) ([]domain.SessionWorktreeRecord, error)
 	ListChecks(ctx context.Context, prURL string) ([]domain.PullRequestCheck, error)
 	ListPRReviews(ctx context.Context, prURL string) ([]domain.PullRequestReview, error)
@@ -78,6 +80,7 @@ type commander interface {
 	RetireForReplacement(ctx context.Context, id domain.SessionID) error
 	WaitForMessageDeliveryReady(ctx context.Context, id domain.SessionID) error
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
+	SendWithOptions(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error
 	Cleanup(ctx context.Context, project domain.ProjectID) (sessionmanager.CleanupResult, error)
 	RollbackSpawn(ctx context.Context, id domain.SessionID) (deleted, killed bool, err error)
 	StageAttachments(ctx context.Context, id domain.SessionID, attachments []ports.SpawnAttachment) ([]string, error)
@@ -182,16 +185,20 @@ type Service struct {
 	dataDir             string
 	telemetry           ports.EventSink
 	logger              *slog.Logger
+	backgroundContext   context.Context
+	runBackground       func(func())
 	agentReadiness      ports.AgentReadinessProvider
 	orchestratorLocksMu sync.Mutex
 	orchestratorLocks   map[domain.ProjectID]*sync.Mutex
 	workspaceCache      *workspaceCache
+	workspaceManifests  *workspaceManifestIndex
 	workspaceEditsMu    sync.Mutex
 	// workspaceGroup coalesces concurrent cache-miss compare/status lookups
 	// for the same (session, root): "Expand All" on many files fires that
 	// many GetWorkspaceFile calls at once, and without this each one would
 	// independently spawn its own git subprocesses for identical work.
 	workspaceGroup singleflight.Group
+	manifestGroup  singleflight.Group
 	// signalCapable reports whether a harness has a hook pipeline that can
 	// deliver activity signals at all. Only capable harnesses are eligible for
 	// the no_signal downgrade: a hook-less harness staying silent forever is
@@ -228,6 +235,9 @@ type Deps struct {
 	DataDir   string
 	Telemetry ports.EventSink
 	Logger    *slog.Logger
+	// BackgroundContext owns best-effort workspace refresh work. It defaults
+	// to context.Background for non-daemon callers.
+	BackgroundContext context.Context
 	// AgentReadiness coordinates advisory native harness checks before launch.
 	AgentReadiness ports.AgentReadinessProvider
 	// SignalCapable gates the no_signal status downgrade per harness; daemon
@@ -241,7 +251,12 @@ type Deps struct {
 
 // NewWithDeps wires a session service with optional PR-claim dependencies.
 func NewWithDeps(d Deps) *Service {
+	backgroundContext := d.BackgroundContext
+	if backgroundContext == nil {
+		backgroundContext = context.Background()
+	}
 	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, logger: d.Logger, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity}
+	s.backgroundContext = backgroundContext
 	if s.prClaimer == nil {
 		if w, ok := d.Store.(ports.PRClaimer); ok {
 			s.prClaimer = w
@@ -251,12 +266,23 @@ func NewWithDeps(d Deps) *Service {
 		s.clock = time.Now
 	}
 	s.workspaceCache = newWorkspaceCache(workspaceCacheTTL, s.clock)
+	s.workspaceManifests = newWorkspaceManifestIndex()
+	s.workspaceManifests.now = s.clock
 	return s
 }
 
 // Spawn creates a session and returns the API-facing read model plus
 // ephemeral prompt size measurements.
 func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
+	if rec, found, err := s.replayClientRequest(ctx, cfg.ClientRequestID, cfg.ClientRequestHash); err != nil {
+		return domain.Session{}, 0, 0, err
+	} else if found {
+		sess, err := s.toSession(ctx, rec)
+		return sess, 0, 0, err
+	}
+	if cfg.ClientRequestID != "" && cfg.Kind != domain.KindWorker {
+		return domain.Session{}, 0, 0, apierr.Invalid("CLIENT_REQUEST_WORKER_REQUIRED", "clientRequestId is supported for worker sessions only", nil)
+	}
 	if cfg.ProjectID == "" && cfg.Kind != domain.KindWorker {
 		return domain.Session{}, 0, 0, apierr.Invalid("STANDALONE_WORKER_REQUIRED", "Standalone sessions must be workers", nil)
 	}
@@ -795,6 +821,11 @@ func (s *Service) Send(ctx context.Context, id domain.SessionID, message string,
 	return toAPIError(s.manager.Send(ctx, id, message, attachment))
 }
 
+// SendWithOptions preserves authorship facts supplied by trusted UI surfaces.
+func (s *Service) SendWithOptions(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error {
+	return toAPIError(s.manager.SendWithOptions(ctx, id, message, attachment, options))
+}
+
 // Rename updates the user-facing session display name.
 func (s *Service) Rename(ctx context.Context, id domain.SessionID, displayName string) error {
 	displayName = strings.TrimSpace(displayName)
@@ -1321,6 +1352,10 @@ func toSpawnAPIError(err error) error {
 		return mapped
 	}
 	switch {
+	case errors.Is(err, sessionmanager.ErrClientRequestConflict):
+		return apierr.Conflict("CLIENT_REQUEST_CONFLICT", "clientRequestId belongs to a different task", nil)
+	case errors.Is(err, sessionmanager.ErrClientRequestIncomplete):
+		return apierr.Conflict("CLIENT_REQUEST_INCOMPLETE", "This task is still starting or its prior launch did not finish; check the session before trying again", nil)
 	case errors.Is(err, context.DeadlineExceeded):
 		return apierr.Conflict("SPAWN_TIMEOUT", "Session spawn timed out before the agent could start", nil)
 	case errors.Is(err, context.Canceled):
@@ -1360,6 +1395,23 @@ func toSpawnAPIError(err error) error {
 	default:
 		return apierr.Internal("SPAWN_INTERNAL", err.Error())
 	}
+}
+
+func (s *Service) replayClientRequest(ctx context.Context, id, hash string) (domain.SessionRecord, bool, error) {
+	if id == "" || s.store == nil {
+		return domain.SessionRecord{}, false, nil
+	}
+	rec, found, err := s.store.GetSessionByClientRequestID(ctx, id)
+	if err != nil || !found {
+		return rec, found, err
+	}
+	if rec.ClientRequestHash != hash {
+		return domain.SessionRecord{}, false, toSpawnAPIError(sessionmanager.ErrClientRequestConflict)
+	}
+	if !rec.ClientRequestCommitted {
+		return domain.SessionRecord{}, false, toSpawnAPIError(sessionmanager.ErrClientRequestIncomplete)
+	}
+	return rec, true, nil
 }
 
 func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (domain.Session, error) {

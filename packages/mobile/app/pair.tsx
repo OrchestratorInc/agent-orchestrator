@@ -67,7 +67,7 @@ export default function PairScreen() {
 		if (Platform.OS !== "ios" || lens) return;
 		try {
 			const lenses = (await camera.current?.getAvailableLensesAsync()) ?? [];
-			if (__DEV__) console.log("[pair] available lenses", lenses);
+			if (typeof __DEV__ !== "undefined" && __DEV__) console.log("[pair] available lenses", lenses);
 			setLens(pickNormalLens(lenses));
 		} catch {
 			/* keep the native default */
@@ -85,7 +85,8 @@ export default function PairScreen() {
 		if (scanned.current || busy || !focused.current) return;
 		// Cheap reject first: the camera sees every barcode in frame, and only a
 		// code we can actually parse should stop the scanner.
-		if (!parsePairingCode(data)) {
+		const offer = parsePairingCode(data);
+		if (!offer) {
 			if (rejected.current !== data) {
 				rejected.current = data;
 				// A v1 code is a recognisable thing, not noise: say what to do
@@ -97,13 +98,13 @@ export default function PairScreen() {
 		}
 		rejected.current = null;
 		scanned.current = true;
-		await pair(data);
+		await pair(data, offer);
 	}
 
 	// Races the code's endpoints, verifies the winner, then stores the machine.
 	// The scanned code is kept so "Try again" can re-run the whole thing rather
 	// than making the user re-scan.
-	async function pair(code: string) {
+	async function pair(code: string, offer?: ReturnType<typeof parsePairingCode>) {
 		pendingCode.current = code;
 		setBusy(true);
 		setFailure(null);
@@ -117,10 +118,15 @@ export default function PairScreen() {
 
 		if (!result.ok) {
 			haptics.warning();
+			// Use the first endpoint from the offer for error reporting, if available
+			const firstEndpoint = offer?.endpoints[0];
+			const errorTarget = firstEndpoint
+				? { host: firstEndpoint.host, port: String(firstEndpoint.port), platform: Platform.OS }
+				: { host: "", port: "", platform: Platform.OS };
 			setFailure(
 				describeConnectionFailure(
-					result.reason === "not-ao-qr" ? "not-ao-qr" : classifyConnectionFailure(undefined),
-					{ host: "", port: "", platform: Platform.OS },
+					result.reason === "not-ao-qr" ? "not-ao-qr" : result.reason === "incompatible" ? "incompatible-host" : classifyConnectionFailure(undefined),
+					errorTarget,
 				),
 			);
 			setBusy(false);
@@ -140,7 +146,8 @@ export default function PairScreen() {
 		setFailure(null);
 		rejected.current = null;
 		if (pendingCode.current) {
-			void pair(pendingCode.current);
+			const offer = parsePairingCode(pendingCode.current);
+			void pair(pendingCode.current, offer);
 			return;
 		}
 		scanned.current = false;
@@ -153,9 +160,9 @@ export default function PairScreen() {
 			<View style={styles.topBar}><MinimalBackButton onPress={back} /></View>
 
 			<View style={styles.steps}>
-				<NumberedStep n={1} title="Open AO on your computer" compact />
-				<NumberedStep n={2} title="Go to Settings → Connect Mobile" compact />
-				<NumberedStep n={3} title="Scan the QR code" compact />
+					<NumberedStep n={1} title="Enable AO on a machine" compact />
+					<NumberedStep n={2} title="Open Connect Mobile or run ao remote-host enable" compact />
+					<NumberedStep n={3} title="Scan the code or enter details manually" compact />
 			</View>
 
 			<View style={styles.viewfinder}>
@@ -255,7 +262,7 @@ function CameraGate({
 			<Text style={styles.gateTitle}>Camera access needed</Text>
 			<Text style={styles.gateHint}>
 				{canAskAgain
-					? "AO uses the camera only to read the pairing QR code on your desktop."
+					? "AO uses the camera only to read a pairing QR code."
 					: "Camera access is turned off for AO. Enable it in system settings, or enter your details manually below."}
 			</Text>
 			{canAskAgain ? (

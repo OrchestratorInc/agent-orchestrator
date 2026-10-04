@@ -20,15 +20,17 @@ const (
 // may be empty to open an idle worker that the user can instruct later. Empty
 // RequestedAgent means the spawn uses the project's worker-agent default.
 type DelegateTaskInput struct {
-	ProjectID       domain.ProjectID
-	Brief           string
-	RequestedAgent  domain.AgentHarness
-	Model           string
-	Effort          *string
-	ApprovalMode    domain.PermissionMode
-	RequestedMode   domain.SessionMode
-	Attachments     []ports.SpawnAttachment
-	TaskPreparation domain.TaskPreparationToken
+	ProjectID         domain.ProjectID
+	Brief             string
+	RequestedAgent    domain.AgentHarness
+	Model             string
+	Effort            *string
+	ApprovalMode      domain.PermissionMode
+	RequestedMode     domain.SessionMode
+	Attachments       []ports.SpawnAttachment
+	TaskPreparation   domain.TaskPreparationToken
+	ClientRequestID   string
+	ClientRequestHash string
 }
 
 // DelegateTaskOutcome identifies the spawned worker. OrchestratorID remains
@@ -59,6 +61,11 @@ func (s *Service) CancelTaskPreparation(ctx context.Context, token string) error
 // delegation also gets a trusted startup instruction to self-rename before
 // implementation begins.
 func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (DelegateTaskOutcome, error) {
+	if rec, found, err := s.replayClientRequest(ctx, in.ClientRequestID, in.ClientRequestHash); err != nil {
+		return DelegateTaskOutcome{}, err
+	} else if found {
+		return DelegateTaskOutcome{WorkerID: rec.ID}, nil
+	}
 	if _, err := s.requireProject(ctx, in.ProjectID); err != nil {
 		return DelegateTaskOutcome{}, err
 	}
@@ -79,6 +86,8 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 
 	effort, effortOverride := optionalTuningValue(in.Effort)
 	worker, _, _, err := s.manager.Spawn(ctx, ports.SpawnConfig{
+		ClientRequestID:     in.ClientRequestID,
+		ClientRequestHash:   in.ClientRequestHash,
 		ProjectID:           in.ProjectID,
 		Kind:                domain.KindWorker,
 		Harness:             in.RequestedAgent,

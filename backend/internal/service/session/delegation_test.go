@@ -2,11 +2,13 @@ package session
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
@@ -62,6 +64,33 @@ func TestDelegateTaskSpawnsWorkerWithoutSecondMessage(t *testing.T) {
 				t.Fatalf("delegation started extra title work: spawns=%d resumed=%#v ready=%#v sent=%#v background=%#v", cmd.spawnCalls, cmd.resumed, cmd.ready, cmd.sent, cmd.backgroundCalls)
 			}
 		})
+	}
+}
+
+func TestDelegateTaskClientRequestReplaysAndConflictsBeforeSpawn(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", ProjectID: "ao", Kind: domain.KindWorker, ClientRequestID: "draft-1", ClientRequestHash: "v1:original", ClientRequestCommitted: true}
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	cmd := &fakeCommander{}
+	svc := &Service{store: st, manager: cmd}
+	input := DelegateTaskInput{ProjectID: "ao", Brief: "Fix it", ClientRequestID: "draft-1", ClientRequestHash: "v1:original"}
+	out, err := svc.DelegateTask(context.Background(), input)
+	if err != nil || out.WorkerID != "ao-1" || cmd.spawnCalls != 0 {
+		t.Fatalf("replay = %+v, spawnCalls=%d, err=%v", out, cmd.spawnCalls, err)
+	}
+	input.ClientRequestHash = "v1:changed"
+	_, err = svc.DelegateTask(context.Background(), input)
+	var apiError *apierr.Error
+	if !errors.As(err, &apiError) || apiError.Kind != apierr.KindConflict || apiError.Code != "CLIENT_REQUEST_CONFLICT" || cmd.spawnCalls != 0 {
+		t.Fatalf("changed payload: spawnCalls=%d, err=%v", cmd.spawnCalls, err)
+	}
+	rec := st.sessions["ao-1"]
+	rec.ClientRequestCommitted = false
+	st.sessions["ao-1"] = rec
+	input.ClientRequestHash = "v1:original"
+	_, err = svc.DelegateTask(context.Background(), input)
+	if !errors.As(err, &apiError) || apiError.Code != "CLIENT_REQUEST_INCOMPLETE" || cmd.spawnCalls != 0 {
+		t.Fatalf("incomplete retry: spawnCalls=%d, err=%v", cmd.spawnCalls, err)
 	}
 }
 

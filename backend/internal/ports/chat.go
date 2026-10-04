@@ -397,12 +397,24 @@ type ChatUserMessage struct {
 	// ClientMessageID makes delivery idempotent: a retry with the same key must
 	// not produce a second provider turn.
 	ClientMessageID string
-	// Origin records who is speaking. Automation shares the queue with the user
-	// and can never resolve an approval.
+	// ClientPayloadHash identifies the original request before AO adds reports
+	// or other server-owned context. It is internal, never supplied by a client.
+	ClientPayloadHash string
+	// Origin records the timeline attribution and delivery source. Automation
+	// shares the queue with the user and can never resolve an approval.
 	Origin domain.MessageOrigin
+	// AuthoredByUser distinguishes user-written content carried through AO's
+	// automation delivery path from content authored by automation itself.
+	AuthoredByUser bool
 	// Settings are the per-turn provider choices for this message. Zero means the
 	// conversation's own defaults.
 	Settings ChatTurnSettings
+}
+
+// MessageDeliveryOptions describes facts about the message independent of the
+// mechanism AO uses to deliver it.
+type MessageDeliveryOptions struct {
+	AuthoredByUser bool
 }
 
 // ChatTurnSettings are the per-turn choices a provider accepts alongside the
@@ -589,9 +601,9 @@ type ChatAccount struct {
 	// expected to supply. AO does not hold provider credentials, so this is
 	// reported to the user rather than answered.
 	ReauthRequired bool
-	// ReauthRecovered explicitly clears an earlier credential demand after a
-	// later provider turn succeeds. It is separate from false/zero because most
-	// account updates say nothing about authentication state.
+	// ReauthRecovered reports provider recovery intent. The daemon requires a
+	// correlated authoritative turn completion before clearing a demand; an
+	// uncorrelated account report alone is not authentication evidence.
 	ReauthRecovered bool
 	// ReauthReason is the provider's stated reason, e.g. "unauthorized".
 	ReauthReason string

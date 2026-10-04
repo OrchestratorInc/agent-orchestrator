@@ -1,8 +1,9 @@
 import type { ProjectSource } from "@aoagents/product-ui";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Bot, Folder, Folders, FolderOpen, GitFork, Star } from "lucide-react";
+import { AlertTriangle, Cloud, Folder, Folders, FolderOpen, GitFork, MessageSquarePlus, Star } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
+import { useCloudGate } from "../hooks/useCloudGate";
 import { useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
@@ -14,7 +15,6 @@ import { useUiStore } from "../stores/ui-store";
 import {
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
-	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
 import { CreateProjectFlow } from "./CreateProjectFlow";
@@ -28,13 +28,17 @@ import { Badge } from "./ui/badge";
  * - One centered column (`max-w-[640px]`); no upward translate hack.
  * - "Star us" is a quiet text link with dashed underline on hover — NOT a
  *   TopbarButton / accent pill / bordered card.
- * - Primary actions are a 2×2 grid; standalone agent lives IN the grid (not a
- *   full-width accent CTA above). Connect Mobile is settings-only — not here.
+ * - Primary actions are a 2×2 grid that always includes the standalone-agent
+ *   action. With Developer Mode and Cloud enabled, a full-width Cloud action
+ *   sits beneath the grid rather than displacing standalone.
+ *   Connect Mobile is settings-only — not here.
  * - Recent rows use shared {@link NavRowHighlight} (same as sidebar), not a
  *   flat `hover:bg-interactive-hover` wash.
  * - Section titles share {@link HOME_SECTION_TITLE_CLASS}. With no projects the
  *   heading is Get started and Recent projects stays hidden; otherwise keep
- *   Jump back paired with Recent projects.
+ *   Jump back paired with Recent projects. The Scratchpad (standalone agents)
+ *   is not a project: it never appears in Recent projects or counts toward
+ *   the heading — the grid's standalone action and the sidebar own it.
  */
 const GITHUB_REPOSITORY_URL = "https://github.com/Untrivial-ai/agent-orchestrator";
 const RECENT_PROJECT_LIMIT = 3;
@@ -70,25 +74,6 @@ function sortProjectsByActivity(projects: WorkspaceSummary[]): WorkspaceSummary[
 	return projects
 		.slice()
 		.sort((left, right) => latestProjectTimestamp(right).localeCompare(latestProjectTimestamp(left)));
-}
-
-function standaloneSessionTimestamp(session: WorkspaceSession): number {
-	for (const value of [session.lastUserMessageAt, session.updatedAt, session.createdAt]) {
-		const parsed = value ? Date.parse(value) : Number.NaN;
-		if (!Number.isNaN(parsed)) return parsed;
-	}
-	return 0;
-}
-
-function mostRecentStandaloneSession(sessions: WorkspaceSession[]): WorkspaceSession | undefined {
-	const candidates = sessions.filter((session) => session.isTerminated !== true && session.status !== "terminated");
-	return (candidates.length > 0 ? candidates : sessions).reduce<WorkspaceSession | undefined>((latest, session) => {
-		if (!latest) return session;
-		const sessionTime = standaloneSessionTimestamp(session);
-		const latestTime = standaloneSessionTimestamp(latest);
-		if (sessionTime !== latestTime) return sessionTime > latestTime ? session : latest;
-		return session.id > latest.id ? session : latest;
-	}, undefined);
 }
 
 function ProjectRow({ project, onClick, emptyTimeLabel, justNowLabel }: { project: WorkspaceSummary; onClick: () => void; emptyTimeLabel: string; justNowLabel: string }) {
@@ -128,11 +113,13 @@ function ProjectRow({ project, onClick, emptyTimeLabel, justNowLabel }: { projec
 }
 
 function HomeActionCard({
+	centerContent = false,
 	disabled,
 	icon,
 	label,
 	onClick,
 }: {
+	centerContent?: boolean;
 	disabled?: boolean;
 	icon: ReactNode;
 	label: string;
@@ -140,7 +127,11 @@ function HomeActionCard({
 }) {
 	return (
 		<button
-			className={`${HOME_BUTTON_CLASS} disabled:pointer-events-none disabled:opacity-50`}
+			className={cn(
+				HOME_BUTTON_CLASS,
+				centerContent && "justify-center",
+				"disabled:pointer-events-none disabled:opacity-50",
+			)}
 			disabled={disabled}
 			onClick={onClick}
 			type="button"
@@ -157,13 +148,22 @@ export function HomePage() {
 	const navigate = useNavigate();
 	const { t } = useTranslation();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
+	const developerMode = useUiStore((state) => state.developerMode);
 	const { cloneProject, createProject, daemonStatus, initializeProjectRepository, workspaceStartupState } =
 		useShell();
 	const { blocked: requirementsBlocked } = useSystemRequirementsGate();
+	const { cloudEnabled } = useCloudGate();
 	const workspaceQuery = useWorkspaceQuery();
-	const [sourceSignal, setSourceSignal] = useState<{ source: ProjectSource; nonce: number } | null>(null);
+	const [sourceSignal, setSourceSignal] = useState<{ source: ProjectSource | "cloud"; nonce: number } | null>(null);
 	const projects = workspaceQuery.data ?? [];
-	const recentProjects = useMemo(() => sortProjectsByActivity(projects).slice(0, RECENT_PROJECT_LIMIT), [projects]);
+	const recentProjects = useMemo(
+		() =>
+			sortProjectsByActivity(projects.filter((project) => project.kind !== STANDALONE_PROJECT_KIND)).slice(
+				0,
+				RECENT_PROJECT_LIMIT,
+			),
+		[projects],
+	);
 
 	const isDaemonReady = usesPreviewWorkspaceData || daemonStatus.state === "ready";
 	const daemonHasFailed = Boolean(daemonStatus.code);
@@ -176,7 +176,7 @@ export function HomePage() {
 
 	if (showStartup) return <DaemonStartupLoader />;
 
-	const requestSource = (source: ProjectSource) => {
+	const requestSource = (source: ProjectSource | "cloud") => {
 		setSourceSignal({ source, nonce: Date.now() });
 	};
 
@@ -202,7 +202,7 @@ export function HomePage() {
 				<div className="space-y-6">
 					<section className="space-y-3 px-3">
 						<div className="flex items-baseline justify-between gap-4">
-							<h1 className={HOME_SECTION_TITLE_CLASS}>{projects.length === 0 ? t("home.getStarted") : t("home.jumpBack")}</h1>
+							<h1 className={HOME_SECTION_TITLE_CLASS}>{recentProjects.length === 0 ? t("home.getStarted") : t("home.jumpBack")}</h1>
 							{/* Quiet text link — not TopbarButton / accent. Dashed underline only on hover. */}
 							<button
 								className="inline-flex shrink-0 items-center gap-1.5 border-b border-dashed border-transparent pb-px text-sm text-muted-foreground hover:border-current hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
@@ -214,7 +214,6 @@ export function HomePage() {
 							</button>
 						</div>
 
-						{/* 2×2 action grid; standalone agent is a cell here, not a hero CTA above. */}
 						<div className="grid grid-cols-2 gap-3">
 							<HomeActionCard
 								icon={<GitFork strokeWidth={1.8} />}
@@ -232,10 +231,20 @@ export function HomePage() {
 								onClick={() => requestSource("workspace")}
 							/>
 							<HomeActionCard
-								icon={<Bot strokeWidth={1.8} />}
+								icon={<MessageSquarePlus strokeWidth={1.8} />}
 								label={t("home.newStandaloneAgent")}
 								onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 							/>
+							{developerMode && cloudEnabled ? (
+								<div className="col-span-2">
+									<HomeActionCard
+										centerContent
+										icon={<Cloud strokeWidth={1.8} />}
+										label={t("createProject.cloudTitle")}
+										onClick={() => requestSource("cloud")}
+									/>
+								</div>
+							) : null}
 						</div>
 					</section>
 
@@ -247,16 +256,7 @@ export function HomePage() {
 									<ProjectRow
 										key={project.id}
 										project={project}
-										onClick={() => {
-											if (project.kind === STANDALONE_PROJECT_KIND) {
-												const session = mostRecentStandaloneSession(project.sessions);
-												session
-													? void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } })
-													: requestNewTask(STANDALONE_WORKSPACE_ID);
-												return;
-											}
-											openProject(project.id);
-										}}
+										onClick={() => openProject(project.id)}
 										emptyTimeLabel={t("home.never")}
 										justNowLabel={t("time.justNow")}
 									/>

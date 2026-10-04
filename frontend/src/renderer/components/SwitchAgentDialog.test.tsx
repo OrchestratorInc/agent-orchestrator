@@ -58,9 +58,9 @@ function renderDialog(
 	const queryClient = new QueryClient({
 		defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
 	});
-	if (projectConfig !== null) queryClient.setQueryData(["project", session.workspaceId], projectConfig);
-	for (const agentId of ["claude-code", "codex"]) {
-		queryClient.setQueryData(agentModelsQueryKey(agentId, session.workspaceId), {
+	if (projectConfig !== null) queryClient.setQueryData(session.hostId ? ["project", session.hostId, session.workspaceId] : ["project", session.workspaceId], projectConfig);
+	for (const agentId of ["claude-code", "codex", "fx"]) {
+		queryClient.setQueryData(agentModelsQueryKey(agentId, session.workspaceId, session.hostId), {
 			agentId,
 			allowCustom: false,
 			fetchedAt: "2026-06-10T00:00:00Z",
@@ -161,6 +161,38 @@ describe("SwitchAgentDialog", () => {
 		expect(onOpenChange).toHaveBeenCalledWith(false);
 	});
 
+	it("offers fx as a switch target", async () => {
+		const tuiWorker = { ...worker, mode: "tui" as const };
+		renderDialog(tuiWorker);
+		const dialog = screen.getByRole("dialog", { name: "Switch agent" });
+		await userEvent.click(within(dialog).getByRole("button", { name: "Target agent" }));
+
+		const fxOption = screen.getByRole("menuitem", { name: "fx" });
+		expect(fxOption).not.toHaveAttribute("data-disabled");
+		await userEvent.click(fxOption);
+		await userEvent.click(within(dialog).getByRole("button", { name: "Switch" }));
+
+		expect(switchMocks.mutate).toHaveBeenCalledWith(
+			{
+				idempotencyKey: "idempotency-1",
+				model: "",
+				session: tuiWorker,
+				targetHarness: "fx",
+			},
+			{ onSuccess: expect.any(Function) },
+		);
+	});
+
+	it("keeps fx unavailable as a Chat switch target", async () => {
+		renderDialog({ ...worker, mode: "chat" });
+		const dialog = screen.getByRole("dialog", { name: "Switch agent" });
+		await userEvent.click(within(dialog).getByRole("button", { name: "Target agent" }));
+
+		expect(screen.getByRole("menuitem", { name: /fx,\s*Coming soon/ })).toHaveAttribute(
+			"data-disabled",
+		);
+	});
+
 	it("keeps direct model IDs in the same searchable model picker", async () => {
 		const { queryClient } = renderDialog();
 		queryClient.setQueryData(agentModelsQueryKey("codex", worker.workspaceId), {
@@ -243,6 +275,44 @@ describe("SwitchAgentDialog", () => {
 		await userEvent.click(within(dialog).getByRole("button", { name: "Switch" }));
 		expect(switchMocks.mutate).toHaveBeenCalledWith(
 			expect.objectContaining({ model: "", targetHarness: "codex" }),
+			expect.any(Object),
+		);
+	});
+
+	it("uses the owning host's project and model when equal session IDs change hosts", async () => {
+		const remoteA = { ...worker, hostId: "host-a" };
+		const remoteB = { ...worker, hostId: "host-b" };
+		const { queryClient, rerender } = renderDialog(remoteA, vi.fn(), undefined, {
+			config: { worker: { agent: "codex", agentConfig: { model: "gpt-5.4-mini" } } },
+		});
+		queryClient.setQueryData(["project", worker.workspaceId], {
+			config: { worker: { agent: "codex", agentConfig: { model: "local-only" } } },
+		});
+		queryClient.setQueryData(["project", "host-b", worker.workspaceId], {
+			config: { worker: { agent: "codex", agentConfig: { model: "gpt-5.4" } } },
+		});
+		queryClient.setQueryData(agentModelsQueryKey("codex", worker.workspaceId, "host-b"), {
+			agentId: "codex",
+			allowCustom: false,
+			fetchedAt: "2026-06-10T00:00:00Z",
+			models: [{ id: "gpt-5.4", label: "Host B model", isDefault: true }],
+			selectionMode: "catalog",
+			source: "test",
+			stale: false,
+		});
+		const dialog = screen.getByRole("dialog", { name: "Switch agent" });
+		expect(within(dialog).getByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.4 Mini");
+		rerender(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<SwitchAgentDialog container={document.body} onOpenChange={vi.fn()} open session={remoteB} />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Host B model"));
+		await userEvent.click(screen.getByRole("button", { name: "Switch" }));
+		expect(switchMocks.mutate).toHaveBeenCalledWith(
+			expect.objectContaining({ session: remoteB, model: "" }),
 			expect.any(Object),
 		);
 	});
@@ -410,6 +480,28 @@ describe("SwitchAgentDialog", () => {
 			switchId: "switch-source-recovery",
 		});
 		expect(within(dialog).queryByRole("button", { name: "Target agent" })).not.toBeInTheDocument();
+	});
+
+	it("routes source recovery to the session host", async () => {
+		const remote = {
+			...worker,
+			hostId: "host-a",
+			activeAgentSwitch: {
+				agentHandoffStatus: "received",
+				errorCode: "source_restore_unconfirmed",
+				fromHarness: "claude-code",
+				id: "switch-source-recovery",
+				state: "source_stopped",
+				targetHarness: "codex",
+			},
+		} satisfies WorkspaceSession;
+		renderDialog(remote);
+		await userEvent.click(screen.getByRole("button", { name: "Restore Claude Code" }));
+		expect(switchMocks.recoverMutate).toHaveBeenCalledWith({
+			sessionId: worker.id,
+			hostId: "host-a",
+			switchId: "switch-source-recovery",
+		});
 	});
 
 	it("offers to recover an unconfirmed source stop", async () => {
