@@ -166,7 +166,7 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 	if err != nil {
 		return false, err
 	}
-	if !hibernateSessionEligible(rec) || s.hasChatView(id) {
+	if !rec.EligibleForChatHibernation() || s.hasChatView(id) {
 		return false, nil
 	}
 	controller, err := s.Controller(id)
@@ -228,7 +228,7 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 		controller.sendMu.Unlock()
 		return false, err
 	}
-	if !hibernateSessionEligible(fresh) {
+	if !fresh.EligibleForChatHibernation() {
 		controller.sendMu.Unlock()
 		return false, nil
 	}
@@ -270,7 +270,7 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 		if err != nil {
 			return false, err
 		}
-		if !hibernateSessionEligible(fresh) {
+		if !fresh.EligibleForChatHibernation() {
 			return false, nil
 		}
 		at := s.now()
@@ -285,15 +285,6 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 		}
 	}
 	return false, errors.New("chat hibernation marker changed concurrently")
-}
-
-func hibernateSessionEligible(rec domain.SessionRecord) bool {
-	return !rec.IsTerminated && !rec.IsTaskPreparation && rec.HibernatedAt == nil &&
-		domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
-		rec.ProvisionState.WithDefault() == domain.SessionProvisionReady &&
-		rec.Activity.State == domain.ActivityIdle &&
-		!rec.Activity.LastActivityAt.IsZero() &&
-		rec.Metadata.ProviderConversationID != ""
 }
 
 // Explicit controller teardown (kill or interface switch) consumes the cold

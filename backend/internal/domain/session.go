@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // These ID types are distinct string types so they can't be swapped at a call
 // site by accident.
@@ -234,6 +237,16 @@ type SessionRecord struct {
 	// the row rather than discarded with it, because the user is already looking
 	// at the session by the time the start can fail.
 	ProvisionError string `json:"provisionError,omitempty"`
+}
+
+// EligibleForChatHibernation is the cheap durable-fact filter. The chat service
+// still checks live provider work and view leases under its controller gate.
+func (s SessionRecord) EligibleForChatHibernation() bool {
+	return NormalizeSessionMode(s.Mode) == SessionModeChat &&
+		!s.IsTerminated && !s.IsTaskPreparation && s.ProvisionState.WithDefault() == SessionProvisionReady &&
+		s.HibernatedAt == nil && s.Activity.State == ActivityIdle &&
+		!s.Activity.LastActivityAt.IsZero() &&
+		strings.TrimSpace(s.Metadata.ProviderConversationID) != ""
 }
 
 // SessionProvisionState is a session's start-up progress.

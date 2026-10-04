@@ -2711,7 +2711,7 @@ func (m *Manager) HibernateIdleChats(ctx context.Context) error {
 	}
 	var errs []error
 	for _, candidate := range records {
-		if !eligibleChatHibernation(candidate) {
+		if !candidate.EligibleForChatHibernation() {
 			continue
 		}
 		err := m.hibernateEligibleChat(ctx, candidate.ID)
@@ -2726,7 +2726,7 @@ func (m *Manager) HibernateIdleChats(ctx context.Context) error {
 // sweep. It shares the same operation and transition gates as the sweep.
 func (m *Manager) HibernateChatIfIdle(ctx context.Context, id domain.SessionID) error {
 	rec, found, err := m.store.GetSession(ctx, id)
-	if err != nil || !found || !eligibleChatHibernation(rec) {
+	if err != nil || !found || !rec.EligibleForChatHibernation() {
 		return err
 	}
 	return m.hibernateEligibleChat(ctx, id)
@@ -2754,14 +2754,6 @@ func (m *Manager) hibernateEligibleChat(ctx context.Context, id domain.SessionID
 	}
 	_, err = hibernator.HibernateChat(operationCtx, id)
 	return err
-}
-
-func eligibleChatHibernation(rec domain.SessionRecord) bool {
-	return domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
-		!rec.IsTerminated && !rec.IsTaskPreparation && rec.ProvisionState.WithDefault() == domain.SessionProvisionReady &&
-		rec.HibernatedAt == nil && rec.Activity.State == domain.ActivityIdle &&
-		!rec.Activity.LastActivityAt.IsZero() &&
-		strings.TrimSpace(rec.Metadata.ProviderConversationID) != ""
 }
 
 // WakeHibernatedChat waits for an in-flight hibernation or wake, then resumes
