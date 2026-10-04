@@ -3,7 +3,7 @@ title: CLI reference
 description: Commands provided by the current Go CLI.
 ---
 
-The `ao` CLI sends commands to the local desktop app's daemon. Product commands require the desktop app to be running. Run `ao <command> --help` to see flags supported by your installed version.
+The `ao` CLI is a thin client for the local desktop app's daemon. Commands that operate on projects and sessions require the app and its daemon to be running. `ao start` opens or downloads the app, `ao status` inspects daemon state even when it is stopped, and `ao doctor` checks the local environment without requiring a running daemon. Run `ao <command> --help` to see flags supported by your installed version.
 
 ## Command tree
 

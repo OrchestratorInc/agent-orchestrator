@@ -1,18 +1,20 @@
 ---
 title: Agent adapters
-description: The terminal harnesses built into AO and the smaller set that also supports structured Chat.
+description: The agent harnesses built into AO, with terminal and structured Chat capabilities.
 ---
 
-To use an agent, install it and sign in on your machine, then check that AO can find it and start a session:
+Most agents require a local installation and sign-in. Unreal Agent is built into AO for macOS and Linux and is Chat-only. For an installed agent, check that AO can find it and start a session:
 
 ```bash
 ao agent ls --refresh
 ao spawn --project my-app --name task --agent codex
 ```
 
-AO uses the agent CLI and authentication you already installed. It does not bundle provider credentials or install adapters from npm.
+AO uses the agent CLI and authentication you already installed for external harnesses. It does not bundle external provider credentials or install external adapters from npm.
 
-## Shipped terminal harnesses
+<span id="shipped-terminal-harnesses" />
+
+## Shipped agent harnesses
 
 The current daemon registers the following capabilities. Availability still depends on platform, installed version, credentials, and permissions; a registered adapter is not proof that it is ready on your machine.
 

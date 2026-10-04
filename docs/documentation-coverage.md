@@ -1,6 +1,6 @@
 # Documentation coverage
 
-Reviewed 3 October 2026. The public desktop guide uses [v0.13.3](https://github.com/Untrivial-ai/agent-orchestrator/releases/tag/v0.13.3), published 1 October 2026 UTC. Source checks used PR #6166 at `44c6ca8a1f8a9492101f6928033fa7aa830b162f`. The follow-up changes edit documentation, not product behavior. Contributor guides describe that checkout. Cloud availability also depends on the deployed service and the signed-in account.
+Reviewed 4 October 2026. The public desktop guide uses [v0.13.3](https://github.com/Untrivial-ai/agent-orchestrator/releases/tag/v0.13.3), published 1 October 2026 UTC. The original source checks used PR #6166 at `44c6ca8a1f8a9492101f6928033fa7aa830b162f`. The 4 October follow-up checked `f8a8416c5` and incorporated main at `b2461dc59`. The follow-up changes edit documentation, not product behavior. Contributor guides describe that checkout. Cloud availability also depends on the deployed service and the signed-in account.
 
 ## What was checked
 
@@ -14,6 +14,7 @@ Reviewed 3 October 2026. The public desktop guide uses [v0.13.3](https://github.
 | Mobile | [Connect Mobile](../frontend/src/docs/content/configuration/remote-access.mdx) | Desktop Connect Mobile component, daemon bridge, and phone source under `packages/mobile/`, including onboarding, QR v2 pairing, multiple desktops, and the incomplete Tailscale enablement path | [Real-device acceptance and screenshots, #6178](https://github.com/Untrivial-ai/agent-orchestrator/issues/6178) |
 | Cloud sessions | [Cloud guide](../frontend/src/docs/content/guides/cloud.mdx) | Desktop auth, organization selection, project/task UI, Archive/Restore, and control-plane handlers | [Authenticated deployment walkthrough and account limits, #6179](https://github.com/Untrivial-ai/agent-orchestrator/issues/6179) |
 | Cloud development and deployment | [Cloud development](cloud-development.md), [Cloud README](../cloud/README.md), and [deployment runbook](../cloud/docs/deployment.md) | Repository ownership, local scripts, deployment argument handling, and provider lifecycle source | No staging or production deployment was performed |
+| Cloud API contract | [OpenAPI](../contracts/cloud/openapi.yaml) and generated Cloud client types | Personal provider GET/PUT/DELETE and session wake checked against registered handlers; credential/provider values checked against their registries | [Remaining route coverage, #6220](https://github.com/Untrivial-ai/agent-orchestrator/issues/6220) |
 | Telemetry | [Product telemetry](telemetry.md), README, and public FAQ | PostHog sink's shared installation ID, GitHub username event/person fields, and enabled GeoIP setting | No production analytics account or stored event data was inspected |
 | Website and translated introductions | README, translated READMEs, and public links | Canonical docs host and capability catalog links; current landing-page copy | [Landing-page companion change, #6180](https://github.com/Untrivial-ai/agent-orchestrator/issues/6180) |
 | Human readability | All 47 public-manual MDX pages and repository prose in this refresh | Unslop review for clear steps, repeated sections, undefined terms, long paragraphs, and consistent headings | Runtime verification is separate from writing quality |
@@ -28,6 +29,29 @@ The public mobile guide uses stable **Pair Desktop** and identifies **Pair a mac
 
 The full local backend race run reported failures in unchanged runtime and authentication tests, including command-probe timeouts. It did not establish a passing full suite. Native OS jobs, container checks, and the remaining CI checks require separate results; the successful documentation and mobile checks do not cover them.
 
+## 4 October corrections
+
+The follow-up resolved the architecture merge conflict by retaining main's new
+conversation-authentication section and the reviewed heading. It corrected
+Cloud terminal wake and lease behavior, live relay input, and read/operate
+permissions against the handlers and storage methods. Public instructions now
+use the Cloud harness login controls, distinguish CLI startup and diagnostics
+from daemon-backed commands, and explain the embedded Unreal Agent exception.
+The old `shipped-terminal-harnesses` anchor remains available.
+
+The production docs build and its TypeScript check passed again. All 1,499
+internal links resolved, with no lost content anchors or removed pages. The
+revised catalog rendered in the browser with no captured console warnings or
+errors. The local commit hook completed its full backend test command with
+failures in unchanged authentication, probe-timing, Git-default, and importer
+tests. That run is recorded as failed, not as a passing full validation.
+
+The Cloud client passed generation, type checking, all 26 tests, and its build.
+The Cloud contract now describes the reviewed personal credential and wake
+routes. It is still a partial API inventory. Issue #6220 tracks the remaining
+route groups and a coverage check; generating client types alone does not prove
+that every server route is represented.
+
 ## Homebrew verification
 
 The existing [AgentWrapper tap](https://github.com/AgentWrapper/homebrew-tap/blob/main/Casks/agent-orchestrator.rb) contains version `0.13.3`. Its arm64 and x64 SHA-256 values match the corresponding official release assets. The old GitHub release URL redirects to `Untrivial-ai/agent-orchestrator` and returned HTTP 200. A new tap name is not needed for this documentation change.
@@ -41,6 +65,7 @@ The cask declares `auto_updates true`; AO's in-app updater remains the normal up
 | [#6178: Mobile walkthrough](https://github.com/Untrivial-ai/agent-orchestrator/issues/6178) | Open | Real iOS and Android pairing on LAN and secure remote access; off-Wi-Fi reconnect; sleep, push, removal, rotation, and version-mismatch checks; screenshots without credentials |
 | [#6179: Cloud walkthrough and limits](https://github.com/Untrivial-ai/agent-orchestrator/issues/6179) | Open | Authorized account journey through sign-in, repository/provider setup, task, files, terminal, review, Archive/Restore; deployed release and account-specific costs/limits |
 | [#6180: Landing-page coverage](https://github.com/Untrivial-ai/agent-orchestrator/issues/6180) | Open in the public repository for coordination | Companion change in the website's owning repository and a check of deployed copy and links |
+| [#6220: Cloud API route coverage](https://github.com/Untrivial-ai/agent-orchestrator/issues/6220) | Open | Reconcile the remaining public and worker routes with OpenAPI, regenerate types, and record intentional exclusions |
 | [#6169: Unknown CLI configuration keys](https://github.com/Untrivial-ai/agent-orchestrator/issues/6169) | Open product fix | CLI rejects unsupported JSON keys before replacing configuration |
 | [#5954: CLI effort preservation](https://github.com/Untrivial-ai/agent-orchestrator/issues/5954) | Open product fix | CLI input and output preserve `agentConfig.effort` |
 

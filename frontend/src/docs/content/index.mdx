@@ -47,7 +47,7 @@ Chat support depends on the harness and installed version; see the [agent capabi
 
 <span id="local-by-design" />
 
-The desktop app runs a Go background service on `127.0.0.1` and talks to it through a local API. AO stores app data and worktree metadata under `~/.ao` by default. It uses the coding agents and source-control credentials already on your computer; AO does not bundle them.
+The desktop app runs a Go background service on `127.0.0.1` and talks to it through a local API. AO stores app data and worktree metadata under `~/.ao` by default. Most integrations use coding agents and source-control credentials already on your computer; AO does not bundle external agents or their credentials. Unreal Agent is a built-in Chat-only adapter on macOS and Linux.
 
 Connect Mobile is a separate, opt-in listener protected by a connection password. See [Connect Mobile](/configuration/remote-access) for local and secure remote pairing.
 
