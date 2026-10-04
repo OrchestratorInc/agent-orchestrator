@@ -73,16 +73,10 @@ func (v *agentCredentialValidator) validateClaude(
 	credentialType string,
 	secret []byte,
 ) error {
-	if credentialType == "oauth_token" {
-		s := string(secret)
-		// #nosec G101 -- checks a public credential-format prefix, not a secret value.
-		if len(s) == 0 || strings.HasPrefix(s, "sk-ant-api") {
-			// Empty secrets are never valid. An sk-ant-api* shape in the oauth_token
-			// path is a structural misclassification: api keys use x-api-key, not
-			// Bearer auth. Reject here before the live probe so a mislabeled key is
-			// never persisted to the cloud as an OAuth credential.
-			return errInvalidAgentCredential
-		}
+	// #nosec G101 -- this checks a public credential-format prefix.
+	if credentialType == "oauth_token" &&
+		(!strings.HasPrefix(string(secret), "sk-ant-oat") || len(secret) < 80) {
+		return errInvalidAgentCredential
 	}
 	request, err := http.NewRequestWithContext(
 		ctx,
@@ -115,7 +109,7 @@ func (v *agentCredentialValidator) validateClaude(
 	switch response.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return errInvalidAgentCredential
-	case http.StatusOK, http.StatusBadRequest, http.StatusTooManyRequests:
+	case http.StatusOK, http.StatusBadRequest:
 		return nil
 	default:
 		return fmt.Errorf(
