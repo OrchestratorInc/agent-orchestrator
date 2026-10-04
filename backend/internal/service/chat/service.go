@@ -50,6 +50,7 @@ type Service struct {
 	// onModelChanged syncs ChatUI's model override (including clearing it) to
 	// session metadata before the next prompt routes or a later TUI rebuild.
 	onModelChanged   func(domain.SessionID, string)
+	onEffortChanged  func(domain.SessionID, string)
 	stopProviderHost func(context.Context, domain.SessionID) error
 	reports          *reportsvc.Coordinator
 
@@ -116,7 +117,8 @@ type Options struct {
 	OnCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 	// OnModelChanged syncs ChatUI's model override to session metadata before
 	// the next prompt routes. Nil leaves session metadata unchanged.
-	OnModelChanged func(domain.SessionID, string)
+	OnModelChanged  func(domain.SessionID, string)
+	OnEffortChanged func(domain.SessionID, string)
 	// StopProviderHost destroys current session ownership on explicit teardown,
 	// even if its daemon attachment already failed. Never used by StopAll.
 	StopProviderHost func(context.Context, domain.SessionID) error
@@ -145,6 +147,7 @@ func New(opts Options) *Service {
 		onAccountChanged:       opts.OnAccountChanged,
 		onCodexCapacityChanged: opts.OnCodexCapacityChanged,
 		onModelChanged:         opts.OnModelChanged,
+		onEffortChanged:        opts.OnEffortChanged,
 		stopProviderHost:       opts.StopProviderHost,
 		controllers:            make(map[domain.SessionID]*Controller),
 		ownerControllers:       make(map[domain.ConversationOwner]*Controller),
@@ -1909,6 +1912,7 @@ func (s *Service) SetConfigOption(
 		// Code's model menu) change the model; it must persist the pick the same
 		// way the turn-settings route does.
 		s.persistPickedModel(id, previous, settings)
+		s.persistPickedEffort(id, previous, settings)
 	}
 	return options, nil
 }
@@ -2058,6 +2062,7 @@ func (s *Service) SetTurnSettings(
 		return domain.ConversationSettings{}, err
 	}
 	s.persistPickedModel(id, previous, settings)
+	s.persistPickedEffort(id, previous, settings)
 	return controller.Settings(), nil
 }
 
@@ -2069,6 +2074,14 @@ func (s *Service) persistPickedModel(id domain.SessionID, previous, next domain.
 		return
 	}
 	s.onModelChanged(id, model)
+}
+
+func (s *Service) persistPickedEffort(id domain.SessionID, previous, next domain.ConversationSettings) {
+	effort := strings.TrimSpace(next.ReasoningEffort)
+	if effort == strings.TrimSpace(previous.ReasoningEffort) || s.onEffortChanged == nil {
+		return
+	}
+	s.onEffortChanged(id, effort)
 }
 
 // RelayChatTurn delivers a message AO is carrying for someone else.

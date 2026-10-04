@@ -7,7 +7,7 @@ import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
 	refreshAgentModels,
-	revalidateAgentModels,
+	agentModelsRevalidationQueryOptions,
 	type AgentModelCatalog,
 } from "../hooks/useAgentModelsQuery";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
@@ -42,15 +42,7 @@ export function AgentModelPicker({
 	const queryClient = useQueryClient();
 	const query = useQuery(agentModelsQueryOptions(agentId, projectId, hostId));
 	const catalog: AgentModelCatalog | undefined = query.data;
-	const revalidationQuery = useQuery({
-		queryKey: hostId
-			? ["agent-model-revalidation", hostId, agentId, projectId, catalog?.validatedAt ?? ""]
-			: ["agent-model-revalidation", agentId, projectId, catalog?.validatedAt ?? ""],
-		queryFn: () => revalidateAgentModels(agentId, projectId, hostId),
-		enabled: agentId !== "" && catalog?.refreshRecommended === true,
-		staleTime: Number.POSITIVE_INFINITY,
-		retry: false,
-	});
+	const revalidationQuery = useQuery(agentModelsRevalidationQueryOptions(agentId, projectId, catalog, hostId));
 	useEffect(() => {
 		if (revalidationQuery.data) {
 			queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), revalidationQuery.data);

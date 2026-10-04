@@ -192,7 +192,7 @@ describe("CreateProjectAgentSheet", () => {
 		expect(screen.getByRole(role, { name: /Claude Code/ })).toBeInTheDocument();
 		expect(screen.getByRole(role, { name: /Aider/ })).toBeInTheDocument();
 		expect(screen.getByRole(role, { name: /fx.*Unverified/ })).toBeInTheDocument();
-		expect(screen.getByRole(role, { name: /OpenCode.*Auth unknown/ })).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByRole(role, { name: /OpenCode/ })).not.toHaveAttribute("aria-disabled", "true");
 		for (const name of [/Codex/, /Cursor/]) expect(screen.queryByRole(role, { name })).not.toBeInTheDocument();
 		await userEvent.keyboard("{End}{Enter}");
 		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "harness", focusAgentId: "codex" }));

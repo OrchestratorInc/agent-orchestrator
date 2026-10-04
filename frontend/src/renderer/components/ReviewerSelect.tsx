@@ -20,6 +20,7 @@ import { useAgentManagementMenu } from "../hooks/useAgentManagementMenu";
 import { AgentAvatar } from "./AgentAvatar";
 import { AgentSelectMenuItem } from "./settings/AgentSelectMenuItem";
 import {
+	PICKER_MENU_WIDTH,
 	OptionMenu,
 	OptionMenuContent,
 	OptionMenuItem,
@@ -150,7 +151,7 @@ export function ReviewerSelect({
 					{needsSetup && <span className="text-xs text-muted-foreground">{t("agentSelector.needsSetup")}</span>}
 				</span>
 			</OptionMenuTrigger>
-			<OptionMenuContent onCloseAutoFocus={management.onCloseAutoFocus} align={contentAlign === "end" ? "end" : "start"} className="reviews-agent-menu-surface w-[18rem]">
+			<OptionMenuContent onCloseAutoFocus={management.onCloseAutoFocus} align={contentAlign === "end" ? "end" : "start"} className={cn("reviews-agent-menu-surface", PICKER_MENU_WIDTH)}>
 				<ReviewerHarnessOption
 					agent={{ id: "__default__", label: defaultHarnessLabel, disabled: false, status: "", statusTone: "success" }}
 					currentHarness={value}
@@ -207,7 +208,7 @@ function ReviewerHarnessOption({
 	persistHarness,
 	closeMenu,
 }: {
-	agent: Pick<RankedAgentOption, "id" | "label" | "status" | "statusTone" | "disabled">;
+	agent: Pick<RankedAgentOption, "id" | "label" | "status" | "statusTone" | "statusIndicator" | "disabled">;
 	currentHarness: string;
 	currentModel: string;
 	currentMode: string;
@@ -250,6 +251,7 @@ function ReviewerHarnessOption({
 						selected={isCurrentHarness}
 						status={agent.status}
 						statusTone={agent.statusTone}
+						statusIndicator={agent.statusIndicator}
 						disabled={agent.disabled}
 					/>
 				</OptionMenuItem>
@@ -276,6 +278,7 @@ function ReviewerHarnessOption({
 					selected={isCurrentHarness}
 					status={agent.status}
 					statusTone={agent.statusTone}
+					statusIndicator={agent.statusIndicator}
 					disabled={agent.disabled}
 				/>
 			</OptionMenuSubTrigger>

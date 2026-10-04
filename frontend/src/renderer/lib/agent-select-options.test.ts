@@ -101,6 +101,15 @@ describe("buildRankedAgentOptions", () => {
 		expect(options[1]).toMatchObject({ id: "codex", disabled: true, status: "Needs auth" });
 	});
 
+	it("uses a neutral status indicator for unknown sign-in without blocking selection", () => {
+		const [option] = buildRankedAgentOptions({
+			agents: [agent("kiro", "installed", "unknown")],
+			priorityRank,
+			fallbackAgents: [],
+		});
+		expect(option).toMatchObject({ disabled: false, status: "", statusTone: "muted", statusIndicator: "auth-unknown" });
+	});
+
 	it("keeps stale known-good agents selectable while checking", () => {
 		const knownGood = agent("codex");
 		knownGood.installation.freshness = "checking";

@@ -10787,3 +10787,13 @@ func TestKill_TerminatesEvenWhenTeardownBudgetExpires(t *testing.T) {
 		t.Fatal("session must be marked terminated even though the teardown budget expired")
 	}
 }
+
+func (f *fakeStore) UpdateSessionEffort(_ context.Context, id domain.SessionID, effort string) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok {
+		return false, nil
+	}
+	rec.Metadata.Effort = effort
+	f.sessions[id] = rec
+	return true, nil
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -197,9 +198,9 @@ func TestClaudeGatewayCatalogFailureReturnsConfiguredModelsWithoutDiscoverySucce
 	if catalog.CustomModelEntry != ports.CustomModelEntryDirect || !catalog.AllowCustom {
 		t.Fatalf("custom entry = (%q, %v), want direct enabled", catalog.CustomModelEntry, catalog.AllowCustom)
 	}
-	wantPrefix := []string{"gateway-primary", "gateway-opus", "gateway-shared", "gateway-fast"}
+	wantPrefix := []string{"gateway-primary", "gateway-opus", "gateway-shared", "gateway-fast", "sonnet", "fable", "opus", "haiku", "opus[1m]"}
 	if len(catalog.Models) < len(wantPrefix) {
-		t.Fatalf("models = %#v, want configured gateway models first", catalog.Models)
+		t.Fatalf("models = %#v, want configured gateway models before fallback aliases", catalog.Models)
 	}
 	for i, want := range wantPrefix {
 		if got := catalog.Models[i].ID; got != want {
@@ -285,5 +286,21 @@ func TestProviderEffortsSurviveNormalization(t *testing.T) {
 	}
 	if got["claude-sonnet-4-5-20250929"] != 0 {
 		t.Fatalf("a model with no efforts must carry none, got %d", got["claude-sonnet-4-5-20250929"])
+	}
+}
+
+func TestClaudeNativeCatalogPreservesOfficialOrderAndDefault(t *testing.T) {
+	request := claudeRequest(t)
+	request.Env["ANTHROPIC_MODEL"] = "configured-pin"
+	want := []ports.AgentModelInfo{
+		{ID: "resolved-current", Label: "Current model", IsDefault: true, Efforts: []string{"low", "max"}},
+		{ID: "z-first", Label: "Z first"}, {ID: "a-next", Label: "A next"},
+	}
+	discoverer := Discoverer{NativeCatalogs: map[string]func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error){"claude-code": func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
+		return ports.AgentModelCatalog{Source: "native", InputFingerprint: "identity", Models: append(want, ports.AgentModelInfo{ID: "z-first", Label: "duplicate"})}, nil
+	}}}
+	catalog, err := discoverer.Discover(context.Background(), request)
+	if err != nil || !reflect.DeepEqual(catalog.Models, want) || catalog.InputFingerprint != "identity" || catalog.Source != "native" {
+		t.Fatalf("catalog=%+v, error=%v", catalog, err)
 	}
 }

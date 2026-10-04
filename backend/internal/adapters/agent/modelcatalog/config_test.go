@@ -22,8 +22,8 @@ func TestParseQwenModelsUsesConfiguredProviderSelectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []ports.AgentModelInfo{
-		{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Provider: "openai", IsDefault: true},
 		{ID: "claude-fable-5", Label: "Fable 5", Provider: "anthropic"},
+		{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Provider: "openai", IsDefault: true},
 	}
 	if !reflect.DeepEqual(models, want) {
 		t.Fatalf("models = %#v, want %#v", models, want)
@@ -129,8 +129,8 @@ providers:
 		t.Fatal(err)
 	}
 	want := []ports.AgentModelInfo{
-		{ID: "claude-sonnet-4-6", Label: "claude-sonnet-4-6", Provider: "anthropic", IsDefault: true},
 		{ID: "claude-haiku-4-5", Label: "claude-haiku-4-5", Provider: "anthropic"},
+		{ID: "claude-sonnet-4-6", Label: "claude-sonnet-4-6", Provider: "anthropic", IsDefault: true},
 	}
 	if !reflect.DeepEqual(models, want) {
 		t.Fatalf("models = %#v, want %#v", models, want)
@@ -173,8 +173,8 @@ func TestParseClineModelsUsesConfiguredProviderSelections(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []ports.AgentModelInfo{
-		{ID: "glm-5.2", Label: "glm-5.2", Provider: "zai-coding-plan", IsDefault: true},
 		{ID: "claude-sonnet-4-6", Label: "claude-sonnet-4-6", Provider: "cline"},
+		{ID: "glm-5.2", Label: "glm-5.2", Provider: "zai-coding-plan", IsDefault: true},
 	}
 	if !reflect.DeepEqual(models, want) {
 		t.Fatalf("models = %#v, want %#v", models, want)

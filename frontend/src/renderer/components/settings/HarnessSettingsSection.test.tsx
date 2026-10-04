@@ -524,12 +524,24 @@ describe("HarnessSettingsSection", () => {
 		});
 		const close = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
 		const user = userEvent.setup();
-		renderSection();
+		const view = renderSection();
 		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
 		await user.click(await within(row).findByRole("button", { name: "Login" }));
 		await within(row).findByTestId("inline-terminal-body");
-		return { row, close, probeCalls: () => probeCalls, exit: () => act(() => terminalStateCallback.value?.("exited")) };
+		return { client: view.client, row, close, probeCalls: () => probeCalls, exit: () => act(() => terminalStateCallback.value?.("exited")) };
 	}
+
+	it("clears only the authenticated harness catalog after login completes", async () => {
+		const { client, row, exit } = await loginWithProbeResults(["authorized"], Number.POSITIVE_INFINITY);
+		client.setQueryData(["agent-models", "claude-code", "project-a"], { models: [{ id: "old-account-model" }] });
+		client.setQueryData(["agent-model-revalidation", "", "claude-code", "project-a", "date"], { models: [{ id: "old-account-model" }] });
+		client.setQueryData(["agent-models", "codex", "project-a"], { models: [{ id: "codex-model" }] });
+		exit();
+		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
+		expect(client.getQueryData(["agent-models", "claude-code", "project-a"])).toBeUndefined();
+		expect(client.getQueryData(["agent-model-revalidation", "", "claude-code", "project-a", "date"])).toBeUndefined();
+		expect(client.getQueryData(["agent-models", "codex", "project-a"])).toEqual({ models: [{ id: "codex-model" }] });
+	});
 
 	it("shows login guidance only when it asks for an action outside the terminal", async () => {
 		const { row, exit } = await loginWithProbeResults(["authorized"], Number.POSITIVE_INFINITY);

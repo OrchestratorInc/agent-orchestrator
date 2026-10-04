@@ -324,6 +324,7 @@ func (r *acpRelay) providerFrame(
 	id := envelope["id"]
 
 	if method != "" {
+		r.captureSessionUpdate(method, envelope["params"])
 		if len(id) > 0 && string(id) != "null" {
 			rewritten, key, created := r.providerRequest(envelope, frame)
 			if created && r.state.ActivePrompt {
@@ -481,6 +482,8 @@ func (r *acpRelay) captureResponse(request acpClientRequest, envelope map[string
 				r.state.SessionID = params.SessionID
 			}
 		}
+	case "session/set_config_option", "session/set_model", "session/set_mode":
+		r.captureSessionSetting(request, result)
 	}
 }
 

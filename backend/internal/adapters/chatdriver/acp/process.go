@@ -14,13 +14,14 @@ import (
 )
 
 type process struct {
-	stdin       io.WriteCloser
-	stdout      io.Reader
-	stop        func() error
-	terminate   func() error
-	reconnected bool
-	gate        *gatedReader
-	acpState    *persistenthost.ACPState
+	stdin         io.WriteCloser
+	stdout        io.Reader
+	stop          func() error
+	terminate     func() error
+	forceStopFunc func() error
+	reconnected   bool
+	gate          *gatedReader
+	acpState      *persistenthost.ACPState
 }
 
 type gatedReader struct {
@@ -75,29 +76,33 @@ func spawnAgent(launch Launch, workdir string) (*process, error) {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	var once sync.Once
-	return &process{
-		stdin:  stdin,
-		stdout: stdout,
-		stop: func() error {
-			var stopErr error
-			once.Do(func() {
-				_ = stdin.Close()
+	var stopErr error
+	stopProcess := func(force bool) error {
+		once.Do(func() {
+			_ = stdin.Close()
+			if !force {
 				select {
 				case err := <-done:
 					stopErr = processExitError(err)
+					return
 				case <-time.After(3 * time.Second):
-					stopErr = killProcessTree(cmd)
-					select {
-					case <-done:
-					case <-time.After(2 * time.Second):
-						if stopErr == nil {
-							stopErr = errors.New("ACP process did not exit after kill")
-						}
-					}
 				}
-			})
-			return stopErr
-		},
+			}
+			stopErr = killProcessTree(cmd)
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				if stopErr == nil {
+					stopErr = errors.New("ACP process did not exit after kill")
+				}
+			}
+		})
+		return stopErr
+	}
+	return &process{
+		stdin: stdin, stdout: stdout,
+		stop:          func() error { return stopProcess(false) },
+		forceStopFunc: func() error { return stopProcess(true) },
 	}, nil
 }
 
@@ -137,4 +142,14 @@ func processExitError(err error) error {
 		return nil
 	}
 	return err
+}
+
+func (p *process) forceStop() error {
+	if p.forceStopFunc != nil {
+		return p.forceStopFunc()
+	}
+	if p.stop != nil {
+		return p.stop()
+	}
+	return nil
 }

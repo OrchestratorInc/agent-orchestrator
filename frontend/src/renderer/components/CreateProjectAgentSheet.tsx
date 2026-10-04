@@ -34,6 +34,7 @@ import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { appI18n } from "../i18n";
 import { Button } from "./ui/button";
+import { PICKER_MENU_WIDTH } from "./ui/option-menu";
 
 type TrackerIntakeConfig = components["schemas"]["TrackerIntakeConfig"];
 
@@ -44,7 +45,7 @@ export type CreateProjectAgentSelection = {
 };
 
 const EMPTY_INTAKE: IntakeForm = { enabled: false, repo: "", assignee: "" };
-const AGENT_MENU_WIDTH = "w-56! min-w-56! max-w-56!";
+const AGENT_MENU_WIDTH = PICKER_MENU_WIDTH;
 type CreateProjectAgentSheetProps = {
 	error?: string | null;
 	action?: "create" | "clone";
@@ -496,6 +497,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 								selected={selected}
 								status={agent.status}
 								statusTone={agent.statusTone}
+								statusIndicator={agent.statusIndicator}
 								disabled={agent.disabled}
 							/>
 						);
@@ -560,6 +562,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 							selected={selected}
 							status={agent.status}
 							statusTone={agent.statusTone}
+							statusIndicator={agent.statusIndicator}
 							disabled={agent.disabled}
 						/>
 					);
@@ -621,6 +624,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 								selected={value === agent.id}
 								status={agent.status}
 								statusTone={agent.statusTone}
+								statusIndicator={agent.statusIndicator}
 								disabled={agent.disabled}
 							/>
 						</SelectItem>

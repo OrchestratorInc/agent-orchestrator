@@ -167,6 +167,20 @@ func (c *conversation) pump() {
 		// context position is stated and a compaction event that arrives in the same
 		// batch has to be able to read it.
 		c.trackContext(n)
+		if n.Method == "thread/settings/updated" {
+			var update struct {
+				ThreadID string `json:"threadId"`
+				Settings struct {
+					Model  string `json:"model"`
+					Effort string `json:"effort"`
+				} `json:"threadSettings"`
+			}
+			if json.Unmarshal(n.Params, &update) == nil && update.ThreadID == c.threadID {
+				c.mu.Lock()
+				c.threadModel, c.threadEffort = update.Settings.Model, update.Settings.Effort
+				c.mu.Unlock()
+			}
+		}
 		// Some normalized output events omit their thread ID. Read the native
 		// envelope so child-thread recovery cannot settle the root's retry.
 		var scope struct {
@@ -383,16 +397,17 @@ func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error
 	if err != nil {
 		return nil, err
 	}
+	c.mu.Lock()
+	threadModel, threadEffort := c.threadModel, c.threadEffort
+	c.mu.Unlock()
 	// Thread settings include the user's config; model/list only has generic defaults.
 	for i := range models {
 		// An omitted turn model inherits thread/start (including config.toml),
 		// not model/list's generic catalog default. If the configured model is
 		// absent, leave no catalog default rather than advertise another model.
-		if c.threadModel != "" {
-			models[i].Default = models[i].ID == c.threadModel
-		}
-		if models[i].ID == c.threadModel && c.threadEffort != "" {
-			models[i].DefaultEffort = c.threadEffort
+		models[i].Default = models[i].ID == threadModel && threadModel != ""
+		if models[i].ID == threadModel {
+			models[i].DefaultEffort = threadEffort
 		}
 	}
 	return models, nil

@@ -1,3 +1,4 @@
+import { PICKER_MENU_WIDTH } from "./ui/option-menu";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle, Repeat2, TriangleAlert, X } from "lucide-react";
 import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -155,7 +156,7 @@ function SwitchTargetPicker({
 			aria-label={t("switchAgent.targetLabel")}
 			disabled={disabled}
 			menuAlign="start"
-			menuClassName="settings-agent-menu-surface"
+			menuClassName={`settings-agent-menu-surface ${PICKER_MENU_WIDTH}`}
 			menuItemClassName="settings-agent-menu-item"
 			onChange={(nextValue) => {
 				if (canSwitchAgentHarness(nextValue, mode) && nextValue !== currentHarness) onChange(nextValue);

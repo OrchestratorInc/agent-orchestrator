@@ -6,9 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
-	"runtime"
+	"slices"
 	"sort"
 	"strings"
 
@@ -287,7 +288,8 @@ func parseQwenModels(raw []byte) ([]ports.AgentModelInfo, error) {
 		return nil, err
 	}
 	var models []ports.AgentModelInfo
-	for provider, configured := range config.ModelProviders {
+	for _, provider := range slices.Sorted(maps.Keys(config.ModelProviders)) {
+		configured := config.ModelProviders[provider]
 		for _, item := range configured {
 			id := strings.TrimSpace(item.ID)
 			if id == "" {
@@ -454,7 +456,13 @@ func parseClineModels(raw []byte) ([]ports.AgentModelInfo, error) {
 		return nil, err
 	}
 	var models []ports.AgentModelInfo
-	for provider, rawProvider := range config.Providers {
+	providers := make([]string, 0, len(config.Providers))
+	for provider := range config.Providers {
+		providers = append(providers, provider)
+	}
+	sort.Strings(providers)
+	for _, provider := range providers {
+		rawProvider := config.Providers[provider]
 		var value any
 		if err := json.Unmarshal(rawProvider, &value); err != nil {
 			return nil, err
@@ -495,23 +503,4 @@ func configuredModelIDs(value any) []string {
 	walk(value)
 	sort.Strings(ids)
 	return ids
-}
-
-func geminiSystemPaths(env map[string]string) (string, string) {
-	system := envValue(env, "GEMINI_CLI_SYSTEM_SETTINGS_PATH")
-	if system == "" {
-		switch runtime.GOOS {
-		case "darwin":
-			system = "/Library/Application Support/GeminiCli/settings.json"
-		case "windows":
-			system = `C:\ProgramData\gemini-cli\settings.json`
-		default:
-			system = "/etc/gemini-cli/settings.json"
-		}
-	}
-	defaults := envValue(env, "GEMINI_CLI_SYSTEM_DEFAULTS_PATH")
-	if defaults == "" {
-		defaults = filepath.Join(filepath.Dir(system), "system-defaults.json")
-	}
-	return system, defaults
 }

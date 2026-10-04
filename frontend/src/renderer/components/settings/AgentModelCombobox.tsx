@@ -1,3 +1,4 @@
+import { EffortMenuItems, effortDisplayLabel } from "./EffortPicker";
 import { Check, ChevronDown, Loader2, RefreshCw, Search } from "lucide-react";
 import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -6,7 +7,7 @@ import { useSuppressStrayFocusRing } from "../../hooks/useSuppressStrayFocusRing
 import { isConcreteModelID, modelChoiceLabel } from "../../lib/agent-model-choices";
 import { cn } from "../../lib/utils";
 import { useModelTuning, type ModelTuningControlsProps } from "./ModelTuningControls";
-import { OptionMenuItem, OptionMenuSub, OptionMenuSubContent, OptionMenuSubTrigger } from "../ui/option-menu";
+import { PICKER_MENU_WIDTH, OptionMenuSub, OptionMenuSubContent, OptionMenuSubTrigger } from "../ui/option-menu";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -23,12 +24,8 @@ const RECENT_MODELS_STORAGE_KEY = "ao.recentModels.v1";
 const ignoreEffortChange = () => {};
 
 export type ModelEffortSelection = Pick<ModelTuningControlsProps,
-	"effort" | "onEffortChange" | "onEffortReset" | "onValidityChange" | "roleLabel"
+	"effort" | "onEffortChange" | "onEffortReset" | "onValidityChange" | "roleLabel" | "launchSupported"
 >;
-
-function effortLabel(value: string) {
-	return value === "xhigh" ? "Extra high" : value.charAt(0).toUpperCase() + value.slice(1);
-}
 
 type AgentModel = NonNullable<AgentModelCatalog["models"]>[number];
 
@@ -98,7 +95,7 @@ export function AgentModelCombobox({
 	triggerClassName?: string;
 	menuAlign?: "start" | "center" | "end";
 	renderTrigger?: (label: string) => ReactNode;
-	/** Persists explicit model choices for this agent and pins them below the current model. */
+	/** Persists explicit model choices for this agent without changing catalog order. */
 	recentScope?: string;
 	/** Flat model names with no groups or badges.
 	 *  Search still shows once the catalog passes MODEL_SEARCH_THRESHOLD,
@@ -112,11 +109,16 @@ export function AgentModelCombobox({
 	"aria-label": string;
 }) {
 	const { t } = useTranslation();
-	const concreteModels = useMemo(
-		() => models.filter((model) => isConcreteModelID(model.id)),
-		[models],
-	);
 	const explicitModel = isConcreteModelID(value) ? value : "";
+	const entryMode = customModelEntry ?? (allowCustom ? "direct" : "none");
+	const allowDirectCustom = entryMode === "direct";
+	const concreteModels = useMemo(() => {
+		const catalogModels = models.filter((model) => isConcreteModelID(model.id));
+		if (allowDirectCustom && explicitModel && !catalogModels.some((model) => model.id === explicitModel)) {
+			return [...catalogModels, { id: explicitModel, label: explicitModel }];
+		}
+		return catalogModels;
+	}, [allowDirectCustom, explicitModel, models]);
 	const { selected: effortModel, invalidEffort } = useModelTuning({
 		models: concreteModels,
 		model: explicitModel,
@@ -127,23 +129,15 @@ export function AgentModelCombobox({
 	});
 	const effortOptions = effortModel?.efforts?.filter((effort) => effort && effort.toLowerCase() !== "default") ?? [];
 	const explicitEffort = tuning?.effort?.toLowerCase() === "default" ? "" : tuning?.effort;
-	const showEffort = Boolean(tuning && (effortOptions.length || explicitEffort));
+	const showEffort = Boolean(tuning);
 	const providerEffort = effortModel?.defaultEffort;
 	const defaultEffort = providerEffort && effortOptions.includes(providerEffort) ? providerEffort : "";
-	const effectiveEffort = explicitEffort || defaultEffort;
-	const currentEffortLabel = effectiveEffort ? effortLabel(effectiveEffort) : t("settings.models.effortNotReported");
-	const entryMode = customModelEntry ?? (allowCustom ? "direct" : "none");
-	const allowDirectCustom = entryMode === "direct";
+	const currentEffortLabel = effortDisplayLabel(explicitEffort || "", effortOptions.map((value) => ({ value })), t("settings.models.useAgentEffort"), defaultEffort);
 	const [search, setSearch] = useState("");
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [effortMenuOpen, setEffortMenuOpen] = useState(false);
-	const [awaitingEffort, setAwaitingEffort] = useState(false);
 	const [refreshFailed, setRefreshFailed] = useState(false);
 	const [refreshingLocal, setRefreshingLocal] = useState(false);
-	const [sessionRecentModels, setSessionRecentModels] = useState<Record<string, string[]>>({});
-	const recentKey = recentScope ?? "";
-	const storedRecentModels = useMemo(() => readRecentModels(recentScope), [recentScope]);
-	const recentModelIDs = recentScope ? (sessionRecentModels[recentKey] ?? storedRecentModels) : [];
 	const normalizedSearch = normalizeSearch(search);
 	const searchIndex = useMemo(() => buildModelSearchIndex(concreteModels), [concreteModels]);
 	const defaultModel = concreteModels.find((model) => model.isDefault)?.id || "";
@@ -161,29 +155,25 @@ export function AgentModelCombobox({
 	);
 
 	const rankedModels = useMemo(() => {
-		if (!normalizedSearch) {
-			// Compact mode reads as a plain, stable list — picking a model
-			// shouldn't reorder it to the top on the next open.
-			return compact ? searchIndex.models : rankInitialModels(searchIndex.models, effectiveModel, recentModelIDs);
-		}
+		if (!normalizedSearch) return searchIndex.models;
 		return searchModelIndex(searchIndex, normalizedSearch).models;
-	}, [compact, effectiveModel, normalizedSearch, recentModelIDs, searchIndex]);
+	}, [normalizedSearch, searchIndex]);
 
-	const visibleModels = rankedModels.slice(0, MAX_VISIBLE_MODELS);
+	const mergeDefaultWithFirstModel = normalizedSearch === "" && showFollowAgentAction && defaultModel !== "" && rankedModels[0]?.id === defaultModel;
+	const visibleModels = rankedModels.slice(mergeDefaultWithFirstModel ? 1 : 0, MAX_VISIBLE_MODELS);
 	const groups = useMemo(
-		() =>
-			compact
-				? [{ key: "all", label: "", kind: "provider" as const, models: visibleModels }]
-				: groupModels(visibleModels, normalizedSearch === "", effectiveModel, recentModelIDs, {
-						pinned: t("settings.models.currentDefaults"),
-						recent: t("settings.models.recent"),
-					}),
-		[compact, effectiveModel, normalizedSearch, recentModelIDs, t, visibleModels],
+		() => compact
+			? [{ key: "all", label: "", kind: "provider" as const, models: visibleModels }]
+			: groupModels(visibleModels),
+		[compact, visibleModels],
 	);
 	const customSearchValue = search.trim();
 	const showCustomSearchAction = allowDirectCustom && customSearchValue !== "" && rankedModels.length === 0;
 	// With no identified model, nothing is selected and the menu just lists models.
-	const currentLabel = (triggerLabel ?? selected?.label ?? explicitModel) || emptyLabel || t("settings.models.selectModel");
+	const defaultLabel = defaultModel
+		? `${searchIndex.byID.get(normalizeSearch(defaultModel))?.label ?? defaultModel} (${t("settings.models.useAgentModel").toLocaleLowerCase()})`
+		: t("settings.models.useAgentModel");
+	const currentLabel = (triggerLabel ?? selected?.label ?? (explicitModel || t("settings.models.useAgentModel"))) || emptyLabel || t("settings.models.selectModel");
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const effortTriggerRef = useRef<HTMLDivElement>(null);
@@ -207,22 +197,17 @@ export function AgentModelCombobox({
 	const onCloseAutoFocus = useSuppressStrayFocusRing(menuOpen);
 	const selectModel = (modelID: string) => {
 		if (recentScope) {
-			const next = rememberRecentModel(recentScope, modelID);
-			setSessionRecentModels((current) => ({ ...current, [recentScope]: next }));
+			rememberRecentModel(recentScope, modelID);
 		}
-		onChange(modelID === defaultModel ? "" : modelID);
+		onChange(modelID);
 	};
-	const selectCatalogModel = (event: Event, item: IndexedModel) => {
-		const openEffort = Boolean(tuning && item.model.efforts?.some((effort) => effort && effort.toLowerCase() !== "default"));
-		if (openEffort) event.preventDefault();
+	const selectCatalogModel = (_event: Event, item: IndexedModel) => {
 		selectModel(item.id);
-		setEffortMenuOpen(openEffort);
-		setAwaitingEffort(openEffort);
-		if (!openEffort) setMenuOpen(false);
+		setMenuOpen(false);
 	};
 	const refreshBusy = refreshing || refreshingLocal;
 	const showManualRefresh = Boolean(
-		onRefresh && (concreteModels.length === 0 || (normalizedSearch !== "" && rankedModels.length === 0)),
+		onRefresh && (!models.some((model) => isConcreteModelID(model.id)) || (normalizedSearch !== "" && rankedModels.length === 0)),
 	);
 	const runRefresh = () => {
 		if (!onRefresh || refreshBusy) return;
@@ -241,7 +226,6 @@ export function AgentModelCombobox({
 				} else {
 					setRefreshFailed(false);
 					setEffortMenuOpen(false);
-					setAwaitingEffort(false);
 				}
 			}}
 		>
@@ -287,7 +271,7 @@ export function AgentModelCombobox({
 						setSearch((current) => current + event.key);
 					}
 				}}
-				className="settings-menu-surface max-h-select-menu-max! w-[min(22rem,calc(100vw-2rem))] overflow-hidden! rounded-(--radius-settings-panel) border-settings-menu bg-settings-menu"
+				className={cn("settings-menu-surface max-h-select-menu-max! overflow-hidden! rounded-(--radius-settings-panel) border-settings-menu bg-settings-menu", PICKER_MENU_WIDTH)}
 			>
 				{(showSearch || showManualRefresh) && (
 					<div className="flex shrink-0 items-center gap-1">
@@ -321,7 +305,7 @@ export function AgentModelCombobox({
 											? "settings.models.searchModelsOrProvidersPlaceholder"
 											: "settings.models.searchPlaceholder",
 									)}
-									className="menu-search-input pl-8!"
+									className="menu-search-input border-0! pl-8!"
 								/>
 							</div>
 						)}
@@ -371,35 +355,35 @@ export function AgentModelCombobox({
 						className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
 						onScroll={updateScrollCue}
 					>
-						{normalizedSearch === "" && showFollowAgentAction && explicitModel && !defaultModel && (
-							<DropdownMenuItem onSelect={() => onChange("")} className={modelItemClass(false)}>
-								{t("settings.models.useAgentModel")}
+						{normalizedSearch === "" && showFollowAgentAction && (
+							<DropdownMenuItem onSelect={() => onChange("")} className={modelItemClass(!explicitModel || (mergeDefaultWithFirstModel && explicitModel === defaultModel))}>
+								{defaultLabel}
 							</DropdownMenuItem>
 						)}
 						{groups.map((group, groupIndex) => (
 							<div key={group.key}>
-								{!compact && (groupIndex > 0 || normalizedSearch === "") && <DropdownMenuSeparator />}
+								{!compact && groupIndex > 0 && <DropdownMenuSeparator />}
 								{!compact && <DropdownMenuLabel className="normal-case tracking-normal">{group.label}</DropdownMenuLabel>}
 								{group.models.map((item) =>
 									compact ? (
 										<DropdownMenuItem
 											key={item.id}
 											onSelect={(event) => selectCatalogModel(event, item)}
-											className={modelItemClass(item.id === effectiveModel)}
-											aria-current={tuning && item.id === effectiveModel ? true : undefined}
+											className={modelItemClass(item.id === explicitModel)}
+											aria-current={tuning && item.id === explicitModel ? true : undefined}
 										>
-											<span className="truncate text-settings-label">{item.label}</span>
-											{tuning && item.id === effectiveModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
+											<span className="truncate text-[length:var(--font-size-base)] text-foreground">{item.label}</span>
+											{tuning && item.id === explicitModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
 										</DropdownMenuItem>
 									) : (
 										<DropdownMenuItem
 											key={item.id}
 											onSelect={(event) => selectCatalogModel(event, item)}
-											className={modelItemClass(item.id === effectiveModel)}
+											className={modelItemClass(item.id === explicitModel)}
 										>
 										<div className="flex min-w-0 flex-1 items-center gap-3">
 											<div className="min-w-0 flex-1">
-												<span className="truncate text-settings-label">{item.label}</span>
+												<span className="truncate text-[length:var(--font-size-base)] text-foreground">{item.label}</span>
 													{shouldShowModelID(item, visibleModels, normalizedSearch) && (
 														<p className="truncate text-xs text-settings-muted">{item.id}</p>
 													)}
@@ -471,33 +455,20 @@ export function AgentModelCombobox({
 					<div className="shrink-0">
 						<DropdownMenuSeparator />
 						<OptionMenuSub open={effortMenuOpen} onOpenChange={(open) => {
-							if (open || !awaitingEffort) setEffortMenuOpen(open);
+							setEffortMenuOpen(open);
 						}}>
 							<OptionMenuSubTrigger ref={effortTriggerRef} label={t("settings.models.reasoningEffort", { defaultValue: "Reasoning effort" })} value={currentEffortLabel} />
 							<OptionMenuSubContent onEscapeKeyDown={(event) => {
 								event.preventDefault();
 								event.stopPropagation();
-								setAwaitingEffort(false);
 								setEffortMenuOpen(false);
 								effortTriggerRef.current?.focus();
 							}}>
-								{explicitEffort && !defaultEffort && (
-									<OptionMenuItem onSelect={() => tuning.onEffortChange("")} className="gap-3 text-xs">
-										{t("settings.models.useAgentEffort")}
-									</OptionMenuItem>
-								)}
-								{effortOptions.map((effort) => (
-									<OptionMenuItem key={effort} role="menuitemradio" aria-checked={effort === effectiveEffort}
-										active={effort === effectiveEffort} onSelect={() => {
-											tuning.onEffortChange(effort === defaultEffort ? "" : effort);
-											setEffortMenuOpen(false);
-											setAwaitingEffort(false);
-											setMenuOpen(false);
-										}} className="gap-3 text-xs">
-										{effortLabel(effort)}
-										{effort === effectiveEffort && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
-									</OptionMenuItem>
-								))}
+								<EffortMenuItems value={explicitEffort || ""} choices={effortOptions.map((value) => ({ value }))} defaultEffort={defaultEffort} availability={tuning.launchSupported === false ? "launch-unavailable" : !effortModel || effortModel.efforts === undefined ? "unknown" : effortOptions.length ? "supported" : "unsupported"} onChange={(value) => {
+									tuning.onEffortChange(value);
+									setEffortMenuOpen(false);
+									setMenuOpen(false);
+								}} />
 							</OptionMenuSubContent>
 						</OptionMenuSub>
 					</div>
@@ -542,10 +513,6 @@ function readRecentModelMap(): Record<string, string[]> {
 	}
 }
 
-function readRecentModels(scope: string | undefined): string[] {
-	return scope ? (readRecentModelMap()[scope] ?? []) : [];
-}
-
 function rememberRecentModel(scope: string, modelID: string): string[] {
 	const recentModels = readRecentModelMap();
 	const next = [modelID, ...(recentModels[scope] ?? []).filter((id) => id !== modelID)].slice(
@@ -579,8 +546,25 @@ function providerFromModelID(modelID: string): string {
 }
 
 export function buildModelSearchIndex(models: AgentModel[]): ModelSearchIndex {
+	const labels = models.map((model) => modelChoiceLabel(model));
+	const labelCounts = new Map<string, number>();
+	for (const label of labels) {
+		const key = normalizeSearch(label);
+		labelCounts.set(key, (labelCounts.get(key) ?? 0) + 1);
+	}
+	const qualifiedLabels = models.map((model, index) => {
+		const label = labels[index];
+		const provider = model.provider?.trim() || providerFromModelID(model.id) || "Other";
+		return (labelCounts.get(normalizeSearch(label)) ?? 0) > 1 ? `${label} (${provider})` : label;
+	});
+	const qualifiedCounts = new Map<string, number>();
+	for (const label of qualifiedLabels) {
+		const key = normalizeSearch(label);
+		qualifiedCounts.set(key, (qualifiedCounts.get(key) ?? 0) + 1);
+	}
 	const indexedModels = models.map((model, index) => {
-		const label = modelChoiceLabel(model);
+		const qualified = qualifiedLabels[index];
+		const label = (qualifiedCounts.get(normalizeSearch(qualified)) ?? 0) > 1 ? `${labels[index]} (${model.id})` : qualified;
 		const provider = model.provider?.trim() || providerFromModelID(model.id) || "Other";
 		return {
 			model,
@@ -649,27 +633,6 @@ export function searchModelIndex(index: ModelSearchIndex, query: string): ModelS
 		candidateCount: universe.length,
 		strategy: "fuzzy-fallback",
 	};
-}
-
-function rankInitialModels(models: IndexedModel[], selectedID: string, recentIDs: string[]): IndexedModel[] {
-	const byID = new Map(models.map((item) => [normalizeSearch(item.id), item]));
-	const result: IndexedModel[] = [];
-	const added = new Set<string>();
-	const append = (item: IndexedModel | undefined) => {
-		if (!item || added.has(item.id)) return;
-		added.add(item.id);
-		result.push(item);
-	};
-
-	append(byID.get(normalizeSearch(selectedID)));
-	for (const item of models) {
-		if (item.model.isDefault) append(item);
-	}
-	for (const recentID of recentIDs) {
-		append(byID.get(normalizeSearch(recentID)));
-	}
-	for (const item of models) append(item);
-	return result;
 }
 
 function providerQualifier(query: string): string {
@@ -753,37 +716,29 @@ type ModelGroup = {
 	models: IndexedModel[];
 };
 
-function groupModels(
-	models: IndexedModel[],
-	showPinned: boolean,
-	selectedID: string,
-	recentIDs: string[],
-	labels: { pinned: string; recent: string },
-) {
-	const groups = new Map<string, ModelGroup>();
-	const recentSet = new Set(recentIDs);
+function groupModels(models: IndexedModel[]): ModelGroup[] {
+	const groups: ModelGroup[] = [];
 	for (const item of models) {
-		const pinned = showPinned && (item.id === selectedID || item.model.isDefault);
-		const recent = showPinned && !pinned && recentSet.has(item.id);
-		const kind: ModelGroup["kind"] = pinned ? "pinned" : recent ? "recent" : "provider";
-		const key = kind === "provider" ? `provider:${item.provider}` : kind;
-		const group = groups.get(key) ?? {
-			key,
-			label: kind === "pinned" ? labels.pinned : kind === "recent" ? labels.recent : item.provider,
-			kind,
-			models: [],
-		};
-		group.models.push(item);
-		groups.set(key, group);
+		const previous = groups.at(-1);
+		if (previous?.label === item.provider) {
+			previous.models.push(item);
+		} else {
+			groups.push({
+				key: `provider:${item.provider}:${groups.length}`,
+				label: item.provider,
+				kind: "provider",
+				models: [item],
+			});
+		}
 	}
-	return [...groups.values()];
+	return groups;
 }
 
 function modelItemClass(selected: boolean): string {
 	return cn(
-		"settings-menu-item min-w-0 cursor-default outline-none",
-		"focus:bg-settings-menu-selected focus:text-settings-title",
-		"data-highlighted:bg-settings-menu-selected data-highlighted:text-settings-title",
-		selected && "border-settings-menu bg-settings-menu-selected text-settings-title",
+		"settings-menu-item min-w-0 cursor-default text-[length:var(--font-size-base)] text-foreground outline-none",
+		"focus:bg-settings-menu-selected focus:text-foreground",
+		"data-highlighted:bg-settings-menu-selected data-highlighted:text-foreground",
+		selected && "border-settings-menu bg-settings-menu-selected text-foreground",
 	);
 }

@@ -48,22 +48,37 @@ describe("AgentModelCombobox", () => {
 		expect(screen.getByRole("menuitem", { name: /Reasoning effort/ })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: "Plain" }));
 		expect(picker).toHaveTextContent("Plain · Low");
-		expect(screen.queryByRole("menuitemradio", { name: "High" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("menuitemradio", { name: "Provider default" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
-		expect(screen.getByRole("menuitemradio", { name: "Low" })).toHaveAttribute("aria-checked", "true");
-		await userEvent.hover(screen.getByRole("menuitem", { name: "Capable" }));
-		expect(screen.getByRole("menuitemradio", { name: "Low" })).toBeInTheDocument();
-		await userEvent.hover(screen.getByRole("menuitemradio", { name: "Low" }));
-		expect(screen.getByRole("menuitemradio", { name: "Low" })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
-		expect(picker).toHaveTextContent("Plain · Low");
 		expect(screen.queryByRole("menuitem", { name: "Plain" })).not.toBeInTheDocument();
 		await userEvent.click(picker);
-		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
-		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
-		expect(picker).toHaveTextContent("Plain");
-		expect(picker).toHaveTextContent("Low");
+		act(() => screen.getByRole("menuitem", { name: /Reasoning effort/ }).focus());
+		await userEvent.keyboard("{ArrowRight}");
+		expect(screen.getByRole("menuitemradio", { name: "Low (default)" })).toHaveAttribute("aria-checked", "true");
+		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low (default)" }));
+		expect(picker).toHaveTextContent("Plain · Low");
+	});
+
+	it("qualifies colliding model labels by provider and keeps the selected model ID", async () => {
+		const { onChange } = renderCombobox([
+			{ id: "anthropic/haiku", label: "Claude Haiku", provider: "anthropic" },
+			{ id: "bedrock/haiku", label: "Claude Haiku", provider: "bedrock" },
+			{ id: "unique", label: "Unique model", provider: "anthropic" },
+		], { compact: true });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getByRole("menuitem", { name: "Claude Haiku (anthropic)" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Unique model" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: "Claude Haiku (bedrock)" }));
+		expect(onChange).toHaveBeenLastCalledWith("bedrock/haiku");
+	});
+
+	it("uses full IDs for colliding model labels within the same provider", async () => {
+		const { onChange } = renderCombobox([
+			{ id: "anthropic/haiku", label: "Claude Haiku", provider: "anthropic" },
+			{ id: "anthropic/haiku-alias", label: "Claude Haiku", provider: "anthropic" },
+		], { compact: true });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Claude Haiku (anthropic/haiku-alias)" }));
+		expect(onChange).toHaveBeenLastCalledWith("anthropic/haiku-alias");
 	});
 
 	it("closes only the effort submenu on Escape", async () => {
@@ -118,17 +133,21 @@ describe("AgentModelCombobox", () => {
 		expect(onChange).not.toHaveBeenCalled();
 		await userEvent.click(picker);
 		expect(screen.queryByRole("menuitem", { name: "Agent default" })).not.toBeInTheDocument();
-		expect(screen.getByRole("menuitem", { name: "GPT-5.6 Sol" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "GPT-5.6 Sol (default)" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "GPT-5.6 Sol" })).not.toBeInTheDocument();
 	});
 
-	it("clears an override when the reported agent model is selected", async () => {
+	it("keeps the normal reported model when it is not the first native choice", async () => {
 		const { onChange } = renderCombobox([
-			{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol", isDefault: true },
 			{ id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
+			{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol", isDefault: true },
 		], { value: "gpt-5.6-luna" });
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.6 Sol" }));
-		expect(onChange).toHaveBeenCalledWith("");
+		expect(onChange).toHaveBeenCalledWith("gpt-5.6-sol");
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.6 Sol (default)" }));
+		expect(onChange).toHaveBeenLastCalledWith("");
 	});
 
 	it("can clear an override when the agent does not report its model", async () => {
@@ -137,11 +156,11 @@ describe("AgentModelCombobox", () => {
 			{ id: "sonnet", label: "Sonnet" },
 		], { value: "sonnet" });
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		await userEvent.click(screen.getByRole("menuitem", { name: "Use agent model" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Default" }));
 		expect(onChange).toHaveBeenCalledWith("");
 	});
 
-	it("clears an effort override when the reported agent effort is selected", async () => {
+	it("returns to inherited effort when selecting its reported default level", async () => {
 		const onEffortChange = vi.fn();
 		renderCombobox([
 			{ id: "capable", label: "Capable", isDefault: true, efforts: ["low", "high"], defaultEffort: "low" },
@@ -149,7 +168,7 @@ describe("AgentModelCombobox", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		act(() => screen.getByRole("menuitem", { name: /Reasoning effort/ }).focus());
 		await userEvent.keyboard("{ArrowRight}");
-		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low (default)" }));
 		expect(onEffortChange).toHaveBeenCalledWith("");
 	});
 
@@ -159,11 +178,11 @@ describe("AgentModelCombobox", () => {
 			{ id: "sonnet", label: "Sonnet" },
 		]);
 		const picker = screen.getByRole("button", { name: "Worker model" });
-		expect(picker).toHaveTextContent("Select model");
+		expect(picker).toHaveTextContent("Default");
 		expect(picker).not.toHaveTextContent("Model not reported");
 		expect(onChange).not.toHaveBeenCalled();
 		await userEvent.click(picker);
-		expect(screen.queryByRole("menuitem", { name: /Default/ })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Default" })).toBeInTheDocument();
 		// The models are listed with none selected.
 		const sonnet = screen.getByRole("menuitem", { name: "Sonnet" });
 		expect(sonnet).not.toHaveAttribute("aria-current");
@@ -212,7 +231,7 @@ describe("AgentModelCombobox", () => {
 		// The first 50 catalog models. The custom-model action appears
 		// only after the user types a value that does not match the catalog.
 		expect(screen.getAllByRole("menuitem")).toHaveLength(50);
-		expect(screen.getByText("Showing 50 of 1,397 matching models — type to narrow")).toBeInTheDocument();
+		expect(screen.getByText("Showing 49 of 1,397 matching models — type to narrow")).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /Model 1000/ })).not.toBeInTheDocument();
 	});
 
@@ -363,6 +382,35 @@ describe("AgentModelCombobox", () => {
 			/>,
 		);
 		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("saved-model");
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Default", "New model", "saved-model"]);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Default" }));
+		expect(view.onChange).toHaveBeenCalledWith("");
+	});
+
+	it("keeps refresh available when only a saved custom value is displayed", async () => {
+		const onRefresh = vi.fn();
+		renderCombobox([], { value: "saved-model", customModelEntry: "direct", onRefresh });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getByRole("menuitem", { name: "saved-model" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Refresh models" }));
+		expect(onRefresh).toHaveBeenCalledOnce();
+	});
+
+	it.each(["none", "configured"] as const)("does not append an off-catalog selection for %s custom entry", async (customModelEntry) => {
+		renderCombobox([{ id: "official", label: "Official model" }], {
+			value: "saved-model", customModelEntry, showFollowAgentAction: false,
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Official model"]);
+	});
+
+	it("does not duplicate a current custom model already in the catalog", async () => {
+		renderCombobox([{ id: "official", label: "Official model" }, { id: "custom", label: "Custom model" }], {
+			value: "custom", customModelEntry: "direct", showFollowAgentAction: false,
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Official model", "Custom model"]);
 	});
 
 	it("does not expose free text for fixed model catalogs", async () => {
@@ -377,22 +425,39 @@ describe("AgentModelCombobox", () => {
 		expect(screen.queryByRole("menuitem", { name: "Enter model ID…" })).not.toBeInTheDocument();
 	});
 
-	it("groups a recent explicit choice immediately after current and default models", async () => {
+	it.each([false, true])("preserves catalog order with a selected and recent older model (compact=%s)", async (compact) => {
 		const models = [
-			{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol", provider: "OpenAI", isDefault: true },
-			{ id: "gpt-5.6-terra", label: "GPT-5.6 Terra", provider: "OpenAI" },
-			{ id: "gpt-5.6-luna", label: "GPT-5.6 Luna", provider: "OpenAI" },
+			{ id: "official/newest", label: "Newest official", provider: "Official" },
+			{ id: "official/default", label: "Provider default", provider: "Official", isDefault: true },
+			{ id: "official/older", label: "Older official", provider: "Official" },
+			{ id: "custom/model", label: "Configured extra", provider: "Custom" },
 		];
-		const first = renderCombobox(models, { recentScope: "codex" });
+		const first = renderCombobox(models, { compact, recentScope: "harness", showFollowAgentAction: false });
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.6 Luna" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Older official" }));
 		first.unmount();
 
-		renderCombobox(models, { recentScope: "codex" });
+		const { onChange } = renderCombobox(models, { compact, recentScope: "harness", value: "official/older", showFollowAgentAction: false });
+		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("Older official");
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+			"Newest official", "Provider default", "Older official", "Configured extra",
+		]);
+		expect(screen.queryByText("Pinned models")).not.toBeInTheDocument();
+		expect(screen.queryByText("Recent")).not.toBeInTheDocument();
+		expect(onChange).not.toHaveBeenCalled();
+	});
 
-		const groupLabels = screen.getAllByText(/Pinned models|Recent/).map((node) => node.textContent);
-		expect(groupLabels).toEqual(["Pinned models", "Recent"]);
+	it("keeps interleaved provider catalogs in order while retaining provider labels", async () => {
+		renderCombobox([
+			{ id: "a/new", label: "A newest", provider: "A" },
+			{ id: "b/new", label: "B newest", provider: "B" },
+			{ id: "a/old", label: "A older", provider: "A" },
+		], { showFollowAgentAction: false });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["A newest", "B newest", "A older"]);
+		expect(screen.getAllByText("A")).toHaveLength(2);
+		expect(screen.getByText("B")).toBeInTheDocument();
 	});
 
 	it("shows machine IDs only when they disambiguate duplicate model names", async () => {
@@ -405,8 +470,8 @@ describe("AgentModelCombobox", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 
 		expect(screen.queryByText("gpt-5.6-sol")).not.toBeInTheDocument();
-		expect(screen.getByText("anthropic/opus-standard")).toBeInTheDocument();
-		expect(screen.getByText("anthropic/opus-long")).toBeInTheDocument();
+		expect(screen.getByText("Opus (anthropic/opus-standard)")).toBeInTheDocument();
+		expect(screen.getByText("Opus (anthropic/opus-long)")).toBeInTheDocument();
 	});
 
 	it("searches the full catalog and groups matching models by provider", async () => {

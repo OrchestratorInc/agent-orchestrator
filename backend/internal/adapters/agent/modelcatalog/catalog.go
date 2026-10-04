@@ -3,6 +3,7 @@
 package modelcatalog
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -37,8 +38,9 @@ const (
 )
 
 type commandSpec struct {
-	args   []string
-	parser func([]byte) ([]ports.AgentModelInfo, error)
+	args       []string
+	parser     func([]byte) ([]ports.AgentModelInfo, error)
+	jsonOutput bool
 	// signIn is set for CLIs whose model-list command opens an interactive
 	// browser sign-in when signed out. Discovery only runs once it confirms a
 	// login, so background refreshes never open that sign-in page.
@@ -117,15 +119,15 @@ var commandSpecs = map[string]commandSpec{
 	"pi":          {args: []string{"--list-models"}, parser: parsePiModels},
 	"kimchi":      {args: []string{"--list-models"}, parser: parsePiModels},
 	"prime-agent": {args: []string{"model", "list"}, parser: parsePiModels},
-	"kimi":        {args: []string{"provider", "list", "--json"}, parser: parseJSONModels},
-	"auggie":      {args: []string{"models", "list", "--json"}, parser: parseJSONModels},
-	"devin":       {args: []string{"models", "list", "--format", "json"}, parser: parseJSONModels},
-	"kiro":        {args: []string{"chat", "--list-models", "--format", "json"}, parser: parseJSONModels, signIn: kiroSignIn},
-	"omp":         {args: []string{"models", "--json"}, parser: parseJSONModels},
+	"kimi":        {args: []string{"provider", "list", "--json"}, parser: parseJSONModels, jsonOutput: true},
+	"auggie":      {args: []string{"models", "list", "--json"}, parser: parseJSONModels, jsonOutput: true},
+	"devin":       {args: []string{"models", "list", "--format", "json"}, parser: parseJSONModels, jsonOutput: true},
+	"kiro":        {args: []string{"chat", "--list-models", "--format", "json"}, parser: parseJSONModels, jsonOutput: true, signIn: kiroSignIn},
+	"omp":         {args: []string{"models", "--json"}, parser: parseJSONModels, jsonOutput: true},
 	"copilot":     {args: []string{"help", "config"}, parser: parseCopilotConfigModels},
 	"droid":       {args: []string{"exec", "--help"}, parser: parseDroidHelpModels},
 	"crush":       {args: []string{"models"}, parser: parseIDLines},
-	"fx":          {args: []string{"models", "--json"}, parser: parseFXModels},
+	"fx":          {args: []string{"models", "--json"}, parser: parseFXModels, jsonOutput: true},
 	"mimo-code":   {args: []string{"models"}, parser: parseIDLines},
 }
 
@@ -200,10 +202,9 @@ func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 
 // Discoverer implements the model-discovery port for production daemon wiring.
 type Discoverer struct {
+	NativeCatalogs    map[string]func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error)
 	CodexModels       CodexModelListFunc
 	ACPOptions        map[string]ACPOptionListFunc
-	ClaudeModels      ClaudeModelListFunc
-	ClaudeCatalog     func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error)
 	ClaudeFingerprint ClaudeFingerprintFunc
 	ClaudeIdentity    func(context.Context, ports.AgentModelDiscoveryRequest) (string, bool)
 }
@@ -230,20 +231,34 @@ type ClaudeFingerprintFunc func(context.Context, ports.AgentModelDiscoveryReques
 
 // Discover uses the agent-owned model surface configured for this adapter.
 func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
-	if request.AgentID == "claude-code" {
-		list := d.ClaudeModels
-		identity := ""
-		if d.ClaudeCatalog != nil {
-			list = func(ctx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
-				reported, err := d.ClaudeCatalog(ctx, request)
-				identity = reported.InputFingerprint
-				return reported.Models, err
+	if native := d.NativeCatalogs[request.AgentID]; native != nil {
+		reported, err := native(ctx, request)
+		if err == nil {
+			base := Base(request.AgentID)
+			base.Models = normalize(reported.Models)
+			base.Source = reported.Source
+			base.InputFingerprint = reported.InputFingerprint
+			base.FetchedAt = reported.FetchedAt
+			if hasConfigDiscoverySource(request.AgentID) {
+				if configured, configErr := discoverConfigCatalog(request.AgentID, request.WorkingDir, request.Env); configErr == nil {
+					base.Models = appendConfiguredModels(base.Models, configured.Models)
+				}
 			}
+			if request.AgentID != "claude-code" {
+				base.Models = applyConfiguredDefault(base.Models, configuredDefaultModel(request.AgentID, request.WorkingDir, request.Env))
+			}
+			return base, nil
 		}
-		catalog, err := discoverClaudeCatalog(ctx, request, list)
-		catalog.InputFingerprint = identity
-		return catalog, err
+		if request.AgentID == "claude-code" {
+			fallback, _ := discoverClaudeCatalog(ctx, request, nil)
+			fallback.InputFingerprint = reported.InputFingerprint
+			return fallback, fmt.Errorf("claude-code model discovery: %w", err)
+		}
+		if !errors.Is(err, ErrNativeCatalogUnsupported) {
+			return Base(request.AgentID), err
+		}
 	}
+
 	if request.AgentID == "muse" {
 		return Base(request.AgentID), nil
 	}
@@ -253,6 +268,12 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 	if list := d.ACPOptions[request.AgentID]; list != nil {
 		catalog, err := discoverACPOptionCatalog(ctx, request, list)
 		if err == nil {
+			if hasConfigDiscoverySource(request.AgentID) {
+				if configured, configErr := discoverConfigCatalog(request.AgentID, request.WorkingDir, request.Env); configErr == nil {
+					catalog.Models = appendConfiguredModels(catalog.Models, configured.Models)
+				}
+			}
+			catalog.Models = applyConfiguredDefault(catalog.Models, configuredDefaultModel(request.AgentID, request.WorkingDir, request.Env))
 			return catalog, nil
 		}
 		// A harness that also keeps configured provider selections (Cline) may be
@@ -266,7 +287,7 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 		// catalog until the next calendar day and never runs the retry ladder —
 		// so an ACP session that merely needed a workspace looks like a harness
 		// with no models. Report the failure instead.
-		if !hasConfigDiscoverySource(request.AgentID) {
+		if _, hasCommand := commandSpecs[request.AgentID]; !hasConfigDiscoverySource(request.AgentID) && !hasCommand {
 			return catalog, err
 		}
 	}
@@ -275,6 +296,14 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 			withOpenCodeCredentialPresence(request.Env, request.CredentialType))
 	}
 	return Discover(ctx, request.AgentID, request.Binary, request.WorkingDir, request.Env)
+}
+
+// CatalogIdentityFingerprint observes credentials that local files cannot track.
+func (d Discoverer) CatalogIdentityFingerprint(ctx context.Context, request ports.AgentModelDiscoveryRequest) (string, bool) {
+	if request.AgentID == "claude-code" && d.ClaudeIdentity != nil {
+		return d.ClaudeIdentity(ctx, request)
+	}
+	return "", false
 }
 
 // opencodeCredentialEnv maps an opencode cloud credential type to the env var
@@ -325,19 +354,8 @@ func claudeCodeModels() []ports.AgentModelInfo {
 	}
 }
 
-// discoverClaudeCatalog builds the Claude Code catalog, preferring the model
-// list the provider itself reports and falling back to the static aliases.
-//
-// The fallback is not a formality. The static list is the set of aliases the
-// first-party API accepts — sonnet, opus, haiku — and those are wrong on every
-// other provider: Bedrock spells the same model anthropic.claude-…-v1:0 with a
-// region prefix, Vertex claude-opus-4-5@20251101. No string rule maps between
-// the three, so the only way to offer correct IDs is to ask the provider that
-// will serve them, which is exactly what the credential probe already does.
-//
-// The static aliases travel with a discovery error so the service can prefer a
-// last-known-good provider catalog. With no cache, the aliases still keep the
-// picker usable while accurately remaining stale/unverified.
+// discoverClaudeCatalog preserves the reported model sequence and retains the
+// existing configured-model fallback when native discovery is unavailable.
 func discoverClaudeCatalog(
 	ctx context.Context,
 	request ports.AgentModelDiscoveryRequest,
@@ -491,9 +509,17 @@ func Discover(ctx context.Context, agentID, binary, workingDir string, env map[s
 	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	cmd := modelCommand(runCtx, binary, spec.args, workingDir, env)
-	output, err := cmd.CombinedOutput()
+	var stderr bytes.Buffer
+	var output []byte
+	var err error
+	if spec.jsonOutput {
+		cmd.Stderr = &stderr
+		output, err = cmd.Output()
+	} else {
+		output, err = cmd.CombinedOutput()
+	}
 	if err != nil {
-		return base, modelDiscoveryError(runCtx, agentID, err, output)
+		return base, modelDiscoveryError(runCtx, agentID, err, append(output, stderr.Bytes()...))
 	}
 	models, err := spec.parser(output)
 	if err != nil {
@@ -569,71 +595,10 @@ func discoverCodexCatalog(ctx context.Context, request ports.AgentModelDiscovery
 	if len(normalized) == 0 {
 		return base, errors.New("codex model discovery returned no models")
 	}
-	base.Models = sortNewestFirst(normalize(normalized))
+	base.Models = normalize(normalized)
 	base.Source = "cli"
 	base.FetchedAt = time.Now().UTC()
 	return base, nil
-}
-
-var modelVersionPattern = regexp.MustCompile(`\d+(?:\.\d+)*`)
-
-// sortNewestFirst orders models by the first version number in their label
-// (then ID), highest first, so the latest release leads the picker. Models
-// sharing a version keep base-before-variant order ("Sol 6" before
-// "Sol 6 Astra"); unversioned models sort last, alphabetically.
-func sortNewestFirst(models []ports.AgentModelInfo) []ports.AgentModelInfo {
-	versions := make(map[string][]int, len(models))
-	for _, item := range models {
-		versions[item.ID] = modelVersion(item)
-	}
-	sort.SliceStable(models, func(i, j int) bool {
-		if cmp := compareVersions(versions[models[i].ID], versions[models[j].ID]); cmp != 0 {
-			return cmp > 0
-		}
-		return strings.ToLower(models[i].Label) < strings.ToLower(models[j].Label)
-	})
-	return models
-}
-
-func modelVersion(item ports.AgentModelInfo) []int {
-	for _, source := range []string{item.Label, item.ID} {
-		match := modelVersionPattern.FindString(source)
-		if match == "" {
-			continue
-		}
-		parts := strings.Split(match, ".")
-		version := make([]int, 0, len(parts))
-		for _, part := range parts {
-			n, err := strconv.Atoi(part)
-			if err != nil {
-				break
-			}
-			version = append(version, n)
-		}
-		return version
-	}
-	return nil
-}
-
-// compareVersions returns >0 when a is newer than b. Missing components count
-// as zero, and any version outranks none.
-func compareVersions(a, b []int) int {
-	if len(a) == 0 || len(b) == 0 {
-		return len(a) - len(b)
-	}
-	for index := 0; index < max(len(a), len(b)); index++ {
-		var left, right int
-		if index < len(a) {
-			left = a[index]
-		}
-		if index < len(b) {
-			right = b[index]
-		}
-		if left != right {
-			return left - right
-		}
-	}
-	return 0
 }
 
 func discoverACPOptionCatalog(
@@ -654,6 +619,9 @@ func discoverACPOptionCatalog(
 		}
 		for _, choice := range option.Choices {
 			id := strings.TrimSpace(choice.Value)
+			if request.AgentID == "kimi" && strings.HasSuffix(id, ",thinking") {
+				continue
+			}
 			if id == "" {
 				continue
 			}
@@ -673,6 +641,42 @@ func discoverACPOptionCatalog(
 			})
 		}
 	}
+	effortOptionID := ""
+	switch request.AgentID {
+	case "deepseek-harness":
+		effortOptionID = "reasoning_effort"
+	case "pi":
+		effortOptionID = "thought_level"
+	case "droid", "copilot":
+		effortOptionID = "reasoning_effort"
+	case "claude-code", "opencode", "opencode-v2":
+		effortOptionID = "effort"
+	}
+	for _, option := range options {
+		if option.Type != ports.ChatConfigOptionSelect || (option.ID != effortOptionID && option.Category != "thought_level") {
+			continue
+		}
+		var efforts []string
+		seen := make(map[string]bool)
+		defaultEffort := ""
+		for _, choice := range option.Choices {
+			if strings.TrimSpace(choice.Value) == "" || seen[choice.Value] {
+				continue
+			}
+			seen[choice.Value] = true
+			efforts = append(efforts, choice.Value)
+			if choice.Value == option.Current.Select {
+				defaultEffort = choice.Value
+			}
+		}
+		for i := range models {
+			if models[i].IsDefault {
+				models[i].Efforts = append([]string(nil), efforts...)
+				models[i].DefaultEffort = defaultEffort
+			}
+		}
+		break
+	}
 	models = normalize(models)
 	if len(models) == 0 {
 		return base, fmt.Errorf("%s ACP model discovery returned no models", request.AgentID)
@@ -688,7 +692,7 @@ func hasDiscoverySource(agentID string) bool {
 	// Harnesses whose catalog comes from a daemon-injected surface rather than a
 	// command spec: Codex's app-server, Claude's provider probe, and the ACP
 	// configuration catalog for Cline and DeepSeek Harness.
-	case "claude-code", "codex", "deepseek-harness":
+	case "claude-code", "codex", "deepseek-harness", "gemini", "copilot", "droid", "kimi":
 		return true
 	}
 	if hasConfigDiscoverySource(agentID) {
@@ -798,7 +802,7 @@ func BinaryVersion(ctx context.Context, binary string) string {
 // resolved executable plus the configuration and credentials its discovery
 // reads. Only the digest is returned or persisted.
 func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string, env map[string]string) string {
-	binaryVersion := "catalog-inputs-v1:" + BinaryVersion(ctx, binary)
+	binaryVersion := "native-catalog-order-v2:" + BinaryVersion(ctx, binary)
 	config := discoveryConfigInputs(ctx, agentID, workingDir, env)
 	if agentID != "claude-code" {
 		if launch := catalogEnvironmentFingerprint(env); launch != "" {
@@ -806,7 +810,7 @@ func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string,
 		}
 	}
 	if config == "" {
-		// The revision invalidates caches that omitted credential/config inputs.
+		// The catalog revision invalidates lists ordered by older daemons.
 		return binaryVersion
 	}
 	hash := sha256.New()
@@ -855,6 +859,35 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 		return "default=" + configured
 	}
 	return ""
+}
+
+func catalogEnvironmentFingerprint(env map[string]string) string {
+	inputs := make(map[string]string)
+	for _, entry := range os.Environ() {
+		key, value, _ := strings.Cut(entry, "=")
+		inputs[key] = value
+	}
+	for key, value := range env {
+		inputs[key] = value
+	}
+	keys := make([]string, 0)
+	for key, value := range inputs {
+		if value == "" {
+			continue
+		}
+		if key == "MODEL" || key == "BASE_URL" || strings.HasSuffix(key, "_API_KEY") || strings.HasSuffix(key, "_TOKEN") || strings.HasSuffix(key, "_BASE_URL") || strings.HasSuffix(key, "_MODEL") || strings.HasSuffix(key, "_CONFIG") || strings.HasSuffix(key, "_CONFIG_DIR") || strings.HasSuffix(key, "_CONFIG_FILE") {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	sort.Strings(keys)
+	hash := sha256.New()
+	for _, key := range keys {
+		_, _ = hash.Write([]byte(key + "\x00" + inputs[key] + "\x00"))
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil)[:8])
 }
 
 func claudeCodeDiscoveryFingerprint(ctx context.Context, workingDir string, env map[string]string) string {
@@ -1130,10 +1163,12 @@ func parseJSONModels(output []byte) ([]ports.AgentModelInfo, error) {
 					IsDefault: firstBool(node, "isDefault", "is_default", "default"),
 				})
 			}
-			for key, child := range node {
+			for _, key := range sortedJSONKeys(node) {
+				child := node[key]
 				if key == "models" {
 					if modelMap, ok := child.(map[string]any); ok {
-						for alias, item := range modelMap {
+						for _, alias := range sortedJSONKeys(modelMap) {
+							item := modelMap[alias]
 							if modelNode, ok := item.(map[string]any); ok && strings.TrimSpace(alias) != "" && looksLikeModelAliasRecord(modelNode) {
 								label := firstString(modelNode, "displayName", "display_name", "model_name", "label", "name")
 								if label == "" {
@@ -1189,6 +1224,7 @@ func firstBool(node map[string]any, keys ...string) bool {
 }
 
 func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
+	order := make([]string, 0, len(models))
 	byID := make(map[string]ports.AgentModelInfo, len(models))
 	for _, item := range models {
 		item.ID = strings.TrimSpace(item.ID)
@@ -1217,53 +1253,40 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 			continue
 		}
 		byID[item.ID] = item
+		order = append(order, item.ID)
 	}
 	out := make([]ports.AgentModelInfo, 0, len(byID))
-	for _, item := range byID {
-		out = append(out, item)
+	for _, id := range order {
+		out = append(out, byID[id])
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].IsDefault != out[j].IsDefault {
-			return out[i].IsDefault
-		}
-		return strings.ToLower(out[i].Label) < strings.ToLower(out[j].Label)
-	})
 	return out
 }
 
-// CatalogIdentityFingerprint observes credentials that local files cannot track.
-func (d Discoverer) CatalogIdentityFingerprint(ctx context.Context, request ports.AgentModelDiscoveryRequest) (string, bool) {
-	if request.AgentID == "claude-code" && d.ClaudeIdentity != nil {
-		return d.ClaudeIdentity(ctx, request)
-	}
-	return "", false
-}
-
-func catalogEnvironmentFingerprint(env map[string]string) string {
-	inputs := make(map[string]string)
-	for _, entry := range os.Environ() {
-		key, value, _ := strings.Cut(entry, "=")
-		inputs[key] = value
-	}
-	for key, value := range env {
-		inputs[key] = value
-	}
-	keys := make([]string, 0)
-	for key, value := range inputs {
-		if value == "" {
-			continue
-		}
-		if key == "MODEL" || key == "BASE_URL" || strings.HasSuffix(key, "_API_KEY") || strings.HasSuffix(key, "_TOKEN") || strings.HasSuffix(key, "_BASE_URL") || strings.HasSuffix(key, "_MODEL") || strings.HasSuffix(key, "_CONFIG") || strings.HasSuffix(key, "_CONFIG_DIR") || strings.HasSuffix(key, "_CONFIG_FILE") {
-			keys = append(keys, key)
-		}
-	}
-	if len(keys) == 0 {
-		return ""
+func sortedJSONKeys(node map[string]any) []string {
+	keys := make([]string, 0, len(node))
+	for key := range node {
+		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	hash := sha256.New()
-	for _, key := range keys {
-		_, _ = hash.Write([]byte(key + "\x00" + inputs[key] + "\x00"))
+	return keys
+}
+
+func appendConfiguredModels(native, configured []ports.AgentModelInfo) []ports.AgentModelInfo {
+	seen := make(map[string]bool, len(native))
+	reportedDefault := false
+	for _, item := range native {
+		seen[item.ID] = true
+		reportedDefault = reportedDefault || (item.IsDefault && isConcreteModel(item.ID))
 	}
-	return fmt.Sprintf("%x", hash.Sum(nil)[:8])
+	for _, item := range configured {
+		if seen[item.ID] {
+			continue
+		}
+		seen[item.ID] = true
+		if reportedDefault {
+			item.IsDefault = false
+		}
+		native = append(native, item)
+	}
+	return native
 }

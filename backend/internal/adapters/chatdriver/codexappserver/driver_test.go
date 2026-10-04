@@ -1281,6 +1281,7 @@ func TestListModelsUsesConfiguredThreadDefault(t *testing.T) {
 
 func TestDiscoverModelsReadsCatalogWithoutOpeningThread(t *testing.T) {
 	d, srv := newTestDriver(t)
+	srv.reply("config/read", `{"config":{},"origins":{}}`)
 	srv.reply("model/list", `{"data":[{"id":"gpt-visible","displayName":"GPT Visible","isDefault":true,"hidden":false},{"id":"gpt-hidden","displayName":"GPT Hidden","hidden":true}]}`)
 
 	models, err := d.DiscoverModels(context.Background(), "/tmp/ws", map[string]string{"CODEX_HOME": "/tmp/codex-home"})

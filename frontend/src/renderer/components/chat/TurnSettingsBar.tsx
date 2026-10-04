@@ -1,3 +1,4 @@
+import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } from "../settings/EffortPicker";
 /**
  * What the next turn will be sent with: model, reasoning effort, approval mode.
  *
@@ -19,6 +20,7 @@
 
 import { Fragment, useMemo, type FocusEvent, type ReactNode } from "react";
 import { Shuffle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
 	OptionMenu,
 	OptionMenuContent,
@@ -129,6 +131,7 @@ export function TurnSettingsBar({
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
 	children?: ReactNode;
 }) {
+	const { t } = useTranslation();
 	const displayModels = useMemo(
 		() => models.map((model) => ({
 			...model,
@@ -166,9 +169,9 @@ export function TurnSettingsBar({
 	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : APPROVAL_ORDER;
 	const approvalLabel = approvalCopy[settings.approvalMode ?? "default"].label;
 	const modelGroupLabel = effortLabel
-		? `${modelLabel} ${capitalize(effortLabel)}`
+		? `${modelLabel} ${formatEffortLabel(effortLabel)}`
 		: modelLabel;
-	const grouped = partitionConfigOptions(displayConfigOptions);
+	const grouped = partitionConfigOptions(displayConfigOptions, t("settings.models.useAgentModel"));
 	const optionDisabled = Boolean(disabled || configPending || rememberPermissionsPending);
 	const applyOption = (optionId: string, value: ChatConfigOptionValue) => {
 		if (!onChangeConfigOption) return;
@@ -186,13 +189,7 @@ export function TurnSettingsBar({
 	const planReturn = modeOption?.choices.find(
 		(choice) => choice.permissionMode === (settings.approvalMode ?? "default"),
 	)?.value;
-	const nativeModelMenu = Boolean(onChange && displayModels.length > 0 && grouped.model.length === 0);
-	const clubbedLeft =
-		grouped.model.length > 0 ||
-		grouped.effort.length > 0 ||
-		Boolean(inlineExecutionMode) ||
-		grouped.toggles.length > 0 ||
-		grouped.extra.length > 0;
+	const nativeModelMenu = Boolean(onChange && grouped.model.length === 0 && grouped.effort.length === 0);
 	const rememberMode = modeOption
 		? modeOption.choices.find((choice) => choice.value === modeOption.currentValue)?.permissionMode
 		: settings.approvalMode ?? "default";
@@ -221,8 +218,9 @@ export function TurnSettingsBar({
 							disabled={optionDisabled}
 							modelLabel={modelLabel}
 							groupLabel={modelGroupLabel}
-							effortLabel={effortLabel}
 							efforts={efforts}
+							defaultEffort={(selected ?? fallback)?.defaultEffort}
+							availability={(selected ?? fallback)?.efforts === undefined ? "unknown" : efforts.length ? "supported" : "unsupported"}
 							reroute={reroute}
 							rerouted={rerouted}
 							chosenLabel={chosenLabel}
@@ -234,7 +232,7 @@ export function TurnSettingsBar({
 						/>
 					) : null}
 
-					{onChangeConfigOption && clubbedLeft && !nativeModelMenu ? (
+					{onChangeConfigOption && !nativeModelMenu ? (
 						<ClubbedConfigPicker
 							modelOptions={grouped.model}
 							effortOptions={grouped.effort}
@@ -279,7 +277,7 @@ export function TurnSettingsBar({
 										active={mode === (settings.approvalMode ?? "default")}
 										radio
 										onSelect={() => onChange({ ...settings, approvalMode: mode })}
-										className={cn("text-xs")}
+										className="text-[length:var(--font-size-base)] text-foreground"
 									>
 										<span
 											className={cn(
@@ -323,8 +321,9 @@ function ModelEffortPicker({
 	disabled,
 	modelLabel,
 	groupLabel,
-	effortLabel,
 	efforts,
+	defaultEffort,
+	availability,
 	reroute,
 	rerouted,
 	chosenLabel,
@@ -340,8 +339,9 @@ function ModelEffortPicker({
 	disabled?: boolean;
 	modelLabel: string;
 	groupLabel: string;
-	effortLabel?: string;
 	efforts: string[];
+	defaultEffort?: string;
+	availability: "supported" | "unsupported" | "unknown";
 	reroute?: ModelReroute;
 	rerouted?: string;
 	chosenLabel: string;
@@ -351,6 +351,7 @@ function ModelEffortPicker({
 	extraOptions?: ChatConfigOption[];
 	onChangeConfigOption?: (optionId: string, value: ChatConfigOptionValue) => void;
 }) {
+	const { t } = useTranslation();
 	const catalog = useMemo(() => models.map((model) => ({ ...model, label: model.displayName })), [models]);
 
 	return (
@@ -392,7 +393,7 @@ function ModelEffortPicker({
 									active={model.id === settings.model}
 									radio
 									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
-									className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
+									className="text-[length:var(--font-size-base)] text-foreground"
 								>
 									{model.displayName}
 								</OptionMenuItem>
@@ -401,32 +402,12 @@ function ModelEffortPicker({
 					</OptionMenuSubContent>
 				</OptionMenuSub>
 
-				{efforts.length > 0 ? (
-					<OptionMenuSub>
-						<OptionMenuSubTrigger label="Effort" value={effortLabel ? capitalize(effortLabel) : "Effort"} />
-						<OptionMenuSubContent className={CHAT_MENU_CLASS}>
-							{efforts.map((effort) => (
-								<OptionMenuItem
-									key={effort}
-									active={effort === settings.reasoningEffort}
-									radio
-									onSelect={() => onChange({ ...settings, reasoningEffort: effort })}
-									className={cn("text-xs")}
-								>
-									<span
-										className={cn(
-											effort === settings.reasoningEffort
-												? "text-foreground"
-												: "text-muted-foreground",
-										)}
-									>
-										{capitalize(effort)}
-									</span>
-								</OptionMenuItem>
-							))}
-						</OptionMenuSubContent>
-					</OptionMenuSub>
-				) : null}
+				<OptionMenuSub>
+					<OptionMenuSubTrigger label="Effort" value={effortDisplayLabel(settings.reasoningEffort ?? "", efforts.map((value) => ({ value })), t("settings.models.useAgentEffort"), defaultEffort)} />
+					<OptionMenuSubContent className={CHAT_MENU_CLASS}>
+						<EffortMenuItems value={settings.reasoningEffort ?? ""} choices={efforts.map((value) => ({ value }))} availability={availability} defaultEffort={defaultEffort} onChange={(value) => onChange({ ...settings, reasoningEffort: value || undefined })} />
+					</OptionMenuSubContent>
+				</OptionMenuSub>
 				{executionMode && onChangeConfigOption ? (
 					<PlanModeToggle option={executionMode} planReturn={planReturn} onChange={onChangeConfigOption} />
 				) : null}
@@ -460,31 +441,40 @@ function ClubbedConfigPicker({
 	disabled?: boolean;
 	onChange: (optionId: string, value: ChatConfigOptionValue) => void;
 }) {
-	const primaryModel = modelOptions[0];
-	const primaryEffort = effortOptions[0];
+	const { t } = useTranslation();
+	const unknownEffort = <EffortPicker value="" choices={[]} defaultValue={null} availability="unknown" disabled={disabled} triggerClassName={TRIGGER_CLASS} onChange={() => {}} />;
+	const primaryModel = modelOptions.at(0);
+	const primaryEffort = effortOptions.at(0);
 	const modelLabel = primaryModel ? optionCurrentLabel(primaryModel) : undefined;
-	const effortLabel = primaryEffort ? optionCurrentLabel(primaryEffort) : undefined;
+	const effortLabel = primaryEffort ? (!primaryEffort.currentValue || primaryEffort.currentValue === "default" ? t("settings.models.useAgentEffort") : optionCurrentLabel(primaryEffort)) : undefined;
 	const groupLabel = [modelLabel, effortLabel].filter(Boolean).join(" ") || "More";
 	const leftCount =
 		modelOptions.length + effortOptions.length + Number(Boolean(executionMode)) + toggles.length + extraOptions.length;
+	if (leftCount === 1 && primaryModel) {
+		return <><ConfigOptionPicker option={primaryModel} disabled={disabled} onChange={(value) => onChange(primaryModel.id, value)} />{unknownEffort}</>;
+	}
+	if (leftCount === 1 && primaryEffort) {
+		return <EffortPicker value={primaryEffort.currentValue ?? ""} choices={primaryEffort.choices.map((choice) => ({ value: choice.value, label: choice.name }))} defaultValue={primaryEffort.choices.find((choice) => choice.value === "default")?.value ?? null} defaultEffort={primaryEffort.choices.find((choice) => choice.value === "default")?.description} disabled={disabled} triggerClassName={TRIGGER_CLASS} onChange={(value) => onChange(primaryEffort.id, { value })} />;
+	}
+	if (leftCount === 0) return unknownEffort;
 	if (leftCount === 1) {
 		if (executionMode)
-			return (
+			return (<>
 				<ExecutionModePicker
 					option={executionMode}
 					planReturn={planReturn}
 					disabled={disabled}
 					onChange={onChange}
-				/>
+				/>{unknownEffort}</>
 			);
 		const option = primaryModel ?? primaryEffort ?? executionMode ?? toggles[0] ?? extraOptions[0];
 		if (!option) return null;
-		return (
+		return (<>
 			<ConfigOptionPicker
 				option={option}
 				disabled={disabled}
 				onChange={(value) => onChange(option.id, value)}
-			/>
+			/>{unknownEffort}</>
 		);
 	}
 
@@ -503,9 +493,9 @@ function ClubbedConfigPicker({
 				{modelOptions.map((option) => (
 					<OptionSubmenu key={option.id} option={option} onChange={onChange} scrollable />
 				))}
-				{effortOptions.map((option) => (
-					<OptionSubmenu key={option.id} option={option} onChange={onChange} />
-				))}
+				{effortOptions.length ? effortOptions.map((option) => (
+					<EffortOptionSubmenu key={option.id} option={option} onChange={onChange} />
+				)) : <OptionMenuSub><OptionMenuSubTrigger label="Effort" value={t("settings.models.useAgentEffort")} /><OptionMenuSubContent className={CHAT_MENU_CLASS}><EffortMenuItems value="" choices={[]} availability="unknown" defaultValue={null} onChange={() => {}} /></OptionMenuSubContent></OptionMenuSub>}
 				{executionMode ? <PlanModeToggle option={executionMode} planReturn={planReturn} onChange={onChange} /> : null}
 				{toggles.map((option) => (
 					<ConfigToggle key={option.id} option={option} onChange={onChange} />
@@ -516,6 +506,14 @@ function ClubbedConfigPicker({
 			</OptionMenuContent>
 		</OptionMenu>
 	);
+}
+
+function EffortOptionSubmenu({ option, onChange }: { option: ChatConfigOption; onChange: (id: string, value: ChatConfigOptionValue) => void }) {
+	const { t } = useTranslation();
+	const defaultChoice = option.choices.find((choice) => choice.value === "default");
+	return <OptionMenuSub><OptionMenuSubTrigger label="Effort" value={!option.currentValue || option.currentValue === "default" ? t("settings.models.useAgentEffort") : optionCurrentLabel(option)} /><OptionMenuSubContent className={CHAT_MENU_CLASS}>
+		<EffortMenuItems value={option.currentValue ?? ""} choices={option.choices.map((choice) => ({ value: choice.value, label: choice.name }))} defaultValue={defaultChoice?.value ?? null} defaultEffort={defaultChoice?.description} onChange={(value) => onChange(option.id, { value })} />
+	</OptionMenuSubContent></OptionMenuSub>;
 }
 
 function PlanModeToggle({
@@ -746,7 +744,7 @@ function ConfigOptionChoices({
 							active={enabled === option.currentBoolean}
 							radio
 						onSelect={() => onChange({ enabled })}
-						className={cn("text-xs")}
+						className="text-[length:var(--font-size-base)] text-foreground"
 					>
 						<span
 							className={cn(
@@ -778,16 +776,11 @@ function ConfigOptionChoices({
 							active={choice.value === option.currentValue}
 							radio
 							onSelect={() => onChange({ value: choice.value })}
-							className={cn("text-xs")}
+							className="text-[length:var(--font-size-base)] text-foreground"
 						>
 							<span className="flex w-full items-baseline gap-2">
 								<span
-									className={cn(
-										"text-xs",
-										choice.value === option.currentValue
-											? "text-foreground"
-											: "text-muted-foreground",
-									)}
+									className="text-[length:var(--font-size-base)] text-foreground"
 								>
 									{choice.name}
 								</span>
@@ -846,10 +839,6 @@ function focusModelSearch(event: FocusEvent<HTMLDivElement>) {
 	}
 }
 
-function capitalize(value: string): string {
-	return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
 function isModelOption(option: ChatConfigOption): boolean {
 	return option.category === "model" || option.id === "model";
 }
@@ -894,7 +883,7 @@ export function hasProviderPermissionMode(options: ChatConfigOption[]): boolean 
 	return Boolean(partitionConfigOptions(options).mode);
 }
 
-function partitionConfigOptions(options: ChatConfigOption[]): {
+function partitionConfigOptions(options: ChatConfigOption[], defaultLabel = "Default"): {
 	model: ChatConfigOption[];
 	effort: ChatConfigOption[];
 	/** Provider plan/agent modes, placed with model selection rather than permissions. */
@@ -912,8 +901,8 @@ function partitionConfigOptions(options: ChatConfigOption[]): {
 	let executionMode: ChatConfigOption | undefined;
 	let mode: ChatConfigOption | undefined;
 	for (const rawOption of options) {
-		const option = rawOption.type === "select" ? resolveImplicitChoice(rawOption) : rawOption;
-		if (option.type === "select" && option.choices.length === 0) continue;
+		const option = rawOption.type === "select" && !isEffortOption(rawOption) ? resolveImplicitChoice(rawOption, defaultLabel) : rawOption;
+		if (option.type === "select" && option.choices.length === 0 && !isEffortOption(option)) continue;
 		if (isAgentOption(option)) continue;
 		if (isModelOption(option)) {
 			if (option.category === "model" || option.id === "model") primaryModel.push(option);
@@ -951,7 +940,7 @@ function partitionConfigOptions(options: ChatConfigOption[]): {
 
 // ACP may expose a provider-owned choice whose description names a concrete
 // option. Keep its wire value so users can return to following the provider.
-function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
+function resolveImplicitChoice(option: ChatConfigOption, defaultLabel: string): ChatConfigOption {
 	const mapped = isModeOption(option) ? {
 		...option,
 		choices: option.choices.map((choice) =>
@@ -970,16 +959,19 @@ function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 	const concrete = mapped.choices.find((choice) =>
 		choice.value !== implicit.value && choice.name.toLowerCase() === implicit.description?.trim().toLowerCase(),
 	);
-	const followLabel = isModelOption(mapped) ? "Use agent model" : isEffortOption(mapped) ? "Use agent effort" : "Use agent setting";
-	if (concrete && mapped.currentValue !== concrete.value) {
-		const label = isDefaultPlaceholderLabel(concrete.name) ? concrete.value : concrete.name;
+	if (isModelOption(mapped)) {
+		const normal = mapped.choices.filter((choice) => choice !== implicit);
+		const merge = concrete !== undefined && normal[0] === concrete;
 		return {
 			...mapped,
-			choices: mapped.choices.filter((choice) => choice !== concrete).map((choice) =>
-				choice === implicit ? { ...choice, name: label } : choice,
-			),
+			currentValue: merge && mapped.currentValue === concrete.value ? implicit.value : mapped.currentValue,
+			choices: [
+				{ ...implicit, name: concrete ? `${concrete.name} (${defaultLabel.toLocaleLowerCase()})` : defaultLabel, description: concrete?.name },
+				...normal.filter((choice) => !merge || choice !== concrete),
+			],
 		};
 	}
+	const followLabel = isModelOption(mapped) || isEffortOption(mapped) ? defaultLabel : "Use agent setting";
 	return {
 		...mapped,
 		choices: mapped.choices.map((choice) => choice === implicit && isDefaultPlaceholderLabel(choice.name)
@@ -1074,7 +1066,7 @@ function optionCurrentLabel(option: ChatConfigOption): string {
 		if (isModelOption(option)) return "Model not reported";
 		return "Selection not reported";
 	}
-	return option.choices.find((choice) => choice.value === option.currentValue)?.name
-		?? option.currentValue
-		?? option.name;
+	const choice = option.choices.find((choice) => choice.value === option.currentValue);
+	if (isModelOption(option) && choice?.value === "default") return choice.description?.trim() || choice.name;
+	return choice?.name ?? option.currentValue ?? option.name;
 }

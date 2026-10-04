@@ -12,14 +12,14 @@ import type { TFunction } from "i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Info, Pencil } from "lucide-react";
 import type { components } from "../../api/schema";
-import { agentModelsQueryKey, agentModelsQueryOptions, refreshAgentModels, revalidateAgentModels, type AgentModelCatalog } from "../hooks/useAgentModelsQuery";
+import { agentModelsQueryKey, agentModelsQueryOptions, refreshAgentModels, agentModelsRevalidationQueryOptions, type AgentModelCatalog } from "../hooks/useAgentModelsQuery";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { useRemoteProjectQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
-import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, supportsModelEffortAtLaunch } from "../lib/agent-model-choices";
 import { isLaunchableAgent } from "../lib/agent-select-options";
 import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
@@ -364,6 +364,10 @@ function SettingsBody({
 			setValidationError(null);
 			void queryClient.invalidateQueries({ queryKey: projectQueryKey(projectId, hostId) });
 			void queryClient.invalidateQueries({ queryKey: hostId ? ["project-config", hostId, projectId] : ["project-config", projectId] });
+			void queryClient.invalidateQueries({
+				queryKey: hostId ? ["agent-models", hostId] : ["agent-models"],
+				predicate: (query) => query.queryKey.length === (hostId ? 4 : 3) && query.queryKey.at(-1) === projectId,
+			});
 			void onSaved();
 			if (result.replacementFailure) {
 				if (!hostId) setOrchestratorReplacementError(projectId, result.replacementFailure);
@@ -808,15 +812,10 @@ function AgentModelField({
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	const { settings } = useSettings(hostId);
 	const query = useQuery(agentModelsQueryOptions(agentId, projectId, hostId));
 	const catalog: AgentModelCatalog | undefined = query.data;
-	const revalidationQuery = useQuery({
-		queryKey: ["agent-model-revalidation", hostId ?? LOCAL_HOST, agentId, projectId, catalog?.validatedAt ?? ""],
-		queryFn: () => revalidateAgentModels(agentId, projectId, hostId),
-		enabled: agentId !== "" && catalog?.refreshRecommended === true,
-		staleTime: Number.POSITIVE_INFINITY,
-		retry: false,
-	});
+	const revalidationQuery = useQuery(agentModelsRevalidationQueryOptions(agentId, projectId, catalog, hostId));
 	useEffect(() => {
 		if (revalidationQuery.data) {
 			queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), revalidationQuery.data);
@@ -908,6 +907,7 @@ function AgentModelField({
 						triggerClassName="w-full justify-between"
 						compact={agentId === "codex"}
 						tuning={{
+							launchSupported: supportsModelEffortAtLaunch(agentId, settings?.defaultSessionMode, settings?.chatHarnesses ?? []),
 							effort,
 							onEffortChange,
 							onValidityChange,

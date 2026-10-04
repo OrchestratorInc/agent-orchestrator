@@ -397,10 +397,7 @@ func TestPersistentACPResumeAdoptsLivePromptWithoutSecondSetup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := json.Marshal(acpsdk.NewSessionResponse{SessionId: "provider-session"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	session := json.RawMessage(`{"sessionId":"provider-session","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"opus","options":[{"value":"opus","name":"Opus"}]},{"id":"effort","name":"Effort","type":"select","currentValue":"high","options":[{"value":"high","name":"High"}]}]}`)
 	daemon, host := net.Pipe()
 	t.Cleanup(func() { _ = host.Close() })
 	driver := New(Config{
@@ -431,6 +428,10 @@ func TestPersistentACPResumeAdoptsLivePromptWithoutSecondSetup(t *testing.T) {
 	}
 	conv := opened.(*conversation)
 	t.Cleanup(func() { _ = conv.Close() })
+	options, err := conv.ListConfigOptions(context.Background())
+	if err != nil || len(options) != 2 || options[0].Current.Select != "opus" || options[1].Current.Select != "high" {
+		t.Fatalf("reconnected config options = %+v, err = %v", options, err)
+	}
 
 	// The replacement SDK must not write initialize or session/resume. Its reader
 	// also remains gated until the durable provider turn is installed.
@@ -702,6 +703,7 @@ type legacyKimiAgent struct {
 	mode               string
 	modeCalls          int
 	configCalls        int
+	promptCalls        int
 }
 
 func fakeLegacyKimiSpawn(agent *legacyKimiAgent) spawnFunc {
@@ -771,6 +773,11 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 					}},
 				},
 			}
+		case "session/prompt":
+			agent.mu.Lock()
+			agent.promptCalls++
+			agent.mu.Unlock()
+			result = map[string]any{"stopReason": "end_turn"}
 		case "session/set_model":
 			var params struct {
 				ModelID string `json:"modelId"`
@@ -3341,6 +3348,42 @@ func TestDiscoverConfigOptionsReadsSessionCatalogWithoutPrompt(t *testing.T) {
 	}
 	if agent.promptParams.Prompt != nil {
 		t.Fatalf("discovery sent a prompt: %#v", agent.promptParams)
+	}
+}
+
+func TestDiscoverConfigOptionsReadsLegacyModelsAndModesWithoutPrompt(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel: "gemini-fast",
+		availableModels: []legacyModelInfo{
+			{ModelID: "gemini-pro", Name: "Gemini Pro"},
+			{ModelID: "gemini-fast", Name: "Gemini Fast"},
+		},
+	}
+	driver := New(Config{
+		Harness: domain.HarnessGemini,
+		Launch: func(context.Context, LaunchConfig) (Launch, error) {
+			return Launch{Command: "gemini", Args: []string{"--acp"}}, nil
+		},
+	}, slog.New(slog.DiscardHandler))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	got, err := driver.discoverConfigOptions(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Category != "model" || got[0].Current.Select != "gemini-fast" || len(got[0].Choices) != 2 {
+		t.Fatalf("options = %#v", got)
+	}
+	if got[0].Choices[0].Value != "gemini-pro" || got[0].Choices[0].Name != "Gemini Pro" || got[0].Choices[1].Value != "gemini-fast" {
+		t.Fatalf("model choices = %#v", got[0].Choices)
+	}
+	if got[1].Category != "mode" || got[1].Current.Select != "default" || len(got[1].Choices) != 1 {
+		t.Fatalf("mode option = %#v", got[1])
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.modelCalls != 0 || agent.modeCalls != 0 || agent.configCalls != 0 || agent.promptCalls != 0 {
+		t.Fatalf("discovery sent mutating requests: model=%d mode=%d config=%d prompt=%d", agent.modelCalls, agent.modeCalls, agent.configCalls, agent.promptCalls)
 	}
 }
 
