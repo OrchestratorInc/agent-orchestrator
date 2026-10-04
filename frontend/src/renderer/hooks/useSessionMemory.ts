@@ -75,8 +75,10 @@ function useMemoryEnabled(): boolean {
 	return useUiStore((state) => state.developerMode);
 }
 
-export function useSessionMemory(projectId?: string) {
-	const enabled = useMemoryEnabled();
+/** `local` is false on another machine's board: these readings are this
+ * machine's, so they must not colour that board's sessions. */
+export function useSessionMemory(projectId?: string, local = true) {
+	const enabled = useMemoryEnabled() && local;
 	return useQuery({
 		enabled,
 		...sessionMemoryQueryOptions(projectId),
@@ -98,8 +100,8 @@ export function useSystemMemory(projectId?: string) {
 
 /** Everything AO runs, app-wide, for the status bar. Same query as the
  * sessions so the bar and the window it opens never disagree. */
-export function useAppMemory() {
-	const enabled = useMemoryEnabled();
+export function useAppMemory(local = true) {
+	const enabled = useMemoryEnabled() && local;
 	return useQuery({
 		enabled,
 		...sessionMemoryQueryOptions(),
@@ -118,8 +120,8 @@ export function useAppMemory() {
 export const memoryPressureRefetchIntervalMs = 10_000;
 export const memoryPressureQueryKey = ["memory-pressure"] as const;
 
-export function useMemoryPressure() {
-	const enabled = useMemoryEnabled();
+export function useMemoryPressure(local = true) {
+	const enabled = useMemoryEnabled() && local;
 	return useQuery({
 		enabled,
 		queryKey: memoryPressureQueryKey,
@@ -138,10 +140,10 @@ export function useMemoryPressure() {
 const lastPressure: { state?: PressureState } = {};
 
 /** The machine's pressure state, or undefined where the host can't be read. */
-export function usePressureState(): PressureState | undefined {
+export function usePressureState(local = true): PressureState | undefined {
 	const queryClient = useQueryClient();
-	const light = useMemoryPressure().data;
-	const system = useAppMemory().data?.system;
+	const light = useMemoryPressure(local).data;
+	const system = useAppMemory(local).data?.system;
 	const reading = light ?? system;
 	const state = reading ? pressureStateFromRaw(reading.pressureRaw, reading.pressureSource) : undefined;
 	// A change of colour is when the numbers matter: fetch them now instead

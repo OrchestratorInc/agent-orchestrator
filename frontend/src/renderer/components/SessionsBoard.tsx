@@ -165,14 +165,15 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		: presentation.showProjectEmpty;
 	// Memory and CPU monitoring is a developer tool: the light, the card chips
 	// and the window behind them only exist in Developer mode.
+	// They read this machine, so another machine's board shows none of them.
 	const developerMode = useUiStore((state) => state.developerMode);
-	const hasMemory = useHasAppMemory() && developerMode;
+	const hasMemory = useHasAppMemory(!hostId) && developerMode && !hostId;
 	// Per-session readings feed each card's resource chip. Chips are grey
 	// unless the machine is tight and the card is part of the fix (idle, or
 	// the single largest).
-	const sessionMemory = useSessionMemory(projectId).data;
+	const sessionMemory = useSessionMemory(projectId, !hostId).data;
 	const memoryBySession = developerMode ? sessionMemory : undefined;
-	const pressure = usePressureState();
+	const pressure = usePressureState(!hostId);
 	const chipToneOf = useMemo(() => {
 		const now = Date.now();
 		const facts = sessions
@@ -436,7 +437,7 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 					archiveAria: t("shell.archiveSessionsAria", { count: sessions.length }),
 					archivedSessions: t("shell.archivedSessions"),
 				}}
-				trailing={developerMode ? <AppMemoryIndicator /> : undefined}
+				trailing={developerMode && !hostId ? <AppMemoryIndicator /> : undefined}
 				renderSessionCard={(session) => (
 					<ArchivedSessionCardAdapter
 						isRestoreDisabled={!connected || restoringSessionId !== undefined}

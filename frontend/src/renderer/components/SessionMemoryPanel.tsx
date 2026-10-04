@@ -57,8 +57,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 const EMPTY_WORKSPACES: readonly WorkspaceSummary[] = [];
 
 /** True once the daemon has produced an app-wide reading; gates the archive bar. */
-export function useHasAppMemory(): boolean {
-	const memory = useAppMemory();
+export function useHasAppMemory(local = true): boolean {
+	const memory = useAppMemory(local);
 	return !memory.isError && (memory.data?.app?.rssBytes ?? 0) > 0;
 }
 
