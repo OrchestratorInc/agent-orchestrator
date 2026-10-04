@@ -27,7 +27,7 @@ func TestMarkdownCanInsertSeveralSourcesAfterOneSpan(t *testing.T) {
 		{ID: "a", URL: "https://example.com/a"},
 		{ID: "b", URL: "https://example.com/b"},
 	}}})
-	if got != "Claim.[1](<https://example.com/a>)[2](<https://example.com/b>)" {
+	if got != "Claim.[1](<https://example.com/a>), [2](<https://example.com/b>)" {
 		t.Fatalf("Markdown() = %q", got)
 	}
 }

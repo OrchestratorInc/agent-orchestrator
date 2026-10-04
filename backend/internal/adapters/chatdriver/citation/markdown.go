@@ -36,7 +36,10 @@ func Markdown(raw string, references []Reference) string {
 			continue
 		}
 		out.WriteString(raw[end:ref.Start])
-		for _, source := range ref.Sources {
+		for i, source := range ref.Sources {
+			if i > 0 {
+				out.WriteString(", ")
+			}
 			if !safeWebURL(source.URL) {
 				out.WriteString("[Source unavailable]")
 				continue

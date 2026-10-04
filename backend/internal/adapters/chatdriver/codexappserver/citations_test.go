@@ -42,7 +42,7 @@ func TestCitationFormatterStreamsNativeMarkersAsLinks(t *testing.T) {
 			t.Fatalf("native citation leaked while streaming: %q", streamed.String())
 		}
 	}
-	want := "The claim. [1](<https://example.com/first>)[2](<https://example.com/second>) Done."
+	want := "The claim. [1](<https://example.com/first>), [2](<https://example.com/second>) Done."
 	if got := streamed.String(); got != want {
 		t.Fatalf("streamed = %q, want %q", got, want)
 	}
