@@ -161,8 +161,10 @@ func (c *conversation) pump() {
 		close(c.events)
 	}()
 	retries := make(map[string]ports.ChatEvent)
+	citations := newCitationFormatter()
 
 	for n := range c.conn.notifs() {
+		citations.observeNotification(n)
 		// Before normalizing, because a token-usage report is the only place the
 		// context position is stated and a compaction event that arrives in the same
 		// batch has to be able to read it.
@@ -178,6 +180,11 @@ func (c *conversation) pump() {
 		// as an absolute instant and has to become a remaining duration, and a
 		// normalizer that reads the clock itself cannot be tested deterministically.
 		for _, ev := range normalizeNotification(n, time.Now()) {
+			var visible bool
+			ev, visible = citations.formatEvent(ev)
+			if !visible {
+				continue
+			}
 			threadID := ev.ProviderConversationID
 			if threadID == "" {
 				threadID = scope.ThreadID
