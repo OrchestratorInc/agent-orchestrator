@@ -1223,6 +1223,7 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 	return out
 }
 
+// CatalogIdentityFingerprint observes credentials that local files cannot track.
 func (d Discoverer) CatalogIdentityFingerprint(ctx context.Context, request ports.AgentModelDiscoveryRequest) (string, bool) {
 	if request.AgentID == "claude-code" && d.ClaudeIdentity != nil {
 		return d.ClaudeIdentity(ctx, request)

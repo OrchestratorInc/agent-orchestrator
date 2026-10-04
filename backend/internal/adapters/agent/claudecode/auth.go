@@ -460,17 +460,6 @@ func readCatalogIdentityFile(ctx context.Context, path string) ([]byte, bool) {
 	return raw, err == nil && len(raw) <= maxIdentityFileSize
 }
 
-// ProviderModels returns the Claude model IDs the configured provider actually
-// serves, in that provider's own ID format.
-//
-// It reuses the credential probe rather than adding a second network call: the
-// response that proves a credential works is the same response that lists what
-// that credential may use. Those two facts are inseparable — an account's model
-// list is scoped to its entitlement — so discovering them together is both
-// cheaper and more correct than asking twice.
-//
-// An error means the provider could not be asked. Callers must fall back to
-// their static list rather than presenting an empty picker.
 // ProviderCatalogIdentityFingerprint observes the effective credential in the
 // background. An inconclusive CLI or credential lookup is not an account change.
 func ProviderCatalogIdentityFingerprint(ctx context.Context, binary, workingDir string, env map[string]string) (string, bool) {
@@ -495,6 +484,17 @@ func providerCatalogIdentity(ctx context.Context, localFingerprint string, resol
 	return fmt.Sprintf("%x", digest[:8]), true
 }
 
+// ProviderModels returns the Claude model IDs the configured provider actually
+// serves, in that provider's own ID format.
+//
+// It reuses the credential probe rather than adding a second network call: the
+// response that proves a credential works is the same response that lists what
+// that credential may use. Those two facts are inseparable — an account's model
+// list is scoped to its entitlement — so discovering them together is both
+// cheaper and more correct than asking twice.
+//
+// An error means the provider could not be asked. Callers must fall back to
+// their static list rather than presenting an empty picker.
 func ProviderModels(ctx context.Context, binary, workingDir string, env map[string]string) ([]ports.AgentModelInfo, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, agentcreds.DefaultTimeout)
 	defer cancel()

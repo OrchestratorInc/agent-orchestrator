@@ -224,7 +224,7 @@ func awaitScopeModelRead(t *testing.T, done <-chan scopeModelResult) (ports.Agen
 	}
 }
 
-func readScopeModel(t *testing.T, svc *Service, ctx context.Context, refresh bool, id, identity string) {
+func readScopeModel(ctx context.Context, t *testing.T, svc *Service, refresh bool, id, identity string) {
 	t.Helper()
 	catalog, err := svc.Models(ctx, "codex", "", refresh)
 	assertScopeCatalog(t, catalog, err, id, identity)
@@ -640,7 +640,7 @@ func TestCatalogScopeAuthInvalidationFencesDiscovery(t *testing.T) {
 			attempt := int32(1)
 			load := func() (ports.AgentModelCatalog, error) { return svc.Models(ctx, "codex", "", false) }
 			if tc.seed {
-				readScopeModel(t, svc, ctx, false, "model-one", "account-a")
+				readScopeModel(ctx, t, svc, false, "model-one", "account-a")
 				attempt = 2
 				load = func() (ports.AgentModelCatalog, error) { return svc.RevalidateModels(ctx, "codex", "") }
 			}
@@ -680,17 +680,17 @@ func TestCatalogScopeAuthInvalidationFencesDiscovery(t *testing.T) {
 				t.Fatal("outgoing-account discovery reached the cache writer")
 			}
 			for range 3 {
-				readScopeModel(t, svc, readCtx, false, "account-b-model", "account-b")
+				readScopeModel(readCtx, t, svc, false, "account-b-model", "account-b")
 			}
 			cache.setWriteError(nil)
 			if tc.seed {
-				readScopeModel(t, svc, readCtx, true, "account-b-model", "account-b")
+				readScopeModel(readCtx, t, svc, true, "account-b-model", "account-b")
 				stored, found, err := svc.cachedCatalog(ctx, "codex", "")
 				if err != nil || !found || len(stored.Catalog.Models) != 1 || stored.Catalog.Models[0].ID != "account-b-model" || stored.Catalog.InputFingerprint != "account-b" {
 					t.Fatalf("safe persisted auth catalog %#v, %v", stored, err)
 				}
 			} else {
-				readScopeModel(t, svc, readCtx, false, "account-b-model", "account-b")
+				readScopeModel(readCtx, t, svc, false, "account-b-model", "account-b")
 			}
 		})
 	}
