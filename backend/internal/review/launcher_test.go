@@ -993,6 +993,22 @@ func TestLauncherSpawnUsesReviewerWorkingDirectoryAndInitialMessage(t *testing.T
 	}
 }
 
+func TestLauncherSpawnCanDeferReviewerInitialMessage(t *testing.T) {
+	reviewer := &fakeReviewerWithLaunchSpec{spec: ports.ReviewCommandSpec{
+		Argv: []string{"kiro-cli", "chat"}, InitialMessage: "task ref",
+	}}
+	rt := &fakeRuntime{}
+	l := newTestLauncher(t, reviewer, rt)
+	spec := launchSpec()
+	spec.DeferInitialMessage = true
+	if _, err := l.Spawn(context.Background(), spec); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if rt.sentMsg != "" {
+		t.Fatalf("deferred launch sent %q, want no initial message", rt.sentMsg)
+	}
+}
+
 func TestLauncherWaitsForReviewerPromptMarkerBeforeInitialMessage(t *testing.T) {
 	reviewer := &fakeReviewerWithLaunchSpec{
 		spec: ports.ReviewCommandSpec{Argv: []string{"agent"}, InitialMessage: "task ref"},

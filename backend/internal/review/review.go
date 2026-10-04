@@ -33,7 +33,7 @@ var (
 type Store interface {
 	UpsertReview(ctx stdctx.Context, r domain.Review) error
 	SetReviewInterfaceMode(ctx stdctx.Context, id string, mode domain.ReviewerInterfaceMode, updatedAt time.Time) (bool, error)
-	RestoreReviewLaunchState(ctx stdctx.Context, review domain.Review) (bool, error)
+	RestoreReviewLaunchState(ctx stdctx.Context, review domain.Review, now time.Time) (bool, error)
 	SetSessionReviewerConfig(ctx stdctx.Context, id domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig, updatedAt time.Time) (bool, error)
 	GetReviewBySession(ctx stdctx.Context, id domain.SessionID) (domain.Review, bool, error)
 	ClearReviewerHandle(ctx stdctx.Context, id domain.SessionID) error
@@ -448,18 +448,43 @@ func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.Se
 		return err
 	}
 
+	previousHandleID := reviewRow.ReviewerHandleID
+	previousAgentSessionID := reviewRow.AgentSessionID
+	previousLaunchID := reviewRow.ReviewerLaunchID
+	deferInitialMessage := modeChanging && previousHandleID != ""
+	handleID := ""
+	rollbackReplacement := func(cause error) error {
+		rollbackNow := e.clock()
+		if handleID != "" {
+			if cleanupErr := e.launcher.Destroy(ctx, handleID); cleanupErr != nil {
+				cause = errors.Join(cause, fmt.Errorf("cleanup replacement reviewer: %w", cleanupErr))
+			}
+		}
+		if hasReview {
+			rollbackCtx, cancel := stdctx.WithTimeout(stdctx.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if modeChanging {
+				if ok, rollbackErr := e.store.RestoreReviewLaunchState(rollbackCtx, previousReview, rollbackNow); rollbackErr != nil {
+					cause = errors.Join(cause, fmt.Errorf("restore previous reviewer surface: %w", rollbackErr))
+				} else if !ok {
+					cause = errors.Join(cause, fmt.Errorf("%w: reviewer %q", ErrNotFound, previousReview.ID))
+				}
+			} else if _, rollbackErr := e.upsertReview(rollbackCtx, worker, harness, previousHandleID, previousAgentSessionID, previousLaunchID, "", now); rollbackErr != nil {
+				cause = errors.Join(cause, fmt.Errorf("rollback review row: %w", rollbackErr))
+			}
+		}
+		return failRuns(0, cause)
+	}
+
 	queueRuns := append([]domain.ReviewRun{}, restarted...)
 	queueRuns = append(queueRuns, created...)
 	queue := reviewQueue(queueRuns)
 	launchRun := queueRuns[0]
-	previousHandleID := reviewRow.ReviewerHandleID
-	previousAgentSessionID := reviewRow.AgentSessionID
 	launchAgentSessionID := reviewRow.AgentSessionID
 	if hasConfigOverride || selectedMode == domain.ReviewerInterfaceChat {
 		launchAgentSessionID = ""
 	}
 	persistedAgentSessionID := launchAgentSessionID
-	handleID := ""
 	if !hasConfigOverride && reviewRow.ReviewerHandleID != "" && reviewerPaneReusable(reviewRow, hadRunningReviewer) {
 		alive, err := e.launcher.Alive(ctx, reviewRow.ReviewerHandleID, reviewRow.ReviewerLaunchID)
 		if err != nil {
@@ -480,29 +505,18 @@ func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.Se
 		if err != nil {
 			return TriggerResult{}, failRuns(0, err)
 		}
-		rollbackSurface := func(cause error) error {
-			if hasReview {
-				rollbackCtx, cancel := stdctx.WithTimeout(stdctx.WithoutCancel(ctx), 5*time.Second)
-				defer cancel()
-				if ok, rollbackErr := e.store.RestoreReviewLaunchState(rollbackCtx, previousReview); rollbackErr != nil {
-					cause = errors.Join(cause, fmt.Errorf("restore previous reviewer surface: %w", rollbackErr))
-				} else if !ok {
-					cause = errors.Join(cause, fmt.Errorf("%w: reviewer %q", ErrNotFound, previousReview.ID))
-				}
-			}
-			return failRuns(0, cause)
-		}
 		if err := e.setReviewerInterfaceMode(ctx, reviewRow.ID, selectedMode, now); err != nil {
-			return TriggerResult{}, rollbackSurface(err)
+			return TriggerResult{}, rollbackReplacement(err)
 		}
 		launchSpec := reviewLaunchSpec(worker, harness, config, launchRun, queue, 0, launchAgentSessionID, launchID)
 		launchSpec.InterfaceMode = selectedMode
+		launchSpec.DeferInitialMessage = deferInitialMessage
 		if selectedMode == domain.ReviewerInterfaceChat {
 			launchSpec.ProviderConversationID = reviewRow.ProviderConversationID
 		}
 		launch, err := e.launcher.Spawn(ctx, launchSpec)
 		if err != nil {
-			return TriggerResult{}, rollbackSurface(fmt.Errorf("launch reviewer: %w", err))
+			return TriggerResult{}, rollbackReplacement(fmt.Errorf("launch reviewer: %w", err))
 		}
 		handleID = launch.HandleID
 		if launch.LaunchID != "" {
@@ -520,6 +534,9 @@ func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.Se
 	}
 	for _, stale := range pendingSupersedes {
 		if _, err := e.store.SupersedeStaleRunningReviewRuns(ctx, workerID, stale.prURL, stale.targetSHA, "superseded by a review trigger for a newer commit"); err != nil {
+			if modeChanging {
+				return TriggerResult{}, rollbackReplacement(err)
+			}
 			if handleID != "" {
 				_ = e.launcher.Destroy(ctx, handleID)
 			}
@@ -528,6 +545,9 @@ func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.Se
 	}
 	if hasConfigOverride && persistedAgentSessionID == "" && reviewRow.ID != "" {
 		if _, err := e.store.UpdateReviewAgentSessionID(ctx, reviewRow.ID, ""); err != nil {
+			if modeChanging {
+				return TriggerResult{}, rollbackReplacement(err)
+			}
 			if handleID != "" {
 				_ = e.launcher.Destroy(ctx, handleID)
 			}
@@ -536,6 +556,9 @@ func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.Se
 	}
 	reviewRow, err = e.upsertReview(ctx, worker, harness, handleID, persistedAgentSessionID, reviewRow.ReviewerLaunchID, "", now)
 	if err != nil {
+		if modeChanging {
+			return TriggerResult{}, rollbackReplacement(err)
+		}
 		if handleID != "" {
 			_ = e.launcher.Destroy(ctx, handleID)
 		}
@@ -544,19 +567,7 @@ func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.Se
 	if hasConfigOverride && previousHandleID != "" && previousHandleID != handleID {
 		if err := e.launcher.Destroy(ctx, previousHandleID); err != nil {
 			if modeChanging {
-				if handleID != "" {
-					if cleanupErr := e.launcher.Destroy(ctx, handleID); cleanupErr != nil {
-						return TriggerResult{}, failRuns(0, errors.Join(fmt.Errorf("destroy previous reviewer: %w", err), fmt.Errorf("cleanup replacement reviewer: %w", cleanupErr)))
-					}
-				}
-				rollbackCtx, cancel := stdctx.WithTimeout(stdctx.WithoutCancel(ctx), 5*time.Second)
-				defer cancel()
-				if ok, rollbackErr := e.store.RestoreReviewLaunchState(rollbackCtx, previousReview); rollbackErr != nil {
-					return TriggerResult{}, failRuns(0, errors.Join(fmt.Errorf("destroy previous reviewer: %w", err), fmt.Errorf("restore previous reviewer surface: %w", rollbackErr)))
-				} else if !ok {
-					return TriggerResult{}, failRuns(0, fmt.Errorf("destroy previous reviewer: %w; previous reviewer row is missing", err))
-				}
-				return TriggerResult{}, failRuns(0, fmt.Errorf("destroy previous reviewer: %w", err))
+				return TriggerResult{}, rollbackReplacement(fmt.Errorf("destroy previous reviewer: %w", err))
 			}
 			if _, rollbackErr := e.upsertReview(ctx, worker, harness, previousHandleID, previousAgentSessionID, "", "", now); rollbackErr != nil {
 				return TriggerResult{}, failRuns(0, fmt.Errorf("destroy previous reviewer: %w; rollback review row: %w", err, rollbackErr))
@@ -567,6 +578,14 @@ func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.Se
 				}
 			}
 			return TriggerResult{}, failRuns(0, fmt.Errorf("destroy previous reviewer: %w", err))
+		}
+		if deferInitialMessage {
+			launchSpec := reviewLaunchSpec(worker, harness, config, launchRun, queue, 0, persistedAgentSessionID, reviewRow.ReviewerLaunchID)
+			launchSpec.InterfaceMode = selectedMode
+			if err := e.launcher.Notify(ctx, handleID, launchSpec); err != nil {
+				_ = e.launcher.Destroy(ctx, handleID)
+				return TriggerResult{}, failRuns(0, fmt.Errorf("notify replacement reviewer: %w", err))
+			}
 		}
 	}
 	for i := range created {
@@ -896,7 +915,7 @@ func (e *Engine) restoreReviewerLocked(
 		AgentConfig:          config,
 		WorkspacePath:        worker.Metadata.WorkspacePath,
 		AgentSessionID:       agentSessionID,
-		RequireNativeHistory: harness == domain.ReviewerCodex,
+		RequireNativeHistory: harness == domain.ReviewerCodex && strings.TrimSpace(agentSessionID) != "",
 		PreviousRuns:         previousRuns,
 		InterfaceMode:        reviewRow.InterfaceMode,
 	})

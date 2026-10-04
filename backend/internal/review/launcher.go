@@ -84,6 +84,10 @@ type LaunchSpec struct {
 	ReviewQueue            []ports.ReviewTask
 	ReviewIndex            int
 	InterfaceMode          domain.ReviewerInterfaceMode
+	// DeferInitialMessage starts the reviewer without dispatching its review
+	// prompt. The engine uses this while replacing a live reviewer so the old
+	// process can be stopped before the replacement receives executable work.
+	DeferInitialMessage bool
 }
 
 // LaunchResult is the terminal/runtime state created by a reviewer launch.
@@ -485,7 +489,11 @@ func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, 
 	if providerID == "" {
 		providerID = strings.TrimSpace(spec.AgentSessionID)
 	}
-	start := ReviewerChatStart{ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), Model: spec.AgentConfig.Model, Effort: spec.AgentConfig.Effort, DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil), Prompt: inv.Prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
+	prompt := inv.Prompt
+	if spec.DeferInitialMessage {
+		prompt = ""
+	}
+	start := ReviewerChatStart{ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), Model: spec.AgentConfig.Model, Effort: spec.AgentConfig.Effort, DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil), Prompt: prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
 	if restore {
 		providerID, err = l.chat.RestoreReviewChat(ctx, start)
 	} else {
@@ -569,7 +577,7 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("reviewer runtime: %w", err)
 	}
-	if cmd.InitialMessage != "" {
+	if cmd.InitialMessage != "" && !spec.DeferInitialMessage {
 		if err := l.waitForPromptReadiness(ctx, reviewer, handle); err != nil {
 			return LaunchResult{}, fmt.Errorf("reviewer prompt readiness: %w", err)
 		}

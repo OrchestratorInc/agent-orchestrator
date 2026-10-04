@@ -1524,7 +1524,11 @@ func cleanupOwnedReviewControllerWork(
 	if err != nil {
 		return false, fmt.Errorf("read reviewer controller generation for %s: %w", reviewID, err)
 	}
-	if owner.ControllerGeneration != generation || owner.InterfaceMode != "chat" {
+	// The generation is the ownership fence. A Chat controller may be stopped
+	// after the review row has already switched to Terminal, so checking the
+	// current interface mode here would skip cleanup for the very transition
+	// this method is meant to settle.
+	if owner.ControllerGeneration != generation {
 		return false, nil
 	}
 	review := sql.NullString{String: reviewID, Valid: true}

@@ -98,7 +98,7 @@ func (f *fakeStore) SetReviewInterfaceMode(_ context.Context, id string, mode do
 	}
 	return updated, nil
 }
-func (f *fakeStore) RestoreReviewLaunchState(_ context.Context, review domain.Review) (bool, error) {
+func (f *fakeStore) RestoreReviewLaunchState(_ context.Context, review domain.Review, _ time.Time) (bool, error) {
 	if f.review == nil || f.review.ID != review.ID {
 		return false, nil
 	}
@@ -754,6 +754,11 @@ func TestTriggerKeepsOldReviewerUntilReplacementStarts(t *testing.T) {
 			t.Fatal("old reviewer was destroyed before replacement launched")
 		}
 	}
+	launcher.onNotify = func(_ string, _ LaunchSpec) {
+		if !launcher.destroyed {
+			t.Fatal("replacement reviewer received work before old reviewer was destroyed")
+		}
+	}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 	res, err := eng.TriggerWithSourceAndMode(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceTUI)
 	if err != nil {
@@ -761,6 +766,9 @@ func TestTriggerKeepsOldReviewerUntilReplacementStarts(t *testing.T) {
 	}
 	if !res.Created || launcher.gotSpec.InterfaceMode != domain.ReviewerInterfaceTUI || store.review.InterfaceMode != domain.ReviewerInterfaceTUI {
 		t.Fatalf("terminal replacement not durable: result=%+v spec=%+v review=%+v", res, launcher.gotSpec, store.review)
+	}
+	if len(launcher.specs) == 0 || !launcher.specs[0].DeferInitialMessage {
+		t.Fatalf("surface replacement should start idle until the old reviewer is stopped: %+v", launcher.specs)
 	}
 	if !launcher.destroyed || launcher.destroyedHandle != old.ReviewerHandleID {
 		t.Fatalf("old reviewer was not destroyed after replacement launch: %+v", launcher)
@@ -936,7 +944,7 @@ func TestRestoreReviewerFallsBackFromUnavailableChat(t *testing.T) {
 	if _, err := eng.RestoreReviewer(context.Background(), worker.ID); err != nil {
 		t.Fatalf("RestoreReviewer: %v", err)
 	}
-	if !launcher.restored || launcher.gotSpec.InterfaceMode != domain.ReviewerInterfaceTUI || launcher.gotSpec.AgentSessionID != "" || store.review.InterfaceMode != domain.ReviewerInterfaceTUI {
+	if !launcher.restored || launcher.gotSpec.InterfaceMode != domain.ReviewerInterfaceTUI || launcher.gotSpec.AgentSessionID != "" || launcher.gotSpec.RequireNativeHistory || store.review.InterfaceMode != domain.ReviewerInterfaceTUI {
 		t.Fatalf("unavailable Chat was not restored as Terminal: spec=%+v review=%+v", launcher.gotSpec, store.review)
 	}
 }

@@ -80,7 +80,7 @@ func TestRestoreReviewLaunchStateRecoversIdentifiersClearedForModeSwitch(t *test
 	if ok, err := s.SetReviewInterfaceMode(ctx, review.ID, domain.ReviewerInterfaceTUI, now.Add(time.Second)); err != nil || !ok {
 		t.Fatalf("switch to terminal: ok=%v err=%v", ok, err)
 	}
-	if ok, err := s.RestoreReviewLaunchState(ctx, review); err != nil || !ok {
+	if ok, err := s.RestoreReviewLaunchState(ctx, review, now.Add(2*time.Second)); err != nil || !ok {
 		t.Fatalf("restore previous launch: ok=%v err=%v", ok, err)
 	}
 	got, ok, err := s.GetReviewByID(ctx, review.ID)

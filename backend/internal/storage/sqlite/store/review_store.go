@@ -64,7 +64,7 @@ func (s *Store) SetReviewInterfaceMode(ctx context.Context, id string, mode doma
 
 // RestoreReviewLaunchState puts the previous reviewer back after a replacement
 // launch fails, including the identifiers cleared while changing surfaces.
-func (s *Store) RestoreReviewLaunchState(ctx context.Context, review domain.Review) (bool, error) {
+func (s *Store) RestoreReviewLaunchState(ctx context.Context, review domain.Review, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	n, err := s.qw.RestoreReviewLaunchState(ctx, gen.RestoreReviewLaunchStateParams{
@@ -72,7 +72,7 @@ func (s *Store) RestoreReviewLaunchState(ctx context.Context, review domain.Revi
 		AgentSessionID: review.AgentSessionID, ReviewerActivityState: string(review.ReviewerActivityState),
 		ReviewerLaunchID: review.ReviewerLaunchID, ProviderConversationID: review.ProviderConversationID,
 		ControllerGeneration: review.ControllerGeneration, ControllerError: review.ControllerError,
-		UpdatedAt: review.UpdatedAt, ID: review.ID,
+		UpdatedAt: now, ID: review.ID,
 	})
 	return n > 0, err
 }
