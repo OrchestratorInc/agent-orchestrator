@@ -106,6 +106,11 @@ import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { useSandboxProviderStore } from "../stores/sandbox-provider-store";
 import { useUiStore } from "../stores/ui-store";
 
+async function readyModelPicker() {
+	await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).not.toHaveAttribute("aria-busy", "true"));
+	return screen.getByRole("button", { name: "Model" });
+}
+
 function Wrap({ children, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }) }: {
 	children: ReactNode;
 	queryClient?: QueryClient;
@@ -350,17 +355,17 @@ describe("TaskComposer", () => {
 
 		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
 
-		const model = await screen.findByRole("button", { name: "Model" });
+		const model = await readyModelPicker();
 		expect(model).toHaveTextContent("GPT-6-Astra");
 		await userEvent.click(model);
 		await userEvent.click(await screen.findByRole("menuitem", { name: "GPT-5.5" }));
 		expect(model).toHaveTextContent("GPT-5.5");
 
 		fireEvent.click(screen.getByLabelText("Agent"));
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("Fable 5.1");
+		expect(await readyModelPicker()).toHaveTextContent("Fable 5.1");
 		fireEvent.click(screen.getByLabelText("Agent"));
 
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.5");
+		expect(await readyModelPicker()).toHaveTextContent("GPT-5.5");
 	});
 
 	it("restores the last successfully spawned standalone harness and model in a new composer", async () => {
@@ -399,7 +404,7 @@ describe("TaskComposer", () => {
 
 		const first = render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
 		fireEvent.click(await screen.findByLabelText("Agent"));
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("Fable 5.1");
+		expect(await readyModelPicker()).toHaveTextContent("Fable 5.1");
 		fireEvent.change(task(), { target: { value: "Remember this setup" } });
 		fireEvent.click(screen.getByText("Start task"));
 		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
@@ -408,7 +413,7 @@ describe("TaskComposer", () => {
 		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
 
 		await waitFor(() => expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", "claude-code"));
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("Fable 5.1");
+		expect(await readyModelPicker()).toHaveTextContent("Fable 5.1");
 	});
 
 	it("persists successful model choices per project without leaking them to another project", async () => {
@@ -432,7 +437,7 @@ describe("TaskComposer", () => {
 		h.post.mockResolvedValueOnce({ data: { workerId: "project-remembered" } });
 
 		const first = render(<Wrap><TaskComposer projectId="project-a" onCreated={vi.fn()} /></Wrap>);
-		const model = await screen.findByRole("button", { name: "Model" });
+		const model = await readyModelPicker();
 		await userEvent.click(model);
 		await userEvent.click(await screen.findByRole("menuitem", { name: "GPT-5.5" }));
 		fireEvent.change(task(), { target: { value: "Remember this project setup" } });
@@ -441,11 +446,11 @@ describe("TaskComposer", () => {
 		first.unmount();
 
 		const remembered = render(<Wrap><TaskComposer projectId="project-a" onCreated={vi.fn()} /></Wrap>);
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.5");
+		expect(await readyModelPicker()).toHaveTextContent("GPT-5.5");
 		remembered.unmount();
 
 		render(<Wrap><TaskComposer projectId="project-b" onCreated={vi.fn()} /></Wrap>);
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT-6-Astra");
+		expect(await readyModelPicker()).toHaveTextContent("GPT-6-Astra");
 	});
 
 	it("does not persist a standalone preference when task creation fails", async () => {
@@ -469,7 +474,7 @@ describe("TaskComposer", () => {
 		h.post.mockResolvedValueOnce({ error: { code: "SPAWN_FAILED", message: "Could not start task" } });
 
 		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
-		const model = await screen.findByRole("button", { name: "Model" });
+		const model = await readyModelPicker();
 		await userEvent.click(model);
 		await userEvent.click(await screen.findByRole("menuitem", { name: "GPT-5.5" }));
 		fireEvent.change(task(), { target: { value: "This spawn will fail" } });
@@ -507,7 +512,7 @@ describe("TaskComposer", () => {
 		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
 
 		await waitFor(() => expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", "codex"));
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT-6-Astra");
+		expect(await readyModelPicker()).toHaveTextContent("GPT-6-Astra");
 	});
 
 	it("keeps a standalone task unselected when no agent is ready", () => {
@@ -585,7 +590,7 @@ describe("TaskComposer", () => {
 		fireEvent.click(screen.getByLabelText("Agent"));
 		const effort = await screen.findByRole("button", { name: "Effort" });
 		await userEvent.click(effort);
-		await userEvent.click(screen.getByRole("menuitem", { name: "High" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		fireEvent.click(screen.getByText("Start task"));
 
 		await waitFor(() =>
@@ -906,7 +911,7 @@ describe("TaskComposer", () => {
 
 		const agent = await screen.findByTestId("agent-field");
 		await waitFor(() => expect(agent).toHaveAttribute("data-value", "codex"));
-		const model = await screen.findByRole("button", { name: "Model" });
+		const model = await readyModelPicker();
 		const prompt = task();
 		expect(agent).toBeEnabled();
 		expect(model).toBeEnabled();
@@ -936,7 +941,7 @@ describe("TaskComposer", () => {
 				customModelEntry: "none",
 				allowCustom: false,
 			},
-			controls: async () => [await screen.findByRole("button", { name: "Model" })],
+			controls: async () => [await readyModelPicker()],
 		},
 		{
 			name: "catalog",
@@ -947,7 +952,7 @@ describe("TaskComposer", () => {
 				customModelEntry: "none",
 				allowCustom: false,
 			},
-			controls: async () => [await screen.findByRole("button", { name: "Model" })],
+			controls: async () => [await readyModelPicker()],
 		},
 		{
 			name: "search and direct model ID",
@@ -959,7 +964,7 @@ describe("TaskComposer", () => {
 				allowCustom: true,
 			},
 			controls: async () => {
-				const model = await screen.findByRole("button", { name: "Model" });
+				const model = await readyModelPicker();
 				await userEvent.click(model);
 				await userEvent.type(screen.getByRole("searchbox", { name: "Search model" }), "private/model-id");
 				await userEvent.click(
@@ -1024,6 +1029,17 @@ describe("TaskComposer", () => {
 		expect(body.attachments).toHaveLength(1);
 		expect(body.attachments?.[0].mimeType).toBe("text/plain");
 		expect(body.attachments?.[0].data.length).toBeGreaterThan(0);
+	});
+
+	it("keeps a visible effort control for cloud tasks without offering ignored launch levels", async () => {
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "codex" } } });
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent: "codex", selectionMode: "catalog", models: [{ id: "gpt-test", label: "GPT Test", isDefault: true, efforts: ["low", "high"] }], allowCustom: true } }
+			: { data: {} });
+		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await userEvent.click(await screen.findByRole("button", { name: "Effort" }));
+		expect(screen.queryByText("This agent does not support choosing effort when starting a task.")).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitemradio", { name: "High" })).not.toBeInTheDocument();
 	});
 
 	it("manages cloud harness connections from a cloud project's agent picker", async () => {
@@ -1222,7 +1238,7 @@ describe("TaskComposer", () => {
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
 
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("grok-4.6");
+		expect(await readyModelPicker()).toHaveTextContent("grok-4.6");
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 		fireEvent.change(task(), { target: { value: "Do the thing" } });
 		fireEvent.click(screen.getByText("Start task"));
@@ -1266,7 +1282,7 @@ describe("TaskComposer", () => {
 			</Wrap>,
 		);
 		await userEvent.click(await screen.findByRole("button", { name: "Effort" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: "High" }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
 		fireEvent.change(task(), { target: { value: "Do the thing" } });
 		await waitForTaskReady();
 		fireEvent.click(screen.getByText("Start task"));
@@ -1423,7 +1439,7 @@ describe("TaskComposer", () => {
 			</QueryClientProvider>,
 		);
 
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.6 Sol");
+		expect(await readyModelPicker()).toHaveTextContent("GPT-5.6 Sol");
 		expect(h.agentValues).not.toContain("");
 	});
 
@@ -1463,7 +1479,7 @@ describe("TaskComposer", () => {
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
 
 		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "claude-code"));
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("Sonnet");
+		expect(await readyModelPicker()).toHaveTextContent("Sonnet");
 		expect(await screen.findByRole("button", { name: "Effort" })).toBeInTheDocument();
 	});
 
@@ -1487,12 +1503,12 @@ describe("TaskComposer", () => {
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
 
-		const picker = await screen.findByRole("button", { name: "Model" });
+		const picker = await readyModelPicker();
 		expect(picker).toHaveTextContent("Sonnet 4.5");
 		expect(picker).not.toHaveTextContent("Claude");
 
 		await userEvent.click(picker);
-		expect(await screen.findByRole("menuitem", { name: "Sonnet 4.5" })).toBeInTheDocument();
+		expect(await screen.findByRole("menuitem", { name: "Sonnet 4.5 (default)" })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Opus 4.7" })).toBeInTheDocument();
 		expect(screen.queryByText(/^Claude /)).not.toBeInTheDocument();
 	});
@@ -1521,7 +1537,7 @@ describe("TaskComposer", () => {
 			</Wrap>,
 		);
 
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5 Codex");
+		expect(await readyModelPicker()).toHaveTextContent("GPT-5 Codex");
 	});
 
 	it("clears a stale model while the newly selected agent catalog resolves", async () => {
@@ -1558,11 +1574,13 @@ describe("TaskComposer", () => {
 			</Wrap>,
 		);
 
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.6 Sol");
+		expect(await readyModelPicker()).toHaveTextContent("GPT-5.6 Sol");
 		fireEvent.click(screen.getByTestId("agent-field"));
 
 		expect(screen.getByLabelText("Model")).not.toHaveTextContent("GPT-5.6 Sol");
-		expect(screen.getByRole("status", { name: "Loading models…" })).toBeInTheDocument();
+		expect(screen.queryByRole("status", { name: "Loading models…" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Model" })).toBeEnabled();
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Default");
 
 		await act(async () => {
 			resolveClaudeCatalog({
@@ -1574,7 +1592,7 @@ describe("TaskComposer", () => {
 				},
 			});
 		});
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("opus[1m]");
+		expect(await readyModelPicker()).toHaveTextContent("opus[1m]");
 	});
 
 	it("does not invent a catalog default when none is reported", async () => {
@@ -1598,8 +1616,8 @@ describe("TaskComposer", () => {
 			</Wrap>,
 		);
 
-		const picker = await screen.findByRole("button", { name: "Model" });
-		expect(picker).toHaveTextContent("Select model");
+		const picker = await readyModelPicker();
+		expect(picker).toHaveTextContent("Default");
 
 		await userEvent.click(picker);
 		expect(await screen.findByRole("menuitem", { name: "GPT-5" })).toBeInTheDocument();
@@ -1645,7 +1663,7 @@ describe("TaskComposer", () => {
 			</Wrap>,
 		);
 
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5");
+		expect(await readyModelPicker()).toHaveTextContent("GPT-5");
 		fireEvent.change(task(), { target: { value: "Use project default model" } });
 		fireEvent.click(screen.getByText("Start task"));
 
@@ -1679,7 +1697,7 @@ describe("TaskComposer", () => {
 			</Wrap>,
 		);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+		await userEvent.click(await readyModelPicker());
 		expect(await screen.findByTitle("Provider temporarily unavailable")).toBeInTheDocument();
 	});
 
@@ -1705,7 +1723,7 @@ describe("TaskComposer", () => {
 			</Wrap>,
 		);
 
-		const picker = await screen.findByRole("button", { name: "Model" });
+		const picker = await readyModelPicker();
 		expect(screen.queryByRole("textbox", { name: "Model" })).not.toBeInTheDocument();
 		await userEvent.click(picker);
 		expect(screen.getByText("Configure the model in opencode, then refresh.")).toBeInTheDocument();
@@ -1741,9 +1759,9 @@ describe("TaskComposer", () => {
 			</Wrap>,
 		);
 
-		const model = await screen.findByRole("button", { name: "Model" });
+		const model = await readyModelPicker();
 		await userEvent.click(model);
-		expect(screen.queryByRole("menuitem", { name: "Use agent model" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Default" })).not.toBeInTheDocument();
 		await userEvent.type(screen.getByRole("searchbox", { name: "Search model" }), "gpt-5.1");
 		await userEvent.click(screen.getByRole("menuitem", { name: "Use “gpt-5.1” as a custom model" }));
 		fireEvent.change(task(), { target: { value: "Use the selected model" } });
@@ -1757,6 +1775,29 @@ describe("TaskComposer", () => {
 				}),
 			),
 		);
+	});
+
+	it("preserves an explicit effort when choosing a listed model with unreported capabilities", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent: "codex", selectionMode: "catalog", models: [
+				{ id: "known", label: "Known model", isDefault: true, efforts: ["low", "high"] },
+				{ id: "unknown", label: "Unreported model" },
+			], allowCustom: true } }
+			: { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } });
+		h.post.mockResolvedValue({ data: { workerId: "sess-tuned" } });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		const effortPicker = await screen.findByRole("button", { name: "Effort" });
+		await userEvent.click(effortPicker);
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Unreported model" }));
+		expect(effortPicker).toHaveTextContent("High");
+		await userEvent.click(effortPicker);
+		expect(screen.queryByText("Effort options have not been reported for this model.")).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
+		expect(h.post.mock.calls[0][1].body).toEqual(expect.objectContaining({ model: "unknown", effort: "high" }));
 	});
 
 	it("inherits worker effort visually but sends only explicit task overrides", async () => {
@@ -1787,7 +1828,7 @@ describe("TaskComposer", () => {
 		h.post.mockResolvedValue({ data: { workerId: "sess-tuned" } });
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
-		const picker = await screen.findByRole("button", { name: "Model" });
+		const picker = await readyModelPicker();
 		expect(picker).toHaveTextContent("GPT Test");
 		const effortPicker = await screen.findByRole("button", { name: "Effort" });
 		expect(effortPicker).toHaveTextContent("High");
@@ -1797,21 +1838,27 @@ describe("TaskComposer", () => {
 		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("effort");
 
 		await userEvent.click(effortPicker);
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Low" }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "Low (default)" }));
 		fireEvent.click(screen.getByText("Start task"));
 		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(2));
-		expect(h.post.mock.calls[1][1].body).toEqual(expect.objectContaining({ effort: "low" }));
+		expect(h.post.mock.calls[1][1].body).toEqual(expect.objectContaining({ effort: "" }));
 
 		await userEvent.click(effortPicker);
-		expect(screen.queryByRole("menuitem", { name: "Default" })).not.toBeInTheDocument();
-		await userEvent.click(await screen.findByRole("menuitem", { name: "High" }));
+		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
 		fireEvent.click(screen.getByText("Start task"));
 		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(3));
-		expect(h.post.mock.calls[2][1].body).not.toHaveProperty("effort");
-		expect(JSON.parse(window.localStorage.getItem("ao.taskComposer.preferences.v1") ?? "{}")["proj-1"].agents.codex).not.toHaveProperty("effort");
+		expect(h.post.mock.calls[2][1].body).toEqual(expect.objectContaining({ effort: "high" }));
+		expect(JSON.parse(window.localStorage.getItem("ao.taskComposer.preferences.v1") ?? "{}")["proj-1"].agents.codex).toHaveProperty("effort", "high");
+		await userEvent.click(effortPicker);
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low (default)" }));
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(4));
+		expect(h.post.mock.calls[3][1].body).toEqual(expect.objectContaining({ effort: "" }));
+
 	});
 
-	it("returns to the reported agent effort without pinning it", async () => {
+	it("uses the reset row to return to the agent effort without pinning it", async () => {
 		h.get.mockImplementation(async (path: string) => path.includes("/models")
 			? { data: { agent: "codex", selectionMode: "catalog", models: [
 				{ id: "gpt-test", label: "GPT Test", isDefault: true, efforts: ["low", "high"], defaultEffort: "low" },
@@ -1821,11 +1868,11 @@ describe("TaskComposer", () => {
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
 		const picker = await screen.findByRole("button", { name: "Effort" });
-		expect(picker).toHaveTextContent("Low");
+		await waitFor(() => expect(picker).toHaveTextContent("Low"));
 		await userEvent.click(picker);
-		await userEvent.click(screen.getByRole("menuitem", { name: "High" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		await userEvent.click(picker);
-		await userEvent.click(screen.getByRole("menuitem", { name: "Low" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low (default)" }));
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
 		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("effort");
@@ -1843,10 +1890,10 @@ describe("TaskComposer", () => {
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
 		const picker = await screen.findByRole("button", { name: "Effort" });
 		await userEvent.click(picker);
-		await userEvent.click(screen.getByRole("menuitem", { name: "High" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		await userEvent.click(picker);
-		await userEvent.click(screen.getByRole("menuitem", { name: "Use agent effort" }));
-		expect(picker).toHaveTextContent("Effort not reported");
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Default" }));
+		expect(picker).toHaveTextContent("Default");
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
 		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("effort");
@@ -1860,7 +1907,7 @@ describe("TaskComposer", () => {
 		h.post.mockResolvedValue({ data: { workerId: "sess-1" } });
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT Test");
+		expect(await readyModelPicker()).toHaveTextContent("GPT Test");
 		fireEvent.click(screen.getByText("Start task"));
 		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
 		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
@@ -1880,7 +1927,7 @@ describe("TaskComposer", () => {
 		h.post.mockResolvedValue({ data: { workerId: "sess-1" } });
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
-		const picker = await screen.findByRole("button", { name: "Model" });
+		const picker = await readyModelPicker();
 		expect(picker).toHaveTextContent(preferred);
 		await userEvent.click(picker);
 		await userEvent.click(await screen.findByRole("menuitem", { name: alternative }));
@@ -1889,7 +1936,7 @@ describe("TaskComposer", () => {
 		expect(h.post.mock.calls[0][1].body.model).toBe("alternative");
 
 		await userEvent.click(picker);
-		await userEvent.click(await screen.findByRole("menuitem", { name: preferred }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: selectionMode === "catalog" ? `${preferred} (default)` : preferred }));
 		expect(picker).toHaveTextContent(preferred);
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(2));
@@ -1908,10 +1955,10 @@ describe("TaskComposer", () => {
 		h.post.mockResolvedValue({ data: { workerId: "sess-1" } });
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
-		const picker = await screen.findByRole("button", { name: "Model" });
+		const picker = await readyModelPicker();
 		expect(picker).toHaveTextContent("GPT Old");
 		await userEvent.click(picker);
-		await userEvent.click(await screen.findByRole("menuitem", { name: "GPT New" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "GPT New (default)" }));
 		expect(picker).toHaveTextContent("GPT New");
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
@@ -1925,7 +1972,7 @@ describe("TaskComposer", () => {
 		h.post.mockResolvedValue({ data: { workerId: "sess-1" } });
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
-		const picker = await screen.findByRole("button", { name: "Model" });
+		const picker = await readyModelPicker();
 		await userEvent.click(picker);
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Fast" }));
 		expect(picker).toHaveTextContent("Fast");

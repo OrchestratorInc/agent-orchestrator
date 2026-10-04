@@ -162,11 +162,15 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = proc.forceStop() }()
+	if proc.forceStopFunc != nil {
+		proc.stop = proc.forceStop
+	}
 	conv, _, _, err := d.initialize(ctx, cfg, proc)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = conv.Close() }()
+	defer func() { _ = proc.forceStop(); _ = conv.Close() }()
 
 	openCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
@@ -177,7 +181,7 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 	if err != nil {
 		return nil, normalizeACPError("ACP session/new", err)
 	}
-	return normalizeConfigOptions(resp.ConfigOptions), nil
+	return normalizeSessionOptions(resp.ConfigOptions, conv.legacyWire.modelState(), resp.Modes), nil
 }
 
 // Harness identifies the AO harness this ACP transport adapts.

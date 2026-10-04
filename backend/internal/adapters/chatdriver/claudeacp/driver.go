@@ -8,7 +8,6 @@ package claudeacp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -91,15 +90,7 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 			if err := validateClaudeLaunchAuth(ctx, plugin, cfg.WorkspacePath, cfg.Env, log); err != nil {
 				return acpdriver.Launch{}, err
 			}
-			var models []ports.AgentModelInfo
-			if _, preserve := claudeACPModelConfig(cfg.Env); !preserve {
-				var modelErr error
-				models, modelErr = claudecode.ProviderModels(ctx, claudeBinary, cfg.WorkspacePath, cfg.Env)
-				if modelErr != nil && log != nil {
-					log.Debug("Claude provider model discovery unavailable; using ACP defaults", "error", modelErr)
-				}
-			}
-			env := claudeACPLaunchEnv(cfg.Env, claudeBinary, cfg.Model, models)
+			env := claudeACPLaunchEnv(cfg.Env, claudeBinary, cfg.Model)
 			return acpdriver.Launch{
 				Command: runtimeLaunch.command,
 				Args:    runtimeLaunch.args,
@@ -172,16 +163,11 @@ func claudeNestedMap(meta map[string]any, key string) map[string]any {
 	return value
 }
 
-// claudeACPLaunchEnv gives claude-agent-acp the same provider model IDs AO
-// exposes in its pre-launch picker. The adapter turns availableModels into its
-// authoritative ACP model choices, so a raw first-party ID selected in AO is
-// accepted by session/set_config_option instead of being rejected because the
-// adapter started with aliases only.
+// claudeACPLaunchEnv preserves Claude Code's native picker and user overrides.
 func claudeACPLaunchEnv(
 	input map[string]string,
 	binary string,
 	selectedModel string,
-	models []ports.AgentModelInfo,
 ) map[string]string {
 	env := make(map[string]string, len(input)+2)
 	for key, value := range input {
@@ -200,49 +186,6 @@ func claudeACPLaunchEnv(
 		// actually starting this session with.
 		env["ANTHROPIC_CUSTOM_MODEL_OPTION"] = selected
 	}
-	config, preserve := claudeACPModelConfig(input)
-	if preserve {
-		return env
-	}
-
-	ids := make([]string, 0, len(models))
-	seen := make(map[string]struct{}, len(models))
-	for _, model := range models {
-		id := strings.TrimSpace(model.ID)
-		if id == "" {
-			continue
-		}
-		if _, duplicate := seen[id]; duplicate {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
-	}
-	// With no provider catalog, leave native aliases to claude-agent-acp. An
-	// availableModels list containing only the selected alias would replace its
-	// full built-in picker with that single model.
-	if len(ids) == 0 && isClaudeNativeModelAlias(selected) {
-		return env
-	}
-	if selected != "" {
-		if _, exists := seen[selected]; !exists {
-			ids = append(ids, selected)
-		}
-	}
-	if len(ids) == 0 {
-		return env
-	}
-
-	encodedIDs, err := json.Marshal(ids)
-	if err != nil {
-		return env
-	}
-	config["availableModels"] = encodedIDs
-	encodedConfig, err := json.Marshal(config)
-	if err != nil {
-		return env
-	}
-	env["CLAUDE_MODEL_CONFIG"] = string(encodedConfig)
 	return env
 }
 
@@ -253,30 +196,6 @@ func isClaudeNativeModelAlias(model string) bool {
 	default:
 		return false
 	}
-}
-
-// claudeACPModelConfig returns a mergeable user configuration. preserve is
-// true when AO must pass the value through untouched, either because the user
-// supplied an authoritative availableModels list or because ACP should report
-// malformed configuration itself. Callers can also use preserve to avoid a
-// provider lookup whose result would be discarded.
-func claudeACPModelConfig(input map[string]string) (map[string]json.RawMessage, bool) {
-	raw, configured := input["CLAUDE_MODEL_CONFIG"]
-	if !configured {
-		raw = os.Getenv("CLAUDE_MODEL_CONFIG")
-	}
-	config := make(map[string]json.RawMessage)
-	if strings.TrimSpace(raw) == "" {
-		return config, false
-	}
-	if err := json.Unmarshal([]byte(raw), &config); err != nil {
-		return nil, true
-	}
-	if config == nil {
-		return nil, true
-	}
-	_, userRestricted := config["availableModels"]
-	return config, userRestricted
 }
 
 func validateClaudeACPExecutable(binary, goos string) error {

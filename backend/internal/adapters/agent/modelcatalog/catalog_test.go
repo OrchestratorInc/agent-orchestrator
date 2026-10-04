@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -556,7 +557,7 @@ func TestCodexDiscoveryUsesStructuredProviderCatalog(t *testing.T) {
 	}
 }
 
-func TestCodexDiscoveryListsNewestModelsFirst(t *testing.T) {
+func TestCodexDiscoveryPreservesOfficialModelSequence(t *testing.T) {
 	discoverer := Discoverer{CodexModels: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatModel, error) {
 		return []ports.ChatModel{
 			{ID: "gpt-5.2", DisplayName: "GPT-5.2", Default: true},
@@ -575,7 +576,7 @@ func TestCodexDiscoveryListsNewestModelsFirst(t *testing.T) {
 	for _, item := range got.Models {
 		ids = append(ids, item.ID)
 	}
-	want := []string{"sol-6", "sol-6-astra", "gpt-5.10", "gpt-5.2", "sol-5", "legacy"}
+	want := []string{"gpt-5.2", "legacy", "sol-5", "sol-6-astra", "gpt-5.10", "sol-6"}
 	if !reflect.DeepEqual(ids, want) {
 		t.Fatalf("model order = %v, want %v", ids, want)
 	}
@@ -627,8 +628,8 @@ gpt-oss-120b-medium  GPT-OSS 120B (Medium)
 		t.Fatal(err)
 	}
 	want := []ports.AgentModelInfo{
-		{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6 (Thinking)"},
 		{ID: "gemini-3.7-flash-high", Label: "Gemini 3.7 Flash (High)"},
+		{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6 (Thinking)"},
 		{ID: "gpt-oss-120b-medium", Label: "GPT-OSS 120B (Medium)"},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -771,8 +772,8 @@ func TestParseDroidHelpModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []ports.AgentModelInfo{
-		{ID: "claude-opus-5", Label: "Opus 5", IsDefault: true},
 		{ID: "auto", Label: "Auto Model"},
+		{ID: "claude-opus-5", Label: "Opus 5", IsDefault: true},
 		{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol"},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -1007,6 +1008,15 @@ func TestClaudeCatalogFingerprintUsesOnlyResolvedSettings(t *testing.T) {
 	}
 }
 
+func TestCatalogFingerprintIgnoresUnrelatedProjectConfig(t *testing.T) {
+	dir := t.TempDir()
+	writeClaudeSettings(t, dir, "opus")
+	got := CatalogFingerprint(context.Background(), "muse", "muse", dir, nil)
+	if want := CatalogFingerprint(context.Background(), "muse", "muse", "", nil); got != want {
+		t.Fatalf("fingerprint = %q, want the executable fingerprint %q", got, want)
+	}
+}
+
 // TestACPOnlyHarnessReportsDiscoveryFailure guards the difference between the
 // two ACP harnesses. Cline keeps configured provider selections, so an ACP
 // failure falls back to those. DeepSeek Harness has no second source, and the
@@ -1059,12 +1069,46 @@ func TestCatalogFingerprintTracksTheDeepSeekProfile(t *testing.T) {
 	}
 }
 
-func TestCatalogFingerprintIgnoresUnrelatedProjectConfig(t *testing.T) {
-	dir := t.TempDir()
-	writeClaudeSettings(t, dir, "opus")
-	got := CatalogFingerprint(context.Background(), "muse", "muse", dir, nil)
-	if want := CatalogFingerprint(context.Background(), "muse", "muse", "", nil); got != want {
-		t.Fatalf("fingerprint = %q, want the executable fingerprint %q", got, want)
+func TestJSONDiscoveryKeepsWarningsOutOfTheCatalog(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture requires POSIX")
+	}
+	binary := filepath.Join(t.TempDir(), "models")
+	body := "#!/bin/sh\nprintf '%s\\n' 'Warning: custom providers disabled' >&2\nprintf '%s\\n' '{\"models\":[{\"selector\":\"provider/model-a\",\"name\":\"Model A\"}]}'\n"
+	if err := os.WriteFile(binary, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Discover(context.Background(), "omp", binary, "", nil)
+	if err != nil || len(got.Models) != 1 || got.Models[0].ID != "provider/model-a" {
+		t.Fatalf("catalog = %#v, error = %v", got, err)
+	}
+	body = "#!/bin/sh\nprintf '%s\\n' 'request failed'\nprintf '%s\\n' 'credential rejected' >&2\nexit 1\n"
+	if err := os.WriteFile(binary, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Discover(context.Background(), "omp", binary, "", nil)
+	if err == nil || !strings.Contains(err.Error(), "request failed") || !strings.Contains(err.Error(), "credential rejected") {
+		t.Fatalf("error = %v, want stdout and stderr diagnostics", err)
+	}
+}
+
+func TestTextDiscoveryPreservesModelListsOnStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture requires POSIX")
+	}
+	t.Setenv("HOME", t.TempDir())
+	for _, agentID := range []string{"pi", "kimchi", "prime-agent"} {
+		t.Run(agentID, func(t *testing.T) {
+			binary := filepath.Join(t.TempDir(), "models")
+			body := "#!/bin/sh\nprintf '%s\\n' 'provider model' 'anthropic claude-model-a' >&2\n"
+			if err := os.WriteFile(binary, []byte(body), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			got, err := Discover(context.Background(), agentID, binary, "", nil)
+			if err != nil || len(got.Models) != 1 || got.Models[0].ID != "anthropic/claude-model-a" {
+				t.Fatalf("catalog = %#v, error = %v", got, err)
+			}
+		})
 	}
 }
 
@@ -1116,6 +1160,17 @@ func TestCodexCatalogFingerprintTracksCredentialAndConfigInputs(t *testing.T) {
 	}
 }
 
+func TestClaudeDiscoveryPreservesIdentityAndModelMetadata(t *testing.T) {
+	request := claudeRequest(t)
+	d := Discoverer{NativeCatalogs: map[string]func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error){"claude-code": func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
+		return ports.AgentModelCatalog{Source: "native", InputFingerprint: "credential-scope", Models: []ports.AgentModelInfo{{ID: "provider/model", Label: "Provider Model", Efforts: []string{"low", "high"}}}}, nil
+	}}}
+	catalog, err := d.Discover(context.Background(), request)
+	if err != nil || catalog.InputFingerprint != "credential-scope" || len(catalog.Models) != 1 || !reflect.DeepEqual(catalog.Models[0].Efforts, []string{"low", "high"}) {
+		t.Fatalf("catalog = %#v, error = %v", catalog, err)
+	}
+}
+
 func TestCatalogEnvironmentFingerprintTracksLaunchCredentials(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "ambient-key")
 	base := map[string]string{"OPENAI_API_KEY": "project-key", "UNRELATED_SETTING": "one"}
@@ -1131,6 +1186,40 @@ func TestCatalogEnvironmentFingerprintTracksLaunchCredentials(t *testing.T) {
 	base["OPENAI_API_KEY"] = "different-key"
 	if got := catalogEnvironmentFingerprint(base); got == first || strings.Contains(got, "key") {
 		t.Fatalf("credential change not safely fingerprinted: %q", got)
+	}
+}
+
+func TestACPCatalogPreservesCurrentModelEffortOnly(t *testing.T) {
+	for _, tc := range []struct{ agent, option string }{
+		{"deepseek-harness", "reasoning_effort"}, {"pi", "thought_level"}, {"opencode", "effort"}, {"opencode-v2", "effort"},
+		{"cline", "reasoning_effort"}, {"deepseek-harness", "unknown-effort"}, {"droid", "reasoning_effort"}, {"copilot", "thought_level"},
+	} {
+		t.Run(tc.agent+"/"+tc.option, func(t *testing.T) {
+			options := []ports.ChatConfigOption{
+				{ID: "model", Type: ports.ChatConfigOptionSelect, Current: ports.ChatConfigOptionValue{Select: "provider/current"}, Choices: []ports.ChatConfigOptionChoice{
+					{Value: "provider/current", Name: "Current"}, {Value: "provider/other", Name: "Other"},
+				}},
+				{ID: tc.option, Category: "thought_level", Type: ports.ChatConfigOptionSelect, Current: ports.ChatConfigOptionValue{Select: "provider:balanced"}, Choices: []ports.ChatConfigOptionChoice{
+					{Value: "off", Name: "None"}, {Value: "provider:balanced", Name: "Medium"}, {Value: "max", Name: "Maximum"}, {Value: "max"}, {Value: ""},
+				}},
+			}
+			catalog, err := discoverACPOptionCatalog(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: tc.agent}, func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+				return options, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, model := range catalog.Models {
+				supported := model.IsDefault
+				if supported {
+					if !reflect.DeepEqual(model.Efforts, []string{"off", "provider:balanced", "max"}) || model.DefaultEffort != "provider:balanced" {
+						t.Fatalf("current model effort = %#v", model)
+					}
+				} else if len(model.Efforts) != 0 || model.DefaultEffort != "" {
+					t.Fatalf("effort leaked to unsupported/unselected model: %#v", model)
+				}
+			}
+		})
 	}
 }
 
@@ -1150,17 +1239,73 @@ func TestClaudeNativeExtrasChangeCatalogFingerprint(t *testing.T) {
 	}
 }
 
-func TestClaudeColdDiscoveryCarriesCapturedIdentity(t *testing.T) {
-	for _, discoveryErr := range []error{nil, errors.New("discovery failed")} {
-		d := Discoverer{ClaudeCatalog: func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
-			return ports.AgentModelCatalog{InputFingerprint: "account-scope", Models: []ports.AgentModelInfo{{ID: "captured-model"}}}, discoveryErr
-		}, ClaudeIdentity: func(context.Context, ports.AgentModelDiscoveryRequest) (string, bool) {
-			t.Fatal("cold discovery must not independently resolve another credential")
-			return "", false
-		}}
-		catalog, err := d.Discover(context.Background(), claudeRequest(t))
-		if !errors.Is(err, discoveryErr) || catalog.InputFingerprint != "account-scope" || len(catalog.Models) == 0 {
-			t.Fatalf("catalog=%+v, error=%v", catalog, err)
-		}
+func TestNormalizePreservesReportedSequenceAndDefaultMetadata(t *testing.T) {
+	got := normalize([]ports.AgentModelInfo{{ID: "older", Label: "Z first"}, {ID: "current", Label: "A next", IsDefault: true}, {ID: "older", Label: "Z first"}})
+	want := []ports.AgentModelInfo{{ID: "older", Label: "Z first"}, {ID: "current", Label: "A next", IsDefault: true}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("models=%+v, want %+v", got, want)
+	}
+}
+func TestParseJSONModelsPreservesArraySequence(t *testing.T) {
+	got, err := parseJSONModels([]byte(`{"models":[{"id":"z-first","name":"Z first"},{"id":"a-next","name":"A next","default":true}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "z-first" || got[1].ID != "a-next" || !got[1].IsDefault {
+		t.Fatalf("models=%+v", got)
+	}
+}
+
+func TestAppendConfiguredModelsKeepsNativeFirstAndDefault(t *testing.T) {
+	native := []ports.AgentModelInfo{{ID: "z-native", Label: "Native", IsDefault: true}, {ID: "a-native", Label: "Next"}}
+	configured := []ports.AgentModelInfo{{ID: "a-native", Label: "duplicate", IsDefault: true}, {ID: "forced", Label: "Forced", IsDefault: true}}
+	got := appendConfiguredModels(native, configured)
+	want := []ports.AgentModelInfo{{ID: "z-native", Label: "Native", IsDefault: true}, {ID: "a-native", Label: "Next"}, {ID: "forced", Label: "Forced"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("models=%+v, want %+v", got, want)
+	}
+}
+
+func TestNativeCatalogFailureOnlyUsesCompatibilityFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		wantErr bool
+	}{{"unsupported", ErrNativeCatalogUnsupported, false}, {"auth", errors.New("auth rejected"), true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := Discoverer{NativeCatalogs: map[string]func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error){"muse": func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
+				return ports.AgentModelCatalog{}, tc.err
+			}}}
+			got, err := d.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "muse"})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err=%v", err)
+			}
+			if !tc.wantErr && len(got.Models) == 0 {
+				t.Fatal("compatibility fallback missing")
+			}
+		})
+	}
+}
+func TestNativeEmptyCatalogDoesNotReexposeFallbackModels(t *testing.T) {
+	d := Discoverer{NativeCatalogs: map[string]func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error){"muse": func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
+		return ports.AgentModelCatalog{Source: "native", Models: []ports.AgentModelInfo{}}, nil
+	}}}
+	got, err := d.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "muse"})
+	if err != nil || len(got.Models) != 0 || got.Source != "native" {
+		t.Fatalf("catalog=%+v,error=%v", got, err)
+	}
+}
+
+func TestClaudeNativeFailureRetainsFallbackAndIdentity(t *testing.T) {
+	request := claudeRequest(t)
+	request.Env["ANTHROPIC_MODEL"] = "configured-pin"
+	failed := errors.New("discovery failed")
+	d := Discoverer{NativeCatalogs: map[string]func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error){"claude-code": func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
+		return ports.AgentModelCatalog{InputFingerprint: "changed-account"}, failed
+	}}}
+	got, err := d.Discover(context.Background(), request)
+	fallback, _ := Discover(context.Background(), request.AgentID, request.Binary, request.WorkingDir, request.Env)
+	if !errors.Is(err, failed) || !reflect.DeepEqual(got.Models, fallback.Models) || got.InputFingerprint != "changed-account" || got.Source != "catalog" {
+		t.Fatalf("catalog=%+v, error=%v", got, err)
 	}
 }

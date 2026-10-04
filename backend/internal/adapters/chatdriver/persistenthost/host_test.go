@@ -60,6 +60,10 @@ func TestProviderHelper(t *testing.T) {
 		if json.Unmarshal(scanner.Bytes(), &frame) != nil {
 			continue
 		}
+		if os.Getenv("AO_CHAT_HOST_CODEX_SETTINGS_HELPER") == "1" && frame.Method == "thread/start" {
+			_, _ = fmt.Fprintf(os.Stdout, `{"id":%d,"result":{"thread":{"id":"actual"},"model":"configured","reasoningEffort":"medium"}}`+"\n", frame.ID)
+			continue
+		}
 		if frame.Method == "emit-later" {
 			time.Sleep(50 * time.Millisecond)
 			_, _ = fmt.Fprintln(os.Stdout, `{"method":"turn/completed","params":{"turn":{"id":"survived"}}}`)

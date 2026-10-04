@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
@@ -58,6 +59,7 @@ type process struct {
 	// second time.
 	reconnected   bool
 	nextRequestID int64
+	codexState    *persistenthost.CodexState
 	// stop releases the process. It must be safe to call more than once.
 	stop func() error
 	// terminate destroys a persistent host for explicit session shutdown.
@@ -102,12 +104,7 @@ func New(plugin codexPlugin, log *slog.Logger) *Driver {
 // conversation without creating a provider thread.
 func DiscoverModels(ctx context.Context, binary, workdir string, env map[string]string) ([]ports.ChatModel, error) {
 	driver := New(fixedCodexPlugin(binary), slog.New(slog.DiscardHandler))
-	conv, err := driver.connect(ctx, workdir, env, "")
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = conv.Close() }()
-	return conv.ListModels(ctx)
+	return driver.DiscoverModels(ctx, workdir, env)
 }
 
 var _ ports.ChatDriver = (*Driver)(nil)
@@ -233,7 +230,54 @@ func (d *Driver) DiscoverModels(ctx context.Context, workdir string, env map[str
 		return nil, err
 	}
 	defer func() { _ = conv.Close() }()
-	return listModels(ctx, conv.conn)
+	models, err := listModels(ctx, conv.conn)
+	if err != nil {
+		return nil, err
+	}
+	return discoveryModelDefaults(ctx, conv.conn, workdir, models, d.log)
+}
+
+func discoveryModelDefaults(ctx context.Context, rpcConn *conn, workdir string, models []ports.ChatModel, log *slog.Logger) ([]ports.ChatModel, error) {
+	configCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var response codexproto.ConfigReadResponse
+	err := rpcConn.request(configCtx, "config/read", codexproto.ConfigReadParams{Cwd: &workdir}, &response)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		for i := range models {
+			models[i].Default = false
+		}
+		log.Warn("Codex effective model default is unavailable", "error", err)
+		return models, nil
+	}
+	configuredModel := ""
+	if response.Config.Model != nil {
+		configuredModel = strings.TrimSpace(*response.Config.Model)
+	}
+	configuredFound := false
+	for i := range models {
+		if configuredModel != "" {
+			models[i].Default = models[i].ID == configuredModel
+			configuredFound = configuredFound || models[i].Default
+		}
+		if !models[i].Default || response.Config.ModelReasoningEffort == nil {
+			continue
+		}
+		effort := string(*response.Config.ModelReasoningEffort)
+		models[i].DefaultEffort = ""
+		for _, advertised := range models[i].Efforts {
+			if advertised == effort {
+				models[i].DefaultEffort = effort
+				break
+			}
+		}
+	}
+	if configuredModel != "" && !configuredFound {
+		models = append(models, ports.ChatModel{ID: configuredModel, DisplayName: configuredModel, Default: true})
+	}
+	return models, nil
 }
 
 type codexVersion [3]int
@@ -373,7 +417,11 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// loaded thread. Host replay bridges output and unresolved server requests
 		// across the daemon detach without waiting for the active turn to settle.
 		conv.readOnly = cfg.ReadOnly
-		conv.start(cfg.ProviderConversationID, cfg.Model, cfg.Effort)
+		model, effort := cfg.Model, cfg.Effort
+		if state := conv.proc.codexState; state != nil && state.ThreadID == cfg.ProviderConversationID {
+			model, effort = state.Model, state.Effort
+		}
+		conv.start(cfg.ProviderConversationID, model, effort)
 		return conv, nil
 	}
 
@@ -497,6 +545,7 @@ func (d *Driver) connectSession(
 		stdout:        transport.Stdout,
 		reconnected:   transport.Reconnected,
 		nextRequestID: transport.NextRequestID,
+		codexState:    transport.CodexState,
 		stop:          transport.Stdin.Close,
 		terminate: func() error {
 			_ = transport.Stdin.Close()

@@ -1,3 +1,5 @@
+import { PICKER_MENU_WIDTH } from "./ui/option-menu";
+import { EffortPicker } from "./settings/EffortPicker";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	TaskComposerView,
@@ -8,7 +10,6 @@ import {
 } from "@aoagents/product-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
@@ -27,7 +28,7 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
-import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, supportsModelEffortAtLaunch } from "../lib/agent-model-choices";
 import {
 	buildRankedAgentOptions,
 	DEFAULT_AGENT_PRIORITY_RANK,
@@ -40,7 +41,7 @@ import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
 	refreshAgentModels,
-	revalidateAgentModels,
+	agentModelsRevalidationQueryOptions,
 } from "../hooks/useAgentModelsQuery";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
@@ -405,19 +406,7 @@ export function TaskComposer({
 		: "";
 	// Shares the picker's query key, so this is the same fetch, not a second one.
 	const modelCatalogQuery = useQuery(agentModelsQueryOptions(selectedAgent, modelsProjectId, hostId));
-	const revalidationQuery = useQuery({
-		queryKey: [
-			"agent-model-revalidation",
-			hostId ?? "",
-			selectedAgent,
-			modelsProjectId,
-			modelCatalogQuery.data?.validatedAt ?? "",
-		],
-		queryFn: () => revalidateAgentModels(selectedAgent, modelsProjectId, hostId),
-		enabled: selectedAgent !== "" && modelCatalogQuery.data?.refreshRecommended === true,
-		staleTime: Number.POSITIVE_INFINITY,
-		retry: false,
-	});
+	const revalidationQuery = useQuery(agentModelsRevalidationQueryOptions(selectedAgent, modelsProjectId, modelCatalogQuery.data, hostId));
 	useEffect(() => {
 		if (revalidationQuery.data) {
 			queryClient.setQueryData(
@@ -477,7 +466,7 @@ export function TaskComposer({
 	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogDefaultOption : "") : defaultModeForSelectedAgent);
 	const selectedModelOrMode = (selectedModel || selectedMode).trim();
 	const projectModelOrMode = projectModelForSelectedAgent || projectModeForSelectedAgent;
-	const requestedModel = selectedModelOrMode && selectedModelOrMode !== projectModelOrMode && (
+	const requestedModel = modelTouched && isConcreteModelID(model) ? model : selectedModelOrMode && selectedModelOrMode !== projectModelOrMode && (
 		selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(projectModelOrMode)
 	) ? selectedModelOrMode : undefined;
 	const rememberedEffortIsExplicit = Boolean(
@@ -498,9 +487,8 @@ export function TaskComposer({
 	});
 	const effortOptions = effortModel?.efforts?.filter((option) => option && option.toLowerCase() !== "default") ?? [];
 	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
-	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
-	const requestedEffort = effortTouched || rememberedEffortIsExplicit
-		? effort === implicitEffort ? undefined : effort
+		const requestedEffort = effortTouched || rememberedEffortIsExplicit
+		? effort || (inheritedEffort ? "" : undefined)
 		: undefined;
 
 	const selectedAgentLabel = agentCatalog?.agents.find((item) => item.id === selectedAgent)?.label || selectedAgent;
@@ -675,7 +663,7 @@ export function TaskComposer({
 				agentLabel: selectedAgentLabel,
 				projectId: isStandalone ? "" : (projectId ?? ""),
 				disabled: isSubmitting,
-				value: selectedModel,
+				value: modelTouched ? model : (rememberedModelIsValid ? rememberedModel : projectModelForSelectedAgent),
 				mode: selectedMode,
 				catalog: modelCatalog,
 				fetching: modelCatalogQuery.isFetching,
@@ -687,11 +675,8 @@ export function TaskComposer({
 					setModel(value);
 					setMode("");
 					setModelTouched(true);
-					// Effort levels are per-model, so a level the newly chosen model
-					// does not advertise has to be dropped rather than carried over.
-					const nextEfforts =
-						modelCatalog?.models?.find((item) => item.id === value)?.efforts ?? [];
-					setEffort((current) => (current !== "" && !nextEfforts.includes(current) ? "" : current));
+					const nextModel = modelCatalog?.models?.find((item) => item.id === value || (!value && item.isDefault));
+					if (nextModel?.efforts !== undefined) setEffort((current) => (current !== "" && !nextModel.efforts?.includes(current) ? "" : current));
 				},
 				onModeChange: (value) => {
 					setMode(value);
@@ -729,42 +714,16 @@ export function TaskComposer({
 				onSubmit: (brief) => void submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined),
 			}}
 			renderAgentControl={(control) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />}
-			renderEffortControl={(control) => <TaskEffortPicker {...control} defaultEffort={effortModel?.defaultEffort} />}
+			renderEffortControl={(control) => <TaskEffortPicker {...control} defaultEffort={effortModel?.defaultEffort} availability={isCloudProject || !supportsModelEffortAtLaunch(selectedAgent, settings?.defaultSessionMode, settings?.chatHarnesses ?? []) ? "launch-unavailable" : !effortModel || effortModel.efforts === undefined ? "unknown" : effortOptions.length ? "supported" : "unsupported"} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
-			showEffort={!requiresTuiFallback && effortOptions.length > 0}
+			showEffort={true}
 		/>
 	);
 }
 
-function TaskEffortPicker({ disabled, label, onChange, options, value, defaultEffort }: TaskComposerEffortControl & { defaultEffort?: string }) {
-	const { t } = useTranslation();
-	const explicitEffort = value.toLowerCase() === "default" ? "" : value;
-	const reportedDefault = defaultEffort && options.includes(defaultEffort) ? defaultEffort : "";
-	const effectiveEffort = explicitEffort || reportedDefault;
-	const visibleLabel = effectiveEffort ? formatEffortLabel(effectiveEffort) : t("settings.models.effortNotReported");
-
-	return (
-		<SettingsOptionMenu
-			aria-label={label}
-			disabled={disabled}
-			value={effectiveEffort}
-			options={options.map((option) => ({ value: option, label: formatEffortLabel(option) }))}
-			action={explicitEffort && !reportedDefault ? { label: t("settings.models.useAgentEffort"), onSelect: () => onChange("") } : undefined}
-			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
-			menuAlign="end"
-			renderTrigger={() => (
-				<span className="min-w-0 truncate text-control text-foreground" title={visibleLabel}>
-					{visibleLabel}
-				</span>
-			)}
-			onChange={onChange}
-		/>
-	);
-}
-
-function formatEffortLabel(value: string): string {
-	return value === "xhigh" ? "Extra high" : value.charAt(0).toUpperCase() + value.slice(1);
+function TaskEffortPicker({ disabled, label, onChange, options, value, defaultEffort, availability }: TaskComposerEffortControl & { defaultEffort?: string; availability: "supported" | "unsupported" | "unknown" | "launch-unavailable" }) {
+	return <EffortPicker label={label} disabled={disabled} value={value.toLowerCase() === "default" ? "" : value} choices={options.map((value) => ({ value }))} defaultEffort={defaultEffort} availability={availability} onChange={onChange} triggerClassName="composer-chip composer-toolbar-option w-full justify-between" />;
 }
 
 // Both local and cloud list only harnesses that can run, plus a way to manage
@@ -800,7 +759,7 @@ function TaskModelPicker({
 
 	// No agent selected: there is nothing loading and no model to choose yet, so
 	// show a clear "select an agent" placeholder, never a spinner. This returns
-	// before the loading check so a no-agent state can never render one.
+	// before rendering the model control.
 	if (agentId === "") {
 		return (
 			<span
@@ -809,25 +768,6 @@ function TaskModelPicker({
 				aria-label={t("newTask.model")}
 			>
 				<span className="truncate text-settings-muted">{t("newTask.selectAgent")}</span>
-			</span>
-		);
-	}
-
-	if (loading) {
-		return (
-			<span
-				className="composer-chip composer-toolbar-option w-full cursor-not-allowed justify-start opacity-50"
-				aria-label={t("newTask.model")}
-			>
-				<span
-					className="inline-flex min-w-0 items-center gap-1.5"
-					role="status"
-					aria-label={t("settings.models.loading")}
-					aria-busy="true"
-				>
-					<Loader2 className="size-icon-sm shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
-					<span className="truncate text-settings-muted">{t("settings.models.loading")}</span>
-				</span>
 			</span>
 		);
 	}
@@ -852,6 +792,7 @@ function TaskModelPicker({
 					: undefined}
 				triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
 				menuAlign="start"
+				menuClassName={PICKER_MENU_WIDTH}
 				renderTrigger={() => (
 					<span className="min-w-0 truncate text-control text-foreground" title={visibleModeLabel}>
 						{visibleModeLabel}
@@ -884,7 +825,7 @@ function TaskModelPicker({
 			customModelEntry={customModelEntry}
 			agentLabel={agentLabel}
 			onRefresh={onRefresh}
-			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
+			refreshing={loading || catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
 			refreshError={catalog?.refreshError}
 			retryAt={catalog?.retryAt}
 			disabled={disabled || agentId === ""}

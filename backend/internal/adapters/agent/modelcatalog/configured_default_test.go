@@ -185,6 +185,11 @@ func TestApplyConfiguredDefault(t *testing.T) {
 		t.Errorf("a CLI-reported default must win over config: %#v", got)
 	}
 
+	got = applyConfiguredDefault(reported, "forced/custom")
+	if len(got) != 3 || got[2].ID != "forced/custom" || got[2].IsDefault || !got[0].IsDefault {
+		t.Fatalf("native first, forced last = %+v", got)
+	}
+
 	for _, configured := range []string{"", "  ", "default", "Default"} {
 		if got := applyConfiguredDefault(listed(), configured); len(got) != 2 || got[0].IsDefault || got[1].IsDefault {
 			t.Errorf("placeholder %q must not select a default: %#v", configured, got)
@@ -362,5 +367,18 @@ func TestConfiguredDefaultFingerprint(t *testing.T) {
 	writeConfig(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{"model": "openai/gpt-5.4"}`)
 	if got := discoveryConfigInputs(context.Background(), "opencode", workDir, nil); got != "default=openai/gpt-5.4" {
 		t.Fatalf("configured default must feed the fingerprint, got %q", got)
+	}
+}
+
+func TestDroidConfiguredDefaultUsesSessionDefaultsAndLocalOverride(t *testing.T) {
+	home := isolateHome(t)
+	workDir := newGitRepo(t).dir
+	writeConfig(t, filepath.Join(home, ".factory", "settings.json"), `{"model":"legacy","sessionDefaultSettings":{"model":"effective"}}`)
+	if got := configuredDefaultModel("droid", workDir, nil); got != "effective" {
+		t.Fatalf("model=%q", got)
+	}
+	writeConfig(t, filepath.Join(home, ".factory", "settings.local.json"), `{"sessionDefaultSettings":{"model":"local"}}`)
+	if got := configuredDefaultModel("droid", workDir, nil); got != "local" {
+		t.Fatalf("model=%q", got)
 	}
 }

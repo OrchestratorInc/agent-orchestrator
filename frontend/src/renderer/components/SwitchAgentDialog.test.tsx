@@ -325,7 +325,7 @@ describe("SwitchAgentDialog", () => {
 		const dialog = screen.getByRole("dialog", { name: "Switch agent" });
 		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.4 Mini"));
 		await userEvent.click(within(dialog).getByRole("button", { name: "Model" }));
-		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.4" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.4 (default)" }));
 		await userEvent.click(within(dialog).getByRole("button", { name: "Switch" }));
 		expect(switchMocks.mutate).toHaveBeenCalledWith(
 			expect.objectContaining({ model: "gpt-5.4", targetHarness: "codex" }),
@@ -361,7 +361,7 @@ describe("SwitchAgentDialog", () => {
 			expect.any(Object),
 		);
 		await userEvent.click(within(dialog).getByRole("button", { name: "Model" }));
-		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.4" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.4 (default)" }));
 		await userEvent.click(within(dialog).getByRole("button", { name: "Switch" }));
 		expect(switchMocks.mutate).toHaveBeenLastCalledWith(
 			expect.objectContaining({ model: "", targetHarness: "codex" }),
@@ -388,7 +388,7 @@ describe("SwitchAgentDialog", () => {
 			expect.any(Object),
 		);
 		await userEvent.click(within(dialog).getByRole("button", { name: "Model" }));
-		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.4" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.4 (default)" }));
 		await userEvent.click(within(dialog).getByRole("button", { name: "Switch" }));
 		expect(switchMocks.mutate).toHaveBeenLastCalledWith(
 			expect.objectContaining({ model: "", targetHarness: "codex" }),

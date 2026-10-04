@@ -35,6 +35,7 @@ export type RankedAgentOption = AgentInfo & {
 	rank: number;
 	status: string;
 	statusTone: AgentStatusTone;
+	statusIndicator?: "auth-unknown";
 };
 
 export function unknownAgentReadiness(id: string, label: string): AgentInfo {
@@ -103,7 +104,7 @@ function isRoleSession(session: RoleSession, role: "worker" | "orchestrator"): b
 	return role === "orchestrator" ? isOrchestratorSession(session) : !isOrchestratorSession(session);
 }
 
-function agentStatus(agent: AgentInfo): Pick<RankedAgentOption, "status" | "statusTone"> {
+function agentStatus(agent: AgentInfo): Pick<RankedAgentOption, "status" | "statusTone" | "statusIndicator"> {
 	if (agent.installation.state === "not_installed") {
 		return { status: "Needs install", statusTone: "muted" };
 	}
@@ -114,7 +115,7 @@ function agentStatus(agent: AgentInfo): Pick<RankedAgentOption, "status" | "stat
 		return { status: "Install unknown", statusTone: "warning" };
 	}
 	if (agent.authentication.state === "unknown") {
-		return { status: "Auth unknown", statusTone: "warning" };
+		return { status: "", statusTone: "muted", statusIndicator: "auth-unknown" };
 	}
 	// A credential exists but nothing proved it works. It must not fall through
 	// to the known-good branch below: rendering an unverified credential green

@@ -521,10 +521,10 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		const picker = await screen.findByRole("button", { name: "Worker model" });
-		expect(picker).toHaveTextContent("Opus · Effort not reported");
+		expect(picker).toHaveTextContent("Opus · Default");
 		expect(picker).not.toHaveTextContent("Claude");
 		await userEvent.click(picker);
-		expect(screen.getByRole("menuitem", { name: "Opus" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Opus (default)" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		submitSettings();
@@ -830,7 +830,7 @@ describe("ProjectSettingsForm", () => {
 		expect(workerModel).toHaveTextContent("GPT-5.4");
 
 		await userEvent.click(workerModel);
-		expect(await screen.findByRole("menuitem", { name: /GPT-5\.6 Sol/ })).toBeInTheDocument();
+		expect(await screen.findByRole("menuitem", { name: /^GPT-5\.6 Sol/ })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: /GPT-5\.5/ })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: /GPT-5\.4/ })).toBeInTheDocument();
 		expect(screen.getByRole("searchbox", { name: "Search worker model" })).toBeInTheDocument();
@@ -1063,7 +1063,7 @@ describe("ProjectSettingsForm", () => {
 		renderSettings("proj-1", undefined, "agents");
 
 		expect(await screen.findAllByText("model refresh unavailable")).toHaveLength(3);
-		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("Select model");
+		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("Default");
 	});
 
 	it("shows cached models immediately and deduplicates background revalidation", async () => {
@@ -1107,7 +1107,7 @@ describe("ProjectSettingsForm", () => {
 
 		renderSettings("proj-1", undefined, "agents");
 
-		expect(await screen.findByRole("button", { name: "Worker model" })).toHaveTextContent("Select model");
+		expect(await screen.findByRole("button", { name: "Worker model" })).toHaveTextContent("Default");
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
 		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", {
 			params: {
@@ -1270,7 +1270,7 @@ describe("ProjectSettingsForm", () => {
 		const reviewer = await screen.findByRole("button", { name: "Reviewer agent" });
 		await userEvent.click(reviewer);
 		const labels = (await screen.findAllByRole("menuitem")).map((option) => option.textContent);
-		expect(labels).not.toContain("KiroAuth unknown");
+		expect(labels).not.toContain("Kiro");
 		expect(labels).toContain("Pi");
 	});
 
@@ -1473,7 +1473,7 @@ describe("ProjectSettingsForm", () => {
 			"Goose",
 			"Kilo Code",
 			"Pi",
-			"KiroAuth unknown",
+			"Kiro",
 			"Manage agents…",
 		]);
 		expect(options[8]).not.toHaveAttribute("aria-disabled", "true");

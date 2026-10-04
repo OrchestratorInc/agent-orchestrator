@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
 import { isConcreteModelID } from "../../lib/agent-model-choices";
-import { SettingsOptionMenu } from "./SettingsOptionMenu";
+import { EffortPicker } from "./EffortPicker";
 import { SettingsRow } from "./SettingsRow";
 
 type Model = components["schemas"]["AgentModelInfo"];
@@ -17,6 +17,7 @@ export type ModelTuningControlsProps = {
 	variant: "settings" | "composer";
 	roleLabel?: string;
 	disabled?: boolean;
+	launchSupported?: boolean;
 };
 
 export function useModelTuning(props: Omit<ModelTuningControlsProps, "variant" | "disabled">) {
@@ -34,7 +35,7 @@ export function useModelTuning(props: Omit<ModelTuningControlsProps, "variant" |
 	const selected =
 		(concreteModel ? models?.find((item) => item.id === concreteModel) : undefined) ??
 		(concreteModel === "" ? models?.find((item) => item.isDefault && isConcreteModelID(item.id)) : undefined);
-	const capabilitiesKnown = models !== undefined;
+	const capabilitiesKnown = selected?.efforts !== undefined;
 	const invalidEffort = Boolean(effort && capabilitiesKnown && !selected?.efforts?.includes(effort));
 
 	useEffect(() => {
@@ -61,26 +62,17 @@ export function ModelTuningControls(props: ModelTuningControlsProps) {
 	const warning = invalidEffort
 		? t("settings.models.unsupportedTuning", { role: roleLabel ? `${roleLabel} ` : "" })
 		: null;
-	if (!selected) {
-		return warning && variant === "settings" ? (
-			<p role="alert" className="px-1 text-xs leading-row text-warning">{warning}</p>
-		) : null;
-	}
-	const effortOptions = selected.efforts?.filter((value) => value && value.toLowerCase() !== "default") ?? [];
-	const explicitEffort = effort.toLowerCase() === "default" ? "" : effort;
-	const effectiveEffort = explicitEffort || (effortOptions.includes(selected.defaultEffort ?? "") ? selected.defaultEffort : "") || "";
-	const effortControl = effortOptions.length ? (
-		<SettingsOptionMenu
-			aria-label={`${prefix}${t("settings.models.effort")}`}
-			value={effectiveEffort}
-			placeholder={t("settings.models.effortNotReported")}
-			disabled={disabled}
-			options={effortOptions.map((value) => ({ value, label: value }))}
-			onChange={onEffortChange}
-			triggerClassName={variant === "composer" ? "composer-chip composer-toolbar-option" : "justify-end"}
-		/>
-	) : null;
-	if (!effortControl) return null;
+	const effortOptions = selected?.efforts?.filter((value) => value && value.toLowerCase() !== "default") ?? [];
+	const effortControl = <EffortPicker
+		label={`${prefix}${t("settings.models.effort")}`}
+		value={effort.toLowerCase() === "default" ? "" : effort}
+		choices={effortOptions.map((value) => ({ value }))}
+		defaultEffort={selected?.defaultEffort}
+		availability={props.launchSupported === false ? "launch-unavailable" : !selected || selected.efforts === undefined ? "unknown" : effortOptions.length ? "supported" : "unsupported"}
+		disabled={disabled}
+		onChange={onEffortChange}
+		triggerClassName={variant === "composer" ? "composer-chip composer-toolbar-option" : "justify-end"}
+	/>;
 	if (variant === "composer") {
 		return effortControl;
 	}

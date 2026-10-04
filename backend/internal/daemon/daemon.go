@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
@@ -470,6 +471,14 @@ func Run() error {
 			}
 			agentSvc.ObserveActiveCodexAccountCapacity(observation)
 		},
+		OnEffortChanged: func(sessionID domain.SessionID, effort string) {
+			if sessMgr == nil {
+				return
+			}
+			if err := sessMgr.PersistChatEffort(ctx, sessionID, effort); err != nil {
+				log.Warn("persist ChatUI effort on session failed; a TUI rebuild may resume with a different effort", "sessionID", sessionID, "effort", effort, "error", err)
+			}
+		},
 		// Sync ChatUI's model choice, including clearing its override, before a
 		// later TUI rebuild reads the session metadata.
 		OnModelChanged: func(sessionID domain.SessionID, model string) {
@@ -485,10 +494,37 @@ func Run() error {
 
 	codexModelDriver := codexappserver.New(codexagent.New(), log)
 	modelDiscoverer := modelcatalog.Discoverer{
+		NativeCatalogs: map[string]func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error){
+			"claude-code": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
+				return claudecodeagent.NativeCatalog(listCtx, request.Binary, request.WorkingDir, request.Env)
+			},
+			"droid": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
+				return modelcatalog.DiscoverDroidCatalog(listCtx, request, cfg.DataDir)
+			},
+		},
 		CodexModels: func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatModel, error) {
 			return codexModelDriver.DiscoverModels(listCtx, request.WorkingDir, request.Env)
 		},
 		ACPOptions: map[string]modelcatalog.ACPOptionListFunc{
+			"gemini": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+				request.Env = maps.Clone(request.Env)
+				if request.Env == nil {
+					request.Env = make(map[string]string)
+				}
+				request.Env["AO_DATA_DIR"] = cfg.DataDir
+				return modelcatalog.DiscoverGeminiOptions(listCtx, request, log)
+			},
+			"copilot": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+				return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{
+					Command: request.Binary,
+					Args:    []string{"--acp", "--stdio"},
+					Env:     request.Env,
+				}, request.WorkingDir, log)
+			},
+
+			"kimi": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+				return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{Command: request.Binary, Args: []string{"acp"}, Env: request.Env}, request.WorkingDir, log)
+			},
 			"cline": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
 				return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{
 					Command: request.Binary,
@@ -503,13 +539,6 @@ func Run() error {
 					Env:     request.Env,
 				}, request.WorkingDir, log)
 			},
-		},
-		// Claude's model IDs are provider-specific — first-party aliases,
-		// Bedrock ARNs-in-miniature, Vertex @-versions — so the list has to come
-		// from whichever provider is configured. An error here is expected and
-		// harmless: discovery falls back to the static aliases.
-		ClaudeCatalog: func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
-			return claudecodeagent.ProviderCatalog(listCtx, request.Binary, request.WorkingDir, request.Env)
 		},
 		ClaudeFingerprint: func(fingerprintCtx context.Context, request ports.AgentModelDiscoveryRequest) string {
 			return claudecodeagent.ProviderCatalogFingerprint(fingerprintCtx, request.Binary, request.WorkingDir, request.Env)

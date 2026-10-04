@@ -10,7 +10,7 @@ import {
 	useAgentReadinessQuery,
 } from "../../hooks/useAgentReadinessQuery";
 import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../hooks/useAgentAuth";
-import { agentModelsQueryPrefix } from "../../hooks/useAgentModelsQuery";
+import { resetAgentModels } from "../../hooks/useAgentModelsQuery";
 import { closeShellTerminal, shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../hooks/useShellTerminals";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentLabel, AGENT_OPTIONS, type AgentId } from "../../lib/agent-options";
@@ -302,7 +302,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 				await Promise.all([
 					queryClient.invalidateQueries({ queryKey: installerKey }),
 					queryClient.invalidateQueries({ queryKey: authPlansKey }),
-					queryClient.invalidateQueries({ queryKey: hostId ? ["agent-models", hostId, agentId] : agentModelsQueryPrefix(agentId) }),
+					resetAgentModels(queryClient, agentId, hostId),
 				]);
 			}
 		});
@@ -527,6 +527,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 		}
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
 		if (loggedIn(result)) {
+			void resetAgentModels(queryClient, workflow.agentId, hostId);
 			try {
 				await closeAuthTerminal(workflow.terminal.handleId, hostId);
 			} catch (error) {
@@ -554,6 +555,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 			setAuthWorkflow(null);
 			void queryClient.invalidateQueries({ queryKey: shellKey });
 			await checkAuth(workflow.agentId, { fresh: true });
+			void resetAgentModels(queryClient, workflow.agentId, hostId);
 			return true;
 		} catch (error) {
 			setAuthWorkflow((current) => current?.terminal.handleId === workflow.terminal.handleId ? { ...current, phase: "cleanup_failed", reason: error instanceof Error ? error.message : t("settings.harness.authFailed") } : current);

@@ -54,15 +54,18 @@ var configuredDefaultSources = map[string]configuredDefaultSource{
 		repoFiles:   []string{".aider.conf.yml", ".aider.conf.yaml"},
 		envOverride: "AIDER_MODEL",
 	},
+
 	"droid": {
 		paths: func(home string, _ map[string]string) []string {
 			if home == "" {
 				return nil
 			}
-			return []string{filepath.Join(home, ".factory", "settings.json")}
+			return []string{filepath.Join(home, ".factory", "settings.json"), filepath.Join(home, ".factory", "settings.local.json")}
 		},
-		parse: parseJSONCModelKey,
+		parse:     parseDroidConfiguredModel,
+		repoFiles: []string{".factory/settings.json", ".factory/settings.local.json"},
 	},
+
 	// Copilot CLI keeps user-editable settings, including the model /model
 	// selects, in settings.json; config.json is legacy managed state and is not
 	// read, so a stale value there can never be marked as the default. Model
@@ -152,25 +155,27 @@ func configuredDefaultModel(agentID, workingDir string, env map[string]string) s
 // applyConfiguredDefault marks the configured model as the catalog default. A
 // catalog that already reports a default is left alone: the CLI's own answer
 // is more authoritative than AO's reading of its config files. A configured
-// model missing from the list is appended, because it is what the CLI will
-// actually run.
+// model missing from the list is appended after native choices without
+// replacing a default reported by the CLI.
 func applyConfiguredDefault(models []ports.AgentModelInfo, configured string) []ports.AgentModelInfo {
 	configured = strings.TrimSpace(configured)
 	if configured == "" || !isConcreteModel(configured) {
 		return models
 	}
+
+	reportedDefault := false
 	for _, item := range models {
-		if item.IsDefault && isConcreteModel(item.ID) {
-			return models
-		}
+		reportedDefault = reportedDefault || (item.IsDefault && isConcreteModel(item.ID))
 	}
 	for i := range models {
 		if strings.EqualFold(models[i].ID, configured) {
-			models[i].IsDefault = true
+			if !reportedDefault {
+				models[i].IsDefault = true
+			}
 			return models
 		}
 	}
-	return append(models, ports.AgentModelInfo{ID: configured, Label: configured, IsDefault: true})
+	return append(models, ports.AgentModelInfo{ID: configured, Label: configured, IsDefault: !reportedDefault})
 }
 
 // isConcreteModel mirrors the renderer's rule: "default" is a placeholder, not
@@ -310,4 +315,20 @@ func envValue(env map[string]string, key string) string {
 		return strings.TrimSpace(value)
 	}
 	return strings.TrimSpace(os.Getenv(key))
+}
+
+func parseDroidConfiguredModel(raw []byte) string {
+	var settings struct {
+		Model                  string `json:"model"`
+		SessionDefaultSettings struct {
+			Model string `json:"model"`
+		} `json:"sessionDefaultSettings"`
+	}
+	if json.Unmarshal(stripJSONC(raw), &settings) != nil {
+		return ""
+	}
+	if model := strings.TrimSpace(settings.SessionDefaultSettings.Model); model != "" {
+		return model
+	}
+	return strings.TrimSpace(settings.Model)
 }

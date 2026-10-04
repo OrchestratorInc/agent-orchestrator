@@ -290,7 +290,7 @@ describe("ACP session config options", () => {
 		};
 		expect(hasProviderPermissionMode([mode])).toBe(false);
 		render(<TurnSettingsBar models={[]} settings={{}} configOptions={[mode]} onChangeConfigOption={vi.fn()} />);
-		expect(screen.queryByText("Default")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Mode" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Mode" })).not.toBeInTheDocument();
 	});
 
@@ -347,19 +347,19 @@ describe("ACP session config options", () => {
 		const view = render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[option]} />);
 
 		const picker = screen.getByRole("button", { name: "Effort" });
-		expect(picker).toHaveTextContent("Use agent effort");
+		expect(picker).toHaveTextContent("Default");
 		await user.click(picker);
-		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: "Default" })).toBeInTheDocument();
 		await user.click(screen.getByRole("menuitemradio", { name: "High" }));
 		expect(onChange).toHaveBeenCalledWith("effort", { value: "high" });
 		view.rerender(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange}
 			configOptions={[{ ...option, currentValue: "high" }]} />);
 		await user.click(screen.getByRole("button", { name: "Effort" }));
-		await user.click(screen.getByRole("menuitemradio", { name: "Use agent effort" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "Default" }));
 		expect(onChange).toHaveBeenLastCalledWith("effort", { value: "default" });
 	});
 
-	it("shows the concrete recommended model selected without a duplicate default option", async () => {
+	it("keeps following the agent separate from pinning the reported default model", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();
 		const option: ChatConfigOption = {
@@ -370,8 +370,8 @@ describe("ACP session config options", () => {
 			currentValue: "default",
 			choices: [
 				{ value: "default", name: "Default (recommended)", description: "Opus" },
-				{ value: "opus", name: "Opus" },
 				{ value: "sonnet", name: "Sonnet" },
+				{ value: "opus", name: "Opus" },
 			],
 		};
 		const view = render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[option]} />);
@@ -379,18 +379,18 @@ describe("ACP session config options", () => {
 		const picker = screen.getByRole("button", { name: "Model" });
 		expect(picker).toHaveTextContent("Opus");
 		await user.click(picker);
-		expect(screen.queryByRole("menuitemradio", { name: /Default/i })).not.toBeInTheDocument();
-		expect(screen.getByRole("menuitemradio", { name: "Opus", checked: true })).toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: "Opus (default)", checked: true })).toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: "Opus", checked: false })).toBeInTheDocument();
 		await user.click(screen.getByRole("menuitemradio", { name: "Sonnet" }));
 		expect(onChange).toHaveBeenCalledWith("model", { value: "sonnet" });
 		view.rerender(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange}
 			configOptions={[{ ...option, currentValue: "sonnet" }]} />);
 		await user.click(screen.getByRole("button", { name: "Model" }));
 		await user.click(screen.getByRole("menuitemradio", { name: "Opus" }));
-		expect(onChange).toHaveBeenLastCalledWith("model", { value: "default" });
+		expect(onChange).toHaveBeenLastCalledWith("model", { value: "opus" });
 	});
 
-	it("lets an explicitly pinned recommended model return to agent control", async () => {
+	it("merges adjacent default model choices and returns a pinned model to agent control", async () => {
 		const onChange = vi.fn();
 		render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[{
 			id: "model", name: "Model", category: "model", type: "select", currentValue: "opus",
@@ -400,9 +400,13 @@ describe("ACP session config options", () => {
 				{ value: "sonnet", name: "Sonnet" },
 			],
 		}]} />);
-		await userEvent.click(screen.getByRole("button", { name: "Model" }));
-		expect(screen.getByRole("menuitemradio", { name: "Opus", checked: true })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("menuitemradio", { name: "Use agent model (Opus)" }));
+		const picker = screen.getByRole("button", { name: "Model" });
+		expect(picker).toHaveTextContent("Opus");
+		expect(picker).not.toHaveTextContent("default");
+		await userEvent.click(picker);
+		expect(screen.queryByRole("menuitemradio", { name: "Opus" })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: "Opus (default)", checked: true })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Opus (default)" }));
 		expect(onChange).toHaveBeenCalledWith("model", { value: "default" });
 	});
 
@@ -524,7 +528,7 @@ describe("ACP session config options", () => {
 		);
 		expect(within(tools).queryByRole("button", { name: "Fast mode" })).not.toBeInTheDocument();
 		expect(within(tools).queryByRole("button", { name: "Agent" })).not.toBeInTheDocument();
-		expect(screen.queryByText("Default")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Mode" })).not.toBeInTheDocument();
 		expect(screen.queryByText("Provider default")).not.toBeInTheDocument();
 
 		await user.click(
@@ -1493,5 +1497,49 @@ describe("OpenCode-style execution modes", () => {
 		await user.click(approvals);
 		await user.click(screen.getByRole("menuitemradio", { name: "Use agent permissions" }));
 		expect(onChange).toHaveBeenCalledWith({ approvalMode: "default" });
+	});
+});
+
+describe("consistent effort availability", () => {
+	it.each([{ models: [] }, { models: [{ id: "custom", displayName: "Custom", default: true }] }])("keeps effort visible with unreported catalog capabilities (%j)", async ({ models }) => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(<TurnSettingsBar models={models} settings={{ model: "custom", reasoningEffort: "high" }} onChange={onChange} />);
+		await user.click(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" }));
+		await user.keyboard("{ArrowDown}{ArrowDown}{ArrowRight}");
+		expect(screen.queryByText("Effort options have not been reported for this model.")).not.toBeInTheDocument();
+		expect(onChange).not.toHaveBeenCalled();
+	});
+
+	it.each([{ configOptions: [] }, { configOptions: [OPTIONS[3]] }, { configOptions: [{ id: "profile", name: "Profile", type: "select" as const, currentValue: "fast", choices: [{ value: "fast", name: "Fast" }] }] }])("keeps unknown effort beside missing or lone ACP controls (%j)", async ({ configOptions }) => {
+		const user = userEvent.setup();
+		render(<TurnSettingsBar models={[]} settings={{}} configOptions={configOptions} onChangeConfigOption={vi.fn()} />);
+		await user.click(screen.getByRole("button", { name: "Effort" }));
+		expect(screen.queryByText("Effort options have not been reported for this model.")).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: "Default" })).toHaveAttribute("aria-disabled", "true");
+	});
+
+	it("preserves the concrete ACP default level and sends the literal reset value", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[{
+			id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: "default",
+			choices: [{ value: "default", name: "Default", description: "Low" }, { value: "low", name: "Low" }, { value: "high", name: "High" }],
+		}]} />);
+		await user.click(screen.getByRole("button", { name: "Effort" }));
+		expect(screen.getByRole("menuitemradio", { name: "Low (default)", checked: true })).toBeInTheDocument();
+		await user.click(screen.getByRole("menuitemradio", { name: "High" }));
+		expect(onChange).toHaveBeenLastCalledWith("effort", { value: "high" });
+		await user.click(screen.getByRole("button", { name: "Effort" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "Low (default)" }));
+		expect(onChange).toHaveBeenLastCalledWith("effort", { value: "default" });
+	});
+
+	it("shows the native provider default in the shared reset row", async () => {
+		const user = userEvent.setup();
+		render(<TurnSettingsBar models={[{ id: "model", displayName: "Model", default: true, efforts: ["low", "medium"], defaultEffort: "medium" }]} settings={{}} onChange={vi.fn()} />);
+		await user.click(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" }));
+		await user.keyboard("{ArrowDown}{ArrowDown}{ArrowRight}");
+		expect(screen.getByRole("menuitemradio", { name: "Medium (default)", checked: true })).toBeInTheDocument();
 	});
 });

@@ -1128,3 +1128,7 @@ func writeFakeExecutable(t *testing.T, path string) {
 		t.Fatalf("write fake executable %s: %v", path, err)
 	}
 }
+
+func (f *fakeSessionLifecycle) PersistChatEffort(_ context.Context, _ domain.SessionID, _ string) error {
+	return nil
+}

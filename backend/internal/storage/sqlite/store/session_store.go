@@ -291,6 +291,17 @@ func (s *Store) UpdateSessionModel(ctx context.Context, id domain.SessionID, mod
 	return rows > 0, nil
 }
 
+// UpdateSessionEffort changes only the effort, preserving concurrent lifecycle updates.
+func (s *Store) UpdateSessionEffort(ctx context.Context, id domain.SessionID, effort string) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.UpdateSessionEffort(ctx, gen.UpdateSessionEffortParams{ID: id, Effort: effort})
+	if err != nil {
+		return false, fmt.Errorf("update session effort for %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
 // UpdateBrowserCapabilityVerifier rotates only the verifier when the caller's
 // controller-owner snapshot is still current. It deliberately leaves every
 // other mutable session field, including user-visible recency, untouched.

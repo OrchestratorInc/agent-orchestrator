@@ -148,7 +148,7 @@ describe("CreateProjectAgentSheet", () => {
 		expect(await screen.findByRole("listbox")).toHaveClass("max-h-select-menu-max!");
 	});
 
-	it.each(["chip", "settings-row"] as const)("uses the fixed compact width for the %s agent menu", async (variant) => {
+	it.each(["chip", "settings-row"] as const)("uses the shared responsive width for the %s agent menu", async (variant) => {
 		render(
 			<RequiredAgentField
 				id="agent"
@@ -163,9 +163,9 @@ describe("CreateProjectAgentSheet", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Agent" }));
 
 		expect(screen.getByRole("menu")).toHaveClass(
-			"w-56!",
-			"min-w-56!",
-			"max-w-56!",
+			"w-[min(16rem,calc(100vw-2rem))]!",
+			"min-w-0!",
+			"max-w-[calc(100vw-2rem)]!",
 		);
 	});
 
@@ -192,7 +192,7 @@ describe("CreateProjectAgentSheet", () => {
 		expect(screen.getByRole(role, { name: /Claude Code/ })).toBeInTheDocument();
 		expect(screen.getByRole(role, { name: /Aider/ })).toBeInTheDocument();
 		expect(screen.getByRole(role, { name: /fx.*Unverified/ })).toBeInTheDocument();
-		expect(screen.getByRole(role, { name: /OpenCode.*Auth unknown/ })).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByRole(role, { name: /OpenCode/ })).not.toHaveAttribute("aria-disabled", "true");
 		for (const name of [/Codex/, /Cursor/]) expect(screen.queryByRole(role, { name })).not.toBeInTheDocument();
 		await userEvent.keyboard("{End}{Enter}");
 		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "harness", focusAgentId: "codex" }));

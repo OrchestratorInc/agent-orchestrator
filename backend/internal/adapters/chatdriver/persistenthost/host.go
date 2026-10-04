@@ -122,6 +122,13 @@ type ACPState struct {
 	PendingResultEventID string          `json:"pendingResultEventId,omitempty"`
 }
 
+// CodexState is the latest official settings reported for a hosted thread.
+type CodexState struct {
+	ThreadID string `json:"threadId"`
+	Model    string `json:"model"`
+	Effort   string `json:"effort"`
+}
+
 // Transport is one authenticated attachment to a persistent provider host.
 type Transport struct {
 	Stdin         io.WriteCloser
@@ -129,6 +136,7 @@ type Transport struct {
 	Reconnected   bool
 	NextRequestID int64
 	ACPState      *ACPState
+	CodexState    *CodexState
 }
 
 type hello struct {
@@ -138,10 +146,11 @@ type hello struct {
 }
 
 type helloResponse struct {
-	OK            bool      `json:"ok"`
-	Error         string    `json:"error,omitempty"`
-	NextRequestID int64     `json:"nextRequestId,omitempty"`
-	ACPState      *ACPState `json:"acpState,omitempty"`
+	OK            bool        `json:"ok"`
+	Error         string      `json:"error,omitempty"`
+	NextRequestID int64       `json:"nextRequestId,omitempty"`
+	ACPState      *ACPState   `json:"acpState,omitempty"`
+	CodexState    *CodexState `json:"codexState,omitempty"`
 }
 
 func hostDir(dataDir, sessionID string) (string, error) {
@@ -468,7 +477,7 @@ func attach(ctx context.Context, d Descriptor, reconnected bool) (*Transport, er
 	}
 	return &Transport{
 		Stdin: conn, Stdout: reader, Reconnected: reconnected,
-		NextRequestID: response.NextRequestID, ACPState: response.ACPState,
+		NextRequestID: response.NextRequestID, ACPState: response.ACPState, CodexState: response.CodexState,
 	}, nil
 }
 
@@ -599,7 +608,7 @@ func Run(ctx context.Context, cfg Config) error {
 	defer func() { _ = os.Remove(path) }()
 
 	h := &host{
-		ctx: ctx, listener: listener, child: child, stdin: stdin, token: token,
+		ctx: ctx, listener: listener, child: child, stdin: stdin, token: token, protocol: cfg.Protocol,
 		detached: make([][]byte, 0, 64), pendingRequests: make(map[string]*pendingRequest),
 		shutdown: make(chan struct{}),
 	}
@@ -650,12 +659,15 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 type host struct {
-	ctx      context.Context
-	listener net.Listener
-	child    *exec.Cmd
-	stdin    io.WriteCloser
-	token    string
-	acp      *acpRelay
+	ctx            context.Context
+	listener       net.Listener
+	child          *exec.Cmd
+	stdin          io.WriteCloser
+	token          string
+	acp            *acpRelay
+	codex          *CodexState
+	codexRequestID string
+	protocol       Protocol
 
 	mu               sync.Mutex
 	cond             *sync.Cond
@@ -724,7 +736,7 @@ func (h *host) handle(conn net.Conn) {
 	h.client = conn
 	h.clientGeneration++
 	generation := h.clientGeneration
-	response := helloResponse{OK: true, NextRequestID: h.maxRequestID}
+	response := helloResponse{OK: true, NextRequestID: h.maxRequestID, CodexState: h.codex}
 	if h.acp != nil {
 		response.ACPState = h.acp.snapshot()
 	}
@@ -772,6 +784,7 @@ func (h *host) handle(conn net.Conn) {
 					return
 				}
 			}
+			h.observeCodexClientFrameLocked(providerFrame)
 			h.mu.Unlock()
 			if len(providerFrame) > 0 {
 				if _, err := h.stdin.Write(providerFrame); err != nil {
@@ -838,6 +851,7 @@ func (h *host) forwardProvider(stdout io.Reader) error {
 		frame, err := reader.ReadBytes('\n')
 		if len(frame) > 0 {
 			h.mu.Lock()
+			h.observeCodexFrameLocked(frame)
 			retainedByACP := false
 			if h.acp != nil {
 				var relayErr error

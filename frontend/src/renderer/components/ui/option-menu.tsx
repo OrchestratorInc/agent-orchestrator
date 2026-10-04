@@ -3,6 +3,8 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
 
+export const PICKER_MENU_WIDTH = "w-[min(16rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!";
+
 const SURFACE =
 	"settings-menu-surface min-w-[14rem] rounded-(--radius-settings-panel) border-settings-menu bg-settings-menu p-1 gap-0!";
 

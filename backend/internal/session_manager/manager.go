@@ -343,6 +343,7 @@ type Store interface {
 	CommitClientRequestSession(ctx context.Context, id domain.SessionID) error
 	UpdateSession(ctx context.Context, rec domain.SessionRecord) error
 	UpdateSessionModel(ctx context.Context, id domain.SessionID, model string) (bool, error)
+	UpdateSessionEffort(ctx context.Context, id domain.SessionID, effort string) (bool, error)
 	UpdateBrowserCapabilityVerifier(ctx context.Context, id domain.SessionID, expected domain.SessionControllerOwner, verifier string) (bool, error)
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
@@ -958,6 +959,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// override) and validate the model before any durable state is created. A
 	// model the harness cannot honor should not leave a seed row behind.
 	agentConfig := applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config), cfg.AgentConfig)
+	if cfg.EffortOverride {
+		agentConfig.Effort = cfg.AgentConfig.Effort
+	}
 	if err := validateSpawnModel(cfg.Harness, agentConfig.Model); err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %s", ErrUnsupportedModel, err.Error())
 	}
@@ -990,6 +994,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			mode = domain.SessionModeTUI
 		}
 		if mode == domain.SessionModeChat {
+			cfg.RequestedMode = mode
 			resolved, err := m.resolveAgentConfig(ctx, cfg, project.Config)
 			if err != nil {
 				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
@@ -1008,6 +1013,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		agentConfig = resolved
 	}
 	cfg.RequestedMode = mode
+	if mode == domain.SessionModeTUI && !supportsLaunchEffort(cfg.Harness, mode) {
+		agentConfig.Effort = ""
+	}
 
 	// Adapters whose model picker is an agent-owned mode list (e.g. Amp) keep
 	// their selectable values in AgentConfig.Mode. Normalize a copy for the
@@ -1437,7 +1445,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
-	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode {
+	if !supportsLaunchEffort(cfg.Harness, cfg.RequestedMode) {
 		resolved.Effort = ""
 		return resolved, nil
 	}
@@ -1447,7 +1455,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		return resolved, nil
 	}
 	if m.modelCatalog == nil {
-		if validateClaudeModel {
+		if validateClaudeModel || (resolved.Effort != "" && cfg.Harness != domain.HarnessCodex) {
 			return ports.AgentConfig{}, fmt.Errorf("%w: model catalog is unavailable", ports.ErrModelCapabilitiesUnavailable)
 		}
 		return resolved, nil
@@ -1498,6 +1506,22 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
 	}
 	return resolved, nil
+}
+
+func supportsLaunchEffort(harness domain.AgentHarness, mode domain.SessionMode) bool {
+	if harness == domain.HarnessCodex || harness == domain.HarnessClaudeCode {
+		return true
+	}
+	if mode != domain.SessionModeChat {
+		return false
+	}
+	switch harness {
+	case domain.HarnessPi, domain.HarnessOpenCode, domain.HarnessOpenCodeV2,
+		domain.HarnessDeepSeek, domain.HarnessUnreal:
+		return true
+	default:
+		return false
+	}
 }
 
 func containsString(values []string, value string) bool {
@@ -1979,8 +2003,11 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 
 func restoredAgentConfig(rec domain.SessionRecord, cfg domain.ProjectConfig) ports.AgentConfig {
 	merged := effectiveAgentConfig(rec.Harness, rec.Kind, cfg)
-	if rec.Harness == domain.HarnessClaudeCode {
+	switch rec.Harness {
+	case domain.HarnessClaudeCode:
 		merged.Model = rec.Metadata.Model
+		merged.Effort = rec.Metadata.Effort
+	case domain.HarnessCodex:
 		merged.Effort = rec.Metadata.Effort
 	}
 	return merged
@@ -3078,6 +3105,18 @@ func (m *Manager) PersistChatModel(ctx context.Context, id domain.SessionID, mod
 	}
 	if !updated {
 		return fmt.Errorf("persist chat model %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+// PersistChatEffort records or clears the Chat effort override for a later TUI rebuild.
+func (m *Manager) PersistChatEffort(ctx context.Context, id domain.SessionID, effort string) error {
+	updated, err := m.store.UpdateSessionEffort(ctx, id, strings.TrimSpace(effort))
+	if err != nil {
+		return fmt.Errorf("persist chat effort %s: %w", id, err)
+	}
+	if !updated {
+		return fmt.Errorf("persist chat effort %s: %w", id, ErrNotFound)
 	}
 	return nil
 }
