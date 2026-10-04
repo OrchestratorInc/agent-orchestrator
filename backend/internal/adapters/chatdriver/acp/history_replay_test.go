@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,18 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+type cancelAfterErrChecks struct{ checks atomic.Int32 }
+
+func (c *cancelAfterErrChecks) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *cancelAfterErrChecks) Done() <-chan struct{}       { return nil }
+func (c *cancelAfterErrChecks) Value(any) any               { return nil }
+func (c *cancelAfterErrChecks) Err() error {
+	if c.checks.Add(1) > 2 {
+		return context.Canceled
+	}
+	return nil
+}
 
 // replayConversation builds the smallest conversation that can run a history
 // replay: the SDK delivery path only touches the capture, the maps, the log,
@@ -252,6 +265,23 @@ func TestACPReplayAcceptsUpdatesDuringDrain(t *testing.T) {
 	assertReplayHistoryEqual(t, history, after)
 }
 
+type replayDeliveryBarrier struct {
+	*conversation
+	delivered chan struct{}
+}
+
+func (c *replayDeliveryBarrier) SessionUpdate(ctx context.Context, notification acpsdk.SessionNotification) error {
+	if err := c.conversation.SessionUpdate(ctx, notification); err != nil {
+		return err
+	}
+	select {
+	case c.delivered <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func TestACPReplayLoadLargeHistoryThroughSDK(t *testing.T) {
 	// More than the SDK queue capacity, with about 20 MiB of text. Distinct
 	// messages keep this test about replay delivery, not quadratic concatenation.
@@ -264,17 +294,39 @@ func TestACPReplayLoadLargeHistoryThroughSDK(t *testing.T) {
 	conv := replayConversation()
 	clientR, clientW := io.Pipe()
 	agentR, agentW := io.Pipe()
-	agent := &fakeAgent{loadUpdates: updates}
+	const batchSize = 512
+	client := &replayDeliveryBarrier{conversation: conv, delivered: make(chan struct{}, batchSize)}
+	agent := &fakeAgent{loadUpdates: updates, afterLoadUpdate: func(ctx context.Context, sent int) error {
+		if sent%batchSize != 0 && sent != len(updates) {
+			return nil
+		}
+		batchCount := batchSize
+		if remainder := sent % batchSize; remainder != 0 {
+			batchCount = remainder
+		}
+		for range batchCount {
+			select {
+			case <-client.delivered:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return nil
+	}}
 	agent.conn = acpsdk.NewAgentSideConnection(agent, agentW, clientR)
-	conv.conn = acpsdk.NewClientSideConnection(conv, clientW, agentR)
+	conv.conn = acpsdk.NewClientSideConnection(client, clientW, agentR)
 	t.Cleanup(func() { _ = clientR.Close(); _ = clientW.Close(); _ = agentR.Close(); _ = agentW.Close() })
 	loader := newRefreshableConversation(conv, acpsdk.LoadSessionRequest{SessionId: "session-1", Cwd: t.TempDir(), McpServers: []acpsdk.McpServer{}})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// Two full 20 MiB SDK loads plus normalization are expensive under the race
+	// detector, especially when other suites share the runner.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	conv.beginHistoryReplay("session-1")
 	// Hold the normalization mutex until the SDK response barrier returns.
-	// An inline handler cannot finish even its first update, fills the SDK
-	// queue, and disconnects. Capturing must deliver the complete burst anyway.
+	// An inline handler cannot acknowledge even its first batch. Capturing must
+	// deliver every update while normalization is blocked. Delivery barriers keep
+	// the SDK's fixed 1024-slot queue from overflowing just because its consumer
+	// is scheduled less often under the race detector.
 	func() {
 		conv.mu.Lock()
 		defer conv.mu.Unlock()
@@ -326,10 +378,18 @@ func TestACPReplayAbortDiscardsRawUpdates(t *testing.T) {
 	if err := conv.SessionUpdate(context.Background(), replayAgentChunk("session-1", "old", "discard")); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	if err := conv.SessionUpdate(context.Background(), replayAgentChunk("session-1", "later", "also discard")); err != nil {
+		t.Fatal(err)
+	}
+	ctx := &cancelAfterErrChecks{}
 	if err := conv.drainAndFinishReplay(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("drain error = %v", err)
+	}
+	conv.mu.Lock()
+	partiallyApplied := conv.activeTurn != "" || len(conv.messages) != 0
+	conv.mu.Unlock()
+	if !partiallyApplied {
+		t.Fatal("test did not cancel after replay normalization had begun")
 	}
 	conv.abortHistoryReplay()
 	if conv.replaying || len(conv.replayUpdates) != 0 {
@@ -338,6 +398,11 @@ func TestACPReplayAbortDiscardsRawUpdates(t *testing.T) {
 	if _, err := conv.ReadHistory(context.Background()); err == nil {
 		t.Fatal("aborted history reported as loaded")
 	}
+	conv.mu.Lock()
+	if conv.activeTurn != "" || len(conv.messages) != 0 {
+		t.Fatal("aborted replay retained partially normalized live state")
+	}
+	conv.mu.Unlock()
 	conv.beginHistoryReplay("session-1")
 	if err := conv.SessionUpdate(context.Background(), replayAgentChunk("session-1", "new", "keep")); err != nil {
 		t.Fatal(err)
