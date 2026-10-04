@@ -1189,9 +1189,14 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 	}
 	artifactFiles, err := sessionartifacts.List(rec.Metadata.ArtifactDir)
 	if err != nil {
-		return domain.Session{}, fmt.Errorf("artifact files %s: %w", rec.ID, err)
+		// An unwalkable artifact root must not fail the session read (and with
+		// it the whole board); the artifact list is simply empty for this read.
+		if s.logger != nil {
+			s.logger.Warn("list session artifacts", "session", rec.ID, "err", err)
+		}
+		artifactFiles = nil
 	}
-	if backfilledArtifactDir || (len(artifactFiles) > 0 && !rec.OutputType.HasArtifact()) {
+	if backfilledArtifactDir || (len(artifactFiles) > 0) != rec.OutputType.HasArtifact() {
 		// Reflect the repair in this response's OutputType too, not just
 		// future ones: the persisted write below lands asynchronously
 		// relative to this read.

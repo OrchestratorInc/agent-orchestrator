@@ -56,8 +56,8 @@ const settingsState = vi.hoisted(() => ({
 const reviewGetMock = vi.hoisted(() => vi.fn());
 const inspectorVisibilityRenders = vi.hoisted(() => [] as boolean[]);
 const chatSurfaceRenders = vi.hoisted(() => [] as string[]);
-const chatSurfaceTransitionRenders = vi.hoisted(() => [] as boolean[]);
 const artifactFeedbackConsumes = vi.hoisted(() => [] as number[]);
+const chatSurfaceTransitionRenders = vi.hoisted(() => [] as boolean[]);
 const chatSurfaceWorkState = vi.hoisted(() => ({
 	controllerBusy: false,
 	hasRunningTurn: false,
@@ -520,8 +520,8 @@ vi.mock("./SessionFileExplorer", () => ({
 	}: {
 		isMaximized?: boolean;
 		onOpenFile?: (path: string, options?: { editing?: boolean; mode?: "diff" | "file" | "rendered" }) => void;
-		onRevealHandled?: (key: number) => void;
 		onRevealRequestConsumed?: (key: number) => void;
+		onRevealHandled?: (key: number) => void;
 		onSplitChange?: (split: boolean) => void;
 		onToggleMaximized?: (next: boolean) => void;
 		revealRequest?: { feedback?: boolean; path: string; key: number; source?: "artifact" } | null;
@@ -533,6 +533,10 @@ vi.mock("./SessionFileExplorer", () => ({
 		const [selectedPath, setSelectedPath] = useState<string | null>(null);
 		useEffect(() => {
 			if (!revealRequest) return;
+			if (revealRequest.source === "artifact") {
+				setSelectedPath(revealRequest.path);
+				return;
+			}
 			setSelectedPath(revealRequest.path);
 			if (isMaximized) return;
 			onOpenFile?.(revealRequest.path, { mode: "file" });
@@ -861,8 +865,8 @@ describe("SessionView", () => {
 		routeBlockerState.options = undefined;
 		inspectorVisibilityRenders.length = 0;
 		chatSurfaceRenders.length = 0;
-		chatSurfaceTransitionRenders.length = 0;
 		artifactFeedbackConsumes.length = 0;
+		chatSurfaceTransitionRenders.length = 0;
 		nativeFullScreenMock.mockReturnValue(false);
 		window.localStorage.clear();
 		for (const session of workspaces.flatMap((workspace) => workspace.sessions)) {
@@ -962,6 +966,24 @@ describe("SessionView", () => {
 			}
 			return { data: { reviewerHandleId: "", reviews: [], runs: [] }, error: undefined };
 		});
+	});
+
+	it("does not replay consumed artifact feedback when Files remounts", async () => {
+		render(<SessionView sessionId="sess-1" />);
+
+		fireEvent.click(screen.getByRole("button", { name: "open artifact feedback" }));
+
+		await waitFor(() => expect(artifactFeedbackConsumes).toEqual([1]));
+		await waitFor(() => expect(screen.queryByText("feedback request 1")).not.toBeInTheDocument());
+		expect(screen.getByText("selected report.html")).toBeInTheDocument();
+
+		fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+		expect(screen.queryByText("selected report.html")).not.toBeInTheDocument();
+
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		expect(screen.getByText("selected report.html")).toBeInTheDocument();
+		expect(screen.queryByText("feedback request 1")).not.toBeInTheDocument();
+		expect(artifactFeedbackConsumes).toEqual([1]);
 	});
 
 	it("resumes only the opened stopped session once, including in StrictMode", async () => {
@@ -1092,24 +1114,6 @@ describe("SessionView", () => {
 		expect(screen.getByText(/Session not found/)).toBeInTheDocument();
 		expect(screen.queryByTestId("terminal-center")).not.toBeInTheDocument();
 	});
-	it("does not replay consumed artifact feedback when Files remounts", async () => {
-		render(<SessionView sessionId="sess-1" />);
-
-		fireEvent.click(screen.getByRole("button", { name: "open artifact feedback" }));
-
-		await waitFor(() => expect(artifactFeedbackConsumes).toEqual([1]));
-		await waitFor(() => expect(screen.queryByText("feedback request 1")).not.toBeInTheDocument());
-		expect(screen.getByText("selected report.html")).toBeInTheDocument();
-
-		fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
-		expect(screen.queryByText("selected report.html")).not.toBeInTheDocument();
-
-		fireEvent.click(screen.getByRole("button", { name: "open files" }));
-		expect(screen.getByText("selected report.html")).toBeInTheDocument();
-		expect(screen.queryByText("feedback request 1")).not.toBeInTheDocument();
-		expect(artifactFeedbackConsumes).toEqual([1]);
-	});
-
 	// Regression: shell terminals are an app-wide list, so without a per-session
 	// filter a shell opened in another session would show up as a tab in this
 	// session's strip. Only this session's shells (not another session's, and no
@@ -3954,6 +3958,28 @@ describe("SessionView", () => {
 		const worker = workerSession("sess-1");
 		worker.status = "merged";
 		worker.isTerminated = true;
+
+		render(<SessionView sessionId="sess-1" />);
+
+		expect(browserViewOptions.current).toMatchObject({ sessionId: "sess-1", terminated: true });
+	});
+
+	it("keeps Browser live for a terminated session showing an opened artifact preview", () => {
+		const worker = workerSession("sess-1");
+		worker.status = "merged";
+		worker.isTerminated = true;
+		worker.previewUrl = "http://ao-preview-artifact.abc.localhost:3001/report.html";
+
+		render(<SessionView sessionId="sess-1" />);
+
+		expect(browserViewOptions.current).toMatchObject({ sessionId: "sess-1", terminated: false });
+	});
+
+	it("still tears Browser down for a terminated session with a workspace preview", () => {
+		const worker = workerSession("sess-1");
+		worker.status = "merged";
+		worker.isTerminated = true;
+		worker.previewUrl = "http://ao-preview.abc.localhost:3001/index.html";
 
 		render(<SessionView sessionId="sess-1" />);
 

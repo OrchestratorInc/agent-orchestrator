@@ -163,6 +163,7 @@ var (
 	ErrSpawnPrompt             = errors.New("prompt")
 	ErrSpawnCreate             = errors.New("create")
 	ErrSpawnSystemPrompt       = errors.New("system prompt file")
+	ErrSpawnArtifactDir        = errors.New("artifact dir")
 	ErrWorkspaceCreate         = errors.New("workspace")
 	ErrWorkspaceProvision      = errors.New("provision")
 	ErrSpawnAttachments        = errors.New("attachments")
@@ -178,7 +179,6 @@ var (
 	ErrClientRequestConflict   = errors.New("client request id belongs to a different task")
 	ErrClientRequestIncomplete = errors.New("client request has an incomplete prior spawn")
 	ErrChatController          = errors.New("chat controller")
-	ErrSpawnArtifactDir        = errors.New("artifact dir")
 )
 
 // wrapSpawnStage annotates a spawn failure with a stage sentinel. The original
@@ -1145,7 +1145,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 				existing, found, lookupErr := m.store.GetSessionByClientRequestID(ctx, cfg.ClientRequestID)
 				if lookupErr == nil && found {
 					replay, replayErr := replayClientRequest(existing, cfg.ClientRequestHash)
-					return replay, promptBytes, systemPromptBytes, replayErr
+					return replay, 0, 0, replayErr
 				}
 			}
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStageEarly(ErrSpawnCreate, err)

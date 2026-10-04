@@ -6,12 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
+const { postMock, remotePostMock } = vi.hoisted(() => ({ postMock: vi.fn(), remotePostMock: vi.fn() }));
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { POST: postMock },
 	apiErrorMessage: (error: unknown, fallback?: string) => error instanceof Error ? error.message : fallback ?? "error",
 	getApiBaseUrl: () => "http://127.0.0.1:3001",
+}));
+vi.mock("../lib/host-clients", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/host-clients")>()),
+	clientForSessionHost: (hostId?: string) => ({ POST: hostId ? remotePostMock : postMock }),
 }));
 vi.mock("../hooks/usePierreFileHighlight", () => ({ usePierreFileHighlightReady: () => true }));
 vi.mock("./ReadOnlyFileView", () => ({
@@ -50,6 +54,7 @@ describe("ArtifactFileView", () => {
 	afterEach(() => {
 		fetchMock.mockReset();
 		postMock.mockReset();
+		remotePostMock.mockReset();
 		vi.unstubAllGlobals();
 	});
 
@@ -153,5 +158,29 @@ describe("ArtifactFileView", () => {
 			params: { path: { sessionId: "sess-1" } },
 			body: { message: expect.stringContaining("notes.txt"), userAuthored: true },
 		});
+	});
+
+	it("sends artifact feedback for a remote session to that host's daemon, not the local one", async () => {
+		fetchMock.mockResolvedValue(new Response("content", { status: 200 }));
+		remotePostMock.mockResolvedValue({ data: { status: "ok" } });
+
+		renderWithQuery(<ArtifactFileView artifactName="notes.txt" feedbackRequestKey={1} hostId="host-2" path="notes.txt" rawUrl={RAW_URL} sessionId="sess-1" />);
+
+		const textbox = await screen.findByRole("textbox", { name: /Feedback for notes\.txt/ });
+		await userEvent.type(textbox, "Remote feedback.");
+		await userEvent.click(screen.getByRole("button", { name: "Send feedback" }));
+
+		await waitFor(() => expect(remotePostMock).toHaveBeenCalled());
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it("resolves a markdown artifact's sibling image against the artifact origin, not the workspace", async () => {
+		fetchMock.mockResolvedValue(new Response("# Report\n\n![chart](chart.png)", { status: 200 }));
+		const rawUrl = "http://ao-preview-artifact.abc123.localhost:3001/sub/report.md?raw=true";
+
+		renderWithQuery(<ArtifactFileView artifactName="report.md" path="sub/report.md" rawUrl={rawUrl} sessionId="sess-1" />);
+
+		const image = await screen.findByRole("img", { name: "chart" });
+		expect(image).toHaveAttribute("src", "http://ao-preview-artifact.abc123.localhost:3001/sub/chart.png");
 	});
 });

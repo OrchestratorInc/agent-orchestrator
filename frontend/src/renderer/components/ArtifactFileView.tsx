@@ -27,6 +27,7 @@ function initialModeFor(path: string): FileViewMode {
 export function ArtifactFileView({
 	artifactName,
 	feedbackRequestKey,
+	hostId,
 	onFeedbackRequestConsumed,
 	path,
 	rawUrl,
@@ -34,12 +35,13 @@ export function ArtifactFileView({
 }: {
 	artifactName: string;
 	feedbackRequestKey?: number;
+	hostId?: string;
 	onFeedbackRequestConsumed?: (key: number) => void;
 	path: string;
 	rawUrl?: string;
 	sessionId: string;
 }) {
-	const annotation = useFileAnnotation(sessionId, { source: artifactName });
+	const annotation = useFileAnnotation(sessionId, { hostId, source: artifactName });
 	const source = useMemo(() => ({ kind: "artifact" as const, rawUrl }), [rawUrl]);
 
 	useEffect(() => {
@@ -54,7 +56,7 @@ export function ArtifactFileView({
 	return (
 		<div className="flex h-full min-h-0 flex-col bg-background">
 			<div className="board-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
-				<FileContentPane annotation={annotation} initialMode={initialModeFor(path)} path={path} sessionId={sessionId} source={source} split={false} />
+				<FileContentPane annotation={annotation} initialMode={initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} />
 			</div>
 		</div>
 	);

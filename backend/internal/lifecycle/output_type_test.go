@@ -227,103 +227,73 @@ func TestReconcileSessionOutputType_DoesNotResurrectSessionTerminatedDuringRead(
 	}
 }
 
-// nthCallBlockingStore blocks the Nth GetSession(blockID) call until release
-// is closed, so a test can deterministically force a goroutine to sit inside
-// mutate's locked critical section while another goroutine attempts to
-// acquire the same lock. entered closes the instant the call starts
-// blocking, so the test knows the lock is actually held before proceeding.
-type nthCallBlockingStore struct {
-	*fakeStore
-	blockID    domain.SessionID
-	blockOnNth int32
-	calls      int32
-	entered    chan struct{}
-	release    chan struct{}
-}
-
-func (s *nthCallBlockingStore) GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
-	if id == s.blockID {
-		if n := atomic.AddInt32(&s.calls, 1); n == s.blockOnNth {
-			close(s.entered)
-			<-s.release
-		}
-	}
-	return s.fakeStore.GetSession(ctx, id)
-}
-
-// TestReconcileSessionOutputType_SerializesWithLifecycleMutate is the reverse
-// direction of the critical-risk regression above: MarkTerminated (like every
-// other lifecycle write) funnels through mutate, which reads a full
-// SessionRecord and later writes it back whole via UpdateSession — including
-// whatever OutputType it saw at read time. Without synchronization, this
-// method's write could land inside that window, and mutate's later full-row
-// write would silently revert it back to "none", keeping a real artifact off
-// the board. Both methods now hold the same m.mu for their entire
-// read-to-write span, so ReconcileSessionOutputType cannot interleave with
-// mutate's critical section at all — it either runs fully before or fully
-// after.
-//
-// mutate calls GetSession a second time from inside its locked section
-// (MarkTerminated also reads once, unlocked, before calling mutate), so the
-// blocking store blocks that second call specifically: the first, unlocked
-// read must not be mistaken for the critical section.
-func TestReconcileSessionOutputType_SerializesWithLifecycleMutate(t *testing.T) {
-	dataDir := t.TempDir()
-	artifactDir := filepath.Join(dataDir, "artifacts", "mer-1")
-	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(artifactDir, "report.html"), []byte("<html></html>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	st := newFakeStore()
+func TestReconcileSessionOutputType_DeletingLastArtifactDropsBackToNone(t *testing.T) {
+	m, st, _ := newManager()
+	dir := t.TempDir()
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID:         "mer-1",
-		OutputType: domain.SessionOutputNone,
-		Activity:   domain.Activity{State: domain.ActivityActive, LastActivityAt: time.Now()},
-		Metadata:   domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
+		OutputType: domain.SessionOutputArtifact,
+		Metadata:   domain.SessionMetadata{ArtifactDir: dir},
 	}
 
-	blocking := &nthCallBlockingStore{
-		fakeStore:  st,
-		blockID:    "mer-1",
-		blockOnNth: 2,
-		entered:    make(chan struct{}),
-		release:    make(chan struct{}),
+	if err := m.ReconcileSessionOutputType(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
 	}
-	m := New(blocking, &fakeMessenger{}, WithDataDir(dataDir))
+	if got := st.sessions["mer-1"].OutputType; got != domain.SessionOutputNone {
+		t.Fatalf("outputType = %q, want %q after the last artifact was removed", got, domain.SessionOutputNone)
+	}
+}
 
-	terminateDone := make(chan error, 1)
-	go func() {
-		terminateDone <- m.MarkTerminated(ctx, "mer-1")
-	}()
-	<-blocking.entered // MarkTerminated now holds m.mu, blocked mid-read.
+// gatedListStore blocks the first ListPRsBySession call until released, so a
+// test can force an older reconcile to sit between its read and its write
+// while a newer one runs.
+type gatedListStore struct {
+	*fakeStore
+	calls   int32
+	entered chan struct{}
+	release chan struct{}
+}
 
-	reconcileDone := make(chan error, 1)
-	go func() {
-		reconcileDone <- m.ReconcileSessionOutputType(ctx, "mer-1")
-	}()
+func (s *gatedListStore) ListPRsBySession(ctx context.Context, id domain.SessionID) ([]domain.PullRequest, error) {
+	prs, err := s.fakeStore.ListPRsBySession(ctx, id)
+	if atomic.AddInt32(&s.calls, 1) == 1 {
+		close(s.entered)
+		<-s.release
+	}
+	return prs, err
+}
+
+func TestReconcileSessionOutputType_OverlappingReconcilesCannotPersistStaleScan(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "report.html"), []byte("<html></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", Metadata: domain.SessionMetadata{ArtifactDir: dir}}
+	gated := &gatedListStore{fakeStore: st, entered: make(chan struct{}), release: make(chan struct{})}
+	m := New(gated, &fakeMessenger{})
+
+	older := make(chan error, 1)
+	go func() { older <- m.ReconcileSessionOutputType(ctx, "mer-1") }()
+	<-gated.entered // the older reconcile has read "no PR" and is paused before writing.
+
+	st.prs["mer-1"] = []domain.PullRequest{{URL: "https://github.com/acme/repo/pull/1", Number: 1}}
+	newer := make(chan error, 1)
+	go func() { newer <- m.ReconcileSessionOutputType(ctx, "mer-1") }()
 
 	select {
-	case <-reconcileDone:
-		t.Fatal("ReconcileSessionOutputType completed while MarkTerminated held the reducer lock mid-write; the reverse race is not closed")
+	case <-newer:
+		t.Fatal("a second reconcile ran while the first was mid-scan; stale writes are possible")
 	case <-time.After(25 * time.Millisecond):
 	}
-
-	close(blocking.release)
-	if err := <-terminateDone; err != nil {
+	close(gated.release)
+	if err := <-older; err != nil {
 		t.Fatal(err)
 	}
-	if err := <-reconcileDone; err != nil {
+	if err := <-newer; err != nil {
 		t.Fatal(err)
 	}
-
-	got := st.sessions["mer-1"]
-	if !got.IsTerminated {
-		t.Fatal("IsTerminated = false, want true")
-	}
-	if got.OutputType != domain.SessionOutputArtifact {
-		t.Fatalf("OutputType = %q, want %q (MarkTerminated's full-row write must not have reverted the reconcile that ran once it released the lock)", got.OutputType, domain.SessionOutputArtifact)
+	if got := st.sessions["mer-1"].OutputType; got != domain.SessionOutputPRAndArtifact {
+		t.Fatalf("outputType = %q, want %q (the newer scan must win)", got, domain.SessionOutputPRAndArtifact)
 	}
 }

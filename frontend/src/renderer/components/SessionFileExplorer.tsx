@@ -49,9 +49,9 @@ import { FileContentPane, type FileOpenOptions } from "./FileContentPane";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 import { WorkspaceReviewPane, type ReviewSourceMenu } from "./diffs/WorkspaceReviewPane";
 import { formatTimeTerse } from "../lib/format-time";
+import { ArtifactFileView } from "./ArtifactFileView";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { sessionUiKey } from "../lib/hosts";
-import { ArtifactFileView } from "./ArtifactFileView";
 
 const WORKSPACE_SOURCE: FilesSource = { kind: "workspace" };
 const ARTIFACT_SOURCE: FilesSource = { kind: "artifact" };
@@ -114,7 +114,10 @@ export function SessionFileExplorer({
 	const source = useUiStore((state) => state.inspectorSessions[uiKey]?.filesSource ?? WORKSPACE_SOURCE);
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
 	const setFilesSource = useUiStore((state) => state.setFilesSource);
-	const annotation = useFileAnnotation(sessionId, { hostId, source: source.kind === "pull_request" ? `${source.label} (${source.url})` : "Workspace" });
+	const annotation = useFileAnnotation(sessionId, {
+		hostId,
+		source: source.kind === "pull_request" ? `${source.label} (${source.url})` : "Workspace",
+	});
 	const snapshot = source.kind === "pull_request" ? prSummaries.find((pr) => pr.url === source.url)?.headSha ?? "" : "";
 	const querySource = useMemo<FilesSource>(
 		() => source.kind === "pull_request" ? { ...source, snapshot } : source,
@@ -499,6 +502,7 @@ export function SessionFileExplorer({
 					artifactTree={artifactTree}
 					feedbackRequestKey={artifactFeedbackRequestKey}
 					filter={filter}
+					hostId={hostId}
 					isMaximized={isMaximized}
 					onBack={() => setSelectedArtifactPath(null)}
 					onFeedbackRequestConsumed={onRevealRequestConsumed}
@@ -575,6 +579,7 @@ function ArtifactFilesPanel({
 	artifactTree,
 	feedbackRequestKey,
 	filter,
+	hostId,
 	isMaximized,
 	onBack,
 	onFeedbackRequestConsumed,
@@ -586,6 +591,7 @@ function ArtifactFilesPanel({
 	artifactTree: TreeNode[];
 	feedbackRequestKey?: number;
 	filter: string;
+	hostId?: string;
 	isMaximized: boolean;
 	onBack: () => void;
 	onFeedbackRequestConsumed?: (key: number) => void;
@@ -613,6 +619,7 @@ function ArtifactFilesPanel({
 						<ArtifactFileView
 							artifactName={artifact.name}
 							feedbackRequestKey={feedbackRequestKey}
+							hostId={hostId}
 							onFeedbackRequestConsumed={onFeedbackRequestConsumed}
 							path={artifact.path}
 							rawUrl={artifact.rawUrl}
@@ -643,6 +650,7 @@ function ArtifactFilesPanel({
 				<ArtifactFileView
 					artifactName={artifact.name}
 					feedbackRequestKey={feedbackRequestKey}
+					hostId={hostId}
 					onFeedbackRequestConsumed={onFeedbackRequestConsumed}
 					path={artifact.path}
 					rawUrl={artifact.rawUrl}
