@@ -1753,7 +1753,7 @@ function ReviewsSection({
 		},
 		onError: () => {
 			setPendingReviewerInterfaceMode((pending) => pending?.sessionId === session.id ? null : pending);
-			void queryClient.invalidateQueries({ queryKey: ["session-reviews", session.id] });
+			void queryClient.invalidateQueries({ queryKey: reviewsKey });
 		},
 	});
 	const cancelReview = useMutation({

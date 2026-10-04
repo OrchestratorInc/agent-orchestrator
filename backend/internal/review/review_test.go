@@ -80,7 +80,6 @@ func (f *fakeStore) SetReviewInterfaceMode(_ context.Context, id string, mode do
 			review.ReviewerHandleID = ""
 		} else {
 			review.ProviderConversationID = ""
-			review.ControllerGeneration = ""
 		}
 		f.reviews[harness] = review
 		f.review = &review
@@ -92,7 +91,6 @@ func (f *fakeStore) SetReviewInterfaceMode(_ context.Context, id string, mode do
 			f.review.ReviewerHandleID = ""
 		} else {
 			f.review.ProviderConversationID = ""
-			f.review.ControllerGeneration = ""
 		}
 		updated = true
 	}
@@ -704,6 +702,28 @@ func TestTriggerFailedPreviousPaneTeardownRestoresOldSurface(t *testing.T) {
 	got := store.reviews[domain.ReviewerCodex]
 	if got.InterfaceMode != old.InterfaceMode || got.ReviewerHandleID != old.ReviewerHandleID || got.AgentSessionID != old.AgentSessionID || launcher.destroyCalls != 2 {
 		t.Fatalf("failed teardown lost previous reviewer or replacement cleanup: review=%+v launcher=%+v", got, launcher)
+	}
+}
+
+func TestTriggerFailedDeferredReviewerNotificationRestoresPreviousSurface(t *testing.T) {
+	old := domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex,
+		ReviewerHandleID: "chat-pane", AgentSessionID: "conv-1", InterfaceMode: domain.ReviewerInterfaceChat,
+		ProviderConversationID: "conv-1", ControllerGeneration: "generation-1"}
+	store := &fakeStore{review: &old, reviews: map[domain.ReviewerHarness]domain.Review{domain.ReviewerCodex: old},
+		runs: []domain.ReviewRun{{ID: "run-1", ReviewID: old.ID, SessionID: "mer-1", Harness: domain.ReviewerCodex,
+			PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning}}}
+	launcher := &fakeLauncher{interfaceMode: domain.ReviewerInterfaceChat, alive: true, handle: "replacement-pane",
+		notifyErr: errors.New("replacement prompt failed")}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+	if _, err := eng.TriggerWithSourceAndMode(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceTUI); err == nil {
+		t.Fatal("expected deferred notification failure")
+	}
+	got := store.reviews[domain.ReviewerCodex]
+	if got.InterfaceMode != old.InterfaceMode || got.ReviewerHandleID != old.ReviewerHandleID || got.ProviderConversationID != old.ProviderConversationID || got.ControllerGeneration != old.ControllerGeneration {
+		t.Fatalf("previous surface was not restored: got=%+v want=%+v", got, old)
+	}
+	if launcher.destroyCalls != 2 || store.runs[0].Status != domain.ReviewRunFailed {
+		t.Fatalf("replacement cleanup or run failure missing: launcher=%+v runs=%+v", launcher, store.runs)
 	}
 }
 

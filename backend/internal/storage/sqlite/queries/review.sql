@@ -33,7 +33,6 @@ FROM review WHERE session_id = ? ORDER BY updated_at DESC, created_at DESC, id D
 -- name: SetReviewInterfaceMode :execrows
 UPDATE review SET interface_mode = ?, reviewer_handle_id = CASE WHEN ? = 'chat' THEN '' ELSE reviewer_handle_id END,
     provider_conversation_id = CASE WHEN ? = 'tui' THEN '' ELSE provider_conversation_id END,
-    controller_generation = CASE WHEN ? = 'tui' THEN '' ELSE controller_generation END,
     controller_error = '', updated_at = ? WHERE id = ?;
 
 -- name: RestoreReviewLaunchState :execrows

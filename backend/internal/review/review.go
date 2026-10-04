@@ -583,8 +583,13 @@ func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.Se
 			launchSpec := reviewLaunchSpec(worker, harness, config, launchRun, queue, 0, persistedAgentSessionID, reviewRow.ReviewerLaunchID)
 			launchSpec.InterfaceMode = selectedMode
 			if err := e.launcher.Notify(ctx, handleID, launchSpec); err != nil {
-				_ = e.launcher.Destroy(ctx, handleID)
-				return TriggerResult{}, failRuns(0, fmt.Errorf("notify replacement reviewer: %w", err))
+				rollbackErr := rollbackReplacement(fmt.Errorf("notify replacement reviewer: %w", err))
+				for _, run := range restarted {
+					if _, updateErr := e.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunFailed, domain.VerdictNone, err.Error(), "", run.AutoInjectReview); updateErr != nil {
+						rollbackErr = errors.Join(rollbackErr, updateErr)
+					}
+				}
+				return TriggerResult{}, rollbackErr
 			}
 		}
 	}

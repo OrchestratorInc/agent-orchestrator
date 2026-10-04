@@ -872,7 +872,6 @@ func (q *Queries) RestoreReviewLaunchState(ctx context.Context, arg RestoreRevie
 const setReviewInterfaceMode = `-- name: SetReviewInterfaceMode :execrows
 UPDATE review SET interface_mode = ?, reviewer_handle_id = CASE WHEN ? = 'chat' THEN '' ELSE reviewer_handle_id END,
     provider_conversation_id = CASE WHEN ? = 'tui' THEN '' ELSE provider_conversation_id END,
-    controller_generation = CASE WHEN ? = 'tui' THEN '' ELSE controller_generation END,
     controller_error = '', updated_at = ? WHERE id = ?
 `
 
@@ -880,7 +879,6 @@ type SetReviewInterfaceModeParams struct {
 	InterfaceMode string
 	Column2       interface{}
 	Column3       interface{}
-	Column4       interface{}
 	UpdatedAt     time.Time
 	ID            string
 }
@@ -890,7 +888,6 @@ func (q *Queries) SetReviewInterfaceMode(ctx context.Context, arg SetReviewInter
 		arg.InterfaceMode,
 		arg.Column2,
 		arg.Column3,
-		arg.Column4,
 		arg.UpdatedAt,
 		arg.ID,
 	)

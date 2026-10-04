@@ -98,7 +98,7 @@ func (s *Store) CreateReviewConversation(ctx context.Context, id, reviewID strin
 			return fmt.Errorf("reviewer %s is not the current chat owner", reviewID)
 		}
 		mode := string(domain.ReviewerInterfaceChat)
-		if n, err := q.SetReviewInterfaceMode(ctx, gen.SetReviewInterfaceModeParams{InterfaceMode: mode, Column2: mode, Column3: mode, Column4: mode, UpdatedAt: now, ID: reviewID}); err != nil {
+		if n, err := q.SetReviewInterfaceMode(ctx, gen.SetReviewInterfaceModeParams{InterfaceMode: mode, Column2: mode, Column3: mode, UpdatedAt: now, ID: reviewID}); err != nil {
 			return err
 		} else if n != 1 {
 			return fmt.Errorf("reviewer %s is not the current chat owner", reviewID)

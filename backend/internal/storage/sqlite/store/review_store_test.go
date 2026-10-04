@@ -194,6 +194,13 @@ func TestCleanupOwnedReviewControllerWorkSettlesItsTurn(t *testing.T) {
 	if claimed, err := s.ClaimReviewChatController(ctx, review.ID, "provider-1", "review-generation", now); err != nil || !claimed {
 		t.Fatalf("claim reviewer controller: claimed=%v err=%v", claimed, err)
 	}
+	if ok, err := s.SetReviewInterfaceMode(ctx, review.ID, domain.ReviewerInterfaceTUI, now.Add(time.Second)); err != nil || !ok {
+		t.Fatalf("switch reviewer to terminal: ok=%v err=%v", ok, err)
+	}
+	switched, ok, err := s.GetReviewByID(ctx, review.ID)
+	if err != nil || !ok || switched.ControllerGeneration != "review-generation" {
+		t.Fatalf("switch cleared the old controller fence: review=%+v ok=%v err=%v", switched, ok, err)
+	}
 	created, err := s.AppendReviewUserMessage(ctx, conversation.ID, session.ID, review.ID, "review-generation", domain.ConversationMessage{
 		ID: "review-message", Text: "Review the change", Origin: domain.MessageOriginHuman,
 	}, "review-turn", now)
