@@ -52,6 +52,35 @@ func TestBrowserLiveRequiresDesktopOptIn(t *testing.T) {
 	}
 }
 
+func TestBrowserLiveRechecksDesktopOptInAfterReserve(t *testing.T) {
+	sessions := &browserLiveSessionStub{}
+	enabledCalls := 0
+	hub := NewBrowserLiveHub(nil, sessions, func() bool {
+		enabledCalls++
+		return enabledCalls == 1
+	}, nil)
+	r := chi.NewRouter()
+	mountBrowserLive(r, hub)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/s1/browser/live", nil)
+	req = req.WithContext(requestscope.WithLAN(req.Context()))
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("disabled-after-reserve status = %d, want 403", res.Code)
+	}
+	if enabledCalls != 2 {
+		t.Fatalf("enabled calls = %d, want 2", enabledCalls)
+	}
+	if sessions.calls != 1 {
+		t.Fatalf("session lookup calls = %d, want 1", sessions.calls)
+	}
+	_, release, ok := hub.reserve("s1")
+	if !ok {
+		t.Fatal("lease was not released after sharing was disabled")
+	}
+	release()
+}
+
 func TestBrowserLiveLeaseIsExclusiveAndRevocable(t *testing.T) {
 	hub := NewBrowserLiveHub(nil, nil, nil, nil)
 	ctx, release, ok := hub.reserve("s1")

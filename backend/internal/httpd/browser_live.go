@@ -121,6 +121,11 @@ func (h *BrowserLiveHub) serve(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "BROWSER_CONTROL_IN_USE", "Another mobile client controls this browser", nil)
 		return
 	}
+	if h.enabled == nil || !h.enabled() {
+		release()
+		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "BROWSER_REMOTE_DISABLED", "Browser viewing from mobile is disabled on the desktop", nil)
+		return
+	}
 	defer release()
 
 	sub, err := h.broker.Subscribe(r.Context(), sessionID)
