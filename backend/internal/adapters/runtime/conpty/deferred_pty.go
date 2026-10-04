@@ -1,6 +1,7 @@
 package conpty
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -9,6 +10,10 @@ import (
 
 // maxDeferredInput bounds input buffered before a deferred process starts.
 const maxDeferredInput = 64 * 1024
+
+// errDeferredInputFull reports input the not-yet-started process could not
+// take: the pre-start buffer is full.
+var errDeferredInputFull = errors.New("deferred pty: input buffer full before the process started")
 
 // deferredPTY is a ptyConn whose process starts on the first Resize, at the
 // grid the host applies for its first sized client. A shell terminal is created
@@ -54,15 +59,21 @@ func (d *deferredPTY) Read(b []byte) (int, error) {
 
 // Write forwards input once the process runs and buffers it until then, so
 // keystrokes typed while the terminal is still sizing itself are not lost.
+// Input past the buffer's bound is reported as a short write, not accepted.
 func (d *deferredPTY) Write(b []byte) (int, error) {
 	d.mu.Lock()
 	conn := d.conn
 	if conn == nil {
-		if !d.closed && !d.failed && len(d.pending)+len(b) <= maxDeferredInput {
-			d.pending = append(d.pending, b...)
+		defer d.mu.Unlock()
+		if d.closed || d.failed {
+			return 0, io.ErrClosedPipe
 		}
-		d.mu.Unlock()
-		return len(b), nil
+		n := min(len(b), maxDeferredInput-len(d.pending))
+		d.pending = append(d.pending, b[:n]...)
+		if n < len(b) {
+			return n, errDeferredInputFull
+		}
+		return n, nil
 	}
 	d.mu.Unlock()
 	return conn.Write(b)

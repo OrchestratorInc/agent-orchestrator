@@ -90,6 +90,19 @@ func TestDeferredPTYStartsAtFirstGridAndReplaysEarlyInput(t *testing.T) {
 	_ = d.Close()
 }
 
+// Input beyond the pre-start buffer is reported, not silently accepted.
+func TestDeferredPTYReportsInputBeyondItsBuffer(t *testing.T) {
+	d := newDeferredPTY((&startRecorder{conn: newFakePTY(42)}).start)
+	if _, err := d.Write(make([]byte, maxDeferredInput-10)); err != nil {
+		t.Fatalf("Write within the buffer: %v", err)
+	}
+	n, err := d.Write(make([]byte, 25))
+	if n != 10 || !errors.Is(err, errDeferredInputFull) {
+		t.Fatalf("Write past the buffer = %d, %v; want 10 accepted and errDeferredInputFull", n, err)
+	}
+	_ = d.Close()
+}
+
 func TestDeferredPTYClosedBeforeStartNeverStarts(t *testing.T) {
 	rec := &startRecorder{conn: newFakePTY(42)}
 	d := newDeferredPTY(rec.start)
