@@ -55,6 +55,7 @@ func (s *Store) SetReviewInterfaceMode(ctx context.Context, id string, mode doma
 		InterfaceMode: string(mode),
 		Column2:       string(mode),
 		Column3:       string(mode),
+		Column4:       string(mode),
 		UpdatedAt:     now,
 		ID:            id,
 	})

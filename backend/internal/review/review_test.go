@@ -78,6 +78,7 @@ func (f *fakeStore) SetReviewInterfaceMode(_ context.Context, id string, mode do
 		review.InterfaceMode = mode
 		if mode == domain.ReviewerInterfaceChat {
 			review.ReviewerHandleID = ""
+			review.ControllerGeneration = ""
 		} else {
 			review.ProviderConversationID = ""
 		}
@@ -89,6 +90,7 @@ func (f *fakeStore) SetReviewInterfaceMode(_ context.Context, id string, mode do
 		f.review.InterfaceMode = mode
 		if mode == domain.ReviewerInterfaceChat {
 			f.review.ReviewerHandleID = ""
+			f.review.ControllerGeneration = ""
 		} else {
 			f.review.ProviderConversationID = ""
 		}
