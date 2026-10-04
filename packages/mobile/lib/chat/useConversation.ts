@@ -208,13 +208,16 @@ export function useMobileConversation(
 	}, [cacheKey, refresh, refreshGate]);
 
 	const loadTurnOptions = useCallback(async (options?: { refresh?: boolean }) => {
-		if (!cfg || unavailable || !hasConversation) return { models, configOptions };
+		if (unavailable || !hasConversation || (!cfg && !sessionSource?.getChatModels)) return { models, configOptions };
 		if (options?.refresh) turnOptionsCache.delete(cacheKey);
 		const catalog = await turnOptionsCache.load(cacheKey, async () => {
+			if (sessionSource?.kind === "cloud" && sessionSource.getChatModels) {
+				return { models: await sessionSource.getChatModels(sessionId), configOptions: [] };
+			}
 			return loadTurnOptionCatalog({
 				hasProviderConfig,
-				loadModels: () => getConversationModels(cfg, sessionId),
-				loadConfigOptions: () => getConversationConfigOptions(cfg, sessionId),
+				loadModels: () => getConversationModels(cfg!, sessionId),
+				loadConfigOptions: () => getConversationConfigOptions(cfg!, sessionId),
 			});
 		});
 		if (mounted.current) {
@@ -222,7 +225,7 @@ export function useMobileConversation(
 			setConfigOptions(catalog.configOptions);
 		}
 		return catalog;
-	}, [cacheKey, cfg, configOptions, hasConversation, hasProviderConfig, models, sessionId, unavailable]);
+	}, [cacheKey, cfg, configOptions, hasConversation, hasProviderConfig, models, sessionId, sessionSource, unavailable]);
 
 	const loadSkills = useCallback(async () => {
 		if (!cfg || unavailable || !hasConversation) return skills;
@@ -356,17 +359,26 @@ export function useMobileConversation(
 		[cfg, runAction, sessionId],
 	);
 	const interrupt = useCallback(
-		() => runAction("interrupt", () => requireConfig(cfg, (c) => options?.reviewId
-			? interruptReviewerConversation(c, options.reviewId)
-			: interruptConversation(c, sessionId))),
-		[cfg, options?.reviewId, runAction, sessionId],
+		() => runAction("interrupt", () => {
+			if (sessionSource?.kind === "cloud") {
+				const running = snapshot?.turns.find((turn) => turn.state === "running");
+				if (!running) throw new Error("There is no running Cloud turn to stop.");
+				return sessionSource.cancelTurn(sessionId, running.id);
+			}
+			return requireConfig(cfg, (c) => options?.reviewId
+				? interruptReviewerConversation(c, options.reviewId)
+				: interruptConversation(c, sessionId));
+		}),
+		[cfg, options?.reviewId, runAction, sessionId, sessionSource, snapshot?.turns],
 	);
 	const resolveApprovalAction = useCallback(
 		(requestId: string, decisionId: string) =>
-			runAction("approval", () => requireConfig(cfg, (c) => options?.reviewId
-				? resolveReviewerApproval(c, options.reviewId, requestId, decisionId)
-				: resolveApproval(c, sessionId, requestId, decisionId))),
-		[cfg, options?.reviewId, runAction, sessionId],
+			runAction("approval", () => sessionSource?.kind === "cloud" && sessionSource.decideApproval
+				? sessionSource.decideApproval(sessionId, requestId, decisionId)
+				: requireConfig(cfg, (c) => options?.reviewId
+					? resolveReviewerApproval(c, options.reviewId, requestId, decisionId)
+					: resolveApproval(c, sessionId, requestId, decisionId))),
+		[cfg, options?.reviewId, runAction, sessionId, sessionSource],
 	);
 	const resolveInputAction = useCallback(
 		(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>) =>
@@ -384,8 +396,10 @@ export function useMobileConversation(
 		[cfg, runAction, sessionId],
 	);
 	const chooseSettings = useCallback(
-		(settings: TurnSettings) => runAction("settings", () => requireConfig(cfg, (c) => setConversationSettings(c, sessionId, settings))),
-		[cfg, runAction, sessionId],
+		(settings: TurnSettings) => runAction("settings", () => sessionSource?.kind === "cloud" && sessionSource.setTurnSettings
+			? sessionSource.setTurnSettings(sessionId, { ...snapshot?.settings, ...settings })
+			: requireConfig(cfg, (c) => setConversationSettings(c, sessionId, settings))),
+		[cfg, runAction, sessionId, sessionSource, snapshot?.settings],
 	);
 	const setConfigOption = useCallback(
 		(optionId: string, value: { value: string } | { enabled: boolean }) =>

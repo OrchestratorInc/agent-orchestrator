@@ -69,15 +69,19 @@ describe("project environment badge", () => {
 	it.each([
 		["dark", darkTheme],
 		["light", lightTheme],
-	] as const)("uses a readable outlined capsule for Local and Cloud in %s mode", async (scheme, theme) => {
+	] as const)("shows borderless Local and Cloud icons in %s mode", async (scheme, theme) => {
 		fixture.scheme = scheme;
-		for (const sourceLabel of ["Local", "Cloud"] as const) {
+		for (const [sourceLabel, iconName] of [["Local", "server"], ["Cloud", "cloud"]] as const) {
 			await act(async () => { renderer = create(<ProjectCard row={row} sourceLabel={sourceLabel} busy={false} onOpenProject={vi.fn()} />); });
-			const badge = renderer!.root.findAll((node) => String(node.type) === "Text" && node.props.children === sourceLabel)[0];
+			const badge = renderer!.root.findAll((node) => String(node.type) === "View" && node.props.accessibilityLabel === `${sourceLabel} environment`)[0];
 			expect(badge).toBeDefined();
-			expect(badge.props.style).toMatchObject({ color: theme.textPrimary, borderColor: theme.borderStrong, borderWidth: 1, borderRadius: 999, minHeight: 16 });
-			expect(badge.props.style.height).toBeUndefined();
+			expect(badge.props.style.borderColor).toBeUndefined();
+			expect(badge.props.style.borderWidth).toBeUndefined();
 			expect(badge.props.style.backgroundColor).toBeUndefined();
+			expect(badge.findAll((node) => String(node.type) === "Feather" && node.props.name === iconName && node.props.color === theme.textPrimary)).toHaveLength(1);
+			expect(renderer!.root.findAll((node) => String(node.type) === "Text" && node.props.children === sourceLabel)).toHaveLength(0);
+			const rowButton = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityRole === "button")[0];
+			expect(rowButton.props.accessibilityLabel).toContain(sourceLabel);
 			await act(async () => renderer?.unmount());
 			renderer = undefined;
 		}

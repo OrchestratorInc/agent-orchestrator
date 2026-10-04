@@ -11,7 +11,7 @@ import {
 } from "./orchestratorView";
 import type { Theme } from "./theme";
 import { rowDividerWidth } from "./divider";
-import { environmentBadgeStyle } from "./environment-badge";
+import { EnvironmentBadge } from "./environment-badge-icon";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { fontScaleCap, space, type } from "./tokens";
 import { Dot } from "./ui";
@@ -58,7 +58,7 @@ export function ProjectCard({
 					<Text style={styles.project} numberOfLines={1}>
 						{row.project.name}
 					</Text>
-					{sourceLabel && <Text style={styles.sourceTag}>{sourceLabel}</Text>}
+					{sourceLabel && <EnvironmentBadge sourceLabel={sourceLabel} theme={t} />}
 					<Feather name="chevron-right" size={15} color={t.textFaint} />
 				</View>
 
@@ -234,7 +234,6 @@ const makeStyles = (t: Theme) =>
 
 		titleRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
 		project: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
-		sourceTag: environmentBadgeStyle(t),
 		timestamp: { color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontVariant: ["tabular-nums"], fontFamily: t.fontMono },
 
 		summaryRow: { flexDirection: "row", alignItems: "center", minWidth: 0 },

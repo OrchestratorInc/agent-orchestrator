@@ -65,6 +65,12 @@ describe("SpawnComposerControls", () => {
 		} as unknown as Parameters<typeof SpawnComposerControls>[0];
 		await act(async () => { renderer = create(<SpawnComposerControls {...props} />); });
 		const runOn = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Run on Choose where to run")[0];
+		const project = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Choose project")[0];
+		const selectorRow = renderer!.root.findAll((node) => String(node.type) === "View")
+			.find((node) => node.props.style?.flexDirection === "row" && node.findAll((child) => String(child.type) === "Pressable" && ["Run on Choose where to run", "Choose project"].includes(child.props.accessibilityLabel)).length === 2);
+		expect(selectorRow?.props.style).toMatchObject({ flexDirection: "row" });
+		expect(runOn.props.style).toContainEqual(expect.objectContaining({ flex: 2, minWidth: 0 }));
+		expect(project.props.style).toContainEqual(expect.objectContaining({ flex: 3, minWidth: 0 }));
 		await act(async () => runOn.props.onPress());
 		expect(renderer!.root.findAll((node) => String(node.type) === "Text").some((node) => node.props.children === "Run on")).toBe(true);
 		const cloud = renderer!.root.findAll((node) => String(node.type) === "Pressable").find((node) => node.findAll((child) => String(child.type) === "Text" && child.props.children === "Cloud").length > 0);

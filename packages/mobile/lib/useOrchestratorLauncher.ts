@@ -51,11 +51,12 @@ export function useOrchestratorLauncher() {
 		return source ? { source, value: row } : null;
 	}, [environment, orgId, config]);
 
-	const openSession = useCallback((input: Scoped<OrchestratorProjectRow> | OrchestratorProjectRow, id: string) => {
+	const openSession = useCallback((input: Scoped<OrchestratorProjectRow> | OrchestratorProjectRow, id: string, newlyStarted = false) => {
 		const row = scopedRow(input);
 		if (!row) return;
 		router.push({ pathname: "/session/[id]", params: {
 			id, projectId: row.value.project.id, source: row.source.kind, sourceId: row.source.id,
+			...(newlyStarted && row.source.kind === "cloud" ? { startup: "spawn" } : {}),
 		} });
 	}, [router, scopedRow]);
 
@@ -75,7 +76,7 @@ export function useOrchestratorLauncher() {
 				const id = await spawnCloudOrchestrator(client, orgId, row.value.project.id, requestKey);
 				cloudRequestKeys.current.delete(key);
 				await refreshSource(row.source).catch(() => {});
-				openSession(row, id);
+				openSession(row, id, true);
 				return;
 			}
 			const next = await launchConductorOn(row.source, row.value.project.id, false, mode);

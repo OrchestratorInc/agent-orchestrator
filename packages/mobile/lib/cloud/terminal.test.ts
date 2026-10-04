@@ -43,6 +43,7 @@ describe("Cloud agent terminal", () => {
 		const { terminal, client, statuses } = fixture();
 		await terminal.connect();
 		expect(client.createTerminalTicket).toHaveBeenCalledWith("org-1", "session-1", "agent");
+		expect(statuses).toEqual(["connecting", "attaching"]);
 		const socket = FakeSocket.instances[0];
 		expect(socket.url).toBe("wss://cloud.example/api/cloud/v1/terminal?ticket=ticket-1&after=0&kind=agent&protocol=2");
 		socket.open();

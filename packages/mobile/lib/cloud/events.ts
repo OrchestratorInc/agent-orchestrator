@@ -1,5 +1,47 @@
 import type { ClientEvent, CloudClient } from "@aoagents/cloud-client";
-import type { ConversationItem, ConversationMessage } from "../chat/types";
+import type { ConversationActivity, ConversationItem, ConversationMessage, ConversationTurn } from "../chat/types";
+
+function payloadField(event: ClientEvent, field: string): unknown {
+	const payload = event.payload as Record<string, unknown> | undefined;
+	return payload?.[field];
+}
+
+function eventTurnId(event: ClientEvent): string | undefined {
+	const value = payloadField(event, "turnId");
+	return typeof value === "string" && value ? value : undefined;
+}
+
+/** Rebuild durable turn history from the same Cloud events shown by desktop. */
+export function toConversationTurns(events: ClientEvent[]): ConversationTurn[] {
+	const turns = new Map<string, ConversationTurn>();
+	for (const event of events) {
+		const id = eventTurnId(event);
+		if (!id) continue;
+		let turn = turns.get(id);
+		if (!turn) {
+			turn = { id, state: "queued", requestedAt: event.createdAt };
+			turns.set(id, turn);
+		}
+		if (event.type === "chat.turn_started" || (event.type === "chat.assistant_delta" && turn.state === "queued")) {
+			turn.state = "running";
+			turn.startedAt = event.createdAt;
+		} else if (event.type === "chat.turn_completed" || event.type === "chat.turn_interrupted" || event.type === "chat.turn_aborted") {
+			turn.state = event.type === "chat.turn_completed" ? "completed" : event.type === "chat.turn_interrupted" ? "interrupted" : "failed";
+			turn.completedAt = event.createdAt;
+			const error = payloadField(event, "error");
+			if (typeof error === "string") turn.errorMessage = error;
+		}
+	}
+	const ordered = [...turns.values()];
+	// Cloud may durably accept the first message before the worker claims its
+	// turn. Show it as the active exchange rather than hiding it behind the
+	// timeline's queued-turn filter while provisioning catches up.
+	if (!ordered.some((turn) => turn.state === "running")) {
+		const next = ordered.find((turn) => turn.state === "queued");
+		if (next) next.state = "running";
+	}
+	return ordered;
+}
 
 /**
  * Cloud transcript events as mobile's conversation items.
@@ -12,56 +54,109 @@ import type { ConversationItem, ConversationMessage } from "../chat/types";
  */
 export function toConversationItems(events: ClientEvent[]): ConversationItem[] {
 	const items: ConversationItem[] = [];
-	let open: ConversationMessage | undefined;
+	const open = new Map<string, ConversationMessage>();
+	const approvals = new Map<string, ConversationActivity>();
 
 	for (const event of events) {
-		switch (event.type) {
+		switch (event.type as string) {
 			case "chat.user_message":
 				// A user message can interleave before a turn-ending event ever
 				// arrives; settle whatever assistant bubble was open rather than
 				// dropping the only reference to it while it is still streaming.
-				if (open) open.streaming = false;
-				open = undefined;
+				for (const message of open.values()) message.streaming = false;
+				open.clear();
+				const userText = payloadField(event, "text");
+				if (typeof userText !== "string" || !userText) break;
 				items.push({
 					kind: "message",
 					id: `${event.sessionId}:${event.sequence}`,
 					sequence: event.sequence,
 					revision: 0,
+					turnId: eventTurnId(event),
 					role: "user",
 					origin: "human",
-					text: event.payload.text,
+					text: userText,
 					streaming: false,
 					createdAt: event.createdAt,
 				});
 				break;
 			case "chat.assistant_delta":
-				if (open) {
-					open.text += event.payload.text;
+				const assistantText = payloadField(event, "text");
+				if (typeof assistantText !== "string" || !assistantText) break;
+				const turnId = eventTurnId(event);
+				const key = turnId ?? "without-turn";
+				const previous = open.get(key);
+				if (previous) {
+					previous.text += assistantText;
 				} else {
-					open = {
+					const message: ConversationMessage = {
 						kind: "message",
 						id: `${event.sessionId}:${event.sequence}`,
 						sequence: event.sequence,
 						revision: 0,
+						turnId,
 						role: "assistant",
 						origin: "provider",
-						text: event.payload.text,
+						text: assistantText,
 						streaming: true,
 						createdAt: event.createdAt,
 					};
-					items.push(open);
+					open.set(key, message);
+					items.push(message);
 				}
 				break;
 			case "chat.turn_completed":
 			case "chat.turn_interrupted":
 			case "chat.turn_aborted":
-				if (open) open.streaming = false;
-				open = undefined;
+				const ended = eventTurnId(event);
+				if (ended) {
+					const message = open.get(ended);
+					if (message) message.streaming = false;
+					open.delete(ended);
+				} else {
+					for (const message of open.values()) message.streaming = false;
+					open.clear();
+				}
+				for (const activity of approvals.values()) {
+					if (activity.status === "pending" && (!ended || activity.turnId === ended)) activity.status = "cancelled";
+				}
+				if (event.type === "chat.turn_aborted") {
+					const error = payloadField(event, "error");
+					if (typeof error === "string" && error) items.push({
+						kind: "activity", id: `cloud-error-${event.sequence}`, turnId: ended,
+						sequence: event.sequence, revision: 1, activityKind: "error", status: "failed",
+						summary: error, detail: { error }, createdAt: event.createdAt,
+					});
+				}
 				break;
+			case "chat.approval_requested": {
+				const requestId = payloadField(event, "requestId");
+				if (typeof requestId !== "string" || !requestId) break;
+				const rawDecisions = payloadField(event, "decisions");
+				const decisions = Array.isArray(rawDecisions) ? rawDecisions.filter((item): item is { id: string; label: string } =>
+					Boolean(item && typeof item === "object" && typeof item.id === "string" && typeof item.label === "string")) : [];
+				const summary = payloadField(event, "summary");
+				const activity: ConversationActivity = {
+					kind: "activity", id: `cloud-approval-${requestId}`, turnId: eventTurnId(event),
+					sequence: event.sequence, revision: 1, activityKind: "approval", status: "pending",
+					summary: typeof summary === "string" ? summary : "Permission required",
+					requestId, decisions, createdAt: event.createdAt,
+				};
+				approvals.set(requestId, activity);
+				items.push(activity);
+				break;
+			}
+			case "chat.approval_decided": {
+				const requestId = payloadField(event, "requestId");
+				if (typeof requestId === "string") {
+					const activity = approvals.get(requestId);
+					if (activity) { activity.status = "completed"; activity.revision += 1; }
+				}
+				break;
+			}
 			case "chat.turn_started":
 			case "chat.interrupt_requested":
-				// No rendering of their own; the controller/turn state they imply
-				// is not tracked from a bare transcript replay.
+				// These change turn state, not the timeline's visible items.
 				break;
 		}
 	}

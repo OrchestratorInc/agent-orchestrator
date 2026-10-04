@@ -1,6 +1,6 @@
 import { CloudApiError, type CloudClient } from "@aoagents/cloud-client";
 
-export type CloudTerminalStatus = "connecting" | "waiting" | "ready" | "disconnected" | "exited" | "error";
+export type CloudTerminalStatus = "connecting" | "waiting" | "attaching" | "ready" | "disconnected" | "exited" | "error";
 
 export function createCloudTerminal(input: {
 	client: CloudClient;
@@ -71,6 +71,7 @@ export function createCloudTerminal(input: {
 			return;
 		}
 		if (disposed) return;
+		input.onStatus("attaching");
 		const url = new URL(input.client.terminalUrl(ticket, { after: 0, kind: "agent" }));
 		url.searchParams.set("protocol", "2");
 		let ws: WebSocket;

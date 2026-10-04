@@ -1,14 +1,33 @@
 import type { CloudClient, Turn } from "@aoagents/cloud-client";
 import type { DashboardSession, ProjectInfo } from "../api";
 import type { ConversationEvent } from "../chat/sse";
-import type { ConversationTurn } from "../chat/types";
+import type { ConversationTurn, TurnSettings } from "../chat/types";
 import type { SessionSource } from "../environment/types";
-import { fetchConversationReplay, pollCloudEvents, toConversationItems } from "./events";
+import { fetchConversationReplay, pollCloudEvents, toConversationItems, toConversationTurns } from "./events";
 import { toDashboardSession, toProjectInfo } from "./mapping";
 
 /** How often the cloud transcript is polled for new events. Matches the
  * tunnel-path conversation poll interval mobile already uses elsewhere. */
 const CLOUD_EVENT_POLL_MS = 2_000;
+const CHAT_HANDOFF_POLL_MS = 1_000;
+const CHAT_HANDOFF_TIMEOUT_MS = 60_000;
+const terminalTransitionPhases = new Set(["completed", "failed", "cancelled"]);
+const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+
+async function waitForChatHandoff(client: CloudClient, orgId: string, id: string): Promise<void> {
+	const deadline = Date.now() + CHAT_HANDOFF_TIMEOUT_MS;
+	for (;;) {
+		const { session } = await client.getSession(orgId, id);
+		if (session.interfaceMode === "chat") return;
+		const status = await client.getSessionInterfaceTransition(orgId, id);
+		const transition = status.transition;
+		if (transition?.phase === "failed" || transition?.phase === "cancelled" || transition?.phase === "recovery_required") {
+			throw new Error(transition.errorDetail || `Cloud could not switch this session to Chat (${transition.phase}).`);
+		}
+		if (Date.now() >= deadline) throw new Error("Cloud is taking too long to switch this session to Chat. Try again shortly.");
+		await new Promise<void>((resolve) => setTimeout(resolve, CHAT_HANDOFF_POLL_MS));
+	}
+}
 
 function toConversationTurn(turn: Turn): ConversationTurn {
 	const state = turn.state === "provisioning"
@@ -45,6 +64,7 @@ export function createCloudSessionSource(input: {
 	orgId: string;
 }): SessionSource {
 	const { client, orgId } = input;
+	const settingsBySession = new Map<string, TurnSettings>();
 	return {
 		kind: "cloud",
 		listProjects: async (): Promise<ProjectInfo[]> =>
@@ -83,29 +103,42 @@ export function createCloudSessionSource(input: {
 				// shows the live tail of a long conversation, not just its start.
 				fetchConversationReplay(client, orgId, id),
 			]);
+			const turns = toConversationTurns(events);
+			if (session.activeTurn && !turns.some((turn) => turn.id === session.activeTurn?.id)) {
+				turns.push(toConversationTurn(session.activeTurn));
+			}
 			return {
 				conversationId: id,
 				sessionId: id,
 				harness: session.harness,
-				// Cloud's `mode` is a trust level, distinct from mobile's chat/tui
-				// controller mode; cloud sessions are always Chat (see mapping.ts).
-				mode: "chat" as const,
-				controller: { state: "ready" as const },
+				// Cloud's `mode` is a trust level; interfaceMode is the actual
+				// controller. A Terminal session must not masquerade as Chat.
+				mode: session.interfaceMode === "tui" ? "tui" as const : "chat" as const,
+				controller: { state: turns.some((turn) => turn.state === "running" || turn.state === "queued") ? "busy" as const : "ready" as const },
 				latestSequence,
 				oldestSequence: events.length > 0 ? events[0].sequence : latestSequence,
 				// No backward pagination yet: a full forward replay is the whole
 				// transcript the control plane will hand back today.
 				hasMoreBefore: false,
-				turns: session.activeTurn ? [toConversationTurn(session.activeTurn)] : [],
+				turns,
 				items: toConversationItems(events),
-				settings: {},
+				settings: settingsBySession.get(id) ?? {},
 			};
 		},
 		sendMessage: async (id, input) => {
+			const settings = settingsBySession.get(id);
+			const message = settings && (settings.model || settings.reasoningEffort || settings.approvalMode)
+				? {
+					text: input.text,
+					...(settings.model ? { model: settings.model } : {}),
+					...(settings.reasoningEffort && reasoningEfforts.has(settings.reasoningEffort)
+						? { reasoningEffort: settings.reasoningEffort as "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" } : {}),
+					...(settings.approvalMode ? { approvalMode: settings.approvalMode } : {}),
+				} : input.text;
 			// The composer's clientMessageId is already a per-message unique id,
 			// so it doubles as the idempotency key: a retry after a dropped
 			// response cannot post the message twice.
-			await client.sendMessage(orgId, id, input.text, { idempotencyKey: input.clientMessageId });
+			await client.sendMessage(orgId, id, message, { idempotencyKey: input.clientMessageId });
 			// The wire response is `{ event: UserMessageEvent }`, not a turn — the
 			// control plane does not hand back a turn id for the message just
 			// posted. Reporting a turnId here would be a guess the UI could
@@ -121,6 +154,28 @@ export function createCloudSessionSource(input: {
 		// lifecycle stage (cloudLifecycleStage) to see it land.
 		resumeSession: async (id) => {
 			await client.resumeSession(orgId, id);
+		},
+		switchToChat: async (id) => {
+			const { session } = await client.getSession(orgId, id);
+			if (session.interfaceMode === "chat") return;
+			const status = await client.getSessionInterfaceTransition(orgId, id);
+			if (!status.supported) throw new Error(status.reason || "Cloud Chat is unavailable for this session.");
+			const active = status.transition && !terminalTransitionPhases.has(status.transition.phase);
+			if (active && status.transition?.targetMode !== "chat") {
+				throw new Error("This session is already switching to Terminal. Wait for that change to finish.");
+			}
+			if (!active) await client.startSessionInterfaceTransition(orgId, id, { targetMode: "chat", policy: "drain" });
+			await waitForChatHandoff(client, orgId, id);
+		},
+		decideApproval: async (id, requestId, decisionId) => {
+			await client.decideChatApproval(orgId, id, requestId, decisionId);
+		},
+		getChatModels: async (id) => {
+			const { session } = await client.getSession(orgId, id);
+			return session.harness === "codex" ? (await client.listChatModels(orgId, id)).models : [];
+		},
+		setTurnSettings: async (id, settings) => {
+			settingsBySession.set(id, { ...settings });
 		},
 		cancelTurn: async (id, turnId) => {
 			// Keyed by the turn id, not freshly generated per call, so a retried

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ClientEvent } from "@aoagents/cloud-client";
-import { fetchConversationReplay, pollCloudEvents, toConversationItems } from "./events";
+import { fetchConversationReplay, pollCloudEvents, toConversationItems, toConversationTurns } from "./events";
 
 const userEvent: ClientEvent = {
 	sessionId: "s1", sequence: 1, type: "chat.user_message",
@@ -33,6 +33,18 @@ describe("toConversationItems", () => {
 		expect(items[1]).toMatchObject({ role: "assistant", text: "Hi there", streaming: true });
 	});
 
+	it("keeps assistant replies from different turns separate when events interleave", () => {
+		const otherTurn = {
+			...deltaTwo,
+			payload: { ...deltaTwo.payload, turnId: "t2" },
+		} as ClientEvent;
+		const items = toConversationItems([deltaOne, otherTurn]);
+		expect(items).toMatchObject([
+			{ role: "assistant", text: "Hi ", turnId: "t1" },
+			{ role: "assistant", text: "there", turnId: "t2" },
+		]);
+	});
+
 	it("marks the assistant message settled once its turn completes", () => {
 		const completed = {
 			sessionId: "s1", sequence: 4, type: "chat.turn_completed",
@@ -40,6 +52,38 @@ describe("toConversationItems", () => {
 		} as ClientEvent;
 		const items = toConversationItems([deltaOne, completed]);
 		expect(items[0]).toMatchObject({ role: "assistant", streaming: false });
+	});
+
+	it("keeps a failed turn's error even when no assistant text was emitted", () => {
+		const aborted = {
+			sessionId: "s1", sequence: 3, type: "chat.turn_aborted",
+			payload: { turnId: "t1", error: "Harness did not start" }, createdAt: "2026-09-01T00:00:03Z",
+		} as ClientEvent;
+		expect(toConversationTurns([userEvent, aborted])).toMatchObject([{ id: "t1", state: "failed", errorMessage: "Harness did not start" }]);
+		expect(toConversationItems([userEvent, aborted])).toContainEqual(expect.objectContaining({
+			kind: "activity", activityKind: "error", status: "failed", summary: "Harness did not start",
+		}));
+	});
+
+	it("treats the first accepted Cloud message as active while the worker starts", () => {
+		const queuedMessage = {
+			...userEvent,
+			payload: { text: "hello", turnId: "t1" },
+		} as ClientEvent;
+		expect(toConversationTurns([queuedMessage])).toMatchObject([{ id: "t1", state: "running" }]);
+	});
+
+	it("settles a Cloud approval after its decision event", () => {
+		const requested = {
+			sessionId: "s1", sequence: 3, type: "chat.approval_requested",
+			payload: { turnId: "t1", requestId: "r1", summary: "Edit file", decisions: [{ id: "allow_once", label: "Allow once" }] },
+			createdAt: "2026-09-01T00:00:03Z",
+		} as unknown as ClientEvent;
+		const decided = {
+			sessionId: "s1", sequence: 4, type: "chat.approval_decided",
+			payload: { turnId: "t1", requestId: "r1", decision: "allow_once" }, createdAt: "2026-09-01T00:00:04Z",
+		} as unknown as ClientEvent;
+		expect(toConversationItems([requested, decided])).toMatchObject([{ activityKind: "approval", status: "completed" }]);
 	});
 
 	it("ignores event types it has no rendering for", () => {

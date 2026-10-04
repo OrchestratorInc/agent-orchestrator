@@ -81,7 +81,7 @@ describe("project orchestrator button", () => {
 		await act(async () => launcher.openOrchestrator(row("start")));
 		expect(state.spawnCloudOrchestrator).toHaveBeenCalledWith({}, "org-1", "project-1", "request-1");
 		expect(state.refreshSource).toHaveBeenCalledWith({ kind: "cloud", id: "org-1" });
-		expect(state.push).toHaveBeenCalledWith({ pathname: "/session/[id]", params: { id: "cloud-session", projectId: "project-1", source: "cloud", sourceId: "org-1" } });
+		expect(state.push).toHaveBeenCalledWith({ pathname: "/session/[id]", params: { id: "cloud-session", projectId: "project-1", source: "cloud", sourceId: "org-1", startup: "spawn" } });
 		expect(state.launchConductor).not.toHaveBeenCalled();
 	});
 });

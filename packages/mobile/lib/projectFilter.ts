@@ -122,12 +122,14 @@ export function resolveSpawnProject(
 	activeProjectId: string,
 	projects: readonly { id: string }[],
 	projectsKnown: boolean,
+	preferredProjectId?: string | null,
 ): string | null {
 	if (
 		currentProjectId
 		&& resolveActiveProject(currentProjectId, projects, projectsKnown) === currentProjectId
 	) return currentProjectId;
-	if (routeProjectId && projects.some((project) => project.id === routeProjectId)) return routeProjectId;
+	if (routeProjectId && (!projectsKnown || projects.some((project) => project.id === routeProjectId))) return routeProjectId;
+	if (preferredProjectId && (!projectsKnown || projects.some((project) => project.id === preferredProjectId))) return preferredProjectId;
 	const active = resolveActiveProject(activeProjectId, projects, projectsKnown);
 	if (active !== ALL_PROJECTS) return active;
 	return projects.length === 1 ? projects[0].id : null;

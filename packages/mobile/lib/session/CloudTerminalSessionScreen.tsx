@@ -156,13 +156,21 @@ const CLOUD_TERMINAL_JS = `
 const labels: Record<CloudTerminalStatus, string> = {
 	connecting: "Connecting to Cloud terminal…",
 	waiting: "Waiting for the Cloud worker…",
+	attaching: "Connecting to Cloud terminal…",
 	ready: "Connected to Cloud terminal",
 	disconnected: "Reconnecting to Cloud terminal…",
 	exited: "Agent terminal exited",
 	error: "Cloud terminal unavailable",
 };
 
-export function CloudTerminalSessionScreen({ session, source }: { session: RouteSession; source: SourceRef }) {
+const startupSteps = [
+	"Creating workspace",
+	"Connecting to worker",
+	"Preparing repository and agent",
+	"Connecting terminal",
+] as const;
+
+export function CloudTerminalSessionScreen({ session, source, showSpawnStartup = false }: { session: RouteSession; source: SourceRef; showSpawnStartup?: boolean }) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
@@ -179,14 +187,17 @@ export function CloudTerminalSessionScreen({ session, source }: { session: Route
 	const xtermRef = useRef<XtermWebViewHandle | null>(null);
 	const terminalRef = useRef<ReturnType<typeof createCloudTerminal> | null>(null);
 	const xtermReady = useRef(false);
+	const firstReadySession = useRef<string | null>(null);
 	const pendingOutput = useRef<Uint8Array[]>([]);
 	const lastSize = useRef<{ cols: number; rows: number } | null>(null);
-	const [status, setStatus] = useState<CloudTerminalStatus>("connecting");
+	const [terminalState, setTerminalState] = useState<{ sessionId: string; status: CloudTerminalStatus }>({ sessionId: session.id, status: "connecting" });
+	const status = terminalState.sessionId === session.id ? terminalState.status : "connecting";
 	const [headerRightReady, setHeaderRightReady] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
 	const [sending, setSending] = useState(false);
 	const [resuming, setResuming] = useState(false);
+	const [switchingChat, setSwitchingChat] = useState(false);
 	const [size, setSize] = useState<{ cols: number; rows: number } | null>(null);
 	const sessionTitle = "displayName" in session ? session.displayName : "Orchestrator";
 	const voice = useVoiceInput({
@@ -195,9 +206,23 @@ export function CloudTerminalSessionScreen({ session, source }: { session: Route
 		}, []),
 	});
 
-	const openChat = useCallback(() => {
-		router.replace({ pathname: "/session/[id]", params: { id: session.id, source: source.kind, sourceId: source.id } });
-	}, [router, session.id, source.kind, source.id]);
+	const openChat = useCallback(async () => {
+		if (switchingChat) return;
+		if (!sessionSource?.switchToChat) {
+			Alert.alert("Chat unavailable", "Your Cloud workspace is not ready. Sign in again and retry.");
+			return;
+		}
+		setSwitchingChat(true);
+		try {
+			await sessionSource.switchToChat(session.id);
+			await refreshBoard();
+			router.replace({ pathname: "/session/[id]", params: { id: session.id, source: source.kind, sourceId: source.id } });
+		} catch (cause) {
+			Alert.alert("Couldn’t open Chat", cause instanceof Error ? cause.message : "Try again shortly.");
+		} finally {
+			setSwitchingChat(false);
+		}
+	}, [refreshBoard, router, session.id, sessionSource, source.kind, source.id, switchingChat]);
 
 	useLayoutEffect(() => resetHeaderRightForSwap(
 		() => navigation.setOptions({ headerRight: undefined }),
@@ -208,27 +233,30 @@ export function CloudTerminalSessionScreen({ session, source }: { session: Route
 		if (!headerRightReady) return;
 		navigation.setOptions({
 			title: sessionTitle || "Cloud terminal",
-			headerRight: () => <Pressable accessibilityRole="button" accessibilityLabel="Open Chat UI" onPress={openChat} style={styles.chatButton}>
-				<Feather name="message-square" size={16} color={t.accent} />
-				<Text style={styles.chatButtonText}>Chat</Text>
+			headerRight: () => <Pressable accessibilityRole="button" accessibilityLabel="Open Chat UI" disabled={switchingChat} onPress={openChat} style={styles.chatButton}>
+				{switchingChat ? <ActivityIndicator size="small" color={t.accent} /> : <Feather name="message-square" size={16} color={t.accent} />}
+				<Text style={styles.chatButtonText}>{switchingChat ? "Switching…" : "Chat"}</Text>
 			</Pressable>,
 		});
-	}, [headerRightReady, navigation, openChat, sessionTitle, styles, t.accent]);
+	}, [headerRightReady, navigation, openChat, sessionTitle, styles, switchingChat, t.accent]);
 
 	useEffect(() => {
 		xtermReady.current = false;
 		pendingOutput.current = [];
-		setStatus("connecting");
+		setTerminalState({ sessionId: session.id, status: "connecting" });
 		setError(null);
 		if (pausedByCoder) return;
 		if (!orgId || source.kind !== "cloud" || orgId !== source.id || !sessionSource) {
-			setStatus("error");
+			setTerminalState({ sessionId: session.id, status: "error" });
 			setError("Your Cloud workspace is not ready. Sign in again and retry.");
 			return;
 		}
 		const terminal = createCloudTerminal({
 			client, orgId, sessionId: session.id,
-			onStatus: setStatus,
+			onStatus: (next) => {
+				if (next === "ready") firstReadySession.current = session.id;
+				setTerminalState({ sessionId: session.id, status: next });
+			},
 			onError: setError,
 			onOutput: (bytes) => {
 				if (!xtermReady.current || !xtermRef.current) {
@@ -323,6 +351,15 @@ export function CloudTerminalSessionScreen({ session, source }: { session: Route
 
 	const rootPad = rootKeyboardPad(Platform.OS === "android" ? "android" : "ios", keyboardHeight, insets.bottom);
 	const bottomPad = dockInset(keyboardHeight, insets.bottom, keyboardVisible);
+	const observedState = session.cloud?.observedState;
+	// A normal revisit reconnects the terminal; it does not recreate the workspace.
+	const showStartup = showSpawnStartup && firstReadySession.current !== session.id
+		&& !pausedByCoder && observedState !== "failed"
+		&& status !== "ready" && status !== "error" && status !== "exited" && !error;
+	const startupStep = status === "attaching" ? 3
+		: (observedState === "bootstrapping" || observedState === "running")
+			? session.runtimeConnected ? 2 : 1
+			: 0;
 	if (pausedByCoder) return <View style={styles.screen}>
 		<View style={styles.statusBar}>
 			<View style={[styles.dot, { backgroundColor: t.amber }]} />
@@ -337,14 +374,14 @@ export function CloudTerminalSessionScreen({ session, source }: { session: Route
 			</Pressable>
 		</View>
 	</View>;
-	return <View style={[styles.screen, rootPad > 0 && { paddingBottom: rootPad }]}>
-		<View style={styles.statusBar}>
+	return <View style={[styles.screen, !showStartup && rootPad > 0 && { paddingBottom: rootPad }]}>
+		{!showStartup ? <View style={styles.statusBar}>
 			<View style={[styles.dot, { backgroundColor: status === "ready" ? t.green : status === "error" || status === "exited" ? t.red : t.amber }]} />
 			<Text style={styles.statusText}>{labels[status]}</Text>
-			{status === "connecting" || status === "waiting" || status === "disconnected" ? <ActivityIndicator size="small" color={t.amber} /> : null}
+			{status === "connecting" || status === "waiting" || status === "attaching" || status === "disconnected" ? <ActivityIndicator size="small" color={t.amber} /> : null}
 			{size ? <Text style={styles.dimensions}>{size.cols}×{size.rows}</Text> : null}
-		</View>
-		{error || voice.error ? <Text style={styles.error} selectable>{error || voice.error}</Text> : null}
+		</View> : null}
+		{!showStartup && (error || voice.error) ? <Text style={styles.error} selectable>{error || voice.error}</Text> : null}
 		<View style={styles.terminal}>
 			<XtermJsWebView
 				key={`cloud-terminal-${scheme}`}
@@ -357,8 +394,20 @@ export function CloudTerminalSessionScreen({ session, source }: { session: Route
 				onData={(data) => { if (!terminalRef.current?.sendInput(data)) setError("Terminal is not ready yet."); }}
 				style={styles.xterm}
 			/>
+			{showStartup ? <View style={styles.startupOverlay} accessible accessibilityLabel={`Starting Cloud terminal: ${startupSteps[startupStep]}`}>
+				<View style={styles.startupSteps}>
+					{startupSteps.map((step, index) => <View key={step} style={styles.startupRow}>
+						<View style={styles.startupIcon}>
+							{index < startupStep ? <Feather name="check" size={16} color="#60a5fa" />
+								: index === startupStep ? <ActivityIndicator size="small" color="#60a5fa" />
+									: <View style={styles.startupDot} />}
+						</View>
+						<Text style={index === startupStep ? styles.startupActiveText : index < startupStep ? styles.startupCompleteText : styles.startupFutureText}>{step}</Text>
+					</View>)}
+				</View>
+			</View> : null}
 		</View>
-		<View style={[styles.dock, { paddingBottom: bottomPad }]}>
+		{!showStartup ? <View style={[styles.dock, { paddingBottom: bottomPad }]}>
 			<KeyRow onKey={(key) => { if (!terminalRef.current?.sendInput(key)) setError("Terminal is not ready yet."); }} />
 			<Composer
 				value={draft}
@@ -372,7 +421,7 @@ export function CloudTerminalSessionScreen({ session, source }: { session: Route
 				onDismissKeyboard={Keyboard.dismiss}
 				targetLocked
 			/>
-		</View>
+		</View> : null}
 	</View>;
 }
 
@@ -392,5 +441,13 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	resumeButtonText: { color: t.onAccent, fontSize: 14, fontWeight: "600" },
 	terminal: { flex: 1 },
 	xterm: { flex: 1, backgroundColor: t.bgBase },
+	startupOverlay: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, backgroundColor: t.bgBase },
+	startupSteps: { width: "100%", maxWidth: 320, gap: 12 },
+	startupRow: { minHeight: 28, flexDirection: "row", alignItems: "center", gap: 12 },
+	startupIcon: { width: 20, alignItems: "center", justifyContent: "center" },
+	startupDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: t.textFaint },
+	startupActiveText: { color: t.textPrimary, fontSize: 14, lineHeight: 20, fontWeight: "600", flexShrink: 1 },
+	startupCompleteText: { color: t.textSecondary, fontSize: 14, lineHeight: 20, flexShrink: 1 },
+	startupFutureText: { color: t.textFaint, fontSize: 14, lineHeight: 20, flexShrink: 1 },
 	dock: { borderTopWidth: 1, borderTopColor: t.borderSubtle, backgroundColor: t.bgSurface },
 });

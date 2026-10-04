@@ -76,15 +76,16 @@ afterEach(async () => {
 });
 
 describe("SpawnComposerControls on iOS", () => {
-	it("places native Run on menu above the project picker", async () => {
+	it("gives destination and project separate native touch hosts and selects a project", async () => {
+		const onSelectProject = vi.fn();
 		await act(async () => {
 			renderer = create(<SpawnComposerControls
 				destinations={[{ source: { kind: "local", id: "desktop-1" }, label: "Local · Paired desktop", available: true }, { source: { kind: "cloud", id: "org-1" }, label: "Cloud", available: true }]}
 				destination={null}
 				onSelectDestination={vi.fn()}
-				projects={[]}
+				projects={[{ id: "project-1", label: "Tap" }]}
 				projectId={null}
-				onSelectProject={vi.fn()}
+				onSelectProject={onSelectProject}
 				agents={[]}
 				harness=""
 				onSelectHarness={vi.fn()}
@@ -101,8 +102,14 @@ describe("SpawnComposerControls on iOS", () => {
 		});
 		const menus = renderer!.root.findAll((node) => String(node.type) === "Menu");
 		expect(menus.length).toBeGreaterThanOrEqual(2);
+		const selectorRow = renderer!.root.findAll((node) => String(node.type) === "View")
+			.find((node) => node.findAll((child) => String(child.type) === "Host" && child.findAll((descendant) => String(descendant.type) === "Menu").length === 1).length === 2);
+		expect(selectorRow).toBeDefined();
 		const labels = menus[0].findAll((node) => String(node.type) === "Button").map((node) => node.props.label);
 		expect(labels).toEqual(["Local · Paired desktop", "Cloud"]);
+		const projectButton = menus[1].findAll((node) => String(node.type) === "Button").find((node) => node.props.label === "Tap");
+		await act(async () => projectButton?.props.onPress());
+		expect(onSelectProject).toHaveBeenCalledWith("project-1");
 	});
 	it("keeps the Cloud harness picker while hiding attachment and model controls", async () => {
 		await act(async () => {

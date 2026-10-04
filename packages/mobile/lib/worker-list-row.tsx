@@ -4,7 +4,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Keyboard, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import type { DashboardSession } from "./api";
 import { resourceKey, type SourceRef } from "./environment/scopedBoard";
-import { environmentBadgeStyle } from "./environment-badge";
+import { EnvironmentBadge } from "./environment-badge-icon";
 import { AgentLogo } from "./AgentLogo";
 import { haptics } from "./haptics";
 import { prLine, workerRowPresentation, workerStatusGlyph } from "./agentsView";
@@ -364,7 +364,7 @@ function WorkerRowContents({
 				<Text style={styles.project} numberOfLines={1}>
 					{row.project}
 				</Text>
-				<Text style={styles.sourceTag}>{sourceLabel}</Text>
+				<EnvironmentBadge sourceLabel={sourceLabel} theme={t} />
 				{/* Paired with the tinted label so status reads by shape as well as
 				    colour. Only shown alongside a real status — when the row is
 				    showing an elapsed time instead, there is no state to depict.
@@ -464,7 +464,6 @@ const makeStyles = (t: Theme) =>
 		renameControlDisabled: { opacity: 0.45 },
 		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
 		project: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
-		sourceTag: environmentBadgeStyle(t),
 		trailing: { fontFamily: "Geist_500Medium", flexShrink: 0, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500", fontVariant: ["tabular-nums"] },
 		title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
 		details: { color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontFamily: t.fontMono },

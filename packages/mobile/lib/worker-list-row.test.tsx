@@ -89,14 +89,21 @@ afterEach(async () => {
 });
 
 describe("Cloud worker row", () => {
-	it("shows the Cloud source as a readable outlined capsule in dark mode", async () => {
-		const props = { interactionMode: "open-only", session, source: { kind: "cloud", id: "org-1" }, projectName: "Tap" } as unknown as Parameters<typeof WorkerListRow>[0];
+	it.each([
+		["cloud", "org-1", "Cloud", "cloud"],
+		["local", "desktop-1", "Local", "server"],
+	] as const)("shows a borderless %s icon while preserving the spoken source", async (kind, id, sourceLabel, iconName) => {
+		const props = { interactionMode: "open-only", session, source: { kind, id }, projectName: "Tap" } as unknown as Parameters<typeof WorkerListRow>[0];
 		await act(async () => { renderer = create(<WorkerListRow {...props} />); });
-		const badge = renderer!.root.findAll((node) => String(node.type) === "Text" && node.props.children === "Cloud")[0];
+		const badge = renderer!.root.findAll((node) => String(node.type) === "View" && node.props.accessibilityLabel === `${sourceLabel} environment`)[0];
 		expect(badge).toBeDefined();
-		expect(badge.props.style).toMatchObject({ color: darkTheme.textPrimary, borderColor: darkTheme.borderStrong, borderWidth: 1, borderRadius: 999, minHeight: 16 });
-		expect(badge.props.style.height).toBeUndefined();
+		expect(badge.props.style.borderColor).toBeUndefined();
+		expect(badge.props.style.borderWidth).toBeUndefined();
 		expect(badge.props.style.backgroundColor).toBeUndefined();
+		expect(badge.findAll((node) => String(node.type) === "Feather" && node.props.name === iconName && node.props.color === darkTheme.textPrimary)).toHaveLength(1);
+		expect(renderer!.root.findAll((node) => String(node.type) === "Text" && node.props.children === sourceLabel)).toHaveLength(0);
+		const rowButton = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityRole === "button")[0];
+		expect(rowButton.props.accessibilityLabel).toContain(sourceLabel);
 	});
 
 	it("opens the session without mounting Local mutation interactions", async () => {

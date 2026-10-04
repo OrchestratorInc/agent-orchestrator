@@ -31,7 +31,7 @@ import { Button, EmptyState } from "../../lib/ui";
  * `sessionRouteView`, and when the route asks is `sessionLookupDue`.
  */
 export default function MobileSessionRoute() {
-	const { id: rawId, view: requestedView, source: sourceParam, sourceId } = useLocalSearchParams<{ id: string; view?: string; source?: string; sourceId?: string }>();
+	const { id: rawId, view: requestedView, source: sourceParam, sourceId, startup } = useLocalSearchParams<{ id: string; view?: string; source?: string; sourceId?: string; startup?: string }>();
 	const id = String(rawId ?? "");
 	const router = useRouter();
 	const { scopedBoard, sourceFor, refreshSource, config, connection } = useApp();
@@ -148,7 +148,7 @@ export default function MobileSessionRoute() {
 	switch (view.kind) {
 		case "screen": {
 			const surface = sessionDisplaySurface({ environment: source?.kind ?? null, sessionMode: view.session.mode, requestedView });
-			if (surface === "cloud-terminal" && source) return <CloudTerminalSessionScreen session={view.session} source={source} />;
+			if (surface === "cloud-terminal" && source) return <CloudTerminalSessionScreen session={view.session} source={source} showSpawnStartup={startup === "spawn"} />;
 			if (surface === "local-terminal") return <TerminalSessionScreen session={view.session} source={source ?? undefined} />;
 			if (source) return <ChatSessionScreen session={view.session} source={source} />;
 			return null;

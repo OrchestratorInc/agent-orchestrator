@@ -11,6 +11,11 @@ describe("spawn destination", () => {
 		expect(initialSpawnDestination(undefined, [local])).toEqual(local);
 		expect(initialSpawnDestination({ kind: "local", id: "old-desktop" }, [local, cloud])).toBeNull();
 	});
+	it("restores the last spawn host when it is still available", () => {
+		expect(initialSpawnDestination(undefined, [local, cloud], cloud)).toEqual(cloud);
+		expect(initialSpawnDestination(local, [local, cloud], cloud)).toEqual(local);
+		expect(initialSpawnDestination(undefined, [local, cloud], { kind: "cloud", id: "old-org" })).toBeNull();
+	});
 	it("cannot submit into a missing or stale destination", () => {
 		expect(canSubmitSpawn(null, "project", "codex", () => undefined)).toBe(false);
 		expect(canSubmitSpawn(local, "project", "codex", () => undefined)).toBe(false);

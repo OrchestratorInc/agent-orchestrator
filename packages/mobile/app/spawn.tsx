@@ -28,6 +28,7 @@ import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceCh
 import { appendSpawnAttachments, readSpawnAttachments, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { canSubmitSpawn, initialSpawnDestination, spawnRequestIsCurrent } from "../lib/spawnDestination";
+import { loadSpawnPreference, saveSpawnPreference, type SpawnPreference } from "../lib/spawnPreference";
 import { spawnNotices } from "../lib/spawnNotices";
 import { SpawnPromptInput } from "../lib/spawn-prompt-input";
 import { useApp } from "../lib/store";
@@ -52,6 +53,8 @@ export default function SpawnModal() {
 	const sourceResolutionComplete = scopedBoard.sources.local.resolved && scopedBoard.sources.cloud.resolved;
 	const [destination, setDestination] = useState<SourceRef | null>(null);
 	const destinationRef = useRef<SourceRef | null>(null);
+	const [savedPreference, setSavedPreference] = useState<SpawnPreference | null>(null);
+	const [preferenceLoaded, setPreferenceLoaded] = useState(false);
 	const catalogGeneration = useRef(0);
 	const cloudSpawn = destination?.kind === "cloud";
 	const projects = useMemo(() => destination
@@ -99,25 +102,39 @@ export default function SpawnModal() {
 
 
 	useEffect(() => {
-		if (!sourceResolutionComplete) return;
+		let cancelled = false;
+		void loadSpawnPreference().then((preference) => {
+			if (cancelled) return;
+			setSavedPreference(preference);
+			setPreferenceLoaded(true);
+		});
+		return () => { cancelled = true; };
+	}, []);
+
+	useEffect(() => {
+		if (!sourceResolutionComplete || !preferenceLoaded) return;
 		const routed = routeDestination && routeDestination.kind !== "invalid" ? routeDestination : null;
 		if (routeDestination?.kind === "invalid") return;
-		const next = initialSpawnDestination(routed, availableSources);
+		const next = initialSpawnDestination(routed, availableSources, savedPreference?.source);
 		if (destinationRef.current && availableSources.some((source) => sourceKey(source) === sourceKey(destinationRef.current!))) return;
 		if (next) { destinationRef.current = next; setDestination(next); }
-	}, [sourceResolutionComplete, routeKind, routeSourceId, availableSources]);
+	}, [sourceResolutionComplete, preferenceLoaded, routeKind, routeSourceId, availableSources, savedPreference?.source]);
 
 	// A project prefill belongs only to the source named by its route.
 	useEffect(() => {
+		if (!preferenceLoaded) return;
+		const savedProject = savedPreference && destination && sourceKey(savedPreference.source) === sourceKey(destination)
+			? savedPreference.projectId : null;
 		const nextProjectId = resolveSpawnProject(
 			projectId,
 			routeDestination && routeDestination.kind !== "invalid" && destination && sourceKey(routeDestination) === sourceKey(destination) ? routeProjectId : undefined,
 			"all",
 			projects,
 			projectsKnown,
+			savedProject,
 		);
 		if (nextProjectId !== projectId) changeProject(nextProjectId);
-	}, [destination, projects, projectsKnown, projectId, routeProjectId, routeKind, routeSourceId]);
+	}, [destination, preferenceLoaded, savedPreference, projects, projectsKnown, projectId, routeProjectId, routeKind, routeSourceId]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -281,6 +298,9 @@ export default function SpawnModal() {
 		catalogGeneration.current += 1;
 		destinationRef.current = next;
 		setDestination(next);
+		const preference = { source: next, projectId: null };
+		setSavedPreference(preference);
+		void saveSpawnPreference(preference);
 		setProjectId(null);
 		setHarness("");
 		setAgentTouched(false);
@@ -310,6 +330,11 @@ export default function SpawnModal() {
 		setProjectDetailLoadedFor(null);
 		setAgentTouched(false);
 		setProjectId(nextProjectId);
+		if (destinationRef.current) {
+			const preference = { source: destinationRef.current, projectId: nextProjectId };
+			setSavedPreference(preference);
+			void saveSpawnPreference(preference);
+		}
 	};
 	const selectAgent = (nextHarness: string) => {
 		if (!spawnModelSourceChanged({ projectId, agentId: harness }, { projectId, agentId: nextHarness })) return;
@@ -414,7 +439,7 @@ export default function SpawnModal() {
 			InteractionManager.runAfterInteractions(() => {
 				router.push({
 					pathname: "/session/[id]",
-					params: { id: session.id, projectId: session.projectId, source: destination.kind, sourceId: destination.id },
+					params: { id: session.id, projectId: session.projectId, source: destination.kind, sourceId: destination.id, ...(destination.kind === "cloud" ? { startup: "spawn" } : {}) },
 				});
 			});
 		} catch (e) {

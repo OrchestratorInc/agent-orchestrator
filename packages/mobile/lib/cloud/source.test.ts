@@ -96,6 +96,91 @@ describe("createCloudSessionSource", () => {
 		expect(result).toEqual({ duplicate: false });
 	});
 
+	it("loads Cloud model choices and forwards chosen turn settings with the message", async () => {
+		const listChatModels = vi.fn(async () => ({ models: [{ id: "model-x", displayName: "Model X", default: true }] }));
+		const sendMessage = vi.fn(async () => ({ event: { sessionId: "s1", sequence: 1, type: "chat.user_message", payload: { text: "hi" }, createdAt: "2026-09-01T00:00:00Z" } }));
+		const source = createCloudSessionSource({ client: clientStub({
+			listChatModels, sendMessage,
+			getSession: vi.fn(async () => ({ session: { ...fullSession("s1"), harness: "codex", interfaceMode: "chat" } })),
+			replayEvents: vi.fn(async () => ({ events: [], hasMore: false, nextAfter: 0 })),
+		}) as never, orgId: "o1" });
+		expect(await source.getChatModels!("s1")).toMatchObject([{ id: "model-x", displayName: "Model X" }]);
+		await source.setTurnSettings!("s1", { model: "model-x", reasoningEffort: "high", approvalMode: "auto" });
+		expect((await source.getConversationPage("s1")).settings).toEqual({ model: "model-x", reasoningEffort: "high", approvalMode: "auto" });
+		await source.sendMessage("s1", { text: "hi", clientMessageId: "cm-1" });
+		expect(sendMessage).toHaveBeenCalledWith("o1", "s1", {
+			text: "hi", model: "model-x", reasoningEffort: "high", approvalMode: "auto",
+		}, { idempotencyKey: "cm-1" });
+	});
+
+	it("does not offer Codex models to a Claude Code Cloud session", async () => {
+		const listChatModels = vi.fn();
+		const source = createCloudSessionSource({ client: clientStub({
+			getSession: vi.fn(async () => ({ session: { ...fullSession("s1"), interfaceMode: "chat" } })),
+			listChatModels,
+		}) as never, orgId: "o1" });
+		expect(await source.getChatModels!("s1")).toEqual([]);
+		expect(listChatModels).not.toHaveBeenCalled();
+	});
+
+	it("does not present a Terminal-mode cloud session as a Chat controller", async () => {
+		const client = clientStub({
+			getSession: vi.fn(async () => ({ session: { ...fullSession("s1"), interfaceMode: "tui" } })),
+			replayEvents: vi.fn(async () => ({ events: [], hasMore: false, nextAfter: 0 })),
+		});
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		const page = await source.getConversationPage("s1");
+		expect(page.mode).toBe("tui");
+	});
+
+	it("waits for Cloud to commit the Chat handoff before opening Chat", async () => {
+		const getSession = vi.fn()
+			.mockResolvedValueOnce({ session: { ...fullSession("s1"), interfaceMode: "tui" } })
+			.mockResolvedValueOnce({ session: { ...fullSession("s1"), interfaceMode: "tui" } })
+			.mockResolvedValue({ session: { ...fullSession("s1"), interfaceMode: "chat" } });
+		const getSessionInterfaceTransition = vi.fn(async () => ({ supported: true, targetMode: "chat" }));
+		const startSessionInterfaceTransition = vi.fn(async () => ({ transition: { phase: "requested", targetMode: "chat" } }));
+		const source = createCloudSessionSource({ client: clientStub({ getSession, getSessionInterfaceTransition, startSessionInterfaceTransition }) as never, orgId: "o1" });
+		const switchToChat = (source as typeof source & { switchToChat(id: string): Promise<void> }).switchToChat;
+		expect(switchToChat).toBeTypeOf("function");
+		vi.useFakeTimers();
+		try {
+			const switching = switchToChat("s1");
+			await vi.advanceTimersByTimeAsync(0);
+			expect(startSessionInterfaceTransition).toHaveBeenCalledWith("o1", "s1", { targetMode: "chat", policy: "drain" });
+			await vi.advanceTimersByTimeAsync(2_000);
+			await switching;
+			expect(getSession).toHaveBeenCalledTimes(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("reports why Cloud cannot hand off instead of navigating to a fake Chat view", async () => {
+		const startSessionInterfaceTransition = vi.fn();
+		const source = createCloudSessionSource({ client: clientStub({
+			getSession: vi.fn(async () => ({ session: { ...fullSession("s1"), interfaceMode: "tui" } })),
+			getSessionInterfaceTransition: vi.fn(async () => ({ supported: false, targetMode: "chat", reason: "This harness does not support Chat." })),
+			startSessionInterfaceTransition,
+		}) as never, orgId: "o1" });
+		await expect(source.switchToChat!("s1")).rejects.toThrow("This harness does not support Chat.");
+		expect(startSessionInterfaceTransition).not.toHaveBeenCalled();
+	});
+
+	it("does not duplicate an existing Cloud Chat handoff", async () => {
+		const getSession = vi.fn()
+			.mockResolvedValueOnce({ session: { ...fullSession("s1"), interfaceMode: "tui" } })
+			.mockResolvedValueOnce({ session: { ...fullSession("s1"), interfaceMode: "chat" } });
+		const startSessionInterfaceTransition = vi.fn();
+		const source = createCloudSessionSource({ client: clientStub({
+			getSession,
+			getSessionInterfaceTransition: vi.fn(async () => ({ supported: true, targetMode: "chat", transition: { phase: "activating", targetMode: "chat" } })),
+			startSessionInterfaceTransition,
+		}) as never, orgId: "o1" });
+		await source.switchToChat!("s1");
+		expect(startSessionInterfaceTransition).not.toHaveBeenCalled();
+	});
+
 	it("cancels a turn with a key stable across retries of the same cancel", async () => {
 		const cancelTurn = vi.fn(async (_orgId: string, _sessionId: string, _turnId: string, options: { idempotencyKey: string }) => ({ ok: true }));
 		const source = createCloudSessionSource({
@@ -131,11 +216,11 @@ describe("createCloudSessionSource", () => {
 			sessionId: "s1",
 			harness: "claude-code",
 			mode: "chat",
-			controller: { state: "ready" },
+			controller: { state: "busy" },
 			latestSequence: 2,
 			oldestSequence: 1,
 			hasMoreBefore: false,
-			turns: [],
+			turns: [{ id: "t1", state: "running" }],
 			settings: {},
 		});
 		expect(page.items).toMatchObject([
@@ -169,6 +254,44 @@ describe("createCloudSessionSource", () => {
 			state: "queued",
 			requestedAt: "2026-09-01T00:00:04Z",
 		}]);
+	});
+
+	it("projects completed Cloud turns and assistant replies from the event history", async () => {
+		const getSession = vi.fn(async () => ({ session: { ...fullSession("s1"), interfaceMode: "chat" } }));
+		const replayEvents = vi.fn(async () => ({
+			events: [
+				{ sessionId: "s1", sequence: 1, type: "chat.user_message", payload: { text: "hi", turnId: "t1" }, createdAt: "2026-09-01T00:00:00Z" },
+				{ sessionId: "s1", sequence: 2, type: "chat.turn_started", payload: { turnId: "t1" }, createdAt: "2026-09-01T00:00:01Z" },
+				{ sessionId: "s1", sequence: 3, type: "chat.assistant_delta", payload: { turnId: "t1", text: "hello" }, createdAt: "2026-09-01T00:00:02Z" },
+				{ sessionId: "s1", sequence: 4, type: "chat.turn_completed", payload: { turnId: "t1" }, createdAt: "2026-09-01T00:00:03Z" },
+			], hasMore: false, nextAfter: 4,
+		}));
+		const source = createCloudSessionSource({ client: clientStub({ getSession, replayEvents }) as never, orgId: "o1" });
+		const page = await source.getConversationPage("s1");
+		expect(page.turns).toMatchObject([{ id: "t1", state: "completed", startedAt: "2026-09-01T00:00:01Z", completedAt: "2026-09-01T00:00:03Z" }]);
+		expect(page.controller.state).toBe("ready");
+		expect(page.items).toMatchObject([
+			{ role: "user", text: "hi", turnId: "t1" },
+			{ role: "assistant", text: "hello", turnId: "t1", streaming: false },
+		]);
+	});
+
+	it("shows an approval request and sends its decision to Cloud", async () => {
+		const decideChatApproval = vi.fn(async () => ({ ok: true }));
+		const source = createCloudSessionSource({ client: clientStub({
+			getSession: vi.fn(async () => ({ session: { ...fullSession("s1"), interfaceMode: "chat" } })),
+			replayEvents: vi.fn(async () => ({ events: [
+				{ sessionId: "s1", sequence: 1, type: "chat.user_message", payload: { text: "edit it", turnId: "t1" }, createdAt: "2026-09-01T00:00:00Z" },
+				{ sessionId: "s1", sequence: 2, type: "chat.turn_started", payload: { turnId: "t1" }, createdAt: "2026-09-01T00:00:01Z" },
+				{ sessionId: "s1", sequence: 3, type: "chat.approval_requested", payload: { turnId: "t1", requestId: "r1", summary: "Edit file", decisions: [{ id: "allow_once", label: "Allow once" }] }, createdAt: "2026-09-01T00:00:02Z" },
+			], hasMore: false, nextAfter: 3 })),
+			decideChatApproval,
+		}) as never, orgId: "o1" });
+		const page = await source.getConversationPage("s1");
+		expect(page.items).toContainEqual(expect.objectContaining({ kind: "activity", activityKind: "approval", status: "pending", requestId: "r1", decisions: [{ id: "allow_once", label: "Allow once" }] }));
+		expect(source.decideApproval).toBeTypeOf("function");
+		await source.decideApproval!("s1", "r1", "allow_once");
+		expect(decideChatApproval).toHaveBeenCalledWith("o1", "s1", "r1", "allow_once");
 	});
 
 	// A single replayEvents call is capped at the server's page limit; opening
