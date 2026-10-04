@@ -113,11 +113,13 @@ function ProjectRow({ project, onClick, emptyTimeLabel, justNowLabel }: { projec
 }
 
 function HomeActionCard({
+	centerContent = false,
 	disabled,
 	icon,
 	label,
 	onClick,
 }: {
+	centerContent?: boolean;
 	disabled?: boolean;
 	icon: ReactNode;
 	label: string;
@@ -125,7 +127,11 @@ function HomeActionCard({
 }) {
 	return (
 		<button
-			className={`${HOME_BUTTON_CLASS} disabled:pointer-events-none disabled:opacity-50`}
+			className={cn(
+				HOME_BUTTON_CLASS,
+				centerContent && "justify-center",
+				"disabled:pointer-events-none disabled:opacity-50",
+			)}
 			disabled={disabled}
 			onClick={onClick}
 			type="button"
@@ -232,6 +238,7 @@ export function HomePage() {
 							{developerMode && cloudEnabled ? (
 								<div className="col-span-2">
 									<HomeActionCard
+										centerContent
 										icon={<Cloud strokeWidth={1.8} />}
 										label={t("createProject.cloudTitle")}
 										onClick={() => requestSource("cloud")}
