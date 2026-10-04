@@ -976,8 +976,12 @@ func parseGrokModels(output []byte) ([]ports.AgentModelInfo, error) {
 var cursorDefaultAnnotation = regexp.MustCompile(`(?i)\((?:current, )?default(?:, current)?\)`)
 var cursorSelectionAnnotation = regexp.MustCompile(`(?i) \((?:current|default|current, default|default, current)\)`)
 var cursorVariantSuffix = regexp.MustCompile(`(?:-(?:extra-high|none|minimal|low|medium|high|xhigh|max|fast|thinking))+$`)
-var cursorFamilyStem = regexp.MustCompile(`^(?:gpt-[0-9]+(?:[.-][0-9]+)*(?:-codex|-sol|-luna)?|claude-(?:opus|sonnet|haiku|fable)-[0-9]+(?:[.-][0-9]+)*|claude-[0-9]+(?:[.-][0-9]+)*-(?:opus|sonnet|haiku)|gemini-[0-9]+(?:[.-][0-9]+)*(?:-(?:pro|flash|flash-lite))?|grok-[0-9]+(?:[.-][0-9]+)*(?:-code)?|composer-[0-9]+(?:[.-][0-9]+)*)$`)
+var cursorFamilyStem = regexp.MustCompile(`^(?:gpt-[0-9]+(?:[.-][0-9]+)*(?:-codex|-sol|-luna|-terra)?|claude-(?:opus|sonnet|haiku|fable)-[0-9]+(?:[.-][0-9]+)*|claude-[0-9]+(?:[.-][0-9]+)*-(?:opus|sonnet|haiku)|gemini-[0-9]+(?:[.-][0-9]+)*(?:-(?:pro|flash|flash-lite))?|(?:cursor-)?grok-[0-9]+(?:[.-][0-9]+)*(?:-code)?|muse-spark-[0-9]+(?:[.-][0-9]+)*|composer-[0-9]+(?:[.-][0-9]+)*)$`)
 var cursorVariantLabel = regexp.MustCompile(`(?i)(?: (?:extra high|none|minimal|low|medium|high|xhigh|max|fast|thinking))+( (?:\(NO ZDR\)))?$`)
+
+func cursorFamilyDisplayLabel(label string) string {
+	return strings.Join(strings.Fields(strings.ReplaceAll(label, "\u200b", "")), " ")
+}
 
 func parseCursorModels(output []byte) ([]ports.AgentModelInfo, error) {
 	models, err := parseSectionModels(string(output), "Available models", "Tip:", true)
@@ -995,16 +999,16 @@ func parseCursorModels(output []byte) ([]ports.AgentModelInfo, error) {
 		if len(indexes) < 2 {
 			continue
 		}
-		label := cursorVariantLabel.ReplaceAllString(models[indexes[0]].Label, "$1")
+		label := cursorVariantLabel.ReplaceAllString(cursorFamilyDisplayLabel(models[indexes[0]].Label), "$1")
 		for _, i := range indexes {
 			if models[i].ID == stem {
-				label = models[i].Label
+				label = cursorFamilyDisplayLabel(models[i].Label)
 				break
 			}
 		}
 		for _, i := range indexes {
 			models[i].FamilyID = stem
-			models[i].FamilyLabel = label
+			models[i].FamilyLabel = strings.TrimSpace(label)
 		}
 	}
 	return models, nil

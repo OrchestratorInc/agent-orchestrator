@@ -346,3 +346,33 @@ exec sleep 30
 		t.Fatalf("partial models=%+v checked=%d error=%v", models, checked, err)
 	}
 }
+
+func TestNativeSupplementChecksShareOverallBudget(t *testing.T) {
+	binary := nativeFixture(t, `IFS= read -r request
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"ao-model-catalog","response":{"models":[{"value":"sonnet"}]}}}'
+IFS= read -r request
+sleep 3.2
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"ao-model-check-1"}}'
+IFS= read -r request
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"ao-model-check-2"}}'
+exec sleep 30
+`)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	checked := 0
+	models, err := nativePickerModelsWithSupplement(ctx, binary, t.TempDir(), nil, func(models []ports.AgentModelInfo, represented map[string]bool, check func(string) (bool, error)) ([]ports.AgentModelInfo, error) {
+		for _, id := range []string{"concrete-one", "concrete-two"} {
+			allowed, err := check(id)
+			if err != nil {
+				return nil, err
+			}
+			if allowed {
+				checked++
+			}
+		}
+		return models, nil
+	})
+	if err != nil || len(models) != 1 || checked != 2 {
+		t.Fatalf("models=%+v checked=%d error=%v", models, checked, err)
+	}
+}

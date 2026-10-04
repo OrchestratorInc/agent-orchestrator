@@ -184,10 +184,6 @@ func nativePickerModelsWithSupplement(ctx context.Context, binary, workingDir st
 		return supplement(models, represented, func(id string) (bool, error) {
 			sequence++
 			requestID := fmt.Sprintf("ao-model-check-%d", sequence)
-			checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			defer cancel()
-			stop := context.AfterFunc(checkCtx, func() { _ = stdout.Close() })
-			defer stop()
 			request := map[string]any{"type": "control_request", "request_id": requestID, "request": map[string]string{"subtype": "set_model", "model": id}}
 			if err := json.NewEncoder(stdin).Encode(request); err != nil {
 				return false, fmt.Errorf("claude-code model check: %w", err)
@@ -210,8 +206,8 @@ func nativePickerModelsWithSupplement(ctx context.Context, binary, workingDir st
 				if reply.Type != "control_response" || reply.Response.RequestID != requestID {
 					continue
 				}
-				if checkCtx.Err() != nil {
-					return false, checkCtx.Err()
+				if ctx.Err() != nil {
+					return false, ctx.Err()
 				}
 				if reply.Response.Subtype == "success" {
 					return true, nil
@@ -224,9 +220,6 @@ func nativePickerModelsWithSupplement(ctx context.Context, binary, workingDir st
 			}
 			if ctx.Err() != nil {
 				return false, ctx.Err()
-			}
-			if checkCtx.Err() != nil {
-				return false, checkCtx.Err()
 			}
 			return false, errors.New("claude-code exited before completing model checks")
 		})

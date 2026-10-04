@@ -1,6 +1,9 @@
 package modelcatalog
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestCursorFamiliesPreserveSelectableVariants(t *testing.T) {
 	models, err := parseCursorModels([]byte(`Available models
@@ -41,5 +44,30 @@ func TestCursorCurrentDefaultAnnotation(t *testing.T) {
 	models, err := parseCursorModels([]byte("Available models\nauto - Auto (current, default)\n"))
 	if err != nil || len(models) != 1 || models[0].Label != "Auto" || !models[0].IsDefault {
 		t.Fatalf("models=%+v err=%v", models, err)
+	}
+}
+
+func TestCursorInstalledAdditionalFamilies(t *testing.T) {
+	for _, tc := range []struct{ stem, first, second, firstLabel, secondLabel, label string }{
+		{"cursor-grok-4.5", "cursor-grok-4.5-high", "cursor-grok-4.5-high-fast", "Grok 4.5", "Grok 4.5 Fast", "Grok 4.5"},
+		{"cursor-grok-4.6", "cursor-grok-4.6-low", "cursor-grok-4.6-medium", "Grok 4.6 Low", "Grok 4.6 Medium", "Grok 4.6"},
+		{"muse-spark-1.3", "muse-spark-1.3-minimal", "muse-spark-1.3-xhigh", "Muse Spark 1.3 1M Minimal", "Muse Spark 1.3 1M Extra High", "Muse Spark 1.3 1M"},
+		{"gpt-5.6-terra", "gpt-5.6-terra-none", "gpt-5.6-terra-max-fast", "GPT-5.6 Terra 1M None", "GPT-5.6 Terra 1M Max Fast", "GPT-5.6 Terra 1M"},
+		{"grok-4.7", "grok-4.7-low-fast", "grok-4.7-medium-fast", "Grok 4.7  Low Fast\u200b\u200b", "Grok 4.7  Medium Fast\u200b\u200b", "Grok 4.7"},
+	} {
+		t.Run(tc.stem, func(t *testing.T) {
+			models, err := parseCursorModels([]byte("Available models\n" + tc.first + " - " + tc.firstLabel + "\n" + tc.second + " - " + tc.secondLabel + "\n"))
+			if err != nil || len(models) != 2 {
+				t.Fatalf("models=%+v error=%v", models, err)
+			}
+			for _, model := range models {
+				if model.FamilyID != tc.stem || model.FamilyLabel != tc.label || strings.Contains(model.FamilyLabel, "\u200b") {
+					t.Fatalf("model=%+v", model)
+				}
+			}
+			if models[0].ID != tc.first || models[1].ID != tc.second || models[0].Label != tc.firstLabel || models[1].Label != tc.secondLabel {
+				t.Fatalf("leaves changed=%+v", models)
+			}
+		})
 	}
 }
