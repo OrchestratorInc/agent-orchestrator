@@ -298,11 +298,11 @@ describe("useOpenShellTerminal", () => {
 			title: "Terminal 1",
 			cloud: { orgId: "cloud-org" },
 		});
-		expect(shell.handleId).toMatch(/^cloud-shell-/);
+		expect(shell?.handleId).toMatch(/^cloud-shell-/);
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([shell]);
 
 		const close = renderHook(() => useCloseShellTerminal(), { wrapper: wrapper(queryClient) });
-		await act(async () => close.result.current.mutateAsync(shell.handleId));
+		await act(async () => close.result.current.mutateAsync(shell!.handleId));
 		expect(deleteMock).not.toHaveBeenCalled();
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([]);
 	});
@@ -427,6 +427,65 @@ describe("useOpenShellTerminal sized creation", () => {
 		await act(async () => finishCreate({ data: { shellTerminal: created } }));
 		await waitFor(() => expect(result.current.open.isSuccess).toBe(true));
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([created]);
+	});
+
+	it("never creates a shell for a pending tab closed before it measured", async () => {
+		// Quickly opening then closing tabs closes them while still pending.
+		const queryClient = new QueryClient({
+			defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+		});
+		queryClient.setQueryData(shellTerminalsQueryKey, []);
+		const { result } = renderHook(
+			() => ({ open: useOpenShellTerminal(), close: useCloseShellTerminal() }),
+			{ wrapper: wrapper(queryClient) },
+		);
+		let pending!: ShellTerminal;
+		act(() => {
+			pending = result.current.open.open({});
+		});
+
+		await act(async () => result.current.close.mutateAsync(pending.handleId));
+		await waitFor(() => expect(result.current.open.isSuccess).toBe(true));
+		// The grid arriving late must not resurrect the closed tab.
+		act(() => reportPendingShellGrid(pending.handleId, measuredGrid));
+		await act(async () => undefined);
+
+		expect(postMock).not.toHaveBeenCalled();
+		expect(deleteMock).not.toHaveBeenCalled();
+		expect(result.current.open.isError).toBe(false);
+		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([]);
+	});
+
+	it("removes the shell a closed pending tab was already being created as", async () => {
+		const created = { ...shells[0] };
+		let finishCreate!: (result: { data: { shellTerminal: ShellTerminal } }) => void;
+		postMock.mockReturnValue(new Promise((resolve) => (finishCreate = resolve)));
+		deleteMock.mockResolvedValue({});
+		const queryClient = new QueryClient({
+			defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+		});
+		queryClient.setQueryData(shellTerminalsQueryKey, []);
+		const { result } = renderHook(
+			() => ({ open: useOpenShellTerminal(), close: useCloseShellTerminal() }),
+			{ wrapper: wrapper(queryClient) },
+		);
+		let pending!: ShellTerminal;
+		act(() => {
+			pending = result.current.open.open({});
+		});
+		act(() => reportPendingShellGrid(pending.handleId, measuredGrid));
+		await waitFor(() => expect(postMock).toHaveBeenCalled());
+
+		await act(async () => result.current.close.mutateAsync(pending.handleId));
+		await act(async () => finishCreate({ data: { shellTerminal: created } }));
+		await waitFor(() => expect(result.current.open.isSuccess).toBe(true));
+
+		expect(deleteMock).toHaveBeenCalledTimes(1);
+		expect(deleteMock).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
+			params: { path: { handleId: created.handleId } },
+		});
+		expect(queryClient.getQueryData<ShellTerminal[]>(shellTerminalsQueryKey)?.map((shell) => shell.handleId)).not.toContain(created.handleId);
+		expect(result.current.open.isError).toBe(false);
 	});
 
 	it("drops the pending tab without creating a PTY when its terminal cannot start", async () => {

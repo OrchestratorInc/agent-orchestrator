@@ -7,7 +7,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import {
 	adoptPendingShell,
+	cancelPendingShell,
 	discardPendingShell,
+	isPendingShellCancelled,
+	isPendingShellHandle,
+	PendingShellCancelledError,
 	PENDING_SHELL_HANDLE_PREFIX,
 	pendingShellGrid,
 } from "../lib/pending-shell-terminals";
@@ -91,6 +95,11 @@ function setPendingShellTab(hostId: HostId | undefined, shell: ShellTerminal, pe
 	const key = pendingTabsHostKey(hostId);
 	const others = (pendingShellTabs.get(key) ?? []).filter((tab) => tab.handleId !== shell.handleId);
 	pendingShellTabs.set(key, pending ? [...others, shell] : others);
+}
+
+function forgetPendingShellTab(hostId: HostId | undefined, handleId: string): void {
+	const key = pendingTabsHostKey(hostId);
+	pendingShellTabs.set(key, (pendingShellTabs.get(key) ?? []).filter((tab) => tab.handleId !== handleId));
 }
 
 async function fetchShellTerminals(hostId?: HostId): Promise<ShellTerminal[]> {
@@ -191,7 +200,7 @@ export function useOpenShellTerminal(hostId?: HostId) {
 			shell,
 			cloud,
 			optimisticShell,
-		}: OpenShellTerminalMutationInput): Promise<ShellTerminal> => {
+		}: OpenShellTerminalMutationInput): Promise<ShellTerminal | null> => {
 			if (usePreviewData && !remote) {
 				previewShellSeq += 1;
 				const shell: ShellTerminal = {
@@ -225,7 +234,12 @@ export function useOpenShellTerminal(hostId?: HostId) {
 			}
 			// Create the PTY at the grid the tab's terminal measured, so the
 			// shell's first prompt is laid out for the width the user sees.
-			const grid = await pendingShellGrid(optimisticShell.handleId);
+			// Resolves null when the user closed the pending tab first: nothing to create.
+			const grid = await pendingShellGrid(optimisticShell.handleId).catch((error: unknown) => {
+				if (error instanceof PendingShellCancelledError) return null;
+				throw error;
+			});
+			if (!grid) return null;
 			const body: OpenShellTerminalRequest = { cols: grid.cols, rows: grid.rows };
 			if (projectId) body.projectId = projectId;
 			if (sessionId) body.sessionId = sessionId;
@@ -237,11 +251,26 @@ export function useOpenShellTerminal(hostId?: HostId) {
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/shell-terminals", { body });
 			if (error) throw error;
 			if (!data) throw new Error("Daemon returned no shell terminal");
+			if (isPendingShellCancelled(optimisticShell.handleId)) {
+				// Closed while the daemon was creating it: remove the shell rather
+				// than show a tab the user already closed.
+				await closeShellTerminal(data.shellTerminal.handleId, hostId).catch((error: unknown) => {
+					console.error("Failed to remove a closed pending shell terminal:", error);
+				});
+				return null;
+			}
 			if (!remote) markTerminalHandleFresh(data.shellTerminal.handleId);
 			return toShellTerminal(data.shellTerminal, hostId);
 		},
 		onSuccess: (shell, { optimisticShell }) => {
 			setPendingShellTab(hostId, optimisticShell, false);
+			if (!shell) {
+				discardPendingShell(optimisticShell.handleId);
+				queryClient.setQueryData<ShellTerminal[]>(queryKey, (current) =>
+					current?.filter((candidate) => candidate.handleId !== optimisticShell.handleId),
+				);
+				return;
+			}
 			// Before the tab's target changes: the pending tab's terminal must be
 			// re-keyed to the created handle first, or the cache would mount a
 			// second terminal for it instead of keeping the measured one.
@@ -291,7 +320,10 @@ export function useOpenShellTerminal(hostId?: HostId) {
 		// create request settles.
 		setPendingShellTab(hostId, optimisticShell, true);
 		queryClient.setQueryData<ShellTerminal[]>(queryKey, (current) => [...(current ?? []), optimisticShell]);
-		mutation.mutate({ ...input, optimisticShell }, callbacks);
+		mutation.mutate(
+			{ ...input, optimisticShell },
+			{ onSuccess: (shell) => (shell ? callbacks?.onSuccess?.(shell) : undefined) },
+		);
 		return optimisticShell;
 	};
 
@@ -318,6 +350,8 @@ export function useCloseShellTerminal(hostId?: HostId) {
 	const remote = Boolean(hostId && hostId !== LOCAL_HOST);
 	return useMutation({
 		mutationFn: async (handleId: string): Promise<void> => {
+			// A pending tab has no PTY yet; onMutate cancelled its creation.
+			if (isPendingShellHandle(handleId)) return;
 			if (usePreviewData && !remote) {
 				previewShellTerminals = previewShellTerminals.filter((s) => s.handleId !== handleId);
 				return;
@@ -329,6 +363,12 @@ export function useCloseShellTerminal(hostId?: HostId) {
 			await closeShellTerminal(handleId, hostId);
 		},
 		onMutate: async (handleId) => {
+			if (isPendingShellHandle(handleId)) {
+				// Before anything awaits: a refetch must not bring the tab back, and
+				// its creation must not go on to produce a shell nobody asked for.
+				forgetPendingShellTab(hostId, handleId);
+				cancelPendingShell(handleId);
+			}
 			const previous = queryClient.getQueryData<ShellTerminal[]>(queryKey);
 			const isCloud = Boolean(previous?.find((shell) => shell.handleId === handleId)?.cloud);
 			const removeClosedShell = () => {

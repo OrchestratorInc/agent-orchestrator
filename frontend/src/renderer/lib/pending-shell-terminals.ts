@@ -34,6 +34,8 @@ export type CreatedShell = {
 };
 
 const pendingGrids = new Map<string, PendingGrid>();
+// Pending shells the user closed before the daemon created them.
+const cancelledShells = new Set<string>();
 // Pending handle -> created handle. Lets state keyed by a tab's pending handle
 // (such as a user-arranged tab order) follow the tab once its PTY exists.
 const createdHandles = new Map<string, string>();
@@ -63,6 +65,28 @@ export function createdShellHandle(handleId: string): string {
 	return createdHandles.get(handleId) ?? handleId;
 }
 
+/** Thrown to a creation waiting on a grid when its pending tab is closed. */
+export class PendingShellCancelledError extends Error {
+	constructor() {
+		super("The terminal was closed before it was created");
+	}
+}
+
+/**
+ * Closing a pending tab cancels its creation: a creation still waiting for
+ * the grid never asks the daemon for a PTY, and one already in flight removes
+ * the shell it gets back instead of showing a tab the user closed.
+ */
+export function cancelPendingShell(pendingHandleId: string): void {
+	cancelledShells.add(pendingHandleId);
+	pendingGridEntry(pendingHandleId).reject(new PendingShellCancelledError());
+	cache?.discard(pendingHandleId);
+}
+
+export function isPendingShellCancelled(pendingHandleId: string): boolean {
+	return cancelledShells.has(pendingHandleId);
+}
+
 /** Announces the created shell so the cache can re-key the pending terminal. */
 export function adoptPendingShell(pendingHandleId: string, shell: CreatedShell): void {
 	pendingGrids.delete(pendingHandleId);
@@ -73,6 +97,7 @@ export function adoptPendingShell(pendingHandleId: string, shell: CreatedShell):
 /** Drops all pending state for a creation that failed. */
 export function discardPendingShell(pendingHandleId: string): void {
 	pendingGrids.delete(pendingHandleId);
+	cancelledShells.delete(pendingHandleId);
 	cache?.discard(pendingHandleId);
 }
 
