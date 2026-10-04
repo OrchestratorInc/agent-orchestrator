@@ -10,7 +10,6 @@ import {
 } from "@aoagents/product-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
@@ -760,7 +759,7 @@ function TaskModelPicker({
 
 	// No agent selected: there is nothing loading and no model to choose yet, so
 	// show a clear "select an agent" placeholder, never a spinner. This returns
-	// before the loading check so a no-agent state can never render one.
+	// before rendering the model control.
 	if (agentId === "") {
 		return (
 			<span
@@ -769,25 +768,6 @@ function TaskModelPicker({
 				aria-label={t("newTask.model")}
 			>
 				<span className="truncate text-settings-muted">{t("newTask.selectAgent")}</span>
-			</span>
-		);
-	}
-
-	if (loading) {
-		return (
-			<span
-				className="composer-chip composer-toolbar-option w-full cursor-not-allowed justify-start opacity-50"
-				aria-label={t("newTask.model")}
-			>
-				<span
-					className="inline-flex min-w-0 items-center gap-1.5"
-					role="status"
-					aria-label={t("settings.models.loading")}
-					aria-busy="true"
-				>
-					<Loader2 className="size-icon-sm shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
-					<span className="truncate text-settings-muted">{t("settings.models.loading")}</span>
-				</span>
 			</span>
 		);
 	}
@@ -845,7 +825,7 @@ function TaskModelPicker({
 			customModelEntry={customModelEntry}
 			agentLabel={agentLabel}
 			onRefresh={onRefresh}
-			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
+			refreshing={loading || catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
 			refreshError={catalog?.refreshError}
 			retryAt={catalog?.retryAt}
 			disabled={disabled || agentId === ""}

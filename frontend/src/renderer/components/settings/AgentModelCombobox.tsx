@@ -238,6 +238,7 @@ export function AgentModelCombobox({
 						triggerClassName,
 					)}
 					aria-label={ariaLabel}
+					aria-busy={refreshing || undefined}
 					disabled={disabled}
 				>
 					{renderTrigger ? (

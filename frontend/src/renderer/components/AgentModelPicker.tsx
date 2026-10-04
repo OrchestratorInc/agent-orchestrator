@@ -1,5 +1,4 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
@@ -67,20 +66,6 @@ export function AgentModelPicker({
 		queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), refreshed);
 	};
 
-	if (catalogLoading) {
-		return (
-			<span
-				className="composer-chip composer-toolbar-option w-full cursor-not-allowed justify-start opacity-50"
-				role="status"
-				aria-label={t("settings.models.loading")}
-				aria-busy="true"
-			>
-				<Loader2 className="size-icon-sm shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
-				<span className="truncate text-settings-muted">{t("settings.models.loading")}</span>
-			</span>
-		);
-	}
-
 	if (catalog?.selectionMode === "mode") {
 		const options = (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
 			value: item.id,
@@ -130,7 +115,7 @@ export function AgentModelPicker({
 			customModelEntry={customModelEntry}
 			agentLabel={agentLabel}
 			onRefresh={refreshCatalog}
-			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
+			refreshing={catalogLoading || catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
 			refreshError={catalog?.refreshError}
 			retryAt={catalog?.retryAt}
 			disabled={disabled || agentId === ""}

@@ -7,11 +7,11 @@ import { agentModelsQueryOptions, agentModelsRevalidationQueryOptions, type Agen
 const catalog = { models: [{ id: "model-a" }], validatedAt: "2026-10-04", refreshRecommended: true } as AgentModelCatalog;
 afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
 describe("shared model queries", () => {
-	it("retains inactive fresh catalogs beyond five minutes without fetching again", async () => {
+	it.each(["codex", "opencode", "cursor"])("retains %s catalogs across switches without fetching again", async (agentId) => {
 		vi.useFakeTimers();
 		get.mockResolvedValue({ data: catalog });
 		const client = new QueryClient();
-		const options = agentModelsQueryOptions("codex", "project-a");
+		const options = agentModelsQueryOptions(agentId, "project-a");
 		await client.fetchQuery(options);
 		await vi.advanceTimersByTimeAsync(360_000);
 		expect(await client.fetchQuery(options)).toEqual(catalog);
