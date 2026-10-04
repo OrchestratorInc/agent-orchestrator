@@ -4376,6 +4376,8 @@ export interface components {
             shell?: string;
             /** @description Start the shell when the requesting client attaches with its terminal grid instead of immediately, so the shell starts at the size that client shows. Only for clients that attach as a sized viewer; omitted starts the shell immediately at the default grid. */
             startOnAttach?: boolean;
+            /** @description Tab title for the new shell, for a client that already shows its tab. Trimmed; omitted or empty numbers it after the existing shells (Terminal N). */
+            title?: string;
         };
         OrchestratorResponse: {
             id: string;

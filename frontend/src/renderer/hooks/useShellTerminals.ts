@@ -255,6 +255,9 @@ export function useOpenShellTerminal(hostId?: HostId) {
 		// the daemon starts the shell then: its first prompt is laid out for the
 		// width this tab shows instead of a guessed default.
 		const body: components["schemas"]["OpenShellTerminalRequest"] = { startOnAttach: true };
+		// The tab already shows this name; the daemon numbering it again could
+		// disagree while tabs the user just closed are still being destroyed.
+		if (optimisticShell) body.title = optimisticShell.title;
 		if (projectId) body.projectId = projectId;
 		if (sessionId) body.sessionId = sessionId;
 		if (remote && shell) body.shell = shell;

@@ -254,6 +254,11 @@ func (s *Service) acquireSessionGate(ctx context.Context, id domain.SessionID) (
 // teardown (and the gate) releases — at which point resolveShellTerminalWorkingDir's
 // existence check sees the worktree is gone and falls back to the project root.
 func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInput) (ShellTerminal, error) {
+	title := strings.TrimSpace(in.Title)
+	if utf8.RuneCountInString(title) > maxShellTerminalTitleLen {
+		return ShellTerminal{}, apierr.Invalid("SHELL_TERMINAL_TITLE_TOO_LONG",
+			fmt.Sprintf("A shell terminal title must be at most %d characters", maxShellTerminalTitleLen), nil)
+	}
 	if in.SessionID != "" {
 		if s.sessions == nil {
 			return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SESSION_LOOKUP", "Session lookup is unavailable")
@@ -278,9 +283,12 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	if err != nil {
 		return ShellTerminal{}, err
 	}
-	openTerminals, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
-	if err != nil {
-		return ShellTerminal{}, fmt.Errorf("open shell terminal: list existing terminals: %w", err)
+	if title == "" {
+		openTerminals, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
+		if err != nil {
+			return ShellTerminal{}, fmt.Errorf("open shell terminal: list existing terminals: %w", err)
+		}
+		title = nextShellTerminalTitle(openTerminals)
 	}
 	argv, usedFallback := resolveUserLoginShell(in.Shell)
 	if usedFallback {
@@ -321,7 +329,7 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	}
 	return s.openTerminal(ctx, openTerminalConfig{
 		argv: argv, env: env, projectID: projectID, sessionID: in.SessionID,
-		workingDir: workingDir, title: nextShellTerminalTitle(openTerminals),
+		workingDir: workingDir, title: title,
 		previewVerifier: verifier,
 		startOnAttach:   in.StartOnAttach,
 	})

@@ -151,6 +151,18 @@ func TestShellTerminalsAPI_OpenPassesStartOnAttachThrough(t *testing.T) {
 	}
 }
 
+func TestShellTerminalsAPI_OpenPassesTitleThrough(t *testing.T) {
+	svc := &fakeShellTerminalService{opened: sampleShellTerminal()}
+	srv := newShellTerminalTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/shell-terminals", `{"projectId":"portfolio","title":"Terminal 3"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", status, body)
+	}
+	if svc.gotOpenInput.Title != "Terminal 3" {
+		t.Errorf("Title = %q, want Terminal 3", svc.gotOpenInput.Title)
+	}
+}
+
 func TestShellTerminalsAPI_OpenRejectsMalformedBody(t *testing.T) {
 	srv := newShellTerminalTestServer(t, &fakeShellTerminalService{opened: sampleShellTerminal()})
 

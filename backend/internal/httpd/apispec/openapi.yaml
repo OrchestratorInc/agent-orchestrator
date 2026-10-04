@@ -12838,6 +12838,11 @@ components:
             that client shows. Only for clients that attach as a sized viewer; omitted
             starts the shell immediately at the default grid.
           type: boolean
+        title:
+          description: Tab title for the new shell, for a client that already shows
+            its tab. Trimmed; omitted or empty numbers it after the existing shells
+            (Terminal N).
+          type: string
       type: object
     OrchestratorResponse:
       properties:

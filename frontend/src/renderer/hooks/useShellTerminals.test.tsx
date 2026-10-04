@@ -142,7 +142,7 @@ describe("host-scoped shell terminals", () => {
 		]));
 
 		expect(remoteA.POST).toHaveBeenCalledWith("/api/v1/shell-terminals", {
-			body: { startOnAttach: true, projectId: "project-a", sessionId: "same-session" },
+			body: { startOnAttach: true, title: "Terminal 1", projectId: "project-a", sessionId: "same-session" },
 		});
 		expect(postMock).not.toHaveBeenCalled();
 		expect(shellStoreMock.load).not.toHaveBeenCalled();

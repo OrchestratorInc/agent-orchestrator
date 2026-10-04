@@ -46,6 +46,10 @@ type OpenShellTerminalInput struct {
 	// width that client shows. Only a client that attaches as a sized viewer
 	// may ask for it: a viewer that never reports a grid would never start it.
 	StartOnAttach bool `json:"startOnAttach,omitempty"`
+	// Title names the tab. A client that already shows the tab passes the
+	// title it shows, so the tab keeps its name when the shell arrives; empty
+	// numbers it after the existing shells.
+	Title string `json:"title,omitempty"`
 }
 
 // InitialInputReadyState describes a terminal state that is ready to receive

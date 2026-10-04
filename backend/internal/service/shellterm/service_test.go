@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -685,6 +686,35 @@ func TestOpenShellTerminalStillStartsResolvedLoginShellInProjectRoot(t *testing.
 	}
 	if len(st.records) != 1 || st.records[0].AppRunID != testAppRunID {
 		t.Fatalf("record not persisted against the current app run: %+v", st.records)
+	}
+}
+
+// A client that already shows the tab names it, so the tab keeps that name
+// when the shell arrives even if the daemon still has shells the client has
+// already closed.
+func TestOpenShellTerminalKeepsTheTitleTheClientShows(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{
+		{HandleID: "ptyhost-v1:shellterm-closing", ProjectID: "portfolio", Title: "Terminal 1", AppRunID: testAppRunID},
+	}}
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	svc := newTestService(rt, st, projects)
+
+	shell, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio", Title: "  Terminal 1 "})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if shell.Title != "Terminal 1" {
+		t.Fatalf("title = %q, want the client's Terminal 1", shell.Title)
+	}
+
+	_, err = svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio", Title: strings.Repeat("x", maxShellTerminalTitleLen+1)})
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "SHELL_TERMINAL_TITLE_TOO_LONG" {
+		t.Fatalf("too-long title error = %v, want SHELL_TERMINAL_TITLE_TOO_LONG", err)
+	}
+	if len(rt.created) != 1 {
+		t.Fatalf("runtime creates = %d, want only the valid open", len(rt.created))
 	}
 }
 
