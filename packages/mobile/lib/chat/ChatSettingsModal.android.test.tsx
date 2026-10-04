@@ -90,4 +90,50 @@ describe("EffortSlider", () => {
 		expect(onChange).toHaveBeenCalledOnce();
 		act(() => renderer.unmount());
 	});
+
+	it("does not retry a failed write when the sheet rerenders", () => {
+		vi.useFakeTimers();
+		const onChange = vi.fn();
+		const afterFailure = vi.fn();
+		let renderer!: ReactTestRenderer;
+
+		act(() => {
+			renderer = create(<EffortSlider choices={choices} selected="default" unplaced="Not reported" onChange={onChange} />);
+		});
+		act(() => renderer.root.findByProps({ testID: "turn-settings-effort" }).props.onValueChange(2));
+		act(() => { vi.advanceTimersByTime(180); });
+		expect(onChange).toHaveBeenCalledOnce();
+		expect(onChange).toHaveBeenCalledWith("high");
+
+		// The server rejected the change. The route shows an error and keeps the
+		// old selected value, so a new render must not start another write.
+		act(() => {
+			renderer.update(<EffortSlider choices={[...choices]} selected="default" unplaced="Not reported" onChange={afterFailure} />);
+		});
+		act(() => { vi.advanceTimersByTime(500); });
+		expect(onChange).toHaveBeenCalledOnce();
+		expect(afterFailure).not.toHaveBeenCalled();
+		act(() => renderer.unmount());
+	});
+
+	it("keeps a user's pending choice through an unrelated sheet rerender", () => {
+		vi.useFakeTimers();
+		const oldCallback = vi.fn();
+		const latestCallback = vi.fn();
+		let renderer!: ReactTestRenderer;
+
+		act(() => {
+			renderer = create(<EffortSlider choices={choices} selected="default" unplaced="Not reported" onChange={oldCallback} />);
+		});
+		act(() => renderer.root.findByProps({ testID: "turn-settings-effort" }).props.onValueChange(2));
+		act(() => { vi.advanceTimersByTime(100); });
+		act(() => {
+			renderer.update(<EffortSlider choices={[...choices]} selected="default" unplaced="Not reported" onChange={latestCallback} />);
+		});
+		act(() => { vi.advanceTimersByTime(80); });
+		expect(oldCallback).not.toHaveBeenCalled();
+		expect(latestCallback).toHaveBeenCalledOnce();
+		expect(latestCallback).toHaveBeenCalledWith("high");
+		act(() => renderer.unmount());
+	});
 });

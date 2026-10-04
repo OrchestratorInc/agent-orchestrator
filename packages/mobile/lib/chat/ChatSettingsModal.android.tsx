@@ -1,6 +1,6 @@
 import { Feather } from "../icons";
 import { Host, Slider, Switch as NativeSwitch } from "@expo/ui";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { haptics } from "../haptics";
 import type { Theme } from "../theme";
@@ -164,18 +164,41 @@ export function EffortSlider({ choices, selected, unplaced, disabled, onChange }
 	// change nobody made.
 	const selectedIndex = effortSliderIndex(choices, selected);
 	const [index, setIndex] = useState(selectedIndex);
+	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const onChangeRef = useRef(onChange);
+	const clearPending = useCallback(() => {
+		if (timer.current !== null) clearTimeout(timer.current);
+		timer.current = null;
+	}, []);
 
-	useEffect(() => setIndex(selectedIndex), [selectedIndex]);
+	useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
 	useEffect(() => {
-		const next = effortSliderWrite(choices, selected, index);
+		setIndex(selectedIndex);
+		clearPending();
+	}, [clearPending, selected, selectedIndex]);
+	useEffect(() => {
+		if (disabled) clearPending();
+	}, [clearPending, disabled]);
+	useEffect(() => clearPending, [clearPending]);
+	// Only a slider move arms the timer. A failed write rerenders the sheet with
+	// the old selected value, but must not silently retry the same write.
+	const move = (value: number) => {
+		const nextIndex = Math.round(value);
+		setIndex(nextIndex);
+		clearPending();
+		if (disabled) return;
+		const next = effortSliderWrite(choices, selected, nextIndex);
 		if (!next) return;
-		const timer = setTimeout(() => { haptics.select(); onChange(next); }, 180);
-		return () => clearTimeout(timer);
-	}, [choices, index, onChange, selected]);
+		timer.current = setTimeout(() => {
+			timer.current = null;
+			haptics.select();
+			onChangeRef.current(next);
+		}, 180);
+	};
 
 	return <View style={[styles.effort, disabled && styles.disabled]}>
 		<View style={styles.effortHeader}><Feather name="activity" size={17} color={t.textSecondary} /><View style={styles.rowCopy}><Text style={styles.rowLabel}>Reasoning effort</Text><Text style={styles.rowDescription}>More effort can improve harder tasks</Text></View><Text style={styles.effortValue}>{index < 0 ? unplaced : choices[index]?.label}</Text></View>
-		<Host style={styles.sliderHost} colorScheme={scheme} seedColor={t.accent}><Slider value={Math.max(0, index)} min={0} max={Math.max(0, choices.length - 1)} step={1} disabled={disabled} onValueChange={(value) => setIndex(Math.round(value))} testID="turn-settings-effort" /></Host>
+		<Host style={styles.sliderHost} colorScheme={scheme} seedColor={t.accent}><Slider value={Math.max(0, index)} min={0} max={Math.max(0, choices.length - 1)} step={1} disabled={disabled} onValueChange={move} testID="turn-settings-effort" /></Host>
 		<View style={styles.effortLabels}>{choices.map((choice, choiceIndex) => <Text key={choice.value} style={[styles.effortLabel, choiceIndex === index && { color: t.accent }]}>{choice.tick ?? choice.label}</Text>)}</View>
 	</View>;
 }

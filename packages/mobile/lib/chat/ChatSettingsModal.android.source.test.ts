@@ -8,7 +8,7 @@ const android = readFileSync(new URL("./ChatSettingsModal.android.tsx", import.m
 describe("Android turn settings sheet", () => {
 	it("places the effort slider without clamping an effort that is none of its levels", () => {
 		expect(android).toContain("const selectedIndex = effortSliderIndex(choices, selected);");
-		expect(android).toContain("const next = effortSliderWrite(choices, selected, index);");
+		expect(android).toContain("const next = effortSliderWrite(choices, selected, nextIndex);");
 		expect(android).not.toMatch(/Math\.max\(0,\s*(?:choices\.findIndex|effortSliderIndex)/);
 	});
 
