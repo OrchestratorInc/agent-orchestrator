@@ -141,6 +141,12 @@ func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) e
 	if f.updateSessionErr != nil {
 		return f.updateSessionErr
 	}
+	// Like the real store, a full-row update never writes artifact_dir or
+	// session_output_type; only UpdateSessionArtifactOutput does.
+	if existing, ok := f.sessions[rec.ID]; ok {
+		rec.Metadata.ArtifactDir = existing.Metadata.ArtifactDir
+		rec.OutputType = existing.OutputType
+	}
 	f.sessions[rec.ID] = rec
 	return nil
 }
@@ -10865,5 +10871,39 @@ func TestSpawn_WorkspaceCreateFailureRemovesReservedArtifactDir(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(dataDir, "artifacts", "mer-1")); !os.IsNotExist(statErr) {
 		t.Fatalf("artifact dir orphaned after workspace create failure: stat err = %v", statErr)
+	}
+}
+
+func TestSpawn_PersistsArtifactDirOnSessionRow(t *testing.T) {
+	m, st, _, _ := newManager()
+	dataDir := t.TempDir()
+	m.dataDir = dataDir
+
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "go"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	want := filepath.Join(dataDir, "artifacts", string(rec.ID))
+	if got := st.sessions[rec.ID].Metadata.ArtifactDir; got != want {
+		t.Fatalf("persisted ArtifactDir = %q, want %q", got, want)
+	}
+}
+
+func TestSpawn_PreparedSessionPersistsArtifactDir(t *testing.T) {
+	m, st, _, _ := newManager()
+	m.runBackground = func(work func()) { work() }
+	dataDir := t.TempDir()
+	m.dataDir = dataDir
+	token, err := m.PrepareTaskWorkspace(ctx, st.projects["mer"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "go", TaskPreparation: token})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	want := filepath.Join(dataDir, "artifacts", string(rec.ID))
+	if got := st.sessions[rec.ID].Metadata.ArtifactDir; got != want {
+		t.Fatalf("persisted ArtifactDir = %q, want %q", got, want)
 	}
 }

@@ -345,6 +345,10 @@ type Store interface {
 	CommitClientRequestSession(ctx context.Context, id domain.SessionID) error
 	UpdateSession(ctx context.Context, rec domain.SessionRecord) error
 	UpdateSessionModel(ctx context.Context, id domain.SessionID, model string) (bool, error)
+	// UpdateSessionArtifactOutput is the only write that changes artifact_dir
+	// and session_output_type on an existing row; UpdateSession leaves them
+	// untouched so a stale full-row write cannot revert a reconcile.
+	UpdateSessionArtifactOutput(ctx context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error)
 	UpdateBrowserCapabilityVerifier(ctx context.Context, id domain.SessionID, expected domain.SessionControllerOwner, verifier string) (bool, error)
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
@@ -1075,7 +1079,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	artifactDir := m.reserveArtifactDir(id)
 	if prep == nil {
 		rec.Metadata.ArtifactDir = artifactDir
-		if err := m.store.UpdateSession(ctx, rec); err != nil {
+		if _, err := m.store.UpdateSessionArtifactOutput(ctx, id, artifactDir, rec.OutputType); err != nil {
 			m.cleanupArtifactDir(id)
 			m.rollbackSpawnSeedRow(ctx, id)
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnArtifactDir, err)
@@ -1144,6 +1148,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 				}
 			}
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStageEarly(ErrSpawnCreate, err)
+		}
+		// PromoteTaskPreparation does not write the artifact columns and the
+		// full-row UpdateSession leaves them alone, so persist the directory
+		// through the dedicated write.
+		rec.Metadata.ArtifactDir = artifactDir
+		if _, err := m.store.UpdateSessionArtifactOutput(ctx, id, artifactDir, rec.OutputType); err != nil {
+			m.logger.Warn("persist artifact dir for prepared session", "session", id, "err", err)
 		}
 	}
 	// A speculative worktree may still be being created under this gate. Wait
