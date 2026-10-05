@@ -519,9 +519,11 @@ func TestBroadcastDropsAClientThatStopsReading(t *testing.T) {
 	})
 	go func() { _, _ = io.Copy(io.Discard, fastPeer) }()
 
+	// The stalled writer can hold a full batch in flight plus a full queue
+	// (2x the buffer), so send more than that to guarantee the queue fills.
 	done := make(chan struct{})
 	go func() {
-		for i := 0; i < hostClientWriteBuffer*2; i++ {
+		for i := 0; i < hostClientWriteBuffer*3; i++ {
 			frame, _ := EncodeMessage(MsgTerminalData, []byte("x"))
 			h.broadcast(frame)
 		}
