@@ -2436,6 +2436,27 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.getByRole("button", { name: "Stop reviewer" })).toBeDisabled();
   });
 
+  it("retains the stopped Chat surface while the reviews refresh is pending", async () => {
+    const reviews = [reviewState(3, "up_to_date")];
+    const reviewerSurface = { mode: "chat", reviewId: "review-1", harness: "codex" };
+    const response = { data: { reviewerHandleId: "", reviewerSurface, reviews } };
+    const common = commonGetsResponder([], "", reviews);
+    let stopped = false;
+    let finishRefresh!: (value: typeof response) => void;
+    const refresh = new Promise<typeof response>((resolve) => { finishRefresh = resolve; });
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/reviews"
+      ? stopped ? refresh : response
+      : common(path));
+    postMock.mockImplementation(async () => { stopped = true; return { data: { reviewerHandleId: "", reviews } }; });
+    const { queryClient } = renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+    await userEvent.click(await screen.findByRole("button", { name: "Stop reviewer" }));
+    await waitFor(() => expect(queryClient.getQueryState(["session-reviews", "sess-1"])?.fetchStatus).toBe("fetching"));
+    await waitFor(() => expect(queryClient.getQueryData<{ reviewerSurface: unknown }>(["session-reviews", "sess-1"])?.reviewerSurface).toEqual(reviewerSurface));
+    expect(stopped).toBe(true);
+    finishRefresh(response);
+  });
+
   it("shows reviewing status and cancel action while auto-review is running", async () => {
     const runningReview = {
       ...approvedReview,
