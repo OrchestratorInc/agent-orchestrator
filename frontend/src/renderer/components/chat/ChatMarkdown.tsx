@@ -53,6 +53,7 @@ import {
 	workspaceFilePath,
 } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
+import { SessionLinkPreviewCard } from "../SessionLinkPreviewCard";
 import {
 	explicitWorkspaceFilePath,
 	findWorkspaceFilePath,
@@ -317,6 +318,7 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 			inAppLink={href ? () => browserLink : undefined}
 			filePath={filePath}
 			onFileOpen={onFileOpen}
+			hoverPreview={sessionLink ? () => <SessionLinkPreviewCard href={href!} /> : undefined}
 			onClick={(event) => {
 				if (href && sessionLink) {
 					event.preventDefault();
