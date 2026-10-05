@@ -1,4 +1,4 @@
-import { KeyRound } from "lucide-react";
+import { KeyRound, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -70,7 +70,7 @@ function Coder11xSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	// A connection must be saved before the control plane can reach the org's Coder
 	// to list its templates, so only then do we enable the live template dropdown.
 	const tokenStored = Boolean(loaded?.tokenSet);
-	const { templates, isLoading: templatesLoading } = useCoderTemplates(orgId === "" ? undefined : orgId, tokenStored);
+	const { templates, isLoading: templatesLoading, isError: templatesError } = useCoderTemplates(orgId === "" ? undefined : orgId, tokenStored);
 	// The coder-templates query is keyed by this prefix (see useCoderTemplates); a
 	// prefix match re-runs it after the connection changes.
 	const coderTemplatesQueryKey = ["cloud-coder-templates"] as const;
@@ -236,6 +236,35 @@ function Coder11xSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						</>
 					)}
 				</div>
+
+				{tokenStored ? (
+					// Read-only catalog of every template on the connected Coder — so the
+					// whole Coder story (not just the default pick above) lives inside AO.
+					// Same tidy name + one-line-spec style as the session template picker.
+					<div className="flex flex-col gap-2 border-t border-border pt-4">
+						<Label className={onboardingFormLabelClass}>{t("settings.coder11x.templatesListLabel")}</Label>
+						<p className={onboardingFieldHintClass}>{t("settings.coder11x.templatesListHint")}</p>
+						{templatesLoading ? (
+							<div className="flex items-center gap-2 px-1 py-3 text-xs text-muted-foreground">
+								<Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+								<span>{t("settings.coder11x.templatesLoading")}</span>
+							</div>
+						) : templatesError ? (
+							<p className={onboardingFieldErrorClass} role="alert">{t("settings.coder11x.templatesError")}</p>
+						) : templates.length === 0 ? (
+							<p className="px-1 py-3 text-xs text-muted-foreground">{t("settings.coder11x.templatesEmpty")}</p>
+						) : (
+							<ul aria-label={t("settings.coder11x.templatesListLabel")} className="flex flex-col overflow-hidden rounded-md border border-border">
+								{templates.map((tpl) => (
+									<li key={tpl.id} className="flex flex-col gap-0.5 border-b border-border px-3 py-2 last:border-b-0">
+										<span className="truncate text-[13px] text-foreground">{tpl.displayName || tpl.name}</span>
+										{tpl.description ? <span className="truncate text-[11px] text-muted-foreground">{tpl.description}</span> : null}
+									</li>
+								))}
+							</ul>
+						)}
+					</div>
+				) : null}
 
 				<div className="flex flex-col gap-1.5">
 					<Label htmlFor="coder11x-agent" className={onboardingFormLabelClass}>{t("settings.coder11x.agentLabel")}</Label>
