@@ -1670,6 +1670,7 @@ function ReviewsSection({
 		setReviewerMode(session.reviewerConfig?.mode ?? "");
 	}, [hostId, session.id, session.reviewerConfig?.mode, session.reviewerConfig?.model, session.reviewerHarness]);
 	const saveReviewer = useMutation({
+		mutationKey: [...reviewsKey, "switch-reviewer"],
 		mutationFn: async ({ harness, model, mode }: { harness: ReviewerHarness | ""; model: string; mode: string }) => {
 			const clearingToProjectDefault = harness === "" && model === "" && mode === "";
 			const currentEffectiveReviewerHarness = (session.reviewerHarness ?? "") || currentDefaultReviewerHarness;
