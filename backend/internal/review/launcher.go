@@ -510,6 +510,11 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 	if !ok {
 		return LaunchResult{}, fmt.Errorf("no reviewer adapter for harness %q", spec.Harness)
 	}
+	// Some adapters deliver the task in argv rather than InitialMessage.
+	// A replacement must start idle regardless of the delivery strategy.
+	if spec.DeferInitialMessage {
+		inv.Prompt = ""
+	}
 	if pl, ok := reviewer.(preLaunchReviewer); ok {
 		if err := pl.PreLaunch(ctx, inv); err != nil {
 			return LaunchResult{}, fmt.Errorf("reviewer pre-launch: %w", err)

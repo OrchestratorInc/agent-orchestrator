@@ -78,6 +78,12 @@ vi.mock("../lib/api-client", () => ({
   },
 }));
 
+vi.mock("../lib/host-clients", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../lib/host-clients")>(),
+  clientForSessionHost: () => ({ GET: getMock, POST: postMock, PATCH: patchMock, PUT: putMock }),
+  clientForHost: () => ({ GET: getMock, POST: postMock, PATCH: patchMock, PUT: putMock }),
+}));
+
 const pr = (
   n: number,
   state: PRState,
@@ -2178,6 +2184,21 @@ describe("SessionInspector summary reviews", () => {
 
     await waitFor(() => expect(onOpenReviewerChat).toHaveBeenCalledWith("review-1"));
     expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
+  });
+
+  it("does not carry a pending reviewer interface choice to another host with the same session ID", async () => {
+    mockCommonGets([], "", [reviewState(3, "needs_review")]);
+    postMock.mockResolvedValue({ response: { status: 200 }, data: { reviews: [reviewState(3, "needs_review")], runs: [], reviewerHandleId: "" } });
+    const currentSession = session([pr(3, "open")], { provider: "codex" });
+    const view = renderWithQuery(<SessionInspector hostId="box-a" session={currentSession} />);
+    await openReviewsSection();
+    await userEvent.click(await screen.findByRole("button", { name: "Terminal", exact: true }));
+    expect(screen.getByRole("button", { name: "Terminal", exact: true })).toHaveAttribute("aria-pressed", "true");
+    view.rerender(<QueryClientProvider client={view.queryClient}><TooltipProvider><SessionInspector session={currentSession} /></TooltipProvider></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Chat", exact: true })).toHaveAttribute("aria-pressed", "true"));
+    await userEvent.click(await screen.findByRole("button", { name: "Review latest commit" }));
+    await waitFor(() => expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")).toHaveLength(1));
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")[0][1].body).not.toHaveProperty("interfaceMode");
   });
 
   it("restarts a running Codex reviewer in Terminal when selected", async () => {

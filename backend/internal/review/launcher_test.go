@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	codexreview "github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -1180,5 +1181,41 @@ func TestLauncherPreflightEnvPrefixWithMissingBinary(t *testing.T) {
 	l := NewLauncher(fakeReviewerResolver{reviewer: reviewer, ok: true}, &fakeRuntime{}, "")
 	if err := l.Preflight(context.Background(), domain.ReviewerClaudeCode, "/ws/mer-1"); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("err = %v, want 'not found'", err)
+	}
+}
+
+func TestDeferredCodexTerminalDispatchesTaskOnlyOnNotify(t *testing.T) {
+	t.Setenv("AO_DATA_DIR", t.TempDir())
+	t.Setenv("AO_RUN_FILE", filepath.Join(t.TempDir(), "running.json"))
+	// Resolve a harmless binary; no provider process is started by fakeRuntime.
+	bin := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	rt := &fakeRuntime{}
+	l := newTestLauncher(t, codexreview.New(), rt)
+	spec := launchSpec()
+	spec.Harness = domain.ReviewerCodex
+	spec.WorkspacePath = t.TempDir()
+	spec.InterfaceMode = domain.ReviewerInterfaceTUI
+	spec.DeferInitialMessage = true
+	result, err := l.Spawn(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, arg := range rt.createCfg.Argv {
+		if strings.Contains(arg, "Read and follow the AO review task") {
+			t.Fatal("deferred replacement received task in argv")
+		}
+	}
+	if rt.sentMsg != "" {
+		t.Fatal("deferred replacement received initial message")
+	}
+	if err := l.Notify(context.Background(), result.HandleID, spec); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rt.sentMsg, "Read and follow the AO review task") {
+		t.Fatal("notification omitted review task")
 	}
 }

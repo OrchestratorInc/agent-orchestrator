@@ -1658,9 +1658,10 @@ function ReviewsSection({
 	);
 	const [reviewerModel, setReviewerModel] = useState(session.reviewerConfig?.model ?? "");
 	const [reviewerMode, setReviewerMode] = useState(session.reviewerConfig?.mode ?? "");
-	const [pendingReviewerInterfaceMode, setPendingReviewerInterfaceMode] = useState<{ sessionId: string; mode: "chat" | "tui" } | null>(null);
+	const reviewerOwnerKey = sessionUiKey(session.id, hostId);
+	const [pendingReviewerInterfaceMode, setPendingReviewerInterfaceMode] = useState<{ ownerKey: string; mode: "chat" | "tui" } | null>(null);
 	const serverReviewerInterfaceMode = reviewsQuery.data?.reviewerSurface?.mode;
-	const reviewerInterfaceMode = pendingReviewerInterfaceMode?.sessionId === session.id
+	const reviewerInterfaceMode = pendingReviewerInterfaceMode?.ownerKey === reviewerOwnerKey
 		? pendingReviewerInterfaceMode.mode
 		: serverReviewerInterfaceMode === "chat" || serverReviewerInterfaceMode === "tui"
 			? serverReviewerInterfaceMode
@@ -1716,7 +1717,7 @@ function ReviewsSection({
 		},
 	});
 	const triggerReview = useMutation({
-		mutationFn: async ({ interfaceMode, harness }: { interfaceMode?: "chat" | "tui"; harness?: ReviewerHarness }) => {
+		mutationFn: async ({ interfaceMode, harness, ownerKey }: { interfaceMode?: "chat" | "tui"; harness?: ReviewerHarness; ownerKey: string }) => {
 			// Keep agent/model overrides scoped to this pass; the interface choice
 			// must reach the daemon so it launches the matching reviewer surface.
 			const reviewerConfig = reviewerModel || reviewerMode
@@ -1728,17 +1729,19 @@ function ReviewsSection({
 				body: { ...(selectedHarness ? { harness: selectedHarness } : {}), ...(!harness && reviewerConfig ? { agentConfig: reviewerConfig } : {}), ...(interfaceMode ? { interfaceMode } : {}) },
 			});
 			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableStartReview")));
-			return { data, reused: response?.status === 200 };
+			return { data, reused: response?.status === 200, ownerKey, reviewsKey, workspaceKey };
 		},
 		onMutate: async () => {
 			setReviewNotice(null);
-			await queryClient.cancelQueries({ queryKey: ["session-reviews", session.id] });
+			await queryClient.cancelQueries({ queryKey: reviewsKey });
+			return { reviewsKey };
 		},
-		onSuccess: ({ data, reused }) => {
-			if (data) queryClient.setQueryData(reviewsKey, data);
-			setPendingReviewerInterfaceMode((pending) => pending?.sessionId === session.id ? null : pending);
-			void queryClient.invalidateQueries({ queryKey: reviewsKey });
-			void queryClient.invalidateQueries({ queryKey: workspaceKey });
+		onSuccess: ({ data, reused, ownerKey, reviewsKey: requestReviewsKey, workspaceKey: requestWorkspaceKey }) => {
+			if (data) queryClient.setQueryData(requestReviewsKey, data);
+			setPendingReviewerInterfaceMode((pending) => pending?.ownerKey === ownerKey ? null : pending);
+			void queryClient.invalidateQueries({ queryKey: requestReviewsKey });
+			void queryClient.invalidateQueries({ queryKey: requestWorkspaceKey });
+			if (ownerKey !== reviewerOwnerKey) return;
 			const started = data?.reviews?.find((review) => review.status === "running" && review.latestRun);
 			if (reused || !started?.latestRun) {
 				setReviewNotice(t("inspector.reviewAlreadyRanForCommit"));
@@ -1751,9 +1754,9 @@ function ReviewsSection({
 				onOpenReviewerTerminal?.({ handleId: data.reviewerHandleId, harness });
 			}
 		},
-		onError: () => {
-			setPendingReviewerInterfaceMode((pending) => pending?.sessionId === session.id ? null : pending);
-			void queryClient.invalidateQueries({ queryKey: reviewsKey });
+		onError: (_error, { ownerKey }, context) => {
+			setPendingReviewerInterfaceMode((pending) => pending?.ownerKey === ownerKey ? null : pending);
+			void queryClient.invalidateQueries({ queryKey: context?.reviewsKey ?? reviewsKey });
 		},
 	});
 	const cancelReview = useMutation({
@@ -1819,13 +1822,13 @@ function ReviewsSection({
 				onCancel={() => cancelReview.mutate()}
 				onAutoReviewChange={(enabled) => saveAutoReview.mutate(enabled)}
 				onKill={() => killReview.mutate()}
-				onTrigger={() => triggerReview.mutate({ interfaceMode: pendingReviewerInterfaceMode?.sessionId === session.id ? pendingReviewerInterfaceMode.mode : undefined })}
+				onTrigger={() => triggerReview.mutate({ ownerKey: reviewerOwnerKey, interfaceMode: pendingReviewerInterfaceMode?.ownerKey === reviewerOwnerKey ? pendingReviewerInterfaceMode.mode : undefined })}
 				reviewerInterfaceMode={reviewerInterfaceMode}
 				onReviewerInterfaceModeChange={(mode) => {
-					setPendingReviewerInterfaceMode({ sessionId: session.id, mode });
+					setPendingReviewerInterfaceMode({ ownerKey: reviewerOwnerKey, mode });
 					const runningHarness = reviewStates.find((review) => review.status === "running")?.latestRun?.harness as ReviewerHarness | undefined;
 					if (reviewStates.some((review) => review.status === "running")) {
-						triggerReview.mutate({ interfaceMode: mode, harness: runningHarness || reviewerOverride || currentDefaultReviewerHarness });
+						triggerReview.mutate({ ownerKey: reviewerOwnerKey, interfaceMode: mode, harness: runningHarness || reviewerOverride || currentDefaultReviewerHarness });
 					}
 				}}
 				reviewerHandleId={reviewsQuery.data?.reviewerHandleId ?? ""}

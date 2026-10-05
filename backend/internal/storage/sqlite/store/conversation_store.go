@@ -4047,3 +4047,27 @@ func steerDeliveryToDomain(row gen.ConversationSteerDelivery) domain.Conversatio
 	}
 	return delivery
 }
+
+// SettleReviewChatWork closes the previous review epoch before a downgrade or
+// configuration replacement. There may be durable work without a live process.
+func (s *Store) SettleReviewChatWork(ctx context.Context, reviewID string, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "settle reviewer Chat epoch", func(q *gen.Queries) error {
+		review, err := q.GetReviewByID(ctx, reviewID)
+		if err != nil {
+			return err
+		}
+		conversation, err := q.SelectConversationByReview(ctx, nullableString(reviewID))
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil {
+			if _, err := cleanupOwnedReviewControllerWork(ctx, q, reviewID, conversation.ID, review.ControllerGeneration, now); err != nil {
+				return err
+			}
+		}
+		_, err = q.ClearReviewChatController(ctx, gen.ClearReviewChatControllerParams{ID: reviewID, UpdatedAt: now})
+		return err
+	})
+}

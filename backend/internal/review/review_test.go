@@ -40,6 +40,7 @@ type fakeStore struct {
 	recoverableReviews     []domain.Review
 	recoverableReviewsErr  error
 	recoveryErrors         map[string]string
+	settledReviewIDs       []string
 }
 
 func (f *fakeStore) UpsertReview(_ context.Context, r domain.Review) error {
@@ -97,6 +98,17 @@ func (f *fakeStore) SetReviewInterfaceMode(_ context.Context, id string, mode do
 		updated = true
 	}
 	return updated, nil
+}
+func (f *fakeStore) SettleReviewChatWork(_ context.Context, reviewID string, _ time.Time) error {
+	f.settledReviewIDs = append(f.settledReviewIDs, reviewID)
+	for harness, review := range f.reviews {
+		if review.ID == reviewID {
+			review.ControllerGeneration = ""
+			f.reviews[harness] = review
+			f.review = &review
+		}
+	}
+	return nil
 }
 func (f *fakeStore) RestoreReviewLaunchState(_ context.Context, review domain.Review, _ time.Time) (bool, error) {
 	if f.review == nil || f.review.ID != review.ID {
@@ -721,7 +733,7 @@ func TestTriggerFailedDeferredReviewerNotificationRestoresPreviousSurface(t *tes
 		t.Fatal("expected deferred notification failure")
 	}
 	got := store.reviews[domain.ReviewerCodex]
-	if got.InterfaceMode != old.InterfaceMode || got.ReviewerHandleID != old.ReviewerHandleID || got.ProviderConversationID != old.ProviderConversationID || got.ControllerGeneration != old.ControllerGeneration {
+	if got.InterfaceMode != old.InterfaceMode || got.ReviewerHandleID != old.ReviewerHandleID || got.ProviderConversationID != old.ProviderConversationID || got.ControllerGeneration != "" || got.ReviewerActivityState != domain.ActivityExited {
 		t.Fatalf("previous surface was not restored: got=%+v want=%+v", got, old)
 	}
 	if launcher.destroyCalls != 2 || store.runs[0].Status != domain.ReviewRunFailed {
@@ -965,6 +977,9 @@ func TestRestoreReviewerFallsBackFromUnavailableChat(t *testing.T) {
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 	if _, err := eng.RestoreReviewer(context.Background(), worker.ID); err != nil {
 		t.Fatalf("RestoreReviewer: %v", err)
+	}
+	if len(store.settledReviewIDs) != 1 || store.settledReviewIDs[0] != old.ID {
+		t.Fatal("unavailable Chat work was not settled")
 	}
 	if !launcher.restored || launcher.gotSpec.InterfaceMode != domain.ReviewerInterfaceTUI || launcher.gotSpec.AgentSessionID != "" || launcher.gotSpec.RequireNativeHistory || store.review.InterfaceMode != domain.ReviewerInterfaceTUI {
 		t.Fatalf("unavailable Chat was not restored as Terminal: spec=%+v review=%+v", launcher.gotSpec, store.review)
@@ -3051,5 +3066,44 @@ func TestTriggerProceedsNormallyAfterSuccessfulPreflight(t *testing.T) {
 	}
 	if len(store.runs) != 1 {
 		t.Fatalf("expected 1 review run, got %d", len(store.runs))
+	}
+}
+
+func TestChatConfigReplacementStopsOldFenceAndStartsFreshProvider(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint("launchFailure=", fail), func(t *testing.T) {
+			old := domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "review-chat:rev-1", InterfaceMode: domain.ReviewerInterfaceChat, ProviderConversationID: "old-thread", AgentSessionID: "old-thread", ControllerGeneration: "old-generation"}
+			store := &fakeStore{review: &old, reviews: map[domain.ReviewerHarness]domain.Review{domain.ReviewerCodex: old}, runs: []domain.ReviewRun{{ID: "run-1", ReviewID: old.ID, SessionID: "mer-1", Harness: domain.ReviewerCodex, PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning}}}
+			launcher := &fakeLauncher{interfaceMode: domain.ReviewerInterfaceChat, alive: true, handle: "review-chat:rev-1"}
+			launcher.onSpawn = func(spec LaunchSpec) {
+				if !launcher.destroyed {
+					t.Fatal("old Chat still alive during configuration replacement")
+				}
+				if spec.ProviderConversationID != "" || spec.AgentSessionID != "" {
+					t.Fatalf("config replacement resumed old provider: %+v", spec)
+				}
+				if spec.AgentConfig.Model != "model-B" || spec.AgentConfig.Effort != "high" {
+					t.Fatalf("replacement config: %+v", spec.AgentConfig)
+				}
+			}
+			if fail {
+				launcher.spawnErr = errors.New("new model unavailable")
+			}
+			worker := liveWorker()
+			worker.ReviewerHarness = domain.ReviewerCodex
+			worker.ReviewerConfig = domain.AgentConfig{Model: "model-A"}
+			eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+			_, err := eng.TriggerWithSourceAndMode(context.Background(), worker.ID, domain.ReviewerCodex, domain.AgentConfig{Model: "model-B", Effort: "high"}, domain.ReviewTriggerManual, domain.ReviewerInterfaceChat)
+			if fail {
+				if err == nil {
+					t.Fatal("expected failed replacement")
+				}
+				if store.runs[0].Status != domain.ReviewRunFailed || store.review.ControllerGeneration != "" || store.review.ReviewerActivityState != domain.ActivityExited || store.review.ProviderConversationID != "old-thread" {
+					t.Fatalf("failed replacement lost truthful saved surface: review=%+v runs=%+v", store.review, store.runs)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

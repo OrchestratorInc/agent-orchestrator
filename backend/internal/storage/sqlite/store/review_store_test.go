@@ -676,3 +676,61 @@ func TestReviewGettersMissing(t *testing.T) {
 		t.Fatalf("missing run by id: ok=%v err=%v", ok, err)
 	}
 }
+
+func TestSettleReviewChatWorkClearsOrphanedEpoch(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "review-cleanup")
+	session, err := s.CreateSession(ctx, sampleRecord("review-cleanup"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	review := domain.Review{
+		ID: "review-cleanup", SessionID: session.ID, ProjectID: session.ProjectID,
+		Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.UpsertReview(ctx, review); err != nil {
+		t.Fatalf("upsert review: %v", err)
+	}
+	conversation, err := s.CreateReviewConversation(ctx, "review-cleanup-conversation", review.ID, session.ProjectID, session.ID, now)
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	if claimed, err := s.ClaimReviewChatController(ctx, review.ID, "provider-1", "review-generation", now); err != nil || !claimed {
+		t.Fatalf("claim reviewer controller: claimed=%v err=%v", claimed, err)
+	}
+	created, err := s.AppendReviewUserMessage(ctx, conversation.ID, session.ID, review.ID, "review-generation", domain.ConversationMessage{
+		ID: "review-message", Text: "Review the change", Origin: domain.MessageOriginHuman,
+	}, "review-turn", now)
+	if err != nil || !created {
+		t.Fatalf("append review message: created=%v err=%v", created, err)
+	}
+	if err := s.BindTurnToProvider(ctx, "review-turn", "provider-turn", now); err != nil {
+		t.Fatalf("bind turn: %v", err)
+	}
+	if err := s.UpsertActivity(ctx, conversation.ID, "provider-turn", domain.ConversationActivity{
+		ID: "review-approval", Kind: domain.ActivityKindApproval, Status: domain.ActivityStatusPending,
+		Summary: "Approve", RequestID: "request-1", ProviderItemID: "item-1",
+	}, now); err != nil {
+		t.Fatalf("upsert approval: %v", err)
+	}
+
+	if err := s.SettleReviewChatWork(ctx, review.ID, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetReviewByID(ctx, review.ID)
+	if err != nil || !ok || got.ControllerGeneration != "" {
+		t.Fatalf("old epoch remained: review=%+v err=%v", got, err)
+	}
+	snapshot, err := s.LoadConversationSnapshot(ctx, conversation.ID)
+	if err != nil {
+		t.Fatalf("load conversation: %v", err)
+	}
+	if len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateFailed {
+		t.Fatalf("reviewer turns = %+v, want one failed turn", snapshot.Turns)
+	}
+	if len(snapshot.Activities) != 1 || snapshot.Activities[0].Status != domain.ActivityStatusFailed {
+		t.Fatalf("reviewer activities = %+v, want one failed approval", snapshot.Activities)
+	}
+}
