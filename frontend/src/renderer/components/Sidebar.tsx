@@ -149,7 +149,7 @@ const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperti
 // vertically centered in the row, so every action's right edge lines up. Never
 // painted: `.sidebar-icon-action` also opts out of the sidebar focus fill in
 // styles.css. Hover/reveal stays instant (no transitions here).
-const ROW_ACTIONS_CLASS = "absolute inset-y-0 right-1 flex items-center gap-1.5";
+const ROW_ACTIONS_CLASS = "absolute inset-y-0 right-1 flex items-center gap-0.5";
 const ROW_ACTION_BUTTON_CLASS =
 	"sidebar-icon-action grid size-6 shrink-0 place-items-center rounded-md !bg-transparent text-passive hover:!bg-interactive-hover focus:!bg-transparent focus-visible:!bg-interactive-hover active:!bg-interactive-hover data-[state=open]:!bg-interactive-hover hover:text-foreground focus-visible:text-foreground disabled:pointer-events-none disabled:opacity-50 data-[state=open]:text-foreground [&_svg]:size-icon-md";
 const HOVER_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;

@@ -1158,7 +1158,7 @@ describe("Sidebar", () => {
 		expect(actionButtons).toHaveClass(
 			"absolute",
 			"right-1",
-			"gap-1.5",
+			"gap-0.5",
 			"opacity-0",
 			"scale-[0.8]",
 			"duration-normal",
@@ -2239,7 +2239,7 @@ describe("Sidebar", () => {
 		if (!projectRow) throw new Error("Project row button not found");
 		expect(projectRow).toHaveClass("pr-sidebar-project-actions");
 		expect(actionCluster).toHaveAttribute("data-project-actions");
-		expect(actionCluster).toHaveClass("right-1", "gap-1.5");
+		expect(actionCluster).toHaveClass("right-1", "gap-0.5");
 		expect(within(actionCluster as HTMLElement).getAllByRole("button")).toHaveLength(2);
 		expect(screen.getByLabelText("Project actions for Project One")).not.toHaveClass("opacity-0");
 	});
