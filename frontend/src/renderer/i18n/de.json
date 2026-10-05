@@ -2321,7 +2321,6 @@
 	"settings.models.selectModel": "Modell auswählen",
 	"settings.models.useAgentModel": "Agentenmodell verwenden",
 	"settings.models.useAgentMode": "Agentenmodus verwenden",
-	"settings.models.useAgentEffort": "Denkaufwand des Agenten verwenden",
 	"settings.models.effortNotReported": "Aufwand nicht gemeldet",
 	"settings.models.modeNotReported": "Modus nicht gemeldet",
 	"remote.hosts": "Remote-Hosts",

@@ -750,7 +750,6 @@ function TaskEffortPicker({ disabled, label, onChange, options, value, defaultEf
 			disabled={disabled}
 			value={effectiveEffort}
 			options={options.map((option) => ({ value: option, label: formatEffortLabel(option) }))}
-			action={explicitEffort && !reportedDefault ? { label: t("settings.models.useAgentEffort"), onSelect: () => onChange("") } : undefined}
 			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
 			menuAlign="end"
 			renderTrigger={() => (

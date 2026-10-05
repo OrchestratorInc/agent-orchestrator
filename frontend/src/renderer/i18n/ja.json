@@ -2321,7 +2321,6 @@
 	"settings.models.selectModel": "モデルを選択",
 	"settings.models.useAgentModel": "エージェントのモデルを使用",
 	"settings.models.useAgentMode": "エージェントのモードを使用",
-	"settings.models.useAgentEffort": "エージェントの推論量を使用",
 	"settings.models.effortNotReported": "推論量は報告されていません",
 	"settings.models.modeNotReported": "モードは報告されていません",
 	"remote.hosts": "リモートホスト",
