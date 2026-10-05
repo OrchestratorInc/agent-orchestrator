@@ -212,12 +212,6 @@ function DraggableChatTab({ children, value }: { children: ReactNode; value: str
 const isMac = isMacPlatform();
 const isLinux = isLinuxPlatform();
 
-type TopbarBounds = {
-	leftInset: number;
-	rightInset: number;
-	width: number;
-};
-
 type MessageEditDraft = ChatDraftInlineEdit;
 
 /**
@@ -942,40 +936,6 @@ function ChatWorkspaceContent({
 	const wheelZoomRemainderRef = useRef(0);
 	const [terminalFontSize, setTerminalFontSize] = useState(initialTerminalFontSize);
 	const [isFullscreen, setIsFullscreen] = useState(false);
-	const [topbarBounds, setTopbarBounds] = useState<TopbarBounds>({
-		leftInset: 0,
-		rightInset: 0,
-		width: 0,
-	});
-
-	useEffect(() => {
-		const surface = surfaceRef.current;
-		if (!surface) return;
-		const workspaceSurface = surface.closest<HTMLElement>(".center-panel-surface");
-		const measure = () => {
-			const surfaceRect = surface.getBoundingClientRect();
-			const workspaceRect = workspaceSurface?.getBoundingClientRect() ?? surfaceRect;
-			const next = {
-				leftInset: workspaceRect.left,
-				rightInset: Math.max(0, window.innerWidth - workspaceRect.right),
-				width: surfaceRect.width,
-			};
-			setTopbarBounds((current) =>
-				current.leftInset === next.leftInset &&
-				current.rightInset === next.rightInset &&
-				current.width === next.width
-					? current
-					: next,
-			);
-		};
-		measure();
-		if (typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(measure);
-		observer.observe(surface);
-		if (workspaceSurface) observer.observe(workspaceSurface);
-		return () => observer.disconnect();
-	}, []);
-
 	useEffect(() => {
 		const handleFullscreenChange = () => {
 			setIsFullscreen(document.fullscreenElement === surfaceRef.current);
@@ -1169,9 +1129,13 @@ function ChatWorkspaceContent({
 					onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
 					configPending={configOptionPending}
 					error={configOptionError}
+					// Turn settings require a live controller even while messages can queue.
 					disabled={
-						snapshot.controller.state === "stopped" || controllerTransitioning || configOptionPending || newWorkDisabled
-					}
+							snapshot.controller.state === "connecting" ||
+							snapshot.controller.state === "stopped" ||
+							session?.provisionState === "provisioning" ||
+							controllerTransitioning || configOptionPending || newWorkDisabled
+						}
 				/>
 			) : null,
 		[
@@ -1181,6 +1145,7 @@ function ChatWorkspaceContent({
 			controllerTransitioning,
 			models,
 			newWorkDisabled,
+			session?.provisionState,
 			onChooseConfigOption,
 			onChooseSettings,
 			onRememberPermissions,
@@ -1321,7 +1286,7 @@ function ChatWorkspaceContent({
 			onKeyDown={handleChatKeyDown}
 			onClick={handleChatSurfaceClick}
 			aria-label="Chat"
-			className="cursor-chat-surface flex h-full min-h-0 flex-col [font-size:var(--chat-font-size)]"
+			className="cursor-chat-surface flex h-full min-h-0 min-w-0 w-full flex-col overflow-hidden [font-size:var(--chat-font-size)]"
 			data-session-mode={snapshot.mode}
 			data-session-role={sessionRole}
 			style={
@@ -1354,7 +1319,6 @@ function ChatWorkspaceContent({
 				orderedAuxiliaryTabs={orderedAuxiliaryTabs}
 				onReorderAuxiliaryTabs={reorderAuxiliaryTabs}
 				inline={isFullscreen}
-				topbarBounds={topbarBounds}
 			/>}
 			<div className="relative flex min-h-0 flex-1 flex-col">
 				{reviewerTarget && session ? (
@@ -1709,7 +1673,6 @@ function ChatHeader({
 	orderedAuxiliaryTabs,
 	onReorderAuxiliaryTabs,
 	inline,
-	topbarBounds,
 	session,
 	onSessionRenamed,
 }: {
@@ -1740,7 +1703,6 @@ function ChatHeader({
 	onSessionRenamed?: () => void | Promise<void>;
 	/** Fullscreen content cannot see the normal topbar portal outside its subtree. */
 	inline?: boolean;
-	topbarBounds: TopbarBounds;
 }) {
 	const { t } = useTranslation();
 	const providerLabel = agentLabel(snapshot.harness);
@@ -1781,9 +1743,7 @@ function ChatHeader({
 						!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
 					)}
 					data-testid="session-terminal-region"
-					style={{
-						width: topbarBounds.width > 0 ? topbarBounds.width : "100%",
-					}}
+					style={{ width: "100%" }}
 				>
 					<div
 						aria-label="Chat tabs"

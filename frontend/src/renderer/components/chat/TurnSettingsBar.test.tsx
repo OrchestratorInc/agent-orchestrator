@@ -916,6 +916,27 @@ describe("remember project permissions", () => {
 });
 
 describe("native model selection", () => {
+	it("shows Claude's resolved model without default model or effort choices", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(<TurnSettingsBar harness="claude-code" onChange={onChange}
+			settings={{ model: "default", reasoningEffort: "default" }} models={[
+				{ id: "default", displayName: "Claude Opus", default: true, efforts: ["default", "low", "high"], defaultEffort: "default" },
+				{ id: "opus", displayName: "Claude Opus", default: false },
+				{ id: "sonnet", displayName: "Claude Sonnet", default: false },
+			]} />);
+		const picker = screen.getByRole("button", { name: "Model and reasoning effort for the next turn" });
+		expect(picker).toHaveTextContent(/^Opus$/);
+		await user.click(picker);
+		await user.keyboard("{ArrowDown}{ArrowRight}");
+		expect(screen.getAllByRole("menuitemradio", { name: "Opus" })).toHaveLength(1);
+		expect(screen.queryByText(/default/i)).not.toBeInTheDocument();
+		await user.keyboard("{ArrowLeft}{ArrowDown}{ArrowRight}");
+		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("menuitemradio", { name: "High" }));
+		expect(onChange).toHaveBeenCalledWith({ model: "default", reasoningEffort: "high" });
+	});
+
 	it("keeps an explicit model visible when the catalog does not contain it", () => {
 		render(
 			<TurnSettingsBar

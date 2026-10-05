@@ -620,6 +620,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const requestCloudResume = useCallback(async () => {
 		if (!session?.cloud) return;
 		await cloudCpClient.resumeSession(session.cloud.orgId, session.id);
+		await cloudCpClient.requestWorkspaceCheckout(session.cloud.orgId, session.id);
 		await refreshWorkspaces();
 	}, [cloudCpClient, refreshWorkspaces, session]);
 	useEffect(() => {
@@ -1583,6 +1584,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									headerActions={sessionHeaderActions}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
+									onOpenFiles={browserOnly ? undefined : prepareFilesInspector}
+									onOpenFile={openCenterFile}
 									session={session}
 									sessionTabAction={sessionTabActions}
 								/>

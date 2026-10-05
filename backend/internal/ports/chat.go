@@ -950,6 +950,8 @@ func (f *chatProviderFailure) Unwrap() error { return f.cause }
 // Deltas are the high-frequency case, so they carry only what changed. A
 // projector folds a delta into the message identified by ProviderItemID and
 // bumps its revision; it never allocates a new timeline position per token.
+// Assistant message text is portable Markdown. Adapters convert native citation
+// annotations to links before emitting events or returning history.
 type ChatEvent struct {
 	Kind ChatEventKind
 	// NativeUserMessageID is an adapter-proven native user record identity.

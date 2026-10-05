@@ -56,6 +56,7 @@ import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { UpdateStatus } from "../../main/update-settings";
 import { parseNightlyVersion } from "../lib/build-channel";
+import { DEV_BUILD_INFO } from "../lib/dev-build-info";
 import { IS_DEV } from "../lib/is-dev";
 import {
 	hasConfiguredOrchestratorAgent,
@@ -597,6 +598,17 @@ export function Sidebar({
 	resizeAuxiliaryTargetRef,
 }: SidebarProps) {
 	const { t } = useTranslation();
+	const devCommitInfo = t(DEV_BUILD_INFO.isDirty ? "shell.devLastCommit" : "shell.devCommit", DEV_BUILD_INFO);
+	const devStatusInfo = t("shell.devStatus", {
+		status: t(DEV_BUILD_INFO.isDirty ? "shell.devDirty" : "shell.devClean"),
+	});
+	const devWorktreeInfo = t("shell.devWorktree", DEV_BUILD_INFO);
+	const devBuildInfoAria = t("shell.devBuildInfoAria", {
+		...DEV_BUILD_INFO,
+		commitInfo: devCommitInfo,
+		statusInfo: devStatusInfo,
+		worktreeInfo: devWorktreeInfo,
+	});
 	const remoteNavigate = useNavigate();
 	const selection = useSelection();
 	const { state, setOpen, toggleSidebar } = useSidebar();
@@ -924,12 +936,25 @@ export function Sidebar({
 						</span>
 					)}
 					{IS_DEV && (
-						<span
-							data-testid="sidebar-dev-badge"
-							className="sidebar-expanded-chrome shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-micro font-semibold leading-none text-amber-600 group-data-[collapsible=icon]:hidden dark:text-amber-400"
-						>
-							{t("shell.dev")}
-						</span>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<span
+									data-testid="sidebar-dev-badge"
+									aria-label={devBuildInfoAria}
+									className="sidebar-expanded-chrome shrink-0 cursor-help rounded-full bg-amber-500/15 px-1.5 py-0.5 text-micro font-semibold leading-none text-amber-600 group-data-[collapsible=icon]:hidden dark:text-amber-400"
+								>
+									{t("shell.dev")}
+								</span>
+							</TooltipTrigger>
+							<TooltipContent side="bottom" align="end">
+								<div className="flex flex-col gap-0.5 font-mono text-[11px]">
+									<span>{t("shell.devBranch", DEV_BUILD_INFO)}</span>
+									<span>{devCommitInfo}</span>
+									<span>{devStatusInfo}</span>
+									<span className="max-w-[min(80vw,42rem)] break-all">{devWorktreeInfo}</span>
+								</div>
+							</TooltipContent>
+						</Tooltip>
 					)}
 				</button>
 				<Tooltip>
