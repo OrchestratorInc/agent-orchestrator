@@ -63,6 +63,7 @@ type codexHookEntry struct {
 type codexHookSpec struct {
 	Event   string
 	Command string
+	Matcher string
 }
 
 // codexManagedHooks is the source of truth for the hooks AO delivers. Event
@@ -72,6 +73,12 @@ var codexManagedHooks = []codexHookSpec{
 	{Event: "SessionStart", Command: codexHookCommandPrefix + "session-start"},
 	{Event: "UserPromptSubmit", Command: codexHookCommandPrefix + "user-prompt-submit"},
 	{Event: "PermissionRequest", Command: codexHookCommandPrefix + "permission-request"},
+	// Current Codex emits the canonical `spawn_agent` tool name. Keep the
+	// historical collaboration alias while older installed Codex builds drain
+	// their sessions, so both payloads reach the parser.
+	{Event: "PostToolUse", Command: codexHookCommandPrefix + "post-tool-use", Matcher: "^(spawn_agent|collaborationspawn_agent)$"},
+	{Event: "SubagentStart", Command: codexHookCommandPrefix + "subagent-start"},
+	{Event: "SubagentStop", Command: codexHookCommandPrefix + "subagent-stop"},
 	{Event: "Stop", Command: codexHookCommandPrefix + "stop"},
 }
 
@@ -98,8 +105,12 @@ func appendSessionHookFlagsForExecutable(cmd *[]string, executable string) {
 	prefix := shellQuoteHookExecutable(executable) + " hooks codex "
 	for _, spec := range codexManagedHooks {
 		action := strings.TrimPrefix(spec.Command, codexHookCommandPrefix)
-		flag := fmt.Sprintf(`hooks.%s=[{hooks=[{type="command",command=%s,timeout=%d}]}]`,
-			spec.Event, codexTOMLBasicString(prefix+action), codexHookTimeout)
+		matcher := ""
+		if spec.Matcher != "" {
+			matcher = "matcher=" + codexTOMLBasicString(spec.Matcher) + ","
+		}
+		flag := fmt.Sprintf(`hooks.%s=[{%shooks=[{type="command",command=%s,timeout=%d}]}]`,
+			spec.Event, matcher, codexTOMLBasicString(prefix+action), codexHookTimeout)
 		*cmd = append(*cmd, "-c", flag)
 	}
 }

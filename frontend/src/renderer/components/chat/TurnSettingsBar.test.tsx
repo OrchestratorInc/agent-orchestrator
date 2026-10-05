@@ -333,7 +333,7 @@ describe("ACP session config options", () => {
 		expect(onChange).toHaveBeenLastCalledWith("profile", { value: "default" });
 	});
 
-	it("keeps an unreported effort selectable without claiming a concrete level", async () => {
+	it("hides the provider default effort choice while keeping concrete levels selectable", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();
 		const option: ChatConfigOption = {
@@ -347,7 +347,7 @@ describe("ACP session config options", () => {
 		const view = render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[option]} />);
 
 		const picker = screen.getByRole("button", { name: "Effort" });
-		expect(picker).toHaveTextContent("Use agent effort");
+		expect(picker).toHaveTextContent("Effort");
 		await user.click(picker);
 		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
 		await user.click(screen.getByRole("menuitemradio", { name: "High" }));
@@ -355,8 +355,8 @@ describe("ACP session config options", () => {
 		view.rerender(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange}
 			configOptions={[{ ...option, currentValue: "high" }]} />);
 		await user.click(screen.getByRole("button", { name: "Effort" }));
-		await user.click(screen.getByRole("menuitemradio", { name: "Use agent effort" }));
-		expect(onChange).toHaveBeenLastCalledWith("effort", { value: "default" });
+		expect(screen.queryByRole("menuitemradio", { name: "Use agent effort" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
 	});
 
 	it("shows the concrete recommended model selected without a duplicate default option", async () => {

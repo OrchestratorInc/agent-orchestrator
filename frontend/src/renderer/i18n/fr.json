@@ -2407,7 +2407,6 @@
 	"settings.models.selectModel": "Sélectionner un modèle",
 	"settings.models.useAgentModel": "Utiliser le modèle de l’agent",
 	"settings.models.useAgentMode": "Utiliser le mode de l’agent",
-	"settings.models.useAgentEffort": "Utiliser l’effort de l’agent",
 	"settings.models.effortNotReported": "Effort non indiqué",
 	"settings.models.modeNotReported": "Mode non indiqué",
 	"remote.hosts": "Hôtes distants",

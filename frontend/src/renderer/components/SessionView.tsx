@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Globe2, Loader2, PanelRight, Plus } from "lucide-react";
 import { useBlocker } from "@tanstack/react-router";
 import { motion } from "motion/react";
@@ -49,6 +49,9 @@ import {
 	useShellTerminals,
 } from "../hooks/useShellTerminals";
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
+import { canResumeAgent } from "../hooks/useCanResumeAgent";
+import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
+import { conversationQueryKey } from "../hooks/useConversation";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
 import { useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility";
 import {
@@ -86,7 +89,8 @@ import {
 import { isMacPlatform } from "../lib/platform";
 import { useShell } from "../lib/shell-context";
 import { cn } from "../lib/utils";
-import { isOrchestratorSession, sessionIsActive } from "../types/workspace";
+import { usesPreviewWorkspaceData } from "../lib/preview-mode";
+import { isOrchestratorSession, sessionAgentExited, sessionIsActive } from "../types/workspace";
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { matchesRendererShortcut } from "../stores/keybindings-store";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
@@ -444,6 +448,42 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const setBrowserContentRevealed = useUiStore((state) => state.setBrowserContentRevealed);
 	const setBrowserUnseen = useUiStore((state) => state.setBrowserUnseen);
 	const { daemonStatus } = useShell();
+	const resumeStatus = useSessionInterfaceTransitionStatus(canResumeAgent(session) ? session?.id : undefined, hostId);
+	const canResume = canResumeAgent(session, resumeStatus.transition) && !resumeStatus.isLoading && !resumeStatus.statusError;
+	const openedSession = useRef({ key: uiSessionId, checked: false });
+	const autoResume = useMutation({
+		mutationKey: ["resume-agent", "local", sessionId],
+		mutationFn: async (id: string) => {
+			const { error, response } = await clientForSessionHost().POST("/api/v1/sessions/{sessionId}/resume-agent", {
+				params: { path: { sessionId: id } },
+			});
+			if (error) throw new Error(apiErrorMessage(error, `Failed to resume agent (${response.status})`));
+		},
+		onSettled: async (_data, _error, id) => {
+			await Promise.all([
+				refreshWorkspaces(),
+				queryClient.invalidateQueries({ queryKey: conversationQueryKey(id) }),
+			]);
+		},
+	});
+	const quietResume = !usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
+		!resumeStatus.statusError && (openedSession.current.key !== uiSessionId || !openedSession.current.checked ||
+			(autoResume.variables === sessionId && autoResume.isPending));
+	const resumeOnOpen = autoResume.mutate;
+	useEffect(() => {
+		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
+		if (usesPreviewWorkspaceData || hostId || session?.cloud || !session || daemonStatus.state !== "ready" ||
+			(session.statusReadiness && session.statusReadiness !== "ready") || openedSession.current.checked) return;
+		if (!sessionAgentExited(session)) {
+			openedSession.current.checked = true;
+			return;
+		}
+		if (!canResume) return;
+		// One attempt per route opening; a failed resume or a later agent exit
+		// stays stopped rather than entering an automatic restart loop.
+		openedSession.current.checked = true;
+		resumeOnOpen(session.id);
+	}, [canResume, daemonStatus.state, hostId, resumeOnOpen, session, uiSessionId]);
 	const previewBaselineRef = useRef<{ sessionId: string; key: string } | null>(null);
 	const sessionSplitRef = useRef<HTMLDivElement | null>(null);
 	const terminalLiveResizeTimerRef = useRef<number | null>(null);
@@ -1534,6 +1574,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	return (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
+			{!hostId && !session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
+				<p className="px-4 py-2 text-xs text-error" role="alert">
+					{apiErrorMessage(autoResume.error)}
+				</p>
+			) : null}
 			<div
 				className="session-split relative flex min-h-0 flex-1 overflow-hidden"
 				data-testid="panel-group"
@@ -1625,7 +1670,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									workspaceFileActive={Boolean(fileTabs.activePath)}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
-									controllerTransitioning={interfaceUi.controllerTransitioning}
+									controllerResumeError={!hostId && autoResume.variables === sessionId && autoResume.isError
+										? apiErrorMessage(autoResume.error) : undefined}
+									controllerTransitioning={interfaceUi.controllerTransitioning || quietResume}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
 									onOpenShell={addShellTerminal}

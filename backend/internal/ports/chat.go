@@ -44,6 +44,8 @@ var (
 	// must preserve the durable session and worktree rather than treating the
 	// failed attachment as proof that the provider died.
 	ErrChatRecoveryInconclusive = errors.New("chat conversation recovery is inconclusive")
+	// ErrChatHostNotRunning is a definitive observation that no provider host exists.
+	ErrChatHostNotRunning = errors.New("chat provider host is not running")
 	// ErrChatNoActiveTurn means an interrupt found nothing to cancel — either AO
 	// has no turn in flight, or the provider no longer considers the named turn
 	// active. A driver must translate its provider's refusal into this rather than
@@ -323,6 +325,8 @@ type ChatStartConfig struct {
 
 // ChatResumeConfig reattaches to a provider conversation after a restart.
 type ChatResumeConfig struct {
+	// ReconnectOnly forbids launching a replacement provider during a health check.
+	ReconnectOnly bool
 	// See ChatStartConfig.ProviderIDsScoped.
 	ProviderIDsScoped      bool
 	SessionID              domain.SessionID
@@ -1055,6 +1059,12 @@ type ChatDriver interface {
 	// Resume reattaches to an existing one. It returns ErrChatResumeFailed
 	// rather than silently starting a new conversation.
 	Resume(ctx context.Context, cfg ChatResumeConfig) (ChatConversation, error)
+}
+
+// ChatDriverReconnector attaches only to a surviving provider. Implementations
+// must never create a provider process or fall back to native history resume.
+type ChatDriverReconnector interface {
+	Reconnect(context.Context, ChatResumeConfig) (ChatConversation, error)
 }
 
 // ChatConversation is one live controller. Exactly one exists per Chat session,

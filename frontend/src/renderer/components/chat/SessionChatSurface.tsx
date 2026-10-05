@@ -124,6 +124,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
+	controllerResumeError,
 	newWorkDisabled,
 	onConversationWorkChange,
 }: {
@@ -172,6 +173,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** The target controller is being installed by an interface handoff. */
 	controllerTransitioning?: boolean;
+	controllerResumeError?: string;
 	/** An interface handoff fences new agent work while current-turn decisions remain available. */
 	newWorkDisabled?: boolean;
 	/** Reports accepted Chat work that must inform an interface-switch policy choice. */
@@ -544,7 +546,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					void commands.resumeAgent().catch(() => {});
 				}}
 				resumingAgent={commands.resumingAgent}
-				resumeError={commands.resumeError}
+				resumeError={commands.resumeError ?? controllerResumeError}
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}

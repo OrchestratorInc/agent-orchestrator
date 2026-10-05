@@ -1298,6 +1298,8 @@ type SetActivityRequest struct {
 	Event                        string                              `json:"event,omitempty" description:"AO hook sub-command that produced this state (e.g. post-tool-use)."`
 	ToolName                     string                              `json:"toolName,omitempty" description:"Native tool name, for tool-use hook events."`
 	ToolUseID                    string                              `json:"toolUseId,omitempty" description:"Native tool-use id, for tool-use hook events."`
+	SubagentID                   string                              `json:"subagentId,omitempty" description:"Native child agent id for this hook event."`
+	RunningSubagentIDs           *[]string                           `json:"runningSubagentIds,omitempty" description:"Running Claude subagent ids observed in a parent Stop hook; empty means none, absent means no snapshot."`
 	AgentSessionID               string                              `json:"agentSessionId,omitempty" description:"Native agent session identifier used to resume its transcript."`
 	LatestUserPrompt             string                              `json:"latestUserPrompt,omitempty" maxLength:"16384" description:"Latest real user prompt exposed by the provider hook."`
 	LatestAssistantUpdate        string                              `json:"latestAssistantUpdate,omitempty" maxLength:"16384" description:"Latest assistant update exposed by the provider hook."`

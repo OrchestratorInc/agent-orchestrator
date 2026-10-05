@@ -181,7 +181,11 @@ func (r *MemoryReader) SystemMemory(ctx context.Context) (domain.SystemMemory, e
 	if err != nil {
 		return domain.SystemMemory{}, err
 	}
-	return v.(domain.SystemMemory), nil
+	out, ok := v.(domain.SystemMemory)
+	if !ok {
+		return domain.SystemMemory{}, fmt.Errorf("system memory flight returned %T", v)
+	}
+	return out, nil
 }
 
 func (r *MemoryReader) readSystemMemory(ctx context.Context) (domain.SystemMemory, error) {
