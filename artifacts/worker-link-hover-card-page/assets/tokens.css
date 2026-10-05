@@ -1,0 +1,1303 @@
+/*
+ * Design tokens — Agent Orchestrator frontend
+ * ============================================
+ * Source of truth for the app (Electron renderer) visual system.
+ * Extracted from the existing dark-first Cursor-like UI in
+ * src/renderer/styles.css — not a restyle.
+ *
+ * Theme switching:
+ *   - Default (:root)              → dark
+ *   - :root[data-theme="light"]    → light (renderer Zustand toggle)
+ *   - :root.dark / .dark           → alias for landing/docs (Fumadocs)
+ *
+ * Imported by src/renderer/styles.css. See DESIGN_TOKENS.md.
+ */
+
+:root,
+:root.dark,
+.dark {
+	/* ── Color scheme hint for native form controls / scrollbars ── */
+	color-scheme: dark;
+
+	/* shadcn base-luma / olive preset (b6tOz2I0x). The renderer is dark-first,
+	   so the preset's .dark values are the default application values. */
+	--background: oklch(0.185 0.006 285.885);
+	--foreground: oklch(0.985 0 0);
+	--card: oklch(0.24 0.008 285.885);
+	--card-foreground: oklch(0.985 0 0);
+	--popover: oklch(0.28 0.008 285.885);
+	--popover-foreground: oklch(0.985 0 0);
+	--primary: oklch(0.92 0.004 286.32);
+	--primary-foreground: oklch(0.21 0.006 285.885);
+	--secondary: oklch(0.274 0.006 286.033);
+	--secondary-foreground: oklch(0.985 0 0);
+	--muted: oklch(0.274 0.006 286.033);
+	--muted-foreground: oklch(0.705 0.015 286.067);
+	--accent: oklch(0.274 0.006 286.033);
+	--accent-foreground: oklch(0.985 0 0);
+	--destructive: oklch(0.704 0.191 22.216);
+	/* Hairlines separate, they do not decorate: below the shadcn dark default of
+	 * 10% so column rules and card edges recede behind content. */
+	--border: oklch(1 0 0 / 7%);
+	--input: oklch(1 0 0 / 4%);
+	--ring: oklch(0.552 0.016 285.938);
+	--chart-1: oklch(0.871 0.006 286.286);
+	--chart-2: oklch(0.552 0.016 285.938);
+	--chart-3: oklch(0.442 0.017 285.786);
+	--chart-4: oklch(0.37 0.013 285.805);
+	--chart-5: oklch(0.274 0.006 286.033);
+	--radius: 0.625rem;
+	--sidebar: oklch(0.155 0.005 285.823);
+	--sidebar-foreground: oklch(0.985 0 0);
+	--sidebar-primary: oklch(0.488 0.243 264.376);
+	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-accent: oklch(0.274 0.006 286.033);
+	--sidebar-accent-foreground: oklch(0.985 0 0);
+	--sidebar-border: var(--border);
+	--sidebar-ring: oklch(0.552 0.016 285.938);
+
+	/* ═══════════════════════════════════════════════════════════════
+	   COLOR — semantic (swap these per theme; do not invent new roles
+	   for one-off hex — map one-offs to the nearest existing role)
+	   ═══════════════════════════════════════════════════════════════ */
+
+	/* Surfaces */
+	--color-bg-primary: var(--background);
+	--color-bg-secondary: var(--card);
+	--color-bg-tertiary: var(--muted);
+	--color-bg-elevated: var(--popover);
+	--color-bg-sidebar: var(--sidebar);
+	/* Token keeps the historical #101317e7 value; painted surfaces use the
+	   opaque plate so the p-2 gutter cannot composite into #111316. */
+	--color-bg-terminal-opaque: #101317;
+	--color-bg-terminal: #101317e7;
+	/* Opaque backing for terminal swaps/covers; prevents retained frames leaking through. */
+	--color-bg-terminal-opaque: #101317;
+
+	/* Text */
+	--color-text-primary: var(--foreground);
+	--color-text-muted: var(--muted-foreground);
+	--color-text-passive: var(--chart-3);
+	--color-brand-logo: #79b0dc;
+	--color-brand-logo-bright: #a5cde7;
+	--color-brand-logo-foreground: #0a0b0d;
+	--color-text-markdown-code: var(--color-brand-logo);
+	--color-text-markdown-link: var(--color-brand-logo); /* underline distinguishes links */
+	--color-text-markdown-link-hover: var(--color-brand-logo-bright);
+	--color-text-terminal: #d7d7d2;
+	--color-text-terminal-dim: #7c7c7c;
+
+	/* Borders */
+	--color-border: var(--border);
+	--color-border-strong: var(--input);
+
+	/* Reverb workspace bar — derived from the shared shadcn token scale. The bar
+	 * reads as the top of the page it heads, not as sidebar chrome, so it takes
+	 * the page canvas and separates with its hairline alone. */
+	--color-bg-topbar: var(--background);
+	--color-bg-topbar-raised: var(--secondary);
+	--color-border-topbar: var(--border);
+	--color-border-topbar-strong: var(--input);
+	--color-text-topbar: var(--foreground);
+	--color-text-topbar-muted: var(--muted-foreground);
+	--color-text-topbar-passive: var(--chart-3);
+
+	/* Accent and destructive roles */
+	--color-accent: var(--primary);
+	--color-accent-foreground: var(--primary-foreground);
+	--color-accent-weak: color-mix(in oklch, var(--primary) 16%, transparent);
+	--color-accent-dim: var(--chart-4);
+	--color-accent-strong: var(--primary);
+	--color-danger-strong: var(--destructive);
+
+	/* Board lane signals, matched to the landing hero's board preview. */
+	--color-status-working: #60a5fa;
+	--color-status-needs-you: #f06445;
+	--color-status-validating: #facc15;
+	--color-status-in-review: #f59e0b;
+	--color-status-ready: #4ade80;
+	--color-status-merged: #c084fc;
+	--color-status-idle: var(--muted-foreground);
+	--color-status-exited: var(--destructive);
+	--color-status-terminated: var(--chart-3);
+	--color-status-terminated-foreground: var(--chart-3);
+	--color-status-unknown: var(--chart-4);
+
+	/* Compatibility roles used by non-session surfaces. */
+	--color-working: var(--color-status-working);
+	--color-warning: var(--color-status-needs-you);
+	--color-success: var(--color-status-ready);
+	--color-success-bright: var(--chart-1);
+	--color-danger: var(--destructive);
+	--color-purple: var(--chart-4);
+
+	/* Interactive overlays */
+	--color-interactive-hover: color-mix(in oklch, var(--foreground) 4%, transparent);
+	--color-interactive-active: color-mix(in oklch, var(--foreground) 7%, transparent);
+	--color-overlay-subtle: color-mix(in oklch, var(--foreground) 1.8%, transparent);
+	--color-overlay-faint: color-mix(in oklch, var(--foreground) 2%, transparent);
+	--color-scrollbar: color-mix(in oklch, var(--foreground) 12%, transparent);
+	--color-scrollbar-board: color-mix(in oklch, var(--foreground) 26%, transparent);
+	--color-scrollbar-board-hover: color-mix(in oklch, var(--foreground) 45%, transparent);
+	--color-scrim: color-mix(in oklch, var(--background) 85%, transparent);
+	--blur-overlay: 1px;
+
+	/* ═══════════════════════════════════════════════════════════════
+	   TYPOGRAPHY
+	   ═══════════════════════════════════════════════════════════════ */
+
+	--font-family-base: "Geist Variable", "Geist", ui-sans-serif, system-ui, sans-serif;
+	--font-family-mono:
+		"Geist Mono Variable", "Geist Mono", "JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font",
+		"FiraCode Nerd Font Mono", "FiraCode Nerd Font", "MesloLGS NF", ui-monospace, SFMono-Regular, Menlo, Monaco,
+		Consolas, "Liberation Mono", "Courier New", monospace;
+
+	/* Scale — dense UI chrome uses half-steps between base sizes */
+	--font-size-2xs: 10.5px; /* uppercase meta, board footers */
+	--font-size-xs: 10px; /* micro labels, tight pills */
+	--font-size-nano: 8px; /* smallest chrome text — sidebar search label */
+	--font-size-caption: 11px; /* badges, kanban labels */
+	--font-size-sm-md: 11.5px; /* inspector tabs, status pills */
+	--font-size-sm: 12px; /* secondary chrome / Tailwind text-xs */
+	--font-size-md-sm: 12.5px; /* kv rows, PR summaries */
+	--font-size-base: 13px; /* dense controls (board buttons) */
+	--font-size-brand: 16px; /* titlebar / board project name */
+	--font-size-md: 14px; /* body / Tailwind text-sm */
+	--font-size-subtitle: 15px; /* dialog titles, stat values */
+	--font-size-heading-sm: 17px; /* empty-state headings */
+	--font-size-heading: 21px; /* dashboard subhead */
+	--font-size-heading-lg: 22px; /* preview mock headings */
+
+	--font-weight-medium: 500;
+	--font-weight-semibold: 600;
+
+	--line-height-normal: 1.5;
+	--line-height-snug: 1.42;
+	--line-height-row: 1.25rem; /* 20px — helper rows at text-xs / text-control */
+	--line-height-body-md: 1.55;
+	--line-height-relaxed: 1.6;
+	--line-height-loose: 1.7;
+
+	/* Letter-spacing — uppercase meta, tight headings */
+	--tracking-tight-xl: -0.025em;
+	--tracking-tight-lg: -0.015em;
+	--tracking-tight: -0.01em;
+	--tracking-wide-xs: 0.04em;
+	--tracking-wide-sm: 0.05em;
+	--tracking-wide: 0.06em;
+	--tracking-wide-md: 0.08em;
+	--tracking-wide-lg: 0.09em;
+	--tracking-wide-xl: 0.12em;
+
+	/* Motion */
+	--duration-fast: 120ms;
+	--duration-normal: 150ms;
+
+	/* State opacity */
+	--opacity-control-disabled: 0.35;
+
+	/* ═══════════════════════════════════════════════════════════════
+	   SPACING — 4px base (audit: 4/6/8/10/12/14/16/18 most common)
+	   Prefer even steps; map odd pixels (5/7/9/11/13/15) to nearest.
+	   ═══════════════════════════════════════════════════════════════ */
+
+	--space-0_5: 2px;
+	--space-0_75: 3px;
+	--space-1: 4px;
+	--space-1_25: 5px;
+	--space-1_5: 6px;
+	--space-1_75: 7px;
+	--space-2: 8px;
+	--space-2_25: 9px;
+	--space-2_5: 10px;
+	--space-2_75: 11px;
+	--space-3: 12px;
+	--space-3_25: 13px;
+	--space-3_5: 14px;
+	--space-3_75: 15px;
+	--space-4: 16px;
+	--space-4_5: 18px;
+	--space-5: 20px;
+	--space-5_5: 22px;
+	--space-6: 24px;
+	--space-8: 32px;
+	--space-10: 40px;
+
+	/* ═══════════════════════════════════════════════════════════════
+	   Z-INDEX — stacking layers
+	   chrome < sidebar-preview < titlebar < overlay
+	   Preview peeks paint behind the titlebar cluster so the expand
+	   toggle stays clickable while the overlay is open.
+	   ═══════════════════════════════════════════════════════════════ */
+
+	--z-chrome: 10;
+	--z-sidebar-preview: 15;
+	--z-titlebar: 20;
+	--z-overlay: 50;
+
+	/* ═══════════════════════════════════════════════════════════════
+	   RADIUS
+	   ═══════════════════════════════════════════════════════════════ */
+
+	--radius-xs: calc(var(--radius) * 0.4);
+	--radius-sm: calc(var(--radius) * 0.6);
+	--radius-md: calc(var(--radius) * 0.8);
+	--radius-lg: var(--radius);
+	--radius-panel: calc(var(--radius) * 1.4);
+	--radius-full: 999px; /* pills, avatars, status dots */
+	--radius-swatch: 2px; /* board lane squares: square-reading, not a dot */
+
+	/* ═══════════════════════════════════════════════════════════════
+	   BREAKPOINTS — documented here; @media cannot use var()
+	   ═══════════════════════════════════════════════════════════════ */
+
+	--breakpoint-layout-narrow: 680px; /* reviewer grid — @custom-media in styles.css */
+	--breakpoint-inspector-compact: 300px; /* inspector @container */
+
+	/* ═══════════════════════════════════════════════════════════════
+	   LAYOUT — fixed chrome dimensions (not spacing scale)
+	   ═══════════════════════════════════════════════════════════════ */
+
+	--ring-width-focus: 3px; /* select trigger focus ring */
+
+	--size-hairline: 1px;
+	--size-icon-2xs: 12px;
+	--size-icon-xs: 9px;
+	--size-icon-sm: 13px;
+	--size-icon-md: 14px;
+	--size-icon-base: 16px;
+	--size-terminal-agent-icon: 11px;
+	--size-icon-lg: 15px;
+	--size-icon-xl: 18px;
+	--size-dot-sm: 7px;
+	--size-swatch: 8px; /* board lane + topbar status squares */
+	--size-control-form: 32px;
+	--size-control-xs: 20px;
+	--size-control-sm: 24px;
+	--size-control-md: 28px;
+	--size-control-lg: 34px;
+	--size-control-xl: 38px;
+	--size-control-board-sm: 30px;
+	--size-control-board: 36px;
+	--size-table-head: var(--space-10);
+	/* Reverb's route-level workspace bar and pane-level secondary rows. Keep
+	   the old names as compatibility aliases while route mounts migrate. */
+	--size-topbar-primary: 36px;
+	--size-topbar-secondary: 36px;
+	--size-topbar-control: 28px;
+	--size-toolbar: var(--size-topbar-primary);
+	/* ShellTopbar (.dashboard-app-header) on Win/Linux — the full-width bar
+	   the sidebar hangs below. Distinct from --size-toolbar (36px) because
+	   the shell header is taller (56px) to accommodate the project crumb. */
+	--size-shell-topbar: 56px;
+	/* Windows custom title bar (.window-titlebar). */
+	--size-window-titlebar: 36px;
+	--size-inspector-tabs: var(--size-topbar-secondary);
+	--size-topbar-context-max: 32rem;
+	--space-topbar-x: 10px;
+	--space-topbar-zone: 10px;
+	--space-topbar-group: 4px;
+	--radius-topbar-control: 7px;
+	--size-row-md: 52px;
+	--size-browser-url: 29px;
+	--size-browser-min: 320px;
+	--size-sidebar-icon: 48px;
+	--size-sidebar-default: 240px;
+	--size-sidebar-mobile: 288px;
+	--size-titlebar-cluster-left: 72px;
+	/* Linux has no traffic lights: with the sidebar open the cluster sits at the
+	 * sidebar's own left inset (TitlebarNav `left-titlebar-cluster-left-linux`). */
+	--size-titlebar-cluster-left-linux: 6px;
+	/* Sidebar off-canvas: the framed centre panel is flush-left, so the cluster
+	 * must clear its border (--size-center-panel-inline-inset) instead of
+	 * straddling it. */
+	--size-titlebar-cluster-left-linux-panel: calc(var(--size-center-panel-inline-inset) + 10px);
+	/* TitlebarNav cluster: 3 × --size-control-md buttons + 2 × 4px flex gaps. */
+	--size-titlebar-cluster-width: calc(3 * var(--size-control-md) + 2 * 4px);
+	/* Breathing room between the last arrow and the adjacent in-panel title. */
+	--size-titlebar-content-gap: 12px;
+	/* Clears fixed TitlebarNav (cluster-left + toggle/arrows) when the sidebar is off-canvas. */
+	--size-titlebar-content-offset: calc(
+		var(--size-titlebar-cluster-left) + var(--size-titlebar-cluster-width) + var(--size-titlebar-content-gap)
+	);
+	/* Same clearance measured from the off-canvas Linux cluster inset. */
+	--size-titlebar-content-offset-linux: calc(
+		var(--size-titlebar-cluster-left-linux-panel) + var(--size-titlebar-cluster-width) +
+			var(--size-titlebar-content-gap)
+	);
+
+	/* Keep macOS traffic-light chrome aligned with the shared route topbar. */
+	--size-traffic-light-clearance: var(--size-toolbar);
+	/* Fullscreen has no traffic lights, but the left navigation still needs one
+	 * compact row before sidebar content begins. */
+	--size-traffic-light-clearance-fullscreen: calc(var(--size-control-md) + var(--space-1));
+	/* Resize handle straddles the sidebar-panel boundary: offset = half the width
+	 * so the hairline lands exactly at the junction and the drag zone covers 6px
+	 * on each side of it. */
+	--size-resize-handle: 12px;
+	--size-resize-handle-offset: 6px;
+	--size-kanban-glow: 130px;
+	--size-kv-label: 74px;
+	--size-notification-width: 460px;
+	--size-notification-max-height: 420px;
+	--size-select-menu-max: 320px; /* agent/select dropdown scroll cap (was max-h-80) */
+	--size-settings-menu-width: 20rem; /* settings option menus — matches agent picker box width */
+	--size-settings-agent-menu-min-width: 20rem; /* agent harness picker — fixed width for status columns */
+	--size-notification-icon: 26px;
+	--size-session-topbar: calc(var(--size-inspector-tabs) + (2 * var(--space-1)));
+	/* DaemonFailureBanner floating toast (was w-[min(22rem,…)] / max-h-40). */
+	--size-daemon-failure-toast: 22rem;
+	--size-daemon-failure-details-max: 10rem;
+	--size-font-size-label: 44px;
+	--size-inspector-status-chip-max: 58%;
+	--size-board-empty: 460px;
+	--size-preview-max: 760px;
+	--size-preview-content: 400px;
+	--size-pr-table-actions: 220px;
+	--size-pr-col-number: 64px;
+	--size-pr-col-state: 96px;
+	--size-content-max: 320px;
+	/* Lets flex children shrink for truncation without hardcoding zero-width utilities in components. */
+	--size-flex-min: 0px;
+	/* Keeps terminal tabs usable after title truncation while leaving room for several tabs. */
+	--size-shell-tab-min: 64px;
+	/* Keeps added session tabs aligned with the owning tab in the secondary strip. */
+	--size-session-pane-tab-max: 112px;
+	/* Compact connected shell tab in a session's terminal strip. This includes
+	   the terminal glyph and close action, not only the truncated label. */
+	--size-shell-tab-connected: 148px;
+	/* Caps a standalone shell terminal's tab label so several open shells stay
+	   readable side by side instead of one long path crowding out the rest. */
+	--size-shell-tab-max: 140px;
+	--size-dialog-md: 420px;
+	--size-dialog-lg: 440px;
+	--size-dialog-orchestrator: 460px;
+	--size-dialog-xl: 560px;
+
+	/* Command palette */
+	--color-bg-command-palette: var(--popover);
+	--color-border-command-palette: var(--border);
+	--color-bg-command-item-active: color-mix(in oklch, var(--popover) 88%, var(--foreground) 12%);
+	--color-text-command-item: var(--foreground);
+	--color-text-command-placeholder: var(--muted-foreground);
+	--color-text-command-muted: var(--muted-foreground);
+	--radius-command-palette: 12px;
+	--radius-command-item: 6px;
+	--shadow-command-palette: var(--elevation-xl);
+	--shadow-popover: var(--elevation-xl);
+	--size-command-palette: 720px;
+	--size-command-palette-top: 14vh;
+	--size-command-palette-list-max: 420px;
+	--size-command-palette-list-vh: 50vh;
+	--size-command-subtitle-max: 45%;
+	--size-command-pad-x: 20px;
+	--size-command-item-inset: 8px;
+	--size-command-item-pad-l: 14px;
+	--font-size-command-input: 16px;
+	--leading-command-item: 22px;
+	--size-branch-chip: 13rem;
+	--size-inspector-min: 280px;
+	--size-textarea-min: 112px;
+	/* Two 20px actions + one 1px gap + the 2px right inset. */
+	--size-sidebar-project-actions: 43px;
+
+	/* Shared inset-panel geometry (welcome board + settings page) */
+	--size-center-panel-inset: 24px;
+	--size-center-panel-inline-inset: 16px;
+	--size-center-panel-bottom-inset: 14px;
+	/* macOS frames the panel with one uniform inset on all four sides. It stays
+	 * near-flush so in-panel titles align with the fixed TitlebarNav row. */
+	--size-center-panel-inset-mac: 6px;
+	/* Formula: inner = outer_window_radius - inset (nested corner alignment).
+	 * macOS window corner ≈ 18px; inset = 6px → inner = 12px. */
+	--radius-window: 18px;
+	--radius-center-panel: calc(var(--radius-window) - var(--size-center-panel-inset-mac));
+
+	/* Welcome / import radius alias (CreateProjectFlow rounded-welcome-panel) */
+	--color-border-welcome-panel: var(--border);
+	--radius-welcome-panel: var(--radius-center-panel);
+
+	/* Import mode picker */
+	--color-bg-import-modal: var(--card);
+	--color-border-import-modal: var(--border);
+	--color-text-import-title: var(--foreground);
+	--color-text-import-muted: var(--muted-foreground);
+	--color-bg-import-card: var(--popover);
+	--color-bg-import-card-hover: var(--accent);
+	--color-bg-import-illustration: var(--color-bg-import-chip);
+	--color-bg-import-chip: var(--secondary);
+	--shadow-import-modal: 0 0 0 1px var(--border), var(--elevation-md);
+	--size-import-modal-max: 896px;
+	--size-import-folder-dialog: 640px;
+	--size-composer-prompt-min: 112px;
+	--size-composer-start-button: 7.25rem;
+	--radius-chat-composer: 20px;
+	/* Task composer — inline toolbar values. Quieter than a filled control at rest
+	 * so the task field stays the only thing with visual weight. */
+	--color-bg-composer-chip: color-mix(in oklab, var(--input) 55%, transparent);
+	--color-bg-composer-chip-hover: var(--secondary);
+	/* Shared equal edge inset for modal header/body/footer sections. */
+	--size-modal-padding: var(--space-6);
+	--size-import-modal-padding: var(--space-8);
+	--size-import-dialog-padding: var(--size-modal-padding);
+	--size-import-mode-card-min: 252px;
+	--size-import-mode-card-min-sm: 292px;
+	--size-import-mode-illustration: 178px;
+
+	/* Settings */
+	--color-bg-settings-row: transparent;
+	--color-bg-settings-menu: var(--popover);
+	--color-bg-settings-menu-selected: color-mix(in oklch, var(--popover) 92%, var(--foreground) 8%);
+	--color-bg-settings-dialog: var(--card);
+	--color-text-settings-title: var(--foreground);
+	--color-text-settings-muted: var(--muted-foreground);
+	--color-text-settings-row: var(--foreground);
+	--color-border-settings: var(--color-border-welcome-panel);
+	--color-border-settings-menu: color-mix(in oklch, var(--border) 60%, var(--foreground) 40%);
+	--font-size-settings-title: 28px;
+	--tracking-settings-title: -0.015em;
+	--tracking-settings-section: 0.06em;
+	--tracking-settings-mono: 0.08em;
+	--radius-settings-panel: 14px;
+	--radius-settings-row: 16px;
+	--size-settings-row: 52px;
+	--size-settings-section-gap: 32px;
+	--size-settings-section-inner-gap: 12px;
+	--size-settings-row-padding: 16px;
+	--size-settings-row-icon-gap: 12px;
+	--size-settings-menu-min-width: 9rem;
+	--size-settings-inline-input-min: 3.5rem;
+	--size-settings-inline-input-max: 12rem;
+	--size-settings-inline-input-max-percent: 42%;
+	--size-settings-inline-input-height: 28px;
+	--size-settings-row-value-max: 20rem;
+	--size-settings-row-value-max-percent: 55%;
+	--size-settings-footer-button-padding-x: 20px;
+	--color-settings-footer-button-primary-fg: var(--primary-foreground);
+	--size-settings-dialog: 575px;
+	--size-settings-dialog-wide: 920px;
+	--size-settings-dialog-height: 680px;
+	--size-settings-dialog-max-h: 680px;
+	--color-border-settings-dialog: oklch(1 0 0 / 3%);
+	--color-border-settings-dialog-header: oklch(1 0 0 / 3%);
+	--color-bg-settings-input: var(--input);
+	--color-border-settings-input: var(--color-border-settings-dialog);
+	--color-text-settings-input: var(--foreground);
+	--color-text-settings-placeholder: var(--muted-foreground);
+	--color-text-import-sep: var(--color-text-import-muted);
+	--color-settings-accent: var(--primary);
+	--color-settings-switch-on: var(--primary);
+
+	/* Project / workspace agents sheet — aliases shared chrome where themes match */
+	--color-bg-agents-sheet: var(--color-bg-settings-dialog);
+	--color-border-agents-sheet: var(--border);
+	--color-bg-agents-sheet-control: var(--input);
+	--color-text-agents-sheet-title: var(--foreground);
+	--color-text-agents-sheet-description: var(--muted-foreground);
+	--color-text-agents-sheet-label: var(--foreground);
+	--radius-agents-sheet: var(--radius-center-panel);
+	/* Settings layout sizes (Figma) */
+	--size-settings-mobile-dialog: 550px;
+	--size-settings-mobile-dialog-pad-x: 24px;
+	--size-settings-mobile-desc: 420px;
+	--size-settings-mobile-qr: 220px;
+	--size-settings-mobile-qr-code: 204px;
+	--size-settings-mobile-warning: 400px;
+	--size-settings-mobile-label: 55px;
+	--size-settings-mobile-regen-width: 179px;
+	--size-settings-mobile-switch-w: 42px;
+	--size-settings-mobile-switch-h: 26px;
+	--size-settings-mobile-details-pad-x: 19px;
+	--size-settings-mobile-switch-travel: 18px;
+	--leading-settings-mobile-title: 22px;
+	--leading-settings-mobile-hint: 14px;
+	--leading-settings-mobile-warning: 15px;
+	--size-settings-action-height: 38px;
+	--radius-settings-action: 16px;
+	--radius-settings-dialog-lg: 24px;
+	--shadow-settings-dialog: var(--elevation-xl);
+	--shadow-settings-qr: var(--elevation-md);
+
+	--size-empty-offset-y: 5vh; /* board empty-state vertical nudge */
+
+	/* Browser static preview (light mock page inside dark app) */
+	--color-preview-bg: #f7f8fb;
+	--color-preview-fg: #17202a;
+	--color-preview-muted: #687384;
+	--color-preview-link: #2f5b9d;
+	--color-preview-card-border: #d7dee8;
+	--color-preview-heading: #111827;
+	--color-preview-body: #526070;
+	--color-preview-success-bg: #e7f8ed;
+	--color-preview-tile-border: #e1e7ef;
+	--color-preview-tile-bg: #fbfcfe;
+	--color-preview-terminal-border: #dce4ef;
+	--color-preview-terminal-bg: #0f172a;
+	--color-preview-terminal-fg: #cbd5e1;
+
+	/* Mock project accent swatches (sidebar dots) */
+--color-project-accent-mint: var(--chart-1);
+	--color-project-accent-sky: var(--chart-2);
+	--color-project-accent-violet: #c4b5fd;
+
+	/* Terminal ANSI palette. Keep this independent from product status colors:
+	   agent TUIs own the semantic meaning of these slots. */
+	--color-term-black: #1f2329;
+	--color-term-red: #f05d5e;
+	--color-term-green: #44c97a;
+	--color-term-yellow: #e5c34b;
+	--color-term-blue: #5b9cff;
+	--color-term-magenta: #c678dd;
+	--color-term-cyan: #56b6c2;
+	--color-term-white: #d7dae0;
+	--color-term-selection-dark: rgb(77 141 255 / 0.3);
+	--color-term-selection-light: rgb(37 99 235 / 0.25);
+	--color-term-selection-inactive: rgb(128 128 128 / 0.2);
+	--color-term-selection-inactive-light: rgb(128 128 128 / 0.15);
+	--color-term-bright-black: #7f8792;
+	--color-term-bright-red: #ff7b7c;
+	--color-term-bright-green: #62df91;
+	--color-term-bright-yellow: #f2d66d;
+	--color-term-bright-blue: #79b1ff;
+	--color-term-bright-magenta: #d99aee;
+	--color-term-bright-cyan: #79d4df;
+	--color-term-bright-white: #f4f5f7;
+
+	/* ═══════════════════════════════════════════════════════════════
+	   SHADOWS
+	   ═══════════════════════════════════════════════════════════════ */
+
+	--elevation-sm: 0 1px 0 color-mix(in oklch, var(--background) 35%, transparent);
+	--elevation-md:
+		0 1px 0 color-mix(in oklch, var(--background) 40%, transparent),
+		0 12px 32px color-mix(in oklch, var(--background) 50%, transparent);
+	--elevation-lg: 0 8px 40px color-mix(in oklch, var(--background) 55%, transparent);
+	--elevation-xl:
+		0 1px 0 color-mix(in oklch, var(--background) 40%, transparent),
+		0 20px 50px color-mix(in oklch, var(--background) 55%, transparent);
+
+	/* @theme bridge — avoids Tailwind theme key / :root name collisions */
+	--bridge-border: var(--color-border);
+	--bridge-border-strong: var(--color-border-strong);
+	--bridge-accent: var(--color-accent);
+	--bridge-accent-fg: var(--color-accent-foreground);
+	--bridge-accent-weak: var(--color-accent-weak);
+	--bridge-accent-dim: var(--color-accent-dim);
+	--bridge-accent-strong: var(--color-accent-strong);
+	--bridge-working: var(--color-working);
+	--bridge-success: var(--color-success);
+	--bridge-warning: var(--color-warning);
+	--bridge-danger: var(--color-danger);
+	--bridge-danger-strong: var(--color-danger-strong);
+	--bridge-status-working: var(--color-status-working);
+	--bridge-status-needs-you: var(--color-status-needs-you);
+	--bridge-status-validating: var(--color-status-validating);
+	--bridge-status-in-review: var(--color-status-in-review);
+	--bridge-status-ready: var(--color-status-ready);
+	--bridge-status-merged: var(--color-status-merged);
+	--bridge-status-idle: var(--color-status-idle);
+	--bridge-status-exited: var(--color-status-exited);
+	--bridge-status-terminated: var(--color-status-terminated);
+	--bridge-status-terminated-foreground: var(--color-status-terminated-foreground);
+	--bridge-status-unknown: var(--color-status-unknown);
+	--bridge-interactive-hover: var(--color-interactive-hover);
+	--bridge-interactive-active: var(--color-interactive-active);
+	--bridge-scrim: var(--color-scrim);
+	--bridge-preview-muted: var(--color-preview-muted);
+	--bridge-preview-link: var(--color-preview-link);
+	--bridge-preview-heading: var(--color-preview-heading);
+	--bridge-preview-body: var(--color-preview-body);
+	--bridge-preview-card: var(--color-preview-card-border);
+	--bridge-preview-success: var(--color-preview-success-bg);
+	--bridge-preview-tile: var(--color-preview-tile-bg);
+	--bridge-preview-tile-border: var(--color-preview-tile-border);
+	--bridge-preview-terminal: var(--color-preview-terminal-bg);
+	--bridge-preview-terminal-border: var(--color-preview-terminal-border);
+	--bridge-preview-terminal-fg: var(--color-preview-terminal-fg);
+
+	/* Legacy renderer aliases. The Reverb workspace styles still consume these
+	   names; keep them as semantic pointers rather than reintroducing a second
+	   palette. They resolve through the active theme's supplied shadcn tokens. */
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
+	--fg: var(--color-text-primary);
+	--fg-muted: var(--color-text-muted);
+	--fg-passive: var(--color-text-passive);
+	--border-1: var(--color-border-strong);
+	--interactive-hover: var(--color-interactive-hover);
+	--interactive-active: var(--color-interactive-active);
+	--accent-weak: var(--color-accent-weak);
+	--term-bg: var(--color-bg-terminal);
+	--green: var(--color-success);
+	--red: var(--color-danger);
+	--orange: var(--color-working);
+	--amber: var(--color-warning);
+
+	--font-sans: var(--font-family-base);
+	--font-mono: var(--font-family-mono);
+}
+
+/* Light theme — set via data-theme (apply-initial-theme + Zustand toggle). */
+
+:root[data-theme="light"] {
+	color-scheme: light;
+
+	--background: oklch(0.985 0 0);
+	--foreground: oklch(0.141 0.005 285.823);
+	--card: oklch(0.985 0 0);
+	--card-foreground: oklch(0.141 0.005 285.823);
+	--popover: oklch(1 0 0);
+	--popover-foreground: oklch(0.141 0.005 285.823);
+	--primary: oklch(0.21 0.006 285.885);
+	--primary-foreground: oklch(0.985 0 0);
+	--secondary: oklch(0.967 0.001 286.375);
+	--secondary-foreground: oklch(0.21 0.006 285.885);
+	--muted: oklch(0.967 0.001 286.375);
+	--muted-foreground: oklch(0.552 0.016 285.938);
+	--accent: oklch(0.967 0.001 286.375);
+	--accent-foreground: oklch(0.21 0.006 285.885);
+	--destructive: oklch(0.577 0.245 27.325);
+	/* Same intent as dark: one step lighter than the shadcn default hairline. */
+	--border: oklch(0.945 0.003 286.32);
+	--input: oklch(0.92 0.004 286.32);
+	--ring: oklch(0.705 0.015 286.067);
+	--chart-1: oklch(0.871 0.006 286.286);
+	--chart-2: oklch(0.552 0.016 285.938);
+	--chart-3: oklch(0.442 0.017 285.786);
+	--chart-4: oklch(0.37 0.013 285.805);
+	--chart-5: oklch(0.274 0.006 286.033);
+	--sidebar: oklch(1 0 0);
+	--sidebar-foreground: oklch(0.141 0.005 285.823);
+	--sidebar-primary: oklch(0.21 0.006 285.885);
+	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-accent: oklch(0.967 0.001 286.375);
+	--sidebar-accent-foreground: oklch(0.21 0.006 285.885);
+	--sidebar-border: var(--border);
+	--sidebar-ring: oklch(0.705 0.015 286.067);
+
+	--color-bg-primary: var(--background);
+	--color-bg-secondary: var(--card);
+	--color-bg-tertiary: var(--muted);
+	--color-bg-elevated: var(--popover);
+	--color-bg-sidebar: var(--sidebar);
+	--color-bg-terminal-opaque: #f5f5f4;
+	--color-bg-terminal: #f5f5f4;
+	--color-bg-terminal-opaque: #f5f5f4;
+
+	--color-text-primary: var(--foreground);
+	--color-text-muted: var(--muted-foreground);
+	--color-text-passive: var(--chart-3);
+	--color-brand-logo: #304c83;
+	--color-brand-logo-bright: #466daa;
+	--color-brand-logo-foreground: #ffffff;
+	--color-text-markdown-code: var(--color-brand-logo);
+	--color-text-markdown-link: var(--color-brand-logo);
+	--color-text-markdown-link-hover: var(--color-brand-logo-bright);
+	--color-text-terminal: #24292f;
+	--color-text-terminal-dim: #6b7280;
+
+	--color-border: var(--border);
+	--color-border-strong: var(--input);
+
+	/* Reverb workspace bar — derived from the shared shadcn token scale. */
+	--color-bg-topbar: var(--background);
+	--color-bg-topbar-raised: var(--secondary);
+	--color-border-topbar: var(--border);
+	--color-border-topbar-strong: var(--input);
+	--color-text-topbar: var(--foreground);
+	--color-text-topbar-muted: var(--muted-foreground);
+	--color-text-topbar-passive: var(--chart-3);
+
+	--color-accent: var(--primary);
+	--color-accent-foreground: var(--primary-foreground);
+	--color-accent-weak: color-mix(in oklch, var(--primary) 12%, transparent);
+	--color-accent-dim: var(--chart-1);
+	--color-accent-strong: var(--primary);
+	--color-danger-strong: var(--destructive);
+
+	/* Same lane hues as dark, deepened so they hold contrast on a light canvas. */
+	--color-status-working: #2563eb;
+	--color-status-needs-you: #c2412d;
+	--color-status-validating: #ca8a04;
+	--color-status-in-review: #d97706;
+	--color-status-ready: #16a34a;
+	--color-status-merged: #9333ea;
+	--color-status-idle: var(--muted-foreground);
+	--color-status-exited: var(--destructive);
+	--color-status-terminated: var(--chart-3);
+	--color-status-terminated-foreground: var(--chart-3);
+	--color-status-unknown: var(--chart-4);
+
+	--color-working: var(--color-status-working);
+	--color-warning: var(--color-status-needs-you);
+	--color-success: var(--color-status-ready);
+	--color-success-bright: var(--chart-1);
+	--color-danger: var(--destructive);
+	--color-purple: var(--chart-4);
+
+	--color-interactive-hover: color-mix(in oklch, var(--foreground) 4%, transparent);
+	--color-interactive-active: color-mix(in oklch, var(--foreground) 7%, transparent);
+	--color-overlay-subtle: color-mix(in oklch, var(--foreground) 2%, transparent);
+	--color-overlay-faint: color-mix(in oklch, var(--foreground) 3%, transparent);
+	--color-scrollbar: color-mix(in oklch, var(--foreground) 12%, transparent);
+	--color-scrollbar-board: color-mix(in oklch, var(--foreground) 26%, transparent);
+	--color-scrollbar-board-hover: color-mix(in oklch, var(--foreground) 45%, transparent);
+	--color-scrim: color-mix(in oklch, var(--foreground) 45%, transparent);
+
+	--elevation-sm: 0 1px 0 color-mix(in oklch, var(--foreground) 6%, transparent);
+	--elevation-md:
+		0 1px 0 color-mix(in oklch, var(--foreground) 3%, transparent),
+		0 12px 30px color-mix(in oklch, var(--foreground) 10%, transparent);
+	--elevation-lg: 0 16px 48px color-mix(in oklch, var(--foreground) 16%, transparent);
+	--elevation-xl:
+		0 1px 0 color-mix(in oklch, var(--foreground) 3%, transparent),
+		0 20px 50px color-mix(in oklch, var(--foreground) 14%, transparent);
+
+	/* Command palette */
+	--color-bg-command-palette: var(--popover);
+	--color-border-command-palette: var(--border);
+	--color-bg-command-item-active: color-mix(in oklch, var(--popover) 88%, var(--foreground) 12%);
+	--color-text-command-item: var(--foreground);
+	--color-text-command-placeholder: var(--muted-foreground);
+	--color-text-command-muted: var(--muted-foreground);
+	--shadow-command-palette: var(--elevation-xl);
+	--shadow-popover: var(--elevation-xl);
+
+	/* Welcome / import radius alias */
+	--color-border-welcome-panel: var(--border);
+
+	/* Import mode picker */
+	--color-bg-import-modal: var(--popover);
+	--color-border-import-modal: var(--border);
+	--color-text-import-title: var(--foreground);
+	--color-text-import-muted: var(--muted-foreground);
+	--color-bg-import-card: var(--card);
+	--color-bg-import-card-hover: var(--accent);
+	--color-bg-import-illustration: var(--color-bg-import-chip);
+	--color-bg-import-chip: var(--secondary);
+	--shadow-import-modal: 0 0 0 1px var(--border), var(--elevation-md);
+
+	/* Project / workspace agents sheet */
+	--color-border-agents-sheet: var(--border);
+	--color-bg-agents-sheet-control: var(--input);
+	--color-text-agents-sheet-title: var(--foreground);
+	--color-text-agents-sheet-description: var(--muted-foreground);
+	--color-text-agents-sheet-label: var(--foreground);
+
+	--color-bg-settings-row: var(--card);
+	--color-bg-settings-menu: var(--popover);
+	--color-bg-settings-menu-selected: color-mix(in oklch, var(--popover) 92%, var(--foreground) 8%);
+	--color-bg-settings-dialog: var(--card);
+	--color-text-settings-title: var(--foreground);
+	--color-text-settings-muted: var(--muted-foreground);
+	--color-text-settings-row: var(--foreground);
+	--color-border-settings-menu: color-mix(in oklch, var(--border) 60%, var(--foreground) 40%);
+	--color-border-settings-dialog: var(--border);
+	--color-border-settings-dialog-header: color-mix(in oklch, var(--border) 70%, transparent);
+	--color-bg-settings-input: var(--input);
+	--color-text-settings-input: var(--foreground);
+	--color-text-settings-placeholder: var(--muted-foreground);
+	--color-settings-accent: var(--primary);
+	--color-settings-switch-on: var(--primary);
+
+	--color-term-black: #24292f;
+	--color-term-red: #a13c37;
+	--color-term-green: #2e6b3e;
+	--color-term-yellow: #87660f;
+	--color-term-blue: #3b5aa6;
+	--color-term-magenta: #7b5799;
+	--color-term-cyan: #3d7a7a;
+	--color-term-white: #666d75;
+	--color-term-bright-black: #4c535b;
+	--color-term-bright-red: #7e3330;
+	--color-term-bright-green: #265231;
+	--color-term-bright-yellow: #6b5108;
+	--color-term-bright-blue: #31487f;
+	--color-term-bright-magenta: #5f4476;
+	--color-term-bright-cyan: #316061;
+	--color-term-bright-white: #24292f;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   NAMED THEMES — applied via data-style-theme on :root.
+   "orchestrate" is the default (no attribute).
+
+   Each palette keeps its canonical background and the hue/chroma of
+   every other token, but lightness is re-derived so all themes trace
+   the SAME contrast curve as Orchestrate:
+     dark   card +0.055 · muted +0.089 · popover +0.095 · sidebar -0.030 ΔL
+     light  card -0.010 · muted -0.022 · popover +0.012 · sidebar +0.012 ΔL
+   Body text lands at ~12.5:1 (dark) / ~13.0:1 (light); muted at ~5.6 / ~5.0.
+   Text chroma is capped so re-lighting cannot oversaturate a hue.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* A named palette owns the terminal's default plate and text as well as the
+   surrounding app chrome. ANSI slots stay independent because agent TUIs use
+   them semantically, but the formerly near-black terminal canvas now follows
+   each palette in both dark and light modes. */
+:root[data-style-theme] {
+	--color-bg-terminal-opaque: var(--background);
+	--color-bg-terminal: var(--background);
+	--color-text-terminal: var(--foreground);
+	--color-text-terminal-dim: var(--muted-foreground);
+}
+
+/* ── GitHub (Primer) ── */
+:root[data-style-theme="github"] {
+	/* Dark */
+	--background:                 #0d1117;
+	--foreground:                 #ccd3d8;
+	--card:                       #191e25;
+	--card-foreground:            #ccd3d8;
+	--popover:                    #22272e;
+	--popover-foreground:         #ccd3d8;
+	--primary:                    #58a6ff;
+	--primary-foreground:         #0d1117;
+	--secondary:                  #21262d;
+	--secondary-foreground:       #ccd3d8;
+	--muted:                      #21262d;
+	--muted-foreground:           #848d96;
+	--accent:                     #21262d;
+	--accent-foreground:          #ccd3d8;
+	--border:                     oklch(1 0 0 / 10%);
+	--input:                      oklch(1 0 0 / 6%);
+	--ring:                       #58a6ff;
+	--sidebar:                    #050b12;
+	--sidebar-foreground:         #ccd3d8;
+	--sidebar-primary:            #58a6ff;
+	--sidebar-primary-foreground: #0d1117;
+	--sidebar-accent:             #21262d;
+	--sidebar-accent-foreground:  #ccd3d8;
+	--sidebar-ring:               #58a6ff;
+}
+:root[data-style-theme="github"][data-theme="light"] {
+	color-scheme: light;
+	/* Light */
+	--background:                 #ffffff;
+	--foreground:                 #2d3237;
+	--card:                       #fafcfe;
+	--card-foreground:            #2d3237;
+	--popover:                    #fdfdfd;
+	--popover-foreground:         #2d3237;
+	--primary:                    #0969da;
+	--primary-foreground:         #ffffff;
+	--secondary:                  #f4f8fc;
+	--secondary-foreground:       #2d3237;
+	--muted:                      #f4f8fc;
+	--muted-foreground:           #68707a;
+	--accent:                     #f4f8fc;
+	--accent-foreground:          #2d3237;
+	--border:                     oklch(0 0 0 / 10%);
+	--input:                      oklch(0 0 0 / 6%);
+	--ring:                       #0969da;
+	--sidebar:                    #fcfeff;
+	--sidebar-foreground:         #2d3237;
+	--sidebar-primary:            #0969da;
+	--sidebar-primary-foreground: #ffffff;
+	--sidebar-accent:             #f4f8fc;
+	--sidebar-accent-foreground:  #2d3237;
+	--sidebar-ring:               #0969da;
+}
+
+/* ── Catppuccin (Mocha / Latte) ── */
+:root[data-style-theme="catppuccin"] {
+	/* Dark */
+	--background:                 #1e1e2e;
+	--foreground:                 #d9e0f9;
+	--card:                       #2b2c3c;
+	--card-foreground:            #d9e0f9;
+	--popover:                    #353647;
+	--popover-foreground:         #d9e0f9;
+	--primary:                    #89b4fa;
+	--primary-foreground:         #1e1e2e;
+	--secondary:                  #333445;
+	--secondary-foreground:       #d9e0f9;
+	--muted:                      #333445;
+	--muted-foreground:           #9197aa;
+	--accent:                     #333445;
+	--accent-foreground:          #d9e0f9;
+	--border:                     oklch(1 0 0 / 8%);
+	--input:                      oklch(1 0 0 / 5%);
+	--ring:                       #89b4fa;
+	--sidebar:                    #171724;
+	--sidebar-foreground:         #d9e0f9;
+	--sidebar-primary:            #89b4fa;
+	--sidebar-primary-foreground: #1e1e2e;
+	--sidebar-accent:             #333445;
+	--sidebar-accent-foreground:  #d9e0f9;
+	--sidebar-ring:               #89b4fa;
+}
+:root[data-style-theme="catppuccin"][data-theme="light"] {
+	color-scheme: light;
+	/* Light */
+	--background:                 #eff1f5;
+	--foreground:                 #25273a;
+	--card:                       #ebeef4;
+	--card-foreground:            #25273a;
+	--popover:                    #f3f5f9;
+	--popover-foreground:         #25273a;
+	--primary:                    #1e66f5;
+	--primary-foreground:         #eff1f5;
+	--secondary:                  #e6eaf4;
+	--secondary-foreground:       #25273a;
+	--muted:                      #e6eaf4;
+	--muted-foreground:           #646679;
+	--accent:                     #e6eaf4;
+	--accent-foreground:          #25273a;
+	--border:                     oklch(0 0 0 / 10%);
+	--input:                      oklch(0 0 0 / 6%);
+	--ring:                       #1e66f5;
+	--sidebar:                    #f2f5fb;
+	--sidebar-foreground:         #25273a;
+	--sidebar-primary:            #1e66f5;
+	--sidebar-primary-foreground: #eff1f5;
+	--sidebar-accent:             #e6eaf4;
+	--sidebar-accent-foreground:  #25273a;
+	--sidebar-ring:               #1e66f5;
+}
+
+/* ── Dracula / Alucard ── */
+:root[data-style-theme="dracula"] {
+	/* Dark */
+	--background:                 #282a36;
+	--foreground:                 #f1f0eb;
+	--card:                       #353748;
+	--card-foreground:            #f1f0eb;
+	--popover:                    #3f4253;
+	--popover-foreground:         #f1f0eb;
+	--primary:                    #bd93f9;
+	--primary-foreground:         #282a36;
+	--secondary:                  #3e4052;
+	--secondary-foreground:       #f1f0eb;
+	--muted:                      #3e4052;
+	--muted-foreground:           #9ba3b6;
+	--accent:                     #3e4052;
+	--accent-foreground:          #f1f0eb;
+	--border:                     oklch(1 0 0 / 10%);
+	--input:                      oklch(1 0 0 / 6%);
+	--ring:                       #bd93f9;
+	--sidebar:                    #22232d;
+	--sidebar-foreground:         #f1f0eb;
+	--sidebar-primary:            #bd93f9;
+	--sidebar-primary-foreground: #282a36;
+	--sidebar-accent:             #3e4052;
+	--sidebar-accent-foreground:  #f1f0eb;
+	--sidebar-ring:               #bd93f9;
+}
+:root[data-style-theme="dracula"][data-theme="light"] {
+	color-scheme: light;
+	/* Light */
+	--background:                 #fffbeb;
+	--foreground:                 #2f2e2e;
+	--card:                       #fcf8e8;
+	--card-foreground:            #2f2e2e;
+	--popover:                    #fffeee;
+	--popover-foreground:         #2f2e2e;
+	--primary:                    #644ac9;
+	--primary-foreground:         #fffbeb;
+	--secondary:                  #f7f4e4;
+	--secondary-foreground:       #2f2e2e;
+	--muted:                      #f7f4e4;
+	--muted-foreground:           #726d5a;
+	--accent:                     #f7f4e4;
+	--accent-foreground:          #2f2e2e;
+	--border:                     oklch(0 0 0 / 10%);
+	--input:                      oklch(0 0 0 / 6%);
+	--ring:                       #644ac9;
+	--sidebar:                    #fffef6;
+	--sidebar-foreground:         #2f2e2e;
+	--sidebar-primary:            #644ac9;
+	--sidebar-primary-foreground: #fffbeb;
+	--sidebar-accent:             #f7f4e4;
+	--sidebar-accent-foreground:  #2f2e2e;
+	--sidebar-ring:               #644ac9;
+}
+
+/* ── Tokyo Night (Storm / Day) ── */
+:root[data-style-theme="tokyo-night"] {
+	/* Dark */
+	--background:                 #24283b;
+	--foreground:                 #e7edff;
+	--card:                       #323647;
+	--card-foreground:            #e7edff;
+	--popover:                    #3c4152;
+	--popover-foreground:         #e7edff;
+	--primary:                    #7aa2f7;
+	--primary-foreground:         #24283b;
+	--secondary:                  #3b3f50;
+	--secondary-foreground:       #e7edff;
+	--muted:                      #3b3f50;
+	--muted-foreground:           #9b9fb4;
+	--accent:                     #3b3f50;
+	--accent-foreground:          #e7edff;
+	--border:                     oklch(1 0 0 / 8%);
+	--input:                      oklch(1 0 0 / 5%);
+	--ring:                       #7aa2f7;
+	--sidebar:                    #1e2131;
+	--sidebar-foreground:         #e7edff;
+	--sidebar-primary:            #7aa2f7;
+	--sidebar-primary-foreground: #24283b;
+	--sidebar-accent:             #3b3f50;
+	--sidebar-accent-foreground:  #e7edff;
+	--sidebar-ring:               #7aa2f7;
+}
+:root[data-style-theme="tokyo-night"][data-theme="light"] {
+	color-scheme: light;
+	/* Light */
+	--background:                 #e1e2e7;
+	--foreground:                 #151d2e;
+	--card:                       #dedfe5;
+	--card-foreground:            #151d2e;
+	--popover:                    #e5e6eb;
+	--popover-foreground:         #151d2e;
+	--primary:                    #2e7de9;
+	--primary-foreground:         #e1e2e7;
+	--secondary:                  #d6daed;
+	--secondary-foreground:       #151d2e;
+	--muted:                      #d6daed;
+	--muted-foreground:           #585e70;
+	--accent:                     #d6daed;
+	--accent-foreground:          #151d2e;
+	--border:                     oklch(0 0 0 / 10%);
+	--input:                      oklch(0 0 0 / 6%);
+	--ring:                       #2e7de9;
+	--sidebar:                    #e5e6ea;
+	--sidebar-foreground:         #151d2e;
+	--sidebar-primary:            #2e7de9;
+	--sidebar-primary-foreground: #e1e2e7;
+	--sidebar-accent:             #d6daed;
+	--sidebar-accent-foreground:  #151d2e;
+	--sidebar-ring:               #2e7de9;
+}
+
+/* ── Rosé Pine (Main / Dawn) ── */
+:root[data-style-theme="rose-pine"] {
+	/* Dark */
+	--background:                 #191724;
+	--foreground:                 #d8d7ec;
+	--card:                       #252434;
+	--card-foreground:            #d8d7ec;
+	--popover:                    #2f2e3e;
+	--popover-foreground:         #d8d7ec;
+	--primary:                    #c4a7e7;
+	--primary-foreground:         #191724;
+	--secondary:                  #2e2c3d;
+	--secondary-foreground:       #d8d7ec;
+	--muted:                      #2e2c3d;
+	--muted-foreground:           #918fa3;
+	--accent:                     #2e2c3d;
+	--accent-foreground:          #d8d7ec;
+	--border:                     oklch(1 0 0 / 8%);
+	--input:                      oklch(1 0 0 / 5%);
+	--ring:                       #c4a7e7;
+	--sidebar:                    #13101a;
+	--sidebar-foreground:         #d8d7ec;
+	--sidebar-primary:            #c4a7e7;
+	--sidebar-primary-foreground: #191724;
+	--sidebar-accent:             #2e2c3d;
+	--sidebar-accent-foreground:  #d8d7ec;
+	--sidebar-ring:               #c4a7e7;
+}
+:root[data-style-theme="rose-pine"][data-theme="light"] {
+	color-scheme: light;
+	/* Light */
+	--background:                 #faf4ed;
+	--foreground:                 #2b283c;
+	--card:                       #f9f0e8;
+	--card-foreground:            #2b283c;
+	--popover:                    #fef8f1;
+	--popover-foreground:         #2b283c;
+	--primary:                    #907aa9;
+	--primary-foreground:         #faf4ed;
+	--secondary:                  #f1eceb;
+	--secondary-foreground:       #2b283c;
+	--muted:                      #f1eceb;
+	--muted-foreground:           #6a687b;
+	--accent:                     #f1eceb;
+	--accent-foreground:          #2b283c;
+	--border:                     oklch(0 0 0 / 10%);
+	--input:                      oklch(0 0 0 / 6%);
+	--ring:                       #907aa9;
+	--sidebar:                    #fdf8f1;
+	--sidebar-foreground:         #2b283c;
+	--sidebar-primary:            #907aa9;
+	--sidebar-primary-foreground: #faf4ed;
+	--sidebar-accent:             #f1eceb;
+	--sidebar-accent-foreground:  #2b283c;
+	--sidebar-ring:               #907aa9;
+}
+
+/* ── Nord ── */
+:root[data-style-theme="nord"] {
+	/* Dark */
+	--background:                 #2e3440;
+	--foreground:                 #d8dee9;
+	--card:                       #3b4252;
+	--card-foreground:            #d8dee9;
+	--popover:                    #434c5e;
+	--popover-foreground:         #d8dee9;
+	--primary:                    #88c0d0;
+	--primary-foreground:         #2e3440;
+	--secondary:                  #3b4252;
+	--secondary-foreground:       #d8dee9;
+	--muted:                      #3b4252;
+	--muted-foreground:           #8894a3;
+	--accent:                     #3b4252;
+	--accent-foreground:          #d8dee9;
+	--border:                     oklch(1 0 0 / 8%);
+	--input:                      oklch(1 0 0 / 5%);
+	--ring:                       #88c0d0;
+	--sidebar:                    #252b37;
+	--sidebar-foreground:         #d8dee9;
+	--sidebar-primary:            #88c0d0;
+	--sidebar-primary-foreground: #2e3440;
+	--sidebar-accent:             #3b4252;
+	--sidebar-accent-foreground:  #d8dee9;
+	--sidebar-ring:               #88c0d0;
+}
+:root[data-style-theme="nord"][data-theme="light"] {
+	color-scheme: light;
+	/* Light */
+	--background:                 #eceff4;
+	--foreground:                 #2e3440;
+	--card:                       #e5e9f0;
+	--card-foreground:            #2e3440;
+	--popover:                    #eef0f4;
+	--popover-foreground:         #2e3440;
+	--primary:                    #5e81ac;
+	--primary-foreground:         #eceff4;
+	--secondary:                  #e0e5ee;
+	--secondary-foreground:       #2e3440;
+	--muted:                      #e0e5ee;
+	--muted-foreground:           #5a6474;
+	--accent:                     #e0e5ee;
+	--accent-foreground:          #2e3440;
+	--border:                     oklch(0 0 0 / 10%);
+	--input:                      oklch(0 0 0 / 6%);
+	--ring:                       #5e81ac;
+	--sidebar:                    #f2f5f9;
+	--sidebar-foreground:         #2e3440;
+	--sidebar-primary:            #5e81ac;
+	--sidebar-primary-foreground: #eceff4;
+	--sidebar-accent:             #e0e5ee;
+	--sidebar-accent-foreground:  #2e3440;
+	--sidebar-ring:               #5e81ac;
+}
+
+/* ── Gruvbox ── */
+:root[data-style-theme="gruvbox"] {
+	/* Dark */
+	--background:                 #282828;
+	--foreground:                 #ebdbb2;
+	--card:                       #3c3836;
+	--card-foreground:            #ebdbb2;
+	--popover:                    #45403d;
+	--popover-foreground:         #ebdbb2;
+	--primary:                    #fabd2f;
+	--primary-foreground:         #282828;
+	--secondary:                  #3c3836;
+	--secondary-foreground:       #ebdbb2;
+	--muted:                      #3c3836;
+	--muted-foreground:           #928374;
+	--accent:                     #3c3836;
+	--accent-foreground:          #ebdbb2;
+	--border:                     oklch(1 0 0 / 8%);
+	--input:                      oklch(1 0 0 / 5%);
+	--ring:                       #d79921;
+	--sidebar:                    #1d2021;
+	--sidebar-foreground:         #ebdbb2;
+	--sidebar-primary:            #d79921;
+	--sidebar-primary-foreground: #282828;
+	--sidebar-accent:             #3c3836;
+	--sidebar-accent-foreground:  #ebdbb2;
+	--sidebar-ring:               #d79921;
+}
+:root[data-style-theme="gruvbox"][data-theme="light"] {
+	color-scheme: light;
+	/* Light */
+	--background:                 #fbf1c7;
+	--foreground:                 #3c3836;
+	--card:                       #f2e5bc;
+	--card-foreground:            #3c3836;
+	--popover:                    #f5eacc;
+	--popover-foreground:         #3c3836;
+	--primary:                    #b57614;
+	--primary-foreground:         #fbf1c7;
+	--secondary:                  #ebdbb2;
+	--secondary-foreground:       #3c3836;
+	--muted:                      #ebdbb2;
+	--muted-foreground:           #7c6f64;
+	--accent:                     #ebdbb2;
+	--accent-foreground:          #3c3836;
+	--border:                     oklch(0 0 0 / 10%);
+	--input:                      oklch(0 0 0 / 6%);
+	--ring:                       #b57614;
+	--sidebar:                    #f9f0cb;
+	--sidebar-foreground:         #3c3836;
+	--sidebar-primary:            #b57614;
+	--sidebar-primary-foreground: #fbf1c7;
+	--sidebar-accent:             #ebdbb2;
+	--sidebar-accent-foreground:  #3c3836;
+	--sidebar-ring:               #b57614;
+}
+
+/* ── Solarized ── */
+:root[data-style-theme="solarized"] {
+	/* Dark */
+	--background:                 #002b36;
+	--foreground:                 #839496;
+	--card:                       #073642;
+	--card-foreground:            #93a1a1;
+	--popover:                    #0d404d;
+	--popover-foreground:         #93a1a1;
+	--primary:                    #268bd2;
+	--primary-foreground:         #002b36;
+	--secondary:                  #073642;
+	--secondary-foreground:       #93a1a1;
+	--muted:                      #073642;
+	--muted-foreground:           #657b83;
+	--accent:                     #073642;
+	--accent-foreground:          #93a1a1;
+	--border:                     oklch(1 0 0 / 8%);
+	--input:                      oklch(1 0 0 / 5%);
+	--ring:                       #268bd2;
+	--sidebar:                    #001f28;
+	--sidebar-foreground:         #93a1a1;
+	--sidebar-primary:            #268bd2;
+	--sidebar-primary-foreground: #002b36;
+	--sidebar-accent:             #073642;
+	--sidebar-accent-foreground:  #93a1a1;
+	--sidebar-ring:               #268bd2;
+}
+:root[data-style-theme="solarized"][data-theme="light"] {
+	color-scheme: light;
+	/* Light */
+	--background:                 #fdf6e3;
+	--foreground:                 #586e75;
+	--card:                       #f5edd8;
+	--card-foreground:            #657b83;
+	--popover:                    #f9f2e7;
+	--popover-foreground:         #657b83;
+	--primary:                    #268bd2;
+	--primary-foreground:         #fdf6e3;
+	--secondary:                  #eee8d5;
+	--secondary-foreground:       #657b83;
+	--muted:                      #eee8d5;
+	--muted-foreground:           #93a1a1;
+	--accent:                     #eee8d5;
+	--accent-foreground:          #657b83;
+	--border:                     oklch(0 0 0 / 10%);
+	--input:                      oklch(0 0 0 / 6%);
+	--ring:                       #268bd2;
+	--sidebar:                    #fef8ec;
+	--sidebar-foreground:         #657b83;
+	--sidebar-primary:            #268bd2;
+	--sidebar-primary-foreground: #fdf6e3;
+	--sidebar-accent:             #eee8d5;
+	--sidebar-accent-foreground:  #657b83;
+	--sidebar-ring:               #268bd2;
+}
