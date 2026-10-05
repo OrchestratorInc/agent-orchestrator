@@ -5,7 +5,6 @@ import { useTranslation } from "react-i18next";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
-import { SearchablePicker } from "../SearchablePicker";
 import { useCloudGate } from "../../hooks/useCloudGate";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
@@ -21,11 +20,15 @@ import { SettingsSection } from "./SettingsSection";
 
 /**
  * Bring-your-own-Coder configuration for 11x: the connection the control plane
- * uses to drive the org's own Coder deployment (URL/IP, API token, owner,
- * default template, agent name). Only shown to @11x.ai users (gated by the
- * settings catalog). Mirrors CloudCredentialsSection's shape: the outer
- * component reads only the daemon cloud gate (a query the settings page already
- * runs), so a local-only app renders nothing and never mounts the cloud hooks.
+ * uses to drive the org's own Coder deployment. The form is deliberately minimal
+ * — the only two things an engineer pastes are the Coder **Base URL** and an
+ * **API token**. Everything else is derived or chosen elsewhere: the workspace
+ * owner is resolved from the token by the control plane on save, and the template
+ * is chosen per project via the creation picker. Only shown to @11x.ai users
+ * (gated by the settings catalog). Mirrors CloudCredentialsSection's shape: the
+ * outer component reads only the daemon cloud gate (a query the settings page
+ * already runs), so a local-only app renders nothing and never mounts the cloud
+ * hooks.
  */
 export function Coder11xSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { cloudEnabled } = useCloudGate();
@@ -44,11 +47,6 @@ function Coder11xSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 
 	const [baseUrl, setBaseUrl] = useState("");
 	const [token, setToken] = useState("");
-	const [owner, setOwner] = useState("");
-	const [templateId, setTemplateId] = useState("");
-	const [agentName, setAgentName] = useState("");
-	const [endpointServiceName, setEndpointServiceName] = useState("");
-	const [region, setRegion] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [saved, setSaved] = useState(false);
@@ -60,15 +58,10 @@ function Coder11xSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	useEffect(() => {
 		if (!loaded) return;
 		setBaseUrl(loaded.baseUrl ?? "");
-		setOwner(loaded.owner ?? "");
-		setTemplateId(loaded.defaultTemplateId ?? "");
-		setAgentName(loaded.agentName ?? "");
-		setEndpointServiceName(loaded.endpointServiceName ?? "");
-		setRegion(loaded.region ?? "");
 	}, [loaded]);
 
 	// A connection must be saved before the control plane can reach the org's Coder
-	// to list its templates, so only then do we enable the live template dropdown.
+	// to list its templates, so only then do we enable the live template list.
 	const tokenStored = Boolean(loaded?.tokenSet);
 	const { templates, isLoading: templatesLoading, isError: templatesError } = useCoderTemplates(orgId === "" ? undefined : orgId, tokenStored);
 	// The coder-templates query is keyed by this prefix (see useCoderTemplates); a
@@ -85,7 +78,10 @@ function Coder11xSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 		);
 	}
 
-	const canSave = !busy && orgId !== "" && baseUrl.trim() !== "" && owner.trim() !== "" && templateId.trim() !== "" && (tokenStored || token.trim() !== "");
+	// The whole form is just a base URL and a token. A token is required to connect
+	// the first time; once one is stored the URL can be re-saved without re-pasting
+	// it (the control plane keeps the existing secret only when a new one is sent).
+	const canSave = !busy && orgId !== "" && baseUrl.trim() !== "" && (tokenStored || token.trim() !== "");
 	const save = async () => {
 		if (!canSave) return;
 		setBusy(true);
@@ -94,11 +90,6 @@ function Coder11xSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 		try {
 			await client.putOrgCoderConfig(orgId, {
 				baseUrl: baseUrl.trim(),
-				owner: owner.trim(),
-				defaultTemplateId: templateId.trim(),
-				agentName: agentName.trim() === "" ? undefined : agentName.trim(),
-				endpointServiceName: endpointServiceName.trim() === "" ? undefined : endpointServiceName.trim(),
-				region: region.trim() === "" ? undefined : region.trim(),
 				token: token.trim() === "" ? undefined : token.trim(),
 			});
 			setToken("");
@@ -181,66 +172,11 @@ function Coder11xSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 					</div>
 				</div>
 
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor="coder11x-owner" className={onboardingFormLabelClass}>{t("settings.coder11x.ownerLabel")}</Label>
-					<Input
-						id="coder11x-owner"
-						type="text"
-						autoComplete="off"
-						spellCheck={false}
-						className="text-[13px]"
-						placeholder={t("settings.coder11x.ownerPlaceholder")}
-						disabled={busy}
-						value={owner}
-						onChange={(event) => setOwner(event.target.value)}
-					/>
-				</div>
-
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor="coder11x-template" className={onboardingFormLabelClass}>{t("settings.coder11x.templateLabel")}</Label>
-					<p className={onboardingFieldHintClass}>{t("settings.coder11x.templateHint")}</p>
-					{tokenStored && templates.length > 0 ? (
-						// Live template list from the org's own Coder (powered by the same
-						// per-org endpoint the project-creation picker uses).
-						<SearchablePicker
-							ariaLabel={t("settings.coder11x.templateLabel")}
-							placeholder={t("settings.coder11x.templateSelect")}
-							searchPlaceholder={t("settings.coder11x.templateSearch")}
-							value={templateId}
-							onChange={setTemplateId}
-							disabled={busy}
-							options={templates.map((tpl) => ({
-								value: tpl.id,
-								label: tpl.displayName || tpl.name,
-								description: tpl.description,
-							}))}
-						/>
-					) : (
-						// Fall back to a plain UUID input when no connection is saved yet, or
-						// the list is still loading, empty, or unreachable.
-						<>
-							<Input
-								id="coder11x-template"
-								type="text"
-								autoComplete="off"
-								spellCheck={false}
-								className="font-mono text-[13px]"
-								placeholder={t("settings.coder11x.templatePlaceholder")}
-								disabled={busy}
-								value={templateId}
-								onChange={(event) => setTemplateId(event.target.value)}
-							/>
-							{tokenStored && !templatesLoading ? (
-								<p className={onboardingFieldHintClass}>{t("settings.coder11x.templateManualHint")}</p>
-							) : null}
-						</>
-					)}
-				</div>
-
 				{tokenStored ? (
 					// Read-only catalog of every template on the connected Coder — so the
-					// whole Coder story (not just the default pick above) lives inside AO.
-					// Same tidy name + one-line-spec style as the session template picker.
+					// whole Coder story lives inside AO. Same tidy name + one-line-spec
+					// style as the session template picker; the template for a session is
+					// chosen per project at creation time, not here.
 					<div className="flex flex-col gap-2 border-t border-border pt-4">
 						<Label className={onboardingFormLabelClass}>{t("settings.coder11x.templatesListLabel")}</Label>
 						<p className={onboardingFieldHintClass}>{t("settings.coder11x.templatesListHint")}</p>
@@ -265,53 +201,6 @@ function Coder11xSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						)}
 					</div>
 				) : null}
-
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor="coder11x-agent" className={onboardingFormLabelClass}>{t("settings.coder11x.agentLabel")}</Label>
-					<p className={onboardingFieldHintClass}>{t("settings.coder11x.agentHint")}</p>
-					<Input
-						id="coder11x-agent"
-						type="text"
-						autoComplete="off"
-						spellCheck={false}
-						className="text-[13px]"
-						placeholder={t("settings.coder11x.agentPlaceholder")}
-						disabled={busy}
-						value={agentName}
-						onChange={(event) => setAgentName(event.target.value)}
-					/>
-				</div>
-
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor="coder11x-endpoint-service" className={onboardingFormLabelClass}>{t("settings.coder11x.endpointServiceLabel")}</Label>
-					<Input
-						id="coder11x-endpoint-service"
-						type="text"
-						autoComplete="off"
-						spellCheck={false}
-						className="font-mono text-[13px]"
-						placeholder={t("settings.coder11x.endpointServicePlaceholder")}
-						disabled={busy}
-						value={endpointServiceName}
-						onChange={(event) => setEndpointServiceName(event.target.value)}
-					/>
-				</div>
-
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor="coder11x-region" className={onboardingFormLabelClass}>{t("settings.coder11x.regionLabel")}</Label>
-					<p className={onboardingFieldHintClass}>{t("settings.coder11x.regionHint")}</p>
-					<Input
-						id="coder11x-region"
-						type="text"
-						autoComplete="off"
-						spellCheck={false}
-						className="font-mono text-[13px]"
-						placeholder={t("settings.coder11x.regionPlaceholder")}
-						disabled={busy}
-						value={region}
-						onChange={(event) => setRegion(event.target.value)}
-					/>
-				</div>
 
 				{error ? <p className={onboardingFieldErrorClass} role="alert">{error}</p> : null}
 

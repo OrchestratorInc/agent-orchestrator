@@ -581,6 +581,16 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	// a later config change cannot disturb a session already in flight.
 	plan, err := s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts, coderOverride)
 	if err != nil {
+		// A bring-your-own-Coder org with no org-default template must pick one per
+		// project; that is user-fixable, so surface it as a clear 422 rather than a
+		// deployment-misconfiguration 500.
+		if errors.Is(err, sandbox.ErrCoderTemplateRequired) {
+			writeError(
+				w, r, http.StatusUnprocessableEntity, "coder_template_required",
+				"Choose a Coder template for this project before starting a session.",
+			)
+			return
+		}
 		s.logger.Error("resolve sandbox provisioning plan", "error", err, "request_id", requestID(r))
 		writeError(
 			w, r, http.StatusInternalServerError, "internal_error",
