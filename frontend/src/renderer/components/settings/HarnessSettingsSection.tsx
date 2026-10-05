@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, Copy, Download, KeyRound, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
+import { BookOpen, Check, Cloud, Copy, Download, Monitor, KeyRound, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -30,7 +30,7 @@ import { createTerminalMux, muxUrlFromApiBase } from "../../lib/terminal-mux";
 import { cn } from "../../lib/utils";
 import { useShellMaybe } from "../../lib/shell-context";
 import { useResolvedTheme } from "../../stores/ui-store";
-import { AgentAvatar } from "../AgentAvatar";
+import { HarnessLogo } from "./HarnessLogo";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
@@ -150,13 +150,13 @@ export function HarnessSettingsSection({
 	useEffect(() => setSelectedHostId(hostId ?? LOCAL_HOST), [hostId]);
 	const remoteOffline = selectedHostId !== LOCAL_HOST && !connected.includes(selectedHostId);
 	return <SettingsSection title={t("settings.harness")} titleHidden={titleHidden} sectionId="harness">
-		<div className="sticky top-0 z-10 flex items-center gap-2 bg-card pb-2">
-			<label className="flex h-9! min-w-0 flex-1 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3">
+		<div className="harness-toolbar flex flex-col items-stretch gap-3 pb-3">
+			{cloudEnabled ? <Tabs value={cloudView ? "cloud" : "local"} onValueChange={(value) => setView(value as HarnessView)}><TabsList className="harness-tabs" aria-label={t("settings.harness.viewLabel")}><TabsTrigger value="local"><Monitor aria-hidden="true" className="size-4" />{t("settings.harness.viewLocal")}<span aria-hidden="true" className="rounded bg-muted px-1.5 text-xs text-settings-muted">{AGENT_OPTIONS.length}</span></TabsTrigger><TabsTrigger value="cloud"><Cloud aria-hidden="true" className="size-4" />{t("settings.harness.viewCloud")}</TabsTrigger></TabsList></Tabs> : null}
+			<label className="flex h-9! min-w-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3">
 				<Search aria-hidden="true" className="size-4 shrink-0 text-settings-muted" />
 				<span className="sr-only">{t("settings.harness.search")}</span>
 				<input aria-label={t("settings.harness.search")} className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted" placeholder={t("settings.harness.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
 			</label>
-			{cloudEnabled ? <Tabs value={cloudView ? "cloud" : "local"} onValueChange={(value) => setView(value as HarnessView)}><TabsList aria-label={t("settings.harness.viewLabel")}><TabsTrigger value="local">{t("settings.harness.viewLocal")}</TabsTrigger><TabsTrigger value="cloud">{t("settings.harness.viewCloud")}</TabsTrigger></TabsList></Tabs> : null}
 		</div>
 		{!cloudView && (connected.length > 0 || remoteOffline) ? <SettingsOptionMenu
 				aria-label={t("remote.host")}
@@ -203,19 +203,19 @@ function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: string; 
 					const connected = isCloudHarnessConnected(connections.data, agentId);
 					return <div
 						aria-labelledby={`harness-agent-${agentId}`}
-						className={cn("settings-row-bar min-h-14 flex-wrap gap-3 transition-[background-color,box-shadow] duration-200", highlightedAgentId === agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
+						className={cn("settings-row-bar harness-row min-h-14 flex-wrap gap-3 transition-[background-color,box-shadow] duration-200", highlightedAgentId === agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
 						data-agent={agentId}
 						data-focus-highlighted={highlightedAgentId === agentId ? "" : undefined}
 						key={agentId}
 						tabIndex={-1}
 					>
-						<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
+						<HarnessLogo provider={agentId} />
 						<div className="min-w-0 flex-1">
 							<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
-							<p className="truncate text-xs text-settings-muted">{connected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}</p>
+							<p className="harness-status text-xs text-settings-muted" data-connected={connected || undefined}>{connected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}</p>
 						</div>
 						{loginAgent === agentId ? null : <Button data-harness-primary-action="" size="sm" variant={connected ? "outline" : "primary"} onClick={() => setLoginAgent(agentId)}>{t(connected ? "settings.harness.refreshLogin" : "settings.harness.login")}</Button>}
-						{loginAgent === agentId ? <div className="basis-full pl-10"><CloudHarnessLoginPanel agent={agentId} onClose={() => setLoginAgent(null)} /></div> : null}
+						{loginAgent === agentId ? <div className="basis-full min-w-0"><CloudHarnessLoginPanel agent={agentId} onClose={() => setLoginAgent(null)} /></div> : null}
 					</div>;
 				})}
 				{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
@@ -741,7 +741,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 						<div
 							aria-labelledby={`harness-agent-${agentId}`}
 							className={cn(
-								"settings-row-bar min-h-14 flex-wrap gap-3 transition-[background-color,box-shadow] duration-200",
+								"settings-row-bar harness-row min-h-14 flex-wrap gap-3 transition-[background-color,box-shadow] duration-200",
 								highlightedAgentId === agentId && "bg-accent-weak ring-2 ring-inset ring-accent",
 							)}
 							data-agent={agentId}
@@ -749,12 +749,12 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 							key={agentId}
 							tabIndex={-1}
 						>
-							<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
+							<HarnessLogo provider={agentId} />
 							<div className="min-w-0 flex-1">
 								<div className="flex items-center gap-1.5">
 									<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
 								</div>
-								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? incompatibleVersionReason ?? authPlan?.reason ?? plan?.reason}>
+								<p className={cn("harness-status text-xs text-settings-muted", rowHasError && "text-error")} data-connected={isInstalled && !rowHasError && authStatus === "authorized" && !isSetupAction || undefined} title={authState?.error ?? actionError ?? job?.error ?? incompatibleVersionReason ?? authPlan?.reason ?? plan?.reason}>
 									{isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : incompatibleVersionReason ?? (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired"))))}
 								</p>
 							</div>
@@ -786,7 +786,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 					</div>
 										) : null}
 										{rowAuthWorkflow ? (
-											<div className="basis-full pl-10">
+											<div className="basis-full min-w-0">
 												<HarnessAuthTerminalPanel
 													workflow={rowAuthWorkflow}
 													hostId={hostId}
@@ -944,7 +944,7 @@ function HarnessAuthTerminalPanel({ workflow, hostId, onClose, onRetry, onTermin
 					<button type="button" aria-label={t("settings.close")} className="grid size-7 place-items-center rounded text-settings-muted hover:bg-interactive-hover" disabled={workflow.phase === "closing" || workflow.phase === "verifying"} onClick={onClose}><X className="size-4" aria-hidden="true" /></button>
 				</div>
 			</div>
-			<div className="h-[300px] min-h-0"><TerminalPane createMux={hostId ? createMux : undefined} daemonReady={hostId ? true : shell ? shell.daemonStatus.state === "ready" : true} focusRequested={workflow.phase === "running" && terminalState === "attached"} fontSize={12} inputRequest={inputRequest} onInputRequestResult={handleInputRequestResult} onTerminalStateChange={handleTerminalState} terminalTarget={{ kind: "shell", handleId: workflow.terminal.handleId, generation: workflow.terminal.createdAt, title: workflow.terminal.title }} theme={theme} /></div>
+			<div className="h-[360px] min-h-0"><TerminalPane createMux={hostId ? createMux : undefined} daemonReady={hostId ? true : shell ? shell.daemonStatus.state === "ready" : true} focusRequested={workflow.phase === "running" && terminalState === "attached"} fontSize={12} inputRequest={inputRequest} onInputRequestResult={handleInputRequestResult} onTerminalStateChange={handleTerminalState} terminalTarget={{ kind: "shell", handleId: workflow.terminal.handleId, generation: workflow.terminal.createdAt, title: workflow.terminal.title }} theme={theme} /></div>
 			{retryable ? <div className="flex items-center justify-end border-t border-(--color-border-settings-input) bg-surface/90 px-3 py-2"><Button type="button" size="sm" variant="outline" onClick={workflow.phase === "cleanup_failed" ? onClose : onRetry}>{workflow.phase === "cleanup_failed" ? t("settings.harness.retry") : workflow.action === "setup" ? t("settings.harness.setup") : t("settings.harness.login")}</Button></div> : null}
 		</div>
 	);
