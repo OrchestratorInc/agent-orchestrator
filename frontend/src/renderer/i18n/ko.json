@@ -770,7 +770,6 @@
 	"newTask.start": "작업 시작",
 	"newTask.starting": "시작 중...",
 	"newTask.title": "새 작업 만들기",
-	"newTask.titleFor": "다음 프로젝트의 새 작업 만들기",
 	"newTask.titleLabel": "제목",
 	"newTask.titlePlaceholder": "WebGL 폴백 렌더러 수정",
 	"newTask.titleRequired": "제목과 브리프는 필수입니다.",

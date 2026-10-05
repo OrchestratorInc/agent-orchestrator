@@ -114,7 +114,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 					{/* One title line names the dialog, styled like every other settings-style
 					    modal; everything else stays the composer's surface, no bordered header. */}
 					<Dialog.Title className="settings-dialog-title flex flex-wrap items-center gap-x-1.5 px-4 pt-3">
-						<span>{t("newTask.titleFor")}</span>
+						<span>{t("newTask.title")}</span>
 						<SettingsOptionMenu
 							aria-label={t("newTask.project")}
 							value={selectedProjectId}

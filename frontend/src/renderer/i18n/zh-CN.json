@@ -770,7 +770,6 @@
 	"newTask.start": "开始任务",
 	"newTask.starting": "正在开始...",
 	"newTask.title": "创建新任务",
-	"newTask.titleFor": "在以下项目中创建新任务",
 	"newTask.titleLabel": "标题",
 	"newTask.titlePlaceholder": "修复 WebGL 回退渲染器",
 	"newTask.titleRequired": "标题和简述为必填项。",

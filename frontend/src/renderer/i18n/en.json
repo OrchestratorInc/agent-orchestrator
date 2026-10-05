@@ -755,7 +755,6 @@
 	"newTask.start": "Start task",
 	"newTask.starting": "Starting...",
 	"newTask.title": "Create a new task",
-	"newTask.titleFor": "Create a new task in",
 	"newTask.titleLabel": "Title",
 	"newTask.titlePlaceholder": "Fix WebGL fallback renderer",
 	"newTask.titleRequired": "Title and brief are required.",

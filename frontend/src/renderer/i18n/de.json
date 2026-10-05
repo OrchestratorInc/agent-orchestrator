@@ -770,7 +770,6 @@
 	"newTask.start": "Aufgabe starten",
 	"newTask.starting": "Wird gestartet...",
 	"newTask.title": "Neue Aufgabe erstellen",
-	"newTask.titleFor": "Neue Aufgabe in",
 	"newTask.titleLabel": "Titel",
 	"newTask.titlePlaceholder": "WebGL-Fallback-Renderer reparieren",
 	"newTask.titleRequired": "Titel und Briefing sind erforderlich.",
