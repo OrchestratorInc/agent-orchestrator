@@ -633,7 +633,22 @@ func (s *Service) orchestratorHandoffPrompt(ctx context.Context, projectID domai
 		fmt.Fprintf(&b, "- `%s`, %s, branch `%s`, workspace `%s`\n", worker.ID, worker.DisplayName, worker.Metadata.Branch, worker.Metadata.WorkspacePath)
 	}
 	b.WriteString("\nContinue by inspecting current AO state. Do not recreate workers or publish changes unless the user or existing project workflow authorizes it.")
-	return b.String()
+	return boundOrchestratorHandoffPrompt(b.String())
+}
+
+const maxOrchestratorHandoffPromptChars = 12000
+
+func boundOrchestratorHandoffPrompt(prompt string) string {
+	runes := []rune(prompt)
+	if len(runes) <= maxOrchestratorHandoffPromptChars {
+		return prompt
+	}
+	notice := "\n\n[Handoff context truncated to keep the replacement prompt bounded.]"
+	limit := maxOrchestratorHandoffPromptChars - len([]rune(notice))
+	if limit < 0 {
+		return string(runes[:maxOrchestratorHandoffPromptChars])
+	}
+	return string(runes[:limit]) + notice
 }
 
 func (s *Service) activeOrchestrators(ctx context.Context, projectID domain.ProjectID) ([]domain.Session, error) {

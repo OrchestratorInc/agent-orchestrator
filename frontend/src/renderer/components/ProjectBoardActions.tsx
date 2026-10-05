@@ -18,15 +18,15 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 	style?: CSSProperties;
 }) {
 	const { t } = useTranslation();
-	const { orchestrator, isSpawning, isProjectRestarting, isProvisioning, spawnError, canCreateAsTui,
+	const { orchestrator, isSpawning, isRefreshing, isProjectRestarting, isProvisioning, spawnError, canCreateAsTui,
 		openNewTask, openOrchestrator } = actions;
 	const { refreshOrchestrator } = actions;
 	const [menuOpen, setMenuOpen] = useState(false);
 	const header = placement === "header";
-	const busy = isSpawning || isProjectRestarting || isProvisioning;
+	const busy = isSpawning || isRefreshing || isProjectRestarting || isProvisioning;
 	const activity = orchestrator ? getAgentActivityView(orchestrator.activity, t).label : undefined;
 	const actionLabel = orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestrator");
-	const busyLabel = isProjectRestarting ? t("shell.restartingDots") : isProvisioning
+	const busyLabel = isRefreshing || isProjectRestarting ? t("shell.restartingDots") : isProvisioning
 		? t("shell.provisioningDots", { defaultValue: "Setting up…" }) : isSpawning ? t("shell.spawningDots") : undefined;
 	const orchestratorButton = (
 		<Tooltip>

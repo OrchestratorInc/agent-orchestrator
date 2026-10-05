@@ -5,6 +5,7 @@ import { CLOUD_AGENT_PROVIDERS } from "./cloud-agents";
 import { settingsQueryKey, type Settings } from "../hooks/useSettings";
 import { readSelectedSandboxProvider, resolveSandboxProviderPreference } from "../stores/sandbox-provider-store";
 import { captureRendererEvent } from "./telemetry";
+import type { WorkspaceSession } from "../types/workspace";
 
 // A cloud project has no locally-configured orchestrator agent (that config
 // lives in the local daemon's project settings), so the launchers must not
@@ -109,4 +110,18 @@ export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId
 		void captureRendererEvent("ao.renderer.cloud_orchestrator_spawn_failed", { project_id: projectId });
 		throw error;
 	}
+}
+
+/** Replaces a cloud orchestrator through the control plane, never the local daemon. */
+export async function replaceCloudOrchestrator(
+	queryClient: QueryClient,
+	projectId: string,
+	current: WorkspaceSession,
+): Promise<string> {
+	if (!current.cloud) throw new Error("The cloud orchestrator is missing its organization.");
+	const settings = queryClient.getQueryData<Settings>(settingsQueryKey);
+	const baseUrl = settings?.cloudControlPlaneUrl ?? "";
+	if (baseUrl === "") throw new Error("The cloud control plane is not configured.");
+	await createRendererCloudCpClient(baseUrl).deleteSession(current.cloud.orgId, current.id);
+	return spawnCloudOrchestrator(queryClient, projectId);
 }

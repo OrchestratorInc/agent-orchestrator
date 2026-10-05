@@ -2921,6 +2921,16 @@ func TestSpawnOrchestratorCleanFreshOmitsReplacementPrompt(t *testing.T) {
 	}
 }
 
+func TestOrchestratorHandoffPromptIsBounded(t *testing.T) {
+	prompt := boundOrchestratorHandoffPrompt(strings.Repeat("x", maxOrchestratorHandoffPromptChars+100))
+	if len([]rune(prompt)) > maxOrchestratorHandoffPromptChars {
+		t.Fatalf("handoff prompt length = %d, want <= %d", len([]rune(prompt)), maxOrchestratorHandoffPromptChars)
+	}
+	if !strings.Contains(prompt, "Handoff context truncated") {
+		t.Fatalf("bounded handoff prompt missing truncation notice")
+	}
+}
+
 func TestSpawnOrchestratorCleanHonorsExplicitReplacementMode(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}

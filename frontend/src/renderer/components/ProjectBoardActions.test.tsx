@@ -8,6 +8,7 @@ const actions: ProjectOrchestratorAction = {
 	projectId: undefined,
 	orchestrator: undefined,
 	isSpawning: false,
+	isRefreshing: false,
 	isProjectRestarting: false,
 	isProvisioning: false,
 	spawnError: "",

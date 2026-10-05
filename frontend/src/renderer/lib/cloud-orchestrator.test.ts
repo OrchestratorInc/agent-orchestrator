@@ -2,13 +2,14 @@ import { QueryClient } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { settingsQueryKey, type Settings } from "../hooks/useSettings";
 import type { CloudCpProviderConnection } from "./cloud-cp";
-import { selectCloudOrchestratorHarness, spawnCloudOrchestrator } from "./cloud-orchestrator";
+import { replaceCloudOrchestrator, selectCloudOrchestratorHarness, spawnCloudOrchestrator } from "./cloud-orchestrator";
 
 const cloudMocks = vi.hoisted(() => ({
 	me: vi.fn(),
 	listUserProviderConnections: vi.fn(),
 	listProjects: vi.fn(),
 	createSession: vi.fn(),
+	deleteSession: vi.fn(),
 }));
 
 vi.mock("../hooks/useCloudCp", () => ({
@@ -17,6 +18,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 		listUserProviderConnections: cloudMocks.listUserProviderConnections,
 		listProjects: cloudMocks.listProjects,
 		createSession: cloudMocks.createSession,
+		deleteSession: cloudMocks.deleteSession,
 	}),
 }));
 
@@ -55,6 +57,7 @@ describe("spawnCloudOrchestrator", () => {
 		cloudMocks.listUserProviderConnections.mockReset();
 		cloudMocks.listProjects.mockReset();
 		cloudMocks.createSession.mockReset();
+		cloudMocks.deleteSession.mockReset();
 	});
 
 	function primeClient(project?: { id: string; config?: Record<string, unknown> }) {
@@ -68,6 +71,15 @@ describe("spawnCloudOrchestrator", () => {
 		cloudMocks.createSession.mockResolvedValue({ session: { id: "session-1" } });
 		return queryClient;
 	}
+
+	it("replaces through the cloud control plane and removes the old session", async () => {
+		const queryClient = primeClient({ id: "project-1" });
+		cloudMocks.listUserProviderConnections.mockResolvedValue({ providerConnections: [connection("codex")] });
+		const current = { id: "old-session", cloud: { orgId: "org-1" } } as never;
+
+		await expect(replaceCloudOrchestrator(queryClient, "project-1", current)).resolves.toBe("session-1");
+		expect(cloudMocks.deleteSession).toHaveBeenCalledWith("org-1", "old-session");
+	});
 
 	it("starts without a user kickoff prompt so the role comes only from the system prompt", async () => {
 		const queryClient = primeClient({ id: "project-1" });

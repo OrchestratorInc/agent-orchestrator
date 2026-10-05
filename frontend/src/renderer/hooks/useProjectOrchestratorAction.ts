@@ -4,7 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, type WorkspaceSession } from "../types/workspace";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost, type WorkspaceScope } from "./useWorkspaceQuery";
-import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
+import { replaceCloudOrchestrator, spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import {
 	isChatPreflightError,
 	resumeOrchestrator,
@@ -108,6 +108,27 @@ export function useProjectOrchestratorAction({
 			});
 		},
 	});
+	const refreshMutation = useMutation({
+		mutationKey: ["project-orchestrator-refresh", hostId, projectId],
+		mutationFn: async (replacementMode: "handoff" | "fresh") => {
+			if (!projectId || !orchestrator) throw new Error("No active orchestrator is available to refresh.");
+			if (project?.kind === CLOUD_PROJECT_KIND) return replaceCloudOrchestrator(queryClient, projectId, orchestrator);
+			return spawnOrchestrator(projectId, "restart", true, undefined, undefined, hostId, replacementMode);
+		},
+		onSuccess: async (openedSessionId) => {
+			await queryClient.invalidateQueries({
+				queryKey: project?.kind === CLOUD_PROJECT_KIND ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId),
+			});
+			if (activeRoute.current === routeKey && projectId) void navigate(sessionNavigateTarget(projectId, openedSessionId, hostId));
+		},
+		onError: (cause) => void captureRendererException(cause, {
+			source: "orchestrator-refresh", operation: "refresh_orchestrator",
+			surface: sessionId ? "session_detail" : "project_board", project_id: projectId,
+		}),
+	});
+	const refreshError = refreshMutation.error
+		? formatOrchestratorStartupError(refreshMutation.error instanceof Error ? refreshMutation.error.message : t("shell.couldNotSpawn"))
+		: "";
 	const openOrchestrator = (mode?: "tui") => {
 		if (!projectId || !hostConnected || isProjectRestarting || isProvisioning) return;
 		// Read the cache synchronously as well as disabling both rendered copies.
@@ -131,20 +152,14 @@ export function useProjectOrchestratorAction({
 		}
 	};
 	const refreshOrchestrator = (replacementMode: "handoff" | "fresh" = "handoff") => {
-		if (!projectId || !hostConnected || isProjectRestarting || isProvisioning || !orchestrator) return;
-		if (hostId) return;
-		void spawnOrchestrator(projectId, "restart", true, undefined, undefined, undefined, replacementMode)
-			.then(async (sessionId) => {
-				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
-				if (activeRoute.current === routeKey) void navigate(sessionNavigateTarget(projectId, sessionId, hostId));
-			})
-			.catch((cause) => void captureRendererException(cause, { source: "orchestrator-refresh", operation: "refresh_orchestrator", project_id: projectId }));
+		if (!projectId || !hostConnected || isProjectRestarting || isProvisioning || refreshMutation.isPending || !orchestrator) return;
+		refreshMutation.mutate(replacementMode);
 	};
 	const openNewTask = () => {
 		if (projectId && hostConnected && !isProjectRestarting && !isProvisioning) useUiStore.getState().requestNewTask(projectId, hostId);
 	};
-	return { projectId, orchestrator, isSpawning, isProjectRestarting, isProvisioning, spawnError,
-		canCreateAsTui: isChatPreflightError(error), openOrchestrator, refreshOrchestrator, openNewTask };
+	return { projectId, orchestrator, isSpawning, isRefreshing: refreshMutation.isPending, isProjectRestarting, isProvisioning,
+		spawnError: refreshError || spawnError, canCreateAsTui: isChatPreflightError(error), openOrchestrator, refreshOrchestrator, openNewTask };
 }
 
 export type ProjectOrchestratorAction = ReturnType<typeof useProjectOrchestratorAction>;
