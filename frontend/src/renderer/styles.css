@@ -521,12 +521,6 @@
 	border-top-width: 1px;
 }
 
-/* Session headers now sit below the macOS panel inset and its top border. Keep
- * the fixed navigation cluster on the same centerline as that header. */
-.app-shell-root:has(.center-panel-shell--mac.center-panel-shell--session:not(.center-panel-shell--fullscreen)) [data-slot="titlebar-nav"] {
-	top: var(--size-center-panel-inset-mac);
-}
-
 /* Keep empty header space draggable while tabs and actions remain interactive.
  * Linux retains its separate strip; macOS uses the actual shared header. */
 html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] {

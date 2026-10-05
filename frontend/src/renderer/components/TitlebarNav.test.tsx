@@ -38,9 +38,9 @@ describe("TitlebarNav", () => {
 		useUiStore.setState({ isSidebarOpen: open });
 		const { container, rerender } = render(<TitlebarNav />);
 		const nav = container.querySelector('[data-slot="titlebar-nav"]');
-		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left");
+		expect(nav).toHaveClass("top-px", "h-traffic-light-clearance", "left-titlebar-cluster-left");
 		rerender(<TooltipProvider><TitlebarNav isFullScreen /></TooltipProvider>);
-		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left-fullscreen");
+		expect(nav).toHaveClass("top-px", "h-traffic-light-clearance", "left-titlebar-cluster-left-fullscreen");
 		expect(screen.getByRole("button", { name: "Go back" })).toBeDisabled();
 	});
 });

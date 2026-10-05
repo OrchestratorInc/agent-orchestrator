@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
+import { AOMascot } from "./AOMascot";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const isMac = isMacPlatform();
@@ -156,7 +157,7 @@ export function TitlebarNav({
     : isFullScreen
       ? "left-titlebar-cluster-left-fullscreen"
       : "left-titlebar-cluster-left";
-  const topClass = isMac ? "top-0" : "top-0.75";
+  const topClass = isMac ? "top-px" : "top-0.75";
   const heightClass = "h-traffic-light-clearance";
 
   // With the sidebar open the brand and the history arrows share one slot: the
@@ -196,11 +197,12 @@ export function TitlebarNav({
           // `invisible` (not unmounted) keeps its width, which both holds the
           // slot steady and feeds the sidebar's minimum-width measurement.
           <span
-            className={`col-start-1 row-start-1 ml-1.5 select-none whitespace-nowrap px-0.5 text-base font-semibold leading-tight tracking-tight-lg text-foreground ${
+            className={`col-start-1 row-start-1 ml-1.5 inline-flex select-none items-center gap-1.5 whitespace-nowrap px-0.5 text-base font-semibold leading-tight tracking-tight-lg text-foreground ${
               arrowsVisible ? "invisible" : ""
             }`}
             data-sidebar-brand=""
           >
+            <AOMascot className="h-5.5 w-5.5 shrink-0" />
             Orchestrator.inc
           </span>
         ) : null}
