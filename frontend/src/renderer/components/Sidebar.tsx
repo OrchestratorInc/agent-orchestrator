@@ -886,6 +886,10 @@ export function Sidebar({
 			data-topbar-offset={underTopbar ? topbarOffset : undefined}
 			className={cn(
 				"sidebar-focusless",
+				// The container keeps a 1px right border, so its content box is 1px
+				// narrower on the right. Pad the left by the same 1px so row gutters
+				// match on both sides.
+				"pl-px",
 				hideEdgeBorder ? "border-transparent" : "border-r-0 group-data-[side=left]:border-r-0",
 				// Prefer top/bottom over h-svh/inset-y so titlebar offset (`top-(--sidebar-chrome-offset)`)
 				// clears chrome without fighting a second height constraint.
