@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 type sessionTopOptions struct {
@@ -132,8 +134,10 @@ func writeSessionTop(cmd *cobra.Command, entries []sessionTopEntry, total uint64
 			rss = formatBytes(*e.RSSBytes)
 			procs = fmt.Sprint(*e.ProcessCount)
 		}
+		// Activity carries the raw enum; "working" is only the derived
+		// status, so comparing against it gave active sessions an idle time.
 		idle := "-"
-		if e.Activity.State != "working" {
+		if e.Activity.State != string(domain.ActivityActive) {
 			idle = sessionAge(now, e.Activity.LastActivityAt)
 		}
 		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n", e.ID, emptyDash(e.Activity.State), rss, procs, idle); err != nil {

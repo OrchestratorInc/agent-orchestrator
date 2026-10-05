@@ -137,3 +137,47 @@ func TestFormatBytes(t *testing.T) {
 		}
 	}
 }
+
+// TestSessionTop_ActiveSessionShowsNoIdleTime: the activity field carries the
+// raw enum ("active"), not the derived status ("working"), so an active row
+// must print a dash where an idle row prints how long it has been quiet.
+func TestSessionTop_ActiveSessionShowsNoIdleTime(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/sessions":
+			_, _ = io.WriteString(w, `{"sessions":[`+
+				`{"id":"demo-1","projectId":"demo","kind":"worker","harness":"codex","status":"working","isTerminated":false,`+
+				`"activity":{"state":"active","lastActivityAt":"2026-06-02T12:00:00Z"},"createdAt":"2026-06-02T11:00:00Z","updatedAt":"2026-06-02T12:00:00Z"},`+
+				sessionJSON("demo-2", "demo", "worker", "idle", false)+`]}`)
+		case "/api/v1/usage/sessions/memory":
+			_, _ = io.WriteString(w, `{"sessions":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "top")
+	if err != nil {
+		t.Fatalf("session top failed: %v\nstderr=%s", err, errOut)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		switch fields[0] {
+		case "demo-1":
+			if fields[len(fields)-1] != "-" || strings.Contains(line, "ago") {
+				t.Fatalf("active session should show no idle time:\n%s", out)
+			}
+		case "demo-2":
+			if !strings.HasSuffix(strings.TrimSpace(line), "ago") {
+				t.Fatalf("idle session should show how long it has been idle:\n%s", out)
+			}
+		}
+	}
+}
