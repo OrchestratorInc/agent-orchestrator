@@ -821,3 +821,52 @@ func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 		})
 	}
 }
+
+func TestInsertReviewRunAllowsRerunAfterApproval(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := s.UpsertReview(ctx, domain.Review{
+		ID: "rev-1", SessionID: rec.ID, ProjectID: rec.ProjectID,
+		Harness: domain.ReviewerClaudeCode, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("upsert review: %v", err)
+	}
+	run := domain.ReviewRun{
+		ID: "run-1", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerClaudeCode,
+		PRURL: "https://example/pr/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning, Verdict: domain.VerdictNone, CreatedAt: now,
+	}
+	if err := s.InsertReviewRun(ctx, run); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictApproved, "approved", "rev-1", true); err != nil {
+		t.Fatalf("mark approved: %v", err)
+	} else if !ok {
+		t.Fatal("mark approved: got ok=false")
+	}
+
+	rerun := run
+	rerun.ID = "run-2"
+	rerun.CreatedAt = now.Add(time.Second)
+	if err := s.InsertReviewRun(ctx, rerun); err != nil {
+		t.Fatalf("rerun after approval insert: %v", err)
+	}
+
+	duplicate := rerun
+	duplicate.ID = "run-3"
+	if err := s.InsertReviewRun(ctx, duplicate); !errors.Is(err, domain.ErrDuplicateReviewRun) {
+		t.Fatalf("concurrent rerun = %v, want duplicate", err)
+	}
+	if ok, err := s.UpdateReviewRunResult(ctx, rerun.ID, domain.ReviewRunComplete, domain.VerdictApproved, "approved again", "rev-2", true); err != nil || !ok {
+		t.Fatalf("finish rerun = %v, %v", ok, err)
+	}
+	runs, err := s.ListReviewRunsBySession(ctx, rec.ID)
+	if err != nil || len(runs) != 2 || runs[0].Verdict != domain.VerdictApproved || runs[1].Verdict != domain.VerdictApproved {
+		t.Fatalf("approval history = %+v, %v", runs, err)
+	}
+}

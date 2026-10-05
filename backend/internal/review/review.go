@@ -213,6 +213,27 @@ func (e *Engine) TriggerWithSource(ctx stdctx.Context, workerID domain.SessionID
 
 // TriggerWithSourceAndMode lets a manual review choose its actual reviewer surface.
 func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.SessionID, override domain.ReviewerHarness, overrideConfig domain.AgentConfig, source domain.ReviewTriggerSource, mode domain.ReviewerInterfaceMode) (TriggerResult, error) {
+	return e.TriggerWithOptions(ctx, workerID, TriggerOptions{Harness: override, Config: overrideConfig, Source: source, InterfaceMode: mode})
+}
+
+// TriggerOptions selects the reviewer, its surface, and explicit same-commit reruns.
+type TriggerOptions struct {
+	Harness       domain.ReviewerHarness
+	Config        domain.AgentConfig
+	Source        domain.ReviewTriggerSource
+	InterfaceMode domain.ReviewerInterfaceMode
+	Rerun         bool
+}
+
+// TriggerWithOptions starts a pass, preserving default same-commit idempotency.
+func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionID, opts TriggerOptions) (TriggerResult, error) {
+	override, overrideConfig, source, mode := opts.Harness, opts.Config, opts.Source, opts.InterfaceMode
+	if source == "" {
+		source = domain.ReviewTriggerManual
+	}
+	if opts.Rerun && source != domain.ReviewTriggerManual {
+		return TriggerResult{}, fmt.Errorf("%w: automatic review cannot request a rerun", ErrInvalid)
+	}
 	if workerID == "" {
 		return TriggerResult{}, fmt.Errorf("%w: worker session id is required", ErrInvalid)
 	}
@@ -333,7 +354,7 @@ func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.Se
 	}
 	hadRunningReviewer := reviewRunsContainRunningForHarness(runs, harness)
 	reviews := Plan(prs, runs)
-	if source == domain.ReviewTriggerAuto {
+	if source == domain.ReviewTriggerAuto || opts.Rerun {
 		reviews = Plan(prs, reviewRunsForHarness(runs, harness))
 		// Automatic sweeps may discover another eligible PR while this harness is
 		// already reviewing one. Reconciliation above has proved the reviewer
@@ -371,7 +392,7 @@ func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.Se
 		// another agent is precisely a request for a second opinion on this commit,
 		// so refusing it makes the reviewer choice inert exactly when it is most
 		// useful. Ineligible PRs stay excluded: nothing can review those.
-		eligible := reviewState.Status == ReviewStateNeedsReview || (source == domain.ReviewTriggerManual && reviewState.Status == ReviewStateChangesRequested)
+		eligible := reviewState.Status == ReviewStateNeedsReview || (source == domain.ReviewTriggerManual && reviewState.Status == ReviewStateChangesRequested) || (opts.Rerun && reviewState.Status != ReviewStateIneligible)
 		if source == domain.ReviewTriggerAuto && autoReviewHeadBlocked(runs, reviewState.PRURL, reviewState.TargetSHA, harness) {
 			eligible = false
 		}

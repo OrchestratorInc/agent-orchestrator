@@ -5184,6 +5184,8 @@ export interface components {
             harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
             /** @enum {string} */
             interfaceMode?: "chat" | "tui";
+            /** @description Start a fresh manual pass for already-reviewed current heads; reuse an active pass from the same reviewer. */
+            rerun?: boolean;
         };
         TriggerReviewResponse: {
             /** @description True when a new review pass was started; false when an existing run for the same commit was reused. */

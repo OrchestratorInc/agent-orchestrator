@@ -14922,6 +14922,10 @@ components:
           - chat
           - tui
           type: string
+        rerun:
+          description: Start a fresh manual pass for already-reviewed current heads;
+            reuse an active pass from the same reviewer.
+          type: boolean
       type: object
     TriggerReviewResponse:
       properties:

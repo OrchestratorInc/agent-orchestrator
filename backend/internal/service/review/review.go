@@ -61,6 +61,7 @@ type Manager interface {
 	RecoverChatReviewers(ctx context.Context) error
 	Trigger(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig) (reviewcore.TriggerResult, error)
 	TriggerWithMode(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig, mode domain.ReviewerInterfaceMode) (reviewcore.TriggerResult, error)
+	TriggerWithOptions(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error)
 	RequestRereview(ctx context.Context, workerID domain.SessionID, prURL, reviewer string) error
 	ResolveReviewComment(ctx context.Context, workerID domain.SessionID, prURL, commentURL string) error
 	TriggerAuto(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness) (reviewcore.TriggerResult, error)
@@ -436,7 +437,15 @@ func (s *Service) TriggerWithMode(ctx context.Context, workerID domain.SessionID
 	if mode != domain.ReviewerInterfaceChat && mode != domain.ReviewerInterfaceTUI {
 		return reviewcore.TriggerResult{}, fmt.Errorf("%w: unknown reviewer interface mode %q", ErrInvalid, mode)
 	}
-	return s.triggerWithSource(ctx, workerID, harness, config, domain.ReviewTriggerManual, mode)
+	return s.triggerWithSource(ctx, workerID, harness, config, domain.ReviewTriggerManual, reviewcore.TriggerOptions{InterfaceMode: mode})
+}
+
+// TriggerWithOptions starts a pass with an explicit same-commit policy.
+func (s *Service) TriggerWithOptions(ctx context.Context, workerID domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+	if opts.Source == "" {
+		opts.Source = domain.ReviewTriggerManual
+	}
+	return s.triggerWithSource(ctx, workerID, opts.Harness, opts.Config, opts.Source, opts)
 }
 
 // TriggerAuto starts a daemon-initiated review pass.
@@ -455,7 +464,7 @@ func (s *Service) triggerWithSource(
 	harness domain.ReviewerHarness,
 	config domain.AgentConfig,
 	source domain.ReviewTriggerSource,
-	mode ...domain.ReviewerInterfaceMode,
+	options ...reviewcore.TriggerOptions,
 ) (reviewcore.TriggerResult, error) {
 	triggeredPayload := map[string]any{"trigger": string(source)}
 	if err := config.Validate(); err != nil {
@@ -479,8 +488,10 @@ func (s *Service) triggerWithSource(
 	}
 	var result reviewcore.TriggerResult
 	var err error
-	if len(mode) > 0 {
-		result, err = s.engine.TriggerWithSourceAndMode(ctx, workerID, harness, config, source, mode[0])
+	if len(options) > 0 {
+		opts := options[0]
+		opts.Harness, opts.Config, opts.Source = harness, config, source
+		result, err = s.engine.TriggerWithOptions(ctx, workerID, opts)
 	} else {
 		result, err = s.engineTrigger(ctx, workerID, harness, config, source)
 	}

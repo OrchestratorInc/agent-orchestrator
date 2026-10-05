@@ -192,7 +192,9 @@ func (c *ReviewsController) trigger(w http.ResponseWriter, r *http.Request) {
 	}
 	var res reviewcore.TriggerResult
 	var err error
-	if in.InterfaceMode != "" {
+	if in.Rerun {
+		res, err = c.Svc.TriggerWithOptions(r.Context(), sessionID(r), reviewcore.TriggerOptions{Harness: in.Harness, Config: in.AgentConfig, Source: domain.ReviewTriggerManual, InterfaceMode: in.InterfaceMode, Rerun: true})
+	} else if in.InterfaceMode != "" {
 		res, err = c.Svc.TriggerWithMode(r.Context(), sessionID(r), in.Harness, in.AgentConfig, in.InterfaceMode)
 	} else {
 		res, err = c.Svc.Trigger(r.Context(), sessionID(r), in.Harness, in.AgentConfig)

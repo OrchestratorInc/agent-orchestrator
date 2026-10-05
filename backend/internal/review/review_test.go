@@ -3116,3 +3116,28 @@ func TestChatConfigReplacementStopsOldFenceAndStartsFreshProvider(t *testing.T) 
 		})
 	}
 }
+
+func TestExplicitRerunStartsFreshPassAndReusesAnActivePass(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "review-mer-1", AgentSessionID: "native-reviewer-1"},
+		runs:   []domain.ReviewRun{{ID: "approved", ReviewID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved}},
+	}
+	launcher := &fakeLauncher{alive: true, handle: "review-mer-1"}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+	opts := TriggerOptions{Rerun: true}
+	res, err := eng.TriggerWithOptions(context.Background(), "mer-1", opts)
+	if err != nil || !res.Created || res.Run.ID == "approved" || len(store.runs) != 2 || !launcher.notified {
+		t.Fatalf("rerun = %+v runs=%+v launcher=%+v error=%v", res, store.runs, launcher, err)
+	}
+	if store.runs[0].Status != domain.ReviewRunComplete || store.runs[0].Verdict != domain.VerdictApproved {
+		t.Fatal("previous verdict changed")
+	}
+	launcher.notified = false
+	again, err := eng.TriggerWithOptions(context.Background(), "mer-1", opts)
+	if err != nil || again.Created || len(store.runs) != 2 || launcher.notified {
+		t.Fatalf("active rerun duplicated: %+v %v", again, err)
+	}
+	if _, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAuto, Rerun: true}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("automatic rerun error = %v", err)
+	}
+}

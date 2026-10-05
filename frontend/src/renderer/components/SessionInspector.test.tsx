@@ -3946,41 +3946,27 @@ describe("SessionInspector summary reviews", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows a no-needed-reviews notice instead of opening the terminal when the backend reuses runs", async () => {
-    mockCommonGets([approvedReview], "reviewer-pane", [
-      reviewState(3, "up_to_date"),
-    ]);
+  it.each([false, true])("confirms a same-commit re-review before sending it (confirm=%s)", async (confirm) => {
+    mockCommonGets([approvedReview], "reviewer-pane", [reviewState(3, "up_to_date")]);
     postMock.mockResolvedValue({
-      response: { status: 200 },
-      data: {
-        reviewerHandleId: "reviewer-pane",
-        reviews: [],
-      },
+      response: { status: 201 },
+      data: { reviewerHandleId: "reviewer-pane", reviews: [{ ...reviewState(3, "running"), latestRun: { ...approvedReview, id: "rerun-1", status: "running", verdict: "" } }] },
     });
     const onOpenReviewerTerminal = vi.fn();
-
-    renderWithQuery(
-      <SessionInspector
-        onOpenReviewerTerminal={onOpenReviewerTerminal}
-        session={session([pr(3, "open")])}
-      />,
-    );
+    renderWithQuery(<SessionInspector onOpenReviewerTerminal={onOpenReviewerTerminal} session={session([pr(3, "open")])} />);
     await openReviewsSection();
-
-    await userEvent.click(
-      await screen.findByRole("button", { name: /re-run review/i }),
-    );
-
-    // The notice is a compact marker; the sentence itself is its accessible name
-    // and rides a tooltip, so it costs the rail one line instead of a boxed
-    // paragraph that outlives the click that caused it.
-    const alreadyReviewed = await screen.findByRole("button", {
-      name: "This commit has already been reviewed. Push a new commit to run another review.",
-    });
-    expect(alreadyReviewed).toHaveTextContent(
-      "This commit has already been reviewed",
-    );
-    expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
+    await userEvent.click(await screen.findByRole("button", { name: "Re-run review" }));
+    expect(await screen.findByText("This commit has already been reviewed, are you sure you want to re-review the same commit?")).toBeInTheDocument();
+    expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.anything());
+    await userEvent.click(screen.getByRole("button", { name: confirm ? "Re-review commit" : "Cancel" }));
+    if (confirm) {
+      await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.objectContaining({ body: expect.objectContaining({ rerun: true }) })));
+      await waitFor(() => expect(onOpenReviewerTerminal).toHaveBeenCalled());
+    } else {
+      expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.anything());
+      expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
+    }
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("cancels the running review instead of allowing rerun", async () => {
