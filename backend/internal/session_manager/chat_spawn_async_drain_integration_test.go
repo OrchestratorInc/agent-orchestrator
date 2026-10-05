@@ -42,6 +42,10 @@ func (l realQueueDrainLauncher) DrainChatQueue(ctx context.Context, id domain.Se
 	return l.service.DrainQueued(ctx, id)
 }
 
+func (l realQueueDrainLauncher) DrainStartupChatQueue(ctx context.Context, id domain.SessionID) error {
+	return l.service.DrainStartupQueued(ctx, id)
+}
+
 func TestIncompleteClientRequestAfterStartupCrashDoesNotReplayOpeningPrompt(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()

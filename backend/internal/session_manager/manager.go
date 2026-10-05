@@ -2797,6 +2797,13 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 	if rec.ProvisionState.IsProvisioning() {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrResumeInProgress)
 	}
+	if rec.ProvisionState == domain.SessionProvisionFailed && rec.StartupCue != nil && rec.StartupCue.DeliveryHeld {
+		if err := m.releasePersistedStartupCueDelivery(ctx, id); err != nil {
+			return RestoreResult{}, err
+		}
+		updated, err := m.getRecord(ctx, id)
+		return RestoreResult{Session: updated, Mode: RestoreModeNative}, err
+	}
 	if rec.ProvisionState == domain.SessionProvisionFailed {
 		result, handedOff, err := m.retryFailedChatSpawn(ctx, rec, releaseHarness)
 		if handedOff {
@@ -3581,8 +3588,8 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 	}
 	if records, err := m.store.ListAllSessions(ctx); err == nil {
 		for _, rec := range records {
-			if !rec.IsTerminated && rec.StartupCue != nil && !rec.StartupCue.HoldsInput() && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI {
-				if err := m.drainStartupCueMessages(ctx, rec.ID); err != nil {
+			if !rec.IsTerminated && rec.StartupCue != nil && rec.StartupCue.DeliveryHeld {
+				if err := m.releasePersistedStartupCueDelivery(ctx, rec.ID); err != nil {
 					m.logger.Warn("startup cue: recover held messages", "sessionID", rec.ID, "error", err)
 				}
 			}

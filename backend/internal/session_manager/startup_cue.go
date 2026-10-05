@@ -134,7 +134,7 @@ func (m *Manager) startStartupCue(id domain.SessionID, project domain.ProjectRec
 		deadlineErr := commandCtx.Err()
 		cancel()
 		if current, exists, readErr := m.store.GetSession(ctx, id); readErr == nil && exists && current.StartupCue != nil && current.StartupCue.State == "cancelled" {
-			if err := release(ctx); err != nil {
+			if err := m.releaseStartupCueDelivery(ctx, id, *current.StartupCue, release); err != nil {
 				m.logger.Warn("startup cue: resume delivery after cancellation", "sessionID", id, "error", err)
 			}
 			return
@@ -150,34 +150,91 @@ func (m *Manager) startStartupCue(id domain.SessionID, project domain.ProjectRec
 		}
 		persistCtx, persistCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer persistCancel()
-		isTUI := domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI
-		if isTUI {
-			releaseDelivery := m.lockStartupDelivery(id)
-			defer releaseDelivery()
-			run.DeliveryHeld = true
-		}
+		run.DeliveryHeld = true
 		if err := store.FinishStartupCue(persistCtx, id, run); err != nil {
 			m.logger.Error("startup cue: persist result", "sessionID", id, "error", err)
 			return
-		}
-		if isTUI {
-			defer func() {
-				clearCtx, clearCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer clearCancel()
-				run.DeliveryHeld = false
-				if err := store.FinishStartupCue(clearCtx, id, run); err != nil {
-					m.logger.Error("startup cue: release terminal input", "sessionID", id, "error", err)
-				}
-			}()
 		}
 		current, exists, err := m.store.GetSession(ctx, id)
 		if err != nil || !exists || current.IsTerminated || ctx.Err() != nil {
 			return
 		}
-		if err := release(ctx); err != nil {
+		if err := m.releaseStartupCueDelivery(ctx, id, run, release); err != nil {
 			m.logger.Warn("startup cue: resume delivery", "sessionID", id, "error", err)
 		}
 	})
+}
+
+// releaseStartupCueDelivery preserves the pre-cue queue semantics: queued
+// messages remain gated until the complete delivery callback succeeds. A
+// failed drain leaves the session retryable and never permits later input to
+// bypass undelivered rows.
+func (m *Manager) releaseStartupCueDelivery(ctx context.Context, id domain.SessionID, run domain.StartupCueRun, release func(context.Context) error) error {
+	releaseDelivery := m.lockStartupDelivery(id)
+	defer releaseDelivery()
+	current, found, err := m.store.GetSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !found || current.IsTerminated {
+		return ErrTerminated
+	}
+	if current.StartupCue == nil || !current.StartupCue.DeliveryHeld {
+		return nil
+	}
+	run = *current.StartupCue
+
+	if err := release(ctx); err != nil {
+		run.DeliveryHeld = true
+		persistCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if store, ok := m.store.(startupCueStore); ok {
+			if persistErr := store.FinishStartupCue(persistCtx, id, run); persistErr != nil {
+				err = errors.Join(err, persistErr)
+			}
+		}
+		if _, provisionErr := m.setProvisionState(persistCtx, id, domain.SessionProvisionFailed, fmt.Sprintf("startup cue delivery: %v", err)); provisionErr != nil {
+			err = errors.Join(err, provisionErr)
+		}
+		return err
+	}
+
+	run.DeliveryHeld = false
+	persistCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if store, ok := m.store.(startupCueStore); ok {
+		if err := store.FinishStartupCue(persistCtx, id, run); err != nil {
+			return err
+		}
+	}
+	_, err = m.setProvisionState(persistCtx, id, domain.SessionProvisionReady, "")
+	return err
+}
+
+func (m *Manager) releasePersistedStartupCueDelivery(ctx context.Context, id domain.SessionID) error {
+	rec, found, err := m.store.GetSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !found || rec.StartupCue == nil {
+		return ErrNotFound
+	}
+	var release func(context.Context) error
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat && m.chat != nil {
+		release = func(releaseCtx context.Context) error { return m.drainStartupChatQueue(releaseCtx, id) }
+	} else {
+		release = func(releaseCtx context.Context) error { return m.drainStartupCueMessages(releaseCtx, id) }
+	}
+	return m.releaseStartupCueDelivery(ctx, id, *rec.StartupCue, release)
+}
+
+func (m *Manager) drainStartupChatQueue(ctx context.Context, id domain.SessionID) error {
+	if drainer, ok := m.chat.(interface {
+		DrainStartupChatQueue(context.Context, domain.SessionID) error
+	}); ok {
+		return drainer.DrainStartupChatQueue(ctx, id)
+	}
+	return m.chat.DrainChatQueue(ctx, id)
 }
 
 // CancelStartupCue stops a running startup terminal and releases delivery.
@@ -206,9 +263,15 @@ func (m *Manager) CancelStartupCue(ctx context.Context, id domain.SessionID) (do
 		}
 	}
 	now := m.clock()
-	run.State, run.Error, run.CompletedAt, run.DeliveryHeld = "cancelled", "Startup cue cancelled by user", &now, false
+	run.State, run.Error, run.CompletedAt, run.DeliveryHeld = "cancelled", "Startup cue cancelled by user", &now, true
 	if err := store.FinishStartupCue(ctx, id, run); err != nil {
 		return domain.StartupCueRun{}, err
+	}
+	if err := m.releasePersistedStartupCueDelivery(ctx, id); err != nil {
+		return run, err
+	}
+	if updated, found, err := m.store.GetSession(ctx, id); err == nil && found && updated.StartupCue != nil {
+		return *updated.StartupCue, nil
 	}
 	return run, nil
 }
@@ -328,19 +391,35 @@ func (m *Manager) recoverStartupCues(ctx context.Context, records []domain.Sessi
 		}
 		run := *rec.StartupCue
 		now := m.clock()
-		run.State, run.Error, run.CompletedAt = "interrupted", "AO restarted while the startup cue was running; it was not rerun", &now
-		run.DeliveryHeld = false
+		if run.State == "pending" || run.State == "running" {
+			run.State, run.Error, run.CompletedAt = "interrupted", "AO restarted while the startup cue was running; it was not rerun", &now
+		}
+		run.DeliveryHeld = true
 		if err := store.FinishStartupCue(ctx, rec.ID, run); err != nil {
 			return err
 		}
 		rec.StartupCue = &run
+		if rec.Metadata.WorkspacePath == "" && rec.Metadata.RuntimeHandleID == "" && rec.Metadata.ProviderConversationID == "" {
+			run.DeliveryHeld = false
+			if err := store.FinishStartupCue(ctx, rec.ID, run); err != nil {
+				return err
+			}
+			rec.StartupCue = &run
+			continue
+		}
 		// A committed controller can be reattached normally; its cue failure is
 		// separate from provider startup and must not become a failed spawn.
 		if rec.Metadata.WorkspacePath != "" && (rec.Metadata.RuntimeHandleID != "" || rec.Metadata.ProviderConversationID != "") {
-			if _, err := m.setProvisionState(ctx, rec.ID, domain.SessionProvisionReady, ""); err != nil {
+			if err := m.releasePersistedStartupCueDelivery(ctx, rec.ID); err != nil {
 				return err
 			}
-			rec.ProvisionState = domain.SessionProvisionReady
+			updated, found, err := m.store.GetSession(ctx, rec.ID)
+			if err != nil {
+				return err
+			}
+			if found {
+				*rec = updated
+			}
 		}
 	}
 	return nil

@@ -1517,7 +1517,7 @@ function ChatWorkspaceContent({
 									settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
 									busy={busy}
 									willQueue={Boolean(turn) || session?.provisionState === "provisioning" || session?.startupCue?.state === "pending" || session?.startupCue?.state === "running"}
-									disabled={(snapshot.controller.state === "stopped" || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
+									disabled={(snapshot.controller.state === "stopped" || controllerTransitioning || newWorkDisabled || (session?.provisionState === "failed" && session.startupCue?.deliveryHeld)) && !queueEdit?.clientMessageId}
 									// Switch/reconnect status is the topbar spinner beside ⋮ — not composer text.
 									disabledPlaceholder={
 										controllerTransitioning || newWorkDisabled ? "" : undefined

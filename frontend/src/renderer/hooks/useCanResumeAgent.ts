@@ -11,7 +11,7 @@ export function canResumeAgent(
 ): boolean {
 	return Boolean(
 		session &&
-			sessionAgentExited(session) &&
+			(sessionAgentExited(session) || (session.provisionState === "failed" && session.startupCue?.deliveryHeld)) &&
 			!session.activeAgentSwitch &&
 			!session.cloud &&
 			!interfaceTransitionIsActive(transition),

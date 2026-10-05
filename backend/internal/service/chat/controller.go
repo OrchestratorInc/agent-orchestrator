@@ -3741,6 +3741,9 @@ func (c *Controller) reportActivity(
 }
 
 func (c *Controller) startupHeld(ctx context.Context) (bool, error) {
+	if admitted, _ := ctx.Value(startupDeliveryContextKey{}).(bool); admitted {
+		return false, nil
+	}
 	if c.startupInputHeld == nil {
 		return false, nil
 	}
