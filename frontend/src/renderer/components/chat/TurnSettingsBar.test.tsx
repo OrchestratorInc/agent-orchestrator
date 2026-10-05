@@ -333,7 +333,7 @@ describe("ACP session config options", () => {
 		expect(onChange).toHaveBeenLastCalledWith("profile", { value: "default" });
 	});
 
-	it("hides the provider default effort choice while keeping concrete levels selectable", async () => {
+	it("keeps a provider reset choice when no default effort level is reported", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();
 		const option: ChatConfigOption = {
@@ -347,16 +347,18 @@ describe("ACP session config options", () => {
 		const view = render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[option]} />);
 
 		const picker = screen.getByRole("button", { name: "Effort" });
-		expect(picker).toHaveTextContent("Effort");
+		expect(picker).toHaveTextContent("Default");
 		await user.click(picker);
-		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: "Default" })).toBeInTheDocument();
 		await user.click(screen.getByRole("menuitemradio", { name: "High" }));
 		expect(onChange).toHaveBeenCalledWith("effort", { value: "high" });
 		view.rerender(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange}
 			configOptions={[{ ...option, currentValue: "high" }]} />);
 		await user.click(screen.getByRole("button", { name: "Effort" }));
 		expect(screen.queryByRole("menuitemradio", { name: "Use agent effort" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: "Default" })).toBeInTheDocument();
+		await user.click(screen.getByRole("menuitemradio", { name: "Default" }));
+		expect(onChange).toHaveBeenLastCalledWith("effort", { value: "default" });
 	});
 
 	it("shows the concrete recommended model selected without a duplicate default option", async () => {
@@ -916,7 +918,7 @@ describe("remember project permissions", () => {
 });
 
 describe("native model selection", () => {
-	it("shows Claude's resolved model without default model or effort choices", async () => {
+	it("keeps Claude model choices while allowing effort reset", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();
 		render(<TurnSettingsBar harness="claude-code" onChange={onChange}
@@ -930,9 +932,9 @@ describe("native model selection", () => {
 		await user.click(picker);
 		await user.keyboard("{ArrowDown}{ArrowRight}");
 		expect(screen.getAllByRole("menuitemradio", { name: "Opus" })).toHaveLength(1);
-		expect(screen.queryByText(/default/i)).not.toBeInTheDocument();
-		await user.keyboard("{ArrowLeft}{ArrowDown}{ArrowRight}");
 		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
+		await user.keyboard("{ArrowLeft}{ArrowDown}{ArrowRight}");
+		expect(screen.getByRole("menuitemradio", { name: "Default" })).toBeInTheDocument();
 		await user.click(screen.getByRole("menuitemradio", { name: "High" }));
 		expect(onChange).toHaveBeenCalledWith({ model: "default", reasoningEffort: "high" });
 	});
