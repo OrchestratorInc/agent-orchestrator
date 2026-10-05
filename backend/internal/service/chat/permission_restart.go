@@ -20,7 +20,7 @@ func (s *Service) restartProviderForPermissions(
 	id domain.SessionID,
 	settings domain.ConversationSettings,
 ) error {
-	gate := s.controllerGate(id)
+	gate := s.controllerGate(domain.SessionConversationOwner(id))
 	if err := gate.lock(ctx); err != nil {
 		return err
 	}
@@ -30,7 +30,7 @@ func (s *Service) restartProviderForPermissions(
 	if err != nil {
 		return err
 	}
-	cfg, driver, err := s.branchLaunchConfig(id, source)
+	cfg, driver, err := s.branchLaunchConfig(source)
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func (s *Service) restartProviderForPermissions(
 	generation := s.newID()
 	conversation := source.conversation
 	conversation.Settings = settings
-	replacement := newController(id, conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
+	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
 	if err := s.store.ActivateConversationBranch(operationCtx, id, conversation.ID, activeBranch.ID,
 		replacement.ProviderConversationID(), generation, s.now()); err != nil {
 		_ = cleanupUnpublishedConversation(provider, true)
@@ -131,11 +131,11 @@ func (s *Service) restartProviderForPermissions(
 		return activateErr
 	}
 	s.mu.Lock()
-	if stored, ok := s.startConfigs[id]; ok {
+	if stored, ok := s.startConfigs[source.owner()]; ok {
 		stored.Permissions = cfg.Permissions
 		stored.Model = cfg.Model
 		stored.Effort = cfg.Effort
-		s.startConfigs[id] = stored
+		s.startConfigs[source.owner()] = stored
 	}
 	s.mu.Unlock()
 	if err := s.installBranchController(operationCtx, id, source, replacement, activeBranch.ID); err != nil {

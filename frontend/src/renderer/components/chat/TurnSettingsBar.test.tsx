@@ -1394,7 +1394,7 @@ describe("Cursor's live Agent/Plan/Ask mode catalog", () => {
 
 		expect(screen.getByRole("button", { name: "Model mode for the next turn" })).toHaveTextContent("Agent");
 		const approvals = screen.getByRole("button", { name: "Approval policy for the next turn" });
-		expect(approvals).toHaveTextContent("Default approvals");
+		expect(approvals).toHaveTextContent("Use agent permissions");
 		await user.click(approvals);
 		await user.click(screen.getByRole("menuitemradio", { name: "Auto-approve" }));
 		expect(confirmSpy).toHaveBeenCalledWith(CURSOR_APPROVAL_RESTART_CONFIRM);
