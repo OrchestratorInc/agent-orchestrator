@@ -10,8 +10,8 @@
 @custom-media --layout-narrow (width <= 680px); /* --breakpoint-layout-narrow */
 
 /*
- * Design system — see DESIGN_TOKENS.md. Flat near-black neutral ramp, hairline
- * borders, system font, refined-blue accent. Dark is primary (:root); light is the supported override
+ * Design system — see DESIGN_TOKENS.md. Flat neutral graphite ramp, hairline
+ * borders, and system font. Dark is primary (:root); light is the supported override
  * (:root[data-theme="light"]). apply-initial-theme runs before CSS load; the
  * Zustand theme toggle updates data-theme on <html>.
  */
@@ -477,7 +477,7 @@
 	min-height: 0;
 	width: 100%;
 	background-color: var(--color-bg-sidebar);
-	padding-top: var(--size-center-panel-inset);
+	padding-top: var(--size-center-panel-bottom-inset);
 	padding-right: var(--size-center-panel-inline-inset);
 	padding-bottom: var(--size-center-panel-bottom-inset);
 	padding-left: 0;
@@ -507,12 +507,33 @@
 	padding-left: var(--size-center-panel-inline-inset);
 }
 
-/* macOS + Linux: inset on all sides except left (flush with sidebar). */
+/* macOS: use the same block inset above and below the surface. */
 .center-panel-shell.center-panel-shell--mac {
 	padding-top: var(--size-center-panel-inset-mac);
 	padding-right: var(--size-center-panel-inset-mac);
 	padding-bottom: var(--size-center-panel-inset-mac);
 	padding-left: 0;
+}
+
+/* Keep the center surface closed on all four edges, including macOS where the
+ * native titlebar sits above the panel rather than replacing its border. */
+.center-panel-shell--mac > .center-panel-surface {
+	border-top-width: 1px;
+}
+
+/* Session headers now sit below the macOS panel inset and its top border. Keep
+ * the fixed navigation cluster on the same centerline as that header. */
+.app-shell-root:has(.center-panel-shell--mac.center-panel-shell--session:not(.center-panel-shell--fullscreen)) [data-slot="titlebar-nav"] {
+	top: var(--size-center-panel-inset-mac);
+}
+
+/* Keep empty header space draggable while tabs and actions remain interactive.
+ * Linux retains its separate strip; macOS uses the actual shared header. */
+html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] {
+	-webkit-app-region: drag;
+}
+html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] :is(button, a, input, [role="tab"], [role="menuitem"]) {
+	-webkit-app-region: no-drag;
 }
 
 .center-panel-shell.center-panel-shell--mac.center-panel-shell--fullscreen {
@@ -611,8 +632,20 @@
 /* When the sidebar is off-canvas, clear only the fixed navigation cluster.
  * Native macOS fullscreen removes the traffic lights, so the cluster moves to
  * the compact panel inset instead of retaining the windowed 79px reserve. */
+.app-shell-root {
+	--ao-titlebar-content-left: var(--size-titlebar-content-offset);
+}
+.native-fullscreen {
+	--ao-titlebar-content-left: calc(var(--space-2) + var(--size-titlebar-cluster-width) + var(--size-titlebar-content-gap));
+}
 .session-topbar-titlebar-clearance-mac {
-	padding-left: var(--size-titlebar-content-offset);
+	/* Follow the actual sidebar animation, never snap to the collapsed inset.
+	 * The width floor also keeps controls clear at small renderer zoom factors. */
+	padding-left: max(
+		0px,
+		calc(var(--ao-titlebar-content-left) - var(--ao-sidebar-layout-width, 0px)),
+		calc(var(--ao-titlebar-content-left) * var(--ao-sidebar-collapse-progress, 0))
+	);
 }
 
 /* Browser pressure keeps a 48px navigation rail in layout. Native macOS
@@ -648,12 +681,6 @@
 	.session-topbar-terminal-region {
 		transition-duration: 0ms;
 	}
-}
-
-.native-fullscreen .session-topbar-titlebar-clearance-mac {
-	padding-left: calc(
-		var(--space-2) + var(--size-titlebar-cluster-width) + var(--size-titlebar-content-gap)
-	);
 }
 
 .session-topbar-titlebar-clearance-linux {
@@ -718,7 +745,7 @@
  * Pad the title past that cluster so it sits next to the buttons. Fullscreen
  * drops the traffic-light reserve so title sits next to the left-edge buttons. */
 .center-panel-shell--titlebar-clearance .center-panel-titlebar {
-	padding-left: calc(var(--size-titlebar-content-offset) - var(--size-center-panel-inset-mac));
+	padding-left: var(--size-titlebar-content-offset);
 }
 
 /* Linux: same cluster clearance without the traffic-light reserve. Keep the
@@ -734,20 +761,12 @@
 	);
 }
 
-/* Windows / Linux: a ShellTopbar already supplies the top chrome, so the
- * framed panel needs no additional top inset. Windows uses its custom
- * frameless titlebar; Linux uses the standard ShellTopbar. The right/bottom
- * insets and the shared --radius-center-panel rounding are kept so the panel
- * matches the macOS framed look. */
+/* Platform chrome may change the inset size, but never breaks the equal
+ * block spacing contract. */
 .platform-windows {
 	--size-center-panel-inset: 8px;
 	--size-center-panel-inline-inset: 8px;
 	--size-center-panel-bottom-inset: 8px;
-}
-
-.platform-windows .center-panel-shell,
-.platform-linux .center-panel-shell {
-	padding-top: 0;
 }
 
 @utility settings-row-bar {
@@ -1083,14 +1102,14 @@ button.settings-row-bar {
 .composer-run-controls {
 	display: grid;
 	min-width: 0;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	grid-template-columns: minmax(max-content, 1fr) minmax(0, 1fr);
 	align-items: center;
 	column-gap: var(--space-2);
 }
 
 .composer-run-controls-with-effort {
-	/* Capability-driven Agent / Model / Effort sizing: 2 / 2 / 1. */
-	grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(5.5rem, 1fr);
+	/* Agent and model share free room; effort keeps enough width for its selected label. */
+	grid-template-columns: minmax(max-content, 1fr) minmax(0, 1fr) minmax(max-content, 0.5fr);
 }
 
 .composer-toolbar-slot {
@@ -1185,7 +1204,8 @@ button.settings-row-bar {
    its text, which reads as a stray half-width box once it sits in a menu. */
 @utility menu-search-input {
 	width: 100%;
-	height: var(--size-settings-action-height);
+	/* Match DropdownMenuItem's text-control line height, py-1.5, and border. */
+	height: calc(var(--line-height-row) + (var(--space-1_5) * 2) + 2px);
 	border: 1px solid var(--color-border-settings-input);
 	border-radius: var(--radius-md);
 	background-color: var(--color-bg-settings-input);
@@ -1802,76 +1822,62 @@ textarea,
 }
 
 .multi-step-loader__step {
-	/* `both`: hold the final keyframe (opacity 0) after the exit and pre-apply
-	   the 0% keyframe before the entry. Without it the element snaps back to its
-	   base style (opacity 1) at animation end, flashing the outgoing sentence
-	   fully opaque for a frame before the swap. */
-	animation: multi-step-loader-step var(--multi-step-loader-duration, 3500ms) ease-in-out both;
+	animation: multi-step-loader-step var(--multi-step-loader-duration, 380ms) ease-out both;
 }
 
 .multi-step-loader__dot {
-	animation: multi-step-loader-dot var(--multi-step-loader-duration, 3500ms) ease-in-out both;
+	animation: status-pulse 1.8s ease-in-out infinite;
 }
 
-.multi-step-loader__check {
-	animation: multi-step-loader-check var(--multi-step-loader-duration, 3500ms) ease-out both;
+.cloud-session-loader--complete {
+	animation: cloud-session-loader-complete 360ms ease-out both;
+}
+
+@keyframes cloud-session-loader-complete {
+	to { opacity: 0; }
+}
+
+.multi-step-loader__shimmer {
+	background-image: linear-gradient(90deg, var(--color-text-muted) 0%, var(--color-text-muted) 34%, #93c5fd 50%, var(--color-text-muted) 66%, var(--color-text-muted) 100%);
+	background-size: 400px 100%;
+	background-repeat: repeat-x;
+	background-clip: text;
+	color: transparent;
+	animation: multi-step-loader-step var(--multi-step-loader-duration, 380ms) ease-out both,
+		multi-step-loader-shimmer 3.2s linear infinite;
+}
+
+@keyframes multi-step-loader-shimmer {
+	to { background-position: -400px center; }
 }
 
 @keyframes multi-step-loader-step {
-	0% {
-		filter: blur(3px);
+	from {
+		filter: blur(2px);
 		opacity: 0;
-		transform: translateY(4px);
+		transform: translateY(3px);
 	}
-	8%,
-	86% {
+	to {
 		filter: blur(0);
 		opacity: 1;
 		transform: translateY(0);
 	}
-	94%,
-	100% {
-		filter: blur(2px);
-		opacity: 0;
-		transform: translateY(-2px);
-	}
-}
-
-@keyframes multi-step-loader-dot {
-	0%,
-	82% {
-		opacity: 1;
-		transform: scale(1);
-	}
-	90%,
-	100% {
-		opacity: 0;
-		transform: scale(0.72);
-	}
-}
-
-@keyframes multi-step-loader-check {
-	0%,
-	82% {
-		opacity: 0;
-		transform: scale(0.72);
-	}
-	90%,
-	100% {
-		opacity: 1;
-		transform: scale(1);
-	}
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.multi-step-loader__step,
-	.multi-step-loader__dot,
-	.multi-step-loader__check {
+	.multi-step-loader__dot {
 		animation: none;
 	}
-
-	.multi-step-loader__check {
-		display: none;
+	.cloud-session-loader--complete {
+		animation: none;
+		opacity: 0;
+	}
+	.multi-step-loader__step {
+		animation: none;
+	}
+	.multi-step-loader__shimmer {
+		background: none;
+		color: var(--color-text-muted);
 	}
 }
 
@@ -2046,6 +2052,14 @@ textarea,
 .ao-startup-logo {
 	animation: ao-startup-logo-breathe 3.2s ease-in-out infinite;
 	filter: drop-shadow(0 7px 20px rgb(0 0 0 / 0.28));
+}
+
+.ao-mascot-eyes {
+	fill: transparent;
+}
+
+:root[data-theme="light"] .ao-mascot-eyes {
+	fill: #000;
 }
 
 .ao-startup-status {
@@ -3965,8 +3979,7 @@ html.sidebar-reordering * {
 
 /* Files tab: the filter field sits in the inspector top bar exactly where the
    browser's address field does, with the same centered track and focus
-   widening. It always stays on the top row; the panel shares the browser's
-   minimum width, so the track shrinks instead of wrapping. */
+   widening, and drops to its own row at the same narrow width (below). */
 .session-inspector__topbar:has(> .files-panel__topbar-host) {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) minmax(0, 240px) minmax(0, 1fr);
@@ -3995,6 +4008,45 @@ html.sidebar-reordering * {
 .session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector-actions-spacer {
 	grid-column: 3;
 	justify-self: end;
+}
+
+/* Like the browser's URL field: once zoom or a narrow window leaves too little
+   room, the filter takes its own row so it cannot slide under the tabs. The
+   focused selector repeats the plain one so its wider focus track above never
+   overrides the two-column layout here. */
+@container inspector (max-width: 440px) {
+	.session-inspector__topbar:has(> .files-panel__topbar-host),
+	.session-inspector__topbar:has(> .files-panel__topbar-host :focus) {
+		height: calc(var(--size-inspector-tabs) + var(--size-inspector-tabs));
+		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-rows: var(--size-inspector-tabs) var(--size-inspector-tabs);
+	}
+
+	.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector__tablist {
+		grid-column: 1;
+		grid-row: 1;
+	}
+
+	.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector-actions-spacer {
+		grid-column: 2;
+		grid-row: 1;
+	}
+
+	.session-inspector__topbar > .files-panel__topbar-host {
+		grid-column: 1 / -1;
+		grid-row: 2;
+		width: 180px;
+		justify-self: center;
+		transition: width var(--duration-fast) ease;
+	}
+
+	.session-inspector__topbar > .files-panel__topbar-host > * {
+		transform: none;
+	}
+
+	.session-inspector__topbar > .files-panel__topbar-host:focus-within {
+		width: min(400px, calc(100cqw - 16px));
+	}
 }
 
 .session-inspector__tab-button {
@@ -4963,6 +5015,67 @@ body:has(#root .platform-linux) > .files-popout-overlay {
 	overflow: hidden;
 	padding: 0 var(--space-1);
 	background: var(--bg);
+}
+
+.browser-panel__find-row {
+	display: flex;
+	height: 36px;
+	flex-shrink: 0;
+	align-items: center;
+	gap: var(--space-1);
+	padding: 3px 6px;
+	border-top: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
+	background: var(--bg);
+}
+
+.browser-panel__find-input {
+	min-width: 0;
+	flex: 1;
+	height: 28px;
+	border: 0;
+	outline: 0;
+	background: transparent;
+	color: var(--fg);
+	font-size: var(--font-size-sm);
+}
+
+.browser-panel__find-input::placeholder {
+	color: var(--muted-foreground);
+}
+
+.browser-panel__find-status {
+	min-width: 52px;
+	color: var(--muted-foreground);
+	font-size: var(--font-size-xs);
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+	white-space: nowrap;
+}
+
+.browser-panel__find-button {
+	display: inline-flex;
+	width: 26px;
+	height: 26px;
+	align-items: center;
+	justify-content: center;
+	border-radius: var(--radius-sm);
+	color: var(--muted-foreground);
+}
+
+.browser-panel__find-button:hover:not(:disabled),
+.browser-panel__find-button:focus-visible {
+	background: var(--surface-hover);
+	color: var(--fg);
+}
+
+.browser-panel__find-button:disabled {
+	opacity: 0.4;
+}
+
+.browser-panel__find-button > svg {
+	width: 14px;
+	height: 14px;
 }
 
 .browser-panel__toolbar--annotation {

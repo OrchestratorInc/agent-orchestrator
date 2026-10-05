@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -48,20 +49,6 @@ type workerCredentialAvailabilityStore interface {
 
 type userProviderCredentialStore interface {
 	UserAgentCredentialAvailable(context.Context, string, string) (bool, error)
-}
-
-func agentConnectionAvailable(
-	connections []domain.ProviderConnection,
-	provider string,
-) bool {
-	for _, connection := range connections {
-		if connection.Provider == provider &&
-			connection.Label == defaultAgentConnectionLabel &&
-			connection.ValidationState == "valid" {
-			return true
-		}
-	}
-	return false
 }
 
 type secretEncrypter interface {
@@ -652,5 +639,5 @@ func validAgentCredentialType(agent, credentialType string) bool {
 }
 
 func providerSecretAssociatedData(orgID, provider string) string {
-	return orgID + "|" + provider + "|" + defaultAgentConnectionLabel
+	return secrets.ProviderConnectionAssociatedData(orgID, provider, defaultAgentConnectionLabel)
 }

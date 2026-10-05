@@ -1146,21 +1146,23 @@ UPDATE sessions SET
     conversation_checkpoint_turn_id = ?15,
     native_checkpoint_evidence = ?16,
     native_transcript_path = ?17,
-    updated_at = ?18
-WHERE sessions.id = ?19
-  AND sessions.revision = ?20
+    claude_activity_facts = ?18,
+    codex_activity_facts = ?19,
+    updated_at = ?20
+WHERE sessions.id = ?21
+  AND sessions.revision = ?22
   AND sessions.is_terminated = 0
-  AND sessions.harness = ?21
-  AND sessions.session_mode = ?22
+  AND sessions.harness = ?23
+  AND sessions.session_mode = ?24
   AND (
       (
-          ?22 <> 'chat'
-          AND sessions.runtime_launch_id = ?23
+          ?24 <> 'chat'
+          AND sessions.runtime_launch_id = ?25
       )
       OR
       (
-          ?22 = 'chat'
-          AND sessions.controller_generation = ?24
+          ?24 = 'chat'
+          AND sessions.controller_generation = ?26
       )
   )
   AND NOT EXISTS (
@@ -1192,6 +1194,8 @@ type UpdateSessionFromActivitySignalParams struct {
 	ConversationCheckpointTurnID     string
 	NativeCheckpointEvidence         string
 	NativeTranscriptPath             string
+	ClaudeActivityFacts              string
+	CodexActivityFacts               string
 	UpdatedAt                        time.Time
 	ID                               domain.SessionID
 	ExpectedRevision                 int64
@@ -1225,6 +1229,8 @@ func (q *Queries) UpdateSessionFromActivitySignal(ctx context.Context, arg Updat
 		arg.ConversationCheckpointTurnID,
 		arg.NativeCheckpointEvidence,
 		arg.NativeTranscriptPath,
+		arg.ClaudeActivityFacts,
+		arg.CodexActivityFacts,
 		arg.UpdatedAt,
 		arg.ID,
 		arg.ExpectedRevision,

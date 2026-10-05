@@ -53,9 +53,13 @@ type Client struct {
 
 type HTTPError struct {
 	StatusCode int
+	Message    string
 }
 
 func (e *HTTPError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("GitHub request returned status %d: %s", e.StatusCode, e.Message)
+	}
 	return fmt.Sprintf("GitHub request returned status %d", e.StatusCode)
 }
 
@@ -966,9 +970,9 @@ func (c *Client) repositoryWriteTokenForRepos(
 }
 
 // statusReadToken mints a short-lived installation token scoped to one
-// repository with read access to pull requests and checks — the permissions
-// GitHub's fine-grained token model requires to fetch PR/review/check-run
-// detail, distinct from repositoryToken's contents:read (used for checkout).
+// repository with read access to contents, pull requests, checks and commit
+// statuses. The snapshot GraphQL query traverses commit and branch fields in
+// private repos, including status-only CI such as CodeRabbit.
 func (c *Client) statusReadToken(
 	ctx context.Context,
 	installationID, repositoryID int64,
@@ -976,13 +980,34 @@ func (c *Client) statusReadToken(
 	if installationID <= 0 || repositoryID <= 0 {
 		return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
 	}
-	response, err := c.createInstallationToken(ctx, installationID, map[string]any{
+	permissions := map[string]string{
+		"contents": "read", "pull_requests": "read", "checks": "read", "statuses": "read",
+	}
+	request := map[string]any{
 		"repository_ids": []int64{repositoryID},
-		"permissions": map[string]string{
-			"pull_requests": "read",
-			"checks":        "read",
-		},
-	})
+		"permissions":    permissions,
+	}
+	response, err := c.createInstallationToken(ctx, installationID, request)
+	var permissionErr *HTTPError
+	if errors.As(err, &permissionErr) && permissionErr.StatusCode == http.StatusUnprocessableEntity &&
+		strings.Contains(permissionErr.Message, "The permissions requested are not granted to this installation") {
+		// Installations may not have approved newer optional check permissions.
+		// Keep the same repository scope and never request write access or an
+		// unrestricted token when retrying with their actual grants.
+		installation, lookupErr := c.GetInstallation(ctx, installationID)
+		if lookupErr != nil {
+			return installationAccessToken{}, lookupErr
+		}
+		for name := range permissions {
+			if granted := installation.Permissions[name]; granted != "read" && granted != "write" {
+				delete(permissions, name)
+			}
+		}
+		if permissions["contents"] == "" || permissions["pull_requests"] == "" {
+			return installationAccessToken{}, errors.New("GitHub installation requires Contents and Pull requests read access to refresh PR status")
+		}
+		response, err = c.createInstallationToken(ctx, installationID, request)
+	}
 	if err != nil {
 		return installationAccessToken{}, err
 	}
@@ -1036,6 +1061,7 @@ func (c *Client) GetPullRequest(
 
 // CheckRun is one GitHub Checks API run against a commit.
 type CheckRun struct {
+	ID         int64  `json:"id"`
 	Name       string `json:"name"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
@@ -1210,7 +1236,11 @@ func (c *Client) jsonRequest(
 		return errors.New("GitHub response exceeded size limit")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return &HTTPError{StatusCode: response.StatusCode}
+		var failure struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(raw, &failure)
+		return &HTTPError{StatusCode: response.StatusCode, Message: failure.Message}
 	}
 	if destination == nil {
 		return nil

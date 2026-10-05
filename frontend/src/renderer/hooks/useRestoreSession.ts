@@ -1,12 +1,15 @@
 import { useCallback } from "react";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { clientForHost } from "../lib/host-clients";
 import { aoBridge } from "../lib/bridge";
 import type { CloudCpSession } from "../lib/cloud-cp";
 import { createRendererCloudCpClient } from "./useCloudCp";
 import { settingsQueryKey, type Settings } from "./useSettings";
-import { cloudSessionsQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
+import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
+import type { WorkspaceSummary } from "../types/workspace";
+import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 
 export type RestoreSessionResult =
 	{ status: "success" } | { status: "not_resumable"; message: string } | { status: "error"; message: string };
@@ -24,27 +27,32 @@ export type RestoreSessionResult =
 function findCloudSession(
 	queryClient: QueryClient,
 	sessionId: string,
-): { orgId: string; workerEpoch: number } | undefined {
+): { orgId: string; workerEpoch: number; kind: "orchestrator" | "worker" } | undefined {
 	for (const [key, sessions] of queryClient.getQueriesData<CloudCpSession[]>({ queryKey: cloudSessionsQueryKey })) {
 		const session = sessions?.find((entry) => entry.id === sessionId);
 		if (session) {
 			const orgId = key[2];
 			if (typeof orgId === "string" && orgId !== "") {
-				return { orgId, workerEpoch: session.workerEpoch ?? 0 };
+				if (session.kind !== "orchestrator" && session.kind !== "worker") continue;
+				return { orgId, workerEpoch: session.workerEpoch ?? 0, kind: session.kind };
 			}
 		}
 	}
 	return undefined;
 }
 
-export function useRestoreSession(): (sessionId: string) => Promise<RestoreSessionResult> {
+export function useRestoreSession(): (sessionId: string, hostId?: string) => Promise<RestoreSessionResult> {
 	const queryClient = useQueryClient();
 
 	return useCallback(
-		async (sessionId: string) => {
+		async (sessionId: string, hostId?: string) => {
+			const cloudSession = hostId ? undefined : findCloudSession(queryClient, sessionId);
+			const role = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId))
+				?.flatMap((workspace) => workspace.sessions)
+				.find((session) => session.id === sessionId)?.kind;
+			recordDirectWorkerInteraction(sessionId, "lifecycle", role ?? cloudSession?.kind, hostId);
 			// Cloud sessions re-provision through the control plane, not the local
 			// daemon: restore keeps the conversation and work intact server-side.
-			const cloudSession = findCloudSession(queryClient, sessionId);
 			if (cloudSession !== undefined) {
 				const { orgId: cloudOrgId, workerEpoch: baselineEpoch } = cloudSession;
 				const settings = queryClient.getQueryData<Settings>(settingsQueryKey);
@@ -76,7 +84,7 @@ export function useRestoreSession(): (sessionId: string) => Promise<RestoreSessi
 			}
 
 			try {
-				const { data, error } = await apiClient.POST("/api/v1/sessions/{sessionId}/restore", {
+				const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/sessions/{sessionId}/restore", {
 					params: { path: { sessionId } },
 				});
 				if (error) {
@@ -87,11 +95,11 @@ export function useRestoreSession(): (sessionId: string) => Promise<RestoreSessi
 					}
 					return { status: "error", message };
 				}
-				await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				if (data?.restoreMode === "saved_prompt") {
 					void aoBridge.notifications
 						.show({
-							id: `restore-fallback:${sessionId}:${Date.now()}`,
+							id: `restore-fallback:${hostId ?? "local"}:${sessionId}:${Date.now()}`,
 							title: "Started from saved prompt",
 							body: "AO could not resume the native agent session, so it started a new conversation from the saved prompt.",
 						})

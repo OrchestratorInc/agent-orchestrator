@@ -148,6 +148,39 @@ type WorkspaceSummary struct {
 	Deletions int
 }
 
+// WorkspaceManifest is the latency-sensitive workspace review read model.
+// Unlike WorkspaceFiles it contains only changed files and omits complete
+// repository inventory and commit-history enrichment. WorkspaceVersion is
+// deliberately identical to the compatible WorkspaceFiles snapshot so the
+// existing detail, revision, and batch-diff endpoints can fence requests
+// against either read model during migration.
+type WorkspaceManifest struct {
+	SessionID        domain.SessionID
+	WorkspaceVersion string
+	CompareBaseSHA   string
+	CompareBaseRef   string
+	CompareMode      WorkspaceCompareMode
+	Files            []WorkspaceFileSummary
+	Sections         WorkspaceFileSections
+	Summary          WorkspaceSummary
+	Truncated        bool
+	Stale            bool
+	Refreshing       bool
+	Degraded         bool
+	DegradedCode     string
+}
+
+// WorkspaceHistory is the non-critical commit metadata loaded after the
+// latency-sensitive manifest. It deliberately avoids enumerating every file
+// in the repository.
+type WorkspaceHistory struct {
+	SessionID        domain.SessionID
+	Commits          []CommitSummary
+	CommitsTruncated bool
+	Ahead            *int
+	Behind           *int
+}
+
 // WorkspaceFileSummary is one file row in the session workspace browser.
 type WorkspaceFileSummary struct {
 	Path            string
@@ -234,6 +267,9 @@ func (s *Service) WorkspaceWatchPaths(ctx context.Context, id domain.SessionID) 
 // the first request after that load completes recomputes the data.
 func (s *Service) InvalidateWorkspaceCache(id domain.SessionID) {
 	s.workspaceCache.invalidateSession(id)
+	if s.workspaceManifests.markStale(id) {
+		s.refreshWorkspaceManifestInBackground(id)
+	}
 }
 
 // ListWorkspaceFiles returns all tracked and untracked, non-ignored files in a
@@ -312,6 +348,53 @@ func (s *Service) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (
 		Ahead:            ahead,
 		Behind:           behind,
 	}), nil
+}
+
+// GetWorkspaceHistory loads commit and upstream metadata without paying for
+// the legacy all-files inventory used by the full workspace browser.
+func (s *Service) GetWorkspaceHistory(ctx context.Context, id domain.SessionID) (WorkspaceHistory, error) {
+	rec, err := s.sessionWorkspaceRecord(ctx, id)
+	if err != nil {
+		return WorkspaceHistory{}, err
+	}
+	project, projectOK, err := s.sessionProject(ctx, rec)
+	if err != nil {
+		return WorkspaceHistory{}, err
+	}
+	if isStandaloneScratchWorkspace(rec) || (projectOK && project.Kind.WithDefault() == domain.ProjectKindWorkspace) {
+		return WorkspaceHistory{SessionID: id, Commits: []CommitSummary{}}, nil
+	}
+	prs, err := s.workspaceComparePRs(ctx, rec.ID)
+	if err != nil {
+		return WorkspaceHistory{}, err
+	}
+	resolve := func(rctx context.Context) workspaceCompareTarget {
+		return resolveWorkspaceCompare(rctx, rec.Metadata.WorkspacePath, rec.Metadata.DiffBaseSHA, rec.Metadata.DiffBaseRef, defaultBranchForProject(project, projectOK), prs)
+	}
+	compare, _, err := s.resolveWorkspaceChanges(ctx, id, rec.Metadata.WorkspacePath, resolve)
+	if err != nil {
+		return WorkspaceHistory{}, err
+	}
+	var commits workspaceCommits
+	var ahead, behind *int
+	g, gctx := errgroup.WithContext(ctx)
+	if base := strings.TrimSpace(compare.gitBase()); base != "" && base != "HEAD" {
+		g.Go(func() (err error) {
+			commits.list, commits.truncated, err = gitCommitLog(gctx, rec.Metadata.WorkspacePath, base)
+			return err
+		})
+	}
+	g.Go(func() error {
+		ahead, behind = gitAheadBehind(gctx, rec.Metadata.WorkspacePath)
+		return nil
+	})
+	if err := g.Wait(); err != nil {
+		return WorkspaceHistory{}, err
+	}
+	if commits.list == nil {
+		commits.list = []CommitSummary{}
+	}
+	return WorkspaceHistory{SessionID: id, Commits: commits.list, CommitsTruncated: commits.truncated, Ahead: ahead, Behind: behind}, nil
 }
 
 func workspaceDegradedCode(err error) string {
@@ -1730,17 +1813,14 @@ func workspaceChangeMaps(ctx context.Context, root, base string) (workspaceChang
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
-		diffStatuses, diffPrevious, err = workspaceDiffStatuses(gctx, root, base)
+		diffStatuses, diffPrevious, counts, err = workspaceDiffStats(gctx, root, base)
 		return err
 	})
 	g.Go(func() (err error) {
 		statusStatuses, statusPrevious, err = workspaceStatuses(gctx, root)
 		return err
 	})
-	g.Go(func() (err error) {
-		counts, err = workspaceNumstat(gctx, root, base)
-		return err
-	})
+
 	if err := g.Wait(); err != nil {
 		return workspaceChangeSet{}, err
 	}
@@ -1807,11 +1887,7 @@ func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSec
 	var ahead, behind *int
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		statuses, previous, err := workspaceDiffNameStatus(gctx, root, "--cached")
-		if err != nil {
-			return err
-		}
-		counts, err := workspaceDiffNumstat(gctx, root, "--cached")
+		statuses, previous, counts, err := workspaceDiffStats(gctx, root, "--cached")
 		if err != nil {
 			return err
 		}
@@ -1819,11 +1895,7 @@ func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSec
 		return nil
 	})
 	g.Go(func() error {
-		statuses, previous, err := workspaceDiffNameStatus(gctx, root)
-		if err != nil {
-			return err
-		}
-		counts, err := workspaceDiffNumstat(gctx, root)
+		statuses, previous, counts, err := workspaceDiffStats(gctx, root)
 		if err != nil {
 			return err
 		}
@@ -1840,11 +1912,7 @@ func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSec
 	})
 	if base = strings.TrimSpace(base); base != "" && base != "HEAD" {
 		g.Go(func() error {
-			statuses, previous, err := workspaceDiffNameStatus(gctx, root, base, "HEAD")
-			if err != nil {
-				return err
-			}
-			counts, err := workspaceDiffNumstat(gctx, root, base, "HEAD")
+			statuses, previous, counts, err := workspaceDiffStats(gctx, root, base, "HEAD")
 			if err != nil {
 				return err
 			}
@@ -2120,8 +2188,40 @@ func classifyWorkspaceStatus(xy string) WorkspaceFileStatus {
 	}
 }
 
-func workspaceDiffStatuses(ctx context.Context, root, base string) (map[string]WorkspaceFileStatus, map[string]string, error) {
-	return workspaceDiffNameStatus(ctx, root, base)
+// workspaceDiffStats obtains status, rename sources and line counts in one
+// Git traversal. Separate name-status and numstat calls each rescan the worktree.
+func workspaceDiffStats(ctx context.Context, root string, revArgs ...string) (map[string]WorkspaceFileStatus, map[string]string, map[string][2]int, error) {
+	args := append([]string{"diff", "--raw", "--numstat", "--find-renames", "-z"}, revArgs...)
+	args = append(args, "--")
+	out, err := gitWorkspaceOutput(ctx, root, args...)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	parts := splitNUL(out)
+	statuses := map[string]WorkspaceFileStatus{}
+	previous := map[string]string{}
+	index := 0
+	for index < len(parts) && strings.HasPrefix(parts[index], ":") {
+		fields := strings.Fields(parts[index])
+		if len(fields) != 5 || index+1 >= len(parts) {
+			return nil, nil, nil, fmt.Errorf("invalid Git raw diff record")
+		}
+		code := fields[4]
+		oldPath := filepath.ToSlash(parts[index+1])
+		newPath := oldPath
+		index += 2
+		status := classifyNameStatus(code)
+		if status == WorkspaceFileRenamed {
+			if index >= len(parts) {
+				return nil, nil, nil, fmt.Errorf("invalid Git rename record")
+			}
+			newPath = filepath.ToSlash(parts[index])
+			index++
+			previous[newPath] = oldPath
+		}
+		statuses[newPath] = status
+	}
+	return statuses, previous, parseNumstatOutput(strings.Join(parts[index:], "\x00")), nil
 }
 
 // workspaceDiffNameStatus runs `git diff --name-status` with the given
@@ -2209,10 +2309,6 @@ func classifyNameStatus(status string) WorkspaceFileStatus {
 	}
 }
 
-func workspaceNumstat(ctx context.Context, root, base string) (map[string][2]int, error) {
-	return workspaceDiffNumstat(ctx, root, base)
-}
-
 // workspaceDiffNumstat runs `git diff --numstat` with the given revision
 // arguments; see workspaceDiffNameStatus for the argument forms.
 func workspaceDiffNumstat(ctx context.Context, root string, revArgs ...string) (map[string][2]int, error) {
@@ -2234,7 +2330,7 @@ func parseNumstatOutput(out string) map[string][2]int {
 	counts := map[string][2]int{}
 	parts := splitNUL(out)
 	for i := 0; i < len(parts); {
-		fields := strings.Split(parts[i], "\t")
+		fields := strings.SplitN(parts[i], "\t", 3)
 		i++
 		if len(fields) < 3 {
 			continue

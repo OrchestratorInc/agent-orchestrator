@@ -82,6 +82,7 @@ var workerEventTypes = map[string]struct{}{
 	"agent.ready":          {},
 	"worker.ready":         {},
 	"chat.assistant_delta": {},
+	"chat.activity":        {},
 }
 
 const (
@@ -275,9 +276,12 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 		Branch:          launch.Branch,
 		Prompt:          launch.Prompt,
 		AgentSessionID:  launch.AgentSessionID,
+		Interface:       string(launch.Interface),
 		ParentSessionID: launch.ParentSessionID,
 		Mode:            launch.Mode,
 		Model:           launch.Model,
+		ReasoningEffort: launch.ReasoningEffort,
+		SelectionAt:     launch.SelectionAt,
 		DeniedCommands:  launch.DeniedCommands,
 		RepositoryURL:   launch.RepositoryURL,
 		DefaultBranch:   launch.DefaultBranch,
@@ -707,18 +711,25 @@ func (s *Server) workerClaimPullRequest(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, http.StatusBadRequest, "INVALID_PULL_REQUEST", "A pull request number or URL is required.")
 		return
 	}
-	// PAT-first, mirroring workerRaisePullRequest: a configured PAT can claim
-	// (fetch + record) a PR even where the checkout broker is read-only.
+	// Prefer the GitHub App (checkout broker) to claim, falling back to the user's
+	// PAT only when the broker cannot complete it — the same App-first/PAT-fallback
+	// precedence as workerRaisePullRequest / the credential-grant endpoints. A
+	// PAT-first order here let a cached-valid-but-rotted PAT (validation_state is a
+	// cached snapshot) shadow a healthy App installation and fail every claim with
+	// "The pull request could not be tracked" (GitHub 401) even though the App can
+	// track it — the same class of bug the raise/merge/token paths avoid by being
+	// App-first. The App token is minted fresh per request and never goes stale.
 	var (
 		pr  domain.PullRequest
 		err error
 	)
-	if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
-		pr, err = s.patWrites.ClaimPullRequest(
-			r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, input.Reference,
-		)
-	} else {
-		pr, err = s.checkoutBroker.ClaimPullRequest(r.Context(), claims.OrgID, claims.SessionID, input.Reference)
+	pr, err = s.checkoutBroker.ClaimPullRequest(r.Context(), claims.OrgID, claims.SessionID, input.Reference)
+	if err != nil {
+		if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
+			pr, err = s.patWrites.ClaimPullRequest(
+				r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, input.Reference,
+			)
+		}
 	}
 	if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
 		writeError(w, r, http.StatusForbidden, "PULL_REQUEST_NOT_AUTHORIZED", "This session does not have an active repository grant.")
@@ -738,6 +749,66 @@ func (s *Server) workerClaimPullRequest(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, worker.ClaimPullRequestResponse{
 		ID: pr.ID, Number: pr.Number, HTMLURL: pr.URL,
 	})
+}
+
+func (s *Server) workerReportGitRefs(w http.ResponseWriter, r *http.Request) {
+	claims := workerFrom(r)
+	if !worker.HasScope(claims, "worker:git") {
+		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:git scope is required.")
+		return
+	}
+	var input worker.ReportGitRefsRequest
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if len(input.Refs) > 128 {
+		writeError(w, r, http.StatusBadRequest, "INVALID_GIT_REFS", "Too many branch heads.")
+		return
+	}
+	refs := make([]domain.WorkerGitRef, 0, len(input.Refs))
+	seen := make(map[string]struct{}, len(input.Refs))
+	for _, ref := range input.Refs {
+		branch := strings.TrimSpace(ref.Branch)
+		if branch == "" || len(branch) > 255 || len(ref.SHA) != 40 || strings.ContainsAny(branch, "\x00\r\n") {
+			writeError(w, r, http.StatusBadRequest, "INVALID_GIT_REFS", "Invalid branch head.")
+			return
+		}
+		if _, err := hex.DecodeString(ref.SHA); err != nil {
+			writeError(w, r, http.StatusBadRequest, "INVALID_GIT_REFS", "Invalid branch head.")
+			return
+		}
+		if _, exists := seen[branch]; exists {
+			writeError(w, r, http.StatusBadRequest, "INVALID_GIT_REFS", "Duplicate branch head.")
+			return
+		}
+		seen[branch] = struct{}{}
+		refs = append(refs, domain.WorkerGitRef{Branch: branch, SHA: ref.SHA})
+	}
+	store, ok := s.store.(interface {
+		WorkerGitHubCheckoutContext(context.Context, string, string) (domain.GitHubCheckoutContext, error)
+		ReplaceWorkerGitRefs(context.Context, string, string, int64, []domain.WorkerGitRef) error
+	})
+	if !ok || s.github == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "SCM_UNAVAILABLE", "Pull request tracking is not available.")
+		return
+	}
+	checkout, err := store.WorkerGitHubCheckoutContext(r.Context(), claims.OrgID, claims.SessionID)
+	if err != nil || checkout.GitHubRepositoryID <= 0 {
+		writeError(w, r, http.StatusForbidden, "REPOSITORY_NOT_AUTHORIZED", "This session has no active repository grant.")
+		return
+	}
+	if err := store.ReplaceWorkerGitRefs(r.Context(), claims.OrgID, claims.SessionID, checkout.GitHubRepositoryID, refs); err != nil {
+		s.logger.Error("record worker branch heads", "error", err)
+		writeError(w, r, http.StatusInternalServerError, "GIT_REFS_FAILED", "Branch heads could not be recorded.")
+		return
+	}
+	if err := s.github.ReconcileWorkerGitRefs(r.Context(), claims.OrgID, checkout.GitHubRepositoryID, refs); err != nil {
+		s.logger.Error("reconcile worker branch heads with webhooks", "error", err)
+		writeError(w, r, http.StatusBadGateway, "PR_RECONCILE_FAILED", "Pull request webhooks could not be reconciled.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // The GitHub App webhook can be delivered to a different environment from the
@@ -876,6 +947,11 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			s.writeWorkerStoreError(w, r, err)
 			return
 		}
+		if err := s.store.AppendInteractiveConversationFacts(r.Context(), claims.OrgID, claims.SessionID,
+			activity.Event, activity.SourceInterface, activity.LatestUserPrompt, activity.LatestAssistantUpdate); err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
 		s.appendSessionProjectionEvent(
 			r.Context(), claims.OrgID, claims.SessionID, input.Type, activity,
 		)
@@ -893,6 +969,20 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.store.AppendSessionEvent(
 			r.Context(), claims.OrgID, claims.SessionID, input.Type, input.Payload,
 		); err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
+	case "chat.activity":
+		var output worker.OutputEvent
+		if err := json.Unmarshal(input.Payload, &output); err != nil ||
+			requireUUID(output.TurnID, "turnId") != nil || output.Attempt <= 0 ||
+			output.Activity == nil || output.Activity.ID == "" || len(output.Activity.ID) > 256 ||
+			len(input.Payload) > maxWorkerOutput+maxWorkerControlBody {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The chat activity payload is invalid.")
+			return
+		}
+		if err := s.store.AppendWorkerTurnActivity(r.Context(), claims.OrgID, claims.SessionID,
+			claims.WorkerID, output.TurnID, claims.Epoch, output.Attempt, *output.Activity); err != nil {
 			s.writeWorkerStoreError(w, r, err)
 			return
 		}
@@ -917,6 +1007,7 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			output.Attempt,
 			output.Stream,
 			output.Text,
+			output.ItemID,
 		); err != nil {
 			s.writeWorkerStoreError(w, r, err)
 			return
@@ -956,7 +1047,10 @@ func (s *Server) workerClaimTurn(w http.ResponseWriter, r *http.Request) {
 		response.Turn = &worker.Turn{
 			ID:              turn.ID,
 			Prompt:          turn.Prompt,
+			Model:           turn.Model,
+			ReasoningEffort: turn.ReasoningEffort,
 			Mode:            turn.Mode,
+			ApprovalMode:    turn.ApprovalMode,
 			DeniedCommands:  turn.DeniedCommands,
 			Harness:         turn.Harness,
 			Attempt:         turn.Attempt,

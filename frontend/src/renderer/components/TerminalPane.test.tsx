@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { shellTerminalsQueryKey, type ShellTerminal } from "../hooks/useShellTerminals";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import type { AttachableTerminal } from "../hooks/useTerminalSession";
+import type { TerminalMux } from "../lib/terminal-mux";
 import type { TerminalTarget } from "../types/terminal";
 import type { WorkspaceSession } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
@@ -22,6 +23,7 @@ const {
 	getMock,
 	postMock,
 	prepareForActivationMock,
+	requestActivationFocusMock,
 	sendUserInputMock,
 	terminalError,
 	terminalState,
@@ -33,12 +35,14 @@ const {
 	xtermMounts,
 	xtermUnmounts,
 	xtermFocusRequests,
+	visibleContentCallback,
 } = vi.hoisted(
 	() => ({
 		attachMock: vi.fn(() => vi.fn()),
 		getMock: vi.fn(async (_path: string, _options: unknown) => ({ data: undefined })),
 		postMock: vi.fn(),
 		prepareForActivationMock: vi.fn(async (): Promise<void> => undefined),
+		requestActivationFocusMock: vi.fn(),
 		sendUserInputMock: vi.fn(),
 		terminalError: { value: undefined as string | undefined },
 		terminalState: { value: "idle" },
@@ -58,6 +62,7 @@ const {
 		xtermMounts: { value: 0 },
 		xtermUnmounts: { value: 0 },
 		xtermFocusRequests: { value: 0 },
+		visibleContentCallback: { value: undefined as (() => void) | undefined },
 	}),
 );
 let terminalLinkHandler: ((uri: string) => void) | undefined;
@@ -93,10 +98,13 @@ vi.mock("./XtermTerminal", () => ({
 	XtermTerminal: (props: {
 		focusRequested?: boolean;
 		isVisible?: boolean;
+		onVisibleContent?: () => void;
 		onLinkOpen?: (uri: string) => void;
 		onReady?: (terminal: AttachableTerminal) => void;
+		supportsCursorColorScheme?: boolean;
 	}) => {
 		terminalLinkHandler = props.onLinkOpen;
+		visibleContentCallback.value = props.onVisibleContent;
 		const instance = useRef(0);
 		if (instance.current === 0) {
 			xtermMounts.value += 1;
@@ -113,7 +121,9 @@ vi.mock("./XtermTerminal", () => ({
 				write: vi.fn((_data, done) => done?.()),
 				writeln: vi.fn(),
 				showLatestOutput: vi.fn(),
+				hasMeasuredGrid: true,
 				prepareForActivation: prepareForActivationMock,
+				requestActivationFocus: requestActivationFocusMock,
 				notifyCursorColorScheme: vi.fn(),
 				sendUserInput: sendUserInputMock,
 				onUserInput: vi.fn(() => disposable),
@@ -123,7 +133,14 @@ vi.mock("./XtermTerminal", () => ({
 				xtermUnmounts.value += 1;
 			};
 		}, []);
-		return <div data-testid="xterm" data-xterm-instance={instance.current} tabIndex={-1} />;
+		return (
+			<div
+				data-supports-cursor-color-scheme={String(props.supportsCursorColorScheme ?? false)}
+				data-testid="xterm"
+				data-xterm-instance={instance.current}
+				tabIndex={-1}
+			/>
+		);
 	},
 }));
 
@@ -178,11 +195,13 @@ beforeEach(() => {
 	attachMock.mockClear();
 	prepareForActivationMock.mockReset();
 	prepareForActivationMock.mockResolvedValue(undefined);
+	requestActivationFocusMock.mockReset();
 	sendUserInputMock.mockReset();
 	sendUserInputMock.mockReturnValue(true);
 	xtermMounts.value = 0;
 	xtermUnmounts.value = 0;
 	xtermFocusRequests.value = 0;
+	visibleContentCallback.value = undefined;
 	useUiStore.setState({ inspectorSessions: {} });
 });
 
@@ -252,6 +271,7 @@ function renderPane(
 	inputRequest?: { id: number; data: string },
 	onInputRequestResult?: (id: number, accepted: boolean) => void,
 	terminalTarget?: TerminalTarget,
+	onTerminalContentReadyChange?: (ready: boolean) => void,
 ) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const previousAO = window.ao;
@@ -264,6 +284,7 @@ function renderPane(
 					fontSize={12}
 					inputRequest={inputRequest}
 					onInputRequestResult={onInputRequestResult}
+					onTerminalContentReadyChange={onTerminalContentReadyChange}
 					session={session}
 					terminalTarget={terminalTarget}
 					theme="dark"
@@ -299,12 +320,14 @@ function renderCachedPane({
 	shellTerminals = [],
 	terminalTarget,
 	focusRequested = false,
+	createMux,
 }: {
 	session?: WorkspaceSession;
 	sessions: WorkspaceSession[];
 	shellTerminals?: ShellTerminal[];
 	terminalTarget?: TerminalTarget;
 	focusRequested?: boolean;
+	createMux?: () => TerminalMux;
 }) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions(sessions));
@@ -324,6 +347,7 @@ function renderCachedPane({
 							terminalTarget={nextTarget}
 							theme="dark"
 							focusRequested={focusRequested}
+							createMux={createMux}
 						/>
 					) : (
 						<div data-testid="away" />
@@ -349,6 +373,34 @@ function activeXterm(): HTMLElement {
 }
 
 describe("TerminalPane empty states", () => {
+	it("does not send Cursor theme protocol to a standalone shell owned by a Cursor session", () => {
+		const cursorSession = { ...worker, provider: "cursor" } satisfies WorkspaceSession;
+		const shell = {
+			handleId: "shell-handle",
+			sessionId: cursorSession.id,
+			workingDir: "/repo/my-app",
+			title: "Terminal 1",
+			createdAt: "2026-10-02T00:00:00Z",
+		} satisfies ShellTerminal;
+		const view = renderCachedPane({
+			session: cursorSession,
+			sessions: [cursorSession],
+			shellTerminals: [shell],
+			terminalTarget: {
+				generation: shell.createdAt,
+				kind: "shell",
+				handleId: shell.handleId,
+				sessionId: cursorSession.id,
+				title: shell.title,
+			},
+		});
+		try {
+			expect(activeXterm()).toHaveAttribute("data-supports-cursor-color-scheme", "false");
+		} finally {
+			view.restore();
+		}
+	});
+
 	it("reports terminal attachment state changes to an optional observer", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const previousAO = window.ao;
@@ -532,6 +584,36 @@ describe("TerminalPane replay cover", () => {
 		}
 	});
 
+	it("reports the cloud agent ready only after its first replay is painted", async () => {
+		const onContentReady = vi.fn();
+		let finishPaint: (() => void) | undefined;
+		prepareForActivationMock.mockImplementation(() => new Promise<void>((resolve) => { finishPaint = resolve; }));
+		terminalState.value = "attached";
+		hasAttached.value = true;
+		replaySettled.value = false;
+		const session = { ...worker, terminalHandleId: "term-1", cloud: { orgId: "org-1" } };
+		const view = renderPane(session, undefined, undefined, undefined, onContentReady);
+		try {
+			expect(onContentReady).toHaveBeenLastCalledWith(false);
+			replaySettled.value = true;
+			view.rerender(
+				<QueryClientProvider client={view.queryClient}>
+					<TooltipProvider>
+						<TerminalPane daemonReady fontSize={12} onTerminalContentReadyChange={onContentReady} session={session} theme="dark" />
+					</TooltipProvider>
+				</QueryClientProvider>,
+			);
+			expect(onContentReady).toHaveBeenLastCalledWith(false);
+			await act(async () => finishPaint?.());
+			expect(onContentReady).toHaveBeenLastCalledWith(false);
+			expect(screen.getByTestId("terminal-connecting-cover")).toBeInTheDocument();
+			act(() => visibleContentCallback.value?.());
+			await waitFor(() => expect(onContentReady).toHaveBeenLastCalledWith(true));
+		} finally {
+			view.restore();
+		}
+	});
+
 	it("uncovers once the replay has settled", () => {
 		replaySettled.value = true;
 		const view = renderPane({ ...worker, terminalHandleId: "term-1" });
@@ -624,6 +706,21 @@ describe("TerminalCacheProvider", () => {
 	const sessionA = { ...worker, id: "sess-a", title: "session A", terminalHandleId: "handle-a" };
 	const sessionB = { ...worker, id: "sess-b", title: "session B", terminalHandleId: "handle-b" };
 
+	it("uses a caller-provided mux without retaining a remote shell in the local cache", async () => {
+		const shell = { handleId: "auth-a", title: "Log in", workingDir: "/host-a", createdAt: "2026-09-29T00:00:00Z" } satisfies ShellTerminal;
+		const createMux = vi.fn(() => ({} as TerminalMux));
+		const view = renderCachedPane({
+			sessions: [], shellTerminals: [shell], createMux,
+			terminalTarget: { kind: "shell", handleId: shell.handleId, generation: `box-a:${shell.createdAt}`, title: shell.title },
+		});
+		try {
+			await waitFor(() => expect(terminalSessionOptions.find((options) => options.shellTerminalHandleId === shell.handleId)?.createMux).toBe(createMux));
+			expect(document.querySelector("[data-terminal-cache-key]")).toBeNull();
+		} finally {
+			view.restore();
+		}
+	});
+
 	it("removes externally-created terminal hosts when the shell provider unmounts", async () => {
 		const view = renderCachedPane({ session: sessionA, sessions: [sessionA, sessionB] });
 		try {
@@ -705,6 +802,21 @@ describe("TerminalCacheProvider", () => {
 
 			view.show(tuiA);
 			await waitFor(() => expect(xtermFocusRequests.value).toBe(3));
+		} finally {
+			view.restore();
+		}
+	});
+
+	it("asks a retained terminal to restore focus on every re-activation", async () => {
+		const view = renderCachedPane({ session: sessionA, sessions: [sessionA, sessionB] });
+		try {
+			await waitFor(() => expect(requestActivationFocusMock).toHaveBeenCalledTimes(1));
+
+			view.show(sessionB);
+			await waitFor(() => expect(requestActivationFocusMock).toHaveBeenCalledTimes(2));
+
+			view.show(sessionA);
+			await waitFor(() => expect(requestActivationFocusMock).toHaveBeenCalledTimes(3));
 		} finally {
 			view.restore();
 		}
@@ -903,6 +1015,17 @@ describe("TerminalCacheProvider", () => {
 });
 
 describe("terminal restore", () => {
+	it("does not show the terminal-ended strip for a Cloud agent", () => {
+		terminalState.value = "exited";
+		const view = renderPane({ ...worker, cloud: { orgId: "org-1" }, terminalHandleId: "term-1" });
+		try {
+			expect(screen.queryByText("This terminal process ended, but the session is not marked terminated yet.")).not.toBeInTheDocument();
+			expect(screen.queryByText("TERMINAL ENDED")).not.toBeInTheDocument();
+		} finally {
+			view.restore();
+		}
+	});
+
 	it.each([
 		["exited", undefined],
 		["error", "terminal handle missing"],

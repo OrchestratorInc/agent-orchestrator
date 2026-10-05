@@ -113,6 +113,28 @@ func (q *Queries) ClearReviewerHandleByHarness(ctx context.Context, arg ClearRev
 	return err
 }
 
+const failUnsubmittedReviewBatchForChatTurn = `-- name: FailUnsubmittedReviewBatchForChatTurn :exec
+UPDATE review_run SET status = 'failed', body = 'reviewer Chat turn ended without submitting a result'
+WHERE status = 'running' AND verdict = '' AND batch_id != ''
+  AND EXISTS (
+    SELECT 1 FROM conversation_turns AS turn
+    JOIN conversation_messages AS message ON message.turn_id = turn.id AND message.conversation_id = turn.conversation_id
+    JOIN review ON review.id = turn.handled_by_review_id
+    WHERE turn.id = ?1
+      AND turn.state IN ('completed', 'recovered', 'failed', 'interrupted', 'cancelled')
+      AND turn.handled_by_review_id = review_run.review_id
+      AND turn.controller_generation != '' AND turn.controller_generation = review.controller_generation
+      AND review.interface_mode = 'chat'
+      AND message.role = 'user' AND message.origin = 'daemon'
+      AND message.client_message_id = 'review-batch:' || review_run.batch_id
+  )
+`
+
+func (q *Queries) FailUnsubmittedReviewBatchForChatTurn(ctx context.Context, turnID string) error {
+	_, err := q.db.ExecContext(ctx, failUnsubmittedReviewBatchForChatTurn, turnID)
+	return err
+}
+
 const getReviewByID = `-- name: GetReviewByID :one
 SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, created_at, updated_at
 FROM review WHERE id = ?
@@ -533,6 +555,51 @@ func (q *Queries) ListCurrentHeadReviewRunsBySessions(ctx context.Context, jsonE
 	return items, nil
 }
 
+const listLiveReviewerHandles = `-- name: ListLiveReviewerHandles :many
+SELECT id, session_id, harness, reviewer_handle_id
+FROM review WHERE reviewer_handle_id != ''
+`
+
+type ListLiveReviewerHandlesRow struct {
+	ID               string
+	SessionID        domain.SessionID
+	Harness          domain.ReviewerHarness
+	ReviewerHandleID string
+}
+
+// Every review row that currently owns a live TUI reviewer pane, across the
+// whole daemon: reviewer processes have no session row of their own (their
+// identity is this table's reviewer_handle_id), and a reviewer outlives the
+// worker that spawned it, so this is the only way to find one that survived
+// its worker's death.
+func (q *Queries) ListLiveReviewerHandles(ctx context.Context) ([]ListLiveReviewerHandlesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listLiveReviewerHandles)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLiveReviewerHandlesRow{}
+	for rows.Next() {
+		var i ListLiveReviewerHandlesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Harness,
+			&i.ReviewerHandleID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecoverableChatReviews = `-- name: ListRecoverableChatReviews :many
 SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, created_at, updated_at
 FROM review WHERE interface_mode = 'chat' AND provider_conversation_id != '' ORDER BY updated_at, id
@@ -829,10 +896,50 @@ func (q *Queries) RecordReviewChatControllerError(ctx context.Context, arg Recor
 	return result.RowsAffected()
 }
 
+const restoreReviewLaunchState = `-- name: RestoreReviewLaunchState :execrows
+UPDATE review SET pr_url = ?, interface_mode = ?, reviewer_handle_id = ?, agent_session_id = ?,
+    reviewer_activity_state = ?, reviewer_launch_id = ?, provider_conversation_id = ?,
+    controller_generation = ?, controller_error = ?, updated_at = ? WHERE id = ?
+`
+
+type RestoreReviewLaunchStateParams struct {
+	PRURL                  string
+	InterfaceMode          string
+	ReviewerHandleID       string
+	AgentSessionID         string
+	ReviewerActivityState  string
+	ReviewerLaunchID       string
+	ProviderConversationID string
+	ControllerGeneration   string
+	ControllerError        string
+	UpdatedAt              time.Time
+	ID                     string
+}
+
+func (q *Queries) RestoreReviewLaunchState(ctx context.Context, arg RestoreReviewLaunchStateParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, restoreReviewLaunchState,
+		arg.PRURL,
+		arg.InterfaceMode,
+		arg.ReviewerHandleID,
+		arg.AgentSessionID,
+		arg.ReviewerActivityState,
+		arg.ReviewerLaunchID,
+		arg.ProviderConversationID,
+		arg.ControllerGeneration,
+		arg.ControllerError,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setReviewInterfaceMode = `-- name: SetReviewInterfaceMode :execrows
 UPDATE review SET interface_mode = ?, reviewer_handle_id = CASE WHEN ? = 'chat' THEN '' ELSE reviewer_handle_id END,
     provider_conversation_id = CASE WHEN ? = 'tui' THEN '' ELSE provider_conversation_id END,
-    controller_generation = CASE WHEN ? = 'tui' THEN '' ELSE controller_generation END,
+    controller_generation = CASE WHEN ? = 'chat' THEN '' ELSE controller_generation END,
     controller_error = '', updated_at = ? WHERE id = ?
 `
 

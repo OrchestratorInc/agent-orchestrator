@@ -589,6 +589,7 @@ func TestConnectOrStartPreparesOnlyWhenLaunchingProvider(t *testing.T) {
 			_ = Shutdown(context.Background(), dataDir, cfg.SessionID)
 			<-done
 		})
+		cfg.ReconnectOnly = true
 		prepareCalls := 0
 		cfg.Prepare = func(context.Context) (PreparedProvider, error) {
 			prepareCalls++
@@ -986,4 +987,18 @@ func requestProviderPID(t *testing.T, transport *Transport, id int64, method str
 		t.Fatalf("provider response = id:%d pid:%s", response.ID, strconv.Itoa(response.Result.PID))
 	}
 	return response.Result.PID
+}
+
+func TestReconnectOnlyNeverPreparesOrStartsMissingHost(t *testing.T) {
+	cfg := Config{SessionID: "missing", DataDir: t.TempDir(), Workdir: t.TempDir(), ReconnectOnly: true}
+	cfg.Prepare = func(context.Context) (PreparedProvider, error) {
+		t.Fatal("health check prepared a provider launch")
+		return PreparedProvider{}, nil
+	}
+	if _, err := ConnectOrStart(context.Background(), cfg); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("error = %v, want stopped host", err)
+	}
+	if _, err := readDescriptor(cfg.DataDir, cfg.SessionID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("health check wrote a descriptor: %v", err)
+	}
 }

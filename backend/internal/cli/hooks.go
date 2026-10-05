@@ -53,6 +53,8 @@ type setActivityAPIRequest struct {
 	Event                        string                              `json:"event,omitempty"`
 	ToolName                     string                              `json:"toolName,omitempty"`
 	ToolUseID                    string                              `json:"toolUseId,omitempty"`
+	SubagentID                   string                              `json:"subagentId,omitempty"`
+	RunningSubagentIDs           *[]string                           `json:"runningSubagentIds,omitempty"`
 	AgentSessionID               string                              `json:"agentSessionId,omitempty"`
 	LatestUserPrompt             string                              `json:"latestUserPrompt,omitempty"`
 	LatestAssistantUpdate        string                              `json:"latestAssistantUpdate,omitempty"`
@@ -114,6 +116,94 @@ func activityMeta(payload []byte) (toolName, toolUseID string) {
 		p.ToolUseID = ""
 	}
 	return p.ToolName, p.ToolUseID
+}
+
+// claudeSubagentFacts keeps native child identity separate from the resumable
+// main session id. A non-nil empty slice proves no children remain; nil means
+// Claude could not supply a task-registry snapshot and must not clear children.
+func claudeSubagentFacts(event string, payload []byte) (string, *[]string) {
+	var p struct {
+		AgentID         string          `json:"agent_id"`
+		BackgroundTasks json.RawMessage `json:"background_tasks"`
+	}
+	if json.Unmarshal(normalizeHookPayload(payload), &p) != nil {
+		return "", nil
+	}
+	id := validSubagentID(p.AgentID)
+	if (event != "stop" && event != "subagent-stop") || len(p.BackgroundTasks) == 0 || p.BackgroundTasks[0] != '[' {
+		return id, nil
+	}
+	var tasks []struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(p.BackgroundTasks, &tasks) != nil || len(tasks) > 128 {
+		return id, nil
+	}
+	running := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		if task.Type != "subagent" {
+			continue
+		}
+		childID := validSubagentID(task.ID)
+		if childID == "" {
+			return id, nil
+		}
+		running = append(running, childID)
+	}
+	return id, &running
+}
+
+func validSubagentID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" || len(id) > maxActivityMetaLen || domain.SanitizeControlChars(id) != id {
+		return ""
+	}
+	return id
+}
+
+func codexSubagentID(event string, payload []byte) string {
+	if event != "subagent-start" && event != "subagent-stop" && event != "user-prompt-submit" {
+		return ""
+	}
+	var p struct {
+		AgentID string `json:"agent_id"`
+	}
+	if json.Unmarshal(normalizeHookPayload(payload), &p) != nil {
+		return ""
+	}
+	return validSubagentID(p.AgentID)
+}
+
+// Codex emits PostToolUse for spawn_agent before the new child's
+// SubagentStart hook. The successful tool response carries a task path but
+// not the child's native agent_id, so its tool_use_id is a provisional key.
+func codexSpawnToolUseID(payload []byte) string {
+	var p struct {
+		ToolName     string `json:"tool_name"`
+		ToolUseID    string `json:"tool_use_id"`
+		AgentID      string `json:"agent_id"`
+		ToolResponse string `json:"tool_response"`
+	}
+	if json.Unmarshal(normalizeHookPayload(payload), &p) != nil ||
+		!isCodexSpawnToolName(p.ToolName) || p.AgentID != "" {
+		return ""
+	}
+	id := validSubagentID(p.ToolUseID)
+	if id == "" {
+		return ""
+	}
+	var response struct {
+		TaskName string `json:"task_name"`
+	}
+	if json.Unmarshal([]byte(p.ToolResponse), &response) != nil || response.TaskName == "" {
+		return ""
+	}
+	return id
+}
+
+func isCodexSpawnToolName(name string) bool {
+	return name == "spawn_agent" || name == "collaborationspawn_agent"
 }
 
 // normalizeHookPayload strips a leading UTF-8 BOM so payloads re-encoded by a
@@ -516,7 +606,20 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		agentSessionID = hookAgentSessionID(payload)
 	}
 	usage := hookUsageMetadata(agent, payload)
-	if !hasActivity && agentSessionID == "" && usage == nil {
+	var subagentID string
+	var runningSubagentIDs *[]string
+	if domain.AgentHarness(agent) == domain.HarnessClaudeCode {
+		subagentID, runningSubagentIDs = claudeSubagentFacts(event, payload)
+	} else if domain.AgentHarness(agent) == domain.HarnessCodex {
+		subagentID = codexSubagentID(event, payload)
+		if event == "post-tool-use" {
+			if spawnID := codexSpawnToolUseID(payload); spawnID != "" {
+				subagentID = spawnID
+				event = "subagent-spawn"
+			}
+		}
+	}
+	if !hasActivity && agentSessionID == "" && usage == nil && subagentID == "" {
 		// Unknown agent, or an event carrying neither activity nor resumable
 		// session metadata: report nothing.
 		return nil
@@ -549,6 +652,8 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		Event:                        event,
 		ToolName:                     toolName,
 		ToolUseID:                    toolUseID,
+		SubagentID:                   subagentID,
+		RunningSubagentIDs:           runningSubagentIDs,
 		AgentSessionID:               agentSessionID,
 		LatestUserPrompt:             conversation.LatestUserPrompt,
 		LatestAssistantUpdate:        conversation.LatestAssistantUpdate,

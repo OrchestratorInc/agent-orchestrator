@@ -242,11 +242,9 @@ function editorSnapshot(): ComposerEditorSnapshot {
 }
 
 function focusEditor(editor: LexicalEditor): void {
-	editor.getRootElement()?.focus();
-	editor.update(() => {
-		const selection = $getSelection();
-		if (!$isRangeSelection(selection)) $getRoot().selectEnd();
-	});
+	editor.focus();
+	const root = editor.getRootElement();
+	if (root && document.activeElement !== root) root.focus({ preventScroll: true });
 }
 
 const EditorBridge = forwardRef<

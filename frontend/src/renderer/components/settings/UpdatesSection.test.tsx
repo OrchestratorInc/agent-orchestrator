@@ -88,3 +88,26 @@ it("renders the installed nightly build time as the device-local instant", async
 	);
 	expect(await screen.findByText(`Built ${builtAt}`)).toBeVisible();
 });
+
+it("links PRs and commits in downloaded notes from the renamed repository", async () => {
+	const repo = "https://github.com/OrchestratorInc/agent-orchestrator";
+	const commit = "7b7db96413e6a396a10afbcada0e2fd04a994ad8";
+	updGetStatus.mockResolvedValue({
+		state: "downloaded",
+		version: "0.13.4-nightly.202610051230",
+		releaseNotes: [
+			"**Changes in this nightly**",
+			"",
+			`- Refresh startup readiness by @illegalcall in [#6228](${repo}/pull/6228)`,
+			"",
+			"**Build details**",
+			"",
+			`- Commit: [7b7db96](${repo}/commit/${commit})`,
+		].join("\n"),
+	} satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByRole("link", { name: "#6228" })).toHaveAttribute("href", `${repo}/pull/6228`);
+	expect(screen.getByRole("link", { name: "7b7db96" })).toHaveAttribute("href", `${repo}/commit/${commit}`);
+	expect(screen.queryByText(/@illegalcall/)).toBeNull();
+});

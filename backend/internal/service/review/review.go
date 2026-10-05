@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -59,6 +60,8 @@ func reviewErrorKind(err error) string {
 type Manager interface {
 	RecoverChatReviewers(ctx context.Context) error
 	Trigger(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig) (reviewcore.TriggerResult, error)
+	TriggerWithMode(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig, mode domain.ReviewerInterfaceMode) (reviewcore.TriggerResult, error)
+	TriggerWithOptions(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error)
 	RequestRereview(ctx context.Context, workerID domain.SessionID, prURL, reviewer string) error
 	ResolveReviewComment(ctx context.Context, workerID domain.SessionID, prURL, commentURL string) error
 	TriggerAuto(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness) (reviewcore.TriggerResult, error)
@@ -83,10 +86,15 @@ type Service struct {
 	clock              func() time.Time
 	telemetry          ports.EventSink
 	codexOperationGate ports.CodexOperationGate
+	notifications      reviewNotificationSink
 	// engineTrigger indirects the engine's source-tagged trigger so the
 	// instrumented path can be exercised without standing up a full engine and
 	// its eighteen-method store. Defaulted in New; only tests replace it.
 	engineTrigger func(context.Context, domain.SessionID, domain.ReviewerHarness, domain.AgentConfig, domain.ReviewTriggerSource) (reviewcore.TriggerResult, error)
+}
+
+type reviewNotificationSink interface {
+	Notify(context.Context, ports.NotificationIntent) error
 }
 
 var _ Manager = (*Service)(nil)
@@ -149,6 +157,12 @@ func WithReviewResolver(resolver ports.SCMReviewResolver) Option {
 // is how every existing test constructs it.
 func WithTelemetry(sink ports.EventSink) Option {
 	return func(s *Service) { s.telemetry = sink }
+}
+
+// WithNotificationSink publishes durable review results after their run has
+// reached complete. The run id is the dedupe key, so submit retries are safe.
+func WithNotificationSink(sink reviewNotificationSink) Option {
+	return func(s *Service) { s.notifications = sink }
 }
 
 // WithCodexAccountOperationGate prevents new Codex reviewer controllers from
@@ -418,6 +432,22 @@ func (s *Service) Trigger(
 	return s.triggerWithSource(ctx, workerID, harness, config, domain.ReviewTriggerManual)
 }
 
+// TriggerWithMode starts a manual pass on the requested reviewer surface.
+func (s *Service) TriggerWithMode(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig, mode domain.ReviewerInterfaceMode) (reviewcore.TriggerResult, error) {
+	if mode != domain.ReviewerInterfaceChat && mode != domain.ReviewerInterfaceTUI {
+		return reviewcore.TriggerResult{}, fmt.Errorf("%w: unknown reviewer interface mode %q", ErrInvalid, mode)
+	}
+	return s.triggerWithSource(ctx, workerID, harness, config, domain.ReviewTriggerManual, reviewcore.TriggerOptions{InterfaceMode: mode})
+}
+
+// TriggerWithOptions starts a pass with an explicit same-commit policy.
+func (s *Service) TriggerWithOptions(ctx context.Context, workerID domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+	if opts.Source == "" {
+		opts.Source = domain.ReviewTriggerManual
+	}
+	return s.triggerWithSource(ctx, workerID, opts.Harness, opts.Config, opts.Source, opts)
+}
+
 // TriggerAuto starts a daemon-initiated review pass.
 func (s *Service) TriggerAuto(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness) (reviewcore.TriggerResult, error) {
 	return s.triggerWithSource(ctx, workerID, harness, domain.AgentConfig{}, domain.ReviewTriggerAuto)
@@ -434,6 +464,7 @@ func (s *Service) triggerWithSource(
 	harness domain.ReviewerHarness,
 	config domain.AgentConfig,
 	source domain.ReviewTriggerSource,
+	options ...reviewcore.TriggerOptions,
 ) (reviewcore.TriggerResult, error) {
 	triggeredPayload := map[string]any{"trigger": string(source)}
 	if err := config.Validate(); err != nil {
@@ -455,7 +486,15 @@ func (s *Service) triggerWithSource(
 		}
 		defer release()
 	}
-	result, err := s.engineTrigger(ctx, workerID, harness, config, source)
+	var result reviewcore.TriggerResult
+	var err error
+	if len(options) > 0 {
+		opts := options[0]
+		opts.Harness, opts.Config, opts.Source = harness, config, source
+		result, err = s.engine.TriggerWithOptions(ctx, workerID, opts)
+	} else {
+		result, err = s.engineTrigger(ctx, workerID, harness, config, source)
+	}
 	if err != nil {
 		s.emit(ctx, "ao.review.trigger_failed", workerID, map[string]any{
 			"error_kind": reviewErrorKind(err),
@@ -742,7 +781,40 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 	default:
 		return domain.ReviewRun{}, fmt.Errorf("%w: review run %q is not running", errRunSuperseded, runID)
 	}
+	s.emitReviewNotification(ctx, run)
 	return run, nil
+}
+
+func (s *Service) emitReviewNotification(ctx context.Context, run domain.ReviewRun) {
+	if s.notifications == nil {
+		return
+	}
+	session, ok, err := s.store.GetSession(ctx, run.SessionID)
+	if err != nil || !ok {
+		slog.Default().WarnContext(ctx, "review notification session lookup failed", "session", run.SessionID, "run", run.ID, "err", err)
+		return
+	}
+	intent := ports.NotificationIntent{
+		SessionID: session.ID, ProjectID: session.ProjectID, PRURL: run.PRURL,
+		SessionDisplayName: session.DisplayName, CreatedAt: s.clock(), SourceKey: "review_run:" + run.ID,
+	}
+	if run.Verdict == domain.VerdictChangesRequested {
+		intent.Type = domain.NotificationReviewChangesRequested
+	} else {
+		intent.Type = domain.NotificationReviewCompleted
+	}
+	prs, listErr := s.store.ListPRsBySession(ctx, run.SessionID)
+	if listErr == nil {
+		for _, pr := range prs {
+			if pr.URL == run.PRURL || pr.HTMLURL == run.PRURL {
+				intent.PRNumber, intent.PRTitle = pr.Number, pr.Title
+				break
+			}
+		}
+	}
+	if err := s.notifications.Notify(ctx, intent); err != nil {
+		slog.Default().WarnContext(ctx, "review notification failed", "session", run.SessionID, "run", run.ID, "err", err)
+	}
 }
 
 func (s *Service) deliverSubmitted(ctx context.Context, workerID domain.SessionID, runs []domain.ReviewRun) ([]domain.ReviewRun, error) {

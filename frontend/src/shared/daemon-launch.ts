@@ -34,19 +34,13 @@ export function resolveDaemonLaunch(
 	}
 
 	if (!isPackaged) {
-		if (platform === "win32") {
-			return {
-				command: env.AO_DEV_DAEMON_BINARY?.trim() || joinPath(appPath, "daemon", bundledDaemonBinaryName(platform)),
-				args: ["daemon"],
-				cwd: appPath,
-				shell: false,
-				source: "dev",
-			};
-		}
+		// Run the daemon predev already built rather than `go run`, so the daemon's
+		// parent is Electron itself, as in the packaged app; the diagnostics view
+		// counts the daemon's parent tree as the rest of AO.
 		return {
-			command: "go",
-			args: ["run", "./cmd/ao", "daemon"],
-			cwd: joinPath(appPath, "..", "backend"),
+			command: env.AO_DEV_DAEMON_BINARY?.trim() || joinPath(appPath, "daemon", bundledDaemonBinaryName(platform)),
+			args: ["daemon"],
+			cwd: appPath,
 			shell: false,
 			source: "dev",
 		};

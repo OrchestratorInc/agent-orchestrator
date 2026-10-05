@@ -283,6 +283,24 @@ func TestSessionsAPI_ActivityAcceptsBlocked(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_ActivityForwardsClaudeSubagentFacts(t *testing.T) {
+	rec := &fakeActivityRecorder{}
+	srv := newActivityTestServer(t, rec)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/activity",
+		`{"state":"idle","event":"stop","agentSessionId":"native-1","launchId":"launch-1","runningSubagentIds":["child-1","child-2"]}`)
+	if status != http.StatusOK {
+		t.Fatalf("activity = %d, want 200; body=%s", status, body)
+	}
+	if rec.gotSignal.RunningSubagentIDs == nil || len(*rec.gotSignal.RunningSubagentIDs) != 2 {
+		t.Fatalf("running children = %+v", rec.gotSignal.RunningSubagentIDs)
+	}
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/activity",
+		`{"event":"subagent-stop","subagentId":"child-1","launchId":"launch-1"}`)
+	if status != http.StatusOK || rec.gotSignal.SubagentID != "child-1" || rec.gotSignal.Valid {
+		t.Fatalf("child completion: status=%d body=%s signal=%+v", status, body, rec.gotSignal)
+	}
+}
+
 func TestSessionsAPI_ActivityThreadsCorrelationFields(t *testing.T) {
 	// The optional correlation fields ride into the signal (sanitized); a
 	// body without them (old CLIs) keeps producing a plain state-only signal,

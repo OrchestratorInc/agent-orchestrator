@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	codexreview "github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -19,6 +20,33 @@ type fakeReviewer struct {
 	gotInv           ports.ReviewInvocation
 	workingDirectory string
 	env              map[string]string
+}
+
+type recordingReviewChatStop struct {
+	ReviewerChatController
+	stopped     string
+	interrupted bool
+}
+
+func (c *recordingReviewChatStop) StopReviewChat(_ context.Context, reviewID string) error {
+	c.stopped = reviewID
+	return nil
+}
+
+func (c *recordingReviewChatStop) InterruptReviewChat(context.Context, string) error {
+	c.interrupted = true
+	return nil
+}
+
+func TestCancelReviewerChatStopsItsController(t *testing.T) {
+	chat := &recordingReviewChatStop{}
+	launcher := NewLauncher(fakeReviewerResolver{}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat))
+	if err := launcher.Cancel(context.Background(), "review-chat:review-1", domain.ReviewerCodex); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if chat.stopped != "review-1" || chat.interrupted {
+		t.Fatalf("reviewer Chat cancel: stopped=%q interrupted=%v", chat.stopped, chat.interrupted)
+	}
 }
 
 func (f *fakeReviewer) ReviewCommand(_ context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
@@ -394,20 +422,23 @@ func (f fakeAgentAuthResolver) AuthStatus(context.Context, domain.ReviewerHarnes
 }
 
 type fakeRuntime struct {
-	createCfg     ports.RuntimeConfig
-	sentMsg       string
-	sentMsgs      []string
-	sentInput     string
-	sentInputs    []string
-	sentTo        string
-	alive         bool
-	interrupt     string
-	interrupts    int
-	destroyed     string
-	destroyBefore bool
-	created       bool
-	output        string
-	outputReads   int
+	createCfg         ports.RuntimeConfig
+	sentMsg           string
+	sentMsgs          []string
+	sentInput         string
+	sentInputs        []string
+	sentTo            string
+	alive             bool
+	unsupervisedAlive bool
+	supervisedRecord  bool
+	interrupt         string
+	interrupts        int
+	destroyed         string
+	destroyBefore     bool
+	created           bool
+	output            string
+	outputReads       int
+	exactRef          ports.SupervisedProcessRef
 }
 
 func (f *fakeRuntime) Create(_ context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
@@ -424,6 +455,19 @@ func (f *fakeRuntime) Destroy(_ context.Context, handle ports.RuntimeHandle) err
 }
 func (f *fakeRuntime) IsAlive(_ context.Context, _ ports.RuntimeHandle) (bool, error) {
 	return f.alive, nil
+}
+func (f *fakeRuntime) IsChildAlive(_ context.Context, _ ports.RuntimeHandle) (bool, error) {
+	return f.alive, nil
+}
+func (f *fakeRuntime) IsUnsupervisedReviewerAlive(_ context.Context, _ ports.RuntimeHandle) (bool, error) {
+	return f.unsupervisedAlive, nil
+}
+func (f *fakeRuntime) IsExactSupervisedProcessAlive(_ context.Context, _ ports.RuntimeHandle, ref ports.SupervisedProcessRef) (bool, error) {
+	f.exactRef = ref
+	return f.alive, nil
+}
+func (f *fakeRuntime) HasSupervisedProcessRecord(_ context.Context, _ ports.RuntimeHandle) (bool, error) {
+	return f.supervisedRecord, nil
 }
 func (f *fakeRuntime) GetOutput(_ context.Context, _ ports.RuntimeHandle, _ int) (string, error) {
 	f.outputReads++
@@ -832,12 +876,60 @@ func TestLauncherNotifyKeepsEarlierTaskReferenceImmutable(t *testing.T) {
 }
 
 func TestLauncherAlive(t *testing.T) {
-	l := NewLauncher(fakeReviewerResolver{ok: true}, &fakeRuntime{alive: true}, t.TempDir())
-	if ok, _ := l.Alive(context.Background(), "review-mer-1"); !ok {
+	rt := &fakeRuntime{alive: true, supervisedRecord: true}
+	l := NewLauncher(fakeReviewerResolver{ok: true}, rt, t.TempDir())
+	if ok, _ := l.Alive(context.Background(), "review-mer-1", ""); !ok {
 		t.Fatal("want alive true")
 	}
-	if ok, _ := l.Alive(context.Background(), ""); ok {
+	if ok, _ := l.Alive(context.Background(), "review-mer-1", "launch-1"); !ok {
+		t.Fatal("want supervised reviewer alive")
+	}
+	if rt.exactRef.SessionID != "review-mer-1" || rt.exactRef.LaunchID != "launch-1" {
+		t.Fatalf("exact process ref = %+v", rt.exactRef)
+	}
+	if ok, _ := l.Alive(context.Background(), "", ""); ok {
 		t.Fatal("empty handle should not be alive")
+	}
+}
+
+func TestLauncherAliveFallsBackForLegacyReviewerLaunch(t *testing.T) {
+	rt := &fakeRuntime{alive: true, unsupervisedAlive: true}
+	l := NewLauncher(fakeReviewerResolver{ok: true}, rt, t.TempDir())
+	if alive, err := l.Alive(context.Background(), "review-mer-1", "launch-1"); err != nil || !alive {
+		t.Fatalf("Alive() = (%v, %v), want legacy child alive", alive, err)
+	}
+	if rt.exactRef.LaunchID != "" {
+		t.Fatalf("exact supervised probe used for legacy launch: %+v", rt.exactRef)
+	}
+}
+
+func TestLauncherAliveDoesNotTreatReviewerExitSinkAsAlive(t *testing.T) {
+	rt := &fakeRuntime{alive: true, supervisedRecord: false, unsupervisedAlive: false}
+	l := NewLauncher(fakeReviewerResolver{ok: true}, rt, t.TempDir())
+	if alive, err := l.Alive(context.Background(), "review-mer-1", "launch-1"); err != nil || alive {
+		t.Fatalf("Alive() = (%v, %v), want exited reviewer", alive, err)
+	}
+}
+
+func TestLauncherSupervisesReviewerLaunch(t *testing.T) {
+	rt := &fakeRuntime{}
+	l := NewLauncher(
+		fakeReviewerResolver{reviewer: &fakeReviewer{}, ok: true},
+		rt,
+		t.TempDir(),
+		WithExecutable(func() (string, error) { return "/usr/local/bin/ao", nil }),
+	)
+	spec := launchSpec()
+	spec.LaunchID = "launch-1"
+	if _, err := l.Spawn(context.Background(), spec); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	want := "/usr/local/bin/ao agent-process supervise --session review-mer-1 --activity-review review-1 --launch launch-1 -- greptile review"
+	if got := strings.Join(rt.createCfg.Argv, " "); got != want {
+		t.Fatalf("runtime argv = %q, want %q", got, want)
+	}
+	if rt.createCfg.Env[sessionmanager.EnvSupervisedProcess] != "1" || rt.createCfg.Env[sessionmanager.EnvRuntimeLaunchID] != "launch-1" {
+		t.Fatalf("supervisor env = %#v", rt.createCfg.Env)
 	}
 }
 
@@ -899,6 +991,22 @@ func TestLauncherSpawnUsesReviewerWorkingDirectoryAndInitialMessage(t *testing.T
 	}
 	if rt.createCfg.WorkspacePath != "/ao/reviewer" || rt.sentMsg != "task ref" {
 		t.Fatalf("create = %+v, sent = %q", rt.createCfg, rt.sentMsg)
+	}
+}
+
+func TestLauncherSpawnCanDeferReviewerInitialMessage(t *testing.T) {
+	reviewer := &fakeReviewerWithLaunchSpec{spec: ports.ReviewCommandSpec{
+		Argv: []string{"kiro-cli", "chat"}, InitialMessage: "task ref",
+	}}
+	rt := &fakeRuntime{}
+	l := newTestLauncher(t, reviewer, rt)
+	spec := launchSpec()
+	spec.DeferInitialMessage = true
+	if _, err := l.Spawn(context.Background(), spec); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if rt.sentMsg != "" {
+		t.Fatalf("deferred launch sent %q, want no initial message", rt.sentMsg)
 	}
 }
 
@@ -1024,8 +1132,8 @@ func TestLauncherPreflightAgentAuthUnauthorizedBlocksReviewer(t *testing.T) {
 		WithAgentAuth(fakeAgentAuthResolver{status: ports.AgentAuthStatusUnauthorized, ok: true}),
 	)
 
-	if err := l.Preflight(context.Background(), domain.ReviewerClaudeCode, "/ws/mer-1"); err == nil || !strings.Contains(err.Error(), "agent auth catalog") {
-		t.Fatalf("err = %v, want agent auth catalog failure", err)
+	if err := l.Preflight(context.Background(), domain.ReviewerClaudeCode, "/ws/mer-1"); !errors.Is(err, ports.ErrChatAuthRequired) {
+		t.Fatalf("err = %v, want ErrChatAuthRequired", err)
 	}
 }
 
@@ -1073,5 +1181,62 @@ func TestLauncherPreflightEnvPrefixWithMissingBinary(t *testing.T) {
 	l := NewLauncher(fakeReviewerResolver{reviewer: reviewer, ok: true}, &fakeRuntime{}, "")
 	if err := l.Preflight(context.Background(), domain.ReviewerClaudeCode, "/ws/mer-1"); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("err = %v, want 'not found'", err)
+	}
+}
+
+func TestDeferredCodexTerminalDispatchesTaskOnlyOnNotify(t *testing.T) {
+	t.Setenv("AO_DATA_DIR", t.TempDir())
+	t.Setenv("AO_RUN_FILE", filepath.Join(t.TempDir(), "running.json"))
+	// Resolve a harmless binary; no provider process is started by fakeRuntime.
+	bin := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	rt := &fakeRuntime{}
+	l := newTestLauncher(t, codexreview.New(), rt)
+	spec := launchSpec()
+	spec.Harness = domain.ReviewerCodex
+	spec.WorkspacePath = t.TempDir()
+	spec.InterfaceMode = domain.ReviewerInterfaceTUI
+	spec.DeferInitialMessage = true
+	result, err := l.Spawn(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, arg := range rt.createCfg.Argv {
+		if strings.Contains(arg, "Read and follow the AO review task") {
+			t.Fatal("deferred replacement received task in argv")
+		}
+	}
+	if rt.sentMsg != "" {
+		t.Fatal("deferred replacement received initial message")
+	}
+	if err := l.Notify(context.Background(), result.HandleID, spec); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rt.sentMsg, "Read and follow the AO review task") {
+		t.Fatal("notification omitted review task")
+	}
+}
+
+type recordingReviewBatch struct {
+	ReviewerChatController
+	reviewID, batchID string
+}
+
+func (c *recordingReviewBatch) SendReviewChat(_ context.Context, reviewID, _ string, batchID string) error {
+	c.reviewID, c.batchID = reviewID, batchID
+	return nil
+}
+
+func TestNotifyReviewerChatCarriesItsBatch(t *testing.T) {
+	chat := &recordingReviewBatch{}
+	launcher := NewLauncher(fakeReviewerResolver{reviewer: &fakeReviewer{}, ok: true}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat))
+	if err := launcher.Notify(context.Background(), "review-chat:review-1", LaunchSpec{ReviewSessionID: "review-1", WorkerID: "worker-1", BatchID: "batch-1", RunID: "run-1", Harness: domain.ReviewerCodex, WorkspacePath: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	if chat.reviewID != "review-1" || chat.batchID != "batch-1" {
+		t.Fatalf("review notification: %+v", chat)
 	}
 }

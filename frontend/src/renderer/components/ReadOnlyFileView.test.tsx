@@ -1,11 +1,30 @@
-import { render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { render, screen, waitFor } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ReadOnlyFileView } from "./ReadOnlyFileView";
 import type { WorkspaceFileDetail } from "../hooks/useSessionWorkspaceFiles";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
 
+const { baseUrlForHostMock, lineScrollIntoView } = vi.hoisted(() => ({
+	baseUrlForHostMock: vi.fn((_hostId: string): string | undefined => undefined),
+	lineScrollIntoView: vi.fn(),
+}));
 vi.mock("../lib/api-client", () => ({ getApiBaseUrl: () => "" }));
+vi.mock("../lib/host-clients", () => {
+	const snapshots = new Map<string, { base: string }>();
+	return {
+		connectedHost: (hostId: string) => {
+			const base = baseUrlForHostMock(hostId);
+			if (base === undefined) return undefined;
+			const cached = snapshots.get(hostId);
+			if (cached?.base === base) return cached;
+			const next = { base };
+			snapshots.set(hostId, next);
+			return next;
+		},
+		subscribeConnectedHosts: () => () => undefined,
+	};
+});
 vi.mock("@pierre/diffs/react", () => ({
 	File: ({ edit, editStateKey, file, lineAnnotations, onEditChange, options, renderAnnotation, renderGutterUtility }: {
 		edit?: boolean;
@@ -13,11 +32,20 @@ vi.mock("@pierre/diffs/react", () => ({
 		file: { name: string; contents: string };
 		lineAnnotations?: Array<{ lineNumber: number }>;
 		onEditChange?: (event: { file: { contents: string } }) => void;
-		options: { enableGutterUtility?: boolean; overflow: string; unsafeCSS?: string };
+		options: { enableGutterUtility?: boolean; onPostRender?: () => void; overflow: string; unsafeCSS?: string };
 		renderAnnotation?: () => ReactNode;
 		renderGutterUtility?: (getHoveredLine: () => { lineNumber: number }) => ReactNode;
 	}) => (
 		<div data-edit={String(Boolean(edit))} data-edit-state-key={editStateKey} data-file-name={file.name} data-gutter-enabled={String(Boolean(options.enableGutterUtility))} data-overflow={options.overflow} data-surface-css={options.unsafeCSS}>
+			{createElement("diffs-container", { ref: (element: HTMLElement | null) => {
+				if (!element || element.shadowRoot) return;
+				const root = element.attachShadow({ mode: "open" });
+				const line = document.createElement("div");
+				line.dataset.line = "120";
+				line.scrollIntoView = lineScrollIntoView;
+				root.append(line);
+				options.onPostRender?.();
+			} })}
 			<code>{file.contents}</code>
 			{edit ? <button onClick={() => onEditChange?.({ file: { contents: "edited\n" } })} type="button">type edit</button> : null}
 			{renderGutterUtility?.(() => ({ lineNumber: 1 }))}
@@ -49,6 +77,46 @@ function baseDetail(overrides: Partial<WorkspaceFileDetail> = {}): WorkspaceFile
 }
 
 describe("ReadOnlyFileView", () => {
+	it("consumes a requested source line once per request key", async () => {
+		lineScrollIntoView.mockClear();
+		const onRevealLineConsumed = vi.fn();
+		const { rerender } = render(
+			<ReadOnlyFileView
+				annotation={annotation()}
+				detail={baseDetail()}
+				onRevealLineConsumed={onRevealLineConsumed}
+				revealLine={{ line: 120, requestKey: 1 }}
+				sessionId="sess-1"
+			/>,
+		);
+		await waitFor(() => expect(lineScrollIntoView).toHaveBeenCalledTimes(1));
+		expect(onRevealLineConsumed).toHaveBeenCalledWith(1);
+
+		rerender(
+			<ReadOnlyFileView
+				annotation={annotation({ draft: "rerender" })}
+				detail={baseDetail()}
+				onRevealLineConsumed={onRevealLineConsumed}
+				revealLine={{ line: 120, requestKey: 1 }}
+				sessionId="sess-1"
+			/>,
+		);
+		await Promise.resolve();
+		expect(lineScrollIntoView).toHaveBeenCalledTimes(1);
+
+		rerender(
+			<ReadOnlyFileView
+				annotation={annotation()}
+				detail={baseDetail()}
+				onRevealLineConsumed={onRevealLineConsumed}
+				revealLine={{ line: 120, requestKey: 2 }}
+				sessionId="sess-1"
+			/>,
+		);
+		await waitFor(() => expect(lineScrollIntoView).toHaveBeenCalledTimes(2));
+		expect(onRevealLineConsumed).toHaveBeenLastCalledWith(2);
+	});
+
 	it("renders source through the wrapped Pierre/Shiki surface", () => {
 		const { container } = render(<ReadOnlyFileView annotation={annotation()} detail={baseDetail()} sessionId="sess-1" />);
 		expect(screen.getByText("hello world")).toBeInTheDocument();
@@ -108,6 +176,15 @@ describe("ReadOnlyFileView", () => {
 		const img = screen.getByRole("img");
 		expect(img).toHaveAttribute("src", expect.stringContaining("/api/v1/sessions/sess-1/workspace/file/blob"));
 		expect(img).toHaveAttribute("src", expect.stringContaining("side=after"));
+	});
+
+	it("loads remote images through the selected host proxy and not local when offline", () => {
+		baseUrlForHostMock.mockImplementation((hostId: string) => hostId === "host-a" ? "http://127.0.0.1:4000/token-a" : undefined);
+		const detail = baseDetail({ binary: true, content: "", path: "logo.png", imageMediaType: "image/png" });
+		const { rerender } = render(<ReadOnlyFileView annotation={annotation()} detail={detail} hostId="host-a" sessionId="same-id" />);
+		expect(screen.getByRole("img")).toHaveAttribute("src", expect.stringContaining("http://127.0.0.1:4000/token-a/api/v1/sessions/same-id/"));
+		rerender(<ReadOnlyFileView annotation={annotation()} detail={detail} hostId="offline" sessionId="same-id" />);
+		expect(screen.getByRole("img")).not.toHaveAttribute("src");
 	});
 
 	it("shows a binary placeholder for a non-image binary file", () => {

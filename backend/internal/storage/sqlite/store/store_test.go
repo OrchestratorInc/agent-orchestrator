@@ -57,6 +57,74 @@ func TestSessionCreateAllowsFakeHarness(t *testing.T) {
 	}
 }
 
+func TestSubagentFactsPersistWithActivityProjection(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.Metadata.RuntimeLaunchID = "launch-1"
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created.Metadata.ClaudeActivityFacts = `{"launchId":"launch-1","parentState":"idle","children":{"child-1":{"running":true,"at":1}}}`
+	created.Metadata.CodexActivityFacts = `{"launchId":"launch-2","parentState":"idle","children":{"child-2":{"running":true,"at":2}}}`
+	if applied, err := s.UpdateSessionFromActivitySignal(ctx, created, created.Revision); err != nil || !applied {
+		t.Fatalf("project facts: applied=%v err=%v", applied, err)
+	}
+	got, found, err := s.GetSession(ctx, created.ID)
+	if err != nil || !found || got.Metadata.ClaudeActivityFacts != created.Metadata.ClaudeActivityFacts {
+		t.Fatalf("persisted facts=%q found=%v err=%v", got.Metadata.ClaudeActivityFacts, found, err)
+	}
+	if got.Metadata.CodexActivityFacts != created.Metadata.CodexActivityFacts {
+		t.Fatalf("Codex facts=%q, want %q", got.Metadata.CodexActivityFacts, created.Metadata.CodexActivityFacts)
+	}
+}
+
+func TestClientRequestSessionBindsOneWorkerAndPreparedPromotionCannotStealKey(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.ClientRequestID, rec.ClientRequestHash = "draft-1", "v1:payload"
+	var wg sync.WaitGroup
+	var ids [2]domain.SessionID
+	var fresh [2]bool
+	var errs [2]error
+	for i := range ids {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			created, inserted, err := s.CreateClientRequestSession(ctx, rec)
+			ids[i], fresh[i], errs[i] = created.ID, inserted, err
+		}(i)
+	}
+	wg.Wait()
+	if errs[0] != nil || errs[1] != nil || ids[0] != ids[1] || fresh[0] == fresh[1] {
+		t.Fatalf("concurrent create: ids=%v fresh=%v errors=%v", ids, fresh, errs)
+	}
+	if err := s.CommitClientRequestSession(ctx, ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	bound, found, err := s.GetSessionByClientRequestID(ctx, "draft-1")
+	if err != nil || !found || bound.ID != ids[0] || bound.ClientRequestHash != "v1:payload" || !bound.ClientRequestCommitted {
+		t.Fatalf("binding = %+v, found=%v, err=%v", bound, found, err)
+	}
+	prep := sampleRecord("mer")
+	prep.IsTaskPreparation = true
+	prep, err = s.CreateSession(ctx, prep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PromoteTaskPreparation(ctx, prep.ID, rec); err == nil {
+		t.Fatal("prepared promotion stole an existing request key")
+	}
+	still, found, err := s.GetSessionByClientRequestID(ctx, "draft-1")
+	if err != nil || !found || still.ID != ids[0] {
+		t.Fatalf("binding after rejected promotion = %+v, found=%v, err=%v", still, found, err)
+	}
+}
+
 func TestSessionCreateAllowsPrimeAgentHarness(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

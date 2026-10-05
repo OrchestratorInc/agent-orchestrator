@@ -48,9 +48,6 @@ const (
 	maxResponseBody      = 1 << 20
 )
 
-// Kept mutable so tests can exercise renewal without waiting 45 minutes.
-var checkoutRenewalInterval = 45 * time.Minute
-
 var workerCapabilities = []string{
 	"worker.heartbeat",
 	"worker.events",
@@ -167,19 +164,102 @@ func run(logger *slog.Logger) error {
 	} else if err := client.setToken(renewed); err != nil {
 		return err
 	}
+	var agentCommandFactory workertransport.AgentCommandFactory
 	pullRequestSocketPath := filepath.Join(dataDir, "ao-pull-request.sock")
 	reviewSocketPath := filepath.Join(dataDir, "ao-review.sock")
 	checkpointSocketPath := filepath.Join(dataDir, "ao-checkpoint.sock")
+	committedInterface := strings.TrimSpace(bootstrap.Launch.Interface)
+	if committedInterface == "" {
+		committedInterface = workertransport.InterfaceTUI
+	}
+	var chatRunner workertransport.ChatRunner
+	if err := verifyHarnessAvailable(bootstrap.Launch.Harness); err != nil {
+		// Workspace files and shell terminals use the same worker transport as the
+		// coding agent. Keep that transport alive when a rootfs is missing the
+		// selected harness instead of making the whole sandbox unreachable.
+		logger.Warn("coding-agent harness unavailable; continuing with workspace transport", "error", err)
+	} else {
+		b := workerexec.HarnessBuilder{DataDir: dataDir, Launch: bootstrap.Launch, Env: map[string]string{}}
+		b.Env["AO_CLOUD_WORKER_API_URL"] = client.baseURL
+		b.Env["AO_CLOUD_WORKER_TOKEN_FILE"] = client.tokenFile
+		b.Env["AO_SESSION_ID"] = bootstrap.SessionID
+		b.Env["AO_PROJECT_ID"] = bootstrap.Launch.ProjectID
+		b.Env["AO_SESSION_KIND"] = bootstrap.Launch.Kind
+		b.Env["AO_PULL_REQUEST_SOCKET"] = pullRequestSocketPath
+		b.Env["AO_PULL_REQUEST_HELP"] = "curl --unix-socket $AO_PULL_REQUEST_SOCKET " +
+			`-X POST http://localhost/pull-request -H 'Content-Type: application/json' ` +
+			`-d '{"branch":"<pushed branch name>","title":"<PR title>","body":"<PR body>"}' ` +
+			"to push the current branch and open a pull request against the project's configured default branch."
+		b.Env["AO_REVIEW_SOCKET"] = reviewSocketPath
+		b.Env["AO_REVIEW_HELP"] = "curl --unix-socket $AO_REVIEW_SOCKET " +
+			`-X POST http://localhost/review -H 'Content-Type: application/json' ` +
+			`-d '{"reviewRunId":"<review run id from the prompt>","verdict":"approved|changes_requested","body":"<your findings>"}' ` +
+			"to submit an AO-triggered review verdict."
+		agentCommandFactory = func(buildCtx context.Context, nativeConversationID, selectedModel, selectedEffort string) (workerexec.Command, error) {
+			credential, err := client.Credential(buildCtx)
+			if err != nil {
+				return workerexec.Command{}, fmt.Errorf("load coding-agent credential: %w", err)
+			}
+			launch, err := interactiveLaunchSettings(bootstrap.Launch, dataDir, nativeConversationID, selectedModel, selectedEffort)
+			if err != nil {
+				return workerexec.Command{}, err
+			}
+			command, err := b.BuildInteractive(launch, credential, workspace)
+			credential.Secret = ""
+			if err != nil {
+				return workerexec.Command{}, fmt.Errorf("build interactive coding-agent command: %w", err)
+			}
+			command.Env["AO_CHECKPOINT_SOCKET"] = checkpointSocketPath
+			return command, nil
+		}
+		var gitRefReporter func(context.Context) error
+		if bootstrap.Launch.RepositoryURL != "" {
+			gitRefReporter = func(ctx context.Context) error { return client.reportGitRefs(ctx, workspace) }
+		}
+		chatRunner = &workerexec.Supervisor{
+			Control: client, Builder: b, Runner: workerexec.OSRunner{},
+			PullRequestClaimer:  client.claimPullRequest,
+			GitRefReporter:      gitRefReporter,
+			UseProviderProtocol: true,
+			// Use the supervisor's 100 ms default. A one-second worker-command
+			// poll makes every phase of a TUI <-> Chat handoff visibly laggy,
+			// particularly on remote Linux sandboxes.
+			Workspace: workspace, Logger: logger,
+		}
+	}
+
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	started := make(chan error, 1)
+	chatWorkspaceReady := make(chan struct{})
+	checkoutRequested := make(chan struct{}, 1)
+	rehydrateDone := make(chan struct{})
 	compareBase := ""
 	if defaultBranch := strings.TrimSpace(bootstrap.Launch.DefaultBranch); defaultBranch != "" {
 		compareBase = "origin/" + defaultBranch
 	}
 	transportSupervisor := workertransport.Supervisor{
-		Control: client, Workspace: workspace, CompareBase: compareBase, Logger: logger,
-		Started: started,
+		Control: client, Workspace: workspace, DataDir: dataDir, Harness: bootstrap.Launch.Harness, CompareBase: compareBase, Logger: logger,
+		AgentCommandFactory: agentCommandFactory,
+		Started:             started, ChatRunner: chatRunner,
+		ChatWorkspaceReady: chatWorkspaceReady,
+		RequestCheckout: func() error {
+			select {
+			case <-rehydrateDone:
+				return nil
+			default:
+			}
+			select {
+			case checkoutRequested <- struct{}{}:
+			default:
+			}
+			return nil
+		},
+		InitialInterface: committedInterface,
+		AgentSessionID:   bootstrap.Launch.AgentSessionID,
+		SelectedModel:    bootstrap.Launch.Model,
+		SelectedEffort:   bootstrap.Launch.ReasoningEffort,
+		SelectionAt:      bootstrap.Launch.SelectionAt,
 	}
 	// Real-time terminal streaming (duplex predictive echo) rides the same
 	// worker transport; wire it before Run when the sandbox opts in. Preserved
@@ -192,15 +272,12 @@ func run(logger *slog.Logger) error {
 	// perceived connection path independent from clone latency without letting
 	// a prompt run in an empty workspace.
 	transportSupervisor.HoldAgentInputUntilWorkspaceReady()
-	results := make(chan error, 6)
-	backgroundWorkers := 5
+	results := make(chan error, 5)
+	backgroundWorkers := 4
 	go func() { results <- client.heartbeatLoop(runCtx, logger) }()
 	go func() { results <- transportSupervisor.Run(runCtx) }()
 	go func() {
-		results <- client.checkoutRenewalLoop(runCtx, logger, workspace, bootstrap.Launch.RepositoryURL)
-	}()
-	go func() {
-		results <- runPullRequestBridge(runCtx, pullRequestSocketPath, client, workspace, logger)
+		results <- runPullRequestBridge(runCtx, pullRequestSocketPath, client, workspace, bootstrap.Launch.DefaultBranch, logger)
 	}()
 	go func() {
 		results <- runReviewBridge(runCtx, reviewSocketPath, client, logger)
@@ -242,21 +319,45 @@ func run(logger *slog.Logger) error {
 	// before the agent is built, so --resume finds the conversation and the
 	// workspace holds the restored files. It is closed once (checkout success or
 	// failure) so the agent never hangs.
-	rehydrateDone := make(chan struct{})
 	go func() {
-		if err := prepareWorkspace(
-			runCtx, logger, client, bootstrap, workspace, dataDir, publicURL,
-		); err != nil {
-			if runCtx.Err() == nil {
-				logger.Error("background workspace startup failed", "error", err)
+		chatReadyClosed := false
+		for {
+			err := prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL)
+			if err == nil {
+				break
 			}
-			close(rehydrateDone)
-			return
+			if runCtx.Err() != nil {
+				return
+			}
+			logger.Error("background workspace startup failed; waiting for session open", "error", err)
+			if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
+				runner.SetWorkspaceStartupError("Repository checkout failed. Check this project's GitHub access, then reopen this session to retry.")
+			}
+			if !chatReadyClosed {
+				close(chatWorkspaceReady)
+				chatReadyClosed = true
+			}
+			select {
+			case <-runCtx.Done():
+				return
+			case <-checkoutRequested:
+			}
 		}
 		// Restore a previously deleted session's state before the agent launches.
 		// A fresh session finds nothing captured and this returns quickly.
 		rehydrateSession(runCtx, logger, client, bootstrap, workspace, dataDir)
+		if bootstrap.Launch.RepositoryURL != "" {
+			if err := client.reportGitRefs(runCtx, workspace); err != nil {
+				logger.Warn("report restored branch heads", "error", err)
+			}
+		}
+		if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
+			runner.SetWorkspaceStartupError("")
+		}
 		close(rehydrateDone)
+		if !chatReadyClosed {
+			close(chatWorkspaceReady)
+		}
 		transportSupervisor.MarkWorkspaceReady()
 		// Serve durable-restore checkpointing now that the checkout and the git
 		// credential helper are in place. The capture is triggered by the agent's
@@ -286,6 +387,38 @@ func run(logger *slog.Logger) error {
 		return nil
 	}
 	return first
+}
+
+func interactiveLaunchSettings(launch worker.LaunchContext, dataDir, nativeConversationID, selectedModel, selectedEffort string) (worker.LaunchContext, error) {
+	launch.AgentSessionID = strings.TrimSpace(nativeConversationID)
+	if selectedModel != "" || selectedEffort != "" {
+		if selectedModel != "" {
+			launch.Model = selectedModel
+		}
+		launch.ReasoningEffort = selectedEffort
+		return launch, nil
+	}
+	if launch.AgentSessionID == "" {
+		return launch, nil
+	}
+	var model, effort string
+	var err error
+	switch launch.Harness {
+	case "codex":
+		model, effort, err = workerexec.CodexConversationSettingsAfter(dataDir, launch.AgentSessionID, launch.SelectionAt)
+	case "claude-code":
+		model, effort, err = workerexec.ClaudeConversationSettingsAfter(dataDir, launch.AgentSessionID, launch.SelectionAt)
+	default:
+		return launch, nil
+	}
+	if err != nil {
+		return launch, fmt.Errorf("read %s conversation settings: %w", launch.Harness, err)
+	}
+	if model != "" {
+		launch.Model = model
+		launch.ReasoningEffort = effort
+	}
+	return launch, nil
 }
 
 func prepareWorkspace(
@@ -392,32 +525,16 @@ func startInteractiveAgent(
 		logger.Warn("coding-agent harness unavailable", "error", err)
 		return nil
 	}
-	credential, err := client.Credential(ctx)
-	if err != nil {
-		return fmt.Errorf("load coding-agent credential: %w", err)
+	if strings.TrimSpace(bootstrap.Launch.Interface) == workertransport.InterfaceChat {
+		return nil // The headless controller owns this worker until a TUI handoff.
 	}
-	agentCommand, err := (workerexec.HarnessBuilder{DataDir: dataDir}).BuildInteractive(
-		bootstrap.Launch, credential, workspace,
-	)
+	if transportSupervisor.AgentCommandFactory == nil {
+		return errors.New("coding-agent command factory is unavailable")
+	}
+	agentCommand, err := transportSupervisor.AgentCommandFactory(ctx, bootstrap.Launch.AgentSessionID, "", "")
 	if err != nil {
 		return fmt.Errorf("build interactive coding-agent command: %w", err)
 	}
-	agentCommand.Env["AO_CLOUD_WORKER_API_URL"] = client.baseURL
-	agentCommand.Env["AO_CLOUD_WORKER_TOKEN_FILE"] = client.tokenFile
-	agentCommand.Env["AO_SESSION_ID"] = bootstrap.SessionID
-	agentCommand.Env["AO_PROJECT_ID"] = bootstrap.Launch.ProjectID
-	agentCommand.Env["AO_SESSION_KIND"] = bootstrap.Launch.Kind
-	agentCommand.Env["AO_CHECKPOINT_SOCKET"] = checkpointSocketPath
-	agentCommand.Env["AO_PULL_REQUEST_SOCKET"] = pullRequestSocketPath
-	agentCommand.Env["AO_PULL_REQUEST_HELP"] = "curl --unix-socket $AO_PULL_REQUEST_SOCKET " +
-		`-X POST http://localhost/pull-request -H 'Content-Type: application/json' ` +
-		`-d '{"branch":"<pushed branch name>","title":"<PR title>","body":"<PR body>"}' ` +
-		"to push the current branch and open a pull request against the repository's default branch."
-	agentCommand.Env["AO_REVIEW_SOCKET"] = reviewSocketPath
-	agentCommand.Env["AO_REVIEW_HELP"] = "curl --unix-socket $AO_REVIEW_SOCKET " +
-		`-X POST http://localhost/review -H 'Content-Type: application/json' ` +
-		`-d '{"reviewRunId":"<review run id from the prompt>","verdict":"approved|changes_requested","body":"<your findings>"}' ` +
-		"to submit an AO-triggered review verdict."
 	agentTerminal, err := client.ensureAgentTerminal(ctx)
 	if err != nil {
 		if agentCommand.Cleanup != nil {
@@ -425,7 +542,7 @@ func startInteractiveAgent(
 		}
 		return fmt.Errorf("initialize agent terminal: %w", err)
 	}
-	if err := transportSupervisor.StartAgent(ctx, agentCommand, agentTerminal.TerminalID); err != nil {
+	if err := transportSupervisor.StartAgent(ctx, agentCommand, agentTerminal); err != nil {
 		return fmt.Errorf("start interactive coding-agent terminal: %w", err)
 	}
 	if err := client.publishEvent(ctx, "agent.ready", map[string]any{
@@ -583,42 +700,47 @@ func (c *client) heartbeatLoop(ctx context.Context, logger *slog.Logger) error {
 	}
 }
 
-func (c *client) checkoutRenewalLoop(
-	ctx context.Context, logger *slog.Logger, workspace, repositoryURL string,
-) error {
-	if worker.IsScratchRepositoryURL(repositoryURL) {
-		<-ctx.Done()
-		return nil
-	}
-	ticker := time.NewTicker(checkoutRenewalInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			c.renewCheckout(ctx, logger, workspace)
-		}
-	}
-}
-
-func (c *client) renewCheckout(ctx context.Context, logger *slog.Logger, workspace string) {
-	grant, err := c.checkoutGrant(ctx)
-	if err != nil {
-		logger.Warn("renew checkout grant failed", "error", err)
-		return
-	}
-	if err := worker.PrepareCheckout(ctx, worker.ExecGitRunner{}, workspace, grant); err != nil {
-		logger.Warn("refresh repository checkout failed", "error", err)
-	}
-}
-
 func (c *client) ClaimTurn(ctx context.Context) (*worker.Turn, error) {
 	var response worker.ClaimTurnResponse
 	if err := c.do(ctx, "/worker/turns/claim", worker.ClaimTurnRequest{}, &response); err != nil {
 		return nil, err
 	}
 	return response.Turn, nil
+}
+
+func (c *client) CreateChatApproval(ctx context.Context, request worker.ChatApproval) error {
+	return c.do(ctx, "/worker/turns/"+url.PathEscape(request.TurnID)+"/approvals", request, nil)
+}
+
+func (c *client) PublishTurnCapabilities(ctx context.Context, turnID string, attempt int, steering bool) error {
+	return c.do(ctx, "/worker/turns/"+url.PathEscape(turnID)+"/capabilities", map[string]any{
+		"attempt": attempt, "steering": steering,
+	}, nil)
+}
+
+func (c *client) ChatApprovalDecision(ctx context.Context, turnID string, attempt int, requestID string) (string, error) {
+	var response struct {
+		Decision string `json:"decision"`
+	}
+	path := "/worker/turns/" + url.PathEscape(turnID) + "/approvals/" + url.PathEscape(requestID) + "?attempt=" + strconv.Itoa(attempt)
+	if err := c.doMethod(ctx, http.MethodGet, path, nil, &response); err != nil {
+		return "", err
+	}
+	return response.Decision, nil
+}
+
+func (c *client) AgentSessionID(ctx context.Context) (string, error) {
+	var response struct {
+		AgentSessionID string `json:"agentSessionId"`
+	}
+	if err := c.doMethod(ctx, http.MethodGet, "/worker/session", nil, &response); err != nil {
+		return "", err
+	}
+	return response.AgentSessionID, nil
+}
+
+func (c *client) EnsureAgentTerminal(ctx context.Context) (worker.AgentTerminalResponse, error) {
+	return c.ensureAgentTerminal(ctx)
 }
 
 func (c *client) Credential(ctx context.Context) (worker.CredentialResponse, error) {
@@ -670,6 +792,44 @@ func (c *client) raisePullRequest(
 	return response, nil
 }
 
+func (c *client) claimPullRequest(ctx context.Context, reference string) error {
+	var response worker.ClaimPullRequestResponse
+	if err := c.do(ctx, "/worker/pull-requests/claim", worker.ClaimPullRequestRequest{Reference: reference}, &response); err != nil {
+		return err
+	}
+	if response.ID == "" {
+		return errors.New("control plane did not confirm pull request claim")
+	}
+	return nil
+}
+
+func (c *client) reportGitRefs(ctx context.Context, workspace string) error {
+	refs, err := localGitRefs(ctx, workspace)
+	if err != nil {
+		return err
+	}
+	return c.do(ctx, "/worker/pull-requests/refs", worker.ReportGitRefsRequest{Refs: refs}, nil)
+}
+
+func localGitRefs(ctx context.Context, workspace string) ([]worker.GitRef, error) {
+	output, err := exec.CommandContext(ctx, "git", "-C", workspace, "for-each-ref", "--sort=-committerdate", "--count=128", "--format=%(refname:short)%09%(objectname)", "refs/heads").Output()
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]worker.GitRef, 0)
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line == "" {
+			continue
+		}
+		branch, sha, ok := strings.Cut(line, "\t")
+		if !ok {
+			return nil, errors.New("git returned a malformed branch head")
+		}
+		refs = append(refs, worker.GitRef{Branch: branch, SHA: sha})
+	}
+	return refs, nil
+}
+
 func (c *client) submitReview(
 	ctx context.Context,
 	reviewRunID string,
@@ -708,7 +868,14 @@ func verifyHarnessAvailable(harness string) error {
 }
 
 func (c *client) PublishOutput(ctx context.Context, output worker.OutputEvent) error {
+	if output.Activity != nil {
+		return c.publishEvent(ctx, "chat.activity", output)
+	}
 	return c.publishEvent(ctx, "chat.assistant_delta", output)
+}
+
+func (c *client) PublishActivity(ctx context.Context, activity worker.ActivityEvent) error {
+	return c.publishEvent(ctx, "agent.activity", activity)
 }
 
 func (c *client) ClaimTransport(ctx context.Context) (*worker.TransportRequest, error) {
@@ -810,11 +977,15 @@ func (c *client) PublishTerminalExit(
 	ctx context.Context,
 	terminalID string,
 	exitCode int,
+	interfaceHandoff bool,
 ) error {
 	return c.do(
 		ctx,
 		"/worker/terminals/"+url.PathEscape(terminalID)+"/exit",
-		worker.TerminalExitRequest{ExitCode: exitCode},
+		worker.TerminalExitRequest{
+			ExitCode:         exitCode,
+			InterfaceHandoff: interfaceHandoff,
+		},
 		nil,
 	)
 }

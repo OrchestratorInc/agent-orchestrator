@@ -174,6 +174,24 @@ describe("sessionPRDisplaySummaries", () => {
 });
 
 describe("prStatusRows", () => {
+	it("shows unavailable checks without a loading indicator when cloud cannot read CI", () => {
+		const pr = summary({ ci: { autoInjectCI: true, state: "unknown", failingChecks: [] }, mergeability: {
+			state: "mergeable", reasons: ["github_checks_unavailable"], prUrl: "https://github.com/acme/repo/pull/7",
+		} });
+		const card = prCardPresentation(pr);
+		expect(card.statusRows?.find((row) => row.key === "ci")).toMatchObject({ label: "Checks unavailable", breathe: false });
+		expect(card.readiness?.label).toBe("Status unavailable");
+		expect(card.readiness?.detail).toContain("Checks and Commit statuses read access");
+	});
+	it("shows lost GitHub App access instead of checking merge status", () => {
+		const pr = summary({ mergeability: {
+			state: "unknown", reasons: ["github_access_lost"], prUrl: "https://github.com/acme/repo/pull/7",
+		} });
+		const merge = prStatusRows(pr).find((row) => row.key === "merge");
+		expect(merge?.value).toBe("Status unavailable");
+		expect(prCardPresentation(pr).readiness?.detail).toBe("GitHub access to this repository is unavailable, so merge readiness cannot be checked.");
+	});
+
 	it("formats the three PR states without exposing raw unknown", () => {
 		const rows = prStatusRows(
 			summary({

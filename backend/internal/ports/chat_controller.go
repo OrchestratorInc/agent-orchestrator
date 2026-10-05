@@ -19,7 +19,9 @@ const (
 
 // ChatControllerStart is the resolved launch contract shared by the coordinator and Chat service.
 type ChatControllerStart struct {
-	SessionID domain.SessionID
+	// ReconnectOnly restricts startup recovery to an existing provider process.
+	ReconnectOnly bool
+	SessionID     domain.SessionID
 	// Owner distinguishes worker and review conversations that share a worker
 	// session. Empty preserves the existing worker-session owner.
 	Owner         domain.ConversationOwner

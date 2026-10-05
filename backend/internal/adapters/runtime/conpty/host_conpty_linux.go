@@ -38,7 +38,7 @@ type linuxPTYConn struct {
 
 const linuxPTYCloseGrace = 250 * time.Millisecond
 
-func newConPTY(cwd, shellCmd string, shellArgs []string) (ptyConn, error) {
+func newConPTY(cwd, shellCmd string, shellArgs []string, cols, rows uint16) (ptyConn, error) {
 	// shellCmd and shellArgs are the runtime launch argv assembled by AO's
 	// trusted agent adapter, not input interpreted by a shell.
 	cmd := exec.Command(shellCmd, shellArgs...) // #nosec G702 -- intentional direct argv execution
@@ -46,8 +46,8 @@ func newConPTY(cwd, shellCmd string, shellArgs []string) (ptyConn, error) {
 	cmd.Env = os.Environ()
 
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{
-		Cols: initialConPTYColumns,
-		Rows: initialConPTYRows,
+		Cols: cols,
+		Rows: rows,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("linux pty: start command: %w", err)
@@ -102,9 +102,12 @@ func (c *linuxPTYConn) Close() error {
 	var closeErr error
 	c.closeOnce.Do(func() {
 		if c.leaderPID > 0 && c.leaderStartTime > 0 {
-			// Phase 1: Discover session members and send graceful SIGTERM.
+			// Phase 1: Discover session members and ask them to exit. SIGHUP
+			// first, as a closing terminal would: an interactive shell ignores
+			// SIGTERM, so without it every close waited out the grace.
 			procs := linuxFindSessionProcesses(c.leaderPID, c.leaderStartTime)
 			if len(procs) > 0 {
+				signalValidatedSessionProcs(procs, syscall.SIGHUP)
 				signalValidatedSessionProcs(procs, syscall.SIGTERM)
 				_ = waitForProcIdentitiesExit(procs, linuxPTYCloseGrace)
 			}

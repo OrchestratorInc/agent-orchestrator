@@ -61,6 +61,8 @@ type pagedConversationService interface {
 }
 
 type reviewerConversationService interface {
+	ModelsForOwner(context.Context, domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error)
+	SetTurnSettingsForOwner(context.Context, domain.ConversationOwner, domain.ConversationSettings) (domain.ConversationSettings, error)
 	SnapshotPageForReview(ctx context.Context, reviewID string, beforeSequence, limit int64) (chatsvc.Snapshot, error)
 	SendForOwner(ctx context.Context, owner domain.ConversationOwner, msg ports.ChatUserMessage) (domain.ConversationTurn, error)
 	ResolveForOwner(ctx context.Context, owner domain.ConversationOwner, requestID string, decision ports.ChatDecision) error
@@ -102,6 +104,8 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/branches/{branchId}/activate", c.activateBranch)
 	r.Put("/sessions/{sessionId}/conversation/title", c.setTitle)
 	r.Post("/sessions/{sessionId}/conversation/mcp/reload", c.reloadMCPServers)
+	r.Get("/reviews/{reviewId}/conversation/models", c.reviewModels)
+	r.Patch("/reviews/{reviewId}/conversation/settings", c.reviewSetSettings)
 	r.Get("/reviews/{reviewId}/conversation", c.reviewSnapshot)
 	r.Post("/reviews/{reviewId}/conversation/messages", c.reviewSend)
 	r.Post("/reviews/{reviewId}/conversation/approvals/{requestId}/resolve", c.reviewResolve)
@@ -115,6 +119,45 @@ func (c *ConversationsController) reviewService(w http.ResponseWriter, r *http.R
 		apispec.NotImplemented(w, r, r.Method, r.URL.Path)
 	}
 	return svc, ok
+}
+
+func (c *ConversationsController) reviewModels(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.reviewService(w, r)
+	if !ok {
+		return
+	}
+	models, selected, err := svc.ModelsForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")))
+	if err != nil && !errors.Is(err, chatsvc.ErrModelsUnsupported) {
+		writeConversationError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, conversationModelsResponse(models, selected))
+}
+
+func (c *ConversationsController) reviewSetSettings(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.reviewService(w, r)
+	if !ok {
+		return
+	}
+	var req ConversationTurnSettingsPayload
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	approval := domain.PermissionMode(req.ApprovalMode)
+	if req.ApprovalMode != "" && !approval.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_APPROVAL_MODE_INVALID", "unknown approval mode", nil)
+		return
+	}
+	settings, err := svc.SetTurnSettingsForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")), domain.ConversationSettings{Model: req.Model, ReasoningEffort: req.ReasoningEffort, ApprovalMode: approval})
+	if errors.Is(err, chatsvc.ErrReviewerPermissionsFixed) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_REVIEW_PERMISSIONS_FIXED", err.Error(), nil)
+		return
+	}
+	if err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, turnSettingsPayload(settings))
 }
 
 func (c *ConversationsController) reviewSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -939,6 +982,10 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found",
 			"CHAT_TURN_NOT_FOUND", "that turn is not in this session's conversation", nil)
 
+	case errors.Is(err, domain.ErrClientMessageConflict):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_MESSAGE_IDEMPOTENCY_CONFLICT", "clientMessageId belongs to a different message", nil)
+
 	case errors.Is(err, chatsvc.ErrTurnRunning):
 		// Retryable, unlike every other refusal here: the same request works once
 		// the agent finishes. Rolling back mid-turn is refused rather than raced,
@@ -1261,11 +1308,23 @@ func accountPayload(account *domain.ConversationAccount) *ConversationAccountPay
 	if account == nil {
 		return nil
 	}
+	state := account.AuthenticationState
+	if state == "" {
+		state = "unknown"
+		if account.ReauthRequiredAt != nil {
+			state = "required"
+		}
+	}
 	return &ConversationAccountPayload{
-		AuthMode:         account.AuthMode,
-		PlanLabel:        account.PlanLabel,
-		ReauthRequiredAt: optionalTimestamp(account.ReauthRequiredAt),
-		ReauthReason:     account.ReauthReason,
+		AuthenticationState:   state,
+		AuthVerifiedAt:        optionalTimestamp(account.AuthVerifiedAt),
+		LastAuthFailureAt:     optionalTimestamp(account.LastAuthFailureAt),
+		LastAuthFailureReason: account.LastAuthFailureReason,
+		AuthFailureID:         account.AuthFailureID,
+		AuthMode:              account.AuthMode,
+		PlanLabel:             account.PlanLabel,
+		ReauthRequiredAt:      optionalTimestamp(account.ReauthRequiredAt),
+		ReauthReason:          account.ReauthReason,
 	}
 }
 
