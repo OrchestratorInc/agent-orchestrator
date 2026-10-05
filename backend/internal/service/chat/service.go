@@ -712,6 +712,21 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			return nil, fmt.Errorf("%w: load live conversation before reconnect: %w", ports.ErrChatRecoveryInconclusive, err)
 		}
 	}
+	if owner.Kind == domain.ConversationOwnerReview && !liveReconnect {
+		if reviewStore, ok := s.store.(reviewerConversationStore); ok {
+			review, found, readErr := reviewStore.GetReviewByID(ctx, owner.ID)
+			if readErr != nil {
+				_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
+				return nil, fmt.Errorf("read reviewer Chat owner before start: %w", readErr)
+			}
+			if found {
+				if _, cleanupErr := s.store.CleanupOwnedReviewControllerWork(ctx, owner.ID, conversation.ID, review.ControllerGeneration, s.now()); cleanupErr != nil {
+					_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
+					return nil, fmt.Errorf("settle previous reviewer Chat work: %w", cleanupErr)
+				}
+			}
+		}
+	}
 
 	// Reconcile legacy demands before replacing the owning generation, while
 	// durable successful turns can still prove recovery for that epoch.
@@ -917,9 +932,13 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 				_ = cleanupUnpublishedConversation(conv, false)
 				return nil, errors.New("commit native history: atomic provider-boundary lifecycle is unavailable")
 			}
-			if err := s.store.CreateAndActivateConversationBranch(
-				ctx, cfg.SessionID, *providerBoundary, generation, s.now(),
-			); err != nil {
+			var err error
+			if owner.Kind == domain.ConversationOwnerReview {
+				err = s.store.CreateAndActivateReviewConversationBranch(ctx, owner.ID, *providerBoundary, generation, s.now())
+			} else {
+				err = s.store.CreateAndActivateConversationBranch(ctx, cfg.SessionID, *providerBoundary, generation, s.now())
+			}
+			if err != nil {
 				_ = cleanupUnpublishedConversation(conv, false)
 				return nil, fmt.Errorf("commit fresh provider boundary: %w", err)
 			}
@@ -1827,7 +1846,12 @@ func (s *Service) Models(ctx context.Context, id domain.SessionID) ([]ports.Chat
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return nil, domain.ConversationSettings{}, err
 	}
-	controller, err := s.Controller(id)
+	return s.ModelsForOwner(ctx, domain.SessionConversationOwner(id))
+}
+
+// ModelsForOwner reads the catalog from the owner-specific provider.
+func (s *Service) ModelsForOwner(ctx context.Context, owner domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error) {
+	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
 		return nil, domain.ConversationSettings{}, err
 	}
@@ -2053,7 +2077,15 @@ func (s *Service) SetTurnSettings(
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return domain.ConversationSettings{}, err
 	}
-	controller, err := s.Controller(id)
+	return s.SetTurnSettingsForOwner(ctx, domain.SessionConversationOwner(id), settings)
+}
+
+// ErrReviewerPermissionsFixed rejects changes to unattended reviewer approval policy.
+var ErrReviewerPermissionsFixed = errors.New("reviewer approval permissions are fixed")
+
+// SetTurnSettingsForOwner records choices without changing another owner's settings.
+func (s *Service) SetTurnSettingsForOwner(ctx context.Context, owner domain.ConversationOwner, settings domain.ConversationSettings) (domain.ConversationSettings, error) {
+	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
 		return domain.ConversationSettings{}, err
 	}
@@ -2061,11 +2093,16 @@ func (s *Service) SetTurnSettings(
 	defer controller.configMu.Unlock()
 	// The turn-settings endpoint does not own provider session mode choices.
 	previous := controller.Settings()
+	if owner.Kind == domain.ConversationOwnerReview && settings.ApprovalMode != previous.ApprovalMode {
+		return domain.ConversationSettings{}, ErrReviewerPermissionsFixed
+	}
 	settings.OpenCodeMode = previous.OpenCodeMode
 	if err := controller.SetSettings(ctx, settings); err != nil {
 		return domain.ConversationSettings{}, err
 	}
-	s.persistPickedModel(id, previous, settings)
+	if owner.Kind == domain.ConversationOwnerSession {
+		s.persistPickedModel(domain.SessionID(owner.ID), previous, settings)
+	}
 	return controller.Settings(), nil
 }
 

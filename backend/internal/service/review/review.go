@@ -60,6 +60,8 @@ func reviewErrorKind(err error) string {
 type Manager interface {
 	RecoverChatReviewers(ctx context.Context) error
 	Trigger(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig) (reviewcore.TriggerResult, error)
+	TriggerWithMode(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig, mode domain.ReviewerInterfaceMode) (reviewcore.TriggerResult, error)
+	TriggerWithOptions(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error)
 	RequestRereview(ctx context.Context, workerID domain.SessionID, prURL, reviewer string) error
 	ResolveReviewComment(ctx context.Context, workerID domain.SessionID, prURL, commentURL string) error
 	TriggerAuto(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness) (reviewcore.TriggerResult, error)
@@ -430,6 +432,22 @@ func (s *Service) Trigger(
 	return s.triggerWithSource(ctx, workerID, harness, config, domain.ReviewTriggerManual)
 }
 
+// TriggerWithMode starts a manual pass on the requested reviewer surface.
+func (s *Service) TriggerWithMode(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig, mode domain.ReviewerInterfaceMode) (reviewcore.TriggerResult, error) {
+	if mode != domain.ReviewerInterfaceChat && mode != domain.ReviewerInterfaceTUI {
+		return reviewcore.TriggerResult{}, fmt.Errorf("%w: unknown reviewer interface mode %q", ErrInvalid, mode)
+	}
+	return s.triggerWithSource(ctx, workerID, harness, config, domain.ReviewTriggerManual, reviewcore.TriggerOptions{InterfaceMode: mode})
+}
+
+// TriggerWithOptions starts a pass with an explicit same-commit policy.
+func (s *Service) TriggerWithOptions(ctx context.Context, workerID domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+	if opts.Source == "" {
+		opts.Source = domain.ReviewTriggerManual
+	}
+	return s.triggerWithSource(ctx, workerID, opts.Harness, opts.Config, opts.Source, opts)
+}
+
 // TriggerAuto starts a daemon-initiated review pass.
 func (s *Service) TriggerAuto(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness) (reviewcore.TriggerResult, error) {
 	return s.triggerWithSource(ctx, workerID, harness, domain.AgentConfig{}, domain.ReviewTriggerAuto)
@@ -446,6 +464,7 @@ func (s *Service) triggerWithSource(
 	harness domain.ReviewerHarness,
 	config domain.AgentConfig,
 	source domain.ReviewTriggerSource,
+	options ...reviewcore.TriggerOptions,
 ) (reviewcore.TriggerResult, error) {
 	triggeredPayload := map[string]any{"trigger": string(source)}
 	if err := config.Validate(); err != nil {
@@ -467,7 +486,15 @@ func (s *Service) triggerWithSource(
 		}
 		defer release()
 	}
-	result, err := s.engineTrigger(ctx, workerID, harness, config, source)
+	var result reviewcore.TriggerResult
+	var err error
+	if len(options) > 0 {
+		opts := options[0]
+		opts.Harness, opts.Config, opts.Source = harness, config, source
+		result, err = s.engine.TriggerWithOptions(ctx, workerID, opts)
+	} else {
+		result, err = s.engineTrigger(ctx, workerID, harness, config, source)
+	}
 	if err != nil {
 		s.emit(ctx, "ao.review.trigger_failed", workerID, map[string]any{
 			"error_kind": reviewErrorKind(err),

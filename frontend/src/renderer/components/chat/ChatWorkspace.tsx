@@ -257,6 +257,8 @@ export interface ChatWorkspaceProps {
 	snapshot: ConversationSnapshot;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
 	uiSessionId?: string;
+	/** Durable draft owner for a conversation that is not a worker session. */
+	draftOwner?: ChatDraftScope;
 	/** The session title from the sidebar (matches what users see in the left sidebar) */
 	sessionTitle?: string;
 	/** The AO role using this shared conversation surface. */
@@ -456,15 +458,15 @@ function OfflineRemoteTerminal() {
  */
 export function ChatWorkspace(props: ChatWorkspaceProps) {
 	const translateDraft = useChatDraftTranslation();
-	const { snapshot, session, uiSessionId = snapshot.sessionId } = props;
+	const { snapshot, session, draftOwner, uiSessionId = draftOwner?.sessionId ?? snapshot.sessionId } = props;
 	const draftScope = useMemo<ChatDraftScope>(
-		() => ({
+		() => draftOwner ?? ({
 			sessionId: uiSessionId,
 			// Live surfaces carry the daemon-created session timestamp. Snapshot-only
 			// fixtures retain the legacy logical scope for deterministic previews.
 			incarnation: session?.createdAt ?? uiSessionId,
 		}),
-		[session?.createdAt, uiSessionId],
+		[draftOwner, session?.createdAt, uiSessionId],
 	);
 	const scopeKey = chatDraftScopeKey(draftScope);
 	const [activation, setActivation] = useState<ChatWorkspaceActivation>();
@@ -473,7 +475,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 	useLayoutEffect(() => {
 		// Snapshot-only previews have no daemon session incarnation to arbitrate.
 		// Their legacy logical scope remains isolated to fixture/demo surfaces.
-		if (!session?.createdAt) {
+		if (!session?.createdAt && !draftOwner) {
 			setActivation({ key: scopeKey, state: "active" });
 			return;
 		}
@@ -484,7 +486,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 		}
 		if (result.replaced) purgeFileAttachmentsForSession(draftScope.sessionId);
 		setActivation({ key: scopeKey, state: "active" });
-	}, [activationAttempt, draftScope, scopeKey, session?.createdAt]);
+	}, [activationAttempt, draftOwner, draftScope, scopeKey, session?.createdAt]);
 
 	if (activation?.key !== scopeKey || activation.state !== "active") {
 		const failure = activation?.key === scopeKey && activation.state === "failed"
@@ -781,9 +783,9 @@ function ChatWorkspaceContent({
 		return result;
 	}, [draftScope]);
 	useEffect(() => {
-		setChatDraftBoundary(uiSessionId, "queued-edit", queueDraftError ? "persistence-failed" : undefined);
-		return () => setChatDraftBoundary(uiSessionId, "queued-edit", undefined);
-	}, [queueDraftError, uiSessionId]);
+		setChatDraftBoundary(draftScope.sessionId, "queued-edit", queueDraftError ? "persistence-failed" : undefined);
+		return () => setChatDraftBoundary(draftScope.sessionId, "queued-edit", undefined);
+	}, [queueDraftError, draftScope.sessionId]);
 	// Text equality cannot prove an attachment-only edit was accepted. Keep an
 	// uncertain edit and its original daemon revision until a save is acknowledged.
 	const changeQueuedDraft = useCallback((text: string) => {
@@ -1488,7 +1490,7 @@ function ChatWorkspaceContent({
 									onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
 									nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 									autoFocus={!reviewerActive}
-									autoFocusKey={uiSessionId}
+									autoFocusKey={draftScope.sessionId}
 									// Steering is only meaningful into a turn that is running. A queued turn
 									// has not reached the provider, so there is nothing to steer.
 									onSteer={newWorkDisabled ? undefined : steer}
@@ -1501,7 +1503,7 @@ function ChatWorkspaceContent({
 									compacting={compacting}
 									compactUnavailable={compactUnavailable}
 									compactBlocked={Boolean(turn)}
-									draftSessionId={queueEdit ? undefined : uiSessionId}
+									draftSessionId={queueEdit ? undefined : draftScope.sessionId}
 									draftSessionIncarnation={draftScope.incarnation}
 									assetBaseUrl={assetBaseUrl}
 									assetSessionId={snapshot.sessionId}
@@ -2128,16 +2130,16 @@ function Timeline({
 	);
 	useEffect(() => {
 		setChatDraftBoundary(
-			uiSessionId,
+			draftScope.sessionId,
 			"inline-edit",
 			[
 				...(draftPersistenceError ? (["persistence-failed"] as const) : []),
 			],
 		);
-	}, [draftPersistenceError, uiSessionId]);
+	}, [draftPersistenceError, draftScope.sessionId]);
 	useEffect(
-		() => () => setChatDraftBoundary(uiSessionId, "inline-edit", undefined),
-		[uiSessionId],
+		() => () => setChatDraftBoundary(draftScope.sessionId, "inline-edit", undefined),
+		[draftScope.sessionId],
 	);
 	// The inspector changes the minimap's visibility, but it must not cause this
 	// entire timeline to rerender. A live conversation can contain hundreds of
