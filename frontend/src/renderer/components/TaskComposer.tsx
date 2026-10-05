@@ -479,9 +479,14 @@ export function TaskComposer({
 	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogDefaultOption : "") : defaultModeForSelectedAgent);
 	const selectedModelOrMode = (selectedModel || selectedMode).trim();
 	const projectModelOrMode = projectModelForSelectedAgent || projectModeForSelectedAgent;
-	const requestedModel = selectedModelOrMode && selectedModelOrMode !== projectModelOrMode && (
-		selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(projectModelOrMode)
-	) ? selectedModelOrMode : undefined;
+	const requestedModel = isStandalone
+		// Standalone sessions have no project config to inherit. If the UI shows a
+		// concrete catalog default, send it explicitly; otherwise the native agent
+		// may launch with a different harness-owned default than the one displayed.
+		? (isConcreteModelID(selectedModelOrMode) ? selectedModelOrMode : undefined)
+		: selectedModelOrMode && selectedModelOrMode !== projectModelOrMode && (
+				selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(projectModelOrMode)
+			) ? selectedModelOrMode : undefined;
 	const rememberedEffortIsExplicit = Boolean(
 		rememberedConfigForSelectedAgent &&
 			Object.prototype.hasOwnProperty.call(rememberedConfigForSelectedAgent, "effort"),
@@ -509,10 +514,17 @@ export function TaskComposer({
 	// With no provider default for the reported levels AO picks one, shows it as
 	// selected, and sends it, so the picker matches what the task runs with.
 	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
-	const effectiveEffort = effort && effort !== "default" ? effort : aoDefaultEffort ?? "";
-	const requestedEffort = effortTouched || rememberedEffortIsExplicit
-		? !effectiveEffort || effectiveEffort === implicitEffort ? undefined : effectiveEffort
-		: aoDefaultEffort;
+	const effectiveEffort = effort && effort !== "default"
+		? effort
+		: aoDefaultEffort ?? (isStandalone && effortOptions.includes(implicitEffort) ? implicitEffort : "");
+	const requestedEffort = isStandalone
+		// Standalone sessions have no project role to inherit from. Send the
+		// concrete effort shown by the picker even when the UI is retrying in TUI
+		// mode, otherwise the native harness may use a different default.
+		? (effectiveEffort || undefined)
+		: effortTouched || rememberedEffortIsExplicit
+			? !effectiveEffort || effectiveEffort === implicitEffort ? undefined : effectiveEffort
+			: aoDefaultEffort;
 	const effortAvailability: EffortAvailability = requiresTuiFallback
 		? "launch-unavailable"
 		: !effortModel || effortModel.efforts === undefined

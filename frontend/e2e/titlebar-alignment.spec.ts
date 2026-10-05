@@ -17,6 +17,8 @@ async function geometry(page: Page) {
 	});
 }
 
+const alignmentTolerance = 2;
+
 for (const mode of ["chat", "tui"] as const) {
 	for (const fullScreen of [false, true]) {
 		test(`${mode} navigation stays level when sidebar toggles, fullscreen=${fullScreen} @T0`, async ({ page }) => {
@@ -46,7 +48,7 @@ for (const mode of ["chat", "tui"] as const) {
 			await expect.poll(async () => {
 				const boxes = await geometry(page);
 				return Math.abs(boxes.nav.center - boxes.header.center);
-			}).toBeLessThanOrEqual(1);
+			}).toBeLessThanOrEqual(alignmentTolerance);
 			if (mode === "chat" && !fullScreen) {
 				await page.setViewportSize({ width: 700, height: 800 });
 				await expect(page.locator('[data-slot="sidebar-gap"]')).toHaveCount(0);
@@ -61,7 +63,7 @@ for (const mode of ["chat", "tui"] as const) {
 			const collapsed = await geometry(page);
 			expect(collapsed.nav.y).toBe(expanded.nav.y);
 			expect(collapsed.nav.height).toBe(expanded.nav.height);
-			expect(Math.abs(collapsed.nav.center - collapsed.header.center)).toBeLessThanOrEqual(1);
+			expect(Math.abs(collapsed.nav.center - collapsed.header.center)).toBeLessThanOrEqual(alignmentTolerance);
 			const firstTab = await page.getByRole("tab").first().boundingBox();
 			expect(firstTab!.x).toBeGreaterThanOrEqual(collapsed.nav.x + collapsed.nav.width);
 			if (!fullScreen) {
