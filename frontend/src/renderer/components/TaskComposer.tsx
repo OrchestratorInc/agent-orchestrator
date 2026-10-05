@@ -1,4 +1,3 @@
-import { EffortPicker } from "./settings/EffortPicker";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	TaskComposerView,
@@ -45,6 +44,7 @@ import {
 } from "../hooks/useAgentModelsQuery";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
+import { EffortPicker, type EffortAvailability } from "./settings/EffortPicker";
 import { useModelTuning } from "./settings/ModelTuningControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import {
@@ -509,6 +509,13 @@ export function TaskComposer({
 		selectedAgent !== "" &&
 		settings?.defaultSessionMode === "chat" &&
 		!settings.chatHarnesses.includes(selectedAgent);
+	const effortAvailability: EffortAvailability = requiresTuiFallback
+		? "launch-unavailable"
+		: !effortModel || effortModel.efforts === undefined
+			? "unknown"
+			: effortOptions.length > 0
+				? "supported"
+				: "unsupported";
 	const canSubmit =
 		hostConnected &&
 		Boolean(projectId) &&
@@ -730,7 +737,7 @@ export function TaskComposer({
 				onSubmit: (brief) => void submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined),
 			}}
 			renderAgentControl={(control) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />}
-			renderEffortControl={(control) => <TaskEffortPicker {...control} defaultEffort={inheritedEffort || effortModel?.defaultEffort} availability={requiresTuiFallback ? "launch-unavailable" : !effortModel || effortModel.efforts === undefined ? "unknown" : effortOptions.length ? "supported" : "unsupported"} />}
+			renderEffortControl={(control) => <TaskEffortPicker {...control} defaultEffort={inheritedEffort || effortModel?.defaultEffort} availability={effortAvailability} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
 			showEffort={!requiresTuiFallback && (effortOptions.length > 0 || Boolean(effort && effort !== "default"))}
@@ -738,8 +745,27 @@ export function TaskComposer({
 	);
 }
 
-function TaskEffortPicker({ disabled, label, onChange, options, value, defaultEffort, availability }: TaskComposerEffortControl & { defaultEffort?: string; availability: "supported" | "unsupported" | "unknown" | "launch-unavailable" }) {
-	return <EffortPicker label={label} disabled={disabled} value={value.toLowerCase() === "default" ? "" : value} choices={options.map((value) => ({ value }))} defaultEffort={defaultEffort} availability={availability} onChange={onChange} triggerClassName="composer-chip composer-toolbar-option w-full justify-between" />;
+function TaskEffortPicker({
+	disabled,
+	label,
+	onChange,
+	options,
+	value,
+	defaultEffort,
+	availability,
+}: TaskComposerEffortControl & { defaultEffort?: string; availability: EffortAvailability }) {
+	return (
+		<EffortPicker
+			label={label}
+			disabled={disabled}
+			value={value.toLowerCase() === "default" ? "" : value}
+			choices={options.map((option) => ({ value: option }))}
+			defaultEffort={defaultEffort}
+			availability={availability}
+			onChange={onChange}
+			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
+		/>
+	);
 }
 
 // Both local and cloud list only harnesses that can run, plus a way to manage

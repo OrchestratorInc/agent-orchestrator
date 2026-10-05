@@ -18,7 +18,6 @@
  */
 
 import { Fragment, useMemo, type FocusEvent, type ReactNode } from "react";
-import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } from "../settings/EffortPicker";
 import { Shuffle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
@@ -32,6 +31,7 @@ import {
 	OptionMenuTrigger,
 } from "../ui/option-menu";
 import { cn } from "../../lib/utils";
+import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } from "../settings/EffortPicker";
 import { agentModelDisplayLabel, isDefaultPlaceholderLabel } from "../../lib/agent-model-choices";
 import { Switch } from "../ui/switch";
 import { ModelMenuChoices } from "./ModelMenuChoices";
@@ -131,6 +131,7 @@ export function TurnSettingsBar({
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
 	children?: ReactNode;
 }) {
+	const { t } = useTranslation();
 	const displayModels = useMemo(
 		() => models.map((model) => ({
 			...model,
@@ -172,7 +173,7 @@ export function TurnSettingsBar({
 	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : APPROVAL_ORDER;
 	const approvalLabel = approvalCopy[settings.approvalMode ?? "default"].label;
 	const modelGroupLabel = effortLabel
-		? `${modelLabel} ${formatEffortLabel(effortLabel)}`
+		? `${modelLabel} ${formatEffortLabel(effortLabel, t)}`
 		: modelLabel;
 	const grouped = partitionConfigOptions(displayConfigOptions);
 	const optionDisabled = Boolean(disabled || configPending || rememberPermissionsPending);
@@ -362,6 +363,8 @@ function ModelEffortPicker({
 }) {
 	const { t } = useTranslation();
 	const catalog = useMemo(() => models.map((model) => ({ ...model, label: model.displayName })), [models]);
+	const effortChoices = useMemo(() => efforts.map((value) => ({ value })), [efforts]);
+	const savedEffort = settings.reasoningEffort === "default" ? "" : settings.reasoningEffort ?? "";
 
 	return (
 		<OptionMenu>
@@ -411,13 +414,22 @@ function ModelEffortPicker({
 					</OptionMenuSubContent>
 				</OptionMenuSub>
 
-				{efforts.length > 0 ? (
-				<OptionMenuSub>
-					<OptionMenuSubTrigger label="Effort" value={effortDisplayLabel(settings.reasoningEffort === "default" ? "" : settings.reasoningEffort ?? "", efforts.map((value) => ({ value })), t("settings.models.effort"), defaultEffort)} />
-					<OptionMenuSubContent className={CHAT_MENU_CLASS}>
-						<EffortMenuItems value={settings.reasoningEffort === "default" ? "" : settings.reasoningEffort ?? ""} choices={efforts.map((value) => ({ value }))} availability={availability} defaultEffort={defaultEffort} onChange={(value) => onChange({ ...settings, reasoningEffort: value || undefined })} />
-					</OptionMenuSubContent>
-				</OptionMenuSub>
+				{efforts.length > 0 || savedEffort ? (
+					<OptionMenuSub>
+						<OptionMenuSubTrigger
+							label={t("settings.models.effort")}
+							value={effortDisplayLabel({ value: savedEffort, choices: effortChoices, followLabel: t("settings.models.effort"), t, defaultEffort })}
+						/>
+						<OptionMenuSubContent className={CHAT_MENU_CLASS}>
+							<EffortMenuItems
+								value={savedEffort}
+								choices={effortChoices}
+								availability={availability}
+								defaultEffort={defaultEffort}
+								onChange={(value) => onChange({ ...settings, reasoningEffort: value || undefined })}
+							/>
+						</OptionMenuSubContent>
+					</OptionMenuSub>
 				) : null}
 				{executionMode && onChangeConfigOption ? (
 					<PlanModeToggle option={executionMode} planReturn={planReturn} onChange={onChangeConfigOption} />
@@ -452,38 +464,43 @@ function ClubbedConfigPicker({
 	disabled?: boolean;
 	onChange: (optionId: string, value: ChatConfigOptionValue) => void;
 }) {
+	const { t } = useTranslation();
 	const primaryModel = modelOptions.at(0);
 	const primaryEffort = effortOptions.at(0);
 	const modelLabel = primaryModel ? optionCurrentLabel(primaryModel) : undefined;
-	const effortLabel = primaryEffort ? effortDisplayLabel(primaryEffort.currentValue === "default" ? "" : primaryEffort.currentValue ?? "", primaryEffort.choices.map((choice) => ({ value: choice.value, label: choice.name })), "", primaryEffort.choices.find((choice) => choice.value === "default")?.description) : undefined;
+	const effortLabel = primaryEffort ? effortDisplayLabel({ ...acpEffortProps(primaryEffort), followLabel: "", t }) : undefined;
 	const groupLabel = [modelLabel, effortLabel].filter(Boolean).join(" ") || "More";
 	const leftCount =
 		modelOptions.length + effortOptions.length + Number(Boolean(executionMode)) + toggles.length + extraOptions.length;
-	if (leftCount === 1 && primaryModel) {
-		return <><ConfigOptionPicker option={primaryModel} disabled={disabled} onChange={(value) => onChange(primaryModel.id, value)} /></>;
-	}
-	if (leftCount === 1 && primaryEffort) {
-		return <EffortPicker value={primaryEffort.currentValue ?? ""} choices={primaryEffort.choices.map((choice) => ({ value: choice.value, label: choice.name }))} defaultValue={primaryEffort.choices.find((choice) => choice.value === "default")?.value ?? null} defaultEffort={primaryEffort.choices.find((choice) => choice.value === "default")?.description} disabled={disabled} triggerClassName={TRIGGER_CLASS} onChange={(value) => onChange(primaryEffort.id, { value })} />;
-	}
 	if (leftCount === 0) return null;
 	if (leftCount === 1) {
+		if (primaryEffort) {
+			return (
+				<EffortPicker
+					{...acpEffortMenuProps(primaryEffort)}
+					disabled={disabled}
+					triggerClassName={TRIGGER_CLASS}
+					onChange={(value) => onChange(primaryEffort.id, { value })}
+				/>
+			);
+		}
 		if (executionMode)
-			return (<>
+			return (
 				<ExecutionModePicker
 					option={executionMode}
 					planReturn={planReturn}
 					disabled={disabled}
 					onChange={onChange}
-				/></>
+				/>
 			);
-		const option = primaryModel ?? primaryEffort ?? executionMode ?? toggles[0] ?? extraOptions[0];
+		const option = primaryModel ?? toggles[0] ?? extraOptions[0];
 		if (!option) return null;
-		return (<>
+		return (
 			<ConfigOptionPicker
 				option={option}
 				disabled={disabled}
 				onChange={(value) => onChange(option.id, value)}
-			/></>
+			/>
 		);
 	}
 
@@ -517,11 +534,40 @@ function ClubbedConfigPicker({
 	);
 }
 
-function EffortOptionSubmenu({ option, onChange }: { option: ChatConfigOption; onChange: (id: string, value: ChatConfigOptionValue) => void }) {
+// ACP exposes the provider-owned reset as a "default" choice whose description
+// names the concrete level it resolves to.
+function acpEffortMenuProps(option: ChatConfigOption) {
 	const defaultChoice = option.choices.find((choice) => choice.value === "default");
-	return <OptionMenuSub><OptionMenuSubTrigger label="Effort" value={effortDisplayLabel(option.currentValue === "default" ? "" : option.currentValue ?? "", option.choices.map((choice) => ({ value: choice.value, label: choice.name })), "", defaultChoice?.description)} /><OptionMenuSubContent className={CHAT_MENU_CLASS}>
-		<EffortMenuItems value={option.currentValue ?? ""} choices={option.choices.map((choice) => ({ value: choice.value, label: choice.name }))} defaultValue={defaultChoice?.value ?? null} defaultEffort={defaultChoice?.description} onChange={(value) => onChange(option.id, { value })} />
-	</OptionMenuSubContent></OptionMenuSub>;
+	return {
+		value: option.currentValue ?? "",
+		choices: option.choices.map((choice) => ({ value: choice.value, label: choice.name })),
+		defaultValue: defaultChoice?.value ?? null,
+		defaultEffort: defaultChoice?.description,
+	};
+}
+
+function acpEffortProps(option: ChatConfigOption) {
+	const { value, choices, defaultEffort } = acpEffortMenuProps(option);
+	return { value: value === "default" ? "" : value, choices, defaultEffort };
+}
+
+function EffortOptionSubmenu({
+	option,
+	onChange,
+}: {
+	option: ChatConfigOption;
+	onChange: (id: string, value: ChatConfigOptionValue) => void;
+}) {
+	const { t } = useTranslation();
+	const followLabel = t("settings.models.effort");
+	return (
+		<OptionMenuSub>
+			<OptionMenuSubTrigger label={followLabel} value={effortDisplayLabel({ ...acpEffortProps(option), followLabel, t })} />
+			<OptionMenuSubContent className={CHAT_MENU_CLASS}>
+				<EffortMenuItems {...acpEffortMenuProps(option)} onChange={(value) => onChange(option.id, { value })} />
+			</OptionMenuSubContent>
+		</OptionMenuSub>
+	);
 }
 
 function PlanModeToggle({

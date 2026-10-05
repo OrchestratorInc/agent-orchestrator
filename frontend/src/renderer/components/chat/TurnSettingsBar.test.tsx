@@ -939,6 +939,19 @@ describe("native model selection", () => {
 		expect(onChange).toHaveBeenCalledWith({ model: "default", reasoningEffort: "high" });
 	});
 
+	it("lets a saved effort be cleared when the model offers no effort levels", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(<TurnSettingsBar harness="claude-code" onChange={onChange}
+			settings={{ model: "plain", reasoningEffort: "high" }}
+			models={[{ id: "plain", displayName: "Plain", default: true, efforts: [] }]} />);
+		await user.click(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" }));
+		await user.keyboard("{ArrowDown}{ArrowDown}{ArrowRight}");
+		expect(screen.getByRole("menuitem", { name: "High (unavailable)" })).toHaveAttribute("aria-disabled", "true");
+		await user.click(screen.getByRole("menuitem", { name: "Clear effort" }));
+		expect(onChange).toHaveBeenCalledWith({ model: "plain", reasoningEffort: undefined });
+	});
+
 	it("keeps an explicit model visible when the catalog does not contain it", () => {
 		render(
 			<TurnSettingsBar

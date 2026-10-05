@@ -115,6 +115,12 @@ describe("ModelTuningControls", () => {
 		expect(screen.queryByText("Effort options have not been reported for this model.")).not.toBeInTheDocument();
 	});
 
+	it("flags a saved effort for a model the loaded catalog does not list", () => {
+		const validity = vi.fn();
+		render(<ModelTuningControls models={models} model="custom" effort="high" onEffortChange={vi.fn()} onValidityChange={validity} variant="settings" />);
+		expect(validity).toHaveBeenLastCalledWith(false);
+	});
+
 	it.each([{ reset: "", expected: "" }, { reset: null, expected: "high" }])("selects the reported effort default with reset=$reset", async ({ reset, expected }) => {
 		const change = vi.fn();
 		render(<EffortPicker value="" choices={[{ value: "low" }, { value: "high" }]} defaultEffort="high" defaultValue={reset} onChange={change} />);

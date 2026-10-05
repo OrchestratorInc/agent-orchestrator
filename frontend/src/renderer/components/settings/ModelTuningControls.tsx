@@ -34,7 +34,10 @@ export function useModelTuning(props: Omit<ModelTuningControlsProps, "variant" |
 	const selected =
 		(concreteModel ? models?.find((item) => item.id === concreteModel) : undefined) ??
 		(concreteModel === "" ? models?.find((item) => item.isDefault && isConcreteModelID(item.id)) : undefined);
-	const capabilitiesKnown = selected?.efforts !== undefined;
+	// A model the catalog does not list is still validated against its (empty)
+	// capabilities. Only a listed model whose provider never reports efforts is
+	// treated as unknown, so a saved effort is kept rather than flagged.
+	const capabilitiesKnown = models !== undefined && (!selected || selected.efforts !== undefined);
 	const invalidEffort = Boolean(effort && capabilitiesKnown && !selected?.efforts?.includes(effort));
 
 	useEffect(() => {
