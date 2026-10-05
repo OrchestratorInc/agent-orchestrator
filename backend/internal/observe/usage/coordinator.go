@@ -31,6 +31,7 @@ type transcriptWatcher interface {
 	Events() <-chan TranscriptEvent
 	Errors() <-chan error
 	Start(context.Context) <-chan struct{}
+	SetRoots(context.Context, []string) error
 	Rebuild(context.Context, []string) error
 }
 
@@ -44,6 +45,7 @@ type CoordinatorConfig struct {
 	Initialize    func(context.Context) error
 	Reconcile     func(context.Context) error
 	ReconcilePath func(context.Context, string) error
+	WatchRoots    func(context.Context) ([]string, error)
 }
 
 // Coordinator turns filesystem, hook, startup, and retry signals into bounded
@@ -60,6 +62,7 @@ type Coordinator struct {
 	initialize    func(context.Context) error
 	reconcile     func(context.Context) error
 	reconcilePath func(context.Context, string) error
+	watchRoots    func(context.Context) ([]string, error)
 	refresh       chan struct{}
 	inventory     chan struct{}
 }
@@ -98,6 +101,7 @@ func NewCoordinator(
 		initialize:    cfg.Initialize,
 		reconcile:     cfg.Reconcile,
 		reconcilePath: cfg.ReconcilePath,
+		watchRoots:    cfg.WatchRoots,
 		refresh:       make(chan struct{}, 1),
 		inventory:     make(chan struct{}, 1),
 	}
@@ -245,6 +249,19 @@ func (c *Coordinator) run(ctx context.Context) {
 		sourcePaths := make([]string, 0, len(nextPaths))
 		for path := range nextPaths {
 			sourcePaths = append(sourcePaths, path)
+		}
+		if c.watchRoots != nil {
+			roots, err := c.watchRoots(ctx)
+			if err == nil {
+				err = c.watcher.SetRoots(ctx, roots)
+			}
+			if err != nil {
+				if ctx.Err() == nil {
+					c.logger.Warn("resolve usage transcript watch roots failed", "err", err)
+					scheduleRetry(refreshRetryID, c.now().UTC().Add(c.retryDelay))
+				}
+				return
+			}
 		}
 		if err := c.watcher.Rebuild(ctx, sourcePaths); err != nil {
 			if ctx.Err() == nil {
