@@ -947,7 +947,8 @@ describe("Sidebar", () => {
 		});
 
 		for (const label of ["New project", "Open a new agent"]) {
-			expect(screen.getByRole("button", { name: label }).querySelector("svg")).toHaveClass("translate-y-px");
+			// Shared 24px row-action button; the icon is centered by the grid, no optical nudge.
+			expect(screen.getByRole("button", { name: label })).toHaveClass("size-6", "place-items-center");
 		}
 	});
 
@@ -1149,28 +1150,29 @@ describe("Sidebar", () => {
 
 		expect(openSession).toHaveClass("pr-[36px]");
 		expect(openSession).toHaveClass(
-			"group-hover/session-row:pr-[50px]",
-			"group-focus-within/session-row:pr-[50px]",
+			"group-hover/session-row:pr-sidebar-project-actions",
+			"group-has-[:focus-visible]/session-row:pr-sidebar-project-actions",
 		);
 		expect(label).toHaveClass("min-w-0", "flex-1", "truncate");
 		expect(actions).toHaveAttribute("data-session-actions");
 		expect(actionButtons).toHaveClass(
 			"absolute",
-			"right-0.5",
+			"right-1",
+			"gap-1.5",
 			"opacity-0",
 			"scale-[0.8]",
 			"duration-normal",
-			"group-focus-within/session-row:pointer-events-auto",
-			"group-focus-within/session-row:scale-100",
-			"group-focus-within/session-row:opacity-100",
+			"group-has-[:focus-visible]/session-row:pointer-events-auto",
+			"group-has-[:focus-visible]/session-row:scale-100",
+			"group-has-[:focus-visible]/session-row:opacity-100",
 		);
 		expect(actionButtons).toHaveAttribute("data-session-action-buttons", "");
 		expect(time).toHaveAttribute("datetime", lastUserMessageAt);
 		expect(time).toHaveClass(
 			"absolute",
-			"right-1.5",
+			"right-2",
 			"opacity-100",
-			"group-focus-within/session-row:opacity-0",
+			"group-has-[:focus-visible]/session-row:opacity-0",
 		);
 		expect(openSession).toHaveClass("pl-1.5");
 		expect(openSession.closest("li")).toHaveClass("pl-0.5");
@@ -2237,7 +2239,7 @@ describe("Sidebar", () => {
 		if (!projectRow) throw new Error("Project row button not found");
 		expect(projectRow).toHaveClass("pr-sidebar-project-actions");
 		expect(actionCluster).toHaveAttribute("data-project-actions");
-		expect(actionCluster).toHaveClass("right-0.5", "gap-px");
+		expect(actionCluster).toHaveClass("right-1", "gap-1.5");
 		expect(within(actionCluster as HTMLElement).getAllByRole("button")).toHaveLength(2);
 		expect(screen.getByLabelText("Project actions for Project One")).not.toHaveClass("opacity-0");
 	});
