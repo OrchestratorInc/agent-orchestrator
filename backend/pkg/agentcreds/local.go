@@ -64,5 +64,21 @@ func (v *Validator) ValidateResolvedLocal(
 		}
 	}
 
+	// An expired OAuth access token is refreshable: a claude.ai subscription
+	// login still holds a valid refresh token, and the agent mints a fresh
+	// access token on launch. The stale access token AO happened to read is not
+	// proof the user is signed out, so hand the question down to the CLI/local
+	// rungs instead of reporting a working, signed-in user as "signed out". A
+	// genuinely revoked token ("... is invalid") does not match and stays a
+	// decisive rejection.
+	if result.State == StateInvalid && cred.Kind == KindOAuthToken && IsRefreshableOAuthExpiry(result.Detail) {
+		return Result{
+			State: StateUnknown, Provider: provider, Source: cred.Source,
+			Fingerprint: cred.Fingerprint(), CheckedAt: result.CheckedAt,
+			Detail: "the OAuth access token has expired but is refreshable, so validity is unproven",
+			Err:    result.Err,
+		}
+	}
+
 	return result
 }

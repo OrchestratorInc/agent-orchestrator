@@ -372,3 +372,25 @@ func IsResolverBug(detail string) bool {
 	}
 	return false
 }
+
+// IsRefreshableOAuthExpiry reports whether a rejection is an *expired* OAuth
+// access token rather than a revoked or otherwise invalid one.
+//
+// A claude.ai subscription login keeps a long-lived refresh token, and the
+// agent (Claude Code) mints a fresh access token on demand. The short-lived
+// access token AO reads from the keychain therefore ages out routinely while
+// the user stays perfectly signed in — "claude auth status" still reports
+// loggedIn, and the next launch refreshes the token transparently. Treating
+// that expiry as a decisive rejection renders a working, signed-in user as
+// "signed out", which is the exact failure this package exists to avoid.
+//
+// A revoked credential returns a different message ("... is invalid"), does not
+// contain "expired", and is left as a decisive rejection so a genuinely
+// signed-out user is still told to re-authenticate.
+func IsRefreshableOAuthExpiry(detail string) bool {
+	lowered := strings.ToLower(detail)
+	if !strings.Contains(lowered, "expired") {
+		return false
+	}
+	return strings.Contains(lowered, "token") || strings.Contains(lowered, "oauth")
+}
