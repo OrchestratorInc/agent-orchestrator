@@ -91,4 +91,39 @@ describe("SessionManagementAccumulator", () => {
 		await accumulator.flush();
 		expect(capture.mock.calls[1][1].pattern_orchestrator_worker_orchestrator_count).toBe(1);
 	});
+
+	it("resets malformed persisted state instead of throwing", () => {
+		localStorage.setItem("ao.telemetry.sessionManagement.v1", JSON.stringify({
+			version: 1,
+			windowStartedAt: null,
+			summary: null,
+			path: null,
+			lastTerminalBurstAt: null,
+		}));
+		const restored = new SessionManagementAccumulator(localStorage, () => now, capture);
+		expect(() => restored.setSurface({ kind: "worker", sessionId: "w1" })).not.toThrow();
+	});
+
+	it("does not count checkpoint transitions while paused", () => {
+		accumulator.setSurface({ kind: "worker", sessionId: "w1" });
+		now += 1_000;
+		accumulator.checkpoint();
+		accumulator.pause();
+		now += 10_000;
+		accumulator.checkpoint();
+		const persisted = JSON.parse(localStorage.getItem("ao.telemetry.sessionManagement.v1") ?? "{}");
+		expect(persisted.summary.worker_same).toBe(1);
+	});
+
+	it("keeps the persisted flush deadline across restart", () => {
+		accumulator.setSurface({ kind: "worker", sessionId: "w1" });
+		const persisted = JSON.parse(localStorage.getItem("ao.telemetry.sessionManagement.v1") ?? "{}");
+		persisted.windowFlushAt = now + 50 * 60_000;
+		localStorage.setItem("ao.telemetry.sessionManagement.v1", JSON.stringify(persisted));
+		now += 49 * 60_000;
+		const restored = new SessionManagementAccumulator(localStorage, () => now, capture);
+		expect(restored.isFlushOverdue()).toBe(false);
+		now += 2 * 60_000;
+		expect(restored.isFlushOverdue()).toBe(true);
+	});
 });

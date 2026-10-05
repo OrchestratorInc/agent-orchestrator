@@ -91,7 +91,7 @@ export function useSwitchAgent() {
 	return useMutation({
 		mutationKey: switchAgentMutationKey,
 		mutationFn: async ({ session, targetHarness, model, idempotencyKey }: SwitchAgentInput) => {
-			recordDirectWorkerInteraction(session.id, "lifecycle", session.kind);
+			recordDirectWorkerInteraction(session.id, "lifecycle", session.kind, session.hostId);
 			const body: {
 				targetHarness: SwitchAgentHarness;
 				model?: string;

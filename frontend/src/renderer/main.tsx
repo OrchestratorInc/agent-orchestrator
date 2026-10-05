@@ -12,7 +12,7 @@ import { createAppRouter } from "./router";
 import { TelemetryBoundary } from "./components/TelemetryBoundary";
 import { CloudOnboardingGate } from "./components/CloudOnboardingGate";
 import { CloudNotificationRuntime } from "./components/CloudNotificationRuntime";
-import { applyRendererTelemetryPolicy, clearRendererTelemetryQueues, initTelemetry } from "./lib/telemetry";
+import { applyRendererTelemetryPolicy, clearRendererTelemetryQueues, initTelemetry, isDeniedEvent } from "./lib/telemetry";
 import { aoBridge } from "./lib/bridge";
 import { startDaemonFailureTelemetry } from "./lib/daemon-telemetry";
 import { startUpdateTelemetry } from "./lib/update-telemetry";
@@ -75,9 +75,19 @@ if (import.meta.env.DEV) {
 	};
 }
 
-void initTelemetry().then((enabled) => {
-	if (enabled) startSessionManagementTelemetry();
-});
+let sessionManagementTelemetryRetries = 0;
+const bootstrapSessionManagementTelemetry = () => {
+	void initTelemetry().then((enabled) => {
+		if (enabled) {
+			startSessionManagementTelemetry();
+			return;
+		}
+		if (!isDeniedEvent("ao.renderer.session_management_summary") && sessionManagementTelemetryRetries++ < 12) {
+			window.setTimeout(bootstrapSessionManagementTelemetry, 5_000);
+		}
+	});
+};
+bootstrapSessionManagementTelemetry();
 startDaemonFailureTelemetry();
 startUpdateTelemetry();
 

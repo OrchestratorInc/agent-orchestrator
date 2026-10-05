@@ -27,13 +27,14 @@ export type RestoreSessionResult =
 function findCloudSession(
 	queryClient: QueryClient,
 	sessionId: string,
-): { orgId: string; workerEpoch: number } | undefined {
+): { orgId: string; workerEpoch: number; kind: "orchestrator" | "worker" } | undefined {
 	for (const [key, sessions] of queryClient.getQueriesData<CloudCpSession[]>({ queryKey: cloudSessionsQueryKey })) {
 		const session = sessions?.find((entry) => entry.id === sessionId);
 		if (session) {
 			const orgId = key[2];
 			if (typeof orgId === "string" && orgId !== "") {
-				return { orgId, workerEpoch: session.workerEpoch ?? 0 };
+				if (session.kind !== "orchestrator" && session.kind !== "worker") continue;
+				return { orgId, workerEpoch: session.workerEpoch ?? 0, kind: session.kind };
 			}
 		}
 	}
@@ -45,13 +46,13 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 
 	return useCallback(
 		async (sessionId: string, hostId?: string) => {
+			const cloudSession = hostId ? undefined : findCloudSession(queryClient, sessionId);
 			const role = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId))
 				?.flatMap((workspace) => workspace.sessions)
 				.find((session) => session.id === sessionId)?.kind;
-			recordDirectWorkerInteraction(sessionId, "lifecycle", role);
+			recordDirectWorkerInteraction(sessionId, "lifecycle", role ?? cloudSession?.kind, hostId);
 			// Cloud sessions re-provision through the control plane, not the local
 			// daemon: restore keeps the conversation and work intact server-side.
-			const cloudSession = hostId ? undefined : findCloudSession(queryClient, sessionId);
 			if (cloudSession !== undefined) {
 				const { orgId: cloudOrgId, workerEpoch: baselineEpoch } = cloudSession;
 				const settings = queryClient.getQueryData<Settings>(settingsQueryKey);

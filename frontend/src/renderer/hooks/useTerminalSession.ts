@@ -812,7 +812,7 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			// end the gate immediately.
 			if (r.replayBuffering) flushReplay();
 			else revealReplayTail();
-			if (session) recordDirectWorkerInteraction(session.id, "terminal", session.kind);
+			if (session) recordDirectWorkerInteraction(session.id, "terminal", session.kind, session.hostId);
 			mux.sendInput(handle, data);
 			return true;
 		});

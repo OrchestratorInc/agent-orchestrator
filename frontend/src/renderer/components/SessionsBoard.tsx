@@ -191,7 +191,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	activeScopeRef.current = scopeKey;
 
 	const openSession = useCallback((session: WorkspaceSession) => {
-		if (session.kind === "worker") recordManualWorkerOpen(session.id);
+		if (session.kind === "worker") recordManualWorkerOpen(session.id, hostId);
 		void navigate(sessionNavigateTarget(session.workspaceId, session.id, hostId));
 	}, [navigate, hostId]);
 

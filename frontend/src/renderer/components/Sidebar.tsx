@@ -1026,7 +1026,7 @@ export function Sidebar({
 										layoutSettled={layoutSettled}
 										onKilled={handlePinnedSessionKilled}
 										onOpenSession={(target) => {
-											if (session.kind === "worker") recordManualWorkerOpen(target.id);
+											if (session.kind === "worker") recordManualWorkerOpen(target.id, target.hostId);
 											if (target.hostId) void remoteNavigate(sessionNavigateTarget(target.workspaceId, target.id, target.hostId));
 											else selection.goSession(target.workspaceId, target.id);
 										}}

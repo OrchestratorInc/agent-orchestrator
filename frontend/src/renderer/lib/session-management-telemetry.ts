@@ -1,4 +1,5 @@
 import { captureRendererEvent, isDeniedEvent } from "./telemetry";
+import { sessionUiKey } from "./hosts";
 
 const STORAGE_KEY = "ao.telemetry.sessionManagement.v1";
 const CHECKPOINT_MS = 5 * 60_000;
@@ -32,6 +33,7 @@ type PersistedState = {
 	version: 1;
 	windowId: string;
 	windowStartedAt: number;
+	windowFlushAt: number;
 	summary: Summary;
 	previousSurface: SessionSurface;
 	path: Array<{ kind: "orchestrator" | "worker"; sessionId: string }>;
@@ -57,11 +59,12 @@ const zeroSummary = (): Summary => ({
 	worker_switch: 0,
 });
 
-function freshState(now: number): PersistedState {
+function freshState(now: number, windowFlushAt = now + FLUSH_MIN_MS + Math.random() * FLUSH_JITTER_MS): PersistedState {
 	return {
 		version: 1,
 		windowId: crypto.randomUUID(),
 		windowStartedAt: now,
+		windowFlushAt,
 		summary: zeroSummary(),
 		previousSurface: null,
 		path: [],
@@ -72,13 +75,51 @@ function freshState(now: number): PersistedState {
 function loadState(storage: Storage, now: number): PersistedState {
 	try {
 		const parsed = JSON.parse(storage.getItem(STORAGE_KEY) ?? "null") as Partial<PersistedState> | null;
-		if (parsed?.version === 1 && parsed.summary && typeof parsed.windowStartedAt === "number") {
-			return { ...freshState(now), ...parsed, summary: { ...zeroSummary(), ...parsed.summary } };
+		if (isValidPersistedState(parsed)) {
+			return {
+				...freshState(now, parsed.windowFlushAt ?? parsed.windowStartedAt + FLUSH_MIN_MS),
+				...parsed,
+				summary: { ...zeroSummary(), ...parsed.summary },
+			};
 		}
 	} catch {
 		// Replace malformed local state.
 	}
 	return freshState(now);
+}
+
+function isFiniteNonNegative(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isValidSurface(value: unknown): value is SessionSurface {
+	return value === null || (
+		typeof value === "object" && value !== null &&
+		(value as { kind?: unknown }).kind !== undefined &&
+		((value as { kind: unknown }).kind === "worker" || (value as { kind: unknown }).kind === "orchestrator") &&
+		typeof (value as { sessionId?: unknown }).sessionId === "string"
+	);
+}
+
+function isValidPersistedState(value: unknown): value is Partial<PersistedState> & Pick<PersistedState, "summary" | "windowStartedAt"> {
+	if (typeof value !== "object" || value === null) return false;
+	const state = value as Partial<PersistedState>;
+	if (state.version !== 1 || typeof state.windowStartedAt !== "number" || !isFiniteNonNegative(state.windowStartedAt)) return false;
+	if (state.windowId !== undefined && typeof state.windowId !== "string") return false;
+	if (state.windowFlushAt !== undefined && !isFiniteNonNegative(state.windowFlushAt)) return false;
+	if (!state.summary || typeof state.summary !== "object") return false;
+	const summary = state.summary as Partial<Summary>;
+	if (![...Object.keys(zeroSummary())].every((key) => isFiniteNonNegative(summary[key as keyof Summary]))) return false;
+	if (!isValidSurface(state.previousSurface)) return false;
+	if (!Array.isArray(state.path) || state.path.length > 8 || !state.path.every(isValidSurfaceEntry)) return false;
+	if (state.pendingManualWorkerId !== undefined && typeof state.pendingManualWorkerId !== "string") return false;
+	if (state.pendingManualWorkerAt !== undefined && !isFiniteNonNegative(state.pendingManualWorkerAt)) return false;
+	if (!state.lastTerminalBurstAt || typeof state.lastTerminalBurstAt !== "object" || Array.isArray(state.lastTerminalBurstAt)) return false;
+	return Object.values(state.lastTerminalBurstAt).every(isFiniteNonNegative);
+}
+
+function isValidSurfaceEntry(value: unknown): value is NonNullable<SessionSurface> {
+	return isValidSurface(value) && value !== null;
 }
 
 function transitionKey(from: NonNullable<SessionSurface>, to: NonNullable<SessionSurface>): TransitionKey {
@@ -173,7 +214,7 @@ export class SessionManagementAccumulator {
 			else this.state.summary.workerActiveMs += elapsed;
 			this.segmentStartedAt = this.isActive(now) ? now : null;
 		}
-		if (countSameSurface && this.surface && this.state.previousSurface) {
+		if (countSameSurface && this.isActive(now) && this.surface && this.state.previousSurface) {
 			this.state.summary[transitionKey(this.state.previousSurface, this.surface)] += 1;
 			this.state.previousSurface = this.surface;
 		}
@@ -213,7 +254,11 @@ export class SessionManagementAccumulator {
 	}
 
 	isFlushOverdue(): boolean {
-		return this.now() - this.state.windowStartedAt >= FLUSH_MIN_MS + FLUSH_JITTER_MS;
+		return this.now() >= this.state.windowFlushAt;
+	}
+
+	flushDelayMs(): number {
+		return Math.max(0, this.state.windowFlushAt - this.now());
 	}
 
 	private isActive(now: number): boolean {
@@ -247,10 +292,15 @@ export class SessionManagementAccumulator {
 }
 
 let runtime: SessionManagementAccumulator | null = null;
+let pendingSurface: SessionSurface | undefined;
 
 export function startSessionManagementTelemetry(): () => void {
 	if (runtime || isDeniedEvent("ao.renderer.session_management_summary")) return () => undefined;
 	runtime = new SessionManagementAccumulator(window.localStorage);
+	if (pendingSurface !== undefined) {
+		runtime.setSurface(pendingSurface);
+		pendingSurface = undefined;
+	}
 	const activity = () => runtime?.activity();
 	const pause = () => runtime?.pause();
 	const visibility = () => document.visibilityState === "visible" ? activity() : pause();
@@ -266,7 +316,7 @@ export function startSessionManagementTelemetry(): () => void {
 	const scheduleFlush = () => {
 		flushTimer = window.setTimeout(() => {
 			void runtime?.flush().finally(scheduleFlush);
-		}, FLUSH_MIN_MS + Math.random() * FLUSH_JITTER_MS);
+		}, runtime?.flushDelayMs() ?? FLUSH_MIN_MS);
 	};
 	if (runtime.isFlushOverdue()) void runtime.flush("startup").finally(scheduleFlush);
 	else scheduleFlush();
@@ -281,17 +331,19 @@ export function startSessionManagementTelemetry(): () => void {
 		document.removeEventListener("visibilitychange", visibility);
 		pause();
 		runtime = null;
+		pendingSurface = undefined;
 	};
 }
 
 export function recordSessionSurface(surface: SessionSurface): void {
-	runtime?.setSurface(surface);
+	if (runtime) runtime.setSurface(surface);
+	else if (surface) pendingSurface = surface;
 }
 
-export function recordManualWorkerOpen(sessionId: string): void {
-	runtime?.markManualWorkerOpen(sessionId);
+export function recordManualWorkerOpen(sessionId: string, hostId?: string): void {
+	runtime?.markManualWorkerOpen(sessionUiKey(sessionId, hostId));
 }
 
-export function recordDirectWorkerInteraction(sessionId: string, kind: Interaction, role?: "orchestrator" | "worker"): void {
-	runtime?.recordInteraction(sessionId, kind, role);
+export function recordDirectWorkerInteraction(sessionId: string, kind: Interaction, role?: "orchestrator" | "worker", hostId?: string): void {
+	runtime?.recordInteraction(sessionUiKey(sessionId, hostId), kind, role);
 }
