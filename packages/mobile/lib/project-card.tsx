@@ -10,8 +10,8 @@ import {
 	type OrchestratorProjectRow,
 } from "./orchestratorView";
 import type { Theme } from "./theme";
-import type { HostedProjectRow } from "./hostedRows";
 import { rowDividerWidth } from "./divider";
+import { EnvironmentBadge } from "./environment-badge-icon";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { fontScaleCap, space, type } from "./tokens";
 import { Dot } from "./ui";
@@ -28,26 +28,29 @@ import { Dot } from "./ui";
  */
 export function ProjectCard({
 	row,
+	sourceLabel,
 	busy,
 	onOpenProject,
 	onOrchestrator,
 }: {
-	row: HostedProjectRow;
+	row: OrchestratorProjectRow;
+	sourceLabel?: "Local" | "Cloud";
 	busy: boolean;
 	onOpenProject: (row: OrchestratorProjectRow) => void;
-	onOrchestrator: (row: OrchestratorProjectRow) => void;
+	onOrchestrator?: (row: OrchestratorProjectRow) => void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const status = orchestratorStatus(t, row.link);
 	const summary = projectCardSummary(row);
 	const blocker = projectBlockerLine(row);
+	const hostName = "hostName" in row.project && typeof row.project.hostName === "string" ? row.project.hostName : undefined;
 
 	return (
 		<View style={styles.row}>
 			<Pressable
 				accessibilityRole="button"
-				accessibilityLabel={`${row.project.name}, ${row.project.hostName} machine, ${status.label}, ${summary.workers}`}
+				accessibilityLabel={`${row.project.name}, ${sourceLabel ? `${sourceLabel}, ` : ""}${hostName ? `${hostName} machine, ` : ""}${onOrchestrator ? `${status.label}, ` : ""}${summary.workers}`}
 				accessibilityHint="Opens the project"
 				onPress={() => onOpenProject(row)}
 				style={({ pressed }) => [styles.body, pressed && styles.pressed]}
@@ -56,18 +59,19 @@ export function ProjectCard({
 					<Text style={styles.project} numberOfLines={1}>
 						{row.project.name}
 					</Text>
-					<View style={styles.machineBadge}>
-						<Text style={styles.machineBadgeText} numberOfLines={1}>{row.project.hostName}</Text>
-					</View>
+					{sourceLabel && <EnvironmentBadge sourceLabel={sourceLabel} theme={t} />}
+					{hostName && <View style={styles.machineBadge}>
+						<Text style={styles.machineBadgeText} numberOfLines={1}>{hostName}</Text>
+					</View>}
 					<Feather name="chevron-right" size={15} color={t.textFaint} />
 				</View>
 
-				<View style={styles.summaryRow}>
+				{onOrchestrator && <View style={styles.summaryRow}>
 					<Dot color={status.color} size={6} breathing={status.breathing} />
 					<Text style={[styles.summaryStrong, styles.statusLabel, { color: status.color }]} numberOfLines={1}>
 						{status.label}
 					</Text>
-				</View>
+				</View>}
 
 				{blocker ? (
 					// Two texts so the ellipsis lands on the worker name, not the age.
@@ -91,9 +95,9 @@ export function ProjectCard({
 				</View>
 			</Pressable>
 
-			<View style={styles.pillSlot} pointerEvents="box-none">
+			{onOrchestrator && <View style={styles.pillSlot} pointerEvents="box-none">
 				<OrchestratorPill row={row} busy={busy} onPress={onOrchestrator} />
-			</View>
+			</View>}
 		</View>
 	);
 }
@@ -150,7 +154,7 @@ export function ProjectPageHeader({
 	row: OrchestratorProjectRow;
 	stats: ProjectPageStats;
 	busy: boolean;
-	onPress: (row: OrchestratorProjectRow) => void;
+	onPress?: (row: OrchestratorProjectRow) => void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -179,7 +183,7 @@ export function ProjectPageHeader({
 			{/* The whole row opens the orchestrator, and so does the pill. The pill
 			    is laid over the row rather than inside its Pressable, so the two
 			    never nest and each stays its own accessible control. */}
-			<View>
+			{onPress ? <View>
 				<Pressable
 					accessibilityRole="button"
 					accessibilityLabel={`${orchestratorButtonCopy(row, busy).label}, ${status.label}, ${row.detail}`}
@@ -213,7 +217,13 @@ export function ProjectPageHeader({
 				<View style={styles.orchestratorPillSlot} pointerEvents="box-none">
 					<OrchestratorPill row={row} busy={busy} onPress={onPress} openLabel="Open" />
 				</View>
-			</View>
+			</View> : (
+				<View style={styles.body}>
+					<Text style={styles.project}>{row.project.name}</Text>
+					{row.project.kind && <Text style={styles.summary}>{row.project.kind.replaceAll("_", " ")}</Text>}
+					<Text style={styles.summary}>Cloud · Read-only</Text>
+				</View>
+			)}
 		</View>
 	);
 }

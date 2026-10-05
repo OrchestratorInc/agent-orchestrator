@@ -56,22 +56,42 @@ describe("active turn controls", () => {
 	});
 
 	it("renames the session, not the conversation", () => {
-		expect(screenSource).toContain("onRename: (next) => renameWorker(session.id, next)");
+		expect(screenSource).toContain("onRename: (next) => renameWorkerOn(source, session.id, next)");
 		expect(screenSource).not.toContain("conversation.rename(next)");
+	});
+	it("binds conversation and terminal navigation to the routed source", () => {
+		expect(screenSource).toContain("const sessionSource = sourceFor(source)");
+		expect(screenSource).toContain("source: source.kind, sourceId: source.id");
+		expect(screenSource).toContain("killOn(source, session.id)");
+		expect(screenSource).not.toContain('params: { id: session.id, view: "terminal" }');
 	});
 
 	it("shows a failed start's reason instead of only a stopped-agent banner", () => {
 		expect(screenSource).toContain('session.provisionState !== "failed"');
 		expect(screenSource).toContain('title="Session failed to start" message={failedStart}');
 		expect(screenSource).toContain('startFailure={failedStart}');
-		expect(screenSource).toContain('disabled={interfaceTransitionActive || Boolean(failedStart)}');
+		expect(screenSource).toContain('disabled={interfaceTransitionActive || cloudComposerLocked || Boolean(failedStart)}');
+	});
+
+	it("shows a paused Coder sandbox before an unavailable conversation fallback", () => {
+		const paused = screenSource.indexOf('if (cloudStage === "paused_by_coder" && !conversation.snapshot)');
+		const unavailable = screenSource.indexOf("if (conversation.unavailable && cloudStage !== \"paused_by_coder\") return <Unavailable");
+		expect(paused).toBeGreaterThan(-1);
+		expect(paused).toBeLessThan(unavailable);
+	});
+
+	it("does not offer the local-agent resume path for a paused cloud sandbox", () => {
+		expect(screenSource).toContain('cloudPaused={cloudStage === "paused_by_coder"}');
+		expect(screenSource).toContain('!cloudPaused && snapshot.controller.state === "stopped"');
+		expect(screenSource).toContain('!cloudPaused && !startFailure && (snapshot.controller.state === "recovering"');
+		expect(screenSource).toContain('conversation.error && cloudStage !== "paused_by_coder"');
 	});
 
 	it("offers a live PR review shortcut while leaving the chat composer in place", () => {
 		expect(screenSource).toContain("sessionPRReadyForReview(session)");
 		expect(screenSource).toContain("reviewPR={reviewPromptPR}");
-		expect(screenSource).toContain("reviewRouteForPR(session.id, reviewPromptPR, currentHostId)");
-		expect(screenSource).toContain("reviewRouteForSession(session, currentHostId)");
+		expect(screenSource).toContain("reviewRouteForPR(session.id, reviewPromptPR, source.id)");
+		expect(screenSource).toContain("reviewRouteForSession(session, source.id)");
 		expect(screenSource).toContain("encodeURIComponent(reviewPromptHostKey)");
 		expect(screenSource).toContain("reviewSummaries.summaryFor(config, session.id, reviewPromptPR.number)");
 		expect(screenSource).toContain("<ChatComposer");

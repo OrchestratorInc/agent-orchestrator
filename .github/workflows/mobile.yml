@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - "packages/mobile/**"
+      - "packages/cloud-client/**"
       - ".github/workflows/mobile.yml"
 
 permissions:
@@ -32,6 +33,16 @@ jobs:
 
       # .npmrc pins legacy-peer-deps for this package; npm ci honors it.
       - run: npm ci
+
+      # packages/mobile consumes @aoagents/cloud-client as a file: dependency
+      # resolved to its built dist/, which is gitignored and not produced by
+      # `npm ci` here (cloud-client's build is a plain script, not `prepare`).
+      # Build it explicitly before typechecking mobile.
+      - name: Build cloud client
+        working-directory: packages/cloud-client
+        run: |
+          npm ci
+          npm run build
 
       - name: Typecheck
         run: npm run typecheck

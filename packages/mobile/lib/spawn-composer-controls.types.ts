@@ -1,4 +1,5 @@
 import type { VoiceMode, VoiceState } from "./voice/types";
+import type { SourceRef } from "./environment/scopedBoard";
 
 export type SpawnComposerOption = {
 	id: string;
@@ -13,6 +14,9 @@ export type SpawnComposerVoice = {
 };
 
 export type SpawnComposerControlsProps = {
+	destinations: readonly { source: SourceRef; label: string; available: boolean; unavailableReason?: string | null }[];
+	destination: SourceRef | null;
+	onSelectDestination: (source: SourceRef) => void;
 	projects: readonly SpawnComposerOption[];
 	projectId: string | null;
 	onSelectProject: (projectId: string) => void;
@@ -24,6 +28,8 @@ export type SpawnComposerControlsProps = {
 	modelLabel: string;
 	onSelectModel: (model: string) => void;
 	onAttach: () => void;
+	showAttachments?: boolean;
+	showModels?: boolean;
 	/** Dictation into the prompt: hold to talk, double-tap for hands-free. */
 	voice: SpawnComposerVoice;
 	onSpawn: () => void;

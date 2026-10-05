@@ -17,10 +17,24 @@ const h = vi.hoisted(() => ({
 	ensureTargetedReadiness: vi.fn(),
 	agentValues: [] as string[],
 	agentCatalog: undefined as { agents: ReturnType<typeof import("../test/agent-readiness-fixtures").agentReadiness>[] } | undefined,
+	cloudProject: false,
 	cloudProjects: [] as Array<{ id: string; displayName: string; repositoryUrl: string; defaultBranch: string; config: Record<string, unknown> }>,
 	cloudCreateSession: vi.fn(),
-	cloudProviders: ["docker"] as string[],
 }));
+
+vi.mock("../hooks/useCloudCp", () => ({
+	useCloudCp: () => ({ client: { createSession: h.cloudCreateSession } }),
+}));
+vi.mock("../hooks/useCloudOrg", () => ({
+	useCloudOrg: () => ({ org: h.cloudProject ? { id: "org-1" } : undefined }),
+}));
+vi.mock("../hooks/useWorkspaceQuery", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useWorkspaceQuery")>();
+	return {
+		...actual,
+		useCloudProjectsQuery: () => ({ data: h.cloudProject ? [{ id: "cloud-project" }] : h.cloudProjects }),
+	};
+});
 
 vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../hooks/useAgentReadinessQuery")>();
@@ -80,30 +94,9 @@ vi.mock("../lib/host-clients", () => ({
 
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: h.capture }));
 
-vi.mock("../hooks/useWorkspaceQuery", () => ({
-	useCloudProjectsQuery: () => ({ data: h.cloudProjects }),
-	cloudProjectsQueryKey: ["cloud-projects"] as const,
-	useCloudSessionsQuery: () => ({ data: [] }),
-	cloudSessionsQueryKey: ["cloud-sessions"] as const,
-}));
-
-vi.mock("../hooks/useCloudOrg", () => ({
-	useCloudOrg: () => ({ org: { id: "org-1" } }),
-}));
-
-vi.mock("../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ client: { createSession: h.cloudCreateSession } }),
-}));
-
-vi.mock("../hooks/useCloudSandboxProviders", () => ({
-	useCloudSandboxProviders: () => ({ available: h.cloudProviders }),
-}));
-
-
 import { TaskComposer } from "./TaskComposer";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
-import { useSandboxProviderStore } from "../stores/sandbox-provider-store";
 import { useUiStore } from "../stores/ui-store";
 
 function Wrap({ children, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }) }: {
@@ -151,17 +144,28 @@ afterEach(() => {
 	h.ensureReadiness.mockReset();
 	h.ensureTargetedReadiness.mockReset();
 	h.agentCatalog = undefined;
-	h.cloudProjects.length = 0;
+	h.cloudProject = false;
 	h.cloudCreateSession.mockReset();
-	h.cloudProviders = ["docker"];
 	window.localStorage.removeItem("ao.cloud.sandboxProvider");
-	useSandboxProviderStore.setState({ selectedProvider: null });
+	h.cloudProjects.length = 0;
 	vi.unstubAllGlobals();
 	h.agentValues.length = 0;
 	window.localStorage.removeItem("ao.taskComposer.preferences.v1");
 });
 
 describe("TaskComposer", () => {
+	it("omits the old local provider override when starting a Cloud task", async () => {
+		h.cloudProject = true;
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "cloud-session-1" } });
+		window.localStorage.setItem("ao.cloud.sandboxProvider", "coder");
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="cloud-project" onCreated={onCreated} /></Wrap>);
+		fireEvent.change(task(), { target: { value: "Do the task" } });
+		fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("cloud-session-1"));
+		expect(h.cloudCreateSession.mock.calls[0]?.[1]).toMatchObject({ projectId: "cloud-project", kind: "worker", prompt: "Do the task" });
+		expect(h.cloudCreateSession.mock.calls[0]?.[1]).not.toHaveProperty("provider");
+	});
 	it("does not launch a remote project task without a ready agent", async () => {
 		h.agentCatalog = { agents: [] };
 		h.remoteGet.mockImplementation(async (path: string) => path === "/api/v1/settings"
@@ -1094,11 +1098,11 @@ describe("TaskComposer", () => {
 	});
 
 	it("uses the control plane default when a saved sandbox provider is unavailable", async () => {
-		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
-		useSandboxProviderStore.getState().setSelectedProvider("coder");
+		h.cloudProject = true;
+		window.localStorage.setItem("ao.cloud.sandboxProvider", "coder");
 		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
 		const onCreated = vi.fn();
-		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={onCreated} /></Wrap>);
+		render(<Wrap><TaskComposer projectId="cloud-project" onCreated={onCreated} /></Wrap>);
 
 		fireEvent.change(task(), { target: { value: "Fix the bug" } });
 		await waitForTaskReady();

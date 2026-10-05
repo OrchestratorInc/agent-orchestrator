@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 // Aliased: this file already declares its own `AppState` type for the
 // provider's context value, so the React Native app-lifecycle API imports
 // under a different name to avoid colliding with it.
@@ -28,8 +28,25 @@ import {
 	type SpawnAttachmentInput,
 } from "./api";
 import { isConfigured, machineIdentity, type ServerConfig } from "./config";
+import { useCloudAuth } from "./cloud/authStore";
+import { loadEnvironment, saveEnvironment } from "./environment/store";
+import { loadSessionSourceBoard, spawnSessionThroughSource } from "./environment/board";
+import {
+	boardReadiness,
+	dispatchCurrentCloudBoardRequest,
+	publishCloudBoardResult,
+	selectBoardState,
+	type BoardState,
+	type CloudBoardRequest,
+} from "./environment/boardSelection";
+import { resolveCloudSource, resolveLocalSource } from "./environment/resolve";
+import { shouldPollCloudSource, shouldPollLocalSource } from "./environment/shouldPoll";
+import { composeBoards, type ScopedBoard, type SourceRef } from "./environment/scopedBoard";
+import { localConfigForSource } from "./environment/sourceResolution";
+import { createLocalSessionSource } from "./environment/local";
+import type { EnvironmentKind, SessionSource } from "./environment/types";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
-import { pollIntervalFor } from "./pollInterval";
+import { cloudBoardPollInterval, pollIntervalFor } from "./pollInterval";
 import { rejectedEndpointNeedsRace, type ConnectOptions } from "./connectRuntime";
 import type { Endpoint } from "./endpoints";
 import { activeHost, loadHosts, sameHostConnections, setActiveHost, type Host } from "./hosts";
@@ -50,6 +67,13 @@ import { emptyHostSnapshot, useOtherHosts, type HostSnapshot } from "./otherHost
 import type { HostedOrchestrator, HostedProject, HostedSession } from "./hostedRows";
 
 const ACTIVE_PROJECT_KEY = "ao.activeProject";
+const EMPTY_BOARD: BoardState<ProjectInfo, DashboardSession, OrchestratorLink> = {
+	projects: [],
+	sessions: [],
+	orchestrators: [],
+	loading: false,
+	error: null,
+};
 
 // Board-level connection state is derived from the REST poll. The session screen
 // tracks its own terminal mux connection separately.
@@ -74,6 +98,43 @@ export type SpawnOptions = {
 type AppState = {
 	config: ServerConfig | null;
 	configured: boolean;
+	/** Readiness of the active environment's board. */
+	/** Saved Local pairing readiness, independent of the selected environment. */
+	localConfigured: boolean;
+	/**
+	 * Which environment is active, or `null` while the persisted choice is
+	 * still loading.
+	 *
+	 * `null` is a genuine third state, not a stand-in for "local" — the same
+	 * shape `OnboardingInput` uses for exactly the same reason. Defaulting
+	 * this to `"local"` while unresolved silently overloads "local" to mean
+	 * both "confirmed local" and "not loaded yet": a returning cloud user
+	 * would render the local empty state (and, with `config` also still
+	 * null, the "no desktop paired" screen) for a frame on every cold start.
+	 * Consumers must treat `null` as "don't know yet, render neither
+	 * environment's empty state" — see `shouldShowLoading` in
+	 * lib/configLoading.ts for the equivalent convention around `config`.
+	 */
+	environment: EnvironmentKind | null;
+	setEnvironment: (kind: EnvironmentKind) => void;
+	/** The active environment's data source. Undefined until one is configured. */
+	sessionSource: SessionSource | undefined;
+	/** Independent source snapshots for the combined board. */
+	localBoard: BoardState<ProjectInfo, DashboardSession, OrchestratorLink>;
+	cloudBoard: BoardState<ProjectInfo, DashboardSession, OrchestratorLink>;
+	scopedBoard: ScopedBoard;
+	availableSources: SourceRef[];
+	localPRs: ReturnType<typeof collectPRs>;
+	sourceFor: (source: SourceRef) => SessionSource | undefined;
+	refreshSource: (source: SourceRef) => Promise<void>;
+	refreshAll: () => Promise<void>;
+	spawnOn: (source: SourceRef, options: import("./api").SpawnOptions & { clientRequestId?: string }) => Promise<{ id: string; projectId: string }>;
+	launchConductorOn: (source: SourceRef, projectId: string, clean?: boolean, mode?: SessionMode) => Promise<OrchestratorLink>;
+	killOn: (source: SourceRef, id: string) => Promise<void>;
+	renameWorkerOn: (source: SourceRef, id: string, displayName: string) => Promise<void>;
+	setWorkerPinnedOn: (source: SourceRef, id: string, pinned: boolean) => Promise<void>;
+	restoreOn: (source: SourceRef, id: string) => Promise<void>;
+	resumeAgentOn: (source: SourceRef, id: string) => Promise<void>;
 	/** Paired machine owning this view, even while its endpoint is offline. */
 	currentHostId: string | undefined;
 	selectedHostName: string | null;
@@ -125,7 +186,6 @@ type AppState = {
 	switchHost: (id: string) => Promise<void>;
 	refresh: () => Promise<void>;
 	refreshHost: (hostId: string) => Promise<void>;
-	refreshAll: () => Promise<void>;
 	configForHost: (hostId: string) => ServerConfig | null;
 	setActiveProject: (id: string) => void;
 	spawn: (opts: SpawnOptions) => Promise<DashboardSession>;
@@ -154,11 +214,13 @@ export function HostScope({ hostId, children }: { hostId: string; children: Reac
 	const host = app.hostStates.find((item) => item.hostId === hostId);
 	const isSelected = app.currentHostId === hostId;
 	const scoped = useMemo<AppState>(() => {
-		if (isSelected) return app;
+		if (isSelected && app.environment === "local") return app;
 		const config = host?.config ?? null;
 		const projects = host?.projects ?? [];
 		return {
 			...app,
+			environment: "local",
+			sessionSource: app.sourceFor({ kind: "local", id: hostId }),
 			config,
 			configured: !!config && isConfigured(config),
 			currentHostId: host?.hostId,
@@ -213,9 +275,47 @@ export function usePRs() {
 	return useMemo(() => collectPRs(sessions), [sessions]);
 }
 
+/**
+ * The active environment's data source. Undefined until one is configured.
+ *
+ * Deliberately has no consumers yet — Task 15 switches the store's existing
+ * readers over to it.
+ */
+export function useSessionSource(): SessionSource | undefined {
+	const { sessionSource } = useApp();
+	return sessionSource;
+}
+
+export function useEnvironment(): { environment: EnvironmentKind | null; setEnvironment: (kind: EnvironmentKind) => void } {
+	const { environment, setEnvironment } = useApp();
+	return { environment, setEnvironment };
+}
+
 // Provider --------------------------------------------------------------------
 
 export function AppProvider({ children }: { children: ReactNode }) {
+	const cloudAuth = useCloudAuth();
+	// `null` until the persisted choice loads — a genuine third state, not a
+	// stand-in for "local" (see AppState's `environment` doc comment above).
+	// Consumers must not render either environment's empty state while this
+	// is null.
+	const [environment, setEnvironmentState] = useState<EnvironmentKind | null>(null);
+	useEffect(() => {
+		let cancelled = false;
+		loadEnvironment().then((kind) => {
+			if (!cancelled) setEnvironmentState(kind);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+	// Updates state synchronously so a user toggling the switcher sees the
+	// change immediately, rather than waiting on the AsyncStorage round trip
+	// saveEnvironment makes underneath.
+	const setEnvironment = useCallback((kind: EnvironmentKind) => {
+		setEnvironmentState(kind);
+		void saveEnvironment(kind);
+	}, []);
 	const [pairedHosts, setPairedHosts] = useState<Host[]>([]);
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
 	const [config, setConfig] = useState<ServerConfig | null>(null);
@@ -236,6 +336,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [errorStatus, setErrorStatus] = useState<number | null>(null);
+	const [cloudBoard, setCloudBoard] = useState<BoardState<ProjectInfo, DashboardSession, OrchestratorLink>>(EMPTY_BOARD);
+	const [cloudBoardOwner, setCloudBoardOwner] = useState<SessionSource | undefined>();
+	const cloudRequestGenerationRef = useRef(0);
+	const activeEnvironmentRef = useRef<EnvironmentKind | null>(environment);
+	const cloudBoardRequestRef = useRef<CloudBoardRequest<SessionSource> | undefined>(undefined);
+	const localSource = useMemo(() => resolveLocalSource(config), [config]);
+	const cloudSource = useMemo(() => resolveCloudSource({
+		client: cloudAuth.client,
+		signedIn: cloudAuth.signedIn === true,
+		orgId: cloudAuth.orgId,
+		sessionEpoch: cloudAuth.sessionEpoch,
+	}), [cloudAuth.client, cloudAuth.signedIn, cloudAuth.orgId, cloudAuth.sessionEpoch]);
+	const sessionSource = environment === "cloud" ? cloudSource : environment === "local" ? localSource : undefined;
+	const cloudOrgId = cloudSource ? cloudAuth.orgId : null;
 	const cfgRef = useRef<ServerConfig | null>(null);
 	const configResolution = useRef(0);
 	// Gate for the connected event: emit only on the not-open -> open transition,
@@ -294,7 +408,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const lastReRaceAt = useRef(0);
 	// Set when the app returns to the foreground, consumed by the upgrade check.
 	const resumedRef = useRef(false);
-
 	const reloadConfig = useCallback(async (options?: ConnectOptions): Promise<ServerConfig | null> => {
 		const resolution = ++configResolution.current;
 		// Races the active machine's endpoints rather than reading one stored
@@ -428,7 +541,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// on device, holding a Cloudflare connection with a working LAN unused.
 	// This is the only thing that moves the app back up the preference order.
 	useEffect(() => {
-		if (!config || !isConfigured(config) || !appActive) return;
+		if (!shouldPollLocalSource({ paired: !!localSource, appActive }) || !config || !isConfigured(config)) return;
 		let stopped = false;
 		const check = async () => {
 			if (stopped) return;
@@ -462,7 +575,73 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			stopped = true;
 			clearInterval(id);
 		};
-	}, [config, appActive, reloadConfig]);
+	}, [config, appActive, localSource, reloadConfig]);
+
+	// A Cloud source is scoped to the signed-in account and organization. Every
+	// source change gets a new generation: any response already in flight can no
+	// longer publish into the new board. A layout effect makes that invalidation
+	// visible before passive poll effects can start their next request.
+	useLayoutEffect(() => {
+		activeEnvironmentRef.current = environment;
+	}, [environment]);
+
+	useLayoutEffect(() => {
+		const generation = cloudRequestGenerationRef.current + 1;
+		cloudRequestGenerationRef.current = generation;
+		cloudBoardRequestRef.current =
+			cloudSource
+				? { source: cloudSource, generation }
+				: undefined;
+		setCloudBoardOwner(undefined);
+		setCloudBoard(cloudSource ? { ...EMPTY_BOARD, loading: true } : EMPTY_BOARD);
+	}, [cloudSource]);
+
+	const fetchCloudBoard = useCallback((): Promise<void> =>
+		dispatchCurrentCloudBoardRequest(
+			() => cloudBoardRequestRef.current,
+			async ({ source, generation, sequence }) => {
+				setCloudBoard((current) => ({ ...current, loading: true, error: null }));
+				try {
+					const board = await loadSessionSourceBoard(source);
+					if (cloudBoardRequestRef.current?.generation === generation &&
+						cloudBoardRequestRef.current?.sequence === sequence) setCloudBoardOwner(source);
+					setCloudBoard((current) =>
+						publishCloudBoardResult({
+							current,
+							requestGeneration: generation,
+							currentGeneration: cloudBoardRequestRef.current?.generation ?? -1,
+							requestSequence: sequence,
+							currentSequence: cloudBoardRequestRef.current?.sequence,
+							result: { kind: "success", ...board },
+						}) ?? current,
+					);
+				} catch (cause) {
+					const message = cause instanceof Error ? cause.message : "Failed to load";
+					setCloudBoard((current) =>
+						publishCloudBoardResult({
+							current,
+							requestGeneration: generation,
+							currentGeneration: cloudBoardRequestRef.current?.generation ?? -1,
+							requestSequence: sequence,
+							currentSequence: cloudBoardRequestRef.current?.sequence,
+							result: { kind: "failure", error: message },
+						}) ?? current,
+					);
+				}
+			},
+		), []);
+
+	const cloudPollMs = cloudBoardPollInterval([
+		...cloudBoard.sessions,
+		...cloudBoard.orchestrators,
+	]);
+
+	useEffect(() => {
+		if (!shouldPollCloudSource({ signedIn: cloudAuth.signedIn === true, orgId: cloudAuth.orgId, appActive })) return;
+		void fetchCloudBoard();
+		const poll = setInterval(() => void fetchCloudBoard(), cloudPollMs);
+		return () => clearInterval(poll);
+	}, [appActive, cloudPollMs, cloudAuth.signedIn, cloudAuth.orgId, cloudSource, fetchCloudBoard]);
 
 	// fetchAll returns false when it hit an auth failure (missing/wrong password
 	// or a 429 lockout). The poll loop uses that to STOP hammering: a phone that
@@ -565,6 +744,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		// A config change (unpair / re-pair / new host) restarts polling; reset the
 		// connected gate so the first open of the new session is a real transition.
 		openRef.current = false;
+		// The paired desktop has its own poll gate. It remains live while Cloud
+		// refreshes independently, but stops heartbeating while backgrounded.
+		if (!shouldPollLocalSource({ paired: pairedHosts.length > 0, appActive })) {
+			if (!pairedHosts.length) setConnection("closed");
+			return;
+		}
 		if (!config || !isConfigured(config)) {
 			setConnection("closed");
 			// Not simply false: until resolution has finished this is "still
@@ -622,7 +807,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// boundary instead of one whole request-timeout later.
 			stopped = true;
 		};
-	}, [config, fetchAll, appActive, reloadConfig, configResolved]);
+	}, [config, fetchAll, appActive, reloadConfig, configResolved, pairedHosts.length]);
 
 	const setActiveProject = useCallback((id: string) => {
 		setChosenProjectId(id);
@@ -640,10 +825,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		() => sessionRowsForMachine(orchestrators, sessionMachine, activeMachine),
 		[orchestrators, sessionMachine, activeMachine],
 	);
-	const { projects, known: projectsKnown } = projectsForMachine(
+	const { projects: localProjects, known: localProjectsKnown } = projectsForMachine(
 		knownProjects,
 		activeMachine,
 	);
+	const localBoard: BoardState<ProjectInfo, DashboardSession, OrchestratorLink> = useMemo(() => ({
+		projects: localProjects,
+		sessions: visibleSessions,
+		orchestrators: visibleOrchestrators,
+		loading,
+		error,
+	}), [localProjects, visibleSessions, visibleOrchestrators, loading, error]);
+	const localPRs = useMemo(() => collectPRs(localBoard.sessions), [localBoard.sessions]);
+	const boardSelection = selectBoardState({
+		environment,
+		sourceKind: sessionSource?.kind,
+		local: localBoard,
+		cloud: cloudBoard,
+		empty: EMPTY_BOARD,
+	});
+	const cloudActive = boardSelection.kind === "cloud";
+	const cloudEnvironment = environment === "cloud";
+	const {
+		projects,
+		sessions: activeSessions,
+		orchestrators: activeOrchestrators,
+		loading: activeLoading,
+		error: activeError,
+	} = boardSelection.state;
+	const projectsKnown = cloudActive ? true : boardSelection.kind === "none" ? false : localProjectsKnown;
 	const activeProjectId = useMemo(
 		() => resolveActiveProject(chosenProjectId, projects, projectsKnown),
 		[chosenProjectId, projects, projectsKnown],
@@ -659,8 +869,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			loading,
 			error,
 			errorStatus,
-			projects,
-			projectsKnown,
+			projects: localProjects,
+			projectsKnown: localProjectsKnown,
 			sessions: visibleSessions,
 			orchestrators: visibleOrchestrators,
 			orchestratorId,
@@ -668,7 +878,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			notificationsUnread,
 			lastSyncAt: lastSyncAtRef.current,
 		};
-	}), [pairedHosts, selectedHostId, otherHosts.snapshots, activeEndpoints, config, connection, loading, error, errorStatus, projects, projectsKnown, visibleSessions, visibleOrchestrators, orchestratorId, stats, notificationsUnread]);
+	}), [pairedHosts, selectedHostId, otherHosts.snapshots, activeEndpoints, config, connection, loading, error, errorStatus, localProjects, localProjectsKnown, visibleSessions, visibleOrchestrators, orchestratorId, stats, notificationsUnread]);
+	const scopedBoard = useMemo(() => composeBoards([
+		...hostStates.map((host) => ({
+			source: { kind: "local" as const, id: host.hostId },
+			status: {
+				resolved: !host.loading,
+				available: !!host.config,
+				loading: host.loading,
+				stale: !!host.error && (host.projectsKnown || host.sessions.length > 0),
+				error: host.error,
+			},
+			snapshot: host.projectsKnown || host.sessions.length > 0
+				? { board: { projects: host.projects, sessions: host.sessions, orchestrators: host.orchestrators } }
+				: undefined,
+		})),
+		...(cloudOrgId ? [{
+			source: { kind: "cloud" as const, id: cloudOrgId },
+			status: {
+				resolved: cloudAuth.signedIn !== null && !cloudAuth.orgLoading,
+				available: !!cloudSource,
+				loading: cloudAuth.orgLoading || cloudBoard.loading,
+				stale: !!cloudBoard.error && cloudBoardOwner === cloudSource,
+				error: cloudAuth.orgError ?? cloudBoard.error,
+			},
+			snapshot: cloudBoardOwner === cloudSource ? { board: cloudBoard } : undefined,
+		}] : []),
+	]), [hostStates, cloudOrgId, cloudAuth.signedIn, cloudAuth.orgLoading, cloudAuth.orgError, cloudSource, cloudBoard, cloudBoardOwner]);
+	const availableSources = useMemo(() => [
+		...hostStates.map((host) => ({ kind: "local" as const, id: host.hostId })),
+		...(cloudOrgId && cloudSource ? [{ kind: "cloud" as const, id: cloudOrgId }] : []),
+	], [hostStates, cloudOrgId, cloudSource]);
 	const allSessions = useMemo<HostedSession[]>(() => hostStates.flatMap((host) => host.sessions.map((session) => ({ ...session, hostId: host.hostId, hostName: host.name }))), [hostStates]);
 	const allProjects = useMemo<HostedProject[]>(() => hostStates.flatMap((host) => host.projects.map((project) => ({ ...project, hostId: host.hostId, hostName: host.name }))), [hostStates]);
 	const allOrchestrators = useMemo<HostedOrchestrator[]>(() => hostStates.flatMap((host) => host.orchestrators.map((link) => ({ ...link, hostId: host.hostId, hostName: host.name }))), [hostStates]);
@@ -685,16 +925,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		if (hostId === selectedHostId) await fetchAll();
 		else await otherHosts.refreshHost(hostId);
 	}, [selectedHostId, fetchAll, otherHosts.refreshHost]);
-	const refreshAll = useCallback(async () => {
-		await Promise.all(hostStates.map((host) => refreshHost(host.hostId)));
-	}, [hostStates, refreshHost]);
-
 	// Pick a sensible project for actions that need one (spawn / conductor).
 	const targetProject = useCallback((): string | null => {
-		if (activeProjectId !== ALL_PROJECTS) return activeProjectId;
-		if (projects.length === 1) return projects[0].id;
+		const selectedProject = resolveActiveProject(chosenProjectId, localProjects, localProjectsKnown);
+		if (selectedProject !== ALL_PROJECTS) return selectedProject;
+		if (localProjects.length === 1) return localProjects[0].id;
 		return null;
-	}, [activeProjectId, projects]);
+	}, [chosenProjectId, localProjects, localProjectsKnown]);
 
 	const spawn = useCallback(
 		async ({ hostId, projectId, prompt, harness, model, mode, attachments, clientRequestId }: SpawnOptions) => {
@@ -796,8 +1033,83 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		await trackFeature("send", () => sendMessage(requireConfig(hostId), id, message));
 	}, [requireConfig]);
 	const refresh = useCallback(async () => {
+		if (activeEnvironmentRef.current === "cloud") {
+			await fetchCloudBoard();
+			return;
+		}
 		await fetchAll();
-	}, [fetchAll]);
+	}, [fetchAll, fetchCloudBoard]);
+	const localSourceCache = useRef(new Map<string, { config: ServerConfig; source: SessionSource }>());
+	const sourceFor = useCallback((ref: SourceRef): SessionSource | undefined => {
+		if (ref.kind === "local") {
+			const cfg = localConfigForSource(ref, configForHost);
+			if (!cfg || !isConfigured(cfg)) return undefined;
+			const cached = localSourceCache.current.get(ref.id);
+			if (cached && sameServerConfig(cached.config, cfg)) return cached.source;
+			const source = createLocalSessionSource(cfg);
+			localSourceCache.current.set(ref.id, { config: cfg, source });
+			return source;
+		}
+		return ref.id === cloudOrgId ? cloudSource : undefined;
+	}, [configForHost, cloudOrgId, cloudSource]);
+	const refreshSource = useCallback(async (ref: SourceRef): Promise<void> => {
+		if (!sourceFor(ref)) throw new Error("This destination is no longer available.");
+		if (ref.kind === "local") await refreshHost(ref.id);
+		else await fetchCloudBoard();
+	}, [sourceFor, refreshHost, fetchCloudBoard]);
+	const refreshAll = useCallback(async (): Promise<void> => {
+		await Promise.allSettled(availableSources.filter((ref) => !!sourceFor(ref)).map(refreshSource));
+	}, [availableSources, sourceFor, refreshSource]);
+	const assertLocalSource = useCallback((ref: SourceRef): ServerConfig => {
+		const c = localConfigForSource(ref, configForHost);
+		if (!c || !isConfigured(c)) throw new Error("This paired desktop is no longer available.");
+		return c;
+	}, [configForHost]);
+	const spawnOn = useCallback(async (ref: SourceRef, options: import("./api").SpawnOptions & { clientRequestId?: string }) => {
+		const source = sourceFor(ref);
+		if (!source) throw new Error("This destination is no longer available.");
+		if (ref.kind === "local") {
+			const config = assertLocalSource(ref);
+			if (!options.projectId) throw new Error("Pick a project first");
+			const session = await delegateTask(config, {
+				projectId: options.projectId,
+				brief: options.prompt ?? "",
+				agent: options.harness,
+				model: options.model,
+				mode: options.mode ?? "chat",
+				attachments: options.attachments,
+				clientRequestId: options.clientRequestId,
+			});
+			await refreshSource(ref);
+			return { id: session.id, projectId: session.projectId };
+		}
+		return spawnSessionThroughSource(source, options, () => refreshSource(ref));
+	}, [sourceFor, refreshSource, assertLocalSource]);
+	const launchConductorOn = useCallback(async (ref: SourceRef, projectId: string, clean = false, mode: SessionMode = "chat") => {
+		const link = await apiLaunchOrchestrator(assertLocalSource(ref), projectId, clean, mode);
+		await refreshSource(ref);
+		return link;
+	}, [assertLocalSource, refreshSource]);
+	const killOn = useCallback(async (ref: SourceRef, id: string) => {
+		await killSession(assertLocalSource(ref), id);
+		await refreshSource(ref);
+	}, [assertLocalSource, refreshSource]);
+	const renameWorkerOn = useCallback(async (ref: SourceRef, id: string, displayName: string) => {
+		await apiRenameSession(assertLocalSource(ref), id, displayName);
+		await refreshSource(ref);
+	}, [assertLocalSource, refreshSource]);
+	const setWorkerPinnedOn = useCallback(async (ref: SourceRef, id: string, pinned: boolean) => {
+		await (pinned ? apiPinSession(assertLocalSource(ref), id) : apiUnpinSession(assertLocalSource(ref), id));
+		await refreshSource(ref);
+	}, [assertLocalSource, refreshSource]);
+	const restoreOn = useCallback(async (ref: SourceRef, id: string) => {
+		await restoreSession(assertLocalSource(ref), id);
+		await refreshSource(ref);
+	}, [assertLocalSource, refreshSource]);
+	const resumeAgentOn = useCallback(async (ref: SourceRef, id: string) => {
+		await resumeSessionAgent(assertLocalSource(ref), id);
+		await refreshSource(ref);
+	}, [assertLocalSource, refreshSource]);
 
 	// Memoized so the provider doesn't hand every useApp() consumer a brand-new
 	// object (causing re-renders) on each render. Re-renders now track real state changes.
@@ -808,7 +1120,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const value = useMemo<AppState>(
 		() => ({
 			config,
-			configured: !!config && isConfigured(config),
+			...boardReadiness(environment, sessionSource?.kind, pairedHosts.length > 0),
 			currentHostId: selectedHostId ?? undefined,
 			selectedHostName,
 			hostStates,
@@ -816,27 +1128,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			allProjects,
 			allOrchestrators,
 			configResolved,
+			environment,
+			setEnvironment,
+			sessionSource,
+			localBoard,
+			cloudBoard,
+			scopedBoard,
+			availableSources,
+			localPRs,
+			sourceFor,
+			refreshSource,
+			refreshAll,
+			spawnOn,
+			launchConductorOn,
+			killOn,
+			renameWorkerOn,
+			setWorkerPinnedOn,
+			restoreOn,
+			resumeAgentOn,
 			activeEndpoints,
 			projects,
 			projectsKnown,
-			sessions: visibleSessions,
-			orchestrators: visibleOrchestrators,
-			orchestratorId: sessionMachine === activeMachine ? orchestratorId : null,
-			stats: sessionMachine === activeMachine ? stats : {},
+			sessions: activeSessions,
+			orchestrators: activeOrchestrators,
+			orchestratorId: cloudEnvironment ? null : sessionMachine === activeMachine ? orchestratorId : null,
+			stats: cloudEnvironment ? {} : sessionMachine === activeMachine ? stats : {},
 			activeProjectId,
-			connection,
-			notificationsUnread: sessionMachine === activeMachine ? notificationsUnread : 0,
-			loading,
-			error,
-			errorStatus,
-			unreachable: isDesktopUnreachable({ connection, error, errorStatus }),
-			getLastSyncAt,
+			connection: cloudEnvironment ? "closed" : connection,
+			notificationsUnread: cloudEnvironment ? 0 : sessionMachine === activeMachine ? notificationsUnread : 0,
+			loading: activeLoading,
+			error: activeError,
+			errorStatus: cloudEnvironment ? null : errorStatus,
+			unreachable: cloudEnvironment ? false : isDesktopUnreachable({ connection, error, errorStatus }),
+			getLastSyncAt: cloudEnvironment ? () => 0 : getLastSyncAt,
 			reloadConfig,
 			switchHost,
-			refresh,
-			refreshHost,
-			refreshAll,
-			configForHost,
+		refresh,
+		refreshHost,
+		configForHost,
 			setActiveProject,
 			spawn,
 			launchConductor,
@@ -850,6 +1179,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		}),
 		[
 			config,
+			pairedHosts.length,
 			selectedHostId,
 			selectedHostName,
 			hostStates,
@@ -857,10 +1187,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			allProjects,
 			allOrchestrators,
 			configResolved,
+			cloudEnvironment,
+			environment,
+			setEnvironment,
+			sessionSource,
+			localBoard,
+			cloudBoard,
+			scopedBoard,
+			availableSources,
+			localPRs,
+			sourceFor,
+			refreshSource,
+			refreshAll,
+			spawnOn,
+			launchConductorOn,
+			killOn,
+			renameWorkerOn,
+			setWorkerPinnedOn,
+			restoreOn,
+			resumeAgentOn,
+			activeEndpoints,
 			projects,
 			projectsKnown,
-			visibleSessions,
-			visibleOrchestrators,
+			activeSessions,
+			activeOrchestrators,
 			sessionMachine,
 			activeMachine,
 			orchestratorId,
@@ -868,8 +1218,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			activeProjectId,
 			connection,
 			notificationsUnread,
-			loading,
-			error,
+			activeLoading,
+			activeError,
 			errorStatus,
 			getLastSyncAt,
 			reloadConfig,

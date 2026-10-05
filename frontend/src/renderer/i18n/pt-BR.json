@@ -759,6 +759,7 @@
 	"settings.cloudProvider.description": "Em qual provedor de sandbox suas novas sessões na nuvem são executadas. O plano de controle valida a escolha em relação aos provedores que oferece.",
 	"settings.cloudProvider.signIn": "Entre no AO Cloud (barra lateral esquerda) para escolher um provedor de sandbox.",
 	"settings.cloudProvider.none": "Nenhum configurado",
+	"settings.cloudProvider.unavailable": "O provedor salvo {{provider}} não está mais disponível. Escolha um provedor disponível para iniciar sessões.",
 	"settings.githubPat.description": "Optional. Paste a GitHub personal access token with access to private repositories. It is encrypted and used only by Cloud workers when cloning GitHub repositories.",
 	"settings.githubPat.remove": "Remove",
 	"settings.cloudConfirm.confirm": "Habilitar a nuvem",

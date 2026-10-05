@@ -18,6 +18,7 @@ export interface UseCloudSandboxProvidersResult {
 	/** Mirrors useCloudCp().ready so callers can gate on one hook. */
 	ready: boolean;
 	isLoading: boolean;
+	isSuccess: boolean;
 }
 
 export function useCloudSandboxProviders(): UseCloudSandboxProvidersResult {
@@ -39,5 +40,6 @@ export function useCloudSandboxProviders(): UseCloudSandboxProvidersResult {
 		default: query.data?.default ?? "",
 		ready,
 		isLoading: query.isLoading,
+		isSuccess: query.isSuccess,
 	};
 }

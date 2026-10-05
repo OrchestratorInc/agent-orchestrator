@@ -15,7 +15,8 @@ import {
 	Text,
 	View,
 } from "react-native";
-import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
+import { mobileReachablePreviewURL, type DashboardSession, type OrchestratorLink } from "../api";
+import { cloudHeaderControllerState, cloudLifecycleStage, isResumable } from "../cloud/lifecycle";
 import { machineIdentity } from "../config";
 import { haptics } from "../haptics";
 import { resetHeaderRightForSwap } from "../headerRightSwap";
@@ -23,6 +24,7 @@ import { openGitHub } from "../openGitHub";
 import { glassHeaderControl } from "../native-header-items";
 import { NativeHeaderButton } from "../native-header-button";
 import { useApp } from "../store";
+import type { SourceRef } from "../environment/scopedBoard";
 import {
 	mobileInterfaceTransitionIsActive,
 	mobileInterfaceTransitionIsBusy,
@@ -41,7 +43,7 @@ import { ChatTimeline } from "./ChatTimeline";
 import { ConversationTitle } from "./ConversationTitle";
 import { chatSheetRoute, type ConversationActionsEntry } from "./chatSheetRegistry";
 import { quotaWarning } from "./conversationChrome";
-import { controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
+import { cloudLifecycleBanner, controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { conversationMarkers } from "./timelineModel";
 import { brokenMcpServers, can } from "./types";
@@ -51,7 +53,7 @@ import { usePRSummaries } from "../usePRSummaries";
 import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
 import { iconSize, type, space } from "../tokens";
 import { backOr } from "../backNavigation";
-import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
+import { userFacingError } from "../connectionError";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -73,7 +75,7 @@ async function dismissKeyboardBeforeSheet(keyboardVisible: boolean): Promise<voi
 	});
 }
 
-export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
+export function ChatSessionScreen({ session, source }: { session: MobileChatSession; source: SourceRef }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const navigation = useNavigation();
@@ -89,8 +91,16 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		),
 		[navigation],
 	);
-	const { config, currentHostId, connection, unreachable, projects, refresh: refreshBoard, setWorkerPinned, renameWorker, kill } = useApp();
-	const conversation = useMobileConversation(config, session.id);
+	const { configForHost, hostStates, scopedBoard, sourceFor, refreshSource, setActiveProject,
+		setWorkerPinnedOn, renameWorkerOn, killOn, restoreOn, resumeAgentOn } = useApp();
+	const config = source.kind === "local" ? configForHost(source.id) : null;
+	const host = source.kind === "local" ? hostStates.find((entry) => entry.hostId === source.id) : undefined;
+	const connection = host?.connection ?? "closed";
+	const unreachable = source.kind === "local" && Boolean(host?.error);
+	const sessionSource = sourceFor(source);
+	const cloudSession = source.kind === "cloud";
+	const refreshBoard = useCallback(() => refreshSource(source), [refreshSource, source.kind, source.id]);
+	const conversation = useMobileConversation(cloudSession ? null : config, session.id, sessionSource);
 	// A load that failed while the desktop was unreachable retries as soon as the
 	// board's poll reconnects, which is what the offline state promises.
 	// Keyed on a failed load, not a missing one, so the first mount doesn't send a
@@ -98,11 +108,11 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const loadFailed = !conversation.snapshot && Boolean(conversation.error);
 	const refreshConversation = conversation.refresh;
 	useEffect(() => {
-		if (connection === "open" && loadFailed) void refreshConversation();
-	}, [connection, loadFailed, refreshConversation]);
+		if (!cloudSession && connection === "open" && loadFailed) void refreshConversation();
+	}, [cloudSession, connection, loadFailed, refreshConversation]);
+	const interfaceSwitch = useInterfaceTransition(cloudSession ? null : config, cloudSession ? "" : session.id, refreshBoard);
 	const actionsEntryRef = useRef<ConversationActionsEntry | undefined>(undefined);
 	const actionsListeners = useRef(new Set<(entry: ConversationActionsEntry) => void>());
-	const interfaceSwitch = useInterfaceTransition(config, session.id, refreshBoard);
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [collapsedReviewPRKey, setCollapsedReviewPRKey] = useState<string>();
 	const [loadedReviewPromptStateKey, setLoadedReviewPromptStateKey] = useState<string>();
@@ -129,6 +139,12 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const keyboardVisible = useKeyboardState((state) => state.isVisible);
 	const turnOptionsRequestedFor = useRef<string | undefined>(undefined);
 	const terminated = "projectName" in session ? Boolean(session.isTerminal) : Boolean(session.isTerminated);
+	// Undefined for a local daemon session (no `cloud` field) and for a cloud
+	// session already connected — both cases leave this screen exactly as it
+	// was before cloud environments existed. Cloud workers and orchestrators
+	// both carry the control-plane sandbox lifecycle.
+	const cloudStage = cloudLifecycleStage(session);
+	const cloudComposerLocked = cloudStage !== undefined && cloudStage !== "connected";
 	const failedStart = "projectName" in session || session.provisionState !== "failed"
 		? undefined
 		: session.provisionError || "The session did not finish starting.";
@@ -146,13 +162,13 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			refreshing: conversation.refreshing,
 			compactSupported: can(snapshot, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact),
 			mcpReloadSupported: can(snapshot, "mcp_reload") && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp),
-			interfaceSupported: Boolean(interfaceSwitch.status?.supported),
-			interfaceReason: interfaceSwitch.status?.reason || interfaceSwitch.error,
-			interfaceSwitching: interfaceTransitionActive || interfaceSwitch.starting,
+			interfaceSupported: cloudSession ? !terminated : Boolean(interfaceSwitch.status?.supported),
+			interfaceReason: cloudSession ? (terminated ? "This session has ended." : undefined) : interfaceSwitch.status?.reason || interfaceSwitch.error,
+			interfaceSwitching: !cloudSession && (interfaceTransitionActive || interfaceSwitch.starting),
 		};
 		actionsEntryRef.current = liveEntry;
 		actionsListeners.current.forEach((listener) => listener(liveEntry));
-	}, [conversation.snapshot, conversation.pendingActions, conversation.refreshing, conversation.actionCodes, openingShell, interfaceSwitch.status, interfaceSwitch.error, interfaceSwitch.starting, interfaceTransitionActive, session.id]);
+	}, [cloudSession, conversation.snapshot, conversation.pendingActions, conversation.refreshing, conversation.actionCodes, openingShell, interfaceSwitch.status, interfaceSwitch.error, interfaceSwitch.starting, interfaceTransitionActive, session.id, terminated]);
 	const interfaceTransitionNotice =
 		!interfaceTransitionActive &&
 		!interfaceSwitch.transition?.noticeAcknowledgedAt &&
@@ -197,12 +213,12 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const title = sessionName || conversation.snapshot?.title || session.id;
 	const projectName = "projectName" in session
 		? session.projectName
-		: projects.find((project) => project.id === session.projectId)?.name;
+		: scopedBoard.projects.find((entry) => entry.source.kind === source.kind && entry.source.id === source.id && entry.value.id === session.projectId)?.value.name;
 	const headerHarness = conversation.snapshot?.harness || session.harness || "Agent";
-	const headerState = conversation.snapshot?.controller.state;
-	const reviewPromptPRCandidate = "projectName" in session ? undefined : sessionPRReadyForReview(session);
+	const headerState = cloudHeaderControllerState(cloudStage, conversation.snapshot?.controller.state ?? "connecting");
+	const reviewPromptPRCandidate = cloudSession || "projectName" in session ? undefined : sessionPRReadyForReview(session);
 	const reviewPromptKey = reviewPromptPRCandidate ? `${reviewPromptPRCandidate.url}#${reviewPromptPRCandidate.number}` : undefined;
-	const reviewPromptHostKey = config ? machineIdentity(config) : currentHostId;
+	const reviewPromptHostKey = config ? machineIdentity(config) : source.id;
 	const reviewPromptStateStorageKey = reviewPromptKey && reviewPromptHostKey
 		? `ao.chat.reviewPromptCollapsed:${encodeURIComponent(reviewPromptHostKey)}:${encodeURIComponent(session.id)}:${encodeURIComponent(reviewPromptKey)}`
 		: undefined;
@@ -280,7 +296,10 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		navigation.setOptions(
 			headerRightReady
 				? glassHeaderControl("right", (
-					<View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+					<View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
+						{cloudSession && !terminated ? (
+							<NativeHeaderButton icon="terminal" label="Open Terminal UI" onPress={() => router.replace({ pathname: "/session/[id]", params: { id: session.id, view: "terminal", source: source.kind, sourceId: source.id } })} />
+						) : null}
 						{reviewPromptCollapsed && reviewPromptPR ? (
 							<Pressable
 								testID="header-pullRequest"
@@ -297,7 +316,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				))
 				: glassHeaderControl("right"),
 		);
-	}, [expandReviewPrompt, headerRightReady, navigation, reviewPromptCollapsed, reviewPromptPR, t]);
+	}, [cloudSession, expandReviewPrompt, headerRightReady, navigation, reviewPromptCollapsed, reviewPromptPR, router, session.id, source.kind, source.id, styles.reviewHeaderPRButton, t, terminated]);
 
 	const loadWorkspaceFiles = useCallback(async () => {
 		if (!config || !conversation.snapshot) return { paths: filePaths, truncated: filePathsTruncated };
@@ -363,15 +382,33 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		if (resuming) return;
 		setResuming(true);
 		try {
-			if (!config) throw new Error(NOT_PAIRED_ACTION_COPY);
-			if (terminated) await restoreSession(config, session.id);
-			else await resumeSessionAgent(config, session.id);
-			await refreshBoard();
+			if (terminated) await restoreOn(source, session.id);
+			else await resumeAgentOn(source, session.id);
 			await conversation.refresh();
 		} catch (cause) {
 			Alert.alert("Couldn't resume the agent", userFacingError(cause));
 		} finally { setResuming(false); }
-	}, [config, conversation.refresh, refreshBoard, resuming, session.id, terminated]);
+	}, [conversation.refresh, resuming, restoreOn, resumeAgentOn, session.id, source, terminated]);
+
+	const [cloudResuming, setCloudResuming] = useState(false);
+	const resumeCloudSandbox = useCallback(async () => {
+		// Guards a repeat tap while the previous resume is still in flight —
+		// the control plane call is not obviously idempotent, and a second tap
+		// before the first banner state change lands must not fire twice.
+		if (cloudResuming) return;
+		setCloudResuming(true);
+		try {
+			// This route's source is fixed even if another board refreshes.
+			if (!sessionSource) throw new Error("No cloud session source available");
+			await sessionSource.resumeSession(session.id);
+			await refreshBoard();
+			await conversation.refresh();
+		} catch (cause) {
+			Alert.alert("Could not resume sandbox", cause instanceof Error ? cause.message : String(cause));
+		} finally {
+			setCloudResuming(false);
+		}
+	}, [cloudResuming, sessionSource, refreshBoard, conversation.refresh, session.id]);
 
 	const startInterfaceSwitch = useCallback(
 		async (policy: "drain" | "interrupt") => {
@@ -386,6 +423,10 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	);
 
 	const requestInterfaceSwitch = useCallback(() => {
+		if (cloudSession) {
+			router.replace({ pathname: "/session/[id]", params: { id: session.id, view: "terminal", source: source.kind, sourceId: source.id } });
+			return;
+		}
 		if (!interfaceSwitch.status?.supported) {
 			Alert.alert("Terminal UI unavailable", interfaceSwitch.status?.reason || interfaceSwitch.error || "This agent cannot resume the same native conversation in Terminal UI.");
 			return;
@@ -405,7 +446,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				{ text: "Stop and switch", style: "destructive", onPress: () => void startInterfaceSwitch("interrupt") },
 			],
 		);
-	}, [interfaceSwitch, startInterfaceSwitch, turnActive, turnWaiting]);
+	}, [cloudSession, interfaceSwitch, router, session.id, source, startInterfaceSwitch, turnActive, turnWaiting]);
 
 	useEffect(() => {
 		const current = conversation.snapshot;
@@ -427,22 +468,22 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			refreshing: conversation.refreshing,
 			compactSupported: can(current, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact),
 			mcpReloadSupported: can(current, "mcp_reload") && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp),
-			interfaceSupported: Boolean(interfaceSwitch.status?.supported),
-			interfaceReason: interfaceSwitch.status?.reason || interfaceSwitch.error,
-			interfaceSwitching: interfaceTransitionActive || interfaceSwitch.starting,
+			interfaceSupported: cloudSession ? !terminated : Boolean(interfaceSwitch.status?.supported),
+			interfaceReason: cloudSession ? (terminated ? "This session has ended." : undefined) : interfaceSwitch.status?.reason || interfaceSwitch.error,
+			interfaceSwitching: !cloudSession && (interfaceTransitionActive || interfaceSwitch.starting),
 			// Orchestrators are not deleted from here; the board owns their lifecycle.
-			canDelete: !("projectName" in session),
-			canPin: !("projectName" in session),
+			canDelete: !cloudSession && !("projectName" in session),
+			canPin: !cloudSession && !("projectName" in session),
 			pinned: "projectName" in session ? false : Boolean(session.isPinned),
 			onMap: () => router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(actionsEntryRef.current?.snapshot ?? current), onSelect: setJumpToSequence })),
 			onOpenShell: () => void openShell(),
-			onPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, previewUrl: "previewUrl" in session ? session.previewUrl ?? undefined : undefined, hostId: currentHostId } }),
+			onPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, previewUrl: "previewUrl" in session ? session.previewUrl ?? undefined : undefined, hostId: source.id } }),
 			onPullRequests: () => {
 				const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
-					? reviewRouteForSession(session, currentHostId)
+					? reviewRouteForSession(session, source.id)
 					: undefined;
 				if (route) openPage(route);
-				else router.push({ pathname: "/(tabs)/prs", params: { hostId: currentHostId, projectId: session.projectId } });
+				else router.push({ pathname: "/(tabs)/prs", params: { hostId: source.id, projectId: session.projectId } });
 			},
 			onSettings: () => void openTurnSettings(),
 			onSwitchInterface: requestInterfaceSwitch,
@@ -451,11 +492,11 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			onRename: () => router.push(chatSheetRoute({
 				kind: "conversation-rename",
 				initialTitle: sessionName,
-				onRename: (next) => renameWorker(session.id, next),
+				onRename: (next) => renameWorkerOn(source, session.id, next),
 			})),
 			onTogglePin: () => {
 				if ("projectName" in session) return;
-				void setWorkerPinned(session.id, !session.isPinned).catch(() => {});
+				void setWorkerPinnedOn(source, session.id, !session.isPinned).catch(() => {});
 			},
 			onRefresh: () => void conversation.refresh(),
 			onDelete: () => {
@@ -467,14 +508,14 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 						{ text: "Cancel", style: "cancel" },
 						// Leave first: the session this screen is showing is about to stop
 						// existing, and the board is where its row disappears from.
-						{ text: "Delete session", style: "destructive", onPress: () => { backOr(router); void kill(session.id).catch(() => {}); } },
+						{ text: "Delete session", style: "destructive", onPress: () => { backOr(router); void killOn(source, session.id).catch(() => {}); } },
 					],
 				);
 			},
 		};
 		actionsEntryRef.current = entry;
 		void dismissKeyboardBeforeSheet(keyboardVisible).then(() => router.push(chatSheetRoute(actionsEntryRef.current ?? entry)));
-	}, [currentHostId, conversation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openPage, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setWorkerPinned, title]);
+	}, [cloudSession, conversation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openPage, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setActiveProject, setWorkerPinnedOn, renameWorkerOn, killOn, source, terminated, title]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else
@@ -510,9 +551,10 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		onSecondary: recheckingTransition ? undefined : () => void retryInterfaceCheck(),
 	};
 
+	if (cloudStage === "paused_by_coder" && !conversation.snapshot) return <Centered icon="cloud" title="Paused by Coder" message={cloudLifecycleBanner(cloudStage)?.body} action={cloudResuming ? "Resuming…" : "Resume"} onAction={() => void resumeCloudSandbox()} />;
 	if (failedStart && !conversation.snapshot) return <Centered icon="alert-triangle" title="Session failed to start" message={failedStart} action={resuming ? "Retrying…" : "Retry"} onAction={() => void resume()} />;
 	if (conversation.loading && !conversation.snapshot) return <Centered icon="message-square" title="Loading conversation…" spinning />;
-	if (conversation.unavailable) return <Unavailable message={conversation.unavailable.message} onShell={() => void openShell()} openingShell={openingShell} />;
+	if (conversation.unavailable && cloudStage !== "paused_by_coder") return <Unavailable message={conversation.unavailable.message} onShell={() => void openShell()} openingShell={openingShell} />;
 	// The board's poll is the app's view of the link: when it is down, say so in
 	// the board's words instead of echoing whatever this request failed with.
 	if (!conversation.snapshot && unreachable) return <Centered icon="wifi-off" title="This machine is offline" message="This conversation loads once the app reconnects." action="Retry" onAction={() => void conversation.refresh()} />;
@@ -570,6 +612,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			) : null}
 			<ConversationBanners
 				snapshot={snapshot}
+				cloudPaused={cloudStage === "paused_by_coder"}
 				startFailure={failedStart}
 				brokenServers={brokenServers}
 				resuming={resuming}
@@ -584,7 +627,18 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				dismissed={dismissedBanners}
 				onDismiss={dismissBanner}
 			/>
-			{conversation.error ? <DismissibleBanner copy={errorBanner("load", conversation.error)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="wifi-off" action="Retry" onPress={() => void conversation.refresh()} /> : null}
+			{cloudLifecycleBanner(cloudStage) ? (
+				<DismissibleBanner
+					copy={cloudLifecycleBanner(cloudStage)}
+					dismissed={dismissedBanners}
+					onDismiss={dismissBanner}
+					tone="warning"
+					icon="cloud"
+					action={isResumable(cloudStage) ? (cloudResuming ? "Resuming…" : "Resume") : undefined}
+					onPress={isResumable(cloudStage) && !cloudResuming ? () => void resumeCloudSandbox() : undefined}
+				/>
+			) : null}
+			{conversation.error && cloudStage !== "paused_by_coder" ? <DismissibleBanner copy={errorBanner("load", conversation.error)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="wifi-off" action="Retry" onPress={() => void conversation.refresh()} /> : null}
 			{quota ? <DismissibleBanner copy={quotaBanner(quota)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone={quota.severity === "critical" ? "danger" : "warning"} icon="alert-triangle" action="Details" onPress={() => setMenuOpen(true)} /> : null}
 			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="alert-circle" /> : null}
 			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon="rotate-ccw" /> : null}
@@ -610,7 +664,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				reviewPRSummary={reviewPromptSummary}
 				reviewPRCollapsed={reviewPromptCollapsed}
 				onCollapseReviewPR={collapseReviewPrompt}
-				onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, currentHostId)) : undefined}
+				onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, source.id)) : undefined}
 				sessionId={session.id}
 				config={config}
 				snapshot={snapshot}
@@ -630,7 +684,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				configOptions={conversation.configOptions}
 				models={conversation.models}
 				steerUnavailable={steerUnsupported}
-				disabled={interfaceTransitionActive || Boolean(failedStart)}
+				disabled={interfaceTransitionActive || cloudComposerLocked || Boolean(failedStart)}
 				pending={mobileInterfaceTransitionIsBusy(interfaceSwitch.transition) || conversation.pendingSends.some((item) => item.state === "sending")}
 				interrupting={conversation.pendingActions.includes("interrupt")}
 				onSend={conversation.send}
@@ -649,14 +703,14 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	);
 }
 
-function ConversationBanners({ snapshot, startFailure, brokenServers, resuming, terminated, mcpReloading, mcpError, mcpReloadSupported, turnInFlight, onResume, onReload, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; startFailure?: string; brokenServers: ReturnType<typeof brokenMcpServers>; resuming: boolean; terminated: boolean; mcpReloading: boolean; mcpError?: string; mcpReloadSupported: boolean; turnInFlight: boolean; onResume(): void; onReload(): void; onOpenShell(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {
+function ConversationBanners({ snapshot, cloudPaused, startFailure, brokenServers, resuming, terminated, mcpReloading, mcpError, mcpReloadSupported, turnInFlight, onResume, onReload, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; cloudPaused: boolean; startFailure?: string; brokenServers: ReturnType<typeof brokenMcpServers>; resuming: boolean; terminated: boolean; mcpReloading: boolean; mcpError?: string; mcpReloadSupported: boolean; turnInFlight: boolean; onResume(): void; onReload(): void; onOpenShell(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {
 	const thread = snapshot.threadState;
 	const reauthAt = snapshot.account?.reauthRequiredAt;
 	return <>
 		{reauthAt ? <DismissibleBanner copy={reauthBanner(reauthAt, signInCommand(snapshot.harness))} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="key" action="Open shell" onPress={onOpenShell} /> : null}
-		{startFailure ? <DismissibleBanner copy={{ key: `start:${startFailure}`, title: "Session failed to start", body: startFailure }} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="alert-triangle" action={resuming ? "Retrying…" : "Retry"} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : snapshot.controller.state === "stopped" ? <DismissibleBanner copy={controllerStoppedBanner(terminated, snapshot.controller.error)} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="power" action={terminated ? (resuming ? "Restoring…" : "Restore") : (resuming ? "Resuming…" : "Resume")} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
+		{startFailure ? <DismissibleBanner copy={{ key: `start:${startFailure}`, title: "Session failed to start", body: startFailure }} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="alert-triangle" action={resuming ? "Retrying…" : "Retry"} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : !cloudPaused && snapshot.controller.state === "stopped" ? <DismissibleBanner copy={controllerStoppedBanner(terminated, snapshot.controller.error)} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="power" action={terminated ? (resuming ? "Restoring…" : "Restore") : (resuming ? "Resuming…" : "Resume")} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
 		{/* Passing states clear themselves, so there is nothing to close. */}
-		{!startFailure && (snapshot.controller.state === "recovering" || snapshot.controller.state === "connecting") ? <InlineBanner tone="warning" icon="loader" title={snapshot.controller.state === "recovering" ? "Reconnecting to the agent…" : "Starting the agent…"} /> : null}
+		{!cloudPaused && !startFailure && (snapshot.controller.state === "recovering" || snapshot.controller.state === "connecting") ? <InlineBanner tone="warning" icon="loader" title={snapshot.controller.state === "recovering" ? "Reconnecting to the agent…" : "Starting the agent…"} /> : null}
 		{threadBanner(thread?.status) ? <DismissibleBanner copy={threadBanner(thread?.status)!} dismissed={dismissed} onDismiss={onDismiss} tone={thread?.status === "system_error" ? "danger" : "warning"} icon="alert-triangle" /> : null}
 		{brokenServers.length ? <DismissibleBanner copy={mcpBanner(brokenServers, mcpError)!} dismissed={dismissed} onDismiss={onDismiss} tone="warning" icon="tool" action={mcpReloadSupported && !turnInFlight ? (mcpReloading ? "Reloading…" : "Reload") : undefined} onPress={mcpReloading ? undefined : onReload} /> : null}
 	</>;

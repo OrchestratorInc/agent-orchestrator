@@ -10,6 +10,11 @@ const source = readFileSync(
 // The Desktop row used to say "Paired" whenever an address was saved, right
 // above a Test connection row reporting the desktop unreachable.
 describe("settings desktop section", () => {
+	it("shows both connection controls without a global Environment row", () => {
+		expect(source).not.toContain("<EnvironmentRow />");
+		expect(source).toContain("<CloudAccountRow />");
+		expect(source).toContain("<DesktopStatusRow />");
+	});
 	it("reports live connection state rather than a saved-address flag", () => {
 		expect(source).not.toMatch(/"Paired"/);
 		expect(source).toMatch(/<DesktopStatusRow \/>/);

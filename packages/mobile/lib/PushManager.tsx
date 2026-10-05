@@ -81,7 +81,7 @@ export function PushManager(): null {
 	// Route notification taps: warm via the response listener, cold start via
 	// getLastNotificationResponseAsync (the listener alone misses the launch tap).
 	useEffect(() => {
-		if (!navState?.key) return; // wait until navigation is ready to accept routes
+		if (!navState?.key) return;
 
 		const handle = (resp: Notifications.NotificationResponse | null, coldStart: boolean) => {
 			if (!resp) return;

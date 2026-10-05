@@ -3,18 +3,21 @@ import { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { haptics } from "../../lib/haptics";
-import { hostRouteMatches } from "../../lib/hostRoute";
+import { boardFailure } from "../../lib/board-presentation";
 import { orchestratorProjectSections, projectDetailSessions, projectPageStats } from "../../lib/orchestratorView";
 import { ProjectPageHeader } from "../../lib/project-card";
 import { StaleBanner } from "../../lib/StaleBanner";
-import { HostScope, useApp } from "../../lib/store";
+import { useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
 import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
 import { WorkerBoardList } from "../../lib/worker-board-list";
+import { WorkerDock } from "../../lib/worker-dock";
+import { workerListBottomInset } from "../../lib/worker-dock-layout";
 import { backOr } from "../../lib/backNavigation";
-import { hostedRowKey } from "../../lib/hostedRows";
+import { resourceKey, sourceKey, sourceSlice } from "../../lib/environment/scopedBoard";
+import { resolveSessionRouteSource } from "../../lib/session/sessionRoute";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -24,8 +27,7 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundar
  * archive included — so nothing here has to be relearned.
  */
 export default function ProjectScreen() {
-	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
-	return hostId ? <HostScope key={hostId} hostId={hostId}><ProjectScreenContent /></HostScope> : <ProjectScreenContent />;
+	return <ProjectScreenContent />;
 }
 
 function ProjectScreenContent() {
@@ -33,37 +35,45 @@ function ProjectScreenContent() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { id, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
-	const { config, currentHostId, connection, loading, error, refresh, projects, sessions, orchestrators } = useApp();
-	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
+	const { id, source: sourceParam, sourceId, hostId } = useLocalSearchParams<{ id: string; source?: string; sourceId?: string; hostId?: string }>();
+	const { scopedBoard, sourceFor, refreshSource } = useApp();
+	const route = resolveSessionRouteSource({ id: id ?? "", source: sourceParam, sourceId, hostId }, scopedBoard.projects);
+	const source = route.kind === "found" ? route.source : null;
+	const status = source ? scopedBoard.sources[sourceKey(source)] : undefined;
+	const configured = source ? !!sourceFor(source) : false;
+	const loading = !!status?.loading;
+	const error = status?.error ?? null;
+	const { projects, sessions, orchestrators } = source ? sourceSlice(scopedBoard, source) : { projects: [], sessions: [], orchestrators: [] };
+	const cloudFailure = boardFailure("cloud", undefined, { host: "", port: "", platform: "" });
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 	const [refreshing, setRefreshing] = useState(false);
 
 	const row = useMemo(
-		() => hostMatches
+		() => source
 			? orchestratorProjectSections(projects, sessions, orchestrators)
 				.flatMap((section) => section.data)
 				.find((candidate) => candidate.project.id === id)
 			: undefined,
-		[projects, sessions, orchestrators, id, hostMatches],
+		[projects, sessions, orchestrators, id, source?.kind, source?.id],
 	);
-	const projectSessions = useMemo(() => hostMatches ? projectDetailSessions(id ?? "", sessions) : [], [hostMatches, id, sessions]);
+	const projectSessions = useMemo(() => source ? projectDetailSessions(id ?? "", sessions) : [], [source?.kind, source?.id, id, sessions]);
 	const stats = useMemo(() => projectPageStats(projectSessions, row?.link), [projectSessions, row?.link]);
+	const detailState = row ? "project" : loading ? "loading" : source?.kind === "cloud" && error ? "cloud-error" : "not-found";
 
 	const onRefresh = useCallback(async () => {
 		haptics.tap();
 		setRefreshing(true);
 		try {
-			await refresh();
+			if (source) await refreshSource(source);
 		} finally {
 			setRefreshing(false);
 		}
-	}, [refresh]);
+	}, [refreshSource, source?.kind, source?.id]);
 
 	const startTask = () => {
-		if (!hostMatches) return;
+		if (!source) return;
 		haptics.tap();
-		router.push({ pathname: "/spawn", params: { projectId: id, hostId: routeHostId } });
+		router.push({ pathname: "/spawn", params: { projectId: id, source: source.kind, sourceId: source.id } });
 	};
 
 	return (
@@ -80,45 +90,42 @@ function ProjectScreenContent() {
 						onPress={() => backOr(router, "/projects")}
 					/>
 				}
+				right={null}
 			/>
-			{hostMatches ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
+			{source && status && <StaleBanner sourceLabel={source.kind === "cloud" ? "Cloud" : "Local"} sourceStatus={status} onRetry={onRefresh} />}
 
-			{!hostMatches ? (
-				loading && !config ? (
+			{route.kind === "ambiguous" || route.kind === "invalid" || route.kind === "missing" ? (
+				<EmptyState icon="folder" title="Choose a project from Projects" message="This link cannot safely identify its source."
+					action={<Button title="Open Projects" onPress={() => router.navigate("/projects")} />} />
+			) : source && !configured && status?.resolved && !row ? (
+				<EmptyState icon="wifi-off" title={source.kind === "cloud" ? "Cloud project unavailable" : "Desktop project unavailable"}
+					message="This project belongs to a source that is no longer connected."
+					action={<Button title={source.kind === "cloud" ? "Sign in to Cloud" : "Pair desktop"}
+						onPress={() => router.push(source.kind === "cloud" ? "/sheets/cloud-signin" : "/pair")} />} />
+			) : detailState !== "project" || !row ? (
+				detailState === "loading" ? (
 					<View style={styles.center}>
 						<ActivityIndicator color={t.accent} />
 					</View>
-				) : (
-					<EmptyState
-						icon="server"
-						title="Project belongs to another machine"
-						message="Open it from that machine's project list."
-						action={<Button title="Open projects" icon="folder" onPress={() => router.navigate("/projects")} />}
-					/>
-				)
-			) : !row ? (
-				loading ? (
-					<View style={styles.center}>
-						<ActivityIndicator color={t.accent} />
-					</View>
-				) : connection !== "open" ? (
-					<EmptyState icon="wifi-off" title="Machine offline" message="This project loads once the app reconnects." />
+				) : detailState === "cloud-error" ? (
+					<EmptyState icon="wifi-off" title={cloudFailure.title} message={cloudFailure.message}
+						action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />} />
 				) : (
 					<EmptyState icon="folder" title="Project not found" message="It may have been removed from AO." />
 				)
 			) : (
 				<WorkerBoardList
-					sessions={projectSessions}
+					sessions={source ? projectSessions.map((value) => ({ source, value })) : []}
 					showProject={false}
-					contentBottomInset={insets.bottom + 32}
+					contentBottomInset={configured ? workerListBottomInset(insets.bottom + 12) : insets.bottom + 32}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListHeaderComponent={
 						<ProjectPageHeader
 							row={row}
 							stats={stats}
-							busy={busyProjects.has(hostedRowKey(currentHostId ?? "", row.project.id))}
-							onPress={openOrchestrator}
+							busy={source ? busyProjects.has(resourceKey(source, row.project.id)) : false}
+							onPress={source && configured ? () => openOrchestrator({ source, value: row }) : undefined}
 						/>
 					}
 					ListEmptyComponent={
@@ -128,12 +135,33 @@ function ProjectScreenContent() {
 								icon="moon"
 								title="No workers yet"
 								message="Start a task to put this project to work."
-								action={<Button title="Start task" icon="plus" onPress={startTask} />}
+								action={configured ? <Button title="Start task" icon="plus" onPress={startTask} /> : null}
 							/>
 						</View>
 					}
 				/>
 			)}
+			{detailState === "project" && configured ? (
+				<View style={[styles.dock, { bottom: insets.bottom + 12 }]}>
+					<WorkerDock
+						controlsEnabled={false}
+						query=""
+						onQueryChange={() => {}}
+						searchOpen={false}
+						onSearchOpen={() => {}}
+						onSearchClose={() => {}}
+						onOpenControls={() => {}}
+						projectFiltered={false}
+						environmentFilter="all"
+						onSelectEnvironment={() => {}}
+						projectOptions={[{ id: "all", label: "All projects" }]}
+						selectedProjectId="all"
+						selectedProjectLabel="All projects"
+						onSelectProject={() => {}}
+						onSpawn={startTask}
+					/>
+				</View>
+			) : null}
 		</View>
 	);
 }
@@ -142,4 +170,5 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
+		dock: { position: "absolute", left: 16, right: 16, height: 52, flexDirection: "row" },
 	});

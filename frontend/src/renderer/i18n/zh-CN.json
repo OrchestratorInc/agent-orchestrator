@@ -756,6 +756,7 @@
 	"settings.cloudProvider.description": "新的云会话运行所在的沙箱提供方。控制平面会根据其提供的提供方验证此选择。",
 	"settings.cloudProvider.signIn": "登录 AO Cloud（左侧边栏）以选择沙箱提供方。",
 	"settings.cloudProvider.none": "未配置",
+	"settings.cloudProvider.unavailable": "已保存的提供方 {{provider}} 不再可用。请选择可用的提供方以启动会话。",
 	"settings.githubPat.description": "Optional. Paste a GitHub personal access token with access to private repositories. It is encrypted and used only by Cloud workers when cloning GitHub repositories.",
 	"settings.githubPat.remove": "Remove",
 	"settings.cloudConfirm.confirm": "启用云功能",

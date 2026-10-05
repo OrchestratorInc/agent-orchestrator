@@ -70,6 +70,7 @@ describe("spawnCloudOrchestrator", () => {
 	}
 
 	it("starts without a user kickoff prompt so the role comes only from the system prompt", async () => {
+		window.localStorage.setItem("ao.cloud.sandboxProvider", "coder");
 		const queryClient = primeClient({ id: "project-1" });
 		cloudMocks.listUserProviderConnections.mockResolvedValue({
 			providerConnections: [connection("claude-code")],
@@ -83,6 +84,7 @@ describe("spawnCloudOrchestrator", () => {
 			displayName: "Orchestrator",
 			prompt: "",
 		});
+		window.localStorage.removeItem("ao.cloud.sandboxProvider");
 	});
 
 	it("does not send a saved provider absent from this control plane", async () => {

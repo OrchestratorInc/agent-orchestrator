@@ -11,9 +11,80 @@ import {
 	sessionLookupDue,
 	sessionLookupKey,
 	sessionLookupSettled,
+	sessionRouteConfigured,
+	sessionDisplaySurface,
 	sessionRouteView,
+	routeSource,
+	resolveSessionRouteSource,
+	cloudSessionListState,
 	type SessionLookup,
 } from "./sessionRoute";
+
+describe("source-qualified session routes", () => {
+	it("shows an absent Cloud session only after its list loaded, without waiting forever", () => {
+		expect(cloudSessionListState({ listed: false, loading: true, error: null })).toBe("loading");
+		expect(cloudSessionListState({ listed: false, loading: false, error: "timeout" })).toBe("failed");
+		expect(cloudSessionListState({ listed: false, loading: false, error: null })).toBe("missing");
+		expect(cloudSessionListState({ listed: true, loading: false, error: null })).toBe("listed");
+	});
+	it("validates explicit Cloud and Local identities", () => {
+		expect(routeSource({ source: "cloud", sourceId: "org-1" })).toEqual({ kind: "cloud", id: "org-1" });
+		expect(routeSource({ source: "local", sourceId: "mac-1" })).toEqual({ kind: "local", id: "mac-1" });
+		expect(routeSource({ source: "local", sourceId: "" })).toEqual({ kind: "invalid" });
+		expect(routeSource({ source: "unknown", sourceId: "org-1" })).toEqual({ kind: "invalid" });
+	});
+
+	it("never guesses an unscoped ID shared by Local and Cloud", () => {
+		const entries = [
+			{ source: { kind: "local" as const, id: "mac-1" }, value: { id: "same" } },
+			{ source: { kind: "cloud" as const, id: "org-1" }, value: { id: "same" } },
+		];
+		expect(resolveSessionRouteSource({ id: "same" }, entries)).toEqual({ kind: "ambiguous" });
+		expect(resolveSessionRouteSource({ id: "same", source: "cloud", sourceId: "org-1" }, entries)).toEqual({ kind: "found", source: entries[1].source });
+		expect(resolveSessionRouteSource({ id: "same", source: "local", sourceId: "old-mac" }, entries)).toEqual({ kind: "found", source: { kind: "local", id: "old-mac" } });
+	});
+	it("preserves a legacy explicit host even after another host is selected", () => {
+		const entries = [
+			{ source: { kind: "local" as const, id: "mac-a" }, value: { id: "same" } },
+			{ source: { kind: "local" as const, id: "mac-b" }, value: { id: "same" } },
+		];
+		expect(resolveSessionRouteSource({ id: "same", hostId: "mac-a" }, entries))
+			.toEqual({ kind: "found", source: { kind: "local", id: "mac-a" } });
+		expect(resolveSessionRouteSource({ id: "same", hostId: "mac-b" }, entries))
+			.toEqual({ kind: "found", source: { kind: "local", id: "mac-b" } });
+		expect(resolveSessionRouteSource({ id: "same", source: "cloud", sourceId: "org-a", hostId: "mac-a" }, entries))
+			.toEqual({ kind: "invalid" });
+	});
+});
+
+describe("sessionDisplaySurface", () => {
+	it("opens a Cloud terminal only for an explicit Cloud terminal view", () => {
+		expect(sessionDisplaySurface({ environment: "cloud", sessionMode: "chat", requestedView: "terminal" })).toBe("cloud-terminal");
+		expect(sessionDisplaySurface({ environment: "cloud", sessionMode: "chat", requestedView: undefined })).toBe("chat");
+		expect(sessionDisplaySurface({ environment: "local", sessionMode: "chat", requestedView: "terminal" })).toBe("chat");
+		expect(sessionDisplaySurface({ environment: "local", sessionMode: "tui", requestedView: "terminal" })).toBe("local-terminal");
+	});
+	it("does not route a Cloud TUI session to the desktop-only terminal surface", () => {
+		expect(sessionDisplaySurface({ environment: "cloud", sessionMode: "tui" })).toBe("cloud-terminal");
+	});
+});
+
+describe("sessionRouteConfigured", () => {
+	it("treats a ready Cloud source as configured without a Local daemon", () => {
+		expect(sessionRouteConfigured({ environment: "cloud", sourceKind: "cloud", localConfigured: null })).toBe(true);
+	});
+
+	it("waits for unresolved environments and Local configuration", () => {
+		expect(sessionRouteConfigured({ environment: null, sourceKind: undefined, localConfigured: null })).toBeNull();
+		expect(sessionRouteConfigured({ environment: "local", sourceKind: undefined, localConfigured: null })).toBeNull();
+	});
+
+	it("rejects an unavailable Cloud source and preserves resolved Local state", () => {
+		expect(sessionRouteConfigured({ environment: "cloud", sourceKind: undefined, localConfigured: true })).toBe(false);
+		expect(sessionRouteConfigured({ environment: "local", sourceKind: "local", localConfigured: true })).toBe(true);
+		expect(sessionRouteConfigured({ environment: "local", sourceKind: undefined, localConfigured: false })).toBe(false);
+	});
+});
 
 const worker = (over: Partial<DashboardSession> = {}): DashboardSession =>
 	({ id: "proj-1", projectId: "proj", mode: "chat", isTerminated: false, ...over }) as DashboardSession;

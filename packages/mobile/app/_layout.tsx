@@ -13,6 +13,7 @@ import { Platform, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { CloudAuthProvider } from "../lib/cloud/authStore";
 import { OnboardingGate } from "../lib/OnboardingGate";
 import { TelemetryManager } from "../lib/TelemetryManager";
 import { PushManager } from "../lib/PushManager";
@@ -99,9 +100,11 @@ export default function RootLayout() {
 			<KeyboardProvider>
 				<SafeAreaProvider>
 					<ThemeProvider>
-						<AppProvider>
-							<Shell />
-						</AppProvider>
+						<CloudAuthProvider>
+							<AppProvider>
+								<Shell />
+							</AppProvider>
+						</CloudAuthProvider>
 					</ThemeProvider>
 				</SafeAreaProvider>
 			</KeyboardProvider>
@@ -169,6 +172,17 @@ function Shell() {
 				}}
 			>
 				<Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+				<Stack.Screen
+					name="create-project"
+					options={{
+						presentation: "formSheet",
+						headerShown: false,
+						sheetAllowedDetents: [0.92],
+						sheetGrabberVisible: true,
+						sheetCornerRadius: 24,
+						contentStyle: { backgroundColor: t.bgSurface },
+					}}
+				/>
 				<Stack.Screen
 					name="settings"
 					options={{
@@ -250,6 +264,12 @@ function Shell() {
 				))}
 				<Stack.Screen
 					name="sheets/connect"
+					options={{ ...CONNECT_SHEET_OPTIONS, contentStyle: { backgroundColor: t.bgSurface } }}
+				/>
+				{/* Also has text inputs, so it takes the same keyboard-aware sizing
+				    as sheets/connect rather than a fixed detent from SHEET_ROUTES. */}
+				<Stack.Screen
+					name="sheets/cloud-signin"
 					options={{ ...CONNECT_SHEET_OPTIONS, contentStyle: { backgroundColor: t.bgSurface } }}
 				/>
 			</Stack>

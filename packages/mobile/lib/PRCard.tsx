@@ -1,8 +1,10 @@
 import { Feather } from "./icons";
+import { useRouter } from "expo-router";
 import { useOpenPage } from "./pageNavigation";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { sessionTitle, shortLabel, type DashboardPR, type DashboardSession, type SessionPRSummary } from "./api";
 import { haptics } from "./haptics";
+import type { SourceRef } from "./environment/scopedBoard";
 import { openGitHub } from "./openGitHub";
 import type { Theme } from "./theme";
 import {
@@ -22,12 +24,14 @@ import { iconSize, space, type } from "./tokens";
 export function PRCard({
 	pr,
 	session,
+	source,
 	summary,
 	hostId,
 	hostName,
 }: {
 	pr: DashboardPR;
 	session: DashboardSession;
+	source: SourceRef | undefined;
 	summary?: SessionPRSummary;
 	hostId: string;
 	hostName?: string;
@@ -35,6 +39,7 @@ export function PRCard({
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const openPage = useOpenPage();
+	const router = useRouter();
 	const state = summary ? stateVisualOf(t, summary.state as PRLifecycle) : prStateVisual(t, pr);
 	const title = summary?.title?.trim() || prTitle(pr, sessionTitle(session));
 	const project = shortLabel(summary?.repo || session.projectId || "Standalone");
@@ -55,11 +60,19 @@ export function PRCard({
 			accessibilityRole="button"
 			accessibilityLabel={`${title}. ${projectLabel}. Pull request ${pr.number}. ${status.text}.`}
 			onPress={() => {
+				if (!source) return;
 				haptics.tap();
-				openPage({
-					pathname: "/review/[sessionId]",
-					params: { sessionId: session.id, prNumber: String(pr.number), prUrl: pr.url, hostId },
-				});
+				if (source.kind === "local") {
+					openPage({
+						pathname: "/review/[sessionId]",
+						params: { sessionId: session.id, prNumber: String(pr.number), prUrl: pr.url, hostId: source.id },
+					});
+				} else {
+					router.push({
+						pathname: "/session/[id]",
+						params: { id: session.id, projectId: session.projectId, source: source.kind, sourceId: source.id },
+					});
+				}
 			}}
 			style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
 		>

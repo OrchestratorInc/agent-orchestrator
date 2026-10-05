@@ -64,6 +64,20 @@ describe("Cloud control-plane interface transitions", () => {
 });
 
 describe("cloud control-plane session lifecycle", () => {
+	it("uses the authenticated transport for account provider preferences", async () => {
+		const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ sandboxProvider: "coder" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+		await expect(client.getUserPreferences()).resolves.toEqual({ sandboxProvider: "coder" });
+		await client.putUserPreferences({ sandboxProvider: "coder", initializeOnly: true });
+		expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.example.test/api/cloud/v1/me/preferences");
+		expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe("Bearer token");
+		expect(fetchMock.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ method: "PUT", body: '{"sandboxProvider":"coder","initializeOnly":true}' }));
+	});
+	it("preserves a provider validation error from the control plane", async () => {
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "Unprocessable Entity", code: "provider_unavailable", message: "not available", requestId: "req-2" }), { status: 422, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+		await expect(client.putUserPreferences({ sandboxProvider: "coder" })).rejects.toMatchObject({ status: 422, code: "provider_unavailable", requestId: "req-2" });
+	});
 	it("pages startup events through JSON without opening an SSE stream", async () => {
 		const page = { events: [{ sessionId: "session/1", sequence: 4, type: "worker.ready", payload: {}, createdAt: "2026-09-29T00:00:00Z" }], hasMore: false, nextAfter: 4 };
 		const fetchMock = vi.fn(async () => new Response(JSON.stringify(page), {

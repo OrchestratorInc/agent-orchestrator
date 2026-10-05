@@ -9,9 +9,12 @@ import type {
   CreateGitHubProjectInput,
   CreateGitHubScratchProjectInput,
   CreateGitHubScratchProjectResponse,
+  CreateOrganizationInput,
   CreateProjectInput,
   CreateSessionInput,
   CurrentAccount,
+  UserCloudPreferences,
+  PutUserCloudPreferencesInput,
   DeleteProjectResponse,
   DeleteSessionResponse,
   ErrorEnvelope,
@@ -22,12 +25,15 @@ import type {
   GitHubUserAuthorizationStart,
   GitHubUserConnection,
   IdempotentRequestOptions,
+  OrganizationMembership,
   PaginationOptions,
   Project,
   ProjectPage,
   PutAgentProviderConnectionInput,
   RedactedProviderConnection,
   RequestOptions,
+  ResumeSessionResponse,
+  RestoreSessionResponse,
   Session,
   SessionInterfaceTransition,
   SessionInterfaceTransitionStatus,
@@ -61,6 +67,7 @@ import type {
   WorkerTerminalOutputResponse,
   WorkerTransportRequest,
   WorkerTurn,
+  WakePausedSessionsResponse,
   WorkspaceDiff,
   WorkspaceDiffFileDetail,
   WorkspaceEntryPage,
@@ -126,6 +133,25 @@ export class CloudClient {
 
   getCurrentAccount(options: RequestOptions = {}): Promise<CurrentAccount> {
     return this.request("/api/cloud/v1/me", options);
+  }
+
+  getUserPreferences(options: RequestOptions = {}): Promise<UserCloudPreferences> {
+    return this.request("/api/cloud/v1/me/preferences", options);
+  }
+
+  putUserPreferences(input: PutUserCloudPreferencesInput, options: RequestOptions = {}): Promise<UserCloudPreferences> {
+    return this.request("/api/cloud/v1/me/preferences", { method: "PUT", body: input, signal: options.signal });
+  }
+
+  createOrganization(
+    input: CreateOrganizationInput,
+    options: RequestOptions = {},
+  ): Promise<{ organization: OrganizationMembership }> {
+    return this.request("/api/cloud/v1/orgs", {
+      method: "POST",
+      body: input,
+      signal: options.signal,
+    });
   }
 
   async listAgents(
@@ -408,6 +434,41 @@ export class CloudClient {
     return this.request(
       this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}`),
       { method: "DELETE", signal: options.signal },
+    );
+  }
+
+  wakeSessions(
+    orgId: string,
+    options: RequestOptions = {},
+  ): Promise<WakePausedSessionsResponse> {
+    return this.request(this.orgPath(orgId, "/sessions/wake"), {
+      method: "POST",
+      signal: options.signal,
+    });
+  }
+
+  resumeSession(
+    orgId: string,
+    sessionId: string,
+    options: RequestOptions = {},
+  ): Promise<ResumeSessionResponse> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/resume`),
+      { method: "POST", signal: options.signal },
+    );
+  }
+
+  restoreSession(
+    orgId: string,
+    sessionId: string,
+    options: RequestOptions = {},
+  ): Promise<RestoreSessionResponse> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/restore`,
+      ),
+      { method: "POST", signal: options.signal },
     );
   }
 
@@ -732,6 +793,37 @@ export class CloudClient {
       providerConnections: RedactedProviderConnection[];
     }>(this.orgPath(orgId, "/provider-connections"), options);
     return response.providerConnections;
+  }
+
+  async listUserProviderConnections(
+    options: RequestOptions = {},
+  ): Promise<RedactedProviderConnection[]> {
+    const response = await this.request<{
+      providerConnections: RedactedProviderConnection[];
+    }>("/api/cloud/v1/me/providers", options);
+    return response.providerConnections;
+  }
+
+  putGitHubPAT(
+    input: { secret: string },
+    options: RequestOptions = {},
+  ): Promise<{ providerConnection: { provider: string } }> {
+    return this.request("/api/cloud/v1/me/github-pat", {
+      method: "PUT",
+      body: input,
+      signal: options.signal,
+    });
+  }
+
+  validateSavedRepositoryAccess(
+    input: { repositoryUrl: string },
+    options: RequestOptions = {},
+  ): Promise<{ writeAccess: boolean }> {
+    return this.request("/api/cloud/v1/me/github-pat/validate-saved-repository", {
+      method: "POST",
+      body: input,
+      signal: options.signal,
+    });
   }
 
   putAgentProviderConnection(

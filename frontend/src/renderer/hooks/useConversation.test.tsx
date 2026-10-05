@@ -209,7 +209,7 @@ describe("accepted conversation sends", () => {
 
 		await waitFor(() => expect(result.current.pendingAcceptedTurnId).toBe("turn-2"));
 		rerender({ sessionId: "ao-1" });
-		expect(result.current.pendingAcceptedTurnId).toBe("turn-1");
+		await waitFor(() => expect(result.current.pendingAcceptedTurnId).toBe("turn-1"));
 	});
 
 	it("retains an in-flight send when Chat unmounts before the response", async () => {

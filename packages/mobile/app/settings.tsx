@@ -26,6 +26,7 @@ import { openGitHub } from "../lib/openGitHub";
 import { tunnelMayHaveRotated } from "../lib/staleTunnel";
 import { getPushStatus, openNotificationSettings, registerForPush, unregisterFromPush } from "../lib/push";
 import { describePushToggle, describeRegisterFailure, type PushStatus } from "../lib/pushStatus";
+import { useCloudAuth } from "../lib/cloud/authStore";
 import { useApp } from "../lib/store";
 import {
 	describeSoftwareUpdateRow,
@@ -59,7 +60,7 @@ export default function SettingsScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
-	const { config, configured, selectedHostName, switchHost, reloadConfig } = useApp();
+	const { config, localConfigured, selectedHostName, switchHost, reloadConfig } = useApp();
 	const scrollRef = useRef<ScrollView>(null);
 	const [pairedHosts, setPairedHosts] = useState<PairedHost[]>([]);
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
@@ -92,7 +93,7 @@ export default function SettingsScreen() {
 
 	if (!loaded) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 
-	const paired = pairedHosts.length > 0 || configured || selectedHostName !== null;
+	const paired = pairedHosts.length > 0 || localConfigured || selectedHostName !== null;
 	const selectedHost = pairedHosts.find((host) => host.id === selectedHostId);
 	const selectedConfigReady = !!config && isConfigured(config) && (!selectedHost || config.hostId === selectedHost.id);
 	return (
@@ -109,6 +110,12 @@ export default function SettingsScreen() {
 				contentContainerStyle={styles.content}
 				keyboardShouldPersistTaps="handled"
 			>
+				<SettingsSection title="Cloud account" footer="Sign out to remove this device's AO Cloud credential.">
+					<SettingsCard>
+						<CloudAccountRow />
+					</SettingsCard>
+				</SettingsSection>
+
 				<SettingsSection title="Machines" footer={selectedHost?.name ?? selectedHostName ?? (paired && config ? `${config.host}:${config.httpPort}` : "Pair this phone with an AO machine.")}>
 					<SettingsCard>
 						<DesktopStatusRow />
@@ -219,6 +226,66 @@ function SettingsCard({ children }: { children: ReactNode }) {
 	);
 }
 
+/**
+ * The signed-in AO Cloud account, with the only way this device's stored
+ * bearer token gets removed: `authStore.signOut` has no other caller, so
+ * without this row a cloud credential can be stored but never revoked or
+ * switched.
+ *
+ * Hidden interactivity rather than hidden entirely when signed out — there's
+ * still something true to report ("Not signed in"), matching ConnectionTestRow's
+ * disabled-when-inapplicable pattern above.
+ */
+function CloudAccountRow() {
+	const cloudAuth = useCloudAuth();
+	const router = useRouter();
+	const [email, setEmail] = useState<string | null>(null);
+	const [signingOut, setSigningOut] = useState(false);
+
+	useEffect(() => {
+		if (cloudAuth.signedIn !== true) {
+			setEmail(null);
+			return;
+		}
+		let cancelled = false;
+		cloudAuth.client
+			.getCurrentAccount()
+			.then((account) => { if (!cancelled) setEmail(account.user.email); })
+			.catch(() => {}); // Best-effort label; the row still works without it.
+		return () => { cancelled = true; };
+	}, [cloudAuth.signedIn, cloudAuth.client]);
+
+	function confirmSignOut() {
+		Alert.alert(
+			"Sign out of AO Cloud?",
+			"This device's saved credential will be removed. You'll need to sign in again to see cloud sessions.",
+			[
+				{ text: "Cancel", style: "cancel" },
+				{
+					text: "Sign out",
+					style: "destructive",
+					onPress: async () => {
+						setSigningOut(true);
+						try { await cloudAuth.signOut(); } finally { setSigningOut(false); }
+					},
+				},
+			],
+		);
+	}
+
+	const signedIn = cloudAuth.signedIn === true;
+	return (
+		<CardRow
+			icon="cloud"
+			label="AO Cloud account"
+			value={signedIn ? (signingOut ? "Signing out…" : (email ?? "Signed in")) : "Not signed in"}
+			disabled={signingOut}
+			loading={signingOut}
+			onPress={signedIn ? () => { haptics.warning(); confirmSignOut(); } : () => router.push("/sheets/cloud-signin")}
+		/>
+	);
+}
+
 /** The theme options, inline inside the Settings sheet on Android. */
 function ThemeChoices({ preference, onSelect }: { preference: ThemePreference; onSelect(next: ThemePreference): void }) {
 	const t = useTheme();
@@ -307,8 +374,8 @@ function MachineRow({ host, selected, loading, onSelect, onEdit }: {
 function DesktopStatusRow() {
 	const t = useTheme();
 	const router = useRouter();
-	const { config, configured, selectedHostName, connection, error, errorStatus, activeEndpoints, loading } = useApp();
-	const paired = configured || selectedHostName !== null;
+	const { config, localConfigured, selectedHostName, connection, error, errorStatus, activeEndpoints, loading } = useApp();
+	const paired = localConfigured || selectedHostName !== null;
 	// Only a poll that actually failed is a failure. Before the first tick lands
 	// errorStatus is null too, which on its own would read as unreachable. Same
 	// gate as the board, which only shows its failure copy behind `error`.

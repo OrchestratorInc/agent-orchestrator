@@ -11,6 +11,7 @@ import {
 	type ReactNode,
 } from "react";
 import {
+	ActivityIndicator,
 	Animated,
 	FlatList,
 	PanResponder,
@@ -24,8 +25,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AgentLogo } from "./AgentLogo";
 import { MascotLamp } from "./ui";
 import type { DashboardSession } from "./api";
+import { resourceKey, type Scoped } from "./environment/scopedBoard";
 import { haptics } from "./haptics";
-import { hostedProjectKey, hostedSessionKey, sessionHostId } from "./hostedRows";
 import { sessionTitle } from "./sessionStatus";
 import { SidebarDestinationIcon } from "./sidebar-destination-icon";
 import { sidebarDestinationHitModifiers } from "./sidebar-destination-hit-modifiers";
@@ -35,7 +36,9 @@ import {
 	RECENT_WORKERS_LABEL,
 	selectedPrimarySidebarDestination,
 	sidebarDestinations,
-	sidebarSessions,
+	sidebarSessionListPresentation,
+	scopedSidebarSessions,
+	sidebarSessionRoute,
 	type PrimarySidebarDestinationId,
 	type SidebarDestination,
 	type SidebarDestinationId,
@@ -55,18 +58,15 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { scheme } = useThemeState();
-	const { allSessions, allProjects, hostStates, connection, config } = useApp();
-	// The store keeps the last good sessions when a poll fails — that is what lets
-	// the board show rows with a stale banner rather than blanking. The drawer had
-	// no such tell, so a disconnected phone still listed workers as if they were
-	// live. Same data, so say the same thing about it.
-	const sessionsStale = hostStates.length > 1
-		? hostStates.every((host) => host.connection === "closed")
-		: connection !== "open";
-	const fleetConnection = hostStates.length > 1
-		? hostStates.some((host) => host.connection === "open") ? "open"
-			: hostStates.some((host) => host.connection === "connecting") ? "connecting" : "closed"
-		: connection;
+	const { scopedBoard, hostStates } = useApp();
+	const { sessions, projects, sources } = scopedBoard;
+	const sourceStatuses = Object.values(sources);
+	const spawnControls = sourceStatuses.some((status) => status.available);
+	const showSidebarSessions = true;
+	const sessionsStaleLabel = sourceStatuses.some((status) => status.error) ? "REFRESH FAILED" : "";
+	const sessionsStale = Boolean(sessionsStaleLabel);
+	const lampStatus = sourceStatuses.some((status) => status.available) ? "open"
+		: hostStates.some((host) => host.connection === "connecting") ? "connecting" : "closed";
 	const router = useRouter();
 	const pathname = usePathname();
 	const insets = useSafeAreaInsets();
@@ -84,17 +84,16 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	);
 	lastPrimaryDestination.current = selectedPrimaryDestination;
 	const drawerWidth = Math.min(width * 0.76, 320);
-	const liveSessions = useMemo(() => sidebarSessions(allSessions), [allSessions]);
+	const liveSessions = useMemo(() => scopedSidebarSessions(sessions), [sessions]);
+	const sessionListPresentation = sidebarSessionListPresentation(null, sourceStatuses.some((status) => !status.resolved || status.loading), liveSessions.length);
 	const projectNames = useMemo(
-		() => new Map(allProjects.map((project) => [hostedProjectKey(project), project.name])),
-		[allProjects],
+		() => new Map(projects.map((entry) => [resourceKey(entry.source, entry.value.id), entry.value.name])),
+		[projects],
 	);
-	const projectLabel = (session: DashboardSession) => {
-		const hostId = sessionHostId(session);
-		const name = projectNames.get(hostedProjectKey({ id: session.projectId, hostId })) ?? session.projectId;
-		const hostName = "hostName" in session && typeof session.hostName === "string" ? session.hostName : undefined;
-		const offline = hostStates.find((host) => host.hostId === hostId)?.connection === "closed";
-		return hostStates.length > 1 && hostName ? `${name ? `${name} · ` : ""}${hostName}${offline ? " (offline)" : ""}` : name;
+	const projectLabel = (entry: Scoped<DashboardSession>) => {
+		const name = projectNames.get(resourceKey(entry.source, entry.value.projectId)) ?? entry.value.projectId;
+		const host = entry.source.kind === "local" ? hostStates.find((item) => item.hostId === entry.source.id) : undefined;
+		return hostStates.length > 1 && host ? `${name} · ${host.name}${host.connection === "closed" ? " (offline)" : ""}` : name;
 	};
 
 	const animateSidebar = useCallback((nextOpen: boolean) => {
@@ -163,18 +162,21 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 		[activeDestination, closeSidebar, router],
 	);
 	const selectSession = useCallback(
-		(session: DashboardSession) => {
+		(entry: Scoped<DashboardSession>) => {
+			const route = sidebarSessionRoute(entry);
+			if (!route) return;
 			haptics.select();
 			closeSidebar();
-			router.push({ pathname: "/session/[id]", params: { id: session.id, projectId: session.projectId, hostId: sessionHostId(session) ?? config?.hostId } });
+			router.push(route);
 		},
-		[closeSidebar, config?.hostId, router],
+		[closeSidebar, router],
 	);
 	const spawnWorker = useCallback(() => {
+		if (!spawnControls) return;
 		haptics.tap();
 		closeSidebar();
 		router.push("/spawn");
-	}, [closeSidebar, router]);
+	}, [closeSidebar, router, spawnControls]);
 	const openSettings = useCallback(() => {
 		haptics.tap();
 		router.push("/settings");
@@ -223,8 +225,10 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 								style={{ width: drawerWidth - 32, height: 232 }}
 							>
 								<RNHostView matchContents>
-									<View style={styles.brandMascotSlot}>
-										<MascotLamp status={fleetConnection} size={55} />
+									<View style={styles.brandRow}>
+										<View style={styles.brandMascotSlot}>
+											<MascotLamp status={lampStatus} size={55} />
+										</View>
 									</View>
 								</RNHostView>
 								<Spacer size={14} />
@@ -234,7 +238,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 											key={destination.id}
 											destination={destination}
 											active={destination.id === selectedPrimaryDestination}
-											badge={sidebarDestinationBadge(destination.id, allSessions)}
+											badge={sidebarDestinationBadge(destination.id, sessions.map((entry) => entry.value))}
 											onPress={() => selectDestination(destination)}
 											drawerWidth={drawerWidth}
 										/>
@@ -244,13 +248,14 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 						</Host>
 					</View>
 
+					{showSidebarSessions && <>
 					<RNText style={styles.sectionLabel}>
 						{RECENT_WORKERS_LABEL.toUpperCase()}
-						{sessionsStale ? <RNText style={styles.sectionLabelStale}>{"  ·  DISCONNECTED"}</RNText> : null}
+						{sessionsStaleLabel ? <RNText style={styles.sectionLabelStale}>{`  ·  ${sessionsStaleLabel}`}</RNText> : null}
 					</RNText>
 					<FlatList
 						data={liveSessions}
-						keyExtractor={hostedSessionKey}
+						keyExtractor={(entry) => resourceKey(entry.source, entry.value.id)}
 						style={[styles.sessionList, sessionsStale && styles.sessionListStale]}
 						contentContainerStyle={[
 							liveSessions.length === 0 ? styles.emptySessionList : styles.sessionListContent,
@@ -259,20 +264,29 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 						showsVerticalScrollIndicator={false}
 						renderItem={({ item }) => (
 							<SessionRow
-								session={item}
+								session={item.value}
+								sourceLabel={item.source.kind === "cloud" ? "Cloud" : "Local"}
 								projectName={projectLabel(item)}
 								onPress={() => selectSession(item)}
 							/>
 						)}
-						ListEmptyComponent={<RNText style={styles.emptySessions}>No active sessions</RNText>}
+						ListEmptyComponent={sessionListPresentation.kind === "loading" ? (
+							<View style={styles.loadingSessions}>
+								<ActivityIndicator size="small" color={t.accent} />
+								<RNText style={styles.emptySessions}>{sessionListPresentation.label}</RNText>
+							</View>
+						) : sessionListPresentation.kind === "empty" ? (
+							<RNText style={styles.emptySessions}>{sessionListPresentation.label}</RNText>
+						) : null}
 					/>
+					</>}
 
 					<View pointerEvents="box-none" style={[styles.sidebarActions, { bottom: insets.bottom + 10 }]}>
 						<SidebarSettingsButton
 							active={activeDestination === "settings"}
 							onPress={openSettings}
 						/>
-						<SidebarSpawnButton onPress={spawnWorker} />
+						{spawnControls && <SidebarSpawnButton onPress={spawnWorker} />}
 					</View>
 				</Animated.View>
 
@@ -296,10 +310,12 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 
 function SessionRow({
 	session,
+	sourceLabel,
 	projectName,
 	onPress,
 }: {
 	session: DashboardSession;
+	sourceLabel: "Local" | "Cloud";
 	projectName: string;
 	onPress: () => void;
 }) {
@@ -311,7 +327,7 @@ function SessionRow({
 		<Pressable
 			onPress={onPress}
 			accessibilityRole="button"
-			accessibilityLabel={`${sessionTitle(session)}, ${visual.label}, ${projectName}`}
+			accessibilityLabel={`${sessionTitle(session)}, ${visual.label}, ${projectName}, ${sourceLabel}`}
 			style={({ pressed }) => [styles.sessionRow, pressed && styles.sessionRowPressed]}
 		>
 			<AgentLogo harness={session.harness} size={28} />
@@ -322,7 +338,7 @@ function SessionRow({
 				<View style={styles.sessionMetaRow}>
 					<View style={[styles.statusDot, { backgroundColor: visual.color }]} />
 					<RNText numberOfLines={1} style={styles.sessionMeta}>
-						{visual.label} · {projectName}
+						{visual.label} · {projectName} · {sourceLabel}
 					</RNText>
 				</View>
 			</View>
@@ -395,7 +411,8 @@ const makeStyles = (t: Theme) =>
 			paddingHorizontal: space.lg,
 		},
 		sidebarTop: { height: 232 },
-		brandMascotSlot: { width: 72, height: 48, paddingLeft: space.md },
+		brandRow: { width: "100%", height: 48, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 12 },
+		brandMascotSlot: { width: 58, height: 48 },
 		brandMascot: { width: 58, height: 48 },
 		sectionLabel: { fontFamily: "Geist_600SemiBold",
 			marginTop: space.sm,
@@ -412,6 +429,7 @@ const makeStyles = (t: Theme) =>
 		sessionListContent: { paddingBottom: space.sm },
 		emptySessionList: { flexGrow: 1 },
 		emptySessions: { fontFamily: "Geist_400Regular", paddingHorizontal: space.md, paddingTop: space.sm, color: t.textTertiary, fontSize: type.subheadline.fontSize },
+		loadingSessions: { paddingHorizontal: space.md, paddingTop: space.sm, flexDirection: "row", alignItems: "center", gap: space.sm },
 		sessionRow: {
 			minHeight: 58,
 			paddingHorizontal: space.md,

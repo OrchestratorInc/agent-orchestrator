@@ -32,6 +32,11 @@ describe("spawn composer", () => {
 		expect(finish).toContain('if (current !== "recording") return;');
 		expect(finish).toContain("device.stop();");
 		expect(finish.slice(finish.indexOf('if (current !== "recording") return;'))).not.toContain('setPhase("idle")');
-		expect(spawn).toContain('disabled={!hostMatches || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}');
+		expect(spawn).toContain('disabled={!canSubmitSpawn(destination, projectId, harness, sourceFor) || busy || modelLoading || loading || listening || voice.state === "transcribing"}');
+	});
+	it("spawns through the chosen source and opens a source-qualified session", () => {
+		expect(spawn).toContain("await spawnOn(destination,");
+		expect(spawn).toContain("source: destination.kind, sourceId: destination.id");
+		expect(spawn).not.toContain("const { environment, projects, projectsKnown, activeProjectId");
 	});
 });

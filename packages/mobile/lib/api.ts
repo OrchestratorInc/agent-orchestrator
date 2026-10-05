@@ -53,6 +53,8 @@ export function isKanbanColumn(value: string | null | undefined): value is Kanba
 export type DashboardSession = {
 	id: string;
 	projectId: string;
+	/** Session role. Cloud lists workers and orchestrators through one endpoint. */
+	kind?: "worker" | "orchestrator";
 	/** Opaque daemon runtime handle used only for terminal mux operations. */
 	terminalHandleId?: string;
 	status: string | null;
@@ -97,6 +99,19 @@ export type DashboardSession = {
 	provisionError?: string;
 	isPinned?: boolean;
 	pinnedAt?: string | null;
+	/** Whether the cloud worker has a current control-plane connection. Cloud sessions only. */
+	runtimeConnected?: boolean;
+	/**
+	 * Sandbox lifecycle for a cloud-hosted session (control-plane intent vs. what the
+	 * sandbox provider actually observes). Absent for local-daemon sessions, which have
+	 * no sandbox to track. Mirrors desktop's WorkspaceSession["cloud"] shape so
+	 * cloud-lifecycle.ts (Task 14) can read it identically on both platforms.
+	 */
+	cloud?: {
+		sandboxProvider?: string;
+		desiredState?: string;
+		observedState?: string;
+	};
 	/** Automatically review each new pull-request head. */
 	autoReviewEnabled?: boolean;
 	/** Automatically deliver completed review feedback to the worker. */
@@ -118,6 +133,10 @@ export type OrchestratorLink = {
 	mode: SessionMode;
 	updatedAt?: string | null;
 	runtimeState?: string | null;
+	/** Cloud control-plane connection for the orchestrator runtime. Absent locally. */
+	runtimeConnected?: boolean;
+	/** Sandbox lifecycle for a cloud-hosted orchestrator. Absent locally. */
+	cloud?: DashboardSession["cloud"];
 	hasRuntime?: boolean;
 	isTerminal?: boolean;
 	isRestorable?: boolean;
@@ -1048,6 +1067,19 @@ export async function spawnSession(
 export type SpawnAttachmentInput = {
 	mimeType: string;
 	data: string;
+};
+
+// An options object rather than four optional positionals: `spawn(a, b, c, d)`
+// with every argument optional and same-typed is where call-site mistakes live.
+export type SpawnOptions = {
+	/** Falls back to the active project, or the only project. */
+	projectId?: string;
+	prompt?: string;
+	harness?: string;
+	model?: string;
+	attachments?: SpawnAttachmentInput[];
+	/** Mobile defaults to Chat; TUI remains an explicit compatibility choice. */
+	mode?: SessionMode;
 };
 
 export async function getSession(cfg: ServerConfig, id: string): Promise<DashboardSession> {

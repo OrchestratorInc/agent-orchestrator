@@ -80,11 +80,13 @@ describe("parsePairingCode", () => {
 describe("deep link scheme", () => {
 	it("matches the scheme the app registers in app.json", async () => {
 		const appConfig = (await import("../app.json")) as unknown as {
-			default: { expo: { scheme: string } };
+			default: { expo: { scheme: string | string[] } };
 		};
-		const scheme = appConfig.default.expo.scheme;
+		const registered = appConfig.default.expo.scheme;
+		const schemes = Array.isArray(registered) ? registered : [registered];
 
-		const got = parsePairingCode(pairingUrl(offer, `${scheme}://pair`));
+		expect(schemes).toContain("aomobile");
+		const got = parsePairingCode(pairingUrl(offer, "aomobile://pair"));
 
 		expect(got?.hostId).toBe("h_b3e07f31");
 	});

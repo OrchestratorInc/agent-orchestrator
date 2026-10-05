@@ -3,9 +3,10 @@ import { useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Keyboard, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import type { DashboardSession } from "./api";
+import { resourceKey, type SourceRef } from "./environment/scopedBoard";
+import { EnvironmentBadge } from "./environment-badge-icon";
 import { AgentLogo } from "./AgentLogo";
 import { haptics } from "./haptics";
-import { sessionHostId } from "./hostedRows";
 import { prLine, workerRowPresentation, workerStatusGlyph } from "./agentsView";
 import { toneColor } from "./prView";
 import { statusVisual, type Theme } from "./theme";
@@ -17,15 +18,90 @@ import { WorkerRowInteraction } from "./worker-row-interaction";
 import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 import { Spinning } from "./ui";
 import { normalizeConversationTitle } from "./chat/conversationMenuModel";
-import { useApp } from "./store";
 import { useOpenPage } from "./pageNavigation";
 import { iconSize, press, space, type } from "./tokens";
 import { userFacingError } from "./connectionError";
 import { reviewRouteForSession } from "./reviewView";
 
-export const WorkerListRow = memo(
-	function WorkerListRow({
+type ReadOnlyWorkerProps = { session: DashboardSession; source: SourceRef; rowKey?: string; projectName?: string; nowBucket?: number };
+type WorkerListRowProps =
+	| (ReadOnlyWorkerProps & { interactionMode: "read-only" })
+	| (ReadOnlyWorkerProps & { interactionMode: "open-only" })
+	| (Parameters<typeof InteractiveWorkerListRow>[0] & { interactionMode: "full" });
+
+export function WorkerListRow(props: WorkerListRowProps) {
+	if (props.interactionMode === "read-only") {
+		return <PassiveWorkerListRow session={props.session} source={props.source} projectName={props.projectName} />;
+	}
+	if (props.interactionMode === "open-only") {
+		return <OpenOnlyWorkerListRow session={props.session} source={props.source} projectName={props.projectName} />;
+	}
+	return <InteractiveWorkerListRow {...props} />;
+}
+
+// Cloud can enter the conversation, but it never mounts the Local gesture,
+// context-menu, or mutation layer.
+function OpenOnlyWorkerListRow(props: ReadOnlyWorkerProps) {
+	const router = useRouter();
+	return (
+		<PassiveWorkerListRow
+			{...props}
+			onPress={() => {
+				haptics.tap();
+				router.push({
+					pathname: "/session/[id]",
+					params: { id: props.session.id, projectId: props.session.projectId, source: props.source.kind, sourceId: props.source.id },
+				});
+			}}
+		/>
+	);
+}
+
+function PassiveWorkerListRow({ session, source, projectName, onPress }: ReadOnlyWorkerProps & { onPress?: () => void }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const row = workerRowPresentation(t, session, projectName);
+	const visual = statusVisual(t, session.status);
+	const prs = prLine(session);
+	const contents = (
+		<>
+			<WorkerRowContents
+				row={row}
+				visual={visual}
+				glyph={workerStatusGlyph(session.status)}
+				details={[row.branch, prs?.text].filter(Boolean).join("  ·  ")}
+				prsTone={prs?.tone}
+				harness={session.harness}
+				sourceLabel={source.kind === "cloud" ? "Cloud" : "Local"}
+				styles={styles}
+				t={t}
+			/>
+		</>
+	);
+	if (onPress) {
+		return (
+			<Pressable
+				onPress={onPress}
+				accessibilityRole="button"
+				accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}. ${source.kind === "cloud" ? "Cloud" : "Local"}.`}
+				accessibilityHint="Opens worker conversation."
+				android_ripple={{ color: t.bgElevatedHover }}
+				style={({ pressed }) => [styles.shell, styles.foreground, styles.row, pressed && styles.rowPressed]}
+			>
+				{contents}
+			</Pressable>
+		);
+	}
+	return (
+		<View style={[styles.shell, styles.foreground, styles.row]} accessible accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}. ${source.kind === "cloud" ? "Cloud" : "Local"}. Read-only.`}>
+			{contents}
+		</View>
+	);
+}
+
+const InteractiveWorkerListRow = memo(function InteractiveWorkerListRow({
 	session,
+	source,
 	rowKey,
 	projectName,
 	isRenaming,
@@ -42,6 +118,7 @@ export const WorkerListRow = memo(
 	onRestore,
 }: {
 	session: DashboardSession;
+	source: SourceRef;
 	rowKey?: string;
 	projectName?: string;
 	isRenaming: boolean;
@@ -67,7 +144,6 @@ export const WorkerListRow = memo(
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
-	const { currentHostId } = useApp();
 	const openPage = useOpenPage();
 	const closeActionRailRef = useRef<() => void>(() => {});
 	const [renameTitle, setRenameTitle] = useState("");
@@ -133,11 +209,11 @@ export const WorkerListRow = memo(
 		haptics.tap();
 		router.push({
 			pathname: "/session/[id]",
-			params: { id: session.id, projectId: session.projectId, hostId: sessionHostId(session) ?? currentHostId },
+			params: { id: session.id, projectId: session.projectId, source: source.kind, sourceId: source.id },
 		});
 	};
 
-	const reviewRoute = reviewRouteForSession(session, sessionHostId(session) ?? currentHostId);
+	const reviewRoute = reviewRouteForSession(session, source.id);
 	const terminated = session.isTerminated === true || session.status === "terminated";
 	const contextActions = workerContextActions({
 		pinned: Boolean(session.isPinned),
@@ -176,7 +252,7 @@ export const WorkerListRow = memo(
 
 	return (
 		<WorkerRowInteraction
-			sessionId={rowKey ?? session.id}
+			sessionId={rowKey ?? resourceKey(source, session.id)}
 			enabled={!isRenaming}
 			activeSwipeId={activeSwipeId}
 			rightActions={renderRightActions()}
@@ -184,7 +260,7 @@ export const WorkerListRow = memo(
 			foregroundStyle={styles.foreground}
 			rowStyle={styles.row}
 			pressedStyle={styles.rowPressed}
-			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.`}
+			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}. Local.`}
 			accessibilityHint="Swipe left for pin and delete actions. Long press for more."
 			onPress={openSession}
 			actions={contextActions}
@@ -201,6 +277,7 @@ export const WorkerListRow = memo(
 					details={details}
 					prsTone={prs?.tone}
 					harness={session.harness}
+					sourceLabel="Local"
 					isRenaming
 					renameTitle={renameTitle}
 					renameSaving={renameSaving}
@@ -219,6 +296,7 @@ export const WorkerListRow = memo(
 					details={details}
 					prsTone={prs?.tone}
 					harness={session.harness}
+					sourceLabel="Local"
 					styles={styles}
 					t={t}
 				/>
@@ -237,6 +315,7 @@ export const WorkerListRow = memo(
 		prev.nowBucket === next.nowBucket &&
 		prev.rowKey === next.rowKey &&
 		prev.projectName === next.projectName &&
+		prev.source.kind === next.source.kind && prev.source.id === next.source.id &&
 		prev.isRenaming === next.isRenaming &&
 		prev.activeSwipeId === next.activeSwipeId &&
 		// By value, not identity: the store polls and publishes freshly parsed
@@ -252,6 +331,7 @@ function WorkerRowContents({
 	details,
 	prsTone,
 	harness,
+	sourceLabel,
 	isRenaming = false,
 	renameTitle = "",
 	renameSaving = false,
@@ -268,6 +348,7 @@ function WorkerRowContents({
 	details: string;
 	prsTone?: Parameters<typeof toneColor>[1];
 	harness: DashboardSession["harness"];
+	sourceLabel: "Local" | "Cloud";
 	isRenaming?: boolean;
 	renameTitle?: string;
 	renameSaving?: boolean;
@@ -286,6 +367,7 @@ function WorkerRowContents({
 				<Text style={styles.project} numberOfLines={1}>
 					{row.project}
 				</Text>
+				<EnvironmentBadge sourceLabel={sourceLabel} theme={t} />
 				{/* Paired with the tinted label so status reads by shape as well as
 				    colour. Only shown alongside a real status — when the row is
 				    showing an elapsed time instead, there is no state to depict.

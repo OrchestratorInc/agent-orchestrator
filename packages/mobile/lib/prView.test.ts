@@ -1,4 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { localOnlyPRCopy } from "./prView";
+import { readFileSync } from "node:fs";
+
+describe("PR source scope", () => {
+	it("explains that PRs are paired-desktop only", () => {
+		expect(localOnlyPRCopy).toContain("paired desktop");
+	});
+	it("routes PR cards back to that desktop, not an unscoped session", () => {
+		const card = readFileSync(new URL("./PRCard.tsx", import.meta.url), "utf8");
+		expect(card).toContain("source: source.kind, sourceId: source.id");
+	});
+});
 import type { DashboardPR, DashboardSession, SessionPRSummary } from "./api";
 import {
 	collectPRs,

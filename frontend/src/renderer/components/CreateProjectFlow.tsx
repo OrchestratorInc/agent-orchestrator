@@ -25,6 +25,7 @@ import { createPortal } from "react-dom";
 import type { components } from "../../api/schema";
 import type { ImportFolderScan } from "../../preload";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudProviderPreference } from "../hooks/useCloudProviderPreference";
 import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
 import { CoderTemplatePicker } from "./CoderTemplatePicker";
 import { SearchablePicker } from "./SearchablePicker";
@@ -44,7 +45,6 @@ import type { CloudCpGitHubAppRepository } from "../lib/cloud-cp/types";
 import { useCloudSession } from "../lib/cloud-session";
 import { useUiStore } from "../stores/ui-store";
 import { useShellMaybe } from "../lib/shell-context";
-import { resolveSandboxProviderPreference, useSandboxProviderStore } from "../stores/sandbox-provider-store";
 import {
 	onboardingAlertErrorClass,
 	onboardingFieldHintClass,
@@ -1443,9 +1443,10 @@ function CloudProjectCard({
 	// The provider new sessions will run on: the user's saved choice when this
 	// control plane offers it, otherwise its default (the same rule the session
 	// launchers apply). Coder options only mean something on Coder.
-	const selectedSandboxProvider = useSandboxProviderStore((state) => state.selectedProvider);
+	const { provider: selectedSandboxProvider } = useCloudProviderPreference();
 	const sessionSandboxProvider =
-		resolveSandboxProviderPreference(selectedSandboxProvider, sandboxProviders.available) ?? sandboxProviders.default;
+		(selectedSandboxProvider && sandboxProviders.available.includes(selectedSandboxProvider) ? selectedSandboxProvider : null) ??
+		sandboxProviders.default;
 	const usesCoder = sessionSandboxProvider === "coder";
 	const resetCoderOptions = useCoderSessionOptionsStore((s) => s.reset);
 	useEffect(() => {

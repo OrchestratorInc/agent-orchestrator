@@ -72,4 +72,12 @@ describe("worker dock visibility", () => {
 			showSpawn: true,
 		});
 	});
+
+	it("keeps the shared spawn action right-aligned without local controls in Cloud", () => {
+		expect(workerDockVisibility(false, false)).toEqual({
+			showControls: false,
+			showSearch: false,
+			showSpawn: true,
+		});
+	});
 });

@@ -87,7 +87,8 @@ function NotificationsContent() {
 	const router = useRouter();
 	const openPage = useOpenPage();
 	const insets = useSafeAreaInsets();
-	const { config, connection, unreachable, errorStatus, sessions, loading: sessionsLoading, restore } = useApp();
+	const { config, configResolved, connection, unreachable, errorStatus, localBoard, availableSources, restoreOn } = useApp();
+	const localSource = availableSources.find((source) => source.kind === "local" && source.id === config?.hostId);
 	const [restoringId, setRestoringId] = useState<string>();
 	const [clearingIds, setClearingIds] = useState<Set<string>>(() => new Set());
 	// A brief line rather than an Alert: the row is still there to act on, and
@@ -199,7 +200,10 @@ function NotificationsContent() {
 		// What a tap does depends on the session behind it, exactly as the renderer
 		// decides: a terminated agent waiting on input is restored, not opened.
 		const action = notificationAction(notification, sessionState(notification.sessionId));
-		if (action.kind === "open") router.navigate({ pathname: "/session/[id]", params: { id: action.sessionId, hostId: config.hostId } });
+		if (action.kind === "open") {
+			if (localSource) router.navigate({ pathname: "/session/[id]", params: { id: action.sessionId, source: localSource.kind, sourceId: localSource.id } });
+			else setNotice("Pair your desktop to open this session.");
+		}
 		else if (action.kind === "review") openPage(notificationTarget({ ...notification, hostId: config.hostId }, config.hostId) as Href);
 		else if (action.kind === "prs") router.navigate({ pathname: "/prs", params: { hostId: config.hostId } });
 		else if (action.kind === "restore") {
@@ -232,12 +236,12 @@ function NotificationsContent() {
 	}
 
 	function sessionState(sessionId?: string) {
-		const session = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
+		const session = sessionId ? localBoard.sessions.find((item) => item.id === sessionId) : undefined;
 		return {
 			terminated: Boolean(session?.isTerminated || session?.status === "terminated"),
 			// Without the board we cannot tell a terminated session from a live one,
 			// and guessing lands on a screen that cannot resolve it.
-			sessionsReady: !sessionsLoading && sessions.length > 0,
+			sessionsReady: !localBoard.loading && localBoard.sessions.length > 0,
 		};
 	}
 
@@ -245,10 +249,10 @@ function NotificationsContent() {
 		if (!config?.hostId || itemsHostId !== config.hostId) return;
 		haptics.tap();
 		setRestoringId(sessionId);
-		void restore(sessionId)
+		void (localSource ? restoreOn(localSource, sessionId) : Promise.reject(new Error("Pair your desktop to restore this session.")))
 			.then(() => {
 				haptics.success();
-				router.navigate({ pathname: "/session/[id]", params: { id: sessionId, hostId: config.hostId } });
+				if (localSource) router.navigate({ pathname: "/session/[id]", params: { id: sessionId, source: localSource.kind, sourceId: localSource.id } });
 			})
 			.catch((cause) => Alert.alert("Couldn't restore the session", userFacingError(cause)))
 			.finally(() => setRestoringId(undefined));
@@ -360,7 +364,7 @@ function NotificationsContent() {
 						) : !config && !error ? (
 							// Shared with the tabs: "Connecting…" while the launch race runs,
 							// the pairing prompt only once it has found no machine.
-							<UnpairedState />
+							<UnpairedState resolving={!configResolved} />
 						) : (
 							<EmptyState
 								icon={error ? "alert-circle" : "check-circle"}

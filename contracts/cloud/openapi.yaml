@@ -43,6 +43,63 @@ paths:
                 $ref: "#/components/schemas/CurrentAccount"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/preferences:
+    get:
+      operationId: getUserPreferences
+      tags: [Account]
+      summary: Get the authenticated user's Cloud sandbox-provider preference.
+      responses:
+        "200":
+          description: The user's saved provider, or null for the deployment default.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserCloudPreferences"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: putUserPreferences
+      tags: [Account]
+      summary: Replace or atomically initialize the user's sandbox-provider preference.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutUserCloudPreferencesInput"
+      responses:
+        "200":
+          description: The saved preference.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserCloudPreferences"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs:
+    post:
+      operationId: createOrganization
+      tags: [Account]
+      summary: Create an organization owned by the authenticated account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrganizationInput"
+      responses:
+        "201":
+          description: Organization created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [organization]
+                properties:
+                  organization:
+                    $ref: "#/components/schemas/OrganizationMembership"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/me/providers:
     get:
       operationId: listUserProviderConnections
@@ -462,6 +519,7 @@ paths:
     post:
       operationId: wakePausedSessions
       tags: [Sessions]
+      summary: Wake every paused sandbox in the organization.
       description: Ask the reconciler to resume the user's idle-paused sandboxes.
       responses:
         "202":
@@ -469,13 +527,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: false
-                required: [woken]
-                properties:
-                  woken:
-                    type: integer
-                    format: int64
+                $ref: "#/components/schemas/WakePausedSessionsResponse"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}:
@@ -508,6 +560,40 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DeleteSessionResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/resume:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: resumeSession
+      tags: [Sessions]
+      summary: Resume one paused session's sandbox.
+      responses:
+        "202":
+          description: Resume was requested; the reconciler owns the provider and worker transitions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResumeSessionResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/restore:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: restoreSession
+      tags: [Sessions]
+      summary: Un-terminate a previously deleted session and queue a fresh sandbox provision.
+      responses:
+        "202":
+          description: Restore was accepted; the sandbox provisions and rehydrates asynchronously.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreSessionResponse"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition:
@@ -2165,6 +2251,31 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OrganizationMembership"
+    UserCloudPreferences:
+      type: object
+      additionalProperties: false
+      required: [sandboxProvider]
+      properties:
+        sandboxProvider:
+          type: [string, "null"]
+    PutUserCloudPreferencesInput:
+      type: object
+      additionalProperties: false
+      required: [sandboxProvider]
+      properties:
+        sandboxProvider:
+          type: [string, "null"]
+        initializeOnly:
+          type: boolean
+    CreateOrganizationInput:
+      type: object
+      additionalProperties: false
+      required: [displayName]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 80
     AgentCapability:
       type: string
       enum:
@@ -3416,6 +3527,48 @@ components:
             desiredState:
               type: string
               const: deleted
+    WakePausedSessionsResponse:
+      type: object
+      additionalProperties: false
+      required: [woken]
+      properties:
+        woken:
+          type: integer
+          format: int64
+    ResumeSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [session]
+      properties:
+        session:
+          type: object
+          additionalProperties: false
+          required: [id, sandboxProvider, desiredState, observedState]
+          properties:
+            id:
+              type: string
+              format: uuid
+            sandboxProvider:
+              type: string
+            desiredState:
+              type: string
+            observedState:
+              type: string
+    RestoreSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [session]
+      properties:
+        session:
+          type: object
+          additionalProperties: false
+          required: [id, restored]
+          properties:
+            id:
+              type: string
+              format: uuid
+            restored:
+              type: boolean
     SessionInterfaceMode:
       type: string
       enum: [tui, chat]
@@ -3547,6 +3700,12 @@ components:
             $ref: "#/components/schemas/AgentCapability"
         runtimeConnected:
           type: boolean
+        sandboxProvider:
+          type: string
+        desiredState:
+          type: string
+        observedState:
+          type: string
         runtimeState:
           type: string
         runtimeError:
@@ -3555,6 +3714,9 @@ components:
           $ref: "#/components/schemas/Turn"
         isTerminated:
           type: boolean
+        workerEpoch:
+          type: integer
+          format: int64
         createdAt:
           type: string
           format: date-time
@@ -3596,6 +3758,9 @@ components:
           items:
             type: string
           default: []
+        provider:
+          type: string
+          description: Explicit sandbox provider override. If omitted, the control plane resolves the user's preference or deployment default.
         sandboxProviderConnectionId:
           type: string
           format: uuid

@@ -21,6 +21,10 @@ const systemImage = (icon: NativeHeaderButtonIcon) =>
 				? "checkmark"
 				: icon === "back"
 					? "chevron.left"
+					: icon === "plus"
+						? "plus"
+					: icon === "terminal"
+						? "terminal"
 					: icon === "more"
 						? "ellipsis"
 						: "bell";

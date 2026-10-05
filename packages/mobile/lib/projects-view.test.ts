@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardSession, ProjectInfo } from "./api";
-import { projectSummaries, projectWorkers } from "./projects-view";
+import { projectRoute, projectSummaries, projectWorkers } from "./projects-view";
 
 const projects: ProjectInfo[] = [
 	{ id: "alpha", name: "Alpha", kind: "single_repo" },
@@ -71,5 +71,16 @@ describe("projectWorkers", () => {
 		];
 
 		expect(projectWorkers("alpha", sessions).map(({ id }) => id)).toEqual(["pinned", "newest"]);
+	});
+});
+
+describe("source-qualified projects", () => {
+	it("routes duplicate IDs to their own source", () => {
+		const project = { id: "same", name: "Shared", kind: "single_repo" } as ProjectInfo;
+		const local = projectRoute({ source: { kind: "local", id: "mac" }, value: project });
+		const cloud = projectRoute({ source: { kind: "cloud", id: "org" }, value: project });
+		expect(local.params.sourceId).toBe("mac");
+		expect(cloud.params.sourceId).toBe("org");
+		expect(local).not.toEqual(cloud);
 	});
 });

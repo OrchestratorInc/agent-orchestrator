@@ -1,5 +1,73 @@
 import { boardZoneOf } from "./agentsView";
 import type { DashboardSession } from "./api";
+import type { EnvironmentKind } from "./environment/types";
+import type { Scoped } from "./environment/scopedBoard";
+
+type SidebarSessionHealth = {
+	stale: boolean;
+	label: "DISCONNECTED" | "REFRESH FAILED" | null;
+	lampStatus: "closed" | "connecting" | "open";
+};
+
+export function sidebarSessionHealth(input: {
+	environment: EnvironmentKind | null;
+	configured: boolean;
+	connection: "closed" | "connecting" | "open";
+	error: string | null;
+}): SidebarSessionHealth {
+	if (input.environment === "cloud") {
+		return input.error
+			? { stale: true, label: "REFRESH FAILED", lampStatus: "closed" }
+			: { stale: false, label: null, lampStatus: input.configured ? "open" : "closed" };
+	}
+	return input.environment === "local" && input.connection !== "open"
+		? { stale: true, label: "DISCONNECTED", lampStatus: input.connection }
+		: { stale: false, label: null, lampStatus: input.connection };
+}
+
+export type SidebarSessionListPresentation =
+	| { kind: "loading"; label: string }
+	| { kind: "empty"; label: "No active sessions" }
+	| { kind: "list" };
+
+/** Distinguishes an empty board from the first request after an environment switch. */
+export function sidebarSessionListPresentation(
+	environment: EnvironmentKind | null,
+	loading: boolean,
+	sessionCount: number,
+): SidebarSessionListPresentation {
+	if (sessionCount > 0) return { kind: "list" };
+	if (loading) {
+		return {
+			kind: "loading",
+			label: environment === "cloud" ? "Loading Cloud workers…" : "Loading workers…",
+		};
+	}
+	return { kind: "empty", label: "No active sessions" };
+}
+
+export function sidebarSessionRoute(entry: Scoped<Pick<DashboardSession, "id" | "projectId">>): {
+	pathname: "/session/[id]"; params: { id: string; projectId: string; source: EnvironmentKind; sourceId: string };
+};
+export function sidebarSessionRoute(environment: EnvironmentKind | null, session: Pick<DashboardSession, "id" | "projectId">): {
+	pathname: "/session/[id]"; params: { id: string; projectId: string };
+} | undefined;
+export function sidebarSessionRoute(
+	entryOrEnvironment: Scoped<Pick<DashboardSession, "id" | "projectId">> | EnvironmentKind | null,
+	session?: Pick<DashboardSession, "id" | "projectId">,
+) {
+	if (entryOrEnvironment && typeof entryOrEnvironment === "object") {
+		return { pathname: "/session/[id]" as const, params: {
+			id: entryOrEnvironment.value.id,
+			projectId: entryOrEnvironment.value.projectId,
+			source: entryOrEnvironment.source.kind,
+			sourceId: entryOrEnvironment.source.id,
+		} };
+	}
+	const environment = entryOrEnvironment;
+	if (environment === null) return undefined;
+	return { pathname: "/session/[id]" as const, params: { id: session!.id, projectId: session!.projectId } };
+}
 
 export type SidebarDestinationId = "projects" | "agents" | "prs" | "settings";
 export type PrimarySidebarDestinationId = Exclude<SidebarDestinationId, "settings">;
@@ -42,6 +110,16 @@ export function sidebarSessions(sessions: readonly DashboardSession[]): Dashboar
 			const pinnedOrder = Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned));
 			if (pinnedOrder !== 0) return pinnedOrder;
 			return b.lastActivityAt.localeCompare(a.lastActivityAt);
+		});
+}
+
+export function scopedSidebarSessions(sessions: readonly Scoped<DashboardSession>[]): Scoped<DashboardSession>[] {
+	return sessions
+		.filter((entry) => !entry.value.isTerminated && entry.value.status !== "terminated")
+		.sort((a, b) => {
+			const pinnedOrder = Number(Boolean(b.value.isPinned)) - Number(Boolean(a.value.isPinned));
+			if (pinnedOrder !== 0) return pinnedOrder;
+			return b.value.lastActivityAt.localeCompare(a.value.lastActivityAt);
 		});
 }
 

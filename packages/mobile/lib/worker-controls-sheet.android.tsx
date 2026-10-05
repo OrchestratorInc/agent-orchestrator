@@ -2,10 +2,13 @@ import { Feather } from "./icons";
 import BottomSheet, { BottomSheetScrollView, BottomSheetView } from "@expo/ui/community/bottom-sheet";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import type { ProjectInfo } from "./api";
+import type { Scoped } from "./environment/scopedBoard";
+import type { EnvironmentKind } from "./environment/types";
 import { haptics } from "./haptics";
 import type { Theme } from "./theme";
 import { useTheme } from "./ThemeProvider";
-import { ALL_WORKER_PROJECTS, workerProjectOptions } from "./worker-controls";
+import { ALL_WORKER_PROJECTS, scopedWorkerProjectOptions } from "./worker-controls";
 import { iconSize, space, type } from "./tokens";
 
 export function WorkerControlsSheet({
@@ -13,20 +16,24 @@ export function WorkerControlsSheet({
 	onDismiss,
 	onSearch,
 	projects,
+	environmentFilter,
+	onSelectEnvironment,
 	selectedProjectId,
 	onSelectProject,
 }: {
 	open: boolean;
 	onDismiss: () => void;
 	onSearch: () => void;
-	projects: { id: string; name: string; hostId?: string; hostName?: string }[];
+	projects: readonly Scoped<ProjectInfo>[];
+	environmentFilter: "all" | EnvironmentKind;
+	onSelectEnvironment: (environment: "all" | EnvironmentKind) => void;
 	selectedProjectId: string;
 	onSelectProject: (projectId: string) => void;
 }) {
 	const t = useTheme();
 	const styles = makeStyles(t);
 	const insets = useSafeAreaInsets();
-	const options = workerProjectOptions(projects);
+	const options = scopedWorkerProjectOptions(projects, environmentFilter);
 
 	return (
 		<BottomSheet
@@ -66,6 +73,16 @@ export function WorkerControlsSheet({
 					<Feather name="chevron-right" size={iconSize.md} color={t.textFaint} />
 				</Pressable>
 
+				<Text style={styles.sectionLabel}>ENVIRONMENT</Text>
+				<View style={styles.environmentOptions}>
+					{(["all", "local", "cloud"] as const).map((option) => (
+						<Pressable key={option} accessibilityRole="button" accessibilityState={{ selected: environmentFilter === option }}
+							onPress={() => { haptics.select(); onSelectEnvironment(option); }}
+							style={[styles.environmentOption, environmentFilter === option && styles.selectedRow]}>
+							<Text style={[styles.projectLabel, environmentFilter === option && styles.selectedLabel]}>{option === "all" ? "All" : option === "local" ? "Local" : "Cloud"}</Text>
+						</Pressable>
+					))}
+				</View>
 				<Text style={styles.sectionLabel}>PROJECTS</Text>
 				<BottomSheetScrollView style={styles.projectList} showsVerticalScrollIndicator={false}>
 					{options.map((project, index) => {
@@ -105,6 +122,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	searchLabel: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600" },
 	sectionLabel: { fontFamily: "Geist_600SemiBold", marginTop: space.xl, marginBottom: space.sm, paddingHorizontal: space.xxs, color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, letterSpacing: 1, fontWeight: "600" },
 	projectList: { flex: 1, borderRadius: 16, borderCurve: "continuous", backgroundColor: t.bgElevated, overflow: "hidden" },
+	environmentOptions: { flexDirection: "row", gap: space.sm },
+	environmentOption: { flex: 1, minHeight: 44, alignItems: "center", justifyContent: "center", borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
 	projectRow: { minHeight: 52, paddingHorizontal: space.lg, flexDirection: "row", alignItems: "center", gap: space.md },
 	separator: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
 	selectedRow: { backgroundColor: t.accentTint },

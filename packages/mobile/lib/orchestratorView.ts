@@ -32,6 +32,19 @@ export function orchestratorStatus(
 	const state = orchestratorState(link);
 	if (state === "missing") return { label: "Not started", color: t.textFaint, breathing: false };
 	if (state === "stopped") return { label: "Stopped", color: t.textTertiary, breathing: false };
+	// `status` is a durable lifecycle summary, while `activity` and the Cloud
+	// connection describe what is happening now. A stale `working` status must
+	// not animate or claim live execution after the agent has gone idle/offline.
+	if (link?.status === "working" && link.runtimeConnected === false) {
+		return { label: "Offline", color: t.textTertiary, breathing: false };
+	}
+	if (link?.status === "working" && link.activity === "idle") {
+		const idle = statusVisual(t, "idle");
+		return { label: idle.label, color: idle.color, breathing: false };
+	}
+	if (link?.status === "working" && link.activity !== "active") {
+		return { label: "Online", color: t.green, breathing: false };
+	}
 	// `no_signal` describes missing activity telemetry, not a dead runtime. The
 	// project row already knows this orchestrator is live from its runtime facts,
 	// so presenting it as anything other than online is misleading.
@@ -200,7 +213,7 @@ function detailFor(state: OrchestratorState, workers: DashboardSession[], zones:
 	if (needsReview) parts.push(countPhrase(needsReview, "worker needs review", "workers need review"));
 	if (ready) parts.push(countPhrase(ready, "pull request is ready", "pull requests are ready"));
 	if (parts.length) return parts.join(" · ");
-	if (workers.length) return countPhrase(workers.length, "active worker", "active workers");
+	if (workers.length) return countPhrase(workers.length, "worker", "workers");
 	return "Ready for coordinated work";
 }
 

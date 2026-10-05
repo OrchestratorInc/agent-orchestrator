@@ -26,6 +26,7 @@ import {
 	type SendTarget,
 } from "./sendRoute";
 import { useApp } from "../store";
+import type { SourceRef } from "../environment/scopedBoard";
 import { useVoiceInput } from "../voice/useVoiceInput";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { closeShellTerminal } from "../chat/api";
@@ -572,7 +573,7 @@ function terminalInterfacePhaseLabel(phase?: string): string {
  * they are refreshed on every poll. A session from that lookup is not refreshed.
  * The shell route passes nothing.
  */
-export default function TerminalScreen({ session: resolved }: { session?: RouteSession }) {
+export default function TerminalScreen({ session: resolved, source }: { session?: RouteSession; source?: SourceRef }) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
@@ -640,18 +641,22 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const [loadedPreview, setLoadedPreview] = useState<{ config: ServerConfig; id: string; value: Awaited<ReturnType<typeof getPreview>> } | null>(null);
 	const previewWebRef = useRef<WebView>(null);
 
-	const { sessions, orchestrators, restore, refresh, config: activeConfig } = useApp();
+	const { hostStates, configForHost, restoreOn, refreshSource } = useApp();
+	const hostId = source?.kind === "local" ? source.id : params.hostId;
+	const host = hostStates.find((entry) => entry.hostId === hostId);
+	const activeConfig = hostId ? configForHost(hostId) : null;
 	const preview = loadedPreview?.id === id ? previewForConfig(loadedPreview, activeConfig, params.hostId) : null;
 	const known =
-		sessions.find((s) => s.id === sessionId) ??
-		orchestrators.find((o) => o.id === sessionId) ??
+		host?.sessions.find((s) => s.id === sessionId) ??
+		host?.orchestrators.find((o) => o.id === sessionId) ??
 		(!shellOnly && resolved?.id === sessionId ? resolved : null);
 	// Runtime handles are opaque. Native macOS PTYs are versioned (ptyhost-v1:),
 	// so using the session id here would incorrectly route the attach to legacy
 	// tmux. Older daemons omit terminalHandleId and retain the historical
 	// session-id handle, which keeps the fallback backward-compatible.
 	const terminalHandleId = shellOnly ? id : known?.terminalHandleId || id;
-	const interfaceSwitch = useInterfaceTransition(activeConfig, shellOnly ? "" : sessionId, refresh);
+	const refreshLocal = useCallback(() => hostId ? refreshSource({ kind: "local", id: hostId }) : Promise.resolve(), [refreshSource, hostId]);
+	const interfaceSwitch = useInterfaceTransition(activeConfig, shellOnly ? "" : sessionId, refreshLocal);
 	// Owned by the screen rather than the hook: the background poll calls the same
 	// `refresh()`, so a hook-wide busy flag would let a poll tick disable the
 	// user's own button and swallow the very tap the recheck exists to serve.
@@ -1270,7 +1275,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const onRestore = useCallback(async () => {
 		setRestoring(true);
 		try {
-			await restore(id);
+			if (!source) throw new Error("This desktop session is no longer available.");
+			await restoreOn(source, id);
 			setBanner(null);
 			setNotFound(false);
 			openedRef.current = false;
@@ -1287,7 +1293,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		} finally {
 			setRestoring(false);
 		}
-	}, [restore, id, terminalHandleId, projectId]);
+	}, [restoreOn, source, id, terminalHandleId, projectId]);
 
 	const xtermOptions = useMemo(
 		() => ({

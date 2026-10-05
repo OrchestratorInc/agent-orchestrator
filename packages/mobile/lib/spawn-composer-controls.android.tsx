@@ -7,10 +7,14 @@ import type { Theme } from "./theme";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
 import { type, space } from "./tokens";
 import { MicKey } from "./voice/MicKey";
+import { sourceKey } from "./environment/scopedBoard";
 
-type OpenMenu = "project" | "harness" | "model" | null;
+type OpenMenu = "destination" | "project" | "harness" | "model" | null;
 
 export function SpawnComposerControls({
+	destinations,
+	destination,
+	onSelectDestination,
 	projects,
 	projectId,
 	onSelectProject,
@@ -22,6 +26,8 @@ export function SpawnComposerControls({
 	modelLabel,
 	onSelectModel,
 	onAttach,
+	showAttachments = true,
+	showModels = true,
 	voice,
 	onSpawn,
 	busy,
@@ -33,11 +39,18 @@ export function SpawnComposerControls({
 	const projectLabel = projects.find((project) => project.id === projectId)?.label ?? "Choose project";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
 	const modelOptions = [{ id: "__auto__", label: "Automatic" }, ...models];
-	const options = openMenu === "project" ? projects : openMenu === "harness" ? agents : modelOptions;
-	const selectedValue = openMenu === "project" ? (projectId ?? "") : openMenu === "harness" ? harness : modelSelection;
-	const menuTitle = openMenu === "project" ? "Project" : openMenu === "harness" ? "Agent" : "Model";
+	const destinationOptions = destinations.map((option) => ({ id: sourceKey(option.source), label: option.available ? option.label : `${option.label} · Unavailable` }));
+	const destinationLabel = destinations.find((option) => destination && sourceKey(option.source) === sourceKey(destination))?.label ?? "Choose where to run";
+	const options = openMenu === "destination" ? destinationOptions : openMenu === "project" ? projects : openMenu === "harness" ? agents : modelOptions;
+	const selectedValue = openMenu === "destination" ? (destination ? sourceKey(destination) : "") : openMenu === "project" ? (projectId ?? "") : openMenu === "harness" ? harness : modelSelection;
+	const menuTitle = openMenu === "destination" ? "Run on" : openMenu === "project" ? "Project" : openMenu === "harness" ? "Agent" : "Model";
 
 	const selectOption = (value: string) => {
+		if (openMenu === "destination") {
+			const selected = destinations.find((option) => sourceKey(option.source) === value);
+			if (!selected?.available) return;
+			onSelectDestination(selected.source);
+		}
 		if (openMenu === "project") onSelectProject(value);
 		if (openMenu === "harness") onSelectHarness(value);
 		if (openMenu === "model") onSelectModel(value);
@@ -62,22 +75,29 @@ export function SpawnComposerControls({
 
 	return (
 		<View style={styles.stack}>
-			<SelectorButton label={projectLabel} icon="folder" onPress={() => setOpenMenu("project")} style={styles.projectButton} />
+			<View style={styles.selectorRow}>
+				<SelectorButton label={`Run on ${destinationLabel}`} icon="monitor" onPress={() => setOpenMenu("destination")} style={styles.destinationButton} />
+				<SelectorButton label={projectLabel} icon="folder" onPress={() => setOpenMenu("project")} style={styles.projectButton} />
+			</View>
 
 			<View style={styles.rail}>
-				<Pressable
-					accessibilityRole="button"
-					accessibilityLabel="Attach a file"
-					android_ripple={{ color: t.accentTint, borderless: true, radius: 20 }}
-					onPress={onAttach}
-					style={styles.attach}
-				>
-					<Feather name="paperclip" size={20} color={t.textSecondary} />
-				</Pressable>
-				<View style={styles.divider} />
+				{showAttachments ? <>
+					<Pressable
+						accessibilityRole="button"
+						accessibilityLabel="Attach a file"
+						android_ripple={{ color: t.accentTint, borderless: true, radius: 20 }}
+						onPress={onAttach}
+						style={styles.attach}
+					>
+						<Feather name="paperclip" size={20} color={t.textSecondary} />
+					</Pressable>
+					<View style={styles.divider} />
+				</> : null}
 				<SelectorButton label={harnessLabel} icon="terminal" harness={harness} onPress={() => setOpenMenu("harness")} style={styles.railButton} />
-				<View style={styles.divider} />
-				<SelectorButton label={modelLabel} onPress={() => setOpenMenu("model")} style={styles.railButton} />
+				{showModels ? <>
+					<View style={styles.divider} />
+					<SelectorButton label={modelLabel} onPress={() => setOpenMenu("model")} style={styles.railButton} />
+				</> : null}
 				<View style={styles.divider} />
 				{/* Plain, like the paperclip: the rail is the surface, and a second
 				    disc inside it would compete with Start task. */}
@@ -181,7 +201,9 @@ function OptionList({ title, options, selectedValue, showAgentLogos, onSelect, o
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	stack: { gap: space.sm },
-	projectButton: { alignSelf: "flex-start", maxWidth: "72%", height: 36, paddingHorizontal: space.sm, backgroundColor: "transparent" },
+	selectorRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
+	destinationButton: { flex: 2, minWidth: 0, height: 36, paddingHorizontal: space.xs, backgroundColor: "transparent" },
+	projectButton: { flex: 3, minWidth: 0, height: 36, paddingHorizontal: space.xs, backgroundColor: "transparent" },
 	rail: {
 		height: 52,
 		flexDirection: "row",

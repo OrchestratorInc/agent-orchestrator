@@ -1,6 +1,7 @@
 import { usePathname, useRootNavigationState, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { shouldOnboard } from "./onboarding";
+import { useCloudAuth } from "./cloud/authStore";
+import { deriveOnboardingInput, shouldOnboard } from "./onboarding";
 import { loadOnboardingSkipped } from "./onboardingStore";
 import { useApp } from "./store";
 
@@ -12,6 +13,7 @@ export function OnboardingGate() {
 	const pathname = usePathname();
 	const navState = useRootNavigationState();
 	const { config } = useApp();
+	const cloudAuth = useCloudAuth();
 	const [skipped, setSkipped] = useState<boolean | null>(null);
 	// The gate redirects once per app launch. Without this, skipping would write
 	// the flag but the intervening render — before the flag is re-read — would
@@ -25,16 +27,23 @@ export function OnboardingGate() {
 	useEffect(() => {
 		if (redirected.current) return;
 		if (!navState?.key) return; // wait until navigation is ready to accept routes
-		// `config` is null until the store's first load resolves; `shouldOnboard`
-		// treats that as "not known yet" and declines to act.
-		const configured = config === null ? null : config.host.trim().length > 0;
-		if (!shouldOnboard({ configured, skipped })) return;
+		// `deriveOnboardingInput` is the one place that turns this raw state into
+		// shouldOnboard's input — see lib/onboarding.ts. This component holds no
+		// literals of its own: a `config` that hasn't loaded yet, or a cloud auth
+		// state still mid-read, both stay `null` all the way through rather than
+		// being guessed at here.
+		const input = deriveOnboardingInput({
+			config,
+			skipped,
+			cloud: { signedIn: cloudAuth.signedIn },
+		});
+		if (!shouldOnboard(input)) return;
 		// Don't fight the user if they've already navigated somewhere deliberately
 		// (e.g. straight to the scanner from a deep link).
 		if (pathname !== "/") return;
 		redirected.current = true;
 		router.replace("/onboarding");
-	}, [config, skipped, pathname, router, navState?.key]);
+	}, [config, skipped, cloudAuth.signedIn, pathname, router, navState?.key]);
 
 	return null;
 }

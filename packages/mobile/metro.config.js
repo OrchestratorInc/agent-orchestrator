@@ -19,7 +19,11 @@ const localModules = path.resolve(projectRoot, "node_modules");
 
 const config = getDefaultConfig(projectRoot);
 
-config.watchFolders = [workspaceRoot];
+// npm links @aoagents/cloud-client into node_modules as a symlink to
+// ../cloud-client (outside this app root), and Metro does not follow
+// symlinks outside the project root by default, so the built package has to
+// be added to watchFolders explicitly.
+config.watchFolders = [workspaceRoot, path.resolve(projectRoot, "../cloud-client")];
 config.resolver.nodeModulesPaths = [localModules, path.resolve(workspaceRoot, "node_modules")];
 
 const pinned = config.resolver.resolveRequest;

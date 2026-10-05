@@ -9,6 +9,9 @@ export type OrganizationRole = Schemas["OrganizationRole"];
 export type CurrentUser = Schemas["CurrentUser"];
 export type OrganizationMembership = Schemas["OrganizationMembership"];
 export type CurrentAccount = Schemas["CurrentAccount"];
+export type UserCloudPreferences = Schemas["UserCloudPreferences"];
+export type PutUserCloudPreferencesInput = Schemas["PutUserCloudPreferencesInput"];
+export type CreateOrganizationInput = Schemas["CreateOrganizationInput"];
 
 export type AgentCapability = Schemas["AgentCapability"];
 export type AgentInstallationState = Schemas["AgentInstallationState"];
@@ -50,6 +53,9 @@ export type Turn = Schemas["Turn"];
 export type CreateSessionInput = Schemas["CreateSessionInput"];
 export type DeleteSessionResponse = Schemas["DeleteSessionResponse"];
 export type SessionPage = Schemas["SessionPage"];
+export type WakePausedSessionsResponse = Schemas["WakePausedSessionsResponse"];
+export type ResumeSessionResponse = Schemas["ResumeSessionResponse"];
+export type RestoreSessionResponse = Schemas["RestoreSessionResponse"];
 export type SessionInterfaceMode = Schemas["SessionInterfaceMode"];
 export type SessionInterfaceTransitionPolicy =
   Schemas["SessionInterfaceTransitionPolicy"];

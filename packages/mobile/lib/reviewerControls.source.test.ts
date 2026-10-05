@@ -128,7 +128,7 @@ describe("reviewer control integration", () => {
 	// A page pushed while a sheet is presented opens inside that sheet, so every
 	// way into review detail and the reviewer goes through useOpenPage.
 	it("opens review detail and the reviewer as pages, never inside a sheet", () => {
-		expect(source("./PRCard.tsx")).toContain("openPage({\n\t\t\t\t\tpathname: \"/review/[sessionId]\"");
+		expect(source("./PRCard.tsx")).toMatch(/if \(source\.kind === "local"\)\s*\{\s*openPage\(\{\s*pathname: "\/review\/\[sessionId\]"/);
 		expect(source("./worker-list-row.tsx")).toContain("if (reviewRoute) openPage(reviewRoute);");
 		expect(source("./chat/ChatSessionScreen.tsx")).toContain("if (route) openPage(route);");
 		expect(source("../app/notifications.tsx")).toContain('action.kind === "review") openPage(');

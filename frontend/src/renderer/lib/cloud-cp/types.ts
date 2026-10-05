@@ -50,6 +50,15 @@ export interface CloudCpMeResponse {
 	sandboxProviders?: CloudCpSandboxProviders;
 }
 
+export interface CloudCpUserPreferences {
+	sandboxProvider: string | null;
+}
+
+export interface CloudCpPutUserPreferencesRequest {
+	sandboxProvider: string | null;
+	initializeOnly?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Organizations and invitations (`org_handlers.go`)
 // ---------------------------------------------------------------------------

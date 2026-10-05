@@ -21,7 +21,7 @@ describe("session header controls", () => {
 	it("uses the PR restore control beside the shared actions button", () => {
 		const start = session.indexOf('glassHeaderControl("right", (');
 		expect(start).toBeGreaterThan(-1);
-		const actions = session.slice(start, start + 900);
+		const actions = session.slice(start, start + 1500);
 		expect(actions).toContain('testID="header-pullRequest"');
 		expect(actions).toContain('accessibilityLabel="Show PR card"');
 		expect(actions).toContain('<NativeHeaderButton icon="more" label="Conversation actions"');

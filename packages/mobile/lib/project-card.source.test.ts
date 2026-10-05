@@ -6,6 +6,10 @@ const page = readFileSync(new URL("../app/project/[id].tsx", import.meta.url), "
 const projects = readFileSync(new URL("../app/(tabs)/projects.tsx", import.meta.url), "utf8");
 
 describe("project row", () => {
+	it("keys Local and Cloud rows by source", () => {
+		expect(projects).toContain("resourceKey(entry.source, entry.value.project.id)");
+		expect(projects).toContain("openOrchestrator(item)");
+	});
 	// Matches a worker row: a divider, not a bordered card.
 	it("is a flat row with a divider", () => {
 		expect(card).toMatch(/row:\s*\{\s*borderBottomWidth:\s*rowDividerWidth/);
@@ -32,8 +36,7 @@ describe("project row", () => {
 	it("opens the project from the row and the orchestrator from the pill", () => {
 		expect(card).toContain("onPress={() => onOpenProject(row)}");
 		expect(card).toContain('pointerEvents="box-none"');
-		expect(projects).toContain('pathname: "/project/[id]"');
-		expect(projects).toContain("onOrchestrator={openOrchestrator}");
+		expect(projects).toContain("router.push(projectRoute({ source: entry.source, value: entry.value.project }))");
 	});
 });
 

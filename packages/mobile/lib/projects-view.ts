@@ -2,6 +2,15 @@ import type { DashboardSession, ProjectInfo } from "./api";
 import { isArchived } from "./agentsView";
 import { collectPRs, prLifecycle } from "./prView";
 import { attentionOf } from "./sessionStatus";
+import type { Scoped } from "./environment/scopedBoard";
+
+export function projectRoute(entry: Scoped<ProjectInfo>) {
+	return { pathname: "/project/[id]" as const, params: {
+		id: entry.value.id,
+		source: entry.source.kind,
+		sourceId: entry.source.id,
+	} };
+}
 
 export type ProjectSummary = {
 	project: ProjectInfo;

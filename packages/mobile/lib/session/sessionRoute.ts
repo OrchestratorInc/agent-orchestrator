@@ -3,10 +3,41 @@
 // the same split as orchestratorView.ts / projectFilter.ts.
 import type { DashboardSession, OrchestratorLink } from "../api";
 import { isSessionGone, shouldKeepPolling } from "../connectionError";
+import type { EnvironmentKind } from "../environment/types";
+import { resolveUnscopedId, type Scoped, type SourceRef } from "../environment/scopedBoard";
 import { hostRouteMatches } from "../hostRoute";
 import type { ConnStatus } from "../store";
 
 export type RouteSession = DashboardSession | OrchestratorLink;
+
+/** An explicit invalid source is never silently replaced by another board. */
+export function routeSource(params: { source?: string | string[]; sourceId?: string | string[] }): SourceRef | { kind: "invalid" } | null {
+	const { source, sourceId } = params;
+	if (source === undefined && sourceId === undefined) return null;
+	if ((source !== "local" && source !== "cloud") || typeof sourceId !== "string" || !sourceId.trim()) return { kind: "invalid" };
+	return { kind: source, id: sourceId };
+}
+
+export function resolveSessionRouteSource(
+	params: { id: string; source?: string | string[]; sourceId?: string | string[]; hostId?: string | string[] },
+	entries: readonly Scoped<{ id: string }>[],
+): { kind: "found"; source: SourceRef } | { kind: "missing" | "ambiguous" | "invalid" } {
+	const explicit = routeSource(params);
+	if (params.hostId !== undefined) {
+		if (typeof params.hostId !== "string" || !params.hostId.trim()) return { kind: "invalid" };
+		if (explicit && (explicit.kind === "invalid" || explicit.kind !== "local" || explicit.id !== params.hostId)) return { kind: "invalid" };
+		return { kind: "found", source: { kind: "local", id: params.hostId } };
+	}
+	if (explicit) return explicit.kind === "invalid" ? explicit : { kind: "found", source: explicit };
+	const match = resolveUnscopedId(params.id, entries);
+	return match.kind === "found" ? { kind: "found", source: match.entry.source } : match;
+}
+
+export function cloudSessionListState(input: { listed: boolean; loading: boolean; error: string | null }): "listed" | "loading" | "failed" | "missing" {
+	if (input.listed) return "listed";
+	if (input.loading) return "loading";
+	return input.error ? "failed" : "missing";
+}
 
 /** What `GET /sessions/{id}` has said about an id the board's lists do not hold. */
 export type SessionLookup =
@@ -28,6 +59,28 @@ export type SessionRouteView =
 	| { kind: "failed" };
 
 const pending: SessionLookup = { state: "pending" };
+
+/** Cloud Terminal is a view of the running agent PTY, not a Local controller-mode handoff. */
+export function sessionDisplaySurface(input: {
+	environment: EnvironmentKind | null;
+	sessionMode: "chat" | "tui";
+	requestedView?: string;
+}): "chat" | "local-terminal" | "cloud-terminal" {
+	if (input.environment === "cloud") {
+		return input.requestedView === "terminal" || input.sessionMode === "tui" ? "cloud-terminal" : "chat";
+	}
+	return input.sessionMode === "chat" ? "chat" : "local-terminal";
+}
+
+export function sessionRouteConfigured(input: {
+	environment: EnvironmentKind | null;
+	sourceKind: EnvironmentKind | undefined;
+	localConfigured: boolean | null;
+}): boolean | null {
+	if (input.environment === null) return null;
+	if (input.environment === "cloud") return input.sourceKind === "cloud";
+	return input.localConfigured;
+}
 
 export function sessionLookupKey(machine: string, id: string): string {
 	return `${machine}|${id}`;

@@ -38,6 +38,8 @@ type Store interface {
 	CreateLocalSession(context.Context, string, []byte, time.Time) error
 	PrincipalFromLocalToken(context.Context, []byte) (domain.Principal, error)
 	RevokeLocalSession(context.Context, []byte) error
+	GetUserSandboxProvider(context.Context, string) (string, bool, error)
+	PutUserSandboxProvider(context.Context, string, string, bool) (string, error)
 	ListMemberships(context.Context, domain.Principal) ([]domain.Membership, error)
 	CreateOrganization(context.Context, domain.Principal, string) (domain.Membership, error)
 	ListOrgMembers(context.Context, domain.Principal, string) ([]domain.OrgMember, error)
@@ -376,6 +378,8 @@ func New(options Options) *Server {
 		router.Post("/auth/local/login", server.loginLocal)
 		router.With(server.authenticate).Post("/auth/local/logout", server.logoutLocal)
 		router.With(server.authenticate).Get("/me", server.me)
+		router.With(server.authenticate).Get("/me/preferences", server.getUserPreferences)
+		router.With(server.authenticate).Put("/me/preferences", server.putUserPreferences)
 		router.With(server.authenticate).Post("/orgs", server.createOrganization)
 		router.With(server.authenticate).Get("/invitations", server.listMyInvitations)
 		router.With(server.authenticate).Get("/me/providers", server.listUserProviderConnections)

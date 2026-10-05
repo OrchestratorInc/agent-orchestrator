@@ -4,9 +4,10 @@ import { Alert, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text 
 import { LayoutAnimationConfig } from "react-native-reanimated";
 import { groupSessions, type BoardSection } from "./agentsView";
 import type { DashboardSession } from "./api";
+import type { BoardInteractionMode } from "./board-presentation";
+import { resourceKey, type Scoped } from "./environment/scopedBoard";
 import { BoardRowTransition } from "./BoardRowTransition";
 import { haptics } from "./haptics";
-import { hostedProjectKey, hostedRowKey, hostedSessionKey, sessionHostId } from "./hostedRows";
 import { useApp } from "./store";
 import type { Theme } from "./theme";
 import { statusVisual } from "./theme";
@@ -21,10 +22,21 @@ import { userFacingError } from "./connectionError";
 // rather than being pinned like desktop's strip — a phone has no room for a
 // permanent footer above the tab bar.
 type ListSection =
-	| BoardSection
-	| { zone: "pinned"; label: string; color: string; data: DashboardSession[] }
-	| { zone: "archive"; label: string; color: string; data: DashboardSession[] }
-	| { zone: "search"; label: string; color: string; data: DashboardSession[] };
+	| (Omit<BoardSection, "data"> & { data: Scoped<DashboardSession>[] })
+	| { zone: "pinned" | "archive" | "search"; label: string; color: string; data: Scoped<DashboardSession>[] };
+
+function groupScopedSessions(t: Theme, entries: readonly Scoped<DashboardSession>[]) {
+	// Keep a distinct object identity even if two sources happen to share a value object.
+	const values = entries.map((entry) => ({ ...entry.value }));
+	const byValue = new Map(values.map((value, index) => [value, entries[index]]));
+	const groups = groupSessions(t, values);
+	const scoped = (values: DashboardSession[]) => values.map((value) => byValue.get(value)!);
+	return {
+		pinned: scoped(groups.pinned),
+		sections: groups.sections.map((section) => ({ ...section, data: scoped(section.data) })),
+		archived: scoped(groups.archived),
+	};
+}
 
 /**
  * Sections that never fold, whatever the user has toggled.
@@ -50,7 +62,7 @@ const ALWAYS_OPEN = new Set<ListSection["zone"]>(["search", "needs_you", "pinned
 export type BoardRow =
 	| { kind: "header"; key: string; label: string; open: boolean; collapsible: boolean }
 	| { kind: "archive"; key: string }
-	| { kind: "session"; key: string; session: DashboardSession };
+	| { kind: "session"; key: string; entry: Scoped<DashboardSession> };
 
 /**
  * The Workers board's grouped list: Pinned, the kanban sections, and a
@@ -74,7 +86,9 @@ export function WorkerBoardList({
 	showProject = true,
 	identityKey,
 }: {
-	sessions: DashboardSession[];
+	/** Retained for the project-page adapter; row policy always comes from its own source. */
+	interactionMode?: BoardInteractionMode;
+	sessions: readonly Scoped<DashboardSession>[];
 	/** Non-empty switches the board to a single flat "Search results" section. */
 	query?: string;
 	listRef?: RefObject<FlatList<BoardRow> | null>;
@@ -99,7 +113,7 @@ export function WorkerBoardList({
 	identityKey?: string;
 }) {
 	const t = useTheme();
-	const { projects, allProjects, hostStates, kill, renameWorker, setWorkerPinned, restore, resumeAgent } = useApp();
+	const { scopedBoard, hostStates, killOn, renameWorkerOn, setWorkerPinnedOn, restoreOn, resumeAgentOn } = useApp();
 	const [renamingWorkerId, setRenamingWorkerId] = useState<string>();
 	const [activeSwipeId, setActiveSwipeId] = useState<string>();
 	const activeSwipeRef = useRef<{ id: string; close(): void } | undefined>(undefined);
@@ -115,29 +129,27 @@ export function WorkerBoardList({
 	const nowBucket = Math.floor(Date.now() / 60_000);
 
 	const projectNames = useMemo(
-		() => new Map([...projects, ...allProjects].map((project) => [hostedProjectKey(project), project.name])),
-		[projects, allProjects],
+		() => new Map(scopedBoard.projects.map((entry) => [resourceKey(entry.source, entry.value.id), entry.value.name])),
+		[scopedBoard.projects],
 	);
 	const multipleHosts = hostStates.length > 1;
-	const projectNameFor = useCallback((session: DashboardSession) => {
-		const hostId = sessionHostId(session);
-		const name = projectNames.get(hostId ? hostedRowKey(hostId, session.projectId) : session.projectId) ?? session.projectId;
-		const hostName = "hostName" in session && typeof session.hostName === "string" ? session.hostName : undefined;
-		const offline = hostStates.find((host) => host.hostId === hostId)?.connection === "closed";
-		return multipleHosts && hostName ? `${name ? `${name} · ` : ""}${hostName}${offline ? " (offline)" : ""}` : name;
+	const projectNameFor = useCallback((entry: Scoped<DashboardSession>) => {
+		const name = projectNames.get(resourceKey(entry.source, entry.value.projectId)) ?? entry.value.projectId;
+		const host = entry.source.kind === "local" ? hostStates.find((item) => item.hostId === entry.source.id) : undefined;
+		return multipleHosts && host ? `${name} · ${host.name}${host.connection === "closed" ? " (offline)" : ""}` : name;
 	}, [hostStates, multipleHosts, projectNames]);
 	const filteredSessions = useMemo(
 		() =>
-			filterWorkerSessions(
-				sessions,
+			sessions.filter((entry) => filterWorkerSessions(
+				[entry.value],
 				query,
-				(_projectId, session) => projectNameFor(session),
+				() => projectNameFor(entry),
 				(status) => statusVisual(t, status).label,
-			),
+			).length > 0),
 		[sessions, query, projectNameFor, t],
 	);
-	const { pinned, sections, archived } = useMemo(() => groupSessions(t, sessions), [t, sessions]);
-	const filteredGroups = useMemo(() => groupSessions(t, filteredSessions), [t, filteredSessions]);
+	const { pinned, sections, archived } = useMemo(() => groupScopedSessions(t, sessions), [t, sessions]);
+	const filteredGroups = useMemo(() => groupScopedSessions(t, filteredSessions), [t, filteredSessions]);
 
 	// The archive is the last section, rendered only when expanded so a collapsed
 	// strip costs nothing to scroll past.
@@ -165,7 +177,7 @@ export function WorkerBoardList({
 				if (section.zone === "archive") {
 					return [
 						{ kind: "archive", key: "header:archive" } as const,
-						...section.data.map((session) => ({ kind: "session", key: hostedSessionKey(session), session }) as const),
+						...section.data.map((entry) => ({ kind: "session", key: resourceKey(entry.source, entry.value.id), entry }) as const),
 					];
 				}
 				const collapsible = !ALWAYS_OPEN.has(section.zone);
@@ -173,7 +185,7 @@ export function WorkerBoardList({
 				return [
 					{ kind: "header", key: `header:${section.zone}`, label: section.label, open, collapsible } as const,
 					...(open
-						? section.data.map((session) => ({ kind: "session", key: hostedSessionKey(session), session }) as const)
+						? section.data.map((entry) => ({ kind: "session", key: resourceKey(entry.source, entry.value.id), entry }) as const)
 						: []),
 				];
 			}),
@@ -199,23 +211,23 @@ export function WorkerBoardList({
 		setActiveSwipeId((activeId) => (activeId === id ? undefined : activeId));
 	}, []);
 
-	const updateWorkerPin = useCallback(async (session: DashboardSession, pinned: boolean) => {
+	const updateWorkerPin = useCallback(async (entry: Scoped<DashboardSession>, pinned: boolean) => {
 		try {
-			await setWorkerPinned(session.id, pinned, sessionHostId(session));
+			await setWorkerPinnedOn(entry.source, entry.value.id, pinned);
 			haptics.success();
 		} catch (cause) {
 			haptics.error();
 			Alert.alert("Couldn't update pin", userFacingError(cause, "Please try again."));
 		}
-	}, [setWorkerPinned]);
+	}, [setWorkerPinnedOn]);
 
 	// Resume restarts a stopped agent; restore brings back a terminated session.
 	// Both are recoveries rather than destructive, so neither asks first — the
 	// failure path is an alert, not a confirmation.
-	const runWorkerRecovery = useCallback(async (session: DashboardSession, kind: "resume" | "restore") => {
+	const runWorkerRecovery = useCallback(async (entry: Scoped<DashboardSession>, kind: "resume" | "restore") => {
 		haptics.tap();
 		try {
-			await (kind === "resume" ? resumeAgent(session.id, sessionHostId(session)) : restore(session.id, sessionHostId(session)));
+			await (kind === "resume" ? resumeAgentOn(entry.source, entry.value.id) : restoreOn(entry.source, entry.value.id));
 			haptics.success();
 		} catch (cause) {
 			haptics.error();
@@ -224,19 +236,19 @@ export function WorkerBoardList({
 				userFacingError(cause, "Please try again."),
 			);
 		}
-	}, [restore, resumeAgent]);
+	}, [restoreOn, resumeAgentOn]);
 
-	const confirmDeleteSession = useCallback((session: DashboardSession) => {
+	const confirmDeleteSession = useCallback((entry: Scoped<DashboardSession>) => {
 		haptics.warning();
 		Alert.alert(
 			"Delete session?",
-			`This terminates ${session.displayName?.trim() || "this worker"}. Its conversation and worktree are preserved.`,
+			`This terminates ${entry.value.displayName?.trim() || "this worker"}. Its conversation and worktree are preserved.`,
 			[
 				{ text: "Cancel", style: "cancel" },
-				{ text: "Delete session", style: "destructive", onPress: () => void kill(session.id, sessionHostId(session)).catch(() => {}) },
+				{ text: "Delete session", style: "destructive", onPress: () => void killOn(entry.source, entry.value.id).catch(() => {}) },
 			],
 		);
-	}, [kill]);
+	}, [killOn]);
 
 	return (
 		/* skipEntering so the first render and every poll-driven rebuild do not
@@ -275,29 +287,33 @@ export function WorkerBoardList({
 							</BoardRowTransition>
 						);
 					}
-				const session = item.session;
-				const rowKey = hostedSessionKey(session);
-				return (
-					<BoardRowTransition>
-						<WorkerListRow
-							nowBucket={nowBucket}
-							session={session}
-							rowKey={rowKey}
-							projectName={showProject ? projectNameFor(session) : session.harness || "Agent"}
-							isRenaming={renamingWorkerId === rowKey}
-							activeSwipeId={activeSwipeId}
-							onSwipeOpen={openExclusiveSwipe}
-							onSwipeClose={closeExclusiveSwipe}
-							onRenameStart={() => setRenamingWorkerId(rowKey)}
-							onRenameCancel={() => setRenamingWorkerId(undefined)}
-							onRename={(title) => renameWorker(session.id, title, sessionHostId(session))}
-							onSetPinned={(next) => updateWorkerPin(session, next)}
-							onDelete={() => confirmDeleteSession(session)}
-							onResume={() => runWorkerRecovery(session, "resume")}
-							onRestore={() => runWorkerRecovery(session, "restore")}
-						/>
-					</BoardRowTransition>
-				);
+					const entry = item.entry;
+					const session = entry.value;
+					const rowKey = resourceKey(entry.source, entry.value.id);
+					return (
+						<BoardRowTransition>
+							<WorkerListRow
+								nowBucket={nowBucket}
+								session={session}
+								source={entry.source}
+								rowKey={rowKey}
+								projectName={showProject ? projectNameFor(entry) : session.harness || "Agent"}
+								{...(entry.source.kind === "local" ? { interactionMode: "full" as const,
+									isRenaming: renamingWorkerId === rowKey,
+									activeSwipeId,
+									onSwipeOpen: openExclusiveSwipe,
+									onSwipeClose: closeExclusiveSwipe,
+									onRenameStart: () => setRenamingWorkerId(rowKey),
+									onRenameCancel: () => setRenamingWorkerId(undefined),
+									onRename: (title: string) => renameWorkerOn(entry.source, session.id, title),
+									onSetPinned: (next: boolean) => updateWorkerPin(entry, next),
+									onDelete: () => confirmDeleteSession(entry),
+									onResume: () => runWorkerRecovery(entry, "resume"),
+									onRestore: () => runWorkerRecovery(entry, "restore"),
+								} : { interactionMode: "open-only" as const })}
+							/>
+						</BoardRowTransition>
+					);
 				}}
 			/>
 		</LayoutAnimationConfig>

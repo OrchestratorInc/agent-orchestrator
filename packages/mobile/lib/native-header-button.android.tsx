@@ -11,7 +11,9 @@ const icons: Record<NativeHeaderButtonIcon, keyof typeof Feather.glyphMap> = {
 	close: "x",
 	check: "check",
 	back: "chevron-left",
+	plus: "plus",
 	more: "more-horizontal",
+	terminal: "terminal",
 };
 
 const TAP_SLOP = space.md;

@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
-import { ActivityIndicator, RefreshControl, SectionList, StyleSheet, View } from "react-native";
+import { ActivityIndicator, RefreshControl, SectionList, StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Theme } from "../../lib/theme";
 import { haptics } from "../../lib/haptics";
 import { PRCard } from "../../lib/PRCard";
 import { PRFilterDock } from "../../lib/pr-filter-dock";
+import { localOnlyPRCopy, collectPRs, prLifecycle, prListSections, type PRListFilter } from "../../lib/prView";
 import { ProjectSwitcher } from "../../lib/ProjectSwitcher";
-import { collectPRs, prLifecycle, prListSections, type PRListFilter } from "../../lib/prView";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp } from "../../lib/store";
 import { UnpairedState } from "../../lib/UnpairedState";
@@ -38,7 +38,7 @@ export default function PRsScreen() {
 	const insets = useSafeAreaInsets();
 	const router = useRouter();
 	const { hostId: routeHostId, projectId: routeProjectId } = useLocalSearchParams<{ hostId?: string; projectId?: string }>();
-	const { hostStates, configForHost, refreshAll, activeProjectId } = useApp();
+	const { hostStates, configForHost, refreshAll, activeProjectId, configResolved, localConfigured } = useApp();
 	const visibleHosts = useMemo(() => routeHostId ? hostStates.filter((host) => host.hostId === routeHostId) : hostStates, [hostStates, routeHostId]);
 	const projectFilter = routeHostId ? (routeProjectId ?? "all") : hostStates.length === 1 ? activeProjectId : "all";
 	const prs = useMemo(() => visibleHosts.flatMap((host) => collectPRs(host.sessions).filter(({ session }) => projectFilter === "all" || session.projectId === projectFilter).map(({ pr, session }) => ({
@@ -77,7 +77,19 @@ export default function PRsScreen() {
 		setRefreshing(false);
 	};
 
-	if (!configured) {
+	if (!configResolved) {
+		return (
+			<View style={styles.screen}>
+				<View style={{ height: insets.top }} />
+				<ScreenHeader title="Pull Requests" />
+				<View style={styles.center}>
+					<ActivityIndicator color={t.accent} />
+				</View>
+			</View>
+		);
+	}
+
+	if (!localConfigured) {
 		return (
 			<View style={styles.screen}>
 				<View style={{ height: insets.top }} />
@@ -85,7 +97,8 @@ export default function PRsScreen() {
 				    screen dropped it, so the tab lost its title and connection lamp exactly
 				    when a user most needs to know what they are looking at. */}
 				<ScreenHeader title="Pull Requests" />
-				<UnpairedState />
+				<Text style={styles.sourceCopy}>{localOnlyPRCopy}</Text>
+				<UnpairedState resolving={!configResolved} />
 			</View>
 		);
 	}
@@ -131,6 +144,7 @@ export default function PRsScreen() {
 						return <PRCard
 							pr={pr}
 							session={session}
+							source={{ kind: "local", id: session.hostId }}
 							hostId={session.hostId}
 							hostName={hostStates.length > 1 ? session.hostName : undefined}
 							summary={config ? summaries.summaryFor(config, session.id, pr.number) : undefined}
@@ -168,6 +182,7 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center" },
+		sourceCopy: { color: t.textTertiary, paddingHorizontal: space.lg, paddingBottom: space.sm },
 		dock: {
 			position: "absolute",
 			left: 16,

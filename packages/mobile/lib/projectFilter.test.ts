@@ -80,6 +80,13 @@ describe("resolveSpawnProject", () => {
 	it("prefers a valid route project when the sheet has no selection", () => {
 		expect(resolveSpawnProject(null, "scratch", ALL_PROJECTS, listed, true)).toBe("scratch");
 	});
+
+	it("restores the last selected project for the chosen host", () => {
+		expect(resolveSpawnProject(null, undefined, ALL_PROJECTS, listed, true, "scratch")).toBe("scratch");
+		expect(resolveSpawnProject(null, "ao", ALL_PROJECTS, listed, true, "scratch")).toBe("ao");
+		expect(resolveSpawnProject(null, "ao", ALL_PROJECTS, [], false, "scratch")).toBe("ao");
+		expect(resolveSpawnProject(null, undefined, ALL_PROJECTS, listed, true, "removed")).toBeNull();
+	});
 });
 
 describe("activeProjectLabel", () => {

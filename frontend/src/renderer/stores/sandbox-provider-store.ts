@@ -1,11 +1,5 @@
-import { create } from "zustand";
-
-// The cloud sandbox provider a user picks for their new cloud sessions, for a
-// control plane that offers more than one. Persisted to localStorage (a
-// per-machine client preference, not synced to the control plane): it is only a
-// default the session-create request carries, and the control plane validates
-// it against what it actually offers. null means "follow the control plane
-// default".
+// Legacy per-machine provider choice. Read only during one-time migration to
+// the account-scoped Cloud preference; no new session creation consumes it.
 const storageKey = "ao.cloud.sandboxProvider";
 
 function getLocalStorage(): Storage | null {
@@ -15,8 +9,7 @@ function getLocalStorage(): Storage | null {
 
 /**
  * Reads the persisted provider without a React subscription, for hook-free
- * callers (e.g. the orchestrator launcher). Returns null when unset or
- * unreadable, which the caller treats as "use the control plane default".
+ * migration. Returns null when unset or unreadable.
  */
 export function readSelectedSandboxProvider(): string | null {
 	try {
@@ -27,32 +20,10 @@ export function readSelectedSandboxProvider(): string | null {
 	}
 }
 
-/** Only send a saved choice when this control plane currently offers it. */
-export function resolveSandboxProviderPreference(selected: string | null, available: readonly string[]): string | null {
-	return selected && available.includes(selected) ? selected : null;
-}
-
-function persistSelectedSandboxProvider(provider: string | null): void {
+export function clearLegacySandboxProvider(): void {
 	try {
-		const storage = getLocalStorage();
-		if (!storage) return;
-		if (provider === null) storage.removeItem(storageKey);
-		else storage.setItem(storageKey, provider);
+		getLocalStorage()?.removeItem(storageKey);
 	} catch {
-		// A blocked or unavailable localStorage must not break provider selection;
-		// the choice simply will not survive a reload.
+		// A blocked localStorage must not prevent using the Cloud preference.
 	}
 }
-
-type SandboxProviderState = {
-	selectedProvider: string | null;
-	setSelectedProvider: (provider: string | null) => void;
-};
-
-export const useSandboxProviderStore = create<SandboxProviderState>((set) => ({
-	selectedProvider: readSelectedSandboxProvider(),
-	setSelectedProvider: (provider) => {
-		persistSelectedSandboxProvider(provider);
-		set({ selectedProvider: provider });
-	},
-}));

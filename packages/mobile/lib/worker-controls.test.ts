@@ -6,7 +6,11 @@ import {
 	workerProjectLabel,
 	workerProjectOptions,
 	workerSearchPresentation,
+	scopedWorkerProjectOptions,
+	boardWorkerKey,
 } from "./worker-controls";
+import type { Scoped } from "./environment/scopedBoard";
+import type { ProjectInfo, DashboardSession } from "./api";
 import { hostedProjectKey } from "./hostedRows";
 
 describe("filterWorkersByProject", () => {
@@ -72,5 +76,27 @@ describe("spawnProjectParam", () => {
 
 	it("leaves project selection open when Workers shows every project", () => {
 		expect(spawnProjectParam(ALL_WORKER_PROJECTS)).toBeUndefined();
+	});
+});
+
+describe("combined Worker filters", () => {
+	const local = { kind: "local", id: "mac" } as const;
+	const cloud = { kind: "cloud", id: "org" } as const;
+	const projects = [
+		{ source: local, value: { id: "same", name: "Shared" } },
+		{ source: cloud, value: { id: "same", name: "Shared" } },
+	] as Scoped<ProjectInfo>[];
+	it("qualifies identical project IDs and filters by environment", () => {
+		const all = scopedWorkerProjectOptions(projects, "all");
+		expect(all).toHaveLength(3);
+		expect(all[1].id).not.toBe(all[2].id);
+		expect(all[1].label).toContain("Local");
+		expect(all[2].label).toContain("Cloud");
+		expect(scopedWorkerProjectOptions(projects, "cloud")).toHaveLength(2);
+	});
+	it("gives same-ID workers distinct row identities", () => {
+		const a = { source: local, value: { id: "same" } } as Scoped<DashboardSession>;
+		const b = { source: cloud, value: { id: "same" } } as Scoped<DashboardSession>;
+		expect(boardWorkerKey(a)).not.toBe(boardWorkerKey(b));
 	});
 });

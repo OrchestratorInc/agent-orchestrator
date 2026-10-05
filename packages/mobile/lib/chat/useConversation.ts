@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { machineIdentity, type ServerConfig } from "../config";
+import type { SessionSource } from "../environment/types";
 import {
-	cancelQueuedConversationTurn,
 	compactConversation,
 	getConversationConfigOptions,
 	getConversationModels,
-	getConversationPage,
 	getReviewerConversationPage,
 	getConversationSkills,
 	mergeConversationPages,
@@ -15,7 +14,6 @@ import {
 	resolveInput,
 	resolveReviewerInput,
 	rollbackConversation,
-	sendConversationMessage,
 	sendReviewerConversationMessage,
 	setConversationConfigOption,
 	setConversationSettings,
@@ -31,6 +29,7 @@ import {
 import type { ChatConfigOption, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
 import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages } from "./snapshot";
 import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
+import { conversationAccess } from "./conversation-access";
 import { subscribeConversationEvents } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
@@ -112,10 +111,20 @@ export type MobileConversation = {
 export function useMobileConversation(
 	cfg: ServerConfig | null,
 	sessionId: string,
-	options?: { reviewId?: string; eventSessionId?: string },
+	sourceOrOptions?: SessionSource | { reviewId?: string; eventSessionId?: string },
 ): MobileConversation {
-	const cacheKey = cfg ? conversationPageCacheKey(cfg, options?.reviewId ? `review:${options.reviewId}` : sessionId) : "";
-	const pendingKey = cfg ? pendingSendKey(machineIdentity(cfg), options?.reviewId ? `review:${options.reviewId}` : sessionId) : "";
+	const sessionSource = sourceOrOptions && "kind" in sourceOrOptions ? sourceOrOptions : undefined;
+	const options = sourceOrOptions && !("kind" in sourceOrOptions) ? sourceOrOptions : undefined;
+	const access = useMemo(
+		() => conversationAccess({ config: cfg, source: sessionSource, sessionId }),
+		[cfg, sessionId, sessionSource],
+	);
+	const cacheKey = options?.reviewId && cfg
+		? `${cfg.secure ? "https" : "http"}://${cfg.host}:${cfg.httpPort}/${cfg.password}/review:${options.reviewId}`
+		: access?.cacheKey ?? "";
+	const pendingKey = sessionSource?.kind === "cloud"
+		? pendingSendKey("cloud", sessionId)
+		: cfg ? pendingSendKey(machineIdentity(cfg), options?.reviewId ? `review:${options.reviewId}` : sessionId) : "";
 	const [initialState] = useState(() => cacheKey
 		? cachedConversationState(conversationPageCache, cacheKey)
 		: { pages: [] as ConversationPage[], loading: true });
@@ -143,13 +152,13 @@ export function useMobileConversation(
 	const hasProviderConfig = Boolean(snapshot?.capabilities?.includes("config_options"));
 
 	const refresh = useCallback(async () => {
-		if (!cfg) return;
+		if (!access && !(options?.reviewId && cfg)) return;
 		const request = refreshGate.begin();
 		setRefreshing(true);
 		try {
 			const live = options?.reviewId
-				? await getReviewerConversationPage(cfg, options.reviewId)
-				: await getConversationPage(cfg, sessionId);
+				? await requireConfig(cfg, (c) => getReviewerConversationPage(c, options.reviewId!))
+				: await access!.source.getConversationPage(sessionId);
 			if (!mounted.current || !refreshGate.isCurrent(request)) return;
 			setPages((old) => {
 				const next = old[0]?.conversationId && old[0].conversationId !== live.conversationId
@@ -171,7 +180,7 @@ export function useMobileConversation(
 				setRefreshing(false);
 			}
 		}
-	}, [cacheKey, cfg, options?.reviewId, refreshGate, sessionId]);
+	}, [access, cacheKey, cfg, options?.reviewId, refreshGate, sessionId]);
 
 	const scheduleRefresh = useCallback(() => {
 		if (refreshTimer.current) clearTimeout(refreshTimer.current);
@@ -179,19 +188,19 @@ export function useMobileConversation(
 	}, [refresh]);
 
 	const loadOlder = useCallback(async () => {
-		if (!cfg || !snapshot?.hasMoreBefore || loadingOlder) return;
+		if ((!access && !(options?.reviewId && cfg)) || !snapshot?.hasMoreBefore || loadingOlder) return;
 		setLoadingOlder(true);
 		try {
 			const older = options?.reviewId
-				? await getReviewerConversationPage(cfg, options.reviewId, snapshot.oldestSequence)
-				: await getConversationPage(cfg, sessionId, snapshot.oldestSequence);
+				? await requireConfig(cfg, (c) => getReviewerConversationPage(c, options.reviewId!, snapshot.oldestSequence))
+				: await access!.source.getConversationPage(sessionId, snapshot.oldestSequence);
 			if (mounted.current) setPages((old) => [...old, older]);
 		} catch (cause) {
 			if (mounted.current) setActionError(conversationActionError(cause));
 		} finally {
 			if (mounted.current) setLoadingOlder(false);
 		}
-	}, [cfg, options?.reviewId, sessionId, snapshot?.hasMoreBefore, snapshot?.oldestSequence, loadingOlder]);
+	}, [access, cfg, options?.reviewId, sessionId, snapshot?.hasMoreBefore, snapshot?.oldestSequence, loadingOlder]);
 
 	useEffect(() => {
 		mounted.current = true;
@@ -226,13 +235,16 @@ export function useMobileConversation(
 	}, [pendingKey, options?.reviewId]);
 
 	const loadTurnOptions = useCallback(async (options?: { refresh?: boolean }) => {
-		if (!cfg || unavailable || !hasConversation) return { models, configOptions };
+		if (unavailable || !hasConversation || (!cfg && !sessionSource?.getChatModels)) return { models, configOptions };
 		if (options?.refresh) turnOptionsCache.delete(cacheKey);
 		const catalog = await turnOptionsCache.load(cacheKey, async () => {
+			if (sessionSource?.kind === "cloud" && sessionSource.getChatModels) {
+				return { models: await sessionSource.getChatModels(sessionId), configOptions: [] };
+			}
 			return loadTurnOptionCatalog({
 				hasProviderConfig,
-				loadModels: () => getConversationModels(cfg, sessionId),
-				loadConfigOptions: () => getConversationConfigOptions(cfg, sessionId),
+				loadModels: () => getConversationModels(cfg!, sessionId),
+				loadConfigOptions: () => getConversationConfigOptions(cfg!, sessionId),
 			});
 		});
 		if (mounted.current) {
@@ -240,7 +252,7 @@ export function useMobileConversation(
 			setConfigOptions(catalog.configOptions);
 		}
 		return catalog;
-	}, [cacheKey, cfg, configOptions, hasConversation, hasProviderConfig, models, sessionId, unavailable]);
+	}, [cacheKey, cfg, configOptions, hasConversation, hasProviderConfig, models, sessionId, sessionSource, unavailable]);
 
 	const loadSkills = useCallback(async () => {
 		if (!cfg || unavailable || !hasConversation) return skills;
@@ -254,12 +266,18 @@ export function useMobileConversation(
 	}, [cacheKey, cfg, hasConversation, sessionId, skills, unavailable]);
 
 	useEffect(() => {
+		if (!options?.reviewId) {
+			if (!access?.subscribeToEvents || unavailable) return;
+			return access.source.subscribeEvents(sessionId, (event) => {
+				if (event.payload?.conversationId) scheduleRefresh();
+			});
+		}
 		const eventSessionId = options?.eventSessionId ?? sessionId;
 		if (!cfg || unavailable || !eventSessionId) return;
 		return subscribeConversationEvents(cfg, eventSessionId, (event) => {
 			if (event.payload?.conversationId) scheduleRefresh();
 		});
-	}, [cfg, options?.eventSessionId, sessionId, scheduleRefresh, unavailable]);
+	}, [access, cfg, options?.eventSessionId, options?.reviewId, sessionId, scheduleRefresh, unavailable]);
 
 	// Poll the conversation on paths where the event stream cannot deliver.
 	// Over a Cloudflare quick tunnel the subscription above never fires — the
@@ -267,11 +285,11 @@ export function useMobileConversation(
 	// bytes — so without this the screen shows the agent working indefinitely
 	// while the reply has already landed.
 	useEffect(() => {
-		const every = conversationPollIntervalFor(cfg);
+		const every = options?.reviewId ? conversationPollIntervalFor(cfg) : access?.pollInterval ?? null;
 		if (every === null || unavailable) return;
 		const timer = setInterval(() => scheduleRefresh(), every);
 		return () => clearInterval(timer);
-	}, [cfg, unavailable, scheduleRefresh]);
+	}, [access?.pollInterval, cfg, options?.reviewId, unavailable, scheduleRefresh]);
 
 	const runAction = useCallback(
 		async <T,>(kind: ConversationAction, action: () => Promise<T>, resetHistoricalPages = false): Promise<T> => {
@@ -299,29 +317,38 @@ export function useMobileConversation(
 
 	const deliver = useCallback(
 		async (pending: PendingSend) => {
-			if (!cfg) throw new Error(NOT_PAIRED_ACTION_COPY);
+			if (!access && !(options?.reviewId && cfg)) throw new Error("No conversation source available");
 			setPendingSends((old) => upsertPending(old, { ...pending, state: "sending", error: undefined }));
 			try {
-				if (needsAttachmentRecovery(Boolean(pending.restored), pending.hasAttachments, Boolean(pending.attachments?.length || pending.resources?.length))) {
-					if (options?.reviewId) throw new Error("Check review history first. If the reply is absent, discard it here, then reattach the files and send again.");
-					try {
-						await recoverSentConversationMessage(cfg, sessionId, pending.id);
-					} catch (cause) {
-						if (conversationErrorCode(cause) === "CHAT_STEER_UNCERTAIN") {
-							throw new Error("This attachment message was not found. Discard it here, then reattach the files and send again.");
-						}
-						throw cause;
+				const input = {
+					text: pending.text,
+					clientMessageId: pending.id,
+					attachments: pending.attachments,
+					resources: pending.resources,
+				};
+				if (sessionSource?.kind === "cloud") {
+					if (needsAttachmentRecovery(Boolean(pending.restored), pending.hasAttachments, Boolean(pending.attachments?.length || pending.resources?.length))) {
+						throw new Error("Check the conversation first. If the message is absent, discard it here, then reattach the files and send again.");
 					}
-				} else if (pending.kind === "steer") {
-					await steerConversation(cfg, sessionId, pending.text, pending.id);
+					await access!.source.sendMessage(sessionId, input);
+				} else if (options?.reviewId && !needsAttachmentRecovery(Boolean(pending.restored), pending.hasAttachments, Boolean(pending.attachments?.length || pending.resources?.length))) {
+					await requireConfig(cfg, (c) => sendReviewerConversationMessage(c, options.reviewId!, input));
 				} else {
-					const sendMessage = options?.reviewId ? sendReviewerConversationMessage : sendConversationMessage;
-					await sendMessage(cfg, options?.reviewId ?? sessionId, {
-						text: pending.text,
-						clientMessageId: pending.id,
-						attachments: pending.attachments,
-						resources: pending.resources,
-					});
+					if (needsAttachmentRecovery(Boolean(pending.restored), pending.hasAttachments, Boolean(pending.attachments?.length || pending.resources?.length))) {
+						if (options?.reviewId) throw new Error("Check review history first. If the reply is absent, discard it here, then reattach the files and send again.");
+						try {
+							await recoverSentConversationMessage(cfg!, sessionId, pending.id);
+						} catch (cause) {
+							if (conversationErrorCode(cause) === "CHAT_STEER_UNCERTAIN") {
+								throw new Error("This attachment message was not found. Discard it here, then reattach the files and send again.");
+							}
+							throw cause;
+						}
+					} else if (pending.kind === "steer") {
+						await steerConversation(cfg!, sessionId, pending.text, pending.id);
+					} else {
+						await access!.source.sendMessage(sessionId, input);
+					}
 				}
 				setPendingSends((old) => old.filter((item) => item.id !== pending.id));
 				await refresh();
@@ -332,7 +359,7 @@ export function useMobileConversation(
 				throw new Error(message);
 			}
 		},
-		[cfg, options?.reviewId, sessionId, refresh],
+		[access, cfg, options?.reviewId, sessionId, refresh, sessionSource],
 	);
 
 	const send = useCallback(
@@ -357,7 +384,7 @@ export function useMobileConversation(
 			});
 			return saved.id;
 		},
-		[cfg, sessionId, snapshot?.capabilities, deliver, pendingKey],
+		[cfg, options?.reviewId, sessionId, snapshot?.capabilities, deliver, pendingKey],
 	);
 
 	const retrySend = useCallback(
@@ -388,25 +415,34 @@ export function useMobileConversation(
 		return saved.id;
 	}, [pendingKey, deliver]);
 	const cancelQueuedTurn = useCallback(
-		(turnId: string) => runAction("queue", () => requireConfig(cfg, (c) => cancelQueuedConversationTurn(c, sessionId, turnId))),
-		[cfg, runAction, sessionId],
+		(turnId: string) => runAction("queue", () => requireConversationAccess(access, (source) => source.cancelTurn(sessionId, turnId))),
+		[access, runAction, sessionId],
 	);
 	const promoteQueuedTurn = useCallback(
 		(turnId: string) => runAction("queue", () => requireConfig(cfg, (c) => promoteQueuedConversationTurn(c, sessionId, turnId))),
 		[cfg, runAction, sessionId],
 	);
 	const interrupt = useCallback(
-		() => runAction("interrupt", () => requireConfig(cfg, (c) => options?.reviewId
-			? interruptReviewerConversation(c, options.reviewId)
-			: interruptConversation(c, sessionId))),
-		[cfg, options?.reviewId, runAction, sessionId],
+		() => runAction("interrupt", () => {
+			if (sessionSource?.kind === "cloud") {
+				const running = snapshot?.turns.find((turn) => turn.state === "running");
+				if (!running) throw new Error("There is no running Cloud turn to stop.");
+				return sessionSource.cancelTurn(sessionId, running.id);
+			}
+			return requireConfig(cfg, (c) => options?.reviewId
+				? interruptReviewerConversation(c, options.reviewId)
+				: interruptConversation(c, sessionId));
+		}),
+		[cfg, options?.reviewId, runAction, sessionId, sessionSource, snapshot?.turns],
 	);
 	const resolveApprovalAction = useCallback(
 		(requestId: string, decisionId: string) =>
-			runAction("approval", () => ignoreStaleApproval(() => requireConfig(cfg, (c) => options?.reviewId
-				? resolveReviewerApproval(c, options.reviewId, requestId, decisionId)
-				: resolveApproval(c, sessionId, requestId, decisionId)))),
-		[cfg, options?.reviewId, runAction, sessionId],
+			runAction("approval", () => sessionSource?.kind === "cloud" && sessionSource.decideApproval
+				? sessionSource.decideApproval(sessionId, requestId, decisionId)
+				: ignoreStaleApproval(() => requireConfig(cfg, (c) => options?.reviewId
+					? resolveReviewerApproval(c, options.reviewId, requestId, decisionId)
+					: resolveApproval(c, sessionId, requestId, decisionId)))),
+		[cfg, options?.reviewId, runAction, sessionId, sessionSource],
 	);
 	const resolveInputAction = useCallback(
 		(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>) =>
@@ -424,8 +460,10 @@ export function useMobileConversation(
 		[cfg, runAction, sessionId],
 	);
 	const chooseSettings = useCallback(
-		(settings: TurnSettings) => runAction("settings", () => requireConfig(cfg, (c) => setConversationSettings(c, sessionId, settings))),
-		[cfg, runAction, sessionId],
+		(settings: TurnSettings) => runAction("settings", () => sessionSource?.kind === "cloud" && sessionSource.setTurnSettings
+			? sessionSource.setTurnSettings(sessionId, { ...snapshot?.settings, ...settings })
+			: requireConfig(cfg, (c) => setConversationSettings(c, sessionId, settings))),
+		[cfg, runAction, sessionId, sessionSource, snapshot?.settings],
 	);
 	const setConfigOption = useCallback(
 		(optionId: string, value: { value: string } | { enabled: boolean }) =>
@@ -513,6 +551,10 @@ function classifyConversationError(error: unknown, reviewer = false): { permanen
 	};
 }
 
-function conversationPageCacheKey(cfg: ServerConfig, sessionId: string): string {
-	return `${cfg.secure ? "https" : "http"}://${cfg.host}:${cfg.httpPort}/${cfg.password}/${sessionId}`;
+async function requireConversationAccess<T>(
+	access: ReturnType<typeof conversationAccess>,
+	action: (source: SessionSource) => Promise<T>,
+): Promise<T> {
+	if (!access) throw new Error("No conversation source available");
+	return action(access.source);
 }

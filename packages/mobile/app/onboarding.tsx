@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useNavigation, useRouter } from "expo-router";
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { setOnboardingSkipped } from "../lib/onboardingStore";
 import { completeOnboarding } from "../lib/onboardingNavigation";
@@ -12,6 +12,7 @@ import type { Theme } from "../lib/theme";
 import { haptics } from "../lib/haptics";
 import { MOBILE_EVENTS } from "../lib/telemetry/events";
 import { mobileTelemetry } from "../lib/telemetry/runtime";
+import { useCloudSignInAction } from "../lib/cloud/useCloudSignInAction";
 import { space, type } from "../lib/tokens";
 
 export default function OnboardingScreen() {
@@ -20,6 +21,7 @@ export default function OnboardingScreen() {
 	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
 	const { reloadConfig } = useApp();
+	const cloudSignIn = useCloudSignInAction("/sheets/cloud-signin?from=onboarding");
 
 	useEffect(() => {
 		mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingStarted);
@@ -30,6 +32,12 @@ export default function OnboardingScreen() {
 		await setOnboardingSkipped();
 		await reloadConfig();
 		completeOnboarding(navigation);
+	}
+
+	async function useCloud() {
+		haptics.tap();
+		if (!(await cloudSignIn.signIn())) return;
+		router.replace("/");
 	}
 
 	return (
@@ -61,6 +69,19 @@ export default function OnboardingScreen() {
 						onPress={() => router.push("/pair?from=onboarding")}
 						style={styles.cta}
 					/>
+					<Pressable
+						accessibilityRole="button"
+						disabled={cloudSignIn.busy}
+						onPress={() => void useCloud()}
+						hitSlop={8}
+						style={styles.cloudAlt}
+					>
+						{cloudSignIn.busy ? (
+							<ActivityIndicator size="small" />
+						) : (
+							<Text style={styles.cloudAltText}>Use AO Cloud instead</Text>
+						)}
+					</Pressable>
 				</View>
 
 				<View style={styles.how}>
@@ -123,6 +144,8 @@ const makeStyles = (t: Theme) =>
 		maxWidth: 330,
 	},
 	cta: { marginTop: space.xxxl, alignSelf: "center", width: "100%", maxWidth: 300 },
+	cloudAlt: { marginTop: 16, alignSelf: "center", paddingVertical: 6 },
+	cloudAltText: { color: t.textTertiary, fontSize: 14, fontWeight: "600" },
 	how: {},
 	howLabel: { fontFamily: "Geist_600SemiBold",
 		color: t.textTertiary,
