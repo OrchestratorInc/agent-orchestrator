@@ -111,7 +111,10 @@ describe("AssistantMessage streaming", () => {
 		expect(visible.startsWith(prefix)).toBe(true);
 		expect(text.startsWith(visible)).toBe(true);
 
-		runFrame(250);
+		// The drain may already have completed by this point, in which case there
+		// is no animation frame left to run. Assert the deadline's visible result
+		// rather than requiring an implementation-specific extra frame.
+		if (frames.size > 0) runFrame(250);
 		expect(document.querySelector("p")?.textContent).toBe(text);
 		expect(frames.size).toBe(0);
 	});
