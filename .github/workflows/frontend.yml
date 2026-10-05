@@ -21,7 +21,9 @@ permissions:
 
 jobs:
   mac-update-helper:
-    runs-on: macos-14
+    # Keep this on Intel to exercise the x64 release target natively while
+    # Swift cross-compiles and lipo-verifies the arm64 helper.
+    runs-on: macos-26-intel
     timeout-minutes: 15
     defaults:
       run:
