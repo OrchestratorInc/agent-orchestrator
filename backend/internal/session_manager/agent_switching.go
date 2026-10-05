@@ -167,6 +167,55 @@ func (m *Manager) RecoverAgentSwitch(ctx context.Context, id domain.SessionID, s
 	return sw, nil
 }
 
+// abandonRetainedAgentSwitchForTermination finalizes a stuck, gate-retaining
+// agent switch so a session wedged in an unrecoverable recovery boundary can
+// still be terminated.
+//
+// A switch that reaches source_restore_unconfirmed can be neither recovered
+// (the source relaunch keeps failing) nor auto-failed (its retained recovery
+// marker must never sit on a failed row), so it holds the switch/input gate
+// forever and Kill would refuse with ErrSwitchInProgress — the session could
+// never be removed. Terminating the whole session makes any pending switch
+// moot, so mark the saga terminally failed (its source session is going away)
+// and release the retained gate.
+//
+// It acts only when the gate is currently held as a *retained* recovery fence,
+// the one state Kill may safely override: a live switch worker never retains
+// its gate, so this never races an in-flight handoff.
+func (m *Manager) abandonRetainedAgentSwitchForTermination(ctx context.Context, id domain.SessionID) error {
+	if !m.agentSwitchRetained(id) {
+		return nil
+	}
+	store, err := m.switchStore()
+	if err != nil {
+		if errors.Is(err, ErrSwitchUnavailable) {
+			m.releaseRetainedAgentSwitch(id)
+			return nil
+		}
+		return err
+	}
+	sw, ok, err := store.GetActiveAgentSwitch(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		// Durable saga already resolved; just drop the stale in-memory fence.
+		m.releaseRetainedAgentSwitch(id)
+		return nil
+	}
+	mode := domain.SessionModeTUI
+	if rec, found, recErr := m.store.GetSession(ctx, id); recErr == nil && found {
+		mode = domain.NormalizeSessionMode(rec.Mode)
+	}
+	recorder := newAgentSwitchFlightRecorder(sw, mode, domain.AgentSwitchExecutionExplicitRecovery)
+	recorder.boundary(domain.AgentSwitchFailureRecoverySettlement)
+	if _, err := m.failAgentSwitchWithRecorder(ctx, store, sw, domain.AgentSwitchErrorSourceSessionTerminated, recorder); err != nil {
+		return err
+	}
+	m.releaseRetainedAgentSwitch(id)
+	return nil
+}
+
 func (m *Manager) admitAgentSwitch(ctx context.Context, id domain.SessionID, cfg SwitchAgentConfig) (domain.AgentSwitch, *admittedAgentSwitch, error) {
 	store, err := m.switchStore()
 	if err != nil {
@@ -3345,6 +3394,16 @@ func sameAgentSwitchFailureFingerprint(a, b domain.AgentSwitch) bool {
 
 func (m *Manager) reconcileAgentSwitch(ctx context.Context, store ports.AgentSwitchStore, rec domain.SessionRecord, sw domain.AgentSwitch, execution domain.AgentSwitchExecution) (bool, error) {
 	if sw.RequiresSourceRestore() {
+		if rec.IsTerminated {
+			// An explicit kill or the reaper won the race: no target can own a
+			// terminated session, so finalize the stuck restore boundary
+			// terminally instead of quarantining its gate forever (mirrors the
+			// terminated handling in reconcileStoppingSource).
+			recorder := newAgentSwitchFlightRecorder(sw, domain.NormalizeSessionMode(rec.Mode), execution)
+			recorder.boundary(domain.AgentSwitchFailureRecoverySettlement)
+			_, failErr := m.failAgentSwitchWithRecorder(ctx, store, sw, domain.AgentSwitchErrorSourceSessionTerminated, recorder)
+			return failErr == nil, failErr
+		}
 		return false, quarantinedAgentSwitchError(sw, fmt.Errorf("reconcile agent switch %s: source restoration remains unconfirmed", sw.ID))
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {

@@ -2243,6 +2243,14 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 		return false, fmt.Errorf("kill %s: cancel provisioning: %w", id, err)
 	}
 
+	// A session wedged in an unrecoverable agent-switch recovery boundary
+	// retains the switch/input gate forever, so the kill-gate acquisition below
+	// would refuse with ErrSwitchInProgress and the session could never be
+	// removed. Finalize that stuck switch and release its retained gate first.
+	if err := m.abandonRetainedAgentSwitchForTermination(ctx, id); err != nil {
+		return false, fmt.Errorf("kill %s: abandon stuck agent switch: %w", id, err)
+	}
+
 	if err := m.beginAgentOperation(ctx, id, agentOperationKill); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrSwitchInProgress

@@ -3043,6 +3043,55 @@ func TestSwitchAgentRetainsRecoveryWhenSourceRollbackFails(t *testing.T) {
 	}
 }
 
+// A session wedged in source_restore_unconfirmed retains the switch/input gate
+// forever, which used to make it impossible to kill (the gate acquisition in
+// Kill refused with ErrSwitchInProgress). Terminating the session must be able
+// to finalize that stuck switch and release the gate.
+func TestAbandonRetainedAgentSwitchForTerminationReleasesStuckGate(t *testing.T) {
+	runtime := &switchRollbackCancellationRuntime{
+		fakeRestartRuntime: &fakeRestartRuntime{fakeRuntime: &fakeRuntime{
+			createIDs: []string{"target-handle"},
+		}},
+		rollbackErr: errors.New("source relaunch unavailable"),
+	}
+	manager, store, _ := newSwitchTestManager(t, runtime)
+
+	sw, err := switchAgentSynchronously(context.Background(), manager, "proj-1", SwitchAgentConfig{
+		TargetHarness:  domain.HarnessCodex,
+		IdempotencyKey: "abandon-stuck-source-restore",
+	})
+	if err == nil || !strings.Contains(err.Error(), "source relaunch unavailable") {
+		t.Fatalf("switch error = %v, want rollback failure", err)
+	}
+	if sw.ErrorCode != domain.AgentSwitchErrorSourceRestoreUnconfirmed || !sw.RequiresSourceRestore() {
+		t.Fatalf("switch recovery marker = code %q sourceRestore=%v, want source restore unconfirmed", sw.ErrorCode, sw.RequiresSourceRestore())
+	}
+	if !manager.agentSwitchRetained("proj-1") || !manager.SessionMutationInProgress("proj-1") {
+		t.Fatal("precondition: the stuck switch should retain the input gate")
+	}
+
+	// Mark the session terminated the way Kill does right before teardown, so
+	// the finalized switch records the session-terminated cause.
+	rec := store.sessions["proj-1"]
+	rec.IsTerminated = true
+	store.sessions["proj-1"] = rec
+
+	if err := manager.abandonRetainedAgentSwitchForTermination(context.Background(), "proj-1"); err != nil {
+		t.Fatalf("abandon retained switch: %v", err)
+	}
+
+	finalized := store.switches[sw.ID]
+	if finalized.State != domain.AgentSwitchFailed {
+		t.Fatalf("finalized switch state = %q, want failed", finalized.State)
+	}
+	if finalized.ErrorCode != domain.AgentSwitchErrorSourceSessionTerminated {
+		t.Fatalf("finalized switch code = %q, want source_session_terminated", finalized.ErrorCode)
+	}
+	if manager.agentSwitchRetained("proj-1") || manager.SessionMutationInProgress("proj-1") {
+		t.Fatal("abandon left the switch/input gate retained; Kill would still be refused")
+	}
+}
+
 func TestSwitchAgentTranscriptReadFailureUsesSingleTerminalFallback(t *testing.T) {
 	const terminalSentinel = "TRANSCRIPT_READ_FAILURE_TERMINAL_FALLBACK"
 	runtime := &fakeRestartRuntime{fakeRuntime: &fakeRuntime{outputs: []string{terminalSentinel}}}
