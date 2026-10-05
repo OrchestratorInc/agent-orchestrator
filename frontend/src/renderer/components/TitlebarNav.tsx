@@ -39,16 +39,14 @@ export function useCanGoForward(): boolean {
   return canGoForward;
 }
 
-// Reveals the history arrows while the pointer is over the sidebar or the
-// titlebar band above it. The band is a fixed zone as wide as the sidebar, so
-// there are no gaps or child-to-child hover handoffs to flicker across; the
-// sidebar body below it is tracked separately, and a short leave delay absorbs
-// the one-frame gap when the pointer crosses between the two.
+// Reveals the history arrows while the pointer is over the sidebar body or the
+// button cluster. The rest of the titlebar band stays a window-drag region
+// (double-click to maximize), so it cannot report hover. A short leave delay
+// absorbs the one-frame gap when the pointer crosses between the two.
 const REVEAL_LEAVE_DELAY_MS = 60;
 
 function useSidebarReveal(isSidebarOpen: boolean) {
   const [revealed, setRevealed] = useState(false);
-  const [zoneWidth, setZoneWidth] = useState(0);
   const inside = useRef({ zone: false, sidebar: false });
   const timer = useRef<number | undefined>(undefined);
 
@@ -67,11 +65,9 @@ function useSidebarReveal(isSidebarOpen: boolean) {
       inside.current = { zone: false, sidebar: false };
       window.clearTimeout(timer.current);
       setRevealed(false);
-      setZoneWidth(0);
       return;
     }
     let el: HTMLElement | null = null;
-    let observer: ResizeObserver | undefined;
     const enter = () => update("sidebar", true);
     const leave = () => update("sidebar", false);
     const frame = requestAnimationFrame(() => {
@@ -79,21 +75,17 @@ function useSidebarReveal(isSidebarOpen: boolean) {
       if (!el) return;
       el.addEventListener("pointerenter", enter);
       el.addEventListener("pointerleave", leave);
-      observer = new ResizeObserver(([entry]) => setZoneWidth(entry.contentRect.width));
-      observer.observe(el);
     });
     return () => {
       cancelAnimationFrame(frame);
       window.clearTimeout(timer.current);
       el?.removeEventListener("pointerenter", enter);
       el?.removeEventListener("pointerleave", leave);
-      observer?.disconnect();
     };
   }, [isSidebarOpen, update]);
 
   return {
     revealed,
-    zoneWidth,
     onZoneEnter: () => update("zone", true),
     onZoneLeave: () => update("zone", false),
   };
@@ -113,7 +105,7 @@ export function TitlebarNav({
   const navigate = useNavigate();
   const canGoBack = useCanGoBack();
   const canGoForward = useCanGoForward();
-  const { revealed, zoneWidth, onZoneEnter, onZoneLeave } =
+  const { revealed, onZoneEnter, onZoneLeave } =
     useSidebarReveal(isSidebarOpen);
 
   if (!isMac && !isLinux) return null;
@@ -131,16 +123,11 @@ export function TitlebarNav({
 
   return (
     <div
-      className={`fixed ${topClass} left-0 z-titlebar ${heightClass}`}
-      data-slot="titlebar-nav-zone"
-      onPointerEnter={onZoneEnter}
-      onPointerLeave={onZoneLeave}
-      style={{ ...noDragStyle, width: zoneWidth }}
-    >
-    <div
-      className={`group/nav absolute ${topClass} ${leftClass} flex ${heightClass} items-center gap-1`}
+      className={`group/nav fixed ${topClass} ${leftClass} z-titlebar flex ${heightClass} items-center gap-1`}
       data-revealed={revealed || undefined}
       data-slot="titlebar-nav"
+      onPointerEnter={onZoneEnter}
+      onPointerLeave={onZoneLeave}
       style={noDragStyle}
     >
       <TitlebarButton
@@ -197,7 +184,6 @@ export function TitlebarNav({
           </TitlebarButton>
         </div>
       </div>
-    </div>
     </div>
   );
 }
