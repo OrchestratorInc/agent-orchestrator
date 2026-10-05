@@ -9795,16 +9795,18 @@ func TestReconcile_AdoptAcrossDaemonRestart(t *testing.T) {
 	if rt.destroyed != 0 {
 		t.Fatalf("adopted sessions must not be destroyed; Destroy called %d times", rt.destroyed)
 	}
-	// Dead worker relaunched under its original id on this same boot without an
-	// intermediate durable termination or worktree capture cycle.
+	// A dead worker stays stopped until an explicit Resume request.
 	if lcm.terminated["mer-3"] != 0 {
 		t.Fatalf("dead worker must not be marked terminated before relaunch; got %d", lcm.terminated["mer-3"])
 	}
 	if st.sessions["mer-3"].IsTerminated {
-		t.Fatal("dead worker must be relaunched (not terminated) after Reconcile")
+		t.Fatal("dead worker must remain resumable after Reconcile")
 	}
-	if rt.created != 1 {
-		t.Fatalf("exactly one runtime relaunch expected (the dead worker); got %d", rt.created)
+	if rt.created != 0 {
+		t.Fatalf("health checks must not create runtimes; got %d", rt.created)
+	}
+	if st.sessions["mer-3"].Activity.State != domain.ActivityExited {
+		t.Fatal("dead worker must be recorded as exited")
 	}
 	if ws.stashCalls != 0 {
 		t.Fatalf("dead worker must reuse its worktree without stashing; got %d stash calls", ws.stashCalls)

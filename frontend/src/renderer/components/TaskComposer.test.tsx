@@ -1854,7 +1854,7 @@ describe("TaskComposer", () => {
 		expect(JSON.parse(window.localStorage.getItem("ao.taskComposer.preferences.v1") ?? "{}")["proj-1"].agents.codex).not.toHaveProperty("effort");
 	});
 
-	it("can clear an effort choice when the agent reports no preferred level", async () => {
+	it("offers only concrete effort choices when the agent reports no preferred level", async () => {
 		h.get.mockImplementation(async (path: string) => path.includes("/models")
 			? { data: { agent: "codex", selectionMode: "catalog", models: [
 				{ id: "gpt-test", label: "GPT Test", isDefault: true, efforts: ["low", "high"] },
@@ -1867,12 +1867,11 @@ describe("TaskComposer", () => {
 		await userEvent.click(picker);
 		await userEvent.click(screen.getByRole("menuitem", { name: "High" }));
 		await userEvent.click(picker);
-		await userEvent.click(screen.getByRole("menuitem", { name: "Use agent effort" }));
-		expect(picker).toHaveTextContent("Effort not reported");
+		expect(screen.queryByRole("menuitem", { name: "Use agent effort" })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
-		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("effort");
-		expect(JSON.parse(window.localStorage.getItem("ao.taskComposer.preferences.v1") ?? "{}")["proj-1"].agents.codex).not.toHaveProperty("effort");
+		expect(h.post.mock.calls[0][1].body).toEqual(expect.objectContaining({ effort: "high" }));
 	});
 
 	it("shows a stored implicit model as the catalog choice without pinning it", async () => {

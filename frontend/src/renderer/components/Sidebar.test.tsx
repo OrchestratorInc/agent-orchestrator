@@ -2578,7 +2578,7 @@ describe("Sidebar", () => {
 		expect(idleDraftDot).not.toHaveClass("animate-status-pulse");
 	});
 
-	it("keeps runtime activity on the dot while showing switch progress separately", () => {
+	it("keeps a stopped agent dot neutral while showing switch progress separately", () => {
 		renderSidebar({
 			workspaces: [{
 				...workspace,
@@ -2595,7 +2595,7 @@ describe("Sidebar", () => {
 		expect(row).toHaveAccessibleDescription("Switching to Codex");
 		expect(within(row).getByText("Switching to Codex")).toBeInTheDocument();
 		const dot = row.querySelector<HTMLElement>("[data-session-status]");
-		expect(dot).toHaveClass("bg-status-needs-you");
+		expect(dot).toHaveClass("bg-passive");
 		expect(dot).not.toHaveClass("animate-status-pulse");
 	});
 

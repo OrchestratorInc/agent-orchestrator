@@ -4852,11 +4852,15 @@ export interface components {
             observedAt?: string;
             /** @description Native main-turn identity reported by the hook, when supported. */
             providerTurnId?: string;
+            /** @description Running Claude subagent ids observed in a parent Stop hook; empty means none, absent means no snapshot. */
+            runningSubagentIds?: null | string[];
             /**
              * @description Agent activity state reported by an agent hook. Optional for metadata-only hooks.
              * @enum {string}
              */
             state?: "active" | "idle" | "waiting_input" | "blocked" | "exited";
+            /** @description Native child agent id for this hook event. */
+            subagentId?: string;
             /** @description AO prompt-hook context correlation UUID, when supported. */
             submissionId?: string;
             /** @description Native tool name, for tool-use hook events. */

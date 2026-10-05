@@ -395,6 +395,14 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	if err != nil {
 		return nil, fmt.Errorf("chat driver for %s: %w", cfg.Harness, err)
 	}
+	resume := driver.Resume
+	if cfg.ReconnectOnly {
+		reconnector, ok := driver.(ports.ChatDriverReconnector)
+		if !ok || cfg.ProviderConversationID == "" {
+			return nil, ports.ErrChatHostNotRunning
+		}
+		resume = reconnector.Reconnect
+	}
 	if nativeEvidence != "" {
 		for _, mismatch := range replayCheckpoint.hardMismatches {
 			if mismatch == ports.ChatHistoryMismatchNativeIdentity {
@@ -608,7 +616,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	var conv ports.ChatConversation
 	hostID := providerHostID(cfg)
 	if cfg.ProviderConversationID != "" {
-		conv, err = driver.Resume(ctx, ports.ChatResumeConfig{
+		conv, err = resume(ctx, ports.ChatResumeConfig{
 			SessionID:              hostID,
 			ProviderConversationID: cfg.ProviderConversationID,
 			DataDir:                cfg.DataDir,

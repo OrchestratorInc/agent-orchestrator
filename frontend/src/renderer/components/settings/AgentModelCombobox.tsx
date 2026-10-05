@@ -481,11 +481,6 @@ export function AgentModelCombobox({
 								setEffortMenuOpen(false);
 								effortTriggerRef.current?.focus();
 							}}>
-								{explicitEffort && !defaultEffort && (
-									<OptionMenuItem onSelect={() => tuning.onEffortChange("")} className="gap-3 text-xs">
-										{t("settings.models.useAgentEffort")}
-									</OptionMenuItem>
-								)}
 								{effortOptions.map((effort) => (
 									<OptionMenuItem key={effort} role="menuitemradio" aria-checked={effort === effectiveEffort}
 										active={effort === effectiveEffort} onSelect={() => {

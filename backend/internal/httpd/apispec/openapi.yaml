@@ -14066,6 +14066,14 @@ components:
         providerTurnId:
           description: Native main-turn identity reported by the hook, when supported.
           type: string
+        runningSubagentIds:
+          description: Running Claude subagent ids observed in a parent Stop hook;
+            empty means none, absent means no snapshot.
+          items:
+            type: string
+          type:
+          - "null"
+          - array
         state:
           description: Agent activity state reported by an agent hook. Optional for
             metadata-only hooks.
@@ -14075,6 +14083,9 @@ components:
           - waiting_input
           - blocked
           - exited
+          type: string
+        subagentId:
+          description: Native child agent id for this hook event.
           type: string
         submissionId:
           description: AO prompt-hook context correlation UUID, when supported.

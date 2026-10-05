@@ -731,7 +731,7 @@ export function TaskComposer({
 				onSubmit: (brief) => void submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined),
 			}}
 			renderAgentControl={(control) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />}
-			renderEffortControl={(control) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={effortModel?.defaultEffort} allowAgentEffort={!isCloudProject} />}
+			renderEffortControl={(control) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={effortModel?.defaultEffort} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
 			showEffort={!requiresTuiFallback && effortOptions.length > 0}
@@ -739,7 +739,7 @@ export function TaskComposer({
 	);
 }
 
-function TaskEffortPicker({ disabled, label, onChange, options, value, defaultEffort, allowAgentEffort = true }: TaskComposerEffortControl & { defaultEffort?: string; allowAgentEffort?: boolean }) {
+function TaskEffortPicker({ disabled, label, onChange, options, value, defaultEffort }: TaskComposerEffortControl & { defaultEffort?: string }) {
 	const { t } = useTranslation();
 	const explicitEffort = value.toLowerCase() === "default" ? "" : value;
 	const reportedDefault = defaultEffort && options.includes(defaultEffort) ? defaultEffort : "";
@@ -752,7 +752,6 @@ function TaskEffortPicker({ disabled, label, onChange, options, value, defaultEf
 			disabled={disabled}
 			value={effectiveEffort}
 			options={options.map((option) => ({ value: option, label: formatEffortLabel(option) }))}
-			action={allowAgentEffort && explicitEffort && !reportedDefault ? { label: t("settings.models.useAgentEffort"), onSelect: () => onChange("") } : undefined}
 			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
 			menuAlign="end"
 			renderTrigger={() => (

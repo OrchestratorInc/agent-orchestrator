@@ -521,7 +521,8 @@ const maxActivitySignalProjectionRetries = 3
 func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error {
 	// Subagent answers, including prompt suggestions, are not root-conversation
 	// facts. Their usage is collected independently from lifecycle metadata.
-	if s.Event == "subagent-stop" {
+	s.SubagentID = strings.TrimSpace(s.SubagentID)
+	if s.Event == "subagent-stop" && s.SubagentID == "" {
 		return nil
 	}
 	s.AgentSessionID = strings.TrimSpace(s.AgentSessionID)
@@ -532,6 +533,15 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 	s.ControllerGeneration = strings.TrimSpace(s.ControllerGeneration)
 	s.ProviderTurnID = strings.TrimSpace(s.ProviderTurnID)
 	s.SubmissionID = strings.TrimSpace(s.SubmissionID)
+	if s.SubagentID != "" {
+		// Child hook identity and transcript are not the root conversation's
+		// resumable identity or history checkpoint.
+		s.AgentSessionID = ""
+		s.TranscriptPath = ""
+		s.LatestUserPrompt = ""
+		s.LatestAssistantUpdate = ""
+		s.ProviderTurnID = ""
+	}
 	if !s.ConversationCheckpointOrigin.Valid() {
 		s.ConversationCheckpointOrigin = domain.ConversationCheckpointOriginUnknown
 	}
@@ -577,7 +587,7 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 			}
 		}
 	}
-	if !s.Valid && s.AgentSessionID == "" && s.LatestUserPrompt == "" && s.LatestAssistantUpdate == "" && s.TranscriptPath == "" {
+	if !s.Valid && s.SubagentID == "" && s.AgentSessionID == "" && s.LatestUserPrompt == "" && s.LatestAssistantUpdate == "" && s.TranscriptPath == "" {
 		return nil
 	}
 	if s.LaunchID != "" {
@@ -850,10 +860,24 @@ retryProjection:
 	// An explicit prompt submission is proof that an agent was relaunched in the
 	// preserved shell. Other same-generation callbacks may have been delayed
 	// behind the process-exit report and cannot resurrect an exited workload.
-	if rec.Activity.State == domain.ActivityExited && s.Valid && s.State != domain.ActivityExited &&
+	if rec.Activity.State == domain.ActivityExited && (s.Valid || s.SubagentID != "") && s.State != domain.ActivityExited &&
 		(s.State != domain.ActivityActive || s.Event != "user-prompt-submit") && !currentChatController {
 		m.mu.Unlock()
 		return nil
+	}
+	s, subagentFacts, err := reduceSubagentActivity(rec, s, now)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	storedSubagentFacts := ""
+	switch rec.Harness {
+	case domain.HarnessClaudeCode:
+		storedSubagentFacts = rec.Metadata.ClaudeActivityFacts
+		checkpoint.ClaudeActivityFacts = subagentFacts
+	case domain.HarnessCodex:
+		storedSubagentFacts = rec.Metadata.CodexActivityFacts
+		checkpoint.CodexActivityFacts = subagentFacts
 	}
 	// Event-tagged signals fold through the session's tool-flight state first:
 	// they may be suppressed (state write skipped) by the blocked-precedence
@@ -874,7 +898,7 @@ retryProjection:
 		(s.AgentSessionID != "" && s.Timestamp.After(rec.Metadata.NativeIdentityObservedAt)) ||
 		(s.AgentSessionID != "" && rec.Metadata.AgentSessionIDLaunchID != s.LaunchID) ||
 		(s.TranscriptPath != "" && rec.Metadata.NativeTranscriptPath != s.TranscriptPath) ||
-		checkpointChanged
+		checkpointChanged || subagentFacts != storedSubagentFacts
 	toolFlightBeforeProjection := cloneToolFlight(m.flights[id])
 	if s.Valid {
 		s = m.applyToolPrecedenceLocked(id, rec.Activity.State, s)

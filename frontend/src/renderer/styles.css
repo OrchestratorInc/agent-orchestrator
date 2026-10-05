@@ -10,8 +10,8 @@
 @custom-media --layout-narrow (width <= 680px); /* --breakpoint-layout-narrow */
 
 /*
- * Design system — see DESIGN_TOKENS.md. Flat near-black neutral ramp, hairline
- * borders, system font, refined-blue accent. Dark is primary (:root); light is the supported override
+ * Design system — see DESIGN_TOKENS.md. Flat neutral graphite ramp, hairline
+ * borders, and system font. Dark is primary (:root); light is the supported override
  * (:root[data-theme="light"]). apply-initial-theme runs before CSS load; the
  * Zustand theme toggle updates data-theme on <html>.
  */
@@ -477,7 +477,7 @@
 	min-height: 0;
 	width: 100%;
 	background-color: var(--color-bg-sidebar);
-	padding-top: var(--size-center-panel-inset);
+	padding-top: var(--size-center-panel-bottom-inset);
 	padding-right: var(--size-center-panel-inline-inset);
 	padding-bottom: var(--size-center-panel-bottom-inset);
 	padding-left: 0;
@@ -507,18 +507,24 @@
 	padding-left: var(--size-center-panel-inline-inset);
 }
 
-/* macOS + Linux: inset on all sides except left (flush with sidebar). */
+/* macOS: use the same block inset above and below the surface. */
 .center-panel-shell.center-panel-shell--mac {
-	padding-top: 0;
+	padding-top: var(--size-center-panel-inset-mac);
 	padding-right: var(--size-center-panel-inset-mac);
 	padding-bottom: var(--size-center-panel-inset-mac);
 	padding-left: 0;
 }
 
-/* The native buttons, fixed navigation and route headers share one row.
- * Insets and the extra session drag strip must not displace that row. */
+/* Keep the center surface closed on all four edges, including macOS where the
+ * native titlebar sits above the panel rather than replacing its border. */
 .center-panel-shell--mac > .center-panel-surface {
-	border-top-width: 0;
+	border-top-width: 1px;
+}
+
+/* Session headers now sit below the macOS panel inset and its top border. Keep
+ * the fixed navigation cluster on the same centerline as that header. */
+.app-shell-root:has(.center-panel-shell--mac.center-panel-shell--session:not(.center-panel-shell--fullscreen)) [data-slot="titlebar-nav"] {
+	top: var(--size-center-panel-inset-mac);
 }
 
 /* Keep empty header space draggable while tabs and actions remain interactive.
@@ -755,20 +761,12 @@ html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] :is(button, 
 	);
 }
 
-/* Windows / Linux: a ShellTopbar already supplies the top chrome, so the
- * framed panel needs no additional top inset. Windows uses its custom
- * frameless titlebar; Linux uses the standard ShellTopbar. The right/bottom
- * insets and the shared --radius-center-panel rounding are kept so the panel
- * matches the macOS framed look. */
+/* Platform chrome may change the inset size, but never breaks the equal
+ * block spacing contract. */
 .platform-windows {
 	--size-center-panel-inset: 8px;
 	--size-center-panel-inline-inset: 8px;
 	--size-center-panel-bottom-inset: 8px;
-}
-
-.platform-windows .center-panel-shell,
-.platform-linux .center-panel-shell {
-	padding-top: 0;
 }
 
 @utility settings-row-bar {

@@ -3579,6 +3579,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"agent exited", fmt.Errorf("send mer-1: %w", sessionmanager.ErrAgentExited), apierr.KindConflict, "AGENT_EXITED"},
 		{"agent not exited", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrAgentNotExited), apierr.KindConflict, "AGENT_NOT_EXITED"},
 		{"resume in progress", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrResumeInProgress), apierr.KindConflict, "AGENT_RESUME_IN_PROGRESS"},
+		{"provider resume failed", fmt.Errorf("resume agent mer-1: %w", ports.ErrChatResumeFailed), apierr.KindConflict, "CHAT_RESUME_FAILED"},
 		{"target agent unauthorized", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrTargetAgentUnauthorized), apierr.KindInvalid, "TARGET_AGENT_UNAUTHORIZED"},
 		{"worker session required", fmt.Errorf("switch agent mer-orchestrator: %w", sessionmanager.ErrUnsupportedSwitchKind), apierr.KindInvalid, "WORKER_SESSION_REQUIRED"},
 		{"unsupported switch harness", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrUnsupportedSwitchHarness), apierr.KindInvalid, "UNSUPPORTED_SWITCH_HARNESS"},

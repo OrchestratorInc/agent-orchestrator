@@ -37,6 +37,7 @@ type Launch struct {
 // construct its process. It intentionally contains no install mechanism: binary
 // ownership stays with the existing agent plugin.
 type LaunchConfig struct {
+	ReconnectOnly   bool
 	SessionID       domain.SessionID
 	DataDir         string
 	WorkspacePath   string
@@ -303,6 +304,12 @@ func (d *Driver) logStartStage(sessionID domain.SessionID, stage string, started
 	)
 }
 
+// Reconnect attaches to a surviving provider without launching a replacement.
+func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	cfg.ReconnectOnly = true
+	return d.Resume(ctx, cfg)
+}
+
 // Resume reconnects to the stored ACP session. When the agent advertises
 // session/load, AO uses it to recover both provider context and the normalized
 // transcript; resume-only agents recover context but explicitly report that no
@@ -334,6 +341,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		Env:   cfg.Env,
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
 		ProviderScopeID: cfg.ProviderScopeID,
+		ReconnectOnly:   cfg.ReconnectOnly,
 	}
 	conv, init, live, err := d.connect(ctx, launchCfg, cfg.PrepareEnv)
 	if err != nil {
@@ -459,6 +467,9 @@ func (d *Driver) connect(
 	cfg LaunchConfig,
 	prepareEnv func(context.Context) (map[string]string, error),
 ) (*conversation, acpsdk.InitializeResponse, *persistenthost.ACPState, error) {
+	if cfg.ReconnectOnly && (cfg.DataDir == "" || cfg.SessionID == "") {
+		return nil, acpsdk.InitializeResponse{}, nil, ports.ErrChatHostNotRunning
+	}
 	processStarted := time.Now()
 	proc, err := d.openProcess(ctx, cfg, prepareEnv)
 	d.logStartStage(cfg.SessionID, "process_open", processStarted, err)
@@ -567,6 +578,7 @@ func (d *Driver) connectProcess(
 	hostConfig := persistenthost.Config{
 		SessionID: string(cfg.SessionID), DataDir: cfg.DataDir, Workdir: cfg.WorkspacePath,
 		Protocol: persistenthost.ProtocolACP, OwnershipFingerprint: identity,
+		ReconnectOnly: cfg.ReconnectOnly,
 		Prepare: func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {
 			if prepareEnv != nil {
 				env, err := prepareEnv(prepareCtx)
@@ -592,6 +604,9 @@ func (d *Driver) connectProcess(
 	}
 	transport, err := d.connectHost(ctx, hostConfig)
 	if err != nil {
+		if errors.Is(err, persistenthost.ErrNotRunning) {
+			return nil, ports.ErrChatHostNotRunning
+		}
 		if errors.Is(err, persistenthost.ErrOwnershipInconclusive) ||
 			errors.Is(err, persistenthost.ErrAttached) ||
 			errors.Is(err, persistenthost.ErrIncompatible) ||
