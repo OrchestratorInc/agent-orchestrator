@@ -1266,7 +1266,9 @@ func newSessionPRMergeabilitySummary(in sessionsvc.PRMergeabilitySummary) Sessio
 	for _, file := range in.ConflictFiles {
 		files = append(files, SessionPRConflictFile{Path: file.Path, URL: file.URL})
 	}
-	return SessionPRMergeabilitySummary{State: in.State, Reasons: in.Reasons, PRURL: in.PRURL, ConflictFiles: files}
+	// No reasons is an empty array, never null: clients read it as a list.
+	reasons := append([]string{}, in.Reasons...)
+	return SessionPRMergeabilitySummary{State: in.State, Reasons: reasons, PRURL: in.PRURL, ConflictFiles: files}
 }
 
 // ClaimPRRequest is the body of POST /sessions/{sessionId}/pr/claim.
