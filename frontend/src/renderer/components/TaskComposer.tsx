@@ -189,6 +189,7 @@ export function TaskComposer({
 					displayName: input.brief.trim().slice(0, 100) || (input.agent ?? "claude-code"),
 					prompt: input.brief,
 					...(input.model ? { model: input.model } : {}),
+					...(input.effort ? { reasoningEffort: input.effort } : {}),
 					...(provider ? { provider } : {}),
 				});
 				// The control plane provisions the sandbox asynchronously; surface the
@@ -497,9 +498,10 @@ export function TaskComposer({
 		onEffortReset: setEffort,
 	});
 	const effortOptions = effortModel?.efforts?.filter((option) => option && option.toLowerCase() !== "default") ?? [];
+	const cloudDefaultEffort = isCloudProject && effortOptions.includes("medium") ? "medium" : "";
 	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
 	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
-	const requestedEffort = effortTouched || rememberedEffortIsExplicit
+	const requestedEffort = isCloudProject ? effort || cloudDefaultEffort || undefined : effortTouched || rememberedEffortIsExplicit
 		? effort === implicitEffort ? undefined : effort
 		: undefined;
 
@@ -532,8 +534,8 @@ export function TaskComposer({
 		}
 	}, [defaultModelForSelectedAgent, defaultModeForSelectedAgent, modelTouched]);
 	useEffect(() => {
-		if (!effortTouched) setEffort(defaultEffortForSelectedAgent);
-	}, [defaultEffortForSelectedAgent, effortTouched]);
+		if (!effortTouched) setEffort(defaultEffortForSelectedAgent || cloudDefaultEffort);
+	}, [cloudDefaultEffort, defaultEffortForSelectedAgent, effortTouched]);
 
 	const isDirty = isPromptDirty || modelTouched || effortTouched || attachments.length > 0;
 	const handlePromptChange = useCallback((value: string) => {
@@ -729,7 +731,7 @@ export function TaskComposer({
 				onSubmit: (brief) => void submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined),
 			}}
 			renderAgentControl={(control) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />}
-			renderEffortControl={(control) => <TaskEffortPicker {...control} defaultEffort={effortModel?.defaultEffort} />}
+			renderEffortControl={(control) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={effortModel?.defaultEffort} allowAgentEffort={!isCloudProject} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
 			showEffort={!requiresTuiFallback && effortOptions.length > 0}
@@ -737,7 +739,7 @@ export function TaskComposer({
 	);
 }
 
-function TaskEffortPicker({ disabled, label, onChange, options, value, defaultEffort }: TaskComposerEffortControl & { defaultEffort?: string }) {
+function TaskEffortPicker({ disabled, label, onChange, options, value, defaultEffort, allowAgentEffort = true }: TaskComposerEffortControl & { defaultEffort?: string; allowAgentEffort?: boolean }) {
 	const { t } = useTranslation();
 	const explicitEffort = value.toLowerCase() === "default" ? "" : value;
 	const reportedDefault = defaultEffort && options.includes(defaultEffort) ? defaultEffort : "";
@@ -750,7 +752,7 @@ function TaskEffortPicker({ disabled, label, onChange, options, value, defaultEf
 			disabled={disabled}
 			value={effectiveEffort}
 			options={options.map((option) => ({ value: option, label: formatEffortLabel(option) }))}
-			action={explicitEffort && !reportedDefault ? { label: t("settings.models.useAgentEffort"), onSelect: () => onChange("") } : undefined}
+			action={allowAgentEffort && explicitEffort && !reportedDefault ? { label: t("settings.models.useAgentEffort"), onSelect: () => onChange("") } : undefined}
 			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
 			menuAlign="end"
 			renderTrigger={() => (

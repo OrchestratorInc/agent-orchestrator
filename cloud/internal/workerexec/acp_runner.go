@@ -184,7 +184,7 @@ func acpLaunch(turn worker.Turn, command Command) (string, []string, map[string]
 	}
 	switch turn.Harness {
 	case "claude-code":
-		env["CLAUDE_CODE_EXECUTABLE"] = command.Path
+		env = claudeModelEnvironment(command, turn.Model, nil)
 		return "claude-agent-acp", nil, env, nil
 	case "cursor":
 		args := []string{"--trust"}

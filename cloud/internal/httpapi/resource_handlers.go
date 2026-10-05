@@ -85,6 +85,7 @@ type createSessionRequest struct {
 	// id, e.g. "anthropic/claude-opus-4-8" for opencode). Optional: empty uses
 	// the harness default.
 	Model                       string   `json:"model,omitempty"`
+	ReasoningEffort             string   `json:"reasoningEffort,omitempty"`
 	DeniedCommands              []string `json:"deniedCommands,omitempty"`
 	SandboxProviderConnectionID string   `json:"sandboxProviderConnectionId,omitempty"`
 	// Provider selects which configured sandbox provider runs this session. It
@@ -602,6 +603,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			Prompt:              request.Prompt,
 			Mode:                request.Mode,
 			Model:               request.Model,
+			ReasoningEffort:     request.ReasoningEffort,
 			DeniedCommands:      request.DeniedCommands,
 			Provider:            plan.Provider,
 			SandboxConnectionID: request.SandboxProviderConnectionID,
@@ -1087,6 +1089,9 @@ func validProjectUpdate(request updateProjectRequest) bool {
 }
 
 func validSessionInput(request createSessionRequest) bool {
+	if validateChatTurnSettings("", request.ReasoningEffort, "", "") != nil {
+		return false
+	}
 	if requireUUID(request.ProjectID, "projectId") != nil ||
 		(request.Kind != "worker" && request.Kind != "orchestrator") ||
 		(request.Mode != "read-only" && request.Mode != "standard" && request.Mode != "trusted") ||

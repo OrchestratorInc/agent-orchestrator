@@ -240,6 +240,7 @@ export interface CloudCpCreateSessionRequest {
 	 * omitted uses the harness default.
 	 */
 	model?: string;
+	reasoningEffort?: string;
 	deniedCommands?: string[];
 	sandboxProviderConnectionId?: string;
 	/**
@@ -758,6 +759,7 @@ export interface CloudCpSendMessageRequest {
 }
 
 export interface CloudCpChatModelsResponse {
+	modes?: string[];
 	model?: string;
 	reasoningEffort?: string;
 	models: Array<{
