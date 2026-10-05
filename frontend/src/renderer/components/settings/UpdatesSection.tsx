@@ -450,8 +450,8 @@ function UpdateActions({
 	};
 
 	// Deliberately no border or accent fill on this block. --primary is
-	// oklch(0.92 0.004 286.32) in dark and near-black in light: both are
-	// effectively neutral, so tinting drew a grey frame that carried no meaning
+	// The neutral primary in dark and near-black in light: both are effectively
+	// neutral, so tinting drew a grey frame that carried no meaning
 	// and competed with the row backgrounds around it. The primary button and
 	// the status line already carry the emphasis.
 	return (
