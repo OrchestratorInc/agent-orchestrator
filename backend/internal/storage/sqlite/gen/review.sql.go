@@ -113,6 +113,28 @@ func (q *Queries) ClearReviewerHandleByHarness(ctx context.Context, arg ClearRev
 	return err
 }
 
+const failUnsubmittedReviewBatchForChatTurn = `-- name: FailUnsubmittedReviewBatchForChatTurn :exec
+UPDATE review_run SET status = 'failed', body = 'reviewer Chat turn ended without submitting a result'
+WHERE status = 'running' AND verdict = '' AND batch_id != ''
+  AND EXISTS (
+    SELECT 1 FROM conversation_turns AS turn
+    JOIN conversation_messages AS message ON message.turn_id = turn.id AND message.conversation_id = turn.conversation_id
+    JOIN review ON review.id = turn.handled_by_review_id
+    WHERE turn.id = ?1
+      AND turn.state IN ('completed', 'recovered', 'failed', 'interrupted', 'cancelled')
+      AND turn.handled_by_review_id = review_run.review_id
+      AND turn.controller_generation != '' AND turn.controller_generation = review.controller_generation
+      AND review.interface_mode = 'chat'
+      AND message.role = 'user' AND message.origin = 'daemon'
+      AND message.client_message_id = 'review-batch:' || review_run.batch_id
+  )
+`
+
+func (q *Queries) FailUnsubmittedReviewBatchForChatTurn(ctx context.Context, turnID string) error {
+	_, err := q.db.ExecContext(ctx, failUnsubmittedReviewBatchForChatTurn, turnID)
+	return err
+}
+
 const getReviewByID = `-- name: GetReviewByID :one
 SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, created_at, updated_at
 FROM review WHERE id = ?

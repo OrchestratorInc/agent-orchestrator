@@ -102,6 +102,7 @@ type LaunchResult struct {
 
 // ReviewerChatStart is the transport-neutral typed reviewer launch request.
 type ReviewerChatStart struct {
+	BatchID                string
 	ReviewID               string
 	WorkerID               domain.SessionID
 	ProjectID              domain.ProjectID
@@ -123,7 +124,7 @@ type ReviewerChatController interface {
 	PreflightReviewChat(context.Context, domain.AgentHarness) error
 	StartReviewChat(context.Context, ReviewerChatStart) (string, error)
 	RestoreReviewChat(context.Context, ReviewerChatStart) (string, error)
-	SendReviewChat(context.Context, string, string) error
+	SendReviewChat(context.Context, string, string, string) error
 	ReviewChatAlive(string) bool
 	InterruptReviewChat(context.Context, string) error
 	StopReviewChat(context.Context, string) error
@@ -493,7 +494,7 @@ func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, 
 	if spec.DeferInitialMessage {
 		prompt = ""
 	}
-	start := ReviewerChatStart{ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), Model: spec.AgentConfig.Model, Effort: spec.AgentConfig.Effort, DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil), Prompt: prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
+	start := ReviewerChatStart{BatchID: spec.BatchID, ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), Model: spec.AgentConfig.Model, Effort: spec.AgentConfig.Effort, DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil), Prompt: prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
 	if restore {
 		providerID, err = l.chat.RestoreReviewChat(ctx, start)
 	} else {
@@ -755,7 +756,7 @@ func (l *agentLauncher) Notify(ctx context.Context, handleID string, spec Launch
 		return fmt.Errorf("reviewer message: %w", err)
 	}
 	if reviewID, ok := reviewerChatID(handleID); ok && l.chat != nil {
-		return l.chat.SendReviewChat(ctx, reviewID, msg)
+		return l.chat.SendReviewChat(ctx, reviewID, msg, spec.BatchID)
 	}
 	if err := l.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: handleID}, msg); err != nil {
 		return fmt.Errorf("notify reviewer: %w", err)
@@ -894,4 +895,12 @@ func (l *agentLauncher) Destroy(ctx context.Context, handleID string) error {
 func reviewerChatID(handleID string) (string, bool) {
 	id, ok := strings.CutPrefix(handleID, reviewerChatHandlePrefix)
 	return id, ok && strings.TrimSpace(id) != ""
+}
+
+// BatchMessageID ties a dispatched reviewer Chat turn to its durable review runs.
+func BatchMessageID(batchID string) string {
+	if batchID == "" {
+		return ""
+	}
+	return "review-batch:" + batchID
 }

@@ -389,10 +389,12 @@ func (c sqliteReviewChatController) StartReviewChat(ctx context.Context, cfg Rev
 func (c sqliteReviewChatController) RestoreReviewChat(ctx context.Context, cfg ReviewerChatStart) (string, error) {
 	return c.StartReviewChat(ctx, cfg)
 }
-func (sqliteReviewChatController) SendReviewChat(context.Context, string, string) error { return nil }
-func (sqliteReviewChatController) ReviewChatAlive(string) bool                          { return true }
-func (sqliteReviewChatController) InterruptReviewChat(context.Context, string) error    { return nil }
-func (sqliteReviewChatController) StopReviewChat(context.Context, string) error         { return nil }
+func (sqliteReviewChatController) SendReviewChat(context.Context, string, string, string) error {
+	return nil
+}
+func (sqliteReviewChatController) ReviewChatAlive(string) bool                       { return true }
+func (sqliteReviewChatController) InterruptReviewChat(context.Context, string) error { return nil }
+func (sqliteReviewChatController) StopReviewChat(context.Context, string) error      { return nil }
 
 type fakeLauncher struct {
 	interfaceMode    domain.ReviewerInterfaceMode
@@ -619,8 +621,12 @@ func TestTriggerPersistsChatModeBeforeCreatingReviewerConversation(t *testing.T)
 	launcher := NewLauncher(singleReviewerResolver{reviewer: chatReviewAdapter{}}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat))
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	if _, err := eng.Trigger(ctx, worker.ID, domain.ReviewerCodex, domain.AgentConfig{Model: "gpt-6-sol", Effort: "high"}); err != nil {
+	result, err := eng.Trigger(ctx, worker.ID, domain.ReviewerCodex, domain.AgentConfig{Model: "gpt-6-sol", Effort: "high"})
+	if err != nil {
 		t.Fatalf("Trigger: %v", err)
+	}
+	if started.BatchID == "" || started.BatchID != result.Run.BatchID {
+		t.Fatalf("reviewer batch = %q, want %q", started.BatchID, result.Run.BatchID)
 	}
 	if started.Model != "gpt-6-sol" || started.Effort != "high" {
 		t.Fatalf("reviewer Chat config: model=%q effort=%q", started.Model, started.Effort)

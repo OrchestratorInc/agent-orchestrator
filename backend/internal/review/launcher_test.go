@@ -1219,3 +1219,24 @@ func TestDeferredCodexTerminalDispatchesTaskOnlyOnNotify(t *testing.T) {
 		t.Fatal("notification omitted review task")
 	}
 }
+
+type recordingReviewBatch struct {
+	ReviewerChatController
+	reviewID, batchID string
+}
+
+func (c *recordingReviewBatch) SendReviewChat(_ context.Context, reviewID, _ string, batchID string) error {
+	c.reviewID, c.batchID = reviewID, batchID
+	return nil
+}
+
+func TestNotifyReviewerChatCarriesItsBatch(t *testing.T) {
+	chat := &recordingReviewBatch{}
+	launcher := NewLauncher(fakeReviewerResolver{reviewer: &fakeReviewer{}, ok: true}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat))
+	if err := launcher.Notify(context.Background(), "review-chat:review-1", LaunchSpec{ReviewSessionID: "review-1", WorkerID: "worker-1", BatchID: "batch-1", RunID: "run-1", Harness: domain.ReviewerCodex, WorkspacePath: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	if chat.reviewID != "review-1" || chat.batchID != "batch-1" {
+		t.Fatalf("review notification: %+v", chat)
+	}
+}

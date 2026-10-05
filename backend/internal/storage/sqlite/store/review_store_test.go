@@ -734,3 +734,90 @@ func TestSettleReviewChatWorkClearsOrphanedEpoch(t *testing.T) {
 		t.Fatalf("reviewer activities = %+v, want one failed approval", snapshot.Activities)
 	}
 }
+
+func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state domain.TurnState
+		stale bool
+		human bool
+	}{
+		{name: "completed", state: domain.TurnStateCompleted},
+		{name: "failed", state: domain.TurnStateFailed},
+		{name: "interrupted", state: domain.TurnStateInterrupted},
+		{name: "obsolete controller", state: domain.TurnStateCompleted, stale: true},
+		{name: "human chat", state: domain.TurnStateCompleted, human: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestStore(t)
+			ctx := context.Background()
+			seedProject(t, s, "batch-review")
+			session, err := s.CreateSession(ctx, sampleRecord("batch-review"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC().Truncate(time.Second)
+			review := domain.Review{ID: "batch-review", SessionID: session.ID, ProjectID: session.ProjectID, Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}
+			if err := s.UpsertReview(ctx, review); err != nil {
+				t.Fatal(err)
+			}
+			conversation, err := s.CreateReviewConversation(ctx, "batch-conversation", review.ID, session.ProjectID, session.ID, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := s.ClaimReviewChatController(ctx, review.ID, "provider", "generation", now); err != nil || !ok {
+				t.Fatalf("claim: %v %v", ok, err)
+			}
+			for _, run := range []domain.ReviewRun{
+				{ID: "missing", BatchID: "batch-1", Status: domain.ReviewRunRunning},
+				{ID: "submitted", BatchID: "batch-1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, Body: "submitted result"},
+				{ID: "next", BatchID: "batch-2", Status: domain.ReviewRunRunning},
+			} {
+				run.ReviewID, run.SessionID, run.Harness, run.CreatedAt = review.ID, session.ID, domain.ReviewerCodex, now
+				if err := s.InsertReviewRun(ctx, run); err != nil {
+					t.Fatal(err)
+				}
+			}
+			origin := domain.MessageOriginDaemon
+			if tc.human {
+				origin = domain.MessageOriginHuman
+			}
+			if ok, err := s.AppendReviewUserMessage(ctx, conversation.ID, session.ID, review.ID, "generation", domain.ConversationMessage{ID: "batch-message", ClientMessageID: "review-batch:batch-1", Text: "Review this batch", Origin: origin}, "batch-turn", now); err != nil || !ok {
+				t.Fatalf("append: %v %v", ok, err)
+			}
+			if err := s.BindTurnToProvider(ctx, "batch-turn", "provider-turn", now); err != nil {
+				t.Fatal(err)
+			}
+			if tc.stale {
+				if ok, err := s.ClaimReviewChatController(ctx, review.ID, "provider", "replacement-generation", now); err != nil || !ok {
+					t.Fatalf("replacement: %v %v", ok, err)
+				}
+			}
+			if err := s.SettleTurn(ctx, conversation.ID, "provider-turn", tc.state, "", now.Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			missing, _, err := s.GetReviewRun(ctx, "missing")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := domain.ReviewRunFailed
+			if tc.stale || tc.human {
+				want = domain.ReviewRunRunning
+			}
+			if missing.Status != want {
+				t.Fatalf("unsubmitted status = %s, want %s", missing.Status, want)
+			}
+			if want == domain.ReviewRunFailed && missing.Body != "reviewer Chat turn ended without submitting a result" {
+				t.Fatalf("failure explanation = %q", missing.Body)
+			}
+			submitted, _, err := s.GetReviewRun(ctx, "submitted")
+			if err != nil || submitted.Status != domain.ReviewRunComplete || submitted.Verdict != domain.VerdictApproved || submitted.Body != "submitted result" {
+				t.Fatalf("submitted result changed: %+v %v", submitted, err)
+			}
+			next, _, err := s.GetReviewRun(ctx, "next")
+			if err != nil || next.Status != domain.ReviewRunRunning {
+				t.Fatalf("new batch changed: %+v %v", next, err)
+			}
+		})
+	}
+}

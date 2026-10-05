@@ -166,3 +166,19 @@ WHERE pr.head_sha != ''
             OR (newer.created_at = review_run.created_at AND newer.id > review_run.id)
         )
   );
+
+-- name: FailUnsubmittedReviewBatchForChatTurn :exec
+UPDATE review_run SET status = 'failed', body = 'reviewer Chat turn ended without submitting a result'
+WHERE status = 'running' AND verdict = '' AND batch_id != ''
+  AND EXISTS (
+    SELECT 1 FROM conversation_turns AS turn
+    JOIN conversation_messages AS message ON message.turn_id = turn.id AND message.conversation_id = turn.conversation_id
+    JOIN review ON review.id = turn.handled_by_review_id
+    WHERE turn.id = sqlc.arg(turn_id)
+      AND turn.state IN ('completed', 'recovered', 'failed', 'interrupted', 'cancelled')
+      AND turn.handled_by_review_id = review_run.review_id
+      AND turn.controller_generation != '' AND turn.controller_generation = review.controller_generation
+      AND review.interface_mode = 'chat'
+      AND message.role = 'user' AND message.origin = 'daemon'
+      AND message.client_message_id = 'review-batch:' || review_run.batch_id
+  );

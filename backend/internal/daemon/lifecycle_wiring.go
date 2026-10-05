@@ -595,15 +595,15 @@ func (c chatLauncher) startReviewChat(ctx context.Context, cfg reviewcore.Review
 	if !sendPrompt || strings.TrimSpace(cfg.Prompt) == "" {
 		return started.ProviderConversationID, nil
 	}
-	if _, err := c.svc.SendForOwner(ctx, owner, ports.ChatUserMessage{Text: cfg.Prompt, Origin: domain.MessageOriginHuman}); err != nil {
+	if _, err := c.svc.SendForOwner(ctx, owner, ports.ChatUserMessage{Text: cfg.Prompt, Origin: domain.MessageOriginDaemon, ClientMessageID: reviewcore.BatchMessageID(cfg.BatchID)}); err != nil {
 		_ = c.svc.StopForOwner(context.Background(), owner)
 		return "", err
 	}
 	return started.ProviderConversationID, nil
 }
 
-func (c chatLauncher) SendReviewChat(ctx context.Context, reviewID, message string) error {
-	_, err := c.svc.SendForOwner(ctx, domain.ReviewConversationOwner(reviewID), ports.ChatUserMessage{Text: message, Origin: domain.MessageOriginDaemon})
+func (c chatLauncher) SendReviewChat(ctx context.Context, reviewID, message, batchID string) error {
+	_, err := c.svc.SendForOwner(ctx, domain.ReviewConversationOwner(reviewID), ports.ChatUserMessage{Text: message, Origin: domain.MessageOriginDaemon, ClientMessageID: reviewcore.BatchMessageID(batchID)})
 	return err
 }
 

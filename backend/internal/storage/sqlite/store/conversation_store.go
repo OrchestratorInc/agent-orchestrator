@@ -1292,6 +1292,11 @@ func (s *Store) SettleTurn(
 		}); err != nil {
 		return fmt.Errorf("settle running activities for turn %s: %w", turn.ID, err)
 	}
+	if turn.HandledByReviewID.Valid {
+		if err := q.FailUnsubmittedReviewBatchForChatTurn(ctx, turn.ID); err != nil {
+			return fmt.Errorf("settle unsubmitted review batch for turn %s: %w", turn.ID, err)
+		}
+	}
 	if state == domain.TurnStateCompleted {
 		if err := finalizeCompletedTurnPlan(ctx, q, turn, now); err != nil {
 			return err
