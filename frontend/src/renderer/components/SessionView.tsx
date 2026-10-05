@@ -1688,7 +1688,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								/>
 								{reviewerChatId ? (
 									<div className="absolute inset-0">
-										<ReviewerChatSurface hideHeader hostId={hostId} reviewId={reviewerChatId} />
+										<ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} />
 									</div>
 								) : null}
 								</>
@@ -1707,7 +1707,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									reviewerTerminal={reviewerTerminal}
 									reviewerChat={reviewerChat}
 									reviewerChatSelected={Boolean(reviewerChatId)}
-									reviewerChatContent={reviewerChatId ? <ReviewerChatSurface hideHeader hostId={hostId} reviewId={reviewerChatId} /> : undefined}
+									reviewerChatContent={reviewerChatId ? <ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} /> : undefined}
 									session={session}
 									shellTerminals={shellTerminals}
 									terminalTarget={routedTerminalTarget}

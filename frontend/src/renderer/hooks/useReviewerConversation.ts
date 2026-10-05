@@ -5,6 +5,9 @@ import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { mergeConversationPages, toSnapshot, type ConversationSendInput } from "./useConversation";
 
+import { sessionReviewsQueryKey } from "../lib/session-reviews";
+import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+
 import type { ChatModel, TurnSettings } from "../types/conversation";
 
 type WireSnapshot = components["schemas"]["ConversationSnapshotResponse"];
@@ -66,6 +69,21 @@ export function useReviewerConversationCommands(reviewId: string | undefined, ho
 				queryKey: reviewerConversationQueryKey(reviewId, hostId),
 			});
 	}, [hostId, queryClient, reviewId]);
+	const resume = useMutation({
+		mutationFn: async ({ workerSessionId, targetHostId }: { workerSessionId: string; targetReviewId: string; targetHostId?: string }) => {
+			const { error } = await clientForSessionHost(targetHostId).POST("/api/v1/sessions/{sessionId}/reviews/restore", {
+				params: { path: { sessionId: workerSessionId } },
+			});
+			if (error) throw error;
+		},
+		onSettled: async (_data, _error, { workerSessionId, targetReviewId, targetHostId }) => {
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: reviewerConversationQueryKey(targetReviewId, targetHostId) }),
+				queryClient.invalidateQueries({ queryKey: sessionReviewsQueryKey(workerSessionId, targetHostId) }),
+				queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(targetHostId) }),
+			]);
+		},
+	});
 	const chooseSettings = useMutation({
 		mutationFn: async ({ settings, targetReviewId, targetHostId }: { settings: TurnSettings; targetReviewId: string; targetHostId?: string }) => {
 			const { data, error } = await clientForSessionHost(targetHostId).PATCH("/api/v1/reviews/{reviewId}/conversation/settings", {
@@ -129,6 +147,11 @@ export function useReviewerConversationCommands(reviewId: string | undefined, ho
 	});
 	const error = [send.error, resolve.error, resolveInput.error, interrupt.error, chooseSettings.error].find(Boolean);
 	return {
+		resumeAgent: (workerSessionId: string) => {
+			if (reviewId) resume.mutate({ workerSessionId, targetReviewId: reviewId, targetHostId: hostId });
+		},
+		resumingAgent: resume.isPending && resume.variables?.targetReviewId === reviewId && resume.variables?.targetHostId === hostId,
+		resumeError: resume.variables?.targetReviewId === reviewId && resume.variables?.targetHostId === hostId && resume.error ? apiErrorMessage(resume.error) : undefined,
 		chooseSettings: (settings: TurnSettings) => {
 			if (reviewId) chooseSettings.mutate({ settings, targetReviewId: reviewId, targetHostId: hostId });
 		},
