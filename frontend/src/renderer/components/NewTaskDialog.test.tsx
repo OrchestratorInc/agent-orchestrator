@@ -222,7 +222,7 @@ describe("NewTaskDialog", () => {
 		expect(options[0]).toHaveClass("settings-menu-item");
 		expect(options[1]).toHaveClass("settings-menu-item");
 		expect(options[0]).toHaveClass("gap-1!");
-		expect(options[1]?.querySelector("img")?.parentElement).toHaveClass("size-6");
+		expect(options[1]?.querySelector("img")?.parentElement).toHaveClass("size-[18px]");
 		expect(options[1]?.querySelector("img")?.parentElement?.parentElement?.parentElement).toHaveClass("w-5");
 		expect(document.querySelector('[data-slot="settings-option-menu-scroll-region"]')).toBeInTheDocument();
 

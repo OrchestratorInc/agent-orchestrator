@@ -38,9 +38,10 @@ function repositoryOwnerAvatar(repo: string): { owner: string; url: string } | n
 
 function ProjectOwnerAvatar({ avatar, className }: { avatar: { owner: string; url: string }; className: string }) {
 	return (
-		<span className={`relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-card bg-muted text-[0.65em] font-medium text-muted-foreground ${className}`} aria-hidden="true">
-			<span className="leading-none">{avatar.owner.charAt(0).toUpperCase()}</span>
+		<span className={`relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-card bg-muted font-medium text-muted-foreground ${className}`} aria-hidden="true">
+			<span className="text-[0.65em] leading-none">{avatar.owner.charAt(0).toUpperCase()}</span>
 			<img
+				key={avatar.url}
 				width={18}
 				height={18}
 				className="absolute inset-0 size-full rounded-full object-cover"
@@ -143,8 +144,8 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 									{selectedProjectId === STANDALONE_WORKSPACE_ID ? (
 										<StickyNote aria-hidden="true" className="size-[1em] shrink-0 text-muted-foreground" />
 									) : selectedProjectAvatar ? (
-										<ProjectOwnerAvatar avatar={selectedProjectAvatar} className="size-8" />
-									) : null}
+										<ProjectOwnerAvatar avatar={selectedProjectAvatar} className="size-[1em]" />
+									) : <StickyNote aria-hidden="true" className="size-[1em] shrink-0 text-muted-foreground" />}
 									<span className="min-w-0 truncate">{selectedProjectName}</span>
 								</span>
 							)}
@@ -154,11 +155,11 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 									<>
 										<span className="relative flex w-5 shrink-0 items-center justify-center">
 											{option.value === STANDALONE_WORKSPACE_ID ? (
-												<StickyNote aria-hidden="true" className="size-[1em]! text-muted-foreground" />
+												<StickyNote aria-hidden="true" className="size-[18px]! text-muted-foreground" />
 											) : (
 												<span className="flex items-center -space-x-2">
 													{avatars.slice(0, 2).map((avatar) => (
-														<ProjectOwnerAvatar key={`${avatar.owner}:${avatar.url}`} avatar={avatar} className="size-6" />
+														<ProjectOwnerAvatar key={`${avatar.owner}:${avatar.url}`} avatar={avatar} className="size-[18px]" />
 													))}
 												</span>
 											)}
