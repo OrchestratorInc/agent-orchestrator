@@ -19,7 +19,7 @@ import { browserLoadEnd, browserLoadError, browserLoadStart, browserNavigationCh
 import { haptics } from "../../lib/haptics";
 import { getInstallId } from "../../lib/installId";
 import { HostScope, useApp } from "../../lib/store";
-import { hostRouteMatches } from "../../lib/hostRoute";
+import { hostRouteMatches, previewForConfig } from "../../lib/hostRoute";
 import { Button, EmptyState } from "../../lib/ui";
 import { headerActionStyle, headerGlyphStyle } from "../../lib/headerAction";
 import type { Theme } from "../../lib/theme";
@@ -133,7 +133,8 @@ function SessionPreviewContent() {
 		};
 	}, [browserSource, config]);
 
-	const pageTitle = browserState.title || title || preview?.entry || "Preview";
+	const qualifiedPreview = preview && config ? previewForConfig({ config, value: preview }, config, routeHostId) : null;
+	const pageTitle = browserState.title || title || qualifiedPreview?.entry || "Preview";
 	useLayoutEffect(() => {
 		navigation.setOptions({
 			title: pageTitle,
@@ -392,7 +393,7 @@ function SessionPreviewContent() {
 		<View style={[styles.browserDock, { paddingBottom: Math.max(insets.bottom, space.sm) }]}>
 			<BrowserToolbar
 				url={currentUrl}
-				title={browserState.title || preview?.entry}
+				title={browserState.title || qualifiedPreview?.entry}
 				contentColorScheme={contentAppearance}
 				loading={browserState.loading || loading}
 				canGoBack={browserState.canGoBack}

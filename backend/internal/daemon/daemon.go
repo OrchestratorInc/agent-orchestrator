@@ -905,7 +905,7 @@ func Run() error {
 		PreviewServer:            managedPreview,
 		SessionCapabilities:      browserAuthority,
 		ShellPreviewCapabilities: shellTermSvc,
-		AgentSwitchPolicy:        policyCoordinator
+		AgentSwitchPolicy:        policyCoordinator,
 	})
 	if err != nil {
 		stop()

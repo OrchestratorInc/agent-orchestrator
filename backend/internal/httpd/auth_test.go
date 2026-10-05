@@ -414,7 +414,7 @@ func TestAuthExemptsIdentityProbe(t *testing.T) {
 func TestAuthMarksOnlyPasswordAuthenticatedRequestsAsMobile(t *testing.T) {
 	state := &authState{}
 	state.setHash(mobilebridge.HashPassword("secret12"))
-	handler := authMiddleware(state, newLockout(5, time.Minute, time.Now), nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := authMiddleware(state, newLockout(time.Now), nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isMobileAuthenticated(r) {
 			w.WriteHeader(http.StatusNoContent)
 			return
