@@ -129,7 +129,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 									) : selectedProjectAvatar ? (
 										<img width={17} height={17} className="size-[1em] shrink-0 rounded-full object-cover" src={selectedProjectAvatar.url} alt="" aria-hidden="true" />
 									) : null}
-									<span className="min-w-0 truncate">{selectedProjectName}</span>
+										<span className="relative -top-px min-w-0 truncate">{selectedProjectName}</span>
 								</span>
 							)}
 							renderMenuItem={(option) => {
