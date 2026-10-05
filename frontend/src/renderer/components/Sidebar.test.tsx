@@ -33,6 +33,7 @@ import { sessionInterfaceTransitionStatus } from "../test/interface-transition-f
 import { useUiStore } from "../stores/ui-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
+import { DEV_BUILD_INFO } from "../lib/dev-build-info";
 
 type DragOverTestEvent = {
 	active: {
@@ -2577,7 +2578,7 @@ describe("Sidebar", () => {
 		expect(idleDraftDot).not.toHaveClass("animate-status-pulse");
 	});
 
-	it("keeps runtime activity on the dot while showing switch progress separately", () => {
+	it("keeps a stopped agent dot neutral while showing switch progress separately", () => {
 		renderSidebar({
 			workspaces: [{
 				...workspace,
@@ -2594,7 +2595,7 @@ describe("Sidebar", () => {
 		expect(row).toHaveAccessibleDescription("Switching to Codex");
 		expect(within(row).getByText("Switching to Codex")).toBeInTheDocument();
 		const dot = row.querySelector<HTMLElement>("[data-session-status]");
-		expect(dot).toHaveClass("bg-status-needs-you");
+		expect(dot).toHaveClass("bg-passive");
 		expect(dot).not.toHaveClass("animate-status-pulse");
 	});
 
@@ -3283,10 +3284,24 @@ describe("Sidebar", () => {
 		}
 	});
 
-	it("marks the brand with a dev badge in dev builds so the unpackaged window is distinguishable", () => {
+	it("shows the branch and commit when hovering the dev badge", async () => {
 		renderSidebar();
 
-		expect(screen.getByTestId("sidebar-dev-badge")).toHaveTextContent("dev");
+		const badge = screen.getByTestId("sidebar-dev-badge");
+		expect(badge).toHaveTextContent("dev");
+		expect(DEV_BUILD_INFO.branch).not.toBe("detached HEAD");
+		expect(badge).toHaveAttribute("aria-label", expect.stringContaining("Branch:"));
+		const commitInfo = `${DEV_BUILD_INFO.isDirty ? "Last commit" : "Commit"}: ${DEV_BUILD_INFO.commit}`;
+		expect(badge).toHaveAttribute("aria-label", expect.stringContaining(commitInfo));
+		const statusInfo = `Status: ${DEV_BUILD_INFO.isDirty ? "dirty" : "clean"}`;
+		expect(badge).toHaveAttribute("aria-label", expect.stringContaining(statusInfo));
+		const worktreeInfo = `Worktree: ${DEV_BUILD_INFO.worktree}`;
+		expect(badge).toHaveAttribute("aria-label", expect.stringContaining(worktreeInfo));
+		await userEvent.hover(badge);
+		expect(await screen.findAllByText(`Branch: ${DEV_BUILD_INFO.branch}`)).not.toHaveLength(0);
+		expect(screen.getAllByText(commitInfo)).not.toHaveLength(0);
+		expect(screen.getAllByText(statusInfo)).not.toHaveLength(0);
+		expect(screen.getAllByText(worktreeInfo)).not.toHaveLength(0);
 	});
 });
 

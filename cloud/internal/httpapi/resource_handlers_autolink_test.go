@@ -16,9 +16,7 @@ const autolinkProjectID = "00000000-0000-0000-0000-0000000000d4"
 const autolinkOrgID = "00000000-0000-0000-0000-0000000000a1"
 
 // stubAutolinkStore embeds Store (nil) so it satisfies the interface while
-// implementing only the two methods createSession reaches on the auto-link
-// path. It deliberately does not implement providerConnectionStore, so the
-// handler's coding-agent credential check is skipped.
+// implementing only the methods createSession reaches on the auto-link path.
 type stubAutolinkStore struct {
 	Store
 	orchestratorID string
@@ -39,6 +37,12 @@ func (s *stubAutolinkStore) GetProject(
 	_ context.Context, _ domain.Principal, _, projectID string,
 ) (domain.Project, error) {
 	return domain.Project{ID: projectID}, nil
+}
+
+func (s *stubAutolinkStore) UserAgentCredentialAvailable(
+	_ context.Context, _, _ string,
+) (bool, error) {
+	return true, nil
 }
 
 func (s *stubAutolinkStore) CreateSession(

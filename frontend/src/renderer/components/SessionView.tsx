@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Globe2, Loader2, PanelRight, Plus } from "lucide-react";
 import { useBlocker } from "@tanstack/react-router";
 import { motion } from "motion/react";
@@ -49,6 +49,9 @@ import {
 	useShellTerminals,
 } from "../hooks/useShellTerminals";
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
+import { canResumeAgent } from "../hooks/useCanResumeAgent";
+import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
+import { conversationQueryKey } from "../hooks/useConversation";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
 import { useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility";
 import {
@@ -86,7 +89,8 @@ import {
 import { isMacPlatform } from "../lib/platform";
 import { useShell } from "../lib/shell-context";
 import { cn } from "../lib/utils";
-import { isOrchestratorSession, sessionIsActive } from "../types/workspace";
+import { usesPreviewWorkspaceData } from "../lib/preview-mode";
+import { isOrchestratorSession, sessionAgentExited, sessionIsActive } from "../types/workspace";
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { matchesRendererShortcut } from "../stores/keybindings-store";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
@@ -444,6 +448,42 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const setBrowserContentRevealed = useUiStore((state) => state.setBrowserContentRevealed);
 	const setBrowserUnseen = useUiStore((state) => state.setBrowserUnseen);
 	const { daemonStatus } = useShell();
+	const resumeStatus = useSessionInterfaceTransitionStatus(canResumeAgent(session) ? session?.id : undefined, hostId);
+	const canResume = canResumeAgent(session, resumeStatus.transition) && !resumeStatus.isLoading && !resumeStatus.statusError;
+	const openedSession = useRef({ key: uiSessionId, checked: false });
+	const autoResume = useMutation({
+		mutationKey: ["resume-agent", "local", sessionId],
+		mutationFn: async (id: string) => {
+			const { error, response } = await clientForSessionHost().POST("/api/v1/sessions/{sessionId}/resume-agent", {
+				params: { path: { sessionId: id } },
+			});
+			if (error) throw new Error(apiErrorMessage(error, `Failed to resume agent (${response.status})`));
+		},
+		onSettled: async (_data, _error, id) => {
+			await Promise.all([
+				refreshWorkspaces(),
+				queryClient.invalidateQueries({ queryKey: conversationQueryKey(id) }),
+			]);
+		},
+	});
+	const quietResume = !usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
+		!resumeStatus.statusError && (openedSession.current.key !== uiSessionId || !openedSession.current.checked ||
+			(autoResume.variables === sessionId && autoResume.isPending));
+	const resumeOnOpen = autoResume.mutate;
+	useEffect(() => {
+		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
+		if (usesPreviewWorkspaceData || hostId || session?.cloud || !session || daemonStatus.state !== "ready" ||
+			(session.statusReadiness && session.statusReadiness !== "ready") || openedSession.current.checked) return;
+		if (!sessionAgentExited(session)) {
+			openedSession.current.checked = true;
+			return;
+		}
+		if (!canResume) return;
+		// One attempt per route opening; a failed resume or a later agent exit
+		// stays stopped rather than entering an automatic restart loop.
+		openedSession.current.checked = true;
+		resumeOnOpen(session.id);
+	}, [canResume, daemonStatus.state, hostId, resumeOnOpen, session, uiSessionId]);
 	const previewBaselineRef = useRef<{ sessionId: string; key: string } | null>(null);
 	const sessionSplitRef = useRef<HTMLDivElement | null>(null);
 	const terminalLiveResizeTimerRef = useRef<number | null>(null);
@@ -620,6 +660,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const requestCloudResume = useCallback(async () => {
 		if (!session?.cloud) return;
 		await cloudCpClient.resumeSession(session.cloud.orgId, session.id);
+		await cloudCpClient.requestWorkspaceCheckout(session.cloud.orgId, session.id);
 		await refreshWorkspaces();
 	}, [cloudCpClient, refreshWorkspaces, session]);
 	useEffect(() => {
@@ -654,16 +695,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			return data ?? ({ reviewerHandleId: "", reviews: [], runs: [] } satisfies ReviewsResponse);
 		},
 	});
+	const reviewerSwitchPending = useIsMutating({
+		mutationKey: [...sessionReviewsQueryKey(sessionId, hostId), "switch-reviewer"],
+	}) > 0;
 	const availableReviewerTerminal = reviewerTerminalFromReviews(reviewerQuery.data);
 	const reviewerTerminal = session && sessionIsActive(session) ? availableReviewerTerminal : undefined;
 	const availableReviewerChat = reviewerChatFromReviews(reviewerQuery.data);
 	const reviewerChat = session && sessionIsActive(session) ? availableReviewerChat : undefined;
-	useEffect(() => {
-		if (!reviewerChatId || !reviewerQuery.isFetched) return;
-		if (availableReviewerChat?.reviewId !== reviewerChatId) {
-			setReviewerChatId(null);
-		}
-	}, [availableReviewerChat?.reviewId, reviewerChatId, reviewerQuery.isFetched]);
 
 	// Shell terminals opened inside a session live beside its pane as extra tabs,
 	// scoped to the session on screen so each session has its own shell set.
@@ -993,15 +1031,20 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				: current,
 		);
 	}, [shellTerminals]);
+	// Reviewer selection belongs to the tab, not its replaceable controller.
+	// Keep it through switch teardown, then follow the replacement surface.
 	useEffect(() => {
-		setTerminalTarget((current) =>
-			current.kind === "reviewer" &&
-				reviewerQuery.isFetched &&
-			(!availableReviewerTerminal || availableReviewerTerminal.handleId !== current.handleId)
-				? { kind: "worker" }
-				: current,
-		);
-	}, [availableReviewerTerminal, reviewerQuery.isFetched]);
+		if ((!reviewerChatId && terminalTarget.kind !== "reviewer") || !reviewerQuery.isFetched || reviewerSwitchPending) return;
+		if (availableReviewerChat) {
+			if (reviewerChatId !== availableReviewerChat.reviewId) selectReviewerChat(availableReviewerChat.reviewId);
+		} else if (availableReviewerTerminal) {
+			if (terminalTarget.kind !== "reviewer" || terminalTarget.handleId !== availableReviewerTerminal.handleId || terminalTarget.harness !== availableReviewerTerminal.harness) {
+				selectReviewerTerminal(availableReviewerTerminal);
+			}
+		} else {
+			selectSessionTerminal();
+		}
+	}, [availableReviewerChat, availableReviewerTerminal, reviewerChatId, reviewerQuery.isFetched, reviewerSwitchPending, selectReviewerChat, selectReviewerTerminal, selectSessionTerminal, terminalTarget]);
 	const isOrchestrator = session ? isOrchestratorSession(session) : false;
 	const hasInspector = Boolean(session);
 	const sizing = useMemo(() => inspectorSizing(inspectorView), [inspectorView]);
@@ -1533,6 +1576,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	return (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
+			{!hostId && !session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
+				<p className="px-4 py-2 text-xs text-error" role="alert">
+					{apiErrorMessage(autoResume.error)}
+				</p>
+			) : null}
 			<div
 				className="session-split relative flex min-h-0 flex-1 overflow-hidden"
 				data-testid="panel-group"
@@ -1583,6 +1631,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									headerActions={sessionHeaderActions}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
+									onOpenFiles={browserOnly ? undefined : prepareFilesInspector}
+									onOpenFile={openCenterFile}
 									session={session}
 									sessionTabAction={sessionTabActions}
 								/>
@@ -1622,7 +1672,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									workspaceFileActive={Boolean(fileTabs.activePath)}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
-									controllerTransitioning={interfaceUi.controllerTransitioning}
+									controllerResumeError={!hostId && autoResume.variables === sessionId && autoResume.isError
+										? apiErrorMessage(autoResume.error) : undefined}
+									controllerTransitioning={interfaceUi.controllerTransitioning || quietResume}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
 									onOpenShell={addShellTerminal}
@@ -1636,7 +1688,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								/>
 								{reviewerChatId ? (
 									<div className="absolute inset-0">
-										<ReviewerChatSurface hideHeader hostId={hostId} reviewId={reviewerChatId} />
+										<ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} />
 									</div>
 								) : null}
 								</>
@@ -1655,7 +1707,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									reviewerTerminal={reviewerTerminal}
 									reviewerChat={reviewerChat}
 									reviewerChatSelected={Boolean(reviewerChatId)}
-									reviewerChatContent={reviewerChatId ? <ReviewerChatSurface hideHeader hostId={hostId} reviewId={reviewerChatId} /> : undefined}
+									reviewerChatContent={reviewerChatId ? <ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} /> : undefined}
 									session={session}
 									shellTerminals={shellTerminals}
 									terminalTarget={routedTerminalTarget}

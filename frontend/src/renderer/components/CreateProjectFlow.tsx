@@ -1474,11 +1474,12 @@ function CloudProjectCard({
 		refetchOnMount: "always",
 		refetchInterval: (query) => {
 			const installations = query.state.data ?? [];
-			return installations.some(
+			const syncing = installations.some(
 				(installation) => installation.status === "active" && installation.syncStatus !== "ready",
-			)
-				? 2500
-				: false;
+			);
+			if (syncing) return 2500;
+			// GitHub may have removed an installation while this step stays open.
+			return installations.some((installation) => installation.status === "active") ? 15_000 : false;
 		},
 		queryFn: async () => {
 			if (!org) return [];
@@ -1661,6 +1662,49 @@ function CloudProjectCard({
 			await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
 			onCreated(project.id);
 		} catch (err) {
+			// A repository backs at most one active project per workspace; the
+			// control plane rejects a duplicate with `project_repository_exists`.
+			// That is not a failure the user needs to act on (the project they
+			// asked for already exists), so open that project instead of showing
+			// a conflict error. If it cannot be located, close quietly rather
+			// than surface a message the user cannot act on.
+			if (
+				err instanceof CloudCpError &&
+				err.code === "project_repository_exists" &&
+				org !== undefined &&
+				selectedRepo !== undefined
+			) {
+				const repoId = selectedRepo.githubRepositoryId;
+				const repoFullName = selectedRepo.fullName.toLowerCase();
+				try {
+					let cursor: string | undefined;
+					let existingId: string | undefined;
+					for (let page = 0; page < 20 && existingId === undefined; page += 1) {
+						const { items, page: info } = await client.listProjects(org.id, { limit: 100, cursor });
+						const match =
+							items.find((candidate) => candidate.githubRepositoryId === repoId) ??
+							// Fallback for legacy projects stored without a repository id: match
+							// the full `owner/name` path segment (not a loose substring, which
+							// would let `acme/repo` match a sibling `acme/repo-two`).
+							items.find((candidate) =>
+								candidate.repositoryUrl.toLowerCase().replace(/\.git$/, "").endsWith(`/${repoFullName}`),
+							);
+						existingId = match?.id;
+						if (!info.hasMore || info.nextCursor === undefined || info.nextCursor === cursor) break;
+						cursor = info.nextCursor;
+					}
+					await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
+					if (existingId !== undefined) {
+						onCreated(existingId);
+						return;
+					}
+				} catch {
+					// Lookup failed: fall through to the quiet close below.
+				}
+				setIsCreating(false);
+				(onClose ?? onBack)();
+				return;
+			}
 			setSubmitError(err instanceof Error ? err.message : t("createProject.couldNotAdd"));
 			setIsCreating(false);
 		}
@@ -1743,6 +1787,16 @@ function CloudProjectCard({
 							}}
 						/>
 					)}
+					{appConnected && (githubAppRepos.data?.length ?? 0) > 0 ? (
+						<button
+							type="button"
+							className="ml-auto block text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+							disabled={isCreating || githubOAuthBusy}
+							onClick={() => void connectGitHub()}
+						>
+							{t("createProject.reconnectGitHub", { defaultValue: "Reconnect GitHub" })}
+						</button>
+					) : null}
 
 					{/* While GitHub is open in the browser: what to do there, and a way out. */}
 					{githubOAuthBusy ? (

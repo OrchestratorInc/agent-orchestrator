@@ -102,6 +102,8 @@ import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 // These responses precede AppendUserMessage. Provider/transport errors can
 // follow durable acceptance and must keep the original delivery ID for recovery.
 const DEFINITIVE_SEND_REJECTIONS = new Set([
+	// Cloud validation failures reject the request before durable acceptance.
+	"validation_error",
 	"INVALID_BODY",
 	"CHAT_MESSAGE_EMPTY",
 	"INVALID_RESOURCE",

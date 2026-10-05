@@ -14,6 +14,7 @@ import {
 	type QueryClient,
 	infiniteQueryOptions,
 	useInfiniteQuery,
+	useIsMutating,
 	useMutation,
 	useQuery,
 	useQueryClient,
@@ -629,7 +630,9 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		onError: (_error, variables) => refreshSessionInBackground(variables.targetSessionId),
 	});
 
+	const resumingAgent = useIsMutating({ mutationKey: ["resume-agent", hostId ?? "local", sessionId] }) > 0;
 	const resume = useMutation({
+		mutationKey: ["resume-agent", hostId ?? "local", sessionId],
 		mutationFn: async () => {
 			const { data, error, response } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/resume-agent",
@@ -1000,7 +1003,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		) => resolveInput.mutateAsync({ requestId, action, content }),
 		interrupt: () => interrupt.mutate({ targetSessionId: sessionId as string }),
 		resumeAgent: () => resume.mutateAsync(),
-		resumingAgent: resume.isPending,
+		resumingAgent,
 		resumeError: resume.error ? apiErrorMessage(resume.error) : undefined,
 		compact: () => compact.mutateAsync(),
 		choosingSettings: chooseSettings.isPending && chooseSettings.variables?.targetSessionId === sessionId,

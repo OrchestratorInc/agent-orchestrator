@@ -2864,10 +2864,8 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
 	}
 	meta := rec.Metadata
-	mode := domain.NormalizeSessionMode(rec.Mode)
 	if meta.WorkspacePath == "" ||
-		(meta.Branch == "" && projectKindForSession(project, rec.ProjectID) != domain.ProjectKindScratch) ||
-		(mode != domain.SessionModeChat && meta.RuntimeHandleID == "") {
+		(meta.Branch == "" && projectKindForSession(project, rec.ProjectID) != domain.ProjectKindScratch) {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, ErrIncompleteHandle)
 	}
 	ws := ports.WorkspaceInfo{
@@ -2876,7 +2874,7 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		SessionID: rec.ID,
 		ProjectID: rec.ProjectID,
 	}
-	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat || meta.RuntimeHandleID == "" {
 		return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, nil, forceFresh, requireNativeHistory, reservedGeneration, domain.SessionInterfaceTransitionHistoryStrict)
 	}
 	handle := ports.RuntimeHandle{ID: meta.RuntimeHandleID}
@@ -2921,7 +2919,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, ErrIncompleteHandle)
 		}
 		return m.resumeChatController(
-			ctx, operation, rec, project, ws, requireNativeHistory, reservedGeneration, historyPolicy,
+			ctx, operation, rec, project, ws, requireNativeHistory, false, reservedGeneration, historyPolicy,
 		)
 	}
 
@@ -3256,16 +3254,10 @@ func (m *Manager) saveAndTeardownOne(ctx context.Context, rec domain.SessionReco
 	return nil
 }
 
-// reconcileLive handles a single non-terminated session on boot. If its runtime
-// session is still alive (tmux is the persistence layer, so it survives a daemon
-// crash) we adopt it: a no-op, the agent keeps running. If the runtime is gone,
-// reattach the existing worktree and relaunch the controller in place. An
-// ordinary daemon restart must not turn every live session into a serial
-// stash/remove/recreate cycle before the HTTP listener can bind.
-//
-// If in-place recovery fails, preserve the live record, worktree, and native
-// conversation identity. A restart-time dependency failure is not user intent
-// to terminate the session; the controller can be retried through Resume Agent.
+// reconcileLive performs explicit recovery of a non-terminated session. It
+// adopts a surviving runtime or relaunches the controller in its existing
+// worktree, preserving conversation identity when recovery fails. Startup uses
+// checkSessionHealth instead so missing agents stay stopped.
 func (m *Manager) reconcileLive(ctx context.Context, rec domain.SessionRecord) error {
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
@@ -3456,28 +3448,10 @@ func (m *Manager) reconcileReap(ctx context.Context, rec domain.SessionRecord) e
 	return nil
 }
 
-// Reconcile is the full boot-time consistency pass. It remains the synchronous
-// entry point for callers that need reconciliation to have completed before
-// proceeding. The daemon uses ReconcileStartupSafety before it starts serving,
-// then runs ReconcileBackground after its listener is live so durable project
-// metadata is available without waiting on worktree and runtime restoration.
-//
-// It replaces the bare RestoreAll
-// call so that however the previous daemon died (clean shutdown, SIGKILL, or
-// crash), live reality matches the DB:
-//
-//  1. Live pass: for each non-terminated session, adopt it if its runtime
-//     survived, else relaunch in place while preserving failed attempts as
-//     recoverable exited sessions (reconcileLive).
-//  2. Reap pass: for each terminated session whose runtime leaked, kill it
-//     (reconcileReap). Runs before restore so a restored session does not
-//     collide with a leaked tmux of the same name.
-//  3. Restore pass: relaunch shutdown-saved sessions (existing RestoreAll).
-//
-// Ordinary per-session liveness failures remain best-effort. Durable
-// agent-switch discovery/recovery is different: an error there aborts this
-// pass so the daemon cannot serve with an unknown switch and an open input
-// fence.
+// Reconcile settles interrupted operations, checks surviving controllers, and
+// reaps leaked runtimes. Missing agents remain stopped; only explicit Resume or
+// Restore may launch them. The daemon runs the health checks after binding its
+// listener so a slow probe cannot delay access to durable session metadata.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	if err := m.ReconcileStartupSafety(ctx); err != nil {
 		return err
@@ -3528,10 +3502,8 @@ func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 	return nil
 }
 
-// ReconcileBackground performs the potentially slow runtime, worktree, and
-// saved-session restoration passes. It is deliberately separate from the
-// startup safety pass so the daemon can serve durable SQLite-backed project
-// and session metadata while this best-effort work continues.
+// ReconcileBackground checks existing controllers and performs startup cleanup.
+// It never launches missing agents or restores shutdown-saved workspaces.
 func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 	defer func() {
 		m.statusRecoveryMu.Lock()
@@ -3658,7 +3630,7 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 					defer m.endAgentOperation(rec.ID, agentOperationReconcile)
 					recoveryCtx, cancel := context.WithTimeout(ctx, m.statusVerificationLimit)
 					defer cancel()
-					return m.reconcileLive(recoveryCtx, rec)
+					return m.checkSessionHealth(recoveryCtx, rec)
 				}()
 				m.finishStatusRecovery(ctx, rec, err)
 				if err != nil {

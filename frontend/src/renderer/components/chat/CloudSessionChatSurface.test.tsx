@@ -41,6 +41,26 @@ const session = {
 
 describe("CloudSessionChatSurface", () => {
 	beforeEach(() => localStorage.clear());
+	it("attributes delivered worker reports as automation without changing the agent prompt", () => {
+		const events: CloudCpClientEvent[] = [{
+			sessionId: session.id, sequence: 1, type: "chat.user_message",
+			payload: { text: '[from worker a1b2c3d4 "Builder"] Full prompt', origin: "automation", senderLabel: "Worker · Builder", displayText: "Full prompt" },
+			createdAt: "2026-10-01T00:00:00Z",
+		}];
+		expect(toSnapshot(session, events).items[0]).toMatchObject({
+			role: "user", origin: "automation", senderLabel: "Worker · Builder", text: "Full prompt",
+		});
+	});
+	it("keeps human messages human even when their text resembles a worker report", () => {
+		const events: CloudCpClientEvent[] = [{
+			sessionId: session.id, sequence: 1, type: "chat.user_message",
+			payload: { text: '[from worker a1b2c3d4 "Builder"] Please help' },
+			createdAt: "2026-10-01T00:00:00Z",
+		}];
+		expect(toSnapshot(session, events).items[0]).toMatchObject({
+			origin: "human", text: '[from worker a1b2c3d4 "Builder"] Please help',
+		});
+	});
 	it("wakes a paused worker before loading model choices", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockReset()
@@ -80,19 +100,63 @@ describe("CloudSessionChatSurface", () => {
 		}, { idempotencyKey: "message-2" });
 	});
 
-	it("hides model controls for Cloud harnesses without a provider catalog", async () => {
+	it("uses the Codex model and effort last selected in the TUI", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
-		cloudMocks.listChatModels.mockClear();
+		cloudMocks.listChatModels.mockResolvedValue({
+			models: [{ id: "tui-model", displayName: "TUI Model", default: false, efforts: ["low", "high"] }],
+			model: "tui-model", reasoningEffort: "high",
+		});
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		localStorage.setItem("cloud-chat-settings:org-1:session-1:codex", JSON.stringify({ model: "old-chat-model", reasoningEffort: "low" }));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}>
+			<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+		</QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ model: "tui-model", reasoningEffort: "high" }));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("continue", [], "native-settings");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "continue", model: "tui-model", reasoningEffort: "high",
+		}, { idempotencyKey: "native-settings" });
+	});
+
+	it("keeps a Chat selector change made while the native model request is in flight", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		let resolveModels!: (value: { models: { id: string; displayName: string; default: boolean; efforts: string[] }[]; model: string; reasoningEffort: string }) => void;
+		cloudMocks.listChatModels.mockReturnValue(new Promise((resolve) => { resolveModels = resolve; }));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}>
+			<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+		</QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalled());
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings({ model: "new-chat-model", reasoningEffort: "xhigh" }));
+		await act(async () => resolveModels({
+			models: [{ id: "old-tui-model", displayName: "Old TUI Model", default: false, efforts: ["low"] }],
+			model: "old-tui-model", reasoningEffort: "low",
+		}));
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ model: "new-chat-model", reasoningEffort: "xhigh" });
+	});
+
+	it.each(["worker", "orchestrator"] as const)("shows Claude models for a %s and restores its native selection", async (kind) => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({
+			models: [{ id: "claude-sonnet", displayName: "Claude Sonnet", default: true, efforts: ["medium", "high"] }],
+			model: "claude-sonnet", reasoningEffort: "high",
+		});
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		render(
 			<QueryClientProvider client={queryClient}>
-				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1" } }} />
+				<CloudSessionChatSurface session={{ ...session, kind, provider: "claude-code", cloud: { orgId: "org-1" } }} />
 			</QueryClientProvider>,
 		);
-		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.harness).toBe("claude-code"));
-		expect(cloudMocks.chatProps.mock.lastCall?.[0].models).toEqual([]);
-		expect(cloudMocks.chatProps.mock.lastCall?.[0].showApprovalMode).toBe(false);
-		expect(cloudMocks.listChatModels).not.toHaveBeenCalled();
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].models).toEqual([
+			{ id: "claude-sonnet", displayName: "Claude Sonnet", default: true, efforts: ["medium", "high"] },
+		]));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ model: "claude-sonnet", reasoningEffort: "high" }));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("continue", [], `claude-${kind}`);
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "continue", model: "claude-sonnet", reasoningEffort: "high",
+		}, { idempotencyKey: `claude-${kind}` });
 	});
 
 	it.each([
@@ -250,6 +314,25 @@ describe("CloudSessionChatSurface", () => {
 		expect(snapshot.controller.state).toBe("ready");
 	});
 
+	it("projects Codex tool activity and turn diffs beside the assistant reply", () => {
+		const event = (sequence: number, type: string, payload: unknown): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type, payload, createdAt: session.updatedAt,
+		});
+		const snapshot = toSnapshot(session, [
+			event(1, "chat.turn_started", { turnId: "turn-1" }),
+			event(2, "chat.activity", { turnId: "turn-1", activity: { id: "cmd-1", kind: "command", status: "running", summary: "go test", detail: { command: "go test" } } }),
+			event(3, "chat.activity", { turnId: "turn-1", activity: { id: "cmd-1", kind: "command", status: "completed", summary: "go test", detail: { command: "go test", output: "ok" } } }),
+			event(4, "chat.activity", { turnId: "turn-1", activity: { id: "edit-1", kind: "file_change", status: "completed", summary: "Edited files", detail: { files: [{ path: "main.go", status: "modified", additions: 0, deletions: 0 }] } } }),
+			event(5, "chat.activity", { turnId: "turn-1", activity: { id: "turn-diff", kind: "turn_diff", status: "completed", summary: "Changed files", detail: { diff: "diff --git a/main.go b/main.go\n--- a/main.go\n+++ b/main.go\n@@ -1 +1 @@\n-old\n+new\n" } } }),
+			event(6, "chat.assistant_delta", { turnId: "turn-1", text: "Done" }),
+			event(7, "chat.turn_completed", { turnId: "turn-1" }),
+		]);
+		expect(snapshot.items).toContainEqual(expect.objectContaining({ activityKind: "command", status: "completed", detail: expect.objectContaining({ output: "ok" }) }));
+		expect(snapshot.items).toContainEqual(expect.objectContaining({ role: "assistant", text: "Done" }));
+		expect(snapshot.items).toContainEqual(expect.objectContaining({ activityKind: "file_change", detail: expect.objectContaining({ files: [expect.objectContaining({ path: "main.go", patch: expect.stringContaining("+new") })] }) }));
+		expect(snapshot.turns[0].diff?.files).toContainEqual(expect.objectContaining({ path: "main.go", additions: 1, deletions: 1 }));
+	});
+
 	it("omits Codex's already-stored stdin status from the visible reply", () => {
 		const events: CloudCpClientEvent[] = [
 			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Hello", turnId: "turn-1" }, createdAt: session.updatedAt },
@@ -261,13 +344,33 @@ describe("CloudSessionChatSurface", () => {
 			.toEqual([expect.objectContaining({ text: "Hello!" })]);
 	});
 
-	it("shows an idle Cloud send as active while the worker claims it", () => {
+	it("shows the first Cloud send as active while the worker claims it", () => {
 		const events: CloudCpClientEvent[] = [
 			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Next", turnId: "turn-next" }, createdAt: session.updatedAt },
 		];
 		const snapshot = toSnapshot(session, events);
 		expect(snapshot.turns).toEqual([expect.objectContaining({ id: "turn-next", state: "running" })]);
 		expect(snapshot.controller.state).toBe("busy");
+	});
+
+	it("queues only later Cloud sends while the first awaits its worker", () => {
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "First", turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.user_message", payload: { text: "Second", turnId: "turn-2" }, createdAt: session.updatedAt },
+		];
+		const snapshot = toSnapshot(session, events);
+		expect(snapshot.turns.map((turn) => turn.state)).toEqual(["running", "queued"]);
+	});
+
+	it("shows the checkout error when a queued turn fails", () => {
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Build", turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_started", payload: { turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 3, type: "chat.turn_aborted", payload: { turnId: "turn-1", error: "Repository checkout failed. Reconnect GitHub." }, createdAt: session.updatedAt },
+		];
+		const snapshot = toSnapshot(session, events);
+		expect(snapshot.turns).toEqual([expect.objectContaining({ state: "failed", errorMessage: "Repository checkout failed. Reconnect GitHub." })]);
+		expect(snapshot.controller.state).toBe("ready");
 	});
 
 	it("keeps a second Cloud message queued behind an active turn", () => {

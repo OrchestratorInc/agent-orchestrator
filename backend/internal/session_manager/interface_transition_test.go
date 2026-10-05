@@ -3383,6 +3383,13 @@ func TestRecoverInterruptedClaudeTUIToChatPreservesPoisonedCheckpointThroughResu
 	if err := manager.ReconcileBackground(reconcileCtx); err != nil {
 		t.Fatalf("reconcile background: %v", err)
 	}
+	stopped, ok, err := st.GetSession(ctx, created.ID)
+	if err != nil || !ok || stopped.Activity.State != domain.ActivityExited || stopped.Metadata.RuntimeLaunchID != "" {
+		t.Fatalf("startup must leave the interrupted source stopped: session=%+v err=%v", stopped, err)
+	}
+	if _, err := manager.ResumeAgentWithMode(ctx, created.ID); err != nil {
+		t.Fatalf("explicitly resume source: %v", err)
+	}
 	relaunched, ok, err := st.GetSession(ctx, created.ID)
 	if err != nil || !ok {
 		t.Fatalf("read relaunched source: ok=%v err=%v", ok, err)

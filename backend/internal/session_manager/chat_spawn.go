@@ -417,6 +417,7 @@ func (m *Manager) resumeChatController(
 	project domain.ProjectRecord,
 	ws ports.WorkspaceInfo,
 	requireNativeHistory bool,
+	reconnectOnly bool,
 	controllerGeneration string,
 	historyPolicy domain.SessionInterfaceTransitionHistoryPolicy,
 ) (RestoreResult, error) {
@@ -466,6 +467,7 @@ func (m *Manager) resumeChatController(
 	}
 	var completionErr error
 	_, err = m.chat.StartChat(ctx, ChatStart{
+		ReconnectOnly:           reconnectOnly,
 		SessionID:               rec.ID,
 		ProjectID:               rec.ProjectID,
 		Kind:                    rec.Kind,

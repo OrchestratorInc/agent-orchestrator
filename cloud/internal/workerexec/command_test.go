@@ -199,7 +199,7 @@ func TestBuildRejectsMismatchedCredential(t *testing.T) {
 
 func TestBuildHeadlessDropsUnverifiableClaudeResume(t *testing.T) {
 	dataDir := t.TempDir()
-	builder := HarnessBuilder{Binaries: map[string]string{"claude-code": "/bin/echo"}, DataDir: dataDir}
+	builder := HarnessBuilder{Binaries: map[string]string{"claude-code": "/bin/echo"}, DataDir: dataDir, Launch: worker.LaunchContext{SessionID: "session-1", Kind: "worker", Harness: "claude-code"}}
 	// The control plane can hold a stale native id after a worker is
 	// reprovisioned; without the JSONL transcript on disk, Claude must start
 	// fresh rather than --resume a conversation that does not exist.
@@ -299,7 +299,7 @@ func TestBuildInteractiveRestoresClaudeConversationFromDurableConfig(t *testing.
 	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
 	command, err := (HarnessBuilder{DataDir: t.TempDir()}).BuildInteractive(worker.LaunchContext{
 		SessionID: "session-1", Harness: "claude-code", AgentSessionID: identity,
-		Mode: "standard",
+		Mode: "standard", Model: "claude-sonnet", ReasoningEffort: "high",
 	}, worker.CredentialResponse{
 		Provider: "claude-code", CredentialType: "api_key", Secret: "secret",
 	}, t.TempDir())
@@ -309,11 +309,26 @@ func TestBuildInteractiveRestoresClaudeConversationFromDurableConfig(t *testing.
 	if !containsAdjacent(command.Args, "--resume", identity) {
 		t.Fatalf("restore args missing from %#v", command.Args)
 	}
+	if !containsAdjacent(command.Args, "--model", "claude-sonnet") || !containsAdjacent(command.Args, "--effort", "high") {
+		t.Fatalf("selected Claude model and effort missing from %#v", command.Args)
+	}
 	if slices.Contains(command.Args, "--session-id") {
 		t.Fatalf("fresh-launch identity present in restore command %#v", command.Args)
 	}
 	if command.Env["CLAUDE_CONFIG_DIR"] != configDir {
 		t.Errorf("CLAUDE_CONFIG_DIR = %q", command.Env["CLAUDE_CONFIG_DIR"])
+	}
+}
+
+func TestBuildInteractiveClaudeDefaultEffortUsesProviderDefault(t *testing.T) {
+	command, err := (HarnessBuilder{DataDir: t.TempDir()}).BuildInteractive(worker.LaunchContext{
+		SessionID: "session-1", Harness: "claude-code", Mode: "standard", Model: "claude-sonnet", ReasoningEffort: "default",
+	}, worker.CredentialResponse{Provider: "claude-code", CredentialType: "api_key", Secret: "secret"}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(command.Args, "--effort") {
+		t.Fatalf("default is not a native effort: %#v", command.Args)
 	}
 }
 

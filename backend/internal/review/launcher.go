@@ -41,7 +41,7 @@ type Launcher interface {
 	// only when a reviewer launch is actually required, after ReviewRun rows
 	// have been created. On failure the engine's Trigger() calls failRuns() to
 	// mark those rows as failed, matching the existing Spawn failure semantics.
-	Preflight(ctx context.Context, harness domain.ReviewerHarness, workspacePath string) error
+	Preflight(ctx context.Context, harness domain.ReviewerHarness, workspacePath string, mode ...domain.ReviewerInterfaceMode) error
 	// live pane (stable per worker, reused across passes) plus any native agent
 	// session id known at launch time.
 	Spawn(ctx context.Context, spec LaunchSpec) (LaunchResult, error)
@@ -83,6 +83,11 @@ type LaunchSpec struct {
 	TargetSHA              string
 	ReviewQueue            []ports.ReviewTask
 	ReviewIndex            int
+	InterfaceMode          domain.ReviewerInterfaceMode
+	// DeferInitialMessage starts the reviewer without dispatching its review
+	// prompt. The engine uses this while replacing a live reviewer so the old
+	// process can be stopped before the replacement receives executable work.
+	DeferInitialMessage bool
 }
 
 // LaunchResult is the terminal/runtime state created by a reviewer launch.
@@ -97,10 +102,13 @@ type LaunchResult struct {
 
 // ReviewerChatStart is the transport-neutral typed reviewer launch request.
 type ReviewerChatStart struct {
+	BatchID                string
 	ReviewID               string
 	WorkerID               domain.SessionID
 	ProjectID              domain.ProjectID
 	Harness                domain.AgentHarness
+	Model                  string
+	Effort                 string
 	DataDir                string
 	WorkspacePath          string
 	Env                    map[string]string
@@ -116,7 +124,7 @@ type ReviewerChatController interface {
 	PreflightReviewChat(context.Context, domain.AgentHarness) error
 	StartReviewChat(context.Context, ReviewerChatStart) (string, error)
 	RestoreReviewChat(context.Context, ReviewerChatStart) (string, error)
-	SendReviewChat(context.Context, string, string) error
+	SendReviewChat(context.Context, string, string, string) error
 	ReviewChatAlive(string) bool
 	InterruptReviewChat(context.Context, string) error
 	StopReviewChat(context.Context, string) error
@@ -214,12 +222,12 @@ func NewLauncher(reviewers ports.ReviewerResolver, rt reviewerRuntime, dataDir s
 // resolve the adapter, build the real ReviewCommand, and validate the
 // executable. The only difference from Spawn is that Preflight stops before
 // runtime.Create().
-func (l *agentLauncher) Preflight(ctx context.Context, harness domain.ReviewerHarness, workspacePath string) error {
+func (l *agentLauncher) Preflight(ctx context.Context, harness domain.ReviewerHarness, workspacePath string, mode ...domain.ReviewerInterfaceMode) error {
 	reviewer, ok := l.reviewers.Reviewer(harness)
 	if !ok {
 		return fmt.Errorf("no reviewer adapter for harness %q", harness)
 	}
-	if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && l.reviewChatSupported(profile) {
+	if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && (len(mode) == 0 || mode[0] != domain.ReviewerInterfaceTUI) && l.reviewChatSupported(profile) {
 		return l.chat.PreflightReviewChat(ctx, profile.ReviewChatHarness())
 	}
 	cmd, err := reviewer.ReviewCommand(ctx, ports.ReviewInvocation{WorkspacePath: workspacePath})
@@ -449,7 +457,7 @@ func (l *agentLauncher) Spawn(ctx context.Context, spec LaunchSpec) (LaunchResul
 		return LaunchResult{}, err
 	}
 	if reviewer, ok := l.reviewers.Reviewer(spec.Harness); ok {
-		if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && l.reviewChatSupported(profile) {
+		if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && spec.InterfaceMode != domain.ReviewerInterfaceTUI && l.reviewChatSupported(profile) {
 			return l.startReviewerChat(ctx, spec, inv, profile, false)
 		}
 	}
@@ -466,7 +474,7 @@ func (l *agentLauncher) RestoreTerminal(ctx context.Context, spec LaunchSpec) (L
 		return LaunchResult{}, err
 	}
 	if reviewer, ok := l.reviewers.Reviewer(spec.Harness); ok {
-		if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && l.reviewChatSupported(profile) {
+		if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && spec.InterfaceMode != domain.ReviewerInterfaceTUI && l.reviewChatSupported(profile) {
 			return l.startReviewerChat(ctx, spec, inv, profile, true)
 		}
 	}
@@ -482,7 +490,11 @@ func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, 
 	if providerID == "" {
 		providerID = strings.TrimSpace(spec.AgentSessionID)
 	}
-	start := ReviewerChatStart{ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil), Prompt: inv.Prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
+	prompt := inv.Prompt
+	if spec.DeferInitialMessage {
+		prompt = ""
+	}
+	start := ReviewerChatStart{BatchID: spec.BatchID, ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), Model: spec.AgentConfig.Model, Effort: spec.AgentConfig.Effort, DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil), Prompt: prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
 	if restore {
 		providerID, err = l.chat.RestoreReviewChat(ctx, start)
 	} else {
@@ -498,6 +510,11 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 	reviewer, ok := l.reviewers.Reviewer(spec.Harness)
 	if !ok {
 		return LaunchResult{}, fmt.Errorf("no reviewer adapter for harness %q", spec.Harness)
+	}
+	// Some adapters deliver the task in argv rather than InitialMessage.
+	// A replacement must start idle regardless of the delivery strategy.
+	if spec.DeferInitialMessage {
+		inv.Prompt = ""
 	}
 	if pl, ok := reviewer.(preLaunchReviewer); ok {
 		if err := pl.PreLaunch(ctx, inv); err != nil {
@@ -566,7 +583,7 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("reviewer runtime: %w", err)
 	}
-	if cmd.InitialMessage != "" {
+	if cmd.InitialMessage != "" && !spec.DeferInitialMessage {
 		if err := l.waitForPromptReadiness(ctx, reviewer, handle); err != nil {
 			return LaunchResult{}, fmt.Errorf("reviewer prompt readiness: %w", err)
 		}
@@ -739,7 +756,7 @@ func (l *agentLauncher) Notify(ctx context.Context, handleID string, spec Launch
 		return fmt.Errorf("reviewer message: %w", err)
 	}
 	if reviewID, ok := reviewerChatID(handleID); ok && l.chat != nil {
-		return l.chat.SendReviewChat(ctx, reviewID, msg)
+		return l.chat.SendReviewChat(ctx, reviewID, msg, spec.BatchID)
 	}
 	if err := l.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: handleID}, msg); err != nil {
 		return fmt.Errorf("notify reviewer: %w", err)
@@ -791,7 +808,9 @@ func (l *agentLauncher) Cancel(ctx context.Context, handleID string, harness dom
 		return nil
 	}
 	if reviewID, ok := reviewerChatID(handleID); ok && l.chat != nil {
-		return l.chat.InterruptReviewChat(ctx, reviewID)
+		// A cancelled review must not leave its Chat controller accepting work or
+		// its in-flight turn looking active. The next trigger starts a fresh one.
+		return l.chat.StopReviewChat(ctx, reviewID)
 	}
 	reviewer, ok := l.reviewers.Reviewer(harness)
 	if !ok {
@@ -876,4 +895,12 @@ func (l *agentLauncher) Destroy(ctx context.Context, handleID string) error {
 func reviewerChatID(handleID string) (string, bool) {
 	id, ok := strings.CutPrefix(handleID, reviewerChatHandlePrefix)
 	return id, ok && strings.TrimSpace(id) != ""
+}
+
+// BatchMessageID ties a dispatched reviewer Chat turn to its durable review runs.
+func BatchMessageID(batchID string) string {
+	if batchID == "" {
+		return ""
+	}
+	return "review-batch:" + batchID
 }
