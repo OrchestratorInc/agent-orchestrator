@@ -3058,10 +3058,16 @@ func capabilityNames(caps ports.ChatCapabilities) []string {
 // it for this pass only, without editing project config, so one session's choice
 // cannot change what another session in the project runs.
 type TriggerReviewRequest struct {
-	Rerun         bool                         `json:"rerun,omitempty" description:"Start a fresh manual pass for already-reviewed current heads; reuse an active pass from the same reviewer."`
 	Harness       domain.ReviewerHarness       `json:"harness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,opencode-v2,kiro,pi,agy,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
 	AgentConfig   domain.AgentConfig           `json:"agentConfig,omitempty"`
 	InterfaceMode domain.ReviewerInterfaceMode `json:"interfaceMode,omitempty" enum:"chat,tui"`
+	// Source labels who asked for the pass. Omitted means a person (manual).
+	Source string `json:"source,omitempty" enum:"manual,agent" description:"Who requested the pass: manual (a person, the default) or agent (an AO session through the CLI)."`
+	// RejectReviewedHead is the CLI's same-commit policy. Omitting it keeps the
+	// reuse behavior the desktop app relies on.
+	RejectReviewedHead bool `json:"rejectReviewedHead,omitempty" description:"Return 409 instead of reusing when every open PR head is already being reviewed or already has a review."`
+	Rerun              bool `json:"rerun,omitempty" description:"Start a fresh pass for already-reviewed current heads; a different reviewer may run alongside one that is still running. A person's rerun reuses an active pass from the same reviewer; an agent's rerun returns 409 REVIEW_ALREADY_RUNNING instead."`
+	EnableAutoInject   bool `json:"enableAutoInject,omitempty" description:"Turn on the worker session's review auto-inject once a pass has started, so its results reach the worker."`
 }
 
 // ResolveReviewCommentRequest is the body of POST /api/v1/sessions/{sessionId}/reviews/comments/resolve.

@@ -29,9 +29,12 @@ var errRunSuperseded = errors.New("review: run is no longer running")
 // ErrInvalid and ErrNotFound re-export the engine sentinels so the HTTP
 // controller maps service failures to 422/404 without importing the core.
 var (
-	ErrInvalid             = reviewcore.ErrInvalid
-	ErrNotFound            = reviewcore.ErrNotFound
-	ErrAgentBinaryNotFound = ports.ErrAgentBinaryNotFound
+	ErrInvalid              = reviewcore.ErrInvalid
+	ErrNotFound             = reviewcore.ErrNotFound
+	ErrConflict             = reviewcore.ErrConflict
+	ErrReviewAlreadyRunning = reviewcore.ErrReviewAlreadyRunning
+	ErrHeadAlreadyReviewed  = reviewcore.ErrHeadAlreadyReviewed
+	ErrAgentBinaryNotFound  = ports.ErrAgentBinaryNotFound
 )
 
 // reviewErrorKind reduces a trigger failure to a safe category. Raw error text
@@ -49,6 +52,8 @@ func reviewErrorKind(err error) string {
 		return "invalid"
 	case errors.Is(err, reviewcore.ErrNotFound):
 		return "not_found"
+	case errors.Is(err, reviewcore.ErrConflict):
+		return "conflict"
 	case errors.Is(err, ports.ErrAgentBinaryNotFound):
 		return "agent_unavailable"
 	}
@@ -62,6 +67,7 @@ type Manager interface {
 	Trigger(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig) (reviewcore.TriggerResult, error)
 	TriggerWithMode(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig, mode domain.ReviewerInterfaceMode) (reviewcore.TriggerResult, error)
 	TriggerWithOptions(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error)
+	TriggerRequested(ctx context.Context, workerID domain.SessionID, req TriggerRequest) (TriggerOutcome, error)
 	RequestRereview(ctx context.Context, workerID domain.SessionID, prURL, reviewer string) error
 	ResolveReviewComment(ctx context.Context, workerID domain.SessionID, prURL, commentURL string) error
 	TriggerAuto(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness) (reviewcore.TriggerResult, error)
@@ -91,7 +97,7 @@ type Service struct {
 	// engineTrigger indirects the engine's source-tagged trigger so the
 	// instrumented path can be exercised without standing up a full engine and
 	// its eighteen-method store. Defaulted in New; only tests replace it.
-	engineTrigger func(context.Context, domain.SessionID, domain.ReviewerHarness, domain.AgentConfig, domain.ReviewTriggerSource) (reviewcore.TriggerResult, error)
+	engineTrigger func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error)
 }
 
 type reviewNotificationSink interface {
@@ -113,6 +119,7 @@ type Store interface {
 	UpdateReviewActivity(ctx context.Context, id string, state domain.ActivityState, agentSessionID, launchID string) (bool, error)
 	GetReviewRun(ctx context.Context, id string) (domain.ReviewRun, bool, error)
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
+	SetSessionAutoInjectReview(ctx context.Context, id domain.SessionID, autoInject bool, updatedAt time.Time) (bool, error)
 	UpdateReviewRunResult(ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error)
 	MarkReviewRunDelivered(ctx context.Context, id string, deliveredAt time.Time) (bool, error)
 	ListPRsBySession(ctx context.Context, id domain.SessionID) ([]domain.PullRequest, error)
@@ -205,14 +212,8 @@ func New(engine *reviewcore.Engine, store Store, opts ...Option) *Service {
 		opt(s)
 	}
 	if s.engineTrigger == nil {
-		s.engineTrigger = func(
-			ctx context.Context,
-			workerID domain.SessionID,
-			harness domain.ReviewerHarness,
-			config domain.AgentConfig,
-			source domain.ReviewTriggerSource,
-		) (reviewcore.TriggerResult, error) {
-			return s.engine.TriggerWithSource(ctx, workerID, harness, config, source)
+		s.engineTrigger = func(ctx context.Context, workerID domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+			return s.engine.TriggerWithOptions(ctx, workerID, opts)
 		}
 	}
 	return s
@@ -430,7 +431,78 @@ func (s *Service) Trigger(
 	harness domain.ReviewerHarness,
 	config domain.AgentConfig,
 ) (reviewcore.TriggerResult, error) {
-	return s.triggerWithSource(ctx, workerID, harness, config, domain.ReviewTriggerManual)
+	return s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{Harness: harness, Config: config, Source: domain.ReviewTriggerManual})
+}
+
+// TriggerRequest is a client-requested review pass with its same-commit and
+// feedback policy.
+type TriggerRequest struct {
+	Harness domain.ReviewerHarness
+	Config  domain.AgentConfig
+	// Source is manual (a person) or agent (an AO session through the CLI).
+	// Automatic passes come only from the daemon through TriggerAuto.
+	Source             domain.ReviewTriggerSource
+	InterfaceMode      domain.ReviewerInterfaceMode
+	RejectReviewedHead bool
+	Rerun              bool
+	// EnableAutoInject turns on the worker session's review auto-inject once a
+	// pass has started, so its results reach the worker.
+	EnableAutoInject bool
+}
+
+// TriggerOutcome is the trigger result plus whether this request turned the
+// session's review auto-inject on.
+type TriggerOutcome struct {
+	reviewcore.TriggerResult
+	AutoInjectEnabled bool
+}
+
+// TriggerRequested starts a client-requested review pass.
+func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionID, req TriggerRequest) (TriggerOutcome, error) {
+	source := req.Source
+	if source == "" {
+		source = domain.ReviewTriggerManual
+	}
+	if source != domain.ReviewTriggerManual && source != domain.ReviewTriggerAgent {
+		return TriggerOutcome{}, fmt.Errorf("%w: review trigger source must be %q or %q", ErrInvalid, domain.ReviewTriggerManual, domain.ReviewTriggerAgent)
+	}
+	if req.Rerun && req.RejectReviewedHead {
+		return TriggerOutcome{}, fmt.Errorf("%w: rerun cannot be combined with rejecting an already-reviewed head", ErrInvalid)
+	}
+	result, err := s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{
+		Harness:            req.Harness,
+		Config:             req.Config,
+		Source:             source,
+		InterfaceMode:      req.InterfaceMode,
+		RejectReviewedHead: req.RejectReviewedHead,
+		Rerun:              req.Rerun,
+	})
+	if err != nil {
+		return TriggerOutcome{}, err
+	}
+	outcome := TriggerOutcome{TriggerResult: result}
+	if !req.EnableAutoInject {
+		return outcome, nil
+	}
+	// Only after a pass exists: a rejected or failed trigger must not change
+	// the session's feedback policy. Delivery reads the session's live setting
+	// when the result arrives, so turning it on now covers this pass.
+	session, ok, err := s.store.GetSession(ctx, workerID)
+	if err != nil {
+		return TriggerOutcome{}, err
+	}
+	if !ok {
+		return TriggerOutcome{}, fmt.Errorf("%w: worker session %q", ErrNotFound, workerID)
+	}
+	if session.AutoInjectReview {
+		return outcome, nil
+	}
+	updated, err := s.store.SetSessionAutoInjectReview(ctx, workerID, true, s.clock())
+	if err != nil {
+		return TriggerOutcome{}, fmt.Errorf("enable review auto-inject: %w", err)
+	}
+	outcome.AutoInjectEnabled = updated
+	return outcome, nil
 }
 
 // TriggerWithMode starts a manual pass on the requested reviewer surface.
@@ -438,7 +510,7 @@ func (s *Service) TriggerWithMode(ctx context.Context, workerID domain.SessionID
 	if mode != domain.ReviewerInterfaceChat && mode != domain.ReviewerInterfaceTUI {
 		return reviewcore.TriggerResult{}, fmt.Errorf("%w: unknown reviewer interface mode %q", ErrInvalid, mode)
 	}
-	return s.triggerWithSource(ctx, workerID, harness, config, domain.ReviewTriggerManual, reviewcore.TriggerOptions{InterfaceMode: mode})
+	return s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{Harness: harness, Config: config, Source: domain.ReviewTriggerManual, InterfaceMode: mode})
 }
 
 // TriggerWithOptions starts a pass with an explicit same-commit policy.
@@ -446,28 +518,26 @@ func (s *Service) TriggerWithOptions(ctx context.Context, workerID domain.Sessio
 	if opts.Source == "" {
 		opts.Source = domain.ReviewTriggerManual
 	}
-	return s.triggerWithSource(ctx, workerID, opts.Harness, opts.Config, opts.Source, opts)
+	return s.triggerWithOptions(ctx, workerID, opts)
 }
 
 // TriggerAuto starts a daemon-initiated review pass.
 func (s *Service) TriggerAuto(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness) (reviewcore.TriggerResult, error) {
-	return s.triggerWithSource(ctx, workerID, harness, domain.AgentConfig{}, domain.ReviewTriggerAuto)
+	return s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{Harness: harness, Source: domain.ReviewTriggerAuto})
 }
 
-// triggerWithSource is the single instrumented trigger path. Both entry points
-// route through it so an automatic pass is never invisible: before this, only
-// the manual Trigger emitted, which made auto-review indistinguishable from
-// manual review in every downstream funnel even though the two answer
-// completely different product questions.
-func (s *Service) triggerWithSource(
+// triggerWithOptions is the single instrumented trigger path. Every entry
+// point routes through it so an automatic pass is never invisible: before
+// this, only the manual Trigger emitted, which made auto-review
+// indistinguishable from manual review in every downstream funnel even though
+// the two answer completely different product questions.
+func (s *Service) triggerWithOptions(
 	ctx context.Context,
 	workerID domain.SessionID,
-	harness domain.ReviewerHarness,
-	config domain.AgentConfig,
-	source domain.ReviewTriggerSource,
-	options ...reviewcore.TriggerOptions,
+	opts reviewcore.TriggerOptions,
 ) (reviewcore.TriggerResult, error) {
-	triggeredPayload := map[string]any{"trigger": string(source)}
+	harness, config, source := opts.Harness, opts.Config, opts.Source
+	triggeredPayload := map[string]any{"trigger": string(source), "rerun": opts.Rerun}
 	if err := config.Validate(); err != nil {
 		err = fmt.Errorf("%w: reviewer config: %w", ErrInvalid, err)
 		s.emit(ctx, "ao.review.trigger_failed", workerID, map[string]any{
@@ -487,15 +557,7 @@ func (s *Service) triggerWithSource(
 		}
 		defer release()
 	}
-	var result reviewcore.TriggerResult
-	var err error
-	if len(options) > 0 {
-		opts := options[0]
-		opts.Harness, opts.Config, opts.Source = harness, config, source
-		result, err = s.engine.TriggerWithOptions(ctx, workerID, opts)
-	} else {
-		result, err = s.engineTrigger(ctx, workerID, harness, config, source)
-	}
+	result, err := s.engineTrigger(ctx, workerID, opts)
 	if err != nil {
 		s.emit(ctx, "ao.review.trigger_failed", workerID, map[string]any{
 			"error_kind": reviewErrorKind(err),
@@ -857,7 +919,10 @@ func (s *Service) deliverableRuns(ctx context.Context, workerID domain.SessionID
 	}
 	deliverable := make([]domain.ReviewRun, 0, len(runs))
 	for _, run := range runs {
-		if run.Status != domain.ReviewRunComplete || run.Verdict != domain.VerdictChangesRequested || run.DeliveredAt != nil || !run.AutoInjectReview {
+		// Both verdicts reach the worker when the session wants review feedback:
+		// requested changes are work to do, and an approval closes the loop for
+		// a worker that asked for the review instead of leaving it to poll.
+		if run.Status != domain.ReviewRunComplete || !run.Verdict.Valid() || run.DeliveredAt != nil || !run.AutoInjectReview {
 			continue
 		}
 		if currentHeads[run.PRURL] != run.TargetSHA {

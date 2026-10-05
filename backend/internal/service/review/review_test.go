@@ -26,6 +26,7 @@ type fakeStore struct {
 	prReviews               map[string][]domain.PullRequestReview
 	prComments              map[string][]domain.PullRequestComment
 	sessionAutoInjectReview *bool
+	autoInjectSets          []bool
 
 	updateCalls        int
 	activityUpdates    int
@@ -91,6 +92,12 @@ func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.S
 		enabled = *f.sessionAutoInjectReview
 	}
 	return domain.SessionRecord{ID: id, AutoInjectReview: enabled}, true, nil
+}
+
+func (f *fakeStore) SetSessionAutoInjectReview(_ context.Context, _ domain.SessionID, autoInject bool, _ time.Time) (bool, error) {
+	f.autoInjectSets = append(f.autoInjectSets, autoInject)
+	f.sessionAutoInjectReview = &autoInject
+	return true, nil
 }
 
 func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
@@ -621,7 +628,9 @@ func TestSubmitManyRejectsOnlySupersededRuns(t *testing.T) {
 	}
 }
 
-func TestSubmitBatchApprovedOnlySendsNothing(t *testing.T) {
+// An approval reaches the worker too when the session wants review feedback: a
+// worker that asked for a review must hear that it passed instead of polling.
+func TestSubmitApprovedDeliversWhenSessionAutoInjects(t *testing.T) {
 	st := &fakeStore{
 		ok:  true,
 		run: domain.ReviewRun{ID: "run-2", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunRunning},
@@ -634,11 +643,34 @@ func TestSubmitBatchApprovedOnlySendsNothing(t *testing.T) {
 	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
 	svc := New(nil, st, WithLifecycleReducer(reducer))
 
-	if _, err := svc.Submit(context.Background(), "mer-1", "run-2", domain.VerdictApproved, "", "102"); err != nil {
+	run, err := svc.Submit(context.Background(), "mer-1", "run-2", domain.VerdictApproved, "", "102")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if reducer.batchCalls != 1 || len(reducer.gotBatch) != 1 || reducer.gotBatch[0].RunID != "run-2" || reducer.gotBatch[0].Verdict != domain.VerdictApproved {
+		t.Fatalf("approved result should be delivered alone: batchCalls=%d batch=%+v", reducer.batchCalls, reducer.gotBatch)
+	}
+	if run.Status != domain.ReviewRunDelivered {
+		t.Fatalf("status = %q, want delivered", run.Status)
+	}
+}
+
+func TestSubmitApprovedSendsNothingWhenSessionAutoInjectIsOff(t *testing.T) {
+	off := false
+	st := &fakeStore{
+		ok:                      true,
+		run:                     domain.ReviewRun{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
+		prs:                     []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}},
+		sessionAutoInjectReview: &off,
+	}
+	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
+	svc := New(nil, st, WithLifecycleReducer(reducer))
+
+	if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "", ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	if reducer.batchCalls != 0 || st.markCalls != 0 {
-		t.Fatalf("approved-only batch should not deliver: batchCalls=%d markCalls=%d", reducer.batchCalls, st.markCalls)
+		t.Fatalf("auto-inject off must not deliver: batchCalls=%d markCalls=%d", reducer.batchCalls, st.markCalls)
 	}
 }
 
@@ -891,7 +923,7 @@ func TestTriggerReportsWhoStartedThePass(t *testing.T) {
 			sink := &recordingSink{}
 			svc := New(nil, &fakeStore{}, WithTelemetry(sink))
 			svc.engineTrigger = func(
-				_ context.Context, _ domain.SessionID, _ domain.ReviewerHarness, _ domain.AgentConfig, _ domain.ReviewTriggerSource,
+				_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions,
 			) (reviewcore.TriggerResult, error) {
 				return reviewcore.TriggerResult{
 					Run:         domain.ReviewRun{Harness: "claude-code"},
@@ -919,7 +951,7 @@ func TestTriggerFailureReportsWhichPassFailed(t *testing.T) {
 	sink := &recordingSink{}
 	svc := New(nil, &fakeStore{}, WithTelemetry(sink))
 	svc.engineTrigger = func(
-		_ context.Context, _ domain.SessionID, _ domain.ReviewerHarness, _ domain.AgentConfig, _ domain.ReviewTriggerSource,
+		_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions,
 	) (reviewcore.TriggerResult, error) {
 		return reviewcore.TriggerResult{}, fmt.Errorf("%w: no PR", reviewcore.ErrInvalid)
 	}
@@ -946,7 +978,7 @@ func TestTriggerRejectsInvalidReviewerConfigBeforeEngine(t *testing.T) {
 	svc := New(nil, &fakeStore{}, WithTelemetry(sink))
 	called := false
 	svc.engineTrigger = func(
-		_ context.Context, _ domain.SessionID, _ domain.ReviewerHarness, _ domain.AgentConfig, _ domain.ReviewTriggerSource,
+		_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions,
 	) (reviewcore.TriggerResult, error) {
 		called = true
 		return reviewcore.TriggerResult{}, nil
@@ -1002,7 +1034,7 @@ func TestRestartedManualPassIsNotReportedAsReused(t *testing.T) {
 	sink := &recordingSink{}
 	svc := New(nil, &fakeStore{}, WithTelemetry(sink))
 	svc.engineTrigger = func(
-		_ context.Context, _ domain.SessionID, _ domain.ReviewerHarness, _ domain.AgentConfig, _ domain.ReviewTriggerSource,
+		_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions,
 	) (reviewcore.TriggerResult, error) {
 		return reviewcore.TriggerResult{Run: domain.ReviewRun{Harness: "codex"}, Created: true, CreatedRuns: nil}, nil
 	}
@@ -1023,7 +1055,7 @@ func TestReusedManualPassStaysATrigger(t *testing.T) {
 	sink := &recordingSink{}
 	svc := New(nil, &fakeStore{}, WithTelemetry(sink))
 	svc.engineTrigger = func(
-		_ context.Context, _ domain.SessionID, _ domain.ReviewerHarness, _ domain.AgentConfig, _ domain.ReviewTriggerSource,
+		_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions,
 	) (reviewcore.TriggerResult, error) {
 		return reviewcore.TriggerResult{Run: domain.ReviewRun{Harness: "codex"}, CreatedRuns: nil}, nil
 	}
@@ -1064,7 +1096,7 @@ func TestReusedOrSkippedAutoPassStillCountsAsTriggered(t *testing.T) {
 			sink := &recordingSink{}
 			svc := New(nil, &fakeStore{}, WithTelemetry(sink))
 			svc.engineTrigger = func(
-				_ context.Context, _ domain.SessionID, _ domain.ReviewerHarness, _ domain.AgentConfig, _ domain.ReviewTriggerSource,
+				_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions,
 			) (reviewcore.TriggerResult, error) {
 				return c.result, nil
 			}
@@ -1090,5 +1122,79 @@ func TestReusedOrSkippedAutoPassStillCountsAsTriggered(t *testing.T) {
 				t.Fatalf("ao.review.trigger_failed count = %d, want 0", len(failed))
 			}
 		})
+	}
+}
+
+func TestTriggerRequestedEnablesAutoInjectOnlyAfterAPassStarts(t *testing.T) {
+	off := false
+	st := &fakeStore{sessionAutoInjectReview: &off}
+	sink := &recordingSink{}
+	svc := New(nil, st, WithTelemetry(sink))
+	var gotOpts reviewcore.TriggerOptions
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		gotOpts = opts
+		return reviewcore.TriggerResult{Created: true, CreatedRuns: []domain.ReviewRun{{ID: "run-1"}}}, nil
+	}
+
+	out, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{
+		Harness: domain.ReviewerCodex, Source: domain.ReviewTriggerAgent, RejectReviewedHead: true, EnableAutoInject: true,
+	})
+	if err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if !out.AutoInjectEnabled || len(st.autoInjectSets) != 1 || !st.autoInjectSets[0] {
+		t.Fatalf("outcome=%+v sets=%v, want auto-inject turned on once", out, st.autoInjectSets)
+	}
+	if gotOpts.Source != domain.ReviewTriggerAgent || !gotOpts.RejectReviewedHead || gotOpts.Harness != domain.ReviewerCodex {
+		t.Fatalf("engine opts = %+v, want the request forwarded", gotOpts)
+	}
+	if got := sink.named("ao.review.triggered"); len(got) != 1 || got[0].Payload["trigger"] != "agent" {
+		t.Fatalf("triggered events = %+v, want one agent trigger", got)
+	}
+
+	// Already on: nothing to change and nothing to report.
+	out, err = svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Source: domain.ReviewTriggerAgent, EnableAutoInject: true})
+	if err != nil {
+		t.Fatalf("second TriggerRequested: %v", err)
+	}
+	if out.AutoInjectEnabled || len(st.autoInjectSets) != 1 {
+		t.Fatalf("outcome=%+v sets=%v, want no second write", out, st.autoInjectSets)
+	}
+}
+
+func TestTriggerRequestedLeavesAutoInjectWhenTheTriggerIsRejected(t *testing.T) {
+	off := false
+	st := &fakeStore{sessionAutoInjectReview: &off}
+	svc := New(nil, st)
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		return reviewcore.TriggerResult{}, fmt.Errorf("%w: PR #1 head abc was already reviewed", reviewcore.ErrHeadAlreadyReviewed)
+	}
+
+	_, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Source: domain.ReviewTriggerAgent, RejectReviewedHead: true, EnableAutoInject: true})
+	if !errors.Is(err, ErrHeadAlreadyReviewed) || !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %v, want ErrHeadAlreadyReviewed", err)
+	}
+	if len(st.autoInjectSets) != 0 {
+		t.Fatalf("a rejected trigger changed auto-inject: %v", st.autoInjectSets)
+	}
+	if kind := reviewErrorKind(err); kind != "conflict" {
+		t.Fatalf("error kind = %q, want conflict", kind)
+	}
+}
+
+func TestTriggerRequestedRejectsDaemonOnlySourceAndContradictoryPolicy(t *testing.T) {
+	svc := New(nil, &fakeStore{})
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		t.Fatal("engine must not run")
+		return reviewcore.TriggerResult{}, nil
+	}
+	for _, req := range []TriggerRequest{
+		{Source: domain.ReviewTriggerAuto},
+		{Source: "robot"},
+		{Rerun: true, RejectReviewedHead: true},
+	} {
+		if _, err := svc.TriggerRequested(context.Background(), "worker-1", req); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("req %+v: err = %v, want ErrInvalid", req, err)
+		}
 	}
 }

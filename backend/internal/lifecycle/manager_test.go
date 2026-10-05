@@ -3863,6 +3863,61 @@ func TestApplyReviewBatchSendsCombinedAndDedups(t *testing.T) {
 	}
 }
 
+// A worker that requested a review hears an approval too, worded so it is never
+// mistaken for the GitHub approval branch protection may require.
+func TestApplyReviewBatchDeliversApprovalWithHonestBoundary(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = working("mer-1")
+	msg := &fakeMessenger{}
+	m := New(st, msg)
+
+	outcome, err := m.ApplyReviewBatch(ctx, "mer-1", "batch-a", []ReviewResult{
+		{RunID: "run-1", BatchID: "batch-a", WorkerID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Verdict: domain.VerdictApproved, GithubReviewID: "201"},
+	})
+	if err != nil {
+		t.Fatalf("ApplyReviewBatch: %v", err)
+	}
+	if outcome != ReviewDeliverySent || len(msg.msgs) != 1 {
+		t.Fatalf("outcome/messages = %q/%v, want sent once", outcome, msg.msgs)
+	}
+	got := msg.msgs[0]
+	for _, want := range []string{
+		"approved 1 review(s)",
+		"Verdict: approved",
+		"Head commit: sha1",
+		"GitHub review: 201",
+		"It is not a GitHub approval",
+		"does not authorize merging",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("approval nudge missing %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "Once you have addressed it") {
+		t.Fatalf("an approval must not ask the worker to address anything: %q", got)
+	}
+}
+
+func TestApplyReviewBatchSummarizesMixedVerdicts(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = working("mer-1")
+	msg := &fakeMessenger{}
+	m := New(st, msg)
+
+	if _, err := m.ApplyReviewBatch(ctx, "mer-1", "batch-m", []ReviewResult{
+		{RunID: "run-1", BatchID: "batch-m", WorkerID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Verdict: domain.VerdictApproved},
+		{RunID: "run-2", BatchID: "batch-m", WorkerID: "mer-1", PRURL: "https://github.com/o/r/pull/2", TargetSHA: "sha2", Verdict: domain.VerdictChangesRequested, Body: "fix it", GithubReviewID: "202"},
+	}); err != nil {
+		t.Fatalf("ApplyReviewBatch: %v", err)
+	}
+	got := msg.msgs[0]
+	for _, want := range []string{"submitted 2 review(s): 1 requesting changes, 1 approved", "reply on GitHub review 202", "It is not a GitHub approval"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("mixed nudge missing %q: %q", want, got)
+		}
+	}
+}
+
 func TestApplyReviewBatchNoopsWithoutDeliverableResults(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = working("mer-1")
