@@ -396,8 +396,8 @@
 	--size-branch-chip: 13rem;
 	--size-inspector-min: 280px;
 	--size-textarea-min: 112px;
-	/* Two 20px actions + one 1px gap + the 2px right inset. */
-	--size-sidebar-project-actions: 43px;
+	/* Two 24px actions + one 6px gap + 4px right inset + 4px label clearance. */
+	--size-sidebar-project-actions: 62px;
 
 	/* Shared inset-panel geometry (welcome board + settings page) */
 	--size-center-panel-inset: 24px;

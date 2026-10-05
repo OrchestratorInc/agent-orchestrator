@@ -2350,9 +2350,9 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 }
 
 /* Icon-only trailing controls (project kebab/orchestrator, session pin/kill,
-   Projects "+") tint the glyph only — never pick up the focus fill above. */
+   section "+") share the instant icon-button fill on hover and focus-visible. */
 .sidebar-focusless .sidebar-icon-action:focus-visible {
-	background-color: transparent !important;
+	background-color: var(--color-interactive-hover) !important;
 }
 
 /* Growing NavRowHighlight owns the fill — don't paint a second focus slab on
@@ -2389,6 +2389,12 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 	opacity: 1;
 }
 
+/* Project label/icon go foreground whenever the project's pill is lit, including
+   when the pointer or keyboard focus is on a trailing action outside the nav button. */
+[data-project-drag-row]:has(:focus-visible) :is([data-project-label], [data-project-folder-visual]) {
+	color: var(--color-foreground);
+}
+
 /* Fine-pointer hover only: row highlight grow, folder↔chevron swap, session
    action reveal. Touch must not sticky-hover; keyboard uses focus-visible above.
    Folder/chevron/actions use `scale`/`rotate` (not `transform`) so Tailwind v4
@@ -2417,6 +2423,10 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 
 	.group\/menu-item:hover:not([data-dragging="true"]) [data-project-folder-visual][data-expanded] [data-project-chevron-icon] {
 		rotate: 90deg;
+	}
+
+	.group\/menu-item:not([data-dragging="true"]) [data-project-drag-row]:hover :is([data-project-label], [data-project-folder-visual]) {
+		color: var(--color-foreground);
 	}
 
 	.group\/session-row:hover [data-session-action-buttons],
