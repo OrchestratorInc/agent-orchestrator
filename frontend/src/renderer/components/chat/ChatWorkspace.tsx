@@ -1131,7 +1131,7 @@ function ChatWorkspaceContent({
 					onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
 					configPending={configOptionPending}
 					error={configOptionError}
-					// Turn settings require a live controller even while messages can queue.
+					agentBusy={turn?.state === "running"}
 					disabled={
 							snapshot.controller.state === "connecting" ||
 							snapshot.controller.state === "stopped" ||
@@ -1160,6 +1160,7 @@ function ChatWorkspaceContent({
 			snapshot.controller.state,
 			stableModelReroute,
 			stableSettings,
+			turn?.state,
 		],
 	);
 	const composerApproval = useMemo(
