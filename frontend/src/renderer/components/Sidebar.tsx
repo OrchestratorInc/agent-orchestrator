@@ -340,7 +340,7 @@ function sidebarMinWidth(): number {
 const SIDEBAR_INITIAL_SECTION_LIMIT = 10;
 /** Initial agent count listed under each expanded project before its own Show more. */
 const SIDEBAR_PROJECT_SESSION_LIMIT = 6;
-/** Keep the complete Scratchpad section (including its footer gap) under half the available height. */
+/** Section scrollers fill the height their flex parent leaves them and scroll inside it. */
 const SECTION_SCROLLER_CLASS =
 	"scrollbar-none overflow-y-auto overflow-x-hidden overscroll-contain group-data-[collapsible=icon]:overflow-visible";
 
@@ -374,20 +374,12 @@ function useShowMoreCap<T extends { id: string }>(
 	return { listed, hiddenCount: Math.max(0, items.length - limit), showAll, toggleShowAll };
 }
 
-/** Scratchpad's total section cap, or none in the collapsed icon rail. */
+/** Scratchpad's total section cap, or none in the collapsed icon rail. Projects
+ *  take whatever height remains (flex-1 + min-h-0), so the two sections share the
+ *  column by flex layout alone and can never sum past it. */
 function scratchpadSectionStyle(isCollapsed: boolean): CSSProperties | undefined {
 	if (isCollapsed) return undefined;
 	return { maxHeight: "calc(50cqh - var(--space-2))" };
-}
-
-/** Cap the content-sized Projects list to the space left above Scratchpad. */
-function projectsScrollerStyle(isCollapsed: boolean, hasShowMore: boolean): CSSProperties | undefined {
-	if (isCollapsed) return undefined;
-	return {
-		maxHeight: hasShowMore
-			? "max(0px, calc(100cqh - var(--sidebar-scratchpad-reserved-height, 0px) - var(--space-8) - var(--space-1)))"
-			: "max(0px, calc(100cqh - var(--sidebar-scratchpad-reserved-height, 0px)))",
-	};
 }
 
 function SidebarSectionScroller({
@@ -737,7 +729,6 @@ export function Sidebar({
 	// Suppress layout animations for the first 500ms so background session
 	// re-sorts during daemon settle don't cause visible row shuffling.
 	const [layoutSettled, setLayoutSettled] = useState(false);
-	const sidebarSectionsRef = useRef<HTMLDivElement>(null);
 	useEffect(() => {
 		const timer = window.setTimeout(() => setLayoutSettled(true), 500);
 		return () => window.clearTimeout(timer);
@@ -1035,7 +1026,6 @@ export function Sidebar({
 					{/* Tree (project-sidebar__tree) */}
 					<SidebarGroupContent
 						className="sidebar-sections-container flex min-h-0 flex-1 flex-col"
-						ref={sidebarSectionsRef}
 					>
 						{workspaceError ? (
 							<div className="sidebar-expanded-chrome px-2.5 py-3 group-data-[collapsible=icon]:hidden">
@@ -1044,11 +1034,11 @@ export function Sidebar({
 							</div>
 						) : null}
 						{projectWorkspaces.length > 0 || remoteHosts.length > 0 ? (
-							<AnimatedSectionBody open={projectContentOpen} className="flex-none">
+							<AnimatedSectionBody open={projectContentOpen} className="min-h-0 flex-initial group-data-[collapsible=icon]:flex-none">
 								<SidebarSectionScroller
-									className={SECTION_SCROLLER_CLASS}
+									className={`${SECTION_SCROLLER_CLASS} min-h-0 flex-1`}
 									testId="sidebar-projects-scroller"
-									style={projectsScrollerStyle(isCollapsed, !isCollapsed && hiddenProjectCount > 0)}
+									wrapperClassName="flex flex-col flex-1"
 								>
 									<SidebarMenu className="relative gap-0.5 rounded-lg group-data-[collapsible=icon]:gap-1 group-data-[collapsible=icon]:rounded-none">
 										<AnimatePresence initial={false}>
@@ -1139,7 +1129,6 @@ export function Sidebar({
 							<ScratchpadSection
 								workspace={standaloneWorkspace}
 								selection={selection}
-								sidebarSectionsRef={sidebarSectionsRef}
 								isCollapsed={isCollapsed}
 								layoutSettled={layoutSettled}
 								open={scratchpadOpen}
@@ -1856,7 +1845,6 @@ const ProjectItem = memo(function ProjectItem({
 function ScratchpadSection({
 	workspace,
 	selection,
-	sidebarSectionsRef,
 	isCollapsed,
 	layoutSettled,
 	open,
@@ -1864,7 +1852,6 @@ function ScratchpadSection({
 }: {
 	workspace: WorkspaceSummary;
 	selection: Selection;
-	sidebarSectionsRef: RefObject<HTMLDivElement | null>;
 	isCollapsed: boolean;
 	layoutSettled: boolean;
 	open: boolean;
@@ -1872,7 +1859,6 @@ function ScratchpadSection({
 }) {
 	const { t } = useTranslation();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
-	const sectionRef = useRef<HTMLDivElement>(null);
 	// Mirrors the project tree: only termination removes an agent from the
 	// sidebar, so a completed PR session stays reachable.
 	const visibleSessions = useMemo(
@@ -1891,21 +1877,6 @@ function ScratchpadSection({
 		toggleShowAll,
 	} = useShowMoreCap(sessions, SIDEBAR_INITIAL_SECTION_LIMIT, selection.activeSessionId, isCollapsed);
 	const listedSessionIds = useMemo(() => listedSessions.map((session) => session.id), [listedSessions]);
-	useLayoutEffect(() => {
-		const section = sectionRef.current;
-		const container = sidebarSectionsRef.current;
-		if (!container) return;
-		const updateReservedHeight = () => {
-			const marginBottom = section ? Number.parseFloat(window.getComputedStyle(section).marginBottom) || 0 : 0;
-			const height = section ? section.getBoundingClientRect().height + marginBottom : 0;
-			container.style.setProperty("--sidebar-scratchpad-reserved-height", `${height}px`);
-		};
-		updateReservedHeight();
-		if (!section || typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(updateReservedHeight);
-		observer.observe(section);
-		return () => observer.disconnect();
-	}, [isCollapsed, listedSessions.length, open, showAll, sidebarSectionsRef]);
 	const commitSessionOrder = useCallback(
 		(next: string[] | null) => {
 			if (!next) return;
@@ -1939,7 +1910,6 @@ function ScratchpadSection({
 
 	return (
 		<div
-			ref={sectionRef}
 			className="sidebar-expanded-chrome mb-2 flex min-h-0 shrink-0 flex-col overflow-hidden group-data-[collapsible=icon]:hidden"
 			data-scratchpad-section=""
 			style={scratchpadSectionStyle(isCollapsed)}
@@ -1999,9 +1969,9 @@ function ScratchpadSection({
 			/>
 			<AnimatedSectionBody open={open && listedSessions.length > 0} className="min-h-0 flex-1">
 				<SidebarSectionScroller
-					className={`${SECTION_SCROLLER_CLASS} h-full min-h-0 flex-1`}
+					className={`${SECTION_SCROLLER_CLASS} min-h-0 flex-1`}
 					testId="sidebar-scratchpad-scroller"
-					wrapperClassName="flex-1"
+					wrapperClassName="flex flex-col flex-1"
 				>
 					<SessionReorderList
 						dndId={sessionDndId(STANDALONE_WORKSPACE_ID)}
