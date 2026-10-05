@@ -79,13 +79,15 @@ func Parse(out string) (*Table, error) {
 			}
 		}
 		p.Command = strings.Join(rest, " ")
-		if len(p.Command) > maxCommandLen {
-			p.Command = p.Command[:maxCommandLen]
-		}
 		// A zombie has exited and holds no memory; it only waits for its
-		// parent to collect the exit code. Listing it reads as a leak.
+		// parent to collect the exit code. Listing it reads as a leak. Check
+		// before capping: ps appends the marker, so a long argv pushes it
+		// past the cap.
 		if strings.Contains(p.Command, "<defunct>") {
 			continue
+		}
+		if len(p.Command) > maxCommandLen {
+			p.Command = p.Command[:maxCommandLen]
 		}
 		t.byPID[pid] = p
 		t.children[ppid] = append(t.children[ppid], pid)

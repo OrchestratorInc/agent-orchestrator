@@ -99,6 +99,19 @@ func TestParseDropsZombies(t *testing.T) {
 	}
 }
 
+// TestParseDropsZombiesWithLongCommands: ps appends <defunct> after the argv,
+// so a command longer than the cap must not lose the marker to truncation.
+func TestParseDropsZombiesWithLongCommands(t *testing.T) {
+	long := strings.Repeat("x", maxCommandLen+50)
+	tbl, err := Parse("300 200 1000 00:00:01 claude\n301 300 0 00:00:00 node " + long + " <defunct>\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tree := tbl.Tree(300); len(tree.Processes) != 1 {
+		t.Fatalf("zombie with a long command listed: %d processes", len(tree.Processes))
+	}
+}
+
 func TestParseKeepsFullCommandLineAndCapsIt(t *testing.T) {
 	long := strings.Repeat("x", 500)
 	tbl, err := Parse("300 200 100 00:00:01 sh -c go test ./internal/httpd/...\n310 300 100 00:00:01 node " + long + "\n")
