@@ -2056,11 +2056,11 @@ textarea,
 	filter: drop-shadow(0 7px 20px rgb(0 0 0 / 0.28));
 }
 
-.ao-startup-eyes {
+.ao-mascot-eyes {
 	fill: transparent;
 }
 
-:root[data-theme="light"] .ao-startup-eyes {
+:root[data-theme="light"] .ao-mascot-eyes {
 	fill: #000;
 }
 
