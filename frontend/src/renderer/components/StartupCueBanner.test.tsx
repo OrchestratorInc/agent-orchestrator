@@ -8,7 +8,7 @@ vi.mock("../stores/ui-store", () => ({ useUiStore: { getState: () => ({ showGlob
 beforeEach(() => { toast.mockReset(); dismiss.mockReset(); localStorage.clear(); });
 afterEach(cleanup);
 const run: components["schemas"]["StartupCueRun"] = {
-	cueId: "cue", name: "Dependencies", command: "npm install", shell: "sh", timeoutSeconds: 600,
+	cueId: "cue", name: "Dependencies", command: "npm install",
 	state: "running", startedAt: new Date().toISOString(),
 };
 

@@ -23,6 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 	"github.com/aoagents/agent-orchestrator/backend/internal/termtheme"
@@ -275,6 +276,12 @@ type ShellTerminalCloser interface {
 	BeginSessionTeardown(ctx context.Context, id domain.SessionID) (release func(), err error)
 }
 
+type StartupCueRunner interface {
+	RunStartupCue(context.Context, shellterm.RunStartupCueInput) (shellterm.StartupCueCommandResult, error)
+	GetOutput(context.Context, string, int) (string, error)
+	CloseShellTerminal(context.Context, string) error
+}
+
 // HarnessUseGate coordinates session lifecycle operations with harness binary
 // replacement so a launch cannot observe a partially installed executable.
 type HarnessUseGate interface {
@@ -523,6 +530,7 @@ type Manager struct {
 	// under lock rather than through the constructor.
 	shellTerminalsMu sync.Mutex
 	shellTerminals   ShellTerminalCloser
+	startupCueRunner StartupCueRunner
 
 	terminalInputGateMu sync.Mutex
 	terminalInputGate   TerminalInputGate
@@ -595,6 +603,12 @@ func (m *Manager) SetShellTerminalCloser(closer ShellTerminalCloser) {
 	m.shellTerminalsMu.Lock()
 	defer m.shellTerminalsMu.Unlock()
 	m.shellTerminals = closer
+}
+
+func (m *Manager) SetStartupCueRunner(runner StartupCueRunner) {
+	m.shellTerminalsMu.Lock()
+	defer m.shellTerminalsMu.Unlock()
+	m.startupCueRunner = runner
 }
 
 // SetTerminalInputGate late-binds the daemon's terminal mux after Session

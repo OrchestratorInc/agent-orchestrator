@@ -149,13 +149,8 @@ func (s *Service) Delete(ctx context.Context, cueID domain.CueID) error {
 }
 
 func normalizeInput(input Input) domain.Cue {
-	if input.StartupTimeoutSeconds == 0 {
-		input.StartupTimeoutSeconds = 600
-	}
 	return domain.Cue{
 		RunOnWorktreeCreation: input.RunOnWorktreeCreation,
-		StartupShell:          strings.TrimSpace(input.StartupShell),
-		StartupTimeoutSeconds: input.StartupTimeoutSeconds,
 		Name:                  strings.TrimSpace(input.Name),
 		Type:                  input.Type,
 		Command:               input.Command,

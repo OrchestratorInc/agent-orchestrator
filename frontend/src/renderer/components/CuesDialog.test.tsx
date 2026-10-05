@@ -414,7 +414,7 @@ test("session creation saves and closes without running, changing history, or na
 	fireEvent.change(screen.getByLabelText("Command"), { target: { value: "  npm test\n" } });
 	fireEvent.click(screen.getByRole("button", { name: "Create" }));
 	await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-	expect(cues.createCue).toHaveBeenCalledExactlyOnceWith("project", { name: "Tests", type: "command", command: "  npm test\n", runOnWorktreeCreation: false, startupShell: "", startupTimeoutSeconds: 600 });
+	expect(cues.createCue).toHaveBeenCalledExactlyOnceWith("project", { name: "Tests", type: "command", command: "  npm test\n", runOnWorktreeCreation: false });
 	expect(cues.invokeCue).not.toHaveBeenCalled();
 	expect(readLastRunCue("project")).toBe("");
 	expect(openProjectSettings).not.toHaveBeenCalled();
@@ -459,14 +459,12 @@ test("the creation modal supports agent cues and returns focus to the session bu
 });
 
 
-test("command startup selection saves its shell and timeout without running", async () => {
+test("command startup selection saves without shell or timeout settings", async () => {
  setup(<CuesSettings projectId="project" />);
  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
- fireEvent.click(screen.getByRole("checkbox", { name: "Run on worktree creation" }));
- expect(screen.getByText(/Only one cue can run/)).toBeInTheDocument();
- fireEvent.change(screen.getByLabelText("Timeout (minutes)"), { target: { value: "2" } });
+	 fireEvent.click(screen.getByRole("switch", { name: "Run on worktree creation" }));
  fireEvent.click(screen.getByRole("button", { name: "Save" }));
- await waitFor(() => expect(cues.updateCue).toHaveBeenCalledWith("cue-1", expect.objectContaining({ runOnWorktreeCreation: true, startupShell: "", startupTimeoutSeconds: 120 })));
+	await waitFor(() => expect(cues.updateCue).toHaveBeenCalledWith("cue-1", expect.objectContaining({ runOnWorktreeCreation: true })));
  expect(cues.invokeCue).not.toHaveBeenCalled();
  expect(toast).not.toHaveBeenCalled();
 });

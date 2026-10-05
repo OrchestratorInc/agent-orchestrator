@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { Loader2, TriangleAlert, X } from "lucide-react";
 import type { components } from "../../api/schema";
 import { useUiStore } from "../stores/ui-store";
+import { apiClient } from "../lib/api-client";
+
+const dismissedStartupRuns = new Set<string>();
 
 export function StartupCueBanner({ sessionId, run }: {
 	sessionId: string;
@@ -11,9 +14,11 @@ export function StartupCueBanner({ sessionId, run }: {
 	const running = run?.state === "pending" || run?.state === "running";
 	const title = run?.state === "cancelled" ? "Startup cue interrupted." : "Startup cue failed; session continued.";
 	const failed = run?.state === "failed" || run?.state === "interrupted" || run?.state === "cancelled";
-	const dismissalKey = run ? `ao.startup-cue-dismissed:${sessionId}:${run.startedAt}` : "";
 	const toastKey = run ? `startup-cue:${sessionId}:${run.startedAt}` : "";
-	const [dismissed, setDismissed] = useState(() => Boolean(dismissalKey && localStorage.getItem(dismissalKey)));
+	const runKey = run ? `${sessionId}:${run.startedAt}` : "";
+	const [dismissed, setDismissed] = useState(() => Boolean(runKey && dismissedStartupRuns.has(runKey)));
+	const [cancelling, setCancelling] = useState(false);
+	useEffect(() => { setDismissed(Boolean(runKey && dismissedStartupRuns.has(runKey))); }, [runKey]);
 	useEffect(() => {
 		if (!running) return;
 		const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -37,10 +42,15 @@ export function StartupCueBanner({ sessionId, run }: {
 		{running ? <Loader2 aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 animate-spin" /> : <TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-destructive" />}
 		<div className="min-w-0 flex-1">
 			<p className="font-medium">{running ? `Running startup cue: ${run.name}… (${elapsed}s)` : title}</p>
+			{running && run.terminalHandle ? <p className="mt-1 text-muted-foreground">Terminal: {run.terminalHandle}</p> : null}
 			<p className="mt-1 text-muted-foreground">{running ? "Preparing the worktree. Messages are queued until the command finishes." : run.error}</p>
+			{running ? <button type="button" disabled={cancelling} className="mt-2 rounded border border-border px-2 py-1 text-xs hover:bg-muted" onClick={async () => {
+				setCancelling(true);
+				try { await apiClient.POST("/api/v1/sessions/{sessionId}/startup-cue/cancel", { params: { path: { sessionId } } }); } finally { setCancelling(false); }
+			}}>{cancelling ? "Cancelling…" : "Cancel setup"}</button> : null}
 			{failed ? <>
 				<button type="button" aria-label="Dismiss startup cue error" className="absolute right-2 top-2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => {
-					localStorage.setItem(dismissalKey, "1");
+					dismissedStartupRuns.add(runKey);
 					setDismissed(true);
 					const toast = useUiStore.getState().globalToasts.find((item) => item.dedupeKey === toastKey);
 					if (toast) useUiStore.getState().dismissGlobalToast(toast.nonce);

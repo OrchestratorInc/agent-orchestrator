@@ -83,6 +83,19 @@ type RunCueCommandInput struct {
 	Command   string
 }
 
+// RunStartupCueInput starts a session-scoped command and appends an AO-owned
+// completion marker so the session manager can gate delivery on process exit.
+type RunStartupCueInput struct {
+	ProjectID domain.ProjectID
+	SessionID domain.SessionID
+	Command   string
+}
+
+type StartupCueCommandResult struct {
+	Terminal ShellTerminal
+	Marker   string
+}
+
 // CueCommandSessionTarget contains the session facts needed to prove that a
 // Cue command can safely use its exact worktree.
 type CueCommandSessionTarget struct {

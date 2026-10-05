@@ -12,8 +12,6 @@ import (
 // agent, so every field is carried in both directions.
 type Input struct {
 	RunOnWorktreeCreation bool
-	StartupShell          string
-	StartupTimeoutSeconds int
 	Name                  string
 	Type                  domain.CueType
 	Command               string

@@ -24,9 +24,6 @@ func (s *Store) InsertCue(ctx context.Context, cue domain.Cue) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.qw.WithTx(tx)
-	if cue.StartupTimeoutSeconds == 0 {
-		cue.StartupTimeoutSeconds = 600
-	}
 	if cue.RunOnWorktreeCreation {
 		if err := q.DisableOtherStartupCues(ctx, gen.DisableOtherStartupCuesParams{ProjectID: cue.ProjectID, ID: cue.ID}); err != nil {
 			return err
@@ -36,8 +33,6 @@ func (s *Store) InsertCue(ctx context.Context, cue domain.Cue) error {
 		ID:                    cue.ID,
 		ProjectID:             cue.ProjectID,
 		RunOnWorktreeCreation: cue.RunOnWorktreeCreation,
-		StartupShell:          cue.StartupShell,
-		StartupTimeoutSeconds: int64(cue.StartupTimeoutSeconds),
 		Name:                  cue.Name,
 		Type:                  cue.Type,
 		Command:               cue.Command,
@@ -102,9 +97,6 @@ func (s *Store) UpdateCue(ctx context.Context, cue domain.Cue) (domain.Cue, bool
 	if err != nil {
 		return domain.Cue{}, false, err
 	}
-	if cue.StartupTimeoutSeconds == 0 {
-		cue.StartupTimeoutSeconds = 600
-	}
 	if cue.RunOnWorktreeCreation {
 		if err := q.DisableOtherStartupCues(ctx, gen.DisableOtherStartupCuesParams{ProjectID: old.ProjectID, ID: cue.ID}); err != nil {
 			return domain.Cue{}, false, err
@@ -112,8 +104,6 @@ func (s *Store) UpdateCue(ctx context.Context, cue domain.Cue) (domain.Cue, bool
 	}
 	row, err := q.UpdateCue(ctx, gen.UpdateCueParams{
 		RunOnWorktreeCreation: cue.RunOnWorktreeCreation,
-		StartupShell:          cue.StartupShell,
-		StartupTimeoutSeconds: int64(cue.StartupTimeoutSeconds),
 		Name:                  cue.Name,
 		Type:                  cue.Type,
 		Command:               cue.Command,
@@ -158,8 +148,6 @@ func cueFromGen(row gen.Cue) domain.Cue {
 		ID:                    row.ID,
 		ProjectID:             row.ProjectID,
 		RunOnWorktreeCreation: row.RunOnWorktreeCreation,
-		StartupShell:          row.StartupShell,
-		StartupTimeoutSeconds: int(row.StartupTimeoutSeconds),
 		Name:                  row.Name,
 		Type:                  row.Type,
 		Command:               row.Command,

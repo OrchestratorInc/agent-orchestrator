@@ -20,6 +20,15 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
+func TestStartupCueMarkerResultIgnoresTerminalControlSequences(t *testing.T) {
+	marker := "__AO_STARTUP_CUE_DONE_session__"
+	output := "command output\r\n\x1b[32m" + marker + "\x1b[0m7\r\n"
+	code, ok := startupCueMarkerResult(output, marker)
+	if !ok || code != 7 {
+		t.Fatalf("marker result = (%d, %v), want (7, true)", code, ok)
+	}
+}
+
 func TestStartupCueHoldsChatUntilCompletionAndContinuesOnFailure(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmt.Sprintf("fail=%v", fail), func(t *testing.T) {

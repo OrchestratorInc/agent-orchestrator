@@ -233,8 +233,6 @@ func projectCueID(r *http.Request) domain.ProjectID {
 func cueInput(req CueDefinitionRequest) cuesvc.Input {
 	return cuesvc.Input{
 		RunOnWorktreeCreation: req.RunOnWorktreeCreation,
-		StartupShell:          req.StartupShell,
-		StartupTimeoutSeconds: req.StartupTimeoutSeconds,
 		Name:                  req.Name,
 		Type:                  domain.CueType(req.Type),
 		Command:               req.Command,
@@ -255,8 +253,6 @@ func cueResponse(cue domain.Cue) CueResponse {
 		ID:                    string(cue.ID),
 		ProjectID:             string(cue.ProjectID),
 		RunOnWorktreeCreation: cue.RunOnWorktreeCreation,
-		StartupShell:          cue.StartupShell,
-		StartupTimeoutSeconds: cue.StartupTimeoutSeconds,
 		Name:                  cue.Name,
 		Type:                  string(cue.Type),
 		Command:               cue.Command,

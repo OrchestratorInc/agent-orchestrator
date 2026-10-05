@@ -391,8 +391,6 @@ type Cue struct {
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 	RunOnWorktreeCreation bool
-	StartupShell          string
-	StartupTimeoutSeconds int64
 }
 
 type ModelUsageEvent struct {

@@ -42,8 +42,8 @@ func (q *Queries) DisableOtherStartupCues(ctx context.Context, arg DisableOtherS
 const insertCue = `-- name: InsertCue :exec
 
 INSERT INTO cues (
-    id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation, startup_shell, startup_timeout_seconds
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertCueParams struct {
@@ -56,8 +56,6 @@ type InsertCueParams struct {
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 	RunOnWorktreeCreation bool
-	StartupShell          string
-	StartupTimeoutSeconds int64
 }
 
 // User-managed reusable quick actions (Cues) scoped to a project. The
@@ -74,14 +72,12 @@ func (q *Queries) InsertCue(ctx context.Context, arg InsertCueParams) error {
 		arg.CreatedAt,
 		arg.UpdatedAt,
 		arg.RunOnWorktreeCreation,
-		arg.StartupShell,
-		arg.StartupTimeoutSeconds,
 	)
 	return err
 }
 
 const selectCueByID = `-- name: SelectCueByID :one
-SELECT id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation, startup_shell, startup_timeout_seconds
+SELECT id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation
 FROM cues
 WHERE id = ?
 `
@@ -99,14 +95,12 @@ func (q *Queries) SelectCueByID(ctx context.Context, id domain.CueID) (Cue, erro
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RunOnWorktreeCreation,
-		&i.StartupShell,
-		&i.StartupTimeoutSeconds,
 	)
 	return i, err
 }
 
 const selectCuesByProject = `-- name: SelectCuesByProject :many
-SELECT id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation, startup_shell, startup_timeout_seconds
+SELECT id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation
 FROM cues
 WHERE project_id = ?
 ORDER BY name
@@ -131,8 +125,6 @@ func (q *Queries) SelectCuesByProject(ctx context.Context, projectID domain.Proj
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.RunOnWorktreeCreation,
-			&i.StartupShell,
-			&i.StartupTimeoutSeconds,
 		); err != nil {
 			return nil, err
 		}
@@ -148,7 +140,7 @@ func (q *Queries) SelectCuesByProject(ctx context.Context, projectID domain.Proj
 }
 
 const selectStartupCue = `-- name: SelectStartupCue :one
-SELECT id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation, startup_shell, startup_timeout_seconds FROM cues WHERE project_id = ? AND run_on_worktree_creation = 1
+SELECT id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation FROM cues WHERE project_id = ? AND run_on_worktree_creation = 1
 `
 
 func (q *Queries) SelectStartupCue(ctx context.Context, projectID domain.ProjectID) (Cue, error) {
@@ -164,17 +156,15 @@ func (q *Queries) SelectStartupCue(ctx context.Context, projectID domain.Project
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RunOnWorktreeCreation,
-		&i.StartupShell,
-		&i.StartupTimeoutSeconds,
 	)
 	return i, err
 }
 
 const updateCue = `-- name: UpdateCue :one
 UPDATE cues
-SET name = ?, type = ?, command = ?, prompt = ?, updated_at = ?, run_on_worktree_creation = ?, startup_shell = ?, startup_timeout_seconds = ?
+SET name = ?, type = ?, command = ?, prompt = ?, updated_at = ?, run_on_worktree_creation = ?
 WHERE id = ?
-RETURNING id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation, startup_shell, startup_timeout_seconds
+RETURNING id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation
 `
 
 type UpdateCueParams struct {
@@ -184,8 +174,6 @@ type UpdateCueParams struct {
 	Prompt                string
 	UpdatedAt             time.Time
 	RunOnWorktreeCreation bool
-	StartupShell          string
-	StartupTimeoutSeconds int64
 	ID                    domain.CueID
 }
 
@@ -197,8 +185,6 @@ func (q *Queries) UpdateCue(ctx context.Context, arg UpdateCueParams) (Cue, erro
 		arg.Prompt,
 		arg.UpdatedAt,
 		arg.RunOnWorktreeCreation,
-		arg.StartupShell,
-		arg.StartupTimeoutSeconds,
 		arg.ID,
 	)
 	var i Cue
@@ -212,8 +198,6 @@ func (q *Queries) UpdateCue(ctx context.Context, arg UpdateCueParams) (Cue, erro
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RunOnWorktreeCreation,
-		&i.StartupShell,
-		&i.StartupTimeoutSeconds,
 	)
 	return i, err
 }

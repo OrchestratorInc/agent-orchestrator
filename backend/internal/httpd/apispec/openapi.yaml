@@ -7714,6 +7714,51 @@ paths:
       summary: Send a message to a running session's agent
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/startup-cue/cancel:
+    post:
+      operationId: cancelSessionStartupCue
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersStartupCueCancelResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Cancel a running startup cue
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/switch-agent:
     post:
       operationId: switchSessionAgent
@@ -10655,6 +10700,13 @@ components:
       required:
       - enabled
       type: object
+    ControllersStartupCueCancelResponse:
+      properties:
+        startupCue:
+          $ref: '#/components/schemas/StartupCueRun'
+      required:
+      - startupCue
+      type: object
     ControllersUpdateCloudOfferingRequest:
       properties:
         enabled:
@@ -11400,12 +11452,6 @@ components:
           type: string
         runOnWorktreeCreation:
           type: boolean
-        startupShell:
-          type: string
-        startupTimeoutSeconds:
-          maximum: 86400
-          minimum: 1
-          type: integer
         type:
           description: 'Cue kind: command sends to a project- or session-scoped shell
             terminal; agent sends an authored prompt. Definition body limit: 128 KiB.'
@@ -11438,12 +11484,6 @@ components:
           type: string
         runOnWorktreeCreation:
           type: boolean
-        startupShell:
-          type: string
-        startupTimeoutSeconds:
-          maximum: 86400
-          minimum: 1
-          type: integer
         type:
           type: string
         updatedAt:
@@ -14627,8 +14667,6 @@ components:
           type: string
         output:
           type: string
-        shell:
-          type: string
         startedAt:
           format: date-time
           type: string
@@ -14641,14 +14679,12 @@ components:
           - interrupted
           - cancelled
           type: string
-        timeoutSeconds:
-          type: integer
+        terminalHandle:
+          type: string
       required:
       - cueId
       - name
       - command
-      - shell
-      - timeoutSeconds
       - state
       - startedAt
       type: object

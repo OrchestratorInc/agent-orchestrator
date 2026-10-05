@@ -7,8 +7,7 @@ type StartupCueRun struct {
 	CueID          CueID      `json:"cueId"`
 	Name           string     `json:"name"`
 	Command        string     `json:"command"`
-	Shell          string     `json:"shell"`
-	TimeoutSeconds int        `json:"timeoutSeconds"`
+	TerminalHandle string     `json:"terminalHandle,omitempty"`
 	DeliveryHeld   bool       `json:"deliveryHeld,omitempty"`
 	State          string     `json:"state" enum:"pending,running,succeeded,failed,interrupted,cancelled"`
 	StartedAt      time.Time  `json:"startedAt"`

@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
@@ -31,13 +34,9 @@ func (m *Manager) prepareStartupCue(ctx context.Context, id domain.SessionID, pr
 	if err != nil || !found {
 		return err
 	}
-	timeout := cue.StartupTimeoutSeconds
-	if timeout == 0 {
-		timeout = 600
-	}
 	_, err = store.ClaimStartupCue(ctx, id, domain.StartupCueRun{
-		CueID: cue.ID, Name: cue.Name, Command: cue.Command, Shell: cue.StartupShell,
-		TimeoutSeconds: timeout, State: "pending", StartedAt: m.clock(),
+		CueID: cue.ID, Name: cue.Name, Command: cue.Command,
+		State: "pending", StartedAt: m.clock(),
 	})
 	return err
 }
@@ -66,7 +65,7 @@ func (m *Manager) startStartupCue(id domain.SessionID, project domain.ProjectRec
 		if !began {
 			return
 		}
-		commandCtx, cancel := context.WithTimeout(ctx, time.Duration(run.TimeoutSeconds)*time.Second)
+		commandCtx, cancel := context.WithCancel(ctx)
 		// Kill can arrive while a command is running, independently of startup's API request.
 		done := make(chan struct{})
 		go func() {
@@ -87,19 +86,64 @@ func (m *Manager) startStartupCue(id domain.SessionID, project domain.ProjectRec
 				}
 			}
 		}()
-		result := runWorkspaceCommand(commandCtx, run.Command, run.Shell, workspace, m.runtimeEnv(id, domain.ProjectID(project.ID), "", project.Config.Env), 64<<10)
-		output, code, commandErr := result.Output, result.ExitCode, result.Err
+		m.shellTerminalsMu.Lock()
+		runner := m.startupCueRunner
+		m.shellTerminalsMu.Unlock()
+		var output string
+		var code *int
+		var commandErr error
+		if runner != nil {
+			started, err := runner.RunStartupCue(commandCtx, shellterm.RunStartupCueInput{ProjectID: domain.ProjectID(project.ID), SessionID: id, Command: run.Command})
+			if err != nil {
+				commandErr = err
+			} else {
+				run.TerminalHandle = started.Terminal.HandleID
+				for commandErr == nil {
+					select {
+					case <-commandCtx.Done():
+						commandErr = commandCtx.Err()
+					default:
+					}
+					if commandErr != nil {
+						break
+					}
+					var outputErr error
+					output, outputErr = runner.GetOutput(commandCtx, started.Terminal.HandleID, 200)
+					if outputErr != nil {
+						commandErr = outputErr
+						break
+					}
+					if len(output) > 64<<10 {
+						output = output[len(output)-(64<<10):]
+					}
+					if marker, ok := startupCueMarkerResult(output, started.Marker); ok {
+						code = &marker
+						if marker != 0 {
+							commandErr = fmt.Errorf("command exited with code %d", marker)
+						}
+						break
+					}
+					time.Sleep(250 * time.Millisecond)
+				}
+			}
+		} else {
+			result := runWorkspaceCommand(commandCtx, run.Command, "", workspace, m.runtimeEnv(id, domain.ProjectID(project.ID), "", project.Config.Env), 64<<10)
+			output, code, commandErr = result.Output, result.ExitCode, result.Err
+		}
 		close(done)
 		deadlineErr := commandCtx.Err()
 		cancel()
+		if current, exists, readErr := m.store.GetSession(ctx, id); readErr == nil && exists && current.StartupCue != nil && current.StartupCue.State == "cancelled" {
+			if err := release(ctx); err != nil {
+				m.logger.Warn("startup cue: resume delivery after cancellation", "sessionID", id, "error", err)
+			}
+			return
+		}
 		now := m.clock()
 		run.CompletedAt, run.Output, run.ExitCode = &now, output, code
 		run.State = "succeeded"
 		if commandErr != nil {
 			run.State, run.Error = "failed", commandErr.Error()
-			if errors.Is(deadlineErr, context.DeadlineExceeded) {
-				run.Error = fmt.Sprintf("Startup cue timed out after %d seconds", run.TimeoutSeconds)
-			}
 			if errors.Is(deadlineErr, context.Canceled) {
 				run.State, run.Error = "cancelled", "Startup cue was interrupted"
 			}
@@ -134,6 +178,100 @@ func (m *Manager) startStartupCue(id domain.SessionID, project domain.ProjectRec
 			m.logger.Warn("startup cue: resume delivery", "sessionID", id, "error", err)
 		}
 	})
+}
+
+// CancelStartupCue stops a running startup terminal and releases delivery.
+func (m *Manager) CancelStartupCue(ctx context.Context, id domain.SessionID) (domain.StartupCueRun, error) {
+	store, ok := m.store.(startupCueStore)
+	if !ok {
+		return domain.StartupCueRun{}, fmt.Errorf("startup cue store unavailable")
+	}
+	rec, found, err := m.store.GetSession(ctx, id)
+	if err != nil {
+		return domain.StartupCueRun{}, err
+	}
+	if !found || rec.StartupCue == nil {
+		return domain.StartupCueRun{}, ErrNotFound
+	}
+	run := *rec.StartupCue
+	if !run.HoldsInput() {
+		return run, nil
+	}
+	if run.TerminalHandle != "" {
+		m.shellTerminalsMu.Lock()
+		runner := m.startupCueRunner
+		m.shellTerminalsMu.Unlock()
+		if runner != nil {
+			_ = runner.CloseShellTerminal(ctx, run.TerminalHandle)
+		}
+	}
+	now := m.clock()
+	run.State, run.Error, run.CompletedAt, run.DeliveryHeld = "cancelled", "Startup cue cancelled by user", &now, false
+	if err := store.FinishStartupCue(ctx, id, run); err != nil {
+		return domain.StartupCueRun{}, err
+	}
+	return run, nil
+}
+
+func startupCueMarkerResult(output, marker string) (int, bool) {
+	output = stripTerminalControlSequences(output)
+	idx := strings.LastIndex(output, marker)
+	if idx < 0 {
+		return 0, false
+	}
+	value := strings.TrimSpace(output[idx+len(marker):])
+	line := strings.Fields(value)
+	if len(line) == 0 {
+		return 0, false
+	}
+	code, err := strconv.Atoi(line[0])
+	return code, err == nil
+}
+
+// stripTerminalControlSequences keeps completion detection independent of the
+// PTY renderer. ConPTY and tmux may include cursor/colour sequences between
+// otherwise adjacent bytes, especially while a prompt is being redrawn.
+func stripTerminalControlSequences(value string) string {
+	var out strings.Builder
+	escaped := false
+	csi := false
+	osc := false
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if osc {
+			if ch == 0x07 {
+				osc = false
+			}
+			continue
+		}
+		if csi {
+			if ch >= 0x40 && ch <= 0x7e {
+				csi = false
+			}
+			continue
+		}
+		if escaped {
+			switch {
+			case ch == '[':
+				csi, escaped = true, false
+			case ch == ']':
+				osc, escaped = true, false
+			case ch >= 0x40 && ch <= 0x7e:
+				escaped = false
+			case ch == 0x1b:
+				escaped = true
+			}
+			continue
+		}
+		if ch == 0x1b {
+			escaped = true
+			continue
+		}
+		if ch != '\r' {
+			out.WriteByte(ch)
+		}
+	}
+	return out.String()
 }
 
 func (m *Manager) drainStartupCueMessages(ctx context.Context, id domain.SessionID) error {

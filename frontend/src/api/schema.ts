@@ -2534,6 +2534,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/startup-cue/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel a running startup cue */
+        post: operations["cancelSessionStartupCue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/switch-agent": {
         parameters: {
             query?: never;
@@ -3561,6 +3578,9 @@ export interface components {
         ControllersSetSessionAutoReviewRequest: {
             enabled: boolean;
         };
+        ControllersStartupCueCancelResponse: {
+            startupCue: components["schemas"]["StartupCueRun"];
+        };
         ControllersUpdateCloudOfferingRequest: {
             enabled: null | boolean;
         };
@@ -3844,8 +3864,6 @@ export interface components {
             /** @description Agent instruction for an agent cue. At most 16384 bytes; cleared when saving command cues. */
             prompt?: string;
             runOnWorktreeCreation?: boolean;
-            startupShell?: string;
-            startupTimeoutSeconds?: number;
             /** @description Cue kind: command sends to a project- or session-scoped shell terminal; agent sends an authored prompt. Definition body limit: 128 KiB. */
             type: string;
         };
@@ -3861,8 +3879,6 @@ export interface components {
             projectId: string;
             prompt?: string;
             runOnWorktreeCreation?: boolean;
-            startupShell?: string;
-            startupTimeoutSeconds?: number;
             type: string;
             /** Format: date-time */
             updatedAt: string;
@@ -5067,12 +5083,11 @@ export interface components {
             exitCode?: null | number;
             name: string;
             output?: string;
-            shell: string;
             /** Format: date-time */
             startedAt: string;
             /** @enum {string} */
             state: "pending" | "running" | "succeeded" | "failed" | "interrupted" | "cancelled";
-            timeoutSeconds: number;
+            terminalHandle?: string;
         };
         SteerConversationRequest: {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];
@@ -15162,6 +15177,65 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    cancelSessionStartupCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersStartupCueCancelResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

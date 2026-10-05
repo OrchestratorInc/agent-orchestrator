@@ -70,8 +70,6 @@ type Cue struct {
 	// command cues.
 	Prompt                string
 	RunOnWorktreeCreation bool
-	StartupShell          string
-	StartupTimeoutSeconds int
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 }
@@ -85,12 +83,6 @@ func (c Cue) Validate() error {
 	}
 	if c.RunOnWorktreeCreation && c.Type != CueTypeCommand {
 		return ErrInvalidCueType
-	}
-	if c.StartupTimeoutSeconds < 0 || c.StartupTimeoutSeconds > 86400 {
-		return errors.New("startup timeout must be between 1 and 86400 seconds")
-	}
-	if strings.ContainsAny(c.StartupShell, "\r\n\x00") {
-		return errors.New("invalid startup shell")
 	}
 	if !c.Type.Valid() {
 		return ErrInvalidCueType

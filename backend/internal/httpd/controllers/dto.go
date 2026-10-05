@@ -962,6 +962,10 @@ type KillSessionResponse struct {
 	Freed     bool             `json:"freed,omitempty"`
 }
 
+type StartupCueCancelResponse struct {
+	StartupCue domain.StartupCueRun `json:"startupCue"`
+}
+
 // RollbackSessionResponse is the body of POST /api/v1/sessions/{sessionId}/rollback.
 // Exactly one of Deleted/Killed is true on a successful rollback; both are
 // false when the session was already absent or already terminated (benign).
@@ -1957,8 +1961,6 @@ type CueProjectIDParam struct {
 // creating or replacing a cue.
 type CueDefinitionRequest struct {
 	RunOnWorktreeCreation bool   `json:"runOnWorktreeCreation,omitempty"`
-	StartupShell          string `json:"startupShell,omitempty"`
-	StartupTimeoutSeconds int    `json:"startupTimeoutSeconds,omitempty" minimum:"1" maximum:"86400"`
 	Name                  string `json:"name" maxLength:"64" description:"Short cue name, unique within the project. Trimmed; must be non-empty and at most 64 bytes."`
 	Type                  string `json:"type" description:"Cue kind: command sends to a project- or session-scoped shell terminal; agent sends an authored prompt. Definition body limit: 128 KiB."`
 	Command               string `json:"command,omitempty" maxLength:"4096" description:"Shell command for a command cue. At most 4096 bytes; cleared when saving agent cues."`
@@ -1968,8 +1970,6 @@ type CueDefinitionRequest struct {
 // CueResponse is one project-scoped reusable quick action.
 type CueResponse struct {
 	RunOnWorktreeCreation bool      `json:"runOnWorktreeCreation,omitempty"`
-	StartupShell          string    `json:"startupShell,omitempty"`
-	StartupTimeoutSeconds int       `json:"startupTimeoutSeconds,omitempty" minimum:"1" maximum:"86400"`
 	ID                    string    `json:"id"`
 	ProjectID             string    `json:"projectId"`
 	Name                  string    `json:"name"`

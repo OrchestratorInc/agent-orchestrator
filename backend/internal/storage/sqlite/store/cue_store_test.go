@@ -45,7 +45,7 @@ func TestStartupCueSelectionReplacesAtomicallyAndRollsBackOnError(t *testing.T) 
 		t.Fatal(err)
 	}
 	selected, found, err := s.SelectStartupCue(ctx, "mer")
-	if err != nil || !found || selected.ID != second.ID || selected.StartupTimeoutSeconds != 600 {
+	if err != nil || !found || selected.ID != second.ID {
 		t.Fatalf("selection: %+v %v", selected, err)
 	}
 	old, _, err := s.SelectCueByID(ctx, first.ID)
