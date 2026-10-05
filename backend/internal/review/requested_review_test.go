@@ -301,3 +301,51 @@ func TestReviewerDefaultsToTheProjectDefaultWorkerConfig(t *testing.T) {
 		t.Fatalf("reviewer config = %+v, want worker model/effort and never worker permissions", got)
 	}
 }
+
+// Restoring a worker restores its selected reviewer. Another reviewer running
+// alongside it keeps running when its pane survived, and is cancelled with an
+// accurate reason when it did not, instead of being reported as "switched".
+func TestRestoreReviewerKeepsALiveParallelReviewerAndCancelsADeadOne(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		handle     string
+		wantStatus domain.ReviewRunStatus
+	}{
+		{"live", "opencode-pane", domain.ReviewRunRunning},
+		{"torn down", "", domain.ReviewRunCancelled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeStore{
+				reviews: map[domain.ReviewerHarness]domain.Review{
+					domain.ReviewerClaudeCode: {ID: "rev-claude-code", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode},
+					domain.ReviewerOpenCode:   {ID: "rev-opencode", SessionID: "mer-1", Harness: domain.ReviewerOpenCode, ReviewerHandleID: tc.handle},
+				},
+				runs: []domain.ReviewRun{
+					requestedRun("run-claude", domain.ReviewerClaudeCode, domain.ReviewRunComplete, domain.VerdictApproved, 1),
+					requestedRun("run-opencode", domain.ReviewerOpenCode, domain.ReviewRunRunning, domain.VerdictNone, 2),
+				},
+			}
+			launcher := &fakeLauncher{alive: true, handle: "claude-pane"}
+			eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+
+			if _, err := eng.RestoreReviewer(context.Background(), "mer-1"); err != nil {
+				t.Fatalf("RestoreReviewer: %v", err)
+			}
+			var got domain.ReviewRun
+			for _, run := range store.runs {
+				if run.ID == "run-opencode" {
+					got = run
+				}
+			}
+			if got.Status != tc.wantStatus {
+				t.Fatalf("opencode run = %+v, want %s", got, tc.wantStatus)
+			}
+			if strings.Contains(got.Body, "switched") {
+				t.Fatalf("opencode run body = %q, must not claim the reviewer was switched", got.Body)
+			}
+			if tc.handle != "" && launcher.destroyCalls != 0 {
+				t.Fatalf("a live parallel reviewer was destroyed: %+v", launcher)
+			}
+		})
+	}
+}

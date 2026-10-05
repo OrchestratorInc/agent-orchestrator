@@ -1039,8 +1039,24 @@ func (e *Engine) restoreReviewerLocked(
 	if err != nil {
 		return RestoreReviewerResult{}, err
 	}
-	if err := e.destroyOtherReviewerHandles(ctx, workerID, harness, reviewRows); err != nil {
+	runs, err := e.store.ListReviewRunsBySession(ctx, workerID)
+	if err != nil {
 		return RestoreReviewerResult{}, err
+	}
+	// Restoring the selected reviewer must not cancel another reviewer that is
+	// still running alongside it; only idle panes of other reviewers go. One
+	// whose pane did not survive cannot finish, so its passes are cancelled
+	// rather than left looking like a review still in progress.
+	if err := e.destroyIdleOtherReviewerHandles(ctx, workerID, harness, reviewRows, runs); err != nil {
+		return RestoreReviewerResult{}, err
+	}
+	for _, other := range reviewRows {
+		if other.Harness == harness || !reviewRunsContainRunningForReview(runs, other) {
+			continue
+		}
+		if _, err := e.cancelStaleRunningRuns(ctx, workerID, other.Harness, other, true, runs); err != nil {
+			return RestoreReviewerResult{}, err
+		}
 	}
 	reviewRow, hasReview, err := e.store.GetReviewBySessionAndHarness(ctx, workerID, harness)
 	if err != nil {
@@ -1048,10 +1064,6 @@ func (e *Engine) restoreReviewerLocked(
 	}
 	if hasReview && reviewRow.IsArchived {
 		return RestoreReviewerResult{}, nil
-	}
-	runs, err := e.store.ListReviewRunsBySession(ctx, workerID)
-	if err != nil {
-		return RestoreReviewerResult{}, err
 	}
 	previousRuns := reviewRunsForHarness(runs, harness)
 	if !hasReview && len(previousRuns) == 0 {
