@@ -2422,6 +2422,10 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
     const stop = await screen.findByRole("button", { name: "Archive reviewer" });
     expect(stop).toBeEnabled();
+    expect(stop.textContent).toBe("");
+    await userEvent.hover(stop);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Archive reviewer");
+    await userEvent.unhover(stop);
     await userEvent.click(stop);
     await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/kill", { params: { path: { sessionId: "sess-1" } } }));
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "review-1"] }));

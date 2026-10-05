@@ -2486,18 +2486,24 @@ function ReviewPanel({
 								{reviewRunning ? <X aria-hidden="true" /> : <Play aria-hidden="true" />}
 								<span className="review-run-action-label">{primaryReviewActionLabel}</span>
 							</Button>
-							<Button
-								aria-label={isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}
-								className="shrink-0 gap-1 px-1.5 text-xs text-error [&_svg]:size-icon-sm"
-								disabled={killDisabled}
-								onClick={onKill}
-								size="sm"
-								type="button"
-								variant="ghost"
-							>
-								<Archive aria-hidden="true" />
-								<span>{isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}</span>
-							</Button>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<Button
+											aria-label={isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}
+											className="shrink-0 [&_svg]:size-icon-sm"
+											disabled={killDisabled}
+											onClick={onKill}
+											size="icon-sm"
+											type="button"
+											variant="ghost"
+										>
+											<Archive aria-hidden="true" />
+										</Button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent>{isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}</TooltipContent>
+							</Tooltip>
 						</div>
 					</div>
 				</div>
