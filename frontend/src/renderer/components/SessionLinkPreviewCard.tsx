@@ -30,9 +30,10 @@ function relativeTime(timestamp: string | undefined, format: (key: "time.justNow
 }
 
 function LoadingCard() {
+	const { t } = useTranslation();
 	return (
 		<HoverCardContent collisionPadding={8} sideOffset={6} className="max-h-48 overflow-y-auto p-3">
-			<div role="status" aria-label="Loading worker details" className="space-y-3">
+			<div role="status" aria-label={t("session.statusChecking")} className="space-y-3">
 				<div className="flex items-center gap-2.5">
 					<Skeleton className="size-7 shrink-0 rounded-md" />
 					<div className="min-w-0 flex-1 space-y-1.5"><Skeleton className="h-3 w-32" /><Skeleton className="h-2.5 w-24" /></div>
@@ -71,7 +72,7 @@ function SessionCardBody({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
 	const prs = useMemo(() => sessionPRDisplaySummaries(session), [session]);
 	const status = session.statusReadiness === "unavailable"
-		? "Worker unavailable"
+		? t("session.statusUnavailable")
 		: session.displayStatus || getSessionStatusView(session.status, t).label;
 	return (
 		<div className="space-y-3" role="status" aria-label={`${session.title}, ${status}`}>
@@ -92,14 +93,14 @@ function SessionCardBody({ session }: { session: WorkspaceSession }) {
 			</div>
 			{prs.length > 0 && (
 				<div className="border-t border-border pt-2">
-					<p className="text-[10px] font-semibold text-muted-foreground">{prs.length} {prs.length === 1 ? "PR" : "PRs"}</p>
+					<p className="text-[10px] font-semibold text-muted-foreground">{prs.length} {t("pr.short")}{prs.length === 1 ? "" : "s"}</p>
 					<div className="mt-1.5 space-y-1.5">
 						{prs.map((pr) => {
 							const presentation = prCardPresentation(pr);
 							const tone = prToneClasses[presentation.primary.tone];
 							return (
 								<div key={`${pr.url}-${pr.number}`} className="flex min-h-5 items-center gap-1.5 text-[10px]">
-									<span className="font-mono font-semibold text-popover-foreground">PR #{pr.number}</span>
+									<span className="font-mono font-semibold text-popover-foreground">{t("pr.short")} #{pr.number}</span>
 									<span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", tone.dot)} />
 									<span className={cn("truncate", tone.text)}>{compactPRLabel(pr, t)}</span>
 								</div>
