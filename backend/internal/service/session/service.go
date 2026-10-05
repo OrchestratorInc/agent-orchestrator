@@ -845,6 +845,39 @@ func (s *Service) Rename(ctx context.Context, id domain.SessionID, displayName s
 	return nil
 }
 
+// RenameIfDisplayName applies an automatic rename only while the provisional
+// display name is still present. A concurrent user rename therefore wins.
+func (s *Service) RenameIfDisplayName(ctx context.Context, id domain.SessionID, currentDisplayName, displayName string) error {
+	if currentDisplayName == "" || strings.TrimSpace(currentDisplayName) != currentDisplayName {
+		return apierr.Invalid("EXPECTED_DISPLAY_NAME_INVALID", "Expected display name must be non-empty and normalized", nil)
+	}
+	if utf8.RuneCountInString(currentDisplayName) > maxDisplayNameLen {
+		return apierr.Invalid("EXPECTED_DISPLAY_NAME_TOO_LONG", fmt.Sprintf("Expected display name must be %d characters or fewer", maxDisplayNameLen), nil)
+	}
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" {
+		return apierr.Invalid("DISPLAY_NAME_REQUIRED", "Display name is required", nil)
+	}
+	if utf8.RuneCountInString(displayName) > maxDisplayNameLen {
+		return apierr.Invalid("DISPLAY_NAME_TOO_LONG", fmt.Sprintf("Display name must be %d characters or fewer", maxDisplayNameLen), nil)
+	}
+	renamed, err := s.store.RenameSessionIfDisplayName(ctx, id, currentDisplayName, displayName, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("rename %s if unchanged: %w", id, err)
+	}
+	if renamed {
+		return nil
+	}
+	_, found, err := s.store.GetSession(ctx, id)
+	if err != nil {
+		return fmt.Errorf("check session %s after conditional rename: %w", id, err)
+	}
+	if !found {
+		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	return apierr.Conflict("SESSION_DISPLAY_NAME_CHANGED", "Session display name changed before the automatic rename", nil)
+}
+
 // SetPreview persists the browser preview URL for a session and returns the
 // refreshed read model. The URL is taken verbatim from the caller (the
 // controller resolves it, either an explicit target or an autodetected entry).

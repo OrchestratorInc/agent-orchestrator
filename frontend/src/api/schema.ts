@@ -4521,6 +4521,8 @@ export interface components {
         };
         RenameSessionRequest: {
             displayName: string;
+            /** @description Rename only if the current display name matches this value. */
+            expectedDisplayName?: null | string;
         };
         RenameSessionResponse: {
             displayName: string;

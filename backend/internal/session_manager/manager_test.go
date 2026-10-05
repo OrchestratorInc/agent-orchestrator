@@ -2659,7 +2659,7 @@ func TestSpawn_DeliversDelegatedPromptOnceAndPreservesLatestUserPrompt(t *testin
 	if st.sessions["mer-1"].Metadata.LatestUserPrompt != brief {
 		t.Fatalf("latest user prompt = %q, want original prompt", st.sessions["mer-1"].Metadata.LatestUserPrompt)
 	}
-	for _, want := range []string{"$AO_SESSION_ID", "at most 20 characters", `ao session rename "$AO_SESSION_ID" "<title>"`, "If self-renaming is unavailable, continue implementation; the provisional display name remains the fallback."} {
+	for _, want := range []string{"$AO_SESSION_ID", "at most 20 characters", `ao session rename "$AO_SESSION_ID" "<title>" --if-current-display-name "<provisional name>"`, "replacing each run of Unicode whitespace with one ASCII space, trimming it, and taking the first 100 Unicode code points", "If self-renaming is unavailable, continue implementation; the provisional display name remains the fallback."} {
 		if !strings.Contains(agent.lastLaunch.SystemPrompt, want) {
 			t.Fatalf("startup system prompt missing %q:\n%s", want, agent.lastLaunch.SystemPrompt)
 		}

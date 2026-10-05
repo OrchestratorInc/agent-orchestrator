@@ -13192,6 +13192,13 @@ components:
           maxLength: 100
           minLength: 1
           type: string
+        expectedDisplayName:
+          description: Rename only if the current display name matches this value.
+          maxLength: 100
+          minLength: 1
+          type:
+          - "null"
+          - string
       required:
       - displayName
       type: object

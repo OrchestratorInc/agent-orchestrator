@@ -44,10 +44,10 @@ type systemPromptConfig struct {
 // direct delegated task with a nonblank brief. It deliberately refers to the
 // worker's environment instead of embedding the allocated session id or task
 // brief in a later message.
-const DelegatedTaskTitleStartupPrompt = `Before beginning implementation, choose a concise title of at most 20 characters and run:
-ao session rename "$AO_SESSION_ID" "<title>"
+const DelegatedTaskTitleStartupPrompt = `Before beginning implementation, derive the provisional display name from the task brief by replacing each run of Unicode whitespace with one ASCII space, trimming it, and taking the first 100 Unicode code points (use "Untitled task" only for an empty brief). Choose a concise title of at most 20 characters and run:
+ao session rename "$AO_SESSION_ID" "<title>" --if-current-display-name "<provisional name>"
 
-If self-renaming is unavailable, continue implementation; the provisional display name remains the fallback.`
+This rename is conditional. If it reports that the display name changed, do not retry without the condition; continue implementation and preserve the current name. If self-renaming is unavailable, continue implementation; the provisional display name remains the fallback.`
 
 type projectRulesConfig struct {
 	ProjectPath    string

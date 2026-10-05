@@ -39,8 +39,14 @@ type sessionClaimPROptions struct {
 	noTakeover bool
 }
 
+type sessionRenameOptions struct {
+	project              string
+	ifCurrentDisplayName string
+}
+
 type sessionRenameRequest struct {
-	DisplayName string `json:"displayName"`
+	DisplayName         string `json:"displayName"`
+	ExpectedDisplayName string `json:"expectedDisplayName,omitempty"`
 }
 
 type sessionDTO struct {
@@ -319,7 +325,7 @@ func newSessionResumeAgentCommand(ctx *commandContext) *cobra.Command {
 }
 
 func newSessionRenameCommand(ctx *commandContext) *cobra.Command {
-	var opts sessionOptions
+	var opts sessionRenameOptions
 	cmd := &cobra.Command{
 		Use:   "rename <id> <name>",
 		Short: "Rename a session",
@@ -333,6 +339,7 @@ func newSessionRenameCommand(ctx *commandContext) *cobra.Command {
 		},
 	}
 	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
+	cmd.Flags().StringVar(&opts.ifCurrentDisplayName, "if-current-display-name", "", "Rename only if the current display name matches this value")
 	return cmd
 }
 
@@ -686,7 +693,7 @@ func (c *commandContext) resumeSessionAgent(ctx context.Context, cmd *cobra.Comm
 	return nil
 }
 
-func (c *commandContext) renameSession(ctx context.Context, cmd *cobra.Command, id, displayName string, opts sessionOptions) error {
+func (c *commandContext) renameSession(ctx context.Context, cmd *cobra.Command, id, displayName string, opts sessionRenameOptions) error {
 	if opts.project != "" {
 		if _, err := c.fetchScopedSession(ctx, id, opts.project); err != nil {
 			return err
@@ -694,7 +701,10 @@ func (c *commandContext) renameSession(ctx context.Context, cmd *cobra.Command, 
 	}
 	name := strings.TrimSpace(displayName)
 	var res renameSessionResponse
-	if err := c.patchJSON(ctx, "sessions/"+url.PathEscape(id), sessionRenameRequest{DisplayName: name}, &res); err != nil {
+	if err := c.patchJSON(ctx, "sessions/"+url.PathEscape(id), sessionRenameRequest{
+		DisplayName:         name,
+		ExpectedDisplayName: opts.ifCurrentDisplayName,
+	}, &res); err != nil {
 		return err
 	}
 	sessionID := res.SessionID

@@ -722,7 +722,8 @@ type SessionPreviewResponse struct {
 
 // RenameSessionRequest is the body of PATCH /api/v1/sessions/{sessionId}.
 type RenameSessionRequest struct {
-	DisplayName string `json:"displayName" minLength:"1" maxLength:"100"`
+	DisplayName         string  `json:"displayName" minLength:"1" maxLength:"100"`
+	ExpectedDisplayName *string `json:"expectedDisplayName,omitempty" minLength:"1" maxLength:"100" description:"Rename only if the current display name matches this value."`
 }
 
 // SetSessionReviewerRequest sets the durable reviewer preference for a session.

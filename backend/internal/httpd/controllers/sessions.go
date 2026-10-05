@@ -100,6 +100,7 @@ type SessionService interface {
 	RollbackSpawn(ctx context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error)
 	Cleanup(ctx context.Context, project domain.ProjectID) (sessionsvc.CleanupOutcome, error)
 	Rename(ctx context.Context, id domain.SessionID, displayName string) error
+	RenameIfDisplayName(ctx context.Context, id domain.SessionID, currentDisplayName, displayName string) error
 	SetPreview(ctx context.Context, id domain.SessionID, previewURL string) (domain.Session, error)
 	SetTerminateOnPRMerge(ctx context.Context, id domain.SessionID, terminate bool) (domain.Session, error)
 	SetAutoInjectReview(ctx context.Context, id domain.SessionID, autoInject bool) (domain.Session, error)
@@ -1403,7 +1404,22 @@ func (c *SessionsController) rename(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "DISPLAY_NAME_TOO_LONG", fmt.Sprintf("displayName must be %d characters or fewer", maxDisplayNameLen), nil)
 		return
 	}
-	if err := c.Svc.Rename(r.Context(), sessionID(r), displayName); err != nil {
+	var err error
+	if in.ExpectedDisplayName != nil {
+		expected := *in.ExpectedDisplayName
+		if expected == "" || strings.TrimSpace(expected) != expected {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "EXPECTED_DISPLAY_NAME_INVALID", "expectedDisplayName must be a non-empty normalized display name", nil)
+			return
+		}
+		if utf8.RuneCountInString(expected) > maxDisplayNameLen {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "EXPECTED_DISPLAY_NAME_TOO_LONG", fmt.Sprintf("expectedDisplayName must be %d characters or fewer", maxDisplayNameLen), nil)
+			return
+		}
+		err = c.Svc.RenameIfDisplayName(r.Context(), sessionID(r), expected, displayName)
+	} else {
+		err = c.Svc.Rename(r.Context(), sessionID(r), displayName)
+	}
+	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}

@@ -496,6 +496,19 @@ func (f *fakeSessionService) Rename(_ context.Context, id domain.SessionID, disp
 	return nil
 }
 
+func (f *fakeSessionService) RenameIfDisplayName(_ context.Context, id domain.SessionID, currentDisplayName, displayName string) error {
+	s, ok := f.sessions[id]
+	if !ok {
+		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	if s.DisplayName != currentDisplayName {
+		return apierr.Conflict("SESSION_DISPLAY_NAME_CHANGED", "Session display name changed before the automatic rename", nil)
+	}
+	s.DisplayName = displayName
+	f.sessions[id] = s
+	return nil
+}
+
 func (f *fakeSessionService) Send(_ context.Context, _ domain.SessionID, message string, attachment *ports.SpawnAttachment) error {
 	f.sent = message
 	f.sentAttachment = attachment
@@ -3391,6 +3404,28 @@ func TestSessionsAPI_RenameNotFound(t *testing.T) {
 
 	body, status, _ := doRequest(t, srv, "PATCH", "/api/v1/sessions/missing-1", `{"displayName":"Renamed"}`)
 	assertErrorCode(t, body, status, http.StatusNotFound, "SESSION_NOT_FOUND")
+}
+
+func TestSessionsAPI_RenameOnlyWhenDisplayNameMatches(t *testing.T) {
+	svc := newFakeSessionService()
+	session := svc.sessions["ao-1"]
+	session.DisplayName = "Provisional title"
+	svc.sessions["ao-1"] = session
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "PATCH", "/api/v1/sessions/ao-1", `{"displayName":"Worker title","expectedDisplayName":"Provisional title"}`)
+	if status != http.StatusOK {
+		t.Fatalf("conditional rename = %d, want 200; body=%s", status, body)
+	}
+	if got := svc.sessions["ao-1"].DisplayName; got != "Worker title" {
+		t.Fatalf("display name = %q, want Worker title", got)
+	}
+
+	body, status, _ = doRequest(t, srv, "PATCH", "/api/v1/sessions/ao-1", `{"displayName":"Overwritten","expectedDisplayName":"Provisional title"}`)
+	assertErrorCode(t, body, status, http.StatusConflict, "SESSION_DISPLAY_NAME_CHANGED")
+	if got := svc.sessions["ao-1"].DisplayName; got != "Worker title" {
+		t.Fatalf("display name after stale conditional rename = %q, want Worker title", got)
+	}
 }
 
 func TestSessionsAPI_RenameValidation(t *testing.T) {
