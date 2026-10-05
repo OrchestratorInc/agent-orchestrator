@@ -511,6 +511,34 @@ describe("useTerminalSession", () => {
 			expect(terminal.lines).toEqual(["replay", "live-1", "live-2"]);
 		});
 
+		// A burst arrives as many messages; output that lands while xterm is still
+		// parsing the previous write goes in as one batch, in order, instead of a
+		// write (and parse/render cycle) per message.
+		it("joins live output that arrives while a write is being parsed", () => {
+			const { terminal, muxes } = setup({ coverInitialReplay: false });
+			terminal.autoCompleteWrites = false;
+			act(() => muxes[0].emitData("handle-1", "a"));
+			act(() => muxes[0].emitData("handle-1", "b"));
+			act(() => muxes[0].emitData("handle-1", "c"));
+			expect(terminal.lines).toEqual(["a"]);
+
+			act(() => terminal.completeWrites());
+			expect(terminal.lines).toEqual(["a", "bc"]);
+			act(() => muxes[0].emitData("handle-1", "d"));
+			expect(terminal.lines).toEqual(["a", "bc"]);
+			act(() => terminal.completeWrites());
+			expect(terminal.lines).toEqual(["a", "bc", "d"]);
+		});
+
+		it("hands held live output to xterm when the attachment is torn down", () => {
+			const { terminal, muxes, detach } = setup({ coverInitialReplay: false });
+			terminal.autoCompleteWrites = false;
+			act(() => muxes[0].emitData("handle-1", "a"));
+			act(() => muxes[0].emitData("handle-1", "held"));
+			act(() => detach());
+			expect(terminal.lines).toEqual(["a", "held"]);
+		});
+
 		it("reveals a pane that replays nothing instead of holding the cover to the cap", () => {
 			const { view, muxes } = setup();
 			act(() => muxes[0].emitOpened("handle-1"));

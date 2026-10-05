@@ -804,16 +804,26 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		let scrollbarFrame: number | null = null;
 		let scrollbarHideTimer: number | null = null;
 		let scrollbarDrag: { pointerId: number; startLine: number; startY: number } | null = null;
+		let scrollbarLastActive = 0;
+		const hideScrollbarWhenIdle = () => {
+			scrollbarHideTimer = null;
+			if (!scrollbarTrack || scrollbarDrag) return;
+			const idleFor = Date.now() - scrollbarLastActive;
+			if (idleFor < MAC_TERMINAL_SCROLLBAR_IDLE_MS) {
+				scrollbarHideTimer = window.setTimeout(hideScrollbarWhenIdle, MAC_TERMINAL_SCROLLBAR_IDLE_MS - idleFor);
+				return;
+			}
+			scrollbarTrack.dataset.active = "false";
+		};
+		// Called on every scroll, which streaming output fires continuously: keep
+		// it to a timestamp. The single hide timer re-arms itself while activity
+		// continues instead of being cleared and re-created per scroll.
 		const revealScrollbar = () => {
 			if (!scrollbarTrack || scrollbarTrack.dataset.scrollable !== "true") return;
-			scrollbarTrack.dataset.active = "true";
-			if (scrollbarHideTimer !== null) window.clearTimeout(scrollbarHideTimer);
-			scrollbarHideTimer = null;
-			if (scrollbarDrag) return;
-			scrollbarHideTimer = window.setTimeout(() => {
-				scrollbarTrack.dataset.active = "false";
-				scrollbarHideTimer = null;
-			}, MAC_TERMINAL_SCROLLBAR_IDLE_MS);
+			scrollbarLastActive = Date.now();
+			if (scrollbarTrack.dataset.active !== "true") scrollbarTrack.dataset.active = "true";
+			if (scrollbarDrag || scrollbarHideTimer !== null) return;
+			scrollbarHideTimer = window.setTimeout(hideScrollbarWhenIdle, MAC_TERMINAL_SCROLLBAR_IDLE_MS);
 		};
 		const updateScrollbar = () => {
 			scrollbarFrame = null;

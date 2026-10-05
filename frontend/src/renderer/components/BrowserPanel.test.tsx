@@ -1265,6 +1265,9 @@ describe("BrowserPanel", () => {
 		render(<BrowserPanel active onTogglePopOut={onTogglePopOut} poppedOut session={session} />);
 
 		const returnButton = screen.getByRole("button", { name: "Return to panel" });
+		await openBrowserControls();
+		expect(screen.queryByRole("menuitem", { name: "Return to panel" })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
 		await userEvent.click(returnButton);
 
 		expect(onTogglePopOut).toHaveBeenCalledWith(false);

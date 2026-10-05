@@ -893,6 +893,30 @@ describe("XtermTerminal", () => {
 		vi.useRealTimers();
 	});
 
+	// Streaming output scrolls continuously; the scrollbar stays up until the
+	// last scroll goes idle, and per-scroll work stays cheap (one pending timer).
+	it("keeps the macOS scrollbar up through continuous scrolling with one pending timer", () => {
+		setNavigatorPlatform("MacIntel");
+		const { container } = render(<XtermTerminal theme="dark" />);
+		const scrollbar = container.querySelector<HTMLElement>(".terminal-scrollbar")!;
+		scrollbar.dataset.scrollable = "true";
+		vi.useFakeTimers();
+		const scroll = () => act(() => state.lastTerminal!.scrollListeners.forEach((listener) => listener()));
+
+		for (let i = 0; i < 50; i++) scroll();
+		expect(vi.getTimerCount()).toBe(1);
+		act(() => vi.advanceTimersByTime(400));
+		scroll();
+		act(() => vi.advanceTimersByTime(400));
+		scroll();
+		act(() => vi.advanceTimersByTime(699));
+		expect(scrollbar.dataset.active).toBe("true");
+		act(() => vi.advanceTimersByTime(1));
+		expect(scrollbar.dataset.active).toBe("false");
+
+		vi.useRealTimers();
+	});
+
 	it("copies selected terminal text on the terminal copy shortcut", () => {
 		render(<XtermTerminal theme="dark" />);
 		state.lastTerminal!.selection = "copied selection";

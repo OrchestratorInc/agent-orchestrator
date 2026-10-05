@@ -6,10 +6,81 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 )
+
+func TestStatusReadTokenUsesGrantedReadPermissions(t *testing.T) {
+	for _, missing := range []string{"statuses", "checks", "contents", "pull_requests"} {
+		t.Run(missing, func(t *testing.T) {
+			posts := 0
+			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/app/installations/1234":
+					permissions := map[string]string{"contents": "write", "pull_requests": "write", "checks": "read", "statuses": "read"}
+					delete(permissions, missing)
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": 1234, "permissions": permissions})
+				case "/app/installations/1234/access_tokens":
+					posts++
+					if posts == 1 {
+						w.WriteHeader(http.StatusUnprocessableEntity)
+						_, _ = w.Write([]byte(`{"message":"The permissions requested are not granted to this installation."}`))
+						return
+					}
+					var request struct {
+						RepositoryIDs []int64           `json:"repository_ids"`
+						Permissions   map[string]string `json:"permissions"`
+					}
+					_ = json.NewDecoder(r.Body).Decode(&request)
+					if len(request.RepositoryIDs) != 1 || request.RepositoryIDs[0] != 42 || request.Permissions[missing] != "" || len(request.Permissions) != 3 {
+						t.Errorf("fallback scope = %+v", request)
+					}
+					for _, permission := range request.Permissions {
+						if permission != "read" {
+							t.Errorf("fallback requested %q permission", permission)
+						}
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"token": "scoped-token", "expires_at": time.Now().Add(time.Hour)})
+				default:
+					t.Errorf("unexpected request %s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer gh.Close()
+			client := newAppTestClient(t, gh.URL, gh.Client())
+			_, err := client.statusReadToken(context.Background(), 1234, 42)
+			mandatory := missing == "contents" || missing == "pull_requests"
+			if mandatory {
+				if err == nil || posts != 1 {
+					t.Fatalf("missing required permission: error=%v posts=%d", err, posts)
+				}
+			} else if err != nil || posts != 2 {
+				t.Fatalf("optional permission fallback: error=%v posts=%d", err, posts)
+			}
+		})
+	}
+}
+
+func TestStatusReadTokenDoesNotRetryUnrelatedErrors(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusUnprocessableEntity} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			requests := 0
+			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`{"message":"Repository access denied"}`))
+			}))
+			defer gh.Close()
+			_, err := newAppTestClient(t, gh.URL, gh.Client()).statusReadToken(context.Background(), 1234, 42)
+			if err == nil || requests != 1 {
+				t.Fatalf("error=%v requests=%d", err, requests)
+			}
+		})
+	}
+}
 
 func TestPullRequestSnapshotQueryHasBalancedDelimiters(t *testing.T) {
 	if err := validateGraphQLDelimiters(pullRequestSnapshotQuery); err != nil {
@@ -38,6 +109,157 @@ func TestMapRESTMergeability(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := mapRESTMergeability(tc.mergeable, tc.state); got != tc.want {
 				t.Fatalf("mapRESTMergeability(%v,%q) = %q, want %q", tc.mergeable, tc.state, got, tc.want)
+			}
+		})
+	}
+}
+
+// A private PR snapshot reads commit and branch fields and the combined check
+// rollup. Status-only CI requires Commit statuses access even without check runs.
+func TestPrivatePullRequestSnapshotUsesContentsAndStatusesReadToken(t *testing.T) {
+	var granted map[string]string
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app/installations/1234/access_tokens":
+			var request struct {
+				RepositoryIDs []int64           `json:"repository_ids"`
+				Permissions   map[string]string `json:"permissions"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Errorf("decode token request: %v", err)
+			}
+			if len(request.RepositoryIDs) != 1 || request.RepositoryIDs[0] != 42 {
+				t.Errorf("repository scope = %v, want [42]", request.RepositoryIDs)
+			}
+			granted = request.Permissions
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"token": "private-pr-token", "expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			})
+		case "/graphql":
+			if r.Header.Get("Authorization") != "Bearer private-pr-token" {
+				t.Errorf("GraphQL used unexpected token")
+			}
+			if granted["contents"] != "read" || granted["statuses"] != "read" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"errors": []map[string]string{{"message": "Resource not accessible by integration"}}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+				"number": 1, "url": "https://github.com/owner/private/pull/1", "state": "OPEN",
+				"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "headRefOid": "head123",
+				"commits": map[string]any{"nodes": []map[string]any{{"commit": map[string]any{"statusCheckRollup": map[string]any{
+					"state": "SUCCESS", "contexts": map[string]any{"nodes": []map[string]any{{"__typename": "StatusContext", "context": "CodeRabbit", "state": "SUCCESS"}}},
+				}}}}},
+			}}}})
+		default:
+			t.Errorf("unexpected GitHub request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer gh.Close()
+
+	client := newAppTestClient(t, gh.URL, gh.Client())
+	access, err := client.statusReadToken(context.Background(), 1234, 42)
+	if err != nil {
+		t.Fatalf("mint status token: %v", err)
+	}
+	snapshot, err := client.FetchPullRequestSnapshotWithToken(context.Background(), access.Token, "owner", "private", 1)
+	if err != nil {
+		t.Fatalf("fetch private PR snapshot: %v", err)
+	}
+	if snapshot.Observation.Mergeability != contract.MergeMergeable {
+		t.Fatalf("mergeability = %q, want mergeable", snapshot.Observation.Mergeability)
+	}
+	if snapshot.Observation.CIState != contract.CIPassing {
+		t.Fatalf("CI state = %q, want passing for status-only CI", snapshot.Observation.CIState)
+	}
+	if granted["pull_requests"] != "read" || granted["checks"] != "read" || granted["statuses"] != "read" {
+		t.Fatalf("PR/check/status permissions = %v, want read", granted)
+	}
+}
+
+func TestPrivatePullRequestSnapshotFallsBackWhenStatusRollupIsForbidden(t *testing.T) {
+	var fullQueries, limitedQueries int
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/graphql":
+			var request struct {
+				Query string `json:"query"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if request.Query == pullRequestSnapshotQuery {
+				fullQueries++
+				_ = json.NewEncoder(w).Encode(map[string]any{"errors": []map[string]string{{"message": "Resource not accessible by integration"}}})
+				return
+			}
+			if request.Query != pullRequestSnapshotQueryWithoutRollup {
+				t.Errorf("unexpected GraphQL query")
+			}
+			limitedQueries++
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+				"number": 1, "url": "https://github.com/owner/private/pull/1", "state": "OPEN",
+				"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "headRefOid": "head123",
+			}}}})
+		case "/repos/owner/private/commits/head123/check-runs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{{
+				"id": 42, "name": "test", "status": "completed", "conclusion": "success",
+			}}})
+		case "/repos/owner/private/commits/head123/status":
+			_ = json.NewEncoder(w).Encode(map[string]any{"state": "success", "total_count": 0})
+		default:
+			t.Errorf("unexpected GitHub request %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer gh.Close()
+	client := NewRESTClient(gh.URL, gh.Client())
+	snapshot, err := client.FetchPullRequestSnapshotWithToken(context.Background(), "token", "owner", "private", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fullQueries != 1 || limitedQueries != 1 {
+		t.Fatalf("queries = full %d, limited %d", fullQueries, limitedQueries)
+	}
+	if snapshot.Observation.CIState != contract.CIPassing || len(snapshot.Checks) != 1 || snapshot.Checks[0].ProviderID != "42" {
+		t.Fatalf("fallback checks = %+v, CI state = %q", snapshot.Checks, snapshot.Observation.CIState)
+	}
+}
+
+func TestSnapshotFallbackRequiresBothCISources(t *testing.T) {
+	for _, tc := range []struct {
+		name, state string
+		want        contract.CIState
+	}{
+		{"inaccessible", "", contract.CIUnknown},
+		{"status failure", "failure", contract.CIFailing},
+		{"status pending", "pending", contract.CIPending},
+		{"status success", "success", contract.CIPassing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/graphql" {
+					var request struct {
+						Query string `json:"query"`
+					}
+					_ = json.NewDecoder(r.Body).Decode(&request)
+					if request.Query == pullRequestSnapshotQuery {
+						_, _ = w.Write([]byte(`{"errors":[{"message":"Resource not accessible by integration"}]}`))
+					} else {
+						_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":{"number":1,"url":"https://github.com/owner/private/pull/1","state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"head123"}}}}`))
+					}
+				} else if strings.HasSuffix(r.URL.Path, "/check-runs") {
+					_, _ = w.Write([]byte(`{"check_runs":[{"id":42,"name":"test","status":"completed","conclusion":"success"}]}`))
+				} else if strings.HasSuffix(r.URL.Path, "/status") && tc.state != "" {
+					_ = json.NewEncoder(w).Encode(map[string]any{"state": tc.state, "total_count": 1})
+				} else {
+					w.WriteHeader(http.StatusForbidden)
+				}
+			}))
+			defer gh.Close()
+			snapshot, err := NewRESTClient(gh.URL, gh.Client()).FetchPullRequestSnapshotWithToken(context.Background(), "token", "owner", "private", 1)
+			if err != nil || snapshot.Observation.CIState != tc.want || snapshot.Observation.Mergeability != contract.MergeMergeable {
+				t.Fatalf("snapshot=%+v error=%v", snapshot.Observation, err)
 			}
 		})
 	}
