@@ -1054,6 +1054,11 @@ func (e *Engine) restoreReviewerLocked(
 		if other.Harness == harness || !reviewRunsContainRunningForReview(runs, other) {
 			continue
 		}
+		// A Chat reviewer has no pane by design; RecoverChatReviewers restores
+		// its durable conversation, so a missing handle is not a dead reviewer.
+		if other.InterfaceMode == domain.ReviewerInterfaceChat {
+			continue
+		}
 		if _, err := e.cancelStaleRunningRuns(ctx, workerID, other.Harness, other, true, runs); err != nil {
 			return RestoreReviewerResult{}, err
 		}
@@ -1427,9 +1432,11 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 		return SessionReviews{}, err
 	}
 	active := []domain.ReviewerSurface{}
-	if reviewerRowActive(reviewRow, runs) {
+	selectedActive := reviewerRowActive(reviewRow, runs)
+	if selectedActive {
 		active = append(active, reviewerSurface(reviewRow))
 	}
+	var firstOtherActive domain.Review
 	for i := range reviewRows {
 		other := reviewRows[i]
 		if other.ID == reviewRow.ID {
@@ -1447,7 +1454,18 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 		}
 		if reviewerRowActive(other, runs) {
 			active = append(active, reviewerSurface(other))
+			if firstOtherActive.ID == "" {
+				firstOtherActive = other
+			}
 		}
+	}
+	// The current reviewer is the one a client should open. When the selected
+	// reviewer is idle but another is working (an agent asked a different
+	// reviewer with --agent), that working reviewer is current; otherwise its
+	// pane would be listed nowhere a single-reviewer client looks.
+	if !selectedActive && firstOtherActive.ID != "" {
+		reviewRow = firstOtherActive
+		reviewerHarness = firstOtherActive.Harness
 	}
 	prs, err := e.prs.ListPRsBySession(ctx, workerID)
 	if err != nil {

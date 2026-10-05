@@ -349,3 +349,55 @@ func TestRestoreReviewerKeepsALiveParallelReviewerAndCancelsADeadOne(t *testing.
 		})
 	}
 }
+
+// When an agent asks a reviewer other than the selected one, the reviewer
+// actually working is the current one clients open; the idle selected reviewer
+// must not hide it.
+func TestListReportsTheWorkingReviewerWhenTheSelectedOneIsIdle(t *testing.T) {
+	store := &fakeStore{
+		reviews: map[domain.ReviewerHarness]domain.Review{
+			domain.ReviewerClaudeCode: {ID: "rev-claude-code", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode},
+			domain.ReviewerCodex:      {ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "codex-pane", ReviewerActivityState: domain.ActivityActive},
+		},
+		runs: []domain.ReviewRun{
+			requestedRun("run-claude", domain.ReviewerClaudeCode, domain.ReviewRunComplete, domain.VerdictApproved, 1),
+			requestedRun("run-codex", domain.ReviewerCodex, domain.ReviewRunRunning, domain.VerdictNone, 2),
+		},
+	}
+	store.runs[1].ReviewID = "rev-codex"
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{alive: true})
+
+	got, err := eng.List(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got.ReviewerHarness != domain.ReviewerCodex || got.ReviewerHandleID != "codex-pane" || got.ReviewerSurface.ReviewID != "rev-codex" {
+		t.Fatalf("current reviewer = %s/%q/%+v, want the working codex reviewer", got.ReviewerHarness, got.ReviewerHandleID, got.ReviewerSurface)
+	}
+	if len(got.ActiveReviewers) != 1 || got.ActiveReviewers[0].Harness != domain.ReviewerCodex {
+		t.Fatalf("active = %+v, want only codex", got.ActiveReviewers)
+	}
+}
+
+// A Chat reviewer running alongside the selected one has no pane by design and
+// is recovered by RecoverChatReviewers; worker restore must not cancel it.
+func TestRestoreReviewerLeavesARunningChatReviewerToChatRecovery(t *testing.T) {
+	store := &fakeStore{
+		reviews: map[domain.ReviewerHarness]domain.Review{
+			domain.ReviewerClaudeCode: {ID: "rev-claude-code", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode},
+			domain.ReviewerCodex:      {ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, InterfaceMode: domain.ReviewerInterfaceChat},
+		},
+		runs: []domain.ReviewRun{
+			requestedRun("run-claude", domain.ReviewerClaudeCode, domain.ReviewRunComplete, domain.VerdictApproved, 1),
+			requestedRun("run-codex", domain.ReviewerCodex, domain.ReviewRunRunning, domain.VerdictNone, 2),
+		},
+	}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{alive: true, handle: "claude-pane"})
+
+	if _, err := eng.RestoreReviewer(context.Background(), "mer-1"); err != nil {
+		t.Fatalf("RestoreReviewer: %v", err)
+	}
+	if got := store.runs[1]; got.Status != domain.ReviewRunRunning {
+		t.Fatalf("codex chat run = %+v, want still running", got)
+	}
+}
