@@ -81,7 +81,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 	const refreshMenu = orchestrator ? (
 		<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
 			<DropdownMenuTrigger asChild>
-				<TopbarButton aria-label="Orchestrator actions" disabled={busy} variant="ghost" style={style}>
+				<TopbarButton aria-label="Orchestrator actions" disabled={busy} variant="icon" style={style}>
 					<MoreHorizontal className="size-icon-md" aria-hidden="true" />
 				</TopbarButton>
 			</DropdownMenuTrigger>

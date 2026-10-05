@@ -14,6 +14,7 @@ const actions: ProjectOrchestratorAction = {
 	canCreateAsTui: false,
 	openNewTask: vi.fn(),
 	openOrchestrator: vi.fn(),
+	refreshOrchestrator: vi.fn(),
 };
 
 describe("ProjectBoardActions", () => {
