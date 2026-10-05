@@ -853,7 +853,7 @@ button.settings-row-bar {
 	overflow-wrap: anywhere;
 }
 
-[data-section="harness"] .harness-status::before {
+[data-section="harness"] .harness-status[data-connected]::before {
 	content: "";
 	width: 0.3125rem;
 	height: 0.3125rem;

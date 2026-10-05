@@ -212,7 +212,7 @@ function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: string; 
 						<HarnessLogo provider={agentId} />
 						<div className="min-w-0 flex-1">
 							<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
-							<p className="harness-status text-xs text-settings-muted">{connected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}</p>
+							<p className="harness-status text-xs text-settings-muted" data-connected={connected || undefined}>{connected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}</p>
 						</div>
 						{loginAgent === agentId ? null : <Button data-harness-primary-action="" size="sm" variant={connected ? "outline" : "primary"} onClick={() => setLoginAgent(agentId)}>{t(connected ? "settings.harness.refreshLogin" : "settings.harness.login")}</Button>}
 						{loginAgent === agentId ? <div className="basis-full min-w-0"><CloudHarnessLoginPanel agent={agentId} onClose={() => setLoginAgent(null)} /></div> : null}
@@ -754,7 +754,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 								<div className="flex items-center gap-1.5">
 									<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
 								</div>
-								<p className={cn("harness-status text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? incompatibleVersionReason ?? authPlan?.reason ?? plan?.reason}>
+								<p className={cn("harness-status text-xs text-settings-muted", rowHasError && "text-error")} data-connected={isInstalled && !rowHasError && authStatus === "authorized" && !isSetupAction || undefined} title={authState?.error ?? actionError ?? job?.error ?? incompatibleVersionReason ?? authPlan?.reason ?? plan?.reason}>
 									{isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : incompatibleVersionReason ?? (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired"))))}
 								</p>
 							</div>
