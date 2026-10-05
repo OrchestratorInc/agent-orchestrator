@@ -118,6 +118,11 @@ func (f *fakeReviewService) TerminateReviewer(context.Context, domain.SessionID,
 	return nil
 }
 
+func (f *fakeReviewService) ArchiveReviewer(ctx context.Context, id domain.SessionID) error {
+	f.list.ReviewerSurface = domain.ReviewerSurface{}
+	return f.TerminateReviewer(ctx, id, "")
+}
+
 func (f *fakeReviewService) TeardownReviewerTerminal(context.Context, domain.SessionID) error {
 	f.teardown = true
 	f.list.ReviewerHandleID = ""
@@ -370,10 +375,11 @@ func TestReviewsCancelIncludesReviewStates(t *testing.T) {
 	}
 }
 
-func TestReviewsKillClearsReviewerHandle(t *testing.T) {
+func TestReviewsKillArchivesReviewerSurface(t *testing.T) {
 	svc := &fakeReviewService{list: reviewcore.SessionReviews{
 		ReviewerHandleID: "review-mer-1",
 		ReviewerHarness:  domain.ReviewerCodex,
+		ReviewerSurface:  domain.ReviewerSurface{Mode: domain.ReviewerInterfaceChat, ReviewID: "review-1", Harness: domain.ReviewerCodex},
 		Reviews:          []reviewcore.PRReviewState{{PRURL: "https://github.com/o/r/pull/1", PRNumber: 1, TargetSHA: "sha1", Status: reviewcore.ReviewStateNeedsReview}},
 		Runs:             []domain.ReviewRun{{ID: "run-1", SessionID: "mer-1", Harness: domain.ReviewerCodex}},
 	}}
@@ -385,12 +391,17 @@ func TestReviewsKillClearsReviewerHandle(t *testing.T) {
 		t.Fatalf("status = %d body=%s", status, body)
 	}
 	if !svc.killed {
-		t.Fatal("TerminateReviewer was not called")
+		t.Fatal("ArchiveReviewer was not called")
 	}
 	for _, want := range []string{`"reviewerHandleId":""`, `"reviews"`, `"runs"`, `"run-1"`} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("body missing %s: %s", want, body)
 		}
+	}
+
+	refreshed, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/mer-1/reviews", "")
+	if status != http.StatusOK || strings.Contains(string(refreshed), `"reviewerSurface"`) || !strings.Contains(string(refreshed), `"run-1"`) {
+		t.Fatalf("archived refresh: %d %s", status, refreshed)
 	}
 }
 

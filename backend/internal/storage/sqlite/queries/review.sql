@@ -1,6 +1,6 @@
 -- name: UpsertReview :exec
-INSERT INTO review (id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO review (id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (session_id, harness) DO UPDATE SET
     project_id = excluded.project_id,
     pr_url = excluded.pr_url,
@@ -12,22 +12,23 @@ ON CONFLICT (session_id, harness) DO UPDATE SET
 	provider_conversation_id = CASE WHEN excluded.provider_conversation_id != '' THEN excluded.provider_conversation_id ELSE review.provider_conversation_id END,
 	controller_generation = CASE WHEN excluded.controller_generation != '' THEN excluded.controller_generation ELSE review.controller_generation END,
 	controller_error = excluded.controller_error,
+    is_archived = excluded.is_archived,
     updated_at = excluded.updated_at;
 
 -- name: GetReviewBySession :one
-SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, created_at, updated_at
+SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
 FROM review WHERE session_id = ? ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1;
 
 -- name: GetReviewBySessionAndHarness :one
-SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, created_at, updated_at
+SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
 FROM review WHERE session_id = ? AND harness = ?;
 
 -- name: GetReviewByID :one
-SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, created_at, updated_at
+SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
 FROM review WHERE id = ?;
 
 -- name: ListReviewsBySession :many
-SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, created_at, updated_at
+SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
 FROM review WHERE session_id = ? ORDER BY updated_at DESC, created_at DESC, id DESC;
 
 -- name: ListLiveReviewerHandles :many
@@ -48,21 +49,21 @@ UPDATE review SET interface_mode = ?, reviewer_handle_id = CASE WHEN ? = 'chat' 
 -- name: RestoreReviewLaunchState :execrows
 UPDATE review SET pr_url = ?, interface_mode = ?, reviewer_handle_id = ?, agent_session_id = ?,
     reviewer_activity_state = ?, reviewer_launch_id = ?, provider_conversation_id = ?,
-    controller_generation = ?, controller_error = ?, updated_at = ? WHERE id = ?;
+    controller_generation = ?, controller_error = ?, is_archived = ?, updated_at = ? WHERE id = ?;
 
 -- name: ClaimReviewChatController :execrows
 UPDATE review SET provider_conversation_id = ?, controller_generation = ?, controller_error = '', updated_at = ?
-WHERE id = ? AND interface_mode = 'chat';
+WHERE id = ? AND interface_mode = 'chat' AND is_archived = FALSE;
 
 -- name: RecordReviewChatControllerError :execrows
-UPDATE review SET controller_error = ?, updated_at = ? WHERE id = ? AND interface_mode = 'chat';
+UPDATE review SET controller_error = ?, updated_at = ? WHERE id = ? AND interface_mode = 'chat' AND is_archived = FALSE;
 
 -- name: ClearReviewChatController :execrows
-UPDATE review SET controller_generation = '', updated_at = ? WHERE id = ? AND interface_mode = 'chat';
+UPDATE review SET controller_generation = '', updated_at = ? WHERE id = ? AND interface_mode = 'chat' AND is_archived = FALSE;
 
 -- name: ListRecoverableChatReviews :many
-SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, created_at, updated_at
-FROM review WHERE interface_mode = 'chat' AND provider_conversation_id != '' ORDER BY updated_at, id;
+SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
+FROM review WHERE interface_mode = 'chat' AND is_archived = FALSE AND provider_conversation_id != '' ORDER BY updated_at, id;
 
 -- name: ClearReviewerHandle :exec
 UPDATE review SET reviewer_handle_id = '', updated_at = CURRENT_TIMESTAMP WHERE session_id = ?;
@@ -191,3 +192,7 @@ WHERE status = 'running' AND verdict = '' AND batch_id != ''
       AND message.role = 'user' AND message.origin = 'daemon'
       AND message.client_message_id = 'review-batch:' || review_run.batch_id
   );
+
+-- name: ArchiveReviewsBySession :exec
+UPDATE review SET is_archived = TRUE, reviewer_handle_id = '', reviewer_launch_id = '',
+    controller_generation = '', reviewer_activity_state = 'exited', updated_at = ? WHERE session_id = ?;

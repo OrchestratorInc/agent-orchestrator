@@ -3141,3 +3141,132 @@ func TestExplicitRerunStartsFreshPassAndReusesAnActivePass(t *testing.T) {
 		t.Fatalf("automatic rerun error = %v", err)
 	}
 }
+
+func (f *fakeStore) ArchiveReviewsBySession(_ context.Context, id domain.SessionID, now time.Time) error {
+	for harness, review := range f.reviews {
+		if review.SessionID == id {
+			review.IsArchived = true
+			review.ReviewerHandleID = ""
+			review.ControllerGeneration = ""
+			review.ReviewerLaunchID = ""
+			review.ReviewerActivityState = domain.ActivityExited
+			review.UpdatedAt = now
+			f.reviews[harness] = review
+		}
+	}
+	if f.review != nil && f.review.SessionID == id {
+		f.review.IsArchived = true
+		f.review.ReviewerHandleID = ""
+		f.review.ControllerGeneration = ""
+		f.review.ReviewerLaunchID = ""
+		f.review.ReviewerActivityState = domain.ActivityExited
+	}
+	return nil
+}
+
+func TestArchiveReviewerHidesSurfaceAndPreservesHistoryUntilNewReview(t *testing.T) {
+	for _, mode := range []domain.ReviewerInterfaceMode{domain.ReviewerInterfaceChat, domain.ReviewerInterfaceTUI} {
+		t.Run(string(mode), func(t *testing.T) {
+			ctx := context.Background()
+			store := newSQLiteReviewStore(t)
+			worker := liveWorker()
+			worker.ReviewerHarness = domain.ReviewerCodex
+			seedReviewWorker(t, store, worker)
+			now := time.Now().UTC()
+			review := domain.Review{ID: "archive-review", SessionID: worker.ID, ProjectID: worker.ProjectID, Harness: domain.ReviewerCodex,
+				InterfaceMode: mode, ReviewerHandleID: "reviewer-pane", CreatedAt: now, UpdatedAt: now}
+			if err := store.UpsertReview(ctx, review); err != nil {
+				t.Fatal(err)
+			}
+			if mode == domain.ReviewerInterfaceChat {
+				conversation, err := store.CreateReviewConversation(ctx, "archive-conversation", review.ID, worker.ProjectID, worker.ID, now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if claimed, err := store.ClaimReviewChatController(ctx, review.ID, "provider-1", "generation-1", now); err != nil || !claimed {
+					t.Fatalf("claim: %v %v", claimed, err)
+				}
+				if created, err := store.AppendReviewUserMessage(ctx, conversation.ID, worker.ID, review.ID, "generation-1", domain.ConversationMessage{ID: "archive-message", Text: "Keep this history", Origin: domain.MessageOriginHuman}, "archive-turn", now); err != nil || !created {
+					t.Fatalf("message: %v %v", created, err)
+				}
+				if err := store.BindTurnToProvider(ctx, "archive-turn", "provider-turn", now); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.UpsertActivity(ctx, conversation.ID, "provider-turn", domain.ConversationActivity{ID: "approval", Kind: domain.ActivityKindApproval, Status: domain.ActivityStatusPending, RequestID: "approval-1"}, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			complete := domain.ReviewRun{ID: "complete", ReviewID: review.ID, SessionID: worker.ID, Harness: review.Harness, PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, Body: "Saved verdict", CreatedAt: now}
+			running := complete
+			running.ID = "running"
+			running.TargetSHA = "sha2"
+			running.Status = domain.ReviewRunRunning
+			running.Verdict = domain.VerdictNone
+			running.Body = ""
+			for _, run := range []domain.ReviewRun{complete, running} {
+				if err := store.InsertReviewRun(ctx, run); err != nil {
+					t.Fatal(err)
+				}
+			}
+			launcher := &fakeLauncher{interfaceMode: mode, handle: "new-reviewer"}
+			engine := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha3"), fakeProjects{}, launcher)
+			if _, err := engine.ArchiveReviewer(ctx, worker.ID); err != nil {
+				t.Fatal(err)
+			}
+			saved, _, err := store.GetReviewByID(ctx, review.ID)
+			if err != nil || !saved.IsArchived || saved.ControllerGeneration != "" || saved.ReviewerHandleID != "" {
+				t.Fatalf("archived row: %+v, %v", saved, err)
+			}
+			list, err := engine.List(ctx, worker.ID)
+			if err != nil || list.ReviewerSurface.ReviewID != "" || list.ReviewerHandleID != "" || len(list.Runs) != 2 {
+				t.Fatalf("archived list: %+v, %v", list, err)
+			}
+			preserved, _, _ := store.GetReviewRun(ctx, complete.ID)
+			cancelled, _, _ := store.GetReviewRun(ctx, running.ID)
+			if preserved.Body != complete.Body || preserved.Verdict != complete.Verdict || preserved.Status != complete.Status || cancelled.Status != domain.ReviewRunCancelled {
+				t.Fatalf("saved results: %+v %+v", preserved, cancelled)
+			}
+			if mode == domain.ReviewerInterfaceChat {
+				snapshot, err := store.LoadConversationSnapshot(ctx, "archive-conversation")
+				if err != nil || len(snapshot.Messages) != 1 || snapshot.Messages[0].Text != "Keep this history" || snapshot.Turns[0].State != domain.TurnStateFailed || snapshot.Activities[0].Status != domain.ActivityStatusFailed {
+					t.Fatalf("saved conversation: %+v, %v", snapshot, err)
+				}
+				if claimed, err := store.ClaimReviewChatController(ctx, review.ID, "provider-1", "late-generation", now); err != nil || claimed {
+					t.Fatalf("archived controller claimed: %v %v", claimed, err)
+				}
+			}
+			// Simulate recovery with a fresh engine; archived reviewers must stay closed.
+			nextLauncher := &fakeLauncher{interfaceMode: mode, handle: "new-reviewer"}
+			next := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha3"), fakeProjects{}, nextLauncher)
+			if err := next.RecoverChatReviewers(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := next.RestoreReviewer(ctx, worker.ID); err != nil {
+				t.Fatal(err)
+			}
+			if nextLauncher.spawned || nextLauncher.restored {
+				t.Fatal("archived reviewer resurrected during recovery")
+			}
+			result, err := next.Trigger(ctx, worker.ID, review.Harness, domain.AgentConfig{})
+			if err != nil || !result.Created || result.ReviewerSurface.ReviewID != review.ID {
+				t.Fatalf("new review: %+v, %v", result, err)
+			}
+			reopened, _, err := store.GetReviewByID(ctx, review.ID)
+			if err != nil || reopened.IsArchived {
+				t.Fatalf("reopened row: %+v, %v", reopened, err)
+			}
+		})
+	}
+}
+
+func TestFailedReviewLaunchKeepsArchivedReviewerHidden(t *testing.T) {
+	old := domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, InterfaceMode: domain.ReviewerInterfaceTUI, IsArchived: true}
+	store := &fakeStore{review: &old, reviews: map[domain.ReviewerHarness]domain.Review{old.Harness: old}}
+	engine := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{spawnErr: errors.New("launch failed")})
+	if _, err := engine.Trigger(context.Background(), "mer-1", old.Harness, domain.AgentConfig{}); err == nil {
+		t.Fatal("expected launch failure")
+	}
+	if !store.review.IsArchived || reviewerSurface(*store.review).ReviewID != "" {
+		t.Fatalf("failed trigger reopened archive: %+v", store.review)
+	}
+}

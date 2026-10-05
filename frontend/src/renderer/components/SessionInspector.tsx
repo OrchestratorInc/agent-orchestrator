@@ -32,7 +32,6 @@ import {
 	GitMerge,
 	Info,
 	Play,
-	Square,
 	Loader2,
 	MessageSquare,
 	X,
@@ -1779,13 +1778,7 @@ function ReviewsSection({
 			};
 		},
 		onSuccess: ({ data, requestReviewsKey, requestWorkspaceKey, reviewId, requestHostId }) => {
-			if (data) {
-				queryClient.setQueryData<components["schemas"]["ListReviewsResponse"]>(requestReviewsKey, (previous) => ({
-					...data,
-					// Kill returns the terminal handle, but stopped Chat history still owns a tab.
-					...(previous?.reviewerSurface?.mode === "chat" ? { reviewerSurface: previous.reviewerSurface } : {}),
-				}));
-			}
+			if (data) queryClient.setQueryData(requestReviewsKey, data);
 			void queryClient.invalidateQueries({ queryKey: requestReviewsKey });
 			void queryClient.invalidateQueries({ queryKey: requestWorkspaceKey });
 			if (reviewId) {
@@ -2502,7 +2495,7 @@ function ReviewPanel({
 								type="button"
 								variant="ghost"
 							>
-								<Square aria-hidden="true" fill="currentColor" />
+								<Archive aria-hidden="true" />
 								<span>{isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}</span>
 							</Button>
 						</div>

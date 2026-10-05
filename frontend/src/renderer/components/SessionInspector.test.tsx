@@ -2410,7 +2410,7 @@ describe("SessionInspector summary reviews", () => {
     );
   });
 
-  it.each(["chat", "tui"])("stops a %s reviewer and refreshes its conversation without changing review history", async (mode) => {
+  it.each(["chat", "tui"])("archives a %s reviewer and refreshes its conversation without changing review history", async (mode) => {
     const reviews = [reviewState(3, "up_to_date")];
     const common = commonGetsResponder([], "", reviews);
     getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/reviews"
@@ -2420,7 +2420,7 @@ describe("SessionInspector summary reviews", () => {
     const { queryClient } = renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
     await openReviewsSection();
-    const stop = await screen.findByRole("button", { name: "Stop reviewer" });
+    const stop = await screen.findByRole("button", { name: "Archive reviewer" });
     expect(stop).toBeEnabled();
     await userEvent.click(stop);
     await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/kill", { params: { path: { sessionId: "sess-1" } } }));
@@ -2429,14 +2429,14 @@ describe("SessionInspector summary reviews", () => {
     expect(putMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/auto-review", expect.anything());
   });
 
-  it("shows a disabled Stop reviewer control before any reviewer exists", async () => {
+  it("shows a disabled Archive reviewer control before any reviewer exists", async () => {
     mockCommonGets([], "", []);
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
-    expect(screen.getByRole("button", { name: "Stop reviewer" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Archive reviewer" })).toBeDisabled();
   });
 
-  it("retains the stopped Chat surface while the reviews refresh is pending", async () => {
+  it("removes the archived Chat surface while the reviews refresh is pending", async () => {
     const reviews = [reviewState(3, "up_to_date")];
     const reviewerSurface = { mode: "chat", reviewId: "review-1", harness: "codex" };
     const response = { data: { reviewerHandleId: "", reviewerSurface, reviews } };
@@ -2450,9 +2450,9 @@ describe("SessionInspector summary reviews", () => {
     postMock.mockImplementation(async () => { stopped = true; return { data: { reviewerHandleId: "", reviews } }; });
     const { queryClient } = renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
-    await userEvent.click(await screen.findByRole("button", { name: "Stop reviewer" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Archive reviewer" }));
     await waitFor(() => expect(queryClient.getQueryState(["session-reviews", "sess-1"])?.fetchStatus).toBe("fetching"));
-    await waitFor(() => expect(queryClient.getQueryData<{ reviewerSurface: unknown }>(["session-reviews", "sess-1"])?.reviewerSurface).toEqual(reviewerSurface));
+    await waitFor(() => expect(queryClient.getQueryData<{ reviewerSurface: unknown }>(["session-reviews", "sess-1"])?.reviewerSurface).toBeUndefined());
     expect(stopped).toBe(true);
     finishRefresh(response);
   });
@@ -2510,7 +2510,7 @@ describe("SessionInspector summary reviews", () => {
       screen.getByRole("button", { name: "Stop review" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Stop reviewer" }),
+      screen.getByRole("button", { name: "Archive reviewer" }),
     ).toBeEnabled();
     expect(
       screen.queryByRole("button", { name: "Re-run review" }),

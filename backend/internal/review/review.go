@@ -32,6 +32,7 @@ var (
 // in production; tests use a fake.
 type Store interface {
 	UpsertReview(ctx stdctx.Context, r domain.Review) error
+	ArchiveReviewsBySession(ctx stdctx.Context, workerID domain.SessionID, now time.Time) error
 	SetReviewInterfaceMode(ctx stdctx.Context, id string, mode domain.ReviewerInterfaceMode, updatedAt time.Time) (bool, error)
 	RestoreReviewLaunchState(ctx stdctx.Context, review domain.Review, now time.Time) (bool, error)
 	SettleReviewChatWork(ctx stdctx.Context, reviewID string, now time.Time) error
@@ -493,7 +494,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			}
 			rollbackCtx, cancel := stdctx.WithTimeout(stdctx.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
-			if modeChanging || (hasConfigOverride && selectedMode == domain.ReviewerInterfaceChat) {
+			if previousReview.IsArchived || modeChanging || (hasConfigOverride && selectedMode == domain.ReviewerInterfaceChat) {
 				if ok, rollbackErr := e.store.RestoreReviewLaunchState(rollbackCtx, previousReview, rollbackNow); rollbackErr != nil {
 					cause = errors.Join(cause, fmt.Errorf("restore previous reviewer surface: %w", rollbackErr))
 				} else if !ok {
@@ -823,6 +824,14 @@ func (e *Engine) RecoverChatReviewers(ctx stdctx.Context) error {
 func (e *Engine) restoreRecoverableChatReviewer(ctx stdctx.Context, review domain.Review) (RestoreReviewerResult, error) {
 	unlock := e.lockWorker(review.SessionID)
 	defer unlock()
+	current, exists, err := e.store.GetReviewBySessionAndHarness(ctx, review.SessionID, review.Harness)
+	if err != nil {
+		return RestoreReviewerResult{}, err
+	}
+	if !exists || current.ID != review.ID || current.IsArchived {
+		return RestoreReviewerResult{}, nil
+	}
+	review = current
 	worker, ok, err := e.sessions.GetSession(ctx, review.SessionID)
 	if err != nil {
 		return RestoreReviewerResult{}, err
@@ -900,6 +909,9 @@ func (e *Engine) restoreReviewerLocked(
 	reviewRow, hasReview, err := e.store.GetReviewBySessionAndHarness(ctx, workerID, harness)
 	if err != nil {
 		return RestoreReviewerResult{}, err
+	}
+	if hasReview && reviewRow.IsArchived {
+		return RestoreReviewerResult{}, nil
 	}
 	runs, err := e.store.ListReviewRunsBySession(ctx, workerID)
 	if err != nil {
@@ -1317,7 +1329,7 @@ func (e *Engine) reconcileExitedReviewer(ctx stdctx.Context, review *domain.Revi
 }
 
 func reviewerSurface(review domain.Review) domain.ReviewerSurface {
-	if review.ID == "" {
+	if review.ID == "" || review.IsArchived {
 		return domain.ReviewerSurface{}
 	}
 	handleID := review.ReviewerHandleID
@@ -1331,7 +1343,7 @@ func reviewerSurface(review domain.Review) domain.ReviewerSurface {
 }
 
 func legacyReviewerHandle(review domain.Review) string {
-	if review.InterfaceMode == domain.ReviewerInterfaceChat {
+	if review.IsArchived || review.InterfaceMode == domain.ReviewerInterfaceChat {
 		return ""
 	}
 	return review.ReviewerHandleID
@@ -1460,6 +1472,15 @@ func (e *Engine) currentReviewForSession(ctx stdctx.Context, workerID domain.Ses
 // adapter for a graceful interrupt sequence: worker termination/restore must
 // remove the terminal pane itself.
 func (e *Engine) TerminateReviewer(ctx stdctx.Context, workerID domain.SessionID, body string) (TerminateResult, error) {
+	return e.terminateReviewer(ctx, workerID, body, false)
+}
+
+// ArchiveReviewer retires all reviewer surfaces but retains conversations and results.
+func (e *Engine) ArchiveReviewer(ctx stdctx.Context, workerID domain.SessionID) (TerminateResult, error) {
+	return e.terminateReviewer(ctx, workerID, "cancelled because reviewer was archived", true)
+}
+
+func (e *Engine) terminateReviewer(ctx stdctx.Context, workerID domain.SessionID, body string, archive bool) (TerminateResult, error) {
 	if workerID == "" {
 		return TerminateResult{}, fmt.Errorf("%w: worker session id is required", ErrInvalid)
 	}
@@ -1475,11 +1496,14 @@ func (e *Engine) TerminateReviewer(ctx stdctx.Context, workerID domain.SessionID
 	}
 	destroyedHandle := ""
 	for _, review := range reviews {
-		if review.ReviewerHandleID == "" {
-			continue
-		}
-		if err := e.launcher.Destroy(ctx, review.ReviewerHandleID); err != nil {
-			return TerminateResult{}, err
+		if archive && review.InterfaceMode == domain.ReviewerInterfaceChat {
+			if err := e.stopReviewChatWork(ctx, review); err != nil {
+				return TerminateResult{}, err
+			}
+		} else if review.ReviewerHandleID != "" {
+			if err := e.launcher.Destroy(ctx, review.ReviewerHandleID); err != nil {
+				return TerminateResult{}, err
+			}
 		}
 		if destroyedHandle == "" {
 			destroyedHandle = review.ReviewerHandleID
@@ -1495,6 +1519,11 @@ func (e *Engine) TerminateReviewer(ctx stdctx.Context, workerID domain.SessionID
 	}
 	if _, err := e.store.CancelRunningReviewRunsBySession(ctx, workerID, body); err != nil {
 		return TerminateResult{}, err
+	}
+	if archive {
+		if err := e.store.ArchiveReviewsBySession(ctx, workerID, e.clock()); err != nil {
+			return TerminateResult{}, err
+		}
 	}
 	cancelled := make([]domain.ReviewRun, 0, len(running))
 	for _, run := range running {
