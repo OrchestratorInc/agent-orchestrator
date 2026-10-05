@@ -8,6 +8,7 @@ import type { ChatConfigOption, ConversationMessage, ConversationSnapshot } from
 import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
 import { useUiStore } from "../../stores/ui-store";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
+import { editorHandoffQueryKey } from "../../hooks/useEditorHandoff";
 import { useConversationConfigOptions, useConversationModels, useConversationSkills } from "../../hooks/useConversation";
 
 const LINK = "http://localhost:5173";
@@ -56,6 +57,8 @@ const {
 		chooseSettings: vi.fn(),
 		pendingAcceptedTurnId: undefined as string | undefined,
 		acknowledgeAcceptedTurn: vi.fn(),
+		resumeWorkspaceUnavailable: false,
+		resetResumeError: vi.fn(),
 	},
 	conversationState: {
 		snapshot: { capabilities: [] } as
@@ -207,6 +210,8 @@ beforeEach(() => {
 	conversationCommandState.busy = false;
 	conversationCommandState.pendingAcceptedTurnId = undefined;
 	conversationCommandState.acknowledgeAcceptedTurn.mockReset();
+	conversationCommandState.resumeWorkspaceUnavailable = false;
+	conversationCommandState.resetResumeError.mockReset();
 	agentSwitchState.data = [];
 	catalogObserverState.enabled = [];
 	visibilityMocks.presentation.mockReset();
@@ -219,6 +224,32 @@ afterEach(() => {
 });
 
 describe("SessionChatSurface link routing", () => {
+	it("clears a later missing-workspace resume error while the cached workspace remains available", async () => {
+		conversationState.snapshot = { capabilities: [], controller: { state: "stopped" } };
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+		const handoff = { workspaceAvailable: true };
+		queryClient.setQueryData(editorHandoffQueryKey(session.id), handoff);
+		const surface = <Wrapper client={queryClient}><SessionChatSurface session={session} /></Wrapper>;
+		const view = render(surface);
+		await waitFor(() => expect(conversationCommandState.resetResumeError).toHaveBeenCalled());
+		conversationCommandState.resetResumeError.mockClear();
+		conversationCommandState.resetResumeError.mockImplementation(() => {
+			conversationCommandState.resumeWorkspaceUnavailable = false;
+		});
+
+		// A failed resume arrives after the successful probe; neither the probe nor
+		// the stopped controller changes to trigger recovery on their own.
+		conversationCommandState.resumeWorkspaceUnavailable = true;
+		view.rerender(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+
+		await waitFor(() => expect(conversationCommandState.resumeWorkspaceUnavailable).toBe(false));
+		expect(conversationCommandState.resetResumeError).toHaveBeenCalledTimes(1);
+		expect(queryClient.getQueryData(editorHandoffQueryKey(session.id))).toBe(handoff);
+		expect(conversationState.snapshot?.controller?.state).toBe("stopped");
+	});
+
 	it("keeps OpenCode approvals writable when its provider supplies Build/Plan mode", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], harness: "opencode" };
 		configState.options = [{

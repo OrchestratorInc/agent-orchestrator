@@ -411,6 +411,31 @@ describe("send keys", () => {
 		expect(readChatSessionDraft(sessionId).composer.delivery?.state).toBe("dispatching");
 	});
 
+	it("abandons an uncertain send journal and releases its local echo", async () => {
+		const sessionId = "composer-send-abandon";
+		const onSend = vi.fn().mockRejectedValue(new Error("response lost"));
+		const onAbandonDelivery = vi.fn();
+		render(
+			<ChatComposer
+				draftSessionId={sessionId}
+				onSend={onSend}
+				onAbandonDelivery={onAbandonDelivery}
+			/>,
+		);
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "possibly delivered request");
+		fireEvent.keyDown(field, { key: "Enter" });
+
+		await waitFor(() => expect(screen.getByRole("button", { name: "Abandon recovery" })).toBeEnabled());
+		const deliveryId = onSend.mock.calls[0]?.[2];
+		await userEvent.click(screen.getByRole("button", { name: "Abandon recovery" }));
+
+		expect(onAbandonDelivery).toHaveBeenCalledWith(deliveryId);
+		expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined();
+		expect(field).toHaveAttribute("contenteditable", "true");
+		expect(field).toHaveTextContent("possibly delivered request");
+	});
+
 	it("locks an accepted draft whose durable clear failed and clears without redispatch", async () => {
 		const sessionId = "composer-accepted-clear-failure";
 		const durableStorage = window.localStorage;
@@ -536,6 +561,26 @@ describe("send keys", () => {
 			view.unmount();
 			localStorage.mockRestore();
 		}
+	});
+
+	it("restores the typed attachment draft without an echo and retries the exact transport payload", async () => {
+		const sessionId = "composer-restored-attachment-without-echo";
+		const requestText = "inspect these notes\n\nAttached files (read these files in the workspace):\n- .ao/attachments/notes.txt";
+		prepareChatComposerDelivery(sessionId, {
+			kind: "send",
+			composerText: "inspect these notes",
+			attachments: [{ id: "restored-notes", path: ".ao/attachments/notes.txt", name: "notes.txt", mimeType: "text/plain", bytes: 5 }],
+			requestText,
+			clientMessageId: "restored-attachment-without-echo",
+		});
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer onSend={onSend} draftSessionId={sessionId} visibleClientMessageIds={new Set()} />);
+		const field = screen.getByLabelText("Message the agent");
+		await waitFor(() => expect(composerWireText(field)).toBe("inspect these notes"));
+		expect(await screen.findByLabelText("Remove notes.txt")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith(requestText, undefined, "restored-attachment-without-echo"));
+		await waitFor(() => expect(composerWireText(field)).toBe(""));
 	});
 
 	it("keeps a restored delivery recoverable without blocking navigation", async () => {
@@ -1100,6 +1145,16 @@ describe("slash commands", () => {
 		expect(screen.getAllByRole("option")).toHaveLength(3);
 	});
 
+	it("shows skills without menu chrome that competes with the suggestions", async () => {
+		const { field } = renderComposer({ skills: SKILLS });
+		await typeInComposer(field, "/");
+
+		expect(screen.queryByText("Skills", { exact: true })).toBeNull();
+		expect(screen.queryByText("Tab", { exact: true })).toBeNull();
+		expect(screen.getByRole("listbox")).toHaveClass("scrollbar-none", "overflow-y-auto");
+		expect(screen.getAllByRole("option")[0]).toHaveClass("!transition-none");
+	});
+
 	it("hides the generic agent source and keeps the AO source label", async () => {
 		const { field } = renderComposer({
 			skills: [
@@ -1341,6 +1396,14 @@ describe("file mentions", () => {
 		// The row reads as a file name plus where it lives, not as one long path.
 		expect(options[0]?.textContent).toContain("chat.go");
 		expect(options[0]?.textContent).toContain("backend/internal/ports");
+	});
+
+	it("shows file matches without a worktree header or visible scrollbar", async () => {
+		const { field } = renderComposer({ filePaths: FILES });
+		await typeInComposer(field, "@chat");
+
+		expect(screen.queryByText("Files in this worktree", { exact: true })).toBeNull();
+		expect(screen.getByRole("listbox")).toHaveClass("scrollbar-none", "overflow-y-auto");
 	});
 
 	// The label is a name; what the agent has to resolve is the whole path.
@@ -1602,7 +1665,15 @@ describe("attachments", () => {
 	it("keeps attachments after a failed send and reuses their staged paths on retry", async () => {
 		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-retry.png"]);
 		const onSend = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(undefined);
-		render(<ChatComposer onSend={onSend} onStageAttachments={stage} />);
+		const onAbandonDelivery = vi.fn();
+		render(
+			<ChatComposer
+				onSend={onSend}
+				onAbandonDelivery={onAbandonDelivery}
+				onStageAttachments={stage}
+				nativeImages
+			/>,
+		);
 		const field = screen.getByLabelText("Message the agent") as HTMLElement;
 
 		fireEvent.paste(field, { clipboardData: clipboardData([png()]) });
@@ -1611,11 +1682,14 @@ describe("attachments", () => {
 		await userEvent.keyboard("{Enter}");
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("attachments were kept");
+		const clientMessageId = onSend.mock.calls[0]?.[2];
+		expect(clientMessageId).toEqual(expect.any(String));
 		expect(field.textContent).toBe("inspect this");
 		expect(screen.getAllByRole("listitem")).toHaveLength(1);
 
 		await userEvent.keyboard("{Enter}");
 		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+		expect(onSend.mock.calls[1]?.[2]).toBe(clientMessageId);
 		expect(stage).toHaveBeenCalledTimes(1);
 		await waitFor(() => expect(screen.queryByRole("listitem")).not.toBeInTheDocument());
 		expect(field.textContent).toBe("");
