@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
@@ -63,8 +65,12 @@ type MemoryReader struct {
 	// cachedSystem is the last SystemMemory answer, reused within CacheTTL.
 	cachedSystem   domain.SystemMemory
 	cachedSystemAt time.Time
-	ReadSystem     func() (procmem.System, error)
-	ReadPressure   func() (procmem.Pressure, error)
+	// systemFlight lets callers that miss the cache together share one host
+	// read. Two reads milliseconds apart would each move the swap and CPU
+	// baseline, and the second would report a rate over almost no time.
+	systemFlight singleflight.Group
+	ReadSystem   func() (procmem.System, error)
+	ReadPressure func() (procmem.Pressure, error)
 }
 
 // NewMemoryReader constructs a memory reader.
@@ -159,14 +165,23 @@ func (r *MemoryReader) SystemMemory(ctx context.Context) (domain.SystemMemory, e
 		return out, nil
 	}
 	r.mu.Unlock()
-	out, err := r.readSystemMemory(ctx)
+	// Detached from this caller's cancellation: the read is shared, and one
+	// caller going away must not fail the others waiting on it.
+	readCtx := context.WithoutCancel(ctx)
+	v, err, _ := r.systemFlight.Do("system", func() (any, error) {
+		out, err := r.readSystemMemory(readCtx)
+		if err != nil {
+			return domain.SystemMemory{}, err
+		}
+		r.mu.Lock()
+		r.cachedSystem, r.cachedSystemAt = out, now
+		r.mu.Unlock()
+		return out, nil
+	})
 	if err != nil {
 		return domain.SystemMemory{}, err
 	}
-	r.mu.Lock()
-	r.cachedSystem, r.cachedSystemAt = out, now
-	r.mu.Unlock()
-	return out, nil
+	return v.(domain.SystemMemory), nil
 }
 
 func (r *MemoryReader) readSystemMemory(ctx context.Context) (domain.SystemMemory, error) {

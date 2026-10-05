@@ -3,6 +3,8 @@ package usage
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -440,5 +442,50 @@ func TestAppMemoryIncludesDetachedReviewerRoot(t *testing.T) {
 	}
 	if rv.Memory.RSSBytes != reviewer || rv.Memory.ProcessCount != 2 {
 		t.Fatalf("reviewer memory = %+v, want %d bytes across 2 processes", rv.Memory, reviewer)
+	}
+}
+
+// TestSystemMemoryCoalescesConcurrentReads: callers that miss the cache at the
+// same moment share one host read. Separate reads would each move the swap and
+// CPU baseline, and the later ones would report a rate over almost no time.
+func TestSystemMemoryCoalescesConcurrentReads(t *testing.T) {
+	now := time.Unix(2000, 0)
+	var reads atomic.Int32
+	release := make(chan struct{})
+	r := NewMemoryReader(MemoryReaderDeps{Store: memStore{}, Runtime: memRuntime{}, Now: func() time.Time { return now }, CacheTTL: 2 * time.Second})
+	r.ReadSystem = func() (procmem.System, error) {
+		reads.Add(1)
+		<-release
+		return procmem.System{TotalBytes: 16 << 30, AvailableBytes: 4 << 30, CPUCount: 8}, nil
+	}
+	const callers = 10
+	var started, done sync.WaitGroup
+	errs := make(chan error, callers)
+	for range callers {
+		started.Add(1)
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			started.Done()
+			_, err := r.SystemMemory(context.Background())
+			errs <- err
+		}()
+	}
+	started.Wait()
+	// Let every caller reach the shared read before the host answers.
+	for reads.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	done.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := reads.Load(); got != 1 {
+		t.Fatalf("host read %d times for %d concurrent callers; want one shared read", got, callers)
 	}
 }
