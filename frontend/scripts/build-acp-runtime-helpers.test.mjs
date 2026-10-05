@@ -17,8 +17,10 @@ import {
 	createWorkDirectory,
 	npmInvocation,
 	patchClaudeContextUsage,
+	patchClaudeFoldedPromptSettlement,
 	patchClaudeHibernationCheck,
 	patchClaudeRetryDetails,
+	patchClaudeStaleIdleDebt,
 	pruneNodeDistribution,
 	runtimeSourceFiles,
 } from "./build-acp-runtime-helpers.mjs";
@@ -221,6 +223,98 @@ describe("patchClaudeContextUsage", () => {
 		});
 		expect(zeroUpdates.map(({ used, size }) => [used, size])).toEqual([[9, 100]]);
 		expect(zero.contextWindowAuthoritative).toBe(false);
+	});
+});
+
+describe("patchClaudeFoldedPromptSettlement", () => {
+	it("routes a task-notification result that names a pending prompt to the user lane", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, `
+        const findUnsettledTurn = (uuid) => (session.turnQueue ?? []).find((t) => t.promptUuid === uuid && !t.settled);
+                    case "result": {
+                        const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind);
+                        try {
+`);
+
+		expect(patchClaudeFoldedPromptSettlement(adapterPath)).toBe(true);
+		expect(patchClaudeFoldedPromptSettlement(adapterPath)).toBe(false);
+		const patched = readFileSync(adapterPath, "utf8");
+
+		const start = patched.indexOf("// AO: a result naming a pending prompt answers it.");
+		const end = patched.indexOf("try {", start);
+		const classify = new Function("message", "session", `
+			const AUTONOMOUS_RESULT_ORIGINS = new Set(["task-notification", "peer"]);
+			const isHeldOpen = (turn) => turn.deferredSettle !== undefined && !turn.settled;
+			const findUnsettledTurn = (uuid) => (session.turnQueue ?? []).find((t) => t.promptUuid === uuid && !t.settled);
+			${patched.slice(start, end)}
+			return isAutonomousResult;
+		`);
+		const notification = { kind: "task-notification" };
+		const session = {
+			turnQueue: [
+				{ promptUuid: "pending", settled: false },
+				{ promptUuid: "settled", settled: true },
+				{ promptUuid: "held", settled: false, deferredSettle: { stopReason: "end_turn" } },
+			],
+		};
+
+		expect(classify({ origin: notification, user_message_uuids: ["pending"] }, session)).toBe(false);
+		expect(classify({ origin: notification, user_message_uuid: "pending" }, session)).toBe(false);
+		expect(classify({ origin: notification, user_message_uuids: ["settled", "held", "unknown"] }, session)).toBe(true);
+		expect(classify({ origin: notification }, session)).toBe(true);
+		expect(classify({ origin: { kind: "human" } }, session)).toBe(false);
+		expect(classify({}, session)).toBe(false);
+	});
+
+	it("fails packaging when the adapter's classification changes", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, "const isAutonomousResult = isAutonomous(message);\n");
+
+		expect(() => patchClaudeFoldedPromptSettlement(adapterPath)).toThrow(/folded-prompt patch/);
+	});
+});
+
+describe("patchClaudeStaleIdleDebt", () => {
+	it("drops unpaid idle debt when Claude starts running again", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, `
+                            case "session_state_changed": {
+                                session.lastSessionState = message.state;
+                                if (message.state === "idle") {
+                                    if (session.owedTrailingIdles > 0) {
+                                        session.owedTrailingIdles--;
+                                    }
+                                }
+                                break;
+                            }
+`);
+
+		expect(patchClaudeStaleIdleDebt(adapterPath)).toBe(true);
+		expect(patchClaudeStaleIdleDebt(adapterPath)).toBe(false);
+		const patched = readFileSync(adapterPath, "utf8");
+
+		const start = patched.indexOf("// AO: drop idle debt that can no longer be paid.");
+		const end = patched.indexOf("break;", start);
+		const onState = new Function("message", "session", `${patched.slice(start, end)}`);
+		const session = { lastSessionState: "idle", owedTrailingIdles: 2 };
+
+		onState({ state: "idle" }, session);
+		expect(session.owedTrailingIdles).toBe(1);
+		onState({ state: "running" }, session);
+		expect(session.owedTrailingIdles).toBe(0);
+		session.owedTrailingIdles = 1;
+		onState({ state: "running" }, session);
+		expect(session.owedTrailingIdles).toBe(1);
+		onState({ state: "idle" }, session);
+		expect(session.owedTrailingIdles).toBe(0);
+		expect(session.lastSessionState).toBe("idle");
+	});
+
+	it("fails packaging when the adapter's state handling changes", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, 'case "session_state_changed": {\n');
+
+		expect(() => patchClaudeStaleIdleDebt(adapterPath)).toThrow(/idle-debt patch/);
 	});
 });
 

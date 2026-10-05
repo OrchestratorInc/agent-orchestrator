@@ -151,6 +151,78 @@ export function patchClaudeHibernationCheck(adapterPath) {
 	return true;
 }
 
+/**
+ * Settle a prompt that Claude Code folded into a task-notification cycle.
+ *
+ * When a prompt arrives while Claude Code runs a cycle it started itself (for
+ * example after a background command finished), the CLI adds the prompt to
+ * that cycle. The cycle's single result keeps its task-notification origin, so
+ * claude-agent-acp 0.70 treats it as autonomous and never answers the prompt:
+ * the session stays "Working" until the user sends something else. The result
+ * names the prompts it answered in user_message_uuid(s); route it through the
+ * user lane when it names a pending, not held-open turn. Port of upstream
+ * agentclientprotocol/claude-agent-acp#1233 for issue #1145.
+ */
+export function patchClaudeFoldedPromptSettlement(adapterPath) {
+	const source = readFileSync(adapterPath, "utf8");
+	if (source.includes("// AO: a result naming a pending prompt answers it.")) return false;
+	const original = "const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind);";
+	const at = source.indexOf(original);
+	if (at < 0 || source.indexOf(original, at + 1) >= 0 || !source.includes("const findUnsettledTurn = (uuid) =>")) {
+		throw new Error("claude-agent-acp autonomous result classification no longer matches AO's folded-prompt patch");
+	}
+	const replacement = [
+		"// AO: a result naming a pending prompt answers it.",
+		"                        const answeredPromptUuids = Array.isArray(message.user_message_uuids)",
+		"                            ? message.user_message_uuids",
+		'                            : typeof message.user_message_uuid === "string" ? [message.user_message_uuid] : [];',
+		"                        const answersPendingPrompt = answeredPromptUuids.some((uuid) => {",
+		"                            const turn = findUnsettledTurn(uuid);",
+		"                            return turn !== undefined && !isHeldOpen(turn);",
+		"                        });",
+		"                        const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind) && !answersPendingPrompt;",
+	].join("\n");
+	writeFileSync(adapterPath, source.slice(0, at) + replacement + source.slice(at + original.length));
+	return true;
+}
+
+/**
+ * Drop trailing-idle debt that can no longer be paid.
+ *
+ * claude-agent-acp 0.70 counts one owed `idle` per result and absorbs that many
+ * idles before treating one as a turn-over signal. Claude Code 2.1.270+ emits a
+ * single idle for a turn plus the task-notification cycle that follows it, so
+ * one unit is never paid. The leftover then swallows the idle a steered turn
+ * settles on, leaving that turn "Working" forever. A transition into `running`
+ * proves every earlier idle was already emitted, so reset the debt there. Port
+ * of the sweep upstream shipped in claude-agent-acp 0.79.
+ */
+export function patchClaudeStaleIdleDebt(adapterPath) {
+	const source = readFileSync(adapterPath, "utf8");
+	if (source.includes("// AO: drop idle debt that can no longer be paid.")) return false;
+	const original = [
+		'case "session_state_changed": {',
+		"                                session.lastSessionState = message.state;",
+		'                                if (message.state === "idle") {',
+	].join("\n");
+	const at = source.indexOf(original);
+	if (at < 0 || source.indexOf(original, at + 1) >= 0 || !source.includes("session.owedTrailingIdles--;")) {
+		throw new Error("claude-agent-acp session state handling no longer matches AO's idle-debt patch");
+	}
+	const replacement = [
+		'case "session_state_changed": {',
+		"                                // AO: drop idle debt that can no longer be paid.",
+		"                                const previousState = session.lastSessionState;",
+		"                                session.lastSessionState = message.state;",
+		'                                if (message.state === "running" && previousState !== "running") {',
+		"                                    session.owedTrailingIdles = 0;",
+		"                                }",
+		'                                if (message.state === "idle") {',
+	].join("\n");
+	writeFileSync(adapterPath, source.slice(0, at) + replacement + source.slice(at + original.length));
+	return true;
+}
+
 export function pruneNodeDistribution(nodeRoot) {
 	// The Unix archives expose npm/corepack as bin/ symlinks into lib/. Remove
 	// the entry points before their targets so packagers never see dangling
