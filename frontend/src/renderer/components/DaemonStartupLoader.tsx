@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import aoLogo from "../../../assets/ao-mascot.png";
+import { AOMascot } from "./AOMascot";
 import { aoBridge } from "../lib/bridge";
 import { useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import { InstallDependencyDialog } from "./InstallDependencyDialog";
@@ -76,14 +76,7 @@ export function DaemonStartupLoader() {
 		>
 			<div className="ao-startup-content flex -translate-y-[3vh] flex-col items-center text-center">
 				<div className="grid h-28 w-32 place-items-center" aria-hidden="true">
-					<div className="ao-startup-logo relative size-24">
-							{/* Fill the PNG's transparent eye sockets on light backgrounds. */}
-							<svg className="ao-startup-eyes absolute inset-0 size-full" viewBox="0 0 1254 1254" aria-hidden="true">
-								<rect x="400" y="500" width="100" height="110" />
-								<rect x="710" y="500" width="100" height="110" />
-							</svg>
-							<img className="relative size-full object-contain" src={aoLogo} alt="" />
-						</div>
+					<AOMascot className="ao-startup-logo size-24" />
 				</div>
 				<p className="mt-5 text-base font-semibold tracking-tight text-foreground">Agent Orchestrator</p>
 				<p className="mt-2 min-h-5 text-md-sm text-muted-foreground">
