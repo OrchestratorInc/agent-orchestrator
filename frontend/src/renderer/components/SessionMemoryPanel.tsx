@@ -32,6 +32,7 @@ import {
 	useSessionMemory,
 	type CPUSample,
 	type AppMemoryReading,
+	type ReviewerMemoryReading,
 	type SessionMemoryReading,
 	type SessionStepReading,
 	type SystemMemoryReading,
@@ -285,7 +286,11 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 		return sort.ascending ? [...largestFirst].reverse() : largestFirst;
 	}, [sessions, readings, sort]);
 	const largest = largestSession(facts);
-	const maxBytes = Math.max(app?.own?.rssBytes ?? 0, ...live.map((row) => row.rssBytes), 1);
+	// AO's total counts reviewer panes too; without their rows the window
+	// could never add up to it.
+	const reviewers = useMemo(() => [...(app?.reviewers ?? [])].sort((a, b) => b.memory.rssBytes - a.memory.rssBytes), [app?.reviewers]);
+	const titles = useMemo(() => sessionTitles(workspaces), [workspaces]);
+	const maxBytes = Math.max(app?.own?.rssBytes ?? 0, ...live.map((row) => row.rssBytes), ...reviewers.map((r) => r.memory.rssBytes), 1);
 	// The copy button sits above the table, so the rows it would copy travel
 	// up. Same order as the screen, so the text matches what was seen.
 	useEffect(() => {
@@ -299,7 +304,7 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 			if (!next.delete(id)) next.add(id);
 			return next;
 		});
-	if (live.length === 0 && !app?.own) {
+	if (live.length === 0 && reviewers.length === 0 && !app?.own) {
 		return <p className="py-6 text-center text-xs text-settings-muted">{t("shell.memoryEmpty")}</p>;
 	}
 	return (
@@ -334,14 +339,32 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 						session={row.session}
 					/>
 				))}
+				{reviewers.length > 0 ? <GroupRow label={t("shell.memoryGroupReviewers")} /> : null}
+				{reviewers.map((reviewer) => (
+					<FixedRow
+						isExpanded={expanded.has(`review:${reviewer.reviewId}`)}
+						key={reviewer.reviewId}
+						label={reviewerLabel(reviewer, titles, t)}
+						maxBytes={maxBytes}
+						onToggle={() => toggleExpanded(`review:${reviewer.reviewId}`)}
+						reading={reviewer.memory}
+						subtitle={reviewer.harness}
+						testId="session-memory-reviewer-row"
+						type={t("shell.memoryCategory.reviewer")}
+					/>
+				))}
 				{app?.own ? (
 					<>
 						<GroupRow label={t("shell.memoryGroupApp")} />
-						<OwnRow
+						<FixedRow
 							isExpanded={expanded.has("ao")}
+							label={t("shell.memoryOwnRow")}
 							maxBytes={maxBytes}
 							onToggle={() => toggleExpanded("ao")}
+							own
 							reading={app.own}
+							testId="session-memory-own-row"
+							type={t("shell.memoryCategory.ao")}
 						/>
 					</>
 				) : null}
@@ -371,6 +394,7 @@ export function CpuSection() {
 export function DiagnosticsBody({ projectId, scroller }: { projectId?: string; scroller?: RefObject<HTMLElement | null> }) {
 	const { t } = useTranslation();
 	const appMemory = useAppMemory().data;
+	const workspaces = useWorkspaceQuery().data ?? EMPTY_WORKSPACES;
 	const [rows, setRows] = useState<ReportRow[]>([]);
 	const graphs = useRef<HTMLDivElement>(null);
 	const scrolledPast = useScrolledPast(graphs, scroller);
@@ -383,7 +407,7 @@ export function DiagnosticsBody({ projectId, scroller }: { projectId?: string; s
 							copiedLabel={t("shell.memoryReportCopied")}
 							label={t("shell.memoryCopyReport")}
 							testId="session-memory-copy"
-							value={() => diagnosticsReport({ app: appMemory?.app, system: appMemory?.system }, rows, t)}
+							value={() => diagnosticsReport({ app: appMemory?.app, system: appMemory?.system }, rows, t, sessionTitles(workspaces))}
 						>
 							<span>{t("shell.memoryCopyReport")}</span>
 						</CopyControl>
@@ -682,6 +706,17 @@ export function sessionReport(
 	return `${lines.join("\n")}\n`;
 }
 
+/** Every session's title by id, terminated ones included: a reviewer can
+ * outlive the worker it reviews. */
+function sessionTitles(workspaces: readonly WorkspaceSummary[]): Map<string, string> {
+	return new Map(workspaces.flatMap((workspace) => workspace.sessions.map((session) => [session.id, session.title] as const)));
+}
+
+/** A reviewer is named by the session it reviews; the id stands in once that session is gone. */
+function reviewerLabel(reviewer: ReviewerMemoryReading, titles: Map<string, string>, t: TFunction): string {
+	return t("shell.memoryReviewerRow", { session: titles.get(reviewer.sessionId) ?? reviewer.sessionId });
+}
+
 /** One row of the report: a session with its reading, in the order shown. */
 export type ReportRow = { session: WorkspaceSession; reading: SessionMemoryReading; usage?: SessionUsageSummary };
 
@@ -695,6 +730,7 @@ export function diagnosticsReport(
 	machine: { app?: AppMemoryReading; system?: SystemMemoryReading },
 	rows: ReportRow[],
 	t: TFunction,
+	titles: Map<string, string>,
 ): string {
 	const { app, system } = machine;
 	const lines = [t("shell.memorySectionMachine")];
@@ -710,7 +746,19 @@ export function diagnosticsReport(
 		if (system.swapBytesPerSec > 0) lines.push(`Swapping ${formatMemory(system.swapBytesPerSec)}/s`);
 	}
 	lines.push(`Sessions ${rows.length}`);
-	return [`${lines.join("\n")}\n`, ...rows.map((row) => sessionReport(row.session, row.reading, row.usage, t))].join("\n");
+	return [`${lines.join("\n")}\n`, ...rows.map((row) => sessionReport(row.session, row.reading, row.usage, t)), ...aoReport(app, titles, t)].join("\n");
+}
+
+/** What AO holds besides the sessions, so the report's rows add up to its total
+ * the same way the window's do: each reviewer pane, then the daemon and app. */
+function aoReport(app: AppMemoryReading | undefined, titles: Map<string, string>, t: TFunction): string[] {
+	if (!app) return [];
+	const line = (label: string, reading: SessionMemoryReading) => `${label}\nMemory   ${formatMemory(reading.rssBytes)} · CPU ${formatCPU(reading.cpuPercent)}\n`;
+	const reviewers = [...(app.reviewers ?? [])].sort((a, b) => b.memory.rssBytes - a.memory.rssBytes);
+	return [
+		...reviewers.map((reviewer) => line(`${reviewerLabel(reviewer, titles, t)} · ${reviewer.harness}`, reviewer.memory)),
+		...(app.own ? [line(t("shell.memoryOwnRow"), app.own)] : []),
+	];
 }
 
 /** The last few tool calls under an expanded row, newest first. */
@@ -746,16 +794,26 @@ function RecentSteps({ steps }: { steps: SessionStepReading[] }) {
 	);
 }
 
-/** AO's daemon and desktop shell: real cost, but not a session, so no action. */
-function OwnRow({ isExpanded, maxBytes, onToggle, reading }: { isExpanded: boolean; maxBytes: number; onToggle: () => void; reading: SessionMemoryReading }) {
-	const { t } = useTranslation();
+/** A row that is real cost but not a session, so it has no action: AO's
+ * daemon and desktop shell, or a reviewer pane. */
+function FixedRow({ isExpanded, label, maxBytes, onToggle, own = false, reading, subtitle, testId, type }: {
+	isExpanded: boolean;
+	label: string;
+	maxBytes: number;
+	onToggle: () => void;
+	own?: boolean;
+	reading: SessionMemoryReading;
+	subtitle?: string;
+	testId: string;
+	type: string;
+}) {
 	const canExpand = reading.processes.length > 0;
 	return (
 		<>
 			<tr
 				aria-expanded={canExpand ? isExpanded : undefined}
 				className={cn("memory-row", canExpand && "cursor-pointer hover:bg-interactive-hover")}
-				data-testid="session-memory-own-row"
+				data-testid={testId}
 				onClick={canExpand ? onToggle : undefined}
 				onKeyDown={canExpand ? toggleOnKeyDown(onToggle) : undefined}
 				tabIndex={canExpand ? 0 : undefined}
@@ -766,17 +824,20 @@ function OwnRow({ isExpanded, maxBytes, onToggle, reading }: { isExpanded: boole
 							aria-hidden="true"
 							className={cn("size-icon-2xs shrink-0 text-passive transition-transform", canExpand ? "opacity-100" : "opacity-0", isExpanded && "rotate-90")}
 						/>
-						<div className="truncate text-sm font-medium text-settings-label">{t("shell.memoryOwnRow")}</div>
+						<div className="min-w-0">
+							<div className="truncate text-sm font-medium text-settings-label" title={label}>{label}</div>
+							{subtitle ? <div className="truncate text-xs text-settings-muted">{subtitle}</div> : null}
+						</div>
 					</div>
 				</td>
 				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs text-passive", cell.type)} data-testid="session-memory-type">
-					{t("shell.memoryCategory.ao")}
+					{type}
 				</td>
 				<ProcessCountCell count={reading.processes.length} isExpanded={isExpanded} />
 				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone="neutral" />
 				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums text-settings-muted", cell.cpu)}>{formatCPU(reading.cpuPercent)}</td>
 			</tr>
-			{isExpanded ? <ProcessRows own processes={reading.processes} /> : null}
+			{isExpanded ? <ProcessRows own={own} processes={reading.processes} /> : null}
 			{isExpanded ? <SpacerRow /> : null}
 		</>
 	);

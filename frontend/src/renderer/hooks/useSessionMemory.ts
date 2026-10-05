@@ -9,6 +9,7 @@ export type SessionMemoryReading = components["schemas"]["SessionMemoryResponse"
 export type SessionStepReading = components["schemas"]["SessionStepResponse"];
 export type SystemMemoryReading = components["schemas"]["SystemMemoryResponse"];
 export type AppMemoryReading = components["schemas"]["AppMemoryResponse"];
+export type ReviewerMemoryReading = components["schemas"]["ControllersReviewerMemoryResponse"];
 export type MemoryPressureReading = components["schemas"]["MemoryPressureResponse"];
 
 export const sessionMemoryQueryRoot = ["session-memory"] as const;

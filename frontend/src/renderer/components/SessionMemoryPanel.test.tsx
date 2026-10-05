@@ -253,6 +253,47 @@ describe("AppMemoryIndicator", () => {
 		expect(within(table).getAllByTestId("session-memory-row")).toHaveLength(2);
 	});
 
+	it("lists reviewer panes between the sessions and AO, in the window and the copied report", async () => {
+		const withReviewers = appReading(20);
+		withReviewers.data.app = {
+			...withReviewers.data.app,
+			reviewers: [
+				// Reviews a session still on the board, so it is named by that title.
+				{ reviewId: "r-small", sessionId: "s-small", harness: "codex", memory: reading("", 120 * 1024 ** 2, 2, [{ pid: 51, ppid: 1, rssBytes: 120 * 1024 ** 2, cpuPercent: 3, command: "codex" }], 3) },
+				// Its worker is gone; the id stands in for the title.
+				{ reviewId: "r-gone", sessionId: "s-gone", harness: "claude-code", memory: reading("", 400 * 1024 ** 2, 1, [], 0) },
+			],
+		} as typeof withReviewers.data.app;
+		appMemoryMock.mockReturnValue(withReviewers);
+		renderButton();
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
+		const table = await screen.findByTestId("session-memory-table");
+		const reviewerRows = within(table).getAllByTestId("session-memory-reviewer-row");
+		// Largest first, like the sessions above them.
+		expect(reviewerRows.map((row) => row.textContent)).toEqual([
+			expect.stringContaining("Review of s-gone"),
+			expect.stringContaining("Review of small worker"),
+		]);
+		expect(reviewerRows[0]).toHaveTextContent("claude-code");
+		expect(reviewerRows[0]).toHaveTextContent("400 MB");
+		expect(within(reviewerRows[1]).getByTestId("session-memory-type")).toHaveTextContent("Reviewer");
+		// Grouped under their own heading, and AO's own row stays last.
+		expect(within(table).getByText("Reviewers")).toBeInTheDocument();
+		const allRows = within(table).getAllByRole("row");
+		expect(allRows.indexOf(reviewerRows[1])).toBeLessThan(allRows.indexOf(within(table).getByTestId("session-memory-own-row")));
+		expect(allRows.at(-1)).toHaveAttribute("data-testid", "session-memory-own-row");
+		// A reviewer opens into its process tree like any row.
+		await userEvent.click(reviewerRows[1]);
+		expect(await screen.findAllByTestId("session-memory-process-row")).toHaveLength(1);
+
+		await userEvent.click(screen.getByRole("button", { name: "Copy report" }));
+		const report = clipboardMock.mock.calls.at(-1)![0] as string;
+		expect(report).toContain("Review of s-gone · claude-code\nMemory   400 MB · CPU 0%");
+		expect(report).toContain("Review of small worker · codex\nMemory   120 MB · CPU 3%");
+		expect(report).toContain("Daemon and app\nMemory   300 MB");
+		expect(report.indexOf("Review of s-gone")).toBeLessThan(report.indexOf("Daemon and app"));
+	});
+
 	it("hides the load figure on a platform with no load average, in the graph and in the copied report", async () => {
 		appMemoryMock.mockReturnValue(appReading(20, 0, 2, 40, 160, -1));
 		renderButton();
