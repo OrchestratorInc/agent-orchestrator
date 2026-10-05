@@ -1,4 +1,4 @@
-import { useCanGoBack, useNavigate, useRouter } from "@tanstack/react-router";
+import { useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, PanelLeft } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -133,12 +133,18 @@ export function TitlebarNav({
   const toggleSidebar = useUiStore((state) => state.toggleSidebar);
   const isSidebarOpen = useUiStore(sidebarIsVisible);
   const router = useRouter();
-  const navigate = useNavigate();
   const canGoBack = useCanGoBack();
   const canGoForward = useCanGoForward();
   const { revealed, onZoneEnter, onZoneLeave } =
     useSidebarReveal(isSidebarOpen);
   const showBrand = useSidebarSettledOpen(isSidebarOpen);
+  const [keyboardFocus, setKeyboardFocus] = useState(false);
+  // The sidebar's minimum width is measured from the brand label, which only
+  // exists once this mounts it. Nudge the sidebar's resize re-clamp so a stored
+  // or default width narrower than the label grows to fit it.
+  useEffect(() => {
+    if (showBrand) window.dispatchEvent(new Event("resize"));
+  }, [showBrand]);
 
   if (!isMac && !isLinux) return null;
   // Native fullscreen changes only the horizontal traffic-light reserve.
@@ -153,14 +159,23 @@ export function TitlebarNav({
   const topClass = isMac ? "top-0" : "top-0.75";
   const heightClass = "h-traffic-light-clearance";
 
+  // With the sidebar open the brand and the history arrows share one slot: the
+  // brand shows at rest, the arrows while the pointer is over the sidebar or the
+  // cluster (or on keyboard focus). Collapsed, there is no brand, so the arrows
+  // stay put. The arrows are only mounted while visible, so hidden arrows never
+  // leave an invisible no-drag hole in the window-drag region.
+  const arrowsVisible = !showBrand || revealed || keyboardFocus;
+
   return (
     <div
-      className={`group/nav fixed ${topClass} ${leftClass} z-titlebar flex ${heightClass} items-center gap-1`}
-      data-revealed={revealed || undefined}
+      className={`fixed ${topClass} ${leftClass} z-titlebar flex ${heightClass} items-center gap-1`}
       data-slot="titlebar-nav"
+      onBlur={() => setKeyboardFocus(false)}
+      onFocus={(event) =>
+        setKeyboardFocus(event.target.matches(":focus-visible"))
+      }
       onPointerEnter={onZoneEnter}
       onPointerLeave={onZoneLeave}
-      style={noDragStyle}
     >
       <TitlebarButton
         label={
@@ -175,46 +190,40 @@ export function TitlebarNav({
       >
         <PanelLeft className="size-icon-lg" aria-hidden="true" />
       </TitlebarButton>
-      {/* With the sidebar open, the brand and the history arrows share one
-          slot: the brand shows at rest and swaps to the arrows while the
-          pointer is over the sidebar or titlebar row, or on keyboard focus. Collapsed, there is no brand, so the arrows stay put. */}
       <div className="grid items-center">
         {showBrand ? (
-          <button
-            aria-label={t("shell.goHome")}
-            className="col-start-1 row-start-1 ml-1.5 whitespace-nowrap rounded-md px-0.5 text-left text-lg font-extrabold leading-tight tracking-tight-lg text-foreground group-has-focus-visible/nav:pointer-events-none group-has-focus-visible/nav:opacity-0 group-data-[revealed]/nav:pointer-events-none group-data-[revealed]/nav:opacity-0"
+          // Not a button on purpose: it stays part of the window-drag region.
+          // `invisible` (not unmounted) keeps its width, which both holds the
+          // slot steady and feeds the sidebar's minimum-width measurement.
+          <span
+            className={`col-start-1 row-start-1 ml-1.5 select-none whitespace-nowrap px-0.5 text-base font-semibold leading-tight tracking-tight-lg text-foreground ${
+              arrowsVisible ? "invisible" : ""
+            }`}
             data-sidebar-brand=""
-            onClick={() => void navigate({ to: "/" })}
-            style={noDragStyle}
-            type="button"
           >
             Orchestrator.inc
-          </button>
+          </span>
         ) : null}
-        <div
-          className={`col-start-1 row-start-1 flex items-center gap-1 ${
-            showBrand
-              ? "pointer-events-none opacity-0 group-has-focus-visible/nav:pointer-events-auto group-has-focus-visible/nav:opacity-100 group-data-[revealed]/nav:pointer-events-auto group-data-[revealed]/nav:opacity-100"
-              : ""
-          }`}
-        >
-          <TitlebarButton
-            disabled={historyLocked || !canGoBack}
-            label={t("titlebar.goBack")}
-            onClick={() => router.history.back()}
-            title={t("titlebar.goBack")}
-          >
-            <ArrowLeft className="size-icon-lg" aria-hidden="true" />
-          </TitlebarButton>
-          <TitlebarButton
-            disabled={historyLocked || !canGoForward}
-            label={t("titlebar.goForward")}
-            onClick={() => router.history.forward()}
-            title={t("titlebar.goForward")}
-          >
-            <ArrowRight className="size-icon-lg" aria-hidden="true" />
-          </TitlebarButton>
-        </div>
+        {arrowsVisible ? (
+          <div className="col-start-1 row-start-1 flex items-center gap-1">
+            <TitlebarButton
+              disabled={historyLocked || !canGoBack}
+              label={t("titlebar.goBack")}
+              onClick={() => router.history.back()}
+              title={t("titlebar.goBack")}
+            >
+              <ArrowLeft className="size-icon-lg" aria-hidden="true" />
+            </TitlebarButton>
+            <TitlebarButton
+              disabled={historyLocked || !canGoForward}
+              label={t("titlebar.goForward")}
+              onClick={() => router.history.forward()}
+              title={t("titlebar.goForward")}
+            >
+              <ArrowRight className="size-icon-lg" aria-hidden="true" />
+            </TitlebarButton>
+          </div>
+        ) : null}
       </div>
     </div>
   );
