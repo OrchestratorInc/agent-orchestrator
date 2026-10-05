@@ -17,15 +17,18 @@ export AWS_PROFILE="${AWS_PROFILE:-ao-cloud}"
 export AWS_REGION="${AWS_REGION:-eu-north-1}"
 CODER_SECRET_ID="${AO_CLOUD_CODER_SECRET_ID:-ao-cloud/production/coder}"
 TEMPLATE_DIR="${AO_CLOUD_CODER_TEMPLATE_DIR:-coder}"
-DEFAULT_TEMPLATE_NAME="${AO_DEVKIT_DEFAULT_TEMPLATE:-ao-linux-docker}"
-# Reuse the default template's image unless overridden.
-BASE_IMAGE="${AO_DEVKIT_BASE_IMAGE:-}"
+# On the single-host Azure Coder deployment the workspace image is present as a
+# local tag (ao-coder-workspace:local) that the docker provider uses without a
+# registry pull. That is the reliable default here because the host has no
+# standing ECR/registry pull credentials; override with AO_DEVKIT_BASE_IMAGE to
+# point at a registry image once the host can authenticate to it.
+BASE_IMAGE="${AO_DEVKIT_BASE_IMAGE:-ao-coder-workspace:local}"
 DEVKIT_PKGS="${AO_DEVKIT_APT_PACKAGES:-build-essential jq less python3 python3-pip python3-venv ripgrep tree unzip vim}"
 
 MED_NAME=ao-devkit;      MED_DISPLAY="AO Dev-kit";   MED_MEM=4096; MED_CPU=1024
-MED_DESC="Medium workspace (4 GB RAM). Claude Code + OpenCode harnesses, plus build-essential, Python 3, ripgrep, jq, tree, vim."
+MED_DESC="Medium workspace (4 GB RAM). The AO coding harness plus developer tooling: build-essential, Python 3, ripgrep, jq, tree, vim, less, unzip."
 LG_NAME=ao-devkit-large; LG_DISPLAY="AO Dev-kit-2";  LG_MEM=8192;  LG_CPU=2048
-LG_DESC="Large workspace (8 GB RAM). Same tooling as AO Dev-kit on a larger machine."
+LG_DESC="Large workspace (8 GB RAM). Same harness and tooling as AO Dev-kit, on a larger machine."
 
 [[ -f "$TEMPLATE_DIR/main.tf" ]] || { echo "Run from the cloud/ directory ($TEMPLATE_DIR/main.tf not found)." >&2; exit 1; }
 
@@ -36,16 +39,6 @@ CODER_SESSION_TOKEN="$(printf '%s' "$secret" | python3 -c 'import sys,json;print
 unset secret
 echo ">> Coder: $CODER_URL"
 
-if [[ -z "$BASE_IMAGE" ]]; then
-  echo ">> deriving workspace image from the live '$DEFAULT_TEMPLATE_NAME' template (already on the host)"
-  BASE_IMAGE="$(
-    curl -fsS -H "Coder-Session-Token: $CODER_SESSION_TOKEN" "$CODER_URL/api/v2/templates" |
-    python3 -c "import sys,json;ts=json.load(sys.stdin);print(next((t['active_version_id'] for t in ts if t['name']=='$DEFAULT_TEMPLATE_NAME'),''))" |
-    { read -r vid; curl -fsS -H "Coder-Session-Token: $CODER_SESSION_TOKEN" "$CODER_URL/api/v2/templateversions/$vid/variables"; } |
-    python3 -c "import sys,json;print(next((v['value'] for v in json.load(sys.stdin) if v['name']=='workspace_image'),''))"
-  )"
-  [[ -n "$BASE_IMAGE" ]] || { echo "could not derive workspace image from '$DEFAULT_TEMPLATE_NAME'; set AO_DEVKIT_BASE_IMAGE" >&2; exit 1; }
-fi
 echo ">> workspace image: $BASE_IMAGE"
 echo ">> dev-kit packages: $DEVKIT_PKGS"
 
