@@ -89,6 +89,7 @@ const PLUGINS = [remarkGfm, remarkSessionLinks];
  */
 const StreamingProse = createContext(false);
 const InsideMarkdownLink = createContext(false);
+const SafeOriginContent = createContext(false);
 const REMOTE_PREVIEW_UNAVAILABLE = "This link points to the remote host. Preview is unavailable on this device.";
 const OpenChatLink = createContext<{
 	open?: (url: string) => void;
@@ -147,6 +148,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	streaming = false,
 	muted = false,
 	className,
+	safeOrigin = false,
 }: {
 	text: string;
 	streaming?: boolean;
@@ -157,9 +159,11 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	 */
 	muted?: boolean;
 	className?: string;
+	safeOrigin?: boolean;
 }) {
 	return (
 		<StreamingProse.Provider value={streaming}>
+			<SafeOriginContent.Provider value={safeOrigin}>
 			<div
 				className={cn(
 					"chat-md leading-[1.58]",
@@ -171,6 +175,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 					{text}
 				</Markdown>
 			</div>
+			</SafeOriginContent.Provider>
 		</StreamingProse.Provider>
 	);
 });
@@ -269,11 +274,13 @@ function compactEmoji(children: ReactNode): ReactNode {
 }
 
 function MarkdownLink({ href, children }: { href?: string; children?: ReactNode }) {
+	const safeOriginContent = useContext(SafeOriginContent);
 	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, workspacePaths } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
 		? workspaceFilePath(href, workspacePaths) ?? findWorkspaceFilePath(href, workspacePaths) ?? explicitWorkspaceFilePath(href)
 		: undefined;
 	const sessionLink = Boolean(href && isSessionLink(href));
+	if (safeOriginContent && !sessionLink) return <>{children}</>;
 	const openInFiles = filePath && !/\.html?$/i.test(filePath) ? filePath : undefined;
 	if (remoteHost && href && (isHostLocalWebLink(href) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
 		return <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
@@ -323,6 +330,7 @@ export function SessionLabelLink({ href, children }: { href: string; children: R
 }
 
 function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
+	if (useContext(SafeOriginContent)) return <span className="text-muted-foreground">{alt || (typeof src === "string" ? src : "")}</span>;
 	const { remoteHost } = useContext(OpenChatLink);
 	if (remoteHost && typeof src === "string" && isHostLocalWebLink(src)) {
 		return <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>{alt || src}</span>;

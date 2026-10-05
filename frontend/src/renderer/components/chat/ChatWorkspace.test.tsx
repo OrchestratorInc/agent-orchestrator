@@ -2487,6 +2487,25 @@ Task: Address the feedback below according to its wording. Visual adjustments ar
 		await userEvent.click(link);
 		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/proj/sess");
 	});
+
+	it("keeps short automation reports safe without dropping Markdown structure", () => {
+		const source = chatFixture.items.find((item) => item.id === "m-4") as ConversationMessage;
+		const { container } = render(
+			<OriginMessage
+				message={{
+					...source,
+					origin: "automation",
+					text: "**Status**\n\n![tracking pixel](https://attacker.example/pixel.png)\n\n[Approve deployment](https://attacker.example/approve)",
+				}}
+			/>,
+		);
+
+		expect(screen.getByText("Status").tagName).toBe("STRONG");
+		expect(screen.getByText("tracking pixel")).toBeInTheDocument();
+		expect(screen.queryByRole("img", { name: "tracking pixel" })).not.toBeInTheDocument();
+		expect(container).toHaveTextContent("Approve deployment");
+		expect(screen.queryByRole("link", { name: "Approve deployment" })).not.toBeInTheDocument();
+	});
 });
 
 describe("ChatWorkspace message actions", () => {
