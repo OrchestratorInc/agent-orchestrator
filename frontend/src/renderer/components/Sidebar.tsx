@@ -318,8 +318,9 @@ function sidebarMinWidth(): number {
 		(el) => el.getBoundingClientRect().width > 0,
 	);
 	if (!brand) return SIDEBAR_MIN_WIDTH;
-	const label = brand.firstElementChild ?? brand;
-	const fit = Math.ceil(brand.getBoundingClientRect().left + label.scrollWidth + SIDEBAR_BRAND_TRAILING_GAP);
+	// Measure the whole brand element: it holds the mascot and the label, so its
+	// scrollWidth is the full width the sidebar has to clear.
+	const fit = Math.ceil(brand.getBoundingClientRect().left + brand.scrollWidth + SIDEBAR_BRAND_TRAILING_GAP);
 	return Math.min(SIDEBAR_MAX_WIDTH, fit);
 }
 /** Initial item count shown in expanded sections; Show more/less toggles the remainder.
