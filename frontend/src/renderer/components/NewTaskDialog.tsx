@@ -143,7 +143,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 									{selectedProjectId === STANDALONE_WORKSPACE_ID ? (
 										<StickyNote aria-hidden="true" className="size-[1em] shrink-0 text-muted-foreground" />
 									) : selectedProjectAvatar ? (
-										<ProjectOwnerAvatar avatar={selectedProjectAvatar} className="size-[1em]" />
+										<ProjectOwnerAvatar avatar={selectedProjectAvatar} className="size-8" />
 									) : null}
 									<span className="min-w-0 truncate">{selectedProjectName}</span>
 								</span>
@@ -158,7 +158,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 											) : (
 												<span className="flex items-center -space-x-2">
 													{avatars.slice(0, 2).map((avatar) => (
-														<ProjectOwnerAvatar key={`${avatar.owner}:${avatar.url}`} avatar={avatar} className="size-[18px]" />
+														<ProjectOwnerAvatar key={`${avatar.owner}:${avatar.url}`} avatar={avatar} className="size-6" />
 													))}
 												</span>
 											)}
