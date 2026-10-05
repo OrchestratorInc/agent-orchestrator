@@ -61,7 +61,7 @@ import { cn } from "../../lib/utils";
 import { caretNotation, stripAnsi } from "../../lib/ansi";
 import { getApiBaseUrl } from "../../lib/api-client";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
-import { ActivityTitle, ChatMarkdown, SessionLinkedText } from "./ChatMarkdown";
+import { ActivityTitle, ChatMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -2242,7 +2242,15 @@ export function SteerMessage({
 	apiBaseUrl?: string | null;
 }) {
 	const text = activity.detail?.text ?? activity.summary;
-	const { body, attachments } = stagedAttachmentParts(text);
+	const senderSessionId = activity.detail?.senderSessionId?.trim();
+	const senderProjectId = activity.detail?.senderProjectId?.trim();
+	const senderLabel = activity.detail?.senderDisplayName?.trim() || senderSessionId;
+	const automationSteer = Boolean(senderSessionId);
+	const senderHref = senderSessionId && senderProjectId
+		? `ao://sessions/${encodeURIComponent(senderProjectId)}/${encodeURIComponent(senderSessionId)}`
+		: undefined;
+	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : text;
+	const { body, attachments } = stagedAttachmentParts(visibleText);
 	let stagedImagesToMatch = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path)).length;
 	// Composer images are recorded twice: once as durable staged paths and once as
 	// native prompt blocks. Suppress only the corresponding leading native images;
@@ -2253,8 +2261,20 @@ export function SteerMessage({
 		return false;
 	});
 	return (
-		<div className="flex flex-col items-end gap-1">
-			<div className="w-fit max-w-[min(78%,560px)] break-words whitespace-pre-wrap rounded-[10px] border border-accent-dim bg-raised px-3 py-2.5 text-sm leading-[1.55] text-foreground">
+		<div className={cn("flex flex-col gap-1", automationSteer ? "items-stretch" : "items-end")}>
+			{automationSteer ? (
+				<div className="mb-1.5 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+					<CircleAlert aria-hidden="true" className="size-3.5 shrink-0 text-logo-accent" />
+					<span>[from {senderHref ? <SessionLabelLink href={senderHref}>{senderLabel}</SessionLabelLink> : senderLabel}]</span>
+					<span className="ml-auto shrink-0 font-normal tabular-nums">{formatTime(activity.createdAt)}</span>
+				</div>
+			) : null}
+			<div className={cn(
+				"break-words whitespace-pre-wrap text-sm leading-[1.55]",
+				automationSteer
+					? "cursor-chat-origin-message rounded-md border border-border border-l-2 border-l-logo-accent/60 px-3.5 py-2.5 text-muted-foreground"
+					: "w-fit max-w-[min(78%,560px)] rounded-[10px] border border-accent-dim bg-raised px-3 py-2.5 text-foreground",
+			)}>
 				{body ? <p>{body}</p> : null}
 				<StagedAttachmentItems
 					paths={attachments}
@@ -2277,6 +2297,11 @@ export function SteerMessage({
 			</span>
 		</div>
 	);
+}
+
+function stripSteerSenderPrefix(text: string, senderSessionId: string): string {
+	const prefix = `[from ${senderSessionId}]`;
+	return text.startsWith(prefix) ? text.slice(prefix.length).replace(/^\s+/, "") : text;
 }
 
 /* -------------------------------------------------------------------------- */

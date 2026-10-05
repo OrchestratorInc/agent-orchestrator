@@ -3,12 +3,17 @@ import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ActivityRow, SteerMessage } from "./ChatTimelineItems";
+import { ChatLinkProvider } from "./ChatMarkdown";
 import type { ConversationActivity } from "../../types/conversation";
 import { aoBridge } from "../../lib/bridge";
 import { TooltipProvider } from "../ui/tooltip";
 
 function render(ui: ReactElement) {
-	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
+	return rtlRender(
+		<TooltipProvider>
+			<ChatLinkProvider onSessionLinkOpen={vi.fn()}>{ui}</ChatLinkProvider>
+		</TooltipProvider>,
+	);
 }
 
 // One test file per new provider signal the daemon started serving. What each covers
@@ -294,7 +299,33 @@ describe("steer message", () => {
 			/>,
 		);
 		expect(screen.getByText("Skip the integration tests")).toBeInTheDocument();
-		expect(screen.getByText(/Steered into the running turn/i)).toBeInTheDocument();
+		 expect(screen.getByText(/Steered into the running turn/i)).toBeInTheDocument();
+	});
+
+	it("renders a CLI steer as an attributed automation block with a session link", () => {
+		render(
+			<SteerMessage
+				sessionId="target-1"
+				activity={activity({
+					activityKind: "system",
+					summary: "[from worker-1] focus on the API",
+					detail: {
+						event: "steer",
+						text: "[from worker-1] focus on the API",
+						origin: "human",
+						senderSessionId: "worker-1",
+						senderProjectId: "project-1",
+						senderDisplayName: "Backend worker",
+					},
+				})}
+			/>,
+		);
+		expect(screen.getByText("Backend worker")).toBeInTheDocument();
+		expect(screen.getByText("focus on the API")).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "Backend worker" })).toHaveAttribute(
+			"href",
+			"ao://sessions/project-1/worker-1",
+		);
 	});
 });
 

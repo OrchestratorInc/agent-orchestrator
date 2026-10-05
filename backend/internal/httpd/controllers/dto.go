@@ -2420,6 +2420,9 @@ type SendConversationMessageResponse struct {
 type SteerConversationRequest struct {
 	// Text is the correction to hand the agent mid-turn.
 	Text string `json:"text"`
+	// SenderSessionID identifies the AO session that authored an automation steer.
+	// It is optional so older callers and in-app human steering remain unchanged.
+	SenderSessionID string `json:"senderSessionId,omitempty"`
 	// Attachments are native image prompt blocks delivered with the correction.
 	Attachments []ConversationImageContentRequest `json:"attachments,omitempty"`
 	// ClientMessageID makes a retry idempotent at AO's durable daemon boundary. The

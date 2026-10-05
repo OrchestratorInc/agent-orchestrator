@@ -5200,6 +5200,7 @@ export interface components {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];
             clientMessageId?: string;
             recoverOnly?: boolean;
+            senderSessionId?: string;
             text: string;
         };
         SteerConversationResponse: {

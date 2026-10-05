@@ -14945,6 +14945,8 @@ components:
           type: string
         recoverOnly:
           type: boolean
+        senderSessionId:
+          type: string
         text:
           type: string
       required:
