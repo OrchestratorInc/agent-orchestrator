@@ -1779,7 +1779,13 @@ function ReviewsSection({
 			};
 		},
 		onSuccess: ({ data, requestReviewsKey, requestWorkspaceKey, reviewId, requestHostId }) => {
-			if (data) queryClient.setQueryData(requestReviewsKey, data);
+			if (data) {
+				queryClient.setQueryData<components["schemas"]["ListReviewsResponse"]>(requestReviewsKey, (previous) => ({
+					...data,
+					// Kill returns the terminal handle, but stopped Chat history still owns a tab.
+					...(previous?.reviewerSurface?.mode === "chat" ? { reviewerSurface: previous.reviewerSurface } : {}),
+				}));
+			}
 			void queryClient.invalidateQueries({ queryKey: requestReviewsKey });
 			void queryClient.invalidateQueries({ queryKey: requestWorkspaceKey });
 			if (reviewId) {
