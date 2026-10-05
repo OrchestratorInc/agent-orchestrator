@@ -32,12 +32,13 @@ import {
 	GitMerge,
 	Info,
 	Play,
-	Trash2,
+	Square,
 	Loader2,
 	MessageSquare,
 	X,
 } from "lucide-react";
 import type { components } from "../../api/schema";
+import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
@@ -79,12 +80,13 @@ import { FilesTopbarHostContext } from "./files-topbar-host";
 import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog } from "./SessionArchiveDialog";
 import { ReviewerSelect } from "./ReviewerSelect";
 import { agentLabel } from "../lib/agent-options";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { Switch } from "./ui/switch";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { appI18n } from "../i18n";
 import type { MessageKey } from "../i18n";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
@@ -1621,12 +1623,7 @@ function ReviewsSection({
 	const queryClient = useQueryClient();
 	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const reviewsKey = sessionReviewsQueryKey(session.id, hostId);
-	const [reviewNotice, setReviewNotice] = useState<string | null>(null);
-	useEffect(() => {
-		if (!reviewNotice) return;
-		const timer = window.setTimeout(() => setReviewNotice(null), 10_000);
-		return () => window.clearTimeout(timer);
-	}, [reviewNotice]);
+	const [rerunConfirmation, setRerunConfirmation] = useState<{ ownerKey: string; heads: string } | null>(null);
 	const reviewsQuery = useQuery({
 		...sessionReviewsQueryOptions(session, hasPr, undefined, hostId),
 		refetchInterval: (query) => {
@@ -1658,6 +1655,13 @@ function ReviewsSection({
 	);
 	const [reviewerModel, setReviewerModel] = useState(session.reviewerConfig?.model ?? "");
 	const [reviewerMode, setReviewerMode] = useState(session.reviewerConfig?.mode ?? "");
+	const reviewerOwnerKey = sessionUiKey(session.id, hostId);
+	const openReviewStates = openReviewStatesFor(session, reviewsQuery.data?.reviews ?? []);
+	const reviewHeads = openReviewStates.map((review) => `${review.prUrl}@${review.targetSha}`).sort().join("\n");
+	const currentHeadReviewed = openReviewStates.some((review) => review.latestRun?.targetSha === review.targetSha && (review.latestRun.status === "complete" || review.latestRun.status === "delivered"));
+	useEffect(() => {
+		setRerunConfirmation((current) => current && (current.ownerKey !== reviewerOwnerKey || current.heads !== reviewHeads) ? null : current);
+	}, [reviewerOwnerKey, reviewHeads]);
 	useEnsureAgentReadiness({
 		agentIds: reviewerOverride ? [reviewerOverride] : [],
 		enabled: reviewerOverride !== "",
@@ -1669,6 +1673,7 @@ function ReviewsSection({
 		setReviewerMode(session.reviewerConfig?.mode ?? "");
 	}, [hostId, session.id, session.reviewerConfig?.mode, session.reviewerConfig?.model, session.reviewerHarness]);
 	const saveReviewer = useMutation({
+		mutationKey: [...reviewsKey, "switch-reviewer"],
 		mutationFn: async ({ harness, model, mode }: { harness: ReviewerHarness | ""; model: string; mode: string }) => {
 			const clearingToProjectDefault = harness === "" && model === "" && mode === "";
 			const currentEffectiveReviewerHarness = (session.reviewerHarness ?? "") || currentDefaultReviewerHarness;
@@ -1709,28 +1714,31 @@ function ReviewsSection({
 		},
 	});
 	const triggerReview = useMutation({
-		mutationFn: async () => {
-			// No override sends no body at all, leaving the default path on the wire
-			// exactly as it was.
+		mutationFn: async ({ ownerKey, rerun = false }: { ownerKey: string; rerun?: boolean }) => {
+			// Keep agent/model overrides scoped to this pass; the daemon selects the surface.
 			const reviewerConfig = reviewerModel || reviewerMode
 				? { ...(reviewerModel ? { model: reviewerModel } : {}), ...(reviewerMode ? { mode: reviewerMode } : {}) }
 				: undefined;
+			const selectedHarness = reviewerOverride || undefined;
 			const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/trigger", {
 				params: { path: { sessionId: session.id } },
-				...(reviewerOverride || reviewerConfig ? { body: { ...(reviewerOverride ? { harness: reviewerOverride } : {}), ...(reviewerConfig ? { agentConfig: reviewerConfig } : {}) } } : {}),
+				body: { ...(selectedHarness ? { harness: selectedHarness } : {}), ...(reviewerConfig ? { agentConfig: reviewerConfig } : {}), ...(rerun ? { rerun: true } : {}) },
 			});
 			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableStartReview")));
-			return { data, reused: response?.status === 200 };
+			return { data, reused: response?.status === 200, rerun, ownerKey, reviewsKey, workspaceKey };
 		},
-		onMutate: () => {
-			setReviewNotice(null);
+		onMutate: async () => {
+			await queryClient.cancelQueries({ queryKey: reviewsKey });
+			return { reviewsKey };
 		},
-		onSuccess: ({ data, reused }) => {
-			void queryClient.invalidateQueries({ queryKey: reviewsKey });
-			void queryClient.invalidateQueries({ queryKey: workspaceKey });
+		onSuccess: ({ data, reused, rerun, ownerKey, reviewsKey: requestReviewsKey, workspaceKey: requestWorkspaceKey }) => {
+			if (data) queryClient.setQueryData(requestReviewsKey, data);
+			void queryClient.invalidateQueries({ queryKey: requestReviewsKey });
+			void queryClient.invalidateQueries({ queryKey: requestWorkspaceKey });
+			if (ownerKey !== reviewerOwnerKey) return;
 			const started = data?.reviews?.find((review) => review.status === "running" && review.latestRun);
-			if (reused || !started?.latestRun) {
-				setReviewNotice(t("inspector.reviewAlreadyRanForCommit"));
+			if (!started?.latestRun) {
+				if (reused && !rerun) setRerunConfirmation({ ownerKey, heads: reviewHeads });
 				return;
 			}
 			if (data?.reviewerSurface?.mode === "chat" && data.reviewerSurface.reviewId) {
@@ -1739,6 +1747,9 @@ function ReviewsSection({
 				const harness = started.latestRun.harness || "reviewer";
 				onOpenReviewerTerminal?.({ handleId: data.reviewerHandleId, harness });
 			}
+		},
+		onError: (_error, _variables, context) => {
+			void queryClient.invalidateQueries({ queryKey: context?.reviewsKey ?? reviewsKey });
 		},
 	});
 	const cancelReview = useMutation({
@@ -1749,7 +1760,6 @@ function ReviewsSection({
 			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableCancelReview")));
 		},
 		onSuccess: () => {
-			setReviewNotice(null);
 			void queryClient.invalidateQueries({ queryKey: reviewsKey });
 			void queryClient.invalidateQueries({ queryKey: workspaceKey });
 		},
@@ -1760,12 +1770,21 @@ function ReviewsSection({
 				params: { path: { sessionId: session.id } },
 			});
 			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableKillReviewSession")));
-			return data;
+			return {
+				data,
+				requestReviewsKey: reviewsKey,
+				requestWorkspaceKey: workspaceKey,
+				reviewId: reviewsQuery.data?.reviewerSurface?.reviewId,
+				requestHostId: hostId,
+			};
 		},
-		onSuccess: (data) => {
-			setReviewNotice(null);
-			if (data) queryClient.setQueryData(reviewsKey, data);
-			void queryClient.invalidateQueries({ queryKey: workspaceKey });
+		onSuccess: ({ data, requestReviewsKey, requestWorkspaceKey, reviewId, requestHostId }) => {
+			if (data) queryClient.setQueryData(requestReviewsKey, data);
+			void queryClient.invalidateQueries({ queryKey: requestReviewsKey });
+			void queryClient.invalidateQueries({ queryKey: requestWorkspaceKey });
+			if (reviewId) {
+				void queryClient.invalidateQueries({ queryKey: reviewerConversationQueryKey(reviewId, requestHostId) });
+			}
 		},
 	});
 	const reviewStates = reviewsQuery.data?.reviews ?? [];
@@ -1804,11 +1823,14 @@ function ReviewsSection({
 				onCancel={() => cancelReview.mutate()}
 				onAutoReviewChange={(enabled) => saveAutoReview.mutate(enabled)}
 				onKill={() => killReview.mutate()}
-				onTrigger={() => triggerReview.mutate()}
+				onTrigger={() => {
+					if (currentHeadReviewed) setRerunConfirmation({ ownerKey: reviewerOwnerKey, heads: reviewHeads });
+					else triggerReview.mutate({ ownerKey: reviewerOwnerKey });
+				}}
 				reviewerHandleId={reviewsQuery.data?.reviewerHandleId ?? ""}
+				reviewerSurface={reviewsQuery.data?.reviewerSurface}
 				reviewerActivityState={reviewsQuery.data?.reviewerActivityState}
 				reviewStates={reviewStates}
-				notice={reviewNotice}
 				agentCatalog={agentsQuery.data}
 				reviewerOverride={reviewerOverride}
 				reviewerModel={reviewerModel}
@@ -1826,6 +1848,19 @@ function ReviewsSection({
 				}}
 				session={session}
 			/>
+			<ConfirmDialog
+				open={rerunConfirmation?.ownerKey === reviewerOwnerKey && rerunConfirmation.heads === reviewHeads}
+				title={t("inspector.rerunReviewTitle")}
+				description={t("inspector.rerunReviewWarning")}
+				confirmLabel={t("inspector.rerunReviewConfirm")}
+				onOpenChange={(open) => { if (!open) setRerunConfirmation(null); }}
+				onConfirm={() => {
+					if (rerunConfirmation?.ownerKey !== reviewerOwnerKey || rerunConfirmation.heads !== reviewHeads) return;
+					setRerunConfirmation(null);
+					triggerReview.mutate({ ownerKey: reviewerOwnerKey, rerun: true });
+				}}
+			/>
+
 			<MergedReviewsSection
 				hostId={hostId}
 				githubPRs={githubReviews}
@@ -2289,6 +2324,7 @@ function ReviewPanel({
 	config,
 	reviewStates,
 	reviewerHandleId,
+	reviewerSurface,
 	reviewerActivityState,
 	isLoading,
 	isTriggering,
@@ -2297,7 +2333,6 @@ function ReviewPanel({
 	isKilling,
 	isSwitchingReviewer,
 	error,
-	notice,
 	agentCatalog,
 	reviewerOverride,
 	reviewerModel,
@@ -2315,6 +2350,7 @@ function ReviewPanel({
 	config?: ProjectConfig;
 	reviewStates: PRReviewState[];
 	reviewerHandleId: string;
+	reviewerSurface?: components["schemas"]["ListReviewsResponse"]["reviewerSurface"];
 	reviewerActivityState?: components["schemas"]["ListReviewsResponse"]["reviewerActivityState"];
 	isLoading: boolean;
 	isTriggering: boolean;
@@ -2322,7 +2358,6 @@ function ReviewPanel({
 	isKilling: boolean;
 	isSwitchingReviewer: boolean;
 	error: unknown;
-	notice: string | null;
 	agentCatalog?: AgentCatalog;
 	reviewerOverride: ReviewerHarness | "";
 	reviewerModel: string;
@@ -2377,7 +2412,8 @@ function ReviewPanel({
 	const activeReviewerHarness = latest?.harness || effectiveReviewerHarness;
 	const autoReviewFailure =
 		latestAutoFailure && latestAutoFailure.id !== dismissedAutoFailureId ? latestAutoFailure.body.trim() : null;
-	const hasReviewerSession = reviewerHandleId.trim() !== "";
+	const hasReviewerSession = reviewerHandleId.trim() !== "" ||
+		Boolean(reviewerSurface?.mode === "chat" && reviewerSurface.reviewId);
 	const reviewRunning = reviewIsRunning(openReviewStates);
 	const reviewLive = reviewHasLiveActivity(openReviewStates, reviewerActivityState, hasReviewerSession);
 	const reviewHasRun = reviewRunning || Boolean(latest);
@@ -2388,7 +2424,7 @@ function ReviewPanel({
 			? t("inspector.review.cancelling")
 			: t("inspector.review.cancel")
 		: runAction;
-	const killDisabled = autoReviewEnabled || isKilling || isTriggering || isSwitchingReviewer || !hasReviewerSession;
+	const killDisabled = isKilling || isCancelling || isTriggering || isSwitchingReviewer || !hasReviewerSession;
 
 	return (
 		<div className="mb-2.5 flex flex-col">
@@ -2405,34 +2441,6 @@ function ReviewPanel({
 						</span>{" "}
 						{autoReviewFailure}
 					</p>
-				) : null}
-				{/* Neutral, not success: a notice is the trigger declining to run and
-				    saying why, so nothing has succeeded. Green reads as "the review ran"
-				    at a glance, and DESIGN.md reserves it for the success/mergeable
-				    signal. The error variant above keeps red for actual failures.
-
-				    Two lines of boxed prose was a lot of permanent rail for one
-				    sentence the user only needs once. The short form confirms the
-				    click landed; the sentence itself is a hover/focus away. */}
-				{notice ? (
-					<TooltipProvider>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<button
-									aria-label={notice}
-									className="mb-2 flex max-w-full shrink-0 items-start gap-1 self-start rounded-sm text-left text-2xs font-medium leading-normal text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-									type="button"
-								>
-									<Info aria-hidden="true" className="mt-px size-icon-2xs shrink-0" />
-									{/* Wraps rather than truncates: this is a sentence now, and
-									    clipping it mid-word would hide the part that identifies
-									    which commit is meant. The rest still rides the tooltip. */}
-									<span className="min-w-0">{t("inspector.reviewAlreadyRanShort")}</span>
-								</button>
-							</TooltipTrigger>
-							<TooltipContent className="max-w-56 leading-normal">{notice}</TooltipContent>
-						</Tooltip>
-					</TooltipProvider>
 				) : null}
 				<div className="review-run-controls-container min-w-0 divide-y divide-border/70 text-xs">
 					<div className="flex min-h-10 min-w-0 items-center justify-between gap-3 py-2">
@@ -2479,28 +2487,18 @@ function ReviewPanel({
 								{reviewRunning ? <X aria-hidden="true" /> : <Play aria-hidden="true" />}
 								<span className="review-run-action-label">{primaryReviewActionLabel}</span>
 							</Button>
-							{hasReviewerSession ? (
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<span className="inline-flex">
-											<Button
-												aria-label={isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}
-												className="h-control-md w-control-md shrink-0 p-0 text-error [&_svg]:size-icon-sm"
-												disabled={killDisabled}
-												onClick={onKill}
-												size="sm"
-												type="button"
-												variant="ghost"
-											>
-												<Trash2 aria-hidden="true" />
-											</Button>
-										</span>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">
-										{isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}
-									</TooltipContent>
-								</Tooltip>
-							) : null}
+							<Button
+								aria-label={isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}
+								className="shrink-0 gap-1 px-1.5 text-xs text-error [&_svg]:size-icon-sm"
+								disabled={killDisabled}
+								onClick={onKill}
+								size="sm"
+								type="button"
+								variant="ghost"
+							>
+								<Square aria-hidden="true" fill="currentColor" />
+								<span>{isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}</span>
+							</Button>
 						</div>
 					</div>
 				</div>

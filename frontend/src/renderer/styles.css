@@ -5017,6 +5017,67 @@ body:has(#root .platform-linux) > .files-popout-overlay {
 	background: var(--bg);
 }
 
+.browser-panel__find-row {
+	display: flex;
+	height: 36px;
+	flex-shrink: 0;
+	align-items: center;
+	gap: var(--space-1);
+	padding: 3px 6px;
+	border-top: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
+	background: var(--bg);
+}
+
+.browser-panel__find-input {
+	min-width: 0;
+	flex: 1;
+	height: 28px;
+	border: 0;
+	outline: 0;
+	background: transparent;
+	color: var(--fg);
+	font-size: var(--font-size-sm);
+}
+
+.browser-panel__find-input::placeholder {
+	color: var(--muted-foreground);
+}
+
+.browser-panel__find-status {
+	min-width: 52px;
+	color: var(--muted-foreground);
+	font-size: var(--font-size-xs);
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+	white-space: nowrap;
+}
+
+.browser-panel__find-button {
+	display: inline-flex;
+	width: 26px;
+	height: 26px;
+	align-items: center;
+	justify-content: center;
+	border-radius: var(--radius-sm);
+	color: var(--muted-foreground);
+}
+
+.browser-panel__find-button:hover:not(:disabled),
+.browser-panel__find-button:focus-visible {
+	background: var(--surface-hover);
+	color: var(--fg);
+}
+
+.browser-panel__find-button:disabled {
+	opacity: 0.4;
+}
+
+.browser-panel__find-button > svg {
+	width: 14px;
+	height: 14px;
+}
+
 .browser-panel__toolbar--annotation {
 	position: relative;
 	display: flex;

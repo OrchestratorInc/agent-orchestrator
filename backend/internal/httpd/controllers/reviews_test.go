@@ -22,6 +22,8 @@ type fakeReviewService struct {
 	// triggeredHarness/config record the override the controller forwarded.
 	triggeredHarness  domain.ReviewerHarness
 	triggeredConfig   domain.AgentConfig
+	triggeredMode     domain.ReviewerInterfaceMode
+	triggeredRerun    bool
 	triggerErr        error
 	cancelErr         error
 	trigger           reviewcore.TriggerResult
@@ -62,6 +64,17 @@ func (f *fakeReviewService) Trigger(
 		return f.trigger, nil
 	}
 	return reviewcore.TriggerResult{Run: domain.ReviewRun{ID: "run-1"}, Created: true}, nil
+}
+
+func (f *fakeReviewService) TriggerWithMode(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig, mode domain.ReviewerInterfaceMode) (reviewcore.TriggerResult, error) {
+	f.triggeredMode = mode
+	return f.Trigger(ctx, workerID, harness, config)
+}
+
+func (f *fakeReviewService) TriggerWithOptions(ctx context.Context, workerID domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+	f.triggeredRerun = opts.Rerun
+	f.triggeredMode = opts.InterfaceMode
+	return f.Trigger(ctx, workerID, opts.Harness, opts.Config)
 }
 
 func (f *fakeReviewService) RequestRereview(_ context.Context, workerID domain.SessionID, prURL, reviewer string) error {
@@ -283,6 +296,18 @@ func TestReviewsTriggerIncludesBatchFields(t *testing.T) {
 	}
 }
 
+func TestReviewsTriggerForwardsRequestedInterfaceMode(t *testing.T) {
+	svc := &fakeReviewService{}
+	srv := newReviewTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", `{"harness":"codex","interfaceMode":"tui"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if svc.triggeredHarness != domain.ReviewerCodex || svc.triggeredMode != domain.ReviewerInterfaceTUI {
+		t.Fatalf("triggered harness=%q mode=%q", svc.triggeredHarness, svc.triggeredMode)
+	}
+}
+
 func TestReviewsResolveCommentForwardsPRAndComment(t *testing.T) {
 	svc := &fakeReviewService{}
 	srv := newReviewTestServer(t, svc)
@@ -431,5 +456,14 @@ func TestReviewsSubmitAcceptsBatchedReviews(t *testing.T) {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("body missing %s: %s", want, body)
 		}
+	}
+}
+
+func TestReviewsTriggerForwardsExplicitRerun(t *testing.T) {
+	svc := &fakeReviewService{}
+	srv := newReviewTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", `{"rerun":true,"harness":"codex","interfaceMode":"chat","agentConfig":{"model":"test-model"}}`)
+	if status != http.StatusCreated || !svc.triggeredRerun || svc.triggeredHarness != domain.ReviewerCodex || svc.triggeredMode != domain.ReviewerInterfaceChat || svc.triggeredConfig.Model != "test-model" {
+		t.Fatalf("forwarding: status=%d service=%+v body=%s", status, svc, body)
 	}
 }

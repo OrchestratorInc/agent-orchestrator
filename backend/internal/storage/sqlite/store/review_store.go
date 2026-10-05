@@ -62,6 +62,21 @@ func (s *Store) SetReviewInterfaceMode(ctx context.Context, id string, mode doma
 	return n > 0, err
 }
 
+// RestoreReviewLaunchState puts the previous reviewer back after a replacement
+// launch fails, including the identifiers cleared while changing surfaces.
+func (s *Store) RestoreReviewLaunchState(ctx context.Context, review domain.Review, now time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.RestoreReviewLaunchState(ctx, gen.RestoreReviewLaunchStateParams{
+		PRURL: review.PRURL, InterfaceMode: string(review.InterfaceMode), ReviewerHandleID: review.ReviewerHandleID,
+		AgentSessionID: review.AgentSessionID, ReviewerActivityState: string(review.ReviewerActivityState),
+		ReviewerLaunchID: review.ReviewerLaunchID, ProviderConversationID: review.ProviderConversationID,
+		ControllerGeneration: review.ControllerGeneration, ControllerError: review.ControllerError,
+		UpdatedAt: now, ID: review.ID,
+	})
+	return n > 0, err
+}
+
 // GetReviewBySession returns the latest review row for a worker session,
 // ok=false if none.
 func (s *Store) GetReviewBySession(ctx context.Context, id domain.SessionID) (domain.Review, bool, error) {
@@ -110,6 +125,24 @@ func (s *Store) ListReviewsBySession(ctx context.Context, id domain.SessionID) (
 	out := make([]domain.Review, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, reviewFromListReviewsBySessionRow(row))
+	}
+	return out, nil
+}
+
+// ListLiveReviewerHandles returns every review row currently holding a live
+// TUI reviewer pane, across every project and session (including one whose
+// worker has since terminated) — the only lookup for a reviewer process that
+// has no session row of its own.
+func (s *Store) ListLiveReviewerHandles(ctx context.Context) ([]domain.ReviewerHandle, error) {
+	rows, err := s.qr.ListLiveReviewerHandles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list live reviewer handles: %w", err)
+	}
+	out := make([]domain.ReviewerHandle, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.ReviewerHandle{
+			ReviewID: row.ID, SessionID: row.SessionID, Harness: row.Harness, HandleID: row.ReviewerHandleID,
+		})
 	}
 	return out, nil
 }

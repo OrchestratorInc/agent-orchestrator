@@ -1,4 +1,4 @@
-import { BadgeCheck, Bot, CircleHelp, Globe2, Keyboard, RefreshCw, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
+import { Activity, BadgeCheck, Bot, CircleHelp, Globe2, Keyboard, RefreshCw, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection } from "../../stores/ui-store";
@@ -14,6 +14,13 @@ import { MobileDevicesSection } from "./MobileDevicesSection";
 import { ReportProblemContent } from "./ReportProblemContent";
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
 import { SettingsSection } from "./SettingsSection";
+
+/** The memory window's own blocks, loaded only when the page is opened: it
+ * samples the machine every two seconds while it is on screen. */
+const MemoryDiagnostics = lazy(async () => {
+	const module = await import("../SessionMemoryPanel");
+	return { default: module.MemoryDiagnostics };
+});
 
 const UpdatesSection = lazy(async () => {
 	const module = await import("./UpdatesSection");
@@ -35,6 +42,10 @@ export type SettingsCatalogItem = {
 	icon: LucideIcon;
 	label: (t: TFunction) => string;
 	visible?: (context: CatalogContext) => boolean;
+	/** Left out of the single-page "all" view; it has its own page in the nav.
+	 * Diagnostics is a live monitor, not a preference: rendering it inside the
+	 * whole-settings page would sample the machine whenever settings opens. */
+	pageOnly?: boolean;
 	render: (t: TFunction, titleHidden: boolean, context: CatalogContext) => ReactNode;
 };
 
@@ -110,6 +121,18 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		),
 	},
 	{
+		id: "diagnostics",
+		icon: Activity,
+		label: (t) => t("settings.diagnostics"),
+		pageOnly: true,
+		visible: ({ developerMode }) => developerMode,
+		render: (t, titleHidden) => (
+			<SettingsSection titleHidden={titleHidden} title={t("settings.diagnostics")}>
+				<MemoryDiagnostics />
+			</SettingsSection>
+		),
+	},
+	{
 		id: "updates",
 		icon: RefreshCw,
 		label: (t) => t("settings.updates"),
@@ -136,5 +159,7 @@ export function globalSettingsItem(section: GlobalSettingsSection, context: Cata
 }
 
 export function globalSettingsItemsFor(section: GlobalSettingsSection | "all", context: CatalogContext): SettingsCatalogItem[] {
-	return section === "all" ? visibleGlobalSettings(context) : [globalSettingsItem(section, context)];
+	return section === "all"
+		? visibleGlobalSettings(context).filter((item) => !item.pageOnly)
+		: [globalSettingsItem(section, context)];
 }

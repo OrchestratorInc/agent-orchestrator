@@ -116,6 +116,16 @@ function setupBridge() {
 		notifyPanelUsed: vi.fn(),
 		notifyPanelBlur: vi.fn(),
 		onFocusLocation: vi.fn(() => () => undefined),
+		getFindState: vi.fn(async (viewId: string) => ({
+			viewId, tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true,
+		})),
+		findInPage: vi.fn(async ({ viewId, query }: { viewId: string; query: string }) => ({
+			viewId, tabId: "t1", query, activeMatchOrdinal: 1, matches: 1, finalUpdate: true,
+		})),
+		stopFindInPage: vi.fn(async ({ viewId }: { viewId: string }) => ({
+			viewId, tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true,
+		})),
+		onFindOpen: vi.fn(() => () => undefined),
 		onReopenClosedTab: vi.fn(() => () => undefined),
 		devtools: vi.fn(
 			async ({ viewId, operation, placement }: {
@@ -154,6 +164,7 @@ function setupBridge() {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
 		}),
+		onFindState: vi.fn(() => () => undefined),
 		onPageFocus: vi.fn(() => () => undefined),
 		onTabsState: vi.fn((listener: TabsListener) => {
 			tabsListeners.add(listener);

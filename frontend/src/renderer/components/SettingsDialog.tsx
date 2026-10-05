@@ -44,9 +44,10 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const closeSettings = useUiStore((state) => state.closeSettings);
+	// Diagnostics (memory and CPU) is listed only in Developer mode.
+	const developerMode = useUiStore((state) => state.developerMode);
 	// Reads the daemon settings the dialog tree already queries; no extra fetch.
 	const { cloudEnabled } = useCloudGate();
-	const developerMode = useUiStore((state) => state.developerMode);
 	// The bring-your-own-Coder page is for @11x.ai users, plus a small allowlist
 	// of internal testers so the flow can be exercised on non-11x accounts.
 	const email = (useCloudSession().session?.user.email ?? "").toLowerCase();

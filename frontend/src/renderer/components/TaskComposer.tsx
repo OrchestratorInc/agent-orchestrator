@@ -28,6 +28,7 @@ import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { fallbackEffort } from "../lib/effort";
 import {
 	buildRankedAgentOptions,
 	DEFAULT_AGENT_PRIORITY_RANK,
@@ -44,6 +45,7 @@ import {
 } from "../hooks/useAgentModelsQuery";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
+import { EffortPicker, type EffortAvailability } from "./settings/EffortPicker";
 import { useModelTuning } from "./settings/ModelTuningControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import {
@@ -501,15 +503,27 @@ export function TaskComposer({
 	const cloudDefaultEffort = isCloudProject && effortOptions.includes("medium") ? "medium" : "";
 	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
 	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
-	const requestedEffort = isCloudProject ? effort || cloudDefaultEffort || undefined : effortTouched || rememberedEffortIsExplicit
-		? effort === implicitEffort ? undefined : effort
-		: undefined;
-
 	const selectedAgentLabel = agentCatalog?.agents.find((item) => item.id === selectedAgent)?.label || selectedAgent;
 	const requiresTuiFallback =
 		selectedAgent !== "" &&
 		settings?.defaultSessionMode === "chat" &&
 		!settings.chatHarnesses.includes(selectedAgent);
+	// With no provider default for the reported levels AO picks one, shows it as
+	// selected, and sends it, so the picker matches what the task runs with.
+	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
+	const effectiveEffort = effort && effort !== "default" ? effort : aoDefaultEffort ?? "";
+	const requestedEffort = isCloudProject
+		? effort || cloudDefaultEffort || undefined
+		: effortTouched || rememberedEffortIsExplicit
+			? !effectiveEffort || effectiveEffort === implicitEffort ? undefined : effectiveEffort
+			: aoDefaultEffort;
+	const effortAvailability: EffortAvailability = requiresTuiFallback
+		? "launch-unavailable"
+		: !effortModel || effortModel.efforts === undefined
+			? "unknown"
+			: effortOptions.length > 0
+				? "supported"
+				: "unsupported";
 	const canSubmit =
 		hostConnected &&
 		Boolean(projectId) &&
@@ -707,7 +721,7 @@ export function TaskComposer({
 			effort={{
 				disabled: isSubmitting,
 				options: effortOptions,
-				value: effort,
+				value: effectiveEffort,
 				onChange: (value) => {
 					setEffort(value);
 					setEffortTouched(true);
@@ -731,41 +745,35 @@ export function TaskComposer({
 				onSubmit: (brief) => void submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined),
 			}}
 			renderAgentControl={(control) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />}
-			renderEffortControl={(control) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={effortModel?.defaultEffort} />}
+			renderEffortControl={(control) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={inheritedEffort || effortModel?.defaultEffort} availability={effortAvailability} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
-			showEffort={!requiresTuiFallback && effortOptions.length > 0}
+			showEffort={!requiresTuiFallback && (effortOptions.length > 0 || Boolean(effort && effort !== "default"))}
 		/>
 	);
 }
 
-function TaskEffortPicker({ disabled, label, onChange, options, value, defaultEffort }: TaskComposerEffortControl & { defaultEffort?: string }) {
-	const { t } = useTranslation();
-	const explicitEffort = value.toLowerCase() === "default" ? "" : value;
-	const reportedDefault = defaultEffort && options.includes(defaultEffort) ? defaultEffort : "";
-	const effectiveEffort = explicitEffort || reportedDefault;
-	const visibleLabel = effectiveEffort ? formatEffortLabel(effectiveEffort) : t("settings.models.effortNotReported");
-
+function TaskEffortPicker({
+	disabled,
+	label,
+	onChange,
+	options,
+	value,
+	defaultEffort,
+	availability,
+}: TaskComposerEffortControl & { defaultEffort?: string; availability: EffortAvailability }) {
 	return (
-		<SettingsOptionMenu
-			aria-label={label}
+		<EffortPicker
+			label={label}
 			disabled={disabled}
-			value={effectiveEffort}
-			options={options.map((option) => ({ value: option, label: formatEffortLabel(option) }))}
-			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
-			menuAlign="end"
-			renderTrigger={() => (
-				<span className="min-w-0 truncate text-control text-foreground" title={visibleLabel}>
-					{visibleLabel}
-				</span>
-			)}
+			value={value.toLowerCase() === "default" ? "" : value}
+			choices={options.map((option) => ({ value: option }))}
+			defaultEffort={defaultEffort}
+			availability={availability}
 			onChange={onChange}
+			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
 		/>
 	);
-}
-
-function formatEffortLabel(value: string): string {
-	return value === "xhigh" ? "Extra high" : value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 // Both local and cloud list only harnesses that can run, plus a way to manage
