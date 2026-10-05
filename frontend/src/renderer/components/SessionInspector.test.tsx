@@ -2186,40 +2186,16 @@ describe("SessionInspector summary reviews", () => {
     expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
   });
 
-  it("does not carry a pending reviewer interface choice to another host with the same session ID", async () => {
+  it("lets the daemon select the reviewer interface", async () => {
     mockCommonGets([], "", [reviewState(3, "needs_review")]);
-    postMock.mockResolvedValue({ response: { status: 200 }, data: { reviews: [reviewState(3, "needs_review")], runs: [], reviewerHandleId: "" } });
-    const currentSession = session([pr(3, "open")], { provider: "codex" });
-    const view = renderWithQuery(<SessionInspector hostId="box-a" session={currentSession} />);
+    postMock.mockResolvedValue({ response: { status: 200 }, data: { reviews: [], runs: [], reviewerHandleId: "" } });
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")], { provider: "codex" })} />);
     await openReviewsSection();
-    await userEvent.click(await screen.findByRole("button", { name: "Terminal" }));
-    expect(screen.getByRole("button", { name: "Terminal" })).toHaveAttribute("aria-pressed", "true");
-    view.rerender(<QueryClientProvider client={view.queryClient}><TooltipProvider><SessionInspector session={currentSession} /></TooltipProvider></QueryClientProvider>);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true"));
+    expect(screen.queryByRole("button", { name: "Chat" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Terminal" })).not.toBeInTheDocument();
     await userEvent.click(await screen.findByRole("button", { name: "Review latest commit" }));
     await waitFor(() => expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")).toHaveLength(1));
     expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")[0][1].body).not.toHaveProperty("interfaceMode");
-  });
-
-  it("restarts a running Codex reviewer in Terminal when selected", async () => {
-    mockCommonGets([], "", [{ ...reviewState(3, "running"), latestRun: { ...approvedReview, harness: "codex", status: "running", verdict: "", body: "" } }]);
-    postMock.mockResolvedValue({
-      response: { status: 201 },
-      data: {
-        reviewerHandleId: "reviewer-terminal",
-        reviewerSurface: { mode: "tui", reviewId: "review-1", harness: "codex", handleId: "reviewer-terminal" },
-        reviews: [{ ...reviewState(3, "running"), latestRun: { ...approvedReview, status: "running", verdict: "", body: "" } }],
-      },
-    });
-    const onOpenReviewerTerminal = vi.fn();
-    renderWithQuery(<SessionInspector onOpenReviewerTerminal={onOpenReviewerTerminal} session={session([pr(3, "open")])} />);
-    await openReviewsSection();
-    await userEvent.click(screen.getByRole("button", { name: "Terminal" }));
-    await waitFor(() => expect(postMock).toHaveBeenCalledWith(
-      "/api/v1/sessions/{sessionId}/reviews/trigger",
-      { params: { path: { sessionId: "sess-1" } }, body: { harness: "codex", interfaceMode: "tui" } },
-    ));
-    expect(onOpenReviewerTerminal).toHaveBeenCalledWith({ handleId: "reviewer-terminal", harness: "codex" });
   });
 
   it("does not override the stored Terminal surface on an ordinary review trigger", async () => {
@@ -2229,25 +2205,10 @@ describe("SessionInspector summary reviews", () => {
       : common(path));
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
-    expect(await screen.findByRole("button", { name: "Terminal" })).toHaveAttribute("aria-pressed", "true");
     await userEvent.click(await screen.findByRole("button", { name: "Review latest commit" }));
     await waitFor(() => expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")[0]?.[1]).toEqual({
       params: { path: { sessionId: "sess-1" } }, body: {},
     }));
-  });
-
-  it("returns to the stored surface when a running reviewer switch fails", async () => {
-    const running = { ...reviewState(3, "running"), latestRun: { ...approvedReview, status: "running", verdict: "", body: "" } };
-    const common = commonGetsResponder([], "review-chat:review-1", [running]);
-    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/reviews"
-      ? { data: { reviewerHandleId: "review-chat:review-1", reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" }, reviews: [running] } }
-      : common(path));
-    postMock.mockResolvedValue({ error: { message: "launch failed" } });
-    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
-    await openReviewsSection();
-    await userEvent.click(await screen.findByRole("button", { name: "Terminal" }));
-    await waitFor(() => expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")).toHaveLength(1));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true"));
   });
 
   it("shows the worker-compatible default reviewer before a run exists", async () => {

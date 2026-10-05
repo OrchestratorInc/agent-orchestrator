@@ -1659,13 +1659,6 @@ function ReviewsSection({
 	const [reviewerModel, setReviewerModel] = useState(session.reviewerConfig?.model ?? "");
 	const [reviewerMode, setReviewerMode] = useState(session.reviewerConfig?.mode ?? "");
 	const reviewerOwnerKey = sessionUiKey(session.id, hostId);
-	const [pendingReviewerInterfaceMode, setPendingReviewerInterfaceMode] = useState<{ ownerKey: string; mode: "chat" | "tui" } | null>(null);
-	const serverReviewerInterfaceMode = reviewsQuery.data?.reviewerSurface?.mode;
-	const reviewerInterfaceMode = pendingReviewerInterfaceMode?.ownerKey === reviewerOwnerKey
-		? pendingReviewerInterfaceMode.mode
-		: serverReviewerInterfaceMode === "chat" || serverReviewerInterfaceMode === "tui"
-			? serverReviewerInterfaceMode
-			: "chat";
 	useEnsureAgentReadiness({
 		agentIds: reviewerOverride ? [reviewerOverride] : [],
 		enabled: reviewerOverride !== "",
@@ -1717,16 +1710,15 @@ function ReviewsSection({
 		},
 	});
 	const triggerReview = useMutation({
-		mutationFn: async ({ interfaceMode, harness, ownerKey }: { interfaceMode?: "chat" | "tui"; harness?: ReviewerHarness; ownerKey: string }) => {
-			// Keep agent/model overrides scoped to this pass; the interface choice
-			// must reach the daemon so it launches the matching reviewer surface.
+		mutationFn: async ({ ownerKey }: { ownerKey: string }) => {
+			// Keep agent/model overrides scoped to this pass; the daemon selects the surface.
 			const reviewerConfig = reviewerModel || reviewerMode
 				? { ...(reviewerModel ? { model: reviewerModel } : {}), ...(reviewerMode ? { mode: reviewerMode } : {}) }
 				: undefined;
-			const selectedHarness = harness || reviewerOverride;
+			const selectedHarness = reviewerOverride || undefined;
 			const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/trigger", {
 				params: { path: { sessionId: session.id } },
-				body: { ...(selectedHarness ? { harness: selectedHarness } : {}), ...(!harness && reviewerConfig ? { agentConfig: reviewerConfig } : {}), ...(interfaceMode ? { interfaceMode } : {}) },
+				body: { ...(selectedHarness ? { harness: selectedHarness } : {}), ...(reviewerConfig ? { agentConfig: reviewerConfig } : {}) },
 			});
 			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableStartReview")));
 			return { data, reused: response?.status === 200, ownerKey, reviewsKey, workspaceKey };
@@ -1738,7 +1730,6 @@ function ReviewsSection({
 		},
 		onSuccess: ({ data, reused, ownerKey, reviewsKey: requestReviewsKey, workspaceKey: requestWorkspaceKey }) => {
 			if (data) queryClient.setQueryData(requestReviewsKey, data);
-			setPendingReviewerInterfaceMode((pending) => pending?.ownerKey === ownerKey ? null : pending);
 			void queryClient.invalidateQueries({ queryKey: requestReviewsKey });
 			void queryClient.invalidateQueries({ queryKey: requestWorkspaceKey });
 			if (ownerKey !== reviewerOwnerKey) return;
@@ -1754,8 +1745,7 @@ function ReviewsSection({
 				onOpenReviewerTerminal?.({ handleId: data.reviewerHandleId, harness });
 			}
 		},
-		onError: (_error, { ownerKey }, context) => {
-			setPendingReviewerInterfaceMode((pending) => pending?.ownerKey === ownerKey ? null : pending);
+		onError: (_error, _variables, context) => {
 			void queryClient.invalidateQueries({ queryKey: context?.reviewsKey ?? reviewsKey });
 		},
 	});
@@ -1822,15 +1812,7 @@ function ReviewsSection({
 				onCancel={() => cancelReview.mutate()}
 				onAutoReviewChange={(enabled) => saveAutoReview.mutate(enabled)}
 				onKill={() => killReview.mutate()}
-				onTrigger={() => triggerReview.mutate({ ownerKey: reviewerOwnerKey, interfaceMode: pendingReviewerInterfaceMode?.ownerKey === reviewerOwnerKey ? pendingReviewerInterfaceMode.mode : undefined })}
-				reviewerInterfaceMode={reviewerInterfaceMode}
-				onReviewerInterfaceModeChange={(mode) => {
-					setPendingReviewerInterfaceMode({ ownerKey: reviewerOwnerKey, mode });
-					const runningHarness = reviewStates.find((review) => review.status === "running")?.latestRun?.harness as ReviewerHarness | undefined;
-					if (reviewStates.some((review) => review.status === "running")) {
-						triggerReview.mutate({ ownerKey: reviewerOwnerKey, interfaceMode: mode, harness: runningHarness || reviewerOverride || currentDefaultReviewerHarness });
-					}
-				}}
+				onTrigger={() => triggerReview.mutate({ ownerKey: reviewerOwnerKey })}
 				reviewerHandleId={reviewsQuery.data?.reviewerHandleId ?? ""}
 				reviewerActivityState={reviewsQuery.data?.reviewerActivityState}
 				reviewStates={reviewStates}
@@ -2328,9 +2310,7 @@ function ReviewPanel({
 	reviewerOverride,
 	reviewerModel,
 	reviewerMode,
-	reviewerInterfaceMode,
 	onReviewerOverrideChange,
-	onReviewerInterfaceModeChange,
 	onReviewerHarnessPreviewChange,
 	onTrigger,
 	onCancel,
@@ -2355,9 +2335,7 @@ function ReviewPanel({
 	reviewerOverride: ReviewerHarness | "";
 	reviewerModel: string;
 	reviewerMode: string;
-	reviewerInterfaceMode: "chat" | "tui";
 	onReviewerOverrideChange: (next: ReviewerHarness | "", config: { model?: string; mode?: string }) => void;
-	onReviewerInterfaceModeChange: (mode: "chat" | "tui") => void;
 	onReviewerHarnessPreviewChange: (next: ReviewerHarness | "") => void;
 	onTrigger: () => void;
 	onCancel: () => void;
@@ -2485,26 +2463,6 @@ function ReviewPanel({
 							value={reviewerOverride}
 						/>
 					</div>
-					{activeReviewerHarness === "codex" ? (
-						<div className="flex min-h-10 min-w-0 items-center justify-between gap-3 py-2">
-							<span className="text-xs font-medium text-foreground">{t("inspector.reviewerInterface")}</span>
-							<div aria-label={t("inspector.reviewerInterface")} className="flex rounded-md border border-border p-0.5" role="group">
-								{(["chat", "tui"] as const).map((mode) => (
-									<Button
-										key={mode}
-										aria-pressed={reviewerInterfaceMode === mode}
-										className="h-6 px-2 text-xs"
-										disabled={isTriggering || isCancelling || isKilling || isSwitchingReviewer}
-										onClick={() => onReviewerInterfaceModeChange(mode)}
-										type="button"
-										variant={reviewerInterfaceMode === mode ? "secondary" : "ghost"}
-									>
-										{t(mode === "chat" ? "inspector.reviewerChat" : "inspector.reviewerTerminal")}
-									</Button>
-								))}
-							</div>
-						</div>
-					) : null}
 					<InspectorPolicyRow
 						checked={autoReviewEnabled}
 						description={t("inspector.autoReviewDescription")}

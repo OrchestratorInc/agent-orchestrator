@@ -116,6 +116,15 @@ func (f *fakeConversationService) InterruptForOwner(_ context.Context, owner dom
 	return f.reviewErr
 }
 
+func (f *fakeConversationService) ModelsForOwner(ctx context.Context, owner domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error) {
+	f.reviewOwner = owner
+	return f.Models(ctx, "")
+}
+func (f *fakeConversationService) SetTurnSettingsForOwner(_ context.Context, owner domain.ConversationOwner, settings domain.ConversationSettings) (domain.ConversationSettings, error) {
+	f.reviewOwner = owner
+	return settings, nil
+}
+
 func (f *fakeConversationService) Models(context.Context, domain.SessionID) ([]ports.ChatModel, domain.ConversationSettings, error) {
 	return nil, domain.ConversationSettings{}, nil
 }

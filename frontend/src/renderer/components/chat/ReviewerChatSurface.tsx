@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useReviewerConversation, useReviewerConversationCommands } from "../../hooks/useReviewerConversation";
+import { useReviewerConversation, useReviewerConversationCommands, useReviewerConversationModels } from "../../hooks/useReviewerConversation";
 import { useHostConnection } from "../../hooks/useHostConnection";
 import { sessionUiKey } from "../../lib/hosts";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
@@ -10,6 +10,7 @@ import { ChatWorkspace } from "./ChatWorkspace";
 export function ReviewerChatSurface({ reviewId, hostId, hideHeader = false }: { reviewId: string; hostId?: string; hideHeader?: boolean }) {
 	const { t } = useTranslation();
 	const { snapshot, isLoading, error, hasOlder, isLoadingOlder, loadOlder } = useReviewerConversation(reviewId, hostId);
+	const catalog = useReviewerConversationModels(reviewId, Boolean(snapshot && snapshot.controller.state !== "stopped"), hostId);
 	const commands = useReviewerConversationCommands(reviewId, hostId);
 	const openSessionLink = useSessionLinkNavigation(hostId);
 	const { baseUrl: remoteBase } = useHostConnection(hostId);
@@ -40,7 +41,10 @@ export function ReviewerChatSurface({ reviewId, hostId, hideHeader = false }: { 
 			sessionRole="worker"
 			hideHeader={hideHeader}
 			busy={commands.busy}
-			commandError={commands.error}
+			commandError={commands.error ?? catalog.error}
+			models={catalog.models}
+			onChooseSettings={commands.chooseSettings}
+			approvalModes={["auto"]}
 			hasOlder={hasOlder}
 			loadingOlder={isLoadingOlder}
 			onLoadOlder={loadOlder}

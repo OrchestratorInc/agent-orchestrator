@@ -1,9 +1,11 @@
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import type { components } from "../../api/schema";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { mergeConversationPages, toSnapshot, type ConversationSendInput } from "./useConversation";
+
+import type { ChatModel, TurnSettings } from "../types/conversation";
 
 type WireSnapshot = components["schemas"]["ConversationSnapshotResponse"];
 const PAGE_SIZE = 200;
@@ -41,6 +43,21 @@ export function useReviewerConversation(reviewId: string | undefined, hostId?: s
 	};
 }
 
+export function useReviewerConversationModels(reviewId: string, enabled: boolean, hostId?: string) {
+	const query = useQuery({
+		queryKey: [...reviewerConversationQueryKey(reviewId, hostId), "models"],
+		enabled,
+		staleTime: 5 * 60 * 1000,
+		retry: false,
+		queryFn: async () => {
+			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/reviews/{reviewId}/conversation/models", { params: { path: { reviewId } } });
+			if (error) throw error;
+			return (data?.models ?? []) as ChatModel[];
+		},
+	});
+	return { models: query.data ?? [], error: query.error ? apiErrorMessage(query.error) : undefined };
+}
+
 export function useReviewerConversationCommands(reviewId: string | undefined, hostId?: string) {
 	const queryClient = useQueryClient();
 	const invalidate = useCallback(async () => {
@@ -49,6 +66,18 @@ export function useReviewerConversationCommands(reviewId: string | undefined, ho
 				queryKey: reviewerConversationQueryKey(reviewId, hostId),
 			});
 	}, [hostId, queryClient, reviewId]);
+	const chooseSettings = useMutation({
+		mutationFn: async ({ settings, targetReviewId, targetHostId }: { settings: TurnSettings; targetReviewId: string; targetHostId?: string }) => {
+			const { data, error } = await clientForSessionHost(targetHostId).PATCH("/api/v1/reviews/{reviewId}/conversation/settings", {
+				params: { path: { reviewId: targetReviewId } }, body: settings,
+			});
+			if (error) throw error;
+			return data;
+		},
+		onSuccess: async (_data, { targetReviewId, targetHostId }) => {
+			await queryClient.invalidateQueries({ queryKey: reviewerConversationQueryKey(targetReviewId, targetHostId) });
+		},
+	});
 	const send = useMutation({
 		mutationFn: async (input: ConversationSendInput) => {
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/reviews/{reviewId}/conversation/messages", {
@@ -98,14 +127,17 @@ export function useReviewerConversationCommands(reviewId: string | undefined, ho
 		},
 		onSettled: invalidate,
 	});
-	const error = [send.error, resolve.error, resolveInput.error, interrupt.error].find(Boolean);
+	const error = [send.error, resolve.error, resolveInput.error, interrupt.error, chooseSettings.error].find(Boolean);
 	return {
+		chooseSettings: (settings: TurnSettings) => {
+			if (reviewId) chooseSettings.mutate({ settings, targetReviewId: reviewId, targetHostId: hostId });
+		},
 		send: (input: ConversationSendInput) => send.mutateAsync(input),
 		resolve: (requestId: string, decisionId: string) => resolve.mutate({ requestId, decisionId }),
 		resolveInput: (requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>) =>
 			resolveInput.mutateAsync({ requestId, action, content }),
 		interrupt: () => interrupt.mutate(),
-		busy: send.isPending || resolve.isPending || resolveInput.isPending || interrupt.isPending,
+		busy: chooseSettings.isPending || send.isPending || resolve.isPending || resolveInput.isPending || interrupt.isPending,
 		error: error ? apiErrorMessage(error) : undefined,
 	};
 }

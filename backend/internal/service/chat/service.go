@@ -1846,7 +1846,12 @@ func (s *Service) Models(ctx context.Context, id domain.SessionID) ([]ports.Chat
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return nil, domain.ConversationSettings{}, err
 	}
-	controller, err := s.Controller(id)
+	return s.ModelsForOwner(ctx, domain.SessionConversationOwner(id))
+}
+
+// ModelsForOwner reads the catalog from the owner-specific provider.
+func (s *Service) ModelsForOwner(ctx context.Context, owner domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error) {
+	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
 		return nil, domain.ConversationSettings{}, err
 	}
@@ -2072,7 +2077,15 @@ func (s *Service) SetTurnSettings(
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return domain.ConversationSettings{}, err
 	}
-	controller, err := s.Controller(id)
+	return s.SetTurnSettingsForOwner(ctx, domain.SessionConversationOwner(id), settings)
+}
+
+// ErrReviewerPermissionsFixed rejects changes to unattended reviewer approval policy.
+var ErrReviewerPermissionsFixed = errors.New("reviewer approval permissions are fixed")
+
+// SetTurnSettingsForOwner records choices without changing another owner's settings.
+func (s *Service) SetTurnSettingsForOwner(ctx context.Context, owner domain.ConversationOwner, settings domain.ConversationSettings) (domain.ConversationSettings, error) {
+	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
 		return domain.ConversationSettings{}, err
 	}
@@ -2080,11 +2093,16 @@ func (s *Service) SetTurnSettings(
 	defer controller.configMu.Unlock()
 	// The turn-settings endpoint does not own provider session mode choices.
 	previous := controller.Settings()
+	if owner.Kind == domain.ConversationOwnerReview && settings.ApprovalMode != previous.ApprovalMode {
+		return domain.ConversationSettings{}, ErrReviewerPermissionsFixed
+	}
 	settings.OpenCodeMode = previous.OpenCodeMode
 	if err := controller.SetSettings(ctx, settings); err != nil {
 		return domain.ConversationSettings{}, err
 	}
-	s.persistPickedModel(id, previous, settings)
+	if owner.Kind == domain.ConversationOwnerSession {
+		s.persistPickedModel(domain.SessionID(owner.ID), previous, settings)
+	}
 	return controller.Settings(), nil
 }
 
