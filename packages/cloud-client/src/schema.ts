@@ -55,6 +55,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listUserProviderConnections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/providers/{agent}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["putUserAgentConnection"];
+        post?: never;
+        delete: operations["deleteUserAgentConnection"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/github/user": {
         parameters: {
             query?: never;
@@ -315,7 +349,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Wake every paused sandbox in the organization. */
+        /**
+         * Wake every paused sandbox in the organization.
+         * @description Ask the reconciler to resume the user's idle-paused sandboxes.
+         */
         post: operations["wakePausedSessions"];
         delete?: never;
         options?: never;
@@ -754,7 +791,7 @@ export interface paths {
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
-                provider: "claude-code" | "codex" | "cursor";
+                provider: "claude-code" | "codex" | "cursor" | "opencode";
             };
             cookie?: never;
         };
@@ -2390,18 +2427,30 @@ export interface components {
             };
         };
         /** @enum {string} */
-        ProviderName: "daytona" | "claude-code" | "codex" | "cursor";
+        ProviderName: "daytona" | "claude-code" | "codex" | "cursor" | "opencode" | "github" | "coder" | "nodeops";
         ProviderPublicConfig: {
             /** Format: uri */
             apiUrl?: string;
             /** @enum {string} */
             target?: "us" | "eu";
             /** @enum {string} */
-            credentialType?: "oauth_token" | "api_key" | "access_token" | "auth_json";
+            credentialType?: "oauth_token" | "api_key" | "access_token" | "auth_json" | "personal_access_token" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
+            /** Format: uri */
+            baseUrl?: string;
+            owner?: string;
+            /** Format: uuid */
+            templateId?: string;
+            agentName?: string;
+            parameters?: {
+                [key: string]: string;
+            };
+            durableRoot?: string;
+            endpointServiceName?: string;
+            region?: string;
         };
         PutAgentProviderConnectionInput: {
             /** @enum {string} */
-            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json";
+            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
             secret: string;
         };
         WorkerCredentialResponse: {
@@ -2618,6 +2667,79 @@ export interface operations {
                         organization: components["schemas"]["OrganizationMembership"];
                     };
                 };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listUserProviderConnections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redacted provider connections owned by the authenticated user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        providerConnections: components["schemas"]["RedactedProviderConnection"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putUserAgentConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutAgentProviderConnectionInput"];
+            };
+        };
+        responses: {
+            /** @description The validated personal coding-agent credential was encrypted and stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        providerConnection: components["schemas"]["RedactedProviderConnection"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteUserAgentConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The personal coding-agent credential was disconnected. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Error"];
         };
@@ -3110,7 +3232,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Wake was requested for this tenant's idle-paused sandboxes. */
+            /** @description The resume requests were accepted for asynchronous processing. */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -3827,7 +3949,7 @@ export interface operations {
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
-                provider: "claude-code" | "codex" | "cursor";
+                provider: "claude-code" | "codex" | "cursor" | "opencode";
             };
             cookie?: never;
         };
@@ -3857,7 +3979,7 @@ export interface operations {
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
-                provider: "claude-code" | "codex" | "cursor";
+                provider: "claude-code" | "codex" | "cursor" | "opencode";
             };
             cookie?: never;
         };

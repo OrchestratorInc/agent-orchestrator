@@ -202,6 +202,43 @@ const chatSession = {
 } satisfies WorkspaceSession;
 
 describe("HumanMessage attachments", () => {
+	it("loads a remote session's staged image from its proxy, not the local daemon", () => {
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			items: [humanMessage("See image\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-remote.png")],
+			latestSequence: 1,
+		};
+		render(<ChatWorkspace snapshot={snapshot} assetBaseUrl="http://127.0.0.1:4000/token-a" />);
+		expect(screen.getByRole("img", { name: "attachment-remote.png" })).toHaveAttribute(
+			"src",
+			`http://127.0.0.1:4000/token-a/api/v1/sessions/${encodeURIComponent(snapshot.sessionId)}/preview/files/.ao/attachments/attachment-remote.png`,
+		);
+	});
+
+	it("does not read an offline remote session's image from the laptop daemon", () => {
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			items: [humanMessage("See image\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-remote.png")],
+			latestSequence: 1,
+		};
+		render(<ChatWorkspace snapshot={snapshot} remoteHostId="box-a" />);
+		expect(screen.queryByRole("img", { name: "attachment-remote.png" })).not.toBeInTheDocument();
+		expect(screen.getByText("attachment-remote.png")).toBeInTheDocument();
+	});
+
+	it("keeps offline remote preview links classified as remote", () => {
+		const assistant = chatFixture.items.find((item): item is ConversationMessage => item.kind === "message" && item.role === "assistant");
+		if (!assistant) throw new Error("Fixture needs an assistant message");
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			items: [{ ...assistant, id: "offline-preview", sequence: 1, text: "[preview](http://localhost:5173)" }],
+			latestSequence: 1,
+		};
+		render(<ChatWorkspace snapshot={snapshot} remoteHostId="box-a" />);
+		expect(screen.getByText("preview")).toBeInTheDocument();
+		expect(screen.queryByRole("link", { name: "preview" })).not.toBeInTheDocument();
+	});
+
 	it("hides appended worker report context from the human message", async () => {
 		const text =
 			"Please continue\n\n<ao-worker-reports>\nReports since your previous turn:\n\n[done] ao://sessions/project/worker\nFinished\n</ao-worker-reports>";
@@ -420,7 +457,10 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getAllByText("Already durable")).toHaveLength(1);
 	});
 
-	it("resolves a relative image in agent prose against this session workspace", () => {
+	it.each([
+		{ surface: "worker", draftOwner: undefined },
+		{ surface: "reviewer", draftOwner: { sessionId: "review:review-1", incarnation: "review-1" } },
+	])("resolves a relative image in $surface prose against the worker workspace", ({ draftOwner }) => {
 		const snapshot = idleSnapshot(chatFixtureEmpty);
 		snapshot.items.push({
 			kind: "message",
@@ -435,7 +475,7 @@ describe("ChatWorkspace timeline", () => {
 			createdAt: "2026-09-09T00:00:00Z",
 		});
 
-		render(<ChatWorkspace snapshot={snapshot} />);
+		render(<ChatWorkspace snapshot={snapshot} draftOwner={draftOwner} />);
 
 		const src = screen.getByRole("img", { name: "screenshot" }).getAttribute("src") ?? "";
 		const url = new URL(src, "http://127.0.0.1");
@@ -487,8 +527,9 @@ describe("ChatWorkspace timeline", () => {
 		const view = render(<ChatWorkspace snapshot={chatFixture} session={chatSession} sessionRole="worker" />);
 
 		expect(screen.getByLabelText("Chat")).toHaveAttribute("data-session-role", "worker");
+		expect(screen.getByLabelText("Chat")).toHaveClass("min-w-0", "w-full", "overflow-hidden");
 		expect(screen.getByTestId("session-workspace-topbar")).toBeInTheDocument();
-		expect(screen.getByTestId("session-terminal-region")).toBeInTheDocument();
+		expect(screen.getByTestId("session-terminal-region")).toHaveStyle({ width: "100%" });
 		const workerTab = screen.getByRole("tab", { name: "Reviewer chat · Codex · Working" });
 		expect(workerTab).toHaveTextContent(chatSession.title);
 		expect(workerTab).not.toHaveTextContent("Codex");
@@ -563,7 +604,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(onSessionRenamed).toHaveBeenCalledOnce();
 	});
 
-	it("clears the fixed titlebar nav when the sidebar is collapsed, like the terminal session", () => {
+	it("keeps titlebar clearance attached throughout sidebar expansion and collapse", () => {
 		useUiStore.setState({ isSidebarOpen: false });
 		const { rerender } = render(<ChatWorkspace snapshot={chatFixture} />);
 
@@ -574,7 +615,7 @@ describe("ChatWorkspace timeline", () => {
 		useUiStore.setState({ isSidebarOpen: true });
 		rerender(<ChatWorkspace snapshot={chatFixture} />);
 
-		expect(screen.getByTestId("session-terminal-region")).not.toHaveClass(
+		expect(screen.getByTestId("session-terminal-region")).toHaveClass(
 			"session-topbar-titlebar-clearance-mac",
 		);
 	});
@@ -1238,6 +1279,29 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
 		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
+	});
+
+	it("waits for controller and provisioning readiness before enabling permission changes", () => {
+		const onChooseSettings = vi.fn();
+		const snapshot = { ...chatFixtureSettled, controller: { state: "connecting" as const } };
+		const renderChat = (controller: "connecting" | "ready", provisionState: "provisioning" | "ready") => (
+			<ChatWorkspace
+				snapshot={{ ...snapshot, controller: { state: controller } }}
+				session={{ ...chatSession, provisionState }}
+				onChooseSettings={onChooseSettings}
+			/>
+		);
+		const view = render(renderChat("connecting", "provisioning"));
+		const approval = () => screen.getByRole("button", { name: "Approval policy for the next turn" });
+		expect(approval()).toBeDisabled();
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toBeEnabled();
+
+		view.rerender(renderChat("ready", "provisioning"));
+		expect(approval()).toBeDisabled();
+
+		view.rerender(renderChat("ready", "ready"));
+		expect(approval()).toBeEnabled();
+		expect(onChooseSettings).not.toHaveBeenCalled();
 	});
 
 	it("offers retry for a failed start without reporting a crash", async () => {
@@ -2193,6 +2257,41 @@ describe("ChatWorkspace message actions", () => {
 
 		render(<ChatWorkspace snapshot={sessionB} onSend={vi.fn()} />);
 		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("session B draft");
+	});
+
+	it("keeps renderer drafts separate for two hosts with the same daemon session ID", async () => {
+		const snapshot = idleSnapshot();
+		const session = { ...chatSession, createdAt: "2026-08-25T09:00:00.000Z" };
+		const a = `host-A:${snapshot.sessionId}`;
+		const b = `host-B:${snapshot.sessionId}`;
+		const first = render(<ChatWorkspace snapshot={snapshot} session={session} uiSessionId={a} onSend={vi.fn()} />);
+		await typeInLexicalEditor(screen.getByLabelText("Message the agent"), "draft on A");
+		first.unmount();
+
+		const second = render(<ChatWorkspace snapshot={snapshot} session={session} uiSessionId={b} onSend={vi.fn()} />);
+		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("");
+		await typeInLexicalEditor(screen.getByLabelText("Message the agent"), "draft on B");
+		second.unmount();
+
+		const restored = render(<ChatWorkspace snapshot={snapshot} session={session} uiSessionId={a} onSend={vi.fn()} />);
+		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("draft on A");
+		restored.unmount();
+
+		render(<ChatWorkspace snapshot={snapshot} session={session} uiSessionId={b} onSend={vi.fn()} />);
+		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("draft on B");
+	});
+
+	it("saves a reviewer draft separately from its worker conversation", async () => {
+		const snapshot = idleSnapshot();
+		const draftOwner = { sessionId: "review:review-1", incarnation: "review-1" };
+		const view = render(<ChatWorkspace snapshot={snapshot} draftOwner={draftOwner} onSend={vi.fn()} />);
+		await typeInLexicalEditor(screen.getByLabelText("Message the agent"), "reviewer reply");
+		await waitFor(() => expect(readChatSessionDraft(draftOwner).composer.text).toBe("reviewer reply"));
+		expect(readChatSessionDraft({ sessionId: snapshot.sessionId, incarnation: snapshot.sessionId }).composer.text).toBe("");
+		view.unmount();
+		render(<ChatWorkspace snapshot={snapshot} draftOwner={draftOwner} onSend={vi.fn()} />);
+		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("reviewer reply");
+		expect(screen.queryByText("Draft couldn’t be saved.")).not.toBeInTheDocument();
 	});
 
 	it("lets only the newest daemon session incarnation own restored drafts", async () => {

@@ -23,7 +23,7 @@ import { iconSize, press, space, type } from "./tokens";
 import { userFacingError } from "./connectionError";
 import { reviewRouteForSession } from "./reviewView";
 
-type ReadOnlyWorkerProps = { session: DashboardSession; source: SourceRef; projectName?: string; nowBucket?: number };
+type ReadOnlyWorkerProps = { session: DashboardSession; source: SourceRef; rowKey?: string; projectName?: string; nowBucket?: number };
 type WorkerListRowProps =
 	| (ReadOnlyWorkerProps & { interactionMode: "read-only" })
 	| (ReadOnlyWorkerProps & { interactionMode: "open-only" })
@@ -102,6 +102,7 @@ function PassiveWorkerListRow({ session, source, projectName, onPress }: ReadOnl
 const InteractiveWorkerListRow = memo(function InteractiveWorkerListRow({
 	session,
 	source,
+	rowKey,
 	projectName,
 	isRenaming,
 	activeSwipeId,
@@ -118,6 +119,7 @@ const InteractiveWorkerListRow = memo(function InteractiveWorkerListRow({
 }: {
 	session: DashboardSession;
 	source: SourceRef;
+	rowKey?: string;
 	projectName?: string;
 	isRenaming: boolean;
 	activeSwipeId?: string;
@@ -211,7 +213,7 @@ const InteractiveWorkerListRow = memo(function InteractiveWorkerListRow({
 		});
 	};
 
-	const reviewRoute = reviewRouteForSession(session);
+	const reviewRoute = reviewRouteForSession(session, source.id);
 	const terminated = session.isTerminated === true || session.status === "terminated";
 	const contextActions = workerContextActions({
 		pinned: Boolean(session.isPinned),
@@ -250,7 +252,7 @@ const InteractiveWorkerListRow = memo(function InteractiveWorkerListRow({
 
 	return (
 		<WorkerRowInteraction
-			sessionId={resourceKey(source, session.id)}
+			sessionId={rowKey ?? resourceKey(source, session.id)}
 			enabled={!isRenaming}
 			activeSwipeId={activeSwipeId}
 			rightActions={renderRightActions()}
@@ -311,6 +313,7 @@ const InteractiveWorkerListRow = memo(function InteractiveWorkerListRow({
 	 */
 	(prev, next) =>
 		prev.nowBucket === next.nowBucket &&
+		prev.rowKey === next.rowKey &&
 		prev.projectName === next.projectName &&
 		prev.source.kind === next.source.kind && prev.source.id === next.source.id &&
 		prev.isRenaming === next.isRenaming &&

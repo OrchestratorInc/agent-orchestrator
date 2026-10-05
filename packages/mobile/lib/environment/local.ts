@@ -37,7 +37,7 @@ export function createLocalSessionSource(cfg: ServerConfig): SessionSource {
 		getConversationPage: (id, beforeSequence) => getConversationPage(cfg, id, beforeSequence),
 		sendMessage: (id, input) => sendConversationMessage(cfg, id, input),
 		cancelTurn: (id, turnId) => cancelQueuedConversationTurn(cfg, id, turnId),
-		subscribeEvents: (id, listener) => subscribeConversationEvents(id, listener),
+		subscribeEvents: (id, listener) => subscribeConversationEvents(cfg, id, listener),
 		// A local session never reports the cloud lifecycle stage that makes
 		// `isResumable` true, so nothing in the UI should ever call this for a
 		// local session. Throwing rather than silently no-opping surfaces a

@@ -21,7 +21,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/interfacereconcile"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/notification"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/prstatus"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/reconcile"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	coderprovider "github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/coder"
@@ -30,7 +29,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandboxresolve"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
-	"github.com/google/uuid"
 )
 
 // readSSHPubKeys loads the operator SSH keys authorized on every sandbox. They
@@ -97,6 +95,7 @@ func provisioningDefaults(cfg config.Config) sandbox.ProvisioningDefaults {
 func newSandboxReconciler(
 	cfg config.Config,
 	store *postgres.Store,
+	providerCipher *secrets.Cipher,
 	logger *slog.Logger,
 ) (*reconcile.Reconciler, error) {
 	// Build every provider this control plane offers, not just the default, so a
@@ -163,7 +162,7 @@ func newSandboxReconciler(
 			coderProvider = provider
 		}
 	}
-	return reconcile.New(store, sandboxresolve.New(nodeOpsProvider, dockerProvider, coderProvider), reconcile.Options{
+	return reconcile.New(store, sandboxresolve.New(nodeOpsProvider, dockerProvider, coderProvider, store, providerCipher), reconcile.Options{
 		PublicURL:              cfg.PublicURL,
 		TerminalStreamEnabled:  cfg.TerminalStreamEnabled,
 		WorkerBinary:           workerBinary,
@@ -342,7 +341,7 @@ func run(logger *slog.Logger) error {
 			githubapp.NewRESTClient("", nil), store,
 		)
 	}
-	reconciler, err := newSandboxReconciler(cfg, store, logger)
+	reconciler, err := newSandboxReconciler(cfg, store, providerCipher, logger)
 	if err != nil {
 		return err
 	}
@@ -355,17 +354,6 @@ func run(logger *slog.Logger) error {
 			Interval:      cfg.IdlePauseInterval,
 			IdleThreshold: cfg.IdlePauseThreshold,
 			Logger:        logger,
-		})
-	}
-	// The scanner only has anything to refresh where GitHub is configured to
-	// resolve an installation for.
-	var prStatusScanner *prstatus.Scanner
-	if githubService != nil {
-		prStatusScanner = prstatus.New(store, githubService, prstatus.Options{
-			Interval:     cfg.PRStatusPollInterval,
-			WorkerID:     "pr-fallback-" + uuid.NewString(),
-			SilenceGrace: cfg.PRWebhookSilenceGrace,
-			Logger:       logger,
 		})
 	}
 	// Worker tokens are only issued where sandboxes are provisioned. Leaving
@@ -511,18 +499,6 @@ func run(logger *slog.Logger) error {
 			logger.Error("interface-transition coordinator stopped", "error", err)
 		}
 	}()
-
-	if prStatusScanner != nil {
-		go func() {
-			logger.Info("pull request fallback scanner started",
-				"interval", cfg.PRStatusPollInterval,
-				"silence_grace", cfg.PRWebhookSilenceGrace,
-			)
-			if err := prStatusScanner.Run(ctx); err != nil {
-				logger.Error("pull request fallback scanner stopped", "error", err)
-			}
-		}()
-	}
 
 	select {
 	case <-ctx.Done():

@@ -7,7 +7,11 @@ vi.mock("../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: t
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ status: mocks.status }) }));
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: undefined }), cloudOrgQueryKey: ["cloud-org"] }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({ cloudProjectsQueryKey: ["cloud-projects"], cloudSessionsQueryKey: ["cloud-sessions"] }));
-vi.mock("../hooks/useProviderConnections", () => ({ useProviderConnections: () => ({ isSuccess: false }), hasValidAgentConnection: () => false }));
+vi.mock("../hooks/useProviderConnections", () => ({
+	useProviderConnections: () => ({ isSuccess: false }),
+	hasValidAgentConnection: () => false,
+	providerConnectionsQueryKey: ["provider-connections"],
+}));
 vi.mock("../stores/credential-dialog-store", () => ({ useCredentialDialogStore: () => vi.fn() }));
 vi.mock("../hooks/useCloudProviderPreference", () => ({ useCloudProviderPreference: (options: unknown) => mocks.preference(options) }));
 vi.mock("./CloudCredentialDialog", () => ({ CloudCredentialDialog: () => null }));

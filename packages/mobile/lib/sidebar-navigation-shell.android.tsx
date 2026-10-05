@@ -63,14 +63,15 @@ let retainedDrawerOpen = false;
 export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { scopedBoard, connection } = useApp();
+	const { scopedBoard, hostStates } = useApp();
 	const { sessions, projects, sources } = scopedBoard;
-	const spawnControls = sources.local.available || sources.cloud.available;
+	const sourceStatuses = Object.values(sources);
+	const spawnControls = sourceStatuses.some((status) => status.available);
 	const showSidebarSessions = true;
-	// See the iOS shell: Local health is daemon connectivity; Cloud health is the
-	// active board refresh result, because Cloud deliberately has no Local poll.
-	const sessionsStaleLabel = [sources.local.error && "LOCAL OFFLINE", sources.cloud.error && "CLOUD REFRESH FAILED"].filter(Boolean).join(" · ");
-	const lampStatus = connection === "open" || sources.cloud.available ? "open" : connection;
+	const sessionsStaleLabel = sourceStatuses.some((status) => status.error) ? "REFRESH FAILED" : "";
+	const sessionsStale = Boolean(sessionsStaleLabel);
+	const lampStatus = sourceStatuses.some((status) => status.available) ? "open"
+		: hostStates.some((host) => host.connection === "connecting") ? "connecting" : "closed";
 	const router = useRouter();
 	const pathname = usePathname();
 	const insets = useSafeAreaInsets();
@@ -95,11 +96,16 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	lastPrimaryDestination.current = selectedPrimaryDestination;
 	const drawerWidth = Math.min(width * 0.76, 320);
 	const liveSessions = useMemo(() => scopedSidebarSessions(sessions), [sessions]);
-	const sessionListPresentation = sidebarSessionListPresentation(null, !sources.local.resolved || !sources.cloud.resolved || sources.local.loading || sources.cloud.loading, liveSessions.length);
+	const sessionListPresentation = sidebarSessionListPresentation(null, sourceStatuses.some((status) => !status.resolved || status.loading), liveSessions.length);
 	const projectNames = useMemo(
 		() => new Map(projects.map((entry) => [resourceKey(entry.source, entry.value.id), entry.value.name])),
 		[projects],
 	);
+	const projectLabel = (entry: Scoped<DashboardSession>) => {
+		const name = projectNames.get(resourceKey(entry.source, entry.value.projectId)) ?? entry.value.projectId;
+		const host = entry.source.kind === "local" ? hostStates.find((item) => item.hostId === entry.source.id) : undefined;
+		return hostStates.length > 1 && host ? `${name} · ${host.name}${host.connection === "closed" ? " (offline)" : ""}` : name;
+	};
 
 	const animateSidebar = useCallback((nextOpen: boolean) => {
 		retainedDrawerOpen = nextOpen;
@@ -229,9 +235,17 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 		const route = sidebarSessionRoute(entry);
 		if (!route) return;
 		haptics.select();
-		pendingClosePath.current = `/session/${entry.value.id}`;
+		const targetPath = `/session/${entry.value.id}`;
+		// Two hosts can have the same session ID. Switching between them changes
+		// only the hostId param, so usePathname will not fire the settling effect.
+		if (sidebarNavigationSettled(targetPath, pathname)) {
+			pendingClosePath.current = null;
+			closeSidebar();
+		} else {
+			pendingClosePath.current = targetPath;
+		}
 		router.push(route);
-	}, [router]);
+	}, [closeSidebar, pathname, router]);
 
 	const spawnWorker = useCallback(() => {
 		if (!spawnControls) return;
@@ -304,14 +318,14 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 			<FlatList
 				data={liveSessions}
 				keyExtractor={(entry) => resourceKey(entry.source, entry.value.id)}
-				style={styles.sessionList}
+				style={[styles.sessionList, sessionsStale && styles.sessionListStale]}
 				contentContainerStyle={liveSessions.length === 0 ? styles.emptySessionList : styles.sessionListContent}
 				showsVerticalScrollIndicator={false}
 				renderItem={({ item }) => (
 					<SessionRow
 						session={item.value}
 						sourceLabel={item.source.kind === "cloud" ? "Cloud" : "Local"}
-						projectName={projectNames.get(resourceKey(item.source, item.value.projectId)) ?? item.value.projectId}
+						projectName={projectLabel(item)}
 						onPress={() => selectSession(item)}
 					/>
 				)}

@@ -32,8 +32,12 @@ export default function FleetScreen() {
 
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { scopedBoard, refreshAll, notificationsUnread } = useApp();
+	const { scopedBoard, refreshAll, notificationsUnread, hostStates } = useApp();
 	const { sessions, projects, sources } = scopedBoard;
+	const sourceStatuses = Object.entries(sources);
+	const unreadCount = hostStates.length > 1
+		? hostStates.reduce((count, host) => count + host.notificationsUnread, 0)
+		: notificationsUnread;
 	const [refreshing, setRefreshing] = useState(false);
 	const [query, setQuery] = useState("");
 	const [searchRequested, setSearchRequested] = useState(false);
@@ -91,8 +95,8 @@ export default function FleetScreen() {
 	const onRefresh = useCallback(async () => {
 		haptics.tap();
 		setRefreshing(true);
-		await refreshAll();
-		setRefreshing(false);
+		try { await refreshAll(); }
+		finally { setRefreshing(false); }
 	}, [refreshAll]);
 
 	const keyboardLayout = workerDockKeyboardLayout(keyboardHeight, insets.bottom, keyboardVisible);
@@ -104,19 +108,19 @@ export default function FleetScreen() {
 		transform: [{ translateY: -keyboardAnimation.progress.value * workerDockLift(keyboardHeight, insets.bottom) }],
 	}));
 
-	const initialLoading = !sources.local.resolved || !sources.cloud.resolved || sources.local.loading || sources.cloud.loading;
-	const anyAvailable = sources.local.available || sources.cloud.available;
+	const initialLoading = sourceStatuses.some(([, status]) => !status.resolved || status.loading);
+	const anyAvailable = sourceStatuses.some(([, status]) => status.available);
 
 	return (
 		<View style={[styles.screen, { paddingBottom: keyboardLayout.rootPaddingBottom }]}>
 			<View style={{ height: insets.top }} />
 			<ScreenHeader
 				title="Workers"
-				right={sources.local.available ?
+				right={hostStates.some((host) => host.connection === "open") ?
 					<HeaderIconButton
 						icon="bell"
 						label="Notifications"
-						badge={notificationsUnread}
+						badge={unreadCount}
 						onPress={() => router.navigate("/notifications")}
 					/>
 					: null
@@ -124,8 +128,9 @@ export default function FleetScreen() {
 			/>
 			{/* Above the list rather than inside ListEmptyComponent: the case this
 			    exists for is a populated board whose poll has died. */}
-			<StaleBanner sourceLabel="Local" sourceStatus={sources.local} onRetry={onRefresh} />
-			<StaleBanner sourceLabel="Cloud" sourceStatus={sources.cloud} onRetry={onRefresh} />
+			{sourceStatuses.map(([key, status]) => (
+				<StaleBanner key={key} sourceLabel={key.startsWith('["cloud"') ? "Cloud" : "Local"} sourceStatus={status} onRetry={onRefresh} />
+			))}
 
 			{initialLoading && sessions.length === 0 ? (
 				<View style={styles.center}>

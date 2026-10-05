@@ -20,7 +20,7 @@ import { captureRendererEvent } from "../lib/telemetry";
 import { LOCAL_ECHO_ENABLED, withLineBufferedLocalInput } from "../lib/terminal-local-echo";
 import { createTerminalMux, muxUrlFromApiBase, type TerminalMux } from "../lib/terminal-mux";
 import { sessionIsActive, type WorkspaceSession } from "../types/workspace";
-import { workspaceQueryKey } from "./useWorkspaceQuery";
+import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 /**
  * The slice of xterm's Terminal the attachment needs. Structural, so tests can
@@ -32,6 +32,13 @@ export type TerminalWriteSource = "live" | "replay";
 export type AttachableTerminal = {
 	cols: number;
 	rows: number;
+	/**
+	 * False until cols/rows come from measuring the terminal's laid-out slot.
+	 * Before that they are xterm's constructor default, which must never be
+	 * claimed as the PTY's size: a shell started at it lays out its first prompt
+	 * for the wrong width.
+	 */
+	hasMeasuredGrid: boolean;
 	/**
 	 * `done` fires once this exact chunk has been parsed into the buffer (xterm's
 	 * own write callback). The attachment uses it to reveal the pane at the
@@ -48,6 +55,12 @@ export type AttachableTerminal = {
 	 * without exposing an intermediate row.
 	 */
 	prepareForActivation: () => Promise<void>;
+	/**
+	 * Restore the caret after the owner re-activates a retained terminal (tab
+	 * switch back to this pane). Must stay guarded: it may not steal focus from
+	 * dialogs or other controls that legitimately hold it.
+	 */
+	requestActivationFocus: () => void;
 	/** Tell Cursor Agent the live light/dark scheme (private 997 notification). */
 	notifyCursorColorScheme: () => void;
 	/** Send an explicit UI action through the same guarded path as user input. */
@@ -115,10 +128,6 @@ const CLOUD_CONNECT_MAX_FAILURES = 8;
 // handles as onConnectionChange("closed") -> scheduleReattach. A client-side
 // cloud open timeout only manufactured reconnect storms (the 3s/30s band-aids).
 const OPEN_TIMEOUT_MS = 3_000;
-// Trailing debounce on grid changes: a pane drag emits a burst of intermediate
-// sizes; the attached program should get one SIGWINCH when the drag settles,
-// not dozens (yyork's terminal-panel does the same at its socket layer).
-const RESIZE_DEBOUNCE_MS = 100;
 // Initial-replay gate. On attach the runtime replays the pane's state, and the
 // daemon pumps it in 32KB reads (attachment.go copyOut) — so the renderer gets
 // N WebSocket frames, N `write()` calls, and N separate event-loop turns. xterm
@@ -202,7 +211,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		disposers: [] as Array<() => void>,
 		retryTimer: null as ReturnType<typeof setTimeout> | null,
 		openTimer: null as ReturnType<typeof setTimeout> | null,
-		resizeTimer: null as ReturnType<typeof setTimeout> | null,
 		// Last positive grid claimed by this attachment. This is deliberately
 		// separate from xterm's local grid: hidden fits must not resize the PTY, and
 		// repeated identical visible fits must not manufacture another SIGWINCH.
@@ -250,7 +258,7 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		// news for the session board. Refetching every workspace on `exit` would
 		// be pure churn — the shell terminal list owns that pane's fate instead.
 		if (optionsRef.current.shellTerminalHandleId) return;
-		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+		void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(sessionRef.current?.hostId) });
 	}, [queryClient]);
 
 	const clearReplayTimers = useCallback(() => {
@@ -305,10 +313,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		if (r.openTimer) {
 			clearTimeout(r.openTimer);
 			r.openTimer = null;
-		}
-		if (r.resizeTimer) {
-			clearTimeout(r.resizeTimer);
-			r.resizeTimer = null;
 		}
 		r.inputReady = false;
 		if (r.mux && r.handle) {
@@ -417,6 +421,52 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				? withLineBufferedLocalInput(baseMux, {})
 				: baseMux;
 		r.mux = mux;
+
+		// Live output: one xterm.write in flight at a time. A burst arrives as many
+		// WebSocket messages, and writing each separately costs a parse/render
+		// cycle per message. Output arriving while xterm parses the previous write
+		// is joined and written as one batch when that write completes, so batches
+		// grow with load while an isolated chunk (a keystroke's echo) is written
+		// immediately. The backlog lives here, bounded by the daemon's
+		// back-pressure, rather than in xterm's own write queue.
+		let liveChunks: Uint8Array[] = [];
+		let liveBytes = 0;
+		let liveWriteInFlight = false;
+		const takeLiveBatch = (): Uint8Array | null => {
+			if (liveChunks.length === 0) return null;
+			let batch = liveChunks[0]!;
+			if (liveChunks.length > 1) {
+				batch = new Uint8Array(liveBytes);
+				let offset = 0;
+				for (const chunk of liveChunks) {
+					batch.set(chunk, offset);
+					offset += chunk.length;
+				}
+			}
+			liveChunks = [];
+			liveBytes = 0;
+			return batch;
+		};
+		const writeLiveBatch = () => {
+			const batch = takeLiveBatch();
+			if (!batch) return;
+			liveWriteInFlight = true;
+			terminal.write(batch, () => {
+				liveWriteInFlight = false;
+				if (isCurrentAttachment(generation, handle, mux)) writeLiveBatch();
+			});
+		};
+		const writeLiveOutput = (bytes: Uint8Array) => {
+			liveChunks.push(bytes);
+			liveBytes += bytes.length;
+			if (!liveWriteInFlight) writeLiveBatch();
+		};
+		// Hand any held output to xterm now, in order, ahead of a teardown or a
+		// write that must follow it.
+		const drainLiveOutput = () => {
+			const batch = takeLiveBatch();
+			if (batch) terminal.write(batch);
+		};
 
 		let pendingReplayWrites = 0;
 		let replayRevealDeadlineReached = false;
@@ -634,12 +684,14 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 						clearTimeout(r.replayTailQuietTimer);
 						r.replayTailQuietTimer = null;
 					}
+					drainLiveOutput();
 					postReplayWriteQueue.push(bytes);
 					drainPostReplayWrites();
 					return;
 				}
-				terminal.write(bytes);
+				writeLiveOutput(bytes);
 			}),
+			drainLiveOutput,
 			mux.onOpened(handle, () => {
 				if (!isCurrentAttachment(generation, handle, mux)) return;
 				clearOpenTimer(generation);
@@ -762,23 +814,17 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			mux.sendInput(handle, data);
 			return true;
 		});
-		// xterm only fires onResize when the grid actually changed; the debounce
-		// additionally collapses a drag/fullscreen/layout burst into one PTY
-		// resize. The last published grid is checked again at send time because a
-		// retained activation can report the same final grid through several paths.
+		// xterm only fires onResize when the grid actually changed. Publish that
+		// grid immediately so a separator drag resizes the program while the
+		// handle is still moving. The last published grid is checked because a
+		// retained activation can report the same grid through several paths.
 		const resize = terminal.onResize(({ cols, rows }) => {
 			if (!isCurrentAttachment(generation, handle, mux)) return;
 			if (optionsRef.current.isVisible === false) return;
-			if (r.resizeTimer) clearTimeout(r.resizeTimer);
-			r.resizeTimer = setTimeout(() => {
-				r.resizeTimer = null;
-				if (!isCurrentAttachment(generation, handle, mux)) return;
-				if (optionsRef.current.isVisible === false) return;
-				const published = r.lastPublishedGrid;
-				if (published?.cols === cols && published.rows === rows) return;
-				mux.resize(handle, cols, rows);
-				r.lastPublishedGrid = { cols, rows };
-			}, RESIZE_DEBOUNCE_MS);
+			const published = r.lastPublishedGrid;
+			if (published?.cols === cols && published.rows === rows) return;
+			mux.resize(handle, cols, rows);
+			r.lastPublishedGrid = { cols, rows };
 		});
 		r.disposers.push(
 			() => input.dispose(),
@@ -789,7 +835,11 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		// wait for `opened`: the daemon fires onOpen from setPTY and only then
 		// starts copyOut (attachment.go), so `attached` arrives before the first
 		// replay byte and would uncover a pane that has not drawn yet.
-		const coverInitialReplay = optionsRef.current.coverInitialReplay !== false;
+		// A handle this renderer just created has no history to replay: its first
+		// bytes are the program starting up (a new shell's prompt). Covering them
+		// only holds a blank pane through the quiet window and reveal fit, so they
+		// stream straight into xterm instead.
+		const coverInitialReplay = optionsRef.current.coverInitialReplay !== false && initialWriteSource !== "live";
 		r.replayBuffering = coverInitialReplay;
 		r.replayChunks = [];
 		r.replayBytes = 0;
@@ -811,10 +861,12 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		// stream, but its stale off-screen grid must not resize the shared PTY.
 		// Zero dimensions mean "attach without claiming a size"; the first
 		// visible fit emits the authoritative grid after activation.
-		const visible = optionsRef.current.isVisible !== false;
-		r.needsVisibleSizeSync = !visible;
-		const openCols = visible ? terminal.cols : 0;
-		const openRows = visible ? terminal.rows : 0;
+		// The same applies before the terminal has measured its slot: the first
+		// measurement publishes the grid instead (see onVisibleSize).
+		const claimsSize = optionsRef.current.isVisible !== false && terminal.hasMeasuredGrid;
+		r.needsVisibleSizeSync = !claimsSize;
+		const openCols = claimsSize ? terminal.cols : 0;
+		const openRows = claimsSize ? terminal.rows : 0;
 		mux.open(handle, openCols, openRows);
 		r.lastPublishedGrid =
 			openCols > 0 && openRows > 0 ? { cols: openCols, rows: openRows } : null;
@@ -921,10 +973,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		) {
 			return;
 		}
-		if (r.resizeTimer) {
-			clearTimeout(r.resizeTimer);
-			r.resizeTimer = null;
-		}
 		r.needsVisibleSizeSync = false;
 		const published = r.lastPublishedGrid;
 		if (published?.cols === cols && published.rows === rows) return;
@@ -944,19 +992,14 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 	}, [daemonReady, connect]);
 
 	// A parked cache entry keeps parsing output, but it must be inert as a PTY
-	// client. Cancel resize work queued while it was visible and remember that a
-	// hidden local refit cannot be forwarded. useLayoutEffect runs before the
-	// cache's activation preparation, so the first visible frame always publishes
-	// its final positive grid even when xterm's local size no longer changes.
+	// client. A hidden local refit cannot be forwarded. useLayoutEffect runs
+	// before the cache's activation preparation, so the first visible frame
+	// always publishes its final positive grid even when xterm's local size no
+	// longer changes.
 	const isVisible = options.isVisible !== false;
 	useLayoutEffect(() => {
 		if (isVisible) return;
-		const r = runtime.current;
-		r.needsVisibleSizeSync = true;
-		if (r.resizeTimer) {
-			clearTimeout(r.resizeTimer);
-			r.resizeTimer = null;
-		}
+		runtime.current.needsVisibleSizeSync = true;
 	}, [isVisible]);
 
 	useEffect(() => {

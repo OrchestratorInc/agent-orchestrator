@@ -18,28 +18,27 @@ export type SourceStatus = Readonly<{
 }>;
 
 export type SourceBoardInput = Readonly<{
+	source: SourceRef;
 	status: SourceStatus;
-	snapshot?: Readonly<{ source: SourceRef; board: SessionSourceBoard }>;
+	snapshot?: Readonly<{ board: SessionSourceBoard }>;
 }>;
 
 export type ScopedBoard = Readonly<{
 	projects: Scoped<ProjectInfo>[];
 	sessions: Scoped<DashboardSession>[];
 	orchestrators: Scoped<OrchestratorLink>[];
-	sources: { local: SourceStatus; cloud: SourceStatus };
+	sources: Record<string, SourceStatus>;
 }>;
 
-export function composeBoards(input: { local: SourceBoardInput; cloud: SourceBoardInput }): ScopedBoard {
-	const slices = [input.local.snapshot, input.cloud.snapshot].filter(
-		(slice): slice is NonNullable<SourceBoardInput["snapshot"]> => slice !== undefined,
-	);
+export function composeBoards(inputs: readonly SourceBoardInput[]): ScopedBoard {
+	const slices = inputs.flatMap(({ source, snapshot }) => snapshot ? [{ source, board: snapshot.board }] : []);
 	const collect = <T,>(pick: (board: SessionSourceBoard) => T[]): Scoped<T>[] =>
 		slices.flatMap((slice) => pick(slice.board).map((value) => ({ source: slice.source, value })));
 	return {
 		projects: collect((board) => board.projects),
 		sessions: collect((board) => board.sessions),
 		orchestrators: collect((board) => board.orchestrators),
-		sources: { local: input.local.status, cloud: input.cloud.status },
+		sources: Object.fromEntries(inputs.map(({ source, status }) => [sourceKey(source), status])),
 	};
 }
 

@@ -3,7 +3,6 @@ import { useRouter } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { Alert, Platform } from "react-native";
 import { ApiError } from "./api";
-import { isConfigured, machineIdentity } from "./config";
 import { resourceKey, type Scoped, type SourceRef } from "./environment/scopedBoard";
 import { chatErrorCopy, isChatPreflightError } from "./chatError";
 import { useCloudAuth } from "./cloud/authStore";
@@ -23,7 +22,7 @@ import { useApp } from "./store";
  */
 export function useOrchestratorLauncher() {
 	const router = useRouter();
-	const { environment, config, refreshSource, launchConductorOn } = useApp();
+	const { environment, config, configForHost, refreshSource, launchConductorOn } = useApp();
 	const { client, orgId } = useCloudAuth();
 	const [busyProjects, setBusyProjects] = useState<ReadonlySet<string>>(() => new Set());
 	// A ref as well as state: state is a render behind, and a fast double tap must
@@ -42,14 +41,14 @@ export function useOrchestratorLauncher() {
 
 	const scopedRow = useCallback((row: Scoped<OrchestratorProjectRow> | OrchestratorProjectRow): Scoped<OrchestratorProjectRow> | null => {
 		if ("source" in row) return row;
-		// Compatibility for existing Project cards until the combined Projects view
-		// passes explicit source entries in Task 5.
+		const rowHostId = "hostId" in row.project && typeof row.project.hostId === "string"
+			? row.project.hostId : config?.hostId;
 		const source: SourceRef | null = environment === "cloud" && orgId
 			? { kind: "cloud", id: orgId }
-			: environment === "local" && config && isConfigured(config)
-				? { kind: "local", id: machineIdentity(config) } : null;
+			: rowHostId && configForHost(rowHostId)
+				? { kind: "local", id: rowHostId } : null;
 		return source ? { source, value: row } : null;
-	}, [environment, orgId, config]);
+	}, [environment, orgId, config?.hostId, configForHost]);
 
 	const openSession = useCallback((input: Scoped<OrchestratorProjectRow> | OrchestratorProjectRow, id: string, newlyStarted = false) => {
 		const row = scopedRow(input);
@@ -96,9 +95,10 @@ export function useOrchestratorLauncher() {
 				return;
 			}
 			const httpStatus = cause instanceof ApiError ? cause.status : undefined;
+			const target = configForHost(row.source.id);
 			const copy = describeConnectionFailure(classifyConnectionFailure(httpStatus), {
-				host: config?.host ?? "",
-				port: config?.httpPort ?? "",
+				host: target?.host ?? "",
+				port: target?.httpPort ?? "",
 				platform: Platform.OS,
 			});
 			Alert.alert(copy.title, copy.message);
@@ -106,7 +106,7 @@ export function useOrchestratorLauncher() {
 			launching.current.delete(key);
 			setBusy(key, false);
 		}
-	}, [client, config?.host, config?.httpPort, launchConductorOn, openSession, orgId, refreshSource, setBusy]);
+	}, [client, configForHost, launchConductorOn, openSession, orgId, refreshSource, setBusy]);
 
 	/** Opens a running orchestrator, or starts or resumes one that is not. */
 	const openOrchestrator = useCallback((input: Scoped<OrchestratorProjectRow> | OrchestratorProjectRow) => {

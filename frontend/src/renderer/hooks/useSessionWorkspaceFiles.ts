@@ -2,7 +2,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient, UseQueryOptions } from "@tanstack/react-query";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiErrorMessage } from "../lib/api-client";
+import { clientForSessionHost } from "../lib/host-clients";
+import { sessionUiKey } from "../lib/hosts";
+import { WORKSPACE_REVIEW_BATCH_SIZE } from "../lib/workspace-review";
 import {
 	getWorkspaceFileConnectionState,
 	subscribeWorkspaceFileChanges,
@@ -18,6 +21,7 @@ export type WorkspaceFileSummary = Omit<components["schemas"]["WorkspaceFileSumm
 };
 export type WorkspaceFileSections = components["schemas"]["WorkspaceFileSections"];
 export type WorkspaceCommitSummary = components["schemas"]["WorkspaceCommitSummary"];
+export type WorkspaceHistoryResponse = components["schemas"]["WorkspaceHistoryResponse"];
 export type WorkspaceSummary = components["schemas"]["WorkspaceSummary"];
 export type WorkspaceFilesResponse = Omit<components["schemas"]["ListWorkspaceFilesResponse"], "files" | "sections" | "workspaceVersion" | "degraded" | "degradedCode"> & {
 	compareMode?: WorkspaceCompareMode;
@@ -31,6 +35,8 @@ export type WorkspaceFilesResponse = Omit<components["schemas"]["ListWorkspaceFi
 	workspaceVersion?: string;
 	degraded?: boolean;
 	degradedCode?: string;
+	stale?: boolean;
+	refreshing?: boolean;
 };
 export type WorkspaceFileDetail = Omit<components["schemas"]["WorkspaceFileResponse"], "editable" | "fileFingerprint" | "workspaceVersion"> & {
 	editable?: boolean;
@@ -45,15 +51,16 @@ export type WorkspaceFileRevision = components["schemas"]["WorkspaceFileRevision
 export type WorkspaceFileSearchResponse = components["schemas"]["WorkspaceFileSearchResponse"];
 export type FilesSource = { kind: "workspace" } | { kind: "pull_request"; number: number; url: string; label: string; snapshot?: string };
 
-export const sessionWorkspaceFilesQueryKey = (sessionId: string) => ["session-workspace-files", sessionId] as const;
+export const sessionWorkspaceFilesQueryKey = (sessionId: string, hostId?: string) =>
+	hostId ? ["session-workspace-files", hostId, sessionId] as const : ["session-workspace-files", sessionId] as const;
 const WORKSPACE_FILES_DEGRADED_REFETCH_MS = 30_000;
 
-async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: string): Promise<WorkspaceFilesResponse> {
-	const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/workspace/files", {
+async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: string, hostId?: string): Promise<WorkspaceFilesResponse> {
+	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/manifest", {
 		params: { path: { sessionId } },
 	});
 	if (error) throw new Error(apiErrorMessage(error, errorMessage));
-	const response = (data ?? {
+	const response = (data ? { ...data, commits: [] } : {
 		sessionId,
 		files: [],
 		truncated: false,
@@ -69,8 +76,20 @@ async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: strin
 	};
 }
 
-async function fetchSessionPRFiles(sessionId: string, number: number, sourceUrl: string, errorMessage: string): Promise<WorkspaceFilesResponse> {
-	const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/pr/{prNumber}/files", {
+async function fetchSessionWorkspaceHistory(sessionId: string, errorMessage: string, hostId?: string): Promise<WorkspaceHistoryResponse> {
+	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/history", {
+		params: { path: { sessionId } },
+	});
+	if (error) throw new Error(apiErrorMessage(error, errorMessage));
+	if (!data) throw new Error(errorMessage);
+	return {
+		...data,
+		commits: (data.commits ?? []).map((commit) => ({ ...commit, files: commit.files ?? [] })),
+	} as WorkspaceHistoryResponse;
+}
+
+async function fetchSessionPRFiles(sessionId: string, number: number, sourceUrl: string, errorMessage: string, hostId?: string): Promise<WorkspaceFilesResponse> {
+	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/pr/{prNumber}/files", {
 		params: { path: { sessionId, prNumber: number }, query: { sourceUrl } },
 	});
 	if (error) throw new Error(apiErrorMessage(error, errorMessage));
@@ -81,11 +100,12 @@ async function fetchSessionPRFiles(sessionId: string, number: number, sourceUrl:
 	} as WorkspaceFilesResponse;
 }
 
-export const sessionWorkspaceFileQueryKey = (sessionId: string, path: string, scope: WorkspaceDiffScope = "combined", commitSha?: string) =>
-	["session-workspace-file", sessionId, scope, commitSha ?? "", path] as const;
+export const sessionWorkspaceFileQueryKey = (sessionId: string, path: string, scope: WorkspaceDiffScope = "combined", commitSha?: string, hostId?: string) =>
+	hostId ? ["session-workspace-file", hostId, sessionId, scope, commitSha ?? "", path] as const
+		: ["session-workspace-file", sessionId, scope, commitSha ?? "", path] as const;
 
-async function fetchSessionWorkspaceFile(sessionId: string, path: string, scope: WorkspaceDiffScope, errorMessage: string, commitSha?: string): Promise<WorkspaceFileDetail> {
-	const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/workspace/file", {
+async function fetchSessionWorkspaceFile(sessionId: string, path: string, scope: WorkspaceDiffScope, errorMessage: string, commitSha?: string, hostId?: string): Promise<WorkspaceFileDetail> {
+	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/file", {
 		params: { path: { sessionId }, query: { path, section: scope === "combined" ? undefined : scope, commitSha } },
 	});
 	if (error) throw new Error(apiErrorMessage(error, errorMessage));
@@ -93,8 +113,8 @@ async function fetchSessionWorkspaceFile(sessionId: string, path: string, scope:
 	return data as WorkspaceFileDetail;
 }
 
-async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: string, path: string, previousPath: string, errorMessage: string, commitSha?: string): Promise<WorkspaceFileDetail> {
-	const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/pr/{prNumber}/file", {
+async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: string, path: string, previousPath: string, errorMessage: string, commitSha?: string, hostId?: string): Promise<WorkspaceFileDetail> {
+	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/pr/{prNumber}/file", {
 		params: { path: { sessionId, prNumber: number }, query: { path, previousPath, sourceUrl, commitSha } },
 	});
 	if (error) throw new Error(apiErrorMessage(error, errorMessage));
@@ -104,17 +124,17 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 
 // Shared so the diff view (expand-on-demand) and the plain read-only viewer
 // always resolve to the same cache entry for a given (session, path).
-export function sessionWorkspaceFileQueryOptions(sessionId: string, path: string, errorMessage = "Unable to load workspace file", scope: WorkspaceDiffScope = "combined", commitSha?: string) {
+export function sessionWorkspaceFileQueryOptions(sessionId: string, path: string, errorMessage = "Unable to load workspace file", scope: WorkspaceDiffScope = "combined", commitSha?: string, hostId?: string) {
 	return {
-		queryKey: sessionWorkspaceFileQueryKey(sessionId, path, scope, commitSha),
-		queryFn: () => fetchSessionWorkspaceFile(sessionId, path, scope, errorMessage, commitSha),
+		queryKey: sessionWorkspaceFileQueryKey(sessionId, path, scope, commitSha, hostId),
+		queryFn: () => fetchSessionWorkspaceFile(sessionId, path, scope, errorMessage, commitSha, hostId),
 	};
 }
 
-export function sessionSourceFileQueryOptions(sessionId: string, source: FilesSource, path: string, errorMessage = "Unable to load file", scope: WorkspaceDiffScope = "combined", commitSha?: string, previousPath = ""): UseQueryOptions<WorkspaceFileDetail> {
+export function sessionSourceFileQueryOptions(sessionId: string, source: FilesSource, path: string, errorMessage = "Unable to load file", scope: WorkspaceDiffScope = "combined", commitSha?: string, previousPath = "", hostId?: string): UseQueryOptions<WorkspaceFileDetail> {
 	return source.kind === "workspace"
-		? sessionWorkspaceFileQueryOptions(sessionId, path, errorMessage, scope, commitSha)
-		: { queryKey: ["session-source-file", sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path], queryFn: () => fetchSessionPRFile(sessionId, source.number, source.url, path, previousPath, errorMessage, commitSha) };
+		? sessionWorkspaceFileQueryOptions(sessionId, path, errorMessage, scope, commitSha, hostId)
+		: { queryKey: hostId ? ["session-source-file", hostId, sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path] : ["session-source-file", sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path], queryFn: () => fetchSessionPRFile(sessionId, source.number, source.url, path, previousPath, errorMessage, commitSha, hostId) };
 }
 
 export const sessionWorkspaceDiffsQueryKey = (
@@ -125,7 +145,9 @@ export const sessionWorkspaceDiffsQueryKey = (
 	ignoreWhitespace: boolean,
 	workspaceVersion?: string,
 	commitSha?: string,
-) => ["session-workspace-diffs", sessionId, scope, commitSha ?? "", paths, contextLines, ignoreWhitespace, workspaceVersion ?? ""] as const;
+	hostId?: string,
+) => hostId ? ["session-workspace-diffs", hostId, sessionId, scope, commitSha ?? "", paths, contextLines, ignoreWhitespace, workspaceVersion ?? ""] as const
+	: ["session-workspace-diffs", sessionId, scope, commitSha ?? "", paths, contextLines, ignoreWhitespace, workspaceVersion ?? ""] as const;
 
 export function sessionWorkspaceDiffsQueryOptions({
 	contextLines = 3,
@@ -136,6 +158,7 @@ export function sessionWorkspaceDiffsQueryOptions({
 	sessionId,
 	workspaceVersion,
 	commitSha,
+	hostId,
 }: {
 	contextLines?: number;
 	errorMessage?: string;
@@ -145,11 +168,12 @@ export function sessionWorkspaceDiffsQueryOptions({
 	sessionId: string;
 	workspaceVersion?: string;
 	commitSha?: string;
+	hostId?: string;
 }) {
 	return {
-		queryKey: sessionWorkspaceDiffsQueryKey(sessionId, scope, paths, contextLines, ignoreWhitespace, workspaceVersion, commitSha),
+		queryKey: sessionWorkspaceDiffsQueryKey(sessionId, scope, paths, contextLines, ignoreWhitespace, workspaceVersion, commitSha, hostId),
 		queryFn: async (): Promise<WorkspaceDiffsResponse> => {
-			const { data, error } = await apiClient.POST("/api/v1/sessions/{sessionId}/workspace/diffs", {
+			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/workspace/diffs", {
 				params: { path: { sessionId } },
 				body: { commitSha, contextLines, ignoreWhitespace, paths: [...paths], scope, workspaceVersion },
 			});
@@ -169,6 +193,7 @@ export async function fetchWorkspaceFileRevision({
 	side,
 	workspaceVersion,
 	commitSha,
+	hostId,
 }: {
 	errorMessage?: string;
 	expectedRevision?: string;
@@ -178,8 +203,9 @@ export async function fetchWorkspaceFileRevision({
 	side: "before" | "after";
 	workspaceVersion?: string;
 	commitSha?: string;
+	hostId?: string;
 }): Promise<WorkspaceFileRevision> {
-	const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/workspace/file/revision", {
+	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/file/revision", {
 		params: { path: { sessionId }, query: { path, scope, side, workspaceVersion, expectedRevision, commitSha } },
 	});
 	if (error) throw new Error(apiErrorMessage(error, errorMessage));
@@ -187,8 +213,8 @@ export async function fetchWorkspaceFileRevision({
 	return data;
 }
 
-export async function fetchPRFileRevision(sessionId: string, number: number, sourceUrl: string, path: string, side: "before" | "after", commitSha?: string): Promise<WorkspaceFileRevision> {
-	const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/pr/{prNumber}/file/revision", {
+export async function fetchPRFileRevision(sessionId: string, number: number, sourceUrl: string, path: string, side: "before" | "after", commitSha?: string, hostId?: string): Promise<WorkspaceFileRevision> {
+	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/pr/{prNumber}/file/revision", {
 		params: { path: { sessionId, prNumber: number }, query: { path, side, sourceUrl, commitSha } },
 	});
 	if (error || !data) throw new Error(apiErrorMessage(error, "Unable to load pull request file revision"));
@@ -202,6 +228,7 @@ export function sessionWorkspaceFileRevisionQueryOptions({
 	side,
 	workspaceVersion,
 	commitSha,
+	hostId,
 }: {
 	path: string;
 	scope: WorkspaceDiffScope;
@@ -209,10 +236,12 @@ export function sessionWorkspaceFileRevisionQueryOptions({
 	side: "before" | "after";
 	workspaceVersion?: string;
 	commitSha?: string;
+	hostId?: string;
 }) {
 	return {
-		queryKey: ["session-workspace-file-revision", sessionId, scope, commitSha ?? "", side, path, workspaceVersion ?? ""] as const,
-		queryFn: () => fetchWorkspaceFileRevision({ sessionId, path, scope, side, workspaceVersion, commitSha }),
+		queryKey: hostId ? ["session-workspace-file-revision", hostId, sessionId, scope, commitSha ?? "", side, path, workspaceVersion ?? ""] as const
+			: ["session-workspace-file-revision", sessionId, scope, commitSha ?? "", side, path, workspaceVersion ?? ""] as const,
+		queryFn: () => fetchWorkspaceFileRevision({ sessionId, path, scope, side, workspaceVersion, commitSha, hostId }),
 	};
 }
 
@@ -224,6 +253,7 @@ export function sessionSourceFileRevisionQueryOptions({
 	source,
 	workspaceVersion,
 	commitSha,
+	hostId,
 }: {
 	path: string;
 	scope: WorkspaceDiffScope;
@@ -232,12 +262,14 @@ export function sessionSourceFileRevisionQueryOptions({
 	source: FilesSource;
 	workspaceVersion?: string;
 	commitSha?: string;
+	hostId?: string;
 }): UseQueryOptions<WorkspaceFileRevision> {
 	return source.kind === "workspace"
-		? sessionWorkspaceFileRevisionQueryOptions({ path, scope, sessionId, side, workspaceVersion, commitSha })
+		? sessionWorkspaceFileRevisionQueryOptions({ path, scope, sessionId, side, workspaceVersion, commitSha, hostId })
 		: {
-			queryKey: ["session-source-file-revision", sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", side, path] as const,
-			queryFn: () => fetchPRFileRevision(sessionId, source.number, source.url, path, side, commitSha),
+			queryKey: hostId ? ["session-source-file-revision", hostId, sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", side, path] as const
+				: ["session-source-file-revision", sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", side, path] as const,
+			queryFn: () => fetchPRFileRevision(sessionId, source.number, source.url, path, side, commitSha, hostId),
 		};
 }
 
@@ -246,13 +278,15 @@ export async function updateSessionWorkspaceFile({
 	expectedFileFingerprint,
 	path,
 	sessionId,
+	hostId,
 }: {
 	content: string;
 	expectedFileFingerprint: string;
 	path: string;
 	sessionId: string;
+	hostId?: string;
 }): Promise<WorkspaceFileDetail> {
-	const { data, error } = await apiClient.PUT("/api/v1/sessions/{sessionId}/workspace/file", {
+	const { data, error } = await clientForSessionHost(hostId).PUT("/api/v1/sessions/{sessionId}/workspace/file", {
 		params: { path: { sessionId } },
 		body: { content, expectedFileFingerprint, path },
 	});
@@ -261,12 +295,19 @@ export async function updateSessionWorkspaceFile({
 	return data as WorkspaceFileDetail;
 }
 
-export function sessionWorkspaceSearchQueryOptions(sessionId: string, query: string, errorMessage = "Unable to search workspace files") {
+export function sessionWorkspaceSearchQueryOptions(
+	sessionId: string,
+	query: string,
+	errorMessage = "Unable to search workspace files",
+	hostId?: string,
+	limit = 100,
+) {
 	return {
-		queryKey: ["session-workspace-search", sessionId, query] as const,
-		queryFn: async (): Promise<WorkspaceFileSearchResponse> => {
-			const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/workspace/search", {
-				params: { path: { sessionId }, query: { query, limit: 100 } },
+		queryKey: hostId ? ["session-workspace-search", hostId, sessionId, query, limit] as const : ["session-workspace-search", sessionId, query, limit] as const,
+		queryFn: async ({ signal }: { signal?: AbortSignal } = {}): Promise<WorkspaceFileSearchResponse> => {
+			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/search", {
+				params: { path: { sessionId }, query: { query, limit } },
+				signal,
 			});
 			if (error) throw new Error(apiErrorMessage(error, errorMessage));
 			if (!data) throw new Error(errorMessage);
@@ -277,29 +318,37 @@ export function sessionWorkspaceSearchQueryOptions(sessionId: string, query: str
 
 // Shared so SessionFileExplorer and SessionInspector resolve to the same cache
 // entry while SSE invalidation remains the normal refresh path.
-export function sessionWorkspaceFilesQueryOptions(sessionId: string, errorMessage = "Unable to load workspace files") {
+export function sessionWorkspaceFilesQueryOptions(sessionId: string, errorMessage = "Unable to load workspace files", hostId?: string) {
 	return {
-		queryKey: sessionWorkspaceFilesQueryKey(sessionId),
-		queryFn: () => fetchSessionWorkspaceFiles(sessionId, errorMessage),
+		queryKey: sessionWorkspaceFilesQueryKey(sessionId, hostId),
+		queryFn: () => fetchSessionWorkspaceFiles(sessionId, errorMessage, hostId),
 	};
 }
 
-export function sessionSourceFilesQueryOptions(sessionId: string, source: FilesSource, errorMessage = "Unable to load files"): UseQueryOptions<WorkspaceFilesResponse> {
+export function sessionWorkspaceHistoryQueryOptions(sessionId: string, errorMessage = "Unable to load workspace history", hostId?: string) {
+	return {
+		queryKey: hostId ? ["session-workspace-history", hostId, sessionId] as const : ["session-workspace-history", sessionId] as const,
+		queryFn: () => fetchSessionWorkspaceHistory(sessionId, errorMessage, hostId),
+		staleTime: Infinity,
+	};
+}
+
+export function sessionSourceFilesQueryOptions(sessionId: string, source: FilesSource, errorMessage = "Unable to load files", hostId?: string): UseQueryOptions<WorkspaceFilesResponse> {
 	return source.kind === "workspace"
-		? sessionWorkspaceFilesQueryOptions(sessionId, errorMessage)
-		: { queryKey: ["session-source-files", sessionId, "pull_request", source.url, source.snapshot ?? ""], queryFn: () => fetchSessionPRFiles(sessionId, source.number, source.url, errorMessage) };
+		? sessionWorkspaceFilesQueryOptions(sessionId, errorMessage, hostId)
+		: { queryKey: hostId ? ["session-source-files", hostId, sessionId, "pull_request", source.url, source.snapshot ?? ""] : ["session-source-files", sessionId, "pull_request", source.url, source.snapshot ?? ""], queryFn: () => fetchSessionPRFiles(sessionId, source.number, source.url, errorMessage, hostId) };
 }
 
 export function workspaceFilesRefetchInterval(state: WorkspaceFileConnectionState, degraded = false): false | number {
 	return state === "degraded" || degraded ? WORKSPACE_FILES_DEGRADED_REFETCH_MS : false;
 }
 
-export function useWorkspaceFileConnectionState(sessionId: string): WorkspaceFileConnectionState {
+export function useWorkspaceFileConnectionState(sessionId: string, hostId?: string): WorkspaceFileConnectionState {
 	const subscribe = useCallback(
-		(listener: () => void) => subscribeWorkspaceFileConnectionState(sessionId, listener),
-		[sessionId],
+		(listener: () => void) => subscribeWorkspaceFileConnectionState(sessionId, listener, hostId),
+		[sessionId, hostId],
 	);
-	const getSnapshot = useCallback(() => getWorkspaceFileConnectionState(sessionId), [sessionId]);
+	const getSnapshot = useCallback(() => getWorkspaceFileConnectionState(sessionId, hostId), [sessionId, hostId]);
 	return useSyncExternalStore(subscribe, getSnapshot);
 }
 
@@ -312,10 +361,10 @@ export function isChangedWorkspaceFile(file: WorkspaceFileSummary): boolean {
 // misleading zero while its first request starts. The same moment also
 // preloads the default review's diffs, because that view is unmounted until
 // the Files tab is selected.
-export function useSessionWorkspaceFilesChangedCount(sessionId: string | undefined): number | undefined {
+export function useSessionWorkspaceFilesChangedCount(sessionId: string | undefined, hostId?: string): number | undefined {
 	const queryClient = useQueryClient();
 	const query = useQuery({
-		...sessionWorkspaceFilesQueryOptions(sessionId ?? ""),
+		...sessionWorkspaceFilesQueryOptions(sessionId ?? "", "Unable to load workspace files", hostId),
 		enabled: Boolean(sessionId),
 		// Live invalidations keep the inactive tab fresh; polling starts only
 		// when the full Files view is visible.
@@ -324,21 +373,20 @@ export function useSessionWorkspaceFilesChangedCount(sessionId: string | undefin
 	});
 	useEffect(() => {
 		if (!sessionId) return;
-		return subscribeWorkspaceFileChanges(sessionId, queryClient);
-	}, [queryClient, sessionId]);
+		return subscribeWorkspaceFileChanges(sessionId, queryClient, hostId);
+	}, [queryClient, sessionId, hostId]);
 	useEffect(() => {
 		if (!sessionId || query.data === undefined) return;
-		const data = queryClient.getQueryData<WorkspaceFilesResponse>(sessionWorkspaceFilesQueryKey(sessionId));
+		const data = queryClient.getQueryData<WorkspaceFilesResponse>(sessionWorkspaceFilesQueryKey(sessionId, hostId));
 		if (!data) return;
-		void prefetchDefaultWorkspaceReviewDiffs(queryClient, sessionId, data).catch(() => {});
-	}, [query.data, query.dataUpdatedAt, queryClient, sessionId]);
+		void prefetchDefaultWorkspaceReviewDiffs(queryClient, sessionId, data, hostId).catch(() => {});
+	}, [query.data, query.dataUpdatedAt, queryClient, sessionId, hostId]);
 	return sessionId ? query.data : undefined;
 }
 
 // Must match WorkspaceReviewPane: the Files tab requests these batches, with
 // this context size, and then full contents for files whose patch ends on the
 // last hunk. A mismatch leaves the tab on "Loading diff…".
-const REVIEW_PREFETCH_BATCH_SIZE = 100;
 const REVIEW_PREFETCH_BATCHES = 4;
 const REVIEW_PREFETCH_EOF_MAX = 40;
 const REVIEW_PREFETCH_EOF_MAX_BYTES = 128 * 1024;
@@ -349,38 +397,37 @@ function isDeferredReviewFile(file: WorkspaceFileSummary) {
 	return file.size > 512 * 1024 || /^(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|go\.sum|cargo\.lock)$/.test(name);
 }
 
-function defaultReviewFiles(data: WorkspaceFilesResponse): { commitSha?: string; files: WorkspaceFileSummary[]; scope: WorkspaceDiffScope } {
+export function defaultWorkspaceReviewSelection(data: WorkspaceFilesResponse): { commitSha?: string; files: WorkspaceFileSummary[]; scope: WorkspaceDiffScope } {
 	// The Files tab count can be seeded from a files array alone. Prefetch only
 	// runs against a full workspace response.
 	const sections = data.sections;
 	if (!sections) return { scope: "combined", files: [] };
-	if (sections.unstaged.length > 0) return { scope: "unstaged", files: sections.unstaged };
-	if (sections.staged.length > 0) return { scope: "staged", files: sections.staged };
+	const files = (data.files ?? []).filter(isChangedWorkspaceFile);
+	if (files.length > 0) return { scope: "combined", files };
 	const commit = data.commits?.[0];
 	if (commit) return { scope: "committed", commitSha: commit.sha, files: commit.files ?? [] };
-	const untracked = new Set(sections.untracked.map((file) => file.path));
-	return {
-		scope: "combined",
-		files: (data.files ?? []).filter((file) => file.status !== "unmodified" && !untracked.has(file.path)),
-	};
+	return { scope: "combined", files };
 }
 
-export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClient, sessionId: string, data: WorkspaceFilesResponse) {
-	const selection = defaultReviewFiles(data);
-	const files = selection.files.filter((file) => !isDeferredReviewFile(file)).slice(0, REVIEW_PREFETCH_BATCH_SIZE * REVIEW_PREFETCH_BATCHES);
+export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClient, sessionId: string, data: WorkspaceFilesResponse, hostId?: string) {
+	const selection = defaultWorkspaceReviewSelection(data);
+	const files = selection.files.filter((file) => !isDeferredReviewFile(file)).slice(0, WORKSPACE_REVIEW_BATCH_SIZE * REVIEW_PREFETCH_BATCHES);
 	if (files.length === 0) return;
 	const token = `${data.workspaceVersion ?? ""}:${selection.scope}:${selection.commitSha ?? ""}:${files.map((file) => file.path).join("\n")}`;
 
 	try {
 		const { REVIEW_CONTEXT_LINES, endsAtLastHunk, patchIdentity } = await import("../components/diffs/trailingContext");
 		const { parsePatchFiles } = await import("@pierre/diffs");
-		const headKey = sessionWorkspaceDiffsQueryKey(sessionId, selection.scope, files.slice(0, REVIEW_PREFETCH_BATCH_SIZE).map((file) => file.path), REVIEW_CONTEXT_LINES, false, data.workspaceVersion, selection.commitSha);
-		// Skip only while the diff cache is still warm. Garbage collection would
-		// otherwise leave the tab spinning and this function unwilling to refill it.
-		if (lastPrefetchedReview.get(sessionId) === token && queryClient.getQueryData(headKey)) return;
-		lastPrefetchedReview.set(sessionId, token);
 		const batches: WorkspaceFileSummary[][] = [];
-		for (let index = 0; index < files.length; index += REVIEW_PREFETCH_BATCH_SIZE) batches.push(files.slice(index, index + REVIEW_PREFETCH_BATCH_SIZE));
+		for (let index = 0; index < files.length; index += WORKSPACE_REVIEW_BATCH_SIZE) batches.push(files.slice(index, index + WORKSPACE_REVIEW_BATCH_SIZE));
+		const cacheKey = sessionUiKey(sessionId, hostId);
+		// An existing entry can be invalidated by a file edit without its summary
+		// version changing. Skip only if every batch is still present and fresh.
+		if (lastPrefetchedReview.get(cacheKey) === token && batches.every((batch) => {
+			const state = queryClient.getQueryState(sessionWorkspaceDiffsQueryKey(sessionId, selection.scope, batch.map((file) => file.path), REVIEW_CONTEXT_LINES, false, data.workspaceVersion, selection.commitSha, hostId));
+			return state?.data !== undefined && !state.isInvalidated;
+		})) return;
+		lastPrefetchedReview.set(cacheKey, token);
 		const responses = await Promise.all(batches.map((batch) => queryClient.fetchQuery({
 			...sessionWorkspaceDiffsQueryOptions({
 				contextLines: REVIEW_CONTEXT_LINES,
@@ -389,6 +436,7 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 				sessionId,
 				workspaceVersion: data.workspaceVersion,
 				commitSha: selection.commitSha,
+				hostId,
 			}),
 			staleTime: Infinity,
 			gcTime: 30 * 60 * 1000,
@@ -413,12 +461,14 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 		}
 
 		await Promise.all(endOfFile.map(async ({ file, identity }) => {
-			const queryKey = ["files-review-end-of-file", sessionId, selection.scope, selection.commitSha ?? "", file.path, file.fileFingerprint ?? "", identity] as const;
-			if (queryClient.getQueryData(queryKey)) return;
+			const queryKey = hostId ? ["files-review-end-of-file", hostId, sessionId, selection.scope, selection.commitSha ?? "", file.path, file.fileFingerprint ?? "", identity] as const
+				: ["files-review-end-of-file", sessionId, selection.scope, selection.commitSha ?? "", file.path, file.fileFingerprint ?? "", identity] as const;
+			const cached = queryClient.getQueryState(queryKey);
+			if (cached?.data !== undefined && !cached.isInvalidated) return;
 			try {
 				const [before, after] = await Promise.all([
-					fetchWorkspaceFileRevision({ commitSha: selection.commitSha, sessionId, path: file.path, scope: selection.scope, side: "before", workspaceVersion: data.workspaceVersion }),
-					fetchWorkspaceFileRevision({ commitSha: selection.commitSha, sessionId, path: file.path, scope: selection.scope, side: "after", workspaceVersion: data.workspaceVersion }),
+					fetchWorkspaceFileRevision({ commitSha: selection.commitSha, sessionId, path: file.path, scope: selection.scope, side: "before", workspaceVersion: data.workspaceVersion, hostId }),
+					fetchWorkspaceFileRevision({ commitSha: selection.commitSha, sessionId, path: file.path, scope: selection.scope, side: "after", workspaceVersion: data.workspaceVersion, hostId }),
 				]);
 				if (before.binary || after.binary || before.truncated || after.truncated) return;
 				const loaded = {
@@ -431,6 +481,7 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 			}
 		}));
 	} catch {
-		if (lastPrefetchedReview.get(sessionId) === token) lastPrefetchedReview.delete(sessionId);
+		const cacheKey = sessionUiKey(sessionId, hostId);
+		if (lastPrefetchedReview.get(cacheKey) === token) lastPrefetchedReview.delete(cacheKey);
 	}
 }

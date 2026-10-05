@@ -43,25 +43,33 @@ import { routeSource } from "../lib/session/sessionRoute";
 export { SheetErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
 export default function SpawnModal() {
+	return <SpawnModalContent />;
+}
+
+function SpawnModalContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
-	const { projectId: routeProjectId, source: routeKind, sourceId: routeSourceId } = useLocalSearchParams<{ projectId?: string; source?: string; sourceId?: string }>();
-	const { scopedBoard, availableSources, sourceFor, spawnOn, config, connection, unreachable } = useApp();
+	const { projectId: routeProjectId, source: routeKind, sourceId: routeSourceId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; source?: string; sourceId?: string; hostId?: string }>();
+	const { scopedBoard, availableSources, sourceFor, spawnOn, configForHost, hostStates, configResolved } = useApp();
 	const { client: cloudClient, orgId: cloudOrgId } = useCloudAuth();
-	const routeDestination = routeSource({ source: routeKind, sourceId: routeSourceId });
-	const sourceResolutionComplete = scopedBoard.sources.local.resolved && scopedBoard.sources.cloud.resolved;
+	const routeDestination = routeSource({ source: routeKind, sourceId: routeSourceId }) ?? (routeHostId ? { kind: "local" as const, id: routeHostId } : null);
+	const sourceResolutionComplete = configResolved;
 	const [destination, setDestination] = useState<SourceRef | null>(null);
 	const destinationRef = useRef<SourceRef | null>(null);
 	const [savedPreference, setSavedPreference] = useState<SpawnPreference | null>(null);
 	const [preferenceLoaded, setPreferenceLoaded] = useState(false);
 	const catalogGeneration = useRef(0);
 	const cloudSpawn = destination?.kind === "cloud";
+	const config = destination?.kind === "local" ? configForHost(destination.id) : null;
+	const selectedHost = destination?.kind === "local" ? hostStates.find((host) => host.hostId === destination.id) : undefined;
+	const connection = selectedHost?.connection ?? "closed";
+	const unreachable = connection === "closed" && !!selectedHost?.error;
 	const projects = useMemo(() => destination
 		? scopedBoard.projects.filter((entry) => sourceKey(entry.source) === sourceKey(destination)).map((entry) => entry.value)
 		: [], [destination, scopedBoard.projects]);
-	const projectsKnown = destination !== null && scopedBoard.sources[destination.kind].resolved && !scopedBoard.sources[destination.kind].loading;
-	const destinations = availableSources.map((source) => ({ source, label: source.kind === "local" ? "Local · Paired desktop" : "Cloud", available: !!sourceFor(source), unavailableReason: source.kind === "local" ? scopedBoard.sources.local.error : scopedBoard.sources.cloud.error }));
+	const projectsKnown = destination !== null && !!scopedBoard.sources[sourceKey(destination)]?.resolved && !scopedBoard.sources[sourceKey(destination)]?.loading;
+	const destinations = availableSources.map((source) => ({ source, label: source.kind === "local" ? `Local · ${hostStates.find((host) => host.hostId === source.id)?.name ?? "Desktop"}` : "Cloud", available: !!sourceFor(source), unavailableReason: scopedBoard.sources[sourceKey(source)]?.error ?? null }));
 
 	const [projectId, setProjectId] = useState<string | null>(null);
 	const [harness, setHarness] = useState("");
@@ -82,6 +90,7 @@ export default function SpawnModal() {
 	const [modelError, setModelError] = useState<string>();
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const requestRef = useRef<{ payload: string; attachments: readonly SpawnAttachment[]; id: string } | undefined>(undefined);
 
 	const [catalog, setCatalog] = useState<AgentCatalog | null>(null);
 	const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -118,7 +127,7 @@ export default function SpawnModal() {
 		const next = initialSpawnDestination(routed, availableSources, savedPreference?.source);
 		if (destinationRef.current && availableSources.some((source) => sourceKey(source) === sourceKey(destinationRef.current!))) return;
 		if (next) { destinationRef.current = next; setDestination(next); }
-	}, [sourceResolutionComplete, preferenceLoaded, routeKind, routeSourceId, availableSources, savedPreference?.source]);
+	}, [sourceResolutionComplete, preferenceLoaded, routeKind, routeSourceId, routeHostId, availableSources, savedPreference?.source]);
 
 	// A project prefill belongs only to the source named by its route.
 	useEffect(() => {
@@ -419,14 +428,20 @@ export default function SpawnModal() {
 		setError(null);
 		setOfferTUI(false);
 		try {
-			const session = await spawnOn(destination, {
+			const request = {
 				projectId: projectId ?? undefined,
 				prompt: prompt.trim() || undefined,
 				harness: harness || undefined,
 				model: modelOverride(displayedModel, modelTouched),
 				mode,
 				attachments: attachmentsRef.current.map(({ mimeType, data }) => ({ mimeType, data })),
-			});
+			};
+			const { attachments: _, ...requestFields } = request;
+			const payload = JSON.stringify(requestFields);
+			if (requestRef.current?.payload !== payload || requestRef.current?.attachments !== attachmentsRef.current) {
+				requestRef.current = { payload, attachments: attachmentsRef.current, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
+			}
+			const session = await spawnOn(destination, { ...request, clientRequestId: requestRef.current.id });
 			haptics.success();
 			// Dismiss the modal first, then open the freshly spawned session's mode-aware surface
 			// once the dismiss transition has settled. Firing both navigations in the

@@ -66,11 +66,8 @@ import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
 import { apiErrorCode, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
-import {
-	TERMINAL_FONT_SIZE_DEFAULT,
-	TERMINAL_FONT_SIZE_MAX,
-	TERMINAL_FONT_SIZE_MIN,
-} from "../../lib/design-tokens";
+import { clampTerminalFontSize, initialTerminalFontSize, terminalFontSizeStorageKey } from "../../lib/terminal-font-size";
+import { createTerminalMux, muxUrlFromApiBase } from "../../lib/terminal-mux";
 import { isLinuxPlatform, isMacPlatform } from "../../lib/platform";
 import { handleTerminalTabListKeyDown } from "../../lib/terminal-tabs";
 import { agentLabel } from "../../lib/agent-options";
@@ -107,7 +104,7 @@ import {
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
-import { ChatComposer, type StoredComposerAttachment } from "./ChatComposer";
+import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
@@ -172,9 +169,6 @@ function latestPendingInteraction(
 
 const CHAT_FONT_SIZE_DEFAULT = 14;
 
-// Reviewer panes share the terminal font-size preference with CenterPane, so a
-// reviewer opened inside the Chat surface matches a reviewer opened in TUI mode.
-const terminalFontSizeStorageKey = "ao.terminal.fontSize";
 const WHEEL_ZOOM_THRESHOLD = 80;
 const WHEEL_ZOOM_RESET_MS = 250;
 
@@ -183,18 +177,6 @@ export interface ChatRetryControl {
 	pending?: boolean;
 	error?: string;
 	turnId?: string;
-}
-
-function clampTerminalFontSize(size: number): number {
-	return Math.min(TERMINAL_FONT_SIZE_MAX, Math.max(TERMINAL_FONT_SIZE_MIN, size));
-}
-
-function initialTerminalFontSize(): number {
-	if (typeof window === "undefined") return TERMINAL_FONT_SIZE_DEFAULT;
-	const raw = window.localStorage?.getItem(terminalFontSizeStorageKey);
-	const parsed = raw === null ? Number.NaN : Number(raw);
-	if (!Number.isFinite(parsed)) return TERMINAL_FONT_SIZE_DEFAULT;
-	return clampTerminalFontSize(parsed);
 }
 
 type ReviewerTerminalTarget = Extract<TerminalTarget, { kind: "reviewer" }>;
@@ -229,12 +211,6 @@ function DraggableChatTab({ children, value }: { children: ReactNode; value: str
 
 const isMac = isMacPlatform();
 const isLinux = isLinuxPlatform();
-
-type TopbarBounds = {
-	leftInset: number;
-	rightInset: number;
-	width: number;
-};
 
 type MessageEditDraft = ChatDraftInlineEdit;
 
@@ -279,10 +255,18 @@ function useQueuedMessages(snapshot: ConversationSnapshot): QueuedMessage[] {
 
 export interface ChatWorkspaceProps {
 	snapshot: ConversationSnapshot;
+	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
+	uiSessionId?: string;
+	/** Durable draft owner for a conversation that is not a worker session. */
+	draftOwner?: ChatDraftScope;
 	/** The session title from the sidebar (matches what users see in the left sidebar) */
 	sessionTitle?: string;
 	/** The AO role using this shared conversation surface. */
 	sessionRole?: SessionKind;
+	/** Host-specific proxy origin for images and staged attachments. */
+	assetBaseUrl?: string;
+	/** Selected remote host, even while its connection has no proxy origin. */
+	remoteHostId?: string;
 	/** Session-level actions owned above the conversation surface. */
 	headerActions?: ReactNode;
 	/** Agent-session actions on the primary chat tab (interface switch, handoff). */
@@ -392,7 +376,7 @@ export interface ChatWorkspaceProps {
 	/** Opens the session Files inspector from a turn's changed-files Review control. */
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
-	onOpenFile?: (path: string) => void;
+	onOpenFile?: (path: string, line?: number) => void;
 	/**
 	 * Re-dispatch a failed turn's durable prompt as a new turn. Offered only for
 	 * eligible failed human turns, so the affordance is drawn on the failed-turn
@@ -461,6 +445,11 @@ type ChatWorkspaceActivation =
 	| { key: string; state: "active" }
 	| { key: string; state: "failed"; reason: "obsolete" | "storage" };
 
+function OfflineRemoteTerminal() {
+	const { t } = useTranslation();
+	return <div className="flex h-full items-center justify-center text-sm text-muted-foreground" role="status">{t("remote.hostOffline")}</div>;
+}
+
 /**
  * Do not mount any renderer draft owner until the daemon incarnation has
  * authoritatively claimed its storage scope. The activation transition itself
@@ -469,15 +458,15 @@ type ChatWorkspaceActivation =
  */
 export function ChatWorkspace(props: ChatWorkspaceProps) {
 	const translateDraft = useChatDraftTranslation();
-	const { snapshot, session } = props;
+	const { snapshot, session, draftOwner, uiSessionId = draftOwner?.sessionId ?? snapshot.sessionId } = props;
 	const draftScope = useMemo<ChatDraftScope>(
-		() => ({
-			sessionId: snapshot.sessionId,
+		() => draftOwner ?? ({
+			sessionId: uiSessionId,
 			// Live surfaces carry the daemon-created session timestamp. Snapshot-only
 			// fixtures retain the legacy logical scope for deterministic previews.
-			incarnation: session?.createdAt ?? snapshot.sessionId,
+			incarnation: session?.createdAt ?? uiSessionId,
 		}),
-		[session?.createdAt, snapshot.sessionId],
+		[draftOwner, session?.createdAt, uiSessionId],
 	);
 	const scopeKey = chatDraftScopeKey(draftScope);
 	const [activation, setActivation] = useState<ChatWorkspaceActivation>();
@@ -486,7 +475,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 	useLayoutEffect(() => {
 		// Snapshot-only previews have no daemon session incarnation to arbitrate.
 		// Their legacy logical scope remains isolated to fixture/demo surfaces.
-		if (!session?.createdAt) {
+		if (!session?.createdAt && !draftOwner) {
 			setActivation({ key: scopeKey, state: "active" });
 			return;
 		}
@@ -497,7 +486,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 		}
 		if (result.replaced) purgeFileAttachmentsForSession(draftScope.sessionId);
 		setActivation({ key: scopeKey, state: "active" });
-	}, [activationAttempt, draftScope, scopeKey, session?.createdAt]);
+	}, [activationAttempt, draftOwner, draftScope, scopeKey, session?.createdAt]);
 
 	if (activation?.key !== scopeKey || activation.state !== "active") {
 		const failure = activation?.key === scopeKey && activation.state === "failed"
@@ -540,6 +529,8 @@ function ChatWorkspaceContent({
 	snapshot,
 	sessionTitle,
 	sessionRole = "worker",
+	assetBaseUrl,
+	remoteHostId,
 	headerActions,
 	sessionTabAction,
 	sessionTabActionWide = false,
@@ -637,6 +628,12 @@ function ChatWorkspaceContent({
 	draftScope,
 }: ChatWorkspaceProps & { draftScope: ChatDraftScope }) {
 	const draftScopeKey = chatDraftScopeKey(draftScope);
+	const uiSessionId = draftScope.sessionId;
+	const activeRemoteHostId = remoteHostId ?? session?.hostId;
+	const remoteCreateMux = useMemo(
+		() => assetBaseUrl ? () => createTerminalMux(muxUrlFromApiBase(assetBaseUrl)) : undefined,
+		[assetBaseUrl],
+	);
 	const turn = activeTurn(snapshot);
 	const hasPendingInteraction = snapshot.items.some(
 		(item) =>
@@ -682,7 +679,7 @@ function ChatWorkspaceContent({
 		const composer = surfaceRef.current?.querySelector<HTMLElement>(
 			'[aria-label="Message the agent"]',
 		);
-		if (composer?.getAttribute("aria-disabled") !== "true") composer?.focus();
+		if (composer?.getAttribute("aria-disabled") !== "true") composerFocusRef.current?.focus();
 	}, []);
 	// Selection is durable UI state; availability only controls whether the tab is
 	// offered. Keeping these separate preserves a selected reviewer while an active
@@ -705,7 +702,7 @@ function ChatWorkspaceContent({
 	const availableTabKeys = useMemo(() => auxiliaryTabs.map((tab) => tab.key), [auxiliaryTabs]);
 	const [tabOrderBySession, setTabOrderBySession] = useState<Record<string, string[]>>({});
 	const orderedAuxiliaryTabs = useMemo(() => {
-		const preferred = auxiliaryTabOrder ?? tabOrderBySession[snapshot.sessionId] ?? [];
+		const preferred = auxiliaryTabOrder ?? tabOrderBySession[uiSessionId] ?? [];
 		const byKey = new Map(auxiliaryTabs.map((tab) => [tab.key, tab]));
 		const ordered = preferred.flatMap((key) => {
 			const tab = byKey.get(key);
@@ -714,7 +711,7 @@ function ChatWorkspaceContent({
 			return [tab];
 		});
 		return [...ordered, ...byKey.values()];
-	}, [auxiliaryTabOrder, auxiliaryTabs, snapshot.sessionId, tabOrderBySession]);
+	}, [auxiliaryTabOrder, auxiliaryTabs, uiSessionId, tabOrderBySession]);
 	const activeWorkspaceTab = workspaceActiveTabKey
 		? workspaceTabs?.find((tab) => tab.key === workspaceActiveTabKey)
 		: undefined;
@@ -726,9 +723,9 @@ function ChatWorkspaceContent({
 				if (!next.includes(key)) next.push(key);
 			}
 			if (onAuxiliaryTabOrderChange) onAuxiliaryTabOrderChange(next);
-			else setTabOrderBySession((current) => ({ ...current, [snapshot.sessionId]: next }));
+			else setTabOrderBySession((current) => ({ ...current, [uiSessionId]: next }));
 		},
-		[availableTabKeys, onAuxiliaryTabOrderChange, snapshot.sessionId],
+		[availableTabKeys, onAuxiliaryTabOrderChange, uiSessionId],
 	);
 	useEffect(() => {
 		if (auxiliaryTabOrder) {
@@ -743,7 +740,7 @@ function ChatWorkspaceContent({
 			return;
 		}
 		setTabOrderBySession((current) => {
-			const currentOrder = current[snapshot.sessionId] ?? [];
+			const currentOrder = current[uiSessionId] ?? [];
 			const available = new Set(availableTabKeys);
 			const next = currentOrder.filter((key) => available.has(key));
 			for (const key of availableTabKeys) {
@@ -751,12 +748,12 @@ function ChatWorkspaceContent({
 			}
 			if (next.length === currentOrder.length && next.every((key, index) => key === currentOrder[index])) return current;
 			if (next.length === 0) {
-				const { [snapshot.sessionId]: _removed, ...rest } = current;
+				const { [uiSessionId]: _removed, ...rest } = current;
 				return rest;
 			}
-			return { ...current, [snapshot.sessionId]: next };
+			return { ...current, [uiSessionId]: next };
 		});
-	}, [auxiliaryTabOrder, availableTabKeys, onAuxiliaryTabOrderChange, snapshot.sessionId]);
+	}, [auxiliaryTabOrder, availableTabKeys, onAuxiliaryTabOrderChange, uiSessionId]);
 	const queuedMessages = useQueuedMessages(snapshot);
 	const stablePromoteQueuedTurn = useStableCallback(onPromoteQueuedTurn);
 	const stableCancelQueuedTurn = useStableCallback(onCancelQueuedTurn);
@@ -786,9 +783,9 @@ function ChatWorkspaceContent({
 		return result;
 	}, [draftScope]);
 	useEffect(() => {
-		setChatDraftBoundary(snapshot.sessionId, "queued-edit", queueDraftError ? "persistence-failed" : undefined);
-		return () => setChatDraftBoundary(snapshot.sessionId, "queued-edit", undefined);
-	}, [queueDraftError, snapshot.sessionId]);
+		setChatDraftBoundary(draftScope.sessionId, "queued-edit", queueDraftError ? "persistence-failed" : undefined);
+		return () => setChatDraftBoundary(draftScope.sessionId, "queued-edit", undefined);
+	}, [queueDraftError, draftScope.sessionId]);
 	// Text equality cannot prove an attachment-only edit was accepted. Keep an
 	// uncertain edit and its original daemon revision until a save is acknowledged.
 	const changeQueuedDraft = useCallback((text: string) => {
@@ -936,44 +933,11 @@ function ChatWorkspaceContent({
 	// the agent knows, so it is never one click.
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
 	const surfaceRef = useRef<HTMLElement | null>(null);
+	const composerFocusRef = useRef<ChatComposerHandle>(null);
 	const lastWheelZoomAtRef = useRef(0);
 	const wheelZoomRemainderRef = useRef(0);
 	const [terminalFontSize, setTerminalFontSize] = useState(initialTerminalFontSize);
 	const [isFullscreen, setIsFullscreen] = useState(false);
-	const [topbarBounds, setTopbarBounds] = useState<TopbarBounds>({
-		leftInset: 0,
-		rightInset: 0,
-		width: 0,
-	});
-
-	useEffect(() => {
-		const surface = surfaceRef.current;
-		if (!surface) return;
-		const workspaceSurface = surface.closest<HTMLElement>(".center-panel-surface");
-		const measure = () => {
-			const surfaceRect = surface.getBoundingClientRect();
-			const workspaceRect = workspaceSurface?.getBoundingClientRect() ?? surfaceRect;
-			const next = {
-				leftInset: workspaceRect.left,
-				rightInset: Math.max(0, window.innerWidth - workspaceRect.right),
-				width: surfaceRect.width,
-			};
-			setTopbarBounds((current) =>
-				current.leftInset === next.leftInset &&
-				current.rightInset === next.rightInset &&
-				current.width === next.width
-					? current
-					: next,
-			);
-		};
-		measure();
-		if (typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(measure);
-		observer.observe(surface);
-		if (workspaceSurface) observer.observe(workspaceSurface);
-		return () => observer.disconnect();
-	}, []);
-
 	useEffect(() => {
 		const handleFullscreenChange = () => {
 			setIsFullscreen(document.fullscreenElement === surfaceRef.current);
@@ -1166,10 +1130,15 @@ function ChatWorkspaceContent({
 					configOptions={configOptions ?? []}
 					onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
 					configPending={configOptionPending}
+					autoSelectEffortOnOpen={snapshot.items.length === 0 && !turn}
 					error={configOptionError}
+					// Turn settings require a live controller even while messages can queue.
 					disabled={
-						snapshot.controller.state === "stopped" || controllerTransitioning || configOptionPending || newWorkDisabled
-					}
+							snapshot.controller.state === "connecting" ||
+							snapshot.controller.state === "stopped" ||
+							session?.provisionState === "provisioning" ||
+							controllerTransitioning || configOptionPending || newWorkDisabled
+						}
 				/>
 			) : null,
 		[
@@ -1179,6 +1148,7 @@ function ChatWorkspaceContent({
 			controllerTransitioning,
 			models,
 			newWorkDisabled,
+			session?.provisionState,
 			onChooseConfigOption,
 			onChooseSettings,
 			onRememberPermissions,
@@ -1189,6 +1159,8 @@ function ChatWorkspaceContent({
 			approvalModes,
 			session?.cloud,
 			snapshot.controller.state,
+			snapshot.items.length,
+			turn,
 			stableModelReroute,
 			stableSettings,
 		],
@@ -1257,15 +1229,15 @@ function ChatWorkspaceContent({
 	const composerDockRef = useRef<HTMLDivElement>(null);
 	const composerCenteredTopRef = useRef<number | null>(null);
 	const composerFlipDyRef = useRef<number | null>(null);
-	const composerSessionRef = useRef(snapshot.sessionId);
+	const composerSessionRef = useRef(uiSessionId);
 
 	useLayoutEffect(() => {
 		const dock = composerDockRef.current;
 		if (!dock) return;
 
-		const sessionChanged = composerSessionRef.current !== snapshot.sessionId;
+		const sessionChanged = composerSessionRef.current !== uiSessionId;
 		if (sessionChanged) {
-			composerSessionRef.current = snapshot.sessionId;
+			composerSessionRef.current = uiSessionId;
 			composerCenteredTopRef.current = null;
 			composerFlipDyRef.current = null;
 			dock.style.transition = "";
@@ -1311,7 +1283,7 @@ function ChatWorkspaceContent({
 		return () => {
 			dock.removeEventListener("transitionend", onEnd);
 		};
-	}, [conversationEmpty, snapshot.sessionId]);
+	}, [conversationEmpty, uiSessionId]);
 
 	return (
 		<section
@@ -1319,7 +1291,7 @@ function ChatWorkspaceContent({
 			onKeyDown={handleChatKeyDown}
 			onClick={handleChatSurfaceClick}
 			aria-label="Chat"
-			className="cursor-chat-surface flex h-full min-h-0 flex-col [font-size:var(--chat-font-size)]"
+			className="cursor-chat-surface flex h-full min-h-0 min-w-0 w-full flex-col overflow-hidden [font-size:var(--chat-font-size)]"
 			data-session-mode={snapshot.mode}
 			data-session-role={sessionRole}
 			style={
@@ -1352,7 +1324,6 @@ function ChatWorkspaceContent({
 				orderedAuxiliaryTabs={orderedAuxiliaryTabs}
 				onReorderAuxiliaryTabs={reorderAuxiliaryTabs}
 				inline={isFullscreen}
-				topbarBounds={topbarBounds}
 			/>}
 			<div className="relative flex min-h-0 flex-1 flex-col">
 				{reviewerTarget && session ? (
@@ -1364,8 +1335,10 @@ function ChatWorkspaceContent({
 						role="tabpanel"
 					>
 						<div className="h-full min-h-0" data-testid="chat-reviewer-terminal">
-							<TerminalPane
-								daemonReady={Boolean(daemonReady)}
+							{activeRemoteHostId && !assetBaseUrl ? <OfflineRemoteTerminal /> : <TerminalPane
+								key={activeRemoteHostId ? `${activeRemoteHostId}:${assetBaseUrl}` : undefined}
+								createMux={activeRemoteHostId ? remoteCreateMux : undefined}
+								daemonReady={activeRemoteHostId ? Boolean(assetBaseUrl) : Boolean(daemonReady)}
 								fontSize={terminalFontSize}
 								isFullscreen={isFullscreen}
 								onChangeFontSize={updateTerminalFontSize}
@@ -1373,7 +1346,7 @@ function ChatWorkspaceContent({
 								session={session}
 								terminalTarget={reviewerTarget}
 								theme={theme ?? "dark"}
-							/>
+							/>}
 						</div>
 					</div>
 				) : null}
@@ -1386,8 +1359,10 @@ function ChatWorkspaceContent({
 						role="tabpanel"
 					>
 						<div className="h-full min-h-0" data-testid="chat-shell-terminal">
-							<TerminalPane
-								daemonReady={Boolean(daemonReady)}
+							{activeRemoteHostId && !assetBaseUrl ? <OfflineRemoteTerminal /> : <TerminalPane
+								key={activeRemoteHostId ? `${activeRemoteHostId}:${assetBaseUrl}` : undefined}
+								createMux={activeRemoteHostId ? remoteCreateMux : undefined}
+								daemonReady={activeRemoteHostId ? Boolean(assetBaseUrl) : Boolean(daemonReady)}
 								fontSize={terminalFontSize}
 								focusRequested
 								isFullscreen={isFullscreen}
@@ -1396,7 +1371,7 @@ function ChatWorkspaceContent({
 								session={session}
 								terminalTarget={shellTarget}
 								theme={theme ?? "dark"}
-							/>
+							/>}
 						</div>
 					</div>
 				) : null}
@@ -1415,7 +1390,7 @@ function ChatWorkspaceContent({
 				>
 					{/* Keep sign-in guidance available without repeating the error from chat. */}
 					{snapshot.account ? (
-						<ReauthBanner account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
+						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
 					) : null}
 					<ControllerBanner
 						controller={snapshot.controller}
@@ -1432,7 +1407,7 @@ function ChatWorkspaceContent({
 					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<McpServerBanner
-						sessionId={snapshot.sessionId}
+						sessionId={uiSessionId}
 						servers={brokenServers}
 						onReload={newWorkDisabled ? undefined : onReloadMcpServers}
 						reloading={reloadingMcpServers}
@@ -1443,11 +1418,13 @@ function ChatWorkspaceContent({
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
-						<ChatLinkProvider onLinkOpen={onLinkOpen} onFileOpen={onOpenFile} onSessionLinkOpen={onSessionLinkOpen} workspacePaths={filePaths}>
-							<ChatImageSourceProvider sessionId={snapshot.sessionId}>
+						<ChatLinkProvider onLinkOpen={onLinkOpen} onFileOpen={onOpenFile} onSessionLinkOpen={onSessionLinkOpen} remoteHost={Boolean(activeRemoteHostId)} workspacePaths={filePaths}>
+							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)}>
 								<Timeline
 									key={draftScopeKey}
 									snapshot={snapshot}
+									assetBaseUrl={assetBaseUrl}
+									remoteHost={Boolean(activeRemoteHostId)}
 									draftScope={draftScope}
 									hasOlder={hasOlder}
 									loadingOlder={loadingOlder}
@@ -1479,6 +1456,7 @@ function ChatWorkspaceContent({
 							>
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
 								<ChatComposer
+									focusRef={composerFocusRef}
 									key={`${draftScopeKey}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
 									queuedDock={composerQueuedDock}
 									approval={composerApproval}
@@ -1512,7 +1490,7 @@ function ChatWorkspaceContent({
 									onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
 									nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 									autoFocus={!reviewerActive}
-									autoFocusKey={snapshot.sessionId}
+									autoFocusKey={draftScope.sessionId}
 									// Steering is only meaningful into a turn that is running. A queued turn
 									// has not reached the provider, so there is nothing to steer.
 									onSteer={newWorkDisabled ? undefined : steer}
@@ -1525,8 +1503,11 @@ function ChatWorkspaceContent({
 									compacting={compacting}
 									compactUnavailable={compactUnavailable}
 									compactBlocked={Boolean(turn)}
-									draftSessionId={queueEdit ? undefined : snapshot.sessionId}
+									draftSessionId={queueEdit ? undefined : draftScope.sessionId}
 									draftSessionIncarnation={draftScope.incarnation}
+									assetBaseUrl={assetBaseUrl}
+									assetSessionId={snapshot.sessionId}
+									remoteHost={Boolean(activeRemoteHostId)}
 									acceptedClientMessageIds={acceptedClientMessageIds}
 								/>
 							</div>
@@ -1697,7 +1678,6 @@ function ChatHeader({
 	orderedAuxiliaryTabs,
 	onReorderAuxiliaryTabs,
 	inline,
-	topbarBounds,
 	session,
 	onSessionRenamed,
 }: {
@@ -1728,7 +1708,6 @@ function ChatHeader({
 	onSessionRenamed?: () => void | Promise<void>;
 	/** Fullscreen content cannot see the normal topbar portal outside its subtree. */
 	inline?: boolean;
-	topbarBounds: TopbarBounds;
 }) {
 	const { t } = useTranslation();
 	const providerLabel = agentLabel(snapshot.harness);
@@ -1765,13 +1744,11 @@ function ChatHeader({
 				<div
 					className={cn(
 						"flex min-w-0 shrink items-stretch",
-						!isSidebarOpen && isMac && "session-topbar-titlebar-clearance-mac",
+						isMac && "session-topbar-titlebar-clearance-mac",
 						!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
 					)}
 					data-testid="session-terminal-region"
-					style={{
-						width: topbarBounds.width > 0 ? topbarBounds.width : "100%",
-					}}
+					style={{ width: "100%" }}
 				>
 					<div
 						aria-label="Chat tabs"
@@ -2044,6 +2021,8 @@ function ControllerBanner({
  */
 function Timeline({
 	snapshot,
+	assetBaseUrl,
+	remoteHost,
 	draftScope,
 	hasOlder,
 	loadingOlder,
@@ -2065,6 +2044,8 @@ function Timeline({
 	localEchos = [],
 }: {
 	snapshot: ConversationSnapshot;
+	assetBaseUrl?: string;
+	remoteHost?: boolean;
 	draftScope: ChatDraftScope;
 	hasOlder?: boolean;
 	loadingOlder?: boolean;
@@ -2073,7 +2054,7 @@ function Timeline({
 	busy?: boolean;
 	onRollback?: (turnId: string) => void;
 	onOpenFiles?: () => void;
-	onOpenFile?: (path: string) => void;
+	onOpenFile?: (path: string, line?: number) => void;
 	retryControl?: ChatRetryControl;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	editPending?: boolean;
@@ -2086,6 +2067,7 @@ function Timeline({
 	localEchos?: ConversationLocalEcho[];
 }) {
 	const translateDraft = useChatDraftTranslation();
+	const uiSessionId = draftScope.sessionId;
 	const scroller = useRef<HTMLDivElement>(null);
 	const scrollContent = useRef<HTMLDivElement>(null);
 	const promptSpacer = useRef<HTMLDivElement>(null);
@@ -2148,23 +2130,23 @@ function Timeline({
 	);
 	useEffect(() => {
 		setChatDraftBoundary(
-			snapshot.sessionId,
+			draftScope.sessionId,
 			"inline-edit",
 			[
 				...(draftPersistenceError ? (["persistence-failed"] as const) : []),
 			],
 		);
-	}, [draftPersistenceError, snapshot.sessionId]);
+	}, [draftPersistenceError, draftScope.sessionId]);
 	useEffect(
-		() => () => setChatDraftBoundary(snapshot.sessionId, "inline-edit", undefined),
-		[snapshot.sessionId],
+		() => () => setChatDraftBoundary(draftScope.sessionId, "inline-edit", undefined),
+		[draftScope.sessionId],
 	);
 	// The inspector changes the minimap's visibility, but it must not cause this
 	// entire timeline to rerender. A live conversation can contain hundreds of
 	// DOM nodes, and inspector toggles are otherwise a broad synchronous commit.
 	// Keep that small accessibility/interaction boundary imperative instead.
 	const inspectorOpenRef = useRef(
-		inspectorIsOpen(useUiStore.getState().inspectorSessions, snapshot.sessionId),
+		inspectorIsOpen(useUiStore.getState().inspectorSessions, uiSessionId),
 	);
 	const turn = activeTurn(snapshot);
 	const [scrollbar, setScrollbar] = useState({
@@ -2189,7 +2171,8 @@ function Timeline({
 	const openFiles = useStableCallback(onOpenFiles);
 	const openFile = useStableCallback(onOpenFile);
 	const retryTurn = useStableCallback(retryControl?.retry);
-	const apiBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+	const localBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+	const apiBaseUrl = remoteHost ? assetBaseUrl ?? null : assetBaseUrl ?? localBaseUrl;
 	const editHumanMessage = useStableCallback(onEditHumanMessage);
 	const activateBranch = useStableCallback(onActivateBranch);
 	const canEditHumanMessage = Boolean(onEditHumanMessage) && !newWorkDisabled;
@@ -2293,13 +2276,13 @@ function Timeline({
 				if (hoveredMarkerRef.current !== null) setHoveredMarker(null);
 			}
 		};
-		setInspectorOpen(inspectorIsOpen(useUiStore.getState().inspectorSessions, snapshot.sessionId));
+		setInspectorOpen(inspectorIsOpen(useUiStore.getState().inspectorSessions, uiSessionId));
 		return useUiStore.subscribe((state, previous) => {
-			const currentOpen = inspectorIsOpen(state.inspectorSessions, snapshot.sessionId);
-			const previousOpen = inspectorIsOpen(previous.inspectorSessions, snapshot.sessionId);
+			const currentOpen = inspectorIsOpen(state.inspectorSessions, uiSessionId);
+			const previousOpen = inspectorIsOpen(previous.inspectorSessions, uiSessionId);
 			if (currentOpen !== previousOpen) setInspectorOpen(currentOpen);
 		});
-	}, [minimapEnabled, snapshot.sessionId]);
+	}, [minimapEnabled, uiSessionId]);
 	const consumedRetrySources = useMemo(() => retrySourceTurnIds(snapshot), [snapshot]);
 	const retryableTurns = useMemo(
 		() =>
@@ -3200,11 +3183,11 @@ const TurnGroup = memo(function TurnGroup({
 }: {
 	group: TimelineGroup;
 	sessionId: string;
-	apiBaseUrl: string;
+	apiBaseUrl: string | null;
 	onDecide: (requestId: string, decisionId: string) => void;
 	onRollback: (turnId: string) => void;
 	onOpenFiles?: () => void;
-	onOpenFile?: (path: string) => void;
+	onOpenFile?: (path: string, line?: number) => void;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	messageEdit?: MessageEditDraft;
 	onStartMessageEdit: (message: ConversationMessage) => void;
@@ -3463,7 +3446,7 @@ function TimelineItem({
 }: {
 	item: ConversationItem;
 	sessionId: string;
-	apiBaseUrl: string;
+	apiBaseUrl: string | null;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	messageEdit?: MessageEditDraft;

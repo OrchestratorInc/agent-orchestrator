@@ -26,19 +26,24 @@ export function PRCard({
 	session,
 	source,
 	summary,
+	hostId,
+	hostName,
 }: {
 	pr: DashboardPR;
 	session: DashboardSession;
 	source: SourceRef | undefined;
 	summary?: SessionPRSummary;
+	hostId: string;
+	hostName?: string;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const router = useRouter();
 	const openPage = useOpenPage();
+	const router = useRouter();
 	const state = summary ? stateVisualOf(t, summary.state as PRLifecycle) : prStateVisual(t, pr);
 	const title = summary?.title?.trim() || prTitle(pr, sessionTitle(session));
 	const project = shortLabel(summary?.repo || session.projectId || "Standalone");
+	const projectLabel = hostName ? `${hostName} · ${project}` : project;
 	const branches = summary
 		? [summary.sourceBranch, summary.targetBranch].filter(Boolean).join(" → ")
 		: session.branch || "";
@@ -53,14 +58,14 @@ export function PRCard({
 	return (
 		<Pressable
 			accessibilityRole="button"
-			accessibilityLabel={`${title}. Pull request ${pr.number}. ${status.text}.`}
+			accessibilityLabel={`${title}. ${projectLabel}. Pull request ${pr.number}. ${status.text}.`}
 			onPress={() => {
 				if (!source) return;
 				haptics.tap();
 				if (source.kind === "local") {
 					openPage({
 						pathname: "/review/[sessionId]",
-						params: { sessionId: session.id, prNumber: String(pr.number), prUrl: pr.url },
+						params: { sessionId: session.id, prNumber: String(pr.number), prUrl: pr.url, hostId: source.id },
 					});
 				} else {
 					router.push({
@@ -73,7 +78,7 @@ export function PRCard({
 		>
 			<View style={styles.eyebrow}>
 				<Feather name="git-pull-request" size={iconSize.sm} color={state.color} />
-				<Text style={styles.project} numberOfLines={1}>{project}</Text>
+				<Text style={styles.project} numberOfLines={1}>{projectLabel}</Text>
 				<Text style={[styles.status, { color: toneColor(t, status.tone) }]} numberOfLines={1}>{status.text}</Text>
 			</View>
 

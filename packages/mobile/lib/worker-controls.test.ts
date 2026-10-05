@@ -11,6 +11,7 @@ import {
 } from "./worker-controls";
 import type { Scoped } from "./environment/scopedBoard";
 import type { ProjectInfo, DashboardSession } from "./api";
+import { hostedProjectKey } from "./hostedRows";
 
 describe("filterWorkersByProject", () => {
 	it("keeps every worker when All projects is selected", () => {
@@ -21,6 +22,17 @@ describe("filterWorkersByProject", () => {
 	it("keeps only workers from the locally selected project", () => {
 		const workers = [{ projectId: "alpha" }, { projectId: "beta" }, { projectId: "alpha" }];
 		expect(filterWorkersByProject(workers, "beta")).toEqual([{ projectId: "beta" }]);
+	});
+
+	it("does not include another machine's workers when project IDs match", () => {
+		const projects = [
+			{ id: "same", name: "App", hostId: "a", hostName: "Laptop" },
+			{ id: "same", name: "App", hostId: "b", hostName: "Desktop" },
+		];
+		const workers = [{ projectId: "same", hostId: "a" }, { projectId: "same", hostId: "b" }];
+		expect(filterWorkersByProject(workers, hostedProjectKey(projects[1]), projects)).toEqual([workers[1]]);
+		expect(spawnProjectParam(hostedProjectKey(projects[1]), projects)).toEqual({ projectId: "same", hostId: "b" });
+		expect(workerProjectOptions(projects).map((item) => item.label)).toEqual(["All projects", "App · Laptop", "App · Desktop"]);
 	});
 });
 

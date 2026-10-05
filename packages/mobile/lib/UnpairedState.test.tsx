@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
 	alert: vi.fn(),
 }));
 vi.mock("./cloud/authStore", () => ({ useCloudAuth: () => state }));
+vi.mock("./store", () => ({ useApp: () => ({ selectedHostName: null, loading: false, reloadConfig: vi.fn(), configResolved: true }) }));
 vi.mock("expo-router", () => ({ useRouter: () => ({ push: state.push }) }));
 vi.mock("react-native", () => ({ Alert: { alert: state.alert } }));
 vi.mock("./ui", () => ({ Button: "Button", EmptyState: "EmptyState" }));

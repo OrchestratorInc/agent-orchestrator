@@ -4,7 +4,7 @@ import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
 import { shouldPoll } from "../../lib/appStatePoll";
 import { ChatSessionScreen } from "../../lib/chat/ChatSessionScreen";
 import { machineIdentity } from "../../lib/config";
-import { resourceKey, type SourceRef } from "../../lib/environment/scopedBoard";
+import { resourceKey, sourceKey, type SourceRef } from "../../lib/environment/scopedBoard";
 import { lookUpSession } from "../../lib/session/sessionLookup";
 import { CloudTerminalSessionScreen } from "../../lib/session/CloudTerminalSessionScreen";
 import TerminalSessionScreen from "../../lib/session/TerminalSessionScreen";
@@ -31,17 +31,19 @@ import { Button, EmptyState } from "../../lib/ui";
  * `sessionRouteView`, and when the route asks is `sessionLookupDue`.
  */
 export default function MobileSessionRoute() {
-	const { id: rawId, view: requestedView, source: sourceParam, sourceId, startup } = useLocalSearchParams<{ id: string; view?: string; source?: string; sourceId?: string; startup?: string }>();
+	const { id: rawId, view: requestedView, source: sourceParam, sourceId, startup, hostId } = useLocalSearchParams<{ id: string; view?: string; source?: string; sourceId?: string; startup?: string; hostId?: string }>();
 	const id = String(rawId ?? "");
 	const router = useRouter();
-	const { scopedBoard, sourceFor, refreshSource, config, connection } = useApp();
-	const route = resolveSessionRouteSource({ id, source: sourceParam, sourceId }, [...scopedBoard.sessions, ...scopedBoard.orchestrators]);
+	const { scopedBoard, sourceFor, refreshSource, configForHost, hostStates } = useApp();
+	const route = resolveSessionRouteSource({ id, source: sourceParam, sourceId, hostId }, [...scopedBoard.sessions, ...scopedBoard.orchestrators]);
 	const source: SourceRef | null = route.kind === "found" ? route.source : null;
 	const currentSource = source ? sourceFor(source) : undefined;
 	const listed = source ? [...scopedBoard.sessions, ...scopedBoard.orchestrators]
 		.find((entry) => resourceKey(entry.source, entry.value.id) === resourceKey(source, id))?.value : undefined;
 	const isListed = Boolean(listed);
-	const status = source ? scopedBoard.sources[source.kind] : undefined;
+	const status = source ? scopedBoard.sources[sourceKey(source)] : undefined;
+	const config = source?.kind === "local" ? configForHost(source.id) : null;
+	const connection = source?.kind === "local" ? hostStates.find((host) => host.hostId === source.id)?.connection ?? "closed" : "closed";
 	const configured = source?.kind === "local"
 		? status?.resolved ? !!currentSource : null
 		: source?.kind === "cloud" ? !!currentSource : false;
@@ -143,7 +145,7 @@ export default function MobileSessionRoute() {
 			</View>
 		);
 	}
-	const view = sessionRouteView({ listed, configured, connection: routeConnection, loading: !!status?.loading, lookup });
+	const view = sessionRouteView({ listed, configured, connection: routeConnection, loading: !!status?.loading, lookup, routeHostId: source?.id, currentHostId: source?.id });
 
 	switch (view.kind) {
 		case "screen": {
@@ -159,13 +161,24 @@ export default function MobileSessionRoute() {
 					<ActivityIndicator color={t.accent} />
 				</View>
 			);
+		case "wrongHost":
+			return (
+				<View style={styles.center}>
+					<EmptyState
+						icon="server"
+						title="Session belongs to another machine"
+						message="Open it from that machine's session list."
+						action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />}
+					/>
+				</View>
+			);
 		case "unpaired":
 			// The board's own unpaired state, word for word.
 			return (
 				<View style={styles.center}>
 					<EmptyState
 						icon="monitor-smartphone"
-						title="No desktop paired"
+						title="No machine paired"
 						action={<Button title="Scan pairing code" icon="maximize" onPress={() => router.push("/pair")} />}
 					/>
 				</View>
@@ -175,7 +188,7 @@ export default function MobileSessionRoute() {
 				<View style={styles.center}>
 					<EmptyState
 						icon="unplug"
-						title="Not connected to your desktop"
+						title="This machine is offline"
 						action={<Button title="Open board" icon="activity" variant="ghost" onPress={() => router.navigate("/")} />}
 					/>
 				</View>
@@ -196,7 +209,7 @@ export default function MobileSessionRoute() {
 					<EmptyState
 						icon="search"
 						title="Session not found"
-						message="It may have been deleted on your desktop."
+						message="It may have been deleted on that machine."
 						action={<Button title="Open board" icon="activity" variant="ghost" onPress={() => router.navigate("/")} />}
 					/>
 				</View>

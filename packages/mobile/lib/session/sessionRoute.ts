@@ -5,6 +5,7 @@ import type { DashboardSession, OrchestratorLink } from "../api";
 import { isSessionGone, shouldKeepPolling } from "../connectionError";
 import type { EnvironmentKind } from "../environment/types";
 import { resolveUnscopedId, type Scoped, type SourceRef } from "../environment/scopedBoard";
+import { hostRouteMatches } from "../hostRoute";
 import type { ConnStatus } from "../store";
 
 export type RouteSession = DashboardSession | OrchestratorLink;
@@ -18,10 +19,15 @@ export function routeSource(params: { source?: string | string[]; sourceId?: str
 }
 
 export function resolveSessionRouteSource(
-	params: { id: string; source?: string | string[]; sourceId?: string | string[] },
+	params: { id: string; source?: string | string[]; sourceId?: string | string[]; hostId?: string | string[] },
 	entries: readonly Scoped<{ id: string }>[],
 ): { kind: "found"; source: SourceRef } | { kind: "missing" | "ambiguous" | "invalid" } {
 	const explicit = routeSource(params);
+	if (params.hostId !== undefined) {
+		if (typeof params.hostId !== "string" || !params.hostId.trim()) return { kind: "invalid" };
+		if (explicit && (explicit.kind === "invalid" || explicit.kind !== "local" || explicit.id !== params.hostId)) return { kind: "invalid" };
+		return { kind: "found", source: { kind: "local", id: params.hostId } };
+	}
 	if (explicit) return explicit.kind === "invalid" ? explicit : { kind: "found", source: explicit };
 	const match = resolveUnscopedId(params.id, entries);
 	return match.kind === "found" ? { kind: "found", source: match.entry.source } : match;
@@ -45,6 +51,7 @@ export type KeyedSessionLookup = { key: string; lookup: SessionLookup };
 export type SessionRouteView =
 	| { kind: "screen"; session: RouteSession }
 	| { kind: "loading" }
+	| { kind: "wrongHost" }
 	| { kind: "unpaired" }
 	| { kind: "offline" }
 	| { kind: "ended" }
@@ -169,8 +176,12 @@ export function sessionRouteView(args: {
 	connection: ConnStatus;
 	loading: boolean;
 	lookup: SessionLookup;
+	routeHostId: string | undefined;
+	currentHostId: string | undefined;
 }): SessionRouteView {
-	if (args.configured === null) return { kind: "loading" };
+	if (args.configured === null && args.loading) return { kind: "loading" };
+	if (!hostRouteMatches(args.routeHostId, args.currentHostId)) return { kind: "wrongHost" };
+	if (args.configured === null) return args.connection === "connecting" ? { kind: "loading" } : { kind: "offline" };
 	if (!args.configured) return { kind: "unpaired" };
 	if (args.listed) return { kind: "screen", session: args.listed };
 	const { lookup } = args;

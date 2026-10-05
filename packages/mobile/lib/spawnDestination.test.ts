@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { canSubmitSpawn, initialSpawnDestination, spawnRequestIsCurrent } from "./spawnDestination";
 
 const local = { kind: "local" as const, id: "desktop-1" };
+const otherLocal = { kind: "local" as const, id: "desktop-2" };
 const cloud = { kind: "cloud" as const, id: "org-1" };
 
 describe("spawn destination", () => {
@@ -15,6 +16,8 @@ describe("spawn destination", () => {
 		expect(initialSpawnDestination(undefined, [local, cloud], cloud)).toEqual(cloud);
 		expect(initialSpawnDestination(local, [local, cloud], cloud)).toEqual(local);
 		expect(initialSpawnDestination(undefined, [local, cloud], { kind: "cloud", id: "old-org" })).toBeNull();
+		expect(initialSpawnDestination(null, [local, otherLocal, cloud], otherLocal)).toEqual(otherLocal);
+		expect(initialSpawnDestination(null, [local, cloud], otherLocal)).toBeNull();
 	});
 	it("cannot submit into a missing or stale destination", () => {
 		expect(canSubmitSpawn(null, "project", "codex", () => undefined)).toBe(false);
@@ -26,5 +29,6 @@ describe("spawn destination", () => {
 		expect(spawnRequestIsCurrent(1, 2, local, cloud)).toBe(false);
 		expect(spawnRequestIsCurrent(2, 2, local, cloud)).toBe(false);
 		expect(spawnRequestIsCurrent(2, 2, cloud, cloud)).toBe(true);
+		expect(spawnRequestIsCurrent(2, 2, local, otherLocal)).toBe(false);
 	});
 });

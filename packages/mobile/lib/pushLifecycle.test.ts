@@ -38,7 +38,7 @@ describe("push notification tap routing", () => {
 		expect(pushNotificationTarget(false, { type: "needs_input", sessionId: "same-id-as-local" })).toBeUndefined();
 		expect(pushNotificationTarget(false, { type: "ready_to_merge" })).toBeUndefined();
 	});
-	it("preserves Local PR target", () => {
-		expect(pushNotificationTarget(true, { type: "ready_to_merge" })).toBe("/prs");
+	it("does not route an unowned legacy PR notification to a machine", () => {
+		expect(pushNotificationTarget(true, { type: "ready_to_merge" })).toBe("/");
 	});
 });

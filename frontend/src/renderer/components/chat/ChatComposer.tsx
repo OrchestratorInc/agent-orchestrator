@@ -32,6 +32,7 @@ import {
 	useCallback,
 	useEffect,
 	useId,
+	useImperativeHandle,
 	useLayoutEffect,
 	useMemo,
 	useRef,
@@ -45,6 +46,7 @@ import {
 	type KeyboardEvent,
 	type ReactElement,
 	type ReactNode,
+	type Ref,
 } from "react";
 import { ArrowUp, Loader2, Plus, Square, X } from "lucide-react";
 import { Button } from "../ui/button";
@@ -100,6 +102,8 @@ import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 // These responses precede AppendUserMessage. Provider/transport errors can
 // follow durable acceptance and must keep the original delivery ID for recovery.
 const DEFINITIVE_SEND_REJECTIONS = new Set([
+	// Cloud validation failures reject the request before durable acceptance.
+	"validation_error",
 	"INVALID_BODY",
 	"CHAT_MESSAGE_EMPTY",
 	"INVALID_RESOURCE",
@@ -141,8 +145,10 @@ function restoredDeliveryNotice(delivery: ChatComposerDelivery | undefined): str
 }
 /** A retained server-owned attachment; image bytes stay in durable storage. */
 export type StoredComposerAttachment = ChatDraftRetainedAttachment & { dataUrl?: string };
+export type ChatComposerHandle = { focus(): void };
 
 export const ChatComposer = memo(function ChatComposer({
+	focusRef,
 	onSend,
 	busy,
 	willQueue,
@@ -183,8 +189,12 @@ export const ChatComposer = memo(function ChatComposer({
 	autoFocus = true,
 	draftSessionId,
 	draftSessionIncarnation,
+	assetBaseUrl,
+	remoteHost = false,
+	assetSessionId,
 	acceptedClientMessageIds,
 }: {
+	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (
 		text: string,
 		attachments?: FileAttachmentPayload[],
@@ -268,6 +278,12 @@ export const ChatComposer = memo(function ChatComposer({
 	draftSessionId?: string;
 	/** Immutable daemon identity for this exact incarnation of the session id. */
 	draftSessionIncarnation?: string;
+	/** Host-specific proxy origin for staged attachment reads. */
+	assetBaseUrl?: string;
+	/** The session belongs to a remote host, even if its proxy is disconnected. */
+	remoteHost?: boolean;
+	/** Daemon wire session ID when draft storage uses a host-scoped identity. */
+	assetSessionId?: string;
 	/** Client ids already present in daemon-authoritative conversation history. */
 	acceptedClientMessageIds?: ReadonlySet<string>;
 }) {
@@ -576,6 +592,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!autoFocus || disabled) return;
 		editor.current?.focus();
 	}, [autoFocus, disabled]);
+	useImperativeHandle(focusRef, () => ({ focus: focusEditor }), [focusEditor]);
 
 	useEffect(() => {
 		focusEditor();
@@ -1074,7 +1091,9 @@ export const ChatComposer = memo(function ChatComposer({
 						continue;
 					}
 					if (!attachment.stagedPath) throw new Error("Missing staged attachment");
-					const response = await fetch(attachmentURL(getApiBaseUrl(), attachmentScope.sessionId, attachment.stagedPath));
+					const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
+					if (assetOrigin === undefined) throw new Error("Remote host disconnected");
+					const response = await fetch(attachmentURL(assetOrigin, assetSessionId ?? attachmentScope.sessionId, attachment.stagedPath));
 					if (!response.ok) throw new Error("Could not read staged attachment");
 					const blob = await response.blob();
 					const data = await new Promise<string>((resolve, reject) => {
@@ -1434,8 +1453,9 @@ export const ChatComposer = memo(function ChatComposer({
 				// here and half there.
 				data-dragging={dragging || undefined}
 				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
-				onClick={(e) => {
+			onClick={(e) => {
 					if (controlsDisabled) return;
+					if ((e.target as HTMLElement).closest('[contenteditable="true"]')) return;
 					// The focusable context tooltip must keep its focus on click.
 					if (
 						e.target === e.currentTarget ||
@@ -1474,8 +1494,9 @@ export const ChatComposer = memo(function ChatComposer({
 					<ul className="flex flex-wrap gap-1.5" aria-label="Attached files">
 						{[...visibleRetainedAttachments, ...fileAttachments.attachments].map((file) => {
 							const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
-							const preview = file.dataUrl ?? (path && IMAGE_ATTACHMENT_PATH.test(path)
-								? attachmentURL(getApiBaseUrl(), boundarySessionId ?? "", path) : undefined);
+							const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
+							const preview = file.dataUrl ?? (path && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
+								? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
 							return (
 							<li
 								key={file.id}

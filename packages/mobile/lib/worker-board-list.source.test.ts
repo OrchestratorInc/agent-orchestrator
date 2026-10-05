@@ -18,8 +18,8 @@ describe("worker board list identity", () => {
 	});
 	it("does not let one source's error hide the other source's rows", () => {
 		expect(board).toContain("const { sessions, projects, sources } = scopedBoard;");
-		expect(board).toContain('sourceStatus={sources.local}');
-		expect(board).toContain('sourceStatus={sources.cloud}');
+		expect(board).toContain("sourceStatuses.map(([key, status]) => (");
+		expect(board).toContain("sourceStatus={status}");
 		expect(board).toContain("initialLoading && sessions.length === 0");
 	});
 	// Swapping the project filter in place left the board showing two lists at

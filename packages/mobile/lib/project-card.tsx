@@ -44,12 +44,13 @@ export function ProjectCard({
 	const status = orchestratorStatus(t, row.link);
 	const summary = projectCardSummary(row);
 	const blocker = projectBlockerLine(row);
+	const hostName = "hostName" in row.project && typeof row.project.hostName === "string" ? row.project.hostName : undefined;
 
 	return (
 		<View style={styles.row}>
 			<Pressable
 				accessibilityRole="button"
-				accessibilityLabel={`${row.project.name}, ${sourceLabel ? `${sourceLabel}, ` : ""}${onOrchestrator ? `${status.label}, ` : ""}${summary.workers}`}
+				accessibilityLabel={`${row.project.name}, ${sourceLabel ? `${sourceLabel}, ` : ""}${hostName ? `${hostName} machine, ` : ""}${onOrchestrator ? `${status.label}, ` : ""}${summary.workers}`}
 				accessibilityHint="Opens the project"
 				onPress={() => onOpenProject(row)}
 				style={({ pressed }) => [styles.body, pressed && styles.pressed]}
@@ -59,6 +60,9 @@ export function ProjectCard({
 						{row.project.name}
 					</Text>
 					{sourceLabel && <EnvironmentBadge sourceLabel={sourceLabel} theme={t} />}
+					{hostName && <View style={styles.machineBadge}>
+						<Text style={styles.machineBadgeText} numberOfLines={1}>{hostName}</Text>
+					</View>}
 					<Feather name="chevron-right" size={15} color={t.textFaint} />
 				</View>
 
@@ -234,6 +238,8 @@ const makeStyles = (t: Theme) =>
 
 		titleRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
 		project: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
+		machineBadge: { maxWidth: 112, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, borderRadius: 999, paddingHorizontal: space.xs, paddingVertical: 2 },
+		machineBadgeText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
 		timestamp: { color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontVariant: ["tabular-nums"], fontFamily: t.fontMono },
 
 		summaryRow: { flexDirection: "row", alignItems: "center", minWidth: 0 },

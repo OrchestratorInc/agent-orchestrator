@@ -113,7 +113,7 @@ export function WorkerBoardList({
 	identityKey?: string;
 }) {
 	const t = useTheme();
-	const { scopedBoard, killOn, renameWorkerOn, setWorkerPinnedOn, restoreOn, resumeAgentOn } = useApp();
+	const { scopedBoard, hostStates, killOn, renameWorkerOn, setWorkerPinnedOn, restoreOn, resumeAgentOn } = useApp();
 	const [renamingWorkerId, setRenamingWorkerId] = useState<string>();
 	const [activeSwipeId, setActiveSwipeId] = useState<string>();
 	const activeSwipeRef = useRef<{ id: string; close(): void } | undefined>(undefined);
@@ -132,15 +132,21 @@ export function WorkerBoardList({
 		() => new Map(scopedBoard.projects.map((entry) => [resourceKey(entry.source, entry.value.id), entry.value.name])),
 		[scopedBoard.projects],
 	);
+	const multipleHosts = hostStates.length > 1;
+	const projectNameFor = useCallback((entry: Scoped<DashboardSession>) => {
+		const name = projectNames.get(resourceKey(entry.source, entry.value.projectId)) ?? entry.value.projectId;
+		const host = entry.source.kind === "local" ? hostStates.find((item) => item.hostId === entry.source.id) : undefined;
+		return multipleHosts && host ? `${name} · ${host.name}${host.connection === "closed" ? " (offline)" : ""}` : name;
+	}, [hostStates, multipleHosts, projectNames]);
 	const filteredSessions = useMemo(
 		() =>
 			sessions.filter((entry) => filterWorkerSessions(
 				[entry.value],
 				query,
-				(projectId) => projectNames.get(resourceKey(entry.source, projectId)) ?? projectId,
+				() => projectNameFor(entry),
 				(status) => statusVisual(t, status).label,
 			).length > 0),
-		[sessions, query, projectNames, t],
+		[sessions, query, projectNameFor, t],
 	);
 	const { pinned, sections, archived } = useMemo(() => groupScopedSessions(t, sessions), [t, sessions]);
 	const filteredGroups = useMemo(() => groupScopedSessions(t, filteredSessions), [t, filteredSessions]);
@@ -284,27 +290,28 @@ export function WorkerBoardList({
 					const entry = item.entry;
 					const session = entry.value;
 					const rowKey = resourceKey(entry.source, entry.value.id);
-						return (
-							<BoardRowTransition>
-								<WorkerListRow
-									nowBucket={nowBucket}
-									session={session}
-									source={entry.source}
-									projectName={showProject ? projectNames.get(resourceKey(entry.source, session.projectId)) : session.harness || "Agent"}
-									{...(entry.source.kind === "local" ? { interactionMode: "full" as const,
-										isRenaming: renamingWorkerId === rowKey,
-										activeSwipeId,
-										onSwipeOpen: openExclusiveSwipe,
-										onSwipeClose: closeExclusiveSwipe,
-										onRenameStart: () => setRenamingWorkerId(rowKey),
-										onRenameCancel: () => setRenamingWorkerId(undefined),
-										onRename: (title: string) => renameWorkerOn(entry.source, session.id, title),
-										onSetPinned: (next: boolean) => updateWorkerPin(entry, next),
-										onDelete: () => confirmDeleteSession(entry),
-										onResume: () => runWorkerRecovery(entry, "resume"),
-										onRestore: () => runWorkerRecovery(entry, "restore"),
-									} : { interactionMode: "open-only" as const })}
-								/>
+					return (
+						<BoardRowTransition>
+							<WorkerListRow
+								nowBucket={nowBucket}
+								session={session}
+								source={entry.source}
+								rowKey={rowKey}
+								projectName={showProject ? projectNameFor(entry) : session.harness || "Agent"}
+								{...(entry.source.kind === "local" ? { interactionMode: "full" as const,
+									isRenaming: renamingWorkerId === rowKey,
+									activeSwipeId,
+									onSwipeOpen: openExclusiveSwipe,
+									onSwipeClose: closeExclusiveSwipe,
+									onRenameStart: () => setRenamingWorkerId(rowKey),
+									onRenameCancel: () => setRenamingWorkerId(undefined),
+									onRename: (title: string) => renameWorkerOn(entry.source, session.id, title),
+									onSetPinned: (next: boolean) => updateWorkerPin(entry, next),
+									onDelete: () => confirmDeleteSession(entry),
+									onResume: () => runWorkerRecovery(entry, "resume"),
+									onRestore: () => runWorkerRecovery(entry, "restore"),
+								} : { interactionMode: "open-only" as const })}
+							/>
 						</BoardRowTransition>
 					);
 				}}

@@ -7,6 +7,7 @@ import { AppState as RNAppState } from "react-native";
 import { shouldPoll } from "./appStatePoll";
 import {
 	ApiError,
+	delegateTask,
 	getNotifications,
 	getSessions,
 	killSession,
@@ -25,43 +26,45 @@ import {
 	type ProjectInfo,
 	type SessionMode,
 	type SpawnAttachmentInput,
-	type SpawnOptions,
 } from "./api";
-import { isConfigured, loadConfig, machineIdentity, type ServerConfig } from "./config";
+import { isConfigured, machineIdentity, type ServerConfig } from "./config";
 import { useCloudAuth } from "./cloud/authStore";
 import { loadEnvironment, saveEnvironment } from "./environment/store";
 import { loadSessionSourceBoard, spawnSessionThroughSource } from "./environment/board";
 import {
-	assertLocalEnvironment,
 	boardReadiness,
 	dispatchCurrentCloudBoardRequest,
 	publishCloudBoardResult,
 	selectBoardState,
-	sourceMatchesCurrent,
 	type BoardState,
 	type CloudBoardRequest,
 } from "./environment/boardSelection";
 import { resolveCloudSource, resolveLocalSource } from "./environment/resolve";
-import { ConfigLoadController } from "./environment/configLoadController";
 import { shouldPollCloudSource, shouldPollLocalSource } from "./environment/shouldPoll";
 import { composeBoards, type ScopedBoard, type SourceRef } from "./environment/scopedBoard";
+import { localConfigForSource } from "./environment/sourceResolution";
+import { createLocalSessionSource } from "./environment/local";
 import type { EnvironmentKind, SessionSource } from "./environment/types";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { cloudBoardPollInterval, pollIntervalFor } from "./pollInterval";
-import type { ConnectOptions } from "./connectRuntime";
+import { rejectedEndpointNeedsRace, type ConnectOptions } from "./connectRuntime";
 import type { Endpoint } from "./endpoints";
-import { activeHost, loadHosts } from "./hosts";
+import { activeHost, loadHosts, sameHostConnections, setActiveHost, type Host } from "./hosts";
 import { shouldReRace } from "./reRace";
 import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 import { pollResultIsCurrent, sameServerConfig } from "./sameConfig";
 import { shouldShowLoading } from "./configLoading";
 import { isDesktopUnreachable, shouldKeepPolling, userFacingError } from "./connectionError";
+import { IncompatibleHostVersionError } from "./race";
 import { primeInstallId } from "./installId";
 import { collectPRs } from "./prView";
-import { ALL_PROJECTS, NO_PROJECTS_KNOWN, projectsForMachine, resolveActiveProject, retainProjects, type KnownProjects } from "./projectFilter";
+import { ALL_PROJECTS, NO_PROJECTS_KNOWN, projectsForMachine, resolveActiveProject, retainProjects, sessionRowsForMachine, type KnownProjects } from "./projectFilter";
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry, trackFeature } from "./telemetry/runtime";
 import { useConversationEventTransport } from "./chat/conversationEvents";
+import { hostRouteMatches } from "./hostRoute";
+import { emptyHostSnapshot, useOtherHosts, type HostSnapshot } from "./otherHosts";
+import type { HostedOrchestrator, HostedProject, HostedSession } from "./hostedRows";
 
 const ACTIVE_PROJECT_KEY = "ao.activeProject";
 const EMPTY_BOARD: BoardState<ProjectInfo, DashboardSession, OrchestratorLink> = {
@@ -76,12 +79,26 @@ const EMPTY_BOARD: BoardState<ProjectInfo, DashboardSession, OrchestratorLink> =
 // tracks its own terminal mux connection separately.
 export type ConnStatus = "closed" | "connecting" | "open";
 
-export type { SpawnOptions } from "./api";
+// An options object rather than four optional positionals: `spawn(a, b, c, d)`
+// with every argument optional and same-typed is where call-site mistakes live.
+export type SpawnOptions = {
+	/** Prevent a stale composer from posting a same-ID project to a new machine. */
+	hostId: string;
+	/** Falls back to the active project, or the only project. */
+	projectId?: string;
+	prompt?: string;
+	harness?: string;
+	model?: string;
+	attachments?: SpawnAttachmentInput[];
+	/** Mobile defaults to Chat; TUI remains an explicit compatibility choice. */
+	mode?: SessionMode;
+	clientRequestId?: string;
+};
 
 type AppState = {
 	config: ServerConfig | null;
-	/** Readiness of the active environment's board. */
 	configured: boolean;
+	/** Readiness of the active environment's board. */
 	/** Saved Local pairing readiness, independent of the selected environment. */
 	localConfigured: boolean;
 	/**
@@ -111,13 +128,21 @@ type AppState = {
 	sourceFor: (source: SourceRef) => SessionSource | undefined;
 	refreshSource: (source: SourceRef) => Promise<void>;
 	refreshAll: () => Promise<void>;
-	spawnOn: (source: SourceRef, options: SpawnOptions) => Promise<{ id: string; projectId: string }>;
+	spawnOn: (source: SourceRef, options: import("./api").SpawnOptions & { clientRequestId?: string }) => Promise<{ id: string; projectId: string }>;
 	launchConductorOn: (source: SourceRef, projectId: string, clean?: boolean, mode?: SessionMode) => Promise<OrchestratorLink>;
 	killOn: (source: SourceRef, id: string) => Promise<void>;
 	renameWorkerOn: (source: SourceRef, id: string, displayName: string) => Promise<void>;
 	setWorkerPinnedOn: (source: SourceRef, id: string, pinned: boolean) => Promise<void>;
 	restoreOn: (source: SourceRef, id: string) => Promise<void>;
 	resumeAgentOn: (source: SourceRef, id: string) => Promise<void>;
+	/** Paired machine owning this view, even while its endpoint is offline. */
+	currentHostId: string | undefined;
+	selectedHostName: string | null;
+	/** One independently connected snapshot per paired machine. */
+	hostStates: HostSnapshot[];
+	allSessions: HostedSession[];
+	allProjects: HostedProject[];
+	allOrchestrators: HostedOrchestrator[];
 	/** Whether the first config resolution has finished. Until it has, an
 	 *  unconfigured store means "still finding the machine", not "unpaired". */
 	configResolved: boolean;
@@ -154,22 +179,25 @@ type AppState = {
 	getLastSyncAt: () => number;
 	// actions
 	/**
-	 * Races the active machine again and resolves to the config it settled on.
-	 * Rejects only if local storage cannot be read.
+	 * Races the selected machine's endpoints. Null means none passed the host
+	 * identity check, so a cached address must not receive its credential.
 	 */
-	reloadConfig: (options?: ConnectOptions) => Promise<ServerConfig>;
+	reloadConfig: (options?: ConnectOptions) => Promise<ServerConfig | null>;
+	switchHost: (id: string) => Promise<void>;
 	refresh: () => Promise<void>;
+	refreshHost: (hostId: string) => Promise<void>;
+	configForHost: (hostId: string) => ServerConfig | null;
 	setActiveProject: (id: string) => void;
-	spawn: (opts: SpawnOptions) => Promise<{ id: string; projectId: string }>;
-	launchConductor: (projectId: string, clean?: boolean, mode?: SessionMode) => Promise<OrchestratorLink>;
-	merge: (pr: DashboardPR) => Promise<void>;
-	kill: (id: string) => Promise<void>;
-	renameWorker: (id: string, displayName: string) => Promise<void>;
-	setWorkerPinned: (id: string, pinned: boolean) => Promise<void>;
-	restore: (id: string) => Promise<void>;
+	spawn: (opts: SpawnOptions) => Promise<DashboardSession>;
+	launchConductor: (projectId: string, clean?: boolean, mode?: SessionMode, hostId?: string) => Promise<OrchestratorLink>;
+	merge: (pr: DashboardPR, hostId?: string) => Promise<void>;
+	kill: (id: string, hostId?: string) => Promise<void>;
+	renameWorker: (id: string, displayName: string, hostId?: string) => Promise<void>;
+	setWorkerPinned: (id: string, pinned: boolean, hostId?: string) => Promise<void>;
+	restore: (id: string, hostId?: string) => Promise<void>;
 	/** Restart a stopped agent without restoring a terminated AO session. */
-	resumeAgent: (id: string) => Promise<void>;
-	send: (id: string, message: string) => Promise<void>;
+	resumeAgent: (id: string, hostId?: string) => Promise<void>;
+	send: (id: string, message: string, hostId?: string) => Promise<void>;
 };
 
 const AppContext = createContext<AppState | null>(null);
@@ -178,6 +206,58 @@ export function useApp(): AppState {
 	const ctx = useContext(AppContext);
 	if (!ctx) throw new Error("useApp must be used within <AppProvider>");
 	return ctx;
+}
+
+/** Reuse the normal session/project screens with a different daemon behind them. */
+export function HostScope({ hostId, children }: { hostId: string; children: ReactNode }) {
+	const app = useApp();
+	const host = app.hostStates.find((item) => item.hostId === hostId);
+	const isSelected = app.currentHostId === hostId;
+	const scoped = useMemo<AppState>(() => {
+		if (isSelected && app.environment === "local") return app;
+		const config = host?.config ?? null;
+		const projects = host?.projects ?? [];
+		return {
+			...app,
+			environment: "local",
+			sessionSource: app.sourceFor({ kind: "local", id: hostId }),
+			config,
+			configured: !!config && isConfigured(config),
+			currentHostId: host?.hostId,
+			selectedHostName: host?.name ?? null,
+			activeEndpoints: host?.endpoints ?? [],
+			projects,
+			projectsKnown: host?.projectsKnown ?? false,
+			sessions: host?.sessions ?? [],
+			orchestrators: host?.orchestrators ?? [],
+			orchestratorId: host?.orchestratorId ?? null,
+			stats: host?.stats ?? {},
+			activeProjectId: resolveActiveProject(app.activeProjectId, projects, host?.projectsKnown ?? false),
+			connection: host?.connection ?? "closed",
+			notificationsUnread: host?.notificationsUnread ?? 0,
+			loading: host?.loading ?? false,
+			error: host?.error ?? null,
+			errorStatus: host?.errorStatus ?? null,
+			unreachable: isDesktopUnreachable({ connection: host?.connection ?? "closed", error: host?.error ?? null, errorStatus: host?.errorStatus ?? null }),
+			getLastSyncAt: () => host?.lastSyncAt ?? 0,
+			refresh: () => app.refreshHost(hostId),
+			spawn: (opts) => app.spawn({ ...opts, hostId }),
+			launchConductor: (projectId, clean, mode) => app.launchConductor(projectId, clean, mode, hostId),
+			merge: (pr) => app.merge(pr, hostId),
+			kill: (id) => app.kill(id, hostId),
+			renameWorker: (id, name) => app.renameWorker(id, name, hostId),
+			setWorkerPinned: (id, pinned) => app.setWorkerPinned(id, pinned, hostId),
+			restore: (id) => app.restore(id, hostId),
+			resumeAgent: (id) => app.resumeAgent(id, hostId),
+			send: (id, message) => app.send(id, message, hostId),
+		};
+	}, [app, host, hostId, isSelected]);
+	return <AppContext.Provider value={scoped}>{children}</AppContext.Provider>;
+}
+
+function HostConversationTransport({ config }: { config: ServerConfig }) {
+	useConversationEventTransport(config);
+	return null;
 }
 
 // Convenience selectors -------------------------------------------------------
@@ -236,15 +316,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		setEnvironmentState(kind);
 		void saveEnvironment(kind);
 	}, []);
-
+	const [pairedHosts, setPairedHosts] = useState<Host[]>([]);
+	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
 	const [config, setConfig] = useState<ServerConfig | null>(null);
 	// Whether resolution has finished at least once. Distinguishes "no config
 	// yet" from "no machine paired" — identical as state, opposite to the user.
 	const [configResolved, setConfigResolved] = useState(false);
+	const [selectedHostName, setSelectedHostName] = useState<string | null>(null);
 	const [activeEndpoints, setActiveEndpoints] = useState<Endpoint[]>([]);
 	const [knownProjects, setKnownProjects] = useState<KnownProjects>(NO_PROJECTS_KNOWN);
 	const [sessions, setSessions] = useState<DashboardSession[]>([]);
 	const [orchestrators, setOrchestrators] = useState<OrchestratorLink[]>([]);
+	const [sessionMachine, setSessionMachine] = useState("");
 	const [orchestratorId, setOrchestratorId] = useState<string | null>(null);
 	const [stats, setStats] = useState<DashboardStats>({});
 	const [chosenProjectId, setChosenProjectId] = useState<string>(ALL_PROJECTS);
@@ -255,7 +338,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const [errorStatus, setErrorStatus] = useState<number | null>(null);
 	const [cloudBoard, setCloudBoard] = useState<BoardState<ProjectInfo, DashboardSession, OrchestratorLink>>(EMPTY_BOARD);
 	const [cloudBoardOwner, setCloudBoardOwner] = useState<SessionSource | undefined>();
-	const [localSnapshotMachine, setLocalSnapshotMachine] = useState<string | null>(null);
 	const cloudRequestGenerationRef = useRef(0);
 	const activeEnvironmentRef = useRef<EnvironmentKind | null>(environment);
 	const cloudBoardRequestRef = useRef<CloudBoardRequest<SessionSource> | undefined>(undefined);
@@ -267,15 +349,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		sessionEpoch: cloudAuth.sessionEpoch,
 	}), [cloudAuth.client, cloudAuth.signedIn, cloudAuth.orgId, cloudAuth.sessionEpoch]);
 	const sessionSource = environment === "cloud" ? cloudSource : environment === "local" ? localSource : undefined;
-	const localMachineId = config && isConfigured(config) ? machineIdentity(config) : null;
 	const cloudOrgId = cloudSource ? cloudAuth.orgId : null;
-	const sourceIdentityRef = useRef({ localId: localMachineId, cloudId: cloudOrgId, localSource, cloudSource });
-	sourceIdentityRef.current = { localId: localMachineId, cloudId: cloudOrgId, localSource, cloudSource };
-	// Start authenticated streaming only after the REST probe succeeds. A stale
-	// password must cost one failed request, not a poll plus a parallel SSE attempt.
-	useConversationEventTransport(connection === "open" ? config : null);
-
 	const cfgRef = useRef<ServerConfig | null>(null);
+	const configResolution = useRef(0);
 	// Gate for the connected event: emit only on the not-open -> open transition,
 	// never on every poll tick. openRef tracks the current state; everConnectedRef
 	// tells a fresh launch apart from a later reconnect.
@@ -307,19 +383,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// while backgrounded rather than rely on the OS suspending the JS timer
 	// whenever it feels like it.
 	const [appActive, setAppActive] = useState(() => shouldPoll(RNAppState.currentState));
-
-	useEffect(() => {
-		const sub = RNAppState.addEventListener("change", (s) => {
-			const active = shouldPoll(s);
-			// Coming back to the foreground is the moment the phone is most
-			// likely to be on a different network than when it went away, so
-			// it is worth re-checking the path rather than waiting out a timer.
-			if (active && !pollActiveRef.current) resumedRef.current = true;
-			pollActiveRef.current = active;
-			setAppActive(active);
-		});
-		return () => sub.remove();
-	}, []);
+	const otherHosts = useOtherHosts(pairedHosts, selectedHostId, appActive);
 
 	// Warm the install id cache as early as possible so the first REST poll tick
 	// (fired from the config effect below) can send X-AO-Install-Id synchronously
@@ -344,44 +408,133 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const lastReRaceAt = useRef(0);
 	// Set when the app returns to the foreground, consumed by the upgrade check.
 	const resumedRef = useRef(false);
-	const configLoadControllerRef = useRef<ConfigLoadController | null>(null);
-	if (!configLoadControllerRef.current) {
-		configLoadControllerRef.current = new ConfigLoadController(
-			{
-				loadSaved: loadConfig,
-				resolveActive: (options) => resolveActiveConfig(runtimeResolveDeps(options)),
-				loadEndpoints: async () => {
-					try {
-						return (await activeHost())?.endpoints ?? [];
-					} catch {
-						return [];
-					}
-				},
-			},
-			({ config: loaded, endpoints, raced }) => {
-				const prev = cfgRef.current;
-				const next = sameServerConfig(prev, loaded) ? (prev as typeof loaded) : loaded;
-				if (raced) lastReRaceAt.current = Date.now();
-				cfgRef.current = next;
-				setConfig(next);
-				setActiveEndpoints(endpoints);
+	const reloadConfig = useCallback(async (options?: ConnectOptions): Promise<ServerConfig | null> => {
+		const resolution = ++configResolution.current;
+		// Races the active machine's endpoints rather than reading one stored
+		// address, so the app lands on LAN at home and the tunnel from anywhere
+		// else without the user choosing. Failed identity probes leave the
+		// selected machine offline instead of reusing an unverified address.
+		// Marked resolved whatever happens below. An unhandled failure here would
+		// otherwise leave the loader up forever, which is a worse failure than
+		// the blank screen this flag exists to prevent.
+		try {
+			const selected = await activeHost();
+			if (resolution !== configResolution.current) return null;
+			setSelectedHostName(selected?.name ?? null);
+			setSelectedHostId(selected?.id ?? null);
+			if ((selected?.id ?? "") !== (cfgRef.current?.hostId ?? "")) {
+				// Hide the previous machine's board and stop its in-flight polls
+				// before waiting for the newly selected machine to answer.
+				cfgRef.current = null;
+				setConfig(null);
+				setConfigResolved(false);
+				setSessions([]);
+				setOrchestrators([]);
+				setSessionMachine("");
+				setOrchestratorId(null);
+				setStats({});
+				setNotificationsUnread(0);
+				lastSyncAtRef.current = 0;
+			}
+			// Let every other paired machine connect while the selected one's
+			// endpoint race is still waiting for an unreachable LAN or tunnel.
+			const hosts = await loadHosts().catch(() => null);
+			if (resolution !== configResolution.current) return null;
+			if (hosts) setPairedHosts((previous) => sameHostConnections(previous, hosts) ? previous : hosts);
+			const c = await resolveActiveConfig(runtimeResolveDeps(options));
+			if (resolution !== configResolution.current) return null;
+		// Keep the previous object when the endpoint has not actually changed.
+		// Resolution builds a fresh one every time, and the live conversation
+		// stream, the poll loop and the terminal mux all key on this value's
+		// identity — handing them a new object for the same endpoint tears them
+		// down and rebuilds them, which showed up as chat replies arriving only
+		// on the next poll instead of streaming in.
+		// Stamped here so every race counts towards the cooldown, however it was
+		// triggered — otherwise a failure race and an upgrade race can fire back
+		// to back and thrash the connection.
+			lastReRaceAt.current = Date.now();
+			const prev = cfgRef.current;
+			const next = sameServerConfig(prev, c) ? (prev as typeof c) : c;
+			cfgRef.current = next;
+			setConfig(next);
+			// Read alongside the config so a failure can be explained: a stored
+			// tunnel that no longer answers is a rotated hostname, not a machine
+			// that is merely out of range.
+			const active = await activeHost().catch(() => selected);
+			if (resolution !== configResolution.current) return null;
+			setActiveEndpoints(active?.endpoints ?? []);
+			setSelectedHostId(active?.id ?? null);
+			return next;
+		} catch (cause) {
+			if (!(cause instanceof IncompatibleHostVersionError)) throw cause;
+			if (resolution !== configResolution.current) return null;
+			cfgRef.current = null;
+			setConfig(null);
+			setError(cause.message);
+			setErrorStatus(426);
+			setConnection("closed");
+			return null;
+		} finally {
+			if (resolution === configResolution.current) {
 				setConfigResolved(true);
-			},
-		);
-	}
-
-	useLayoutEffect(() => {
-		configLoadControllerRef.current?.setLocalEnabled(true);
-	}, []);
-
-	const reloadConfig = useCallback(async (options?: ConnectOptions): Promise<ServerConfig> => {
-		const loaded = await configLoadControllerRef.current?.reload(options);
-		return loaded ?? loadConfig();
+				// An unreachable selected host must not hide other paired hosts.
+				const hosts = await loadHosts().catch(() => null);
+				if (resolution === configResolution.current && hosts) {
+					setPairedHosts((previous) => sameHostConnections(previous, hosts) ? previous : hosts);
+				}
+			}
+		}
 	}, []);
 
 	useEffect(() => {
-		void reloadConfig();
+		const sub = RNAppState.addEventListener("change", (state) => {
+			const active = shouldPoll(state);
+			if (active === pollActiveRef.current) return;
+			pollActiveRef.current = active;
+			if (!active) {
+				// A LAN address can point at a different machine when the phone wakes.
+				// Keep display rows, but never reuse its old bearer connection.
+				configResolution.current++;
+				cfgRef.current = null;
+				setConfig(null);
+				setConfigResolved(false);
+				setConnection("closed");
+			} else {
+				resumedRef.current = true;
+				void reloadConfig();
+			}
+			setAppActive(active);
+		});
+		return () => sub.remove();
 	}, [reloadConfig]);
+
+	const switchHost = useCallback(async (id: string) => {
+		// Stop A's in-flight polls before the persisted selection changes. A
+		// response that lands after this point must not repopulate B's screen.
+		configResolution.current++;
+		cfgRef.current = null;
+		setConfig(null);
+		setConfigResolved(false);
+		try {
+			await setActiveHost(id);
+		} catch (error) {
+			await reloadConfig();
+			throw error;
+		}
+		await reloadConfig();
+	}, [reloadConfig]);
+
+	useEffect(() => {
+		reloadConfig();
+	}, [reloadConfig]);
+
+	// An offline selected host still needs to reconnect when its network returns.
+	// Without this, a failed initial endpoint race leaves it closed until a tap.
+	useEffect(() => {
+		if (!appActive || !configResolved || selectedHostId === null || config) return;
+		const timer = setInterval(() => void reloadConfig(), 15_000);
+		return () => clearInterval(timer);
+	}, [appActive, configResolved, selectedHostId, config, reloadConfig]);
 
 	// Nothing re-picks a path while the current one answers, so once the app
 	// fell to the tunnel it stayed there even after Wi-Fi came back — observed
@@ -396,8 +549,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			resumedRef.current = false;
 			let known: Endpoint[] = [];
 			try {
-				// Most-recent-first, so the head is the machine in use.
-				known = (await loadHosts())[0]?.endpoints ?? [];
+				known = (await activeHost())?.endpoints ?? [];
 			} catch {
 				return; // Storage unavailable: leave the working connection alone.
 			}
@@ -518,8 +670,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				machineIdentity(c),
 			));
 			setSessions(sess.sessions);
-			setLocalSnapshotMachine(machineIdentity(c));
 			setOrchestrators(sess.orchestrators);
+			setSessionMachine(machineIdentity(c));
 			setOrchestratorId(sess.orchestratorId);
 			setStats(sess.stats);
 			setError(null);
@@ -568,11 +720,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// Auth failures are not transient — don't keep polling into a lockout.
 			// Network/other errors are transient, so keep polling for recovery.
 			// Decided from the status, not the message text: see shouldKeepPolling.
-			return shouldKeepPolling(status);
+			const keepPolling = shouldKeepPolling(status);
+			if (status === 426) {
+				cfgRef.current = null;
+				setConfig(null);
+			}
+			if (await rejectedEndpointNeedsRace(c, status) && pollResultIsCurrent(c, cfgRef.current)) {
+				// A different machine can acquire the same LAN address while the app
+				// stays foregrounded. Drop that URL before racing verified endpoints.
+				cfgRef.current = null;
+				setConfig(null);
+				void reloadConfig().catch(() => {});
+			}
+			return keepPolling;
 		} finally {
 			if (pollResultIsCurrent(c, cfgRef.current)) setLoading(false);
 		}
-	}, []);
+	}, [reloadConfig]);
 
 	// (Re)start the REST poll whenever the config changes. Stops polling on an
 	// auth failure so the phone can't lock itself out by hammering a bad password.
@@ -582,8 +746,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		openRef.current = false;
 		// The paired desktop has its own poll gate. It remains live while Cloud
 		// refreshes independently, but stops heartbeating while backgrounded.
-		if (!shouldPollLocalSource({ paired: !!localSource, appActive })) {
-			if (!localSource) setConnection("closed");
+		if (!shouldPollLocalSource({ paired: pairedHosts.length > 0, appActive })) {
+			if (!pairedHosts.length) setConnection("closed");
 			return;
 		}
 		if (!config || !isConfigured(config)) {
@@ -643,7 +807,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// boundary instead of one whole request-timeout later.
 			stopped = true;
 		};
-	}, [config, fetchAll, appActive, reloadConfig, configResolved, localSource]);
+	}, [config, fetchAll, appActive, reloadConfig, configResolved, pairedHosts.length]);
 
 	const setActiveProject = useCallback((id: string) => {
 		setChosenProjectId(id);
@@ -652,50 +816,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 	// During a re-pair, the previous machine's retained list is not evidence
 	// about the new machine. Keep it hidden until the active machine answers.
+	const activeMachine = config && isConfigured(config) ? machineIdentity(config) : "";
+	const visibleSessions = useMemo(
+		() => sessionRowsForMachine(sessions, sessionMachine, activeMachine),
+		[sessions, sessionMachine, activeMachine],
+	);
+	const visibleOrchestrators = useMemo(
+		() => sessionRowsForMachine(orchestrators, sessionMachine, activeMachine),
+		[orchestrators, sessionMachine, activeMachine],
+	);
 	const { projects: localProjects, known: localProjectsKnown } = projectsForMachine(
 		knownProjects,
-		config && isConfigured(config) ? machineIdentity(config) : "",
+		activeMachine,
 	);
 	const localBoard: BoardState<ProjectInfo, DashboardSession, OrchestratorLink> = useMemo(() => ({
 		projects: localProjects,
-		sessions: localSnapshotMachine === localMachineId ? sessions : [],
-		orchestrators: localSnapshotMachine === localMachineId ? orchestrators : [],
+		sessions: visibleSessions,
+		orchestrators: visibleOrchestrators,
 		loading,
 		error,
-	}), [localProjects, localSnapshotMachine, localMachineId, sessions, orchestrators, loading, error]);
-	const scopedBoard = useMemo(() => composeBoards({
-		local: {
-			status: {
-				resolved: configResolved,
-				available: !!localSource,
-				loading: !configResolved || (loading && localSnapshotMachine !== localMachineId),
-				stale: !!error && localSnapshotMachine === localMachineId,
-				error,
-			},
-			snapshot: localMachineId && localSnapshotMachine === localMachineId
-				? { source: { kind: "local", id: localMachineId }, board: localBoard }
-				: undefined,
-		},
-		cloud: {
-			status: {
-				resolved: cloudAuth.signedIn !== null && (cloudAuth.signedIn === false || !!cloudAuth.orgId || !cloudAuth.orgLoading),
-				available: !!cloudSource,
-				loading: cloudAuth.orgLoading || cloudBoard.loading,
-				stale: !!cloudBoard.error && cloudBoardOwner === cloudSource,
-				error: cloudAuth.orgError ?? cloudBoard.error,
-			},
-			snapshot: cloudOrgId && cloudBoardOwner === cloudSource
-				? { source: { kind: "cloud", id: cloudOrgId }, board: cloudBoard }
-				: undefined,
-		},
-	}), [configResolved, localSource, loading, localSnapshotMachine, localMachineId, error, localBoard,
-		cloudAuth.signedIn, cloudAuth.orgId, cloudAuth.orgLoading, cloudAuth.orgError,
-		cloudSource, cloudBoard, cloudBoardOwner, cloudOrgId]);
+	}), [localProjects, visibleSessions, visibleOrchestrators, loading, error]);
 	const localPRs = useMemo(() => collectPRs(localBoard.sessions), [localBoard.sessions]);
-	const availableSources = useMemo(() => [
-		...(localMachineId && localSource ? [{ kind: "local" as const, id: localMachineId }] : []),
-		...(cloudOrgId && cloudSource ? [{ kind: "cloud" as const, id: cloudOrgId }] : []),
-	], [localMachineId, localSource, cloudOrgId, cloudSource]);
 	const boardSelection = selectBoardState({
 		environment,
 		sourceKind: sessionSource?.kind,
@@ -717,117 +858,180 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		() => resolveActiveProject(chosenProjectId, projects, projectsKnown),
 		[chosenProjectId, projects, projectsKnown],
 	);
-
+	const hostStates = useMemo<HostSnapshot[]>(() => pairedHosts.map((host) => {
+		if (host.id !== selectedHostId) return otherHosts.snapshots[host.id] ?? emptyHostSnapshot(host);
+		return {
+			hostId: host.id,
+			name: host.name,
+			endpoints: activeEndpoints,
+			config,
+			connection,
+			loading,
+			error,
+			errorStatus,
+			projects: localProjects,
+			projectsKnown: localProjectsKnown,
+			sessions: visibleSessions,
+			orchestrators: visibleOrchestrators,
+			orchestratorId,
+			stats,
+			notificationsUnread,
+			lastSyncAt: lastSyncAtRef.current,
+		};
+	}), [pairedHosts, selectedHostId, otherHosts.snapshots, activeEndpoints, config, connection, loading, error, errorStatus, localProjects, localProjectsKnown, visibleSessions, visibleOrchestrators, orchestratorId, stats, notificationsUnread]);
+	const scopedBoard = useMemo(() => composeBoards([
+		...hostStates.map((host) => ({
+			source: { kind: "local" as const, id: host.hostId },
+			status: {
+				resolved: !host.loading,
+				available: !!host.config,
+				loading: host.loading,
+				stale: !!host.error && (host.projectsKnown || host.sessions.length > 0),
+				error: host.error,
+			},
+			snapshot: host.projectsKnown || host.sessions.length > 0
+				? { board: { projects: host.projects, sessions: host.sessions, orchestrators: host.orchestrators } }
+				: undefined,
+		})),
+		...(cloudOrgId ? [{
+			source: { kind: "cloud" as const, id: cloudOrgId },
+			status: {
+				resolved: cloudAuth.signedIn !== null && !cloudAuth.orgLoading,
+				available: !!cloudSource,
+				loading: cloudAuth.orgLoading || cloudBoard.loading,
+				stale: !!cloudBoard.error && cloudBoardOwner === cloudSource,
+				error: cloudAuth.orgError ?? cloudBoard.error,
+			},
+			snapshot: cloudBoardOwner === cloudSource ? { board: cloudBoard } : undefined,
+		}] : []),
+	]), [hostStates, cloudOrgId, cloudAuth.signedIn, cloudAuth.orgLoading, cloudAuth.orgError, cloudSource, cloudBoard, cloudBoardOwner]);
+	const availableSources = useMemo(() => [
+		...hostStates.map((host) => ({ kind: "local" as const, id: host.hostId })),
+		...(cloudOrgId && cloudSource ? [{ kind: "cloud" as const, id: cloudOrgId }] : []),
+	], [hostStates, cloudOrgId, cloudSource]);
+	const allSessions = useMemo<HostedSession[]>(() => hostStates.flatMap((host) => host.sessions.map((session) => ({ ...session, hostId: host.hostId, hostName: host.name }))), [hostStates]);
+	const allProjects = useMemo<HostedProject[]>(() => hostStates.flatMap((host) => host.projects.map((project) => ({ ...project, hostId: host.hostId, hostName: host.name }))), [hostStates]);
+	const allOrchestrators = useMemo<HostedOrchestrator[]>(() => hostStates.flatMap((host) => host.orchestrators.map((link) => ({ ...link, hostId: host.hostId, hostName: host.name }))), [hostStates]);
+	const configForHost = useCallback((hostId: string): ServerConfig | null => {
+		if (hostId === selectedHostId) return cfgRef.current;
+		return otherHosts.configForHost(hostId);
+	}, [selectedHostId, otherHosts.configForHost]);
+	const requireConfig = useCallback((hostId?: string): ServerConfig => {
+		const c = hostId === undefined ? cfgRef.current : configForHost(hostId);
+		if (!c || (hostId !== undefined && !hostRouteMatches(hostId, c.hostId))) throw new Error("Host is not connected");
+		return c;
+	}, [configForHost]);
+	const refreshHost = useCallback(async (hostId: string) => {
+		if (hostId === selectedHostId) await fetchAll();
+		else await otherHosts.refreshHost(hostId);
+	}, [selectedHostId, fetchAll, otherHosts.refreshHost]);
 	// Pick a sensible project for actions that need one (spawn / conductor).
 	const targetProject = useCallback((): string | null => {
-		if (activeProjectId !== ALL_PROJECTS) return activeProjectId;
-		if (projects.length === 1) return projects[0].id;
+		const selectedProject = resolveActiveProject(chosenProjectId, localProjects, localProjectsKnown);
+		if (selectedProject !== ALL_PROJECTS) return selectedProject;
+		if (localProjects.length === 1) return localProjects[0].id;
 		return null;
-	}, [activeProjectId, projects]);
-	const assertLocalAction = useCallback(() => {
-		assertLocalEnvironment(activeEnvironmentRef.current);
-	}, []);
+	}, [chosenProjectId, localProjects, localProjectsKnown]);
 
 	const spawn = useCallback(
-		async ({ projectId, prompt, harness, model, mode, attachments }: SpawnOptions) => {
-			const source = sessionSource;
+		async ({ hostId, projectId, prompt, harness, model, mode, attachments, clientRequestId }: SpawnOptions) => {
 			const resolvedMode = mode ?? "chat";
 			return trackFeature("spawn", async () => {
-				const proj = projectId ?? targetProject();
-				if (!source) throw new Error("The selected environment is not ready.");
+				const c = requireConfig(hostId);
+				const hostProjects = hostStates.find((host) => host.hostId === hostId)?.projects ?? [];
+				const proj = projectId ?? (hostId === selectedHostId ? targetProject() : hostProjects.length === 1 ? hostProjects[0].id : null);
 				if (!proj) throw new Error("Pick a project first");
-				return spawnSessionThroughSource(source, {
+				const session = await delegateTask(c, {
 					projectId: proj,
-					prompt,
-					harness,
+					brief: prompt ?? "",
+					agent: harness,
 					model,
 					mode: resolvedMode,
 					attachments,
-				}, source.kind === "cloud"
-					? fetchCloudBoard
-					: async () => { await fetchAll(); });
+					clientRequestId,
+				});
+				await refreshHost(hostId);
+				return session;
 			}, { mode: resolvedMode });
 		},
-		[sessionSource, targetProject, fetchAll, fetchCloudBoard],
+		[targetProject, requireConfig, hostStates, selectedHostId, refreshHost],
 	);
 
 	const launchConductor = useCallback(
-		async (projectId: string, clean = false, mode: SessionMode = "chat") =>
+		async (projectId: string, clean = false, mode: SessionMode = "chat", hostId?: string) =>
 			trackFeature("conductor", async () => {
-				assertLocalAction();
-				const c = cfgRef.current!;
+				const c = requireConfig(hostId);
 				const link = await apiLaunchOrchestrator(c, projectId, clean, mode);
-				await fetchAll();
+				await refreshHost(c.hostId ?? "");
 				return link;
 			}),
-		[assertLocalAction, fetchAll],
+		[requireConfig, refreshHost],
 	);
 
 	const merge = useCallback(
-		async (pr: DashboardPR) =>
+		async (pr: DashboardPR, hostId?: string) =>
 			trackFeature("merge", async () => {
-				assertLocalAction();
-				await apiMergePR(cfgRef.current!, pr);
-				await fetchAll();
+				const c = requireConfig(hostId);
+				await apiMergePR(c, pr);
+				await refreshHost(c.hostId ?? "");
 			}),
-		[assertLocalAction, fetchAll],
+		[requireConfig, refreshHost],
 	);
 
 	const kill = useCallback(
-		async (id: string) =>
+		async (id: string, hostId?: string) =>
 			trackFeature("kill", async () => {
-				assertLocalAction();
-				await killSession(cfgRef.current!, id);
-				await fetchAll();
+				const c = requireConfig(hostId);
+				await killSession(c, id);
+				await refreshHost(c.hostId ?? "");
 			}),
-		[assertLocalAction, fetchAll],
+		[requireConfig, refreshHost],
 	);
 
 	const renameWorker = useCallback(
-		async (id: string, displayName: string) => {
-			assertLocalAction();
-			await apiRenameSession(cfgRef.current!, id, displayName);
-			await fetchAll();
+		async (id: string, displayName: string, hostId?: string) => {
+			const c = requireConfig(hostId);
+			await apiRenameSession(c, id, displayName);
+			await refreshHost(c.hostId ?? "");
 		},
-		[assertLocalAction, fetchAll],
+		[requireConfig, refreshHost],
 	);
 
 	const setWorkerPinned = useCallback(
-		async (id: string, pinned: boolean) => {
-			assertLocalAction();
-			await (pinned ? apiPinSession(cfgRef.current!, id) : apiUnpinSession(cfgRef.current!, id));
-			await fetchAll();
+		async (id: string, pinned: boolean, hostId?: string) => {
+			const c = requireConfig(hostId);
+			await (pinned ? apiPinSession(c, id) : apiUnpinSession(c, id));
+			await refreshHost(c.hostId ?? "");
 		},
-		[assertLocalAction, fetchAll],
+		[requireConfig, refreshHost],
 	);
 
 	const restore = useCallback(
-		async (id: string) =>
+		async (id: string, hostId?: string) =>
 			trackFeature("restore", async () => {
-				assertLocalAction();
-				await restoreSession(cfgRef.current!, id);
-				await fetchAll();
+				const c = requireConfig(hostId);
+				await restoreSession(c, id);
+				await refreshHost(c.hostId ?? "");
 			}),
-		[assertLocalAction, fetchAll],
+		[requireConfig, refreshHost],
 	);
 
 	// Distinct from restore, and the chat screen already relies on the
 	// difference: a terminated AO session is restored, a merely stopped
 	// agent/controller is resumed without resurrecting the session around it.
 	const resumeAgent = useCallback(
-		async (id: string) =>
+		async (id: string, hostId?: string) =>
 			trackFeature("restore", async () => {
-				assertLocalAction();
-				await resumeSessionAgent(cfgRef.current!, id);
-				await fetchAll();
+				const c = requireConfig(hostId);
+				await resumeSessionAgent(c, id);
+				await refreshHost(c.hostId ?? "");
 			}),
-		[assertLocalAction, fetchAll],
+		[requireConfig, refreshHost],
 	);
 
-	const send = useCallback(async (id: string, message: string) => {
-		assertLocalAction();
-		await trackFeature("send", () => sendMessage(cfgRef.current!, id, message));
-	}, [assertLocalAction]);
+	const send = useCallback(async (id: string, message: string, hostId?: string) => {
+		await trackFeature("send", () => sendMessage(requireConfig(hostId), id, message));
+	}, [requireConfig]);
 	const refresh = useCallback(async () => {
 		if (activeEnvironmentRef.current === "cloud") {
 			await fetchCloudBoard();
@@ -835,40 +1039,52 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		}
 		await fetchAll();
 	}, [fetchAll, fetchCloudBoard]);
+	const localSourceCache = useRef(new Map<string, { config: ServerConfig; source: SessionSource }>());
 	const sourceFor = useCallback((ref: SourceRef): SessionSource | undefined => {
-		const current = sourceIdentityRef.current;
-		if (!sourceMatchesCurrent(ref, current)) return undefined;
 		if (ref.kind === "local") {
-			const cfg = cfgRef.current;
-			if (!cfg || !isConfigured(cfg) || machineIdentity(cfg) !== ref.id) return undefined;
-			return current.localSource;
+			const cfg = localConfigForSource(ref, configForHost);
+			if (!cfg || !isConfigured(cfg)) return undefined;
+			const cached = localSourceCache.current.get(ref.id);
+			if (cached && sameServerConfig(cached.config, cfg)) return cached.source;
+			const source = createLocalSessionSource(cfg);
+			localSourceCache.current.set(ref.id, { config: cfg, source });
+			return source;
 		}
-		return current.cloudSource;
-	}, []);
+		return ref.id === cloudOrgId ? cloudSource : undefined;
+	}, [configForHost, cloudOrgId, cloudSource]);
 	const refreshSource = useCallback(async (ref: SourceRef): Promise<void> => {
 		if (!sourceFor(ref)) throw new Error("This destination is no longer available.");
-		if (ref.kind === "local") await fetchAll();
+		if (ref.kind === "local") await refreshHost(ref.id);
 		else await fetchCloudBoard();
-	}, [sourceFor, fetchAll, fetchCloudBoard]);
+	}, [sourceFor, refreshHost, fetchCloudBoard]);
 	const refreshAll = useCallback(async (): Promise<void> => {
-		const current = sourceIdentityRef.current;
-		const pending: Promise<void>[] = [];
-		if (current.localId) pending.push(refreshSource({ kind: "local", id: current.localId }));
-		if (current.cloudId) pending.push(refreshSource({ kind: "cloud", id: current.cloudId }));
-		await Promise.allSettled(pending);
-	}, [refreshSource]);
-	const spawnOn = useCallback(async (ref: SourceRef, options: SpawnOptions) => {
+		await Promise.allSettled(availableSources.filter((ref) => !!sourceFor(ref)).map(refreshSource));
+	}, [availableSources, sourceFor, refreshSource]);
+	const assertLocalSource = useCallback((ref: SourceRef): ServerConfig => {
+		const c = localConfigForSource(ref, configForHost);
+		if (!c || !isConfigured(c)) throw new Error("This paired desktop is no longer available.");
+		return c;
+	}, [configForHost]);
+	const spawnOn = useCallback(async (ref: SourceRef, options: import("./api").SpawnOptions & { clientRequestId?: string }) => {
 		const source = sourceFor(ref);
 		if (!source) throw new Error("This destination is no longer available.");
+		if (ref.kind === "local") {
+			const config = assertLocalSource(ref);
+			if (!options.projectId) throw new Error("Pick a project first");
+			const session = await delegateTask(config, {
+				projectId: options.projectId,
+				brief: options.prompt ?? "",
+				agent: options.harness,
+				model: options.model,
+				mode: options.mode ?? "chat",
+				attachments: options.attachments,
+				clientRequestId: options.clientRequestId,
+			});
+			await refreshSource(ref);
+			return { id: session.id, projectId: session.projectId };
+		}
 		return spawnSessionThroughSource(source, options, () => refreshSource(ref));
-	}, [sourceFor, refreshSource]);
-	const assertLocalSource = useCallback((ref: SourceRef): ServerConfig => {
-		const c = cfgRef.current;
-		if (!c || !isConfigured(c) || !sourceMatchesCurrent(ref, {
-			localId: machineIdentity(c), cloudId: sourceIdentityRef.current.cloudId,
-		}, "local")) throw new Error("This paired desktop is no longer available.");
-		return c;
-	}, []);
+	}, [sourceFor, refreshSource, assertLocalSource]);
 	const launchConductorOn = useCallback(async (ref: SourceRef, projectId: string, clean = false, mode: SessionMode = "chat") => {
 		const link = await apiLaunchOrchestrator(assertLocalSource(ref), projectId, clean, mode);
 		await refreshSource(ref);
@@ -904,7 +1120,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const value = useMemo<AppState>(
 		() => ({
 			config,
-			...boardReadiness(environment, sessionSource?.kind, !!config && isConfigured(config)),
+			...boardReadiness(environment, sessionSource?.kind, pairedHosts.length > 0),
+			currentHostId: selectedHostId ?? undefined,
+			selectedHostName,
+			hostStates,
+			allSessions,
+			allProjects,
+			allOrchestrators,
 			configResolved,
 			environment,
 			setEnvironment,
@@ -929,18 +1151,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			projectsKnown,
 			sessions: activeSessions,
 			orchestrators: activeOrchestrators,
-			orchestratorId: cloudEnvironment ? null : orchestratorId,
-			stats: cloudEnvironment ? {} : stats,
+			orchestratorId: cloudEnvironment ? null : sessionMachine === activeMachine ? orchestratorId : null,
+			stats: cloudEnvironment ? {} : sessionMachine === activeMachine ? stats : {},
 			activeProjectId,
 			connection: cloudEnvironment ? "closed" : connection,
-			notificationsUnread: cloudEnvironment ? 0 : notificationsUnread,
+			notificationsUnread: cloudEnvironment ? 0 : sessionMachine === activeMachine ? notificationsUnread : 0,
 			loading: activeLoading,
 			error: activeError,
 			errorStatus: cloudEnvironment ? null : errorStatus,
 			unreachable: cloudEnvironment ? false : isDesktopUnreachable({ connection, error, errorStatus }),
 			getLastSyncAt: cloudEnvironment ? () => 0 : getLastSyncAt,
 			reloadConfig,
-			refresh,
+			switchHost,
+		refresh,
+		refreshHost,
+		configForHost,
 			setActiveProject,
 			spawn,
 			launchConductor,
@@ -954,6 +1179,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		}),
 		[
 			config,
+			pairedHosts.length,
+			selectedHostId,
+			selectedHostName,
+			hostStates,
+			allSessions,
+			allProjects,
+			allOrchestrators,
 			configResolved,
 			cloudEnvironment,
 			environment,
@@ -979,7 +1211,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			projectsKnown,
 			activeSessions,
 			activeOrchestrators,
-			orchestrators,
+			sessionMachine,
+			activeMachine,
 			orchestratorId,
 			stats,
 			activeProjectId,
@@ -990,7 +1223,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			errorStatus,
 			getLastSyncAt,
 			reloadConfig,
+			switchHost,
 			refresh,
+			refreshHost,
+			refreshAll,
+			configForHost,
 			setActiveProject,
 			spawn,
 			launchConductor,
@@ -1004,5 +1241,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		],
 	);
 
-	return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+	return <AppContext.Provider value={value}>
+		{/* Exactly one live CDC stream per connected host, independent of which
+		    routes remain mounted in the navigation stack. */}
+		{hostStates.map((host) => host.config && host.connection === "open"
+			? <HostConversationTransport key={host.hostId} config={host.config} />
+			: null)}
+		{children}
+	</AppContext.Provider>;
 }

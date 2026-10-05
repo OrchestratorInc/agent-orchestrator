@@ -16,7 +16,7 @@ import { WorkerBoardList } from "../../lib/worker-board-list";
 import { WorkerDock } from "../../lib/worker-dock";
 import { workerListBottomInset } from "../../lib/worker-dock-layout";
 import { backOr } from "../../lib/backNavigation";
-import { resourceKey, sourceSlice } from "../../lib/environment/scopedBoard";
+import { resourceKey, sourceKey, sourceSlice } from "../../lib/environment/scopedBoard";
 import { resolveSessionRouteSource } from "../../lib/session/sessionRoute";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
@@ -27,15 +27,19 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundar
  * archive included — so nothing here has to be relearned.
  */
 export default function ProjectScreen() {
+	return <ProjectScreenContent />;
+}
+
+function ProjectScreenContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { id, source: sourceParam, sourceId } = useLocalSearchParams<{ id: string; source?: string; sourceId?: string }>();
+	const { id, source: sourceParam, sourceId, hostId } = useLocalSearchParams<{ id: string; source?: string; sourceId?: string; hostId?: string }>();
 	const { scopedBoard, sourceFor, refreshSource } = useApp();
-	const route = resolveSessionRouteSource({ id: id ?? "", source: sourceParam, sourceId }, scopedBoard.projects);
+	const route = resolveSessionRouteSource({ id: id ?? "", source: sourceParam, sourceId, hostId }, scopedBoard.projects);
 	const source = route.kind === "found" ? route.source : null;
-	const status = source ? scopedBoard.sources[source.kind] : undefined;
+	const status = source ? scopedBoard.sources[sourceKey(source)] : undefined;
 	const configured = source ? !!sourceFor(source) : false;
 	const loading = !!status?.loading;
 	const error = status?.error ?? null;
@@ -45,13 +49,14 @@ export default function ProjectScreen() {
 	const [refreshing, setRefreshing] = useState(false);
 
 	const row = useMemo(
-		() =>
-			orchestratorProjectSections(projects, sessions, orchestrators)
+		() => source
+			? orchestratorProjectSections(projects, sessions, orchestrators)
 				.flatMap((section) => section.data)
-				.find((candidate) => candidate.project.id === id),
-		[projects, sessions, orchestrators, id],
+				.find((candidate) => candidate.project.id === id)
+			: undefined,
+		[projects, sessions, orchestrators, id, source?.kind, source?.id],
 	);
-	const projectSessions = useMemo(() => projectDetailSessions(id ?? "", sessions), [id, sessions]);
+	const projectSessions = useMemo(() => source ? projectDetailSessions(id ?? "", sessions) : [], [source?.kind, source?.id, id, sessions]);
 	const stats = useMemo(() => projectPageStats(projectSessions, row?.link), [projectSessions, row?.link]);
 	const detailState = row ? "project" : loading ? "loading" : source?.kind === "cloud" && error ? "cloud-error" : "not-found";
 
@@ -66,8 +71,9 @@ export default function ProjectScreen() {
 	}, [refreshSource, source?.kind, source?.id]);
 
 	const startTask = () => {
+		if (!source) return;
 		haptics.tap();
-		if (source) router.push({ pathname: "/spawn", params: { projectId: id, source: source.kind, sourceId: source.id } });
+		router.push({ pathname: "/spawn", params: { projectId: id, source: source.kind, sourceId: source.id } });
 	};
 
 	return (
@@ -116,10 +122,10 @@ export default function ProjectScreen() {
 					onRefresh={onRefresh}
 					ListHeaderComponent={
 						<ProjectPageHeader
-								row={row}
-								stats={stats}
-								busy={source ? busyProjects.has(resourceKey(source, row.project.id)) : false}
-								onPress={source && configured ? () => openOrchestrator({ source, value: row }) : undefined}
+							row={row}
+							stats={stats}
+							busy={source ? busyProjects.has(resourceKey(source, row.project.id)) : false}
+							onPress={source && configured ? () => openOrchestrator({ source, value: row }) : undefined}
 						/>
 					}
 					ListEmptyComponent={

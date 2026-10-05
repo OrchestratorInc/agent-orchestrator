@@ -6,9 +6,9 @@ const notifications = readFileSync(new URL("../../app/notifications.tsx", import
 
 describe("Local-only actions on the combined board", () => {
 	it("keeps terminal handles and restores on the paired desktop", () => {
-		expect(terminal).toContain("localBoard.sessions.find");
+		expect(terminal).toContain("host?.sessions.find");
 		expect(terminal).toContain("restoreOn(source, id)");
-		expect(terminal).toContain("refreshSource(source)");
+		expect(terminal).toContain("refreshSource({ kind: \"local\", id: hostId })");
 	});
 	it("uses Local notifications and source-qualified routes", () => {
 		expect(notifications).toContain("localBoard.sessions.find");

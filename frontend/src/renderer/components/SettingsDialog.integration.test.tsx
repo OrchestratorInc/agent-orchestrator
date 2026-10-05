@@ -48,7 +48,7 @@ function renderDialogs(origin?: "create-project" | "new-task") {
 
 async function openAgentManagement(label: string) {
 	await userEvent.click(await screen.findByLabelText(label));
-	const action = screen.queryByRole("menuitem", { name: "Manage agents…" }) ?? screen.getByRole("option", { name: "Manage agents…" });
+	const action = screen.queryByRole("menuitem", { name: /^Manage agents(?:…)?$/ }) ?? screen.getByRole("option", { name: /^Manage agents(?:…)?$/ });
 	await userEvent.click(action);
 	await screen.findByRole("textbox", { name: "Search harnesses" });
 }
