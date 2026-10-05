@@ -377,6 +377,7 @@ describe("global board first launch", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Try again" }));
 		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "shellterm-github" } },
+			signal: expect.any(AbortSignal),
 		}));
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
 		act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("attached"));

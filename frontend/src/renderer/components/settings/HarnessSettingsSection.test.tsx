@@ -490,6 +490,7 @@ describe("HarnessSettingsSection", () => {
 
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-terminal-1" } },
+			signal: expect.any(AbortSignal),
 		}));
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
@@ -548,7 +549,7 @@ describe("HarnessSettingsSection", () => {
 
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument(), { timeout: 5_000 });
 		expect(probeCalls()).toBe(2);
-		expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", { params: { path: { handleId: "auth-terminal-1" } } });
+		expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", { params: { path: { handleId: "auth-terminal-1" } }, signal: expect.any(AbortSignal) });
 	});
 
 	it("closes a login panel it could not confirm once the harness reads as logged in", async () => {
@@ -591,6 +592,7 @@ describe("HarnessSettingsSection", () => {
 
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-mimo" } },
+			signal: expect.any(AbortSignal),
 		}));
 		expect(await within(row).findByText("Configured")).toBeInTheDocument();
 		expect(within(row).queryByRole("button", { name: "Configured" })).toBeNull();
@@ -638,6 +640,7 @@ describe("HarnessSettingsSection", () => {
 
 		await waitFor(() => expect(closeTerminal).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-terminal-close" } },
+			signal: expect.any(AbortSignal),
 		}));
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/probe", {
 			params: { path: { agent: "claude-code" } },
