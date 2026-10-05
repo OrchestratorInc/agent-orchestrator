@@ -35,13 +35,6 @@ export function EffortMenuItems({ value, choices, onChange, defaultValue = "", d
 		? levels.find((choice) => choice.value.toLowerCase() === reportedDefault || choice.label?.toLowerCase() === reportedDefault)
 		: undefined;
 	return <>
-		{!defaultChoice && <OptionMenuItem radio active={following} disabled={defaultValue === null}
-			onSelect={() => { if (defaultValue !== null) onChange(defaultValue); }} className="text-[length:var(--font-size-base)] text-foreground">
-			<span className="flex-1">
-				{effortDisplayLabel("", choices, t("settings.models.useAgentEffort"), defaultEffort)}
-			</span>
-			<Check aria-hidden="true" className={`ml-3 size-3 shrink-0 ${following ? "" : "invisible"}`} />
-		</OptionMenuItem>}
 		{unknown ? <OptionMenuItem disabled className="text-[length:var(--font-size-base)] text-muted-foreground">
 			{t(availability === "unknown" ? "settings.models.currentEffort" : "settings.models.savedEffortUnavailable", { effort: formatEffortLabel(value) })}
 		</OptionMenuItem> : null}
@@ -50,10 +43,11 @@ export function EffortMenuItems({ value, choices, onChange, defaultValue = "", d
 			const active = choice.value === value || (following && isDefault);
 			return <OptionMenuItem key={choice.value} radio active={active}
 				onSelect={() => onChange(isDefault && defaultValue !== null ? defaultValue : choice.value)} className="text-[length:var(--font-size-base)] text-foreground">
-				<span className="flex-1">{choice.label || formatEffortLabel(choice.value)}{isDefault ? ` (${t("settings.models.useAgentEffort").toLocaleLowerCase()})` : ""}</span>
+				<span className="flex-1">{choice.label || formatEffortLabel(choice.value)}</span>
 				<Check aria-hidden="true" className={`ml-3 size-3 shrink-0 ${active ? "" : "invisible"}`} />
 			</OptionMenuItem>;
 		})}
+		{unknown && defaultValue !== null ? <OptionMenuItem onSelect={() => onChange(defaultValue)}>{t("settings.models.clearEffort")}</OptionMenuItem> : null}
 	</>;
 }
 
@@ -61,8 +55,9 @@ export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; labe
 	const { t } = useTranslation();
 	const following = props.value === (props.defaultValue ?? "") || (!props.value && props.defaultValue === "default");
 	const label = !following && props.value
-		? effortDisplayLabel(props.value, props.choices, t("settings.models.useAgentEffort"))
-		: effortDisplayLabel("", props.choices, t("settings.models.useAgentEffort"), props.defaultEffort);
+		? effortDisplayLabel(props.value, props.choices, t("settings.models.effort"))
+		: effortDisplayLabel("", props.choices, t("settings.models.effort"), props.defaultEffort);
+	if (!props.choices.some((choice) => choice.value && choice.value.toLowerCase() !== "default") && (!props.value || following)) return null;
 	return <OptionMenu>
 		<OptionMenuTrigger disabled={props.disabled} aria-label={props.label || t("settings.models.effort")} className={props.triggerClassName}>
 			<span className="min-w-0 truncate">{label}</span>

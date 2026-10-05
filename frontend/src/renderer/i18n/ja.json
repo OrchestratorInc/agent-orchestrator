@@ -2321,7 +2321,7 @@
 	"settings.models.selectModel": "モデルを選択",
 	"settings.models.useAgentModel": "エージェントのモデルを使用",
 	"settings.models.useAgentMode": "エージェントのモードを使用",
-	"settings.models.useAgentEffort": "デフォルト",
+	"settings.models.clearEffort": "推論レベルをクリア",
 	"settings.models.currentEffort": "現在の推論量: {{effort}}",
 	"settings.models.savedEffortUnavailable": "{{effort}}（利用不可）",
 	"settings.models.effortNotReported": "推論量は報告されていません",

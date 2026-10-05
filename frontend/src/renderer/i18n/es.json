@@ -2351,7 +2351,7 @@
 	"settings.models.selectModel": "Seleccionar modelo",
 	"settings.models.useAgentModel": "Usar modelo del agente",
 	"settings.models.useAgentMode": "Usar modo del agente",
-	"settings.models.useAgentEffort": "Predeterminado",
+	"settings.models.clearEffort": "Borrar esfuerzo",
 	"settings.models.currentEffort": "Esfuerzo actual: {{effort}}",
 	"settings.models.savedEffortUnavailable": "{{effort}} (no disponible)",
 	"settings.models.effortNotReported": "Esfuerzo no informado",

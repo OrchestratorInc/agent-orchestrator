@@ -1804,7 +1804,7 @@ describe("TaskComposer", () => {
 
 		await userEvent.click(effortPicker);
 		expect(screen.queryByRole("menuitem", { name: "Default" })).not.toBeInTheDocument();
-		await userEvent.click(await screen.findByRole("menuitemradio", { name: "High (default)" }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
 		fireEvent.click(screen.getByText("Start task"));
 		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(3));
 		expect(h.post.mock.calls[2][1].body).not.toHaveProperty("effort");
@@ -1825,7 +1825,7 @@ describe("TaskComposer", () => {
 		await userEvent.click(picker);
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		await userEvent.click(picker);
-		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low (default)" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
 		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("effort");

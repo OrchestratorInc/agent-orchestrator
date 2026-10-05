@@ -733,7 +733,7 @@ export function TaskComposer({
 			renderEffortControl={(control) => <TaskEffortPicker {...control} defaultEffort={inheritedEffort || effortModel?.defaultEffort} availability={requiresTuiFallback ? "launch-unavailable" : !effortModel || effortModel.efforts === undefined ? "unknown" : effortOptions.length ? "supported" : "unsupported"} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
-			showEffort={true}
+			showEffort={!requiresTuiFallback && (effortOptions.length > 0 || Boolean(effort && effort !== "default"))}
 		/>
 	);
 }

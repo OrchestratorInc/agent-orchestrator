@@ -93,7 +93,7 @@ describe("ModelTuningControls", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Effort" }));
 		expect(screen.queryByText("Effort options have not been reported for this model.")).not.toBeInTheDocument();
 		expect(screen.queryByText("High (unavailable)")).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole("menuitemradio", { name: /Default/ }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Clear effort" }));
 		expect(change).toHaveBeenLastCalledWith("");
 	});
 
@@ -104,13 +104,13 @@ describe("ModelTuningControls", () => {
 		expect(validity).toHaveBeenLastCalledWith(false);
 		await userEvent.click(screen.getByRole("button", { name: "Effort" }));
 		expect(screen.queryByText("This model does not support an effort setting.")).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole("menuitemradio", { name: /Default/ }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Clear effort" }));
 		expect(change).toHaveBeenLastCalledWith("");
 	});
 
 	it("does not borrow effort choices for an unlisted custom model", async () => {
 		render(<ModelTuningControls models={models} model="custom" effort="" onEffortChange={vi.fn()} variant="composer" />);
-		await userEvent.click(screen.getByRole("button", { name: "Effort" }));
+		expect(screen.queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitemradio", { name: "High" })).not.toBeInTheDocument();
 		expect(screen.queryByText("Effort options have not been reported for this model.")).not.toBeInTheDocument();
 	});
@@ -123,7 +123,7 @@ describe("ModelTuningControls", () => {
 		expect(trigger).not.toHaveTextContent("default");
 		await userEvent.click(trigger);
 		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole("menuitemradio", { name: "High (default)" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		expect(change).toHaveBeenCalledWith(expected);
 	});
 

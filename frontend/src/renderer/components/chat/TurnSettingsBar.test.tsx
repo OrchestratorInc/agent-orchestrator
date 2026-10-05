@@ -333,13 +333,13 @@ describe("ACP session config options", () => {
 		expect(onChange).toHaveBeenLastCalledWith("profile", { value: "default" });
 	});
 
-	it("keeps a provider reset choice when no default effort level is reported", async () => {
+	it("shows a concrete effort level and preserves the native reset value", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();
 		const option: ChatConfigOption = {
 			id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: "default",
 			choices: [
-				{ value: "default", name: "Default" },
+				{ value: "default", name: "Default", description: "High" },
 				{ value: "low", name: "Low" },
 				{ value: "high", name: "High" },
 			],
@@ -347,17 +347,17 @@ describe("ACP session config options", () => {
 		const view = render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[option]} />);
 
 		const picker = screen.getByRole("button", { name: "Effort" });
-		expect(picker).toHaveTextContent("Default");
+		expect(picker).toHaveTextContent("High");
 		await user.click(picker);
-		expect(screen.getByRole("menuitemradio", { name: "Default" })).toBeInTheDocument();
-		await user.click(screen.getByRole("menuitemradio", { name: "High" }));
-		expect(onChange).toHaveBeenCalledWith("effort", { value: "high" });
+		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		expect(onChange).toHaveBeenCalledWith("effort", { value: "low" });
 		view.rerender(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange}
-			configOptions={[{ ...option, currentValue: "high" }]} />);
+			configOptions={[{ ...option, currentValue: "low" }]} />);
 		await user.click(screen.getByRole("button", { name: "Effort" }));
 		expect(screen.queryByRole("menuitemradio", { name: "Use agent effort" })).not.toBeInTheDocument();
-		expect(screen.getByRole("menuitemradio", { name: "Default" })).toBeInTheDocument();
-		await user.click(screen.getByRole("menuitemradio", { name: "Default" }));
+		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("menuitemradio", { name: "High" }));
 		expect(onChange).toHaveBeenLastCalledWith("effort", { value: "default" });
 	});
 
@@ -934,7 +934,7 @@ describe("native model selection", () => {
 		expect(screen.getAllByRole("menuitemradio", { name: "Opus" })).toHaveLength(1);
 		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
 		await user.keyboard("{ArrowLeft}{ArrowDown}{ArrowRight}");
-		expect(screen.getByRole("menuitemradio", { name: "Default" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
 		await user.click(screen.getByRole("menuitemradio", { name: "High" }));
 		expect(onChange).toHaveBeenCalledWith({ model: "default", reasoningEffort: "high" });
 	});
