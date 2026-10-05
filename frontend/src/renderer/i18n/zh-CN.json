@@ -652,7 +652,7 @@
 	"inspector.timeline.merged": "已合并",
 	"inspector.timeline.opened": "已打开",
 	"inspector.unableCancelReview": "无法停止评审",
-	"inspector.unableKillReviewSession": "无法终止评审会话",
+	"inspector.unableKillReviewSession": "无法归档评审员",
 	"inspector.unableRestoreReviewSession": "无法恢复评审会话",
 	"inspector.unableStartReview": "无法启动评审",
 	"inspector.viewPreviousReview": "查看上次评审",

@@ -655,7 +655,7 @@
 	"inspector.timeline.merged": "Mesclado",
 	"inspector.timeline.opened": "Aberto",
 	"inspector.unableCancelReview": "Não foi possível parar a revisão",
-	"inspector.unableKillReviewSession": "Não foi possível encerrar a sessão de revisão",
+	"inspector.unableKillReviewSession": "Não foi possível arquivar o revisor",
 	"inspector.unableRestoreReviewSession": "Não foi possível restaurar a sessão de revisão",
 	"inspector.unableStartReview": "Não foi possível iniciar a revisão",
 	"inspector.viewPreviousReview": "Ver revisão anterior",

@@ -652,7 +652,7 @@
 	"inspector.timeline.merged": "Gemerged",
 	"inspector.timeline.opened": "Geöffnet",
 	"inspector.unableCancelReview": "Review konnte nicht gestoppt werden",
-	"inspector.unableKillReviewSession": "Review-Sitzung konnte nicht beendet werden",
+	"inspector.unableKillReviewSession": "Reviewer konnte nicht archiviert werden",
 	"inspector.unableRestoreReviewSession": "Review-Sitzung konnte nicht wiederhergestellt werden",
 	"inspector.unableStartReview": "Review konnte nicht gestartet werden",
 	"inspector.viewPreviousReview": "Vorheriges Review anzeigen",

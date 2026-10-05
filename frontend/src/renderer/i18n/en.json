@@ -648,7 +648,7 @@
 	"inspector.timeline.merged": "Merged",
 	"inspector.timeline.opened": "Opened",
 	"inspector.unableCancelReview": "Unable to stop review",
-	"inspector.unableKillReviewSession": "Unable to kill review session",
+	"inspector.unableKillReviewSession": "Unable to archive reviewer",
 	"inspector.unableRestoreReviewSession": "Unable to restore review session",
 	"inspector.unableStartReview": "Unable to start review",
 	"inspector.viewPreviousReview": "View previous review",

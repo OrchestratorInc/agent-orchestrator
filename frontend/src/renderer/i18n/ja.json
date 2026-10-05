@@ -652,7 +652,7 @@
 	"inspector.timeline.merged": "マージ済み",
 	"inspector.timeline.opened": "オープン",
 	"inspector.unableCancelReview": "レビューを停止できません",
-	"inspector.unableKillReviewSession": "レビューセッションを終了できません",
+	"inspector.unableKillReviewSession": "レビュアーをアーカイブできません",
 	"inspector.unableRestoreReviewSession": "レビューセッションを復元できません",
 	"inspector.unableStartReview": "レビューを開始できません",
 	"inspector.viewPreviousReview": "前回のレビューを表示",

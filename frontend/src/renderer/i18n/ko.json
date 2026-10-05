@@ -652,7 +652,7 @@
 	"inspector.timeline.merged": "병합됨",
 	"inspector.timeline.opened": "열림",
 	"inspector.unableCancelReview": "리뷰를 중지할 수 없습니다",
-	"inspector.unableKillReviewSession": "리뷰 세션을 종료할 수 없습니다",
+	"inspector.unableKillReviewSession": "리뷰어를 보관할 수 없습니다",
 	"inspector.unableRestoreReviewSession": "리뷰 세션을 복원할 수 없습니다",
 	"inspector.unableStartReview": "리뷰를 시작할 수 없습니다",
 	"inspector.viewPreviousReview": "이전 리뷰 보기",

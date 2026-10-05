@@ -655,7 +655,7 @@
 	"inspector.timeline.merged": "Fusionné",
 	"inspector.timeline.opened": "Ouvert",
 	"inspector.unableCancelReview": "Impossible d'arrêter la revue",
-	"inspector.unableKillReviewSession": "Impossible de terminer la session de revue",
+	"inspector.unableKillReviewSession": "Impossible d’archiver le réviseur",
 	"inspector.unableRestoreReviewSession": "Impossible de restaurer la session de revue",
 	"inspector.unableStartReview": "Impossible de démarrer la revue",
 	"inspector.viewPreviousReview": "Voir la revue précédente",
