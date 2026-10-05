@@ -1269,6 +1269,13 @@ func SortClaudeNewestFirst(models []ports.AgentModelInfo) []ports.AgentModelInfo
 		if a.variant != b.variant {
 			return !a.variant
 		}
+		// Claude's trailing YYYYMMDD snapshot is the best available signal for
+		// recency when both IDs provide one. Compare it before model version so
+		// newer releases remain first even when a provider changes its version
+		// naming scheme. If either date is absent, use the version as fallback.
+		if a.snapshot != 0 && b.snapshot != 0 && a.snapshot != b.snapshot {
+			return a.snapshot > b.snapshot
+		}
 		if cmp := compareVersions(a.version, b.version); cmp != 0 {
 			return cmp > 0
 		}

@@ -370,6 +370,17 @@ func TestClaudeSameVersionSnapshotsSortNewestFirst(t *testing.T) {
 	})
 }
 
+func TestClaudeSnapshotDatesLeadVersionWhenBothAreKnown(t *testing.T) {
+	models := []ports.AgentModelInfo{
+		{ID: "claude-sonnet-5-20251001", Label: "Claude Sonnet 5"},
+		{ID: "claude-sonnet-4-5-20260115", Label: "Claude Sonnet 4.5"},
+	}
+
+	assertClaudeOrder(t, SortClaudeNewestFirst(models), []string{
+		"claude-sonnet-4-5-20260115", "claude-sonnet-5-20251001",
+	})
+}
+
 func TestClaudeSortFallsBackToLabelForOpaqueProviderID(t *testing.T) {
 	models := []ports.AgentModelInfo{
 		{ID: "gateway-model-a", Label: "Claude Sonnet 5"},
