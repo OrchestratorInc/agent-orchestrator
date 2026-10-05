@@ -1128,6 +1128,7 @@ function ChatWorkspaceContent({
 					configOptions={configOptions ?? []}
 					onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
 					configPending={configOptionPending}
+					autoSelectEffortOnOpen={snapshot.items.length === 0 && !turn}
 					error={configOptionError}
 					// Turn settings require a live controller even while messages can queue.
 					disabled={
@@ -1156,6 +1157,8 @@ function ChatWorkspaceContent({
 			approvalModes,
 			session?.cloud,
 			snapshot.controller.state,
+			snapshot.items.length,
+			turn,
 			stableModelReroute,
 			stableSettings,
 		],

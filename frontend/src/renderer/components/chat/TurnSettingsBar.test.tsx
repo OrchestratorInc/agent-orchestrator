@@ -1547,38 +1547,74 @@ describe("effort default when the provider reports none", () => {
 		],
 		...overrides,
 	});
-	const renderAcp = (option: ChatConfigOption, onChangeConfigOption = vi.fn()) => {
-		render(<TurnSettingsBar harness="claude-code" settings={{}} models={[]} onChange={vi.fn()} configOptions={[option]} onChangeConfigOption={onChangeConfigOption} />);
-		return onChangeConfigOption;
-	};
+	const acpModel = (currentValue: string): ChatConfigOption => ({
+		id: "model",
+		name: "Model",
+		category: "model",
+		type: "select",
+		currentValue,
+		choices: [
+			{ value: "a", name: "Model A" },
+			{ value: "b", name: "Model B" },
+		],
+	});
+	const bar = (options: ChatConfigOption[], extra: Partial<Parameters<typeof TurnSettingsBar>[0]> = {}) => (
+		<TurnSettingsBar harness="claude-code" settings={{}} models={[]} onChange={vi.fn()} configOptions={options} {...extra} />
+	);
 
-	it("sets a middle level on the agent when its default names no level", () => {
-		const change = renderAcp(acpEffort());
+	it("sets a middle level on a new conversation whose default names no level", () => {
+		const change = vi.fn();
+		render(bar([acpEffort()], { onChangeConfigOption: change, autoSelectEffortOnOpen: true }));
 		expect(change).toHaveBeenCalledTimes(1);
 		expect(change).toHaveBeenCalledWith("effort", { value: "medium" });
 	});
 
+	it("does not change an existing conversation just by opening it", () => {
+		const change = vi.fn();
+		render(bar([acpEffort()], { onChangeConfigOption: change }));
+		expect(change).not.toHaveBeenCalled();
+	});
+
+	it("sets a level once the user chooses another model, even in an existing conversation", () => {
+		const change = vi.fn();
+		const view = render(bar([acpModel("a"), acpEffort()], { onChangeConfigOption: change }));
+		expect(change).not.toHaveBeenCalled();
+		view.rerender(bar([acpModel("b"), acpEffort()], { onChangeConfigOption: change }));
+		expect(change).toHaveBeenCalledTimes(1);
+		expect(change).toHaveBeenCalledWith("effort", { value: "medium" });
+	});
+
+	it("selects a level again when the user returns to the first model", () => {
+		const change = vi.fn();
+		const view = render(bar([acpModel("a"), acpEffort()], { onChangeConfigOption: change }));
+		view.rerender(bar([acpModel("b"), acpEffort()], { onChangeConfigOption: change }));
+		view.rerender(bar([acpModel("a"), acpEffort()], { onChangeConfigOption: change }));
+		expect(change).toHaveBeenCalledTimes(2);
+	});
+
 	it("leaves the provider in charge when its default names a level", () => {
-		const change = renderAcp(acpEffort({
+		const change = vi.fn();
+		render(bar([acpEffort({
 			choices: [{ value: "default", name: "Default", description: "High" }, { value: "low", name: "Low" }, { value: "high", name: "High" }],
-		}));
+		})], { onChangeConfigOption: change, autoSelectEffortOnOpen: true }));
 		expect(change).not.toHaveBeenCalled();
 	});
 
 	it("does not override an effort that is already chosen", () => {
-		const change = renderAcp(acpEffort({ currentValue: "low" }));
+		const change = vi.fn();
+		render(bar([acpEffort({ currentValue: "low" })], { onChangeConfigOption: change, autoSelectEffortOnOpen: true }));
 		expect(change).not.toHaveBeenCalled();
 	});
 
 	it("does not set anything while the controls are disabled", () => {
 		const change = vi.fn();
-		render(<TurnSettingsBar harness="claude-code" settings={{}} models={[]} onChange={vi.fn()} disabled configOptions={[acpEffort()]} onChangeConfigOption={change} />);
+		render(bar([acpEffort()], { onChangeConfigOption: change, autoSelectEffortOnOpen: true, disabled: true }));
 		expect(change).not.toHaveBeenCalled();
 	});
 
-	it("selects a middle level in the native model menu when the model has no default", () => {
+	it("selects a middle level in the native model menu on a new conversation", () => {
 		const onChange = vi.fn();
-		render(<TurnSettingsBar harness="claude-code" onChange={onChange} settings={{ model: "m1" }}
+		render(<TurnSettingsBar harness="claude-code" onChange={onChange} settings={{ model: "m1" }} autoSelectEffortOnOpen
 			models={[{ id: "m1", displayName: "Model", default: true, efforts: ["low", "medium", "high"] }]} />);
 		expect(onChange).toHaveBeenCalledTimes(1);
 		expect(onChange).toHaveBeenCalledWith({ model: "m1", reasoningEffort: "medium" });
@@ -1586,7 +1622,7 @@ describe("effort default when the provider reports none", () => {
 
 	it("keeps the native provider default when it is one of the levels", () => {
 		const onChange = vi.fn();
-		render(<TurnSettingsBar harness="claude-code" onChange={onChange} settings={{ model: "m1" }}
+		render(<TurnSettingsBar harness="claude-code" onChange={onChange} settings={{ model: "m1" }} autoSelectEffortOnOpen
 			models={[{ id: "m1", displayName: "Model", default: true, efforts: ["low", "medium", "high"], defaultEffort: "high" }]} />);
 		expect(onChange).not.toHaveBeenCalled();
 	});

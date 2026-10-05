@@ -98,6 +98,7 @@ export function TurnSettingsBar({
 	configPending,
 	error,
 	disabled,
+	autoSelectEffortOnOpen = false,
 	children,
 }: {
 	models: ChatModel[];
@@ -127,6 +128,13 @@ export function TurnSettingsBar({
 	) => Promise<unknown> | void;
 	/** Prevent overlapping writes because provider responses replace the catalog. */
 	configPending?: boolean;
+	/**
+	 * Pick an effort as soon as this opens when the model reports levels but no
+	 * default. Only for a conversation with no turns yet, so reopening an existing
+	 * one never changes the effort it was running with. Choosing another model
+	 * always selects one regardless.
+	 */
+	autoSelectEffortOnOpen?: boolean;
 	error?: string;
 	disabled?: boolean;
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
@@ -188,19 +196,19 @@ export function TurnSettingsBar({
 	// what the next turn uses.
 	const acpEffortOption = grouped.effort.at(0);
 	useApplyEffortDefault(
-		`${harness}:${grouped.model.map((option) => option.currentValue).join(":")}:${acpEffortOption?.id}`,
+		`${harness}:${grouped.model.map((option) => option.currentValue).join(":")}`,
 		acpEffortOption ? acpFallbackEffort(acpEffortOption) : undefined,
 		(value) => {
 			if (acpEffortOption) applyOption(acpEffortOption.id, { value });
 		},
-		optionDisabled || !onChangeConfigOption,
+		{ disabled: optionDisabled || !onChangeConfigOption, applyOnMount: autoSelectEffortOnOpen },
 	);
 	const nativeEffortUnset = !settings.reasoningEffort || settings.reasoningEffort === "default";
 	useApplyEffortDefault(
 		`${harness}:${settings.model ?? fallback?.id}`,
 		nativeModelMenu && nativeEffortUnset ? fallbackEffort(efforts, (selected ?? fallback)?.defaultEffort) : undefined,
 		(value) => onChange?.({ ...settings, reasoningEffort: value }),
-		optionDisabled || !onChange,
+		{ disabled: optionDisabled || !onChange, applyOnMount: autoSelectEffortOnOpen },
 	);
 	const modeOption = grouped.mode;
 	const inlineExecutionMode =

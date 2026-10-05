@@ -4,7 +4,9 @@ import { useTranslation } from "react-i18next";
 import type { AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useSuppressStrayFocusRing } from "../../hooks/useSuppressStrayFocusRing";
 import { isConcreteModelID, modelChoiceLabel } from "../../lib/agent-model-choices";
+import { fallbackEffort, useApplyEffortDefault } from "../../lib/effort";
 import { cn } from "../../lib/utils";
+import { formatEffortLabel } from "./EffortPicker";
 import { useModelTuning, type ModelTuningControlsProps } from "./ModelTuningControls";
 import { OptionMenuItem, OptionMenuSub, OptionMenuSubContent, OptionMenuSubTrigger } from "../ui/option-menu";
 import {
@@ -25,10 +27,6 @@ const ignoreEffortChange = () => {};
 export type ModelEffortSelection = Pick<ModelTuningControlsProps,
 	"effort" | "onEffortChange" | "onEffortReset" | "onValidityChange" | "roleLabel"
 >;
-
-function effortLabel(value: string) {
-	return value === "xhigh" ? "Extra high" : value.charAt(0).toUpperCase() + value.slice(1);
-}
 
 type AgentModel = NonNullable<AgentModelCatalog["models"]>[number];
 
@@ -130,8 +128,17 @@ export function AgentModelCombobox({
 	const showEffort = Boolean(tuning && (effortOptions.length || explicitEffort));
 	const providerEffort = effortModel?.defaultEffort;
 	const defaultEffort = providerEffort && effortOptions.includes(providerEffort) ? providerEffort : "";
-	const effectiveEffort = explicitEffort || defaultEffort;
-	const currentEffortLabel = effectiveEffort ? effortLabel(effectiveEffort) : t("settings.models.effortNotReported");
+	// No provider default for these levels: AO picks one and saves it when the
+	// model is chosen, so the control never reads as unset.
+	const aoDefaultEffort = fallbackEffort(effortOptions, providerEffort);
+	const effectiveEffort = explicitEffort || defaultEffort || aoDefaultEffort || "";
+	useApplyEffortDefault(
+		explicitModel,
+		tuning && !explicitEffort ? aoDefaultEffort : undefined,
+		tuning?.onEffortChange ?? ignoreEffortChange,
+		{ disabled: disabled || !tuning },
+	);
+	const currentEffortLabel = effectiveEffort ? formatEffortLabel(effectiveEffort, t) : t("settings.models.effortNotReported");
 	const entryMode = customModelEntry ?? (allowCustom ? "direct" : "none");
 	const allowDirectCustom = entryMode === "direct";
 	const [search, setSearch] = useState("");
@@ -489,7 +496,7 @@ export function AgentModelCombobox({
 											setAwaitingEffort(false);
 											setMenuOpen(false);
 										}} className="gap-3 text-xs">
-										{effortLabel(effort)}
+										{formatEffortLabel(effort, t)}
 										{effort === effectiveEffort && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
 									</OptionMenuItem>
 								))}

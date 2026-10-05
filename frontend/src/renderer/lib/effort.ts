@@ -21,25 +21,35 @@ export function fallbackEffort(levels: string[], providerDefault?: string): stri
 }
 
 /**
- * Applies AO's fallback effort once per context (for example per model), so a
- * level the picker shows as selected is also set on the agent. It never fires
- * again for the same context, which keeps a level the user later changes or
- * clears from being overwritten.
+ * Applies AO's fallback effort so a level the picker shows as selected is also
+ * the one in effect.
+ *
+ * It runs once per context (for example per model) and never again for the same
+ * one, so a level the user later changes or clears is not overwritten. By
+ * default it does not touch whatever was already open when the picker mounted,
+ * only what follows a change of context such as the user choosing another
+ * model. `applyOnMount` opts a fresh surface in to being set immediately.
  */
 export function useApplyEffortDefault(
 	context: string,
 	value: string | undefined,
 	apply: (value: string) => void,
-	disabled?: boolean,
+	{ disabled, applyOnMount }: { disabled?: boolean; applyOnMount?: boolean } = {},
 ) {
+	const initialContext = useRef<string | undefined>(undefined);
+	const contextChanged = useRef(false);
 	const applied = useRef<string | undefined>(undefined);
 	const applyRef = useRef(apply);
 	applyRef.current = apply;
 	useEffect(() => {
-		if (disabled || !value) return;
+		if (disabled) return;
+		if (initialContext.current === undefined) initialContext.current = context;
+		else if (context !== initialContext.current) contextChanged.current = true;
+		if (!value) return;
+		if (!applyOnMount && !contextChanged.current) return;
 		const key = JSON.stringify([context, value]);
 		if (applied.current === key) return;
 		applied.current = key;
 		applyRef.current(value);
-	}, [context, value, disabled]);
+	}, [context, value, disabled, applyOnMount]);
 }
