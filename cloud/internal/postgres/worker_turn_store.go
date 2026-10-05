@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -38,6 +40,9 @@ func (s *Store) ClaimWorkerTurn(
 
 		var state string
 		var turnModeCap string
+		var requestedMode string
+		var approvalMode string
+		var sessionInterface domain.SessionInterface
 		var turnDeniedCommands []string
 		err := tx.QueryRow(
 			ctx,
@@ -85,12 +90,14 @@ func (s *Store) ClaimWorkerTurn(
 				RETURNING turn.id, turn.session_id, turn.user_message_sequence,
 					turn.state, turn.attempt_count, turn.worker_epoch
 			)
-			SELECT claimed.id, claimed.session_id, event.payload->>'text',
-				session.mode, session.denied_commands, session.harness,
+				SELECT claimed.id, claimed.session_id, event.payload->>'text',
+					session.mode, session.denied_commands, session.harness, session.interface,
 				claimed.attempt_count, claimed.worker_epoch,
 				claimed.state, session.agent_session_id,
 				claimed.user_message_sequence,
-				COALESCE(claimed_turn.mode_cap, ''), COALESCE(claimed_turn.denied_commands, ARRAY[]::text[])
+				COALESCE(claimed_turn.mode_cap, ''), COALESCE(claimed_turn.denied_commands, ARRAY[]::text[]),
+				COALESCE(event.payload->>'model', ''), COALESCE(event.payload->>'reasoningEffort', ''),
+				COALESCE(event.payload->>'mode', ''), COALESCE(event.payload->>'approvalMode', '')
 			FROM claimed
 			JOIN ao_sessions session
 				ON session.org_id = $1 AND session.id = claimed.session_id
@@ -110,6 +117,7 @@ func (s *Store) ClaimWorkerTurn(
 			&turn.Mode,
 			&turn.DeniedCommands,
 			&turn.Harness,
+			&sessionInterface,
 			&turn.Attempt,
 			&turn.WorkerEpoch,
 			&state,
@@ -117,6 +125,10 @@ func (s *Store) ClaimWorkerTurn(
 			&turn.UserEventSequence,
 			&turnModeCap,
 			&turnDeniedCommands,
+			&turn.Model,
+			&turn.ReasoningEffort,
+			&requestedMode,
+			&approvalMode,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
@@ -127,10 +139,23 @@ func (s *Store) ClaimWorkerTurn(
 		// The session's own mode/denied_commands are the ceiling; a turn
 		// created from a capped share-grant holder's message narrows that
 		// ceiling further, never loosens it. See effectiveMode.
-		turn.Mode = effectiveMode(turn.Mode, turnModeCap)
+		turn.Mode = effectiveMode(effectiveMode(turn.Mode, turnModeCap), requestedMode)
+		turn.ApprovalMode = approvalMode
 		turn.DeniedCommands = effectiveDeniedCommands(turn.DeniedCommands, turnDeniedCommands)
 		turn.CancelRequested = state == "cancel_requested"
 		claimed = true
+		if sessionInterface.Normalized() == domain.SessionInterfaceChat {
+			// A claimed Chat turn is the controller's authoritative work signal.
+			// Its fenced completion below settles this state even when the
+			// provider fails before it can emit any lifecycle hooks.
+			if _, err := tx.Exec(ctx, `UPDATE ao_sessions
+				SET activity_state = 'active', activity_source_request_id = NULL,
+					updated_at = now()
+				WHERE org_id = $1 AND id = $2 AND interface = 'chat'
+				  AND is_terminated = false`, orgID, sessionID); err != nil {
+				return err
+			}
+		}
 		return appendTypedEvent(ctx, tx, orgID, sessionID, "chat.turn_started", map[string]any{
 			"turnId":      turn.ID,
 			"attempt":     turn.Attempt,
@@ -188,6 +213,89 @@ func (s *Store) RequestTurnCancellation(
 	})
 }
 
+// SteerTurn queues guidance for the active worker. Delivery is recorded only
+// after its live provider connection acknowledges the injection.
+func (s *Store) SteerTurn(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID, turnID, idempotencyKey, text string,
+) (domain.ClientEvent, error) {
+	var event domain.ClientEvent
+	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
+		if access.Role == "viewer" {
+			return ErrForbidden
+		}
+		payload, err := json.Marshal(map[string]string{
+			"turnId": turnID, "text": text,
+		})
+		if err != nil {
+			return err
+		}
+		var commandID string
+		err = tx.QueryRow(ctx, `INSERT INTO ao_commands (
+			org_id, session_id, idempotency_key, kind, payload
+		) VALUES ($1, $2, $3, 'turn.steer', $4)
+		ON CONFLICT (org_id, idempotency_key) DO NOTHING
+		RETURNING id`, orgID, sessionID, idempotencyKey, payload).Scan(&commandID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return loadIdempotentSteer(ctx, tx, orgID, sessionID, idempotencyKey, payload, &event)
+		}
+		if err != nil {
+			return normalizeConstraintError(err)
+		}
+		var state string
+		if err := tx.QueryRow(ctx, `SELECT state FROM ao_turns
+			WHERE org_id = $1 AND session_id = $2 AND id = $3 FOR UPDATE`, orgID, sessionID, turnID).Scan(&state); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if state != "running" {
+			return ErrTurnFinished
+		}
+		requestPayload, err := json.Marshal(map[string]string{
+			"turnId": turnID, "text": text, "clientMessageId": idempotencyKey, "commandId": commandID,
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := createWorkerRequest(ctx, tx, orgID, sessionID, "chat.steer", requestPayload, 45*time.Second, access.ModeCap); err != nil {
+			return err
+		}
+		if err := appendTypedEvent(ctx, tx, orgID, sessionID, "chat.turn_steer_requested", map[string]any{
+			"turnId": turnID, "text": text, "clientMessageId": idempotencyKey,
+		}); err != nil {
+			return err
+		}
+		if err := scanClientEvent(tx.QueryRow(ctx, `SELECT session_id, sequence, type, payload, created_at
+			FROM ao_events WHERE org_id = $1 AND session_id = $2
+			ORDER BY sequence DESC LIMIT 1`, orgID, sessionID), &event); err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `UPDATE ao_commands
+			SET result = jsonb_build_object('eventSequence', $1::bigint), updated_at = now()
+			WHERE id = $2`, event.Sequence, commandID)
+		return err
+	})
+	return event, err
+}
+
+func loadIdempotentSteer(ctx context.Context, tx pgx.Tx, orgID, sessionID, idempotencyKey string, payload []byte, event *domain.ClientEvent) error {
+	var storedPayload []byte
+	var storedSessionID, kind, status string
+	var sequence int64
+	if err := tx.QueryRow(ctx, `SELECT session_id, kind, status, payload, (result->>'eventSequence')::bigint
+		FROM ao_commands WHERE org_id = $1 AND idempotency_key = $2`, orgID, idempotencyKey).Scan(&storedSessionID, &kind, &status, &storedPayload, &sequence); err != nil {
+		return err
+	}
+	if storedSessionID != sessionID || kind != "turn.steer" || (status != "accepted" && status != "succeeded" && status != "failed") || !jsonEqual(storedPayload, payload) {
+		return ErrIdempotencyMismatch
+	}
+	return scanClientEvent(tx.QueryRow(ctx, `SELECT session_id, sequence, type, payload, created_at
+		FROM ao_events WHERE org_id = $1 AND session_id = $2 AND sequence = $3`, orgID, sessionID, sequence), event)
+}
+
 // WorkerTurnCancellationRequested observes cancellation only when the caller
 // still owns the exact worker epoch and attempt.
 func (s *Store) WorkerTurnCancellationRequested(
@@ -238,7 +346,7 @@ func (s *Store) AppendWorkerTurnOutput(
 	orgID, sessionID, workerID, turnID string,
 	epoch int64,
 	attempt int,
-	stream, text string,
+	stream, text, itemID string,
 ) error {
 	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		if err := requireCurrentWorker(ctx, tx, orgID, sessionID, workerID, epoch); err != nil {
@@ -254,6 +362,38 @@ func (s *Store) AppendWorkerTurnOutput(
 			"attempt": attempt,
 			"stream":  stream,
 			"text":    text,
+			"itemId":  itemID,
+		})
+	})
+}
+
+func (s *Store) AppendWorkerTurnCapabilities(ctx context.Context, orgID, sessionID, workerID, turnID string, epoch int64, attempt int, steering bool) error {
+	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		if err := requireCurrentWorker(ctx, tx, orgID, sessionID, workerID, epoch); err != nil {
+			return err
+		}
+		if err := requireActiveTurnFence(ctx, tx, orgID, sessionID, turnID, epoch, attempt); err != nil {
+			return err
+		}
+		return appendTypedEvent(ctx, tx, orgID, sessionID, "chat.turn_capabilities", map[string]any{
+			"turnId": turnID, "attempt": attempt, "steering": steering,
+		})
+	})
+}
+
+// AppendWorkerTurnActivity records a normalized provider activity under the
+// same worker and turn fencing as assistant output.
+func (s *Store) AppendWorkerTurnActivity(ctx context.Context, orgID, sessionID, workerID, turnID string,
+	epoch int64, attempt int, activity worker.ChatActivity) error {
+	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		if err := requireCurrentWorker(ctx, tx, orgID, sessionID, workerID, epoch); err != nil {
+			return err
+		}
+		if err := requireActiveTurnFence(ctx, tx, orgID, sessionID, turnID, epoch, attempt); err != nil {
+			return err
+		}
+		return appendTypedEvent(ctx, tx, orgID, sessionID, "chat.activity", map[string]any{
+			"turnId": turnID, "attempt": attempt, "activity": activity,
 		})
 	})
 }
@@ -329,13 +469,32 @@ func (s *Store) FinishWorkerTurn(
 		); err != nil {
 			return err
 		}
+		// TUI turn completion only means the prompt reached the terminal; the
+		// interactive agent may still be working. Chat owns its full turn, so a
+		// fenced terminal callback is authoritative even on provider errors.
+		if _, err := tx.Exec(ctx, `UPDATE ao_sessions session
+			SET activity_state = 'idle',
+				activity_source_request_id = NULL,
+				activity_blocked_tool_name = '',
+				activity_blocked_tool_use_id = '',
+				updated_at = now()
+			WHERE session.org_id = $1 AND session.id = $2
+			  AND session.interface = 'chat' AND session.activity_state = 'active'
+			  AND session.is_terminated = false
+			  AND NOT EXISTS (
+				SELECT 1 FROM ao_turns other
+				WHERE other.org_id = session.org_id AND other.session_id = session.id
+				  AND other.id <> $3 AND other.state IN ('provisioning', 'running', 'cancel_requested')
+			  )`, orgID, sessionID, turnID); err != nil {
+			return err
+		}
 		return appendTypedEvent(ctx, tx, orgID, sessionID, eventType, payload)
 	})
 	return alreadyFinished, err
 }
 
-// WorkerAgentCredential returns only the valid default credential selected by
-// the current session's harness. The encrypted bytes stay opaque to the store.
+// WorkerAgentCredential returns the session creator's valid personal credential
+// for the selected harness. The encrypted bytes stay opaque to the store.
 func (s *Store) WorkerAgentCredential(
 	ctx context.Context,
 	orgID, sessionID, workerID string,
@@ -346,42 +505,6 @@ func (s *Store) WorkerAgentCredential(
 		if err := requireCurrentWorker(ctx, tx, orgID, sessionID, workerID, epoch); err != nil {
 			return err
 		}
-		err := tx.QueryRow(
-			ctx,
-			`SELECT connection.provider,
-				COALESCE(connection.config->>'credentialType', ''),
-				connection.encrypted_secret,
-				connection.secret_nonce
-			FROM ao_sessions session
-			JOIN ao_provider_connections connection
-				ON connection.org_id = session.org_id
-				AND connection.provider = session.harness
-				AND connection.label = $3
-				AND connection.validation_state = 'valid'
-			WHERE session.org_id = $1
-				AND session.id = $2
-				AND session.is_terminated = false`,
-			orgID,
-			sessionID,
-			defaultWorkerCredentialLabel,
-		).Scan(
-			&credential.Provider,
-			&credential.CredentialType,
-			&credential.EncryptedSecret,
-			&credential.Nonce,
-		)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return err
-		}
-		// The org has no shared connection for this harness — fall back to
-		// the session creator's own personal connection, if they have one.
-		// This is what lets connecting a credential once make it usable
-		// across every org a person belongs to, not just the one they
-		// connected it in; it never overrides an org-level connection that
-		// exists, only fills in when there isn't one.
 		var harness string
 		var createdByUserID *string
 		if err := tx.QueryRow(
@@ -404,7 +527,7 @@ func (s *Store) WorkerAgentCredential(
 		); err != nil {
 			return err
 		}
-		err = tx.QueryRow(
+		err := tx.QueryRow(
 			ctx,
 			`SELECT connection.provider,
 				COALESCE(connection.config->>'credentialType', ''),

@@ -3,7 +3,9 @@ package controllers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +13,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path"
@@ -19,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -109,6 +114,10 @@ type SessionService interface {
 	ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error)
 	StageAttachments(ctx context.Context, id domain.SessionID, attachments []ports.SpawnAttachment) ([]string, error)
 	WorkspaceWatchPaths(ctx context.Context, id domain.SessionID) ([]string, error)
+	GetWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
+	RefreshWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
+	ReconcileWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
+	GetWorkspaceHistory(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceHistory, error)
 	ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error)
 	GetWorkspaceFile(ctx context.Context, id domain.SessionID, path string, section sessionsvc.WorkspaceFileSection) (sessionsvc.WorkspaceFileDetail, error)
 	GetWorkspaceFileAtCommit(ctx context.Context, id domain.SessionID, path, commitSHA string) (sessionsvc.WorkspaceFileDetail, error)
@@ -156,6 +165,12 @@ type SessionCapabilityValidator interface {
 	Valid(sessionID domain.SessionID, token, verifier string) bool
 }
 
+// ShellPreviewCapabilityValidator checks the separate, preview-only bearer
+// held by a live session-scoped user shell.
+type ShellPreviewCapabilityValidator interface {
+	ValidPreviewCapability(ctx context.Context, sessionID domain.SessionID, token string) (bool, error)
+}
+
 // UsageHookRecorder consumes transcript metadata from the same native hook
 // callback without changing activity-state semantics.
 type UsageHookRecorder interface {
@@ -165,12 +180,13 @@ type UsageHookRecorder interface {
 // SessionsController owns the session routes. Nil keeps routes registered but
 // returns OpenAPI-backed 501s.
 type SessionsController struct {
-	Svc           SessionService
-	Activity      ActivityRecorder
-	Usage         UsageHookRecorder
-	Attachments   *attachmentstore.Store
-	PreviewServer ManagedPreviewServer
-	Capabilities  SessionCapabilityValidator
+	Svc                      SessionService
+	Activity                 ActivityRecorder
+	Usage                    UsageHookRecorder
+	Attachments              *attachmentstore.Store
+	PreviewServer            ManagedPreviewServer
+	Capabilities             SessionCapabilityValidator
+	ShellPreviewCapabilities ShellPreviewCapabilityValidator
 }
 
 // Register mounts the session routes on the supplied router.
@@ -186,7 +202,12 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/preview/server", c.startPreviewServer)
 	r.Delete("/sessions/{sessionId}/preview/server", c.stopPreviewServer)
 	r.Get("/sessions/{sessionId}/preview/files/*", c.previewFile)
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		r.Method(method, "/sessions/{sessionId}/preview/app/*", http.HandlerFunc(c.previewApp))
+	}
 	r.Post("/sessions/{sessionId}/attachments", c.stageAttachments)
+	r.Get("/sessions/{sessionId}/workspace/manifest", c.getWorkspaceManifest)
+	r.Get("/sessions/{sessionId}/workspace/history", c.getWorkspaceHistory)
 	r.Get("/sessions/{sessionId}/workspace/files", c.listWorkspaceFiles)
 	r.Get("/sessions/{sessionId}/workspace/file", c.getWorkspaceFile)
 	r.Put("/sessions/{sessionId}/workspace/file", c.updateWorkspaceFile)
@@ -271,6 +292,10 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
+	if !validClientRequestID(in.ClientRequestID) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "INVALID_CLIENT_REQUEST_ID", "clientRequestId must be 1-128 visible characters", nil)
+		return
+	}
 	mode, err := domain.ParseSessionMode(string(in.Mode))
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "SESSION_MODE_INVALID", err.Error(), nil)
@@ -302,7 +327,14 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", attachErr.code, attachErr.message, nil)
 		return
 	}
-	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}})
+	requestHash := ""
+	if in.ClientRequestID != "" {
+		keyless := in
+		keyless.ClientRequestID = ""
+		keyless.Attachments = nil
+		requestHash = clientRequestFingerprint("session", keyless, attachments)
+	}
+	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -475,6 +507,84 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 	c.serveWorkspacePreviewFile(w, r, sess.Metadata.WorkspacePath, assetPath)
 }
 
+// previewApp reaches only the running, session-owned managed preview process.
+// The selected URL comes from the manager, never from a caller-supplied port.
+func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil || c.PreviewServer == nil {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_NOT_FOUND", "Preview not found", nil)
+		return
+	}
+	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	status := c.PreviewServer.Status(sess.ID)
+	target, err := url.Parse(status.URL)
+	if err != nil || status.State != previewserver.StateReady || status.TargetKind != previewserver.TargetApp ||
+		status.URL != sess.Metadata.PreviewURL || target == nil || target.Scheme != "http" ||
+		!isPreviewLoopback(target.Hostname()) || target.User != nil || target.Port() == "" ||
+		strconv.Itoa(status.Port) != target.Port() || sess.IsTerminated {
+		w.Header().Set("X-AO-Preview-Managed-Required", "1")
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "PREVIEW_MANAGED_REQUIRED", "Run ao preview start in this session to open a remote live preview", nil)
+		return
+	}
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(req *httputil.ProxyRequest) {
+			appAuthorization := req.Out.Header.Get("X-AO-Preview-App-Authorization")
+			hadPreviewOrigin := req.Out.Header.Get("X-AO-Preview-App-Origin") != ""
+			req.SetURL(target)
+			req.Out.Host = target.Host
+			req.Out.URL.Path = "/" + strings.TrimPrefix(chi.URLParam(r, "*"), "/")
+			req.Out.URL.RawPath = ""
+			req.Out.URL.RawQuery = req.In.URL.RawQuery
+			// AO credentials authenticate the tunnel, not the agent-run web app.
+			req.Out.Header.Del("Authorization")
+			req.Out.Header.Del("Proxy-Authorization")
+			req.Out.Header.Del("X-AO-Preview-App-Authorization")
+			req.Out.Header.Del("X-AO-Preview-App-Origin")
+			req.Out.Header.Del("Origin")
+			if appAuthorization != "" {
+				req.Out.Header.Set("Authorization", appAuthorization)
+			}
+			if hadPreviewOrigin {
+				req.Out.Header.Set("Origin", target.Scheme+"://"+target.Host)
+			}
+			req.Out.Header.Del(browserCapabilityHeader)
+			cookies := req.Out.Cookies()
+			req.Out.Header.Del("Cookie")
+			for _, cookie := range cookies {
+				if cookie.Name != "ao_conn" {
+					req.Out.AddCookie(cookie)
+				}
+			}
+		},
+		ModifyResponse: func(res *http.Response) error {
+			if location := res.Header.Get("Location"); location != "" {
+				if redirect, parseErr := url.Parse(location); parseErr == nil && redirect.IsAbs() && isPreviewLoopback(redirect.Hostname()) {
+					if redirect.Port() != target.Port() {
+						return errors.New("preview redirect to another local port")
+					}
+					res.Header.Set("Location", redirect.RequestURI())
+				}
+			}
+			return nil
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
+			http.Error(w, "Preview target unavailable or redirected to another local port", http.StatusBadGateway)
+		},
+	}
+	proxy.ServeHTTP(w, r)
+}
+
+func isPreviewLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // PreviewOrigin serves a workspace preview from its isolated *.localhost
 // origin. It returns false when the request host is not a preview origin so the
 // daemon router can continue handling its normal API and control surfaces.
@@ -584,6 +694,32 @@ func (c *SessionsController) listWorkspaceFiles(w http.ResponseWriter, r *http.R
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, workspaceFilesResponse(files))
+}
+
+func (c *SessionsController) getWorkspaceManifest(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/manifest")
+		return
+	}
+	manifest, err := c.Svc.GetWorkspaceManifest(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, workspaceManifestResponse(manifest))
+}
+
+func (c *SessionsController) getWorkspaceHistory(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/history")
+		return
+	}
+	history, err := c.Svc.GetWorkspaceHistory(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, workspaceHistoryResponse(history))
 }
 
 func (c *SessionsController) getWorkspaceFile(w http.ResponseWriter, r *http.Request) {
@@ -876,6 +1012,13 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 		envelope.WriteError(w, r, err)
 		return
 	}
+	// The watcher cannot report edits made before it existed. Reconcile both
+	// workspace caches after the watch is installed and before telling the client
+	// it can stop fallback polling.
+	if _, err := c.Svc.ReconcileWorkspaceManifest(r.Context(), sessionID(r)); err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
 
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream; charset=utf-8")
@@ -883,6 +1026,9 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 	h.Set("Connection", "keep-alive")
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
+	if _, err := fmt.Fprint(w, "event: ready\ndata: {}\n\n"); err != nil {
+		return
+	}
 	flusher.Flush()
 
 	keepAlive := time.NewTicker(15 * time.Second)
@@ -897,19 +1043,30 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 			}
 			c.Svc.InvalidateWorkspaceCache(sessionID(r))
 			payload := struct {
+				Kind             string `json:"kind"`
 				WorkspaceVersion string `json:"workspaceVersion,omitempty"`
+				Refreshing       bool   `json:"refreshing"`
 				Overflow         bool   `json:"overflow"`
-			}{Overflow: true}
-			if files, listErr := c.Svc.ListWorkspaceFiles(r.Context(), sessionID(r)); listErr == nil {
-				payload.WorkspaceVersion = files.WorkspaceVersion
-			}
+			}{Kind: "dirty", Refreshing: true, Overflow: true}
 			data, _ := json.Marshal(payload)
 			if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
 				return
 			}
 			flusher.Flush()
+			manifest, refreshErr := c.Svc.RefreshWorkspaceManifest(r.Context(), sessionID(r))
+			if refreshErr != nil {
+				continue
+			}
+			payload.Kind = "version"
+			payload.WorkspaceVersion = manifest.WorkspaceVersion
+			payload.Refreshing = false
+			data, _ = json.Marshal(payload)
+			if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
+				return
+			}
+			flusher.Flush()
 		case <-keepAlive.C:
-			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+			if _, err := fmt.Fprint(w, "event: heartbeat\ndata: {}\n\n"); err != nil {
 				return
 			}
 			flusher.Flush()
@@ -1107,23 +1264,35 @@ func (c *SessionsController) authorizePreviewServer(w http.ResponseWriter, r *ht
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "SESSION_TERMINATED", "Session is terminated", nil)
 		return false
 	}
-	if !c.Capabilities.Valid(
+	if c.Capabilities.Valid(
 		id,
 		strings.TrimSpace(r.Header.Get(browserCapabilityHeader)),
 		sess.Metadata.BrowserCapabilityVerifier,
 	) {
-		envelope.WriteAPIError(
-			w,
-			r,
-			http.StatusForbidden,
-			"forbidden",
-			"PREVIEW_CAPABILITY_INVALID",
-			"Preview capability is invalid",
-			nil,
-		)
-		return false
+		return true
 	}
-	return true
+	if c.ShellPreviewCapabilities != nil {
+		valid, err := c.ShellPreviewCapabilities.ValidPreviewCapability(
+			r.Context(), id, strings.TrimSpace(r.Header.Get("X-AO-Preview-Capability")),
+		)
+		if err != nil {
+			envelope.WriteError(w, r, err)
+			return false
+		}
+		if valid {
+			return true
+		}
+	}
+	envelope.WriteAPIError(
+		w,
+		r,
+		http.StatusForbidden,
+		"forbidden",
+		"PREVIEW_CAPABILITY_INVALID",
+		"Preview capability is invalid",
+		nil,
+	)
+	return false
 }
 
 func previewServerStatusResponse(status previewserver.Status) PreviewServerStatusResponse {
@@ -1641,6 +1810,10 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
+	if !validClientRequestID(in.ClientRequestID) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "INVALID_CLIENT_REQUEST_ID", "clientRequestId must be 1-128 visible characters", nil)
+		return
+	}
 	if in.ProjectID == "" {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROJECT_ID_REQUIRED", "projectId is required", nil)
 		return
@@ -1670,23 +1843,50 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", attachErr.code, attachErr.message, nil)
 		return
 	}
+	requestHash := ""
+	if in.ClientRequestID != "" {
+		keyless := in
+		keyless.ClientRequestID = ""
+		keyless.TaskPreparation = ""
+		keyless.Attachments = nil
+		requestHash = clientRequestFingerprint("delegate", keyless, attachments)
+	}
 
 	out, err := c.Svc.DelegateTask(r.Context(), sessionsvc.DelegateTaskInput{
-		ProjectID:       in.ProjectID,
-		Brief:           domain.SanitizeControlChars(in.Brief),
-		RequestedAgent:  in.Agent,
-		Model:           domain.SanitizeControlChars(strings.TrimSpace(in.Model)),
-		Effort:          sanitizedOptionalString(in.Effort),
-		ApprovalMode:    in.ApprovalMode,
-		RequestedMode:   in.Mode,
-		Attachments:     attachments,
-		TaskPreparation: domain.TaskPreparationToken(strings.TrimSpace(in.TaskPreparation)),
+		ClientRequestID:   in.ClientRequestID,
+		ClientRequestHash: requestHash,
+		ProjectID:         in.ProjectID,
+		Brief:             domain.SanitizeControlChars(in.Brief),
+		RequestedAgent:    in.Agent,
+		Model:             domain.SanitizeControlChars(strings.TrimSpace(in.Model)),
+		Effort:            sanitizedOptionalString(in.Effort),
+		ApprovalMode:      in.ApprovalMode,
+		RequestedMode:     in.Mode,
+		Attachments:       attachments,
+		TaskPreparation:   domain.TaskPreparationToken(strings.TrimSpace(in.TaskPreparation)),
 	})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusAccepted, DelegateTaskResponse{OK: true, WorkerID: out.WorkerID, OrchestratorID: out.OrchestratorID})
+}
+
+func validClientRequestID(id string) bool {
+	return id == "" || len(id) <= maxIdempotencyKey && strings.TrimSpace(id) == id && strings.IndexFunc(id, unicode.IsControl) < 0
+}
+
+func clientRequestFingerprint(route string, request any, attachments []ports.SpawnAttachment) string {
+	h := sha256.New()
+	_ = json.NewEncoder(h).Encode(struct {
+		Route   string
+		Request any
+	}{route, request})
+	for _, attachment := range attachments {
+		_, _ = fmt.Fprintf(h, "%d:%s:%d:", len(attachment.Ext), attachment.Ext, len(attachment.Data))
+		_, _ = h.Write(attachment.Data)
+	}
+	return "v1:" + hex.EncodeToString(h.Sum(nil))
 }
 
 func (c *SessionsController) prepareTask(w http.ResponseWriter, r *http.Request) {
@@ -1751,8 +1951,8 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_CONVERSATION_CHECKPOINT_ORIGIN", "Conversation checkpoint origin must be human or coordination", nil)
 		return
 	}
-	if state == "" && agentSessionID == "" && in.Usage == nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ACTIVITY_OR_SESSION_ID_REQUIRED", "Activity state or agent session ID is required", nil)
+	if state == "" && agentSessionID == "" && in.Usage == nil && in.SubagentID == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ACTIVITY_OR_SESSION_ID_REQUIRED", "Activity state, agent session ID, or subagent ID is required", nil)
 		return
 	}
 	// The correlation fields ride the same lenient decode: absent on old CLIs.
@@ -1767,6 +1967,7 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		Event:                        capActivityMeta(domain.SanitizeControlChars(in.Event)),
 		ToolName:                     capActivityMeta(domain.SanitizeControlChars(in.ToolName)),
 		ToolUseID:                    capActivityMeta(domain.SanitizeControlChars(in.ToolUseID)),
+		SubagentID:                   capActivityMeta(domain.SanitizeControlChars(in.SubagentID)),
 		AgentSessionID:               agentSessionID,
 		LatestUserPrompt:             capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.LatestUserPrompt)), 16<<10),
 		LatestAssistantUpdate:        capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.LatestAssistantUpdate)), 16<<10),
@@ -1777,8 +1978,22 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		TranscriptPath:               capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.TranscriptPath)), 4096),
 		LaunchID:                     capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.LaunchID))),
 	}
+	if in.RunningSubagentIDs != nil && len(*in.RunningSubagentIDs) <= 128 {
+		running := make([]string, 0, len(*in.RunningSubagentIDs))
+		for _, id := range *in.RunningSubagentIDs {
+			clean := capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(id)))
+			if clean == "" {
+				running = nil
+				break
+			}
+			running = append(running, clean)
+		}
+		if running != nil {
+			sig.RunningSubagentIDs = &running
+		}
+	}
 	var activityErr error
-	if c.Activity != nil && (sig.Valid || sig.AgentSessionID != "") {
+	if c.Activity != nil && (sig.Valid || sig.AgentSessionID != "" || sig.SubagentID != "") {
 		activityErr = c.Activity.ApplyActivitySignal(r.Context(), sessionID(r), sig)
 		if err := activityErr; err != nil && !errors.Is(err, ports.ErrActivityProjectionContention) {
 			if errors.Is(err, ports.ErrSessionNotFound) {
@@ -2242,6 +2457,31 @@ func workspaceFilesResponse(files sessionsvc.WorkspaceFiles) ListWorkspaceFilesR
 		DegradedCode:     files.DegradedCode,
 		Ahead:            files.Ahead,
 		Behind:           files.Behind,
+	}
+}
+
+func workspaceManifestResponse(manifest sessionsvc.WorkspaceManifest) WorkspaceManifestResponse {
+	return WorkspaceManifestResponse{
+		SessionID:        manifest.SessionID,
+		WorkspaceVersion: manifest.WorkspaceVersion,
+		CompareBaseSHA:   manifest.CompareBaseSHA,
+		CompareBaseRef:   manifest.CompareBaseRef,
+		CompareMode:      manifest.CompareMode,
+		Files:            workspaceFileSummariesResponse(manifest.Files),
+		Sections:         workspaceFileSectionsResponse(manifest.Sections),
+		Summary:          WorkspaceSummary(manifest.Summary),
+		Truncated:        manifest.Truncated,
+		Stale:            manifest.Stale,
+		Refreshing:       manifest.Refreshing,
+		Degraded:         manifest.Degraded,
+		DegradedCode:     manifest.DegradedCode,
+	}
+}
+
+func workspaceHistoryResponse(history sessionsvc.WorkspaceHistory) WorkspaceHistoryResponse {
+	return WorkspaceHistoryResponse{
+		SessionID: history.SessionID, Commits: workspaceCommitsResponse(history.Commits),
+		CommitsTruncated: history.CommitsTruncated, Ahead: history.Ahead, Behind: history.Behind,
 	}
 }
 

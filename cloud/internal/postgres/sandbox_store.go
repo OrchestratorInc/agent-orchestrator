@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -601,6 +602,20 @@ func (s *Store) DisconnectSessionWorkers(
 			orgID,
 			sessionID,
 		)
+		if err != nil {
+			return err
+		}
+		// A failed or paused worker can no longer be doing live work. Settle
+		// the activity fact in the same transaction as disconnecting it so a
+		// crashed worker cannot leave its Kanban card showing Working forever.
+		_, err = tx.Exec(ctx, `UPDATE ao_sessions
+			SET activity_state = 'idle',
+				activity_source_request_id = NULL,
+				activity_blocked_tool_name = '',
+				activity_blocked_tool_use_id = '',
+				updated_at = now()
+			WHERE org_id = $1 AND id = $2 AND activity_state = 'active'
+			  AND is_terminated = false`, orgID, sessionID)
 		return err
 	})
 }
@@ -679,6 +694,7 @@ func (s *Store) CompleteSandboxDeletion(
 			`UPDATE ao_sessions
 			SET is_terminated = true,
 				activity_state = 'exited',
+				activity_source_request_id = NULL,
 				updated_at = now()
 			WHERE id = $1 AND org_id = $2`,
 			sessionID,
@@ -826,16 +842,25 @@ func (s *Store) WorkerLaunchSpec(
 ) (domain.WorkerLaunch, error) {
 	launch := domain.WorkerLaunch{OrgID: orgID}
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var interfaceValue string
 		err := tx.QueryRow(
 			ctx,
 			`SELECT session.id, session.project_id, project.display_name, project.config,
 				session.kind, session.harness,
 				session.display_name, session.branch, session.prompt,
-				session.agent_session_id, session.mode, session.model, session.denied_commands,
+				session.agent_session_id, session.mode,
+				COALESCE(NULLIF(selection.selected_model, ''), session.model),
+				COALESCE(selection.selected_effort, ''), COALESCE(selection.created_at, to_timestamp(0)), session.denied_commands, session.interface,
 				COALESCE(session.parent_session_id::text, ''),
 				project.repository_url, project.default_branch
 			FROM ao_sessions session
 			JOIN ao_projects project ON project.id = session.project_id
+			LEFT JOIN LATERAL (
+				SELECT selected_model, selected_effort, created_at FROM ao_interface_transitions
+				WHERE org_id = session.org_id AND session_id = session.id
+				  AND phase = 'completed' AND selected_model <> ''
+				ORDER BY completed_at DESC, id DESC LIMIT 1
+			) selection ON true
 			WHERE session.id = $1 AND session.org_id = $2`,
 			sessionID,
 			orgID,
@@ -852,7 +877,10 @@ func (s *Store) WorkerLaunchSpec(
 			&launch.AgentSessionID,
 			&launch.Mode,
 			&launch.Model,
+			&launch.ReasoningEffort,
+			&launch.SelectionAt,
 			&launch.DeniedCommands,
+			&interfaceValue,
 			&launch.ParentSessionID,
 			&launch.RepositoryURL,
 			&launch.DefaultBranch,
@@ -863,6 +891,7 @@ func (s *Store) WorkerLaunchSpec(
 		if err != nil {
 			return fmt.Errorf("load worker launch spec: %w", err)
 		}
+		launch.Interface = domain.SessionInterface(interfaceValue).Normalized()
 		return nil
 	})
 	if err != nil {
@@ -892,6 +921,7 @@ func (s *Store) RegisterWorkerBootstrap(
 		tag, err := tx.Exec(ctx,
 			`UPDATE ao_sessions
 			SET activity_state = 'idle',
+				activity_source_request_id = NULL,
 				activity_blocked_tool_name = '',
 				activity_blocked_tool_use_id = '',
 				updated_at = now()
@@ -997,17 +1027,21 @@ func (s *Store) SetWorkerActivity(
 			return ErrStaleWorker
 		}
 		var currentState, blockedToolName, blockedToolUseID string
+		var sessionInterface domain.SessionInterface
 		if err := tx.QueryRow(ctx,
 			`SELECT activity_state, activity_blocked_tool_name,
-				activity_blocked_tool_use_id
+				activity_blocked_tool_use_id, interface
 			FROM ao_sessions
 			WHERE org_id = $1 AND id = $2 AND is_terminated = false
 			FOR UPDATE`,
 			orgID, sessionID,
-		).Scan(&currentState, &blockedToolName, &blockedToolUseID); errors.Is(err, pgx.ErrNoRows) {
+		).Scan(&currentState, &blockedToolName, &blockedToolUseID, &sessionInterface); errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		} else if err != nil {
 			return fmt.Errorf("load worker activity: %w", err)
+		}
+		if !shouldApplyWorkerActivity(sessionInterface, activity) {
+			return nil
 		}
 		if activity.State == "" {
 			tag, err := tx.Exec(ctx,
@@ -1035,6 +1069,7 @@ func (s *Store) SetWorkerActivity(
 		tag, err := tx.Exec(ctx,
 			`UPDATE ao_sessions
 			SET activity_state = $1,
+				activity_source_request_id = NULL,
 				activity_blocked_tool_name = $2,
 				activity_blocked_tool_use_id = $3,
 				agent_session_id = CASE WHEN $4 <> '' THEN $4 ELSE agent_session_id END,
@@ -1062,6 +1097,19 @@ func (s *Store) SetWorkerActivity(
 		}
 		return nil
 	})
+}
+
+func shouldApplyWorkerActivity(sessionInterface domain.SessionInterface, activity worker.ActivityEvent) bool {
+	if sessionInterface.Normalized() == domain.SessionInterfaceTUI {
+		return true
+	}
+	if activity.State == "" && strings.TrimSpace(activity.AgentSessionID) != "" {
+		return true
+	}
+	// A terminal hook can arrive after Chat has taken ownership. Its stop
+	// acknowledgement may settle activity, but late active work belongs to
+	// the old controller and must not make Chat appear to be working.
+	return activity.SourceInterface == "tui" && activity.State == "idle"
 }
 
 func matchingBlockedTool(

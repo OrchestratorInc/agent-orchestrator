@@ -3202,7 +3202,11 @@ func quarantinedAgentSwitchError(sw domain.AgentSwitch, cause error) error {
 	return cause
 }
 
-func (m *Manager) reconcileAgentSwitches(ctx context.Context, allowQuarantine bool) error {
+func (m *Manager) reconcileAgentSwitches(ctx context.Context, startup bool) error {
+	execution := domain.AgentSwitchExecutionExplicitRecovery
+	if startup {
+		execution = domain.AgentSwitchExecutionStartupReconcile
+	}
 	store, err := m.switchStore()
 	if err != nil {
 		if errors.Is(err, ErrSwitchUnavailable) {
@@ -3233,7 +3237,7 @@ func (m *Manager) reconcileAgentSwitches(ctx context.Context, allowQuarantine bo
 						// attribute makes os.RemoveAll fail every boot), so folding this
 						// into the boot-fatal error would refuse to bind the daemon
 						// forever. Record it as a maintenance fault and keep going.
-						m.observeTerminalAgentSwitchMaintenanceFailure(ctx, store, historical, domain.NormalizeSessionMode(rec.Mode), domain.AgentSwitchExecutionStartupReconcile)
+						m.observeTerminalAgentSwitchMaintenanceFailure(ctx, store, historical, domain.NormalizeSessionMode(rec.Mode), execution)
 						m.logger.Warn("agent switch: terminal handoff artifact cleanup failed on boot; continuing", "sessionID", rec.ID, "switchID", historical.ID, "error", cleanupErr)
 					}
 				}
@@ -3252,8 +3256,8 @@ func (m *Manager) reconcileAgentSwitches(ctx context.Context, allowQuarantine bo
 			errs = append(errs, beginErr)
 			continue
 		}
-		resolved, reconcileErr := m.reconcileAgentSwitch(ctx, store, rec, sw, domain.AgentSwitchExecutionStartupReconcile)
-		m.observeAgentSwitchRecoveryFailure(ctx, store, sw, domain.NormalizeSessionMode(rec.Mode), domain.AgentSwitchExecutionStartupReconcile, reconcileErr)
+		resolved, reconcileErr := m.reconcileAgentSwitch(ctx, store, rec, sw, execution)
+		m.observeAgentSwitchRecoveryFailure(ctx, store, sw, domain.NormalizeSessionMode(rec.Mode), execution, reconcileErr)
 		if resolved {
 			m.endAgentSwitch(rec.ID)
 			if current, found, reloadErr := store.GetAgentSwitch(ctx, sw.ID); reloadErr != nil {
@@ -3262,7 +3266,7 @@ func (m *Manager) reconcileAgentSwitches(ctx context.Context, allowQuarantine bo
 				if cleanupErr := m.cleanupAgentHandoffArtifacts(ctx, current); cleanupErr != nil {
 					// Same best-effort maintenance as the terminal sweep above: a
 					// failed artifact deletion must not wedge daemon boot.
-					m.observeTerminalAgentSwitchMaintenanceFailure(ctx, store, current, domain.NormalizeSessionMode(rec.Mode), domain.AgentSwitchExecutionStartupReconcile)
+					m.observeTerminalAgentSwitchMaintenanceFailure(ctx, store, current, domain.NormalizeSessionMode(rec.Mode), execution)
 					m.logger.Warn("agent switch: terminal handoff artifact cleanup failed on boot; continuing", "sessionID", rec.ID, "switchID", current.ID, "error", cleanupErr)
 				}
 			}
@@ -3271,7 +3275,7 @@ func (m *Manager) reconcileAgentSwitches(ctx context.Context, allowQuarantine bo
 		}
 		if reconcileErr != nil {
 			//nolint:errorlint // Only a top-level quarantine is safe to suppress; joined infrastructure errors must fail startup.
-			if _, quarantined := reconcileErr.(agentSwitchQuarantinedError); allowQuarantine && !resolved && quarantined {
+			if _, quarantined := reconcileErr.(agentSwitchQuarantinedError); startup && !resolved && quarantined {
 				m.logger.Warn("agent switch: startup quarantined session", "sessionID", rec.ID, "switchID", sw.ID, "error", reconcileErr)
 				continue
 			}
@@ -3670,6 +3674,16 @@ func (m *Manager) failRecoveredSwitchWithSourceRollback(
 ) (bool, error) {
 	mode := domain.NormalizeSessionMode(rec.Mode)
 	recorder := newAgentSwitchFlightRecorder(sw, mode, execution)
+	if execution == domain.AgentSwitchExecutionStartupReconcile {
+		recorder.boundary(domain.AgentSwitchFailureSourceControllerRestore)
+		recorder.callOutcome = domain.AgentSwitchCallNoEffectFailure
+		recorder.retain(false)
+		marked, err := m.markSourceRestoreUnconfirmedWithRecorder(ctx, store, sw, recorder)
+		if err != nil {
+			return false, err
+		}
+		return false, quarantinedAgentSwitchError(marked, errors.New("source agent is stopped; explicit recovery is required"))
+	}
 	project, projectErr := m.loadProject(ctx, rec.ProjectID)
 	if projectErr != nil {
 		m.logger.Error("agent switch recovery: source project unavailable for rollback", "sessionID", rec.ID, "switchID", sw.ID, "error", projectErr)

@@ -1689,17 +1689,16 @@ paths:
     get:
       operationId: streamEvents
       parameters:
-      - description: Replay events with seq greater than this cursor. When omitted,
-          clients may send Last-Event-ID instead.
+      - description: Replay events after a non-negative sequence, or use latest to
+          start at the current head. Last-Event-ID overrides latest on reconnect.
         in: query
         name: after
         schema:
-          description: Replay events with seq greater than this cursor. When omitted,
-            clients may send Last-Event-ID instead.
-          minimum: 0
+          description: Replay events after a non-negative sequence, or use latest
+            to start at the current head. Last-Event-ID overrides latest on reconnect.
           type:
           - "null"
-          - integer
+          - string
       responses:
         "200":
           content:
@@ -2199,6 +2198,56 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
       summary: Enable the Connect Mobile LAN bridge and issue a fresh password
+      tags:
+      - mobile
+  /api/v1/mobile/enable-lan-only:
+    post:
+      operationId: enableMobileLANOnly
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileStatusResponse'
+          description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Enable the authenticated LAN bridge without a managed public tunnel
+      tags:
+      - mobile
+  /api/v1/mobile/enable-tunnel-only:
+    post:
+      operationId: enableMobileTunnelOnly
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileStatusResponse'
+          description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+      summary: Enable the authenticated listener on loopback for a managed tunnel
       tags:
       - mobile
   /api/v1/mobile/keep-awake:
@@ -3847,6 +3896,108 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Send a message to a Chat reviewer
+      tags:
+      - conversations
+  /api/v1/reviews/{reviewId}/conversation/models:
+    get:
+      operationId: listReviewerConversationModels
+      parameters:
+      - description: Reviewer conversation identifier.
+        in: path
+        name: reviewId
+        required: true
+        schema:
+          description: Reviewer conversation identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationModelsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the models offered for a Chat reviewer
+      tags:
+      - conversations
+  /api/v1/reviews/{reviewId}/conversation/settings:
+    patch:
+      operationId: setReviewerConversationSettings
+      parameters:
+      - description: Reviewer conversation identifier.
+        in: path
+        name: reviewId
+        required: true
+        schema:
+          description: Reviewer conversation identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationTurnSettingsPayload'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationTurnSettingsPayload'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Select model and effort for the reviewer's next Chat turn
       tags:
       - conversations
   /api/v1/reviews/{reviewSessionID}/activity:
@@ -6585,6 +6736,187 @@ paths:
       summary: Set (or autodetect) the browser preview URL for a session
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/preview/app/*:
+    delete:
+      operationId: deleteSessionPreviewApp
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+      summary: Send a request to the running session-owned application preview
+      tags:
+      - sessions
+    get:
+      operationId: getSessionPreviewApp
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            text/html:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+      summary: Proxy the running session-owned application preview
+      tags:
+      - sessions
+    head:
+      operationId: headSessionPreviewApp
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          description: OK
+        "404":
+          description: Not Found
+        "409":
+          description: Conflict
+      summary: Read headers from the running session-owned application preview
+      tags:
+      - sessions
+    patch:
+      operationId: patchSessionPreviewApp
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+      summary: Send a request to the running session-owned application preview
+      tags:
+      - sessions
+    post:
+      operationId: postSessionPreviewApp
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+      summary: Send a request to the running session-owned application preview
+      tags:
+      - sessions
+    put:
+      operationId: putSessionPreviewApp
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+      summary: Send a request to the running session-owned application preview
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/preview/files/*:
     get:
       operationId: getSessionPreviewFile
@@ -6640,6 +6972,14 @@ paths:
         name: X-AO-Browser-Capability
         schema:
           description: Opaque browser capability injected into the owning AO worker.
+          type: string
+      - description: Opaque preview-only capability injected into a session-scoped
+          user shell.
+        in: header
+        name: X-AO-Preview-Capability
+        schema:
+          description: Opaque preview-only capability injected into a session-scoped
+            user shell.
           type: string
       responses:
         "200":
@@ -6697,6 +7037,14 @@ paths:
         schema:
           description: Opaque browser capability injected into the owning AO worker.
           type: string
+      - description: Opaque preview-only capability injected into a session-scoped
+          user shell.
+        in: header
+        name: X-AO-Preview-Capability
+        schema:
+          description: Opaque preview-only capability injected into a session-scoped
+            user shell.
+          type: string
       responses:
         "200":
           content:
@@ -6752,6 +7100,14 @@ paths:
         name: X-AO-Browser-Capability
         schema:
           description: Opaque browser capability injected into the owning AO worker.
+          type: string
+      - description: Opaque preview-only capability injected into a session-scoped
+          user shell.
+        in: header
+        name: X-AO-Preview-Capability
+        schema:
+          description: Opaque preview-only capability injected into a session-scoped
+            user shell.
           type: string
       requestBody:
         content:
@@ -7950,6 +8306,85 @@ paths:
       summary: List files in a session workspace with git change status
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/workspace/history:
+    get:
+      operationId: getSessionWorkspaceHistory
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHistoryResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get lazy commit and upstream metadata for a workspace review
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/workspace/manifest:
+    get:
+      operationId: getSessionWorkspaceManifest
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceManifestResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get the compact changed-file manifest for the initial workspace review
+        paint
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/workspace/search:
     get:
       operationId: searchSessionWorkspaceFiles
@@ -8571,6 +9006,31 @@ paths:
       summary: Cancel an unclaimed speculative task worktree
       tags:
       - projects
+  /api/v1/usage/memory/pressure:
+    get:
+      operationId: getMemoryPressure
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryPressureResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the machine's memory-pressure verdict without sampling any process
+      tags:
+      - usage
   /api/v1/usage/sessions:
     get:
       operationId: listCompactSessionUsage
@@ -8640,6 +9100,38 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Get detailed token and estimated cost usage for one session
+      tags:
+      - usage
+  /api/v1/usage/sessions/memory:
+    get:
+      operationId: listSessionMemory
+      parameters:
+      - description: Optional project id filter for dashboard cards.
+        in: query
+        name: projectId
+        schema:
+          description: Optional project id filter for dashboard cards.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSessionMemoryResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List resident memory of each live session's runtime process tree
       tags:
       - usage
 components:
@@ -9154,6 +9646,34 @@ components:
           $ref: '#/components/schemas/AgentSwitch'
       required:
       - switch
+      type: object
+    AppMemoryResponse:
+      properties:
+        cpuMeasured:
+          description: 'False when there was no earlier sample to measure against:
+            cpuPercent is unknown, not zero.'
+          type: boolean
+        cpuPercent:
+          format: double
+          minimum: 0
+          type: number
+        own:
+          $ref: '#/components/schemas/SessionMemoryResponse'
+        processCount:
+          minimum: 0
+          type: integer
+        reviewers:
+          items:
+            $ref: '#/components/schemas/ControllersReviewerMemoryResponse'
+          type: array
+        rssBytes:
+          minimum: 0
+          type: integer
+      required:
+      - rssBytes
+      - processCount
+      - cpuPercent
+      - cpuMeasured
       type: object
     AttachmentInput:
       properties:
@@ -10083,6 +10603,24 @@ components:
       required:
       - ok
       type: object
+    ControllersReviewerMemoryResponse:
+      properties:
+        harness:
+          type: string
+        memory:
+          $ref: '#/components/schemas/SessionMemoryResponse'
+        reviewId:
+          type: string
+        sessionId:
+          description: The worker session this reviewer reviews, not the reviewer's
+            own identity.
+          type: string
+      required:
+      - reviewId
+      - sessionId
+      - harness
+      - memory
+      type: object
     ControllersSecurePairingStatus:
       properties:
         active:
@@ -10241,6 +10779,7 @@ components:
           - ci_failed
           - review_pending
           - changes_requested
+          - commented
           - approved
           - mergeable
           - merged
@@ -10253,6 +10792,7 @@ components:
           - ci_failed
           - review_pending
           - changes_requested
+          - commented
           - approved
           - mergeable
           - merged
@@ -10329,7 +10869,25 @@ components:
       type: object
     ConversationAccountPayload:
       properties:
+        authFailureId:
+          type: string
         authMode:
+          type: string
+        authVerifiedAt:
+          type:
+          - "null"
+          - string
+        authenticationState:
+          enum:
+          - unknown
+          - required
+          - authenticated
+          type: string
+        lastAuthFailureAt:
+          type:
+          - "null"
+          - string
+        lastAuthFailureReason:
           type: string
         planLabel:
           type: string
@@ -11168,6 +11726,9 @@ components:
           type: array
         brief:
           maxLength: 16384
+          type: string
+        clientRequestId:
+          maxLength: 128
           type: string
         effort:
           maxLength: 64
@@ -12076,6 +12637,19 @@ components:
       - reviews
       - runs
       type: object
+    ListSessionMemoryResponse:
+      properties:
+        app:
+          $ref: '#/components/schemas/AppMemoryResponse'
+        sessions:
+          items:
+            $ref: '#/components/schemas/SessionMemoryResponse'
+          type: array
+        system:
+          $ref: '#/components/schemas/SystemMemoryResponse'
+      required:
+      - sessions
+      type: object
     ListSessionPRsResponse:
       properties:
         linkedPrs:
@@ -12221,6 +12795,22 @@ components:
       required:
       - status
       type: object
+    MemoryPressureResponse:
+      properties:
+        pressureRaw:
+          format: double
+          minimum: 0
+          type: number
+        pressureSource:
+          enum:
+          - psi
+          - available_pct
+          - memorystatus
+          type: string
+      required:
+      - pressureRaw
+      - pressureSource
+      type: object
     MergePRRequest:
       properties:
         expectedHeadSha:
@@ -12320,6 +12910,8 @@ components:
           type: string
         keepAwake:
           $ref: '#/components/schemas/ControllersKeepAwakeStatus'
+        loopbackOnly:
+          type: boolean
         password:
           type: string
         port:
@@ -12334,6 +12926,7 @@ components:
           type: string
       required:
       - enabled
+      - loopbackOnly
       - endpoints
       - hostId
       - tunnel
@@ -12419,6 +13012,8 @@ components:
           - ready_to_merge
           - pr_merged
           - pr_closed_unmerged
+          - review_completed
+          - review_changes_requested
           type: string
       required:
       - id
@@ -12470,6 +13065,17 @@ components:
         shell:
           description: 'Windows shell selector: auto, git-bash, pwsh, powershell,
             cmd, or a custom executable path. Ignored on macOS and Linux.'
+          type: string
+        startOnAttach:
+          description: Start the shell when the requesting client attaches with its
+            terminal grid instead of immediately, so the shell starts at the size
+            that client shows. Only for clients that attach as a sized viewer; omitted
+            starts the shell immediately at the default grid.
+          type: boolean
+        title:
+          description: Tab title for the new shell, for a client that already shows
+            its tab. Trimmed; omitted or empty numbers it after the existing shells
+            (Terminal N).
           type: string
       type: object
     OrchestratorResponse:
@@ -12774,6 +13380,10 @@ components:
       properties:
         deviceName:
           description: Human-friendly device label.
+          type: string
+        hostName:
+          description: This phone's label for the host; used in OS push notification
+            titles.
           type: string
         installId:
           description: 'Stable per-install device id, keying the registry so a rotated
@@ -13200,6 +13810,17 @@ components:
       - sessionId
       - message
       type: object
+    SessionActivityResponse:
+      properties:
+        current:
+          $ref: '#/components/schemas/SessionStepResponse'
+        recent:
+          items:
+            $ref: '#/components/schemas/SessionStepResponse'
+          type: array
+      required:
+      - recent
+      type: object
     SessionInterfaceTransition:
       properties:
         completedAt:
@@ -13289,6 +13910,64 @@ components:
       required:
       - supported
       - targetMode
+      type: object
+    SessionMemoryProcessResponse:
+      properties:
+        command:
+          type: string
+        cpuPercent:
+          description: Share of one core used since the previous sample; zero on the
+            first.
+          format: double
+          minimum: 0
+          type: number
+        pid:
+          type: integer
+        ppid:
+          type: integer
+        rssBytes:
+          minimum: 0
+          type: integer
+      required:
+      - pid
+      - ppid
+      - rssBytes
+      - cpuPercent
+      - command
+      type: object
+    SessionMemoryResponse:
+      properties:
+        activity:
+          $ref: '#/components/schemas/SessionActivityResponse'
+        cpuPercent:
+          description: Share of one core the whole tree used since the previous sample;
+            zero on the first.
+          format: double
+          minimum: 0
+          type: number
+        processCount:
+          minimum: 0
+          type: integer
+        processes:
+          items:
+            $ref: '#/components/schemas/SessionMemoryProcessResponse'
+          type: array
+        rssBytes:
+          description: Resident set size summed over the runtime process tree.
+          minimum: 0
+          type: integer
+        sampledAt:
+          format: date-time
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - rssBytes
+      - processCount
+      - cpuPercent
+      - sampledAt
+      - processes
       type: object
     SessionPRCISummary:
       properties:
@@ -13635,6 +14314,26 @@ components:
       required:
       - session
       type: object
+    SessionStepResponse:
+      properties:
+        endedAt:
+          description: Absent while the tool is still running.
+          format: date-time
+          type:
+          - "null"
+          - string
+        failed:
+          type: boolean
+        startedAt:
+          format: date-time
+          type: string
+        tool:
+          type: string
+      required:
+      - tool
+      - startedAt
+      - failed
+      type: object
     SessionUsageResponse:
       properties:
         harnesses:
@@ -13690,6 +14389,14 @@ components:
         providerTurnId:
           description: Native main-turn identity reported by the hook, when supported.
           type: string
+        runningSubagentIds:
+          description: Running Claude subagent ids observed in a parent Stop hook;
+            empty means none, absent means no snapshot.
+          items:
+            type: string
+          type:
+          - "null"
+          - array
         state:
           description: Agent activity state reported by an agent hook. Optional for
             metadata-only hooks.
@@ -13699,6 +14406,9 @@ components:
           - waiting_input
           - blocked
           - exited
+          type: string
+        subagentId:
+          description: Native child agent id for this hook event.
           type: string
         submissionId:
           description: AO prompt-hook context correlation UUID, when supported.
@@ -14021,6 +14731,9 @@ components:
           type: array
         branch:
           type: string
+        clientRequestId:
+          maxLength: 128
+          type: string
         displayName:
           maxLength: 100
           type: string
@@ -14336,6 +15049,60 @@ components:
       required:
       - targetHarness
       type: object
+    SystemMemoryResponse:
+      properties:
+        availableBytes:
+          description: What the kernel would hand out without swapping (MemAvailable).
+          minimum: 0
+          type: integer
+        cpuCount:
+          minimum: 0
+          type: integer
+        cpuMeasured:
+          type: boolean
+        cpuPercent:
+          format: double
+          minimum: 0
+          type: number
+        load1:
+          format: double
+          type: number
+        pressureRaw:
+          format: double
+          minimum: 0
+          type: number
+        pressureSource:
+          enum:
+          - psi
+          - available_pct
+          - memorystatus
+          type: string
+        swapBytesPerSec:
+          format: double
+          minimum: 0
+          type: number
+        swapTotalBytes:
+          minimum: 0
+          type: integer
+        swapUsedBytes:
+          minimum: 0
+          type: integer
+        totalBytes:
+          minimum: 0
+          type: integer
+      required:
+      - totalBytes
+      - availableBytes
+      - swapTotalBytes
+      - swapUsedBytes
+      - swapBytesPerSec
+      - cpuCount
+      - load1
+      - cpuPercent
+      - cpuMeasured
+      - pressureRaw
+      - pressureSource
+      type: object
     SystemRequirement:
       properties:
         detail:
@@ -14425,6 +15192,15 @@ components:
           - cline
           - autohand
           type: string
+        interfaceMode:
+          enum:
+          - chat
+          - tui
+          type: string
+        rerun:
+          description: Start a fresh manual pass for already-reviewed current heads;
+            reuse an active pass from the same reviewer.
+          type: boolean
       type: object
     TriggerReviewResponse:
       properties:
@@ -14983,6 +15759,72 @@ components:
       - binary
       - editable
       - fileFingerprint
+      type: object
+    WorkspaceHistoryResponse:
+      properties:
+        ahead:
+          type:
+          - "null"
+          - integer
+        behind:
+          type:
+          - "null"
+          - integer
+        commits:
+          items:
+            $ref: '#/components/schemas/WorkspaceCommitSummary'
+          type: array
+        commitsTruncated:
+          type: boolean
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - commits
+      type: object
+    WorkspaceManifestResponse:
+      properties:
+        compareBaseRef:
+          type: string
+        compareBaseSha:
+          type: string
+        compareMode:
+          enum:
+          - base
+          - head_fallback
+          type: string
+        degraded:
+          type: boolean
+        degradedCode:
+          type: string
+        files:
+          items:
+            $ref: '#/components/schemas/WorkspaceFileSummary'
+          type: array
+        refreshing:
+          type: boolean
+        sections:
+          $ref: '#/components/schemas/WorkspaceFileSections'
+        sessionId:
+          type: string
+        stale:
+          type: boolean
+        summary:
+          $ref: '#/components/schemas/WorkspaceSummary'
+        truncated:
+          type: boolean
+        workspaceVersion:
+          type: string
+      required:
+      - sessionId
+      - workspaceVersion
+      - files
+      - sections
+      - summary
+      - truncated
+      - stale
+      - refreshing
+      - degraded
       type: object
     WorkspaceRepo:
       properties:

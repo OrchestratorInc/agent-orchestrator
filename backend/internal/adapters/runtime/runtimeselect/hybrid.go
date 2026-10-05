@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -24,6 +25,8 @@ type routedBackend interface {
 	ports.StyledTerminalOutputReader
 	ports.SupervisedProcessInspector
 	ports.ExactSupervisedProcessInspector
+	ports.RuntimeProcessRootInspector
+	ports.SupervisedProcessRecordInspector
 }
 
 type hybridRuntime struct {
@@ -38,6 +41,8 @@ var _ ports.RuntimeRestarter = (*hybridRuntime)(nil)
 var _ ports.StyledTerminalOutputReader = (*hybridRuntime)(nil)
 var _ ports.SupervisedProcessInspector = (*hybridRuntime)(nil)
 var _ ports.ExactSupervisedProcessInspector = (*hybridRuntime)(nil)
+var _ ports.RuntimeProcessRootInspector = (*hybridRuntime)(nil)
+var _ ports.SupervisedProcessRecordInspector = (*hybridRuntime)(nil)
 
 func newHybridRuntime(legacy, direct routedBackend, log *slog.Logger, platform string) *hybridRuntime {
 	if log == nil {
@@ -87,6 +92,16 @@ func (r *hybridRuntime) IsChildAlive(ctx context.Context, handle ports.RuntimeHa
 	return backend.IsChildAlive(ctx, raw)
 }
 
+func (r *hybridRuntime) IsUnsupervisedReviewerAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	backend, raw := r.route(handle)
+	if inspector, ok := backend.(interface {
+		IsUnsupervisedReviewerAlive(context.Context, ports.RuntimeHandle) (bool, error)
+	}); ok {
+		return inspector.IsUnsupervisedReviewerAlive(ctx, raw)
+	}
+	return backend.IsChildAlive(ctx, raw)
+}
+
 func (r *hybridRuntime) ProbeFencedRuntime(ctx context.Context, ref ports.FencedRuntimeRef) ports.FencedProbeResult {
 	backend, raw := r.route(ref.Handle)
 	ref.Handle = raw
@@ -118,6 +133,12 @@ func (r *hybridRuntime) GetOutput(ctx context.Context, handle ports.RuntimeHandl
 	return backend.GetOutput(ctx, raw, lines)
 }
 
+// ServerPID always asks the legacy (tmux) backend: it's the one shared
+// detached server, regardless of which backend owns any given session.
+func (r *hybridRuntime) ServerPID(ctx context.Context) (int, bool) {
+	return r.legacy.ServerPID(ctx)
+}
+
 func (r *hybridRuntime) GetStyledOutput(ctx context.Context, handle ports.RuntimeHandle, lines int) (string, error) {
 	backend, raw := r.route(handle)
 	return backend.GetStyledOutput(ctx, raw, lines)
@@ -125,12 +146,26 @@ func (r *hybridRuntime) GetStyledOutput(ctx context.Context, handle ports.Runtim
 
 func (r *hybridRuntime) IsSupervisedProcessAlive(ctx context.Context, handle ports.RuntimeHandle, ref ports.SupervisedProcessRef) (bool, error) {
 	backend, raw := r.route(handle)
+	ref = normalizeProcessRef(handle, raw, ref)
 	return backend.IsSupervisedProcessAlive(ctx, raw, ref)
 }
 
 func (r *hybridRuntime) IsExactSupervisedProcessAlive(ctx context.Context, handle ports.RuntimeHandle, ref ports.SupervisedProcessRef) (bool, error) {
 	backend, raw := r.route(handle)
+	ref = normalizeProcessRef(handle, raw, ref)
 	return backend.IsExactSupervisedProcessAlive(ctx, raw, ref)
+}
+
+func normalizeProcessRef(handle, raw ports.RuntimeHandle, ref ports.SupervisedProcessRef) ports.SupervisedProcessRef {
+	if string(ref.SessionID) == handle.ID && raw.ID != handle.ID {
+		ref.SessionID = domain.SessionID(raw.ID)
+	}
+	return ref
+}
+
+func (r *hybridRuntime) HasSupervisedProcessRecord(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	backend, raw := r.route(handle)
+	return backend.HasSupervisedProcessRecord(ctx, raw)
 }
 
 // Restart preserves tmux's in-place restart behavior for every legacy handle.
@@ -151,6 +186,11 @@ func (r *hybridRuntime) Restart(ctx context.Context, handle ports.RuntimeHandle,
 	// Re-enter the normal creation policy so an unavailable replacement host
 	// can still recover the session on tmux and return its unprefixed handle.
 	return r.Create(ctx, cfg)
+}
+
+func (r *hybridRuntime) ProcessRootPIDs(ctx context.Context, handle ports.RuntimeHandle) ([]int, error) {
+	backend, raw := r.route(handle)
+	return backend.ProcessRootPIDs(ctx, raw)
 }
 
 func (r *hybridRuntime) route(handle ports.RuntimeHandle) (routedBackend, ports.RuntimeHandle) {
