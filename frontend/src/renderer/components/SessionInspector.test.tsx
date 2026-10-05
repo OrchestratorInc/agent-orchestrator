@@ -2192,10 +2192,10 @@ describe("SessionInspector summary reviews", () => {
     const currentSession = session([pr(3, "open")], { provider: "codex" });
     const view = renderWithQuery(<SessionInspector hostId="box-a" session={currentSession} />);
     await openReviewsSection();
-    await userEvent.click(await screen.findByRole("button", { name: "Terminal", exact: true }));
-    expect(screen.getByRole("button", { name: "Terminal", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(await screen.findByRole("button", { name: "Terminal" }));
+    expect(screen.getByRole("button", { name: "Terminal" })).toHaveAttribute("aria-pressed", "true");
     view.rerender(<QueryClientProvider client={view.queryClient}><TooltipProvider><SessionInspector session={currentSession} /></TooltipProvider></QueryClientProvider>);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Chat", exact: true })).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true"));
     await userEvent.click(await screen.findByRole("button", { name: "Review latest commit" }));
     await waitFor(() => expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")).toHaveLength(1));
     expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")[0][1].body).not.toHaveProperty("interfaceMode");

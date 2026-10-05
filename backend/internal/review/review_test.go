@@ -970,7 +970,7 @@ func TestRestoreReviewerRestoresDeadReviewerFromHistory(t *testing.T) {
 func TestRestoreReviewerFallsBackFromUnavailableChat(t *testing.T) {
 	old := domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex,
 		InterfaceMode: domain.ReviewerInterfaceChat, ProviderConversationID: "conv-1", AgentSessionID: "conv-1"}
-	store := &fakeStore{review: &old, reviews: map[domain.ReviewerHarness]domain.Review{domain.ReviewerCodex: old}}
+	store := &fakeStore{review: &old, reviews: map[domain.ReviewerHarness]domain.Review{domain.ReviewerCodex: old}, runs: []domain.ReviewRun{{ID: "run-1", ReviewID: old.ID, SessionID: old.SessionID, Harness: old.Harness, Status: domain.ReviewRunRunning}}}
 	launcher := &fakeLauncher{handle: "terminal-pane"}
 	worker := liveWorker()
 	worker.ReviewerHarness = domain.ReviewerCodex
@@ -980,6 +980,9 @@ func TestRestoreReviewerFallsBackFromUnavailableChat(t *testing.T) {
 	}
 	if len(store.settledReviewIDs) != 1 || store.settledReviewIDs[0] != old.ID {
 		t.Fatal("unavailable Chat work was not settled")
+	}
+	if store.runs[0].Status != domain.ReviewRunCancelled {
+		t.Fatal("unavailable Chat left the review run running")
 	}
 	if !launcher.restored || launcher.gotSpec.InterfaceMode != domain.ReviewerInterfaceTUI || launcher.gotSpec.AgentSessionID != "" || launcher.gotSpec.RequireNativeHistory || store.review.InterfaceMode != domain.ReviewerInterfaceTUI {
 		t.Fatalf("unavailable Chat was not restored as Terminal: spec=%+v review=%+v", launcher.gotSpec, store.review)

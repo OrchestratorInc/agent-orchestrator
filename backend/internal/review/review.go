@@ -833,6 +833,9 @@ func (e *Engine) restorePersistedChatReviewerLocked(ctx stdctx.Context, worker d
 		if err := e.stopReviewChatWork(ctx, review); err != nil {
 			return RestoreReviewerResult{}, err
 		}
+		if _, err := e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, worker.ID, review.Harness, "cancelled because reviewer Chat is unavailable"); err != nil {
+			return RestoreReviewerResult{}, err
+		}
 		if err := e.setReviewerInterfaceMode(ctx, review.ID, domain.ReviewerInterfaceTUI, e.clock()); err != nil {
 			return RestoreReviewerResult{}, err
 		}
@@ -924,6 +927,9 @@ func (e *Engine) restoreReviewerLocked(
 		}
 	} else if reviewRow.InterfaceMode == domain.ReviewerInterfaceChat && e.launcher.InterfaceMode(harness) != domain.ReviewerInterfaceChat {
 		if err := e.stopReviewChatWork(ctx, reviewRow); err != nil {
+			return RestoreReviewerResult{}, err
+		}
+		if _, err := e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, worker.ID, harness, "cancelled because reviewer Chat is unavailable"); err != nil {
 			return RestoreReviewerResult{}, err
 		}
 		if err := e.setReviewerInterfaceMode(ctx, reviewRow.ID, domain.ReviewerInterfaceTUI, e.clock()); err != nil {
