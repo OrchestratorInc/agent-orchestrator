@@ -77,9 +77,9 @@
 	--color-text-primary: var(--foreground);
 	--color-text-muted: var(--muted-foreground);
 	--color-text-passive: var(--chart-3);
-	--color-brand-logo: #a6a6a6;
-	--color-brand-logo-bright: #d2d2d2;
-	--color-brand-logo-foreground: #252525;
+	--color-brand-logo: #79b0dc;
+	--color-brand-logo-bright: #a5cde7;
+	--color-brand-logo-foreground: #0a0b0d;
 	--color-text-markdown-code: var(--color-brand-logo);
 	--color-text-markdown-link: var(--color-brand-logo); /* underline distinguishes links */
 	--color-text-markdown-link-hover: var(--color-brand-logo-bright);
@@ -688,9 +688,9 @@
 	--color-text-primary: var(--foreground);
 	--color-text-muted: var(--muted-foreground);
 	--color-text-passive: var(--chart-3);
-	--color-brand-logo: #6f6f6f;
-	--color-brand-logo-bright: #8d8d8d;
-	--color-brand-logo-foreground: #fafafa;
+	--color-brand-logo: #304c83;
+	--color-brand-logo-bright: #466daa;
+	--color-brand-logo-foreground: #ffffff;
 	--color-text-markdown-code: var(--color-brand-logo);
 	--color-text-markdown-link: var(--color-brand-logo);
 	--color-text-markdown-link-hover: var(--color-brand-logo-bright);

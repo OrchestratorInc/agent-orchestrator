@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +78,14 @@ func TestCloudPromptProviderHelper(t *testing.T) {
 		}
 		if len(request.ID) == 0 {
 			continue
+		}
+		if request.Method == "session/load" && request.Params["sessionId"] != "native-1" {
+			if code, _ := strconv.Atoi(os.Getenv("AO_PROMPT_LOAD_ERROR_CODE")); code != 0 {
+				if err := output.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "error": map[string]any{"code": code, "message": "restore rejected"}}); err != nil {
+					t.Fatal(err)
+				}
+				continue
+			}
 		}
 		result := map[string]any{}
 		switch request.Method {

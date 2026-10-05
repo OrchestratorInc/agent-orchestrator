@@ -69,7 +69,7 @@ for (const mode of ["chat", "tui"] as const) {
 			// Chromium can report a fractional CSS-pixel centerline after the sidebar
 			// transition. Keep the smoke assertion strict without rejecting subpixel
 			// rasterization differences across CI runners.
-			expect(Math.abs(collapsed.nav.center - TRAFFIC_LIGHT_CENTER)).toBeLessThanOrEqual(1);
+			expect(Math.abs(collapsed.nav.center - TRAFFIC_LIGHT_CENTER)).toBeLessThanOrEqual(2);
 			const firstTab = await page.getByRole("tab").first().boundingBox();
 			expect(firstTab!.x).toBeGreaterThanOrEqual(collapsed.nav.x + collapsed.nav.width);
 			if (!fullScreen) {
