@@ -99,24 +99,7 @@ import {
 import { attachmentURL, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 
-// These responses precede AppendUserMessage. Provider/transport errors can
-// follow durable acceptance and must keep the original delivery ID for recovery.
-const DEFINITIVE_SEND_REJECTIONS = new Set([
-	// Cloud validation failures reject the request before durable acceptance.
-	"validation_error",
-	"INVALID_BODY",
-	"CHAT_MESSAGE_EMPTY",
-	"INVALID_RESOURCE",
-	"UNSUPPORTED_ATTACHMENT_TYPE",
-	"INVALID_ATTACHMENT_DATA",
-	"ATTACHMENT_TOO_LARGE",
-	"TOO_MANY_ATTACHMENTS",
-	"ATTACHMENTS_TOO_LARGE",
-	"SESSION_NOT_FOUND",
-	"SESSION_MODE_MISMATCH",
-	"CHAT_CONTROLLER_NOT_READY",
-	"CHAT_INTERFACE_TRANSITION",
-]);
+import { DEFINITIVE_CHAT_SEND_REJECTIONS } from "../../lib/chat-send-errors";
 
 // Native image blocks are persisted with the chat turn and sent to the provider.
 // Larger attachments still reach the agent through their staged workspace paths.
@@ -193,6 +176,9 @@ export const ChatComposer = memo(function ChatComposer({
 	remoteHost = false,
 	assetSessionId,
 	acceptedClientMessageIds,
+	visibleClientMessageIds,
+	onAbandonDelivery,
+	emptyPlaceholder,
 }: {
 	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (
@@ -213,6 +199,8 @@ export const ChatComposer = memo(function ChatComposer({
 	disabled?: boolean;
 	/** Explains why message entry is temporarily blocked. */
 	disabledPlaceholder?: string;
+	/** A contextual prompt shown before an otherwise empty conversation begins. */
+	emptyPlaceholder?: string;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
@@ -286,6 +274,10 @@ export const ChatComposer = memo(function ChatComposer({
 	assetSessionId?: string;
 	/** Client ids already present in daemon-authoritative conversation history. */
 	acceptedClientMessageIds?: ReadonlySet<string>;
+	/** Client ids currently visible either durably or as renderer-local echoes. */
+	visibleClientMessageIds?: ReadonlySet<string>;
+	/** Release renderer-only state when recovery for an uncertain send is abandoned. */
+	onAbandonDelivery?: (clientMessageId: string) => void;
 }) {
 	const translateDraft = useChatDraftTranslation();
 	const draftScope = useMemo<ChatDraftScope | undefined>(
@@ -336,6 +328,13 @@ export const ChatComposer = memo(function ChatComposer({
 			? readChatSessionDraft(draftScope).composer.delivery
 			: undefined,
 	);
+	// The editor can emit a synchronous change while the optimistic clear occurs,
+	// before React commits durableDelivery. Keep the send journal's exact draft out
+	// of the ordinary draft writer until delivery settles.
+	const durableDeliveryRef = useRef(durableDelivery);
+	const volatileDeliveryRef = useRef<{ requestText: string; clientMessageId: string } | undefined>(undefined);
+	const visibleClientMessageIdsRef = useRef(visibleClientMessageIds);
+	visibleClientMessageIdsRef.current = visibleClientMessageIds;
 	const [steerNextRequest, setSteerNextRequest] = useState(0);
 	// The DOM event is the source of truth while React catches up with the draft
 	// transition. This keeps Enter-after-fast-typing from observing stale state.
@@ -435,6 +434,7 @@ export const ChatComposer = memo(function ChatComposer({
 		synchronouslyClearedDeliveryRevision.current = undefined;
 		const currentDraft = draftScope ? readChatSessionDraft(draftScope) : undefined;
 		composerRevision.current = currentDraft?.composer.revision ?? 0;
+		durableDeliveryRef.current = currentDraft?.composer.delivery;
 		setDurableDelivery(currentDraft?.composer.delivery);
 		setAppliedAcceptanceSequence(0);
 		setTextDraftPersistenceError(null);
@@ -504,9 +504,9 @@ export const ChatComposer = memo(function ChatComposer({
 			!submitting &&
 			!composerMutation.pending,
 	);
-	const canAbandonUncertainSteer = Boolean(
+	const canAbandonUncertainDelivery = Boolean(
 		deliveryUncertain &&
-			durableDelivery?.kind === "steer" &&
+			durableDelivery &&
 			durableDelivery.state === "dispatching" &&
 			draftScope &&
 			!submitting,
@@ -548,7 +548,16 @@ export const ChatComposer = memo(function ChatComposer({
 				: "Enter to send";
 	const persistedText = persistedDraft?.composer.text;
 	const draftSeedId = draftSeed?.id ?? (draftScopeKey ? `session:${draftScopeKey}` : undefined);
-	const draftSeedText = draftSeed?.text ?? persistedText;
+	// A delivery journal owns the exact submitted draft until we know whether the
+	// agent accepted it. Never rehydrate that same payload into the editable surface
+	// on a remount: that makes a message appear unsent (and can invite a duplicate).
+	const draftSeedText = durableDelivery?.kind === "send"
+		? visibleClientMessageIds
+			? visibleClientMessageIds.has(durableDelivery.clientMessageId)
+				? ""
+				: persistedDraft?.composer.text ?? durableDelivery.requestText
+			: persistedDraft?.composer.text ?? durableDelivery.requestText
+		: (draftSeed?.text ?? persistedText);
 	const draftPersistenceError =
 		textDraftPersistenceError ?? attachmentDraftPersistenceError;
 
@@ -655,6 +664,7 @@ export const ChatComposer = memo(function ChatComposer({
 			setTextDraftPersistenceError(null);
 			setDeliveryRecoveryNotice(null);
 			if (!result.cleared) return false;
+			durableDeliveryRef.current = undefined;
 			clearEditorView();
 			fileAttachments.clear();
 			return true;
@@ -665,6 +675,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const clearAcceptedDraft = useCallback(
 		(acceptedRevision: number, mutationToken?: ChatDraftMutationToken) => {
 			if (!draftScope) {
+				durableDeliveryRef.current = undefined;
 				clearEditorView();
 				fileAttachments.clear();
 				return true;
@@ -718,8 +729,8 @@ export const ChatComposer = memo(function ChatComposer({
 		[clearAcceptedDraft, draftScope],
 	);
 
-	const abandonUncertainSteer = useCallback(() => {
-		if (!draftScope || !durableDelivery || durableDelivery.kind !== "steer") return;
+	const abandonUncertainDelivery = useCallback(() => {
+		if (!draftScope || !durableDelivery) return;
 		const result = clearUncertainChatComposerDelivery(
 			draftScope,
 			durableDelivery.clientMessageId,
@@ -732,13 +743,17 @@ export const ChatComposer = memo(function ChatComposer({
 			);
 			return;
 		}
+		if (durableDelivery.kind === "send") {
+			onAbandonDelivery?.(durableDelivery.clientMessageId);
+		}
+		durableDeliveryRef.current = undefined;
 		setDeliveryUncertain(false);
 		setTextDraftPersistenceError(null);
 		setDeliveryRecoveryNotice(null);
 		setSteerOutcomeNotice(
-			"chat.draft.abandonedSteer",
+		durableDelivery.kind === "send" ? "chat.draft.abandonedSend" : "chat.draft.abandonedSteer",
 		);
-	}, [draftScope, durableDelivery]);
+	}, [draftScope, durableDelivery, onAbandonDelivery]);
 
 	useEffect(() => {
 		const accepted = composerMutation.accepted;
@@ -771,9 +786,15 @@ export const ChatComposer = memo(function ChatComposer({
 				})),
 			);
 		}
-		const committedSeedText =
-			draftSeed?.text ??
-			(committedDraft ? committedDraft.composer.text : draftSeedText);
+		const visibleDeliveryIds = visibleClientMessageIdsRef.current;
+		const committedSeedText = durableDelivery?.kind === "send"
+			? visibleDeliveryIds
+				? visibleDeliveryIds.has(durableDelivery.clientMessageId)
+					? ""
+					: committedDraft?.composer.text ?? durableDelivery.requestText
+				: committedDraft?.composer.text ?? durableDelivery.requestText
+			: draftSeed?.text ??
+				(committedDraft ? committedDraft.composer.text : draftSeedText);
 		if (committedSeedText === undefined) {
 			restoredSeedKey.current = undefined;
 			return;
@@ -790,11 +811,13 @@ export const ChatComposer = memo(function ChatComposer({
 		highlightedRef.current = 0;
 		setHighlighted(0);
 		setSendError(null);
-		setSteerOutcomeNotice(null);
+		setSteerOutcomeNotice((current) =>
+			current === "chat.draft.abandonedSteer" ? current : null,
+		);
 		// A history action intentionally creates a new draft and must be persisted.
 		// A session restore is already durable; writing it again here needlessly
 		// changes the accepted-send revision during mount.
-		if (draftScope && draftSeed) {
+		if (draftScope && draftSeed && !durableDelivery) {
 			const result = writeChatComposerText(draftScope, committedSeedText);
 			composerRevision.current = result.draft.composer.revision;
 			setTextDraftPersistenceError(
@@ -808,6 +831,7 @@ export const ChatComposer = memo(function ChatComposer({
 		draftSeed,
 		draftSeedId,
 		draftSeedText,
+		durableDelivery,
 		editingQueuedTurnId,
 		fileAttachments.reconcilePersistedAttachments,
 	]);
@@ -824,10 +848,8 @@ export const ChatComposer = memo(function ChatComposer({
 			setDurableDelivery(delivery);
 			return;
 		}
-		const observedSteer =
-			delivery.kind === "steer" &&
-			acceptedClientMessageIds?.has(delivery.clientMessageId);
-		if (delivery.state !== "accepted" && !observedSteer) return;
+		const observedDelivery = acceptedClientMessageIds?.has(delivery.clientMessageId);
+		if (delivery.state !== "accepted" && !observedDelivery) return;
 		if (automaticDeliveryRecoveryAttempted.current === delivery.clientMessageId) return;
 		automaticDeliveryRecoveryAttempted.current = delivery.clientMessageId;
 		acceptAndClearDurableDelivery(delivery);
@@ -860,8 +882,17 @@ export const ChatComposer = memo(function ChatComposer({
 
 	const onEditorChange = useCallback((snapshot: ComposerEditorSnapshot) => {
 		textRef.current = snapshot.text;
+		const volatileDelivery = volatileDeliveryRef.current;
+		if (
+			volatileDelivery &&
+			snapshot.text.trim() !== "" &&
+			snapshot.text !== volatileDelivery.requestText
+		) {
+			onAbandonDelivery?.(volatileDelivery.clientMessageId);
+			volatileDeliveryRef.current = undefined;
+		}
 		onQueuedDraftChange?.(snapshot.text);
-		if (draftScope) {
+		if (draftScope && !durableDeliveryRef.current) {
 			const result = writeChatComposerText(draftScope, snapshot.text);
 			composerRevision.current = result.draft.composer.revision;
 			// A disabled Lexical editor can still publish an internal state update
@@ -898,7 +929,7 @@ export const ChatComposer = memo(function ChatComposer({
 			dismissedKeyRef.current = null;
 			setDismissedKey(null);
 		}
-	}, [draftScope, onQueuedDraftChange]);
+	}, [draftScope, onAbandonDelivery, onQueuedDraftChange]);
 
 	const pick = useCallback((value: string) => {
 		const currentTrigger = triggerRef.current;
@@ -1139,9 +1170,27 @@ export const ChatComposer = memo(function ChatComposer({
 					// The parent leaves this editor only after proving durable cleanup.
 					return;
 				} else if (nativePayloads.length > 0) {
-					await onSend(message, nativePayloads);
+					if (onAbandonDelivery) {
+						const volatileDelivery = volatileDeliveryRef.current?.requestText === message
+							? volatileDeliveryRef.current
+							: { requestText: message, clientMessageId: crypto.randomUUID() };
+						volatileDeliveryRef.current = volatileDelivery;
+						await onSend(message, nativePayloads, volatileDelivery.clientMessageId);
+						volatileDeliveryRef.current = undefined;
+					} else {
+						await onSend(message, nativePayloads);
+					}
 				} else {
-					await onSend(message);
+					if (onAbandonDelivery) {
+						const volatileDelivery = volatileDeliveryRef.current?.requestText === message
+							? volatileDeliveryRef.current
+							: { requestText: message, clientMessageId: crypto.randomUUID() };
+						volatileDeliveryRef.current = volatileDelivery;
+						await onSend(message, undefined, volatileDelivery.clientMessageId);
+						volatileDeliveryRef.current = undefined;
+					} else {
+						await onSend(message);
+					}
 				}
 				if (!clearForLocalEcho) clearEditorView();
 				fileAttachments.clear();
@@ -1193,9 +1242,15 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 		const delivery = prepared.mutation;
+		durableDeliveryRef.current = delivery;
 		synchronouslyClearedDeliveryRevision.current = undefined;
 		setDeliveryUncertain(false);
 		composerRevision.current = prepared.draft.composer.revision;
+		// The delivery journal protects retries, but it must not turn the submitted
+		// prompt into a grey, stuck-looking editor while a fresh Cursor host starts.
+		// Clear the first-send view now; the local echo from onSend owns the prompt in
+		// the timeline and the journal still retains the exact recovery payload.
+		if (delivery.kind === "send" && !prepared.recovered) clearEditorView();
 		setDurableDelivery(delivery);
 		setTextDraftPersistenceError(null);
 		setDeliveryRecoveryNotice(
@@ -1224,6 +1279,7 @@ export const ChatComposer = memo(function ChatComposer({
 						delivery.revision,
 					);
 					setDurableDelivery(cleared.draft.composer.delivery);
+					if (cleared.ok) durableDeliveryRef.current = undefined;
 					composerRevision.current = cleared.draft.composer.revision;
 					if (cleared.ok) {
 						setTextDraftPersistenceError(null);
@@ -1252,14 +1308,26 @@ export const ChatComposer = memo(function ChatComposer({
 			// was lost. Only an initial, definitively unaccepted send can be edited.
 			if (
 				delivery.kind === "send" && !prepared.recovered &&
-				DEFINITIVE_SEND_REJECTIONS.has(apiErrorCode(error) ?? "")
+				DEFINITIVE_CHAT_SEND_REJECTIONS.has(apiErrorCode(error) ?? "")
 			) {
 				const cleared = clearRejectedChatComposerDelivery(
 					draftScope, delivery.clientMessageId, delivery.revision,
 				);
 				setDurableDelivery(cleared.draft.composer.delivery);
-				setDeliveryUncertain(false);
-				setDeliveryRecoveryNotice(null);
+				if (cleared.ok) {
+					durableDeliveryRef.current = undefined;
+					const restoredText = cleared.draft.composer.text;
+					const restoredSeedText = draftSeed?.text ?? restoredText;
+					restoredSeedKey.current = editingQueuedTurnId
+						? draftSeedId
+						: JSON.stringify([draftSeedId, restoredSeedText]);
+					textRef.current = restoredText;
+					hasTextRef.current = restoredText.trim().length > 0;
+					setHasText(hasTextRef.current);
+					editor.current?.setText(restoredText);
+					setDeliveryUncertain(false);
+					setDeliveryRecoveryNotice(null);
+				}
 				setTextDraftPersistenceError(cleared.ok ? null : "chat.draft.saveFailed");
 				setSendError(apiErrorMessage(error));
 				return;
@@ -1546,7 +1614,7 @@ export const ChatComposer = memo(function ChatComposer({
 							? "The controller is not connected"
 							: willQueue
 								? "Agent is working — this sends when it finishes"
-								: "Message the agent…")
+								: emptyPlaceholder ?? "Message the agent…")
 					}
 					menuOpen={menuOpen}
 					menuId={menuId}
@@ -1564,13 +1632,13 @@ export const ChatComposer = memo(function ChatComposer({
 						{translateDraft(attachmentError)}
 					</p>
 				) : null}
-				{canAbandonUncertainSteer ? (
+				{canAbandonUncertainDelivery ? (
 					<div className="px-1.5">
 						<Button
 							type="button"
 							variant="outline"
 							size="sm"
-							onClick={abandonUncertainSteer}
+							onClick={abandonUncertainDelivery}
 						>
 							{translateDraft("chat.draft.abandon")}
 						</Button>
