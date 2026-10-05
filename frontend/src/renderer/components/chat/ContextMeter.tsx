@@ -13,9 +13,10 @@
  * required, which matters for something glanced at rather than studied.
  */
 
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Minimize2 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { formatTokenCount } from "../../lib/format-token-count";
+import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import type { ConversationRateLimits, ConversationUsage } from "../../types/conversation";
 
@@ -102,10 +103,20 @@ export function ContextMeter({
 	usage,
 	rateLimits,
 	className,
+	onCompact,
+	compacting = false,
+	compactSupported = false,
+	compactBlocked = false,
+	compactUnavailable,
 }: {
 	usage?: ConversationUsage;
 	rateLimits?: ConversationRateLimits;
 	className?: string;
+	onCompact?: () => void | Promise<unknown>;
+	compacting?: boolean;
+	compactSupported?: boolean;
+	compactBlocked?: boolean;
+	compactUnavailable?: string;
 }) {
 	const quota = rateLimits ? worstWindow(rateLimits) : undefined;
 	const hasContext = usage !== undefined && (usage.contextUsed > 0 || usage.contextWindow > 0);
@@ -122,6 +133,34 @@ export function ContextMeter({
 		<TooltipProvider>
 			<div className={cn("flex shrink-0 items-center gap-2", className)}>
 				{usage && hasContext ? <ContextReadout usage={usage} /> : null}
+				{onCompact && compactSupported && usage && hasContext && usage.contextUsed > 0 && usage.contextWindow > 0 && usage.contextUsed / usage.contextWindow >= CONTEXT_WARN ? (
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<span className="inline-flex">
+								<Button
+									type="button"
+									variant="ghost"
+									size="icon-sm"
+									disabled={compacting || compactBlocked || Boolean(compactUnavailable)}
+									aria-busy={compacting}
+									aria-label="Compact conversation history"
+									data-compact-control=""
+									onClick={() => void onCompact()}
+									className="size-7 rounded-full text-muted-foreground hover:bg-white/5! hover:text-foreground"
+								>
+									<Minimize2 aria-hidden="true" className={cn("size-3.5", compacting && "animate-pulse")} />
+								</Button>
+							</span>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">
+							{compacting
+								? "Compacting conversation history"
+								: compactBlocked
+									? "Stop the current turn before compacting"
+									: compactUnavailable ?? "Compact conversation history"}
+						</TooltipContent>
+					</Tooltip>
+				) : null}
 				{showQuota && quota ? <QuotaWarning quota={quota} limits={rateLimits} /> : null}
 			</div>
 		</TooltipProvider>

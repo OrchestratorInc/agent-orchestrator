@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ContextMeter } from "./ContextMeter";
 import type { ConversationRateLimits, ConversationUsage } from "../../types/conversation";
 
@@ -73,10 +73,37 @@ describe("ContextMeter", () => {
 			expect(screen.getByRole("progressbar")).toHaveClass("text-status-needs-you");
 		});
 
-		it("shifts to the exited token from 90%, where the next turn is at risk", () => {
+	it("shifts to the exited token from 90%, where the next turn is at risk", () => {
 			render(<ContextMeter usage={usage({ contextUsed: 232_560 })} />);
 			expect(screen.getByRole("progressbar")).toHaveClass("text-status-exited");
 		});
+	});
+
+	it("offers compaction beside the meter at the warning threshold", async () => {
+		const onCompact = vi.fn();
+		render(
+			<ContextMeter
+				usage={usage({ contextUsed: 180_880 })}
+				onCompact={onCompact}
+				compactSupported
+			/>,
+		);
+		const button = screen.getByRole("button", { name: "Compact conversation history" });
+		expect(button).toBeEnabled();
+		await userEvent.click(button);
+		expect(onCompact).toHaveBeenCalledOnce();
+	});
+
+	it("disables compaction while a turn is active", () => {
+		render(
+			<ContextMeter
+				usage={usage({ contextUsed: 180_880 })}
+				onCompact={vi.fn()}
+				compactSupported
+				compactBlocked
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "Compact conversation history" })).toBeDisabled();
 	});
 
 	it("clamps a provider that overreports past its own window", () => {

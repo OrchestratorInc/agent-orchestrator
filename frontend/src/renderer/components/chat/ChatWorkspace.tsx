@@ -1482,7 +1482,19 @@ function ChatWorkspaceContent({
 									onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
 									onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
 									commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
-									settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
+									settings={
+										<>
+											<ContextMeter
+												usage={snapshot.usage}
+												onCompact={newWorkDisabled ? undefined : onCompact}
+												compacting={compacting}
+												compactSupported={can(snapshot, "compaction")}
+												compactBlocked={Boolean(turn)}
+												compactUnavailable={compactUnavailable}
+											/>
+											{composerSettings}
+										</>
+									}
 									busy={busy}
 									willQueue={Boolean(turn) || session?.provisionState === "provisioning"}
 									disabled={(snapshot.controller.state === "stopped" || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
