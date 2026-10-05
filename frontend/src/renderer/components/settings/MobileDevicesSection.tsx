@@ -64,11 +64,15 @@ export async function fetchDevices(): Promise<MobileDevice[]> {
 export function MobileDevicesSection() {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	// Rows removed in the UI but whose DELETE has not been sent yet (Undo is
-	// still offered), and rows whose DELETE succeeded but which the next poll
-	// has not dropped yet. Both are hidden from the normal list.
+	// Rows removed in the UI and shown as "removed · Undo" until their DELETE
+	// settles. deletingIds is the subset whose undo window has ended and whose
+	// DELETE is in flight, so Undo can no longer cancel it.
 	const [pendingRemovals, setPendingRemovals] = useState<ReadonlySet<string>>(() => new Set());
-	const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
+	const [deletingIds, setDeletingIds] = useState<ReadonlySet<string>>(() => new Set());
+	// Devices with a mute PATCH in flight. Tracked per device because the
+	// mutation's own isPending/variables only describe the latest call, so a
+	// second toggle would otherwise unlock the first device's switch early.
+	const [mutingIds, setMutingIds] = useState<ReadonlySet<string>>(() => new Set());
 	const removalTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 	const trashButtons = useRef(new Map<string, HTMLButtonElement>());
 
@@ -94,7 +98,13 @@ export function MobileDevicesSection() {
 			});
 			if (error) throw new Error(apiErrorMessage(error));
 		},
+		onMutate: ({ installId }) => {
+			setMutingIds((prev) => new Set(prev).add(installId));
+		},
 		onSuccess: invalidate,
+		onSettled: (_data, _error, { installId }) => {
+			setMutingIds((prev) => without(prev, installId));
+		},
 	});
 
 	const remove = useMutation({
@@ -108,13 +118,21 @@ export function MobileDevicesSection() {
 			});
 			if (error) throw new Error(apiErrorMessage(error));
 		},
-		onSuccess: (_data, installId) => {
-			setRemovedIds((prev) => new Set(prev).add(installId));
+		onSuccess: async (_data, installId) => {
+			// Drop the row from the cached roster rather than hiding its id, so a
+			// later poll that lists it again (the phone re-registered, muted) shows
+			// it. Cancel first so a poll that started before the DELETE landed
+			// cannot write the stale row back.
+			await queryClient.cancelQueries({ queryKey: mobileDevicesQueryKey });
+			queryClient.setQueryData<MobileDevice[]>(mobileDevicesQueryKey, (prev) =>
+				prev?.filter((d) => d.installId !== installId),
+			);
 			invalidate();
 		},
 		onSettled: (_data, _error, installId) => {
 			// On failure the row simply comes back, with the error shown below.
 			setPendingRemovals((prev) => without(prev, installId));
+			setDeletingIds((prev) => without(prev, installId));
 		},
 	});
 
@@ -130,13 +148,18 @@ export function MobileDevicesSection() {
 			installId,
 			setTimeout(() => {
 				removalTimers.current.delete(installId);
+				setDeletingIds((prev) => new Set(prev).add(installId));
 				removeDevice.current(installId);
 			}, REMOVE_UNDO_MS),
 		);
 	};
 
 	const undoRemoval = (installId: string) => {
-		clearTimeout(removalTimers.current.get(installId));
+		const timer = removalTimers.current.get(installId);
+		// The window already closed and the DELETE is on its way; restoring the
+		// row now would show a device that is about to be gone.
+		if (timer === undefined) return;
+		clearTimeout(timer);
 		removalTimers.current.delete(installId);
 		setPendingRemovals((prev) => without(prev, installId));
 		// Hand focus back to the row's trash button, which replaces Undo.
@@ -156,18 +179,7 @@ export function MobileDevicesSection() {
 		};
 	}, []);
 
-	// Once a poll no longer lists a removed device, stop tracking it — so a phone
-	// that later re-registers (it comes back muted) shows up again.
-	useEffect(() => {
-		if (!query.data) return;
-		const listed = new Set(query.data.map((d) => d.installId));
-		setRemovedIds((prev) => {
-			const next = new Set([...prev].filter((id) => listed.has(id)));
-			return next.size === prev.size ? prev : next;
-		});
-	}, [query.data]);
-
-	const devices = (query.data ?? []).filter((d) => !removedIds.has(d.installId));
+	const devices = query.data ?? [];
 	// Stable client-side order: the daemon sorts live-first then by LastSeenAt
 	// descending, and LastSeenAt advances on every phone poll — with 2+ live
 	// devices that ordering can flip on any 3s refetch, jumping rows under the
@@ -230,7 +242,7 @@ export function MobileDevicesSection() {
 											autoFocus
 											aria-label={t("mobile.devices.undoRemoveAria", { name })}
 											className="min-h-10 rounded-md px-2 text-sm font-medium text-primary transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-											disabled={remove.isPending && remove.variables === device.installId}
+											disabled={deletingIds.has(device.installId)}
 											onClick={() => undoRemoval(device.installId)}
 										>
 											{t("mobile.devices.undo")}
@@ -261,9 +273,7 @@ export function MobileDevicesSection() {
 										<Bell className="size-4 text-settings-muted" aria-hidden="true" data-testid="bell" />
 										<Switch
 											checked={device.notificationsEnabled && !device.muted}
-											disabled={
-												tokenless || (mute.isPending && mute.variables?.installId === device.installId)
-											}
+											disabled={tokenless || mutingIds.has(device.installId)}
 											aria-label={t("mobile.devices.notificationsFor", { name })}
 											onCheckedChange={(next) =>
 												mute.mutate({ installId: device.installId, muted: !next })
