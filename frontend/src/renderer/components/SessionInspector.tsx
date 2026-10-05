@@ -32,12 +32,13 @@ import {
 	GitMerge,
 	Info,
 	Play,
-	Trash2,
+	Square,
 	Loader2,
 	MessageSquare,
 	X,
 } from "lucide-react";
 import type { components } from "../../api/schema";
+import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
@@ -1769,11 +1770,21 @@ function ReviewsSection({
 				params: { path: { sessionId: session.id } },
 			});
 			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableKillReviewSession")));
-			return data;
+			return {
+				data,
+				requestReviewsKey: reviewsKey,
+				requestWorkspaceKey: workspaceKey,
+				reviewId: reviewsQuery.data?.reviewerSurface?.reviewId,
+				requestHostId: hostId,
+			};
 		},
-		onSuccess: (data) => {
-			if (data) queryClient.setQueryData(reviewsKey, data);
-			void queryClient.invalidateQueries({ queryKey: workspaceKey });
+		onSuccess: ({ data, requestReviewsKey, requestWorkspaceKey, reviewId, requestHostId }) => {
+			if (data) queryClient.setQueryData(requestReviewsKey, data);
+			void queryClient.invalidateQueries({ queryKey: requestReviewsKey });
+			void queryClient.invalidateQueries({ queryKey: requestWorkspaceKey });
+			if (reviewId) {
+				void queryClient.invalidateQueries({ queryKey: reviewerConversationQueryKey(reviewId, requestHostId) });
+			}
 		},
 	});
 	const reviewStates = reviewsQuery.data?.reviews ?? [];
@@ -1817,6 +1828,7 @@ function ReviewsSection({
 					else triggerReview.mutate({ ownerKey: reviewerOwnerKey });
 				}}
 				reviewerHandleId={reviewsQuery.data?.reviewerHandleId ?? ""}
+				reviewerSurface={reviewsQuery.data?.reviewerSurface}
 				reviewerActivityState={reviewsQuery.data?.reviewerActivityState}
 				reviewStates={reviewStates}
 				agentCatalog={agentsQuery.data}
@@ -2312,6 +2324,7 @@ function ReviewPanel({
 	config,
 	reviewStates,
 	reviewerHandleId,
+	reviewerSurface,
 	reviewerActivityState,
 	isLoading,
 	isTriggering,
@@ -2337,6 +2350,7 @@ function ReviewPanel({
 	config?: ProjectConfig;
 	reviewStates: PRReviewState[];
 	reviewerHandleId: string;
+	reviewerSurface?: components["schemas"]["ListReviewsResponse"]["reviewerSurface"];
 	reviewerActivityState?: components["schemas"]["ListReviewsResponse"]["reviewerActivityState"];
 	isLoading: boolean;
 	isTriggering: boolean;
@@ -2398,7 +2412,8 @@ function ReviewPanel({
 	const activeReviewerHarness = latest?.harness || effectiveReviewerHarness;
 	const autoReviewFailure =
 		latestAutoFailure && latestAutoFailure.id !== dismissedAutoFailureId ? latestAutoFailure.body.trim() : null;
-	const hasReviewerSession = reviewerHandleId.trim() !== "";
+	const hasReviewerSession = reviewerHandleId.trim() !== "" ||
+		Boolean(reviewerSurface?.mode === "chat" && reviewerSurface.reviewId);
 	const reviewRunning = reviewIsRunning(openReviewStates);
 	const reviewLive = reviewHasLiveActivity(openReviewStates, reviewerActivityState, hasReviewerSession);
 	const reviewHasRun = reviewRunning || Boolean(latest);
@@ -2409,7 +2424,7 @@ function ReviewPanel({
 			? t("inspector.review.cancelling")
 			: t("inspector.review.cancel")
 		: runAction;
-	const killDisabled = autoReviewEnabled || isKilling || isTriggering || isSwitchingReviewer || !hasReviewerSession;
+	const killDisabled = isKilling || isCancelling || isTriggering || isSwitchingReviewer || !hasReviewerSession;
 
 	return (
 		<div className="mb-2.5 flex flex-col">
@@ -2472,28 +2487,18 @@ function ReviewPanel({
 								{reviewRunning ? <X aria-hidden="true" /> : <Play aria-hidden="true" />}
 								<span className="review-run-action-label">{primaryReviewActionLabel}</span>
 							</Button>
-							{hasReviewerSession ? (
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<span className="inline-flex">
-											<Button
-												aria-label={isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}
-												className="h-control-md w-control-md shrink-0 p-0 text-error [&_svg]:size-icon-sm"
-												disabled={killDisabled}
-												onClick={onKill}
-												size="sm"
-												type="button"
-												variant="ghost"
-											>
-												<Trash2 aria-hidden="true" />
-											</Button>
-										</span>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">
-										{isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}
-									</TooltipContent>
-								</Tooltip>
-							) : null}
+							<Button
+								aria-label={isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}
+								className="shrink-0 gap-1 px-1.5 text-xs text-error [&_svg]:size-icon-sm"
+								disabled={killDisabled}
+								onClick={onKill}
+								size="sm"
+								type="button"
+								variant="ghost"
+							>
+								<Square aria-hidden="true" fill="currentColor" />
+								<span>{isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}</span>
+							</Button>
 						</div>
 					</div>
 				</div>

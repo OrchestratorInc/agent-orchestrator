@@ -2410,6 +2410,32 @@ describe("SessionInspector summary reviews", () => {
     );
   });
 
+  it.each(["chat", "tui"])("stops a %s reviewer and refreshes its conversation without changing review history", async (mode) => {
+    const reviews = [reviewState(3, "up_to_date")];
+    const common = commonGetsResponder([], "", reviews);
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/reviews"
+      ? { data: { reviewerHandleId: mode === "tui" ? "terminal-pane" : "", reviewerSurface: { mode, reviewId: "review-1", harness: "codex" }, reviews } }
+      : common(path));
+    postMock.mockResolvedValue({ data: { reviewerHandleId: "", reviews } });
+    const { queryClient } = renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    await openReviewsSection();
+    const stop = await screen.findByRole("button", { name: "Stop reviewer" });
+    expect(stop).toBeEnabled();
+    await userEvent.click(stop);
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/kill", { params: { path: { sessionId: "sess-1" } } }));
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "review-1"] }));
+    expect(queryClient.getQueryData<{ reviews: unknown[] }>(["session-reviews", "sess-1"])?.reviews).toEqual(reviews);
+    expect(putMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/auto-review", expect.anything());
+  });
+
+  it("shows a disabled Stop reviewer control before any reviewer exists", async () => {
+    mockCommonGets([], "", []);
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+    expect(screen.getByRole("button", { name: "Stop reviewer" })).toBeDisabled();
+  });
+
   it("shows reviewing status and cancel action while auto-review is running", async () => {
     const runningReview = {
       ...approvedReview,
@@ -2463,8 +2489,8 @@ describe("SessionInspector summary reviews", () => {
       screen.getByRole("button", { name: "Stop review" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Kill review session" }),
-    ).toBeDisabled();
+      screen.getByRole("button", { name: "Stop reviewer" }),
+    ).toBeEnabled();
     expect(
       screen.queryByRole("button", { name: "Re-run review" }),
     ).not.toBeInTheDocument();
@@ -3990,7 +4016,7 @@ describe("SessionInspector summary reviews", () => {
     expect(
       screen.queryByRole("button", { name: /re-run review/i }),
     ).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /stop review/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^stop review$/i }));
 
     await waitFor(() => {
       expect(postMock).toHaveBeenCalledWith(
