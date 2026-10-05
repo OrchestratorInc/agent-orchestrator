@@ -2878,6 +2878,49 @@ func TestSpawnOrchestratorCleanPreservesPersistedMode(t *testing.T) {
 	}
 }
 
+func TestSpawnOrchestratorCleanHandoffSeedsReplacementPrompt(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator,
+		Metadata: domain.SessionMetadata{
+			Prompt:                "Coordinate the migration",
+			LatestUserPrompt:      "Finish the storage work",
+			LatestAssistantUpdate: "Workers are running tests",
+		},
+	}
+	st.sessions["mer-worker"] = domain.SessionRecord{
+		ID: "mer-worker", ProjectID: "mer", Kind: domain.KindWorker,
+		DisplayName: "storage worker", Metadata: domain.SessionMetadata{Branch: "ao/worker", WorkspacePath: "/tmp/worker"},
+	}
+	fc := &fakeCommander{}
+	svc := &Service{manager: fc, store: st}
+
+	if _, err := svc.SpawnOrchestratorWithReplacementMode(context.Background(), "mer", true, "handoff", "", ""); err != nil {
+		t.Fatalf("SpawnOrchestratorWithReplacementMode: %v", err)
+	}
+	for _, want := range []string{"AO Orchestrator Handoff", "Coordinate the migration", "Finish the storage work", "storage worker", "ao/worker"} {
+		if !strings.Contains(fc.spawnedCfg.Prompt, want) {
+			t.Errorf("handoff prompt missing %q: %s", want, fc.spawnedCfg.Prompt)
+		}
+	}
+}
+
+func TestSpawnOrchestratorCleanFreshOmitsReplacementPrompt(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator, Metadata: domain.SessionMetadata{Prompt: "Do not copy this"}}
+	fc := &fakeCommander{}
+	svc := &Service{manager: fc, store: st}
+
+	if _, err := svc.SpawnOrchestratorWithReplacementMode(context.Background(), "mer", true, "fresh", "", ""); err != nil {
+		t.Fatalf("SpawnOrchestratorWithReplacementMode: %v", err)
+	}
+	if fc.spawnedCfg.Prompt != "" {
+		t.Fatalf("fresh replacement prompt = %q, want empty", fc.spawnedCfg.Prompt)
+	}
+}
+
 func TestSpawnOrchestratorCleanHonorsExplicitReplacementMode(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}

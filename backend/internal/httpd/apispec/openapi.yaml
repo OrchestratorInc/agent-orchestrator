@@ -14706,6 +14706,11 @@ components:
           type: string
         projectId:
           type: string
+        replacementMode:
+          enum:
+          - handoff
+          - fresh
+          type: string
       required:
       - projectId
       type: object

@@ -1367,8 +1367,9 @@ type ReviewIDParam struct {
 
 // SpawnOrchestratorRequest is the body of POST /api/v1/orchestrators.
 type SpawnOrchestratorRequest struct {
-	ProjectID domain.ProjectID `json:"projectId"`
-	Clean     bool             `json:"clean,omitempty"`
+	ProjectID       domain.ProjectID `json:"projectId"`
+	Clean           bool             `json:"clean,omitempty"`
+	ReplacementMode string           `json:"replacementMode,omitempty" enum:"handoff,fresh"`
 	// Mode applies only when this request creates a project orchestrator. An
 	// idempotent ensure returns the existing orchestrator unchanged, and a clean
 	// replacement inherits the existing orchestrator's currently committed mode.

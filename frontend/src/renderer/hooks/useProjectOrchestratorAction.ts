@@ -130,11 +130,21 @@ export function useProjectOrchestratorAction({
 			mutation.mutate(mode);
 		}
 	};
+	const refreshOrchestrator = (replacementMode: "handoff" | "fresh" = "handoff") => {
+		if (!projectId || !hostConnected || isProjectRestarting || isProvisioning || !orchestrator) return;
+		if (hostId) return;
+		void spawnOrchestrator(projectId, "restart", true, undefined, undefined, undefined, replacementMode)
+			.then(async (sessionId) => {
+				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+				if (activeRoute.current === routeKey) void navigate(sessionNavigateTarget(projectId, sessionId, hostId));
+			})
+			.catch((cause) => void captureRendererException(cause, { source: "orchestrator-refresh", operation: "refresh_orchestrator", project_id: projectId }));
+	};
 	const openNewTask = () => {
 		if (projectId && hostConnected && !isProjectRestarting && !isProvisioning) useUiStore.getState().requestNewTask(projectId, hostId);
 	};
 	return { projectId, orchestrator, isSpawning, isProjectRestarting, isProvisioning, spawnError,
-		canCreateAsTui: isChatPreflightError(error), openOrchestrator, openNewTask };
+		canCreateAsTui: isChatPreflightError(error), openOrchestrator, refreshOrchestrator, openNewTask };
 }
 
 export type ProjectOrchestratorAction = ReturnType<typeof useProjectOrchestratorAction>;

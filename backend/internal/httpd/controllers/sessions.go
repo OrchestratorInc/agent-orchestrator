@@ -138,6 +138,10 @@ type SessionService interface {
 	Unpin(ctx context.Context, id domain.SessionID) (domain.Session, error)
 }
 
+type replacementModeSessionService interface {
+	SpawnOrchestratorWithReplacementMode(context.Context, domain.ProjectID, bool, string, domain.SessionMode, domain.PermissionMode) (domain.Session, error)
+}
+
 type sessionMessageOptionsSender interface {
 	SendWithOptions(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error
 }
@@ -2087,6 +2091,10 @@ func (c *SessionsController) spawnOrchestrator(w http.ResponseWriter, r *http.Re
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROJECT_ID_REQUIRED", "projectId is required", nil)
 		return
 	}
+	if in.ReplacementMode != "" && in.ReplacementMode != "handoff" && in.ReplacementMode != "fresh" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "REPLACEMENT_MODE_INVALID", "replacementMode must be handoff or fresh", nil)
+		return
+	}
 	if in.Mode != "" {
 		if _, err := domain.ParseSessionMode(string(in.Mode)); err != nil {
 			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "SESSION_MODE_INVALID", err.Error(), nil)
@@ -2097,7 +2105,13 @@ func (c *SessionsController) spawnOrchestrator(w http.ResponseWriter, r *http.Re
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_APPROVAL_MODE", "approvalMode is invalid", nil)
 		return
 	}
-	sess, err := c.Svc.SpawnOrchestrator(r.Context(), in.ProjectID, in.Clean, in.Mode, in.ApprovalMode)
+	var sess domain.Session
+	var err error
+	if replacement, ok := c.Svc.(replacementModeSessionService); ok {
+		sess, err = replacement.SpawnOrchestratorWithReplacementMode(r.Context(), in.ProjectID, in.Clean, in.ReplacementMode, in.Mode, in.ApprovalMode)
+	} else {
+		sess, err = c.Svc.SpawnOrchestrator(r.Context(), in.ProjectID, in.Clean, in.Mode, in.ApprovalMode)
+	}
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return

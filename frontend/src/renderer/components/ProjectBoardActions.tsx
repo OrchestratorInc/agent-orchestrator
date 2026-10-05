@@ -1,12 +1,14 @@
 import { type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus } from "lucide-react";
+import { MoreHorizontal, Plus, RefreshCw } from "lucide-react";
+import { useState } from "react";
 import type { ProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { getAgentActivityView } from "../lib/session-presentation";
 import { TopbarActionError, TopbarButton } from "./TopbarButton";
 import { OrchestratorActivityIndicator } from "./OrchestratorActivityIndicator";
 import { OrchestratorIcon } from "./icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
 export function ProjectBoardActions({ actions, placement, quiet = false, cloud = false, style }: {
 	actions: ProjectOrchestratorAction;
@@ -18,6 +20,8 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 	const { t } = useTranslation();
 	const { orchestrator, isSpawning, isProjectRestarting, isProvisioning, spawnError, canCreateAsTui,
 		openNewTask, openOrchestrator } = actions;
+	const { refreshOrchestrator } = actions;
+	const [menuOpen, setMenuOpen] = useState(false);
 	const header = placement === "header";
 	const busy = isSpawning || isProjectRestarting || isProvisioning;
 	const activity = orchestrator ? getAgentActivityView(orchestrator.activity, t).label : undefined;
@@ -74,7 +78,26 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 			{canCreateAsTui ? <TopbarButton disabled={busy} onClick={() => openOrchestrator("tui")} style={style}>{t("newTask.createAsTui")}</TopbarButton> : null}
 		</div>
 	) : null;
-	return header ? <>{feedback}{newTaskButton}{orchestratorButton}</> : <>
+	const refreshMenu = orchestrator ? (
+		<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+			<DropdownMenuTrigger asChild>
+				<TopbarButton aria-label="Orchestrator actions" disabled={busy} variant="ghost" style={style}>
+					<MoreHorizontal className="size-icon-md" aria-hidden="true" />
+				</TopbarButton>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end" className="min-w-60">
+				<DropdownMenuItem onSelect={() => refreshOrchestrator("handoff")}>
+					<RefreshCw className="size-3.5" aria-hidden="true" />
+					{t("shell.refreshOrchestrator", { defaultValue: "Refresh Orchestrator" })}
+				</DropdownMenuItem>
+				<DropdownMenuSeparator />
+				<DropdownMenuItem onSelect={() => refreshOrchestrator("fresh")}>
+					{t("shell.createFreshOrchestrator", { defaultValue: "Create Fresh Orchestrator Instead" })}
+				</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
+	) : null;
+	return header ? <>{feedback}{newTaskButton}{orchestratorButton}{refreshMenu}</> : <>
 		<div className="mt-5 flex items-center gap-2">{orchestratorButton}{newTaskButton}</div>
 		{feedback}
 	</>;

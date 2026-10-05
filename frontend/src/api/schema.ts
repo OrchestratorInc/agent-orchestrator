@@ -5115,6 +5115,8 @@ export interface components {
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             clean?: boolean;
             /** @enum {string} */
+            replacementMode?: "handoff" | "fresh";
+            /** @enum {string} */
             mode?: "chat" | "tui";
             projectId: string;
         };
