@@ -2112,6 +2112,10 @@ function Timeline({
 	} | null>(null);
 	const pinnedRef = useRef(true);
 	const [pinned, setPinned] = useState(true);
+	const [activityDisclosureOverrides, setActivityDisclosureOverrides] = useState<Record<string, boolean>>({});
+	const onActivityDisclosureChange = useCallback((key: string, open: boolean) => {
+		setActivityDisclosureOverrides((current) => ({ ...current, [key]: open }));
+	}, []);
 	const [hoveredMarker, setHoveredMarker] = useState<number | null>(null);
 	const hoveredMarkerRef = useRef<number | null>(null);
 	hoveredMarkerRef.current = hoveredMarker;
@@ -2691,6 +2695,10 @@ function Timeline({
 			? Math.max(0, groups.length * (CHAT_ESTIMATED_TURN_HEIGHT + CHAT_TURN_GAP) - CHAT_INITIAL_VIEWPORT_HEIGHT)
 			: 0,
 		anchorTo: virtualized ? "end" : "start",
+		// The virtualizer's distance-from-end excludes the trailing prompt spacer.
+		// Disable end anchoring while unpinned so streamed output cannot mistake the
+		// reader's position for the physical end of the scroll container.
+		scrollEndThreshold: pinned ? 1 : -1,
 		followOnAppend: virtualized && pinned,
 		// Bootstrap unmeasurable panels until their real geometry is available.
 		observeElementRect: (instance, callback) => observeElementRect(instance, (rect) =>
@@ -3077,6 +3085,8 @@ function Timeline({
 							>
 								<TurnGroup
 									group={group}
+									activityDisclosureOverrides={activityDisclosureOverrides}
+									onActivityDisclosureChange={onActivityDisclosureChange}
 									sessionId={snapshot.sessionId}
 									apiBaseUrl={apiBaseUrl}
 									onDecide={decide}
@@ -3273,6 +3283,8 @@ function Timeline({
  */
 const TurnGroup = memo(function TurnGroup({
 	group,
+	activityDisclosureOverrides,
+	onActivityDisclosureChange,
 	sessionId,
 	apiBaseUrl,
 	onDecide,
@@ -3303,6 +3315,8 @@ const TurnGroup = memo(function TurnGroup({
 	newHumanMessageIds,
 }: {
 	group: TimelineGroup;
+	activityDisclosureOverrides: Readonly<Record<string, boolean>>;
+	onActivityDisclosureChange: (key: string, open: boolean) => void;
 	sessionId: string;
 	apiBaseUrl: string;
 	onDecide: (requestId: string, decisionId: string) => void;
@@ -3364,6 +3378,9 @@ const TurnGroup = memo(function TurnGroup({
 				run.kind === "activities" ? (
 					<ActivityRun
 						key={run.key}
+						disclosureKey={`${group.key}:${run.key}`}
+						disclosureOverrides={activityDisclosureOverrides}
+						onDisclosureChange={onActivityDisclosureChange}
 						activities={run.items.filter(
 							(item): item is ConversationActivity => item.kind === "activity",
 						)}

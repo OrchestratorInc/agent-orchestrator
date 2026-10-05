@@ -1557,7 +1557,7 @@ describe("ChatWorkspace timeline", () => {
 	it("keeps the visible virtual turn anchored when a row above it grows", async () => {
 		stubVirtualTimelineGeometry();
 		const originalObserver = window.ResizeObserver;
-		const observers: TestResizeObserver[] = [];
+		const observers: Array<{ targets: Set<Element>; callback: ResizeObserverCallback }> = [];
 		class TestResizeObserver {
 			targets = new Set<Element>();
 			constructor(public callback: ResizeObserverCallback) { observers.push(this); }
@@ -1586,6 +1586,59 @@ describe("ChatWorkspace timeline", () => {
 			});
 			expect(log.scrollTop).toBe(19140);
 			expect(reader().getBoundingClientRect().top).toBe(top);
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+		} finally {
+			window.ResizeObserver = originalObserver;
+		}
+	});
+
+	it("does not follow a streaming resize of the latest row while the reader is unpinned", async () => {
+		stubVirtualTimelineGeometry((index) => index === 59 ? 120 : 600);
+		const originalObserver = window.ResizeObserver;
+		const observers: Array<{ targets: Set<Element>; callback: ResizeObserverCallback }> = [];
+		class TestResizeObserver {
+			targets = new Set<Element>();
+			constructor(public callback: ResizeObserverCallback) { observers.push(this); }
+			observe(target: Element) { this.targets.add(target); }
+			unobserve(target: Element) { this.targets.delete(target); }
+			disconnect() { this.targets.clear(); }
+		}
+		window.ResizeObserver = TestResizeObserver as unknown as typeof ResizeObserver;
+		try {
+			const snapshot = chatFixtureLongHistory(60);
+			const latestTurnId = snapshot.turns.at(-1)!.id;
+			snapshot.turns.at(-1)!.state = "running";
+			snapshot.items = snapshot.items.filter((item) =>
+				item.turnId !== latestTurnId || item.kind === "message",
+			);
+			const latestAssistant = snapshot.items.findLast(
+				(item) => item.kind === "message" && item.role === "assistant" && item.turnId === latestTurnId,
+			);
+			if (latestAssistant?.kind === "message") latestAssistant.streaming = true;
+			render(<ChatWorkspace snapshot={snapshot} />);
+			const log = screen.getByRole("log");
+			log.scrollTop = log.scrollHeight - log.clientHeight - 150;
+			fireEvent.scroll(log);
+			await screen.findByRole("button", { name: "Jump to latest" });
+			expect(Number.parseFloat(screen.getByTestId("chat-prompt-spacer").style.height)).toBeGreaterThan(150);
+			const unpinnedScrollTop = log.scrollTop;
+			const latest = log.querySelector<HTMLElement>('[data-index="59"]')!;
+			expect(latest).toBeInTheDocument();
+
+			let observedResize = false;
+			act(() => {
+				const entry = { target: latest, borderBoxSize: [{ blockSize: 900, inlineSize: 768 }] } as unknown as ResizeObserverEntry;
+				for (const observer of observers) {
+					if (observer.targets.has(latest)) {
+						observedResize = true;
+						observer.callback([entry], observer as unknown as ResizeObserver);
+					}
+				}
+			});
+
+			expect(observedResize).toBe(true);
+			expect(log.scrollTop).toBe(unpinnedScrollTop);
+			expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
 			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 		} finally {
 			window.ResizeObserver = originalObserver;
@@ -2000,6 +2053,33 @@ describe("ChatWorkspace timeline", () => {
 
 		rerender(<ChatWorkspace snapshot={poll(snapshot)} />);
 		expect(run).toHaveAttribute("aria-expanded", "true");
+	});
+
+	it("preserves an expanded activity disclosure after its virtual row unmounts", async () => {
+		const user = userEvent.setup();
+		stubVirtualTimelineGeometry();
+		const snapshot = chatFixtureLongHistory(60);
+		const view = render(<ChatWorkspace snapshot={snapshot} />);
+		const log = screen.getByRole("log");
+		const jumpTo = async (index: number) => {
+			log.scrollTop = index * 636;
+			fireEvent.scroll(log);
+			await waitFor(() => expect(log.querySelector(`[data-index="${index}"]`)).toBeInTheDocument());
+		};
+
+		await jumpTo(20);
+		const turn = log.querySelector<HTMLElement>('[data-index="20"]')!;
+		const disclosure = within(turn).getAllByRole("button", { expanded: false })[0]!;
+		await user.click(disclosure);
+		expect(disclosure).toHaveAttribute("aria-expanded", "true");
+
+		await jumpTo(50);
+		await waitFor(() => expect(log.querySelector('[data-index="20"]')).not.toBeInTheDocument());
+		await jumpTo(20);
+		const returnedDisclosure = within(log.querySelector<HTMLElement>('[data-index="20"]')!)
+			.getAllByRole("button", { expanded: true })[0]!;
+		expect(returnedDisclosure).toHaveAttribute("aria-expanded", "true");
+		view.unmount();
 	});
 });
 
