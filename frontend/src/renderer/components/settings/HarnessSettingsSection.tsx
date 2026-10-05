@@ -125,10 +125,10 @@ function diagnosticsText(agentId: AgentId, job: InstallJob): string {
  * and left out entirely where the daemon cannot measure the host. English,
  * like the rest of this report: it is read by whoever fixes the bug.
  */
-async function machineText(queryClient: QueryClient): Promise<string> {
-	let reading: Awaited<ReturnType<typeof fetchSessionMemory>>;
+async function machineText(queryClient: QueryClient, remoteClient?: ReturnType<typeof clientForSessionHost>): Promise<string> {
+	let reading: Pick<Awaited<ReturnType<typeof fetchSessionMemory>>, "app" | "system" | "sessions">;
 	try {
-		reading = await queryClient.fetchQuery(sessionMemoryQueryOptions());
+		reading = remoteClient ? await fetchRemoteMachine(remoteClient) : await queryClient.fetchQuery(sessionMemoryQueryOptions());
 	} catch {
 		return "";
 	}
@@ -151,6 +151,15 @@ async function machineText(queryClient: QueryClient): Promise<string> {
 		lines.push(`Live sessions: ${sessions.length} · ${formatMemory(sessions.reduce((sum, s) => sum + s.rssBytes, 0))}`);
 	}
 	return lines.join("\n");
+}
+
+/** A remote install's diagnostics describe that host, so its numbers come
+ * from its own daemon. Fetched directly: the shared query and the CPU graph
+ * hold this computer's readings only. */
+async function fetchRemoteMachine(client: ReturnType<typeof clientForSessionHost>) {
+	const { data, error } = await client.GET("/api/v1/usage/sessions/memory", { params: { query: {} } });
+	if (error) throw error;
+	return { sessions: data?.sessions ?? [], system: data?.system, app: data?.app };
 }
 
 function installMethodLabel(method: { id: string; label: string } | undefined, fallback?: string): string | undefined {
@@ -483,7 +492,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 
 	/** Diagnostics plus the machine they were taken on. */
 	const copyDiagnostics = async (agentId: AgentId, job: InstallJob) => {
-		const machine = await machineText(queryClient);
+		const machine = await machineText(queryClient, hostId ? client : undefined);
 		await copyText(agentId, [diagnosticsText(agentId, job), machine].filter(Boolean).join("\n\n"));
 	};
 
