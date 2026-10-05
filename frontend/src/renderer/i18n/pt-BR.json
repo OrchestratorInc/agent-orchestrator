@@ -773,7 +773,7 @@
 	"newTask.start": "Iniciar tarefa",
 	"newTask.starting": "Iniciando...",
 	"newTask.title": "Criar uma nova tarefa",
-	"newTask.titleFor": "Criar uma nova tarefa para",
+	"newTask.titleFor": "Criar uma nova tarefa em",
 	"newTask.titleLabel": "Título",
 	"newTask.titlePlaceholder": "Corrigir renderer de fallback WebGL",
 	"newTask.titleRequired": "Título e briefing são obrigatórios.",

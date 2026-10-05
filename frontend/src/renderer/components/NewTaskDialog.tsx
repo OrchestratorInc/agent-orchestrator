@@ -1,11 +1,40 @@
 import * as Dialog from "@radix-ui/react-dialog";
+import { useQueries } from "@tanstack/react-query";
 import { StickyNote } from "lucide-react";
+import { useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
-import { TaskComposer } from "./TaskComposer";
 import { labelForHost } from "../lib/host-clients";
-import { STANDALONE_WORKSPACE_ID, STANDALONE_PROJECT_KIND } from "../types/workspace";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { TaskComposer } from "./TaskComposer";
+import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, STANDALONE_PROJECT_KIND } from "../types/workspace";
+import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
+
+function repositoryOwnerAvatar(repo: string): { owner: string; url: string } | null {
+	const value = repo.trim();
+	const scp = value.match(/^[^/@:\s]+@([^/:\s]+):(.+)$/);
+	let host: string;
+	let pathname: string;
+	if (scp?.[1] && scp[2]) {
+		host = scp[1].toLowerCase();
+		pathname = scp[2];
+	} else {
+		try {
+			const parsed = new URL(value.includes("://") ? value : `https://${value}`);
+			host = parsed.hostname.toLowerCase();
+			pathname = parsed.pathname;
+		} catch {
+			return null;
+		}
+	}
+	const owner = pathname.replace(/^\/+|\/+$/g, "").split("/")[0]?.replace(/\.git$/, "");
+	if (!owner) return null;
+	const encodedOwner = encodeURIComponent(owner);
+	if (host === "github.com") return { owner, url: `https://github.com/${encodedOwner}.png?size=64` };
+	if (host === "gitlab.com") return { owner, url: `https://gitlab.com/-/avatar?username=${encodedOwner}` };
+	if (host === "bitbucket.org") return { owner, url: `https://bitbucket.org/account/${encodedOwner}/avatar/64/` };
+	return { owner, url: `https://unavatar.io/${encodeURIComponent(host)}/${encodedOwner}` };
+}
 
 type NewTaskDialogProps = {
 	open: boolean;
@@ -21,43 +50,121 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 	const localWorkspaces = useWorkspaceQuery({ subscribed: open }).data ?? [];
 	const remoteWorkspaces = useRemoteWorkspaces({ subscribed: open }).data ?? [];
 	const workspaces = hostId ? remoteWorkspaces.filter((workspace) => workspace.hostId === hostId) : localWorkspaces;
-	const projects = workspaces.filter(
+	const projects = useMemo(() => workspaces.filter(
 		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== STANDALONE_PROJECT_KIND,
-	);
+	), [workspaces]);
+	const localProjects = useMemo(() => hostId ? [] : projects.filter((project) => project.kind !== CLOUD_PROJECT_KIND), [hostId, projects]);
+	const localProjectDetails = useQueries({
+		queries: localProjects.map((project) => ({
+			queryKey: ["project", project.id],
+			enabled: open,
+			staleTime: 30_000,
+			queryFn: async () => {
+				const { data, error } = await apiClient.GET("/api/v1/projects/{id}", {
+					params: { path: { id: project.id } },
+				});
+				if (error) throw new Error(apiErrorMessage(error));
+				if (data?.status !== "ok") return undefined;
+				return data.project;
+			},
+		})),
+	});
+	const projectAvatars = useMemo(() => new Map(projects.map((project) => {
+		const seen = new Set<string>();
+		const detailsIndex = localProjects.findIndex((localProject) => localProject.id === project.id);
+		const details = detailsIndex >= 0 ? localProjectDetails[detailsIndex]?.data : undefined;
+		const primaryRepo = details && "repo" in details && typeof details.repo === "string" ? details.repo : "";
+		const workspaceRepos = details && "workspaceRepos" in details ? details.workspaceRepos ?? [] : project.workspaceRepos ?? [];
+		const repositories = [
+			...(primaryRepo ? [{ repo: primaryRepo }] : []),
+			...workspaceRepos,
+		];
+		const avatars = repositories.flatMap(({ repo }) => {
+			const avatar = repositoryOwnerAvatar(repo);
+			if (!avatar) return [];
+			const identity = `${new URL(avatar.url).hostname}/${avatar.owner.toLowerCase()}`;
+			if (seen.has(identity)) return [];
+			seen.add(identity);
+			return [avatar];
+		});
+		return [project.id, avatars] as const;
+	})), [localProjectDetails, localProjects, projects]);
 	const selectedProjectId = projectId ?? STANDALONE_WORKSPACE_ID;
+	const selectedProject = projects.find((project) => project.id === selectedProjectId);
+	const selectedProjectName = selectedProject?.name ?? t("standalone.workspaceName");
+	const selectedProjectAvatar = projectAvatars.get(selectedProjectId)?.[0];
+	const projectOptions = [
+		{ value: STANDALONE_WORKSPACE_ID, label: t("standalone.workspaceName") },
+		...projects.map((project) => ({ value: project.id, label: project.name })),
+	];
+	useEffect(() => {
+		if (!open) return;
+		for (const avatars of projectAvatars.values()) {
+			for (const avatar of avatars) {
+				const image = new Image();
+				image.src = avatar.url;
+			}
+		}
+	}, [open, projectAvatars]);
 	return (
 		<Dialog.Root open={open} onOpenChange={onOpenChange}>
 			<Dialog.Portal>
 				<Dialog.Overlay className="dialog-overlay data-[state=open]:animate-overlay-in data-[state=closed]:animate-overlay-out" />
 				<Dialog.Content className="fixed left-1/2 top-1/2 z-overlay w-dialog-xl -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-border bg-popover p-0 text-popover-foreground shadow-xl data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none">
-				{/* One title line names the dialog; the composer remains the main surface. */}
-					<Dialog.Title className="settings-dialog-title flex flex-wrap items-baseline gap-x-1.5 px-4 pt-3">
+					{/* One title line names the dialog, styled like every other settings-style
+					    modal; everything else stays the composer's surface, no bordered header. */}
+					<Dialog.Title className="settings-dialog-title flex flex-wrap items-center gap-x-1.5 px-4 pt-3">
 						<span>{t("newTask.titleFor")}</span>
-						<Select value={selectedProjectId} onValueChange={(value) => onProjectChange?.(value)}>
-							<SelectTrigger
-								size="auto"
-								className="w-fit gap-1 rounded-md bg-muted/40 px-1.5 py-0 text-[length:inherit] font-inherit text-foreground outline-none transition-colors hover:bg-interactive-hover focus:outline-none focus-visible:outline-none focus-visible:ring-0 aria-expanded:bg-interactive-hover"
-								aria-label={t("newTask.project")}
-							>
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent
-								position="popper"
-								align="start"
-								showScrollButtons={false}
-								className="min-w-56 max-h-[min(18rem,var(--radix-select-content-available-height))] overflow-y-auto overscroll-contain"
-							>
-								<SelectItem className="transition-none" value={STANDALONE_WORKSPACE_ID}>
-									<span className="inline-flex items-center gap-2">
-										<StickyNote aria-hidden="true" className="size-icon-sm text-muted-foreground" />
-										{t("standalone.workspaceName")}
-									</span>
-								</SelectItem>
-								{projects.map((project) => (
-									<SelectItem className="transition-none" key={project.id} value={project.id}>{project.name}</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
+						<SettingsOptionMenu
+							aria-label={t("newTask.project")}
+							value={selectedProjectId}
+							options={projectOptions}
+							onChange={(value) => onProjectChange?.(value)}
+							menuAlign="start"
+							menuClassName="w-48 max-h-72"
+							triggerClassName="w-fit max-w-[45vw] min-w-0 gap-1 rounded-md bg-transparent! px-1! py-0! text-[length:inherit]! font-semibold leading-[inherit]! text-foreground hover:bg-interactive-hover! hover:text-foreground data-[state=open]:bg-transparent! data-[state=open]:hover:bg-interactive-hover! data-[state=open]:text-foreground"
+							menuItemClassName="gap-1!"
+							renderTrigger={() => (
+								<span className="inline-flex min-w-0 items-center gap-1.5">
+									{selectedProjectId === STANDALONE_WORKSPACE_ID ? (
+										<StickyNote aria-hidden="true" className="size-[1em] shrink-0 text-muted-foreground" />
+									) : selectedProjectAvatar ? (
+										<img width={17} height={17} className="size-[1em] shrink-0 rounded-full object-cover" src={selectedProjectAvatar.url} alt="" aria-hidden="true" />
+									) : null}
+									<span className="min-w-0 truncate">{selectedProjectName}</span>
+								</span>
+							)}
+							renderMenuItem={(option) => {
+								const avatars = projectAvatars.get(option.value) ?? [];
+								return (
+									<>
+										<span className="relative flex w-5 shrink-0 items-center justify-center">
+											{option.value === STANDALONE_WORKSPACE_ID ? (
+												<StickyNote aria-hidden="true" className="size-[1em]! text-muted-foreground" />
+											) : (
+												<span className="flex items-center -space-x-2">
+													{avatars.slice(0, 2).map((avatar) => (
+														<img
+															key={`${avatar.owner}:${avatar.url}`}
+															width={18}
+															height={18}
+															className="size-[18px] shrink-0 rounded-full border border-card bg-muted object-cover"
+															src={avatar.url}
+															alt=""
+															aria-hidden="true"
+															title={avatar.owner}
+															onError={(event) => { event.currentTarget.style.visibility = "hidden"; }}
+														/>
+													))}
+												</span>
+											)}
+											{avatars.length > 2 ? <span className="absolute -bottom-1 -right-1 flex size-3 items-center justify-center rounded-full border border-card bg-muted text-[8px] text-muted-foreground">+{avatars.length - 2}</span> : null}
+										</span>
+										<span className="min-w-0 truncate text-settings-label">{option.label}</span>
+									</>
+								);
+							}}
+						/>
 						{hostId ? <span className="text-settings-muted">· {labelForHost(hostId) ?? hostId}</span> : null}
 					</Dialog.Title>
 					<Dialog.Description className="sr-only">

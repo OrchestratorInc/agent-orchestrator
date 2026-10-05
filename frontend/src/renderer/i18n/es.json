@@ -773,7 +773,7 @@
 	"newTask.start": "Iniciar tarea",
 	"newTask.starting": "Iniciando...",
 	"newTask.title": "Crear una nueva tarea",
-	"newTask.titleFor": "Crear una nueva tarea para",
+	"newTask.titleFor": "Crear una nueva tarea en",
 	"newTask.titleLabel": "Título",
 	"newTask.titlePlaceholder": "Corregir el renderizador de respaldo de WebGL",
 	"newTask.titleRequired": "El título y la descripción son obligatorios.",

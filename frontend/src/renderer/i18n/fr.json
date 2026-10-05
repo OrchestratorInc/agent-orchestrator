@@ -773,7 +773,7 @@
 	"newTask.start": "Démarrer la tâche",
 	"newTask.starting": "Démarrage...",
 	"newTask.title": "Créer une nouvelle tâche",
-	"newTask.titleFor": "Créer une nouvelle tâche pour",
+	"newTask.titleFor": "Créer une nouvelle tâche dans",
 	"newTask.titleLabel": "Titre",
 	"newTask.titlePlaceholder": "Corriger le moteur de rendu de secours WebGL",
 	"newTask.titleRequired": "Le titre et le brief sont obligatoires.",
