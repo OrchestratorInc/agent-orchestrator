@@ -608,7 +608,6 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 	}
 	projectionAttempts := 0
 	originalSignal := s
-	stepRecorded := false
 retryProjection:
 	s = originalSignal
 	rec, ok, err := m.store.GetSession(ctx, id)
@@ -674,10 +673,6 @@ retryProjection:
 	if s.ExpectedRevision != nil && rec.Revision != *s.ExpectedRevision {
 		m.mu.Unlock()
 		return nil
-	}
-	if !stepRecorded {
-		m.recordStepLocked(id, s, now)
-		stepRecorded = true
 	}
 	// Conversation text is meaningful only inside one provider identity, owner
 	// generation, and main turn. Reduce it as one durable state machine so a Stop
@@ -866,6 +861,11 @@ retryProjection:
 		m.mu.Unlock()
 		return nil
 	}
+	// Every fence has accepted the signal, so its tool step may land. A
+	// projection that loses its revision race puts the steps back below, and
+	// the retry records the step again against the fresh row.
+	stepsBeforeProjection := m.stepsSnapshotLocked(id)
+	m.recordStepLocked(id, s, now)
 	// Event-tagged signals fold through the session's tool-flight state first:
 	// they may be suppressed (state write skipped) by the blocked-precedence
 	// rule, while their tracking side effects still land. Untagged signals
@@ -900,6 +900,7 @@ retryProjection:
 			return applied, false, err
 		}
 		m.restoreToolFlightLocked(id, toolFlightBeforeProjection)
+		m.restoreStepsLocked(id, stepsBeforeProjection)
 		if err != nil {
 			return false, false, err
 		}

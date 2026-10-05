@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -101,6 +102,88 @@ func TestStepsClearedWhenRuntimeEnds(t *testing.T) {
 		}
 		if steps := m.Steps("mer-1"); len(steps) != 0 {
 			t.Fatalf("old runtime's open step survived the switch: %+v", steps)
+		}
+	})
+}
+
+// TestStepsOnlyLandForAcceptedSignals: a tool step is recorded only once every
+// fence has accepted the signal and its projection is applied. A rejected or
+// failed signal must not leave a phantom current or recent step behind.
+func TestStepsOnlyLandForAcceptedSignals(t *testing.T) {
+	ctx := context.Background()
+	pre := ports.ActivitySignal{Valid: true, State: domain.ActivityActive, Event: "pre-tool-use", ToolName: "Bash", ToolUseID: "t1"}
+	// Idle, so the active pre-tool-use is a state change the store must write;
+	// an active row would skip the write and never reach the failure paths.
+	idle := func() domain.SessionRecord {
+		rec := working("mer-1")
+		rec.Activity.State = domain.ActivityIdle
+		return rec
+	}
+
+	t.Run("exited workload", func(t *testing.T) {
+		m, st, _ := newManager()
+		rec := working("mer-1")
+		rec.Activity.State = domain.ActivityExited
+		st.sessions["mer-1"] = rec
+		if err := m.ApplyActivitySignal(ctx, "mer-1", pre); err != nil {
+			t.Fatal(err)
+		}
+		if steps := m.Steps("mer-1"); len(steps) != 0 {
+			t.Fatalf("delayed tool hook after exit recorded a step: %+v", steps)
+		}
+	})
+
+	t.Run("stale native identity", func(t *testing.T) {
+		m, st, _ := newManager()
+		observed := time.Unix(2000, 0)
+		rec := working("mer-1")
+		rec.Metadata.AgentSessionID = "native-new"
+		rec.Metadata.NativeIdentityObservedAt = observed
+		st.sessions["mer-1"] = rec
+		stale := pre
+		stale.AgentSessionID = "native-old"
+		stale.Timestamp = observed.Add(-time.Second)
+		if err := m.ApplyActivitySignal(ctx, "mer-1", stale); err != nil {
+			t.Fatal(err)
+		}
+		if steps := m.Steps("mer-1"); len(steps) != 0 {
+			t.Fatalf("signal from a replaced native session recorded a step: %+v", steps)
+		}
+	})
+
+	t.Run("failed write", func(t *testing.T) {
+		st := &promptConflictStore{fakeStore: newFakeStore(), writeErr: errors.New("write failed")}
+		st.sessions["mer-1"] = idle()
+		m := New(st, &fakeMessenger{})
+		if err := m.ApplyActivitySignal(ctx, "mer-1", pre); err == nil {
+			t.Fatal("want the write error")
+		}
+		if steps := m.Steps("mer-1"); len(steps) != 0 {
+			t.Fatalf("failed projection left a step: %+v", steps)
+		}
+	})
+
+	t.Run("exhausted revision retries", func(t *testing.T) {
+		st := &promptConflictStore{fakeStore: newFakeStore(), alwaysConflict: true}
+		st.sessions["mer-1"] = idle()
+		m := New(st, &fakeMessenger{})
+		if err := m.ApplyActivitySignal(ctx, "mer-1", pre); err == nil {
+			t.Fatal("want contention error")
+		}
+		if steps := m.Steps("mer-1"); len(steps) != 0 {
+			t.Fatalf("abandoned projection left a step: %+v", steps)
+		}
+	})
+
+	t.Run("one retry records once", func(t *testing.T) {
+		st := &promptConflictStore{fakeStore: newFakeStore(), conflict: true}
+		st.sessions["mer-1"] = idle()
+		m := New(st, &fakeMessenger{})
+		if err := m.ApplyActivitySignal(ctx, "mer-1", pre); err != nil {
+			t.Fatal(err)
+		}
+		if steps := m.Steps("mer-1"); len(steps) != 1 || steps[0].ToolUseID != "t1" {
+			t.Fatalf("retried projection steps = %+v, want exactly one", steps)
 		}
 	})
 }

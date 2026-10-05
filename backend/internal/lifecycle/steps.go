@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"slices"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -42,6 +43,20 @@ func (m *Manager) recordStepLocked(id domain.SessionID, s ports.ActivitySignal, 
 			return
 		}
 	}
+}
+
+// stepsSnapshotLocked copies a session's steps so a projection that is not
+// applied can restore them; nil when the session has none.
+func (m *Manager) stepsSnapshotLocked(id domain.SessionID) []domain.SessionStep {
+	return slices.Clone(m.steps[id])
+}
+
+func (m *Manager) restoreStepsLocked(id domain.SessionID, snapshot []domain.SessionStep) {
+	if snapshot == nil {
+		delete(m.steps, id)
+		return
+	}
+	m.steps[id] = snapshot
 }
 
 // Steps returns a session's recent tool steps, oldest first. Empty for a
