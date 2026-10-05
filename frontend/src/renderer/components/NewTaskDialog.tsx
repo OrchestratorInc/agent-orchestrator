@@ -36,6 +36,22 @@ function repositoryOwnerAvatar(repo: string): { owner: string; url: string } | n
 	return { owner, url: `https://unavatar.io/${encodeURIComponent(host)}/${encodedOwner}` };
 }
 
+function ProjectOwnerAvatar({ avatar, className }: { avatar: { owner: string; url: string }; className: string }) {
+	return (
+		<span className={`relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-card bg-muted text-[0.65em] font-medium text-muted-foreground ${className}`} aria-hidden="true">
+			<span className="leading-none">{avatar.owner.charAt(0).toUpperCase()}</span>
+			<img
+				width={18}
+				height={18}
+				className="absolute inset-0 size-full rounded-full object-cover"
+				src={avatar.url}
+				alt=""
+				onError={(event) => { event.currentTarget.style.visibility = "hidden"; }}
+			/>
+		</span>
+	);
+}
+
 type NewTaskDialogProps = {
 	open: boolean;
 	projectId?: string;
@@ -127,9 +143,9 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 									{selectedProjectId === STANDALONE_WORKSPACE_ID ? (
 										<StickyNote aria-hidden="true" className="size-[1em] shrink-0 text-muted-foreground" />
 									) : selectedProjectAvatar ? (
-										<img width={17} height={17} className="size-[1em] shrink-0 rounded-full object-cover" src={selectedProjectAvatar.url} alt="" aria-hidden="true" />
+										<ProjectOwnerAvatar avatar={selectedProjectAvatar} className="size-[1em]" />
 									) : null}
-										<span className="min-w-0 truncate">{selectedProjectName}</span>
+									<span className="min-w-0 truncate">{selectedProjectName}</span>
 								</span>
 							)}
 							renderMenuItem={(option) => {
@@ -142,17 +158,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 											) : (
 												<span className="flex items-center -space-x-2">
 													{avatars.slice(0, 2).map((avatar) => (
-														<img
-															key={`${avatar.owner}:${avatar.url}`}
-															width={18}
-															height={18}
-															className="size-[18px] shrink-0 rounded-full border border-card bg-muted object-cover"
-															src={avatar.url}
-															alt=""
-															aria-hidden="true"
-															title={avatar.owner}
-															onError={(event) => { event.currentTarget.style.visibility = "hidden"; }}
-														/>
+														<ProjectOwnerAvatar key={`${avatar.owner}:${avatar.url}`} avatar={avatar} className="size-[18px]" />
 													))}
 												</span>
 											)}
