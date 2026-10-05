@@ -257,17 +257,17 @@ export function HomePage() {
 									<ProjectRow
 										key={project.id}
 										project={project}
-						onClick={() => {
-							if (project.kind === STANDALONE_PROJECT_KIND) {
-												const session = mostRecentStandaloneSession(project.sessions);
-												if (session) recordManualWorkerOpen(session.id);
-												session
-													? void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } })
-													: requestNewTask(STANDALONE_WORKSPACE_ID);
-												return;
-											}
-							openProject(project.id);
-						}}
+										onClick={() => {
+										if (project.kind === STANDALONE_PROJECT_KIND) {
+											const session = project.sessions.find((candidate) => candidate.kind === "worker");
+											if (session) recordManualWorkerOpen(session.id);
+											session
+												? void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } })
+												: requestNewTask(STANDALONE_WORKSPACE_ID);
+											return;
+										}
+										openProject(project.id);
+									}}
 										emptyTimeLabel={t("home.never")}
 										justNowLabel={t("time.justNow")}
 									/>
