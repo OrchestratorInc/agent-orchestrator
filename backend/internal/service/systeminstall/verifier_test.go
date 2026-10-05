@@ -5,8 +5,10 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -92,7 +94,9 @@ func TestVerifierBoundsVersionProbe(t *testing.T) {
 	t.Parallel()
 	runner := &recordingCommandRunner{run: func(ctx context.Context, _ []string, _, _ io.Writer) error {
 		<-ctx.Done()
-		return ctx.Err()
+		// The host runner kills the probe's process group at the deadline, so
+		// its error is the child's exit status rather than ctx.Err().
+		return errors.New("signal: killed")
 	}}
 	verifier := NewVerifier(verifierResolver{
 		domain.HarnessCodex: verifierAgent{path: "/custom/bin/codex", authCalls: &atomic.Int32{}},
@@ -103,4 +107,56 @@ func TestVerifierBoundsVersionProbe(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Verify error = %v, want deadline exceeded", err)
 	}
+	for _, want := range []string{"codex version probe", "timed out after 20ms", "Verify again"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Verify error = %q, want it to contain %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "signal: killed") {
+		t.Fatalf("Verify error = %q, want the timeout named instead of the kill signal", err)
+	}
+}
+
+func TestVerifierKeepsNonTimeoutProbeFailure(t *testing.T) {
+	t.Parallel()
+	runner := &recordingCommandRunner{run: func(context.Context, []string, io.Writer, io.Writer) error {
+		return errors.New("exit status 1")
+	}}
+	verifier := NewVerifier(verifierResolver{
+		domain.HarnessCodex: verifierAgent{path: "/custom/bin/codex", authCalls: &atomic.Int32{}},
+	}, runner)
+
+	_, err := verifier.Verify(context.Background(), TargetCodex)
+	if err == nil || err.Error() != "run codex version probe: exit status 1" {
+		t.Fatalf("Verify error = %v, want the probe's own failure", err)
+	}
+}
+
+// A freshly installed Cursor CLI took ~12s to answer its first --version on an
+// Intel Mac while macOS assessed the new binary (#5887). The default bound must
+// let that first post-install verification succeed instead of killing it.
+func TestVerifierDefaultTimeoutAllowsSlowFirstLaunch(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		runner := &recordingCommandRunner{run: func(ctx context.Context, _ []string, stdout, _ io.Writer) error {
+			select {
+			case <-time.After(12 * time.Second):
+				_, _ = io.WriteString(stdout, "2026.10.01-e373342\n")
+				return nil
+			case <-ctx.Done():
+				return errors.New("signal: killed")
+			}
+		}}
+		verifier := NewVerifier(verifierResolver{
+			domain.HarnessCursor: verifierAgent{path: "/home/test/.local/bin/cursor-agent", authCalls: &atomic.Int32{}},
+		}, runner)
+
+		result, err := verifier.Verify(t.Context(), TargetCursor)
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if result.ResolvedPath != "/home/test/.local/bin/cursor-agent" || result.Output != "2026.10.01-e373342\n" {
+			t.Fatalf("result = %+v", result)
+		}
+	})
 }
