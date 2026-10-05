@@ -768,6 +768,7 @@
 	"newTask.selectAgent": "에이전트 선택",
 	"newTask.removeImage": "이미지 {{number}} 제거",
 	"newTask.start": "작업 시작",
+	"newTask.create": "작업 만들기",
 	"newTask.starting": "시작 중...",
 	"newTask.title": "새 작업 만들기",
 	"newTask.titleLabel": "제목",

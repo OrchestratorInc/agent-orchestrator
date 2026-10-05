@@ -771,6 +771,7 @@
 	"newTask.selectAgent": "Selecionar agente",
 	"newTask.removeImage": "Remover imagem {{number}}",
 	"newTask.start": "Iniciar tarefa",
+	"newTask.create": "Criar tarefa",
 	"newTask.starting": "Iniciando...",
 	"newTask.title": "Criar uma nova tarefa",
 	"newTask.titleLabel": "Título",

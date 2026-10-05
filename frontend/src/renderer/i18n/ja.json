@@ -768,6 +768,7 @@
 	"newTask.selectAgent": "エージェントを選択",
 	"newTask.removeImage": "画像 {{number}} を削除",
 	"newTask.start": "タスクを開始",
+	"newTask.create": "タスクを作成",
 	"newTask.starting": "開始中...",
 	"newTask.title": "新しいタスクを作成",
 	"newTask.titleLabel": "タイトル",

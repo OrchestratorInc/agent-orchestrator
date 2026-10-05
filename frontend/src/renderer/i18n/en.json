@@ -753,6 +753,7 @@
 	"newTask.selectAgent": "Select agent",
 	"newTask.removeImage": "Remove image {{number}}",
 	"newTask.start": "Start task",
+	"newTask.create": "Create task",
 	"newTask.starting": "Starting...",
 	"newTask.title": "Create a new task",
 	"newTask.titleLabel": "Title",

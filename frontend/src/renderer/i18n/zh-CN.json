@@ -768,6 +768,7 @@
 	"newTask.selectAgent": "选择代理",
 	"newTask.removeImage": "移除图片 {{number}}",
 	"newTask.start": "开始任务",
+	"newTask.create": "创建任务",
 	"newTask.starting": "正在开始...",
 	"newTask.title": "创建新任务",
 	"newTask.titleLabel": "标题",
