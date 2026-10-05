@@ -20,6 +20,7 @@ const { history } = vi.hoisted(() => ({
 
 vi.mock("@tanstack/react-router", () => ({
 	useCanGoBack: () => false,
+	useNavigate: () => vi.fn(),
 	useRouter: () => ({ history }),
 }));
 

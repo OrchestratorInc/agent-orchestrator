@@ -1,6 +1,6 @@
-import { useCanGoBack, useRouter } from "@tanstack/react-router";
+import { useCanGoBack, useNavigate, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, PanelLeft } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
@@ -39,6 +39,66 @@ export function useCanGoForward(): boolean {
   return canGoForward;
 }
 
+// Reveals the history arrows while the pointer is over the sidebar or the
+// titlebar band above it. The band is a fixed zone as wide as the sidebar, so
+// there are no gaps or child-to-child hover handoffs to flicker across; the
+// sidebar body below it is tracked separately, and a short leave delay absorbs
+// the one-frame gap when the pointer crosses between the two.
+const REVEAL_LEAVE_DELAY_MS = 60;
+
+function useSidebarReveal(isSidebarOpen: boolean) {
+  const [revealed, setRevealed] = useState(false);
+  const [zoneWidth, setZoneWidth] = useState(0);
+  const inside = useRef({ zone: false, sidebar: false });
+  const timer = useRef<number | undefined>(undefined);
+
+  const update = useCallback((source: "zone" | "sidebar", value: boolean) => {
+    inside.current[source] = value;
+    window.clearTimeout(timer.current);
+    if (inside.current.zone || inside.current.sidebar) {
+      setRevealed(true);
+    } else {
+      timer.current = window.setTimeout(() => setRevealed(false), REVEAL_LEAVE_DELAY_MS);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isSidebarOpen) {
+      inside.current = { zone: false, sidebar: false };
+      window.clearTimeout(timer.current);
+      setRevealed(false);
+      setZoneWidth(0);
+      return;
+    }
+    let el: HTMLElement | null = null;
+    let observer: ResizeObserver | undefined;
+    const enter = () => update("sidebar", true);
+    const leave = () => update("sidebar", false);
+    const frame = requestAnimationFrame(() => {
+      el = document.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
+      if (!el) return;
+      el.addEventListener("pointerenter", enter);
+      el.addEventListener("pointerleave", leave);
+      observer = new ResizeObserver(([entry]) => setZoneWidth(entry.contentRect.width));
+      observer.observe(el);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer.current);
+      el?.removeEventListener("pointerenter", enter);
+      el?.removeEventListener("pointerleave", leave);
+      observer?.disconnect();
+    };
+  }, [isSidebarOpen, update]);
+
+  return {
+    revealed,
+    zoneWidth,
+    onZoneEnter: () => update("zone", true),
+    onZoneLeave: () => update("zone", false),
+  };
+}
+
 export function TitlebarNav({
   historyLocked = false,
   isFullScreen = false,
@@ -50,8 +110,11 @@ export function TitlebarNav({
   const toggleSidebar = useUiStore((state) => state.toggleSidebar);
   const isSidebarOpen = useUiStore(sidebarIsVisible);
   const router = useRouter();
+  const navigate = useNavigate();
   const canGoBack = useCanGoBack();
   const canGoForward = useCanGoForward();
+  const { revealed, zoneWidth, onZoneEnter, onZoneLeave } =
+    useSidebarReveal(isSidebarOpen);
 
   if (!isMac && !isLinux) return null;
   // Native fullscreen changes only the horizontal traffic-light reserve.
@@ -68,7 +131,15 @@ export function TitlebarNav({
 
   return (
     <div
-      className={`fixed ${topClass} ${leftClass} z-titlebar flex ${heightClass} items-center gap-1`}
+      className={`fixed ${topClass} left-0 z-titlebar ${heightClass}`}
+      data-slot="titlebar-nav-zone"
+      onPointerEnter={onZoneEnter}
+      onPointerLeave={onZoneLeave}
+      style={{ ...noDragStyle, width: zoneWidth }}
+    >
+    <div
+      className={`group/nav absolute ${topClass} ${leftClass} flex ${heightClass} items-center gap-1`}
+      data-revealed={revealed || undefined}
       data-slot="titlebar-nav"
       style={noDragStyle}
     >
@@ -85,22 +156,48 @@ export function TitlebarNav({
       >
         <PanelLeft className="size-icon-lg" aria-hidden="true" />
       </TitlebarButton>
-      <TitlebarButton
-        disabled={historyLocked || !canGoBack}
-        label={t("titlebar.goBack")}
-        onClick={() => router.history.back()}
-        title={t("titlebar.goBack")}
-      >
-        <ArrowLeft className="size-icon-lg" aria-hidden="true" />
-      </TitlebarButton>
-      <TitlebarButton
-        disabled={historyLocked || !canGoForward}
-        label={t("titlebar.goForward")}
-        onClick={() => router.history.forward()}
-        title={t("titlebar.goForward")}
-      >
-        <ArrowRight className="size-icon-lg" aria-hidden="true" />
-      </TitlebarButton>
+      {/* With the sidebar open, the brand and the history arrows share one
+          slot: the brand shows at rest and swaps to the arrows while the
+          pointer is over the sidebar or titlebar row, or on keyboard focus. Collapsed, there is no brand, so the arrows stay put. */}
+      <div className="grid items-center">
+        {isSidebarOpen ? (
+          <button
+            aria-label={t("shell.goHome")}
+            className="col-start-1 row-start-1 ml-1.5 whitespace-nowrap rounded-md px-0.5 text-left text-lg font-extrabold leading-tight tracking-tight-lg text-foreground group-has-focus-visible/nav:pointer-events-none group-has-focus-visible/nav:opacity-0 group-data-[revealed]/nav:pointer-events-none group-data-[revealed]/nav:opacity-0"
+            data-sidebar-brand=""
+            onClick={() => void navigate({ to: "/" })}
+            style={noDragStyle}
+            type="button"
+          >
+            Orchestrator.inc
+          </button>
+        ) : null}
+        <div
+          className={`col-start-1 row-start-1 flex items-center gap-1 ${
+            isSidebarOpen
+              ? "pointer-events-none opacity-0 group-has-focus-visible/nav:pointer-events-auto group-has-focus-visible/nav:opacity-100 group-data-[revealed]/nav:pointer-events-auto group-data-[revealed]/nav:opacity-100"
+              : ""
+          }`}
+        >
+          <TitlebarButton
+            disabled={historyLocked || !canGoBack}
+            label={t("titlebar.goBack")}
+            onClick={() => router.history.back()}
+            title={t("titlebar.goBack")}
+          >
+            <ArrowLeft className="size-icon-lg" aria-hidden="true" />
+          </TitlebarButton>
+          <TitlebarButton
+            disabled={historyLocked || !canGoForward}
+            label={t("titlebar.goForward")}
+            onClick={() => router.history.forward()}
+            title={t("titlebar.goForward")}
+          >
+            <ArrowRight className="size-icon-lg" aria-hidden="true" />
+          </TitlebarButton>
+        </div>
+      </div>
+    </div>
     </div>
   );
 }
