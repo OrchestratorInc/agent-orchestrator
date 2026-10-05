@@ -30,6 +30,7 @@ import {
 	OptionMenuSubTrigger,
 	OptionMenuTrigger,
 } from "../ui/option-menu";
+import { fallbackEffort, useApplyEffortDefault } from "../../lib/effort";
 import { cn } from "../../lib/utils";
 import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } from "../settings/EffortPicker";
 import { agentModelDisplayLabel, isDefaultPlaceholderLabel } from "../../lib/agent-model-choices";
@@ -181,6 +182,26 @@ export function TurnSettingsBar({
 		if (!onChangeConfigOption) return;
 		void Promise.resolve(onChangeConfigOption(optionId, value)).catch(() => {});
 	};
+	const nativeModelMenu = Boolean(onChange && displayModels.length > 0 && grouped.model.length === 0);
+	// A model with effort levels but no provider default would otherwise show no
+	// selected effort. AO picks a level and sets it, so what the picker shows is
+	// what the next turn uses.
+	const acpEffortOption = grouped.effort.at(0);
+	useApplyEffortDefault(
+		`${harness}:${grouped.model.map((option) => option.currentValue).join(":")}:${acpEffortOption?.id}`,
+		acpEffortOption ? acpFallbackEffort(acpEffortOption) : undefined,
+		(value) => {
+			if (acpEffortOption) applyOption(acpEffortOption.id, { value });
+		},
+		optionDisabled || !onChangeConfigOption,
+	);
+	const nativeEffortUnset = !settings.reasoningEffort || settings.reasoningEffort === "default";
+	useApplyEffortDefault(
+		`${harness}:${settings.model ?? fallback?.id}`,
+		nativeModelMenu && nativeEffortUnset ? fallbackEffort(efforts, (selected ?? fallback)?.defaultEffort) : undefined,
+		(value) => onChange?.({ ...settings, reasoningEffort: value }),
+		optionDisabled || !onChange,
+	);
 	const modeOption = grouped.mode;
 	const inlineExecutionMode =
 		grouped.executionMode && isPlanBinary(grouped.executionMode) ? grouped.executionMode : undefined;
@@ -193,7 +214,6 @@ export function TurnSettingsBar({
 	const planReturn = modeOption?.choices.find(
 		(choice) => choice.permissionMode === (settings.approvalMode ?? "default"),
 	)?.value;
-	const nativeModelMenu = Boolean(onChange && displayModels.length > 0 && grouped.model.length === 0);
 	const clubbedLeft =
 		grouped.model.length > 0 ||
 		grouped.effort.length > 0 ||
@@ -549,6 +569,21 @@ function acpEffortMenuProps(option: ChatConfigOption) {
 function acpEffortProps(option: ChatConfigOption) {
 	const { value, choices, defaultEffort } = acpEffortMenuProps(option);
 	return { value: value === "default" ? "" : value, choices, defaultEffort };
+}
+
+// ACP exposes the provider-owned reset as a "default" choice. When it names no
+// concrete level, nothing is selected, so AO supplies one.
+function acpFallbackEffort(option: ChatConfigOption): string | undefined {
+	if (option.currentValue && option.currentValue !== "default") return undefined;
+	const concrete = option.choices.filter((choice) => choice.value && choice.value !== "default");
+	const described = option.choices.find((choice) => choice.value === "default")?.description?.trim().toLowerCase();
+	const reported = concrete.find(
+		(choice) => described && (choice.value.toLowerCase() === described || choice.name.toLowerCase() === described),
+	)?.value;
+	return fallbackEffort(
+		concrete.map((choice) => choice.value),
+		reported,
+	);
 }
 
 function EffortOptionSubmenu({

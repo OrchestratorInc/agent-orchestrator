@@ -28,6 +28,7 @@ import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { fallbackEffort } from "../lib/effort";
 import {
 	buildRankedAgentOptions,
 	DEFAULT_AGENT_PRIORITY_RANK,
@@ -500,15 +501,18 @@ export function TaskComposer({
 	const effortOptions = effortModel?.efforts?.filter((option) => option && option.toLowerCase() !== "default") ?? [];
 	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
 	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
-	const requestedEffort = effortTouched || rememberedEffortIsExplicit
-		? !effort || effort === implicitEffort ? undefined : effort
-		: undefined;
-
 	const selectedAgentLabel = agentCatalog?.agents.find((item) => item.id === selectedAgent)?.label || selectedAgent;
 	const requiresTuiFallback =
 		selectedAgent !== "" &&
 		settings?.defaultSessionMode === "chat" &&
 		!settings.chatHarnesses.includes(selectedAgent);
+	// With no provider default for the reported levels AO picks one, shows it as
+	// selected, and sends it, so the picker matches what the task runs with.
+	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
+	const effectiveEffort = effort && effort !== "default" ? effort : aoDefaultEffort ?? "";
+	const requestedEffort = effortTouched || rememberedEffortIsExplicit
+		? !effectiveEffort || effectiveEffort === implicitEffort ? undefined : effectiveEffort
+		: aoDefaultEffort;
 	const effortAvailability: EffortAvailability = requiresTuiFallback
 		? "launch-unavailable"
 		: !effortModel || effortModel.efforts === undefined
@@ -713,7 +717,7 @@ export function TaskComposer({
 			effort={{
 				disabled: isSubmitting,
 				options: effortOptions,
-				value: effort,
+				value: effectiveEffort,
 				onChange: (value) => {
 					setEffort(value);
 					setEffortTouched(true);
