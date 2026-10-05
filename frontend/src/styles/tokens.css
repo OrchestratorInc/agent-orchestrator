@@ -397,7 +397,7 @@
 	--size-inspector-min: 280px;
 	--size-textarea-min: 112px;
 	/* Two 24px actions + one 6px gap + 4px right inset + 4px label clearance. */
-	--size-sidebar-project-actions: 62px;
+	--size-sidebar-project-actions: 58px;
 
 	/* Shared inset-panel geometry (welcome board + settings page) */
 	--size-center-panel-inset: 24px;
