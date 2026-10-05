@@ -25,10 +25,10 @@ TEMPLATE_DIR="${AO_CLOUD_CODER_TEMPLATE_DIR:-coder}"
 BASE_IMAGE="${AO_DEVKIT_BASE_IMAGE:-ao-coder-workspace:local}"
 DEVKIT_PKGS="${AO_DEVKIT_APT_PACKAGES:-build-essential jq less python3 python3-pip python3-venv ripgrep tree unzip vim}"
 
-MED_NAME=ao-devkit;      MED_DISPLAY="AO Dev-kit";   MED_MEM=4096; MED_CPU=1024
-MED_DESC="Medium (4 GB). Claude + Python, ripgrep, jq, build tools."
-LG_NAME=ao-devkit-large; LG_DISPLAY="AO Dev-kit-2";  LG_MEM=8192;  LG_CPU=2048
-LG_DESC="Large (8 GB). Same tooling as AO Dev-kit, bigger machine."
+MED_NAME=ao-devkit;      MED_DISPLAY="AO Dev-kit (Medium)";   MED_MEM=4096; MED_CPU=1024
+MED_DESC="4 GB RAM · Claude + dev tooling"
+LG_NAME=ao-devkit-large; LG_DISPLAY="AO Dev-kit (Large)";  LG_MEM=8192;  LG_CPU=2048
+LG_DESC="8 GB RAM · Claude + dev tooling"
 
 [[ -f "$TEMPLATE_DIR/main.tf" ]] || { echo "Run from the cloud/ directory ($TEMPLATE_DIR/main.tf not found)." >&2; exit 1; }
 
