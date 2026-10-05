@@ -913,7 +913,7 @@ export function Sidebar({
 					type="button"
 				>
 					<span
-						className="sidebar-expanded-chrome min-w-0 flex-1 truncate text-base font-medium leading-tight tracking-tight-lg text-foreground group-data-[collapsible=icon]:hidden"
+						className="sidebar-expanded-chrome min-w-0 flex-1 truncate text-lg font-extrabold leading-tight tracking-tight-lg text-foreground group-data-[collapsible=icon]:hidden"
 					>
 						Orchestrator.inc
 					</span>

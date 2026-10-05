@@ -91,6 +91,37 @@ function useSidebarReveal(isSidebarOpen: boolean) {
   };
 }
 
+// The brand replaces the arrows only once the sidebar has fully slid open, and
+// the arrows come back the moment it starts closing. The sidebar animates with
+// a spring (no transitionend), so watch its container reach x = 0.
+const SETTLE_TIMEOUT_MS = 1500;
+
+function useSidebarSettledOpen(isSidebarOpen: boolean): boolean {
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    if (!isSidebarOpen) {
+      setSettled(false);
+      return;
+    }
+    const started = performance.now();
+    let frame = 0;
+    const check = () => {
+      const el = document.querySelector<HTMLElement>(
+        '[data-slot="sidebar-container"]',
+      );
+      const open = el ? el.getBoundingClientRect().left >= -0.5 : false;
+      if (open || performance.now() - started > SETTLE_TIMEOUT_MS) {
+        setSettled(true);
+        return;
+      }
+      frame = requestAnimationFrame(check);
+    };
+    frame = requestAnimationFrame(check);
+    return () => cancelAnimationFrame(frame);
+  }, [isSidebarOpen]);
+  return isSidebarOpen && settled;
+}
+
 export function TitlebarNav({
   historyLocked = false,
   isFullScreen = false,
@@ -107,6 +138,7 @@ export function TitlebarNav({
   const canGoForward = useCanGoForward();
   const { revealed, onZoneEnter, onZoneLeave } =
     useSidebarReveal(isSidebarOpen);
+  const showBrand = useSidebarSettledOpen(isSidebarOpen);
 
   if (!isMac && !isLinux) return null;
   // Native fullscreen changes only the horizontal traffic-light reserve.
@@ -147,7 +179,7 @@ export function TitlebarNav({
           slot: the brand shows at rest and swaps to the arrows while the
           pointer is over the sidebar or titlebar row, or on keyboard focus. Collapsed, there is no brand, so the arrows stay put. */}
       <div className="grid items-center">
-        {isSidebarOpen ? (
+        {showBrand ? (
           <button
             aria-label={t("shell.goHome")}
             className="col-start-1 row-start-1 ml-1.5 whitespace-nowrap rounded-md px-0.5 text-left text-lg font-extrabold leading-tight tracking-tight-lg text-foreground group-has-focus-visible/nav:pointer-events-none group-has-focus-visible/nav:opacity-0 group-data-[revealed]/nav:pointer-events-none group-data-[revealed]/nav:opacity-0"
@@ -161,7 +193,7 @@ export function TitlebarNav({
         ) : null}
         <div
           className={`col-start-1 row-start-1 flex items-center gap-1 ${
-            isSidebarOpen
+            showBrand
               ? "pointer-events-none opacity-0 group-has-focus-visible/nav:pointer-events-auto group-has-focus-visible/nav:opacity-100 group-data-[revealed]/nav:pointer-events-auto group-data-[revealed]/nav:opacity-100"
               : ""
           }`}
