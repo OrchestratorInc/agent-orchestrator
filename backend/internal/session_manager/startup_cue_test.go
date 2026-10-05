@@ -198,6 +198,47 @@ func TestStartupCueRecoveryDoesNotRerun(t *testing.T) {
 	}
 }
 
+func TestStartupCueRecoveryDefersChatDeliveryUntilControllerReattach(t *testing.T) {
+	ctx := context.Background()
+	chat := &recordingLauncher{drainErr: fmt.Errorf("no live chat controller")}
+	m, _, _ := newChatManager(chat)
+	st := sqlitetest.MustOpenAt(t, t.TempDir())
+	m.store = st
+	if err := st.UpsertProject(ctx, domain.ProjectRecord{ID: string(chatTestProject), RegisteredAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	created, err := st.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: chatTestProject, Kind: domain.KindWorker,
+		Mode: domain.SessionModeChat, ProvisionState: domain.SessionProvisionReady,
+		Metadata: domain.SessionMetadata{
+			WorkspacePath: "C:/worktree", ProviderConversationID: "conversation",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ClaimStartupCue(ctx, created.ID, domain.StartupCueRun{State: "running", DeliveryHeld: true}); err != nil {
+		t.Fatal(err)
+	}
+	records, err := st.ListAllSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.recoverStartupCues(ctx, records); err != nil {
+		t.Fatalf("recovery should not depend on a Chat controller: %v", err)
+	}
+	if len(chat.drained) != 0 {
+		t.Fatalf("recovery drained before controller reattach: %v", chat.drained)
+	}
+	recovered, found, err := st.GetSession(ctx, created.ID)
+	if err != nil || !found || recovered.StartupCue == nil {
+		t.Fatalf("recovered session = %+v, found=%v, err=%v", recovered, found, err)
+	}
+	if recovered.StartupCue.State != "interrupted" || !recovered.StartupCue.DeliveryHeld {
+		t.Fatalf("recovered cue = %+v, want interrupted and held", recovered.StartupCue)
+	}
+}
+
 func TestStartupCueHoldsTUIInputAndMessages(t *testing.T) {
 	ctx := context.Background()
 	data, workspace := t.TempDir(), t.TempDir()

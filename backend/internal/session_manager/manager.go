@@ -532,6 +532,13 @@ type Manager struct {
 	shellTerminals   ShellTerminalCloser
 	startupCueRunner StartupCueRunner
 
+	// startupCueExecMu guards the in-memory executions that are currently
+	// running. The durable StartupCueRun is the recovery source of truth, while
+	// this registry closes the race between starting a terminal and persisting
+	// its handle for cancellation.
+	startupCueExecMu sync.Mutex
+	startupCueExec   map[domain.SessionID]*startupCueExecution
+
 	terminalInputGateMu sync.Mutex
 	terminalInputGate   TerminalInputGate
 
@@ -850,6 +857,7 @@ func New(d Deps) *Manager {
 		// Leave enough headroom to avoid a false delivery failure.
 		switchDeliveryAckWait:  150 * time.Second,
 		transitions:            make(map[domain.SessionID]*interfaceTransitionRun),
+		startupCueExec:         make(map[domain.SessionID]*startupCueExecution),
 		transitionDeliveryWake: make(chan struct{}, 1),
 		sendConfirm: sendConfirmConfig{
 			pollInterval:    sendConfirmPollInterval,

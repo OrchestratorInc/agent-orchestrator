@@ -678,7 +678,9 @@ type Session struct {
 	ClientRequestID                  string
 	ClientRequestHash                string
 	ClientRequestCommitted           bool
+	CodexActivityFacts               string
 	StartupCueJson                   string
+	ClaudeActivityFacts              string
 }
 
 type SessionCleanupFact struct {

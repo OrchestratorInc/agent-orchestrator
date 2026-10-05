@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
@@ -22,6 +23,13 @@ type startupCueStore interface {
 	EnqueueStartupCueMessage(context.Context, domain.SessionID, string, string) (bool, error)
 	ListStartupCueMessages(context.Context, domain.SessionID) ([]domain.StartupCueMessage, error)
 	MarkStartupCueMessageDelivered(context.Context, int64) error
+}
+
+type startupCueExecution struct {
+	cancel          context.CancelFunc
+	terminalHandle  string
+	cancelRequested bool
+	stopped         chan struct{}
 }
 
 // prepareStartupCue pins the definition before any controller can accept input.
@@ -45,13 +53,30 @@ func (m *Manager) prepareStartupCue(ctx context.Context, id domain.SessionID, pr
 // Session creation stays responsive; provider delivery is gated durably.
 func (m *Manager) startStartupCue(id domain.SessionID, project domain.ProjectRecord, workspace string, release func(context.Context) error) {
 	m.runInBackground(func() {
+		var execution *startupCueExecution
+		defer func() {
+			if execution == nil {
+				return
+			}
+			m.startupCueExecMu.Lock()
+			if current := m.startupCueExec[id]; current == execution {
+				delete(m.startupCueExec, id)
+			}
+			m.startupCueExecMu.Unlock()
+			close(execution.stopped)
+		}()
 		ctx := m.backgroundContext
+		// Admission and cancellation share this lock, so cancellation cannot
+		// observe a running row before its worker is registered.
+		releaseAdmission := m.lockStartupDelivery(id)
 		rec, found, err := m.store.GetSession(ctx, id)
 		if err != nil || !found || !rec.StartupCue.HoldsInput() {
+			releaseAdmission()
 			return
 		}
 		store, ok := m.store.(startupCueStore)
 		if !ok {
+			releaseAdmission()
 			return
 		}
 		run := *rec.StartupCue
@@ -59,13 +84,23 @@ func (m *Manager) startStartupCue(id domain.SessionID, project domain.ProjectRec
 		run.StartedAt = m.clock()
 		began, err := store.BeginStartupCue(ctx, id, run)
 		if err != nil {
+			releaseAdmission()
 			m.logger.Error("startup cue: record execution", "sessionID", id, "error", err)
 			return
 		}
 		if !began {
+			releaseAdmission()
 			return
 		}
 		commandCtx, cancel := context.WithCancel(ctx)
+		execution = &startupCueExecution{cancel: cancel, stopped: make(chan struct{})}
+		m.startupCueExecMu.Lock()
+		if m.startupCueExec == nil {
+			m.startupCueExec = make(map[domain.SessionID]*startupCueExecution)
+		}
+		m.startupCueExec[id] = execution
+		m.startupCueExecMu.Unlock()
+		releaseAdmission()
 		// Kill can arrive while a command is running, independently of startup's API request.
 		done := make(chan struct{})
 		go func() {
@@ -98,6 +133,14 @@ func (m *Manager) startStartupCue(id domain.SessionID, project domain.ProjectRec
 				commandErr = err
 			} else {
 				run.TerminalHandle = started.Terminal.HandleID
+				m.startupCueExecMu.Lock()
+				execution.terminalHandle = run.TerminalHandle
+				m.startupCueExecMu.Unlock()
+				// Persist the handle immediately. Cancellation must be able to
+				// close the terminal before queued input is released.
+				if err := store.FinishStartupCue(ctx, id, run); err != nil {
+					commandErr = err
+				}
 				for commandErr == nil {
 					select {
 					case <-commandCtx.Done():
@@ -133,6 +176,29 @@ func (m *Manager) startStartupCue(id domain.SessionID, project domain.ProjectRec
 		close(done)
 		deadlineErr := commandCtx.Err()
 		cancel()
+		m.startupCueExecMu.Lock()
+		cancelRequested := execution != nil && execution.cancelRequested
+		m.startupCueExecMu.Unlock()
+		// Context cancellation stops polling, not the terminal process. Confirm
+		// shutdown before recording a terminal outcome or admitting delivery.
+		if runner != nil && run.TerminalHandle != "" && (cancelRequested || commandErr != nil && code == nil) {
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			stopErr := closeStartupCueTerminal(stopCtx, runner, run.TerminalHandle)
+			stopCancel()
+			if stopErr != nil {
+				run.DeliveryHeld, run.Output = true, output
+				run.Error = fmt.Sprintf("startup cue terminal shutdown: %v", stopErr)
+				persistCtx, persistCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer persistCancel()
+				if err := store.FinishStartupCue(persistCtx, id, run); err != nil {
+					m.logger.Error("startup cue: persist shutdown failure", "sessionID", id, "error", err)
+				}
+				if _, err := m.setProvisionState(persistCtx, id, domain.SessionProvisionFailed, run.Error); err != nil {
+					m.logger.Error("startup cue: record shutdown failure", "sessionID", id, "error", err)
+				}
+				return
+			}
+		}
 		if current, exists, readErr := m.store.GetSession(ctx, id); readErr == nil && exists && current.StartupCue != nil && current.StartupCue.State == "cancelled" {
 			if err := m.releaseStartupCueDelivery(ctx, id, *current.StartupCue, release); err != nil {
 				m.logger.Warn("startup cue: resume delivery after cancellation", "sessionID", id, "error", err)
@@ -144,7 +210,9 @@ func (m *Manager) startStartupCue(id domain.SessionID, project domain.ProjectRec
 		run.State = "succeeded"
 		if commandErr != nil {
 			run.State, run.Error = "failed", commandErr.Error()
-			if errors.Is(deadlineErr, context.Canceled) {
+			if cancelRequested {
+				run.State, run.Error = "cancelled", "Startup cue cancelled by user"
+			} else if errors.Is(deadlineErr, context.Canceled) {
 				run.State, run.Error = "cancelled", "Startup cue was interrupted"
 			}
 		}
@@ -181,6 +249,9 @@ func (m *Manager) releaseStartupCueDelivery(ctx context.Context, id domain.Sessi
 	}
 	if current.StartupCue == nil || !current.StartupCue.DeliveryHeld {
 		return nil
+	}
+	if current.StartupCue.State == "pending" || current.StartupCue.State == "running" {
+		return fmt.Errorf("startup cue command has not stopped; cancel setup before retrying delivery")
 	}
 	run = *current.StartupCue
 
@@ -239,6 +310,13 @@ func (m *Manager) drainStartupChatQueue(ctx context.Context, id domain.SessionID
 
 // CancelStartupCue stops a running startup terminal and releases delivery.
 func (m *Manager) CancelStartupCue(ctx context.Context, id domain.SessionID) (domain.StartupCueRun, error) {
+	releaseAdmission := m.lockStartupDelivery(id)
+	admissionHeld := true
+	defer func() {
+		if admissionHeld {
+			releaseAdmission()
+		}
+	}()
 	store, ok := m.store.(startupCueStore)
 	if !ok {
 		return domain.StartupCueRun{}, fmt.Errorf("startup cue store unavailable")
@@ -254,12 +332,55 @@ func (m *Manager) CancelStartupCue(ctx context.Context, id domain.SessionID) (do
 	if !run.HoldsInput() {
 		return run, nil
 	}
-	if run.TerminalHandle != "" {
+	m.startupCueExecMu.Lock()
+	execution := m.startupCueExec[id]
+	if execution != nil {
+		execution.cancelRequested = true
+		execution.cancel()
+	}
+	terminalHandle := run.TerminalHandle
+	if execution != nil && execution.terminalHandle != "" {
+		terminalHandle = execution.terminalHandle
+	}
+	m.startupCueExecMu.Unlock()
+	if execution != nil {
+		// The worker owns terminal shutdown and result persistence. It also
+		// handles cancellation while RunStartupCue is still publishing a handle.
+		releaseAdmission()
+		admissionHeld = false
+		select {
+		case <-execution.stopped:
+		case <-ctx.Done():
+			return run, ctx.Err()
+		}
+		updated, found, readErr := m.store.GetSession(ctx, id)
+		if readErr != nil {
+			return run, readErr
+		}
+		if !found || updated.StartupCue == nil {
+			return run, ErrNotFound
+		}
+		if updated.StartupCue.State == "running" {
+			return *updated.StartupCue, fmt.Errorf("%s", updated.StartupCue.Error)
+		}
+		if err := m.releasePersistedStartupCueDelivery(ctx, id); err != nil {
+			return *updated.StartupCue, err
+		}
+		updated, readErr = m.getRecord(ctx, id)
+		if readErr != nil {
+			return run, readErr
+		}
+		return *updated.StartupCue, nil
+	}
+	if terminalHandle != "" {
 		m.shellTerminalsMu.Lock()
 		runner := m.startupCueRunner
 		m.shellTerminalsMu.Unlock()
-		if runner != nil {
-			_ = runner.CloseShellTerminal(ctx, run.TerminalHandle)
+		if runner == nil {
+			return run, fmt.Errorf("startup cue terminal runner unavailable")
+		}
+		if err := closeStartupCueTerminal(ctx, runner, terminalHandle); err != nil {
+			return run, err
 		}
 	}
 	now := m.clock()
@@ -267,6 +388,8 @@ func (m *Manager) CancelStartupCue(ctx context.Context, id domain.SessionID) (do
 	if err := store.FinishStartupCue(ctx, id, run); err != nil {
 		return domain.StartupCueRun{}, err
 	}
+	releaseAdmission()
+	admissionHeld = false
 	if err := m.releasePersistedStartupCueDelivery(ctx, id); err != nil {
 		return run, err
 	}
@@ -274,6 +397,15 @@ func (m *Manager) CancelStartupCue(ctx context.Context, id domain.SessionID) (do
 		return *updated.StartupCue, nil
 	}
 	return run, nil
+}
+
+func closeStartupCueTerminal(ctx context.Context, runner StartupCueRunner, handle string) error {
+	err := runner.CloseShellTerminal(ctx, handle)
+	var apiError *apierr.Error
+	if errors.As(err, &apiError) && apiError.Code == "SHELL_TERMINAL_NOT_FOUND" {
+		return nil // Confirmed terminal deletion makes repeated cancellation safe.
+	}
+	return err
 }
 
 func startupCueMarkerResult(output, marker string) (int, bool) {
@@ -407,20 +539,9 @@ func (m *Manager) recoverStartupCues(ctx context.Context, records []domain.Sessi
 			rec.StartupCue = &run
 			continue
 		}
-		// A committed controller can be reattached normally; its cue failure is
-		// separate from provider startup and must not become a failed spawn.
-		if rec.Metadata.WorkspacePath != "" && (rec.Metadata.RuntimeHandleID != "" || rec.Metadata.ProviderConversationID != "") {
-			if err := m.releasePersistedStartupCueDelivery(ctx, rec.ID); err != nil {
-				return err
-			}
-			updated, found, err := m.store.GetSession(ctx, rec.ID)
-			if err != nil {
-				return err
-			}
-			if found {
-				*rec = updated
-			}
-		}
+		// Delivery is intentionally deferred until background reconciliation,
+		// after any Chat controller has been reattached. Startup safety must not
+		// call a controller-dependent drain before the daemon can serve.
 	}
 	return nil
 }
