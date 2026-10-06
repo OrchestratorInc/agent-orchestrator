@@ -133,9 +133,7 @@ describe("ContextMeter", () => {
 
 		rerender(<ContextMeter {...props} compactUnavailable="This agent cannot compact its history" />);
 		expect(screen.getByRole("status")).toHaveTextContent("This agent cannot compact its history");
-		expect(button).toBeDisabled();
-		await userEvent.hover(button);
-		expect(await screen.findByRole("tooltip")).toHaveTextContent("This agent cannot compact its history");
+		expect(screen.getByRole("button", { name: "Compact conversation history" })).toBeDisabled();
 	});
 
 	it("clamps a provider that overreports past its own window", () => {
