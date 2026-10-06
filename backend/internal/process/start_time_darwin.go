@@ -3,6 +3,7 @@
 package process
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -17,11 +18,14 @@ func StartTime(pid int) (time.Time, error) {
 	}
 	info, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
 	if err != nil {
+		if errors.Is(err, unix.ESRCH) || errors.Is(err, unix.EIO) {
+			err = errors.Join(err, ErrNotRunning)
+		}
 		return time.Time{}, fmt.Errorf("observe PID %d start time: %w", pid, err)
 	}
 	p := info.Proc
 	if int(p.P_pid) != pid || p.P_starttime.Sec <= 0 || p.P_stat == 5 {
-		return time.Time{}, fmt.Errorf("PID %d is missing, changed or a zombie", pid)
+		return time.Time{}, fmt.Errorf("PID %d is missing, changed or a zombie: %w", pid, ErrNotRunning)
 	}
 	return time.Unix(p.P_starttime.Sec, int64(p.P_starttime.Usec)*1000).UTC(), nil
 }

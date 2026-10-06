@@ -3,6 +3,7 @@
 package process
 
 import (
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -24,5 +25,8 @@ func TestStartTimeCurrentProcess(t *testing.T) {
 		if _, err := StartTime(pid); err == nil {
 			t.Errorf("invalid PID %d admitted", pid)
 		}
+	}
+	if _, err := StartTime(1 << 30); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("missing process has no typed sentinel: %v", err)
 	}
 }
