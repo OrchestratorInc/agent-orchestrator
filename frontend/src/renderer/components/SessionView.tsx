@@ -1707,7 +1707,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								/>
 								{reviewerChatId ? (
 									<div className="absolute inset-0">
-										<ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} />
+										<ReviewerChatSurface
+											hideHeader
+											hostId={hostId}
+											workerSessionId={sessionId}
+											reviewId={reviewerChatId}
+											onOpenShell={addShellTerminal}
+											openingShell={openShellTerminal.isPending}
+											shellError={
+												openShellTerminal.error ? apiErrorMessage(openShellTerminal.error) : undefined
+											}
+										/>
 									</div>
 								) : null}
 								</>
@@ -1726,7 +1736,19 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									reviewerTerminal={reviewerTerminal}
 									reviewerChat={reviewerChat}
 									reviewerChatSelected={Boolean(reviewerChatId)}
-									reviewerChatContent={reviewerChatId ? <ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} /> : undefined}
+									reviewerChatContent={reviewerChatId ? (
+										<ReviewerChatSurface
+											hideHeader
+											hostId={hostId}
+											workerSessionId={sessionId}
+											reviewId={reviewerChatId}
+											onOpenShell={addShellTerminal}
+											openingShell={openShellTerminal.isPending}
+											shellError={
+												openShellTerminal.error ? apiErrorMessage(openShellTerminal.error) : undefined
+											}
+										/>
+									) : undefined}
 									session={session}
 									shellTerminals={shellTerminals}
 									terminalTarget={routedTerminalTarget}
