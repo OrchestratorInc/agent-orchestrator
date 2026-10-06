@@ -657,6 +657,9 @@ describe("Sidebar", () => {
 		expect(settingsButtons).toHaveLength(2);
 		expect(expandedButton).toHaveAttribute("tabindex", "-1");
 		expect(expandedButton?.closest('[aria-hidden="true"]')).toBeInTheDocument();
+		// Hidden from assistive tech, not removed from layout: display: none would drop
+		// the footer content while the sidebar slides away and leave its border behind.
+		expect(expandedButton?.closest("[hidden]")).toBeNull();
 		expect(collapsedButton).toHaveAttribute("tabindex", "0");
 		expect(collapsedButton?.closest('[aria-hidden="true"]')).toBeNull();
 	});

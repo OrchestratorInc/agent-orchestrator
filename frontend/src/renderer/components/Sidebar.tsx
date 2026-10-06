@@ -1149,7 +1149,11 @@ export function Sidebar({
 				)}
 				<div
 					aria-hidden={isCollapsed || undefined}
-					hidden={isCollapsed}
+					// `hidden` (display: none) is for the real icon rail only. Hiding the footer
+					// this way while an offcanvas sidebar slides away drops its content at once
+					// and leaves the footer's top border behind. aria-hidden and tabIndex -1
+					// already keep it out of reach while collapsed.
+					hidden={isIconRail}
 					className="sidebar-expanded-chrome relative flex w-full min-w-46.5 flex-col gap-0.5"
 				>
 					<UpdateStatusRow
