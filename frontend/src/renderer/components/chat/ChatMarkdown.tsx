@@ -314,6 +314,11 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 	);
 }
 
+/** Render one safe in-app session link using the surrounding ChatLinkProvider. */
+export function SessionLabelLink({ href, children }: { href: string; children: ReactNode }) {
+	return <MarkdownLink href={href}>{children}</MarkdownLink>;
+}
+
 function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
 	const { remoteHost } = useContext(OpenChatLink);
 	if (remoteHost && typeof src === "string" && isHostLocalWebLink(src)) {
