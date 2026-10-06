@@ -482,14 +482,14 @@ export function TaskComposer({
 		isConcreteModelID(rememberedMode) && catalogModels.some((item) => item.id === rememberedMode);
 	const defaultModelForSelectedAgent =
 		(rememberedModelIsValid ? rememberedModel : "") ||
-		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
+		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? "" : catalogDefaultOption) ||
 		claudeFallbackOption;
 	const defaultModeForSelectedAgent =
 		(rememberedModeIsValid ? rememberedMode : "") ||
-		(catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(isConcreteModelID(projectModeForSelectedAgent) ? projectModeForSelectedAgent : "") ||
+		(catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? catalogDefaultOption : "");
 	const selectedModel = model || (modelTouched ? (catalogUsesModes ? "" : catalogDefaultOption) : defaultModelForSelectedAgent);
 	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogDefaultOption : "") : defaultModeForSelectedAgent);
