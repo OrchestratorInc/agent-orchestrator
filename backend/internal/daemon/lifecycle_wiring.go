@@ -667,10 +667,6 @@ func (c chatLauncher) DrainChatQueue(ctx context.Context, id domain.SessionID) e
 	return c.svc.DrainQueued(ctx, id)
 }
 
-func (c chatLauncher) DrainStartupChatQueue(ctx context.Context, id domain.SessionID) error {
-	return c.svc.DrainStartupQueued(ctx, id)
-}
-
 func (c chatLauncher) HasLiveChatController(id domain.SessionID) bool {
 	return c.svc.HasLiveChatController(id)
 }

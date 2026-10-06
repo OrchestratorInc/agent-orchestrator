@@ -1193,11 +1193,6 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
 	}
 
-	rec, err = m.getRecord(ctx, id)
-	if err != nil {
-		return domain.SessionRecord{}, 0, 0, err
-	}
-
 	// CLI agents receive the prompt as text and cannot consume inline binary
 	// data, so any pasted/dropped images are written into the worktree and
 	// referenced by path in the prompt. Done after provisioning (so the worktree
@@ -4184,7 +4179,6 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 // retries. Ordinary callers leave it empty; the outbox preserves the key across
 // restart, rollback, and even a second overlapping handoff.
 func (m *Manager) send(ctx context.Context, id domain.SessionID, message, clientMessageID string, authoredByUser bool) error {
-
 	// A controller transition deliberately has a short interval with no writer.
 	// Queue internal/lifecycle sends durably instead of racing either controller
 	// or dropping coordination work; the transition worker drains this outbox

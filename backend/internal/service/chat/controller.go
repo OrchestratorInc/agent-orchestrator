@@ -1445,8 +1445,6 @@ func (c *Controller) sendLocked(
 		}, nil
 	}
 
-	// After startup releases, a concurrent new send must not overtake the
-	// opening turn already waiting in the durable queue.
 	return c.dispatch(ctx, turnID, msg, now)
 }
 

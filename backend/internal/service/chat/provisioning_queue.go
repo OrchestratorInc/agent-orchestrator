@@ -123,12 +123,3 @@ func (s *Service) DrainQueued(ctx context.Context, id domain.SessionID) error {
 	}
 	return controller.drain(ctx)
 }
-
-type startupDeliveryContextKey struct{}
-
-// DrainStartupQueued admits only the manager-owned drain while ordinary
-// provider input remains durably held. The controller's send lock still
-// serializes dispatch with all other callers.
-func (s *Service) DrainStartupQueued(ctx context.Context, id domain.SessionID) error {
-	return s.DrainQueued(context.WithValue(ctx, startupDeliveryContextKey{}, true), id)
-}

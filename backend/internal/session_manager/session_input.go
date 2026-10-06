@@ -33,7 +33,6 @@ var _ sessionguard.InputLease = (*Manager)(nil)
 // close admission and wait for every already-admitted write to finish.
 func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok bool) {
 	id = domain.SessionID(strings.TrimSpace(string(id)))
-
 	m.agentOpMu.Lock()
 	if m.agentOperationActiveLocked(id) && !m.agentSwitchDecisionInputAllowedLocked(id) {
 		m.agentOpMu.Unlock()

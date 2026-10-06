@@ -1730,6 +1730,12 @@ func (c *SessionsController) kill(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, KillSessionResponse{OK: true, SessionID: sessionID(r), Freed: freed})
 }
 
+// rollback undoes a partially-completed spawn: if the session row is still in
+// seed state (no workspace, no runtime handle yet), the row is deleted
+// outright. If anything observable has landed it falls back to Kill so the
+// runtime/workspace are torn down. Used by `ao spawn --claim-pr` to undo a
+// session whose claim step failed, avoiding the orphan terminated row a
+// plain Kill would leave behind.
 func (c *SessionsController) rollback(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/rollback")
