@@ -7464,6 +7464,69 @@ paths:
       summary: Resolve an external review comment thread
       tags:
       - reviews
+  /api/v1/sessions/{sessionId}/reviews/findings/resolve:
+    post:
+      operationId: resolveReviewFindings
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveReviewFindingsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveReviewFindingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Resolve a worker's AO review findings
+      tags:
+      - reviews
   /api/v1/sessions/{sessionId}/reviews/kill:
     post:
       operationId: killReviewSession
@@ -12653,6 +12716,10 @@ components:
           items:
             $ref: '#/components/schemas/DomainReviewerSurface'
           type: array
+        findings:
+          items:
+            $ref: '#/components/schemas/ReviewFinding'
+          type: array
         reviewerActivityState:
           enum:
           - active
@@ -12680,6 +12747,7 @@ components:
       - reviews
       - runs
       - activeReviewers
+      - findings
       type: object
     ListSessionMemoryResponse:
       properties:
@@ -13620,6 +13688,33 @@ components:
       required:
       - action
       type: object
+    ResolveReviewFindingsRequest:
+      properties:
+        actorSessionId:
+          description: AO session resolving the findings (the worker or an orchestrator
+            of its project). Empty when a person resolves them.
+          type: string
+        findingIds:
+          description: Ids of the worker's AO review findings to resolve.
+          items:
+            type: string
+          type: array
+        note:
+          description: 'How the finding was handled: what changed, or why no change
+            is needed.'
+          type: string
+      required:
+      - findingIds
+      type: object
+    ResolveReviewFindingsResponse:
+      properties:
+        findings:
+          items:
+            $ref: '#/components/schemas/ReviewFinding'
+          type: array
+      required:
+      - findings
+      type: object
     RestoreReviewResponse:
       properties:
         reviewerHandleId:
@@ -13695,6 +13790,57 @@ components:
         turnId:
           type: string
       type: object
+    ReviewFinding:
+      properties:
+        body:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        line:
+          type: integer
+        ordinal:
+          type: integer
+        path:
+          type: string
+        prUrl:
+          type: string
+        resolutionNote:
+          type: string
+        resolvedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        resolvedBySessionId:
+          type: string
+        runId:
+          type: string
+        sessionId:
+          type: string
+        status:
+          enum:
+          - open
+          - resolved
+          - superseded
+          type: string
+        supersededByRunId:
+          type: string
+        targetSha:
+          type: string
+      required:
+      - id
+      - runId
+      - sessionId
+      - prUrl
+      - targetSha
+      - ordinal
+      - body
+      - status
+      - createdAt
+      type: object
     ReviewRun:
       properties:
         autoInjectReview:
@@ -13718,6 +13864,8 @@ components:
         id:
           type: string
         prUrl:
+          type: string
+        providerPostError:
           type: string
         reviewId:
           type: string
@@ -15097,6 +15245,22 @@ components:
       - sourceGenerationId
       - handoff
       type: object
+    SubmitReviewFinding:
+      properties:
+        body:
+          description: What must change and why.
+          type: string
+        line:
+          description: Line in path the finding is anchored to; 0 for the whole file
+            or a design-level finding.
+          type: integer
+        path:
+          description: Changed file the finding is about; empty for a design-level
+            finding.
+          type: string
+      required:
+      - body
+      type: object
     SubmitReviewInput:
       properties:
         body:
@@ -15120,10 +15284,17 @@ components:
     SubmitReviewItem:
       properties:
         body:
-          description: Review body recorded by AO. Required for changes_requested.
+          description: Review summary recorded by AO. Required for changes_requested.
           type: string
+        findings:
+          description: Changes the reviewer requires, each tracked and resolved in
+            AO. A changes_requested result needs at least one; an approval has none.
+          items:
+            $ref: '#/components/schemas/SubmitReviewFinding'
+          type: array
         githubReviewId:
-          description: Id of the GitHub PR review the reviewer posted, if any.
+          description: Id of a GitHub PR review the reviewer posted itself. Only reviewers
+            started before findings moved into AO send this.
           type: string
         runId:
           description: Review run id being completed.

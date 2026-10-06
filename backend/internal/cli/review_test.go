@@ -736,3 +736,61 @@ func TestReviewListDefaultsToCallingSession(t *testing.T) {
 		t.Fatalf("path = %q, want the calling session", capture.path)
 	}
 }
+
+func TestReviewResolveSendsFindingsNoteAndActingSession(t *testing.T) {
+	cfg := setReviewEnv(t)
+	t.Setenv("AO_SESSION_ID", "mer-orc")
+	srv, capture := reviewServer(t, http.StatusOK, `{"findings":[{"id":"f-1","status":"resolved"},{"id":"f-2","status":"resolved"}]}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, aliveDeps(), "review", "resolve", "f-1", "f-2", "--session", "mer-1", "--note", "fixed in 1a2b")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if capture.path != "/api/v1/sessions/mer-1/reviews/findings/resolve" {
+		t.Fatalf("path = %q", capture.path)
+	}
+	var body resolveFindingsRequest
+	if err := json.Unmarshal([]byte(capture.body), &body); err != nil {
+		t.Fatalf("decode body %q: %v", capture.body, err)
+	}
+	if len(body.FindingIDs) != 2 || body.Note != "fixed in 1a2b" || body.ActorSessionID != "mer-orc" {
+		t.Fatalf("body = %+v", body)
+	}
+	if !strings.Contains(out, "resolved 2 finding(s) for mer-1") {
+		t.Fatalf("stdout = %q", out)
+	}
+}
+
+func TestReviewResolveRefusesInsideReviewerAndNeedsASession(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, capture := reviewServer(t, http.StatusOK, `{"findings":[]}`)
+	writeRunFileFor(t, cfg, srv)
+
+	if _, _, err := executeCLI(t, aliveDeps(), "review", "resolve", "f-1"); ExitCode(err) != 2 {
+		t.Fatalf("outside a session without --session: err=%v, want usage error", err)
+	}
+	t.Setenv("AO_REVIEW_SESSION_ID", "review-1")
+	_, _, err := executeCLI(t, aliveDeps(), "review", "resolve", "f-1", "--session", "mer-1")
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "cannot run inside a reviewer") {
+		t.Fatalf("err = %v, want the reviewer refusal", err)
+	}
+	if strings.Contains(capture.path, "/reviews/") {
+		t.Fatalf("no resolve request expected, got %s", capture.path)
+	}
+}
+
+func TestReviewListShowsOpenFindingsWithIDs(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, _ := reviewServer(t, http.StatusOK, `{"reviews":[{"prUrl":"u","prNumber":5,"status":"changes_requested","latestRun":{"id":"run-1","verdict":"changes_requested"}}],
+		"findings":[{"id":"f-open","path":"greet.js","line":12,"body":"add tests\nmore detail","status":"open"},{"id":"f-done","body":"done","status":"resolved"}]}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, aliveDeps(), "review", "ls", "mer-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, "f-open  greet.js:12  add tests") || strings.Contains(out, "f-done") || strings.Contains(out, "more detail") {
+		t.Fatalf("stdout = %q", out)
+	}
+}

@@ -184,6 +184,9 @@ type SessionReviews struct {
 	// selected reviewer first, so clients can open each of several reviewers
 	// working on the same worker at once.
 	ActiveReviewers []domain.ReviewerSurface
+	// Findings is every finding AO's reviewer filed for this worker, oldest
+	// first, including resolved and superseded history.
+	Findings []domain.ReviewFinding
 }
 
 // CancelResult is the review state after a reviewer pane cancellation.

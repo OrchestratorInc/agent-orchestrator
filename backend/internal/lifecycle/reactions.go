@@ -276,6 +276,14 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 			return err
 		}
 	}
+	// AO's own review passes reach the worker through AO, not as PR comments
+	// (#6300). A pass that finished while the worker could not take a message
+	// is retried here, on the PR's next observation, as well as by the sweep.
+	if !needsInput {
+		if err := m.DeliverReviewRuns(ctx, id, o.URL); err != nil {
+			return err
+		}
+	}
 	// Surface deferred policy/parent-stack read errors only after independent
 	// nudges have been sent, so one failed lookup cannot hide another reaction.
 	if ciPolicyErr != nil {
@@ -608,6 +616,11 @@ func prCommentObservations(comments []domain.PullRequestComment) []ports.PRComme
 	out := make([]ports.PRCommentObservation, 0, len(comments))
 	for _, comment := range comments {
 		if !domain.IsActionableReviewComment(comment.Resolved, comment.IsBot, comment.File, comment.Line) {
+			continue
+		}
+		// The worker's own reply on a thread answers feedback; delivering it back
+		// as review work is the loop #6300 (and #5574) describe.
+		if comment.OwnReply {
 			continue
 		}
 		out = append(out, ports.PRCommentObservation{

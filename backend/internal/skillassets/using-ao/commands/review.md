@@ -18,7 +18,16 @@ does not authorize merging.
 ao review <subcommand> [args] [flags]
 ```
 
-The review loop can be inspected, submitted, cancelled, or triggered again.
+The review loop can be inspected, submitted, cancelled, triggered again, and its
+findings resolved.
+
+AO's reviewer files each change it requires as a **finding in AO**, not as a
+GitHub review thread. AO posts one summary comment on the PR, then delivers the
+verdict and the open findings, with their ids, to the worker once. The worker
+resolves each finding in AO with `ao review resolve` and does not reply on
+GitHub for them. Review comments from people and bots on GitHub are still
+forwarded as before; a worker's own replies on those threads are not forwarded
+back to it.
 
 ## Subcommands
 
@@ -38,6 +47,8 @@ ao review ls [worker-session-id] [flags]
 | Flag | Meaning | Default / Required |
 |---|---|---|
 | `--json` | Output reviews as JSON | - |
+
+The table lists each PR's review state; below it, every open finding with its id.
 
 **Example:**
 
@@ -61,11 +72,15 @@ ao review submit [worker-session-id] [flags]
 | Flag | Meaning | Default / Required |
 |---|---|---|
 | `--body string` | Review body: a path to a Markdown file, or `-` to read from stdin | - |
-| `--review-id string` | Id of the GitHub PR review just posted (the `.id` from the `gh api` POST that created the review) | - |
-| `--reviews string` | JSON review results array or object: a path, or `-` to read from stdin | - |
+| `--review-id string` | Id of a GitHub PR review the reviewer posted itself. Only reviewers started before findings moved into AO pass it | - |
+| `--reviews string` | JSON review results array or object: a path, or `-` to read from stdin. Each result takes `runId`, `verdict`, `body`, and `findings` (`[{"path", "line", "body"}]`) | - |
 | `--run string` | Review run id | Required |
 | `--session string` | Worker session id (or pass it as the positional argument) | - |
 | `--verdict string` | Review verdict: `approved` or `changes_requested` | Required |
+
+A `changes_requested` result needs at least one finding, and an approval has
+none (optional suggestions go in `body`). AO stores the findings with the
+verdict in one step, so retrying the same submission records nothing twice.
 
 If the local daemon is restarting when a result is submitted, AO retains the
 parsed result in memory and retries the same idempotent request for up to 30
@@ -81,8 +96,36 @@ ao review submit mer-3 --run review-run-1 --verdict approved
 ```
 
 ```bash
-# Submit a changes-requested review with a body from stdin
-echo "Please fix the null check on line 42." | ao review submit --session mer-3 --run review-run-1 --verdict changes_requested --body -
+# Submit a changes-requested review with its findings from stdin
+printf '%s' '{ "reviews": [ { "runId": "review-run-1", "verdict": "changes_requested", "body": "One correctness issue.", "findings": [ { "path": "src/auth.go", "line": 42, "body": "Check the token for nil before use." } ] } ] }' | ao review submit --session mer-3 --reviews -
+```
+
+---
+
+### ao review resolve
+
+Resolve one or more AO review findings with a note on how each was handled.
+The worker resolves its own findings (default: the calling session); an
+orchestrator passes `--session <worker>`, and only on a human's instruction.
+Reviewer panes cannot run it. A finding that a newer review replaced cannot be
+resolved, and resolving an already resolved finding changes nothing.
+
+**Syntax:**
+```
+ao review resolve <finding-id>... [flags]
+```
+
+**Flags:**
+
+| Flag | Meaning | Default / Required |
+|---|---|---|
+| `--note string` | What changed, or why no change is needed | - |
+| `--session string` | Worker session that owns the findings | The calling AO session |
+
+**Example:**
+
+```bash
+ao review resolve 6f1c0d2e-... --note "Added the nil check and a test."
 ```
 
 ---
@@ -142,11 +185,13 @@ again: the command exits 1 with `REVIEW_ALREADY_RUNNING` or
 `--rerun`. The trigger re-reads the PR from the provider first; if you
 just pushed and it still says already reviewed, wait a few seconds and retry. The same reviewer agent never runs twice on one head at the same time.
 
-By default the command turns on the worker session's review auto-inject. The
-reviewer posts an inline GitHub comment for each change it requires, and AO
-forwards those comments to the worker like any other review comments. An
-approval adds no comments, so check the verdict with `ao review ls`. If a run
-shows `failed` or `cancelled`, trigger again; nothing else reports it.
+By default the command turns on the worker session's review auto-inject, so AO
+delivers each finished pass to the worker once: the verdict, and for requested
+changes every open finding with its id. A pass that finishes while the worker
+is waiting for input is delivered when it can take messages again. A newer
+completed review of the same PR replaces the findings still open from earlier
+passes. If a run shows `failed` or `cancelled`, trigger again; nothing else
+reports it.
 
 **Examples:**
 

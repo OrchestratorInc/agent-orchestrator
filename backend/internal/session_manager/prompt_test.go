@@ -321,13 +321,18 @@ func TestBuildSystemPrompt_WorkerNativeReviewFollowsProjectPolicy(t *testing.T) 
 		"--rerun",
 		"Never spawn, or ask the orchestrator to spawn, a separate worker session to review your PR",
 		"An AO approval is not a GitHub approval",
+		"ao review resolve <finding-id> --note",
+		"Do not reply on GitHub for AO findings",
 	}
 
 	on := build(true, true)
-	for _, want := range append(common, "This project asks workers to request it", "run `ao review trigger` again for the new head", "findings arrive in this session as PR review comments", "check `ao review ls` for the verdict before reporting the work done", "`ao review trigger --pr <url>`", "If it shows the run failed or was cancelled") {
+	for _, want := range append(common, "This project asks workers to request it", "run `ao review trigger` again for the new head", "AO delivers the verdict to this session", "resolve each one with `ao review resolve`", "`ao review trigger --pr <url>`", "shows the run failed or was cancelled") {
 		if !strings.Contains(on, want) {
 			t.Fatalf("opted-in worker prompt missing %q:\n%s", want, on)
 		}
+	}
+	if strings.Contains(on, "PR review comments") {
+		t.Fatalf("worker prompt still says AO findings arrive as PR review comments:\n%s", on)
 	}
 	if strings.Contains(on, "leaves starting a review to people") {
 		t.Fatalf("opted-in worker prompt still asks before reviewing:\n%s", on)

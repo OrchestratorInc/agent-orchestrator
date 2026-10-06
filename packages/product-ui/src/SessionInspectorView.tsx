@@ -446,6 +446,8 @@ export type InspectorReviewRun = {
 	harness: string;
 	id: string;
 	inlineComments?: InspectorInlineComment[];
+	/** A problem with the run itself, such as its summary not reaching GitHub. */
+	notice?: string;
 	resolvedComments?: InspectorInlineComment[];
 	status: string;
 	url?: string | null;
@@ -464,8 +466,12 @@ export type InspectorInlineComment = {
 	autoInjectReview?: boolean;
 	body?: string;
 	file?: string;
+	/** Set for an AO review finding, which is resolved in AO, not on GitHub. */
+	findingId?: string;
 	line?: number;
 	pullRequestUrl?: string;
+	/** How a resolved or superseded AO finding was closed, and by whom. */
+	resolution?: string;
 	reviewerId?: string;
 	resolved?: boolean;
 	url?: string;
@@ -867,6 +873,7 @@ function ReviewRunHistory({
 					onSendReviewSummary={onSendReviewSummary}
 					onViewInlineCommentInFile={onViewInlineCommentInFile}
 					inlineComments={run.inlineComments}
+					notice={run.notice}
 					resolvedComments={run.resolvedComments}
 					source="agent"
 					testId="review-run-summary"
@@ -1141,9 +1148,10 @@ function InlineCommentList({
 	const [sendErrorCommentIds, setSendErrorCommentIds] = useState<Set<string>>(() => new Set());
 	const keyedComments = comments.map((comment, index) => ({
 		...comment,
-		id: `${reviewerId}:${comment.url ?? `${comment.file ?? ""}:${comment.line ?? ""}:${index}`}`,
+		id: comment.findingId ?? `${reviewerId}:${comment.url ?? `${comment.file ?? ""}:${comment.line ?? ""}:${index}`}`,
 		reviewerId: comment.reviewerId || reviewerId,
-		url: comment.url || reviewUrl,
+		// An AO finding has no GitHub comment of its own to link to.
+		url: comment.findingId ? comment.url : comment.url || reviewUrl,
 	}));
 	return (
 		<div className="divide-y divide-border/60">
@@ -1294,6 +1302,7 @@ function InlineCommentRow({
 				</span>
 				{body ? <span data-overflow-axis="horizontal" ref={previewRef} className={cn("mt-1 block min-w-0 text-muted-foreground", expanded ? "whitespace-pre-wrap break-words" : "truncate")}>{expanded ? body : preview}</span> : null}
 			</div>
+			{comment.resolution ? <p className="m-0 whitespace-pre-wrap break-words text-2xs text-passive" data-testid="finding-resolution">{comment.resolution}</p> : null}
 			{resolvedSuccess ? <p className="m-0 text-2xs font-medium text-success">{labels.resolvedReview}</p> : null}
 			{resolveError ? <p className="m-0 text-2xs font-medium text-error">{labels.resolveReviewFailed}</p> : null}
 			{sendError && !sent ? <p className="m-0 text-2xs font-medium text-error">{labels.sendToWorkerAgentError}</p> : null}
@@ -1309,6 +1318,7 @@ function ReviewSummaryCard({
 	isEarlier = false,
 	labels,
 	inlineComments = [],
+	notice,
 	onOpenInAOBrowser,
 	onResolveInlineComment,
 	onSendInlineComment,
@@ -1330,6 +1340,7 @@ function ReviewSummaryCard({
 	isEarlier?: boolean;
 	labels: InspectorReviewLabels;
 	inlineComments?: InspectorInlineComment[];
+	notice?: string;
 	onOpenInAOBrowser?: (url: string) => void;
 	onResolveInlineComment?: (comment: InspectorInlineComment & { reviewerId?: string }) => Promise<void> | void;
 	onSendInlineComment?: (comment: InspectorInlineComment & { reviewerId?: string }) => Promise<void> | void;
@@ -1375,6 +1386,7 @@ function ReviewSummaryCard({
 					testId={testId}
 				/>
 			) : null}
+			{notice ? <p className="m-0 text-2xs text-muted-foreground" data-testid="review-run-notice">{notice}</p> : null}
 			<ReviewLinks
 				clamped={isOverflowing}
 				expanded={expanded}

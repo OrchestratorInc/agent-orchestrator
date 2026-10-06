@@ -130,6 +130,9 @@ type PullRequestComment struct {
 	IsBot            bool
 	CreatedAt        time.Time
 	AutoInjectReview bool
+	// OwnReply marks a reply AO's own provider identity wrote on an existing
+	// review thread: the worker answering feedback, never feedback for it.
+	OwnReply bool
 }
 
 // IsActionableReviewComment reports whether a review comment should block

@@ -3499,3 +3499,28 @@ func TestMergeabilityFromProviderFacts_UnstableOutranksBlockers(t *testing.T) {
 		})
 	}
 }
+
+// A later comment from AO's own provider identity on a review thread is the
+// worker's reply and is marked so lifecycle never nudges it back (#6300). The
+// thread's first comment is review feedback whoever wrote it.
+func TestDomainFromObservationMarksOwnRepliesButNotThreadRoots(t *testing.T) {
+	obs := testObs(1)
+	obs.Review = ports.SCMReviewObservation{Threads: []ports.SCMReviewThreadObservation{
+		{ID: "t1", Comments: []ports.SCMReviewCommentObservation{{ID: "root", Author: "alice"}, {ID: "reply", Author: "agentwrapper"}, {ID: "human", Author: "alice"}}},
+		{ID: "t2", Comments: []ports.SCMReviewCommentObservation{{ID: "own-root", Author: "AgentWrapper"}}},
+	}}
+	_, _, _, _, comments := domainFromObservation("p-1", domain.SessionRecord{}, obs, domain.PullRequest{}, persistenceOptions{ownLogin: "AgentWrapper"}, time.Unix(1, 0).UTC())
+	own := map[string]bool{}
+	for _, c := range comments {
+		own[c.ID] = c.OwnReply
+	}
+	if !own["reply"] || own["root"] || own["human"] || own["own-root"] {
+		t.Fatalf("own-reply marks = %v, want only the later comment by AO's login", own)
+	}
+	_, _, _, _, comments = domainFromObservation("p-1", domain.SessionRecord{}, obs, domain.PullRequest{}, persistenceOptions{}, time.Unix(1, 0).UTC())
+	for _, c := range comments {
+		if c.OwnReply {
+			t.Fatalf("without a known identity nothing is marked: %+v", c)
+		}
+	}
+}
