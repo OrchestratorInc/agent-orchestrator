@@ -1,6 +1,6 @@
 import { act, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiBaseUrl } from "../../lib/api-client";
 import type { ConversationActivity } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
@@ -39,6 +39,7 @@ describe("render activity", () => {
 	afterEach(() => {
 		setApiBaseUrl(null);
 		document.documentElement.removeAttribute("data-theme");
+		document.documentElement.removeAttribute("data-style-theme");
 	});
 
 	it("frames the page sandboxed, from the daemon, with the theme in the fragment", () => {
@@ -74,5 +75,47 @@ describe("render activity", () => {
 			),
 		);
 		expect(frame().getAttribute("src")).toBe(src);
+	});
+
+	it("restyles when the style theme changes, without reloading the page", async () => {
+		const sheet = document.createElement("style");
+		sheet.textContent = 'html[data-style-theme="dracula"] { --color-bg-primary: rgb(40,42,54); }';
+		document.head.append(sheet);
+		try {
+			render(<ActivityRow activity={renderActivity()} />);
+			const src = frame().getAttribute("src");
+			const sent: unknown[] = [];
+			Object.defineProperty(frame().contentWindow!, "postMessage", {
+				configurable: true,
+				value: (message: unknown) => sent.push(message),
+			});
+			act(() => document.documentElement.setAttribute("data-style-theme", "dracula"));
+			await waitFor(() =>
+				expect(sent).toContainEqual(
+					expect.objectContaining({
+						method: "ui/notifications/host-context-changed",
+						params: expect.objectContaining({
+							styles: { variables: expect.objectContaining({ "--background": "rgb(40,42,54)" }) },
+						}),
+					}),
+				),
+			);
+			expect(frame().getAttribute("src")).toBe(src);
+		} finally {
+			sheet.remove();
+		}
+	});
+
+	it("does not re-read the theme when only the root style attribute changes", async () => {
+		render(<ActivityRow activity={renderActivity()} />);
+		const read = vi.spyOn(window, "getComputedStyle");
+		try {
+			act(() => document.documentElement.style.setProperty("--sidebar-chrome-width", "240px"));
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			expect(read).not.toHaveBeenCalled();
+		} finally {
+			read.mockRestore();
+			document.documentElement.style.cssText = "";
+		}
 	});
 });

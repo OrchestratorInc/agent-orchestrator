@@ -18,7 +18,7 @@ import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
-/** The app theme as handed to renders; follows data-theme flips on <html>. */
+/** The app theme as handed to renders; follows data-theme and data-style-theme flips on <html>. */
 function useRenderTheme(): RenderTheme {
 	const [theme, setTheme] = useState(readRenderTheme);
 	useEffect(() => {
@@ -28,7 +28,11 @@ function useRenderTheme(): RenderTheme {
 				return renderThemesEqual(current, next) ? current : next;
 			}),
 		);
-		observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "class", "style"] });
+		// Not `style`: only sidebar/zoom geometry writes it, on every animation tick.
+		observer.observe(document.documentElement, {
+			attributes: true,
+			attributeFilter: ["data-theme", "data-style-theme", "class"],
+		});
 		return () => observer.disconnect();
 	}, []);
 	return theme;
