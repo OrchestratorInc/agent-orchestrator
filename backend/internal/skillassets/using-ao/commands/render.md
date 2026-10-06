@@ -49,6 +49,8 @@ If the user must still read the page after the dev server stops, use `ao render`
   and its left edge lines up with your text.
 - Use a fluid width with no outer padding, card, border, or banner title. The
   page is part of your reply.
+- When the reader expands the page, it gets the full window width. Use a fluid width so the
+  page can use that width. AO centers a top-level block that has a maximum width.
 - Give charts fixed pixel heights. Do not size `html` or `body` with `100vh` or
   `height: 100%`: the frame grows to fit the page, and viewport heights make it
   grow again.
