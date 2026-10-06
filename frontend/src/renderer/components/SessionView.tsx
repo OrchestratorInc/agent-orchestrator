@@ -1201,8 +1201,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		sourcePreviewUrl: session?.previewUrl,
 		navUrl: browserView.navState.url,
 	});
-	// ⌘W on the browser's last tab closes the browser: dock a pop-out and
-	// collapse the inspector that hosts it.
 	const browserViewId = browserView.viewId;
 	useEffect(
 		() =>
