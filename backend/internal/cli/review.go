@@ -363,8 +363,8 @@ A head that is already being reviewed, or already has a review, is not reviewed
 again: the command fails and says why. Pass --rerun to review the same commit
 again, or to add a different --agent alongside one that is still running.
 
-The worker session's review auto-inject is turned on so the result (changes
-requested or approved) is delivered to the worker; pass --no-inject to leave
+The worker session's review auto-inject is turned on so the reviewer's inline
+review comments are delivered to the worker; pass --no-inject to leave
 that setting unchanged. AO's review is internal: an approval is not a GitHub
 approval and does not authorize merging.`,
 		Args: atMostOneArg,
@@ -432,7 +432,7 @@ func (c *commandContext) triggerReview(cmd *cobra.Command, args []string, opts r
 	}
 	switch {
 	case res.AutoInjectEnabled:
-		_, err := fmt.Fprintf(out, "turned on review auto-inject for %s; the result will be delivered to the session\n", session)
+		_, err := fmt.Fprintf(out, "turned on review auto-inject for %s; the reviewer's comments will be delivered to the session, and `ao review ls` shows the verdict\n", session)
 		return err
 	case opts.noInject:
 		_, err := fmt.Fprintf(out, "left review auto-inject unchanged for %s; check results with `ao review ls %s`\n", session, session)

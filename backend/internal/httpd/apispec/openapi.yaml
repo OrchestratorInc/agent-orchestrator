@@ -15177,7 +15177,7 @@ components:
           $ref: '#/components/schemas/AgentConfig'
         enableAutoInject:
           description: Turn on the worker session's review auto-inject once a pass
-            has started, so its results reach the worker.
+            has started, so the reviewer's PR review comments reach the worker.
           type: boolean
         harness:
           enum:

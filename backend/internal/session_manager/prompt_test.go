@@ -324,7 +324,7 @@ func TestBuildSystemPrompt_WorkerNativeReviewFollowsProjectPolicy(t *testing.T) 
 	}
 
 	on := build(true, true)
-	for _, want := range append(common, "This project asks workers to request it", "run `ao review trigger` again for the new head") {
+	for _, want := range append(common, "This project asks workers to request it", "run `ao review trigger` again for the new head", "findings arrive in this session as PR review comments", "check `ao review ls` for the verdict before reporting the work done") {
 		if !strings.Contains(on, want) {
 			t.Fatalf("opted-in worker prompt missing %q:\n%s", want, on)
 		}

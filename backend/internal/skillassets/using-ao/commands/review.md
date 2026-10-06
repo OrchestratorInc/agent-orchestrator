@@ -136,9 +136,10 @@ again: the command exits 1 with `REVIEW_ALREADY_RUNNING` or
 `REVIEW_HEAD_ALREADY_REVIEWED` and says what to do. Push new commits, or pass
 `--rerun`. The same reviewer agent never runs twice on one head at the same time.
 
-By default the command turns on the worker session's review auto-inject, so the
-result (changes requested or approved) is delivered to the worker. Check results
-with `ao review ls`.
+By default the command turns on the worker session's review auto-inject. The
+reviewer posts an inline GitHub comment for each change it requires, and AO
+forwards those comments to the worker like any other review comments. An
+approval adds no comments, so check the verdict with `ao review ls`.
 
 **Examples:**
 

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/reqid"
 	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
@@ -89,7 +88,6 @@ type Service struct {
 	store              Store
 	requester          ports.SCMReviewRequester
 	resolver           ports.SCMReviewResolver
-	lifecycle          Reducer
 	clock              func() time.Time
 	telemetry          ports.EventSink
 	codexOperationGate ports.CodexOperationGate
@@ -121,26 +119,14 @@ type Store interface {
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 	SetSessionAutoInjectReview(ctx context.Context, id domain.SessionID, autoInject bool, updatedAt time.Time) (bool, error)
 	UpdateReviewRunResult(ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error)
-	MarkReviewRunDelivered(ctx context.Context, id string, deliveredAt time.Time) (bool, error)
 	ListPRsBySession(ctx context.Context, id domain.SessionID) ([]domain.PullRequest, error)
 	ListPRReviews(ctx context.Context, prURL string) ([]domain.PullRequestReview, error)
 	ListPRComments(ctx context.Context, prURL string) ([]domain.PullRequestComment, error)
 	MarkPRCommentResolved(ctx context.Context, prURL, commentID string) (bool, error)
 }
 
-// Reducer is the lifecycle reaction boundary used after a review result has
-// been persisted.
-type Reducer interface {
-	ApplyReviewBatch(ctx context.Context, workerID domain.SessionID, batchID string, results []lifecycle.ReviewResult) (lifecycle.ReviewDeliveryOutcome, error)
-}
-
 // Option customizes the review service.
 type Option func(*Service)
-
-// WithLifecycleReducer wires post-submit review delivery through lifecycle.
-func WithLifecycleReducer(r Reducer) Option {
-	return func(s *Service) { s.lifecycle = r }
-}
 
 // WithClock overrides the service clock for tests.
 func WithClock(clock func() time.Time) Option {
@@ -446,7 +432,7 @@ type TriggerRequest struct {
 	RejectReviewedHead bool
 	Rerun              bool
 	// EnableAutoInject turns on the worker session's review auto-inject once a
-	// pass has started, so its results reach the worker.
+	// pass has started, so the reviewer's PR review comments reach the worker.
 	EnableAutoInject bool
 }
 
@@ -744,22 +730,10 @@ func (s *Service) SubmitMany(ctx context.Context, workerID domain.SessionID, rev
 		}
 		return nil, fmt.Errorf("%w: no submittable review runs in submission", ErrInvalid)
 	}
-	if s.lifecycle == nil {
-		return runs, nil
-	}
-	delivered, err := s.deliverSubmitted(ctx, workerID, runs)
-	if err != nil {
-		return nil, err
-	}
-	byID := make(map[string]domain.ReviewRun, len(delivered))
-	for _, run := range delivered {
-		byID[run.ID] = run
-	}
-	for i, run := range runs {
-		if deliveredRun, ok := byID[run.ID]; ok {
-			runs[i] = deliveredRun
-		}
-	}
+	// The result reaches the worker through the PR itself: the reviewer posts
+	// its review on the provider, and the SCM observer forwards unresolved
+	// review comments to the worker like any other reviewer's. AO does not send
+	// a second, separate verdict message.
 	return runs, nil
 }
 
@@ -878,89 +852,6 @@ func (s *Service) emitReviewNotification(ctx context.Context, run domain.ReviewR
 	if err := s.notifications.Notify(ctx, intent); err != nil {
 		slog.Default().WarnContext(ctx, "review notification failed", "session", run.SessionID, "run", run.ID, "err", err)
 	}
-}
-
-func (s *Service) deliverSubmitted(ctx context.Context, workerID domain.SessionID, runs []domain.ReviewRun) ([]domain.ReviewRun, error) {
-	deliverable, err := s.deliverableRuns(ctx, workerID, runs)
-	if err != nil {
-		return nil, err
-	}
-	if len(deliverable) == 0 {
-		return nil, nil
-	}
-	results := reviewResults(workerID, deliverable)
-	outcome, err := s.lifecycle.ApplyReviewBatch(ctx, workerID, results[0].BatchID, results)
-	if err != nil {
-		return nil, err
-	}
-	if outcome != lifecycle.ReviewDeliverySent {
-		return nil, nil
-	}
-	deliveredAt := s.clock()
-	delivered := make([]domain.ReviewRun, 0, len(deliverable))
-	for _, run := range deliverable {
-		updated, err := s.store.MarkReviewRunDelivered(ctx, run.ID, deliveredAt)
-		if err != nil {
-			return nil, err
-		}
-		if updated {
-			run.Status = domain.ReviewRunDelivered
-			run.DeliveredAt = &deliveredAt
-			delivered = append(delivered, run)
-		}
-	}
-	return delivered, nil
-}
-
-func (s *Service) deliverableRuns(ctx context.Context, workerID domain.SessionID, runs []domain.ReviewRun) ([]domain.ReviewRun, error) {
-	currentHeads, err := s.currentHeadsByPR(ctx, workerID)
-	if err != nil {
-		return nil, err
-	}
-	deliverable := make([]domain.ReviewRun, 0, len(runs))
-	for _, run := range runs {
-		// Both verdicts reach the worker when the session wants review feedback:
-		// requested changes are work to do, and an approval closes the loop for
-		// a worker that asked for the review instead of leaving it to poll.
-		if run.Status != domain.ReviewRunComplete || !run.Verdict.Valid() || run.DeliveredAt != nil || !run.AutoInjectReview {
-			continue
-		}
-		if currentHeads[run.PRURL] != run.TargetSHA {
-			continue
-		}
-		deliverable = append(deliverable, run)
-	}
-	return deliverable, nil
-}
-
-func reviewResults(workerID domain.SessionID, runs []domain.ReviewRun) []lifecycle.ReviewResult {
-	results := make([]lifecycle.ReviewResult, 0, len(runs))
-	for _, run := range runs {
-		results = append(results, lifecycle.ReviewResult{
-			RunID:          run.ID,
-			BatchID:        run.BatchID,
-			WorkerID:       workerID,
-			PRURL:          run.PRURL,
-			TargetSHA:      run.TargetSHA,
-			Verdict:        run.Verdict,
-			Body:           run.Body,
-			GithubReviewID: run.GithubReviewID,
-			DeliveredAt:    run.DeliveredAt,
-		})
-	}
-	return results
-}
-
-func (s *Service) currentHeadsByPR(ctx context.Context, workerID domain.SessionID) (map[string]string, error) {
-	prs, err := s.store.ListPRsBySession(ctx, workerID)
-	if err != nil {
-		return nil, err
-	}
-	current := make(map[string]string, len(prs))
-	for _, pr := range prs {
-		current[pr.URL] = pr.HeadSHA
-	}
-	return current, nil
 }
 
 // List returns a worker's review state.

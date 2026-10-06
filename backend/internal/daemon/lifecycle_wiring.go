@@ -344,7 +344,6 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 			reviewcore.WithReviewerChat(reviewerChat)),
 	})
 	reviewOpts := []reviewsvc.Option{
-		reviewsvc.WithLifecycleReducer(lcm),
 		reviewsvc.WithTelemetry(telemetry),
 		reviewsvc.WithNotificationSink(notifications),
 		reviewsvc.WithCodexAccountOperationGate(codexOperationGate),

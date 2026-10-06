@@ -5304,7 +5304,7 @@ export interface components {
         };
         TriggerReviewRequest: {
             agentConfig?: components["schemas"]["AgentConfig"];
-            /** @description Turn on the worker session's review auto-inject once a pass has started, so its results reach the worker. */
+            /** @description Turn on the worker session's review auto-inject once a pass has started, so the reviewer's PR review comments reach the worker. */
             enableAutoInject?: boolean;
             /** @enum {string} */
             harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
