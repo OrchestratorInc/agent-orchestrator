@@ -7,9 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -119,23 +117,24 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	if s.verifier == nil {
 		return advisory, nil
 	}
-	var sources []Plan
+	var plans []Plan
+	recordedMethod := ""
 	if s.ownsInstallation != nil && s.latestVersion != nil {
 		if planner, err := s.newRequestPlanner(ctx); err == nil {
-			recordedMethod := ""
 			if job.Status == StatusSucceeded {
 				recordedMethod = job.Method
 			}
-			sources = packageSources(planner.agentMethodPlans(target, AgentOperationInstall), recordedMethod)
+			plans = planner.agentMethodPlans(target, AgentOperationInstall)
 		}
 	}
-	if len(sources) == 0 && s.officialVersion == nil {
+	if len(plans) == 0 && s.officialVersion == nil {
 		return advisory, nil
 	}
 	verified, err := s.verifier.Verify(ctx, target)
 	if err != nil {
 		return advisory, nil //nolint:nilerr // An unverified binary cannot establish update availability.
 	}
+	sources := advisoryPackageSources(plans, recordedMethod, packageLayout(verified.ResolvedPath))
 	// The binary's package-manager root decides the source, so harnesses the
 	// user installed outside AO are covered as well as AO-installed ones.
 	var source Plan
@@ -188,78 +187,6 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		advisory.Status = UpdateStatusCurrent
 	}
 	return advisory, nil
-}
-
-// packageSources lists the npm and Homebrew recipes that can report a latest
-// version, with the method of a successful AO install tried first.
-func packageSources(plans []Plan, preferred string) []Plan {
-	sources := make([]Plan, 0, len(plans))
-	for _, plan := range plans {
-		if plan.Package == "" || (plan.Method != "npm" && plan.Method != "homebrew") {
-			continue
-		}
-		if plan.Method == preferred {
-			sources = append([]Plan{plan}, sources...)
-		} else {
-			sources = append(sources, plan)
-		}
-	}
-	return sources
-}
-
-// packageOwnsBinary traces symlinks to the package-manager installation root.
-// A merely successful AO job does not prove which executable an adapter uses.
-func packageOwnsBinary(commands ports.CommandRunner) func(context.Context, string, string, string, bool) (bool, error) {
-	return func(ctx context.Context, binaryPath, method, pkg string, cask bool) (bool, error) {
-		if commands == nil || binaryPath == "" {
-			return false, nil
-		}
-		var argv []string
-		switch method {
-		case "npm":
-			argv = []string{"npm", "root", "-g"}
-		case "homebrew":
-			argv = []string{"brew", "--prefix"}
-		default:
-			return false, nil
-		}
-		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		output := &capturedOutput{max: 4096}
-		if err := commands.Run(probeCtx, argv, output, output); err != nil {
-			return false, err
-		}
-		root := strings.TrimSpace(output.String())
-		if root == "" || !filepath.IsAbs(root) {
-			return false, nil
-		}
-		root, err := filepath.EvalSymlinks(root)
-		if err != nil {
-			return false, err
-		}
-		binary, err := filepath.EvalSymlinks(binaryPath)
-		if err != nil {
-			return false, err
-		}
-		roots := []string{}
-		if method == "npm" {
-			roots = append(roots, filepath.Join(root, pkg))
-		} else {
-			name := filepath.Base(pkg)
-			if cask {
-				roots = append(roots, filepath.Join(root, "Caskroom", name))
-			} else {
-				roots = append(roots, filepath.Join(root, "Cellar", name))
-			}
-		}
-		for _, candidate := range roots {
-			rel, err := filepath.Rel(candidate, binary)
-			if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-				return true, nil
-			}
-		}
-		return false, nil
-	}
 }
 
 func latestAvailableVersion(commands ports.CommandRunner) func(context.Context, string, string, bool) (string, error) {

@@ -13,6 +13,7 @@ const (
 	layoutHomebrew       = "homebrew"
 	layoutNPM            = "npm"
 	layoutPNPM           = "pnpm"
+	layoutYarn           = "yarn"
 	layoutBun            = "bun"
 	layoutUV             = "uv"
 	layoutPipx           = "pipx"
@@ -55,6 +56,8 @@ func layoutOf(path string) string {
 			return layoutWinget
 		case "pnpm":
 			return layoutPNPM
+		case "yarn":
+			return layoutYarn
 		case "node_modules":
 			return layoutNPM
 		case "uv":
@@ -123,14 +126,12 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 
 func (s *Service) methodOwnsBinary(ctx context.Context, plan Plan, path string) bool {
 	switch plan.Method {
-	case "npm", "homebrew":
+	case "npm", "homebrew", "bun", "uv", "pipx", "winget":
 		if s.ownsInstallation == nil || plan.Package == "" {
 			return false
 		}
 		owned, err := s.ownsInstallation(ctx, path, plan.Method, packageWithoutLatest(plan.Package), plan.PackageCask)
 		return err == nil && owned
-	case "bun", "uv", "pipx", "winget":
-		return packageLayout(path) == plan.Method
 	default:
 		// Vendor installers write their own locations; any package tool's
 		// layout means another installer owns this binary.

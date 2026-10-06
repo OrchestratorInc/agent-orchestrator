@@ -222,7 +222,7 @@ func TestUpdateAdvisoryRequiresVerifiedPackageOwnership(t *testing.T) {
 	}
 }
 
-func TestPackageOwnsBinaryTracesSymlinkIntoNPMPackage(t *testing.T) {
+func TestManagerOwnsBinaryTracesSymlinkIntoNPMPackage(t *testing.T) {
 	root := t.TempDir()
 	packageDir := filepath.Join(root, "node_modules", "@openai", "codex", "bin")
 	if err := os.MkdirAll(packageDir, 0o755); err != nil {
@@ -236,7 +236,7 @@ func TestPackageOwnsBinaryTracesSymlinkIntoNPMPackage(t *testing.T) {
 	if err := os.Symlink(actual, link); err != nil {
 		t.Fatal(err)
 	}
-	lookup := packageOwnsBinary(commandRunnerFunc(func(_ context.Context, argv []string, stdout, _ io.Writer) error {
+	lookup := managerOwnsBinary(commandRunnerFunc(func(_ context.Context, argv []string, stdout, _ io.Writer) error {
 		if len(argv) != 3 || argv[0] != "npm" || argv[1] != "root" || argv[2] != "-g" {
 			t.Fatalf("argv=%v", argv)
 		}

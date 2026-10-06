@@ -23,6 +23,7 @@ func TestLayoutOfRecognisesPackageToolDirectories(t *testing.T) {
 		"/Users/me/.volta/bin/codex":                                          layoutVersionManager,
 		`C:\Users\me\AppData\Local\Microsoft\WinGet\Packages\copilot.exe`:     layoutWinget,
 		"/Users/me/Library/pnpm/global/5/node_modules/@openai/codex":          layoutPNPM,
+		"/Users/me/.config/yarn/global/node_modules/@openai/codex/bin/codex":  layoutYarn,
 	} {
 		if got := layoutOf(path); got != want {
 			t.Errorf("layoutOf(%q) = %q, want %q", path, got, want)

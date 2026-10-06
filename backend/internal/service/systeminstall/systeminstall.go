@@ -411,7 +411,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		backgroundContext:   backgroundContext,
 		latestVersion:       latestAvailableVersion(commands),
 		officialVersion:     officialReleaseVersion(runtime.GOOS, runtime.GOARCH),
-		ownsInstallation:    packageOwnsBinary(commands),
+		ownsInstallation:    managerOwnsBinary(commands),
 		updateAdvisories:    make(map[Target]UpdateAdvisory),
 		updateAdvisoryCalls: make(map[Target]*updateAdvisoryCall),
 	}
