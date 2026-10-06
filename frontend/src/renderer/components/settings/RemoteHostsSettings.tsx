@@ -6,7 +6,7 @@ import { disconnectHost } from "../../lib/host-clients";
 import { requestRemoteHostsRefresh } from "../../hooks/useRemoteHosts";
 import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
 import { useCloudSession } from "../../lib/cloud-session";
-import { deleteAccountRemoteHost, listAccountRemoteHosts, saveAccountRemoteHost } from "../../lib/account-remote-hosts";
+import { deleteAccountRemoteHost, saveAccountRemoteHost } from "../../lib/account-remote-hosts";
 import { useSettings } from "../../hooks/useSettings";
 import { useLocalSignInDialogStore } from "../../stores/local-signin-dialog-store";
 import { useUiStore } from "../../stores/ui-store";
@@ -93,8 +93,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			if (editing && !editing.hostId && editing.url !== nextUrl) await aoBridge.remotes.remove(editing.url);
 			const current = (await aoBridge.remotes.list()).find((item) => item.url === nextUrl);
 			if (current?.hostId && cloudBaseUrl) {
-				const registered = (await listAccountRemoteHosts(cloudBaseUrl)).find((item) => item.hostId === current.hostId);
-				const token = password ? await aoBridge.remotes.issueAccountToken(current.url) : registered?.token ?? await aoBridge.remotes.issueAccountToken(current.url);
+				const token = await aoBridge.remotes.issueAccountToken(current.url);
 				await saveAccountRemoteHost(cloudBaseUrl, { hostId: current.hostId, label: current.label, url: current.url, token });
 			}
 			await load();

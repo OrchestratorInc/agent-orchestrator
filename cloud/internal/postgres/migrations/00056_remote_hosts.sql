@@ -10,6 +10,8 @@ CREATE TABLE ao_remote_hosts (
     PRIMARY KEY (user_id, host_id)
 );
 
+CREATE INDEX ao_remote_hosts_host_id_idx ON ao_remote_hosts (host_id);
+
 ALTER TABLE ao_remote_hosts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ao_remote_hosts FORCE ROW LEVEL SECURITY;
 CREATE POLICY ao_remote_hosts_owner_policy ON ao_remote_hosts

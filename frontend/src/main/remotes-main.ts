@@ -23,7 +23,7 @@ export type RemotesIpcDeps = {
 	file: string;
 	registry: RemoteRegistry;
 	requireAccount: () => Promise<void>;
-	getAccountId?: () => Promise<string>;
+	getAccountId: () => Promise<string>;
 	probe?: (entry: RemoteEntry) => Promise<RemoteHealth>;
 	identity?: (entry: Pick<RemoteEntry, "url">) => Promise<string>;
 };
@@ -60,7 +60,6 @@ export function registerRemotesIpc(
 	};
 	const accountID = async () => {
 		await requireAccount();
-		if (!getAccountId) return ""; // Legacy test harnesses do not have an account identity.
 		const id = await getAccountId();
 		if (!id) throw new Error("Sign in to AO Cloud to use remote hosts.");
 		return id;
@@ -69,9 +68,9 @@ export function registerRemotesIpc(
 		const account = await accountID();
 		const entries = await readRemotes(file);
 		if (!account) return entries;
-		// An old unowned credential cannot safely be attributed to whichever
-		// account happens to sign in first. It must be paired again explicitly.
-		return entries.filter((item) => item.accountUserId === account);
+		// Legacy rows stay local-only: show them without attributing them to the
+		// signed-in account, while keeping other accounts isolated.
+		return entries.filter((item) => !item.accountUserId || item.accountUserId === account);
 	};
 
 	ipcMain.handle("remotes:list", () => ordered(async () => toHostViews(await owned())));
@@ -86,7 +85,7 @@ export function registerRemotesIpc(
 			if (error instanceof IncompatibleRemoteVersionError) return "incompatible" as RemoteHealth;
 			return "offline" as RemoteHealth;
 		}
-		const entry = { label: input.label, url: input.url, password: input.password, hostId, accountUserId: account || undefined };
+		const entry = { label: input.label, url: input.url, password: input.password, hostId, accountUserId: account };
 		const health = await checkedProbe(entry);
 		if (health === "online") {
 			const previous = (await owned()).find((saved) => saved.hostId === hostId);
@@ -110,13 +109,12 @@ export function registerRemotesIpc(
 		const entry = await findRemote(file, url, hostId);
 		const health = await checkedProbe(entry);
 		if (health !== "online") throw new Error(`host ${url} is ${health}`);
-		await requireAccount();
 		return registry.connect(entry);
 	}));
 	ipcMain.handle("remotes:importAccountHost", async (_event, expectedAccountId: string, input: RemoteEntry) => ordered(async () => {
 		const account = await accountID();
 		if (!account || account !== expectedAccountId || !input.hostId || !/^[0-9a-f]{64}$/.test(input.password)) throw new Error("Invalid account host credential.");
-		const local = (await owned()).find((entry) => entry.hostId === input.hostId);
+		const local = (await readRemotes(file)).find((entry) => entry.hostId === input.hostId);
 		// Keep the original password on the machine that performed pairing; a
 		// Cloud refresh must not replace it with the narrower account token.
 		if (local?.password && !/^[0-9a-f]{64}$/.test(local.password)) {
@@ -137,14 +135,14 @@ export function registerRemotesIpc(
 		}
 	}));
 	ipcMain.handle("remotes:issueAccountToken", async (_event, url: string) => ordered(async () => {
-		const entry = (await owned()).find((saved) => saved.url === url);
+		const account = await accountID();
+		const entry = (await readRemotes(file)).find((saved) => saved.url === url && (!saved.accountUserId || saved.accountUserId === account));
 		if (!entry?.hostId) throw new Error("Pair this host before linking it to your account.");
-		if (/^[0-9a-f]{64}$/.test(entry.password)) throw new Error("Re-pair with the machine password to relink this host.");
 		if (await identity(entry) !== entry.hostId) throw new Error("Remote host identity changed; connection refused.");
 		const endpoint = new URL("/api/v1/remote-host/account-token", entry.url);
 		const response = await fetch(endpoint, {
 			method: "POST", redirect: "error",
-			headers: { Authorization: `Bearer ${entry.password}`, "X-AO-Expected-Host-ID": entry.hostId },
+			headers: { Authorization: `Bearer ${entry.password}`, "X-AO-Expected-Host-ID": entry.hostId, "X-AO-Account-ID": account },
 			signal: AbortSignal.timeout(8_000),
 		});
 		if (!response.ok) throw new Error("The host did not accept account linking. Check its password and version.");

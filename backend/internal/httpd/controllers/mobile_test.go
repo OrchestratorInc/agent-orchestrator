@@ -91,10 +91,10 @@ func TestIssueAccountTokenRequiresPairingPasswordAndPersistsHash(t *testing.T) {
 	}
 	lan := &fakeLAN{running: true}
 	bridge := &BridgeService{LAN: lan, ConfigPath: path, HostID: "h_test"}
-	if _, err := bridge.IssueAccountToken("wrong"); err == nil {
+	if _, err := bridge.IssueAccountToken("wrong", "user-a"); err == nil {
 		t.Fatal("wrong password accepted")
 	}
-	issued, err := bridge.IssueAccountToken("secret12")
+	issued, err := bridge.IssueAccountToken("secret12", "user-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestIssueAccountTokenRequiresPairingPasswordAndPersistsHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !mobilebridge.PasswordMatches(state.AccountTokenHash, issued.Token) || lan.accountHash != state.AccountTokenHash {
+	if !mobilebridge.PasswordMatches(state.AccountTokenHash, issued.Token) || state.AccountToken != issued.Token || state.AccountTokenOwner != "user-a" || lan.accountHash != state.AccountTokenHash {
 		t.Fatal("account credential was not persisted and armed")
 	}
 	if state.Password != "secret12" {
@@ -121,7 +121,7 @@ func TestPasswordRotationRevokesAccountToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := bridge.IssueAccountToken(status.Password); err != nil {
+	if _, err := bridge.IssueAccountToken(status.Password, "user-a"); err != nil {
 		t.Fatal(err)
 	}
 	if lan.accountHash == "" {
@@ -136,6 +136,36 @@ func TestPasswordRotationRevokesAccountToken(t *testing.T) {
 	}
 	if state.AccountTokenHash != "" || lan.accountHash != "" {
 		t.Fatal("password rotation left the account token valid")
+	}
+}
+
+func TestIssueAccountTokenReusesCredentialForSameAccount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mobile", "config.json")
+	if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "secret12"}); err != nil {
+		t.Fatal(err)
+	}
+	lan := &fakeLAN{running: true}
+	bridge := &BridgeService{LAN: lan, ConfigPath: path, HostID: "h_test"}
+	first, err := bridge.IssueAccountToken("secret12", "user-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := bridge.IssueAccountToken("secret12", "user-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Token != first.Token {
+		t.Fatalf("same-account retry rotated token: first=%q second=%q", first.Token, second.Token)
+	}
+	third, err := bridge.IssueAccountToken("secret12", "user-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Token == first.Token {
+		t.Fatal("different account did not rotate token")
+	}
+	if got, err := bridge.IssueAccountToken(third.Token, "user-b"); err != nil || got.Token != third.Token {
+		t.Fatalf("current token retry = %+v, %v; want current credential", got, err)
 	}
 }
 

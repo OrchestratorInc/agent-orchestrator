@@ -32,36 +32,36 @@ function endpoint(raw: string): Endpoint | null {
 // A sign-out waits for the current sync before clearing its local credentials.
 let pendingSync: Promise<void> = Promise.resolve();
 
+function enqueue<T>(operation: () => Promise<T>): Promise<T> {
+	const next = pendingSync.catch(() => {}).then(operation);
+	pendingSync = next.then(() => undefined, () => undefined);
+	return next;
+}
+
 /** Forgetting on this phone must not re-import the host on the next account sync. */
 export function ignoreAccountHost(accountId: string, hostId: string): Promise<void> {
-	const next = pendingSync.catch(() => {}).then(async () => {
+	return enqueue(async () => {
 		const ids = await ignoredHosts(accountId);
 		ids.add(hostId);
 		await AsyncStorage.setItem(ignoredKey(accountId), JSON.stringify([...ids]));
 	});
-	pendingSync = next.catch(() => {});
-	return next;
 }
 
 /** An explicit re-pair restores a previously hidden machine on this phone. */
 export function unignoreAccountHost(accountId: string, hostId: string): Promise<void> {
-	const next = pendingSync.catch(() => {}).then(async () => {
+	return enqueue(async () => {
 		const ids = await ignoredHosts(accountId);
 		if (!ids.delete(hostId)) return;
 		await AsyncStorage.setItem(ignoredKey(accountId), JSON.stringify([...ids]));
 	});
-	pendingSync = next.catch(() => {});
-	return next;
 }
 
 /** Import only account-owned machines; never replace a manual pairing token. */
 export function syncAccountHosts(account: Account): Promise<void> {
-	const next = pendingSync.catch(() => {}).then(async () => {
+	return enqueue(async () => {
 		if ((await loadAccount())?.id !== account.id) return;
 		await performSync(account);
 	});
-	pendingSync = next.catch(() => {});
-	return next;
 }
 
 async function performSync(account: Account): Promise<void> {
@@ -83,7 +83,7 @@ async function performSync(account: Account): Promise<void> {
 				const found = await identity.json() as { hostId?: string };
 				if (!identity.ok || found.hostId !== manual.id) continue;
 				const claim = await fetch(`${base}/api/v1/remote-host/account-token`, {
-					method: "POST", headers: { Authorization: `Bearer ${manual.token}`, "X-AO-Expected-Host-ID": manual.id },
+					method: "POST", headers: { Authorization: `Bearer ${manual.token}`, "X-AO-Expected-Host-ID": manual.id, "X-AO-Account-ID": account.id },
 					signal: AbortSignal.timeout(5_000),
 				});
 				if (!claim.ok) continue;

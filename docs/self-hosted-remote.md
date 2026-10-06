@@ -65,8 +65,9 @@ Pairing does not copy GitHub credentials from your laptop.
    **Settings → Harness**, select the VM to install/sign in to an agent there.
 
 The host publishes a changed quick-tunnel address to AO Cloud automatically.
-Desktop connections saved before account linking are not claimed for whichever
-account signs in next; re-pair one time under **Settings → Remote hosts**.
+Desktop connections saved before account linking keep their original pairing
+password and are not attributed to whichever account signs in next. Re-pair
+only if you want to replace that local credential with an account-scoped one.
 
 ## Status and other hosts
 
