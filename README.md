@@ -229,7 +229,8 @@ Join [Discord](https://discord.com/invite/UZv7JjxbwG) for help and contributor d
 
 ## Product telemetry
 
-Orchestrator.inc collects limited usage and reliability telemetry designed to exclude project content. Events can include a project's GitHub owner or your signed-in GitHub username, and PostHog may derive coarse location from an IP address; telemetry is therefore not fully anonymous. [Learn what is collected and how to turn off desktop telemetry](docs/telemetry.md).
+Product telemetry is designed to exclude your code, prompts, agent conversations, and credentials.\
+Orchestrator.inc collects limited usage and reliability telemetry to improve the product. [Learn what we collect and how to turn off desktop telemetry](docs/telemetry.md).
 
 ## License
 
