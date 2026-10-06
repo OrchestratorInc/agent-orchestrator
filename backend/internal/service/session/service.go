@@ -186,8 +186,8 @@ type Service struct {
 	telemetry           ports.EventSink
 	logger              *slog.Logger
 	backgroundContext   context.Context
-	agentReadiness      ports.AgentReadinessProvider
 	runBackground       func(func())
+	agentReadiness      ports.AgentReadinessProvider
 	orchestratorLocksMu sync.Mutex
 	orchestratorLocks   map[domain.ProjectID]*sync.Mutex
 	workspaceCache      *workspaceCache
@@ -208,10 +208,7 @@ type Service struct {
 	// githubIdentity optionally resolves the operator's authenticated GitHub
 	// account so the handle rides along with product telemetry. Nil disables it
 	// and the emitter degrades to anonymous.
-	githubIdentity         ports.ScopedIdentityResolver
-	titleRefinementSlots   chan struct{}
-	titleRefinementMu      sync.Mutex
-	titleRefinementCancels map[domain.SessionID]context.CancelFunc
+	githubIdentity ports.ScopedIdentityResolver
 }
 
 // SetChatProviderPreserver wires the live Chat lifetime observation after both
@@ -238,12 +235,11 @@ type Deps struct {
 	DataDir   string
 	Telemetry ports.EventSink
 	Logger    *slog.Logger
+	// BackgroundContext owns best-effort workspace refresh work. It defaults
+	// to context.Background for non-daemon callers.
+	BackgroundContext context.Context
 	// AgentReadiness coordinates advisory native harness checks before launch.
 	AgentReadiness ports.AgentReadinessProvider
-	// BackgroundContext owns best-effort work that must survive an HTTP request
-	// returning but stop with the daemon. It defaults to context.Background for
-	// focused service tests and non-daemon callers.
-	BackgroundContext context.Context
 	// SignalCapable gates the no_signal status downgrade per harness; daemon
 	// wiring passes activitydispatch.SupportsHarness. Left nil, no session is
 	// ever downgraded to no_signal.
@@ -259,7 +255,8 @@ func NewWithDeps(d Deps) *Service {
 	if backgroundContext == nil {
 		backgroundContext = context.Background()
 	}
-	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}}
+	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, logger: d.Logger, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity}
+	s.backgroundContext = backgroundContext
 	if s.prClaimer == nil {
 		if w, ok := d.Store.(ports.PRClaimer); ok {
 			s.prClaimer = w
@@ -801,7 +798,6 @@ func restoreModeView(mode sessionmanager.RestoreMode) RestoreModeView {
 
 // Kill delegates terminal intent and teardown to the internal manager.
 func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
-	s.cancelTitleRefinement(id)
 	freed, err := s.manager.Kill(ctx, id)
 	return freed, toAPIError(err)
 }
@@ -811,7 +807,6 @@ func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 // when the claim step fails, avoiding the orphan terminated row that a plain
 // Kill would leave behind.
 func (s *Service) RollbackSpawn(ctx context.Context, id domain.SessionID) (RollbackOutcome, error) {
-	s.cancelTitleRefinement(id)
 	deleted, killed, err := s.manager.RollbackSpawn(ctx, id)
 	if err != nil {
 		return RollbackOutcome{}, toAPIError(err)
@@ -848,6 +843,39 @@ func (s *Service) Rename(ctx context.Context, id domain.SessionID, displayName s
 		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
 	return nil
+}
+
+// RenameIfDisplayName applies an automatic rename only while the provisional
+// display name is still present. A concurrent user rename therefore wins.
+func (s *Service) RenameIfDisplayName(ctx context.Context, id domain.SessionID, currentDisplayName, displayName string) error {
+	if currentDisplayName == "" || strings.TrimSpace(currentDisplayName) != currentDisplayName {
+		return apierr.Invalid("EXPECTED_DISPLAY_NAME_INVALID", "Expected display name must be non-empty and normalized", nil)
+	}
+	if utf8.RuneCountInString(currentDisplayName) > maxDisplayNameLen {
+		return apierr.Invalid("EXPECTED_DISPLAY_NAME_TOO_LONG", fmt.Sprintf("Expected display name must be %d characters or fewer", maxDisplayNameLen), nil)
+	}
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" {
+		return apierr.Invalid("DISPLAY_NAME_REQUIRED", "Display name is required", nil)
+	}
+	if utf8.RuneCountInString(displayName) > maxDisplayNameLen {
+		return apierr.Invalid("DISPLAY_NAME_TOO_LONG", fmt.Sprintf("Display name must be %d characters or fewer", maxDisplayNameLen), nil)
+	}
+	renamed, err := s.store.RenameSessionIfDisplayName(ctx, id, currentDisplayName, displayName, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("rename %s if unchanged: %w", id, err)
+	}
+	if renamed {
+		return nil
+	}
+	_, found, err := s.store.GetSession(ctx, id)
+	if err != nil {
+		return fmt.Errorf("check session %s after conditional rename: %w", id, err)
+	}
+	if !found {
+		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	return apierr.Conflict("SESSION_DISPLAY_NAME_CHANGED", "Session display name changed before the automatic rename", nil)
 }
 
 // SetPreview persists the browser preview URL for a session and returns the

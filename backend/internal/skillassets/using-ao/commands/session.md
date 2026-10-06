@@ -142,6 +142,7 @@ ao session rename <id> <name> [flags]
 | Flag | Meaning | Default / Required |
 |---|---|---|
 | `-p, --project string` | Project id to scope the lookup | - |
+| `--if-current-display-name string` | Rename only if the current display name matches this value | - |
 
 **Examples:**
 

@@ -567,6 +567,31 @@ func TestSessionRenameUpdatesDisplayName(t *testing.T) {
 	}
 }
 
+func TestSessionRenameIfDisplayNamePreservesManualRename(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", DisplayName: "Fix renderer"}
+	svc := &Service{store: st}
+
+	if err := svc.RenameIfDisplayName(context.Background(), "mer-1", "Fix renderer", "Worker title"); err != nil {
+		t.Fatalf("conditional rename: %v", err)
+	}
+	if got := st.sessions["mer-1"].DisplayName; got != "Worker title" {
+		t.Fatalf("display name = %q, want Worker title", got)
+	}
+
+	if err := svc.Rename(context.Background(), "mer-1", "User title"); err != nil {
+		t.Fatalf("manual rename: %v", err)
+	}
+	err := svc.RenameIfDisplayName(context.Background(), "mer-1", "Worker title", "Late worker title")
+	var apiError *apierr.Error
+	if !errors.As(err, &apiError) || apiError.Code != "SESSION_DISPLAY_NAME_CHANGED" {
+		t.Fatalf("conditional rename error = %v, want SESSION_DISPLAY_NAME_CHANGED", err)
+	}
+	if got := st.sessions["mer-1"].DisplayName; got != "User title" {
+		t.Fatalf("manual display name overwritten: %q", got)
+	}
+}
+
 func TestSessionRenameRejectsOverlongDisplayName(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer"}
@@ -4182,9 +4207,6 @@ func TestDelegateTaskPassesAttachmentsToSpawnConfig(t *testing.T) {
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
 	fc := &fakeCommander{}
 	svc := NewWithDeps(Deps{Manager: fc, Store: st})
-	// This test only inspects the worker spawn. Keep asynchronous title
-	// refinement from issuing a second Spawn against the recording fake.
-	svc.runBackground = func(func()) {}
 
 	_, err := svc.DelegateTask(context.Background(), DelegateTaskInput{
 		ProjectID:      "mer",

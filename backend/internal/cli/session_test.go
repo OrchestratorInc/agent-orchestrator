@@ -759,6 +759,38 @@ func TestSessionRename_SuccessWithProjectScope(t *testing.T) {
 	}
 }
 
+func TestSessionRenameCanRequireCurrentDisplayName(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var got sessionRenameRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal/telemetry/cli-invoked" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodPatch || r.URL.Path != "/api/v1/sessions/demo-1" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1","displayName":"Generated title"}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{}, "session", "rename", "demo-1", "Generated title", "--if-current-display-name", "Fix renderer")
+	if err != nil {
+		t.Fatalf("session rename failed: %v\nstderr=%s", err, errOut)
+	}
+	if got.DisplayName != "Generated title" || got.ExpectedDisplayName != "Fix renderer" {
+		t.Fatalf("rename request = %#v", got)
+	}
+}
+
 func TestSessionCommands_MissingIDIsUsageError(t *testing.T) {
 	setConfigEnv(t)
 	for _, sub := range []string{"get", "kill", "restore", "exit-agent", "resume-agent"} {
