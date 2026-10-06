@@ -59,6 +59,7 @@ import {
 	useCloudSessionQuery,
 	useWorkspaceQuery,
 	useWorkspaceSession,
+	workspaceQueryKey,
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
 import { cloudLifecycleStage } from "../lib/cloud-lifecycle";

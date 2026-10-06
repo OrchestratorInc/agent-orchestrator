@@ -469,6 +469,15 @@ describe("shell workspace startup", () => {
 		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(2));
 	});
 
+	it("keeps chat hibernation disabled when Developer Mode is off", async () => {
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
+		await renderShell();
+
+		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", {
+			body: { enabled: false },
+		}));
+	});
+
 	it("routes duplicate-path project adds to the registered project and shows a toast", async () => {
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
 		vi.mocked(apiClient.POST).mockResolvedValueOnce({
