@@ -578,7 +578,21 @@ func Run() error {
 		}
 		return fmt.Errorf("wire session service: %w", err)
 	}
-	testingSvc := wireTestingService(cfg, store, wiredSessMgr, testingProviders{})
+	testingDeps, err := configuredTestingProviders(cfg)
+	if err != nil {
+		return fmt.Errorf("wire testing providers: %w", err)
+	}
+	defer func() {
+		if testingDeps.Close == nil {
+			return
+		}
+		closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := testingDeps.Close(closeCtx); err != nil {
+			log.Error("testing desktop shutdown", "err", err)
+		}
+	}()
+	testingSvc := wireTestingService(cfg, store, wiredSessMgr, testingDeps)
 	defer testingSvc.Close()
 	sessionSvc.SetChatProviderPreserver(chatSvc.PreservesProviderOnRestart)
 	memoryReader := usagesvc.NewMemoryReader(usagesvc.MemoryReaderDeps{

@@ -66,6 +66,7 @@ type Recipe struct {
 	ID           string `json:"id"`
 	CheckoutPath string `json:"checkoutPath"`
 	Snapshot     string `json:"snapshot"`
+	DeliveryMode string `json:"deliveryMode,omitempty"`
 }
 
 // Deps supplies persistence, providers and target recipes.
@@ -78,6 +79,7 @@ type Deps struct {
 	Clock           Clock
 	Recipes         map[string]Recipe
 	TargetStateRoot string
+	EvidenceRoot    string
 }
 
 // CreateRunInput selects an issue, revision and configured recipe.

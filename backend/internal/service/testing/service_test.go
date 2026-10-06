@@ -81,6 +81,8 @@ type fakeProviders struct {
 	bindWrong                    bool
 	stopFail                     bool
 	screenshotHook               func(context.Context) error
+	inputFrames                  []domain.TestDesktopFrame
+	cleanupEvents                []string
 }
 
 func (p *fakeProviders) Start(_ context.Context, spec ports.TestingTargetSpec) (domain.TestTargetIdentity, error) {
@@ -99,6 +101,7 @@ func (p *fakeProviders) Stop(_ context.Context, _ domain.TestTargetIdentity) (po
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.stops++
+	p.cleanupEvents = append(p.cleanupEvents, "target_stop")
 	if p.stopFail {
 		return ports.TestingCleanupResult{State: domain.TestCleanupFailed, Leftovers: []string{"owned PID remains"}}, errors.New("stop failed")
 	}
@@ -129,12 +132,13 @@ func (p *fakeProviders) Screenshot(ctx context.Context, target domain.TestTarget
 	}
 	var pixels bytes.Buffer
 	_ = png.Encode(&pixels, image.NewRGBA(image.Rect(0, 0, 2, 2)))
-	return domain.TestScreenshot{Frame: domain.TestDesktopFrame{Target: target, Width: 2, Height: 2, Bounds: domain.TestWindowBounds{Width: 1, Height: 1}, CapturedAt: p.clock.Now()}, MIMEType: "image/png", Data: pixels.Bytes()}, nil
+	return domain.TestScreenshot{Frame: domain.TestDesktopFrame{Target: target, Width: 2, Height: 2, Scale: 2, CaptureHandle: "private-capture-receipt", Bounds: domain.TestWindowBounds{Width: 1, Height: 1}, CapturedAt: p.clock.Now()}, MIMEType: "image/png", Data: pixels.Bytes()}, nil
 }
-func (p *fakeProviders) Click(ctx context.Context, _ domain.TestTargetIdentity, _ domain.TestDesktopFrame, _ domain.TestClickRequest) (domain.TestActionResult, error) {
+func (p *fakeProviders) Click(ctx context.Context, _ domain.TestTargetIdentity, frame domain.TestDesktopFrame, _ domain.TestClickRequest) (domain.TestActionResult, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.clicks++
+	p.inputFrames = append(p.inputFrames, frame)
 	return domain.TestActionResult{Delivered: true}, ctx.Err()
 }
 func (p *fakeProviders) Type(ctx context.Context, t domain.TestTargetIdentity, f domain.TestDesktopFrame, _ domain.TestTypeRequest) (domain.TestActionResult, error) {
@@ -149,9 +153,11 @@ type fakeWorkers struct {
 	binding     WorkerBinding
 	request     WorkerLaunchRequest
 	skipPrepare bool
+	launches    int
 }
 
 func (w *fakeWorkers) LaunchTestingWorker(ctx context.Context, r WorkerLaunchRequest) (domain.SessionID, error) {
+	w.launches++
 	w.request = r
 	now := time.Now().UTC()
 	session, err := w.store.CreateSession(ctx, domain.SessionRecord{ProjectID: r.ProjectID, Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: now}, CreatedAt: now, UpdatedAt: now})
@@ -162,6 +168,36 @@ func (w *fakeWorkers) LaunchTestingWorker(ctx context.Context, r WorkerLaunchReq
 		w.binding, err = r.Prepare(ctx, session.ID)
 	}
 	return session.ID, err
+}
+
+type policyDesktop struct {
+	*fakeProviders
+	mode, gap string
+	starts    int
+}
+
+func (d *policyDesktop) DeliveryMode() string { return d.mode }
+func (d *policyDesktop) InputDeliveryMode(tool string) string {
+	if tool == "click" {
+		return "background"
+	}
+	return d.mode
+}
+func (d *policyDesktop) StartRecording(_ context.Context, _ domain.TestTargetIdentity, _ string) (ports.TestingRecordingResult, error) {
+	d.starts++
+	return ports.TestingRecordingResult{Gap: d.gap}, nil
+}
+func (d *policyDesktop) StopRecording(_ context.Context, _ domain.TestTargetIdentity) (ports.TestingRecordingResult, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.cleanupEvents = append(d.cleanupEvents, "recording_stop")
+	return ports.TestingRecordingResult{Gap: d.gap}, nil
+}
+func (d *policyDesktop) Release(_ context.Context, _ domain.TestTargetIdentity) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.cleanupEvents = append(d.cleanupEvents, "desktop_release")
+	return nil
 }
 
 type evidenceFault struct {
@@ -211,7 +247,7 @@ type fixture struct {
 	start    StartAttemptResult
 }
 
-func newFixture(t *testing.T) *fixture {
+func newFixture(t *testing.T, configure ...func(*Deps)) *fixture {
 	t.Helper()
 	store := sqlitetest.MustOpen(t)
 	dir := t.TempDir()
@@ -222,7 +258,10 @@ func newFixture(t *testing.T) *fixture {
 	if err := store.UpsertProject(context.Background(), domain.ProjectRecord{ID: "ao", Path: dir, RegisteredAt: clock.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	deps := Deps{Store: store, Target: provider, Desktop: provider, Workers: worker, Evidence: evidence, Clock: clock, TargetStateRoot: filepath.Join(dir, "target"), Recipes: map[string]Recipe{"native": {ID: "native", CheckoutPath: dir, Snapshot: "fake recipe"}}}
+	deps := Deps{Store: store, Target: provider, Desktop: provider, Workers: worker, Evidence: evidence, Clock: clock, TargetStateRoot: filepath.Join(dir, "target"), EvidenceRoot: filepath.Join(dir, "testing"), Recipes: map[string]Recipe{"native": {ID: "native", CheckoutPath: dir, Snapshot: "fake recipe"}}}
+	for _, configure := range configure {
+		configure(&deps)
+	}
 	f := &fixture{deps: deps, store: store, clock: clock, provider: provider, worker: worker, evidence: evidence, dir: dir}
 	f.svc = New(deps)
 	var err error

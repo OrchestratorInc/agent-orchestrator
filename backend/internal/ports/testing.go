@@ -53,6 +53,40 @@ type TestingDesktopControl interface {
 	Key(ctx context.Context, target domain.TestTargetIdentity, frame domain.TestDesktopFrame, request domain.TestKeyRequest) (domain.TestActionResult, error)
 }
 
+// TestingDesktopPolicy declares the configured policy and the mode actually
+// requested for each input tool. The service journals both before dispatch.
+type TestingDesktopPolicy interface {
+	DeliveryMode() string
+	InputDeliveryMode(tool string) string
+}
+
+// TestingDesktopRecorder is an optional window-only recording extension.
+// Output must stay in the supervising daemon's supplied evidenceDir. Gap
+// declares unavailable or incomplete recording without claiming video evidence.
+type TestingDesktopRecorder interface {
+	StartRecording(ctx context.Context, target domain.TestTargetIdentity, evidenceDir string) (TestingRecordingResult, error)
+	StopRecording(ctx context.Context, target domain.TestTargetIdentity) (TestingRecordingResult, error)
+}
+
+// TestingRecordingResult is provider-neutral recording metadata. Path is private
+// daemon staging input, never a worker argument or a durable evidence path.
+type TestingRecordingResult struct {
+	Path        string
+	MIMEType    string
+	Width       int
+	Height      int
+	Duration    time.Duration
+	StartedAt   time.Time
+	StoppedAt   time.Time
+	RecorderPID int
+	Gap         string
+}
+
+// TestingDesktopReleaser revokes one attempt's desktop session at cleanup.
+type TestingDesktopReleaser interface {
+	Release(ctx context.Context, target domain.TestTargetIdentity) error
+}
+
 // TestingEvidenceStore writes attempt-owned artifacts and a durable journal
 // outside the target, under ~/.ao. It returns receipts only after saving data.
 // Writes must be bounded, reject path traversal and exclude capability secrets.

@@ -127,13 +127,16 @@ type TestDaemonQueryResult struct {
 // RequestID lets the service refuse a duplicate input without executing it twice.
 // Inputs are validated tool data; headers, capability tokens and env are excluded.
 type TestActionRecord struct {
-	AttemptID TestAttemptID   `json:"attemptId"`
-	RequestID string          `json:"requestId"`
-	Tool      string          `json:"tool"`
-	Input     json.RawMessage `json:"input"`
-	State     string          `json:"state"`
-	Detail    string          `json:"detail,omitempty"`
-	At        time.Time       `json:"at"`
+	AttemptID              TestAttemptID   `json:"attemptId"`
+	RequestID              string          `json:"requestId"`
+	Tool                   string          `json:"tool"`
+	Input                  json.RawMessage `json:"input"`
+	State                  string          `json:"state"`
+	Detail                 string          `json:"detail,omitempty"`
+	DeliveryMode           string          `json:"deliveryMode,omitempty"`
+	ConfiguredDeliveryMode string          `json:"configuredDeliveryMode,omitempty"`
+	RecordingGap           string          `json:"recordingGap,omitempty"`
+	At                     time.Time       `json:"at"`
 }
 
 // TestSubmitReportRequest saves the investigator's conclusion and replay steps.

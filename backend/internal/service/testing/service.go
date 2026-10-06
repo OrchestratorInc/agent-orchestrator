@@ -42,6 +42,7 @@ type attemptState struct {
 	cleanupDone chan struct{}
 	cleanupErr  error
 	finishErr   error
+	recording   bool
 }
 
 // Service owns target-bound tool dispatch and in-memory capabilities.
@@ -98,6 +99,7 @@ func (s *Service) CreateRun(ctx context.Context, in CreateRunInput) (domain.Test
 	if !ok {
 		return domain.TestRunRecord{}, invalid("Unknown configured testing recipe")
 	}
+	recipe.DeliveryMode = s.deliveryMode()
 	if in.LinkedRunID != "" {
 		linked, found, e := s.deps.Store.GetTestRun(ctx, in.LinkedRunID)
 		if e != nil {
@@ -168,7 +170,7 @@ func (s *Service) StartAttempt(ctx context.Context, id domain.TestRunID, in Star
 		return StartAttemptResult{}, inactive()
 	}
 	now := s.deps.Clock.Now().UTC()
-	rec, err := s.deps.Store.CreateTestAttempt(ctx, domain.TestAttemptRecord{ID: domain.TestAttemptID(uuid.NewString()), RunID: id, Deadline: now.Add(in.Timeout), CreatedAt: now, RecordingGap: "Native checkpoint 0 has no recording provider; screenshots and logs only."})
+	rec, err := s.deps.Store.CreateTestAttempt(ctx, domain.TestAttemptRecord{ID: domain.TestAttemptID(uuid.NewString()), RunID: id, Deadline: now.Add(in.Timeout), CreatedAt: now})
 	if err != nil {
 		s.mu.Unlock()
 		return StartAttemptResult{}, apierr.Conflict("TEST_ATTEMPT_START_FAILED", "Cannot create attempt; a prior attempt may still be active", nil)
@@ -217,6 +219,9 @@ func (s *Service) StartAttempt(ctx context.Context, id domain.TestRunID, in Star
 	err = s.deps.Store.UpdateTestAttempt(startCtx, st.record)
 	s.mu.Unlock()
 	if err != nil {
+		return fail(err)
+	}
+	if err := s.startRecording(startCtx, st, bound); err != nil {
 		return fail(err)
 	}
 	if !json.Valid([]byte(run.IssueSnapshot)) {
@@ -402,6 +407,14 @@ func (s *Service) cleanup(ctx context.Context, st *attemptState) {
 		cleanupErr = ProviderNotConfigured()
 		result.State = domain.TestCleanupFailed
 	} else if rec.Target.ID != "" {
+		if e := s.stopRecording(ctx, st, rec.Target); e != nil {
+			cleanupErr = e
+		}
+		if desktop, ok := s.deps.Desktop.(ports.TestingDesktopReleaser); ok && rec.Target.WindowID != "" {
+			if e := desktop.Release(ctx, rec.Target); e != nil {
+				cleanupErr = e
+			}
+		}
 		logs, e := s.deps.Target.ReadLogs(ctx, rec.Target, domain.TestReadLogsRequest{MaxBytes: 65536})
 		if e == nil {
 			_, e = s.deps.Evidence.Write(ctx, rec.ID, ports.TestingEvidenceArtifact{Kind: "final_logs", MIMEType: "text/plain"}, strings.NewReader(logs.Text))

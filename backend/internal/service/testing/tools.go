@@ -216,6 +216,13 @@ func (s *Service) Execute(ctx context.Context, id domain.TestAttemptID, session 
 		return result, targetChanged()
 	}
 	record := domain.TestActionRecord{AttemptID: id, RequestID: requestID, Tool: name, Input: canonical, State: "dispatching", At: s.deps.Clock.Now().UTC()}
+	if name == "click" || name == "type" || name == "key" {
+		record.ConfiguredDeliveryMode = s.deliveryMode()
+		record.DeliveryMode = record.ConfiguredDeliveryMode
+		if policy, ok := s.deps.Desktop.(ports.TestingDesktopPolicy); ok {
+			record.DeliveryMode = policy.InputDeliveryMode(name)
+		}
+	}
 	if err = s.deps.Evidence.AppendAction(callCtx, record); err != nil {
 		return result, apierr.Internal("TEST_EVIDENCE_WRITE_FAILED", "Cannot save action journal; tool was not dispatched")
 	}
@@ -286,7 +293,13 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 		if e != nil || geometry.Width != shot.Frame.Width || geometry.Height != shot.Frame.Height {
 			return result, targetChanged()
 		}
-		receipt, e := s.save(ctx, st, &result, "screenshot", shot.MIMEType, shot.Data, &shot.Frame)
+		// Evidence receives metadata only. Keep the adapter's private capture
+		// receipt intact in memory for subsequent input, even if a store mutates
+		// the metadata pointer it receives.
+		metadata := shot.Frame
+		metadata.Target = domain.TestTargetIdentity{}
+		metadata.CaptureHandle = ""
+		receipt, e := s.save(ctx, st, &result, "screenshot", shot.MIMEType, shot.Data, &metadata)
 		if e != nil {
 			return result, e
 		}
