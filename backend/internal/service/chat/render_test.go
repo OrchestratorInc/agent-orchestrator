@@ -113,3 +113,57 @@ func TestPublishRenderRejectsBadPagesBeforeStoring(t *testing.T) {
 		t.Fatalf("invalid pages were stored: %v", entries)
 	}
 }
+
+func TestCheckRenderLoadsTheStoredPageAndDeletesIt(t *testing.T) {
+	h := newHarnessForHarness(t, domain.HarnessCodex)
+	var gotArgs map[string]any
+	var pageDuringCheck []byte
+	h.svc.SetRenderCheck(func(ctx context.Context, id domain.SessionID, args map[string]any) (any, error) {
+		gotArgs = args
+		renderID := strings.TrimPrefix(args["url"].(string), "http://127.0.0.1:3001/api/v1/sessions/"+string(id)+"/renders/")
+		file, _, err := h.renders.OpenRender(ctx, id, renderID)
+		if err != nil {
+			t.Fatalf("page not stored during the check: %v", err)
+		}
+		pageDuringCheck, _ = io.ReadAll(file)
+		_ = file.Close()
+		return map[string]any{
+			"data": "iVBORw0KGgo=", "width": 720.0, "height": 412.0, "contentHeight": 412.0,
+			"consoleMessages": []any{map[string]any{"level": "error", "text": "Uncaught ReferenceError: d3 is not defined"}},
+		}, nil
+	})
+
+	result, err := h.svc.CheckRender(context.Background(), testSession, chatsvc.RenderCheckInput{
+		HTML: "<p>chart</p>", BaseURL: "http://127.0.0.1:3001",
+	})
+	if err != nil {
+		t.Fatalf("CheckRender: %v", err)
+	}
+	if !strings.HasPrefix(gotArgs["url"].(string), "http://127.0.0.1:3001/api/v1/sessions/"+string(testSession)+"/renders/check-") || gotArgs["width"] != 720 {
+		t.Fatalf("args = %v", gotArgs)
+	}
+	if !strings.Contains(string(pageDuringCheck), `<style id="ao-theme">`) {
+		t.Fatal("the check did not see the bootstrapped page readers get")
+	}
+	if result.ContentHeight != 412 || result.PNG != "iVBORw0KGgo=" || len(result.ConsoleMessages) != 1 || result.ConsoleMessages[0].Level != "error" {
+		t.Fatalf("result = %+v", result)
+	}
+	entries, _ := os.ReadDir(filepath.Join(h.rendersDir, "attachments", string(testSession)))
+	if len(entries) != 0 {
+		t.Fatalf("check left files behind: %v", entries)
+	}
+}
+
+func TestCheckRenderWithoutTheDesktopAppSaysSo(t *testing.T) {
+	h := newHarnessForHarness(t, domain.HarnessCodex)
+	h.svc.SetRenderCheck(func(context.Context, domain.SessionID, map[string]any) (any, error) {
+		return nil, chatsvc.ErrRenderCheckUnavailable
+	})
+	_, err := h.svc.CheckRender(context.Background(), testSession, chatsvc.RenderCheckInput{HTML: "<p>x</p>", BaseURL: "http://127.0.0.1:3001"})
+	if !errors.Is(err, chatsvc.ErrRenderCheckUnavailable) {
+		t.Fatalf("err = %v, want ErrRenderCheckUnavailable", err)
+	}
+	if _, err := h.svc.CheckRender(context.Background(), testSession, chatsvc.RenderCheckInput{HTML: "<p>x</p>", Width: 100}); !errors.Is(err, chatsvc.ErrRenderInvalid) {
+		t.Fatalf("width 100: err = %v, want ErrRenderInvalid", err)
+	}
+}

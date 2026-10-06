@@ -7277,6 +7277,69 @@ paths:
       summary: Serve a published render as a sandboxed HTML document
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/renders/check:
+    post:
+      operationId: checkSessionRender
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenderCheckRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RenderCheckResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Screenshot an agent's HTML page in the desktop app before it is published
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/restore:
     post:
       operationId: restoreSession
@@ -13567,6 +13630,65 @@ components:
       - ok
       - sessionId
       - displayName
+      type: object
+    RenderCheckRequest:
+      properties:
+        html:
+          description: A complete, self-contained HTML document, at most 1 MiB.
+          type: string
+        width:
+          description: Viewport width in CSS pixels, 240-1600. Defaults to 720.
+          type: integer
+      required:
+      - html
+      type: object
+    RenderCheckResponse:
+      properties:
+        consoleMessages:
+          items:
+            $ref: '#/components/schemas/RenderConsoleMessage'
+          type: array
+        contentHeight:
+          description: Height the page needs at this width, in CSS pixels.
+          type: integer
+        screenshot:
+          $ref: '#/components/schemas/RenderCheckScreenshot'
+      required:
+      - screenshot
+      - contentHeight
+      - consoleMessages
+      type: object
+    RenderCheckScreenshot:
+      properties:
+        data:
+          description: Base64 PNG.
+          type: string
+        height:
+          type: integer
+        mimeType:
+          type: string
+        width:
+          type: integer
+      required:
+      - mimeType
+      - data
+      - width
+      - height
+      type: object
+    RenderConsoleMessage:
+      properties:
+        level:
+          enum:
+          - debug
+          - log
+          - warning
+          - error
+          type: string
+        text:
+          type: string
+      required:
+      - level
+      - text
       type: object
     ReorderQueuedConversationTurnsRequest:
       properties:

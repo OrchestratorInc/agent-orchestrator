@@ -484,6 +484,15 @@ func Run() error {
 			}
 		},
 	})
+	// "__render-check" is internal to this wiring: it is not in the
+	// service/browser allowlist, so `ao browser` cannot send it.
+	chatSvc.SetRenderCheck(func(ctx context.Context, id domain.SessionID, args map[string]any) (any, error) {
+		result, err := browserBroker.Execute(ctx, id, "__render-check", args)
+		if errors.Is(err, browserruntime.ErrUnavailable) {
+			return nil, chatsvc.ErrRenderCheckUnavailable
+		}
+		return result.Value, err
+	})
 
 	codexModelDriver := codexappserver.New(codexagent.New(), log)
 	modelDiscoverer := modelcatalog.Discoverer{

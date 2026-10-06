@@ -2975,6 +2975,33 @@ type PublishRenderResponse struct {
 	Path       string `json:"path"`
 }
 
+// RenderCheckRequest is a page an agent wants to see before it publishes it.
+type RenderCheckRequest struct {
+	HTML  string `json:"html" description:"A complete, self-contained HTML document, at most 1 MiB."`
+	Width int    `json:"width,omitempty" description:"Viewport width in CSS pixels, 240-1600. Defaults to 720."`
+}
+
+// RenderCheckScreenshot is the page as the desktop app drew it.
+type RenderCheckScreenshot struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data" description:"Base64 PNG."`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+}
+
+// RenderConsoleMessage is one console line the page wrote while it loaded.
+type RenderConsoleMessage struct {
+	Level string `json:"level" enum:"debug,log,warning,error"`
+	Text  string `json:"text"`
+}
+
+// RenderCheckResponse reports how the page rendered.
+type RenderCheckResponse struct {
+	Screenshot      RenderCheckScreenshot  `json:"screenshot"`
+	ContentHeight   int                    `json:"contentHeight" description:"Height the page needs at this width, in CSS pixels."`
+	ConsoleMessages []RenderConsoleMessage `json:"consoleMessages"`
+}
+
 // RenderIDParam names a published render.
 type RenderIDParam struct {
 	RenderID string `path:"renderId" description:"Render identifier returned when the page was published."`

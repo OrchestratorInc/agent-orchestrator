@@ -15,6 +15,7 @@ import (
 
 const (
 	publishRenderPath = "/api/v1/sessions/{sessionId}/renders"
+	checkRenderPath   = "/api/v1/sessions/{sessionId}/renders/check"
 	renderFilePath    = "/api/v1/sessions/{sessionId}/renders/{renderId}"
 	// Scripts run, but the opaque origin keeps the page out of the app's
 	// session and storage, and corsMiddleware refuses Origin: null, so even a
@@ -50,6 +51,46 @@ func (c *ConversationsController) publishRender(w http.ResponseWriter, r *http.R
 	case errors.Is(err, chatsvc.ErrNoActiveTurn):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "RENDER_NO_ACTIVE_TURN",
 			"a render is shown in the turn the agent is running, and no turn is in flight", nil)
+	default:
+		writeConversationError(w, r, err)
+	}
+}
+
+type renderChecker interface {
+	CheckRender(context.Context, domain.SessionID, chatsvc.RenderCheckInput) (chatsvc.RenderCheckResult, error)
+}
+
+func (c *ConversationsController) checkRender(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(renderChecker)
+	if !ok {
+		apispec.NotImplemented(w, r, "POST", checkRenderPath)
+		return
+	}
+	var req RenderCheckRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	// The desktop app loads the page from the origin the CLI reached: the
+	// loopback listener (preview hosts never reach this route).
+	result, err := svc.CheckRender(r.Context(), sessionID(r), chatsvc.RenderCheckInput{
+		HTML: req.HTML, Width: req.Width, BaseURL: "http://" + r.Host,
+	})
+	switch {
+	case err == nil:
+		messages := make([]RenderConsoleMessage, 0, len(result.ConsoleMessages))
+		for _, m := range result.ConsoleMessages {
+			messages = append(messages, RenderConsoleMessage{Level: m.Level, Text: m.Text})
+		}
+		envelope.WriteJSON(w, http.StatusOK, RenderCheckResponse{
+			Screenshot:      RenderCheckScreenshot{MimeType: "image/png", Data: result.PNG, Width: result.Width, Height: result.Height},
+			ContentHeight:   result.ContentHeight,
+			ConsoleMessages: messages,
+		})
+	case errors.Is(err, chatsvc.ErrRenderInvalid):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "RENDER_INVALID", err.Error(), nil)
+	case errors.Is(err, chatsvc.ErrRenderCheckUnavailable):
+		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "RENDER_CHECK_UNAVAILABLE",
+			"render check needs the AO desktop app; open it, or publish without a check", nil)
 	default:
 		writeConversationError(w, r, err)
 	}

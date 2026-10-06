@@ -53,6 +53,7 @@ type Service struct {
 	stopProviderHost func(context.Context, domain.SessionID) error
 	reports          *reportsvc.Coordinator
 	renders          RenderFiles
+	renderCheck      RenderCheck
 
 	mu               sync.RWMutex
 	controllers      map[domain.SessionID]*Controller

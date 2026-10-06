@@ -132,3 +132,64 @@ func TestPublishRenderRouteMapsOutcomes(t *testing.T) {
 		})
 	}
 }
+
+type renderCheckStub struct {
+	*renderStub
+	checkInput chatsvc.RenderCheckInput
+	checkErr   error
+}
+
+func (s *renderCheckStub) CheckRender(_ context.Context, _ domain.SessionID, in chatsvc.RenderCheckInput) (chatsvc.RenderCheckResult, error) {
+	s.checkInput = in
+	return chatsvc.RenderCheckResult{PNG: "iVBORw0KGgo=", Width: 720, Height: 412, ContentHeight: 412,
+		ConsoleMessages: []chatsvc.RenderConsoleMessage{{Level: "error", Text: "boom"}}}, s.checkErr
+}
+
+func TestRenderCheckRouteReturnsTheScreenshotAndNamesTheOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"ok", nil, http.StatusOK, ""},
+		{"no desktop app", chatsvc.ErrRenderCheckUnavailable, http.StatusServiceUnavailable, "RENDER_CHECK_UNAVAILABLE"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &renderCheckStub{renderStub: &renderStub{fakeConversationService: &fakeConversationService{}}, checkErr: tc.err}
+			log := slog.New(slog.NewTextHandler(io.Discard, nil))
+			srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{DataDir: t.TempDir()}, log, nil, httpd.APIDeps{
+				Sessions: newFakeSessionService(), Conversations: svc,
+			}, httpd.ControlDeps{}))
+			t.Cleanup(srv.Close)
+
+			resp, err := http.Post(srv.URL+"/api/v1/sessions/proj-1/renders/check", "application/json",
+				strings.NewReader(`{"html":"<p>x</p>","width":390}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			var body struct {
+				Code       string `json:"code"`
+				Screenshot struct {
+					MimeType string `json:"mimeType"`
+					Data     string `json:"data"`
+				} `json:"screenshot"`
+				ContentHeight int `json:"contentHeight"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&body)
+			if resp.StatusCode != tc.status || body.Code != tc.code {
+				t.Fatalf("status=%d code=%q, want %d %q", resp.StatusCode, body.Code, tc.status, tc.code)
+			}
+			if tc.err != nil {
+				return
+			}
+			if body.Screenshot.MimeType != "image/png" || body.Screenshot.Data != "iVBORw0KGgo=" || body.ContentHeight != 412 {
+				t.Fatalf("body = %+v", body)
+			}
+			if svc.checkInput.Width != 390 || svc.checkInput.BaseURL != srv.URL {
+				t.Fatalf("input = %+v", svc.checkInput)
+			}
+		})
+	}
+}

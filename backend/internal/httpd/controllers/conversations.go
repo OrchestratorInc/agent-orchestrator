@@ -108,6 +108,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Put("/sessions/{sessionId}/conversation/title", c.setTitle)
 	r.Post("/sessions/{sessionId}/conversation/mcp/reload", c.reloadMCPServers)
 	r.Post("/sessions/{sessionId}/renders", c.publishRender)
+	r.Post("/sessions/{sessionId}/renders/check", c.checkRender)
 	r.Get("/sessions/{sessionId}/renders/{renderId}", c.renderFile)
 	r.Get("/reviews/{reviewId}/conversation/models", c.reviewModels)
 	r.Patch("/reviews/{reviewId}/conversation/settings", c.reviewSetSettings)

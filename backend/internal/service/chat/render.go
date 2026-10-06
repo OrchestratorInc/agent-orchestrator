@@ -16,6 +16,10 @@ const (
 	maxRenderTitleRunes = 200
 	minRenderHeight     = 80
 	maxRenderHeight     = 2000
+
+	defaultRenderCheckWidth = 720
+	minRenderCheckWidth     = 240
+	maxRenderCheckWidth     = 1600
 )
 
 // ErrRenderInvalid reports a page the agent must fix before publishing. The
@@ -113,4 +117,90 @@ func (c *Controller) recordRender(ctx context.Context, renderID, title string, h
 		return "", fmt.Errorf("record render on turn %s: %w", providerTurnID, err)
 	}
 	return activityID, nil
+}
+
+// ErrRenderCheckUnavailable reports that no desktop app is connected to load the page.
+var ErrRenderCheckUnavailable = errors.New("render check needs the AO desktop app")
+
+// RenderCheck asks the desktop app to load a render URL in a hidden view. The
+// daemon wires it to the browser-runtime broker.
+type RenderCheck func(ctx context.Context, id domain.SessionID, args map[string]any) (any, error)
+
+// RenderCheckInput is a page an agent wants to see before it publishes it.
+// BaseURL is the daemon origin the desktop app can load, e.g. http://127.0.0.1:3001.
+type RenderCheckInput struct {
+	HTML    string
+	Width   int
+	BaseURL string
+}
+
+// RenderConsoleMessage is one console line the page wrote while it loaded.
+type RenderConsoleMessage struct {
+	Level string `json:"level"`
+	Text  string `json:"text"`
+}
+
+// RenderCheckResult is what the page looked like at the requested width.
+type RenderCheckResult struct {
+	PNG             string                 `json:"data"`
+	Width           int                    `json:"width"`
+	Height          int                    `json:"height"`
+	ContentHeight   int                    `json:"contentHeight"`
+	ConsoleMessages []RenderConsoleMessage `json:"consoleMessages"`
+}
+
+// SetRenderCheck installs the desktop-app page loader after daemon wiring.
+func (s *Service) SetRenderCheck(check RenderCheck) {
+	s.renderCheck = check
+}
+
+// CheckRender shows the agent its page as readers will see it: the same
+// stored, bootstrapped document, loaded by the desktop app in a hidden view.
+func (s *Service) CheckRender(ctx context.Context, id domain.SessionID, in RenderCheckInput) (RenderCheckResult, error) {
+	width := in.Width
+	if width == 0 {
+		width = defaultRenderCheckWidth
+	}
+	switch {
+	case strings.TrimSpace(in.HTML) == "":
+		return RenderCheckResult{}, fmt.Errorf("%w: the page is empty", ErrRenderInvalid)
+	case len(in.HTML) > maxRenderHTMLBytes:
+		return RenderCheckResult{}, fmt.Errorf("%w: the page is %d bytes; the limit is %d", ErrRenderInvalid, len(in.HTML), maxRenderHTMLBytes)
+	case width < minRenderCheckWidth || width > maxRenderCheckWidth:
+		return RenderCheckResult{}, fmt.Errorf("%w: width must be %d-%d", ErrRenderInvalid, minRenderCheckWidth, maxRenderCheckWidth)
+	case s.renders == nil || s.renderCheck == nil:
+		return RenderCheckResult{}, ErrRenderCheckUnavailable
+	}
+	if _, err := s.requireChatSession(ctx, id); err != nil {
+		return RenderCheckResult{}, err
+	}
+	renderID := "check-" + s.newID()
+	if err := s.renders.PutRender(ctx, id, renderID, []byte(injectRenderBootstrap(in.HTML))); err != nil {
+		return RenderCheckResult{}, fmt.Errorf("store render check: %w", err)
+	}
+	defer func() {
+		if err := s.renders.RemoveRender(context.WithoutCancel(ctx), id, renderID); err != nil {
+			s.log.Warn("render check cleanup failed", "session", id, "render", renderID, "error", err)
+		}
+	}()
+	pageURL := strings.TrimRight(in.BaseURL, "/") +
+		"/api/v1/sessions/" + url.PathEscape(string(id)) + "/renders/" + url.PathEscape(renderID)
+	value, err := s.renderCheck(ctx, id, map[string]any{"url": pageURL, "width": width})
+	if err != nil {
+		return RenderCheckResult{}, err
+	}
+	// The broker hands back decoded JSON, so numbers arrive as float64; a round
+	// trip through the typed result turns them into ints.
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return RenderCheckResult{}, fmt.Errorf("encode render check result: %w", err)
+	}
+	var result RenderCheckResult
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		return RenderCheckResult{}, fmt.Errorf("desktop app returned an unreadable render check: %w", err)
+	}
+	if result.PNG == "" {
+		return RenderCheckResult{}, errors.New("desktop app returned a render check with no screenshot")
+	}
+	return result, nil
 }
