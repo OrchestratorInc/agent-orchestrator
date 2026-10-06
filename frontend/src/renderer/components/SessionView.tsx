@@ -42,6 +42,7 @@ import { MultiStepLoader } from "./ui/multi-step-loader";
 import { useBrowserView } from "../hooks/useBrowserView";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import {
+	adoptedShellHandle,
 	useCloseShellTerminal,
 	useOpenShellTerminal,
 	useRenameShellTerminal,
@@ -70,6 +71,7 @@ import { sessionReviewsQueryKey } from "../lib/session-reviews";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { matchWorkspaceFilePath } from "../lib/workspace-file-path";
+import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { aoBridge } from "../lib/bridge";
 import {
 	chatDraftDialogCopy,
@@ -93,7 +95,7 @@ import {
 	inspectorMaxWidthCss,
 } from "../lib/inspector-width";
 
-type CenterFileOpenRequest = { commitSha?: string; editing: boolean; key: number; mode: FileViewMode; scope?: FileOpenOptions["scope"] };
+type CenterFileOpenRequest = { commitSha?: string; editing: boolean; key: number; line?: number; mode: FileViewMode; scope?: FileOpenOptions["scope"] };
 const EMPTY_AUXILIARY_TAB_ORDER: string[] = [];
 // Centre-file open requests take keys from this process-wide counter, not a
 // per-mount one: the display mode remembered for a request (ui-store) outlives a
@@ -436,6 +438,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
 	const setInspectorViewForSession = useUiStore((state) => state.setInspectorView);
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
+	const workspaceFileOpenRequest = useUiStore((state) => state.workspaceFileOpenRequest);
+	const clearWorkspaceFileOpenRequest = useUiStore((state) => state.clearWorkspaceFileOpenRequest);
 	const initializeInspectorSession = useUiStore((state) => state.initializeInspectorSession);
 	const setBrowserContentRevealed = useUiStore((state) => state.setBrowserContentRevealed);
 	const setBrowserUnseen = useUiStore((state) => state.setBrowserUnseen);
@@ -465,6 +469,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		Record<string, Record<string, CenterFileOpenRequest>>
 	>({});
 	const consumedCenterEditingRequestsRef = useRef(new Set<string>());
+	const consumedCenterLineRequestsRef = useRef(new Set<string>());
 	const activeCenterFileRequest = fileTabs.activePath
 		? centerFileRequestsBySession[uiSessionId]?.[fileTabs.activePath]
 		: undefined;
@@ -476,6 +481,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		&& activeCenterFileRequestToken
 		&& !consumedCenterEditingRequestsRef.current.has(activeCenterFileRequestToken),
 	);
+	const activeCenterFileInitialLine = activeCenterFileRequest?.line != null
+		&& activeCenterFileRequestToken
+		&& !consumedCenterLineRequestsRef.current.has(activeCenterFileRequestToken)
+		? activeCenterFileRequest.line
+		: undefined;
 	const [auxiliaryTabOrderBySession, setAuxiliaryTabOrderBySession] = useState<Record<string, string[]>>({});
 	const auxiliaryTabOrder = auxiliaryTabOrderBySession[uiSessionId] ?? EMPTY_AUXILIARY_TAB_ORDER;
 	const setAuxiliaryTabOrder = useCallback(
@@ -672,7 +682,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			...openShellKeys,
 		];
 		const availableKeys = new Set(available);
-		const resolved = auxiliaryTabOrder.filter((key) => availableKeys.has(key));
+		// A pending shell tab keeps its place once it becomes its shell.
+		const resolved = [
+			...new Set(auxiliaryTabOrder.map((key) => adoptedShellHandle(key) ?? key)),
+		].filter((key) => availableKeys.has(key));
 		for (const key of available) {
 			if (!resolved.includes(key)) resolved.push(key);
 		}
@@ -680,9 +693,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [auxiliaryTabOrder, fileTabs.openPaths, reviewerChat, reviewerTerminal, shellTerminals]);
 	useEffect(() => {
 		setAuxiliaryTabOrderBySession((current) => {
-			const currentOrder = current[uiSessionId] ?? [];
+			const storedOrder = current[uiSessionId] ?? [];
+			const currentOrder = [...new Set(storedOrder.map((key) => adoptedShellHandle(key) ?? key))];
 			const newKeys = resolvedAuxiliaryTabOrder.filter((key) => !currentOrder.includes(key));
-			if (newKeys.length === 0) {
+			if (newKeys.length === 0 && currentOrder.length === storedOrder.length
+				&& currentOrder.every((key, index) => key === storedOrder[index])) {
 				return current;
 			}
 			return { ...current, [uiSessionId]: [...currentOrder, ...newKeys] };
@@ -704,25 +719,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// session's worktree (the project id is only the fallback when the session's
 	// workspace can no longer be resolved).
 	const addShellTerminal = useCallback(() => {
-		const shell = openShellTerminal.open(
-			{ projectId: session?.workspaceId, sessionId, cloud: session?.cloud },
-			{
-				onSuccess: (openedShell) => {
-					setActiveShellTerminal(openedShell.handleId);
-					setFileTabsBySession((current) => ({
-						...current,
-						[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
-					}));
-					setTerminalTarget({
-						generation: openedShell.createdAt,
-						kind: "shell",
-						handleId: openedShell.handleId,
-						sessionId,
-						title: openedShell.title,
-					});
-				},
-			},
-		);
+		const shell = openShellTerminal.open({ projectId: session?.workspaceId, sessionId, cloud: session?.cloud });
 		if (!shell) return;
 		setFileTabsBySession((current) => ({
 			...current,
@@ -736,7 +733,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			sessionId,
 			title: shell.title,
 		});
-	}, [openShellTerminal, sessionId, session?.cloud, session?.workspaceId, setActiveShellTerminal, uiSessionId]);
+	}, [
+		openShellTerminal,
+		sessionId,
+		session?.cloud,
+		session?.workspaceId,
+		setActiveShellTerminal,
+		uiSessionId,
+	]);
 
 	const activateAuxiliaryTab = useCallback(
 		(key?: string) => {
@@ -886,6 +890,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [setActiveShellTerminal, uiSessionId]);
 	const openCenterFile = useCallback((path: string, options?: FileOpenOptions) => {
 		setReviewerChatId(null);
+		setActiveShellTerminal(null);
+		setTerminalTarget({ kind: "worker" });
 		const key = nextCenterFileRequestKey();
 		setCenterFileRequestsBySession((current) => {
 			const sessionRequests = current[uiSessionId] ?? {};
@@ -897,6 +903,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						commitSha: options?.commitSha,
 						editing: options?.editing ?? false,
 						key,
+						line: options?.line,
 						mode: options?.mode ?? "file",
 						scope: options?.scope,
 					},
@@ -907,9 +914,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			...current,
 			[uiSessionId]: openSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, path),
 		}));
-	}, [uiSessionId]);
+	}, [setActiveShellTerminal, uiSessionId]);
 	const markCenterFileEditingConsumed = useCallback((path: string, requestKey: number) => {
 		consumedCenterEditingRequestsRef.current.add(`${uiSessionId}:${path}:${requestKey}`);
+	}, [uiSessionId]);
+	const markCenterFileLineConsumed = useCallback((path: string, requestKey: number) => {
+		consumedCenterLineRequestsRef.current.add(`${uiSessionId}:${path}:${requestKey}`);
 	}, [uiSessionId]);
 	const setCenterFileDirty = useCallback((path: string, dirty: boolean) => {
 		setDirtyFilesBySession((current) => {
@@ -926,11 +936,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [uiSessionId]);
 	const activateCenterFile = useCallback((path: string) => {
 		setReviewerChatId(null);
+		setActiveShellTerminal(null);
+		setTerminalTarget({ kind: "worker" });
 		setFileTabsBySession((current) => ({
 			...current,
 			[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, path),
 		}));
-	}, [uiSessionId]);
+	}, [setActiveShellTerminal, uiSessionId]);
 	const closeCenterFile = useCallback((path: string) => {
 		setFileTabsBySession((current) => ({
 			...current,
@@ -954,6 +966,21 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			!fileTabs.activePath && !reviewerChatId) return;
 		selectShellTerminal(shell.handleId);
 	}, [activeShellTerminalHandleId, fileTabs.activePath, reviewerChatId, selectShellTerminal, shellTerminals, terminalTarget]);
+	// A tab selected while it was pending follows it to the shell it became.
+	// Only what still points at the pending tab moves: the user may have
+	// selected another tab in the meantime.
+	useEffect(() => {
+		const adoptedActive = activeShellTerminalHandleId ? adoptedShellHandle(activeShellTerminalHandleId) : undefined;
+		if (adoptedActive) {
+			setActiveShellTerminal(adoptedActive);
+			return;
+		}
+		if (terminalTarget.kind !== "shell") return;
+		const adoptedTarget = adoptedShellHandle(terminalTarget.handleId);
+		if (adoptedTarget && shellTerminals.some((shell) => shell.handleId === adoptedTarget)) {
+			selectShellTerminal(adoptedTarget);
+		}
+	}, [activeShellTerminalHandleId, selectShellTerminal, setActiveShellTerminal, shellTerminals, terminalTarget]);
 
 	// If the pane is pointed at a shell that is not in THIS session's strip — e.g.
 	// after navigating to a different session whose globally-active shell belongs
@@ -1239,19 +1266,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [hostId, queryClient, sessionId, t]);
 
 	const revealResolvedWorkspaceFile = useCallback(
-		async (rawPath: string) => {
+		async (rawPath: string, options?: FileOpenOptions) => {
 			const data = await fetchWorkspaceFiles();
 			const path = matchWorkspaceFilePath(rawPath, data.files ?? []);
-			if (browserOnly) {
-				openCenterFile(path);
-				return;
-			}
-			setFilePreviewRequestsBySession((current) => ({
-				...current,
-				[uiSessionId]: { path, key: (current[uiSessionId]?.key ?? 0) + 1 },
-			}));
+			openCenterFile(path, options);
 		},
-		[browserOnly, openCenterFile, fetchWorkspaceFiles, uiSessionId],
+		[openCenterFile, fetchWorkspaceFiles],
 	);
 
 	// A reveal is one-shot. Left in place, it would reopen the file (and take
@@ -1266,25 +1286,45 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [uiSessionId]);
 
 	const handleOpenFiles = useCallback(() => {
+		markFileViewerPerformance("files-click");
 		prepareFilesInspector();
 		void fetchWorkspaceFiles();
 	}, [fetchWorkspaceFiles, prepareFilesInspector]);
 
 	const handleOpenReviewFile = useCallback(
 		(target: { line?: number; path: string }) => {
-			prepareFilesInspector();
-			void revealResolvedWorkspaceFile(target.path);
+			void revealResolvedWorkspaceFile(target.path, { line: target.line, mode: "diff" });
 		},
-		[prepareFilesInspector, revealResolvedWorkspaceFile],
+		[revealResolvedWorkspaceFile],
 	);
 
 	const handleOpenFile = useCallback(
-		(path: string) => {
-			prepareFilesInspector();
-			void revealResolvedWorkspaceFile(path);
+		(path: string, line?: number) => {
+			void revealResolvedWorkspaceFile(path, { line, mode: "file" });
 		},
-		[prepareFilesInspector, revealResolvedWorkspaceFile],
+		[revealResolvedWorkspaceFile],
 	);
+
+	useEffect(() => {
+		if (!workspaceFileOpenRequest || !session) return;
+		if (sessionUiKey(workspaceFileOpenRequest.sessionId, workspaceFileOpenRequest.hostId) !== uiSessionId) return;
+		const { nonce, path } = workspaceFileOpenRequest;
+		if (session.cloud) {
+			prepareFilesInspector();
+			openCenterFile(path, { mode: "file" });
+		} else {
+			handleOpenFile(path);
+		}
+		clearWorkspaceFileOpenRequest(nonce);
+	}, [
+		clearWorkspaceFileOpenRequest,
+		handleOpenFile,
+		openCenterFile,
+		prepareFilesInspector,
+		session,
+		uiSessionId,
+		workspaceFileOpenRequest,
+	]);
 
 	const handleToggleFilesPopOut = useCallback(
 		(next: boolean) => {
@@ -1640,6 +1680,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							annotation={fileAnnotation}
 							commitSha={activeCenterFileRequest?.commitSha}
 							initialEditing={activeCenterFileInitialEditing}
+							initialLine={activeCenterFileInitialLine}
 							initialMode={activeCenterFileRequest?.mode ?? "file"}
 							initialRequestKey={activeCenterFileRequest?.key ?? 0}
 							onDirtyChange={setCenterFileDirty}
@@ -1653,11 +1694,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 											hostId={hostId}
 											annotation={fileAnnotation}
 											commitSha={activeCenterFileRequest?.commitSha}
-											initialEditing={activeCenterFileInitialEditing}
+							initialEditing={activeCenterFileInitialEditing}
+							initialLine={activeCenterFileInitialLine}
 											initialMode={activeCenterFileRequest?.mode ?? "file"}
 											initialRequestKey={activeCenterFileRequest?.key ?? 0}
 											onDirtyChange={setCenterFileDirty}
-											onInitialEditingConsumed={markCenterFileEditingConsumed}
+							onInitialEditingConsumed={markCenterFileEditingConsumed}
+							onInitialLineConsumed={markCenterFileLineConsumed}
 											path={fileTabs.activePath}
 											sessionId={sessionId}
 											split={filesSplit}

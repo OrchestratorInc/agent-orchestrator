@@ -32,6 +32,7 @@ import {
 	useCallback,
 	useEffect,
 	useId,
+	useImperativeHandle,
 	useLayoutEffect,
 	useMemo,
 	useRef,
@@ -45,6 +46,7 @@ import {
 	type KeyboardEvent,
 	type ReactElement,
 	type ReactNode,
+	type Ref,
 } from "react";
 import { ArrowUp, Loader2, Plus, Square, X } from "lucide-react";
 import { Button } from "../ui/button";
@@ -141,8 +143,10 @@ function restoredDeliveryNotice(delivery: ChatComposerDelivery | undefined): str
 }
 /** A retained server-owned attachment; image bytes stay in durable storage. */
 export type StoredComposerAttachment = ChatDraftRetainedAttachment & { dataUrl?: string };
+export type ChatComposerHandle = { focus(): void };
 
 export const ChatComposer = memo(function ChatComposer({
+	focusRef,
 	onSend,
 	busy,
 	willQueue,
@@ -188,6 +192,7 @@ export const ChatComposer = memo(function ChatComposer({
 	assetSessionId,
 	acceptedClientMessageIds,
 }: {
+	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (
 		text: string,
 		attachments?: FileAttachmentPayload[],
@@ -585,6 +590,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!autoFocus || disabled) return;
 		editor.current?.focus();
 	}, [autoFocus, disabled]);
+	useImperativeHandle(focusRef, () => ({ focus: focusEditor }), [focusEditor]);
 
 	useEffect(() => {
 		focusEditor();
@@ -1445,8 +1451,9 @@ export const ChatComposer = memo(function ChatComposer({
 				// here and half there.
 				data-dragging={dragging || undefined}
 				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
-				onClick={(e) => {
+			onClick={(e) => {
 					if (controlsDisabled) return;
+					if ((e.target as HTMLElement).closest('[contenteditable="true"]')) return;
 					// The focusable context tooltip must keep its focus on click.
 					if (
 						e.target === e.currentTarget ||

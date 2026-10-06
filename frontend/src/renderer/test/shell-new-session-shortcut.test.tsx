@@ -754,7 +754,6 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 
 		expect(shellMocks.openShellTerminal).toHaveBeenCalledWith(
 			expect.objectContaining({ projectId: "proj-1", sessionId: "sess-1" }),
-			expect.anything(),
 		);
 	});
 
@@ -772,7 +771,6 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 				sessionId: "sess-1",
 				cloud: { orgId: "cloud-org" },
 			}),
-			expect.anything(),
 		);
 		delete session.cloud;
 	});
@@ -787,7 +785,6 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 
 		expect(shellMocks.openShellTerminal).toHaveBeenCalledWith(
 			expect.objectContaining({ projectId: "proj-2", sessionId: "sess-cross" }),
-			expect.anything(),
 		);
 	});
 

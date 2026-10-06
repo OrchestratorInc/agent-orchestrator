@@ -632,8 +632,13 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 		go s.runTerminalStream(processCtx, input.TerminalID, terminal)
 	}
 	go func() {
-		defer close(terminal.done)
 		_ = command.Wait()
+		// Signal process exit before removing the terminal or publishing its exit.
+		// Interface handoff uses this channel to fence the next controller from
+		// starting while the TUI may still own the provider's thread writer. If
+		// PublishTerminalExit delays this signal, a concurrent stop can observe an
+		// already-removed terminal and incorrectly conclude that shutdown finished.
+		close(terminal.done)
 		s.mu.Lock()
 		current := s.terminals[input.TerminalID]
 		if current == terminal {

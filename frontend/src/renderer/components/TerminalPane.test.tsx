@@ -121,6 +121,7 @@ vi.mock("./XtermTerminal", () => ({
 				write: vi.fn((_data, done) => done?.()),
 				writeln: vi.fn(),
 				showLatestOutput: vi.fn(),
+				hasMeasuredGrid: true,
 				prepareForActivation: prepareForActivationMock,
 				requestActivationFocus: requestActivationFocusMock,
 				notifyCursorColorScheme: vi.fn(),

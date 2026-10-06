@@ -104,7 +104,7 @@ import {
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
-import { ChatComposer, type StoredComposerAttachment } from "./ChatComposer";
+import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
@@ -380,7 +380,7 @@ export interface ChatWorkspaceProps {
 	/** Opens the session Files inspector from a turn's changed-files Review control. */
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
-	onOpenFile?: (path: string) => void;
+	onOpenFile?: (path: string, line?: number) => void;
 	/**
 	 * Re-dispatch a failed turn's durable prompt as a new turn. Offered only for
 	 * eligible failed human turns, so the affordance is drawn on the failed-turn
@@ -683,7 +683,7 @@ function ChatWorkspaceContent({
 		const composer = surfaceRef.current?.querySelector<HTMLElement>(
 			'[aria-label="Message the agent"]',
 		);
-		if (composer?.getAttribute("aria-disabled") !== "true") composer?.focus();
+		if (composer?.getAttribute("aria-disabled") !== "true") composerFocusRef.current?.focus();
 	}, []);
 	// Selection is durable UI state; availability only controls whether the tab is
 	// offered. Keeping these separate preserves a selected reviewer while an active
@@ -937,6 +937,7 @@ function ChatWorkspaceContent({
 	// the agent knows, so it is never one click.
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
 	const surfaceRef = useRef<HTMLElement | null>(null);
+	const composerFocusRef = useRef<ChatComposerHandle>(null);
 	const lastWheelZoomAtRef = useRef(0);
 	const wheelZoomRemainderRef = useRef(0);
 	const [terminalFontSize, setTerminalFontSize] = useState(initialTerminalFontSize);
@@ -1420,7 +1421,7 @@ function ChatWorkspaceContent({
 				>
 					{/* Keep sign-in guidance available without repeating the error from chat. */}
 					{snapshot.account ? (
-						<ReauthBanner account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
+						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
 					) : null}
 					<ControllerBanner
 						controller={snapshot.controller}
@@ -1486,6 +1487,7 @@ function ChatWorkspaceContent({
 							>
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
 								<ChatComposer
+									focusRef={composerFocusRef}
 									key={`${draftScopeKey}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
 									queuedDock={composerQueuedDock}
 									approval={composerApproval}
@@ -1775,7 +1777,7 @@ function ChatHeader({
 				<div
 					className={cn(
 						"flex min-w-0 shrink items-stretch",
-						!isSidebarOpen && isMac && "session-topbar-titlebar-clearance-mac",
+						isMac && "session-topbar-titlebar-clearance-mac",
 						!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
 					)}
 					data-testid="session-terminal-region"
@@ -2087,7 +2089,7 @@ function Timeline({
 	busy?: boolean;
 	onRollback?: (turnId: string) => void;
 	onOpenFiles?: () => void;
-	onOpenFile?: (path: string) => void;
+	onOpenFile?: (path: string, line?: number) => void;
 	retryControl?: ChatRetryControl;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	editPending?: boolean;
@@ -3220,7 +3222,7 @@ const TurnGroup = memo(function TurnGroup({
 	onDecide: (requestId: string, decisionId: string) => void;
 	onRollback: (turnId: string) => void;
 	onOpenFiles?: () => void;
-	onOpenFile?: (path: string) => void;
+	onOpenFile?: (path: string, line?: number) => void;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	messageEdit?: MessageEditDraft;
 	onStartMessageEdit: (message: ConversationMessage) => void;
