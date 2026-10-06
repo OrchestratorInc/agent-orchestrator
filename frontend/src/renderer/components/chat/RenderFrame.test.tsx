@@ -1,4 +1,5 @@
 import { act, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiBaseUrl } from "../../lib/api-client";
@@ -139,5 +140,36 @@ describe("render activity", () => {
 			read.mockRestore();
 			document.documentElement.style.cssText = "";
 		}
+	});
+
+	it("expands the page at its inline width, centered in the dialog", async () => {
+		const user = userEvent.setup();
+		const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(660);
+		try {
+			render(<ActivityRow activity={renderActivity()} />);
+			const inline = frame();
+			await user.click(screen.getByRole("button", { name: "Expand page" }));
+			const frames = await screen.findAllByTitle("Turns by day");
+			expect(frames).toHaveLength(2);
+			const expanded = frames.find((f) => f !== inline) as HTMLIFrameElement;
+			expect(expanded.style.width).toBe("660px");
+			expect(expanded.className).toContain("max-w-full");
+			expect(expanded.parentElement?.className).toContain("justify-center");
+			expect(inline.isConnected).toBe(true);
+			expect(inline.style.width).toBe("");
+			expect(inline.style.height).toBe("300px");
+		} finally {
+			width.mockRestore();
+		}
+	});
+
+	it("falls back to a readable width when the inline box was not measured", async () => {
+		const user = userEvent.setup();
+		render(<ActivityRow activity={renderActivity()} />);
+		await user.click(screen.getByRole("button", { name: "Expand page" }));
+		const frames = await screen.findAllByTitle("Turns by day");
+		const expanded = frames[1] as HTMLIFrameElement;
+		expect(expanded.style.width).toBe("");
+		expect(expanded.className).toContain("max-w-3xl");
 	});
 });

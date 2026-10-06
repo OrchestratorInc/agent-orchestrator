@@ -45,7 +45,7 @@ function useRenderTheme(): RenderTheme {
  * storage, or the daemon. It reads the theme from its URL fragment before
  * first paint and restyles from posted messages after, so the src never changes.
  */
-function RenderDocument({ render, fit, className }: { render: RenderRef; fit?: boolean; className?: string }) {
+function RenderDocument({ render, fit, width, className }: { render: RenderRef; fit?: boolean; width?: number; className?: string }) {
 	const theme = useRenderTheme();
 	const frameRef = useRef<HTMLIFrameElement>(null);
 	const themeRef = useRef(theme);
@@ -84,7 +84,7 @@ function RenderDocument({ render, fit, className }: { render: RenderRef; fit?: b
 			loading="lazy"
 			onLoad={postTheme}
 			className={cn("block w-full border-0", className)}
-			style={fit ? { height: clampRenderHeight(contentHeight ?? render.height) } : undefined}
+			style={{ width, height: fit ? clampRenderHeight(contentHeight ?? render.height) : undefined }}
 		/>
 	);
 }
@@ -93,6 +93,9 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 	const { t } = useTranslation();
 	const remoteHost = useChatRemoteHost();
 	const [expanded, setExpanded] = useState(false);
+	// The expanded page keeps the inline frame's width so it lays out as it does inline.
+	const boxRef = useRef<HTMLDivElement>(null);
+	const [expandedWidth, setExpandedWidth] = useState(0);
 	// The local daemon has no copy of a remote host's render, and the remote
 	// proxy URL must not reach the page: its path carries the proxy's capability
 	// token, which the page could read from its own location.
@@ -104,7 +107,7 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 		);
 	}
 	return (
-		<div className="group/render relative min-w-0">
+		<div ref={boxRef} className="group/render relative min-w-0">
 			<RenderDocument render={render} fit />
 			<Tooltip>
 				<TooltipTrigger asChild>
@@ -113,7 +116,10 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 						size="icon-sm"
 						aria-label={t("chat.render.expand")}
 						className="absolute end-1 top-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-visible:opacity-100"
-						onClick={() => setExpanded(true)}
+						onClick={() => {
+							setExpandedWidth(boxRef.current?.clientWidth ?? 0);
+							setExpanded(true);
+						}}
 					>
 						<Maximize2 className="size-3.5" />
 					</Button>
@@ -126,7 +132,15 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 					className="z-overlay flex h-[calc(100svh-6rem)] w-[calc(100vw-6rem)] max-w-none flex-col gap-2 p-2 pt-10"
 				>
 					<DialogTitle className="sr-only">{render.title}</DialogTitle>
-					{expanded ? <RenderDocument render={render} className="min-h-0 flex-1" /> : null}
+					{expanded ? (
+						<div className="flex min-h-0 flex-1 justify-center">
+							<RenderDocument
+								render={render}
+								width={expandedWidth || undefined}
+								className={expandedWidth ? "h-full max-w-full" : "h-full w-full max-w-3xl"}
+							/>
+						</div>
+					) : null}
 				</DialogContent>
 			</Dialog>
 		</div>
