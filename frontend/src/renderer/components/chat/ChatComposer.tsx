@@ -145,7 +145,7 @@ function restoredDeliveryNotice(delivery: ChatComposerDelivery | undefined): str
 }
 /** A retained server-owned attachment; image bytes stay in durable storage. */
 export type StoredComposerAttachment = ChatDraftRetainedAttachment & { dataUrl?: string };
-export type ChatComposerHandle = { focus(): void };
+export type ChatComposerHandle = { focus(): void; isEmpty(): boolean };
 
 export const ChatComposer = memo(function ChatComposer({
 	focusRef,
@@ -609,7 +609,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!autoFocus || disabled) return;
 		editor.current?.focus();
 	}, [autoFocus, disabled]);
-	useImperativeHandle(focusRef, () => ({ focus: focusEditor }), [focusEditor]);
+	useImperativeHandle(focusRef, () => ({ focus: focusEditor, isEmpty: () => !hasDraft }), [focusEditor, hasDraft]);
 
 	useEffect(() => {
 		focusEditor();

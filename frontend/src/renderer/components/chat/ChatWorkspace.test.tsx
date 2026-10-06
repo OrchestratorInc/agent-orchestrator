@@ -2942,20 +2942,18 @@ describe("ChatWorkspace message actions", () => {
 			).toBe("replacement draft"),
 		);
 
-		const onSend = vi.fn();
 		view.rerender(
 			<ChatWorkspace
 				snapshot={snapshot}
 				session={firstIncarnation}
-				onSend={onSend}
+				onSend={vi.fn()}
 			/>,
 		);
-		expect(await screen.findByText(/Drafts can’t be saved right now/)).toBeInTheDocument();
-		const staleComposer = await screen.findByLabelText("Message the agent");
-		expect(staleComposer).toHaveTextContent("");
-		await typeInLexicalEditor(staleComposer, "continue on the current session");
-		fireEvent.keyDown(staleComposer, { key: "Enter" });
-		await waitFor(() => expect(onSend.mock.calls[0]?.[0]).toBe("continue on the current session"));
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"This Chat view belongs to an older session incarnation. Reopen the current session to continue.",
+		);
+		expect(screen.queryByLabelText("Message the agent")).not.toBeInTheDocument();
+		expect(screen.queryByText(/Drafts can’t be saved right now/)).not.toBeInTheDocument();
 		expect(
 			readChatSessionDraft({
 				sessionId: snapshot.sessionId,
@@ -2984,7 +2982,12 @@ describe("ChatWorkspace message actions", () => {
 
 		try {
 			render(<ChatWorkspace snapshot={snapshot} session={session} onSend={onSend} onEditMessage={vi.fn()} />);
-			expect(await screen.findByText(/Drafts can’t be saved right now/)).toBeInTheDocument();
+			expect(
+				await screen.findByText(
+					"Drafts can’t be saved right now. You can keep chatting, but unsent text won’t be kept if you leave this chat.",
+				),
+			).toBeInTheDocument();
+			expect(screen.queryByText(/older session incarnation/)).not.toBeInTheDocument();
 			expect(screen.getByRole("log")).toBeInTheDocument();
 			// Editing a sent message depends on a saved draft, so it is not offered.
 			expect(screen.queryByRole("button", { name: "Edit user message" })).not.toBeInTheDocument();
@@ -2996,6 +2999,42 @@ describe("ChatWorkspace message actions", () => {
 			expect(
 				readChatSessionDraft({ sessionId: snapshot.sessionId, incarnation: session.createdAt }, backing).composer.text,
 			).toBe("");
+		} finally {
+			localStorage.mockRestore();
+		}
+	});
+
+	it("saves drafts again once storage recovers and the window regains focus", async () => {
+		const snapshot = idleSnapshot();
+		const session = {
+			...chatSession,
+			createdAt: "2026-08-26T09:45:00.000Z",
+		};
+		const backing = window.localStorage;
+		let failWrites = true;
+		const storage = {
+			getItem: backing.getItem.bind(backing),
+			removeItem: backing.removeItem.bind(backing),
+			setItem: (key: string, value: string) => {
+				if (failWrites) throw new DOMException("blocked", "SecurityError");
+				backing.setItem(key, value);
+			},
+		} as Storage;
+		const localStorage = vi.spyOn(window, "localStorage", "get").mockReturnValue(storage);
+
+		try {
+			render(<ChatWorkspace snapshot={snapshot} session={session} onSend={vi.fn()} />);
+			expect(await screen.findByText(/Drafts can’t be saved right now/)).toBeInTheDocument();
+
+			failWrites = false;
+			fireEvent.focus(window);
+			await waitFor(() => expect(screen.queryByText(/Drafts can’t be saved right now/)).not.toBeInTheDocument());
+			await typeInLexicalEditor(await screen.findByLabelText("Message the agent"), "saved after recovery");
+			await waitFor(() =>
+				expect(
+					readChatSessionDraft({ sessionId: snapshot.sessionId, incarnation: session.createdAt }, backing).composer.text,
+				).toBe("saved after recovery"),
+			);
 		} finally {
 			localStorage.mockRestore();
 		}
