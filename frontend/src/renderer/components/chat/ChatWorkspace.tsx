@@ -3126,12 +3126,13 @@ function Timeline({
 									onActivateBranch={canActivateBranch ? activateBranch : undefined}
 									activateBranchPending={activateBranchPending}
 									activateBranchError={activateBranchError}
-									// Reserve the rollback slot as soon as a turn is live; it stays disabled
-									// until the provider has accepted the turn and the daemon can act on it.
-									canRollback={Boolean(onRollback && group.turnId && (group.rollbackable || group.live))}
+									// Only a turn the provider actually accepted can be undone: a turn it
+									// never saw holds no history to discard, and the daemon refuses it
+									// rather than hiding rows the agent still remembers.
+									canRollback={Boolean(onRollback && group.turnId && group.rollbackable)}
 									rollbackDisabled={rollbackDisabled}
 									busy={busy}
-										queued={Boolean(group.turnId && queued.has(group.turnId))}
+									queued={Boolean(group.turnId && queued.has(group.turnId))}
 								/>
 							</div>
 						);
@@ -3394,12 +3395,20 @@ const TurnGroup = memo(function TurnGroup({
 			}
 		}
 	}
-	const workedRuns = runs.filter((run, index) => {
-		const item = run.items[0];
-		return index !== finalAssistantRunIndex && !isHumanRun(item);
-	});
-	const humanRuns = runs.filter((run) => isHumanRun(run.items[0]));
+	// Only the prompt that opened the turn sits above the Working row. A steer or a
+	// later message stays where it happened among the work, so the reader sees
+	// what the agent had done when it arrived.
+	const firstWorkIndex = runs.findIndex((run) => !isHumanRun(run.items[0]));
+	const leadingHumanCount = firstWorkIndex < 0 ? runs.length : firstWorkIndex;
+	const humanRuns = runs.slice(0, leadingHumanCount);
+	const workedRuns = runs.filter(
+		(_run, index) => index >= leadingHumanCount && index !== finalAssistantRunIndex,
+	);
 	const finalRun = finalAssistantRunIndex >= 0 ? runs[finalAssistantRunIndex] : undefined;
+	// Errors and system warnings stay readable after the turn settles instead of
+	// folding away with the routine work.
+	const noticeRuns = group.outcome ? workedRuns.filter(isNoticeRun) : [];
+	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
 	// Keep the live row mounted while its spinner animates out, then hand over to the settled row.
 	const [showSettledStatus, setShowSettledStatus] = useState(!group.live);
 	useEffect(() => {
@@ -3458,44 +3467,65 @@ const TurnGroup = memo(function TurnGroup({
 				rollbackDisabled={rollbackDisabled}
 			/>
 		);
+	// One flat keyed list rather than a slot per section, so a run keeps its element
+	// when the turn settles: the final answer leaving the worked runs, or a notice
+	// moving out from among them, does not remount it or drop the reader's selection.
+	const body: ReactNode[] = humanRuns.map(renderRun);
+	// A live provider failure replaces the Working row with its reconnect card, and a
+	// turn that stops without an outcome (cancelled) has no settled row to hand over to.
+	if (!group.liveProviderFailure && (group.live || (group.outcome && !showSettledStatus))) {
+		body.push(<LiveResponseStatus key="turn-working" startedAt={group.liveStartedAt} settling={!group.live} />);
+	}
+	const outcome = showSettledStatus ? group.outcome : undefined;
+	if (!outcome) {
+		body.push(...workedRuns.map(renderRun));
+	} else if (foldedRuns.length > 0) {
+		const disclosureKey = `${group.key}:worked`;
+		body.push(
+			<Accordion
+				key="turn-worked"
+				type="single"
+				collapsible
+				className="-mx-1 border-b border-border"
+				// Held above the virtualizer, so the accordion stays open when its row scrolls away and back.
+				value={activityDisclosureOverrides[disclosureKey] ? "worked" : ""}
+				onValueChange={(value) => onActivityDisclosureChange(disclosureKey, value === "worked")}
+			>
+				<AccordionItem value="worked" className="border-0">
+					<AccordionTrigger
+						className="chat-worked-trigger h-7 select-none gap-1 px-1 py-0 text-sm font-normal text-muted-foreground transition-colors hover:text-foreground active:transform-none"
+						headerClassName="hover:bg-transparent data-[state=open]:bg-transparent"
+						trailing={null}
+					>
+						<span className="inline-flex w-fit items-center gap-1">
+							Worked for
+							{outcome.durationMs !== undefined ? <TurnDuration durationMs={outcome.durationMs} inline /> : null}
+							<ChevronRight aria-hidden="true" className="size-3.5 shrink-0 transition-transform duration-200 group-data-[state=open]/row:rotate-90" />
+						</span>
+					</AccordionTrigger>
+					{/* Padding lives on the inner div: the content element's height is what animates,
+					    so any padding on it itself would stay put while it opens and closes. */}
+					<AccordionContent className="chat-worked-accordion-content">
+						<div className="space-y-2 px-1 pb-2 pt-1">{foldedRuns.map(renderRun)}</div>
+					</AccordionContent>
+				</AccordionItem>
+			</Accordion>,
+		);
+	} else {
+		body.push(
+			<div key="turn-worked-plain" className="-mx-1 flex h-7 select-none items-center border-b border-border px-1 py-0 text-sm font-normal text-muted-foreground">
+				<span className="inline-flex w-fit items-center gap-1">
+					Worked for
+					{outcome.durationMs !== undefined ? <TurnDuration durationMs={outcome.durationMs} inline /> : null}
+				</span>
+			</div>,
+		);
+	}
+	if (outcome) body.push(...noticeRuns.map(renderRun));
+	if (finalRun) body.push(renderRun(finalRun));
 	return (
 		<div className="flex min-w-0 flex-col gap-2.5">
-			{humanRuns.map(renderRun)}
-			{group.live || !showSettledStatus ? (
-				<LiveResponseStatus startedAt={group.liveStartedAt} settling={!group.live} />
-			) : null}
-			{!group.outcome || !showSettledStatus ? workedRuns.map(renderRun) : null}
-			{group.outcome && showSettledStatus && workedRuns.length > 0 ? (
-				<Accordion type="single" collapsible className="-mx-1 border-b border-border" defaultValue="">
-					<AccordionItem value="worked" className="border-0">
-						<AccordionTrigger
-							className="chat-worked-trigger h-7 select-none gap-1 px-1 py-0 text-sm font-normal text-muted-foreground transition-colors hover:text-foreground active:transform-none"
-							headerClassName="hover:bg-transparent data-[state=open]:bg-transparent"
-							trailing={null}
-						>
-							<span className="inline-flex w-fit items-center gap-1">
-								Worked for
-								{group.outcome.durationMs !== undefined ? <TurnDuration durationMs={group.outcome.durationMs} inline /> : null}
-								<ChevronRight aria-hidden="true" className="size-3.5 shrink-0 transition-transform duration-200 group-data-[state=open]/row:rotate-90" />
-							</span>
-						</AccordionTrigger>
-						{/* Padding lives on the inner div: the content element's height is what animates,
-						    so any padding on it itself would stay put while it opens and closes. */}
-						<AccordionContent className="chat-worked-accordion-content">
-							<div className="space-y-2 px-1 pb-2 pt-1">{workedRuns.map(renderRun)}</div>
-						</AccordionContent>
-					</AccordionItem>
-				</Accordion>
-			) : null}
-			{group.outcome && showSettledStatus && workedRuns.length === 0 ? (
-				<div className="-mx-1 flex h-7 select-none items-center border-b border-border px-1 py-0 text-sm font-normal text-muted-foreground">
-					<span className="inline-flex w-fit items-center gap-1">
-						Worked for
-						{group.outcome.durationMs !== undefined ? <TurnDuration durationMs={group.outcome.durationMs} inline /> : null}
-					</span>
-				</div>
-			) : null}
-			{finalRun ? renderRun(finalRun) : null}
+			{body}
 			{/* Both of these are current state of the turn rather than steps in it, which
 			    is why they sit at its end: a checklist that ticks itself off and a file
 			    list that grows both change while the reader watches, and at the end of a
@@ -4007,4 +4037,20 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 
 function isHumanRun(item: ConversationItem | undefined): boolean {
 	return (item?.kind === "message" && item.role === "user") || (item?.kind === "activity" && isSteer(item));
+}
+
+/** An error or stamped system warning, which a settled turn keeps outside its folded work. */
+function isNoticeRun(run: TimelineRun): boolean {
+	const item = run.items[0];
+	if (run.kind !== "single" || item?.kind !== "activity") return false;
+	if (item.activityKind === "error") return true;
+	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
+}
+
+/** Mirrors the items `TimelineItem` draws nothing for, so they cannot fill an empty accordion. */
+function rendersNothing(run: TimelineRun): boolean {
+	const item = run.items[0];
+	if (run.kind !== "single" || !item) return false;
+	if (item.kind === "message") return item.role === "assistant" && item.text.trim() === "";
+	return item.activityKind === "user_input" || (item.activityKind === "approval" && item.status === "pending");
 }

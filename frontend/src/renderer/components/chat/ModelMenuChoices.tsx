@@ -62,7 +62,13 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 						if (event.key === "Enter") {
 							event.preventDefault();
 							if (!normalizedQuery) return;
-							scrollRef.current?.querySelector<HTMLElement>('[role="menuitemradio"]')?.click();
+							const highlighted = searchActiveID
+								? document.getElementById(optionID(searchActiveID))
+								: null;
+							(
+								highlighted ??
+								scrollRef.current?.querySelector<HTMLElement>('[role="menuitemradio"]')
+							)?.click();
 							return;
 						}
 						if (event.key === "ArrowDown" || event.key === "ArrowUp") {

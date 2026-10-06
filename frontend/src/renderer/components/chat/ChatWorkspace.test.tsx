@@ -814,6 +814,61 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("I found the relevant component.")).toBeVisible();
 	});
 
+	it("keeps a mid-turn steer in order among the work instead of hoisting it with the prompt", () => {
+		const turnId = "turn-with-steer";
+		const at = "2026-08-11T10:01:00Z";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 5,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Run the unit tests",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "message", id: "prose", turnId, sequence: 2, revision: 0,
+					role: "assistant", origin: "provider", text: "Starting with the test suite.",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "activity", id: "tool", turnId, sequence: 3, revision: 0,
+					activityKind: "command", status: "completed", summary: "go test ./...",
+					detail: { command: "go test ./..." }, createdAt: at,
+				},
+				{
+					kind: "activity", id: "steer", turnId, sequence: 4, revision: 0,
+					activityKind: "system", status: "completed", summary: "Only the unit ones, please",
+					detail: { event: "steer", text: "Only the unit ones, please", origin: "human" },
+					createdAt: at,
+				},
+				{
+					kind: "message", id: "reply", turnId, sequence: 5, revision: 0,
+					role: "assistant", origin: "provider", text: "Switching to the unit tests.",
+					streaming: false, createdAt: at,
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		// Read the transcript in document order: only the prompt sits above Working, and
+		// the steer stays after the work it interrupted and before the reply to it.
+		const text = screen.getByRole("log").textContent ?? "";
+		const positions = [
+			"Run the unit tests",
+			"Working for",
+			"Starting with the test suite.",
+			"Ran command",
+			"Only the unit ones, please",
+			"Switching to the unit tests.",
+		].map((fragment) => text.indexOf(fragment));
+		expect(positions.every((position) => position >= 0)).toBe(true);
+		expect(positions).toEqual([...positions].sort((a, b) => a - b));
+	});
+
 	it("replaces the generic working label with Claude's live retry count and backoff", () => {
 		const snapshot = structuredClone(chatFixture);
 		snapshot.items = snapshot.items.filter(
@@ -848,6 +903,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(status).toHaveTextContent("Reconnecting to Claude, attempt 2 of 10.");
 		expect(status).toHaveTextContent("The API request failed. Trying again in 4s.");
 		expect(status).not.toHaveTextContent("Working for");
+		expect(screen.queryByTestId("live-working-label")).not.toBeInTheDocument();
 	});
 
 	it("interrupts the active turn when Escape is pressed", () => {
@@ -1481,7 +1537,10 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent("thread hit an internal error");
 
 		rerender(<ChatWorkspace snapshot={chatFixtureMcpFailed} />);
-		expect(screen.getByRole("status")).toHaveTextContent(/tool servers? did not start/);
+		// The live turn's Working row is a status too, so pick out the tool-server banner.
+		expect(
+			screen.getAllByRole("status").find((status) => /tool servers? did not start/.test(status.textContent ?? "")),
+		).toBeInTheDocument();
 	});
 
 	it("reuses anchor measurements while scrolling and refreshes after content mutations", () => {
@@ -2219,6 +2278,7 @@ describe("ChatWorkspace timeline", () => {
 
 		await jumpTo(20);
 		const turn = log.querySelector<HTMLElement>('[data-index="20"]')!;
+		// The settled turn's first disclosure is its Worked accordion, held above the virtualizer too.
 		const disclosure = within(turn).getAllByRole("button", { expanded: false })[0]!;
 		await user.click(disclosure);
 		expect(disclosure).toHaveAttribute("aria-expanded", "true");

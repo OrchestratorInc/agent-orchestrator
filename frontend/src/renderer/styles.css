@@ -2696,6 +2696,12 @@ html.sidebar-reordering * {
 	box-shadow: none;
 }
 
+/* Keyboard focus ring without a border, so layout never shifts. Must stay
+   after, and not be overridden by, any theme-specific box-shadow. */
+.cursor-chat-composer:has(:focus-visible) {
+	box-shadow: 0 0 0 1px var(--color-border-strong);
+}
+
 .cursor-chat-composer[data-attached-top] {
 	border-top-left-radius: 0;
 	border-top-right-radius: 0;
@@ -3010,9 +3016,9 @@ html.sidebar-reordering * {
 }
 
 :root[data-theme="light"] .cursor-chat-composer {
-	--composer-bg: var(--color-bg-secondary);
-
-	box-shadow: none;
+	/* `--color-bg-secondary` equals the canvas in light themes; with no border
+	   the composer needs the tertiary step to separate (see human message). */
+	--composer-bg: var(--color-bg-tertiary);
 }
 
 /* Light theme collapses the surface stack the dark bubble relies on: `--card`
@@ -6019,5 +6025,4 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	.ao-qr-resolved {
 		animation: none;
 	}
-
 }

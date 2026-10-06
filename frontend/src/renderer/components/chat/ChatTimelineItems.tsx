@@ -453,7 +453,11 @@ function formatDuration(ms: number): string {
 	// Status labels are intentionally discrete: start at one second and advance
 	// in whole seconds so the live and settled rows never show fractional time.
 	if (ms < 60_000) return `${Math.max(1, Math.floor(ms / 1000))}s`;
-	return `${Math.max(1, Math.floor(ms / 60_000))}m`;
+	const totalMinutes = Math.floor(ms / 60_000);
+	if (totalMinutes < 60) return `${totalMinutes}m`;
+	const hours = Math.floor(totalMinutes / 60);
+	const minutes = totalMinutes % 60;
+	return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
 }
 
 function formatDecisionDuration(ms: number): string {
@@ -464,8 +468,7 @@ function formatDecisionDuration(ms: number): string {
 export function ResponseSpinner() {
 	return (
 		<Loader2
-			role="status"
-			aria-label="Generating response"
+			aria-hidden="true"
 			data-testid="response-spinner"
 			className="size-3 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
 		/>
@@ -836,7 +839,12 @@ export function LiveResponseStatus({ startedAt, settling = false }: { startedAt?
 	}, [startedAt]);
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
-		if (settling) return;
+		if (settling) {
+			// The interval stops while settling; refresh once so the frozen label
+			// matches the final duration instead of lagging up to a second.
+			setNow(Date.now());
+			return;
+		}
 		const timer = window.setInterval(() => setNow(Date.now()), 1000);
 		return () => window.clearInterval(timer);
 	}, [settling]);
@@ -1980,9 +1988,9 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 									    told than a policy rule matching, so the provider's own word
 									    for it is carried rather than flattened to "automatically". */}
 									{detail.decisionSource}
-						{detail.durationMs !== undefined && detail.durationMs > 0
-							? ` · ${formatDecisionDuration(detail.durationMs)}`
-							: ""}
+									{detail.durationMs !== undefined && detail.durationMs > 0
+										? ` · ${formatDecisionDuration(detail.durationMs)}`
+										: ""}
 								</dd>
 							</>
 						) : null}
