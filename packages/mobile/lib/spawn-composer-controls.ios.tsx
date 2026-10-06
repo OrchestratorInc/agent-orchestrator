@@ -1,6 +1,6 @@
 import { Host, RNHostView } from "@expo/ui";
 import { Asset } from "expo-asset";
-import { Button, Group, HStack, Image, Menu, Spacer, Text, VStack } from "@expo/ui/swift-ui";
+import { Button, Divider, Group, HStack, Image, Menu, Spacer, Text, VStack } from "@expo/ui/swift-ui";
 import {
 	accessibilityIdentifier,
 	aspectRatio,
@@ -13,6 +13,7 @@ import {
 	labelStyle,
 	layoutPriority,
 	lineLimit,
+	menuOrder,
 	opacity,
 	padding,
 	resizable,
@@ -75,9 +76,16 @@ export function SpawnComposerControls({
 							<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
 						</HStack>
 					}
-					modifiers={[buttonStyle("plain"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ width: PROJECT_MENU_WIDTH, alignment: "leading" }), accessibilityIdentifier("spawn-project")]}
+					modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ width: PROJECT_MENU_WIDTH, alignment: "leading" }), accessibilityIdentifier("spawn-project")]}
 				>
-					{projects.map((project) => (
+					{projects.map((project) => project.sectionBreakBefore ? <Group key={project.id}>
+						<Divider />
+						<Button
+							label={project.label}
+							systemImage={project.id === projectId ? "checkmark" : "folder"}
+							onPress={() => { haptics.select(); onSelectProject(project.id); }}
+						/>
+					</Group> : (
 						<Button
 							key={project.id}
 							label={project.label}

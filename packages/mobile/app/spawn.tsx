@@ -404,7 +404,7 @@ function SpawnModalContent() {
 				<KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
 				{Platform.OS === "ios" ? voiceFeedback : null}
 				<SpawnComposerControls
-					projects={[{ id: STANDALONE_PROJECT, label: "Standalone worker" }, ...projects.map((item) => ({ id: item.id, label: item.name }))]}
+					projects={[...projects.map((item) => ({ id: item.id, label: item.name })), { id: STANDALONE_PROJECT, label: "Standalone agent", sectionBreakBefore: true }]}
 					projectId={projectId}
 					onSelectProject={changeProject}
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}

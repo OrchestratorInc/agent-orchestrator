@@ -107,6 +107,7 @@ describe("Android native compatibility boundaries", () => {
 		expect(android).not.toContain("Picker");
 		expect(android).not.toContain("@expo/ui");
 		expect(android).toContain("AgentLogo");
+		expect(android).toContain("option.sectionBreakBefore && styles.optionSectionBreak");
 	});
 
 	it("uses a rounded native Android attachment chooser instead of the square popup menu", () => {

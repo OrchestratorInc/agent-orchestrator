@@ -166,7 +166,7 @@ function OptionList({ title, options, selectedValue, showAgentLogos, onSelect, o
 							accessibilityState={{ selected }}
 							android_ripple={{ color: t.accentTint }}
 							onPress={() => onSelect(option.id)}
-							style={[styles.optionRow, index > 0 && styles.optionBorder, selected && styles.optionSelected]}
+							style={[styles.optionRow, index > 0 && !option.sectionBreakBefore && styles.optionBorder, option.sectionBreakBefore && styles.optionSectionBreak, selected && styles.optionSelected]}
 						>
 							{showAgentLogos ? <AgentLogo harness={option.id} size={24} /> : null}
 							<Text numberOfLines={2} style={[styles.optionLabel, selected && styles.optionLabelSelected]}>{option.label}</Text>
@@ -206,6 +206,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	optionList: { maxHeight: 340, borderRadius: 16, backgroundColor: t.bgElevated, overflow: "hidden" },
 	optionRow: { minHeight: 54, paddingHorizontal: space.lg, paddingVertical: space.md, flexDirection: "row", alignItems: "center", gap: space.md },
 	optionBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
+	optionSectionBreak: { marginTop: space.xs, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderDefault },
 	optionSelected: { backgroundColor: t.accentTint },
 	optionLabel: { fontFamily: "Geist_400Regular", flex: 1, color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
 	optionLabelSelected: { fontFamily: "Geist_600SemiBold", color: t.accent, fontWeight: "600" },

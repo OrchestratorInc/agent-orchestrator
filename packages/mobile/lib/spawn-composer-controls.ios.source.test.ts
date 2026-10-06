@@ -15,4 +15,11 @@ describe("iOS spawn menu layout", () => {
 		expect(source).toContain('accessibilityIdentifier("spawn-project")');
 		expect(source).toContain('accessibilityIdentifier("spawn-model")');
 	});
+
+	it("separates standalone from the project rows", () => {
+		expect(source).toContain("Button, Divider, Group");
+		expect(source).toContain('menuOrder("fixed")');
+		expect(source).toContain("project.sectionBreakBefore ? <Group");
+		expect(source).toContain("<Divider />");
+	});
 });
