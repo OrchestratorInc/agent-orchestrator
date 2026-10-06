@@ -3,6 +3,11 @@ import { installFakeAgent } from "./support/fake-bridge";
 
 test.use({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36" });
 
+// The nav cluster sits on the native traffic lights' centerline, not on the
+// session header, which is inset below the panel. The lights are 14px tall
+// with their top at y=12, so their center is 19px from the window top.
+const TRAFFIC_LIGHT_CENTER = 19;
+
 async function geometry(page: Page) {
 	return page.evaluate(() => {
 		const rect = (selector: string) => {
@@ -45,7 +50,7 @@ for (const mode of ["chat", "tui"] as const) {
 			}
 			await expect.poll(async () => {
 				const boxes = await geometry(page);
-				return Math.abs(boxes.nav.center - boxes.header.center);
+				return Math.abs(boxes.nav.center - TRAFFIC_LIGHT_CENTER);
 			}).toBeLessThanOrEqual(1);
 			if (mode === "chat" && !fullScreen) {
 				await page.setViewportSize({ width: 700, height: 800 });
@@ -64,7 +69,7 @@ for (const mode of ["chat", "tui"] as const) {
 			// Chromium can report a fractional CSS-pixel centerline after the sidebar
 			// transition. Keep the smoke assertion strict without rejecting subpixel
 			// rasterization differences across CI runners.
-			expect(Math.abs(collapsed.nav.center - collapsed.header.center)).toBeLessThanOrEqual(2);
+			expect(Math.abs(collapsed.nav.center - TRAFFIC_LIGHT_CENTER)).toBeLessThanOrEqual(2);
 			const firstTab = await page.getByRole("tab").first().boundingBox();
 			expect(firstTab!.x).toBeGreaterThanOrEqual(collapsed.nav.x + collapsed.nav.width);
 			if (!fullScreen) {

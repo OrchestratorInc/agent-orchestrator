@@ -18,7 +18,7 @@ trigger: "Using the ao CLI in an AO workspace: creating Cues, spawning workers, 
 | `automation` | Manage durable recurring session automations | Creating, editing, disabling, deleting, and inspecting scheduled runs | [commands/automation.md](commands/automation.md) |
 | `cue` | Create or list reusable project Cues | Saving a repetitive command or agent task at the user's request | [commands/cue.md](commands/cue.md) |
 | `orchestrator` | List orchestrator sessions | Viewing which sessions are orchestrators | [commands/orchestrator.md](commands/orchestrator.md) |
-| `review` | List, submit, cancel, or trigger a reviewer pass for a worker's PR | Managing a code review loop | [commands/review.md](commands/review.md) |
+| `review` | Start, list, cancel, or submit AO's native reviewer for a worker's PR (default: this session) | Getting an adversarial review of an AO session's PR; never spawn a worker to review | [commands/review.md](commands/review.md) |
 | `send` | Send a message to a running agent session | Correcting or directing a live agent | [commands/send.md](commands/send.md) |
 | `report` | Persist a meaningful worker report | Checkpoints, blockers, decisions, outputs, and completion | [commands/report.md](commands/report.md) |
 | `preview` | Start a session-owned app or open an exact URL/file | Running and showing the worker's relevant app, Markdown, HTML, PDF, or image | [commands/preview.md](commands/preview.md) |

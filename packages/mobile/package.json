@@ -70,8 +70,10 @@
   "devDependencies": {
     "@types/node": "^26.2.0",
     "@types/react": "~19.2.4",
+    "@types/react-test-renderer": "^19.3.0",
     "patch-package": "^8.0.1",
     "pngjs": "3.4.0",
+    "react-test-renderer": "^19.2.3",
     "typescript": "~6.0.3",
     "vitest": "^4.1.10"
   }
