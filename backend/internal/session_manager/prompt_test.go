@@ -323,6 +323,7 @@ func TestBuildSystemPrompt_WorkerNativeReviewFollowsProjectPolicy(t *testing.T) 
 		"An AO approval is not a GitHub approval",
 		"ao review resolve <finding-id> --note",
 		"Do not reply on GitHub for AO findings",
+		"Do not wait for a review by polling `ao review ls` in a background loop or background task",
 	}
 
 	on := build(true, true)
