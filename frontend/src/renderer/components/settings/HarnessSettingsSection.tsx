@@ -52,6 +52,8 @@ type OperationRequest = { agentId: AgentId; operation: InstalledOperation; metho
 const installerQueryKey = ["agent-installers"] as const;
 const installJobsQueryKey = ["agent-install-jobs"] as const;
 const updateAdvisoryQueryKey = (agentId: AgentId, hostId?: string) => ["agent-update-advisory", hostId ?? LOCAL_HOST, agentId] as const;
+const UNKNOWN_UPDATE_ADVISORY_REFRESH_MS = 5 * 60_000;
+const DEFINITIVE_UPDATE_ADVISORY_REFRESH_MS = 60 * 60_000;
 const POLL_INTERVAL_MS = 1_000;
 const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // The first check right after a login terminal exits can fail transiently (the
@@ -113,13 +115,19 @@ async function fetchUpdateAdvisory(agentId: AgentId, hostId?: string): Promise<A
 	return data;
 }
 
+export function updateAdvisoryRefreshInterval(advisory?: AgentUpdateAdvisory): number {
+	return !advisory || advisory.status === "unknown"
+		? UNKNOWN_UPDATE_ADVISORY_REFRESH_MS
+		: DEFINITIVE_UPDATE_ADVISORY_REFRESH_MS;
+}
+
 function HarnessUpdateAdvisory({ agentId, hostId, expanded = false }: { agentId: AgentId; hostId?: string; expanded?: boolean }) {
 	const { t } = useTranslation();
 	const advisory = useQuery({
 		queryKey: updateAdvisoryQueryKey(agentId, hostId),
 		queryFn: () => fetchUpdateAdvisory(agentId, hostId),
-		staleTime: 60 * 60_000,
-		refetchInterval: 60 * 60_000,
+		staleTime: (query) => updateAdvisoryRefreshInterval(query.state.data),
+		refetchInterval: (query) => updateAdvisoryRefreshInterval(query.state.data),
 		retry: false,
 	});
 	if (!expanded) return advisory.data?.status === "behind_latest"

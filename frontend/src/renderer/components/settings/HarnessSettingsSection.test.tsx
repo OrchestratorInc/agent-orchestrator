@@ -9,7 +9,7 @@ import { agentReadinessQueryKey, useAgentReadinessQuery, type AgentReadiness } f
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentReadiness } from "../../test/agent-readiness-fixtures";
 import { TooltipProvider } from "../ui/tooltip";
-import { HarnessSettingsSection } from "./HarnessSettingsSection";
+import { HarnessSettingsSection, updateAdvisoryRefreshInterval } from "./HarnessSettingsSection";
 
 // Cloud sign-in state for the cloud login rows. Signed out by default, which
 // leaves every row on its local-only controls.
@@ -121,6 +121,20 @@ const plans = {
 		},
 	],
 };
+
+describe("updateAdvisoryRefreshInterval", () => {
+	it("retries missing advisory data after five minutes", () => {
+		expect(updateAdvisoryRefreshInterval()).toBe(5 * 60_000);
+	});
+
+	it.each([
+		["unknown", 5 * 60_000],
+		["current", 60 * 60_000],
+		["behind_latest", 60 * 60_000],
+	] as const)("uses the expected cadence for %s advisories", (status, expected) => {
+		expect(updateAdvisoryRefreshInterval({ agentId: "codex", status, checkedAt: "2026-10-06T00:00:00Z" })).toBe(expected);
+	});
+});
 
 function ReadinessSelector({ agentId }: { agentId: string }) {
 	const readiness = useAgentReadinessQuery();
