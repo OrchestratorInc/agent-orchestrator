@@ -126,7 +126,7 @@ describe("FileContentPane", () => {
 				imageMediaType: "image/png",
 				deleted: false,
 				content: "",
-				contentTruncated: false,
+				contentTruncated: true,
 				diff: "",
 				diffTruncated: false,
 			},
@@ -136,6 +136,7 @@ describe("FileContentPane", () => {
 
 		expect(await screen.findByRole("img", { name: "assets/logo.png" })).toBeInTheDocument();
 		expect(screen.queryByText("Loading files...")).not.toBeInTheDocument();
+		expect(getMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows the filename instead of a redundant File tab for an untouched non-Markdown file", async () => {
