@@ -62,6 +62,30 @@ func TestProjectSetConfig_TrackerIntakeFlags(t *testing.T) {
 	}
 }
 
+func TestProjectUpdate_DryRunSendsPartialPatch(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := projectServer(t, http.StatusOK, `{"project":{"id":"demo"},"changes":[{"path":"config.canonicalRepoURL","from":"","to":"https://github.com/OrchestratorInc/agent-orchestrator"}],"dryRun":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "project", "update", "demo", "--canonical-repo-url", "https://github.com/OrchestratorInc/agent-orchestrator", "--dry-run", "--json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if capture.method != http.MethodPatch || capture.path != "/api/v1/projects/demo/config" {
+		t.Fatalf("request = %s %s, want PATCH /api/v1/projects/demo/config", capture.method, capture.path)
+	}
+	var got projectUpdateRequest
+	if err := json.Unmarshal(capture.body, &got); err != nil {
+		t.Fatalf("decode request: %v\nbody=%s", err, capture.body)
+	}
+	if got.CanonicalRepoURL == nil || *got.CanonicalRepoURL != "https://github.com/OrchestratorInc/agent-orchestrator" || !got.DryRun {
+		t.Fatalf("request = %#v", got)
+	}
+	if !strings.Contains(out, "canonicalRepoURL") {
+		t.Fatalf("output missing change: %s", out)
+	}
+}
+
 func TestProjectSetConfig_TrackerIntakeJSON(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, capture := projectServer(t, http.StatusOK, `{"project":{"id":"demo","path":"/repo/demo"}}`)

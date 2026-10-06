@@ -53,6 +53,7 @@ type Manager interface {
 	// SetConfig replaces a project's per-project config, returning the updated
 	// read-model.
 	SetConfig(ctx context.Context, id domain.ProjectID, in SetConfigInput) (Project, error)
+	UpdateConfig(ctx context.Context, id domain.ProjectID, in UpdateConfigInput) (UpdateConfigResult, error)
 
 	// Remove unregisters a project, stopping its sessions and reclaiming
 	// managed workspaces.
@@ -776,6 +777,66 @@ func (m *Service) SetConfig(ctx context.Context, id domain.ProjectID, in SetConf
 	}
 	m.modelScopeChanged(row.ID)
 	return m.projectFromRow(ctx, row), nil
+}
+
+// UpdateConfig merges explicitly supplied config fields and optionally returns
+// the resulting diff without persisting it.
+func (m *Service) UpdateConfig(ctx context.Context, id domain.ProjectID, in UpdateConfigInput) (UpdateConfigResult, error) {
+	if err := validateProjectID(id); err != nil {
+		return UpdateConfigResult{}, err
+	}
+	row, ok, err := m.store.GetProject(ctx, string(id))
+	if err != nil {
+		return UpdateConfigResult{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
+	}
+	if !ok || !row.ArchivedAt.IsZero() {
+		return UpdateConfigResult{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
+	}
+	updated := row.Config
+	changes := make([]ConfigChange, 0, 2)
+	if in.CanonicalRepoURL != nil {
+		from := updated.CanonicalRepoURL
+		updated.CanonicalRepoURL = strings.TrimSpace(*in.CanonicalRepoURL)
+		if from != updated.CanonicalRepoURL {
+			changes = append(changes, ConfigChange{Path: "config.canonicalRepoURL", From: from, To: updated.CanonicalRepoURL})
+		}
+	}
+	if in.DefaultBranch != nil {
+		from := updated.DefaultBranch
+		updated.DefaultBranch = strings.TrimSpace(*in.DefaultBranch)
+		if from != updated.DefaultBranch {
+			changes = append(changes, ConfigChange{Path: "config.defaultBranch", From: from, To: updated.DefaultBranch})
+		}
+	}
+	if err := updated.Validate(); err != nil {
+		return UpdateConfigResult{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
+	}
+	if row.Kind.WithDefault() == domain.ProjectKindScratch {
+		if err := validateScratchProjectConfig(updated); err != nil {
+			return UpdateConfigResult{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
+		}
+	}
+	if err := updated.ValidateCanonicalRepository(row.RepoOriginURL); err != nil {
+		return UpdateConfigResult{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
+	}
+	result := UpdateConfigResult{Changes: changes, DryRun: in.DryRun}
+	if in.DryRun || len(changes) == 0 {
+		project := m.projectFromRow(ctx, row)
+		result.Project = &project
+		return result, nil
+	}
+	stored, updatedRow, err := m.store.UpdateProjectConfig(ctx, string(id), updated)
+	if err != nil {
+		return UpdateConfigResult{}, apierr.Internal("PROJECT_CONFIG_UPDATE_FAILED", "Failed to update project config")
+	}
+	if !updatedRow {
+		return UpdateConfigResult{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
+	}
+	row = stored
+	m.modelScopeChanged(row.ID)
+	project := m.projectFromRow(ctx, row)
+	result.Project = &project
+	return result, nil
 }
 
 func validateScratchProjectConfig(cfg domain.ProjectConfig) error {

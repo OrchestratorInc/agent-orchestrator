@@ -2273,6 +2273,39 @@ func TestManager_SetPermissionsPreservesConfig(t *testing.T) {
 	}
 }
 
+func TestManager_UpdateConfigPreservesUnchangedFieldsAndDryRun(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t)
+	repo := gitRepo(t)
+	if out, err := exec.Command("git", "-C", repo, "remote", "add", "origin", "https://github.com/Untrivial-ai/agent-orchestrator").CombinedOutput(); err != nil {
+		t.Fatalf("origin: %v %s", err, out)
+	}
+	if _, err := m.Add(ctx, project.AddInput{Path: repo, ProjectID: ptr("ao")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.UpdateSettings(ctx, "ao", project.UpdateSettingsInput{DisplayName: "AO", Config: domain.ProjectConfig{
+		DefaultBranch: "main", Env: map[string]string{"KEEP": "yes"}, AgentRules: "keep",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	newURL := "https://github.com/OrchestratorInc/agent-orchestrator"
+	dry, err := m.UpdateConfig(ctx, "ao", project.UpdateConfigInput{CanonicalRepoURL: &newURL, DryRun: true})
+	if err != nil || len(dry.Changes) != 1 || !dry.DryRun {
+		t.Fatalf("dry run = %#v, err=%v", dry, err)
+	}
+	got, err := m.Get(ctx, "ao")
+	if err != nil || got.Project.Config.CanonicalRepoURL != "" {
+		t.Fatalf("dry run mutated config: %#v, err=%v", got.Project.Config, err)
+	}
+	if _, err := m.UpdateConfig(ctx, "ao", project.UpdateConfigInput{CanonicalRepoURL: &newURL}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = m.Get(ctx, "ao")
+	if err != nil || got.Project.Config.CanonicalRepoURL != newURL || got.Project.Config.Env["KEEP"] != "yes" || got.Project.Config.AgentRules != "keep" {
+		t.Fatalf("updated config = %#v, err=%v", got.Project.Config, err)
+	}
+}
+
 func TestManager_RememberPortablePermissions(t *testing.T) {
 	m := newManager(t)
 	ctx := context.Background()

@@ -2961,6 +2961,50 @@ paths:
       tags:
       - projects
   /api/v1/projects/{id}/config:
+    patch:
+      operationId: updateProjectConfig
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProjectConfigInput'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateProjectConfigResult'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Update selected project config fields
+      tags:
+      - projects
     put:
       operationId: setProjectConfig
       parameters:
@@ -13270,6 +13314,19 @@ components:
         worker:
           $ref: '#/components/schemas/RoleOverride'
       type: object
+    ProjectConfigChange:
+      properties:
+        from:
+          type: string
+        path:
+          type: string
+        to:
+          type: string
+      required:
+      - path
+      - from
+      - to
+      type: object
     ProjectGetResponse:
       properties:
         project:
@@ -15273,6 +15330,37 @@ components:
           type:
           - "null"
           - string
+      type: object
+    UpdateProjectConfigInput:
+      properties:
+        canonicalRepoURL:
+          type:
+          - "null"
+          - string
+        defaultBranch:
+          type:
+          - "null"
+          - string
+        dryRun:
+          type: boolean
+      type: object
+    UpdateProjectConfigResult:
+      properties:
+        changes:
+          items:
+            $ref: '#/components/schemas/ProjectConfigChange'
+          type: array
+        dryRun:
+          type: boolean
+        project:
+          anyOf:
+          - type: "null"
+          - $ref: '#/components/schemas/Project'
+            type: object
+      required:
+      - project
+      - changes
+      - dryRun
       type: object
     UpdateProjectSettingsInput:
       properties:
