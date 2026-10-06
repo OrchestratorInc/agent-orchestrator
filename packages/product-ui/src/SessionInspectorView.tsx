@@ -26,7 +26,7 @@ export type InspectorView = "summary" | "reviews" | "browser" | "files";
 
 export type InspectorTab = {
 	badge?: boolean;
-	/** Shown beside the icon when positive, e.g. the number of changed files. */
+	/** Corner badge count, e.g. changed files; hidden at zero. */
 	count?: number;
 	displayLabel?: string;
 	icon: ReactNode;
@@ -259,7 +259,6 @@ export function SessionInspectorSummaryView({
 	/** Omit alongside {@link artifactTitle} to skip the artifacts section entirely. */
 	artifactCards?: ReactNode;
 	artifactTitle?: string;
-	/** The session branch: its pull requests, uncommitted/unpushed work, and the next git action. */
 	branch?: ReactNode;
 	completion?: ReactNode;
 	context?: ReactNode;

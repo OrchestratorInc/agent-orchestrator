@@ -65,7 +65,6 @@ export function SessionBranchSummary({
 	onOpenFiles: () => void;
 	/** The open or draft PR that new commits would update. */
 	openPRNumber?: number;
-	/** The rendered pull request section, or null when the session has none. */
 	pullRequests: ReactNode;
 	session: WorkspaceSession;
 }) {

@@ -11,11 +11,8 @@ export type PendingSessionGitAction = {
 	idleSince?: number;
 };
 
-// The inspector's commit/push/PR button stays in its loading state from the
-// click until the workspace facts show the result. The Summary view unmounts on
-// every tab switch, so the pending action lives here, keyed by sessionUiKey.
-//
-// Not persisted — a reload re-derives everything from the workspace facts.
+// The Summary view unmounts on every tab switch, so a pending git action lives
+// here (keyed by sessionUiKey). Not persisted: a reload re-derives from git facts.
 type SessionGitActionState = {
 	pending: Record<string, PendingSessionGitAction>;
 	start: (key: string, kind: SessionGitActionKind) => void;
