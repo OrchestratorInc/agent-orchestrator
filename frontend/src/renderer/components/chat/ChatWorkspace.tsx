@@ -1463,6 +1463,11 @@ function ChatWorkspaceContent({
 							>
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
 								<StartupCueBanner sessionId={uiSessionId} run={session?.startupCue} />
+								{conversationEmpty ? (
+									<h1 className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl">
+										{t("chat.welcome.heading")}
+									</h1>
+								) : null}
 								<ChatComposer
 									focusRef={composerFocusRef}
 									key={`${draftScopeKey}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}

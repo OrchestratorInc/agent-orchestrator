@@ -710,7 +710,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(composer?.parentElement).toHaveClass("mx-auto", "w-full", "max-w-3xl");
 	});
 
-	it("shows live working state inline with the current turn while the composer owns the stop action", async () => {
+	it("keeps the live action row in the response while the composer owns the stop action", async () => {
 		const user = userEvent.setup();
 		const onInterrupt = vi.fn();
 		const snapshot = structuredClone(chatFixture);
@@ -725,17 +725,148 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} onInterrupt={onInterrupt} />);
 
-		const status = screen.getByTestId("live-turn-status");
-		expect(screen.getByRole("log", { name: "Conversation" })).toContainElement(status);
-		expect(status).toHaveClass("min-h-6", "px-1");
-		expect(status).not.toHaveClass("border", "bg-surface", "rounded-md");
-		expect(status).toHaveTextContent(/^Working for /);
-		expect(within(status).queryByRole("button")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("live-turn-status")).not.toBeInTheDocument();
+		// One Working row for the turn, owned by the turn group, never one per message.
+		expect(screen.getAllByTestId("live-working-label")).toHaveLength(1);
+		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Working for /);
+		expect(screen.getAllByTestId("response-spinner")).toHaveLength(1);
 
 		const stop = screen.getByRole("button", { name: "Stop turn" });
 		expect(screen.getByLabelText("Message the agent").closest("form")).toContainElement(stop);
 		await user.click(stop);
 		expect(onInterrupt).toHaveBeenCalledOnce();
+	});
+
+	it("shows Working when a running turn has not produced a timeline group yet", () => {
+		const requestedAt = new Date(Date.now() - 2_000).toISOString();
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			turns: [{ id: "turn-starting", state: "running", requestedAt }],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Working for /);
+		expect(screen.getByTestId("response-spinner")).toBeInTheDocument();
+	});
+
+	it("keeps single-item settled work inside the Worked accordion", async () => {
+		const user = userEvent.setup();
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			latestSequence: 3,
+			turns: [
+				{
+					id: "turn-with-prose-work",
+					state: "completed",
+					providerTurnId: "provider-turn-with-prose-work",
+					requestedAt: "2026-08-11T10:01:00Z",
+					startedAt: "2026-08-11T10:01:01Z",
+					completedAt: "2026-08-11T10:01:04Z",
+				},
+			],
+			items: [
+				{
+					kind: "message",
+					id: "prompt",
+					turnId: "turn-with-prose-work",
+					sequence: 1,
+					revision: 0,
+					role: "user",
+					origin: "human",
+					text: "Inspect the implementation",
+					streaming: false,
+					createdAt: "2026-08-11T10:01:00Z",
+				},
+				{
+					kind: "message",
+					id: "intermediate-answer",
+					turnId: "turn-with-prose-work",
+					sequence: 2,
+					revision: 0,
+					role: "assistant",
+					origin: "provider",
+					text: "I found the relevant component.",
+					streaming: false,
+					createdAt: "2026-08-11T10:01:02Z",
+				},
+				{
+					kind: "message",
+					id: "final-answer",
+					turnId: "turn-with-prose-work",
+					sequence: 3,
+					revision: 0,
+					role: "assistant",
+					origin: "provider",
+					text: "The implementation is correct.",
+					streaming: false,
+					createdAt: "2026-08-11T10:01:04Z",
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+		const worked = screen.getByRole("button", { name: /Worked for/ });
+		expect(screen.getByText("The implementation is correct.")).toBeVisible();
+
+		await user.click(worked);
+		expect(screen.getByText("I found the relevant component.")).toBeVisible();
+	});
+
+	it("keeps a mid-turn steer in order among the work instead of hoisting it with the prompt", () => {
+		const turnId = "turn-with-steer";
+		const at = "2026-08-11T10:01:00Z";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 5,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Run the unit tests",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "message", id: "prose", turnId, sequence: 2, revision: 0,
+					role: "assistant", origin: "provider", text: "Starting with the test suite.",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "activity", id: "tool", turnId, sequence: 3, revision: 0,
+					activityKind: "command", status: "completed", summary: "go test ./...",
+					detail: { command: "go test ./..." }, createdAt: at,
+				},
+				{
+					kind: "activity", id: "steer", turnId, sequence: 4, revision: 0,
+					activityKind: "system", status: "completed", summary: "Only the unit ones, please",
+					detail: { event: "steer", text: "Only the unit ones, please", origin: "human" },
+					createdAt: at,
+				},
+				{
+					kind: "message", id: "reply", turnId, sequence: 5, revision: 0,
+					role: "assistant", origin: "provider", text: "Switching to the unit tests.",
+					streaming: false, createdAt: at,
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		// Read the transcript in document order: only the prompt sits above Working, and
+		// the steer stays after the work it interrupted and before the reply to it.
+		const text = screen.getByRole("log").textContent ?? "";
+		const positions = [
+			"Run the unit tests",
+			"Working for",
+			"Starting with the test suite.",
+			"Ran command",
+			"Only the unit ones, please",
+			"Switching to the unit tests.",
+		].map((fragment) => text.indexOf(fragment));
+		expect(positions.every((position) => position >= 0)).toBe(true);
+		expect(positions).toEqual([...positions].sort((a, b) => a - b));
 	});
 
 	it("replaces the generic working label with Claude's live retry count and backoff", () => {
@@ -772,6 +903,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(status).toHaveTextContent("Reconnecting to Claude, attempt 2 of 10.");
 		expect(status).toHaveTextContent("The API request failed. Trying again in 4s.");
 		expect(status).not.toHaveTextContent("Working for");
+		expect(screen.queryByTestId("live-working-label")).not.toBeInTheDocument();
 	});
 
 	it("interrupts the active turn when Escape is pressed", () => {
@@ -988,12 +1120,14 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent("The agent is waiting for your decision.");
 		expect(screen.getByText("Do you want to run this command?")).toBeInTheDocument();
 		expect(screen.queryByText("Waiting for your decision")).not.toBeInTheDocument();
-		expect(screen.queryByText(/^Working for /)).not.toBeInTheDocument();
+		expect(screen.getAllByTestId("live-working-label")).toHaveLength(1);
+		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Working for /);
 		const approval = screen.getByRole("group", {
 			name: "Approval request approval-1",
 		});
 		const composer = approval.closest("form");
-		expect(composer).toHaveClass("cursor-chat-composer", "border");
+		expect(composer).toHaveClass("cursor-chat-composer");
+		expect(composer).not.toHaveClass("border");
 		expect(screen.getByRole("log", { name: "Conversation" })).not.toContainElement(approval);
 		expect(screen.queryByLabelText("Message the agent")).not.toBeInTheDocument();
 		expect(within(approval).queryByText("Terminal")).not.toBeInTheDocument();
@@ -1302,6 +1436,9 @@ describe("ChatWorkspace timeline", () => {
 		const snapshot = {
 			...chatFixtureSettled,
 			controller: { state: "connecting" as const },
+			items: chatFixtureSettled.items.map((item) =>
+				item.kind === "message" && item.role === "assistant" ? { ...item, streaming: false } : item,
+			),
 			turns: [
 				...chatFixtureSettled.turns,
 				{ id: "queued-start", state: "queued" as const, requestedAt: "2026-08-15T00:00:00Z" },
@@ -1400,7 +1537,10 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent("thread hit an internal error");
 
 		rerender(<ChatWorkspace snapshot={chatFixtureMcpFailed} />);
-		expect(screen.getByRole("status")).toHaveTextContent(/tool servers? did not start/);
+		// The live turn's Working row is a status too, so pick out the tool-server banner.
+		expect(
+			screen.getAllByRole("status").find((status) => /tool servers? did not start/.test(status.textContent ?? "")),
+		).toBeInTheDocument();
 	});
 
 	it("reuses anchor measurements while scrolling and refreshes after content mutations", () => {
@@ -1924,16 +2064,21 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("tooltip")).not.toHaveTextContent("Automatic compaction completed");
 	});
 
-	it("centers the composer on an empty conversation instead of a starter blurb", () => {
+	it("centers an empty-chat welcome heading above a realistic starter prompt", () => {
+		const random = vi.spyOn(Math, "random").mockReturnValue(0);
 		render(<ChatWorkspace snapshot={chatFixtureEmpty} />);
-		expect(screen.queryByText("Start the conversation")).not.toBeInTheDocument();
 		expect(screen.queryByRole("log")).not.toBeInTheDocument();
-		expect(screen.getByLabelText("Message the agent")).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "What do you want to work on?" })).toHaveClass("font-normal");
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute(
+			"aria-placeholder",
+			"Fix a failing test in this project",
+		);
 		expect(
 			screen
 				.getByTestId("chat-conversation-panel")
 				.querySelector("[data-composer-placement='center']"),
 		).not.toBeNull();
+		random.mockRestore();
 	});
 
 	it("docks the composer once the conversation has content", () => {
@@ -2133,6 +2278,7 @@ describe("ChatWorkspace timeline", () => {
 
 		await jumpTo(20);
 		const turn = log.querySelector<HTMLElement>('[data-index="20"]')!;
+		// The settled turn's first disclosure is its Worked accordion, held above the virtualizer too.
 		const disclosure = within(turn).getAllByRole("button", { expanded: false })[0]!;
 		await user.click(disclosure);
 		expect(disclosure).toHaveAttribute("aria-expanded", "true");
@@ -3554,8 +3700,8 @@ describe("ChatWorkspace message actions", () => {
 		const snapshot = structuredClone(chatFixture);
 		snapshot.items = snapshot.items.filter((item) => item.sequence <= 12);
 		render(<ChatWorkspace snapshot={snapshot} />);
-		// The latest assistant message is mid-stream; half a message is not what the
-		// reader means by "copy this", and streaming has no extra visual indicator.
+		// The latest assistant message is mid-stream; its copy action remains mounted
+		// in the bottom row while the response continues.
 		expect(screen.queryByLabelText("still writing")).not.toBeInTheDocument();
 		expect(screen.queryByText("Writing…")).not.toBeInTheDocument();
 	});

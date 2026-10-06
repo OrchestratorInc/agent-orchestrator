@@ -595,6 +595,7 @@ type Review struct {
 	ProviderConversationID string
 	ControllerGeneration   string
 	ControllerError        string
+	IsArchived             bool
 }
 
 type ReviewRun struct {

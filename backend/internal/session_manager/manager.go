@@ -4907,6 +4907,8 @@ func promptProjectContext(projectID domain.ProjectID, project domain.ProjectReco
 		Repo:          project.RepoOriginURL,
 		DefaultBranch: cfg.DefaultBranch,
 		Path:          project.Path,
+
+		WorkersRequestReview: cfg.WorkersRequestReview,
 	}
 }
 

@@ -226,9 +226,6 @@ func TestReviewRunCDC_EmitsOnInsertAndLifecycleUpdates(t *testing.T) {
 	if ok, err := s.UpdateReviewRunResult(ctx, "run-complete", domain.ReviewRunComplete, domain.VerdictApproved, "done", "gh-review-1", true); err != nil || !ok {
 		t.Fatalf("complete update ok=%v err=%v", ok, err)
 	}
-	if ok, err := s.MarkReviewRunDelivered(ctx, "run-complete", now.Add(time.Minute)); err != nil || !ok {
-		t.Fatalf("deliver update ok=%v err=%v", ok, err)
-	}
 
 	insertRun("run-failed", "sha-2", domain.ReviewTriggerManual)
 	if n, err := s.SupersedeStaleRunningReviewRuns(ctx, rec.ID, review.PRURL, "sha-new", "stale"); err != nil || n != 1 {
@@ -256,8 +253,8 @@ func TestReviewRunCDC_EmitsOnInsertAndLifecycleUpdates(t *testing.T) {
 	if len(created) != 3 {
 		t.Fatalf("want 3 review-run created events, got %d", len(created))
 	}
-	if len(updated) != 4 {
-		t.Fatalf("want 4 review-run updated events, got %d", len(updated))
+	if len(updated) != 3 {
+		t.Fatalf("want 3 review-run updated events, got %d", len(updated))
 	}
 	var createdPayload map[string]any
 	if err := json.Unmarshal(created[0].Payload, &createdPayload); err != nil {

@@ -197,7 +197,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const title = sessionName || conversation.snapshot?.title || session.id;
 	const projectName = "projectName" in session
 		? session.projectName
-		: projects.find((project) => project.id === session.projectId)?.name;
+		: session.projectId ? projects.find((project) => project.id === session.projectId)?.name : "Standalone";
 	const headerHarness = conversation.snapshot?.harness || session.harness || "Agent";
 	const headerState = conversation.snapshot?.controller.state;
 	const reviewPromptPRCandidate = "projectName" in session ? undefined : sessionPRReadyForReview(session);

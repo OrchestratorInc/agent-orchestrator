@@ -65,6 +65,7 @@ import { clientForHost } from "../lib/host-clients";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
+import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 
 export const Route = createFileRoute("/_shell")({
 	// Prefetch the workspace list for the whole shell (parent loaders run before
@@ -207,6 +208,24 @@ function ShellLayout() {
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
 	const sidebarHasLayout = useUiStore(sidebarOccupiesLayout);
+	// The drag strip above the sidebar must be exactly as wide as the sidebar.
+	// `--ao-sidebar-w` only reaches the strip if it already exists when the
+	// sidebar first applies its saved width, so measure the sidebar instead.
+	const [sidebarWidthPx, setSidebarWidthPx] = useState<number | null>(null);
+	useEffect(() => {
+		if (!isMac || !sidebarHasLayout) return;
+		let observer: ResizeObserver | undefined;
+		const frame = requestAnimationFrame(() => {
+			const el = document.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
+			if (!el) return;
+			observer = new ResizeObserver(([entry]) => setSidebarWidthPx(entry.target.getBoundingClientRect().width));
+			observer.observe(el);
+		});
+		return () => {
+			cancelAnimationFrame(frame);
+			observer?.disconnect();
+		};
+	}, [sidebarHasLayout]);
 	const syncSystemTheme = useUiStore((state) => state.syncSystemTheme);
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const openProjectSettings = useUiStore((state) => state.openProjectSettings);
@@ -322,9 +341,18 @@ function ShellLayout() {
 		: routeParams.sessionId
 			? workspaces.find((workspace) => workspace.sessions.some((session) => session.id === routeParams.sessionId))?.id
 			: undefined;
-	const scopedSession = !routeParams.hostId && routeParams.sessionId
-		? workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === routeParams.sessionId)
+	const scopedSession = routeParams.sessionId
+		? (routeParams.hostId ? remoteWorkspaces : workspaces)
+			.flatMap((workspace) => workspace.sessions)
+			.find((session) => session.id === routeParams.sessionId)
 		: undefined;
+	useEffect(() => {
+		recordSessionSurface(
+			scopedSession?.kind === "orchestrator" || scopedSession?.kind === "worker"
+				? { kind: scopedSession.kind, sessionId: sessionUiKey(scopedSession.id, routeParams.hostId) }
+				: null,
+		);
+	}, [routeParams.hostId, scopedSession?.id, scopedSession?.kind]);
 	// Warms the New Task composer's model-catalog cache while the user is just
 	// looking at the project, so the picker never shows a loading flash the
 	// first time they actually open the dialog.
@@ -406,6 +434,7 @@ function ShellLayout() {
 					: (currentIndex + direction + sessions.length) % sessions.length;
 			const session = sessions[nextIndex];
 			if (!session || session.id === routeParams.sessionId) return;
+			if (session.kind === "worker") recordManualWorkerOpen(sessionUiKey(session.id, hostId));
 			void navigate(sessionNavigateTarget(projectId, session.id, hostId));
 		},
 		[navigate, routeParams.hostId, routeParams.projectId, routeParams.sessionId, scopedProjectId],
@@ -1236,7 +1265,10 @@ function ShellLayout() {
 								isFullScreen ? "pointer-events-none h-0" : "h-traffic-light-clearance",
 							)}
 							ref={sidebarDragStripRef}
-							style={trafficLightDragActive ? ({ WebkitAppRegion: "drag" } as CSSProperties) : undefined}
+							style={{
+								...(sidebarHasLayout && sidebarWidthPx ? { width: sidebarWidthPx } : null),
+								...(trafficLightDragActive ? ({ WebkitAppRegion: "drag" } as CSSProperties) : null),
+							}}
 						/>
 					) : null}
 					{/* Fixed macOS titlebar cluster beside the traffic lights — rendered

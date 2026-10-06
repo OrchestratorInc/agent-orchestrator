@@ -48,7 +48,7 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, Loader2, Plus, Square, X } from "lucide-react";
+import { ArrowUp, CornerUpRight, ListPlus, Loader2, Plus, Square, X } from "lucide-react";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "../../lib/utils";
@@ -193,6 +193,7 @@ export const ChatComposer = memo(function ChatComposer({
 	remoteHost = false,
 	assetSessionId,
 	acceptedClientMessageIds,
+	emptyPlaceholder,
 }: {
 	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (
@@ -213,6 +214,8 @@ export const ChatComposer = memo(function ChatComposer({
 	disabled?: boolean;
 	/** Explains why message entry is temporarily blocked. */
 	disabledPlaceholder?: string;
+	/** A contextual prompt shown before an otherwise empty conversation begins. */
+	emptyPlaceholder?: string;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
@@ -337,6 +340,8 @@ export const ChatComposer = memo(function ChatComposer({
 			: undefined,
 	);
 	const [steerNextRequest, setSteerNextRequest] = useState(0);
+	// Cmd/Ctrl held anywhere in the window turns a send-button click into a steer.
+	const [modifierHeld, setModifierHeld] = useState(false);
 	// The DOM event is the source of truth while React catches up with the draft
 	// transition. This keeps Enter-after-fast-typing from observing stale state.
 	const textRef = useRef("");
@@ -522,17 +527,24 @@ export const ChatComposer = memo(function ChatComposer({
 			!durableDelivery &&
 			!fileAttachments.preparing;
 	const sendActionEnabled = canSend || canRecoverDelivery;
+	// A plain send while a turn runs is queued, so the button says so instead of
+	// looking identical to an immediate send.
+	const queuesDraft = Boolean(willQueue && !savingQueuedEdit && !queuedEditRecovery);
+	// Cmd/Ctrl+Enter or Cmd/Ctrl+click steers the current draft into the running
+	// turn; the send button only shows it while the modifier is held.
+	const canSteerDraft = Boolean(canSteer && onSteer) && !savingQueuedEdit;
+	const steersDraft = modifierHeld && canSteerDraft;
+	const showsSteer = steersDraft && !durableDelivery && !queuedEditRecovery;
 	const sendActionLabel = translateDraft(durableDelivery
 		? durableDelivery.state === "accepted"
 			? "chat.draft.clearMessage"
 			: "chat.draft.retryMessage"
-		: queuedEditRecovery ? "chat.draft.retryEdit" : "Send message");
+		: queuedEditRecovery
+			? "chat.draft.retryEdit"
+			: showsSteer ? "Steer message" : queuesDraft ? "Queue message" : "Send message");
 	const canStopTurn = Boolean(
 		willQueue && onInterrupt && !controlsDisabled && !hasDraft && !savingQueuedEdit,
 	);
-	// Cmd/Ctrl+Enter remains an intentionally quiet power-user path for steering
-	// the current draft into the running turn. The visible hint stays queue-only.
-	const canSteerDraft = Boolean(canSteer && onSteer) && !savingQueuedEdit;
 	const canSteerNext =
 		Boolean(canSteer && onSteer) &&
 		!controlsDisabled &&
@@ -543,9 +555,11 @@ export const ChatComposer = memo(function ChatComposer({
 		? "Enter to insert"
 		: savingQueuedEdit
 			? "⏎ save edit"
-			: willQueue
-				? "⏎ queue"
-				: "Enter to send";
+			: showsSteer
+				? "Steer into running turn"
+				: willQueue
+					? "⏎ queue"
+					: "Enter to send";
 	const persistedText = persistedDraft?.composer.text;
 	const draftSeedId = draftSeed?.id ?? (draftScopeKey ? `session:${draftScopeKey}` : undefined);
 	const draftSeedText = draftSeed?.text ?? persistedText;
@@ -1369,15 +1383,13 @@ export const ChatComposer = memo(function ChatComposer({
 		void fileAttachments.addFiles(files);
 	}
 
-	// Keep the hidden Cmd/Ctrl steering shortcut available for the send-button path
-	// without rerendering the composer for every modifier key event.
-	const modifierHeldRef = useRef(false);
+	// Only modifier transitions re-render: React bails out when the value is unchanged.
 	useEffect(() => {
 		const onKey = (event: globalThis.KeyboardEvent) => {
-			modifierHeldRef.current = event.metaKey || event.ctrlKey;
+			setModifierHeld(event.metaKey || event.ctrlKey);
 		};
 		const onBlur = () => {
-			modifierHeldRef.current = false;
+			setModifierHeld(false);
 		};
 		window.addEventListener("keydown", onKey);
 		window.addEventListener("keyup", onKey);
@@ -1425,7 +1437,7 @@ export const ChatComposer = memo(function ChatComposer({
 			<form
 				onSubmit={(event) => event.preventDefault()}
 				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
-				className="cursor-chat-composer relative flex flex-col gap-1.5 border px-3 py-3"
+				className="cursor-chat-composer relative flex flex-col gap-1.5 px-3 py-3"
 			>
 				{approval}
 				{commandError ? (
@@ -1440,7 +1452,7 @@ export const ChatComposer = memo(function ChatComposer({
 	return withQueueStack(
 		<form
 			// Cmd/Ctrl steering remains available as a quiet power-user action.
-			onSubmit={(event) => void submit(event, modifierHeldRef.current && canSteerDraft)}
+			onSubmit={(event) => void submit(event, steersDraft)}
 				onDragOver={(event) => {
 					if (!canAttach || submitInFlight.current) return;
 					event.preventDefault();
@@ -1464,7 +1476,7 @@ export const ChatComposer = memo(function ChatComposer({
 						editor.current?.focus();
 					}
 				}}
-				className="cursor-chat-composer relative flex cursor-text flex-col gap-1.5 border px-3 pt-3 pb-3"
+				className="cursor-chat-composer relative flex cursor-text flex-col gap-1.5 px-3 pt-3 pb-3"
 			>
 				{menuOpen && trigger ? (
 					<ComposerSuggestMenu
@@ -1546,7 +1558,7 @@ export const ChatComposer = memo(function ChatComposer({
 							? "The controller is not connected"
 							: willQueue
 								? "Agent is working — this sends when it finishes"
-								: "Message the agent…")
+								: emptyPlaceholder ?? "Message the agent…")
 					}
 					menuOpen={menuOpen}
 					menuId={menuId}
@@ -1659,6 +1671,10 @@ export const ChatComposer = memo(function ChatComposer({
 											<Square aria-hidden="true" className="size-2.5 fill-current" />
 										) : submitting || steerPending || savingQueuedEditPending || sendPending ? (
 											<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+										) : showsSteer ? (
+											<CornerUpRight aria-hidden="true" className="size-3.5" />
+										) : queuesDraft && !durableDelivery ? (
+											<ListPlus aria-hidden="true" className="size-3.5" />
 										) : (
 											<ArrowUp aria-hidden="true" className="size-3.5" />
 										)}

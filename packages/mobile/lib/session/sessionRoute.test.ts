@@ -76,6 +76,12 @@ describe("sessionRouteView", () => {
 		expect(view({ lookup: found(live) })).toEqual({ kind: "screen", session: live });
 	});
 
+	it("opens a standalone worker without a project id", () => {
+		const standalone = worker({ id: "standalone-1", projectId: "" });
+		expect(view({ listed: standalone })).toEqual({ kind: "screen", session: standalone });
+		expect(view({ lookup: found(standalone) })).toEqual({ kind: "screen", session: standalone });
+	});
+
 	it.each([404, 410])("reports not found only on a %s", (status) => {
 		expect(view({ lookup: failed(status) })).toEqual({ kind: "missing" });
 	});

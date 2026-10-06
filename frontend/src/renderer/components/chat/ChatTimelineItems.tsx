@@ -450,12 +450,29 @@ function shortenPaths(text: string): string {
 }
 
 function formatDuration(ms: number): string {
-	if (ms < 1000) return `${ms}ms`;
-	if (ms < 60_000) {
-		// Drop a trailing ".0" so whole seconds read as "3s", not "3.0s".
-		return `${(ms / 1000).toFixed(1).replace(/\.0$/, "")}s`;
-	}
-	return `${Math.round(ms / 60_000)}m`;
+	// Status labels are intentionally discrete: start at one second and advance
+	// in whole seconds so the live and settled rows never show fractional time.
+	if (ms < 60_000) return `${Math.max(1, Math.floor(ms / 1000))}s`;
+	const totalMinutes = Math.floor(ms / 60_000);
+	if (totalMinutes < 60) return `${totalMinutes}m`;
+	const hours = Math.floor(totalMinutes / 60);
+	const minutes = totalMinutes % 60;
+	return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}
+
+function formatDecisionDuration(ms: number): string {
+	if (ms < 1_000) return `${Math.max(0, Math.round(ms))}ms`;
+	return `${(ms / 1_000).toFixed(1)}s`;
+}
+
+export function ResponseSpinner() {
+	return (
+		<Loader2
+			aria-hidden="true"
+			data-testid="response-spinner"
+			className="size-3 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
+		/>
+	);
 }
 
 function formatTime(iso: string): string {
@@ -746,26 +763,28 @@ function BrowserAnnotationOrigin({
 export function AssistantMessage({
 	message,
 	showCopy = false,
+	live = false,
 	onRollback,
-	durationMs,
+	rollbackDisabled = false,
 }: {
 	message: ConversationMessage;
-	/** Only the final answer of a finished turn owns the turn's copy action. */
+	/** The final answer owns the copy action; it stays available while that answer streams. */
 	showCopy?: boolean;
+	/** The enclosing turn is still active, even if its last text chunk has landed. */
+	live?: boolean;
 	/**
 	 * Discard this turn and everything after it. Lives next to copy so the finished
 	 * answer owns both "keep this" and "undo from here".
 	 */
 	onRollback?: () => void;
-	/** How long the finished turn took; sits next to rollback on the action row. */
-	durationMs?: number;
+	/** Keep the rollback action mounted while another response is streaming. */
+	rollbackDisabled?: boolean;
 }) {
 	const visibleText = useSmoothStreamingText(message);
 	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
-	const hasDuration = durationMs !== undefined && durationMs > 0;
-	const showActions = !renderingStreaming && (showCopy || Boolean(onRollback) || hasDuration);
+	const showActions = !live && !renderingStreaming && (showCopy || Boolean(onRollback));
 	return (
-		<div className="group/message relative">
+		<div className="group/message relative" data-chat-streaming-output={renderingStreaming ? "" : undefined}>
 			<ChatMarkdown text={visibleText} streaming={renderingStreaming} />
 			{showActions ? (
 				// One action row for the completed answer, not one after every prose
@@ -773,14 +792,16 @@ export function AssistantMessage({
 				// duration stay visible; only the wall-clock time reveals on hover.
 				<div className="mt-1 flex h-7 items-center gap-0.5">
 					{showCopy ? (
-						/* The stored markdown, not a re-serialization of what was rendered:
-						   pasting it into an editor has to give back what the agent wrote. */
-						<CopyButton
-							text={message.text}
-							label="Copy message as markdown"
-							compact
-							className="-ml-1.5 size-7 justify-center rounded-md px-0 py-0 transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
-						/>
+						<div className="-ml-1.5 size-7 shrink-0">
+							{/* The stored markdown, not a re-serialization of what was rendered:
+							   pasting it into an editor has to give back what the agent wrote. */}
+							<CopyButton
+								text={message.text}
+								label="Copy message as markdown"
+								compact
+								className="size-7 justify-center rounded-md px-0 py-0 transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
+							/>
+						</div>
 					) : null}
 					{onRollback ? (
 						<Tooltip>
@@ -788,8 +809,9 @@ export function AssistantMessage({
 								<button
 									type="button"
 									onClick={onRollback}
+									disabled={rollbackDisabled}
 									aria-label="Roll back to here"
-									className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
+									className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none motion-reduce:active:scale-100"
 								>
 									<Undo2 aria-hidden="true" className="size-3" />
 								</button>
@@ -797,7 +819,6 @@ export function AssistantMessage({
 							<TooltipContent side="bottom">Roll back to here</TooltipContent>
 						</Tooltip>
 					) : null}
-					{hasDuration ? <TurnDuration durationMs={durationMs} /> : null}
 					<span
 						className="w-auto shrink-0 px-1 text-[11px] tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
 						aria-label={`Sent ${formatMessageTimestamp(message.createdAt)}`}
@@ -806,6 +827,53 @@ export function AssistantMessage({
 					</span>
 				</div>
 			) : null}
+		</div>
+	);
+}
+
+
+export function LiveResponseStatus({ startedAt, settling = false }: { startedAt?: string; settling?: boolean }) {
+	const started = useMemo(() => {
+		const parsed = startedAt ? Date.parse(startedAt) : Date.now();
+		return Number.isFinite(parsed) ? parsed : Date.now();
+	}, [startedAt]);
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (settling) {
+			// The interval stops while settling; refresh once so the frozen label
+			// matches the final duration instead of lagging up to a second.
+			setNow(Date.now());
+			return;
+		}
+		const timer = window.setInterval(() => setNow(Date.now()), 1000);
+		return () => window.clearInterval(timer);
+	}, [settling]);
+	const elapsedMs = Math.max(0, now - started);
+	// Settling animates opacity and transform only, never layout, so it stays smooth
+	// even when the main thread is busy finishing the turn. These are keyframe
+	// animations rather than transitions so they also play when the row first
+	// mounts already settled. The spinner shrinks and fades in place while the label
+	// slides left by the spinner's footprint (12px + 6px gap), landing exactly where
+	// the settled "Worked for" row puts it. The label keeps its shimmer class
+	// throughout (only the highlight fades), so the text never changes paint
+	// technique and cannot blink.
+	return (
+		<div className="-mx-1 flex h-7 select-none items-center gap-1.5 border-b border-border px-1 py-0">
+			<span
+				aria-hidden={settling || undefined}
+				data-settling={settling || undefined}
+				className="chat-working-spinner-slot flex shrink-0 origin-center"
+			>
+				<ResponseSpinner />
+			</span>
+			<span
+				role="status"
+				data-testid="live-working-label"
+				data-settling={settling || undefined}
+				className="chat-working-shimmer text-sm font-normal"
+			>
+				{settling ? "Worked for" : "Working for"} {formatDuration(elapsedMs)}
+			</span>
 		</div>
 	);
 }
@@ -1921,7 +1989,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 									    for it is carried rather than flattened to "automatically". */}
 									{detail.decisionSource}
 									{detail.durationMs !== undefined && detail.durationMs > 0
-										? ` · ${formatDuration(detail.durationMs)}`
+										? ` · ${formatDecisionDuration(detail.durationMs)}`
 										: ""}
 								</dd>
 							</>
@@ -2756,10 +2824,16 @@ function fileBasename(path: string): string {
 /* -------------------------------------------------------------------------- */
 
 /** Turn wall-clock duration; lives on the action row next to rollback, not the Done divider. */
-export function TurnDuration({ durationMs }: { durationMs: number }) {
+export function TurnDuration({ durationMs, inline = false }: { durationMs: number; inline?: boolean }) {
 	if (durationMs <= 0) return null;
 	return (
-		<span className="shrink-0 px-1 font-sans text-[12px] leading-none tabular-nums text-muted-foreground">
+		<span
+			className={cn(
+				"shrink-0 font-sans text-sm leading-none tabular-nums text-muted-foreground",
+				inline && "group-hover/row:text-foreground",
+				!inline && "px-1",
+			)}
+		>
 			{formatDuration(durationMs)}
 		</span>
 	);

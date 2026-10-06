@@ -11,6 +11,7 @@ import {
 	reviewerConversationQueryRoot,
 } from "../hooks/useReviewerConversation";
 import { agentSwitchesQueryRoot } from "../hooks/useAgentSwitches";
+import { sessionReviewsQueryKey } from "./session-reviews";
 import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
 import { agentSwitchVisibility } from "./agent-switch-visibility";
 import { codexAccountsQueryKey, writeCodexAccounts } from "../hooks/codex-accounts-state";
@@ -62,6 +63,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 			const pendingConversationSessions = new Set<string>();
 			const pendingReviewerConversations = new Set<string>();
+			const pendingReviewSessions = new Set<string>();
 			const pendingInterfaceTransitionSessions = new Set<string>();
 			const pendingEditorHandoffSessions = new Set<string>();
 			const pendingModelCatalogScopes = new Map<string, { agentId: string; projectId: string }>();
@@ -232,6 +234,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					invalidate(conversationQueryKey(sessionId));
 				}
 				pendingConversationSessions.clear();
+				for (const sessionId of pendingReviewSessions) {
+					invalidate(sessionReviewsQueryKey(sessionId));
+				}
+				pendingReviewSessions.clear();
 				for (const reviewId of pendingReviewerConversations) {
 					invalidate(reviewerConversationQueryKey(reviewId));
 				}
@@ -282,6 +288,17 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 										projectId?: unknown;
 								  })
 								: undefined;
+						// A review run can start or finish without this window asking for
+						// it: an agent ran `ao review trigger`, auto-review fired, or a
+						// reviewer submitted. Refresh that session's reviews so the
+						// inspector shows it instead of a stale verdict.
+						if (
+							(decoded.type === "review_run_created" || decoded.type === "review_run_updated") &&
+							typeof decoded.sessionId === "string" &&
+							decoded.sessionId
+						) {
+							pendingReviewSessions.add(decoded.sessionId);
+						}
 						if (payload?.kind === "model_catalog" && typeof payload.agentId === "string" && typeof payload.projectId === "string") {
 							pendingModelCatalogScopes.set(`${payload.agentId}\0${payload.projectId}`, {
 								agentId: payload.agentId,
@@ -474,6 +491,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				disposed = true;
 				if (refreshTimer !== undefined) clearTimeout(refreshTimer);
 				pendingConversationSessions.clear();
+				pendingReviewSessions.clear();
 				pendingInterfaceTransitionSessions.clear();
 				pendingModelCatalogScopes.clear();
 				refreshes.clear();
