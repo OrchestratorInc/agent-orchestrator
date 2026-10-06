@@ -232,8 +232,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					: [],
 			),
 		);
+		const queuedTurnIds = new Set(snapshot.turns.filter((turn) => turn.state === "queued").map((turn) => turn.id));
 		for (const echo of localEchos) {
-			if (echo.turnId && durableHumanTurnIds.has(echo.turnId)) acknowledgeLocalEcho?.(echo.turnId);
+			if (
+				echo.turnId && durableHumanTurnIds.has(echo.turnId) &&
+				!(echo.backgroundWake && queuedTurnIds.has(echo.turnId))
+			) acknowledgeLocalEcho?.(echo.turnId);
 		}
 	}, [acknowledgeLocalEcho, localEchos, snapshot]);
 	useEffect(() => {

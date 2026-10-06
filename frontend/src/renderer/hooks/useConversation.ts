@@ -125,6 +125,8 @@ export type ConversationLocalEcho = {
 	clientMessageId: string;
 	text: string;
 	createdAt: string;
+	/** A hibernated send is acknowledged locally while the provider wakes. */
+	backgroundWake?: boolean;
 	/** Filled after the daemon accepts the send, then used for exact reconciliation. */
 	turnId?: string;
 };
@@ -469,10 +471,15 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 
 	const send = useMutation({
 		onMutate: (variables: ConversationSendMutationInput) => {
+			const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(
+				conversationQueryKey(variables.targetSessionId, hostId),
+			);
+			const backgroundWake = current?.pages.some((page) => page.controller.state === "hibernated") ?? false;
 			addConversationLocalEcho(queryClient, stateKey(variables.targetSessionId), {
 				clientMessageId: variables.clientMessageId,
 				text: variables.input.text,
 				createdAt: new Date().toISOString(),
+				backgroundWake,
 			});
 			queryClient.setQueryData<ConversationDispatchTrackingBySession>(
 				conversationDispatchTrackingQueryKey,

@@ -1000,7 +1000,7 @@ func (s *Store) appendUserMessage(
 		if readErr != nil {
 			return false, fmt.Errorf("check queued session %s: %w", session, readErr)
 		}
-		if record.IsTerminated || !record.ProvisionState.IsProvisioning() {
+		if record.IsTerminated || (!record.ProvisionState.IsProvisioning() && !record.HibernatedAt.Valid) {
 			return false, domain.ErrSessionNotProvisioning
 		}
 	}

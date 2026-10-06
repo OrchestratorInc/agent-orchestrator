@@ -13,6 +13,11 @@ import (
 // View leases survive a missed renderer heartbeat but expire after a crash.
 const chatViewLease = 30 * time.Second
 
+type wakeRun struct {
+	done chan struct{}
+	err  error
+}
+
 type hibernationStore interface {
 	SetSessionHibernated(context.Context, domain.SessionID, int64, *time.Time) (bool, error)
 }
@@ -402,23 +407,85 @@ func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error
 		return ErrNoController
 	}
 	s.wakeMu.Lock()
+	if run := s.wakeRuns[id]; run != nil {
+		s.wakeMu.Unlock()
+		select {
+		case <-run.done:
+			return run.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	run := &wakeRun{done: make(chan struct{})}
+	s.wakeRuns[id] = run
 	s.waking[id]++
 	s.wakeMu.Unlock()
-	defer func() {
+	finish := func(resultErr error) error {
 		s.wakeMu.Lock()
+		run.err = resultErr
+		delete(s.wakeRuns, id)
 		s.waking[id]--
 		if s.waking[id] == 0 {
 			delete(s.waking, id)
 		}
+		close(run.done)
 		s.wakeMu.Unlock()
-	}()
+		return resultErr
+	}
 	if err := s.wakeChat(ctx, id); err != nil {
-		return err
+		return finish(err)
 	}
 	if !s.HasLiveChatController(id) {
-		return ErrNoController
+		return finish(ErrNoController)
 	}
-	return nil
+	return finish(nil)
+}
+
+// startBackgroundWake accepts a hibernated send before provider startup. The
+// durable queue is the acknowledgement boundary; wake and drain happen after
+// the HTTP request returns so the composer never exposes startup latency.
+func (s *Service) startBackgroundWake(id domain.SessionID) {
+	s.wakeMu.Lock()
+	if s.backgroundWakes[id] {
+		s.wakeMu.Unlock()
+		return
+	}
+	s.backgroundWakes[id] = true
+	s.wakeMu.Unlock()
+	go func() {
+		defer func() {
+			s.wakeMu.Lock()
+			delete(s.backgroundWakes, id)
+			s.wakeMu.Unlock()
+		}()
+		ctx := context.Background()
+		if err := s.wakeHibernated(ctx, id); err != nil {
+			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not wake the agent: %v", err))
+			return
+		}
+		if err := s.DrainQueued(ctx, id); err != nil {
+			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not deliver the message: %v", err))
+		}
+	}()
+}
+
+func (s *Service) failQueuedTurns(ctx context.Context, id domain.SessionID, message string) {
+	conversation, err := s.store.ConversationForSession(ctx, id)
+	if err != nil {
+		return
+	}
+	for {
+		queued, err := s.store.NextQueuedTurn(ctx, conversation.ID)
+		if errors.Is(err, domain.ErrNoQueuedTurn) {
+			return
+		}
+		if err != nil {
+			return
+		}
+		if err := s.store.SettleTurnByID(ctx, queued.TurnID, domain.TurnStateFailed, message, s.now()); err != nil {
+			return
+		}
+	}
 }
 
 func (s *Service) isWaking(id domain.SessionID) bool {

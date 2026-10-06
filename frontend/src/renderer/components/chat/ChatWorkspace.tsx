@@ -786,6 +786,16 @@ function ChatWorkspaceContent({
 		});
 	}, [auxiliaryTabOrder, availableTabKeys, onAuxiliaryTabOrderChange, uiSessionId]);
 	const queuedMessages = useQueuedMessages(snapshot);
+	const backgroundWakeQueuedTurnIds = useMemo(
+		() => new Set(
+			(localEchos ?? [])
+				.filter((echo) => echo.backgroundWake && echo.turnId)
+				.map((echo) => echo.turnId as string)
+				.filter((turnId) => snapshot.turns.some((turn) => turn.id === turnId && turn.state === "queued")),
+		),
+		[localEchos, snapshot.turns],
+	);
+	const visibleQueuedMessages = queuedMessages.filter((message) => !backgroundWakeQueuedTurnIds.has(message.turnId));
 	const stablePromoteQueuedTurn = useStableCallback(onPromoteQueuedTurn);
 	const stableCancelQueuedTurn = useStableCallback(onCancelQueuedTurn);
 	const [queueEdit, setQueueEdit] = useState<ChatDraftQueuedEdit | undefined>(
@@ -1222,9 +1232,9 @@ function ChatWorkspaceContent({
 		Boolean(onSteer) && can(snapshot, "steer") && turn?.state === "running";
 	const composerQueuedDock = useMemo(
 		() =>
-			queuedMessages.length > 0 ? (
+			visibleQueuedMessages.length > 0 ? (
 				<QueuedMessageDock
-					messages={queuedMessages}
+					messages={visibleQueuedMessages}
 					editingTurnId={queueEdit?.turnId}
 					disabled={Boolean(queueEdit?.clientMessageId)}
 					canSteer={canSteerQueuedMessage}
@@ -1250,7 +1260,7 @@ function ChatWorkspaceContent({
 			promoteQueuedTurnPendingTurnId,
 			queueEdit?.clientMessageId,
 			queueEdit?.turnId,
-			queuedMessages,
+			visibleQueuedMessages,
 		],
 	);
 	const composerDraftSeed = useMemo(
@@ -2722,6 +2732,12 @@ function Timeline({
 		if (added.size > 0) setNewHumanMessageIds(added);
 	}, [items, snapshot.latestSequence]);
 	const localItems = useMemo(() => {
+		const backgroundQueuedTurnIds = new Set(
+			localEchos
+				.filter((echo) => echo.backgroundWake && echo.turnId)
+				.map((echo) => echo.turnId as string)
+				.filter((turnId) => snapshot.turns.some((turn) => turn.id === turnId && turn.state === "queued")),
+		);
 		return localEchos
 			.filter(
 				(echo) =>
@@ -2730,7 +2746,7 @@ function Timeline({
 							item.kind === "message" &&
 							item.role === "user" &&
 							item.origin === "human" &&
-							((echo.turnId && item.turnId === echo.turnId) ||
+							((echo.turnId && item.turnId === echo.turnId && !backgroundQueuedTurnIds.has(echo.turnId)) ||
 								(!echo.turnId && item.text === echo.text && item.createdAt >= echo.createdAt)),
 					),
 			)
@@ -2744,11 +2760,29 @@ function Timeline({
 				origin: "human",
 				text: echo.text,
 				streaming: false,
-				delivery: echo.turnId ? "accepted" : "sending",
+				delivery: echo.backgroundWake || echo.turnId ? "accepted" : "sending",
 				createdAt: echo.createdAt,
 			}));
-	}, [items, localEchos, snapshot.latestSequence]);
-	const timelineItems = useStableList([...items, ...localItems], itemKey, sameContent);
+	}, [items, localEchos, snapshot.latestSequence, snapshot.turns]);
+	const backgroundQueuedTurnIds = useMemo(
+		() => new Set(
+			localEchos
+				.filter((echo) => echo.backgroundWake && echo.turnId)
+				.map((echo) => echo.turnId as string)
+				.filter((turnId) => snapshot.turns.some((turn) => turn.id === turnId && turn.state === "queued")),
+		),
+		[localEchos, snapshot.turns],
+	);
+	const timelineItems = useStableList(
+		[
+			...items.filter(
+				(item) => !(item.kind === "message" && item.role === "user" && item.turnId && backgroundQueuedTurnIds.has(item.turnId)),
+			),
+			...localItems,
+		],
+		itemKey,
+		sameContent,
+	);
 	const previousEchoIds = useRef<ReadonlySet<string>>(new Set(localEchos.map((echo) => echo.clientMessageId)));
 	useLayoutEffect(() => {
 		const ids = new Set(localEchos.map((echo) => echo.clientMessageId));

@@ -448,6 +448,123 @@ func TestRelayChatTurnWithIDWakesHibernatedSession(t *testing.T) {
 	}
 }
 
+func TestSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t *testing.T) {
+	h, old := settledHibernationHarness(t, domain.TurnStateCompleted)
+	ctx := context.Background()
+	if hibernated, err := h.svc.HibernateChat(ctx, testSession); err != nil || !hibernated {
+		t.Fatalf("hibernate = %v, %v", hibernated, err)
+	}
+
+	resumed := newFakeConversation()
+	resumed.turnSeq = 1
+	var resumeConfig ports.ChatResumeConfig
+	wakeService := chatsvc.New(chatsvc.Options{
+		Store: h.st, Reader: fullSnapshotReader(h.st), Sessions: h.st,
+		Drivers:  fakeRegistry{driver: fakeDriver{conv: resumed, resumeCfg: &resumeConfig}},
+		Activity: h.activity, Log: slog.New(slog.DiscardHandler), Now: h.now,
+		NewID: func() string { return "background-wake" },
+	})
+	t.Cleanup(func() { _ = wakeService.Stop(context.Background(), testSession) })
+	wakeEntered := make(chan struct{})
+	releaseWake := make(chan struct{})
+	wakeService.SetWakeCallback(func(ctx context.Context, id domain.SessionID) error {
+		close(wakeEntered)
+		<-releaseWake
+		rec, found, err := h.st.GetSession(ctx, id)
+		if err != nil || !found || rec.HibernatedAt == nil {
+			return fmt.Errorf("read hibernated session: found=%v marker=%v err=%w", found, rec.HibernatedAt, err)
+		}
+		cleared, err := h.st.SetSessionHibernated(ctx, id, rec.Revision, nil)
+		if err != nil || !cleared {
+			return fmt.Errorf("clear hibernation: applied=%v err=%w", cleared, err)
+		}
+		_, err = wakeService.Start(ctx, chatsvc.StartConfig{
+			SessionID: id, ProjectID: testProject, Harness: domain.HarnessCodex,
+			WorkspacePath: t.TempDir(), ProviderConversationID: old.ProviderConversationID(),
+		})
+		return err
+	})
+
+	started := time.Now()
+	turn, err := wakeService.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "send while cold", ClientMessageID: "cold-send-1",
+	})
+	if err != nil || turn.State != domain.TurnStateQueued || time.Since(started) > 250*time.Millisecond {
+		t.Fatalf("cold send = %+v, %v; elapsed=%s", turn, err, time.Since(started))
+	}
+	select {
+	case <-wakeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("background wake did not start")
+	}
+	if got := resumed.sentTexts(); len(got) != 0 {
+		t.Fatalf("message reached provider before wake completed: %v", got)
+	}
+	close(releaseWake)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := resumed.sentTexts(); len(got) == 1 && got[0] == "send while cold" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("background queue was not drained: %v", resumed.sentTexts())
+}
+
+func TestFailedBackgroundWakeSettlesAllQueuedMessagesOnce(t *testing.T) {
+	h, _ := settledHibernationHarness(t, domain.TurnStateCompleted)
+	ctx := context.Background()
+	if hibernated, err := h.svc.HibernateChat(ctx, testSession); err != nil || !hibernated {
+		t.Fatalf("hibernate = %v, %v", hibernated, err)
+	}
+	wakeErr := errors.New("provider conversation is unavailable")
+	var wakeCalls atomic.Int32
+	wakeStarted := make(chan struct{}, 2)
+	releaseWake := make(chan struct{})
+	h.svc.SetWakeCallback(func(context.Context, domain.SessionID) error {
+		wakeCalls.Add(1)
+		wakeStarted <- struct{}{}
+		<-releaseWake
+		return wakeErr
+	})
+	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "first cold message", ClientMessageID: "cold-fail-0",
+	})
+	if err != nil || turn.State != domain.TurnStateQueued {
+		t.Fatalf("first cold send = %+v, %v", turn, err)
+	}
+	select {
+	case <-wakeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("background wake did not start")
+	}
+	turn, err = h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "second cold message", ClientMessageID: "cold-fail-1",
+	})
+	if err != nil || turn.State != domain.TurnStateQueued {
+		t.Fatalf("second cold send = %+v, %v", turn, err)
+	}
+	close(releaseWake)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snapshot, err := h.svc.Snapshot(ctx, testSession)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(snapshot.Turns) >= 3 && snapshot.Turns[len(snapshot.Turns)-2].State == domain.TurnStateFailed && snapshot.Turns[len(snapshot.Turns)-1].State == domain.TurnStateFailed {
+			if wakeCalls.Load() != 1 {
+				t.Fatalf("wake attempts = %d, want one shared attempt", wakeCalls.Load())
+			}
+			if snapshot.Turns[len(snapshot.Turns)-2].ErrorMessage == "" || snapshot.Turns[len(snapshot.Turns)-1].ErrorMessage == "" {
+				t.Fatal("failed cold turns did not retain an error")
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("queued turns were not settled after wake failure; wake attempts=%d", wakeCalls.Load())
+}
+
 func TestSendAfterTimedOutHibernationWaitsForProviderStop(t *testing.T) {
 	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
 	conv.keepOpen = true

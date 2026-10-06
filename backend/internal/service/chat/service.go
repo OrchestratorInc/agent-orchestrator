@@ -59,6 +59,8 @@ type Service struct {
 	viewLeases         map[domain.SessionID]map[string]time.Time
 	wakeMu             sync.Mutex
 	waking             map[domain.SessionID]int
+	wakeRuns           map[domain.SessionID]*wakeRun
+	backgroundWakes    map[domain.SessionID]bool
 
 	mu               sync.RWMutex
 	controllers      map[domain.SessionID]*Controller
@@ -162,6 +164,8 @@ func New(opts Options) *Service {
 		gates:                  make(map[domain.ConversationOwner]controllerGate),
 		probed:                 make(map[domain.AgentHarness]ports.ChatCapabilities),
 		waking:                 make(map[domain.SessionID]int),
+		wakeRuns:               make(map[domain.SessionID]*wakeRun),
+		backgroundWakes:        make(map[domain.SessionID]bool),
 	}
 }
 
@@ -551,20 +555,25 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	queuedBeforeFirstController := false
 	preserveUndispatchedQueue := false
 	hadProviderHistory := false
+	_, queuedStartErr := s.store.NextQueuedTurn(ctx, conversation.ID)
+	if queuedStartErr != nil && !errors.Is(queuedStartErr, domain.ErrNoQueuedTurn) {
+		return nil, fmt.Errorf("read queued chat turns before start: %w", queuedStartErr)
+	}
+	hasQueuedBeforeStart := queuedStartErr == nil
 	if s.sessions != nil {
 		record, found, readErr := s.sessions.GetSession(ctx, cfg.SessionID)
 		if readErr != nil {
 			return nil, fmt.Errorf("read chat session before start: %w", readErr)
 		}
-		if found && record.ProvisionState.IsProvisioning() {
+		if found && (record.ProvisionState.IsProvisioning() || record.HibernatedAt != nil || hasQueuedBeforeStart) {
 			hadProviderHistory = record.Metadata.ProviderConversationID != ""
 			running, listErr := s.store.ListVisibleRunningTurnProviderIDs(ctx, conversation.ID)
 			if listErr != nil {
 				return nil, fmt.Errorf("read running chat turns before start: %w", listErr)
 			}
-			queuedBeforeFirstController = record.Metadata.ControllerGeneration == "" &&
+			queuedBeforeFirstController = record.ProvisionState.IsProvisioning() && record.Metadata.ControllerGeneration == "" &&
 				record.Metadata.ProviderConversationID == "" && len(running) == 0
-			preserveUndispatchedQueue = len(running) == 0
+			preserveUndispatchedQueue = len(running) == 0 && (record.ProvisionState.IsProvisioning() || hasQueuedBeforeStart)
 		}
 	}
 	providerBoundaryID := ""
@@ -1123,7 +1132,7 @@ func (s *Service) Send(
 		msg.Text = reports.AppendToUserMessage(msg.Text)
 	}
 	var turn domain.ConversationTurn
-	if record.ProvisionState.IsProvisioning() {
+	if record.ProvisionState.IsProvisioning() || record.HibernatedAt != nil {
 		// Keep messages on the durable queue until provisioning finishes so a
 		// new message cannot overtake the opening prompt during handoff.
 		turn, err = s.queueWithoutController(ctx, record, msg)
@@ -1140,6 +1149,9 @@ func (s *Service) Send(
 					release()
 				}
 			}
+		}
+		if err == nil && record.HibernatedAt != nil && turn.ID != "" {
+			s.startBackgroundWake(id)
 		}
 	} else {
 		var controller *Controller
