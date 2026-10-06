@@ -72,7 +72,7 @@ func TestManagedVersionCheckerUsesNativeOutdatedCommands(t *testing.T) {
 			name: "winget exact id",
 			plan: Plan{Method: "winget", Package: "GitHub.Copilot"},
 			response: managerCommandResponse{
-				argv:   []string{"winget", "upgrade", "--id", "GitHub.Copilot", "--exact", "--source", "winget", "--accept-source-agreements", "--disable-interactivity"},
+				argv:   []string{"winget", "upgrade", "--disable-interactivity"},
 				output: "GitHub Copilot  GitHub.Copilot  1.2.0  1.3.0  winget\n",
 			},
 		},
@@ -161,7 +161,7 @@ func TestManagedVersionCheckerFallsBackWhenOutdatedResultIsEmpty(t *testing.T) {
 			name: "winget show versions",
 			plan: Plan{Method: "winget", Package: "GitHub.Copilot"},
 			responses: []managerCommandResponse{
-				{argv: []string{"winget", "upgrade", "--id", "GitHub.Copilot", "--exact", "--source", "winget", "--accept-source-agreements", "--disable-interactivity"}, output: "No applicable upgrade found.\n"},
+				{argv: []string{"winget", "upgrade", "--disable-interactivity"}, output: "No applicable upgrade found.\n"},
 				{argv: []string{"winget", "show", "--id", "GitHub.Copilot", "--exact", "--source", "winget", "--versions", "--accept-source-agreements", "--disable-interactivity"}, output: "Found GitHub Copilot [GitHub.Copilot]\nVersion\n-------\n1.3.0\n1.2.0\n"},
 			},
 		},
@@ -267,7 +267,7 @@ func TestManagedVersionCheckerRejectsBadRegistryResponses(t *testing.T) {
 
 func TestManagedVersionCheckerRejectsAmbiguousWingetRows(t *testing.T) {
 	commands := managerCommandRunner(t, managerCommandResponse{
-		argv:   []string{"winget", "upgrade", "--id", "GitHub.Copilot", "--exact", "--source", "winget", "--accept-source-agreements", "--disable-interactivity"},
+		argv:   []string{"winget", "upgrade", "--disable-interactivity"},
 		output: "GitHub Copilot  GitHub.Copilot  1.2.0  1.3.0  winget\nGitHub Copilot Preview  GitHub.Copilot  2.0.0  2.1.0  winget\n",
 	})
 	current, _ := parseUpdateVersion("1.2.0")

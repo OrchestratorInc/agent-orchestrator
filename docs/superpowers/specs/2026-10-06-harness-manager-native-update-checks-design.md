@@ -85,8 +85,10 @@ versions and remains the fallback. Formula and cask parsing stay separate.
 ### Winget
 
 Prove ownership from Winget's package layout and the exact allowlisted package
-ID. Use a non-mutating exact-ID query (`winget upgrade --id ... --exact`) to
-discover an available version. Because Winget table output can be localized or
+ID. Use `winget upgrade` without a package selector to list available updates,
+then filter the exact ID in its output. Never pass `--id` to this discovery
+command: that performs an upgrade. Use `winget show --id ... --exact --versions`
+as the read-only fallback. Because Winget table output can be localized or
 change shape, accept only rows that can be tied to the exact package ID and
 contain parseable current/available versions; otherwise return `unknown`.
 

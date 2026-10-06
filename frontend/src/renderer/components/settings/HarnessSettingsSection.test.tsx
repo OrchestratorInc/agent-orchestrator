@@ -129,10 +129,16 @@ describe("updateAdvisoryRefreshInterval", () => {
 
 	it.each([
 		["unknown", 5 * 60_000],
+		["future_status", 5 * 60_000],
+		["", 5 * 60_000],
 		["current", 60 * 60_000],
 		["behind_latest", 60 * 60_000],
 	] as const)("uses the expected cadence for %s advisories", (status, expected) => {
 		expect(updateAdvisoryRefreshInterval({ agentId: "codex", status, checkedAt: "2026-10-06T00:00:00Z" })).toBe(expected);
+	});
+
+	it("retries a failed refresh even when an old current result remains cached", () => {
+		expect(updateAdvisoryRefreshInterval({ agentId: "codex", status: "current", checkedAt: "2026-10-06T00:00:00Z" }, true)).toBe(5 * 60_000);
 	});
 });
 
@@ -254,6 +260,25 @@ describe("HarnessSettingsSection", () => {
 		await userEvent.click(within(row).getByRole("button", { name: "Expand Codex options" }));
 		expect(within(row).getByText(/1.2.3.*1.3.0/)).toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "Update" })).toBeEnabled();
+	});
+
+	it.each(["future_status", ""])("shows an unknown result for unexpected advisory status %s", async (status) => {
+		mockInstalledOperations("npm");
+		const get = vi.mocked(apiClient.GET);
+		const previous = get.getMockImplementation()!;
+		get.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/{agent}/update-advisory") {
+				const agentId = (options as { params: { path: { agent: string } } }).params.path.agent;
+				return { data: { agentId, status, currentVersion: "1.3.0", source: "npm", checkedAt: "2026-10-06T00:00:00Z" } } as never;
+			}
+			return (previous as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		renderSection();
+		const row = (await screen.findByRole("button", { name: "Expand Codex options" })).closest('[data-agent="codex"]') as HTMLElement;
+		await userEvent.click(within(row).getByRole("button", { name: "Expand Codex options" }));
+		expect(await within(row).findByText("Update availability could not be verified. You can still update manually.")).toBeInTheDocument();
+		expect(within(row).queryByText(/Up to date/)).toBeNull();
+		expect(within(row).queryByText("Update available")).toBeNull();
 	});
 
 	it("updates through the package manager that owns the binary over a stale saved method", async () => {

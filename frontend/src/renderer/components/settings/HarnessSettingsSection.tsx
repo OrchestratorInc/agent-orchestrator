@@ -115,10 +115,14 @@ async function fetchUpdateAdvisory(agentId: AgentId, hostId?: string): Promise<A
 	return data;
 }
 
-export function updateAdvisoryRefreshInterval(advisory?: AgentUpdateAdvisory): number {
-	return !advisory || advisory.status === "unknown"
-		? UNKNOWN_UPDATE_ADVISORY_REFRESH_MS
-		: DEFINITIVE_UPDATE_ADVISORY_REFRESH_MS;
+function hasDefinitiveUpdateStatus(advisory?: AgentUpdateAdvisory): boolean {
+	return advisory?.status === "current" || advisory?.status === "behind_latest";
+}
+
+export function updateAdvisoryRefreshInterval(advisory?: AgentUpdateAdvisory, hasError = false): number {
+	return !hasError && hasDefinitiveUpdateStatus(advisory)
+		? DEFINITIVE_UPDATE_ADVISORY_REFRESH_MS
+		: UNKNOWN_UPDATE_ADVISORY_REFRESH_MS;
 }
 
 function HarnessUpdateAdvisory({ agentId, hostId, expanded = false }: { agentId: AgentId; hostId?: string; expanded?: boolean }) {
@@ -126,14 +130,14 @@ function HarnessUpdateAdvisory({ agentId, hostId, expanded = false }: { agentId:
 	const advisory = useQuery({
 		queryKey: updateAdvisoryQueryKey(agentId, hostId),
 		queryFn: () => fetchUpdateAdvisory(agentId, hostId),
-		staleTime: (query) => updateAdvisoryRefreshInterval(query.state.data),
-		refetchInterval: (query) => updateAdvisoryRefreshInterval(query.state.data),
+		staleTime: (query) => updateAdvisoryRefreshInterval(query.state.data, query.state.status === "error"),
+		refetchInterval: (query) => updateAdvisoryRefreshInterval(query.state.data, query.state.status === "error"),
 		retry: false,
 	});
-	if (!expanded) return advisory.data?.status === "behind_latest"
+	if (!expanded) return !advisory.isError && advisory.data?.status === "behind_latest"
 		? <span className="shrink-0 rounded-full bg-accent-weak px-2 py-0.5 text-[11px] font-medium text-accent">{t("settings.harness.updateAvailable")}</span>
 		: null;
-	if (!advisory.data || advisory.data.status === "unknown") return <p className="text-xs text-settings-muted">{t("settings.harness.updateStatusUnknown")}</p>;
+	if (advisory.isError || !advisory.data || !hasDefinitiveUpdateStatus(advisory.data)) return <p className="text-xs text-settings-muted">{t("settings.harness.updateStatusUnknown")}</p>;
 	return <p className="text-xs text-settings-muted">
 		{advisory.data.status === "behind_latest"
 			? t("settings.harness.updateVersions", { current: advisory.data.currentVersion, latest: advisory.data.latestVersion })

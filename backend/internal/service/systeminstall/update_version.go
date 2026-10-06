@@ -8,7 +8,7 @@ import (
 
 var (
 	exactUpdateVersionPattern = regexp.MustCompile(`^v?([0-9]+(?:\.[0-9]+){1,3})(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$`)
-	updateVersionPattern      = regexp.MustCompile(`(?:^|[^0-9A-Za-z])v?([0-9]+(?:\.[0-9]+){1,3})(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:$|[^0-9A-Za-z.+-])`)
+	updateVersionPattern      = regexp.MustCompile(`v?[0-9]+(?:\.[0-9]+)+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`)
 )
 
 type updateVersion struct {
@@ -20,8 +20,30 @@ type updateVersion struct {
 }
 
 func findUpdateVersion(text string) (updateVersion, bool) {
-	match := updateVersionPattern.FindStringSubmatch(text)
-	return updateVersionFromMatch(match)
+	var version updateVersion
+	found := false
+	for _, span := range updateVersionPattern.FindAllStringIndex(text, -1) {
+		// Reject partial matches inside a longer version or identifier. A tag
+		// prefix such as rust-v is allowed, but malformed cores are never sliced.
+		if span[0] > 0 && versionTokenByte(text[span[0]-1], false) || span[1] < len(text) && versionTokenByte(text[span[1]], true) {
+			continue
+		}
+		candidate, ok := parseUpdateVersion(text[span[0]:span[1]])
+		if !ok {
+			return updateVersion{}, false
+		}
+		if found && candidate.display != version.display {
+			// Runtime warnings may precede the CLI version on either stream.
+			// Without an unambiguous version, the advisory must remain unknown.
+			return updateVersion{}, false
+		}
+		version, found = candidate, true
+	}
+	return version, found
+}
+
+func versionTokenByte(char byte, includeHyphen bool) bool {
+	return char >= '0' && char <= '9' || char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char == '.' || char == '+' || includeHyphen && char == '-'
 }
 
 func parseUpdateVersion(text string) (updateVersion, bool) {
@@ -59,6 +81,9 @@ func updateVersionFromMatch(match []string) (updateVersion, bool) {
 }
 
 func compareUpdateVersions(installed, latest updateVersion) (int, bool) {
+	if len(installed.prerelease) != 0 && len(latest.prerelease) != 0 && prereleaseChannel(installed.prerelease) != prereleaseChannel(latest.prerelease) {
+		return 0, false
+	}
 	for index := range installed.core {
 		if installed.core[index] < latest.core[index] {
 			return -1, true
@@ -75,9 +100,6 @@ func compareUpdateVersions(installed, latest updateVersion) (int, bool) {
 	}
 	if len(latest.prerelease) == 0 {
 		return -1, true
-	}
-	if prereleaseChannel(installed.prerelease) != prereleaseChannel(latest.prerelease) {
-		return 0, false
 	}
 	for index := 0; index < len(installed.prerelease) || index < len(latest.prerelease); index++ {
 		if index == len(installed.prerelease) {

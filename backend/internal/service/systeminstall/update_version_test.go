@@ -59,6 +59,7 @@ func TestCompareUpdateVersionsRequiresCompatibleChannels(t *testing.T) {
 		{name: "build metadata ignored", installed: "1.2.3+build.1", latest: "1.2.3+build.2", wantComparable: true},
 		{name: "stable follows prerelease", installed: "1.2.3-beta.2", latest: "1.2.3", wantOrder: -1, wantComparable: true},
 		{name: "different prerelease channels", installed: "1.2.3-beta.2", latest: "1.2.3-rc.1", wantComparable: false},
+		{name: "different channels and different cores", installed: "1.2.3-beta.2", latest: "2.0.0-rc.1", wantComparable: false},
 	}
 
 	for _, tt := range tests {

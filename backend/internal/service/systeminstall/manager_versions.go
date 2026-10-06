@@ -253,7 +253,9 @@ func wingetManagedVersion(ctx context.Context, commands ports.CommandRunner, pla
 	if commands == nil {
 		return managedVersionResult{}, fmt.Errorf("winget command runner unavailable")
 	}
-	argv := []string{"winget", "upgrade", "--id", plan.Package, "--exact", "--source", "winget", "--accept-source-agreements", "--disable-interactivity"}
+	// Supplying --id makes winget upgrade install the selected update. Listing
+	// without a package selector is read-only; filter the exact ID in the output.
+	argv := []string{"winget", "upgrade", "--disable-interactivity"}
 	out, commandErr := runManagedVersionCommand(ctx, commands, argv)
 	latest, matches := parseWingetUpgrade(out, plan.Package)
 	if matches == 1 {
@@ -334,6 +336,23 @@ func npmRegistryVersion(ctx context.Context, client *http.Client, pkg string, cu
 		return managedVersionResult{}, err
 	}
 	latest := metadata.DistTags[channel]
+	if latest == "" && channel != "latest" {
+		// The prerelease identifier need not be the dist-tag: e.g. next may
+		// publish beta versions. Only accept an unambiguous matching family.
+		for tag, version := range metadata.DistTags {
+			if tag == "latest" {
+				continue
+			}
+			candidate, ok := managedResult(version, channel)
+			if !ok {
+				continue
+			}
+			if latest != "" && latest != candidate.Latest {
+				return managedVersionResult{}, fmt.Errorf("%w: multiple dist-tags match %s", errUpdateChannelUnconfirmed, channel)
+			}
+			latest = candidate.Latest
+		}
+	}
 	if latest == "" {
 		return managedVersionResult{}, fmt.Errorf("%w: npm package %s has no %s dist-tag", errUpdateChannelUnconfirmed, pkg, channel)
 	}

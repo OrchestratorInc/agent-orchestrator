@@ -1174,9 +1174,6 @@ func TestDroidInstallAllowsTerminatedSessionAndOtherHarnesses(t *testing.T) {
 
 func TestHarnessLaunchGateBlocksCodexMaintenanceBeforeSessionEnumeration(t *testing.T) {
 	s := newTestService("darwin", "npm")
-	s.maintenance = maintenanceResolverFunc(func(context.Context, Target) (MaintenanceResolution, error) {
-		return MaintenanceResolution{Target: TargetCodex, Method: "npm", UpdateArgv: []string{"npm", "update-codex"}}, nil
-	})
 	sessionCalls := 0
 	s.sessions = sessionListerFunc(func(context.Context) ([]domain.SessionRecord, error) {
 		sessionCalls++
@@ -1200,16 +1197,21 @@ func TestHarnessLaunchGateBlocksCodexMaintenanceBeforeSessionEnumeration(t *test
 }
 
 func TestHarnessMaintenanceGateBlocksCodexLaunchThroughWorkerLifetime(t *testing.T) {
-	s := newTestService("darwin")
-	s.maintenance = maintenanceResolverFunc(func(context.Context, Target) (MaintenanceResolution, error) {
-		return MaintenanceResolution{Target: TargetCodex, Method: "npm", UpdateArgv: []string{"npm", "update-codex"}}, nil
-	})
+	s := newTestService("darwin", "npm")
+	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
 	started := make(chan struct{})
 	releaseCommand := make(chan struct{})
-	s.commands = commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error {
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(releaseCommand) }) }
+	defer unblock()
+	s.commands = commandRunnerFunc(func(ctx context.Context, _ []string, _, _ io.Writer) error {
 		close(started)
-		<-releaseCommand
-		return nil
+		select {
+		case <-releaseCommand:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	})
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
 		return VerifyResult{ResolvedPath: "/verified/codex", Output: "codex 2.0.0"}, nil
@@ -1218,12 +1220,17 @@ func TestHarnessMaintenanceGateBlocksCodexLaunchThroughWorkerLifetime(t *testing
 	if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate); err != nil {
 		t.Fatalf("StartAgentOperation: %v", err)
 	}
-	<-started
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("maintenance worker did not start")
+	}
 	if release, ok := s.TryBeginHarnessUse(domain.HarnessCodex); ok {
 		release()
 		t.Fatal("Codex launch acquired the gate while maintenance worker was running")
 	}
-	close(releaseCommand)
+	unblock()
+	s.workers.Wait()
 	waitForStatus(t, s, TargetCodex, StatusSucceeded)
 	if release, ok := s.TryBeginHarnessUse(domain.HarnessCodex); !ok {
 		t.Fatal("Codex launch remained blocked after maintenance completed")
@@ -1234,9 +1241,6 @@ func TestHarnessMaintenanceGateBlocksCodexLaunchThroughWorkerLifetime(t *testing
 
 func TestHarnessMaintenanceSeesSessionCreatedBeforeLaunchGateRelease(t *testing.T) {
 	s := newTestService("darwin")
-	s.maintenance = maintenanceResolverFunc(func(context.Context, Target) (MaintenanceResolution, error) {
-		return MaintenanceResolution{Target: TargetCodex, Method: "npm", UpdateArgv: []string{"npm", "update-codex"}}, nil
-	})
 	release, ok := s.TryBeginHarnessUse(domain.HarnessCodex)
 	if !ok {
 		t.Fatal("Codex launch lease was unexpectedly rejected")
@@ -1258,11 +1262,8 @@ func TestHarnessMaintenanceAllowsTerminatedAndOtherHarnessSessions(t *testing.T)
 		{name: "active Claude", sessions: []domain.SessionRecord{{ID: "claude-1", Harness: domain.HarnessClaudeCode}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			s := newTestService("darwin")
+			s := newTestService("darwin", "npm")
 			s.sessions = sessionListerStub{sessions: tt.sessions}
-			s.maintenance = maintenanceResolverFunc(func(context.Context, Target) (MaintenanceResolution, error) {
-				return MaintenanceResolution{Target: TargetCodex, Method: "npm", UpdateArgv: []string{"npm", "update-codex"}}, nil
-			})
 			s.commands = commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error { return errors.New("stop after guard") })
 
 			if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate); err != nil {

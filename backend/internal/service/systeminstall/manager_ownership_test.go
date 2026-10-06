@@ -2,6 +2,7 @@ package systeminstall
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +14,12 @@ func TestNodeShimTargetsPackage(t *testing.T) {
 	root := t.TempDir()
 	packageRoot := filepath.Join(root, "node_modules", "@openai", "codex")
 	if err := os.MkdirAll(packageRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(packageRoot, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageRoot, "bin", "codex.js"), []byte("cli"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	good := filepath.Join(root, "codex.cmd")
@@ -35,6 +42,12 @@ func TestManagerOwnsBinaryAcceptsWindowsNPMShimForExpectedPackageOnly(t *testing
 	root := t.TempDir()
 	packageRoot := filepath.Join(root, "node_modules", "@openai", "codex")
 	if err := os.MkdirAll(packageRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(packageRoot, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageRoot, "bin", "codex.js"), []byte("cli"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	shim := filepath.Join(root, "codex.cmd")
@@ -89,8 +102,9 @@ func TestManagerOwnsBinaryRecognizesSupportedManagerPackages(t *testing.T) {
 				return filepath.Join(root, ".local", "pipx", "venvs", "mistral-vibe", "bin", "vibe")
 			},
 			wantArgv: []string{"pipx", "list", "--json"},
-			output: func(_, _ string) string {
-				return `{"venvs":{"mistral-vibe":{"metadata":{"main_package":{"package":"mistral-vibe","package_version":"1.2.3"}}}}}`
+			output: func(_, binary string) string {
+				pathJSON, _ := json.Marshal(binary)
+				return `{"venvs":{"mistral-vibe":{"metadata":{"main_package":{"package":"mistral-vibe","app_paths":[{"__type__":"Path","__Path__":` + string(pathJSON) + `}],"package_version":"1.2.3"}}}}}`
 			},
 		},
 		{

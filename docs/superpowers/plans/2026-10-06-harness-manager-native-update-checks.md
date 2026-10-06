@@ -143,7 +143,7 @@ git commit -m "fix: detect harness package manager ownership"
 
 - [ ] **Step 1: Write failing provider tests**
 
-Add one table per provider and assert these command shapes: npm global `outdated --json` followed by `view` when empty; Homebrew `outdated --json=v2` followed by `info --json=v2` when empty; exact-ID Winget `upgrade`; Bun `pm view`; pnpm global `outdated --format json` followed by `view`; Yarn Classic `global outdated --json` followed by `info`. Cover valid output written alongside a non-zero npm exit and ambiguous Winget output.
+Add one table per provider and assert these command shapes: npm global `outdated --json` followed by `view` when empty; Homebrew `outdated --json=v2` followed by `info --json=v2` when empty; Winget `upgrade` listing without a package selector, filtering the exact ID in output; Bun `pm view`; pnpm global `outdated --format json` followed by `view`; Yarn Classic `global outdated --json` followed by `info`. Cover valid output written alongside a non-zero npm exit and ambiguous Winget output. An exact-ID `winget upgrade` performs an upgrade and must never be used for discovery.
 
 For Node managers, cover the injected HTTP client's exact escaped npm registry
 fallback and dist-tag parsing. For uv and pipx, assert their read-only list
