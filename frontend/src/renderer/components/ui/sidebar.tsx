@@ -541,7 +541,9 @@ function SidebarMenuButton({
 		/>
 	);
 
-	if (!tooltip) {
+	// The tooltip only ever shows in the collapsed rail (never on mobile), so the
+	// expanded sidebar mounts no Tooltip/Popper per row.
+	if (!tooltip || state !== "collapsed" || isMobile) {
 		return button;
 	}
 

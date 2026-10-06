@@ -73,6 +73,19 @@ export function ResizeHandle({
 			place(el ? borderCenterX(el, borderEdge) : null);
 		};
 
+		// Mutation/resize events can fire mid-frame with layout dirty; reading rects
+		// there forces a synchronous layout. Coalesce them into one rAF read, where
+		// the browser has just laid out. ResizeObserver callbacks already run
+		// after layout, so they read directly.
+		let syncRaf = 0;
+		const scheduleSync = () => {
+			if (syncRaf) return;
+			syncRaf = requestAnimationFrame(() => {
+				syncRaf = 0;
+				sync();
+			});
+		};
+
 		// ResizeObserver follows the painted border after layout and before paint.
 		// Reading it on every pointermove forced layout after each width write.
 		const endLocalDrag = () => {
@@ -105,7 +118,7 @@ export function ResizeHandle({
 			refreshObserved();
 			const border = getBorderElementRef.current();
 			if (border !== borderMoTarget) bindBorderMo();
-			sync();
+			scheduleSync();
 		});
 		const bindBorderMo = () => {
 			const border = getBorderElementRef.current();
@@ -145,14 +158,15 @@ export function ResizeHandle({
 		bodyMo.observe(document.body, { attributes: true, attributeFilter: ["class"] });
 		onBodyClass();
 
-		window.addEventListener("resize", sync);
+		window.addEventListener("resize", scheduleSync);
 		return () => {
+			if (syncRaf) cancelAnimationFrame(syncRaf);
 			if (borderPollRaf) cancelAnimationFrame(borderPollRaf);
 			ro.disconnect();
 			mo.disconnect();
 			bodyMo.disconnect();
 			endLocalDrag();
-			window.removeEventListener("resize", sync);
+			window.removeEventListener("resize", scheduleSync);
 		};
 	}, [borderEdge]);
 

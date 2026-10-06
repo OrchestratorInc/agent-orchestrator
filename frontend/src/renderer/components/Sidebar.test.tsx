@@ -11,6 +11,19 @@ vi.mock("motion/react", async (importOriginal) => {
 		AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
 	};
 });
+// Spy on the per-render presentation derivation: SessionRow calls it exactly
+// once per render, so its call count is the row render count.
+const { switchPresentationSpy } = vi.hoisted(() => ({ switchPresentationSpy: vi.fn() }));
+vi.mock("../lib/agent-switch-presentation", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../lib/agent-switch-presentation")>();
+	return {
+		...actual,
+		deriveSessionAgentSwitchPresentation: (...args: Parameters<typeof actual.deriveSessionAgentSwitchPresentation>) => {
+			switchPresentationSpy(...args);
+			return actual.deriveSessionAgentSwitchPresentation(...args);
+		},
+	};
+});
 import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -202,6 +215,8 @@ const session: WorkspaceSession = {
 	prs: [],
 };
 
+let rerenderSidebarWorkspaces: (workspaces: WorkspaceSummary[]) => void = () => undefined;
+
 // The row archive is confirmed, not instant: open the shared modal and accept.
 async function confirmArchiveFromRow(row: HTMLElement) {
 	fireEvent.click(within(row).getByLabelText("Archive session"));
@@ -341,7 +356,7 @@ function renderSidebar({
 		});
 	}
 	seed?.(queryClient);
-	render(
+	const tree = (currentWorkspaces: WorkspaceSummary[]) => (
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
 				<SidebarProvider defaultOpen={initialOpen}>
@@ -351,7 +366,7 @@ function renderSidebar({
 						onCreateProject={onCreateProject}
 						onInitializeProject={onInitializeProject}
 						onRemoveProject={onRemoveProject}
-						workspaces={workspaces}
+						workspaces={currentWorkspaces}
 						remoteHosts={remoteHosts}
 						remoteWorkspaces={remoteWorkspaces}
 						onCreateRemoteProject={onCreateRemoteProject}
@@ -360,8 +375,10 @@ function renderSidebar({
 					/>
 				</SidebarProvider>
 			</TooltipProvider>
-		</QueryClientProvider>,
+		</QueryClientProvider>
 	);
+	const utils = render(tree(workspaces));
+	rerenderSidebarWorkspaces = (next) => utils.rerender(tree(next));
 	return onRemoveProject;
 }
 
@@ -518,6 +535,28 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
+	it("re-renders only the changed session row when one session ticks", () => {
+		const sessions = ["a", "b", "c"].map((id) => ({ ...session, id: `proj-1-${id}`, title: `task ${id}` }));
+		const base = { ...workspace, sessions };
+		renderSidebar({ workspaces: [base] });
+		expect(screen.getByLabelText("Open task a")).toBeInTheDocument();
+		switchPresentationSpy.mockClear();
+		// A daemon tick: new workspace and sessions array, but only "b" changed.
+		const tick = { ...base, sessions: [sessions[0], { ...sessions[1], updatedAt: "2026-06-30T00:05:00Z" }, sessions[2]] };
+		act(() => rerenderSidebarWorkspaces([tick]));
+		expect(switchPresentationSpy).toHaveBeenCalledTimes(1);
+		expect(switchPresentationSpy.mock.calls[0][0]).toMatchObject({ id: "proj-1-b" });
+	});
+
+	it("does not re-render session rows when the parent re-renders with the same data", () => {
+		const sessions = ["a", "b"].map((id) => ({ ...session, id: `proj-1-${id}`, title: `task ${id}` }));
+		const data = [{ ...workspace, sessions }];
+		renderSidebar({ workspaces: data });
+		switchPresentationSpy.mockClear();
+		act(() => rerenderSidebarWorkspaces(data));
+		expect(switchPresentationSpy).not.toHaveBeenCalled();
+	});
+
 	it("creates local or remote projects from the header button", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
@@ -1145,7 +1184,7 @@ describe("Sidebar", () => {
 		const openSession = screen.getByLabelText("Open fix login");
 		const label = within(openSession).getByText("fix login");
 		const actions = screen.getByLabelText("Pin session").closest("[data-session-actions]");
-		const actionButtons = screen.getByLabelText("Pin session").parentElement;
+		const actionButtons = screen.getByLabelText("Pin session").closest("[data-session-action-buttons]");
 		const time = actions?.querySelector("time");
 
 		expect(openSession).toHaveClass("pr-[36px]");
