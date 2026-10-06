@@ -48,6 +48,7 @@ import { readKeybindingOverrides, writeKeybindingOverrides } from "./main/keybin
 import { readEditorSettings, writeEditorPreference } from "./main/editor-settings";
 import { createEditorHandoff } from "./main/editor-handoff";
 import { launchCommand } from "./main/launch-command";
+import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
 import {
 	decideRelocation,
 	inspectInstalledBundle,
@@ -704,6 +705,11 @@ async function createWindowInternal(): Promise<void> {
 		if (url !== shellWebContents.getURL()) {
 			event.preventDefault();
 		}
+	});
+
+	shellWebContents.on("will-frame-navigate", (event) => {
+		if (event.isMainFrame || !event.frame) return;
+		if (blocksRenderFrameNavigation(event.frame.url, event.url)) event.preventDefault();
 	});
 
 	shellWebContents.on("will-prevent-unload", (event) => {
