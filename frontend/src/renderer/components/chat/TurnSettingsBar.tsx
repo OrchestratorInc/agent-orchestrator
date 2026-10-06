@@ -77,8 +77,9 @@ const CODEX_APPROVAL_ORDER: ApprovalMode[] = [
 	"bypass-permissions",
 ];
 
+// Drawn on the trigger's press surface, so state comes from the host button's group.
 const TRIGGER_CLASS =
-	"h-7 gap-1 bg-transparent rounded-lg px-3 text-[12px]! leading-none text-muted-foreground hover:bg-white/5 hover:text-foreground data-[state=open]:bg-white/5 data-[state=open]:text-foreground";
+	"h-7 gap-1 bg-transparent rounded-lg px-3 text-[12px]! leading-none text-muted-foreground group-hover/option-menu-trigger:bg-white/5 group-hover/option-menu-trigger:text-foreground group-data-[state=open]/option-menu-trigger:bg-white/5 group-data-[state=open]/option-menu-trigger:text-foreground";
 const CHAT_MENU_CLASS = "chat-settings-menu text-[12px]!";
 
 export function TurnSettingsBar({
@@ -429,7 +430,7 @@ function ModelEffortPicker({
 								}`
 							: "Model and reasoning effort for the next turn"
 					}
-					className={TRIGGER_CLASS}
+					pressSurfaceClassName={TRIGGER_CLASS}
 				>
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
 					{reroute ? (
@@ -531,7 +532,7 @@ function ClubbedConfigPicker({
 				<EffortPicker
 					{...acpEffortMenuProps(primaryEffort)}
 					disabled={disabled}
-					triggerClassName={TRIGGER_CLASS}
+					triggerPressSurfaceClassName={TRIGGER_CLASS}
 					onChange={(value) => onChange(primaryEffort.id, { value })}
 				/>
 			);
@@ -563,7 +564,7 @@ function ClubbedConfigPicker({
 					disabled={disabled}
 					aria-label="Model and reasoning effort for the next turn"
 					title="Model and reasoning effort for the next turn"
-					className={TRIGGER_CLASS}
+					pressSurfaceClassName={TRIGGER_CLASS}
 				>
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
 				</OptionMenuTrigger>
@@ -728,7 +729,7 @@ function ExecutionModePicker({
 				disabled={disabled}
 				aria-label="Model mode for the next turn"
 				title="Model mode for the next turn"
-				className={TRIGGER_CLASS}
+				pressSurfaceClassName={TRIGGER_CLASS}
 			>
 				<span className="min-w-0 max-w-[16ch] truncate">{executionModeLabel(option)}</span>
 			</OptionMenuTrigger>
@@ -962,7 +963,7 @@ function Picker({
 					aria-label={title}
 					title={title}
 					disabled={disabled}
-					className={TRIGGER_CLASS}
+					pressSurfaceClassName={TRIGGER_CLASS}
 				>
 					<span className="min-w-0 max-w-[16ch] truncate">{label}</span>
 					{badge}

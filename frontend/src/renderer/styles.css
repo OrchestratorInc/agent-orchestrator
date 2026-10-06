@@ -2497,6 +2497,12 @@ html.sidebar-reordering * {
 	transform: scale(0.96);
 }
 
+/* Menu triggers anchor their menu, so the button itself must never transform;
+   their inner press surface plays the press instead (see OptionMenuTrigger). */
+.cursor-chat-surface button[data-press-host]:not(:disabled):active {
+	transform: none;
+}
+
 /* Timeline summaries are disclosure controls, not raised buttons. Keeping their
    footprint fixed prevents the label from shifting when the pointer lands. */
 .cursor-chat-surface .activity-summary-button:not(:disabled):active {
