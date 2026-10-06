@@ -2497,9 +2497,9 @@ html.sidebar-reordering * {
 	transform: scale(0.96);
 }
 
-/* Menu triggers anchor their menu, so the button itself must never transform;
-   their inner press surface plays the press instead (see OptionMenuTrigger). */
-.cursor-chat-surface button[data-press-host]:not(:disabled):active {
+/* Menu triggers anchor their menu: scaling one on press would move the open menu,
+   which is positioned from the trigger's box. They get hover and open states only. */
+.cursor-chat-surface .settings-option-trigger:not(:disabled):active {
 	transform: none;
 }
 

@@ -77,9 +77,8 @@ const CODEX_APPROVAL_ORDER: ApprovalMode[] = [
 	"bypass-permissions",
 ];
 
-// Drawn on the trigger's press surface, so state comes from the host button's group.
 const TRIGGER_CLASS =
-	"h-7 gap-1 bg-transparent rounded-lg px-3 text-[12px]! leading-none text-muted-foreground group-hover/option-menu-trigger:bg-white/5 group-hover/option-menu-trigger:text-foreground group-data-[state=open]/option-menu-trigger:bg-white/5 group-data-[state=open]/option-menu-trigger:text-foreground";
+	"h-7 gap-1 bg-transparent rounded-lg px-3 text-[12px]! leading-none text-muted-foreground hover:bg-white/5 hover:text-foreground data-[state=open]:bg-white/5 data-[state=open]:text-foreground";
 const CHAT_MENU_CLASS = "chat-settings-menu text-[12px]!";
 
 export function TurnSettingsBar({
@@ -97,7 +96,6 @@ export function TurnSettingsBar({
 	configOptions,
 	onChangeConfigOption,
 	configPending,
-	configPendingOptionId,
 	error,
 	disabled,
 	autoSelectEffortOnOpen = false,
@@ -137,8 +135,6 @@ export function TurnSettingsBar({
 	 * always selects one regardless.
 	 */
 	autoSelectEffortOnOpen?: boolean;
-	/** The provider option being written; unlike a native settings write, it should not dim unrelated controls. */
-	configPendingOptionId?: string;
 	error?: string;
 	disabled?: boolean;
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
@@ -189,15 +185,9 @@ export function TurnSettingsBar({
 		? `${modelLabel} ${formatEffortLabel(effortLabel, t)}`
 		: modelLabel;
 	const grouped = partitionConfigOptions(displayConfigOptions);
-	// Native setting writes do not identify a single control, so they still lock
-	// the row. Provider catalog writes do: only the control whose value is being
-	// confirmed should change appearance. The mutation guard below keeps the
-	// catalog atomic even though the other controls remain visually stable.
-	const baseDisabled = Boolean(disabled || rememberPermissionsPending || (configPending && !configPendingOptionId));
-	const optionDisabled = (...options: Array<ChatConfigOption | undefined>) =>
-		baseDisabled || Boolean(configPendingOptionId && options.some((option) => option?.id === configPendingOptionId));
+	const optionDisabled = Boolean(disabled || configPending || rememberPermissionsPending);
 	const applyOption = (optionId: string, value: ChatConfigOptionValue) => {
-		if (!onChangeConfigOption || configPending) return;
+		if (!onChangeConfigOption) return;
 		void Promise.resolve(onChangeConfigOption(optionId, value)).catch(() => {});
 	};
 	const nativeModelMenu = Boolean(onChange && displayModels.length > 0 && grouped.model.length === 0);
@@ -211,14 +201,14 @@ export function TurnSettingsBar({
 		(value) => {
 			if (acpEffortOption) applyOption(acpEffortOption.id, { value });
 		},
-		{ disabled: optionDisabled(acpEffortOption) || !onChangeConfigOption, applyOnMount: autoSelectEffortOnOpen },
+		{ disabled: optionDisabled || !onChangeConfigOption, applyOnMount: autoSelectEffortOnOpen },
 	);
 	const nativeEffortUnset = !settings.reasoningEffort || settings.reasoningEffort === "default";
 	useApplyEffortDefault(
 		`${harness}:${settings.model ?? fallback?.id}`,
 		nativeModelMenu && nativeEffortUnset ? fallbackEffort(efforts, (selected ?? fallback)?.defaultEffort) : undefined,
 		(value) => onChange?.({ ...settings, reasoningEffort: value }),
-		{ disabled: baseDisabled || !onChange, applyOnMount: autoSelectEffortOnOpen },
+		{ disabled: optionDisabled || !onChange, applyOnMount: autoSelectEffortOnOpen },
 	);
 	const modeOption = grouped.mode;
 	const inlineExecutionMode =
@@ -243,7 +233,7 @@ export function TurnSettingsBar({
 		: settings.approvalMode ?? "default";
 	const rememberAction = onRememberPermissions && rememberMode && !planning ? (
 		<OptionMenuItem
-			disabled={baseDisabled}
+			disabled={optionDisabled}
 			onSelect={() => {
 				void Promise.resolve(onRememberPermissions(rememberMode)).catch(() => {});
 			}}
@@ -255,14 +245,7 @@ export function TurnSettingsBar({
 	const showRightDropdown = Boolean(children || (!planning && ((showApprovalMode && onChange) || modeOption)));
 
 	return (
-		<div
-			role="group"
-			aria-label="Turn settings"
-			// Keep the write serialized without changing every sibling trigger's
-			// disabled appearance. The active trigger still receives `disabled` above.
-			inert={configPending || undefined}
-			className="flex min-w-0 flex-1 flex-col gap-0.5"
-		>
+		<div role="group" aria-label="Turn settings" className="flex min-w-0 flex-1 flex-col gap-0.5">
 			<div className="flex h-7 min-w-0 flex-1 items-center justify-between gap-2">
 				<div className="flex h-7 min-w-0 flex-wrap items-center gap-0.5">
 					{nativeModelMenu && onChange ? (
@@ -270,7 +253,7 @@ export function TurnSettingsBar({
 							models={harness === "claude-code" ? displayModels.filter((model) => model.id !== "default") : displayModels}
 							settings={settings}
 							onChange={onChange}
-							disabled={baseDisabled}
+							disabled={optionDisabled}
 							modelLabel={modelLabel}
 							groupLabel={modelGroupLabel}
 							efforts={efforts}
@@ -295,13 +278,7 @@ export function TurnSettingsBar({
 							planReturn={planReturn}
 							toggles={grouped.toggles}
 							extraOptions={grouped.extra}
-							disabled={optionDisabled(
-								...grouped.model,
-								...grouped.effort,
-								inlineExecutionMode,
-								...grouped.toggles,
-								...grouped.extra,
-							)}
+							disabled={optionDisabled}
 							onChange={applyOption}
 						/>
 					) : null}
@@ -310,7 +287,7 @@ export function TurnSettingsBar({
 						<ExecutionModePicker
 							option={standaloneExecutionMode}
 							planReturn={planReturn}
-							disabled={optionDisabled(standaloneExecutionMode)}
+							disabled={optionDisabled}
 							onChange={applyOption}
 						/>
 					) : null}
@@ -322,7 +299,7 @@ export function TurnSettingsBar({
 						{!planning && modeOption && onChangeConfigOption ? (
 							<ConfigOptionPicker
 								option={modeOption}
-								disabled={optionDisabled(modeOption)}
+								disabled={optionDisabled}
 								onChange={(value) => applyOption(modeOption.id, value)}
 								footer={rememberAction}
 							/>
@@ -330,7 +307,7 @@ export function TurnSettingsBar({
 							<Picker
 								label={approvalLabel}
 													title="Approval policy for the next turn"
-								disabled={baseDisabled}
+													disabled={optionDisabled}
 							>
 								{approvalOrder.filter((mode) => !approvalModes || approvalModes.includes(mode)).map((mode) => (
 									<OptionMenuItem
@@ -430,7 +407,7 @@ function ModelEffortPicker({
 								}`
 							: "Model and reasoning effort for the next turn"
 					}
-					pressSurfaceClassName={TRIGGER_CLASS}
+					className={TRIGGER_CLASS}
 				>
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
 					{reroute ? (
@@ -532,7 +509,7 @@ function ClubbedConfigPicker({
 				<EffortPicker
 					{...acpEffortMenuProps(primaryEffort)}
 					disabled={disabled}
-					triggerPressSurfaceClassName={TRIGGER_CLASS}
+					triggerClassName={TRIGGER_CLASS}
 					onChange={(value) => onChange(primaryEffort.id, { value })}
 				/>
 			);
@@ -564,7 +541,7 @@ function ClubbedConfigPicker({
 					disabled={disabled}
 					aria-label="Model and reasoning effort for the next turn"
 					title="Model and reasoning effort for the next turn"
-					pressSurfaceClassName={TRIGGER_CLASS}
+					className={TRIGGER_CLASS}
 				>
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
 				</OptionMenuTrigger>
@@ -729,7 +706,7 @@ function ExecutionModePicker({
 				disabled={disabled}
 				aria-label="Model mode for the next turn"
 				title="Model mode for the next turn"
-				pressSurfaceClassName={TRIGGER_CLASS}
+				className={TRIGGER_CLASS}
 			>
 				<span className="min-w-0 max-w-[16ch] truncate">{executionModeLabel(option)}</span>
 			</OptionMenuTrigger>
@@ -963,7 +940,7 @@ function Picker({
 					aria-label={title}
 					title={title}
 					disabled={disabled}
-					pressSurfaceClassName={TRIGGER_CLASS}
+					className={TRIGGER_CLASS}
 				>
 					<span className="min-w-0 max-w-[16ch] truncate">{label}</span>
 					{badge}

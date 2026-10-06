@@ -1,6 +1,5 @@
-import { forwardRef, useRef, type ButtonHTMLAttributes } from "react";
+import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useReducedMotion } from "motion/react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
 
@@ -34,77 +33,20 @@ export const OptionMenu = DropdownMenuPrimitive.Root;
 // Trigger
 // ---------------------------------------------------------------------------
 
-const PRESS_KEYFRAMES: Keyframe[] = [
-	{ transform: "scale(1)" },
-	{ transform: "scale(0.96)", offset: 0.4 },
-	{ transform: "scale(1)" },
-];
-
-function playPress(surface: HTMLElement | null) {
-	if (!surface || typeof surface.animate !== "function") return;
-	surface.animate(PRESS_KEYFRAMES, { duration: 200, easing: "ease-out" });
-}
-
 export const OptionMenuTrigger = forwardRef<
 	HTMLButtonElement,
-	ButtonHTMLAttributes<HTMLButtonElement> & {
-		showCaret?: boolean;
-		/**
-		 * Draw the trigger's chrome on an inner surface that plays a press animation,
-		 * instead of on the button. The button stays untransformed because it is the
-		 * menu's positioning anchor: scaling it would place the menu against the
-		 * shrunken box and then move it when the press springs back. The press is a
-		 * one-shot animation on pointerdown because the menu opens on pointerdown
-		 * and cancels it, so `:active` never applies while opening.
-		 */
-		pressSurfaceClassName?: string;
-	}
->(function OptionMenuTrigger(
-	{ className, children, showCaret = true, pressSurfaceClassName, onPointerDown, onKeyDown, ...props },
-	ref,
-) {
-	const surface = useRef<HTMLSpanElement>(null);
-	const reducedMotion = useReducedMotion();
-	const caret = showCaret ? (
-		<ChevronDown
-			className="size-icon-sm shrink-0 group-data-[state=open]/option-menu-trigger:rotate-180"
-			aria-hidden="true"
-		/>
-	) : null;
-	if (pressSurfaceClassName !== undefined) {
-		return (
-			<DropdownMenuPrimitive.Trigger asChild>
-				<button
-					ref={ref}
-					type="button"
-					data-press-host=""
-					className={cn(
-						"group/option-menu-trigger inline-flex max-w-full min-w-0 rounded-lg outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
-						className,
-					)}
-					onPointerDown={(event) => {
-						onPointerDown?.(event);
-						if (!reducedMotion && event.button === 0 && !event.currentTarget.disabled) playPress(surface.current);
-					}}
-					onKeyDown={(event) => {
-						onKeyDown?.(event);
-						if (!reducedMotion && (event.key === "Enter" || event.key === " ") && !event.repeat) playPress(surface.current);
-					}}
-					{...props}
-				>
-					<span ref={surface} className={cn("settings-option-trigger max-w-full min-w-0", pressSurfaceClassName)}>
-						{children}
-						{caret}
-					</span>
-				</button>
-			</DropdownMenuPrimitive.Trigger>
-		);
-	}
+	ButtonHTMLAttributes<HTMLButtonElement> & { showCaret?: boolean }
+>(function OptionMenuTrigger({ className, children, showCaret = true, ...props }, ref) {
 	return (
 		<DropdownMenuPrimitive.Trigger asChild>
 			<button ref={ref} type="button" className={cn(TRIGGER, className)} {...props}>
 				{children}
-				{caret}
+				{showCaret ? (
+					<ChevronDown
+						className="size-icon-sm shrink-0 group-data-[state=open]/option-menu-trigger:rotate-180"
+						aria-hidden="true"
+					/>
+				) : null}
 			</button>
 		</DropdownMenuPrimitive.Trigger>
 	);

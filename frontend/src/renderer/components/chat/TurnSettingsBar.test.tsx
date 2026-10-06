@@ -673,36 +673,6 @@ describe("ACP session config options", () => {
 		expect(screen.getByRole("button", { name: "Model" })).toBeDisabled();
 	});
 
-	it("keeps unaffected provider controls stable while one option is saving", () => {
-		const mode: ChatConfigOption = {
-			id: "mode",
-			name: "Mode",
-			category: "mode",
-			type: "select",
-			currentValue: "agent",
-			choices: [
-				{ value: "agent", name: "Agent" },
-				{ value: "plan", name: "Plan" },
-				{ value: "ask", name: "Ask" },
-			],
-		};
-		render(
-			<TurnSettingsBar
-				harness="cursor"
-				models={[]}
-				settings={{}}
-				configOptions={[OPTIONS[0], mode]}
-				configPending
-				configPendingOptionId="mode"
-				onChangeConfigOption={vi.fn()}
-			/>,
-		);
-
-		expect(screen.getByRole("button", { name: "Model" })).toBeEnabled();
-		expect(screen.getByRole("button", { name: "Model mode for the next turn" })).toBeDisabled();
-		expect(screen.getByRole("group", { name: "Turn settings" })).toHaveAttribute("inert");
-	});
-
 	it("hides permissions while the provider is in plan mode", () => {
 		render(
 			<TurnSettingsBar

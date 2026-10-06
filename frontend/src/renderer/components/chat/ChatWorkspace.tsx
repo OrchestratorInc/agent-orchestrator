@@ -374,8 +374,6 @@ export interface ChatWorkspaceProps {
 		value: ChatConfigOptionValue,
 	) => Promise<unknown> | void;
 	configOptionPending?: boolean;
-	/** The provider option currently being saved, if the provider catalog owns it. */
-	configOptionPendingOptionId?: string;
 	configOptionError?: string;
 	/** Summarize earlier history to reclaim context. */
 	onCompact?: () => void;
@@ -605,7 +603,6 @@ function ChatWorkspaceContent({
 	configOptions,
 	onChooseConfigOption,
 	configOptionPending,
-	configOptionPendingOptionId,
 	configOptionError,
 	onCompact,
 	compacting,
@@ -1149,21 +1146,19 @@ function ChatWorkspaceContent({
 					onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
 					configPending={configOptionPending}
 					autoSelectEffortOnOpen={snapshot.items.length === 0 && !turn}
-					configPendingOptionId={configOptionPendingOptionId}
 					error={configOptionError}
 					// Turn settings require a live controller even while messages can queue.
 					disabled={
 							snapshot.controller.state === "connecting" ||
 							snapshot.controller.state === "stopped" ||
 							session?.provisionState === "provisioning" ||
-							controllerTransitioning || newWorkDisabled
+							controllerTransitioning || configOptionPending || newWorkDisabled
 						}
 				/>
 			) : null,
 		[
 			configOptionError,
 			configOptionPending,
-			configOptionPendingOptionId,
 			configOptions,
 			controllerTransitioning,
 			models,
