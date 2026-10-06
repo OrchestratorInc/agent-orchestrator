@@ -64,6 +64,7 @@ type fixture struct {
 	born          time.Time
 	changed       bool
 	foreign       bool
+	hidden        bool
 	providerError bool
 	elements      []capturedElement
 }
@@ -87,7 +88,7 @@ func newFixture(t *testing.T) *fixture {
 			if f.foreign {
 				pid = 999
 			}
-			return jsonOutput(map[string]any{"windows": []window{{PID: pid, ID: 456, Layer: 0, Bounds: f.bounds}}}), nil
+			return jsonOutput(map[string]any{"windows": []window{{PID: pid, ID: 456, Layer: 0, Bounds: f.bounds, OnScreen: !f.hidden}}}), nil
 		case "get_window_state":
 			path, ok := input["screenshot_out_file"].(string)
 			if !ok {
@@ -283,15 +284,6 @@ func TestPixelTypeAndKeyInjection(t *testing.T) {
 	last = f.runner.calls[len(f.runner.calls)-1]
 	if last.args[3] != "press_key" || !strings.Contains(last.args[4], `"modifiers":["cmd"]`) {
 		t.Fatalf("wrong key chord: %v", last.args)
-	}
-}
-
-func TestRecordingGapMakesNoProviderCall(t *testing.T) {
-	f := newFixture(t)
-	before := len(f.runner.calls)
-	result, err := f.adapter.StartRecording(context.Background(), f.target, "/evidence")
-	if err != nil || result.Gap == "" || len(f.runner.calls) != before {
-		t.Fatalf("recording gap unexpectedly started capture: %+v, %v", result, err)
 	}
 }
 

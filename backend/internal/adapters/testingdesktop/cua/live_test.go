@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -31,16 +32,57 @@ func TestLiveElectron(t *testing.T) {
 		t.Fatal(err)
 	}
 	var fixture struct {
-		PID int `json:"pid"`
+		PID      int    `json:"pid"`
+		WindowID string `json:"windowId,omitempty"`
 	}
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	if os.Getenv("CUA_LIVE_STAGE") == "close-driver" {
+		data, err := os.ReadFile(filepath.Join(root, "video-driver-listeners.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var driver struct {
+			PID   int       `json:"pid"`
+			Birth time.Time `json:"birth"`
+		}
+		if err := json.Unmarshal(data, &driver); err != nil {
+			t.Fatal(err)
+		}
+		birth, err := process.StartTime(driver.PID)
+		if err != nil || !birth.Equal(driver.Birth) {
+			t.Fatal("owned Driver identity changed before cleanup")
+		}
+		a, err := New(Config{DataDir: filepath.Join(root, "adapter")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.driver = driverIdentity{pid: driver.PID, started: driver.Birth}
+		if err := a.Close(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
 	started, err := process.StartTime(fixture.PID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if os.Getenv("CUA_LIVE_STAGE") == "close-fixture" {
+		observed, err := process.StartTime(fixture.PID)
+		if err != nil || !observed.Equal(started) {
+			t.Fatal("fixture birth identity changed before cleanup")
+		}
+		p, err := os.FindProcess(fixture.PID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Signal(syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		return
 	}
 	mode := DeliveryMode(os.Getenv("CUA_LIVE_DELIVERY"))
 	a, err := New(Config{DataDir: filepath.Join(root, "adapter"), DeliveryMode: mode, Runner: liveRunner{root: root}})
@@ -55,8 +97,16 @@ func TestLiveElectron(t *testing.T) {
 		}
 	})
 	target, err := a.BindWindow(ctx, domain.TestTargetIdentity{ID: "disposable-electron", LaunchID: "live-proof", Generation: 1,
-		ElectronPID: fixture.PID, ElectronStartedAt: started, DataDir: filepath.Join(root, "user-data")})
+		ElectronPID: fixture.PID, ElectronStartedAt: started, DataDir: filepath.Join(root, "user-data"), WindowID: fixture.WindowID})
 	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.WindowID = target.WindowID
+	data, err = json.MarshalIndent(fixture, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "fixture-pid.json"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("target PID=%d start=%s window=%s driver PID=%d mode=%s", target.ElectronPID, target.ElectronStartedAt.Format(time.RFC3339Nano), target.WindowID, a.driver.pid, a.DeliveryMode())
@@ -98,6 +148,71 @@ func TestLiveElectron(t *testing.T) {
 		return shot.Frame
 	}
 	frame := capture("before")
+	if stage == "video" || stage == "video-close" {
+		windows, err := a.windows(ctx, a.bindings[target.ID])
+		write("recording-windows", windows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recording, err := a.StartRecording(ctx, target, filepath.Join(root, "evidence"))
+		write("start-recording", map[string]any{"result": recording, "error": fmt.Sprint(err)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame = capture("recording-before-click")
+		if _, err := a.Click(ctx, target, frame, domain.TestClickRequest{ScreenshotID: frame.ScreenshotID, X: 300, Y: 440}); err != nil {
+			t.Fatal(err)
+		}
+		capture("recording-after-click")
+		// This interval is the requested sample duration, not a readiness retry.
+		select {
+		case <-time.After(3 * time.Second):
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		if stage == "video-close" {
+			if err := a.checkProcess(ctx, target); err != nil {
+				t.Fatal(err)
+			}
+			p, err := os.FindProcess(target.ElectronPID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := p.Signal(syscall.SIGTERM); err != nil {
+				t.Fatal(err)
+			}
+			for {
+				birth, probeErr := process.StartTime(target.ElectronPID)
+				if probeErr != nil || !birth.Equal(target.ElectronStartedAt) {
+					break
+				}
+				select {
+				case <-time.After(100 * time.Millisecond):
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+			}
+		}
+		final, err := a.StopRecording(ctx, target)
+		write("stop-recording", map[string]any{"result": final, "error": fmt.Sprint(err)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if final.Gap != "" || final.Duration <= 0 || final.Width != frame.Width || final.Height != frame.Height || final.Path != recording.Path {
+			t.Fatalf("invalid finalized recording: %+v", final)
+		}
+		t.Logf("finalized %s, %s, %dx%d, recorder PID=%d, target-closed=%t", final.Path, final.Duration, final.Width, final.Height, final.RecorderPID, stage == "video-close")
+		return
+	}
+	if stage == "video-front" {
+		var result any
+		err := a.call(ctx, "bring_to_front", a.targetArgs(a.bindings[target.ID]), &result)
+		write("activation", map[string]any{"result": result, "error": fmt.Sprint(err)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
 	if stage == "capture" {
 		return
 	}
@@ -184,11 +299,6 @@ func TestLiveElectron(t *testing.T) {
 		if !strings.Contains(string(observed[len(logBefore):]), `"state":"BUTTON CLICK OBSERVED"`) {
 			t.Fatal("button effect missing")
 		}
-		gap, err := a.StartRecording(ctx, target, filepath.Join(root, "evidence"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		write("recording", gap)
 		return
 	}
 	result, err := a.Type(ctx, target, frame, domain.TestTypeRequest{ScreenshotID: frame.ScreenshotID, X: 240, Y: 280, Text: "ELECTRON PIXEL PROOF"})
@@ -233,20 +343,17 @@ func TestLiveElectron(t *testing.T) {
 			}
 		}
 	}
-	recording, err := a.StartRecording(ctx, target, filepath.Join(root, "evidence"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	write("recording", recording)
-	if recording.Gap == "" {
-		t.Fatal("recording gap missing")
-	}
 }
 
 type liveRunner struct{ root string }
 
 func (r liveRunner) Run(ctx context.Context, executable string, args, env []string) (Output, error) {
 	out, err := (commandRunner{}).Run(ctx, executable, args, env)
+	if len(args) == 5 && args[2] == "call" && args[3] == "list_windows" {
+		if writeErr := os.WriteFile(filepath.Join(r.root, "provider-windows.json"), out.Stdout, 0o600); writeErr != nil {
+			return out, writeErr
+		}
+	}
 	if len(args) == 5 && args[2] == "call" && args[3] == "get_window_state" {
 		var state map[string]json.RawMessage
 		if json.Unmarshal(out.Stdout, &state) == nil {

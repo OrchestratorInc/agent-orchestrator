@@ -161,14 +161,26 @@ func (a *Adapter) Release(ctx context.Context, target domain.TestTargetIdentity)
 		return refuse("target_not_bound", "release target does not match binding")
 	}
 	b.receipt = nil
+	var cleanup error
+	if b.recording != nil {
+		if _, err := a.stopRecording(ctx, b); err != nil {
+			cleanup = err
+			select {
+			case <-b.recording.process.done:
+				// A movie gap must not leave an exited recorder's Driver alive.
+			default:
+				return err
+			}
+		}
+	}
 	if err := a.checkDriver(ctx); err != nil {
-		return err
+		return errors.Join(cleanup, err)
 	}
 	if err := a.call(ctx, "end_session", map[string]any{"session": b.session}, nil); err != nil {
-		return err
+		return errors.Join(cleanup, err)
 	}
 	delete(a.bindings, target.ID)
-	return nil
+	return cleanup
 }
 
 // Close revokes sessions and stops only the daemon this instance launched,
@@ -178,13 +190,28 @@ func (a *Adapter) Close(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.closed = true
+	var cleanup error
+	pending := false
+	for _, b := range a.bindings {
+		if b.recording != nil {
+			_, err := a.stopRecording(ctx, b)
+			cleanup = errors.Join(cleanup, err)
+			select {
+			case <-b.recording.process.done:
+			default:
+				pending = true
+			}
+		}
+	}
+	if pending {
+		return cleanup // retain ownership for a later cleanup retry
+	}
 	if a.driver.pid == 0 {
-		return nil
+		return cleanup
 	}
 	if err := a.checkDriver(ctx); err != nil {
-		return err
+		return errors.Join(cleanup, err)
 	}
-	var cleanup error
 	for _, b := range a.bindings {
 		cleanup = errors.Join(cleanup, a.call(ctx, "end_session", map[string]any{"session": b.session}, nil))
 	}

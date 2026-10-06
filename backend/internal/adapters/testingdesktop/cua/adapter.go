@@ -73,6 +73,7 @@ type binding struct {
 	session   string
 	receipt   *captureReceipt
 	lastTyped *typedFocus
+	recording *windowRecording
 }
 
 type typedFocus struct {
@@ -115,15 +116,17 @@ type pixelBounds struct {
 // Adapter serializes observation and input. The supervising daemon owns one
 // instance, calls Close on shutdown, and must journal DeliveryMode before input.
 type Adapter struct {
-	mu       sync.Mutex
-	cfg      Config
-	runner   Runner
-	started  func(context.Context, int) (time.Time, error)
-	root     string
-	bindings map[string]*binding
-	driver   driverIdentity
-	closed   bool
-	now      func() time.Time
+	mu            sync.Mutex
+	cfg           Config
+	runner        Runner
+	started       func(context.Context, int) (time.Time, error)
+	root          string
+	bindings      map[string]*binding
+	driver        driverIdentity
+	closed        bool
+	now           func() time.Time
+	startRecorder func(args, env []string, stdout, stderr string) (*recordingProcess, error)
+	stagingDir    string
 }
 
 var _ ports.TestingDesktopControl = (*Adapter)(nil)
@@ -168,8 +171,13 @@ func New(cfg Config) (*Adapter, error) {
 	if len(filepath.Join(root, "driver.sock")) > 103 {
 		return nil, refuse("invalid_config", "resolved Unix socket path exceeds the macOS limit")
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
 	return &Adapter{cfg: cfg, runner: runner, started: started, root: root,
-		bindings: make(map[string]*binding), now: time.Now}, nil
+		bindings: make(map[string]*binding), now: time.Now, startRecorder: startScreencapture,
+		stagingDir: filepath.Join(home, "Library", "Group Containers", "group.com.apple.screencapture", "ScreenRecordings")}, nil
 }
 
 // DeliveryMode lets the service journal the configured policy before dispatch.
@@ -232,6 +240,10 @@ func (a *Adapter) BindWindow(ctx context.Context, target domain.TestTargetIdenti
 func (a *Adapter) Screenshot(ctx context.Context, target domain.TestTargetIdentity) (shot domain.TestScreenshot, err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.screenshot(ctx, target)
+}
+
+func (a *Adapter) screenshot(ctx context.Context, target domain.TestTargetIdentity) (shot domain.TestScreenshot, err error) {
 	b, err := a.bound(ctx, target)
 	if err != nil {
 		return shot, err
@@ -478,10 +490,12 @@ func validBounds(b domain.TestWindowBounds) bool {
 }
 
 type window struct {
-	PID    int                     `json:"pid"`
-	ID     int                     `json:"window_id"`
-	Layer  int                     `json:"layer"`
-	Bounds domain.TestWindowBounds `json:"bounds"`
+	PID            int                     `json:"pid"`
+	ID             int                     `json:"window_id"`
+	Layer          int                     `json:"layer"`
+	Bounds         domain.TestWindowBounds `json:"bounds"`
+	OnScreen       bool                    `json:"is_on_screen"`
+	OnCurrentSpace *bool                   `json:"on_current_space"`
 }
 
 func (a *Adapter) windows(ctx context.Context, b *binding) ([]window, error) {
