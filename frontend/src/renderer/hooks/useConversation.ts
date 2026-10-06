@@ -826,28 +826,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 	});
 
-	/**
-	 * Restart the tool servers.
-	 *
-	 * Worth offering because a server that failed to start is not a transient blip the
-	 * agent will retry: it will simply never call those tools, and nothing in the
-	 * timeline says so. Refused mid-turn, which is why the control is disabled rather
-	 * than allowed to fail.
-	 */
-	const reloadMcp = useMutation({
-		mutationFn: async () => {
-			const { data, error } = await clientForSessionHost(hostId).POST(
-				"/api/v1/sessions/{sessionId}/conversation/mcp/reload",
-				{
-					params: { path: { sessionId: sessionId as string } },
-				},
-			);
-			if (error) throw error;
-			return data;
-		},
-		onSuccess: invalidate,
-	});
-
 	const rollback = useMutation({
 		mutationFn: async (turnId: string) => {
 			const { data, error } = await clientForSessionHost(hostId).POST(
@@ -1125,13 +1103,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		 * answer is a property of the driver, not of the moment.
 		 */
 		steerUnsupported: apiErrorCode(steer.error) === "CHAT_STEER_UNSUPPORTED",
-		reloadMcpServers: () => reloadMcp.mutateAsync(),
-		reloadingMcpServers: reloadMcp.isPending,
-		mcpReloadUnsupported: apiErrorCode(reloadMcp.error) === "CHAT_MCP_RELOAD_UNSUPPORTED",
-		mcpReloadError:
-			reloadMcp.error && apiErrorCode(reloadMcp.error) !== "CHAT_MCP_RELOAD_UNSUPPORTED"
-				? apiErrorMessage(reloadMcp.error)
-				: undefined,
 		busy:
 			trackedDispatch?.state === "pending" ||
 			(send.isPending && sendTargetsCurrentSession) ||

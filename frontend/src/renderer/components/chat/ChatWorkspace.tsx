@@ -454,10 +454,6 @@ export interface ChatWorkspaceProps {
 	promoteQueuedTurnPendingTurnId?: string;
 	cancelQueuedTurnPendingTurnId?: string;
 	editQueuedTurnPendingTurnId?: string;
-	/** Start the tool servers again. Absent when the harness cannot. */
-	onReloadMcpServers?: () => void;
-	reloadingMcpServers?: boolean;
-	mcpReloadError?: string;
 }
 
 type ChatWorkspaceActivation =
@@ -641,9 +637,6 @@ function ChatWorkspaceContent({
 	promoteQueuedTurnPendingTurnId,
 	cancelQueuedTurnPendingTurnId,
 	editQueuedTurnPendingTurnId,
-	onReloadMcpServers,
-	reloadingMcpServers,
-	mcpReloadError,
 	draftScope,
 }: ChatWorkspaceProps & { draftScope: ChatDraftScope }) {
 	const draftScopeKey = chatDraftScopeKey(draftScope);
@@ -1474,14 +1467,6 @@ function ChatWorkspaceContent({
 						shellError={shellError}
 					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
-					<McpServerBanner
-						sessionId={uiSessionId}
-						servers={brokenServers}
-						onReload={newWorkDisabled ? undefined : onReloadMcpServers}
-						reloading={reloadingMcpServers}
-						turnInFlight={Boolean(turn)}
-						error={mcpReloadError}
-					/>
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
@@ -1530,71 +1515,80 @@ function ChatWorkspaceContent({
 										{t("chat.welcome.heading")}
 									</h1>
 								) : null}
-								<ChatComposer
-									focusRef={composerFocusRef}
-									key={`${draftScopeKey}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
-									queuedDock={composerQueuedDock}
-									approval={composerApproval}
-									elicitation={composerElicitation}
-									onSend={handleComposerSend}
-									draftSeed={composerDraftSeed}
-									editingQueuedTurnId={queueEdit?.turnId}
-									queuedEditRecovery={Boolean(queueEdit?.clientMessageId)}
-									savingQueuedEditPending={Boolean(
-										queueEdit?.turnId &&
-											editQueuedTurnPendingTurnId === queueEdit.turnId,
-									)}
-									onCancelQueuedEdit={cancelQueuedEdit}
-									onQueuedDraftChange={queueEdit ? changeQueuedDraft : undefined}
-									queuedDraftScope={queueEdit ? draftScope : undefined}
-									onQueuedAttachmentsChange={changeQueuedStagedAttachments}
-									onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
-									onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
-									commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
-									settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
-									busy={busy}
-									willQueue={Boolean(turn) || session?.provisionState === "provisioning"}
-									queuePlaceholder={
-										session?.provisionState === "provisioning"
-											? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
-											: undefined
-									}
-									disabled={(snapshot.controller.state === "stopped" || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
-									// Switch/reconnect status is the topbar spinner beside ⋮ — not composer text.
-									disabledPlaceholder={
-										controllerTransitioning || newWorkDisabled ? "" : undefined
-									}
-									// Keep the composer useful outside the centered welcome state too. A
-									// task can have non-message activity before its first visible chat
-									// message, and the generic placeholder makes a still-empty composer
-									// look like a regression.
-									emptyPlaceholder={conversationEmpty ? emptyChatPlaceholder : undefined}
-									skills={skills}
-									filePaths={filePaths}
-									filePathsTruncated={filePathsTruncated}
-									onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
-									nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
-									autoFocus={!reviewerActive}
-									autoFocusKey={draftScope.sessionId}
-									// Steering is only meaningful into a turn that is running. A queued turn
-									// has not reached the provider, so there is nothing to steer.
-									onSteer={newWorkDisabled ? undefined : steer}
-									showSteerButton={showSteerButton}
-									canSteer={Boolean(onSteer) && turn?.state === "running"}
-									sendPending={sendPending}
-									steerPending={steerPending}
-									steerRefusal={steerRefusal}
-									onCompact={newWorkDisabled ? undefined : onCompact}
-									compacting={compacting}
-									compactUnavailable={compactUnavailable}
-									compactBlocked={Boolean(turn)}
-									draftSessionId={queueEdit ? undefined : draftScope.sessionId}
-									draftSessionIncarnation={draftScope.incarnation}
-									assetBaseUrl={assetBaseUrl}
-									assetSessionId={snapshot.sessionId}
-									remoteHost={Boolean(activeRemoteHostId)}
-									acceptedClientMessageIds={acceptedClientMessageIds}
-								/>
+								<div className="relative">
+									<McpServerBanner
+										key={uiSessionId}
+										sessionId={uiSessionId}
+										servers={brokenServers}
+										placement={conversationEmpty ? "below" : "above"}
+										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
+									/>
+									<ChatComposer
+										focusRef={composerFocusRef}
+										key={`${draftScopeKey}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
+										queuedDock={composerQueuedDock}
+										approval={composerApproval}
+										elicitation={composerElicitation}
+										onSend={handleComposerSend}
+										draftSeed={composerDraftSeed}
+										editingQueuedTurnId={queueEdit?.turnId}
+										queuedEditRecovery={Boolean(queueEdit?.clientMessageId)}
+										savingQueuedEditPending={Boolean(
+											queueEdit?.turnId &&
+												editQueuedTurnPendingTurnId === queueEdit.turnId,
+										)}
+										onCancelQueuedEdit={cancelQueuedEdit}
+										onQueuedDraftChange={queueEdit ? changeQueuedDraft : undefined}
+										queuedDraftScope={queueEdit ? draftScope : undefined}
+										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
+										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
+										onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
+										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
+										settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
+										busy={busy}
+										willQueue={Boolean(turn) || session?.provisionState === "provisioning"}
+										queuePlaceholder={
+											session?.provisionState === "provisioning"
+												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
+												: undefined
+										}
+										disabled={(snapshot.controller.state === "stopped" || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
+										// Switch/reconnect status is the topbar spinner beside ⋮ — not composer text.
+										disabledPlaceholder={
+											controllerTransitioning || newWorkDisabled ? "" : undefined
+										}
+										// Keep the composer useful outside the centered welcome state too. A
+										// task can have non-message activity before its first visible chat
+										// message, and the generic placeholder makes a still-empty composer
+										// look like a regression.
+										emptyPlaceholder={conversationEmpty ? emptyChatPlaceholder : undefined}
+										skills={skills}
+										filePaths={filePaths}
+										filePathsTruncated={filePathsTruncated}
+										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
+										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
+										autoFocus={!reviewerActive}
+										autoFocusKey={draftScope.sessionId}
+										// Steering is only meaningful into a turn that is running. A queued turn
+										// has not reached the provider, so there is nothing to steer.
+										onSteer={newWorkDisabled ? undefined : steer}
+										showSteerButton={showSteerButton}
+										canSteer={Boolean(onSteer) && turn?.state === "running"}
+										sendPending={sendPending}
+										steerPending={steerPending}
+										steerRefusal={steerRefusal}
+										onCompact={newWorkDisabled ? undefined : onCompact}
+										compacting={compacting}
+										compactUnavailable={compactUnavailable}
+										compactBlocked={Boolean(turn)}
+										draftSessionId={queueEdit ? undefined : draftScope.sessionId}
+										draftSessionIncarnation={draftScope.incarnation}
+										assetBaseUrl={assetBaseUrl}
+										assetSessionId={snapshot.sessionId}
+										remoteHost={Boolean(activeRemoteHostId)}
+										acceptedClientMessageIds={acceptedClientMessageIds}
+									/>
+								</div>
 							</div>
 						</div>
 					</div>

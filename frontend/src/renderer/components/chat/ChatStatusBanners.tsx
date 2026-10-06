@@ -7,15 +7,18 @@
  * later turn failing for a reason that looks generic. A thread the provider has put
  * into `system_error` looks, from AO's side, like an agent that has gone quiet.
  *
- * They live above the scroller rather than in it because they are current state:
- * scrolling away from them must not scroll away from the reason the session is
- * stuck.
+ * The persistent ones live above the scroller rather than in it because they are
+ * current state: scrolling away from them must not scroll away from the reason the
+ * session is stuck. The MCP note is a one-time heads-up, so it docks by the composer
+ * without displacing the conversation.
  */
 
-import { memo, useMemo, useState } from "react";
-import { KeyRound, Plug, RefreshCw, TriangleAlert, X } from "lucide-react";
+import { memo, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { KeyRound, Plug, TriangleAlert, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import type { ConversationAccount, ConversationThreadState, McpServer } from "../../types/conversation";
 
 /** A current provider credential demand; dismissal affects presentation only. */
@@ -147,112 +150,97 @@ export const ThreadStateBanner = memo(function ThreadStateBanner({
 	);
 });
 
+const MCP_NOTICE_MS = 3_000;
+const MCP_NOTICE_FADE_MS = 200;
+const MCP_NOTICE_STORAGE_PREFIX = "ao:mcp-notice-shown:";
+// The set covers pane remounts; storage keeps the note from replaying after a reload.
+const mcpNoticeShownSessions = new Set<string>();
+
+function mcpNoticeWasShown(sessionId: string): boolean {
+	if (mcpNoticeShownSessions.has(sessionId)) return true;
+	try {
+		return window.localStorage.getItem(`${MCP_NOTICE_STORAGE_PREFIX}${sessionId}`) === "1";
+	} catch {
+		return false;
+	}
+}
+
+function rememberMcpNotice(sessionId: string): void {
+	mcpNoticeShownSessions.add(sessionId);
+	try {
+		window.localStorage.setItem(`${MCP_NOTICE_STORAGE_PREFIX}${sessionId}`, "1");
+	} catch {
+		// Best-effort: the in-memory set still covers this renderer's lifetime.
+	}
+}
+
 /**
- * Tool servers that did not start.
+ * A brief, once-per-session note that some tool servers did not start.
  *
- * Only failures are shown. A healthy server is not news, and listing every one would
- * put a permanent status bar above a conversation to say that nothing is wrong. A
- * failed one is worth interrupting for because its absence is invisible: the agent
- * will not mention the tools it does not have, so the user sees a worse answer with
- * no cause.
+ * The agent never mentions tools it does not have, so without this a user sees a
+ * worse answer with no cause. The fix lives in the agent's own config, so there is
+ * nothing to do here: say it once, quietly, and get out of the way.
  */
 export const McpServerBanner = memo(function McpServerBanner({
 	sessionId,
 	servers,
-	onReload,
-	reloading,
-	turnInFlight,
-	error,
+	placement = "above",
+	active = true,
 }: {
-	/** Scopes a dismissal to this session, even when the surface is reused. */
 	sessionId: string;
 	/** Only the broken ones. The caller filters, so an empty list means nothing to say. */
 	servers: McpServer[];
-	/** Absent when the harness cannot reload, in which case no control is drawn. */
-	onReload?: () => void;
-	reloading?: boolean;
-	/** The daemon refuses a reload mid-turn, so the control explains itself instead. */
-	turnInFlight?: boolean;
-	error?: string;
+	/** Relative to the composer, which the parent wraps in a positioned box. */
+	placement?: "above" | "below";
+	/** A hidden chat panel must not use up the session's one note. */
+	active?: boolean;
 }) {
-	const warningKey = useMemo(
-		() => `${sessionId}:${servers.map((server) => `${server.name}/${server.status}`).sort().join(",")}`,
-		[servers, sessionId],
-	);
-	const [dismissedKey, setDismissedKey] = useState<string>();
-	if (servers.length === 0) return null;
-	if (dismissedKey === warningKey) return null;
+	const { t } = useTranslation();
+	const [phase, setPhase] = useState<"waiting" | "shown" | "fading" | "done">("waiting");
+	const hasFailures = servers.length > 0;
+
+	useEffect(() => {
+		if (phase !== "waiting" || !active || !hasFailures || mcpNoticeWasShown(sessionId)) return;
+		rememberMcpNotice(sessionId);
+		setPhase("shown");
+	}, [active, hasFailures, phase, sessionId]);
+
+	useEffect(() => {
+		if (phase !== "shown" && phase !== "fading") return;
+		const timer = window.setTimeout(
+			() => setPhase(phase === "shown" ? "fading" : "done"),
+			phase === "shown" ? MCP_NOTICE_MS : MCP_NOTICE_FADE_MS,
+		);
+		return () => window.clearTimeout(timer);
+	}, [phase]);
+
+	if (!hasFailures || (phase !== "shown" && phase !== "fading")) return null;
+	const names = servers
+		.map((server) => server.name.charAt(0).toUpperCase() + server.name.slice(1))
+		.join(", ");
 
 	return (
-		<div
-			role="status"
-			aria-atomic="true"
-			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
-		>
-			<Plug aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning" />
-			<div className="flex min-w-0 flex-1 flex-col gap-1">
-				<strong className="text-xs font-medium text-warning">
-					{servers.length === 1
-						? "A tool server did not start"
-						: `${servers.length} tool servers did not start`}
-				</strong>
-				<span className="text-[11px] leading-snug text-muted-foreground">
-					The agent has none of their tools and will not say so — it works around them
-					silently.
-				</span>
-				<ul className="flex flex-col gap-0.5">
-					{servers.map((server) => (
-						<li key={server.name} className="text-[11px] leading-snug">
-							<span className="font-mono text-foreground">{server.name}</span>
-							<span className="text-muted-foreground">
-								{" · "}
-								{server.status}
-								{/* The classification first, then the raw text: one is actionable,
-								    the other is the provider's own words and often long. */}
-								{server.failureReason ? ` · ${server.failureReason}` : ""}
-							</span>
-							{server.error ? (
-								<span className="block truncate text-[10.5px] text-muted-foreground/70" title={server.error}>
-									{server.error}
-								</span>
-							) : null}
-						</li>
-					))}
-				</ul>
-				{error ? <span className="text-[11px] text-destructive">{error}</span> : null}
-			</div>
-			<div className="flex h-control-md shrink-0 items-center gap-2">
-				{onReload ? (
-					<Button
-						type="button"
-						size="sm"
-						variant="outline"
-						onClick={onReload}
-						disabled={reloading || turnInFlight}
-						title={
-							turnInFlight
-								? "Finish or stop the current turn before reloading tool servers"
-								: "Start the tool servers again"
-						}
-						className="shrink-0 gap-1.5"
+		<TooltipProvider>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<div
+						role={phase === "shown" ? "status" : undefined}
+						className={cn(
+							"absolute left-1/2 z-10 flex w-max max-w-full -translate-x-1/2 items-center gap-1.5 rounded-md bg-background px-2 py-0.5 text-[11px] text-muted-foreground transition-opacity duration-200 ease-out motion-reduce:transition-none",
+							placement === "below" ? "top-full mt-1.5" : "bottom-full mb-1.5",
+							phase === "fading" && "opacity-0",
+						)}
 					>
-						<RefreshCw
-							aria-hidden="true"
-							className={cn("size-3", reloading && "animate-spin")}
-						/>
-						{reloading ? "Reloading…" : "Reload"}
-					</Button>
-				) : null}
-				<button
-					type="button"
-					aria-label="Close tool server warning"
-					title="Dismiss for this session"
-					onClick={() => setDismissedKey(warningKey)}
-					className="grid size-10 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50"
-				>
-					<X aria-hidden="true" className="size-4" />
-				</button>
-			</div>
-		</div>
+						<Plug aria-hidden="true" className="size-3 shrink-0" />
+						<span className="truncate">
+							{t("chat.mcpNotice.unavailable", { names, count: servers.length })}
+						</span>
+					</div>
+				</TooltipTrigger>
+				<TooltipContent side={placement === "below" ? "bottom" : "top"}>
+					{t("chat.mcpNotice.detail")}
+				</TooltipContent>
+			</Tooltip>
+		</TooltipProvider>
 	);
 });

@@ -1701,9 +1701,9 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent("thread hit an internal error");
 
 		rerender(<ChatWorkspace snapshot={chatFixtureMcpFailed} />);
-		// The live turn's Working row is a status too, so pick out the tool-server banner.
+		// The live turn's Working row is a status too, so pick out the tool-server note.
 		expect(
-			screen.getAllByRole("status").find((status) => /tool servers? did not start/.test(status.textContent ?? "")),
+			screen.getAllByRole("status").find((status) => /MCPs? unavailable/.test(status.textContent ?? "")),
 		).toBeInTheDocument();
 	});
 
