@@ -84,6 +84,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	mountMobile(r, deps.Mobile)
 	mountMobileDevices(r, &controllers.MobileDevicesController{Registry: deps.DeviceRoster, Presence: deps.DeviceLive})
 	api.Register(r)
+	(&controllers.TestingController{Svc: deps.Testing}).Register(r)
 
 	return r
 }

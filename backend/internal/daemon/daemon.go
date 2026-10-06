@@ -913,7 +913,10 @@ func Run() error {
 		nativeSessions, _ = codewhaleAgent.(ports.AgentNativeSessionResolver)
 	}
 
+	testingSvc := newTestingService(cfg, store, testingProviders{})
+	defer testingSvc.Close()
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
+		Testing:            testingSvc,
 		Projects:           projectSvc,
 		HostID:             hostIdentity.HostID,
 		Endpoints:          bs,

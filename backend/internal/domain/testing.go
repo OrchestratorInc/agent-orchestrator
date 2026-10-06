@@ -11,7 +11,7 @@ type (
 	TestToolProfileID string
 )
 
-// TestToolProfileNativeV1 selects AO's six checkpoint 0 tools over stdio.
+// TestToolProfileNativeV1 selects AO's checkpoint 0 tools over stdio.
 const TestToolProfileNativeV1 TestToolProfileID = "ao-native-test-v1"
 
 // TestRunRecord holds investigation facts independently of session status.

@@ -6,7 +6,9 @@ import (
 )
 
 // TestScreenshotRequest captures the attempt's bound window without arguments.
-type TestScreenshotRequest struct{}
+type TestScreenshotRequest struct {
+	_ struct{} `additionalProperties:"false"`
+}
 
 // TestMouseButton selects one button. Empty selects the default left button.
 type TestMouseButton string
@@ -21,31 +23,35 @@ const (
 // TestClickRequest uses pixels from an unscaled screenshot, with origin at its
 // top-left. The service resolves ScreenshotID within the current attempt.
 type TestClickRequest struct {
-	ScreenshotID string          `json:"screenshotId"`
-	X            int             `json:"x"`
-	Y            int             `json:"y"`
-	Button       TestMouseButton `json:"button,omitempty"`
+	_            struct{}        `additionalProperties:"false"`
+	ScreenshotID string          `json:"screenshotId" minLength:"1"`
+	X            int             `json:"x" minimum:"0"`
+	Y            int             `json:"y" minimum:"0"`
+	Button       TestMouseButton `json:"button,omitempty" enum:"left,right,middle" default:"left"`
 }
 
 // TestTypeRequest focuses a point in the bound window before entering text.
 type TestTypeRequest struct {
-	ScreenshotID string `json:"screenshotId"`
-	X            int    `json:"x"`
-	Y            int    `json:"y"`
-	Text         string `json:"text"`
+	_            struct{} `additionalProperties:"false"`
+	ScreenshotID string   `json:"screenshotId" minLength:"1"`
+	X            int      `json:"x" minimum:"0"`
+	Y            int      `json:"y" minimum:"0"`
+	Text         string   `json:"text" maxLength:"16384"`
 }
 
 // TestKeyRequest sends one key or a simultaneous chord to the bound window.
 type TestKeyRequest struct {
-	ScreenshotID string   `json:"screenshotId"`
-	Keys         []string `json:"keys"`
+	_            struct{} `additionalProperties:"false"`
+	ScreenshotID string   `json:"screenshotId" minLength:"1"`
+	Keys         []string `json:"keys" minItems:"1" maxItems:"4"`
 }
 
 // TestReadLogsRequest selects bounded output from daemon-owned target logs.
 // It accepts no filesystem path. An empty cursor starts at the log's beginning.
 type TestReadLogsRequest struct {
-	Cursor   string `json:"cursor,omitempty"`
-	MaxBytes int    `json:"maxBytes,omitempty"`
+	_        struct{} `additionalProperties:"false"`
+	Cursor   string   `json:"cursor,omitempty" maxLength:"256"`
+	MaxBytes int      `json:"maxBytes,omitempty" minimum:"1" maximum:"262144" default:"65536"`
 }
 
 // TestDaemonResource selects one of the two allowed target GET routes.
@@ -61,7 +67,8 @@ const (
 // Allowed resources are projects and sessions; no URL, path, method or body
 // is accepted. The environment adapter supplies the exact target endpoint.
 type TestDaemonQueryRequest struct {
-	Resource TestDaemonResource `json:"resource"`
+	_        struct{}           `additionalProperties:"false"`
+	Resource TestDaemonResource `json:"resource" enum:"projects,sessions"`
 }
 
 // TestWindowBounds is a native window rectangle in desktop points.
@@ -76,7 +83,7 @@ type TestWindowBounds struct {
 // ScreenshotID is assigned after saving evidence. Input must reject changed
 // window bounds, stale frames, foreign screenshot IDs and out-of-bounds pixels.
 type TestDesktopFrame struct {
-	ScreenshotID string             `json:"screenshotId"`
+	ScreenshotID string             `json:"screenshotId" minLength:"1"`
 	Target       TestTargetIdentity `json:"-"`
 	Bounds       TestWindowBounds   `json:"bounds"`
 	Width        int                `json:"width"`
@@ -112,7 +119,7 @@ type TestLogResult struct {
 
 // TestDaemonQueryResult contains the JSON from one allowed target GET route.
 type TestDaemonQueryResult struct {
-	Resource TestDaemonResource `json:"resource"`
+	Resource TestDaemonResource `json:"resource" enum:"projects,sessions"`
 	Data     json.RawMessage    `json:"data"`
 }
 
@@ -127,4 +134,18 @@ type TestActionRecord struct {
 	State     string          `json:"state"`
 	Detail    string          `json:"detail,omitempty"`
 	At        time.Time       `json:"at"`
+}
+
+// TestSubmitReportRequest saves the investigator's conclusion and replay steps.
+// Markdown is limited to 64 KiB. Outcome uses the six TestOutcome wire labels.
+type TestSubmitReportRequest struct {
+	_        struct{}    `additionalProperties:"false"`
+	Outcome  TestOutcome `json:"outcome" enum:"reproduced,not_reproduced,needs_information,environment_blocked,partial,cancelled"`
+	Markdown string      `json:"markdown" maxLength:"65536"`
+}
+
+// TestSubmitReportResult links the retained report and its outcome.
+type TestSubmitReportResult struct {
+	Outcome    TestOutcome `json:"outcome"`
+	EvidenceID string      `json:"evidenceId"`
 }
