@@ -55,7 +55,7 @@ type Launcher interface {
 	// Reusable reports whether the harness accepts another review task in its
 	// existing TUI. Reviewers with launch-fixed context return false.
 	Reusable(harness domain.ReviewerHarness) bool
-	// Cancel interrupts a running reviewer pane while keeping the terminal alive.
+	// Cancel interrupts reviewer work while keeping its Chat or terminal alive.
 	Cancel(ctx context.Context, handleID string, harness domain.ReviewerHarness) error
 	// Destroy tears down a reviewer pane entirely. This is used when the owning
 	// worker session itself is torn down, not for user-facing review cancellation.
@@ -808,9 +808,9 @@ func (l *agentLauncher) Cancel(ctx context.Context, handleID string, harness dom
 		return nil
 	}
 	if reviewID, ok := reviewerChatID(handleID); ok && l.chat != nil {
-		// A cancelled review must not leave its Chat controller accepting work or
-		// its in-flight turn looking active. The next trigger starts a fresh one.
-		return l.chat.StopReviewChat(ctx, reviewID)
+		// Stop review cancels the turn, just like Stop in the Chat composer.
+		// Keep the controller and conversation usable; Archive owns teardown.
+		return l.chat.InterruptReviewChat(ctx, reviewID)
 	}
 	reviewer, ok := l.reviewers.Reviewer(harness)
 	if !ok {
