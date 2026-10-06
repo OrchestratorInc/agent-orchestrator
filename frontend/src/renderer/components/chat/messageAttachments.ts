@@ -87,12 +87,12 @@ export function attachedInlineImages(text: string, attached: string[]): string {
 }
 
 /** Plain-text form for one-line surfaces: attached inline images read as `[Image N]`. */
-export function labelInlineImages(text: string): string {
+export function labelInlineImages(text: string, label: (index: number) => string = (index) => `Image ${index}`): string {
 	const { body, attachments } = stagedAttachmentParts(text);
 	const images = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
 	if (images.length === 0) return text;
 	const labelled = splitInlineImagePaths(body, (path) => images.includes(path))
-		.map((segment) => segment.path === undefined ? segment.text : `[Image ${images.indexOf(segment.path) + 1}]`)
+		.map((segment) => segment.path === undefined ? segment.text : `[${label(images.indexOf(segment.path) + 1)}]`)
 		.join("");
 	return labelled + text.slice(body.length);
 }

@@ -2203,6 +2203,7 @@
 	"chat.image.open": "Abrir imagem: {{name}}",
 	"chat.image.openUnnamed": "Abrir imagem",
 	"chat.image.untitled": "Imagem",
+	"chat.image.numbered": "Imagem {{index}}",
 	"chat.edit.cancel": "Cancelar edição",
 	"chat.edit.send": "Enviar mensagem editada",
 	"chat.edit.sendShortcut": "Enviar mensagem editada (⌘/Ctrl+Enter)",

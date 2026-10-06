@@ -250,7 +250,7 @@ describe("HumanMessage attachments", () => {
 			latestSequence: 1,
 		};
 		render(<ChatWorkspace snapshot={snapshot} assetBaseUrl="http://127.0.0.1:4000/token-a" />);
-		expect(screen.getByRole("img", { name: "attachment-remote.png" })).toHaveAttribute(
+		expect(screen.getByRole("img", { name: "Image 1" })).toHaveAttribute(
 			"src",
 			`http://127.0.0.1:4000/token-a/api/v1/sessions/${encodeURIComponent(snapshot.sessionId)}/preview/files/.ao/attachments/attachment-remote.png`,
 		);
@@ -263,7 +263,7 @@ describe("HumanMessage attachments", () => {
 			latestSequence: 1,
 		};
 		render(<ChatWorkspace snapshot={snapshot} remoteHostId="box-a" />);
-		expect(screen.queryByRole("img", { name: "attachment-remote.png" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("img", { name: "Image 1" })).not.toBeInTheDocument();
 		expect(screen.getByText("attachment-remote.png")).toBeInTheDocument();
 	});
 
@@ -299,7 +299,7 @@ describe("HumanMessage attachments", () => {
 			/>,
 		);
 
-		const image = screen.getByRole("img", { name });
+		const image = screen.getByRole("img", { name: "Image 1" });
 		expect(image).toHaveAttribute(
 			"src",
 			`http://127.0.0.1:3001/api/v1/sessions/ao%20session%2F1/preview/files/.ao/attachments/${name}`,
@@ -358,7 +358,7 @@ describe("HumanMessage attachments", () => {
 			/>,
 		);
 
-		expect(screen.getByRole("img", { name: "attachment-ab12.png" })).toBeInTheDocument();
+		expect(screen.getByRole("img", { name: "Image 1" })).toBeInTheDocument();
 		expect(screen.getByText("attachment-cd34.pdf")).toBeInTheDocument();
 		expect(screen.getByRole("list", { name: "Attached files" })).toBeInTheDocument();
 		expect(screen.queryByText(/Attached files \(read these files/)).not.toBeInTheDocument();
@@ -374,9 +374,9 @@ describe("HumanMessage attachments", () => {
 			/>,
 		);
 
-		await userEvent.click(screen.getByRole("button", { name: "Open image: attachment-ab12.png" }));
+		await userEvent.click(screen.getByRole("button", { name: "Open image: Image 1" }));
 		const dialog = await screen.findByRole("dialog");
-		expect(within(dialog).getByRole("img", { name: "attachment-ab12.png" })).toHaveAttribute(
+		expect(within(dialog).getByRole("img", { name: "Image 1" })).toHaveAttribute(
 			"src",
 			expect.stringContaining("/api/v1/sessions/ao-1/preview/files/.ao/attachments/attachment-ab12.png"),
 		);

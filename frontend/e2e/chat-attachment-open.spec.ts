@@ -51,10 +51,10 @@ test("a sent image attachment opens at full size when clicked @T0", async ({ pag
 	});
 	await page.goto(`/#/projects/fake-proj/sessions/${sessionId}`);
 
-	await page.getByRole("button", { name: "Open image: attachment-open.png" }).click();
+	await page.getByRole("button", { name: "Open image: Image 1" }).click();
 	const dialog = page.getByRole("dialog");
 	await expect(dialog).toBeVisible();
-	const full = dialog.getByRole("img", { name: "attachment-open.png" });
+	const full = dialog.getByRole("img", { name: "Image 1" });
 	await expect(full).toBeVisible();
 	await expect.poll(() => full.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
 	await page.screenshot({ path: test.info().outputPath("dialog.png") });
@@ -124,7 +124,7 @@ test("a pasted image sits inline in the prose, in the composer and in history @T
 	// History: the path in the prose is a chip that opens the image.
 	const bubble = page.locator(".cursor-chat-human-message");
 	await expect(bubble.locator("p")).toHaveText("The header in Image 1 is too tall");
-	await bubble.getByRole("button", { name: "Open image: Image 1" }).click();
+	await bubble.locator("p").getByRole("button", { name: "Open image: Image 1" }).click();
 	await expect(page.getByRole("dialog")).toBeVisible();
 	await page.keyboard.press("Escape");
 
@@ -138,9 +138,9 @@ test("a pasted image sits inline in the prose, in the composer and in history @T
 		transfer.items.add(new File([bytes], "image.png", { type: "image/png" }));
 		document.activeElement?.dispatchEvent(new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }));
 	}, png);
-	await expect(field.locator('[data-composer-token="image"]')).toHaveText("image.png");
+	await expect(field.locator('[data-composer-token="image"]')).toHaveText("Image 1");
 	await page.keyboard.type("shorter");
-	await expect(field).toHaveText("Make this one image.png shorter");
+	await expect(field).toHaveText("Make this one Image 1 shorter");
 	await page.screenshot({ path: test.info().outputPath("composer.png") });
 	await page.keyboard.press("Enter");
 	await expect.poll(() => sent).toEqual([

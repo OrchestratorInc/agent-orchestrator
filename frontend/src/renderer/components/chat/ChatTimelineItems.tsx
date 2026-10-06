@@ -16,6 +16,7 @@ import {
 	QUIET_ACTION_PILL,
 } from "./action-pill";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
@@ -402,7 +403,8 @@ function formatTokens(tokens: number): string {
 
 /**
  * Prose whose inline staged image paths (written by the composer's image chips)
- * render as chips that open the image, numbered to match the attachment row.
+ * render as chips that open the image. "Image N" counts images in attachment
+ * order, the same label the attachment row and the composer use.
  */
 function ProseWithInlineImages({
 	text,
@@ -417,6 +419,7 @@ function ProseWithInlineImages({
 	apiBaseUrl: string | null;
 	renderText: (text: string) => ReactNode;
 }) {
+	const { t } = useTranslation();
 	const images = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
 	if (apiBaseUrl === null || images.length === 0) return renderText(text);
 	return splitInlineImagePaths(text, (path) => images.includes(path)).map((segment, index) =>
@@ -427,7 +430,7 @@ function ProseWithInlineImages({
 				key={index}
 				inline
 				src={attachmentURL(apiBaseUrl, sessionId, segment.path)}
-				alt={`Image ${images.indexOf(segment.path) + 1}`}
+				alt={t("chat.image.numbered", { index: images.indexOf(segment.path) + 1 })}
 			/>
 		),
 	);
@@ -446,14 +449,19 @@ function StagedAttachmentItems({
 	ariaLabel: string;
 	className?: string;
 }) {
+	const { t } = useTranslation();
 	if (paths.length === 0) return null;
+	const images = paths.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
 	return (
 		<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
 			{paths.map((path) => {
 				const name = attachmentName(path);
 				return IMAGE_ATTACHMENT_PATH.test(path) && apiBaseUrl !== null ? (
 					<li key={path} className="max-w-full">
-						<ChatImage src={attachmentURL(apiBaseUrl, sessionId, path)} alt={name} />
+						<ChatImage
+							src={attachmentURL(apiBaseUrl, sessionId, path)}
+							alt={t("chat.image.numbered", { index: images.indexOf(path) + 1 })}
+						/>
 					</li>
 				) : (
 					<li

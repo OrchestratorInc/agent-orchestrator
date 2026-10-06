@@ -38,6 +38,7 @@ import {
 	type KeyboardEvent,
 } from "react";
 import { Box, Image as ImageIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { composerFileIcon } from "./composerFileIcon";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
@@ -83,7 +84,10 @@ const ComposerImages = createContext<ComposerImage[]>([]);
 
 /** An empty path is a reservation whose image is still being staged. */
 function ComposerImageChip({ path }: { path: string }) {
-	const image = useContext(ComposerImages).find((candidate) => candidate.path === path);
+	const { t } = useTranslation();
+	const images = useContext(ComposerImages);
+	const index = images.findIndex((candidate) => candidate.path === path);
+	const image = images[index];
 	if (!path) {
 		return (
 			<span
@@ -109,7 +113,10 @@ function ComposerImageChip({ path }: { path: string }) {
 			) : (
 				<ImageIcon aria-hidden="true" className="size-3 shrink-0" />
 			)}
-			<span className="truncate">{image?.name ?? "Image"}</span>
+			{/* Numbered like the sent message will be; the file name stays in the tooltip. */}
+			<span className="truncate">
+				{image ? t("chat.image.numbered", { index: index + 1 }) : t("chat.image.untitled")}
+			</span>
 		</span>
 	);
 }

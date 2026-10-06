@@ -2172,6 +2172,7 @@
 	"chat.image.open": "画像を開く: {{name}}",
 	"chat.image.openUnnamed": "画像を開く",
 	"chat.image.untitled": "画像",
+	"chat.image.numbered": "画像 {{index}}",
 	"chat.edit.cancel": "編集をキャンセル",
 	"chat.edit.send": "編集したメッセージを送信",
 	"chat.edit.sendShortcut": "編集したメッセージを送信（⌘/Ctrl+Enter）",

@@ -1455,8 +1455,9 @@ describe("attachments", () => {
 			expect(node).not.toBeNull();
 			return node as HTMLElement;
 		});
-		expect(chip).toHaveTextContent("a.png");
-		expect(field.textContent).toBe("compare a.png ");
+		expect(chip).toHaveTextContent("Image 1");
+		expect(chip).toHaveAttribute("title", "a.png");
+		expect(field.textContent).toBe("compare Image 1 ");
 
 		await userEvent.click(screen.getByLabelText("Remove a.png"));
 		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).toBeNull());
@@ -1654,7 +1655,7 @@ describe("attachments", () => {
 		await userEvent.keyboard("{Enter}");
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("attachments were kept");
-		expect(field.textContent).toBe("shot.png inspect this");
+		expect(field.textContent).toBe("Image 1 inspect this");
 		expect(screen.getAllByRole("listitem")).toHaveLength(1);
 
 		await userEvent.keyboard("{Enter}");
