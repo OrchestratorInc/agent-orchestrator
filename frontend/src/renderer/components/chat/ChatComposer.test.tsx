@@ -209,7 +209,8 @@ describe("send keys", () => {
 
 		await typeInComposer(field, "queue this next");
 		expect(screen.queryByRole("button", { name: "Stop turn" })).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+		expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Queue message" })).toBeEnabled();
 	});
 
 	it("sends on Enter", async () => {
@@ -367,10 +368,10 @@ describe("send keys", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
-	it("unlocks a definitively rejected first send and gives the edited send a new identity", async () => {
-		const sessionId = "composer-first-send-refused";
+	it.each(["CHAT_CONTROLLER_NOT_READY", "validation_error"])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code) => {
+		const sessionId = `composer-first-send-refused-${code}`;
 		const onSend = vi.fn()
-			.mockRejectedValueOnce({ code: "CHAT_CONTROLLER_NOT_READY", message: "Controller is not running" })
+			.mockRejectedValueOnce({ code, message: "Request was rejected" })
 			.mockResolvedValue(undefined);
 		const first = render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
 		const field = screen.getByLabelText("Message the agent");
@@ -378,7 +379,7 @@ describe("send keys", () => {
 		fireEvent.keyDown(field, { key: "Enter" });
 		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
-		expect(screen.getByRole("alert")).toHaveTextContent("Controller is not running");
+		expect(screen.getByRole("alert")).toHaveTextContent("Request was rejected");
 		expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined();
 		first.unmount();
 		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
@@ -392,11 +393,11 @@ describe("send keys", () => {
 		await waitFor(() => expect(restored).toHaveTextContent(""));
 	});
 
-	it("keeps an uncertain earlier send locked when its retry is definitively refused", async () => {
-		const sessionId = "composer-recovery-send-refused";
+	it.each(["CHAT_CONTROLLER_NOT_READY", "validation_error"])("keeps an uncertain earlier send locked when its retry is definitively refused (%s)", async (code) => {
+		const sessionId = `composer-recovery-send-refused-${code}`;
 		const onSend = vi.fn()
 			.mockRejectedValueOnce(new Error("response lost"))
-			.mockRejectedValue({ code: "CHAT_CONTROLLER_NOT_READY", message: "Controller is not running" });
+			.mockRejectedValue({ code, message: "Request was rejected" });
 		const first = render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
 		await typeInComposer(screen.getByLabelText("Message the agent"), "possibly accepted request");
 		fireEvent.keyDown(screen.getByLabelText("Message the agent"), { key: "Enter" });
@@ -847,11 +848,12 @@ describe("steering", () => {
 		const { onSend, onSteer, field } = renderSteerable();
 
 		await typeInComposer(field, "pointer agrees with the chip");
+		expect(screen.getByRole("button", { name: "Queue message" })).toBeEnabled();
 		act(() => {
 			window.dispatchEvent(new KeyboardEvent("keydown", { key: "Meta", metaKey: true }));
 		});
 
-		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await userEvent.click(screen.getByRole("button", { name: "Steer message" }));
 
 		await waitFor(() => expect(onSteer).toHaveBeenCalledWith("pointer agrees with the chip"));
 		expect(onSend).not.toHaveBeenCalled();
@@ -868,7 +870,7 @@ describe("steering", () => {
 			window.dispatchEvent(new KeyboardEvent("keyup", { key: "Meta", metaKey: false }));
 		});
 
-		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await userEvent.click(screen.getByRole("button", { name: "Queue message" }));
 
 		await waitFor(() => expect(onSend).toHaveBeenCalledWith("back to the queue"));
 		expect(onSteer).not.toHaveBeenCalled();
@@ -1981,7 +1983,7 @@ describe("unavailable states", () => {
 		render(<ChatComposer onSend={onSend} willQueue onInterrupt={onInterrupt} />);
 
 		await typeInComposer(screen.getByLabelText("Message the agent"), "follow up");
-		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await userEvent.click(screen.getByRole("button", { name: "Queue message" }));
 
 		expect(onSend).toHaveBeenCalledWith("follow up");
 		expect(onInterrupt).not.toHaveBeenCalled();

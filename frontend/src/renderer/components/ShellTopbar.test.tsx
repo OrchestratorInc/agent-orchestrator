@@ -413,18 +413,19 @@ describe("ShellTopbar orchestrator actions", () => {
 		},
 	);
 
-	it.each([CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, "unknown"] as const)(
+	it.each(["single_repo", "multi_repo", CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, "unknown"] as const)(
 		"hides the board cue runner for %s projects", (kind) => {
 			renderTopbarSessions([orchestrator], "", false, undefined, kind as WorkspaceSummary["kind"]);
 			expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
 		},
 	);
 
-	it("shows the play-icon cue runner for a worker session", () => {
-		renderTopbar(sessionWith());
+	it.each(["worker", "orchestrator"] as const)("shows the play-icon cue runner for a %s session", (kind) => {
+		renderTopbar(sessionWith({ kind }));
 
 		const runner = screen.getByRole("button", { name: "Run a cue" });
 		expect(runner.querySelector(".lucide-play")).not.toBeNull();
+		expect(runner).toBeEnabled();
 		expect(screen.getByTestId("workspace-topbar-actions")).toContainElement(runner);
 	});
 
@@ -443,7 +444,7 @@ describe("ShellTopbar orchestrator actions", () => {
 
 		const actions = screen.getByTestId("workspace-topbar-actions");
 		expect(actions.closest("header")).toHaveClass("workspace-topbar-container");
-		expect(screen.getByRole("button", { name: "Run a cue" }).querySelector(".lucide-play")).not.toBeNull();
+		expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
 	});
 
 	it.each([

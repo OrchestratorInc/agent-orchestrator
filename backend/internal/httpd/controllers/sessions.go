@@ -35,6 +35,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 	"github.com/aoagents/agent-orchestrator/backend/internal/workspacewatch"
@@ -114,6 +115,10 @@ type SessionService interface {
 	ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error)
 	StageAttachments(ctx context.Context, id domain.SessionID, attachments []ports.SpawnAttachment) ([]string, error)
 	WorkspaceWatchPaths(ctx context.Context, id domain.SessionID) ([]string, error)
+	GetWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
+	RefreshWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
+	ReconcileWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
+	GetWorkspaceHistory(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceHistory, error)
 	ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error)
 	GetWorkspaceFile(ctx context.Context, id domain.SessionID, path string, section sessionsvc.WorkspaceFileSection) (sessionsvc.WorkspaceFileDetail, error)
 	GetWorkspaceFileAtCommit(ctx context.Context, id domain.SessionID, path, commitSHA string) (sessionsvc.WorkspaceFileDetail, error)
@@ -150,7 +155,7 @@ type ActivityRecorder interface {
 // ManagedPreviewServer is the deterministic server lifecycle attached to a
 // worker. It is separate from static file rendering and browser automation.
 type ManagedPreviewServer interface {
-	Start(ctx context.Context, sessionID domain.SessionID, workspacePath, configurationName string) (previewserver.Status, error)
+	Start(ctx context.Context, sessionID domain.SessionID, workspacePath, configurationName string, projectEnv map[string]string) (previewserver.Status, error)
 	Stop(ctx context.Context, sessionID domain.SessionID) (previewserver.Status, error)
 	Status(sessionID domain.SessionID) previewserver.Status
 }
@@ -176,7 +181,10 @@ type UsageHookRecorder interface {
 // SessionsController owns the session routes. Nil keeps routes registered but
 // returns OpenAPI-backed 501s.
 type SessionsController struct {
-	Svc                      SessionService
+	Svc      SessionService
+	Projects interface {
+		Get(context.Context, domain.ProjectID) (projectsvc.GetResult, error)
+	}
 	Activity                 ActivityRecorder
 	Usage                    UsageHookRecorder
 	Attachments              *attachmentstore.Store
@@ -202,6 +210,8 @@ func (c *SessionsController) Register(r chi.Router) {
 		r.Method(method, "/sessions/{sessionId}/preview/app/*", http.HandlerFunc(c.previewApp))
 	}
 	r.Post("/sessions/{sessionId}/attachments", c.stageAttachments)
+	r.Get("/sessions/{sessionId}/workspace/manifest", c.getWorkspaceManifest)
+	r.Get("/sessions/{sessionId}/workspace/history", c.getWorkspaceHistory)
 	r.Get("/sessions/{sessionId}/workspace/files", c.listWorkspaceFiles)
 	r.Get("/sessions/{sessionId}/workspace/file", c.getWorkspaceFile)
 	r.Put("/sessions/{sessionId}/workspace/file", c.updateWorkspaceFile)
@@ -690,6 +700,32 @@ func (c *SessionsController) listWorkspaceFiles(w http.ResponseWriter, r *http.R
 	envelope.WriteJSON(w, http.StatusOK, workspaceFilesResponse(files))
 }
 
+func (c *SessionsController) getWorkspaceManifest(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/manifest")
+		return
+	}
+	manifest, err := c.Svc.GetWorkspaceManifest(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, workspaceManifestResponse(manifest))
+}
+
+func (c *SessionsController) getWorkspaceHistory(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/history")
+		return
+	}
+	history, err := c.Svc.GetWorkspaceHistory(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, workspaceHistoryResponse(history))
+}
+
 func (c *SessionsController) getWorkspaceFile(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/file")
@@ -980,6 +1016,13 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 		envelope.WriteError(w, r, err)
 		return
 	}
+	// The watcher cannot report edits made before it existed. Reconcile both
+	// workspace caches after the watch is installed and before telling the client
+	// it can stop fallback polling.
+	if _, err := c.Svc.ReconcileWorkspaceManifest(r.Context(), sessionID(r)); err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
 
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream; charset=utf-8")
@@ -1004,13 +1047,24 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 			}
 			c.Svc.InvalidateWorkspaceCache(sessionID(r))
 			payload := struct {
+				Kind             string `json:"kind"`
 				WorkspaceVersion string `json:"workspaceVersion,omitempty"`
+				Refreshing       bool   `json:"refreshing"`
 				Overflow         bool   `json:"overflow"`
-			}{Overflow: true}
-			if files, listErr := c.Svc.ListWorkspaceFiles(r.Context(), sessionID(r)); listErr == nil {
-				payload.WorkspaceVersion = files.WorkspaceVersion
-			}
+			}{Kind: "dirty", Refreshing: true, Overflow: true}
 			data, _ := json.Marshal(payload)
+			if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
+				return
+			}
+			flusher.Flush()
+			manifest, refreshErr := c.Svc.RefreshWorkspaceManifest(r.Context(), sessionID(r))
+			if refreshErr != nil {
+				continue
+			}
+			payload.Kind = "version"
+			payload.WorkspaceVersion = manifest.WorkspaceVersion
+			payload.Refreshing = false
+			data, _ = json.Marshal(payload)
 			if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
 				return
 			}
@@ -1144,12 +1198,24 @@ func (c *SessionsController) startPreviewServer(w http.ResponseWriter, r *http.R
 		envelope.WriteError(w, r, err)
 		return
 	}
+	var projectEnv map[string]string
+	if sess.ProjectID != "" && c.Projects != nil {
+		project, err := c.Projects.Get(r.Context(), sess.ProjectID)
+		if err != nil {
+			envelope.WriteError(w, r, err)
+			return
+		}
+		if project.Project != nil && project.Project.Config != nil {
+			projectEnv = project.Project.Config.Env
+		}
+	}
 	previous := c.PreviewServer.Status(sessionID(r))
 	status, err := c.PreviewServer.Start(
 		r.Context(),
 		sessionID(r),
 		sess.Metadata.WorkspacePath,
 		strings.TrimSpace(in.Configuration),
+		projectEnv,
 	)
 	if err != nil {
 		currentStatus := c.PreviewServer.Status(sessionID(r))
@@ -1901,8 +1967,8 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_CONVERSATION_CHECKPOINT_ORIGIN", "Conversation checkpoint origin must be human or coordination", nil)
 		return
 	}
-	if state == "" && agentSessionID == "" && in.Usage == nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ACTIVITY_OR_SESSION_ID_REQUIRED", "Activity state or agent session ID is required", nil)
+	if state == "" && agentSessionID == "" && in.Usage == nil && in.SubagentID == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ACTIVITY_OR_SESSION_ID_REQUIRED", "Activity state, agent session ID, or subagent ID is required", nil)
 		return
 	}
 	// The correlation fields ride the same lenient decode: absent on old CLIs.
@@ -1917,6 +1983,7 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		Event:                        capActivityMeta(domain.SanitizeControlChars(in.Event)),
 		ToolName:                     capActivityMeta(domain.SanitizeControlChars(in.ToolName)),
 		ToolUseID:                    capActivityMeta(domain.SanitizeControlChars(in.ToolUseID)),
+		SubagentID:                   capActivityMeta(domain.SanitizeControlChars(in.SubagentID)),
 		AgentSessionID:               agentSessionID,
 		LatestUserPrompt:             capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.LatestUserPrompt)), 16<<10),
 		LatestAssistantUpdate:        capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.LatestAssistantUpdate)), 16<<10),
@@ -1927,8 +1994,22 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		TranscriptPath:               capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.TranscriptPath)), 4096),
 		LaunchID:                     capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.LaunchID))),
 	}
+	if in.RunningSubagentIDs != nil && len(*in.RunningSubagentIDs) <= 128 {
+		running := make([]string, 0, len(*in.RunningSubagentIDs))
+		for _, id := range *in.RunningSubagentIDs {
+			clean := capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(id)))
+			if clean == "" {
+				running = nil
+				break
+			}
+			running = append(running, clean)
+		}
+		if running != nil {
+			sig.RunningSubagentIDs = &running
+		}
+	}
 	var activityErr error
-	if c.Activity != nil && (sig.Valid || sig.AgentSessionID != "") {
+	if c.Activity != nil && (sig.Valid || sig.AgentSessionID != "" || sig.SubagentID != "") {
 		activityErr = c.Activity.ApplyActivitySignal(r.Context(), sessionID(r), sig)
 		if err := activityErr; err != nil && !errors.Is(err, ports.ErrActivityProjectionContention) {
 			if errors.Is(err, ports.ErrSessionNotFound) {
@@ -2392,6 +2473,31 @@ func workspaceFilesResponse(files sessionsvc.WorkspaceFiles) ListWorkspaceFilesR
 		DegradedCode:     files.DegradedCode,
 		Ahead:            files.Ahead,
 		Behind:           files.Behind,
+	}
+}
+
+func workspaceManifestResponse(manifest sessionsvc.WorkspaceManifest) WorkspaceManifestResponse {
+	return WorkspaceManifestResponse{
+		SessionID:        manifest.SessionID,
+		WorkspaceVersion: manifest.WorkspaceVersion,
+		CompareBaseSHA:   manifest.CompareBaseSHA,
+		CompareBaseRef:   manifest.CompareBaseRef,
+		CompareMode:      manifest.CompareMode,
+		Files:            workspaceFileSummariesResponse(manifest.Files),
+		Sections:         workspaceFileSectionsResponse(manifest.Sections),
+		Summary:          WorkspaceSummary(manifest.Summary),
+		Truncated:        manifest.Truncated,
+		Stale:            manifest.Stale,
+		Refreshing:       manifest.Refreshing,
+		Degraded:         manifest.Degraded,
+		DegradedCode:     manifest.DegradedCode,
+	}
+}
+
+func workspaceHistoryResponse(history sessionsvc.WorkspaceHistory) WorkspaceHistoryResponse {
+	return WorkspaceHistoryResponse{
+		SessionID: history.SessionID, Commits: workspaceCommitsResponse(history.Commits),
+		CommitsTruncated: history.CommitsTruncated, Ahead: history.Ahead, Behind: history.Behind,
 	}
 }
 

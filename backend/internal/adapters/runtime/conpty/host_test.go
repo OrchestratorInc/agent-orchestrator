@@ -454,6 +454,95 @@ func TestSlowClientDoesNotBlockFanOut(t *testing.T) {
 	}
 }
 
+// A viewer that reads slowly must still see every byte: output waits for its
+// queue to drain (pausing the program) instead of dropping it and replaying a
+// truncated ring on re-attach.
+func TestBroadcastWaitsForASlowClientInsteadOfDroppingIt(t *testing.T) {
+	hostEnd, peer := net.Pipe()
+	h := &host{clients: make(map[net.Conn]*clientState), shutdownC: make(chan struct{})}
+	client := newClientState()
+	h.clients[hostEnd] = client
+	go h.writeClient(hostEnd, client)
+	t.Cleanup(func() { h.removeClient(hostEnd, client); _ = peer.Close() })
+
+	const frames = hostClientWriteBuffer * 3
+	go func() {
+		for i := 0; i < frames; i++ {
+			frame, _ := EncodeMessage(MsgTerminalData, []byte(fmt.Sprintf("%06d", i)))
+			h.broadcast(frame)
+		}
+	}()
+
+	var got []string
+	parser := NewMessageParser(func(_ byte, payload []byte) { got = append(got, string(payload)) })
+	buf := make([]byte, 512)
+	_ = peer.SetReadDeadline(time.Now().Add(10 * time.Second))
+	for len(got) < frames {
+		n, err := peer.Read(buf)
+		if err != nil {
+			t.Fatalf("slow client lost its connection after %d of %d frames: %v", len(got), frames, err)
+		}
+		parser.Feed(buf[:n])
+		time.Sleep(time.Millisecond) // a viewer slower than the producer
+	}
+	for i, payload := range got {
+		if want := fmt.Sprintf("%06d", i); payload != want {
+			t.Fatalf("frame %d = %q, want %q (out of order or lost)", i, payload, want)
+		}
+	}
+	h.mu.Lock()
+	_, stillAttached := h.clients[hostEnd]
+	h.mu.Unlock()
+	if !stillAttached {
+		t.Fatal("slow client was dropped")
+	}
+}
+
+// A viewer that stops reading must not hold the PTY: after slowClientGrace it is
+// dropped and output keeps flowing to the others.
+func TestBroadcastDropsAClientThatStopsReading(t *testing.T) {
+	defer func(grace time.Duration) { slowClientGrace = grace }(slowClientGrace)
+	slowClientGrace = 100 * time.Millisecond
+
+	stalledHost, stalledPeer := net.Pipe()
+	fastHost, fastPeer := net.Pipe()
+	h := &host{clients: make(map[net.Conn]*clientState), shutdownC: make(chan struct{})}
+	stalled, fast := newClientState(), newClientState()
+	h.clients[stalledHost], h.clients[fastHost] = stalled, fast
+	go h.writeClient(stalledHost, stalled)
+	go h.writeClient(fastHost, fast)
+	t.Cleanup(func() {
+		h.removeClient(stalledHost, stalled)
+		h.removeClient(fastHost, fast)
+		_ = stalledPeer.Close()
+		_ = fastPeer.Close()
+	})
+	go func() { _, _ = io.Copy(io.Discard, fastPeer) }()
+
+	// The stalled writer can hold a full batch in flight plus a full queue
+	// (2x the buffer), so send more than that to guarantee the queue fills.
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < hostClientWriteBuffer*3; i++ {
+			frame, _ := EncodeMessage(MsgTerminalData, []byte("x"))
+			h.broadcast(frame)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("output stayed blocked behind a viewer that stopped reading")
+	}
+	h.mu.Lock()
+	_, stalledAttached := h.clients[stalledHost]
+	_, fastAttached := h.clients[fastHost]
+	h.mu.Unlock()
+	if stalledAttached || !fastAttached {
+		t.Fatalf("attached after stall: stalled=%v fast=%v; want only the stalled viewer dropped", stalledAttached, fastAttached)
+	}
+}
+
 // TestTerminalInput: MsgTerminalInput from a client reaches the fakePTY's input.
 func TestTerminalInput(t *testing.T) {
 	f := startServe(t, 102)

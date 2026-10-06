@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -292,12 +293,12 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 			if completionErr != nil {
 				return domain.SessionRecord{}, wrapSpawnStage(id, ErrSpawnCommit, completionErr)
 			}
-			return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, err)
+			return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, agentlaunch.RedactError(err, in.project.Config.Env))
 		}
 		// No controller exists, so nothing provider-side needs closing. The
 		// runtime was never touched, hence runtimeDestroyed=false.
 		m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
-		return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, err)
+		return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, agentlaunch.RedactError(err, in.project.Config.Env))
 	}
 
 	// The initial prompt is a normal turn through the controller. There is no
@@ -308,7 +309,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 			m.stopChatAfterSpawnFailure(ctx, id)
 			m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, in.record, in.workspace, in.workspaceProject, true)
 			m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
-			return domain.SessionRecord{}, wrapSpawnStage(id, ErrSpawnDeliverPrompt, err)
+			return domain.SessionRecord{}, wrapSpawnStage(id, ErrSpawnDeliverPrompt, agentlaunch.RedactError(err, in.project.Config.Env))
 		}
 	}
 
@@ -414,6 +415,7 @@ func (m *Manager) resumeChatController(
 	project domain.ProjectRecord,
 	ws ports.WorkspaceInfo,
 	requireNativeHistory bool,
+	reconnectOnly bool,
 	controllerGeneration string,
 	historyPolicy domain.SessionInterfaceTransitionHistoryPolicy,
 ) (RestoreResult, error) {
@@ -463,6 +465,7 @@ func (m *Manager) resumeChatController(
 	}
 	var completionErr error
 	_, err = m.chat.StartChat(ctx, ChatStart{
+		ReconnectOnly:           reconnectOnly,
 		SessionID:               rec.ID,
 		ProjectID:               rec.ProjectID,
 		Kind:                    rec.Kind,
@@ -533,7 +536,7 @@ func (m *Manager) resumeChatController(
 			m.stopChatBestEffort(ctx, rec.ID)
 			return RestoreResult{}, fmt.Errorf("%s %s: completed: %w", operation, rec.ID, completionErr)
 		}
-		return RestoreResult{}, fmt.Errorf("%s %s: resume chat: %w", operation, rec.ID, err)
+		return RestoreResult{}, fmt.Errorf("%s %s: resume chat: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env))
 	}
 
 	restored, err := m.getRecord(ctx, rec.ID)

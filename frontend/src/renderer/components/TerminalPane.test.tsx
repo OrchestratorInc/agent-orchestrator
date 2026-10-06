@@ -23,6 +23,7 @@ const {
 	getMock,
 	postMock,
 	prepareForActivationMock,
+	requestActivationFocusMock,
 	sendUserInputMock,
 	terminalError,
 	terminalState,
@@ -41,6 +42,7 @@ const {
 		getMock: vi.fn(async (_path: string, _options: unknown) => ({ data: undefined })),
 		postMock: vi.fn(),
 		prepareForActivationMock: vi.fn(async (): Promise<void> => undefined),
+		requestActivationFocusMock: vi.fn(),
 		sendUserInputMock: vi.fn(),
 		terminalError: { value: undefined as string | undefined },
 		terminalState: { value: "idle" },
@@ -99,6 +101,7 @@ vi.mock("./XtermTerminal", () => ({
 		onVisibleContent?: () => void;
 		onLinkOpen?: (uri: string) => void;
 		onReady?: (terminal: AttachableTerminal) => void;
+		supportsCursorColorScheme?: boolean;
 	}) => {
 		terminalLinkHandler = props.onLinkOpen;
 		visibleContentCallback.value = props.onVisibleContent;
@@ -118,7 +121,9 @@ vi.mock("./XtermTerminal", () => ({
 				write: vi.fn((_data, done) => done?.()),
 				writeln: vi.fn(),
 				showLatestOutput: vi.fn(),
+				hasMeasuredGrid: true,
 				prepareForActivation: prepareForActivationMock,
+				requestActivationFocus: requestActivationFocusMock,
 				notifyCursorColorScheme: vi.fn(),
 				sendUserInput: sendUserInputMock,
 				onUserInput: vi.fn(() => disposable),
@@ -128,7 +133,14 @@ vi.mock("./XtermTerminal", () => ({
 				xtermUnmounts.value += 1;
 			};
 		}, []);
-		return <div data-testid="xterm" data-xterm-instance={instance.current} tabIndex={-1} />;
+		return (
+			<div
+				data-supports-cursor-color-scheme={String(props.supportsCursorColorScheme ?? false)}
+				data-testid="xterm"
+				data-xterm-instance={instance.current}
+				tabIndex={-1}
+			/>
+		);
 	},
 }));
 
@@ -183,6 +195,7 @@ beforeEach(() => {
 	attachMock.mockClear();
 	prepareForActivationMock.mockReset();
 	prepareForActivationMock.mockResolvedValue(undefined);
+	requestActivationFocusMock.mockReset();
 	sendUserInputMock.mockReset();
 	sendUserInputMock.mockReturnValue(true);
 	xtermMounts.value = 0;
@@ -360,6 +373,34 @@ function activeXterm(): HTMLElement {
 }
 
 describe("TerminalPane empty states", () => {
+	it("does not send Cursor theme protocol to a standalone shell owned by a Cursor session", () => {
+		const cursorSession = { ...worker, provider: "cursor" } satisfies WorkspaceSession;
+		const shell = {
+			handleId: "shell-handle",
+			sessionId: cursorSession.id,
+			workingDir: "/repo/my-app",
+			title: "Terminal 1",
+			createdAt: "2026-10-02T00:00:00Z",
+		} satisfies ShellTerminal;
+		const view = renderCachedPane({
+			session: cursorSession,
+			sessions: [cursorSession],
+			shellTerminals: [shell],
+			terminalTarget: {
+				generation: shell.createdAt,
+				kind: "shell",
+				handleId: shell.handleId,
+				sessionId: cursorSession.id,
+				title: shell.title,
+			},
+		});
+		try {
+			expect(activeXterm()).toHaveAttribute("data-supports-cursor-color-scheme", "false");
+		} finally {
+			view.restore();
+		}
+	});
+
 	it("reports terminal attachment state changes to an optional observer", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const previousAO = window.ao;
@@ -761,6 +802,21 @@ describe("TerminalCacheProvider", () => {
 
 			view.show(tuiA);
 			await waitFor(() => expect(xtermFocusRequests.value).toBe(3));
+		} finally {
+			view.restore();
+		}
+	});
+
+	it("asks a retained terminal to restore focus on every re-activation", async () => {
+		const view = renderCachedPane({ session: sessionA, sessions: [sessionA, sessionB] });
+		try {
+			await waitFor(() => expect(requestActivationFocusMock).toHaveBeenCalledTimes(1));
+
+			view.show(sessionB);
+			await waitFor(() => expect(requestActivationFocusMock).toHaveBeenCalledTimes(2));
+
+			view.show(sessionA);
+			await waitFor(() => expect(requestActivationFocusMock).toHaveBeenCalledTimes(3));
 		} finally {
 			view.restore();
 		}

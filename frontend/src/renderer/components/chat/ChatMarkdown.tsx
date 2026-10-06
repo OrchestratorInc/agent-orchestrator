@@ -31,6 +31,7 @@ import {
 	Fragment,
 	memo,
 	useContext,
+	useMemo,
 	useState,
 	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
@@ -53,6 +54,7 @@ import { AppLink } from "../AppLink";
 import {
 	explicitWorkspaceFilePath,
 	findWorkspaceFilePath,
+	workspaceFileReferenceLine,
 } from "../../lib/workspace-file-path";
 import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
@@ -90,28 +92,33 @@ const InsideMarkdownLink = createContext(false);
 const REMOTE_PREVIEW_UNAVAILABLE = "This link points to the remote host. Preview is unavailable on this device.";
 const OpenChatLink = createContext<{
 	open?: (url: string) => void;
-	openFile?: (path: string) => void;
+	openFile?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
 	openSession?: (url: string) => void;
 	workspacePaths: string[];
 }>({ workspacePaths: [] });
+const EMPTY_WORKSPACE_PATHS: string[] = [];
 
 export function ChatLinkProvider({
 	onLinkOpen,
 	onFileOpen,
 	remoteHost,
 	onSessionLinkOpen,
-	workspacePaths = [],
+	workspacePaths = EMPTY_WORKSPACE_PATHS,
 	children,
 }: {
 	onLinkOpen?: (url: string) => void;
-	onFileOpen?: (path: string) => void;
+	onFileOpen?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
 	onSessionLinkOpen?: (url: string) => void;
 	workspacePaths?: string[];
 	children: ReactNode;
 }) {
-	return <OpenChatLink.Provider value={{ open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, workspacePaths }}>{children}</OpenChatLink.Provider>;
+	const value = useMemo(
+		() => ({ open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, workspacePaths }),
+		[onLinkOpen, onFileOpen, onSessionLinkOpen, remoteHost, workspacePaths],
+	);
+	return <OpenChatLink.Provider value={value}>{children}</OpenChatLink.Provider>;
 }
 
 function isHostLocalWebLink(href: string): boolean {
@@ -235,6 +242,7 @@ const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "graphem
 
 function compactEmoji(children: ReactNode): ReactNode {
 	if (typeof children === "string") {
+		if (!EMOJI_GRAPHEME.test(children)) return children;
 		let last = 0;
 		const parts: ReactNode[] = [];
 		for (const { segment, index } of GRAPHEME_SEGMENTER.segment(children)) {
@@ -285,7 +293,9 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 				}
 				if (openInFiles && onFileOpen) {
 					event.preventDefault();
-					onFileOpen(openInFiles);
+					const line = workspaceFileReferenceLine(href ?? "");
+					if (line == null) onFileOpen(openInFiles);
+					else onFileOpen(openInFiles, line);
 					return;
 				}
 				if (href && !browserLink) {
@@ -302,6 +312,11 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 			</ChatImageLinkScope>
 		</AppLink>
 	);
+}
+
+/** Render one safe in-app session link using the surrounding ChatLinkProvider. */
+export function SessionLabelLink({ href, children }: { href: string; children: ReactNode }) {
+	return <MarkdownLink href={href}>{children}</MarkdownLink>;
 }
 
 function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
@@ -367,7 +382,11 @@ function InlineCode({ children }: { children?: ReactNode }) {
 	return (
 		<button
 			type="button"
-			onClick={() => onFileOpen(filePath)}
+			onClick={() => {
+				const line = workspaceFileReferenceLine(text ?? "");
+				if (line == null) onFileOpen(filePath);
+				else onFileOpen(filePath, line);
+			}}
 			aria-label={`Open ${filePath} in Files`}
 			className="inline rounded text-left transition-colors hover:bg-interactive-hover"
 		>

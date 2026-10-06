@@ -32,6 +32,7 @@ import {
 } from "../lib/chat-draft-boundary";
 import { sessionUiKey } from "../lib/hosts";
 import type { WorkspaceSession } from "../types/workspace";
+import { readCloudTurnSettings } from "../components/chat/CloudSessionChatSurface";
 import type { ConversationWorkState } from "../components/chat/SessionChatSurface";
 
 type Transition = components["schemas"]["SessionInterfaceTransition"];
@@ -299,7 +300,14 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 			pendingAttachments: decision.kind === "confirmed" ? decision.pendingAttachments : undefined,
 		});
 		try {
-			const response = await interfaceSwitch.start({ targetMode, policy, historyPolicy });
+			const selected = chatToTerminal && session?.cloud
+				? readCloudTurnSettings(`cloud-chat-settings:${session.cloud.orgId}:${session.id}:${session.provider}`)
+				: undefined;
+			const response = await interfaceSwitch.start({
+				targetMode, policy, historyPolicy,
+				...(selected?.model ? { model: selected.model } : {}),
+				...(selected?.reasoningEffort ? { reasoningEffort: selected.reasoningEffort } : {}),
+			});
 			if (requestId !== undefined) setChatLeaveLock((current) =>
 				current?.requestId === requestId && response?.transition?.id
 					? { ...current, transitionId: response.transition.id, needsReconciliation: false }
@@ -309,7 +317,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 			if (requestId !== undefined) setChatLeaveLock((current) =>
 				current?.requestId === requestId ? { ...current, needsReconciliation: true } : current);
 		}
-	}, [chatToTerminal, confirmUnsafeDraftLeave, interfaceSwitch, owner, sessionId]);
+	}, [chatToTerminal, confirmUnsafeDraftLeave, interfaceSwitch, owner, session, sessionId]);
 	const request = useCallback(() => {
 		interfaceSwitch.resetStartError();
 		if (cloudTerminalToChat && !busy && session?.cloud) {

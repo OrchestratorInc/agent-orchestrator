@@ -117,7 +117,7 @@ func TestSend_SteerActiveTurnUsesProviderSteeringWithoutQueueing(t *testing.T) {
 	if err := json.Unmarshal([]byte(bodies[0]), &req); err != nil {
 		t.Fatal(err)
 	}
-	if req.Text != "[from source-2] correct course" || req.ClientMessageID == "" {
+	if req.Text != "[from source-2] correct course" || req.ClientMessageID == "" || req.SenderSessionID != "source-2" {
 		t.Errorf("request = %+v", req)
 	}
 	if !strings.Contains(out, "accepted by provider") || !strings.Contains(out, "action is not confirmed") {

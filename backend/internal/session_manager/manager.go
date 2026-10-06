@@ -1262,7 +1262,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		status, authErr := validator.ValidateLaunchAuth(ctx, ws.Path, env)
 		if authErr != nil {
 			m.logger.Debug("spawn: launch authentication probe inconclusive; continuing",
-				"sessionID", id, "harness", cfg.Harness, "error", authErr)
+				"sessionID", id, "harness", cfg.Harness, "error", agentlaunch.RedactValues(authErr.Error(), project.Config.Env))
 		} else if status == ports.AgentAuthStatusUnauthorized {
 			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, ports.ErrAgentAuthRequired)
@@ -1336,7 +1336,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	})
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrRuntimeCreate, err)
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrRuntimeCreate, agentlaunch.RedactError(err, project.Config.Env))
 	}
 
 	metadata := domain.SessionMetadata{
@@ -2814,10 +2814,8 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
 	}
 	meta := rec.Metadata
-	mode := domain.NormalizeSessionMode(rec.Mode)
 	if meta.WorkspacePath == "" ||
-		(meta.Branch == "" && projectKindForSession(project, rec.ProjectID) != domain.ProjectKindScratch) ||
-		(mode != domain.SessionModeChat && meta.RuntimeHandleID == "") {
+		(meta.Branch == "" && projectKindForSession(project, rec.ProjectID) != domain.ProjectKindScratch) {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, ErrIncompleteHandle)
 	}
 	ws := ports.WorkspaceInfo{
@@ -2826,7 +2824,7 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		SessionID: rec.ID,
 		ProjectID: rec.ProjectID,
 	}
-	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat || meta.RuntimeHandleID == "" {
 		return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, nil, forceFresh, requireNativeHistory, reservedGeneration, domain.SessionInterfaceTransitionHistoryStrict)
 	}
 	handle := ports.RuntimeHandle{ID: meta.RuntimeHandleID}
@@ -2871,7 +2869,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, ErrIncompleteHandle)
 		}
 		return m.resumeChatController(
-			ctx, operation, rec, project, ws, requireNativeHistory, reservedGeneration, historyPolicy,
+			ctx, operation, rec, project, ws, requireNativeHistory, false, reservedGeneration, historyPolicy,
 		)
 	}
 
@@ -3002,7 +3000,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: runtime: %w", operation, rec.ID, err)
+		return RestoreResult{}, fmt.Errorf("%s %s: runtime: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env))
 	}
 	metadata := domain.SessionMetadata{
 		Permissions:               rec.Metadata.Permissions,
@@ -3206,16 +3204,10 @@ func (m *Manager) saveAndTeardownOne(ctx context.Context, rec domain.SessionReco
 	return nil
 }
 
-// reconcileLive handles a single non-terminated session on boot. If its runtime
-// session is still alive (tmux is the persistence layer, so it survives a daemon
-// crash) we adopt it: a no-op, the agent keeps running. If the runtime is gone,
-// reattach the existing worktree and relaunch the controller in place. An
-// ordinary daemon restart must not turn every live session into a serial
-// stash/remove/recreate cycle before the HTTP listener can bind.
-//
-// If in-place recovery fails, preserve the live record, worktree, and native
-// conversation identity. A restart-time dependency failure is not user intent
-// to terminate the session; the controller can be retried through Resume Agent.
+// reconcileLive performs explicit recovery of a non-terminated session. It
+// adopts a surviving runtime or relaunches the controller in its existing
+// worktree, preserving conversation identity when recovery fails. Startup uses
+// checkSessionHealth instead so missing agents stay stopped.
 func (m *Manager) reconcileLive(ctx context.Context, rec domain.SessionRecord) error {
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
@@ -3406,28 +3398,10 @@ func (m *Manager) reconcileReap(ctx context.Context, rec domain.SessionRecord) e
 	return nil
 }
 
-// Reconcile is the full boot-time consistency pass. It remains the synchronous
-// entry point for callers that need reconciliation to have completed before
-// proceeding. The daemon uses ReconcileStartupSafety before it starts serving,
-// then runs ReconcileBackground after its listener is live so durable project
-// metadata is available without waiting on worktree and runtime restoration.
-//
-// It replaces the bare RestoreAll
-// call so that however the previous daemon died (clean shutdown, SIGKILL, or
-// crash), live reality matches the DB:
-//
-//  1. Live pass: for each non-terminated session, adopt it if its runtime
-//     survived, else relaunch in place while preserving failed attempts as
-//     recoverable exited sessions (reconcileLive).
-//  2. Reap pass: for each terminated session whose runtime leaked, kill it
-//     (reconcileReap). Runs before restore so a restored session does not
-//     collide with a leaked tmux of the same name.
-//  3. Restore pass: relaunch shutdown-saved sessions (existing RestoreAll).
-//
-// Ordinary per-session liveness failures remain best-effort. Durable
-// agent-switch discovery/recovery is different: an error there aborts this
-// pass so the daemon cannot serve with an unknown switch and an open input
-// fence.
+// Reconcile settles interrupted operations, checks surviving controllers, and
+// reaps leaked runtimes. Missing agents remain stopped; only explicit Resume or
+// Restore may launch them. The daemon runs the health checks after binding its
+// listener so a slow probe cannot delay access to durable session metadata.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	if err := m.ReconcileStartupSafety(ctx); err != nil {
 		return err
@@ -3475,10 +3449,8 @@ func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 	return nil
 }
 
-// ReconcileBackground performs the potentially slow runtime, worktree, and
-// saved-session restoration passes. It is deliberately separate from the
-// startup safety pass so the daemon can serve durable SQLite-backed project
-// and session metadata while this best-effort work continues.
+// ReconcileBackground checks existing controllers and performs startup cleanup.
+// It never launches missing agents or restores shutdown-saved workspaces.
 func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 	defer func() {
 		m.statusRecoveryMu.Lock()
@@ -3529,9 +3501,6 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 		if err := m.reconcileReap(ctx, rec); err != nil {
 			m.logger.Error("reconcile: reap pass failed, skipping", "sessionID", rec.ID, "error", err)
 		}
-	}
-	if err := m.RestoreAll(ctx); err != nil {
-		return err
 	}
 	if err := m.deliverAllTransitionMessages(ctx); err != nil {
 		m.logger.Error("reconcile: transition-message delivery deferred for retry", "error", err)
@@ -3596,7 +3565,7 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 					defer m.endAgentOperation(rec.ID, agentOperationReconcile)
 					recoveryCtx, cancel := context.WithTimeout(ctx, m.statusVerificationLimit)
 					defer cancel()
-					return m.reconcileLive(recoveryCtx, rec)
+					return m.checkSessionHealth(recoveryCtx, rec)
 				}()
 				m.finishStatusRecovery(ctx, rec, err)
 				if err != nil {
@@ -4849,6 +4818,8 @@ func promptProjectContext(projectID domain.ProjectID, project domain.ProjectReco
 		Repo:          project.RepoOriginURL,
 		DefaultBranch: cfg.DefaultBranch,
 		Path:          project.Path,
+
+		WorkersRequestReview: cfg.WorkersRequestReview,
 	}
 }
 
@@ -5164,10 +5135,7 @@ func spawnEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueI
 }
 
 func spawnEnvForOS(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, dataDir string, projectEnv map[string]string, caseInsensitive bool) map[string]string {
-	env := make(map[string]string, len(projectEnv)+4)
-	for k, v := range projectEnv {
-		env[k] = v
-	}
+	env := agentlaunch.MergeEnv(projectEnv, nil)
 	setProtected := func(key, value string) {
 		if caseInsensitive {
 			for existing := range env {
@@ -5380,7 +5348,7 @@ func (m *Manager) provisionWorkspace(ctx context.Context, project domain.Project
 	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
 		return err
 	}
-	return runPostCreate(ctx, workspacePath, project.Config.PostCreate)
+	return runPostCreate(ctx, workspacePath, project.Config.PostCreate, project.Config.Env)
 }
 
 // applySymlinks links each repo-relative path into the workspace. A source that
@@ -5438,7 +5406,7 @@ func safeRelPath(rel string) (string, error) {
 // runPostCreate runs each post-create command in the workspace via the platform
 // shell, so OS-agnostic commands like "pnpm install" work. A non-zero exit
 // aborts the spawn with the command output.
-func runPostCreate(ctx context.Context, workspacePath string, commands []string) error {
+func runPostCreate(ctx context.Context, workspacePath string, commands []string, projectEnv map[string]string) error {
 	for _, command := range commands {
 		command = strings.TrimSpace(command)
 		if command == "" {
@@ -5451,8 +5419,12 @@ func runPostCreate(ctx context.Context, workspacePath string, commands []string)
 			cmd = aoprocess.CommandContext(ctx, "sh", "-c", command)
 		}
 		cmd.Dir = workspacePath
+		cmd.Env = os.Environ()
+		for key, value := range agentlaunch.MergeEnv(projectEnv, nil) {
+			cmd.Env = append(cmd.Env, key+"="+value)
+		}
 		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("postCreate %q: %w: %s", command, err, strings.TrimSpace(string(out)))
+			return fmt.Errorf("postCreate %q: %w: %s", agentlaunch.RedactValues(command, projectEnv), err, agentlaunch.RedactValues(strings.TrimSpace(string(out)), projectEnv))
 		}
 	}
 	return nil

@@ -191,12 +191,14 @@ type Service struct {
 	orchestratorLocksMu sync.Mutex
 	orchestratorLocks   map[domain.ProjectID]*sync.Mutex
 	workspaceCache      *workspaceCache
+	workspaceManifests  *workspaceManifestIndex
 	workspaceEditsMu    sync.Mutex
 	// workspaceGroup coalesces concurrent cache-miss compare/status lookups
 	// for the same (session, root): "Expand All" on many files fires that
 	// many GetWorkspaceFile calls at once, and without this each one would
 	// independently spawn its own git subprocesses for identical work.
 	workspaceGroup singleflight.Group
+	manifestGroup  singleflight.Group
 	// signalCapable reports whether a harness has a hook pipeline that can
 	// deliver activity signals at all. Only capable harnesses are eligible for
 	// the no_signal downgrade: a hook-less harness staying silent forever is
@@ -267,6 +269,8 @@ func NewWithDeps(d Deps) *Service {
 		s.clock = time.Now
 	}
 	s.workspaceCache = newWorkspaceCache(workspaceCacheTTL, s.clock)
+	s.workspaceManifests = newWorkspaceManifestIndex()
+	s.workspaceManifests.now = s.clock
 	return s
 }
 
@@ -1321,6 +1325,9 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("CHAT_DRIVER_INCOMPATIBLE", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatAuthRequired):
 		return apierr.Conflict("CHAT_AUTH_REQUIRED", "The agent is installed but not authenticated", nil)
+	case errors.Is(err, ports.ErrChatResumeFailed):
+		return apierr.Conflict("CHAT_RESUME_FAILED",
+			"The agent could not resume its saved conversation. Your AO history is still available.", nil)
 	case errors.Is(err, ports.ErrAgentAuthRequired):
 		return apierr.Conflict("AGENT_AUTH_REQUIRED", "The agent is installed but the project credential was rejected", nil)
 	case errors.Is(err, ports.ErrUnsupportedEffort):

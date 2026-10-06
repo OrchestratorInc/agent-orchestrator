@@ -65,8 +65,10 @@ import {
   getCloudSession,
   handleCloudDeepLink,
   installCloudIPC,
+  readAuthStore,
   showCloudSignInFailure,
   signOutCloud,
+  writeAuthStore,
 } from "./cloud-auth";
 
 describe("native WorkOS authentication", () => {
@@ -132,6 +134,80 @@ describe("native WorkOS authentication", () => {
     await expect(getCloudSession(dataDir)).resolves.toMatchObject({
       user: { email: "person@example.com" },
     });
+  });
+
+  it("silently accepts the same completed callback without exchanging its code again", async () => {
+    await beginCloudSignIn(dataDir);
+    const callback = "ao-app://callback?code=code_123&state=state_123";
+    const account = await handleCloudDeepLink(callback, dataDir);
+
+    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual(account);
+    expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it("exchanges a callback once when the OS delivers it concurrently", async () => {
+    await beginCloudSignIn(dataDir);
+    const callback = "ao-app://callback?code=code_123&state=state_123";
+    const accounts = await Promise.all([
+      handleCloudDeepLink(callback, dataDir),
+      handleCloudDeepLink(callback, dataDir),
+    ]);
+
+    expect(accounts[0]).toEqual(accounts[1]);
+    expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores callbacks with no login pending without changing the signed-in account", async () => {
+    await beginCloudSignIn(dataDir);
+    const account = await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir);
+    await expect(handleCloudDeepLink(
+      "ao-app://callback?code=different_code&state=state_123", dataDir,
+    )).resolves.toEqual(account);
+    await expect(handleCloudDeepLink(
+      "ao-app://callback?code=code_123&state=unverified_state", dataDir,
+    )).resolves.toEqual(account);
+    expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("quietly returns to an account saved before callback deduplication was added", async () => {
+    await beginCloudSignIn(dataDir);
+    const callback = "ao-app://callback?code=code_123&state=state_123";
+    const account = await handleCloudDeepLink(callback, dataDir);
+    const store = await readAuthStore(dataDir);
+    delete store.completedCallback;
+    await writeAuthStore(dataDir, store);
+
+    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual(account);
+    expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not restore a signed-out account when its old return button is clicked", async () => {
+    await beginCloudSignIn(dataDir);
+    const callback = "ao-app://callback?code=code_123&state=state_123";
+    await handleCloudDeepLink(callback, dataDir);
+    await signOutCloud(dataDir);
+
+    await expect(handleCloudDeepLink(callback, dataDir)).rejects.toThrow("No WorkOS sign-in is pending");
+    await expect(getCloudSession(dataDir)).resolves.toBeNull();
+    expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a newer pending login when an already completed callback repeats", async () => {
+    await beginCloudSignIn(dataDir);
+    const callback = "ao-app://callback?code=code_123&state=state_123";
+    const account = await handleCloudDeepLink(callback, dataDir);
+    mocks.getAuthorizationUrlWithPKCE.mockResolvedValueOnce({
+      url: "https://workos.example/authorize", state: "state_456", codeVerifier: "verifier_456",
+    });
+    await beginCloudSignIn(dataDir);
+
+    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual(account);
+    await handleCloudDeepLink("ao-app://callback?code=code_456&state=state_456", dataDir);
+    expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(2);
+    expect(mocks.authenticateWithCode).toHaveBeenLastCalledWith(expect.objectContaining({
+      code: "code_456", codeVerifier: "verifier_456",
+    }));
   });
 
   it("requires an AO Cloud session before starting provider login", async () => {

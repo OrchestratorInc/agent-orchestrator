@@ -38,6 +38,7 @@ type ShellRuntime interface {
 // start in. The daemon wiring adapts the project service to it.
 type ProjectRootLocator interface {
 	ProjectRoot(ctx context.Context, id domain.ProjectID) (string, error)
+	ProjectEnv(ctx context.Context, id domain.ProjectID) (map[string]string, error)
 }
 
 // SessionWorkspaceLocator resolves a session id to the workspace it is
@@ -182,13 +183,13 @@ func NewService(runtime ShellRuntime, store Store, projects ProjectRootLocator, 
 	}
 }
 
-func (s *Service) pinnedEnv() map[string]string {
-	path, err := agentlaunch.PinnedPATH(s.executable, os.Getenv, nil, s.dataDir)
+func (s *Service) pinnedEnv(projectEnv map[string]string) map[string]string {
+	path, err := agentlaunch.PinnedPATH(s.executable, os.Getenv, projectEnv, s.dataDir)
 	if err != nil {
 		s.log.Warn("shell terminal PATH not pinned to the daemon binary; a bare `ao` may resolve to a different install", "err", err)
-		return nil
+		return agentlaunch.MergeEnv(projectEnv, nil)
 	}
-	return map[string]string{"PATH": path}
+	return agentlaunch.MergeEnv(projectEnv, map[string]string{"PATH": path})
 }
 
 // ValidPreviewCapability accepts a shell's preview-only bearer while its
@@ -254,6 +255,11 @@ func (s *Service) acquireSessionGate(ctx context.Context, id domain.SessionID) (
 // teardown (and the gate) releases — at which point resolveShellTerminalWorkingDir's
 // existence check sees the worktree is gone and falls back to the project root.
 func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInput) (ShellTerminal, error) {
+	title := strings.TrimSpace(in.Title)
+	if utf8.RuneCountInString(title) > maxShellTerminalTitleLen {
+		return ShellTerminal{}, apierr.Invalid("SHELL_TERMINAL_TITLE_TOO_LONG",
+			fmt.Sprintf("A shell terminal title must be at most %d characters", maxShellTerminalTitleLen), nil)
+	}
 	if in.SessionID != "" {
 		if s.sessions == nil {
 			return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SESSION_LOOKUP", "Session lookup is unavailable")
@@ -278,9 +284,19 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	if err != nil {
 		return ShellTerminal{}, err
 	}
-	openTerminals, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
-	if err != nil {
-		return ShellTerminal{}, fmt.Errorf("open shell terminal: list existing terminals: %w", err)
+	var projectEnv map[string]string
+	if projectID != "" {
+		projectEnv, err = s.projects.ProjectEnv(ctx, projectID)
+		if err != nil {
+			return ShellTerminal{}, fmt.Errorf("open shell terminal: resolve project environment: %w", err)
+		}
+	}
+	if title == "" {
+		openTerminals, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
+		if err != nil {
+			return ShellTerminal{}, fmt.Errorf("open shell terminal: list existing terminals: %w", err)
+		}
+		title = nextShellTerminalTitle(openTerminals)
 	}
 	argv, usedFallback := resolveUserLoginShell(in.Shell)
 	if usedFallback {
@@ -291,7 +307,7 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SHELL",
 			"Could not determine a shell to launch. Set SHELL (macOS/Linux) or ComSpec (Windows).")
 	}
-	env := s.pinnedEnv()
+	env := s.pinnedEnv(projectEnv)
 	if env == nil {
 		env = make(map[string]string, 3)
 	}
@@ -320,9 +336,10 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		}()
 	}
 	return s.openTerminal(ctx, openTerminalConfig{
-		argv: argv, env: env, projectID: projectID, sessionID: in.SessionID,
-		workingDir: workingDir, title: nextShellTerminalTitle(openTerminals),
+		argv: argv, env: env, projectEnv: projectEnv, projectID: projectID, sessionID: in.SessionID,
+		workingDir: workingDir, title: title,
 		previewVerifier: verifier,
+		startOnAttach:   in.StartOnAttach,
 	})
 }
 
@@ -417,14 +434,12 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 		return ShellTerminal{}, err
 	}
 	defer readiness.cleanup()
-	env := s.pinnedEnv()
-	if env == nil {
-		env = map[string]string{}
+	projectEnv, err := s.projects.ProjectEnv(ctx, projectID)
+	if err != nil {
+		return ShellTerminal{}, fmt.Errorf("run cue command: resolve project environment: %w", err)
 	}
-	for key, value := range readiness.env {
-		env[key] = value
-	}
-	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectID: projectID,
+	env := agentlaunch.MergeEnv(s.pinnedEnv(projectEnv), readiness.env)
+	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectEnv: projectEnv, projectID: projectID,
 		sessionID: in.SessionID, workingDir: workingDir, title: nextShellTerminalTitle(records)})
 	if err != nil {
 		return ShellTerminal{}, err
@@ -529,6 +544,7 @@ type openTerminalConfig struct {
 	handleID                 string
 	argv                     []string
 	env                      map[string]string
+	projectEnv               map[string]string
 	projectID                domain.ProjectID
 	sessionID                domain.SessionID
 	workingDir               string
@@ -536,6 +552,7 @@ type openTerminalConfig struct {
 	transient                bool
 	cleanupWorkingDirOnError bool
 	previewVerifier          string
+	startOnAttach            bool
 }
 
 // openTerminal creates and persists a terminal, rolling the runtime back on
@@ -550,6 +567,10 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		}
 	}
 
+	// Stamped before the runtime spawns: concurrent opens finish spawning in
+	// any order, and the list is ordered by creation, so tabs opened in quick
+	// succession must keep the order they were opened in.
+	createdAt := s.now().UTC()
 	// SessionID is the runtime adapters' name for "what to call this PTY"; it
 	// is not a session row and no sessions record is ever created. The
 	// shellterm- prefix keeps the two namespaces disjoint.
@@ -561,12 +582,15 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		// A user shell's exit is final, just like a trusted command's exit.
 		// Durability across app launches is a separate persistence policy.
 		ExitOnCommandCompletion: true,
+		StartOnAttach:           cfg.startOnAttach,
+		// Only agent terminals are probed for their rendered screen.
+		LazyStyledOutput: true,
 	})
 	if err != nil {
 		if cfg.cleanupWorkingDirOnError {
 			s.cleanupAuthWorkspace(cfg.workingDir, handleID)
 		}
-		return ShellTerminal{}, fmt.Errorf("open shell terminal %s: runtime: %w", handleID, err)
+		return ShellTerminal{}, fmt.Errorf("open shell terminal %s: runtime: %w", handleID, agentlaunch.RedactError(err, cfg.projectEnv))
 	}
 
 	rec := ShellTerminalRecord{
@@ -580,12 +604,13 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		Title:                     cfg.title,
 		AppRunID:                  s.appRunID,
 		Transient:                 cfg.transient,
-		CreatedAt:                 s.now().UTC(),
+		CreatedAt:                 createdAt,
 		PreviewCapabilityVerifier: cfg.previewVerifier,
 	}
 	if err := s.store.InsertShellTerminal(ctx, rec); err != nil {
 		stillAlive, destroyErr := s.destroyRuntimeConfirmed(context.WithoutCancel(ctx), handle)
 		if stillAlive {
+			destroyErr = agentlaunch.RedactError(destroyErr, cfg.projectEnv)
 			s.log.Warn("shell terminal rollback failed; retaining workspace for live runtime",
 				"handleId", handle.ID, "workingDir", cfg.workingDir, "error", destroyErr)
 		} else if cfg.cleanupWorkingDirOnError {

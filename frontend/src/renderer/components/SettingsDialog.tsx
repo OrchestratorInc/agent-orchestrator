@@ -1,4 +1,4 @@
-import { Bot, Loader2, MonitorCog, Play, RotateCcw, TriangleAlert, X, type LucideIcon } from "lucide-react";
+import { Bot, KeyRound, Loader2, MonitorCog, Play, RotateCcw, TriangleAlert, X, type LucideIcon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useRef, useState } from "react";
@@ -10,6 +10,7 @@ import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { ProjectCleanupSettings } from "./ProjectCleanupSettings";
+import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { CuesSettings } from "./CuesDialog";
 import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
 import { type GlobalSettingsSection, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
@@ -45,9 +46,10 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const closeSettings = useUiStore((state) => state.closeSettings);
+	// Diagnostics (memory and CPU) is listed only in Developer mode.
+	const developerMode = useUiStore((state) => state.developerMode);
 	// Reads the daemon settings the dialog tree already queries; no extra fetch.
 	const { cloudEnabled } = useCloudGate();
-	const developerMode = useUiStore((state) => state.developerMode);
 	// The bring-your-own-Coder page is for @11x.ai users, plus a small allowlist
 	// of internal testers so the flow can be exercised on non-11x accounts.
 	const email = (useCloudSession().session?.user.email ?? "").toLowerCase();
@@ -84,6 +86,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
 	];
 	if (!remoteHostId) {
+		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
 		projectSections.push({ id: "cleanup", label: t("settings.project.workspaceCleanup"), icon: RotateCcw });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
 	}
@@ -281,8 +284,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 										</div>
 									) : (
 										<p className="flex items-center gap-2 text-settings-muted">
-											<Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />
-											{t("settings.project.saving")}
+											{projectSaveState.phase === "pending" && activeProjectSection === "environment" ? t("settings.project.unsavedChanges") : <><Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />{t("settings.project.saving")}</>}
 										</p>
 									)}
 								</div>
@@ -291,8 +293,8 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 
 						{/* Main area — same bg as the app page */}
 						<div className="flex min-w-0 flex-1 flex-col bg-card">
-							<DialogHeader className={cn(settingsDialogHeaderClass, "flex h-auto shrink-0 flex-row items-center justify-between border-b-0 pb-3")}>
-								<Dialog.Title className="text-2xl font-bold text-foreground">{activeLabel}{remoteHostId && <span className="ml-2 text-sm font-normal text-muted-foreground">· {labelForHost(remoteHostId) ?? remoteHostId}</span>}</Dialog.Title>
+							<DialogHeader className={cn(settingsDialogHeaderClass, "flex h-auto shrink-0 flex-row items-center justify-between border-b-0 px-(--size-modal-padding) py-3")}>
+								<Dialog.Title className={cn(isProjectSettings ? "settings-dialog-title" : "text-2xl font-bold text-foreground")}>{activeLabel}{remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(remoteHostId) ?? remoteHostId}</span>}</Dialog.Title>
 								<Dialog.Description className="sr-only">
 									{isProjectSettings
 										? t("settings.project.dialogDescription")
@@ -317,6 +319,8 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 										<CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />
 									) : displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "cleanup" ? (
 										<ProjectCleanupSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />
+									) : displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "environment" ? (
+										<ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />
 									) : displaySettings?.scope === "project" ? (
 										<ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />
 									) : (

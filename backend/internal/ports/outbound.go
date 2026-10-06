@@ -221,6 +221,19 @@ type RuntimeConfig struct {
 	// not determine whether a terminal survives an app launch. Agent runtimes
 	// leave it disabled to retain scrollback and manual recovery.
 	ExitOnCommandCompletion bool
+	// StartOnAttach defers starting Argv until a viewer first attaches with its
+	// grid, so the process starts at the size that viewer shows. A shell started
+	// at a guessed grid lays its first prompt out for the wrong width (zsh's
+	// partial-line marker then leaks as a stray "%"). Only for terminals a user
+	// opened to look at: agents and scripted command terminals must start
+	// whether or not anyone is viewing. Runtimes that cannot defer ignore it.
+	StartOnAttach bool
+	// LazyStyledOutput lets the runtime skip maintaining a rendered screen until
+	// GetStyledOutput is first called for this terminal. Rendering every byte
+	// costs CPU on heavy output; terminals nothing probes for styled output
+	// (user and command shells, not agents) need not pay it continuously.
+	// Runtimes that always render ignore it.
+	LazyStyledOutput bool
 }
 
 // RuntimeHandle identifies a live runtime instance. Its ID is opaque outside
@@ -244,6 +257,14 @@ type SupervisedProcessRef struct {
 // as exit.
 type SupervisedProcessInspector interface {
 	IsSupervisedProcessAlive(ctx context.Context, handle RuntimeHandle, ref SupervisedProcessRef) (bool, error)
+}
+
+// RuntimeProcessRootInspector exposes the operating-system pids at the root of
+// a runtime's process tree (a tmux pane leader, a PTY host). Memory accounting
+// walks their descendants. It is an optional capability: a runtime without it
+// simply reports no memory reading rather than zero.
+type RuntimeProcessRootInspector interface {
+	ProcessRootPIDs(ctx context.Context, handle RuntimeHandle) ([]int, error)
 }
 
 // ExactSupervisedProcessInspector is the strict launch-generation probe used
