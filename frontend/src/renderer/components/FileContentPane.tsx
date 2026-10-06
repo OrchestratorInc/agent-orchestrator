@@ -34,6 +34,7 @@ import { AO_PIERRE_FILES_REVIEW_CSS } from "./diffs/pierreTheme";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { MarkdownFileView } from "./markdown/MarkdownFileView";
+import { MarkdownEditor } from "./MarkdownEditor";
 
 // Edit-mode Cancel/Save sit beside icon-sm toolbar buttons; keep them the same
 // height with small text and icons so they do not dwarf the toolbar.
@@ -241,6 +242,7 @@ export function FileContentPane({
 			commitSha={commitSha}
 			hostId={hostId}
 			source={source}
+			markdownEditing={editing && renderedAvailable}
 		/>
 	) : <PanelMessage>{t("files.loading")}</PanelMessage>;
 	const beginEditing = () => {
@@ -432,7 +434,7 @@ function artifactOriginOf(source: FilesSource): string | undefined {
 	}
 }
 
-function CompleteFileView({ annotation, commitSha, detail, editing, onContentReady, onEditChange, onRevealLineConsumed, revealLine, scope, sessionId, hostId, source }: { annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; onContentReady?: () => void; onEditChange: (content: string) => void; onRevealLineConsumed?: (requestKey: number) => void; revealLine?: { line: number; requestKey: number }; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource }) {
+function CompleteFileView({ annotation, commitSha, detail, editing, markdownEditing = false, onContentReady, onEditChange, onRevealLineConsumed, revealLine, scope, sessionId, hostId, source }: { annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; markdownEditing?: boolean; onContentReady?: () => void; onEditChange: (content: string) => void; onRevealLineConsumed?: (requestKey: number) => void; revealLine?: { line: number; requestKey: number }; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource }) {
 	const { t } = useTranslation();
 	const revision = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ commitSha, path: detail.path, scope, sessionId, hostId, side: detail.deleted ? "before" : "after", source, workspaceVersion: detail.workspaceVersion }),
@@ -470,5 +472,6 @@ function CompleteFileView({ annotation, commitSha, detail, editing, onContentRea
 			/>
 		);
 	}
+	if (markdownEditing) return <MarkdownEditor filePath={detail.path} onChange={onEditChange} value={detail.content} />;
 	return <ReadOnlyFileView annotation={annotation} detail={detail} editing={editing} onContentReady={onContentReady} onEditChange={onEditChange} onRevealLineConsumed={onRevealLineConsumed} revealLine={revealLine} scope={scope} sessionId={sessionId} hostId={hostId} />;
 }
