@@ -21,6 +21,7 @@ type movieDesktop struct {
 	result            ports.TestingRecordingResult
 	startErr, stopErr error
 	escapePath        string
+	startGap, stopGap string
 }
 
 func (d *movieDesktop) Close(ctx context.Context) error {
@@ -39,6 +40,7 @@ func (d *movieDesktop) StartRecording(_ context.Context, _ domain.TestTargetIden
 		return ports.TestingRecordingResult{}, err
 	}
 	d.result = ports.TestingRecordingResult{Path: filepath.Join(dir, "window.mov"), MIMEType: "video/quicktime", Width: 2, Height: 2, StartedAt: d.clock.Now(), RecorderPID: 800, StagingCleanup: "pending: recording in progress"}
+	d.result.Gap = d.startGap
 	if d.startErr != nil {
 		d.result.Gap = "owned recorder startup observation failed"
 	}
@@ -55,7 +57,7 @@ func (d *movieDesktop) StopRecording(ctx context.Context, _ domain.TestTargetIde
 	d.result.StoppedAt = d.result.StartedAt.Add(time.Second)
 	d.result.StagingPath = "/native/staging/owned-window.mov"
 	d.result.StagingCleanup = "verified absent after final move"
-	d.result.Gap = ""
+	d.result.Gap = d.stopGap
 	if d.stopErr != nil {
 		d.result.Gap = "owned recorder did not finalize"
 		return d.result, d.stopErr
@@ -160,7 +162,7 @@ func TestRecordingFinishCancelAndDeadlineSaveEvidenceBeforeTargetStop(t *testing
 	}
 }
 
-func TestRecordingFailureRetainsGapAndStillStopsTarget(t *testing.T) {
+func TestRecordingFailureOnlySetsGapForRecorderErrorAndStillStopsTarget(t *testing.T) {
 	for _, failure := range []string{"provider_stop", "recording", "recording_metadata", "foreign_path"} {
 		t.Run(failure, func(t *testing.T) {
 			f, desktop := movieFixture(t, nil)
@@ -179,9 +181,73 @@ func TestRecordingFailureRetainsGapAndStillStopsTarget(t *testing.T) {
 				t.Fatal("recording failure reported successful cleanup")
 			}
 			rec, _, err := f.store.GetTestAttempt(ctx, f.start.AttemptID)
-			if err != nil || rec.RecordingGap == "" || rec.CleanupState != domain.TestCleanupFailed || f.provider.stops != 1 {
-				t.Fatal("recording failure lost gap or skipped target stop", rec, err)
+			wantGap := ""
+			if failure == "provider_stop" {
+				wantGap = desktop.stopErr.Error()
+			}
+			if err != nil || rec.RecordingGap != wantGap || rec.CleanupState != domain.TestCleanupFailed || f.provider.stops != 1 {
+				t.Fatal("recording failure misclassified gap or skipped target stop", rec, err)
+			}
+			journal, err := os.ReadFile(filepath.Join(f.dir, "testing", string(f.run.ID), string(rec.ID), "actions.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			foundFailure := false
+			for _, line := range bytes.Split(bytes.TrimSpace(journal), []byte("\n")) {
+				var record domain.TestActionRecord
+				if err := json.Unmarshal(line, &record); err != nil {
+					t.Fatal(err)
+				}
+				if record.Tool == "stop_recording" && record.State == "failed" {
+					foundFailure = record.Detail != "" && record.RecordingGap == wantGap
+				}
+			}
+			if !foundFailure {
+				t.Fatal("recording failure reason missing from journal")
 			}
 		})
 	}
+}
+
+func TestRecordingStartErrorRetainsReasonUntilSuccessfulStop(t *testing.T) {
+	f, desktop := movieFixture(t, func(d *movieDesktop) {
+		d.startErr = errors.New("cannot observe recorder process birth")
+	})
+	rec, _, err := f.store.GetTestAttempt(context.Background(), f.start.AttemptID)
+	if err != nil || rec.RecordingGap != desktop.startErr.Error() {
+		t.Fatal("StartRecording error reason was not retained", rec.RecordingGap, err)
+	}
+	_, _ = f.svc.Cancel(context.Background(), f.start.AttemptID)
+	f.wait(t)
+	rec, _, err = f.store.GetTestAttempt(context.Background(), f.start.AttemptID)
+	if err != nil || rec.RecordingGap != "" {
+		t.Fatal("successful finalization retained startup gap", rec.RecordingGap, err)
+	}
+}
+
+func TestRecordingSuccessfulProviderCannotDeclareGap(t *testing.T) {
+	f, _ := movieFixture(t, func(d *movieDesktop) {
+		d.startGap = "legacy gap without a start error"
+		d.stopGap = "legacy gap without a stop error"
+	})
+	rec, _, err := f.store.GetTestAttempt(context.Background(), f.start.AttemptID)
+	if err != nil || rec.RecordingGap != "" {
+		t.Fatal("successful StartRecording declared a gap", rec.RecordingGap, err)
+	}
+	_, _ = f.svc.Cancel(context.Background(), f.start.AttemptID)
+	f.wait(t)
+	rec, _, err = f.store.GetTestAttempt(context.Background(), f.start.AttemptID)
+	if err != nil || rec.RecordingGap != "" {
+		t.Fatal("successful StopRecording declared a gap", rec.RecordingGap, err)
+	}
+	receipts, err := f.svc.ListEvidence(context.Background(), rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, receipt := range receipts {
+		if receipt.Kind == "recording" {
+			return
+		}
+	}
+	t.Fatal("successful recording was not saved as video evidence")
 }

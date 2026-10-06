@@ -47,33 +47,42 @@ func (s *Service) startRecording(ctx context.Context, st *attemptState, target d
 	if err := s.recordingJournal(ctx, record); err != nil {
 		return err
 	}
-	result := ports.TestingRecordingResult{Gap: "Window-only recording provider is not configured; screenshots and logs only."}
-	if recorder, ok := s.deps.Desktop.(ports.TestingDesktopRecorder); ok {
+	var result ports.TestingRecordingResult
+	var setupErr, startErr error
+	recorder, configured := s.deps.Desktop.(ports.TestingDesktopRecorder)
+	if configured {
 		if !filepath.IsAbs(s.deps.EvidenceRoot) {
-			result.Gap = "Recording evidence directory is not configured."
+			setupErr = fmt.Errorf("recording evidence directory is not configured")
 		} else {
-			var err error
-			result, err = recorder.StartRecording(ctx, target, s.recordingDirectory(st))
-			if err != nil && result.Gap == "" {
-				result.Gap = "Window-only recording failed to start."
+			result, startErr = recorder.StartRecording(ctx, target, s.recordingDirectory(st))
+			result.Gap = ""
+			if startErr != nil {
+				result.Gap = startErr.Error()
 			}
 		}
+	} else {
+		record.Detail = "Recording provider is not configured; no recording was started."
 	}
 	s.mu.Lock()
-	st.recording = result.Gap == "" || result.RecorderPID > 0
+	st.recording = configured && setupErr == nil && (startErr == nil || result.RecorderPID > 0)
 	s.mu.Unlock()
 	record.At = s.deps.Clock.Now().UTC()
 	record.State = "completed"
 	record.RecordingGap = result.Gap
 	record.Recording, _ = json.Marshal(result)
-	if result.Gap != "" {
+	if startErr != nil {
 		record.State = "failed"
+		record.Detail = "StartRecording failed: " + result.Gap
+	} else if setupErr != nil {
+		record.State, record.Detail = "failed", setupErr.Error()
+	} else if record.Detail != "" {
+		record.State = "skipped"
 	}
 	completionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	journalErr := s.recordingJournal(completionCtx, record)
 	gapErr := s.setRecordingGap(completionCtx, st, result.Gap)
-	return errors.Join(journalErr, gapErr)
+	return errors.Join(journalErr, gapErr, setupErr)
 }
 
 func (s *Service) stopRecording(ctx context.Context, st *attemptState, target domain.TestTargetIdentity) error {
@@ -93,28 +102,28 @@ func (s *Service) stopRecording(ctx context.Context, st *attemptState, target do
 	// Stop even when the journal fails: cancellation must not leave a recorder
 	// running. The cleanup still reports the evidence failure explicitly.
 	result, err := recorder.StopRecording(ctx, target)
-	if err != nil && result.Gap == "" {
-		result.Gap = "Window-only recording failed to stop."
+	result.Gap = ""
+	if err != nil {
+		result.Gap = err.Error()
 	}
-	if result.Gap == "" {
+	if err == nil {
 		if e := s.saveRecording(ctx, st, result); e != nil {
-			err = errors.Join(err, e)
-			result.Gap = "Finalized recording could not be saved as evidence."
+			err = e
 		}
 	}
 	record.At = s.deps.Clock.Now().UTC()
 	record.State = "completed"
-	if result.Gap != "" || err != nil {
+	if err != nil {
 		record.State = "failed"
+		record.Detail = err.Error()
 	}
 	record.RecordingGap = result.Gap
 	record.Recording, _ = json.Marshal(result)
 	metadata, _ := json.Marshal(result)
 	_, metadataErr := s.deps.Evidence.Write(ctx, st.record.ID, ports.TestingEvidenceArtifact{Kind: "recording_metadata", MIMEType: "application/json"}, strings.NewReader(string(metadata)))
 	if metadataErr != nil {
-		result.Gap = "Recording metadata could not be saved as evidence."
-		record.State, record.RecordingGap = "failed", result.Gap
-		record.Recording, _ = json.Marshal(result)
+		record.State = "failed"
+		record.Detail = "Recording metadata could not be saved as evidence."
 		metadataErr = apierr.Internal("TEST_EVIDENCE_WRITE_FAILED", "Cannot save recording metadata")
 	}
 	completionErr := s.recordingJournal(ctx, record)

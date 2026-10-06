@@ -193,13 +193,19 @@ func (d *policyDesktop) InputDeliveryMode(tool string) string {
 }
 func (d *policyDesktop) StartRecording(_ context.Context, _ domain.TestTargetIdentity, _ string) (ports.TestingRecordingResult, error) {
 	d.starts++
-	return ports.TestingRecordingResult{Gap: d.gap}, nil
+	if d.gap != "" {
+		return ports.TestingRecordingResult{Gap: d.gap}, errors.New(d.gap)
+	}
+	return ports.TestingRecordingResult{}, nil
 }
 func (d *policyDesktop) StopRecording(_ context.Context, _ domain.TestTargetIdentity) (ports.TestingRecordingResult, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.cleanupEvents = append(d.cleanupEvents, "recording_stop")
-	return ports.TestingRecordingResult{Gap: d.gap}, nil
+	if d.gap != "" {
+		return ports.TestingRecordingResult{Gap: d.gap}, errors.New(d.gap)
+	}
+	return ports.TestingRecordingResult{}, nil
 }
 func (d *policyDesktop) Release(_ context.Context, _ domain.TestTargetIdentity) error {
 	d.mu.Lock()
@@ -335,7 +341,7 @@ func TestHappyPathReportAndEvidenceSurviveTargetStop(t *testing.T) {
 	}
 	f.wait(t)
 	rec, ok, err := f.store.GetTestAttempt(context.Background(), f.start.AttemptID)
-	if err != nil || !ok || rec.Outcome != domain.TestOutcomeReproduced || rec.CleanupState != domain.TestCleanupComplete || rec.RecordingGap == "" {
+	if err != nil || !ok || rec.Outcome != domain.TestOutcomeReproduced || rec.CleanupState != domain.TestCleanupComplete || rec.RecordingGap != "" {
 		t.Fatal("attempt report or cleanup not retained", err)
 	}
 	run, _, _ := f.store.GetTestRun(context.Background(), f.run.ID)
