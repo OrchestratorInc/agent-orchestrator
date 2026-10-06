@@ -209,7 +209,7 @@ func TestResolveBinaryForMajorSharesOneProbeDeadline(t *testing.T) {
 	t.Cleanup(func() { versionProbeTimeout = oldTimeout })
 	first, second := t.TempDir(), t.TempDir()
 	for _, dir := range []string{first, second} {
-		if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte("#!/bin/sh\nsleep 0.1\nprintf '2.0.0\\n'\n"), 0o755); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte("#!/bin/sh\n/bin/sleep 0.1\nprintf 'development\\n'\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
