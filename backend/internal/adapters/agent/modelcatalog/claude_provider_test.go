@@ -294,19 +294,17 @@ func TestProviderEffortsSurviveNormalization(t *testing.T) {
 	}
 }
 
-// The picker leads with the newest model of each family, families in tier
-// order: every Fable, then every Opus, then Sonnet, then Haiku. Within a
-// family the version decides, and the trailing snapshot date is not part of
-// it (4.5-20251101 is still 4.5, which outranks 4.1).
-func TestClaudeCatalogOrdersFamiliesNewestFirst(t *testing.T) {
+// The picker orders models globally by descending snapshot date, without
+// grouping families or comparing versions. Undated models retain their order.
+func TestClaudeCatalogOrdersBySnapshotDateGlobally(t *testing.T) {
 	list := func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 		return []ports.AgentModelInfo{
 			{ID: "claude-haiku-4-5-20251001", Label: "Claude Haiku 4.5"},
-			{ID: "claude-opus-4-1", Label: "Claude Opus 4.1"},
-			{ID: "claude-sonnet-5", Label: "Claude Sonnet 5"},
+			{ID: "claude-opus-4-1-20251115", Label: "Claude Opus 4.1"},
+			{ID: "claude-sonnet-5-20260115", Label: "Claude Sonnet 5"},
 			{ID: "us.anthropic.claude-opus-4-5-v1:0", Label: "Claude Opus 4.5"},
-			{ID: "claude-fable-5-1", Label: "Claude Fable 5.1"},
-			{ID: "claude-opus-5", Label: "Claude Opus 5"},
+			{ID: "claude-fable-5-1-20251210", Label: "Claude Fable 5.1"},
+			{ID: "claude-opus-5-20251101", Label: "Claude Opus 5"},
 		}, nil
 	}
 	catalog, err := discoverClaudeCatalog(context.Background(), claudeRequest(t), list)
@@ -314,28 +312,26 @@ func TestClaudeCatalogOrdersFamiliesNewestFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"claude-fable-5-1",
-		"claude-opus-5",
-		"us.anthropic.claude-opus-4-5-v1:0",
-		"claude-opus-4-1",
-		"claude-sonnet-5",
+		"claude-sonnet-5-20260115",
+		"claude-fable-5-1-20251210",
+		"claude-opus-4-1-20251115",
+		"claude-opus-5-20251101",
 		"claude-haiku-4-5-20251001",
+		"us.anthropic.claude-opus-4-5-v1:0",
 	}
 	assertClaudeOrder(t, catalog.Models, want)
 }
 
-// The static alias snapshot is the fallback picker, so it follows the same
-// tier order. Bare aliases resolve to the newest build in their family, and
-// a variant stays behind its base model.
-func TestClaudeFallbackModelsOrderedByFamily(t *testing.T) {
+// Static aliases lack snapshot dates, so the sort keeps their input order.
+func TestClaudeFallbackAliasesKeepTheirOrder(t *testing.T) {
 	catalog, err := discoverClaudeCatalog(context.Background(), claudeRequest(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertClaudeOrder(t, catalog.Models, []string{"fable", "opus", "opus[1m]", "sonnet", "haiku"})
+	assertClaudeOrder(t, catalog.Models, []string{"fable", "haiku", "opus", "opus[1m]", "sonnet"})
 }
 
-func TestClaudeBracketedAliasDoesNotOutrankPinnedSnapshot(t *testing.T) {
+func TestClaudeUndatedAliasesKeepOrderAfterDatedModels(t *testing.T) {
 	models := []ports.AgentModelInfo{
 		{ID: "opus[1m]", Label: "Opus (1M context)"},
 		{ID: "claude-opus-5-20260101", Label: "Claude Opus 5"},
@@ -343,11 +339,11 @@ func TestClaudeBracketedAliasDoesNotOutrankPinnedSnapshot(t *testing.T) {
 	}
 
 	assertClaudeOrder(t, SortClaudeNewestFirst(models), []string{
-		"opus", "claude-opus-5-20260101", "opus[1m]",
+		"claude-opus-5-20260101", "opus[1m]", "opus",
 	})
 }
 
-func TestClaudeLegacyFamilyVersionsSortNewestFirst(t *testing.T) {
+func TestClaudeLegacyIDsSortBySnapshotDate(t *testing.T) {
 	models := []ports.AgentModelInfo{
 		{ID: "claude-3-5-sonnet-20241022", Label: "Claude 3.5 Sonnet"},
 		{ID: "claude-3-7-sonnet-20250219", Label: "Claude 3.7 Sonnet"},
@@ -370,24 +366,26 @@ func TestClaudeSameVersionSnapshotsSortNewestFirst(t *testing.T) {
 	})
 }
 
-func TestClaudeSnapshotDatesLeadVersionWhenBothAreKnown(t *testing.T) {
+func TestClaudeSnapshotDatesSortGloballyAndKeepUndatedOrder(t *testing.T) {
 	models := []ports.AgentModelInfo{
 		{ID: "claude-sonnet-5-20251001", Label: "Claude Sonnet 5"},
-		{ID: "claude-sonnet-4-5-20260115", Label: "Claude Sonnet 4.5"},
+		{ID: "claude-opus-4-5-20260115", Label: "Claude Opus 4.5"},
+		{ID: "opus", Label: "Opus"},
+		{ID: "fable", Label: "Fable"},
 	}
 
 	assertClaudeOrder(t, SortClaudeNewestFirst(models), []string{
-		"claude-sonnet-4-5-20260115", "claude-sonnet-5-20251001",
+		"claude-opus-4-5-20260115", "claude-sonnet-5-20251001", "opus", "fable",
 	})
 }
 
-func TestClaudeSortFallsBackToLabelForOpaqueProviderID(t *testing.T) {
+func TestClaudeOpaqueIDsWithoutDatesKeepOrder(t *testing.T) {
 	models := []ports.AgentModelInfo{
 		{ID: "gateway-model-a", Label: "Claude Sonnet 5"},
 		{ID: "gateway-model-b", Label: "Claude Opus 5"},
 	}
 
-	assertClaudeOrder(t, SortClaudeNewestFirst(models), []string{"gateway-model-b", "gateway-model-a"})
+	assertClaudeOrder(t, SortClaudeNewestFirst(models), []string{"gateway-model-a", "gateway-model-b"})
 }
 
 func TestClaudeRequestScrubsAmbientGatewayConfiguration(t *testing.T) {
@@ -401,24 +399,22 @@ func TestClaudeRequestScrubsAmbientGatewayConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertClaudeOrder(t, catalog.Models, []string{"fable", "opus", "opus[1m]", "sonnet", "haiku"})
+	assertClaudeOrder(t, catalog.Models, []string{"fable", "haiku", "opus", "opus[1m]", "sonnet"})
 }
 
-// The configured default stays pinned at the top of the picker regardless of
-// its family, and the rest of the catalog keeps tier order behind it.
-func TestClaudeConfiguredDefaultLeadsFamilyOrder(t *testing.T) {
+// The configured alias is undated, so it remains in the stable undated group.
+func TestClaudeConfiguredAliasKeepsUndatedOrder(t *testing.T) {
 	request := claudeRequest(t)
 	t.Setenv("ANTHROPIC_MODEL", "haiku")
 	catalog, err := discoverClaudeCatalog(context.Background(), request, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertClaudeOrder(t, catalog.Models, []string{"haiku", "fable", "opus", "opus[1m]", "sonnet"})
+	assertClaudeOrder(t, catalog.Models, []string{"fable", "haiku", "opus", "opus[1m]", "sonnet"})
 }
 
-// An unknown family (a custom gateway alias or a family shipped after this
-// snapshot) sorts after the known tiers rather than displacing them.
-func TestClaudeUnknownFamilySortsLast(t *testing.T) {
+// Without snapshot dates, provider order is left alone regardless of family.
+func TestClaudeUndatedUnknownFamilyKeepsProviderOrder(t *testing.T) {
 	list := func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 		return []ports.AgentModelInfo{
 			{ID: "internal-preview-9", Label: "Internal Preview 9"},
@@ -461,12 +457,5 @@ func TestClaudeDiscoveryFingerprintCoversTheOrderRevision(t *testing.T) {
 	}
 	if other := discoveryConfigInputs(context.Background(), "codex", dir, nil); strings.Contains(other, "order=") {
 		t.Fatalf("codex discovery inputs = %q, want no Claude order revision", other)
-	}
-	original := claudeFamilyOrder
-	claudeFamilyOrder = append(append([]string(nil), original...), "future-family")
-	t.Cleanup(func() { claudeFamilyOrder = original })
-	changed := discoveryConfigInputs(context.Background(), "claude-code", dir, nil)
-	if changed == claude {
-		t.Fatalf("Claude discovery inputs did not change with family order: %q", changed)
 	}
 }
