@@ -157,7 +157,7 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 					<span>{t("settings.project.envName")}</span>
 					<span>{t("settings.project.envValue")}</span>
 					<span className="sr-only">{t("settings.project.showVariable")}</span>
-					<span className="sr-only">{t("settings.project.removeVariable", { name: "" })}</span>
+					<span aria-hidden="true" className="sr-only">{t("settings.project.envValue")}</span>
 				</div>
 				{rows.map((row, index) => <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-border px-4 py-3 last:border-b-0" key={index}>
 					<input aria-label={`${t("settings.project.envName")} ${index + 1}`} className="settings-field-control min-w-0" placeholder={t("settings.project.envName")} value={row.name} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} />
