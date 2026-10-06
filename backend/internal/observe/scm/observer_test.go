@@ -984,9 +984,6 @@ func TestPoll_IgnoresForkPRWithMatchingBranch(t *testing.T) {
 	}
 }
 
-// After a repo rename or transfer, the provider reports the new canonical name
-// for both head and base while the project remote still names the old repo.
-// A same-repo PR's head is the repo that was listed, so it must be discovered.
 func TestPoll_DiscoversSameRepoPRAfterRename(t *testing.T) {
 	store := testStoreWithSession()
 	provider := &fakeProvider{

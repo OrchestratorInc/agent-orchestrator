@@ -1079,8 +1079,7 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 			// fetch and push URL, limited to the scanned base's provider and host.
 			// Reject unconfigured or deleted heads before matching branch ownership.
 			headRepo := pr.HeadRepo
-			// A renamed or transferred repo reports its new name for head and
-			// base; a same-repo PR's head is the repo listed here.
+			// Same-repo PR: the head is the listed repo, even if it was renamed.
 			if pr.BaseRepo != "" && strings.EqualFold(pr.HeadRepo, pr.BaseRepo) {
 				headRepo = repoFullName(repo)
 			}

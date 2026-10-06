@@ -138,9 +138,7 @@ type SCMPRObservation struct {
 	// branch lives in. It matches the base repo for same-repo PRs and differs
 	// for PRs opened from a fork, so branch-prefix attribution can ignore forks.
 	HeadRepo string
-	// BaseRepo is the provider's current full name of the base repository. It
-	// can differ from the listed repo's configured name after a rename or
-	// transfer; it is empty when the provider does not report it.
+	// BaseRepo is the provider's current full name of the base repository.
 	BaseRepo string
 	// TargetBranch is the PR base/target branch name.
 	TargetBranch string
