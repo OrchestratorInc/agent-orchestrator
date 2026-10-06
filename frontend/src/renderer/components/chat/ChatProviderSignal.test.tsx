@@ -2,9 +2,9 @@ import { render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { ActivityRow, SteerMessage } from "./ChatTimelineItems";
+import { ActivityRow, OriginMessage, SteerMessage } from "./ChatTimelineItems";
 import { ChatLinkProvider } from "./ChatMarkdown";
-import type { ConversationActivity } from "../../types/conversation";
+import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
 import { aoBridge } from "../../lib/bridge";
 import { TooltipProvider } from "../ui/tooltip";
 
@@ -326,6 +326,31 @@ describe("steer message", () => {
 			"href",
 			"ao://sessions/project-1/worker-1",
 		);
+	});
+
+	it("renders an idle automation message with the same sender header and link", () => {
+		const message: ConversationMessage = {
+			kind: "message",
+			id: "message-1",
+			sequence: 1,
+			revision: 0,
+			role: "user",
+			origin: "automation",
+			text: "[from worker-1] use the simpler approach",
+			streaming: false,
+			senderSessionId: "worker-1",
+			senderProjectId: "project-1",
+			senderDisplayName: "Backend worker",
+			createdAt: new Date().toISOString(),
+		};
+		render(<OriginMessage message={message} />);
+
+		expect(screen.getByRole("link", { name: "Backend worker" })).toHaveAttribute(
+			"href",
+			"ao://sessions/project-1/worker-1",
+		);
+		expect(screen.getByText("use the simpler approach")).toBeInTheDocument();
+		expect(screen.queryByText("[from worker-1] use the simpler approach")).not.toBeInTheDocument();
 	});
 
 	it("keeps long attributed steers consistent with automation reports", async () => {

@@ -674,15 +674,25 @@ export function OriginMessage({ message }: { message: ConversationMessage }) {
 		return <BrowserAnnotationOrigin message={message} annotations={browserAnnotations} />;
 	}
 
-	const longReport = message.text.length > ORIGIN_REPORT_COLLAPSE_AT;
+	const senderSessionId = message.senderSessionId?.trim();
+	const senderProjectId = message.senderProjectId?.trim();
+	const senderLabel = message.senderDisplayName?.trim() || senderSessionId;
+	const senderHref = senderSessionId && senderProjectId
+		? `ao://sessions/${encodeURIComponent(senderProjectId)}/${encodeURIComponent(senderSessionId)}`
+		: undefined;
+	const visibleText = senderSessionId ? stripSteerSenderPrefix(message.text, senderSessionId) : message.text;
+	const longReport = visibleText.length > ORIGIN_REPORT_COLLAPSE_AT;
 	const preview = longReport
-		? `${message.text.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
-		: message.text;
+		? `${visibleText.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
+		: visibleText;
 
 	return (
-		<AutomationMessageFrame label={message.senderLabel ?? message.origin} createdAt={message.createdAt}>
+		<AutomationMessageFrame
+			label={senderSessionId ? <>{"[from "}{senderHref ? <SessionLabelLink href={senderHref}>{senderLabel}</SessionLabelLink> : senderLabel}{"]"}</> : message.senderLabel ?? message.origin}
+			createdAt={message.createdAt}
+		>
 			{longReport && expanded ? (
-				<ChatMarkdown text={message.text} muted />
+				<ChatMarkdown text={visibleText} muted />
 			) : (
 				<p className={cn("whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
 					<SessionLinkedText text={preview} />

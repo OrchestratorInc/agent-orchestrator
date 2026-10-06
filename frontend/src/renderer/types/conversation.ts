@@ -181,6 +181,9 @@ export interface ConversationMessage {
 	delivery?: DeliveryState;
 	/** Set when origin is a worker or automation, for the attribution line. */
 	senderLabel?: string;
+	senderSessionId?: string;
+	senderProjectId?: string;
+	senderDisplayName?: string;
 	createdAt: string;
 }
 

@@ -11144,6 +11144,12 @@ components:
           - user
           - assistant
           type: string
+        senderDisplayName:
+          type: string
+        senderProjectId:
+          type: string
+        senderSessionId:
+          type: string
         sequence:
           format: int64
           type: integer

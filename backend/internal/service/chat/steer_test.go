@@ -571,10 +571,12 @@ func TestSteerOrSendIdleCrossSessionUsesAutomationOrigin(t *testing.T) {
 	h := newHarnessWithConversation(t, provider)
 
 	_, err := h.svc.SteerOrSend(context.Background(), testSession, ports.ChatUserMessage{
-		Text:            "[from worker-1] use the simpler approach",
-		ClientMessageID: "idle-cross-session-steer",
-		Origin:          domain.MessageOriginHuman,
-		SenderSessionID: "worker-1",
+		Text:              "[from worker-1] use the simpler approach",
+		ClientMessageID:   "idle-cross-session-steer",
+		Origin:            domain.MessageOriginHuman,
+		SenderSessionID:   "worker-1",
+		SenderProjectID:   "project-1",
+		SenderDisplayName: "Backend worker",
 	}, false)
 	if err != nil {
 		t.Fatalf("SteerOrSend: %v", err)
@@ -590,6 +592,9 @@ func TestSteerOrSendIdleCrossSessionUsesAutomationOrigin(t *testing.T) {
 	message := snapshot.Messages[len(snapshot.Messages)-1]
 	if message.Origin != domain.MessageOriginAutomation {
 		t.Fatalf("idle cross-session steer origin = %q, want automation", message.Origin)
+	}
+	if message.SenderSessionID != "worker-1" || message.SenderProjectID != "project-1" || message.SenderDisplayName != "Backend worker" {
+		t.Fatalf("idle cross-session sender metadata = (%q, %q, %q)", message.SenderSessionID, message.SenderProjectID, message.SenderDisplayName)
 	}
 }
 
