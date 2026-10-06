@@ -327,6 +327,38 @@ describe("steer message", () => {
 			"ao://sessions/project-1/worker-1",
 		);
 	});
+
+	it("keeps long attributed steers consistent with automation reports", async () => {
+		const user = userEvent.setup();
+		const body = `${"A long steering report. ".repeat(30)}See ao://sessions/project-2/worker-2`;
+		render(
+			<SteerMessage
+				sessionId="target-1"
+				activity={activity({
+					activityKind: "system",
+					summary: `[from worker-2] ${body}`,
+					detail: {
+						event: "steer",
+						text: `[from worker-2] ${body}`,
+						origin: "human",
+						senderSessionId: "worker-2",
+						senderProjectId: "project-1",
+						senderDisplayName: "A very long backend worker display name that should truncate",
+					},
+				})}
+			/>,
+		);
+
+		const label = screen.getByText(/A very long backend worker/);
+		expect(label.closest(".cursor-chat-origin-message")).toContainElement(label);
+		expect(screen.getByRole("button", { name: "Show full report" })).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Show full report" }));
+		expect(screen.getByRole("button", { name: "Hide report" })).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "ao://sessions/project-2/worker-2" })).toHaveAttribute(
+			"href",
+			"ao://sessions/project-2/worker-2",
+		);
+	});
 });
 
 describe("provider error", () => {
