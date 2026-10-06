@@ -1123,3 +1123,83 @@ func TestOutputDuringAttachIsDeliveredOnce(t *testing.T) {
 		t.Fatalf("client received %q, want %q exactly once", got, want)
 	}
 }
+
+// TestOutputHeldForASlowViewerReachesANewAttachOnce: output waits for a viewer
+// whose queue is full (see broadcast). A client that attaches during that wait
+// must get the waiting chunk exactly once, live, and a snapshot whose restored
+// modes do not include it. Recorded into the ring and the tracker before the
+// wait, the chunk would reach the new client twice (in its snapshot and again
+// once the wait ends), and Restore would already prefix the chunk's ?1049h.
+func TestOutputHeldForASlowViewerReachesANewAttachOnce(t *testing.T) {
+	f := startServe(t, 305)
+	defer f.cancel()
+
+	// A viewer that never reads: its writer blocks on the pipe and its queue
+	// fills as output is recorded.
+	stalledHost, stalledPeer := net.Pipe()
+	stalled := newClientState()
+	f.host.mu.Lock()
+	f.host.clients[stalledHost] = stalled
+	f.host.mu.Unlock()
+	go f.host.writeClient(stalledHost, stalled)
+	defer func() { _ = stalledPeer.Close() }()
+
+	full := func() bool {
+		f.host.mu.Lock()
+		defer f.host.mu.Unlock()
+		return !stalled.hasRoom()
+	}
+	for i := 0; !full(); i++ {
+		if i > hostClientWriteBuffer*2 {
+			t.Fatal("the stalled viewer's queue never filled")
+		}
+		line := []byte(fmt.Sprintf("fill %04d\n", i))
+		if _, err := f.pty.WriteOutput(line); err != nil {
+			t.Fatalf("write fill: %v", err)
+		}
+		waitRecorded(t, f, line)
+	}
+
+	held := []byte("\x1b[?1049h\x1b[?1006hheld\n")
+	if _, err := f.pty.WriteOutput(held); err != nil { // returns once the pump has read it
+		t.Fatalf("write held chunk: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	f.host.mu.Lock()
+	recorded := bytes.Contains(f.ring.Replay(), held)
+	f.host.mu.Unlock()
+	if recorded {
+		t.Fatal("the chunk was recorded while a viewer's queue was full")
+	}
+
+	c := newTestClient(t, f.addr)
+	defer c.close()
+	typ, snap := c.readFrame(t)
+	if typ != MsgTerminalData {
+		t.Fatalf("first frame type 0x%02x, want the snapshot", typ)
+	}
+	if bytes.Contains(snap, []byte("\x1b[?1049h")) || bytes.Contains(snap, []byte("held")) {
+		t.Fatalf("snapshot taken during the wait carries the held chunk or its modes: %q", snap[:min(len(snap), 80)])
+	}
+
+	_ = stalledPeer.Close() // the stalled viewer goes away; output resumes
+
+	var live []byte
+	for len(live) < len(held) {
+		typ, payload := c.readFrame(t)
+		if typ != MsgTerminalData {
+			t.Fatalf("got type 0x%02x, want MsgTerminalData", typ)
+		}
+		live = append(live, payload...)
+	}
+	select {
+	case fr, ok := <-c.frameC:
+		if ok {
+			live = append(live, fr.payload...)
+		}
+	case <-time.After(200 * time.Millisecond):
+	}
+	if !bytes.Equal(live, held) {
+		t.Fatalf("new client received %q live, want %q exactly once", live, held)
+	}
+}
