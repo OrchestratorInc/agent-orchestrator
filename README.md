@@ -229,11 +229,7 @@ Join [Discord](https://discord.com/invite/UZv7JjxbwG) for help and contributor d
 
 ## Product telemetry
 
-Orchestrator.inc uses limited product usage and reliability metrics designed to exclude project content, with the GitHub identity exceptions described below. These metrics help us understand adoption and improve the product. To understand which teams and developers get the most value from Orchestrator.inc, we also record the GitHub organization or account that owns a project (the owner segment only, never the repository, path, or URL); for a personal repository this is the owner's own username, so that single field is not anonymous. We use it to prioritize improvements and reach out for feedback.
-
-Orchestrator.inc also shares the GitHub username signed in to its GitHub integration on session-start events, so we can see which developers are most active and reach out for feedback. Orchestrator.inc only sends a personal (human) account, never an organization or a bot token, and sends nothing if no GitHub token is available. The handle is part of product telemetry and has no separate control; turning telemetry off stops it along with everything else.
-
-Orchestrator.inc leaves PostHog's IP-based location derivation enabled, so coarse geography (country, and where available region and city) is available in aggregate to understand which areas Orchestrator.inc is used in. PostHog may associate that geography with other events from the same installation, including a session-start event carrying your GitHub handle. Orchestrator.inc never resolves or sends precise location and does not store your IP address. Turning telemetry off stops it with everything else. [Learn more about telemetry and privacy](docs/telemetry.md).
+Orchestrator.inc collects limited usage and reliability telemetry designed to exclude project content. Events can include a project's GitHub owner or your signed-in GitHub username, and PostHog may derive coarse location from an IP address; telemetry is therefore not fully anonymous. [Learn what is collected and how to turn off desktop telemetry](docs/telemetry.md).
 
 ## License
 
