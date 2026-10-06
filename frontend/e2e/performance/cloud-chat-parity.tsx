@@ -26,7 +26,7 @@ const snapshot = toSnapshot(session,[
  event(5,"chat.assistant_delta",{turnId:"search",attempt:1,itemId:"answer",text:"\n\n"}),
  event(6,"chat.assistant_delta",{turnId:"search",attempt:1,itemId:"answer",text:"Both homes meet the requested criteria."}),
  event(7,"chat.turn_completed",{turnId:"search"}),
- event(8,"chat.user_message",{turnId:"report",origin:"automation",senderSessionId:"fixture-worker",text:"Worker report: the listing comparison is complete."}),
+ event(8,"chat.user_message",{turnId:"report",origin:"automation",senderSessionId:"fixture-worker",senderLabel:"Worker · Home search",displayText:"Worker report: the listing comparison is complete.",text:'[from worker fixture "Home search"] Worker report: the listing comparison is complete.'}),
  event(9,"chat.turn_started",{turnId:"report",attempt:1}),
  event(10,"chat.assistant_delta",{turnId:"report",attempt:1,itemId:"acknowledgment",text:"Recorded the comparison."}),
  event(11,"chat.turn_completed",{turnId:"report"}),

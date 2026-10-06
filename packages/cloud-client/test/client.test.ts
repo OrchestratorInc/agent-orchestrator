@@ -608,6 +608,8 @@ describe("CloudClient", () => {
         text: "Search complete.",
         origin: "automation",
         senderSessionId: "00000000-0000-0000-0000-000000000002",
+        senderLabel: "Worker · Home search",
+        displayText: "Search complete.",
       },
       createdAt: "2026-08-09T00:00:00Z",
     };
@@ -622,6 +624,8 @@ describe("CloudClient", () => {
     if (replayed?.type !== "chat.user_message") throw new Error("Expected user message");
     expect(replayed.payload.origin).toBe("automation");
     expect(replayed.payload.senderSessionId).toBe(event.payload.senderSessionId);
+    expect(replayed.payload.senderLabel).toBe("Worker · Home search");
+    expect(replayed.payload.displayText).toBe("Search complete.");
   });
 
   it("sends idempotency keys on mutating commands", async () => {

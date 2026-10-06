@@ -54,11 +54,11 @@ describe("CloudSessionChatSurface", () => {
 	it("keeps human messages human even when their text resembles a worker report", () => {
 		const events: CloudCpClientEvent[] = [{
 			sessionId: session.id, sequence: 1, type: "chat.user_message",
-			payload: { text: '[from worker a1b2c3d4 "Builder"] Please help' },
+			payload: { text: '[from worker a1b2c3d4 "Builder"] Please help', origin: "human", senderLabel: "Worker · Builder", displayText: "Misleading report" },
 			createdAt: "2026-10-01T00:00:00Z",
 		}];
 		expect(toSnapshot(session, events).items[0]).toMatchObject({
-			origin: "human", text: '[from worker a1b2c3d4 "Builder"] Please help',
+			origin: "human", text: '[from worker a1b2c3d4 "Builder"] Please help', senderLabel: undefined,
 		});
 	});
 

@@ -427,11 +427,11 @@ func TestACPMessageIdentityAndWhitespaceSurviveLiveOutput(t *testing.T) {
 }
 
 func TestCodexMessageOutputPreservesIdentityAndWhitespace(t *testing.T) {
-	output, ok := codexAgentMessageOutput(json.RawMessage(`{"threadId":"current","itemId":"answer","delta":"\n\n"}`), "current")
-	if !ok || output.ItemID != "answer" || output.Text != "\n\n" {
-		t.Fatalf("output=%#v accepted=%v", output, ok)
+	output := projectCodexNotification(codexFrame{Method: "item/agentMessage/delta", Params: json.RawMessage(`{"threadId":"current","itemId":"answer","delta":"\n\n"}`)}, "current")
+	if len(output) != 1 || output[0].ItemID != "answer" || output[0].Text != "\n\n" {
+		t.Fatalf("output=%#v", output)
 	}
-	if _, ok := codexAgentMessageOutput(json.RawMessage(`{"threadId":"other","itemId":"answer","delta":"foreign"}`), "current"); ok {
+	if output := projectCodexNotification(codexFrame{Method: "item/agentMessage/delta", Params: json.RawMessage(`{"threadId":"other","itemId":"answer","delta":"foreign"}`)}, "current"); len(output) != 0 {
 		t.Fatal("another thread's output was accepted")
 	}
 }

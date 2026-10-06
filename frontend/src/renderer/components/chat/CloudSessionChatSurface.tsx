@@ -8,9 +8,6 @@ import type { WorkspaceSession } from "../../types/workspace";
 import { ChatWorkspace } from "./ChatWorkspace";
 
 type EventPayload = {
-	origin?: unknown;
-	senderLabel?: unknown;
-	itemId?: unknown;
 	attempt?: unknown;
 	clientMessageId?: unknown;
 	requestId?: unknown;

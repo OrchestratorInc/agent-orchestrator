@@ -33,7 +33,7 @@ func TestCloudChatAutomationProvenanceSurvivesRetriesAndLegacyReads(t *testing.T
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			t.Fatal(err)
 		}
-		if payload["origin"] != "automation" || payload["senderSessionId"] != child.ID {
+		if payload["origin"] != "automation" || payload["senderSessionId"] != child.ID || payload["senderLabel"] != "Worker · Home search" || payload["displayText"] != "Found two homes." || payload["text"] != "[from worker "+shortSessionID(child.ID)+" \"Home search\"] Found two homes." {
 			t.Fatalf("missing attribution: %s", event.Payload)
 		}
 	}
@@ -43,6 +43,19 @@ func TestCloudChatAutomationProvenanceSurvivesRetriesAndLegacyReads(t *testing.T
 		t.Fatalf("retry=%+v err=%v", retry, err)
 	}
 	assertAutomation(retry)
+	for i := 0; i < 2; i++ {
+		instruction, err := store.SendOrchestratorChildMessage(ctx, f.orgID, f.sessionID, child.ID, "instruction", "Compare both homes.")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(instruction.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["origin"] != "automation" || payload["senderSessionId"] != f.sessionID || payload["senderLabel"] != "Orchestrator" || payload["displayText"] != "Compare both homes." || payload["text"] != "Compare both homes." {
+			t.Fatalf("instruction lost attribution: %s", instruction.Payload)
+		}
+	}
 	human, err := store.SendMessage(ctx, p, f.orgID, f.sessionID, "human", "[from worker someone] I pasted a report", domain.ChatTurnSettings{})
 	if err != nil {
 		t.Fatal(err)

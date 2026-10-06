@@ -103,14 +103,6 @@ func sendMessageTx(
 	if err != nil {
 		return domain.ClientEvent{}, err
 	}
-	if actorSessionID != "" {
-		if err := annotateAutomationMessage(&event, actorSessionID); err != nil {
-			return domain.ClientEvent{}, err
-		}
-		if _, err := tx.Exec(ctx, `UPDATE ao_events SET payload=$4 WHERE org_id=$1 AND session_id=$2 AND sequence=$3`, orgID, sessionID, event.Sequence, event.Payload); err != nil {
-			return domain.ClientEvent{}, err
-		}
-	}
 	// A user message is proof of life: wake a sandbox the idle-pause scanner
 	// paused for silence and schedule reconciliation immediately even when the
 	// sandbox was already running, so provider deadline extension cannot wait

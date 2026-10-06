@@ -2132,9 +2132,13 @@ export interface components {
                 origin?: "human" | "automation";
                 /**
                  * Format: uuid
-                 * @description Source worker session for automation messages.
+                 * @description Source agent session for automation messages.
                  */
                 senderSessionId?: string;
+                /** @description Server-owned display label for an automation sender. */
+                senderLabel?: string;
+                /** @description Display text for an automation message; text retains the full agent prompt. */
+                displayText?: string;
                 /** Format: uuid */
                 turnId?: string;
             };

@@ -495,15 +495,3 @@ func handleCodexApproval(ctx context.Context, conn *codexRPC, control approvalCo
 		}
 	}
 }
-
-func codexAgentMessageOutput(raw json.RawMessage, threadID string) (Output, bool) {
-	var event struct {
-		ThreadID string `json:"threadId"`
-		Delta    string `json:"delta"`
-		ItemID   string `json:"itemId"`
-	}
-	if json.Unmarshal(raw, &event) != nil || event.Delta == "" || (event.ThreadID != "" && event.ThreadID != threadID) {
-		return Output{}, false
-	}
-	return Output{Stream: "stdout", Text: event.Delta, ItemID: event.ItemID}, true
-}
