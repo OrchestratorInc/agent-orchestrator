@@ -106,7 +106,7 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 		if statusErr == nil && job.Status == StatusSucceeded && job.Method == plan.Method {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("%w: AO could not confirm which %s installation is in use (%v); update or remove it manually", ErrInstallOwner, target, err)
+		return nil, fmt.Errorf("%w: AO could not confirm which %s installation is in use (%w); update or remove it manually", ErrInstallOwner, target, err)
 	}
 	if !s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
 		return nil, fmt.Errorf("%w: the %s that AO runs (%s) was not installed with %s; update or remove it manually with the tool that installed it", ErrInstallOwner, target, verified.ResolvedPath, installMethodLabel(plan.Method))
