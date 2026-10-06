@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
-import type { ApprovalMode, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, TurnSettings } from "../../types/conversation";
+import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, TurnSettings } from "../../types/conversation";
 import type { WorkspaceSession } from "../../types/workspace";
 import { ChatWorkspace } from "./ChatWorkspace";
 
@@ -26,7 +26,7 @@ type EventPayload = {
 	itemId?: unknown;
 };
 
-type CloudTurnSettings = TurnSettings;
+type CloudTurnSettings = TurnSettings & { executionMode?: "agent" | "plan" };
 
 function allowedApprovalModes(harness: string, ceiling?: "read-only" | "standard" | "trusted"): ApprovalMode[] {
 	if (ceiling === "read-only" || !ceiling) return [];
@@ -39,6 +39,7 @@ export function readCloudTurnSettings(key: string): CloudTurnSettings {
 		const saved = JSON.parse(localStorage.getItem(key) ?? "null");
 		if (!saved || typeof saved !== "object") return {};
 		return {
+			executionMode: saved.executionMode === "plan" || saved.executionMode === "agent" ? saved.executionMode : undefined,
 			model: typeof saved.model === "string" ? saved.model : undefined,
 			reasoningEffort: typeof saved.reasoningEffort === "string" ? saved.reasoningEffort : undefined,
 			approvalMode: saved.approvalMode === "default" || saved.approvalMode === "accept-edits" || saved.approvalMode === "auto" || saved.approvalMode === "bypass-permissions" ? saved.approvalMode : undefined,
@@ -407,12 +408,14 @@ export function CloudSessionChatSurface({
 			const selectedSettings: CloudTurnSettings = settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
 			const approvalMode = selectedSettings.approvalMode && approvalModes.includes(selectedSettings.approvalMode)
 				? selectedSettings.approvalMode : approvalModes[0];
+			const mode = selectedSettings.executionMode === "plan" && modelsQuery.data?.modes?.includes("plan")
+				? "read-only" : cloud.permissionMode;
 			return client.sendSessionMessage(cloud.orgId, session.id, {
 				text,
 				...(selectedSettings.model ? { model: selectedSettings.model } : {}),
 				...(selectedSettings.reasoningEffort ? { reasoningEffort: selectedSettings.reasoningEffort } : {}),
-				...(cloud.permissionMode ? { mode: cloud.permissionMode } : {}),
-				...(approvalMode ? { approvalMode } : {}),
+				...(mode ? { mode } : {}),
+				...(approvalMode && mode !== "read-only" ? { approvalMode } : {}),
 			}, { idempotencyKey: clientMessageId });
 		},
 		onSuccess: () => void invalidate(),
@@ -463,10 +466,27 @@ export function CloudSessionChatSurface({
 		},
 		onSettled: () => void invalidate(),
 	});
+	const planOptions: ChatConfigOption[] | undefined =
+		session.provider === "claude-code" && modelsQuery.data?.modes?.includes("plan")
+			? [{
+				id: "mode", name: "Mode", category: "mode", type: "select",
+				currentValue: cloud?.permissionMode === "read-only" || settings.executionMode === "plan" ? "plan" : "agent",
+				choices: [
+					...(cloud?.permissionMode === "read-only" || !modelsQuery.data.modes.includes("default")
+						? [] : [{ value: "agent", name: "Agent" }]),
+					{ value: "plan", name: "Plan" },
+				],
+			}]
+			: undefined;
 	return (
 		<ChatWorkspace
 			snapshot={snapshot}
 			models={modelsQuery.data?.models ?? []}
+			configOptions={planOptions}
+			onChooseConfigOption={planOptions ? (id, choice) => {
+				if (id !== "mode" || !("value" in choice) || !planOptions[0].choices.some((option) => option.value === choice.value)) return;
+				updateSettings({ ...settingsRef.current.settings, executionMode: choice.value === "plan" ? "plan" : "agent" });
+			} : undefined}
 			onChooseSettings={(next) => updateSettings({ ...settingsRef.current.settings, ...next })}
 			showApprovalMode={approvalModes.length > 0}
 			approvalModes={approvalModes}

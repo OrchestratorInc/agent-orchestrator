@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useNavigate, useParams, useRouterState } from "@tanstack/react-router";
@@ -56,8 +56,6 @@ import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { UpdateStatus } from "../../main/update-settings";
 import { parseNightlyVersion } from "../lib/build-channel";
-import { DEV_BUILD_INFO } from "../lib/dev-build-info";
-import { IS_DEV } from "../lib/is-dev";
 import {
 	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
@@ -123,8 +121,8 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { OrchestratorIcon } from "./icons";
 import { Badge } from "./ui/badge";
-import { AOMascot } from "./AOMascot";
 import { cn } from "../lib/utils";
+import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { useUiStore } from "../stores/ui-store";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -132,7 +130,7 @@ import { SessionArchiveDialog } from "./SessionArchiveDialog";
 import { CreateProjectFlow, type CloneProjectInput, type CreateProjectInput } from "./CreateProjectFlow";
 import { ResizeHandle } from "./ResizeHandle";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
-import { isMacPlatform } from "../lib/platform";
+import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { useCloudSession } from "../lib/cloud-session";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
@@ -143,6 +141,7 @@ import { RemoteHostsSection } from "./RemoteHostsSection";
 // sidebar toggle + history arrows above this surface. Windows hangs the sidebar
 // under its custom titlebar.
 const isMac = isMacPlatform();
+const brandInTitlebar = isMac || isLinuxPlatform();
 const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
 // Shared styling for the per-project hover action buttons (orchestrator, kebab):
@@ -310,6 +309,21 @@ export const SIDEBAR_DEFAULT_WIDTH = 240;
 /** Floor/ceiling for sidebar resize — pass the same values to useResizable AND ResizeHandle. */
 export const SIDEBAR_MIN_WIDTH = 200;
 export const SIDEBAR_MAX_WIDTH = 420;
+const SIDEBAR_BRAND_TRAILING_GAP = 12;
+/** Narrowest the sidebar may get: just wide enough to show the whole brand
+ *  label. Measured, because the label's left edge moves with window zoom (the
+ *  traffic-light reserve is divided by the zoom factor). Falls back to
+ *  SIDEBAR_MIN_WIDTH when no brand is rendered (collapsed rail, tests). */
+function sidebarMinWidth(): number {
+	const brand = Array.from(document.querySelectorAll<HTMLElement>("[data-sidebar-brand]")).find(
+		(el) => el.getBoundingClientRect().width > 0,
+	);
+	if (!brand) return SIDEBAR_MIN_WIDTH;
+	// Measure the whole brand element: it holds the mascot and the label, so its
+	// scrollWidth is the full width the sidebar has to clear.
+	const fit = Math.ceil(brand.getBoundingClientRect().left + brand.scrollWidth + SIDEBAR_BRAND_TRAILING_GAP);
+	return Math.min(SIDEBAR_MAX_WIDTH, fit);
+}
 /** Initial item count shown in expanded sections; Show more/less toggles the remainder.
  *  Collapsed icon rail always shows the full list so projects stay reachable. */
 const SIDEBAR_INITIAL_SECTION_LIMIT = 10;
@@ -598,17 +612,6 @@ export function Sidebar({
 	resizeAuxiliaryTargetRef,
 }: SidebarProps) {
 	const { t } = useTranslation();
-	const devCommitInfo = t(DEV_BUILD_INFO.isDirty ? "shell.devLastCommit" : "shell.devCommit", DEV_BUILD_INFO);
-	const devStatusInfo = t("shell.devStatus", {
-		status: t(DEV_BUILD_INFO.isDirty ? "shell.devDirty" : "shell.devClean"),
-	});
-	const devWorktreeInfo = t("shell.devWorktree", DEV_BUILD_INFO);
-	const devBuildInfoAria = t("shell.devBuildInfoAria", {
-		...DEV_BUILD_INFO,
-		commitInfo: devCommitInfo,
-		statusInfo: devStatusInfo,
-		worktreeInfo: devWorktreeInfo,
-	});
 	const remoteNavigate = useNavigate();
 	const selection = useSelection();
 	const { state, setOpen, toggleSidebar } = useSidebar();
@@ -681,15 +684,6 @@ export function Sidebar({
 	const [pinnedOpen, setPinnedOpen] = useState(true);
 	const [projectsOpen, setProjectsOpen] = useState(true);
 	const [scratchpadOpen, setScratchpadOpen] = useState(true);
-	// Fetch the running app version to derive the build channel. Channel is
-	// identity: derived from the version string, not the update-channel setting
-	// (the setting can be changed mid-session; the binary cannot).
-	const { data: appVersion } = useQuery({
-		queryKey: ["app-version"],
-		queryFn: () => aoBridge.app.getVersion(),
-		staleTime: Infinity,
-	});
-	const isNightly = typeof appVersion === "string" && appVersion.includes("-nightly.");
 
 	// agent-orchestrator's sidebar resize: drag the right edge (200-420px,
 	// persisted), double-click to reset to 240px. Drives --ao-sidebar-w on :root,
@@ -722,9 +716,10 @@ export function Sidebar({
 		getCssTargets: getResizeTargets,
 		storageKey: "ao-sidebar-w",
 		defaultWidth: SIDEBAR_DEFAULT_WIDTH,
-		min: SIDEBAR_MIN_WIDTH,
+		min: sidebarMinWidth,
 		max: SIDEBAR_MAX_WIDTH,
 		edge: "right",
+		reclampOnWindowResize: true,
 		onExpand: () => setOpen(true),
 	});
 
@@ -910,6 +905,8 @@ export function Sidebar({
 					aria-label={t("shell.goHome")}
 					className={cn(
 						"group/brand flex w-full shrink-0 items-center gap-1.5 rounded-md px-0.5 text-left",
+						// macOS/Linux show the brand in TitlebarNav instead.
+						brandInTitlebar && "hidden",
 						"group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-1 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:pb-2",
 						commandPaletteEnabled ? "pb-2" : "pb-3",
 					)}
@@ -918,44 +915,10 @@ export function Sidebar({
 					type="button"
 				>
 					<span
-						className={cn(
-							"grid h-5.5 w-5.5 shrink-0 place-items-center",
-							"group-data-[collapsible=icon]:size-control-board group-data-[collapsible=icon]:rounded-lg",
-						)}
+						className="sidebar-expanded-chrome min-w-0 flex-1 truncate text-base font-semibold leading-tight tracking-tight-lg text-foreground group-data-[collapsible=icon]:hidden"
 					>
-						<AOMascot className="h-5.5 w-5.5 -translate-y-[1.5px]" />
+						Orchestrator.inc
 					</span>
-					<span
-						className="sidebar-expanded-chrome min-w-0 flex-1 truncate text-sm font-bold leading-tight tracking-tight-lg text-foreground group-data-[collapsible=icon]:hidden"
-					>
-						Agent Orchestrator
-					</span>
-					{isNightly && (
-						<span className="sidebar-expanded-chrome shrink-0 rounded-full bg-purple-subtle px-1.5 py-0.5 text-micro font-semibold leading-none text-purple-accent group-data-[collapsible=icon]:hidden">
-							{t("shell.nightly")}
-						</span>
-					)}
-					{IS_DEV && (
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<span
-									data-testid="sidebar-dev-badge"
-									aria-label={devBuildInfoAria}
-									className="sidebar-expanded-chrome shrink-0 cursor-help rounded-full bg-amber-500/15 px-1.5 py-0.5 text-micro font-semibold leading-none text-amber-600 group-data-[collapsible=icon]:hidden dark:text-amber-400"
-								>
-									{t("shell.dev")}
-								</span>
-							</TooltipTrigger>
-							<TooltipContent side="bottom" align="end">
-								<div className="flex flex-col gap-0.5 font-mono text-[11px]">
-									<span>{t("shell.devBranch", DEV_BUILD_INFO)}</span>
-									<span>{devCommitInfo}</span>
-									<span>{devStatusInfo}</span>
-									<span className="max-w-[min(80vw,42rem)] break-all">{devWorktreeInfo}</span>
-								</div>
-							</TooltipContent>
-						</Tooltip>
-					)}
 				</button>
 				<Tooltip>
 					<TooltipTrigger asChild>
@@ -1024,9 +987,11 @@ export function Sidebar({
 										hostLabel={session.hostId ? remoteHosts.find((host) => host.hostId === session.hostId)?.label ?? session.hostId : undefined}
 										layoutSettled={layoutSettled}
 										onKilled={handlePinnedSessionKilled}
-										onOpenSession={(target) => target.hostId
-											? void remoteNavigate(sessionNavigateTarget(target.workspaceId, target.id, target.hostId))
-											: selection.goSession(target.workspaceId, target.id)}
+										onOpenSession={(target) => {
+											if (session.kind === "worker") recordManualWorkerOpen(target.id, target.hostId);
+											if (target.hostId) void remoteNavigate(sessionNavigateTarget(target.workspaceId, target.id, target.hostId));
+											else selection.goSession(target.workspaceId, target.id);
+										}}
 									/>
 								))}
 							</SidebarMenuSub>
@@ -1407,6 +1372,7 @@ const ProjectItem = memo(function ProjectItem({
 		[sessions],
 	);
 	const openSession = useCallback((sessionId: string) => {
+		recordManualWorkerOpen(sessionId);
 		selection.goSession(workspace.id, sessionId);
 	}, [selection, workspace.id]);
 	const handleSessionKilled = useCallback(
@@ -1941,7 +1907,10 @@ function ScratchpadSection({
 		[sessions],
 	);
 	const openSession = useCallback(
-		(sessionId: string) => selection.goSession(STANDALONE_WORKSPACE_ID, sessionId),
+		(sessionId: string) => {
+			recordManualWorkerOpen(sessionId);
+			selection.goSession(STANDALONE_WORKSPACE_ID, sessionId);
+		},
 		[selection],
 	);
 	const handleSessionKilled = useCallback(

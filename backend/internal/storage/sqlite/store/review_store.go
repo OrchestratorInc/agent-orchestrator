@@ -42,6 +42,7 @@ func (s *Store) UpsertReview(ctx context.Context, r domain.Review) error {
 		ProviderConversationID: r.ProviderConversationID,
 		ControllerGeneration:   r.ControllerGeneration,
 		ControllerError:        r.ControllerError,
+		IsArchived:             r.IsArchived,
 		CreatedAt:              r.CreatedAt,
 		UpdatedAt:              r.UpdatedAt,
 	})
@@ -58,6 +59,21 @@ func (s *Store) SetReviewInterfaceMode(ctx context.Context, id string, mode doma
 		Column4:       string(mode),
 		UpdatedAt:     now,
 		ID:            id,
+	})
+	return n > 0, err
+}
+
+// RestoreReviewLaunchState puts the previous reviewer back after a replacement
+// launch fails, including the identifiers cleared while changing surfaces.
+func (s *Store) RestoreReviewLaunchState(ctx context.Context, review domain.Review, now time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.RestoreReviewLaunchState(ctx, gen.RestoreReviewLaunchStateParams{
+		PRURL: review.PRURL, InterfaceMode: string(review.InterfaceMode), ReviewerHandleID: review.ReviewerHandleID,
+		AgentSessionID: review.AgentSessionID, ReviewerActivityState: string(review.ReviewerActivityState),
+		ReviewerLaunchID: review.ReviewerLaunchID, ProviderConversationID: review.ProviderConversationID,
+		ControllerGeneration: review.ControllerGeneration, ControllerError: review.ControllerError, IsArchived: review.IsArchived,
+		UpdatedAt: now, ID: review.ID,
 	})
 	return n > 0, err
 }
@@ -110,6 +126,24 @@ func (s *Store) ListReviewsBySession(ctx context.Context, id domain.SessionID) (
 	out := make([]domain.Review, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, reviewFromListReviewsBySessionRow(row))
+	}
+	return out, nil
+}
+
+// ListLiveReviewerHandles returns every review row currently holding a live
+// TUI reviewer pane, across every project and session (including one whose
+// worker has since terminated) — the only lookup for a reviewer process that
+// has no session row of its own.
+func (s *Store) ListLiveReviewerHandles(ctx context.Context) ([]domain.ReviewerHandle, error) {
+	rows, err := s.qr.ListLiveReviewerHandles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list live reviewer handles: %w", err)
+	}
+	out := make([]domain.ReviewerHandle, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.ReviewerHandle{
+			ReviewID: row.ID, SessionID: row.SessionID, Harness: row.Harness, HandleID: row.ReviewerHandleID,
+		})
 	}
 	return out, nil
 }
@@ -391,6 +425,7 @@ func reviewFromGetReviewBySessionRow(r gen.GetReviewBySessionRow) domain.Review 
 		ProviderConversationID: r.ProviderConversationID,
 		ControllerGeneration:   r.ControllerGeneration,
 		ControllerError:        r.ControllerError,
+		IsArchived:             r.IsArchived,
 		CreatedAt:              r.CreatedAt,
 		UpdatedAt:              r.UpdatedAt,
 	}
@@ -411,6 +446,7 @@ func reviewFromGetReviewBySessionAndHarnessRow(r gen.GetReviewBySessionAndHarnes
 		ProviderConversationID: r.ProviderConversationID,
 		ControllerGeneration:   r.ControllerGeneration,
 		ControllerError:        r.ControllerError,
+		IsArchived:             r.IsArchived,
 		CreatedAt:              r.CreatedAt,
 		UpdatedAt:              r.UpdatedAt,
 	}
@@ -431,6 +467,7 @@ func reviewFromListReviewsBySessionRow(r gen.ListReviewsBySessionRow) domain.Rev
 		ProviderConversationID: r.ProviderConversationID,
 		ControllerGeneration:   r.ControllerGeneration,
 		ControllerError:        r.ControllerError,
+		IsArchived:             r.IsArchived,
 		CreatedAt:              r.CreatedAt,
 		UpdatedAt:              r.UpdatedAt,
 	}
@@ -451,13 +488,14 @@ func reviewFromReview(r gen.GetReviewByIDRow) domain.Review {
 		ProviderConversationID: r.ProviderConversationID,
 		ControllerGeneration:   r.ControllerGeneration,
 		ControllerError:        r.ControllerError,
+		IsArchived:             r.IsArchived,
 		CreatedAt:              r.CreatedAt,
 		UpdatedAt:              r.UpdatedAt,
 	}
 }
 
 func reviewFromListRecoverableChatReviewsRow(r gen.ListRecoverableChatReviewsRow) domain.Review {
-	return domain.Review{ID: r.ID, SessionID: r.SessionID, ProjectID: r.ProjectID, Harness: r.Harness, PRURL: r.PRURL, ReviewerHandleID: r.ReviewerHandleID, AgentSessionID: r.AgentSessionID, ReviewerActivityState: domain.ActivityState(r.ReviewerActivityState), ReviewerLaunchID: r.ReviewerLaunchID, InterfaceMode: domain.ReviewerInterfaceMode(r.InterfaceMode), ProviderConversationID: r.ProviderConversationID, ControllerGeneration: r.ControllerGeneration, ControllerError: r.ControllerError, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
+	return domain.Review{ID: r.ID, SessionID: r.SessionID, ProjectID: r.ProjectID, Harness: r.Harness, PRURL: r.PRURL, ReviewerHandleID: r.ReviewerHandleID, AgentSessionID: r.AgentSessionID, ReviewerActivityState: domain.ActivityState(r.ReviewerActivityState), ReviewerLaunchID: r.ReviewerLaunchID, InterfaceMode: domain.ReviewerInterfaceMode(r.InterfaceMode), ProviderConversationID: r.ProviderConversationID, ControllerGeneration: r.ControllerGeneration, ControllerError: r.ControllerError, IsArchived: r.IsArchived, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
 }
 
 func reviewRunFromRow(r gen.ReviewRun) domain.ReviewRun {
@@ -542,4 +580,11 @@ func (s *Store) ListCurrentHeadReviewRunsForSessions(ctx context.Context, ids []
 		}
 	}
 	return out, nil
+}
+
+// ArchiveReviewsBySession retires surfaces after their controllers are settled.
+func (s *Store) ArchiveReviewsBySession(ctx context.Context, workerID domain.SessionID, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.qw.ArchiveReviewsBySession(ctx, gen.ArchiveReviewsBySessionParams{SessionID: workerID, UpdatedAt: now})
 }

@@ -19,12 +19,14 @@ vi.mock("./NewTaskDialog", () => ({
 		open,
 		projectId,
 		hostId,
+		onProjectChange,
 		onCreated,
 		onOpenChange,
 	}: {
 		open: boolean;
 		projectId?: string;
 		hostId?: string;
+		onProjectChange: (projectId: string) => void;
 		onCreated: (id: string) => void;
 		onOpenChange: (open: boolean) => void;
 	}) => {
@@ -37,6 +39,9 @@ vi.mock("./NewTaskDialog", () => ({
 				</label>
 				<button type="button" onClick={() => onCreated("sess-9")}>
 					create
+				</button>
+				<button type="button" onClick={() => onProjectChange("proj-8")}>
+					select another project
 				</button>
 				<button type="button" onClick={() => onOpenChange(false)}>
 					close
@@ -115,6 +120,24 @@ describe("GlobalNewTaskDialog", () => {
 		expect(navigateMock).toHaveBeenCalledWith({
 			to: "/host/$hostId/session/$sessionId",
 			params: { hostId: "box-b", sessionId: "sess-9" },
+		});
+	});
+
+	it("navigates to the project selected in the new task dialog", async () => {
+		const user = userEvent.setup();
+		renderDialog();
+		act(() => {
+			useUiStore.getState().requestNewTask("proj-7");
+		});
+		await screen.findByTestId("new-task-dialog");
+
+		await user.click(screen.getByRole("button", { name: "select another project" }));
+		expect(screen.getByTestId("new-task-dialog")).toHaveAttribute("data-project", "proj-8");
+		await user.click(screen.getByRole("button", { name: "create" }));
+
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-8", sessionId: "sess-9" },
 		});
 	});
 

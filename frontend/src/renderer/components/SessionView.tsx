@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Globe2, Loader2, PanelRight, Plus } from "lucide-react";
 import { useBlocker } from "@tanstack/react-router";
 import { motion } from "motion/react";
@@ -695,16 +695,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			return data ?? ({ reviewerHandleId: "", reviews: [], runs: [] } satisfies ReviewsResponse);
 		},
 	});
+	const reviewerSwitchPending = useIsMutating({
+		mutationKey: [...sessionReviewsQueryKey(sessionId, hostId), "switch-reviewer"],
+	}) > 0;
 	const availableReviewerTerminal = reviewerTerminalFromReviews(reviewerQuery.data);
 	const reviewerTerminal = session && sessionIsActive(session) ? availableReviewerTerminal : undefined;
 	const availableReviewerChat = reviewerChatFromReviews(reviewerQuery.data);
 	const reviewerChat = session && sessionIsActive(session) ? availableReviewerChat : undefined;
-	useEffect(() => {
-		if (!reviewerChatId || !reviewerQuery.isFetched) return;
-		if (availableReviewerChat?.reviewId !== reviewerChatId) {
-			setReviewerChatId(null);
-		}
-	}, [availableReviewerChat?.reviewId, reviewerChatId, reviewerQuery.isFetched]);
 
 	// Shell terminals opened inside a session live beside its pane as extra tabs,
 	// scoped to the session on screen so each session has its own shell set.
@@ -1034,15 +1031,20 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				: current,
 		);
 	}, [shellTerminals]);
+	// Reviewer selection belongs to the tab, not its replaceable controller.
+	// Keep it through switch teardown, then follow the replacement surface.
 	useEffect(() => {
-		setTerminalTarget((current) =>
-			current.kind === "reviewer" &&
-				reviewerQuery.isFetched &&
-			(!availableReviewerTerminal || availableReviewerTerminal.handleId !== current.handleId)
-				? { kind: "worker" }
-				: current,
-		);
-	}, [availableReviewerTerminal, reviewerQuery.isFetched]);
+		if ((!reviewerChatId && terminalTarget.kind !== "reviewer") || !reviewerQuery.isFetched || reviewerSwitchPending) return;
+		if (availableReviewerChat) {
+			if (reviewerChatId !== availableReviewerChat.reviewId) selectReviewerChat(availableReviewerChat.reviewId);
+		} else if (availableReviewerTerminal) {
+			if (terminalTarget.kind !== "reviewer" || terminalTarget.handleId !== availableReviewerTerminal.handleId || terminalTarget.harness !== availableReviewerTerminal.harness) {
+				selectReviewerTerminal(availableReviewerTerminal);
+			}
+		} else {
+			selectSessionTerminal();
+		}
+	}, [availableReviewerChat, availableReviewerTerminal, reviewerChatId, reviewerQuery.isFetched, reviewerSwitchPending, selectReviewerChat, selectReviewerTerminal, selectSessionTerminal, terminalTarget]);
 	const isOrchestrator = session ? isOrchestratorSession(session) : false;
 	const hasInspector = Boolean(session);
 	const sizing = useMemo(() => inspectorSizing(inspectorView), [inspectorView]);
@@ -1686,7 +1688,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								/>
 								{reviewerChatId ? (
 									<div className="absolute inset-0">
-										<ReviewerChatSurface hideHeader hostId={hostId} reviewId={reviewerChatId} />
+										<ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} />
 									</div>
 								) : null}
 								</>
@@ -1705,7 +1707,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									reviewerTerminal={reviewerTerminal}
 									reviewerChat={reviewerChat}
 									reviewerChatSelected={Boolean(reviewerChatId)}
-									reviewerChatContent={reviewerChatId ? <ReviewerChatSurface hideHeader hostId={hostId} reviewId={reviewerChatId} /> : undefined}
+									reviewerChatContent={reviewerChatId ? <ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} /> : undefined}
 									session={session}
 									shellTerminals={shellTerminals}
 									terminalTarget={routedTerminalTarget}

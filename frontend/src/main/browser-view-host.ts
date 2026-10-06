@@ -140,6 +140,27 @@ export type BrowserTabsState = {
   };
 };
 
+export type BrowserFindState = {
+  viewId: string;
+  tabId: string;
+  query: string;
+  activeMatchOrdinal: number;
+  matches: number;
+  finalUpdate: boolean;
+};
+
+export type BrowserFindInput = {
+  viewId: string;
+  query: string;
+  forward: boolean;
+  newSession: boolean;
+};
+
+export type BrowserFindStopInput = {
+  viewId: string;
+  focusPage?: boolean;
+};
+
 export type BrowserAgentActivityState = {
   viewId: string;
   active: boolean;
@@ -214,6 +235,7 @@ export type BrowserShortcutAction =
   | "reopen-tab"
   | "close-tab"
   | "focus-location"
+  | "find"
   | "reload";
 
 export function browserShortcutAction(
@@ -233,6 +255,8 @@ export function browserShortcutAction(
         return "close-tab";
       case "l":
         return "focus-location";
+      case "f":
+        return "find";
       case "r":
         return "reload";
     }
@@ -272,6 +296,7 @@ type BrowserWebContents = Pick<
   | "debugger"
   | "executeJavaScript"
   | "focus"
+  | "findInPage"
   | "mainFrame"
   | "getTitle"
   | "getURL"
@@ -287,6 +312,7 @@ type BrowserWebContents = Pick<
   | "send"
   | "setWindowOpenHandler"
   | "stop"
+  | "stopFindInPage"
 > & {
   openDevTools?: (
     options?: Pick<OpenDevToolsOptions, "mode" | "activate">,
@@ -451,6 +477,7 @@ type BrowserEntry = {
   view: BrowserViewLike;
   ready: Promise<void>;
   state: BrowserNavState;
+  findState: BrowserFindState & { requestId?: number };
   annotationEnabled: boolean;
   annotationSessions: Map<
     string,
@@ -780,6 +807,29 @@ export function createBrowserViewHost(
     shellWebContents.send("browser:profileState", state);
     return state;
   };
+  const publicFindState = (entry: BrowserEntry): BrowserFindState => {
+    const { requestId: _requestId, ...state } = entry.findState;
+    return state;
+  };
+  const pushFindState = (entry: BrowserEntry): BrowserFindState => {
+    const state = publicFindState(entry);
+    shellWebContents.send("browser:findState", state);
+    return state;
+  };
+  const resetFindState = (
+    entry: BrowserEntry,
+    notify = true,
+  ): BrowserFindState => {
+    entry.findState = {
+      viewId: entry.state.viewId,
+      tabId: entry.tabId,
+      query: "",
+      activeMatchOrdinal: 0,
+      matches: 0,
+      finalUpdate: true,
+    };
+    return notify ? pushFindState(entry) : publicFindState(entry);
+  };
 
   const destroyDevTools = (session: BrowserSessionEntry): void => {
     const devtools = session.devtools;
@@ -869,6 +919,14 @@ export function createBrowserViewHost(
       view,
       ready: Promise.resolve(),
       state,
+      findState: {
+        viewId: session.viewId,
+        tabId,
+        query: "",
+        activeMatchOrdinal: 0,
+        matches: 0,
+        finalUpdate: true,
+      },
       annotationEnabled: false,
       annotationSessions: new Map(),
       documentGeneration: 0,
@@ -880,6 +938,20 @@ export function createBrowserViewHost(
     const isCurrentEntry = () =>
       entries.get(session.viewId) === session &&
       session.tabs.get(entry.tabId) === entry;
+    view.webContents.on("found-in-page", (_event, result) => {
+      if (
+        !isCurrentEntry() ||
+        entry.findState.requestId !== result.requestId
+      )
+        return;
+      entry.findState = {
+        ...entry.findState,
+        activeMatchOrdinal: result.activeMatchOrdinal,
+        matches: result.matches,
+        finalUpdate: result.finalUpdate,
+      };
+      if (session.activeTabId === entry.tabId) pushFindState(entry);
+    });
     // Native Chromium DevTools can be closed from its own window controls. Keep
     // the renderer's toggle state in sync with that user action. Programmatic
     // close/reopen cycles used for retargeting or placement changes are marked
@@ -953,6 +1025,7 @@ export function createBrowserViewHost(
           .record(profileId, url, title, incrementVisit)
           .catch(() => undefined);
       },
+      () => resetFindState(entry, session.activeTabId === entry.tabId),
     );
     wireFaviconEvents(view.webContents, entry, () => {
       if (isCurrentEntry()) pushTabsState(options, session);
@@ -1373,6 +1446,7 @@ export function createBrowserViewHost(
     if (session.devtools && isBlankBrowserEntry(next)) destroyDevTools(session);
     applySessionBounds(session, next);
     pushNavState(options, next);
+    pushFindState(next);
     if (notify) pushTabsState(options, session, { kind: "selected", tabId });
     if (session.devtools) pushDevToolsState(session);
     if (session.devtools && session.devtools.desiredTabId !== tabId) {
@@ -1543,6 +1617,16 @@ export function createBrowserViewHost(
   const reopenClosedTab = (session: BrowserSessionEntry): void => {
     shellWebContents.send("browser:reopenClosedTab", session.viewId);
   };
+  const focusFind = (session: BrowserSessionEntry): void => {
+    lastUsedViewId = session.viewId;
+    if (typeof shellWebContents.isFocused === "function") {
+      if (!shellWebContents.isFocused()) shellWebContents.focus();
+    } else {
+      shellWebContents.focus();
+    }
+    const entry = activeEntry(session);
+    shellWebContents.send("browser:findOpen", publicFindState(entry));
+  };
   function attachBrowserShortcuts(
     contents: Pick<WebContents, "on">,
     getSession: () => BrowserSessionEntry | undefined,
@@ -1561,6 +1645,10 @@ export function createBrowserViewHost(
       lastUsedViewId = session.viewId;
       if (action === "focus-location") {
         focusLocation(session);
+        return;
+      }
+      if (action === "find") {
+        focusFind(session);
         return;
       }
       if (action === "reload") {
@@ -2693,6 +2781,71 @@ export function createBrowserViewHost(
       ? invokeNav(viewId, (contents) => contents.stop(), true)
       : emptyNavState(viewId),
   );
+  handle("browser:find", (event, input: BrowserFindInput) => {
+    const session =
+      typeof input?.viewId === "string" ? entries.get(input.viewId) : undefined;
+    if (
+      !session ||
+      !isRendererOwned(event, input.viewId) ||
+      typeof input.query !== "string" ||
+      input.query.length > 10_000 ||
+      typeof input.forward !== "boolean" ||
+      typeof input.newSession !== "boolean"
+    ) {
+      throw browserError("INVALID_ARGUMENT", "Invalid find-in-page request");
+    }
+    const entry = activeEntry(session);
+    if (!input.query) {
+      entry.view.webContents.stopFindInPage("clearSelection");
+      return resetFindState(entry);
+    }
+    const requestId = entry.view.webContents.findInPage(input.query, {
+      forward: input.forward,
+      findNext: input.newSession,
+      matchCase: false,
+    });
+    if (input.newSession && input.query.length < 4) {
+      // Chromium delays new find sessions shorter than four characters by
+      // 400 ms. A follow-up request for the same query flushes that pending
+      // search immediately without advancing the match. Keep tracking the
+      // initial request id because that is the request Chromium emits.
+      entry.view.webContents.findInPage(input.query, {
+        forward: input.forward,
+        findNext: false,
+        matchCase: false,
+      });
+    }
+    entry.findState = {
+      viewId: session.viewId,
+      tabId: entry.tabId,
+      query: input.query,
+      activeMatchOrdinal: input.newSession
+        ? 0
+        : entry.findState.activeMatchOrdinal,
+      matches: input.newSession ? 0 : entry.findState.matches,
+      finalUpdate: false,
+      requestId,
+    };
+    return pushFindState(entry);
+  });
+  handle("browser:find:stop", (event, input: BrowserFindStopInput) => {
+    const session =
+      typeof input?.viewId === "string" ? entries.get(input.viewId) : undefined;
+    if (!session || !isRendererOwned(event, input.viewId)) {
+      throw browserError(
+        "INVALID_ARGUMENT",
+        "Invalid find-in-page stop request",
+      );
+    }
+    const entry = activeEntry(session);
+    entry.view.webContents.stopFindInPage("clearSelection");
+    const state = resetFindState(entry);
+    if (input.focusPage) {
+      if (isBlankBrowserEntry(entry)) focusLocation(session);
+      else entry.view.webContents.focus();
+    }
+    return state;
+  });
   handle("browser:captureScreenshot", async (event, viewId: string) => {
     const session =
       typeof viewId === "string" ? entries.get(viewId) : undefined;
@@ -2762,6 +2915,19 @@ export function createBrowserViewHost(
     return session && isRendererOwned(event, viewId)
       ? listTabs(session)
       : emptyTabsState(viewId);
+  });
+  handle("browser:find:get", (event, viewId: string) => {
+    const session = entries.get(viewId);
+    return session && isRendererOwned(event, viewId)
+      ? publicFindState(activeEntry(session))
+      : {
+          viewId,
+          tabId: "",
+          query: "",
+          activeMatchOrdinal: 0,
+          matches: 0,
+          finalUpdate: true,
+        };
   });
   handle("browser:selectTab", (event, input: BrowserTabInput) => {
     const session = entries.get(input.viewId);
@@ -4258,12 +4424,14 @@ function wireNavEvents(
   syncActiveBounds: () => void,
   syncTabs: () => void,
   recordHistory: (url: string, title: string, incrementVisit: boolean) => void,
+  resetFind: () => void,
 ): void {
   const update = () => {
     syncTabs();
     if (isActive()) pushNavState(options, entry);
   };
   contents.on("did-navigate", (_event, url) => {
+    resetFind();
     entry.documentGeneration += 1;
     entry.navigationGeneration += 1;
     clearStaleFavicon(entry, url);

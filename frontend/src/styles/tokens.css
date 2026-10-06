@@ -19,42 +19,41 @@
 	/* ── Color scheme hint for native form controls / scrollbars ── */
 	color-scheme: dark;
 
-	/* shadcn base-luma / olive preset (b6tOz2I0x). The renderer is dark-first,
-	   so the preset's .dark values are the default application values. */
-	--background: oklch(0.185 0.006 285.885);
-	--foreground: oklch(0.985 0 0);
-	--card: oklch(0.24 0.008 285.885);
-	--card-foreground: oklch(0.985 0 0);
-	--popover: oklch(0.28 0.008 285.885);
-	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.92 0.004 286.32);
-	--primary-foreground: oklch(0.21 0.006 285.885);
-	--secondary: oklch(0.274 0.006 286.033);
-	--secondary-foreground: oklch(0.985 0 0);
-	--muted: oklch(0.274 0.006 286.033);
-	--muted-foreground: oklch(0.705 0.015 286.067);
-	--accent: oklch(0.274 0.006 286.033);
-	--accent-foreground: oklch(0.985 0 0);
+	/* Near-neutral graphite palette: the default app surfaces use only a trace of blue-gray. */
+	--background: oklch(0.210 0.002 250);
+	--foreground: oklch(0.970 0.002 250);
+	--card: oklch(0.250 0.002 250);
+	--card-foreground: oklch(0.970 0.002 250);
+	--popover: oklch(0.300 0.002 250);
+	--popover-foreground: oklch(0.970 0.002 250);
+	--primary: oklch(0.900 0.002 250);
+	--primary-foreground: oklch(0.210 0.002 250);
+	--secondary: oklch(0.295 0.002 250);
+	--secondary-foreground: oklch(0.970 0.002 250);
+	--muted: oklch(0.295 0.002 250);
+	--muted-foreground: oklch(0.720 0.002 250);
+	--accent: oklch(0.295 0.002 250);
+	--accent-foreground: oklch(0.970 0.002 250);
 	--destructive: oklch(0.704 0.191 22.216);
 	/* Hairlines separate, they do not decorate: below the shadcn dark default of
 	 * 10% so column rules and card edges recede behind content. */
 	--border: oklch(1 0 0 / 7%);
 	--input: oklch(1 0 0 / 4%);
-	--ring: oklch(0.552 0.016 285.938);
-	--chart-1: oklch(0.871 0.006 286.286);
-	--chart-2: oklch(0.552 0.016 285.938);
-	--chart-3: oklch(0.442 0.017 285.786);
-	--chart-4: oklch(0.37 0.013 285.805);
-	--chart-5: oklch(0.274 0.006 286.033);
+	--ring: oklch(0.620 0.002 250);
+	--chart-1: oklch(0.84 0 0);
+	--chart-2: oklch(0.6 0 0);
+	--chart-3: oklch(0.48 0 0);
+	--chart-4: oklch(0.4 0 0);
+	--chart-5: oklch(0.29 0 0);
 	--radius: 0.625rem;
-	--sidebar: oklch(0.155 0.005 285.823);
-	--sidebar-foreground: oklch(0.985 0 0);
-	--sidebar-primary: oklch(0.488 0.243 264.376);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.274 0.006 286.033);
-	--sidebar-accent-foreground: oklch(0.985 0 0);
+	--sidebar: oklch(0.180 0.002 250);
+	--sidebar-foreground: oklch(0.970 0.002 250);
+	--sidebar-primary: oklch(0.900 0.002 250);
+	--sidebar-primary-foreground: oklch(0.210 0.002 250);
+	--sidebar-accent: oklch(0.295 0.002 250);
+	--sidebar-accent-foreground: oklch(0.970 0.002 250);
 	--sidebar-border: var(--border);
-	--sidebar-ring: oklch(0.552 0.016 285.938);
+	--sidebar-ring: oklch(0.62 0 0);
 
 	/* ═══════════════════════════════════════════════════════════════
 	   COLOR — semantic (swap these per theme; do not invent new roles
@@ -67,12 +66,12 @@
 	--color-bg-tertiary: var(--muted);
 	--color-bg-elevated: var(--popover);
 	--color-bg-sidebar: var(--sidebar);
-	/* Token keeps the historical #101317e7 value; painted surfaces use the
-	   opaque plate so the p-2 gutter cannot composite into #111316. */
-	--color-bg-terminal-opaque: #101317;
-	--color-bg-terminal: #101317e7;
+	/* Keep the terminal plate opaque so the p-2 gutter cannot composite into
+	   retained frames during terminal swaps. */
+	--color-bg-terminal-opaque: #252525;
+	--color-bg-terminal: #252525e7;
 	/* Opaque backing for terminal swaps/covers; prevents retained frames leaking through. */
-	--color-bg-terminal-opaque: #101317;
+	--color-bg-terminal-opaque: #252525;
 
 	/* Text */
 	--color-text-primary: var(--foreground);
@@ -84,8 +83,8 @@
 	--color-text-markdown-code: var(--color-brand-logo);
 	--color-text-markdown-link: var(--color-brand-logo); /* underline distinguishes links */
 	--color-text-markdown-link-hover: var(--color-brand-logo-bright);
-	--color-text-terminal: #d7d7d2;
-	--color-text-terminal-dim: #7c7c7c;
+	--color-text-terminal: #d6d6d6;
+	--color-text-terminal-dim: #8e8e8e;
 
 	/* Borders */
 	--color-border: var(--border);
@@ -644,47 +643,47 @@
 :root[data-theme="light"] {
 	color-scheme: light;
 
-	--background: oklch(0.985 0 0);
-	--foreground: oklch(0.141 0.005 285.823);
-	--card: oklch(0.985 0 0);
-	--card-foreground: oklch(0.141 0.005 285.823);
-	--popover: oklch(1 0 0);
-	--popover-foreground: oklch(0.141 0.005 285.823);
-	--primary: oklch(0.21 0.006 285.885);
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.967 0.001 286.375);
-	--secondary-foreground: oklch(0.21 0.006 285.885);
-	--muted: oklch(0.967 0.001 286.375);
-	--muted-foreground: oklch(0.552 0.016 285.938);
-	--accent: oklch(0.967 0.001 286.375);
-	--accent-foreground: oklch(0.21 0.006 285.885);
+	--background: oklch(0.97 0 0);
+	--foreground: oklch(0.18 0 0);
+	--card: oklch(0.975 0 0);
+	--card-foreground: oklch(0.18 0 0);
+	--popover: oklch(0.99 0 0);
+	--popover-foreground: oklch(0.18 0 0);
+	--primary: oklch(0.24 0 0);
+	--primary-foreground: oklch(0.97 0 0);
+	--secondary: oklch(0.935 0 0);
+	--secondary-foreground: oklch(0.18 0 0);
+	--muted: oklch(0.935 0 0);
+	--muted-foreground: oklch(0.5 0 0);
+	--accent: oklch(0.935 0 0);
+	--accent-foreground: oklch(0.18 0 0);
 	--destructive: oklch(0.577 0.245 27.325);
 	/* Same intent as dark: one step lighter than the shadcn default hairline. */
-	--border: oklch(0.945 0.003 286.32);
-	--input: oklch(0.92 0.004 286.32);
-	--ring: oklch(0.705 0.015 286.067);
-	--chart-1: oklch(0.871 0.006 286.286);
-	--chart-2: oklch(0.552 0.016 285.938);
-	--chart-3: oklch(0.442 0.017 285.786);
-	--chart-4: oklch(0.37 0.013 285.805);
-	--chart-5: oklch(0.274 0.006 286.033);
-	--sidebar: oklch(1 0 0);
-	--sidebar-foreground: oklch(0.141 0.005 285.823);
-	--sidebar-primary: oklch(0.21 0.006 285.885);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.967 0.001 286.375);
-	--sidebar-accent-foreground: oklch(0.21 0.006 285.885);
+	--border: oklch(0.91 0 0);
+	--input: oklch(0.86 0 0);
+	--ring: oklch(0.64 0 0);
+	--chart-1: oklch(0.72 0 0);
+	--chart-2: oklch(0.52 0 0);
+	--chart-3: oklch(0.4 0 0);
+	--chart-4: oklch(0.32 0 0);
+	--chart-5: oklch(0.24 0 0);
+	--sidebar: oklch(0.985 0 0);
+	--sidebar-foreground: oklch(0.18 0 0);
+	--sidebar-primary: oklch(0.24 0 0);
+	--sidebar-primary-foreground: oklch(0.97 0 0);
+	--sidebar-accent: oklch(0.935 0 0);
+	--sidebar-accent-foreground: oklch(0.18 0 0);
 	--sidebar-border: var(--border);
-	--sidebar-ring: oklch(0.705 0.015 286.067);
+	--sidebar-ring: oklch(0.64 0 0);
 
 	--color-bg-primary: var(--background);
 	--color-bg-secondary: var(--card);
 	--color-bg-tertiary: var(--muted);
 	--color-bg-elevated: var(--popover);
 	--color-bg-sidebar: var(--sidebar);
-	--color-bg-terminal-opaque: #f5f5f4;
-	--color-bg-terminal: #f5f5f4;
-	--color-bg-terminal-opaque: #f5f5f4;
+	--color-bg-terminal-opaque: #f5f5f5;
+	--color-bg-terminal: #f5f5f5;
+	--color-bg-terminal-opaque: #f5f5f5;
 
 	--color-text-primary: var(--foreground);
 	--color-text-muted: var(--muted-foreground);
@@ -695,8 +694,8 @@
 	--color-text-markdown-code: var(--color-brand-logo);
 	--color-text-markdown-link: var(--color-brand-logo);
 	--color-text-markdown-link-hover: var(--color-brand-logo-bright);
-	--color-text-terminal: #24292f;
-	--color-text-terminal-dim: #6b7280;
+	--color-text-terminal: #3d3d3d;
+	--color-text-terminal-dim: #757575;
 
 	--color-border: var(--border);
 	--color-border-strong: var(--input);

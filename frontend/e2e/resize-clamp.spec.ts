@@ -23,7 +23,7 @@ test("sidebar drag stops at its minimum width instead of collapsing", async ({ p
 	const box = await handle.boundingBox();
 	if (!box) throw new Error("sidebar resize handle not visible");
 
-	// Drag far past the 200px floor, all the way to the window edge.
+	// Drag far past the floor, all the way to the window edge.
 	await dragPointer(
 		page,
 		{ x: box.x + box.width / 2, y: box.y + box.height / 2 },
@@ -34,12 +34,23 @@ test("sidebar drag stops at its minimum width instead of collapsing", async ({ p
 	const width = await page.evaluate(() =>
 		document.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')?.style.getPropertyValue("--ao-sidebar-w"),
 	);
-	expect(width).toBe("200px");
+	// The floor is the narrowest width that still shows the whole brand label
+	// (see sidebarMinWidth in Sidebar.tsx), or 200px when no label is rendered.
+	const expectedFloor = await page.evaluate(() => {
+		const brand = Array.from(document.querySelectorAll<HTMLElement>("[data-sidebar-brand]")).find(
+			(el) => el.getBoundingClientRect().width > 0,
+		);
+		return brand ? Math.ceil(brand.getBoundingClientRect().left + brand.scrollWidth + 12) : 200;
+	});
+	expect(width).toBe(`${expectedFloor}px`);
 
-	// The explicit toggle still collapses (and the drag-clamped width persisted).
+	// The explicit toggle still collapses. The default width now sits at the
+	// label-fit floor, so a drag to the floor may change nothing and persist
+	// nothing; if it did persist, it must be the floor.
 	await page.keyboard.press("ControlOrMeta+b");
 	await expect(sidebar).toHaveAttribute("data-state", "collapsed");
-	expect(await page.evaluate(() => window.localStorage.getItem("ao-sidebar-w"))).toBe("200");
+	const stored = await page.evaluate(() => window.localStorage.getItem("ao-sidebar-w"));
+	expect([null, String(expectedFloor)]).toContain(stored);
 });
 
 test("inspector drag stops at minSize instead of collapsing; buttons still toggle", async ({ page }) => {

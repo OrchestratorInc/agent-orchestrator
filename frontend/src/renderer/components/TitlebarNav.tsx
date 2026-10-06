@@ -1,9 +1,10 @@
 import { useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, PanelLeft } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
+import { AOMascot } from "./AOMascot";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const isMac = isMacPlatform();
@@ -39,6 +40,89 @@ export function useCanGoForward(): boolean {
   return canGoForward;
 }
 
+// Reveals the history arrows while the pointer is over the sidebar body or the
+// button cluster. The rest of the titlebar band stays a window-drag region
+// (double-click to maximize), so it cannot report hover. A short leave delay
+// absorbs the one-frame gap when the pointer crosses between the two.
+const REVEAL_LEAVE_DELAY_MS = 60;
+
+function useSidebarReveal(isSidebarOpen: boolean) {
+  const [revealed, setRevealed] = useState(false);
+  const inside = useRef({ zone: false, sidebar: false });
+  const timer = useRef<number | undefined>(undefined);
+
+  const update = useCallback((source: "zone" | "sidebar", value: boolean) => {
+    inside.current[source] = value;
+    window.clearTimeout(timer.current);
+    if (inside.current.zone || inside.current.sidebar) {
+      setRevealed(true);
+    } else {
+      timer.current = window.setTimeout(() => setRevealed(false), REVEAL_LEAVE_DELAY_MS);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isSidebarOpen) {
+      inside.current = { zone: false, sidebar: false };
+      window.clearTimeout(timer.current);
+      setRevealed(false);
+      return;
+    }
+    let el: HTMLElement | null = null;
+    const enter = () => update("sidebar", true);
+    const leave = () => update("sidebar", false);
+    const frame = requestAnimationFrame(() => {
+      el = document.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
+      if (!el) return;
+      el.addEventListener("pointerenter", enter);
+      el.addEventListener("pointerleave", leave);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer.current);
+      el?.removeEventListener("pointerenter", enter);
+      el?.removeEventListener("pointerleave", leave);
+    };
+  }, [isSidebarOpen, update]);
+
+  return {
+    revealed,
+    onZoneEnter: () => update("zone", true),
+    onZoneLeave: () => update("zone", false),
+  };
+}
+
+// The brand replaces the arrows only once the sidebar has fully slid open, and
+// the arrows come back the moment it starts closing. The sidebar animates with
+// a spring (no transitionend), so watch its container reach x = 0.
+const SETTLE_TIMEOUT_MS = 1500;
+
+function useSidebarSettledOpen(isSidebarOpen: boolean): boolean {
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    if (!isSidebarOpen) {
+      setSettled(false);
+      return;
+    }
+    const started = performance.now();
+    let frame = 0;
+    const check = () => {
+      const el = document.querySelector<HTMLElement>(
+        '[data-slot="sidebar-container"]',
+      );
+      const open = el ? el.getBoundingClientRect().left >= -0.5 : false;
+      if (open || performance.now() - started > SETTLE_TIMEOUT_MS) {
+        setSettled(true);
+        return;
+      }
+      frame = requestAnimationFrame(check);
+    };
+    frame = requestAnimationFrame(check);
+    return () => cancelAnimationFrame(frame);
+  }, [isSidebarOpen]);
+  return isSidebarOpen && settled;
+}
+
 export function TitlebarNav({
   historyLocked = false,
   isFullScreen = false,
@@ -52,6 +136,16 @@ export function TitlebarNav({
   const router = useRouter();
   const canGoBack = useCanGoBack();
   const canGoForward = useCanGoForward();
+  const { revealed, onZoneEnter, onZoneLeave } =
+    useSidebarReveal(isSidebarOpen);
+  const showBrand = useSidebarSettledOpen(isSidebarOpen);
+  const [keyboardFocus, setKeyboardFocus] = useState(false);
+  // The sidebar's minimum width is measured from the brand label, which only
+  // exists once this mounts it. Nudge the sidebar's resize re-clamp so a stored
+  // or default width narrower than the label grows to fit it.
+  useEffect(() => {
+    if (showBrand) window.dispatchEvent(new Event("resize"));
+  }, [showBrand]);
 
   if (!isMac && !isLinux) return null;
   // Native fullscreen changes only the horizontal traffic-light reserve.
@@ -63,14 +157,26 @@ export function TitlebarNav({
     : isFullScreen
       ? "left-titlebar-cluster-left-fullscreen"
       : "left-titlebar-cluster-left";
-  const topClass = isMac ? "top-0" : "top-0.75";
+  const topClass = isMac ? "top-px" : "top-0.75";
   const heightClass = "h-traffic-light-clearance";
+
+  // With the sidebar open the brand and the history arrows share one slot: the
+  // brand shows at rest, the arrows while the pointer is over the sidebar or the
+  // cluster (or on keyboard focus). Collapsed, there is no brand, so the arrows
+  // stay put. The arrows are only mounted while visible, so hidden arrows never
+  // leave an invisible no-drag hole in the window-drag region.
+  const arrowsVisible = !showBrand || revealed || keyboardFocus;
 
   return (
     <div
       className={`fixed ${topClass} ${leftClass} z-titlebar flex ${heightClass} items-center gap-1`}
       data-slot="titlebar-nav"
-      style={noDragStyle}
+      onBlur={() => setKeyboardFocus(false)}
+      onFocus={(event) =>
+        setKeyboardFocus(event.target.matches(":focus-visible"))
+      }
+      onPointerEnter={onZoneEnter}
+      onPointerLeave={onZoneLeave}
     >
       <TitlebarButton
         label={
@@ -85,22 +191,42 @@ export function TitlebarNav({
       >
         <PanelLeft className="size-icon-lg" aria-hidden="true" />
       </TitlebarButton>
-      <TitlebarButton
-        disabled={historyLocked || !canGoBack}
-        label={t("titlebar.goBack")}
-        onClick={() => router.history.back()}
-        title={t("titlebar.goBack")}
-      >
-        <ArrowLeft className="size-icon-lg" aria-hidden="true" />
-      </TitlebarButton>
-      <TitlebarButton
-        disabled={historyLocked || !canGoForward}
-        label={t("titlebar.goForward")}
-        onClick={() => router.history.forward()}
-        title={t("titlebar.goForward")}
-      >
-        <ArrowRight className="size-icon-lg" aria-hidden="true" />
-      </TitlebarButton>
+      <div className="grid items-center">
+        {showBrand ? (
+          // Not a button on purpose: it stays part of the window-drag region.
+          // `invisible` (not unmounted) keeps its width, which both holds the
+          // slot steady and feeds the sidebar's minimum-width measurement.
+          <span
+            className={`col-start-1 row-start-1 ml-1.5 inline-flex select-none items-center gap-1.5 whitespace-nowrap px-0.5 text-base font-semibold leading-tight tracking-tight-lg text-foreground ${
+              arrowsVisible ? "invisible" : ""
+            }`}
+            data-sidebar-brand=""
+          >
+            <AOMascot className="h-5.5 w-5.5 shrink-0" />
+            Orchestrator.inc
+          </span>
+        ) : null}
+        {arrowsVisible ? (
+          <div className="col-start-1 row-start-1 flex items-center gap-1">
+            <TitlebarButton
+              disabled={historyLocked || !canGoBack}
+              label={t("titlebar.goBack")}
+              onClick={() => router.history.back()}
+              title={t("titlebar.goBack")}
+            >
+              <ArrowLeft className="size-icon-lg" aria-hidden="true" />
+            </TitlebarButton>
+            <TitlebarButton
+              disabled={historyLocked || !canGoForward}
+              label={t("titlebar.goForward")}
+              onClick={() => router.history.forward()}
+              title={t("titlebar.goForward")}
+            >
+              <ArrowRight className="size-icon-lg" aria-hidden="true" />
+            </TitlebarButton>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

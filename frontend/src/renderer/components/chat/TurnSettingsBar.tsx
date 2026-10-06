@@ -19,6 +19,7 @@
 
 import { Fragment, useMemo, type FocusEvent, type ReactNode } from "react";
 import { Shuffle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
 	OptionMenu,
 	OptionMenuContent,
@@ -29,7 +30,9 @@ import {
 	OptionMenuSubTrigger,
 	OptionMenuTrigger,
 } from "../ui/option-menu";
+import { fallbackEffort, useApplyEffortDefault } from "../../lib/effort";
 import { cn } from "../../lib/utils";
+import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } from "../settings/EffortPicker";
 import { agentModelDisplayLabel, isDefaultPlaceholderLabel } from "../../lib/agent-model-choices";
 import { Switch } from "../ui/switch";
 import { ModelMenuChoices } from "./ModelMenuChoices";
@@ -95,6 +98,7 @@ export function TurnSettingsBar({
 	configPending,
 	error,
 	disabled,
+	autoSelectEffortOnOpen = false,
 	children,
 }: {
 	models: ChatModel[];
@@ -124,11 +128,19 @@ export function TurnSettingsBar({
 	) => Promise<unknown> | void;
 	/** Prevent overlapping writes because provider responses replace the catalog. */
 	configPending?: boolean;
+	/**
+	 * Pick an effort as soon as this opens when the model reports levels but no
+	 * default. Only for a conversation with no turns yet, so reopening an existing
+	 * one never changes the effort it was running with. Choosing another model
+	 * always selects one regardless.
+	 */
+	autoSelectEffortOnOpen?: boolean;
 	error?: string;
 	disabled?: boolean;
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
 	children?: ReactNode;
 }) {
+	const { t } = useTranslation();
 	const displayModels = useMemo(
 		() => models.map((model) => ({
 			...model,
@@ -162,13 +174,15 @@ export function TurnSettingsBar({
 	const availableEfforts = (selected ?? fallback)?.efforts ?? [];
 	const efforts = availableEfforts.filter((effort) => effort.toLowerCase() !== "default");
 	const selectedEffort =
-		settings.reasoningEffort ?? (selected ?? fallback)?.defaultEffort ?? undefined;
+		settings.reasoningEffort && settings.reasoningEffort !== "default"
+			? settings.reasoningEffort
+			: (selected ?? fallback)?.defaultEffort;
 	const effortLabel = selectedEffort === "default" ? undefined : selectedEffort;
 	const approvalCopy = harness === "codex" ? CODEX_APPROVAL_COPY : APPROVAL_COPY;
 	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : APPROVAL_ORDER;
 	const approvalLabel = approvalCopy[settings.approvalMode ?? "default"].label;
 	const modelGroupLabel = effortLabel
-		? `${modelLabel} ${capitalize(effortLabel)}`
+		? `${modelLabel} ${formatEffortLabel(effortLabel, t)}`
 		: modelLabel;
 	const grouped = partitionConfigOptions(displayConfigOptions);
 	const optionDisabled = Boolean(disabled || configPending || rememberPermissionsPending);
@@ -176,6 +190,26 @@ export function TurnSettingsBar({
 		if (!onChangeConfigOption) return;
 		void Promise.resolve(onChangeConfigOption(optionId, value)).catch(() => {});
 	};
+	const nativeModelMenu = Boolean(onChange && displayModels.length > 0 && grouped.model.length === 0);
+	// A model with effort levels but no provider default would otherwise show no
+	// selected effort. AO picks a level and sets it, so what the picker shows is
+	// what the next turn uses.
+	const acpEffortOption = grouped.effort.at(0);
+	useApplyEffortDefault(
+		`${harness}:${grouped.model.map((option) => option.currentValue).join(":")}`,
+		acpEffortOption ? acpFallbackEffort(acpEffortOption) : undefined,
+		(value) => {
+			if (acpEffortOption) applyOption(acpEffortOption.id, { value });
+		},
+		{ disabled: optionDisabled || !onChangeConfigOption, applyOnMount: autoSelectEffortOnOpen },
+	);
+	const nativeEffortUnset = !settings.reasoningEffort || settings.reasoningEffort === "default";
+	useApplyEffortDefault(
+		`${harness}:${settings.model ?? fallback?.id}`,
+		nativeModelMenu && nativeEffortUnset ? fallbackEffort(efforts, (selected ?? fallback)?.defaultEffort) : undefined,
+		(value) => onChange?.({ ...settings, reasoningEffort: value }),
+		{ disabled: optionDisabled || !onChange, applyOnMount: autoSelectEffortOnOpen },
+	);
 	const modeOption = grouped.mode;
 	const inlineExecutionMode =
 		grouped.executionMode && isPlanBinary(grouped.executionMode) ? grouped.executionMode : undefined;
@@ -188,7 +222,6 @@ export function TurnSettingsBar({
 	const planReturn = modeOption?.choices.find(
 		(choice) => choice.permissionMode === (settings.approvalMode ?? "default"),
 	)?.value;
-	const nativeModelMenu = Boolean(onChange && displayModels.length > 0 && grouped.model.length === 0);
 	const clubbedLeft =
 		grouped.model.length > 0 ||
 		grouped.effort.length > 0 ||
@@ -223,8 +256,9 @@ export function TurnSettingsBar({
 							disabled={optionDisabled}
 							modelLabel={modelLabel}
 							groupLabel={modelGroupLabel}
-							effortLabel={effortLabel}
 							efforts={efforts}
+							defaultEffort={(selected ?? fallback)?.defaultEffort}
+							availability={(selected ?? fallback)?.efforts === undefined ? "unknown" : efforts.length ? "supported" : "unsupported"}
 							reroute={reroute}
 							rerouted={rerouted}
 							chosenLabel={chosenLabel}
@@ -325,8 +359,9 @@ function ModelEffortPicker({
 	disabled,
 	modelLabel,
 	groupLabel,
-	effortLabel,
 	efforts,
+	defaultEffort,
+	availability,
 	reroute,
 	rerouted,
 	chosenLabel,
@@ -342,8 +377,9 @@ function ModelEffortPicker({
 	disabled?: boolean;
 	modelLabel: string;
 	groupLabel: string;
-	effortLabel?: string;
 	efforts: string[];
+	defaultEffort?: string;
+	availability: "supported" | "unsupported" | "unknown";
 	reroute?: ModelReroute;
 	rerouted?: string;
 	chosenLabel: string;
@@ -353,7 +389,10 @@ function ModelEffortPicker({
 	extraOptions?: ChatConfigOption[];
 	onChangeConfigOption?: (optionId: string, value: ChatConfigOptionValue) => void;
 }) {
+	const { t } = useTranslation();
 	const catalog = useMemo(() => models.map((model) => ({ ...model, label: model.displayName })), [models]);
+	const effortChoices = useMemo(() => efforts.map((value) => ({ value })), [efforts]);
+	const savedEffort = settings.reasoningEffort === "default" ? "" : settings.reasoningEffort ?? "";
 
 	return (
 		<OptionMenu>
@@ -403,29 +442,20 @@ function ModelEffortPicker({
 					</OptionMenuSubContent>
 				</OptionMenuSub>
 
-				{efforts.length > 0 ? (
+				{efforts.length > 0 || savedEffort ? (
 					<OptionMenuSub>
-						<OptionMenuSubTrigger label="Effort" value={effortLabel ? capitalize(effortLabel) : "Effort"} />
+						<OptionMenuSubTrigger
+							label={t("settings.models.effort")}
+							value={effortDisplayLabel({ value: savedEffort, choices: effortChoices, followLabel: t("settings.models.effort"), t, defaultEffort })}
+						/>
 						<OptionMenuSubContent className={CHAT_MENU_CLASS}>
-							{efforts.map((effort) => (
-								<OptionMenuItem
-									key={effort}
-									active={effort === settings.reasoningEffort}
-									radio
-									onSelect={() => onChange({ ...settings, reasoningEffort: effort })}
-									className={cn("text-xs")}
-								>
-									<span
-										className={cn(
-											effort === settings.reasoningEffort
-												? "text-foreground"
-												: "text-muted-foreground",
-										)}
-									>
-										{capitalize(effort)}
-									</span>
-								</OptionMenuItem>
-							))}
+							<EffortMenuItems
+								value={savedEffort}
+								choices={effortChoices}
+								availability={availability}
+								defaultEffort={defaultEffort}
+								onChange={(value) => onChange({ ...settings, reasoningEffort: value || undefined })}
+							/>
 						</OptionMenuSubContent>
 					</OptionMenuSub>
 				) : null}
@@ -462,14 +492,26 @@ function ClubbedConfigPicker({
 	disabled?: boolean;
 	onChange: (optionId: string, value: ChatConfigOptionValue) => void;
 }) {
-	const primaryModel = modelOptions[0];
-	const primaryEffort = effortOptions[0];
+	const { t } = useTranslation();
+	const primaryModel = modelOptions.at(0);
+	const primaryEffort = effortOptions.at(0);
 	const modelLabel = primaryModel ? optionCurrentLabel(primaryModel) : undefined;
-	const effortLabel = primaryEffort ? optionCurrentLabel(primaryEffort) : undefined;
+	const effortLabel = primaryEffort ? effortDisplayLabel({ ...acpEffortProps(primaryEffort), followLabel: "", t }) : undefined;
 	const groupLabel = [modelLabel, effortLabel].filter(Boolean).join(" ") || "More";
 	const leftCount =
 		modelOptions.length + effortOptions.length + Number(Boolean(executionMode)) + toggles.length + extraOptions.length;
+	if (leftCount === 0) return null;
 	if (leftCount === 1) {
+		if (primaryEffort) {
+			return (
+				<EffortPicker
+					{...acpEffortMenuProps(primaryEffort)}
+					disabled={disabled}
+					triggerClassName={TRIGGER_CLASS}
+					onChange={(value) => onChange(primaryEffort.id, { value })}
+				/>
+			);
+		}
 		if (executionMode)
 			return (
 				<ExecutionModePicker
@@ -479,7 +521,7 @@ function ClubbedConfigPicker({
 					onChange={onChange}
 				/>
 			);
-		const option = primaryModel ?? primaryEffort ?? executionMode ?? toggles[0] ?? extraOptions[0];
+		const option = primaryModel ?? toggles[0] ?? extraOptions[0];
 		if (!option) return null;
 		return (
 			<ConfigOptionPicker
@@ -506,7 +548,7 @@ function ClubbedConfigPicker({
 					<OptionSubmenu key={option.id} option={option} onChange={onChange} scrollable />
 				))}
 				{effortOptions.map((option) => (
-					<OptionSubmenu key={option.id} option={option} onChange={onChange} />
+					<EffortOptionSubmenu key={option.id} option={option} onChange={onChange} />
 				))}
 				{executionMode ? <PlanModeToggle option={executionMode} planReturn={planReturn} onChange={onChange} /> : null}
 				{toggles.map((option) => (
@@ -517,6 +559,57 @@ function ClubbedConfigPicker({
 				) : null}
 			</OptionMenuContent>
 		</OptionMenu>
+	);
+}
+
+// ACP exposes the provider-owned reset as a "default" choice whose description
+// names the concrete level it resolves to.
+function acpEffortMenuProps(option: ChatConfigOption) {
+	const defaultChoice = option.choices.find((choice) => choice.value === "default");
+	return {
+		value: option.currentValue ?? "",
+		choices: option.choices.map((choice) => ({ value: choice.value, label: choice.name })),
+		defaultValue: defaultChoice?.value ?? null,
+		defaultEffort: defaultChoice?.description,
+	};
+}
+
+function acpEffortProps(option: ChatConfigOption) {
+	const { value, choices, defaultEffort } = acpEffortMenuProps(option);
+	return { value: value === "default" ? "" : value, choices, defaultEffort };
+}
+
+// ACP exposes the provider-owned reset as a "default" choice. When it names no
+// concrete level, nothing is selected, so AO supplies one.
+function acpFallbackEffort(option: ChatConfigOption): string | undefined {
+	if (option.currentValue && option.currentValue !== "default") return undefined;
+	const concrete = option.choices.filter((choice) => choice.value && choice.value !== "default");
+	const described = option.choices.find((choice) => choice.value === "default")?.description?.trim().toLowerCase();
+	const reported = concrete.find(
+		(choice) => described && (choice.value.toLowerCase() === described || choice.name.toLowerCase() === described),
+	)?.value;
+	return fallbackEffort(
+		concrete.map((choice) => choice.value),
+		reported,
+	);
+}
+
+function EffortOptionSubmenu({
+	option,
+	onChange,
+}: {
+	option: ChatConfigOption;
+	onChange: (id: string, value: ChatConfigOptionValue) => void;
+}) {
+	const { t } = useTranslation();
+	const followLabel = t("settings.models.effort");
+	return (
+		<OptionMenuSub>
+			<OptionMenuSubTrigger label={followLabel} value={effortDisplayLabel({ ...acpEffortProps(option), followLabel, t })} />
+			<OptionMenuSubContent className={CHAT_MENU_CLASS}>
+				<EffortMenuItems {...acpEffortMenuProps(option)} onChange={(value) => onChange(option.id, { value })} />
+			</OptionMenuSubContent>
+		</OptionMenuSub>
 	);
 }
 
@@ -848,10 +941,6 @@ function focusModelSearch(event: FocusEvent<HTMLDivElement>) {
 	}
 }
 
-function capitalize(value: string): string {
-	return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
 function isModelOption(option: ChatConfigOption): boolean {
 	return option.category === "model" || option.id === "model";
 }
@@ -916,10 +1005,10 @@ function partitionConfigOptions(options: ChatConfigOption[]): {
 	for (const rawOption of options) {
 		const option = rawOption.type === "select"
 			? isEffortOption(rawOption)
-				? withChoices(rawOption, rawOption.choices.filter((choice) => !isDefaultEffortChoice(choice)))
+				? rawOption
 				: resolveImplicitChoice(rawOption)
 			: rawOption;
-		if (option.type === "select" && option.choices.length === 0) continue;
+		if (option.type === "select" && option.choices.length === 0 && !isEffortOption(option)) continue;
 		if (isAgentOption(option)) continue;
 		if (isModelOption(option)) {
 			if (option.category === "model" || option.id === "model") primaryModel.push(option);
@@ -927,6 +1016,7 @@ function partitionConfigOptions(options: ChatConfigOption[]): {
 			continue;
 		}
 		if (isEffortOption(option)) {
+			if (!option.choices.some((choice) => choice.value && choice.value !== "default")) continue;
 			effort.push(option);
 			continue;
 		}
@@ -955,15 +1045,6 @@ function partitionConfigOptions(options: ChatConfigOption[]): {
 	return { model: [...primaryModel, ...otherModel], effort, executionMode, toggles, mode, extra };
 }
 
-function isDefaultEffortChoice(choice: ChatConfigOption["choices"][number]): boolean {
-	const name = choice.name.trim().toLowerCase();
-	const value = choice.value.trim().toLowerCase();
-	return ["default", "provider default", "agent default", "model default", "use agent effort", "use provider effort", "use model effort"].includes(name)
-		|| ["default", "inherit", "provider-default", "agent-default", "model-default"].includes(value);
-}
-
-// ACP may expose a provider-owned choice whose description names a concrete
-// option. Keep its wire value so users can return to following the provider.
 function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 	const mapped = isModeOption(option) ? {
 		...option,

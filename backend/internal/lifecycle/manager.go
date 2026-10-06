@@ -247,6 +247,9 @@ type Manager struct {
 	// flights tracks, per session, the in-flight tool executions and the
 	// pending permission dialog's identity (see toolFlight). Guarded by mu.
 	flights map[domain.SessionID]*toolFlight
+	// steps is each session's recent tool calls for the memory window, from
+	// tool-use hooks (see steps.go). Guarded by mu.
+	steps map[domain.SessionID][]domain.SessionStep
 	// pendingLaunches closes the small ordering gap between starting a supervised
 	// process and durably recording its generation in MarkSpawned. A hook from
 	// that exact generation waits on ready instead of being discarded as stale.
@@ -280,6 +283,7 @@ func New(store sessionStore, messenger ports.AgentMessenger, opts ...Option) *Ma
 		clock:                       clock,
 		react:                       newReactionState(),
 		flights:                     map[domain.SessionID]*toolFlight{},
+		steps:                       map[domain.SessionID][]domain.SessionStep{},
 		pendingLaunches:             map[domain.SessionID]pendingLaunch{},
 		steerActive:                 func(domain.AgentHarness) bool { return false },
 		startupSignalGatesInput:     func(domain.AgentHarness) bool { return false },
@@ -493,6 +497,7 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		// (later observations return early on cur.IsTerminated). Runs under
 		// m.mu — mutate holds it across this callback.
 		delete(m.flights, id)
+		delete(m.steps, id)
 		terminated = true
 		return next, true
 	})
@@ -628,6 +633,7 @@ retryProjection:
 	now := m.clock()
 	if rec.IsTerminated {
 		delete(m.flights, id)
+		delete(m.steps, id)
 		m.mu.Unlock()
 		return nil
 	}
@@ -907,12 +913,18 @@ retryProjection:
 		m.mu.Unlock()
 		return nil
 	}
+	// Every fence has accepted the signal, so its tool step may land. A
+	// projection that loses its revision race puts the steps back below, and
+	// the retry records the step again against the fresh row.
+	stepsBeforeProjection := m.stepsSnapshotLocked(id)
+	m.recordStepLocked(id, s, now)
 	project := func(next domain.SessionRecord) (applied, retry bool, err error) {
 		applied, err = m.store.UpdateSessionFromActivitySignal(ctx, next, observedRevision)
 		if applied {
 			return applied, false, err
 		}
 		m.restoreToolFlightLocked(id, toolFlightBeforeProjection)
+		m.restoreStepsLocked(id, stepsBeforeProjection)
 		if err != nil {
 			return false, false, err
 		}
@@ -1708,6 +1720,9 @@ func (m *Manager) changeControllerEpoch(
 	next.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}
 	next.UpdatedAt = now
 	delete(m.flights, id)
+	// The old runtime's open step never gets its post-hook; left in place it
+	// would show as the new controller's current tool.
+	delete(m.steps, id)
 	resolutions := needsInputResolutions(previous, next, now)
 	waitingEvents := m.waitingInputEvents(
 		next, previous.Activity.State, previous.Activity.LastActivityAt, now,
@@ -1816,6 +1831,7 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 				cur.IsTerminated = true
 				cur.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: now}
 				delete(m.flights, id) // runs under m.mu (mutate holds it)
+				delete(m.steps, id)
 				outcome = terminationApplied
 				return cur, true
 			}

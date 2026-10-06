@@ -61,6 +61,82 @@ describe("CloudSessionChatSurface", () => {
 			origin: "human", text: '[from worker a1b2c3d4 "Builder"] Please help',
 		});
 	});
+
+	it("offers native Claude Plan mode and sends read-only turns without changing the permission ceiling", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({
+			models: [{ id: "opus", displayName: "Opus", default: true }],
+			modes: ["default", "plan"],
+		});
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const view = render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface
+					session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }}
+				/>
+			</QueryClientProvider>,
+		);
+		await waitFor(() =>
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].configOptions?.[0].choices).toContainEqual({
+				value: "plan",
+				name: "Plan",
+			}),
+		);
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseConfigOption("mode", { value: "plan" }));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("outline only", [], "plan-1");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith(
+			"org-1",
+			session.id,
+			{ text: "outline only", mode: "read-only" },
+			{ idempotencyKey: "plan-1" },
+		);
+		view.unmount();
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface
+					session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }}
+				/>
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].configOptions?.[0].currentValue).toBe("plan"));
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseConfigOption("mode", { value: "agent" }));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("implement", [], "agent-1");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith(
+			"org-1",
+			session.id,
+			expect.objectContaining({ mode: "trusted" }),
+			{ idempotencyKey: "agent-1" },
+		);
+	});
+
+	it("keeps a read-only Claude session in Plan mode and cannot elevate it to Agent", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [], modes: ["default", "plan"] });
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface
+					session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "read-only" } }}
+				/>
+			</QueryClientProvider>,
+		);
+		await waitFor(() =>
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].configOptions?.[0].choices).toEqual([
+				{ value: "plan", name: "Plan" },
+			]),
+		);
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseConfigOption("mode", { value: "agent" }));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("hello", [], "readonly-1");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith(
+			"org-1",
+			session.id,
+			{ text: "hello", mode: "read-only" },
+			{ idempotencyKey: "readonly-1" },
+		);
+	});
+
 	it("wakes a paused worker before loading model choices", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockReset()
