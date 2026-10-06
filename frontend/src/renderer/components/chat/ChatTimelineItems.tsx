@@ -41,6 +41,7 @@ import {
 	SquareTerminal,
 	Undo2,
 	User,
+	X,
 } from "lucide-react";
 
 /** Fixed icon column, matching the prototype's row anatomy. */
@@ -857,7 +858,14 @@ export function AssistantMessage({
 }
 
 
-export function LiveResponseStatus({ startedAt, settling = false }: { startedAt?: string; settling?: boolean }) {
+export function LiveResponseStatus({ startedAt, settling = false, startupLabel, failed = false, children }: {
+	startedAt?: string;
+	settling?: boolean;
+	startupLabel?: string;
+	failed?: boolean;
+	children?: ReactNode;
+}) {
+	const reducedMotion = useReducedMotion();
 	const started = useMemo(() => {
 		const parsed = startedAt ? Date.parse(startedAt) : Date.now();
 		return Number.isFinite(parsed) ? parsed : Date.now();
@@ -883,22 +891,38 @@ export function LiveResponseStatus({ startedAt, settling = false }: { startedAt?
 	// throughout (only the highlight fades), so the text never changes paint
 	// technique and cannot blink.
 	return (
-		<div className="-mx-1 flex h-7 select-none items-center gap-1.5 border-b border-border px-1 py-0">
-			<span
-				aria-hidden={settling || undefined}
-				data-settling={settling || undefined}
-				className="chat-working-spinner-slot flex shrink-0 origin-center"
-			>
-				<ResponseSpinner />
-			</span>
-			<span
-				role="status"
-				data-testid="live-working-label"
-				data-settling={settling || undefined}
-				className="chat-working-shimmer text-sm font-normal"
-			>
-				{settling ? "Worked for" : "Working for"} {formatDuration(elapsedMs)}
-			</span>
+		<div className="min-w-0">
+			<div className="-mx-1 flex h-7 select-none items-center gap-1.5 border-b border-border px-1 py-0">
+				<span
+					aria-hidden={settling || undefined}
+					data-settling={settling || undefined}
+					className="chat-working-spinner-slot flex shrink-0 origin-center"
+				>
+					{failed ? <X className="size-3 text-destructive" /> : <ResponseSpinner />}
+				</span>
+				<span
+					role={failed ? "alert" : "status"}
+					data-testid="live-working-label"
+					data-settling={settling || undefined}
+					className={cn("text-sm font-normal", failed ? "text-destructive" : "chat-working-shimmer")}
+				>
+					{startupLabel ?? `${settling ? "Worked for" : "Working for"} ${formatDuration(elapsedMs)}`}
+				</span>
+			</div>
+			<AnimatePresence initial={false}>
+				{children ? (
+					<motion.div
+						key="startup-checklist"
+						initial={false}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.2, ease: "easeOut" }}
+						className="overflow-hidden"
+					>
+						{children}
+					</motion.div>
+				) : null}
+			</AnimatePresence>
 		</div>
 	);
 }

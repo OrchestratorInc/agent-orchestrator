@@ -183,7 +183,8 @@ var shippedMigrations = map[int64]string{
 	177: "0177_review_run_rerun_same_head.sql",
 	178: "0178_archive_reviewers.sql",
 	179: "0179_conversation_message_sender.sql",
-	180: "0180_session_hibernation.sql",
+	180: "0180_session_provision_steps.sql",
+	181: "0181_session_hibernation.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

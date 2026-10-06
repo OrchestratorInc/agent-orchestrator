@@ -1246,15 +1246,15 @@ func repairRenumberedChatMigrationHistory(db *sql.DB) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// This PR's dev builds used 0179 for hibernation before main assigned it to
-	// sender metadata. Move only that physical schema to 0180 so neither ALTER
-	// is replayed over an existing column and the real 0179 is still applied.
+	// Earlier dev builds used 0179 or 0180 for hibernation. Move that physical
+	// schema to 0181 so main's sender metadata and startup steps still apply.
 	if _, err := tx.Exec(`
-UPDATE goose_db_version SET version_id = 180
-WHERE version_id = 179 AND is_applied = 1
+UPDATE goose_db_version SET version_id = 181
+WHERE is_applied = 1
   AND EXISTS (SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'hibernated_at')
-  AND NOT EXISTS (SELECT 1 FROM pragma_table_info('conversation_messages') WHERE name = 'sender_session_id')
-  AND NOT EXISTS (SELECT 1 FROM goose_db_version WHERE version_id = 180)`); err != nil {
+  AND ((version_id = 179 AND NOT EXISTS (SELECT 1 FROM pragma_table_info('conversation_messages') WHERE name = 'sender_session_id'))
+    OR (version_id = 180 AND NOT EXISTS (SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'provision_steps')))
+  AND NOT EXISTS (SELECT 1 FROM goose_db_version WHERE version_id = 181)`); err != nil {
 		return err
 	}
 

@@ -174,7 +174,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at
 FROM sessions WHERE id = ?
@@ -237,6 +237,7 @@ type GetSessionRow struct {
 	SessionPermissions               string
 	ProvisionState                   domain.SessionProvisionState
 	ProvisionError                   string
+	ProvisionSteps                   string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
@@ -305,6 +306,7 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.SessionPermissions,
 		&i.ProvisionState,
 		&i.ProvisionError,
+		&i.ProvisionSteps,
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
 		&i.AutomationLaunchCompleted,
@@ -328,7 +330,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at
 FROM sessions WHERE automation_run_id = ?
@@ -391,6 +393,7 @@ type GetSessionByAutomationRunIDRow struct {
 	SessionPermissions               string
 	ProvisionState                   domain.SessionProvisionState
 	ProvisionError                   string
+	ProvisionSteps                   string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
@@ -459,6 +462,7 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.SessionPermissions,
 		&i.ProvisionState,
 		&i.ProvisionError,
+		&i.ProvisionSteps,
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
 		&i.AutomationLaunchCompleted,
@@ -631,7 +635,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at
 FROM sessions ORDER BY project_id, num
@@ -694,6 +698,7 @@ type ListAllSessionsRow struct {
 	SessionPermissions               string
 	ProvisionState                   domain.SessionProvisionState
 	ProvisionError                   string
+	ProvisionSteps                   string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
@@ -768,6 +773,7 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.SessionPermissions,
 			&i.ProvisionState,
 			&i.ProvisionError,
+			&i.ProvisionSteps,
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
 			&i.AutomationLaunchCompleted,
@@ -801,7 +807,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at
 FROM sessions WHERE project_id IS ? ORDER BY num
@@ -864,6 +870,7 @@ type ListSessionsByProjectRow struct {
 	SessionPermissions               string
 	ProvisionState                   domain.SessionProvisionState
 	ProvisionError                   string
+	ProvisionSteps                   string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
@@ -938,6 +945,7 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.SessionPermissions,
 			&i.ProvisionState,
 			&i.ProvisionError,
+			&i.ProvisionSteps,
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
 			&i.AutomationLaunchCompleted,
@@ -1394,6 +1402,30 @@ func (q *Queries) SetSessionProvisionState(ctx context.Context, arg SetSessionPr
 		arg.UpdatedAt,
 		arg.ID,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSessionProvisionSteps = `-- name: SetSessionProvisionSteps :execrows
+UPDATE sessions SET
+    provision_steps = ?1,
+    updated_at = ?2
+WHERE id = ?3
+`
+
+type SetSessionProvisionStepsParams struct {
+	ProvisionSteps string
+	UpdatedAt      time.Time
+	ID             domain.SessionID
+}
+
+// Publish an asynchronous Chat start's checklist. As narrow as
+// SetSessionProvisionState, for the same reason: the controller commit writes
+// the rest of the row from its own goroutine.
+func (q *Queries) SetSessionProvisionSteps(ctx context.Context, arg SetSessionProvisionStepsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionProvisionSteps, arg.ProvisionSteps, arg.UpdatedAt, arg.ID)
 	if err != nil {
 		return 0, err
 	}

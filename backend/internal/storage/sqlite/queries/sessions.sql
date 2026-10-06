@@ -195,7 +195,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at
 FROM sessions WHERE id = ?;
@@ -213,7 +213,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at
 FROM sessions WHERE automation_run_id = ?;
@@ -231,7 +231,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at
 FROM sessions WHERE project_id IS ? ORDER BY num;
@@ -249,7 +249,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at
 FROM sessions ORDER BY project_id, num;
@@ -352,6 +352,15 @@ WHERE id = sqlc.arg(id)
 UPDATE sessions SET
     provision_state = sqlc.arg(provision_state),
     provision_error = sqlc.arg(provision_error),
+    updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id);
+
+-- name: SetSessionProvisionSteps :execrows
+-- Publish an asynchronous Chat start's checklist. As narrow as
+-- SetSessionProvisionState, for the same reason: the controller commit writes
+-- the rest of the row from its own goroutine.
+UPDATE sessions SET
+    provision_steps = sqlc.arg(provision_steps),
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id);
 

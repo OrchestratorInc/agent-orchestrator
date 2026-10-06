@@ -684,6 +684,7 @@ type Session struct {
 	ClientRequestCommitted           bool
 	CodexActivityFacts               string
 	ClaudeActivityFacts              string
+	ProvisionSteps                   string
 	HibernatedAt                     sql.NullTime
 }
 
