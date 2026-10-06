@@ -58,6 +58,10 @@ const APPROVALS: Array<{ value: ApprovalMode; label: string; description: string
  */
 export function approvalLabel(mode: ApprovalMode, harness: string): string {
 	if (mode === "default" && harness === "codex") return "Full access";
+	return approvalModeLabel(mode);
+}
+
+function approvalModeLabel(mode: ApprovalMode): string {
 	return APPROVALS.find((item) => item.value === mode)?.label ?? mode;
 }
 
@@ -99,14 +103,11 @@ export function providerTurnControlKind(option: ChatConfigOption): ProviderTurnC
  * pick, when it reads "Use agent model (Opus 5.5)". Otherwise "Use agent
  * model" / "Use agent effort" rather than a level we would have to guess.
  *
- * Permission modes: a placeholder the daemon maps to AO's default permission
- * mode reads "Use agent permissions", as on desktop; one it maps to another
- * mode keeps its name, since the label would describe the wrong behaviour. A
- * placeholder the daemon does not map reads "Use agent permissions" too; desktop
- * drops such a choice when its value is "default", but here it stays, so every
- * mode the agent offers can still be picked. "Default approvals" is what
- * daemons before #5849 call OpenCode's default tier, and a phone can be paired
- * with one.
+ * Permission modes: see `namePermissionChoice`. A provider's own names stay,
+ * as on desktop. Desktop names a placeholder mapped to AO's default mode "Use
+ * agent permissions", drops one whose value is "default" otherwise, and shows
+ * any other by its placeholder name. Here every placeholder stays, so each mode
+ * the agent offers can still be picked, and is named by the mode it applies.
  */
 export function resolveDefaultChoices(options: ChatConfigOption[]): ChatConfigOption[] {
 	return options.map(resolveDefaultChoice);
@@ -118,14 +119,8 @@ function resolveDefaultChoice(option: ChatConfigOption): ChatConfigOption {
 	// Fast mode is a toggle, and fastControlValue reads a "default" choice as Off.
 	if (kind === "fast") return option;
 	if (kind === "permissions") {
-		const followsAgent = (choice: ChatConfigChoice) =>
-			(choice.permissionMode === undefined || choice.permissionMode === "default")
-			&& (isDefaultPlaceholderLabel(choice.name) || /^default approvals$/i.test(choice.name.trim()));
-		if (!option.choices.some(followsAgent)) return option;
-		return {
-			...option,
-			choices: option.choices.map((choice) => followsAgent(choice) ? { ...choice, name: USE_AGENT_PERMISSIONS } : choice),
-		};
+		const choices = option.choices.map(namePermissionChoice);
+		return choices.every((choice, index) => choice === option.choices[index]) ? option : { ...option, choices };
 	}
 	const implicit = option.choices.find((choice) => choice.value === "default");
 	if (!implicit) return option;
@@ -157,6 +152,21 @@ function resolveDefaultChoice(option: ChatConfigOption): ChatConfigOption {
 /** "Default", "Default (recommended)": a label that names no model, level or mode. */
 function isDefaultPlaceholderLabel(label: string): boolean {
 	return /^default(?:\s*\([^)]*\))?$/i.test(label.trim());
+}
+
+/**
+ * A permission choice whose name says nothing is named by the mode the daemon
+ * maps it to, because picking it applies that mode: a "Default" mapped to
+ * bypass-permissions reads "Never ask", not "Default" (review on #6071). An
+ * unmapped one reads "Use agent permissions". "Default approvals" is what
+ * daemons before #5849 call OpenCode's default tier, and a phone can be paired
+ * with one. The wire value is kept.
+ */
+function namePermissionChoice(choice: ChatConfigChoice): ChatConfigChoice {
+	const placeholder = isDefaultPlaceholderLabel(choice.name) || /^(?:default approvals|use agent permissions)$/i.test(choice.name.trim());
+	if (!placeholder) return choice;
+	const name = approvalModeLabel(choice.permissionMode ?? "default");
+	return name === choice.name ? choice : { ...choice, name };
 }
 
 /**

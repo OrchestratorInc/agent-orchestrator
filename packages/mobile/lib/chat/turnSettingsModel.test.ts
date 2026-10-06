@@ -254,20 +254,36 @@ describe("default labels", () => {
 		]);
 	});
 
-	// Review on #6071: the rename read only the name. A placeholder the daemon
-	// maps to another permission mode would have claimed to follow the agent.
-	it("does not rename a placeholder the daemon maps to another permission mode", () => {
-		const [mode] = resolveDefaultChoices([{
-			id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default",
+	// Reviews on #6071: a placeholder the daemon maps to another permission mode
+	// first claimed to follow the agent, then kept "Default" while picking it
+	// applied that mode. It now says what it applies.
+	it("names a placeholder by the permission mode the daemon maps it to", () => {
+		const options = resolveDefaultChoices([{
+			id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "yolo",
 			choices: [
 				{ value: "default", name: "Default", permissionMode: "default" },
-				{ value: "yolo", name: "Default", permissionMode: "bypass-permissions" },
+				{ value: "yolo", name: "Default", description: "Skips every prompt", permissionMode: "bypass-permissions" },
+				{ value: "edits", name: "Default (recommended)", permissionMode: "accept-edits" },
+				{ value: "ao-auto", name: "Default approvals", permissionMode: "auto" },
+				{ value: "trust", name: "Use agent permissions", permissionMode: "bypass-permissions" },
+				{ value: "bypassPermissions", name: "Bypass Permissions", permissionMode: "bypass-permissions" },
 			],
 		}]);
-		expect(mode.choices.map((choice) => [choice.value, choice.name])).toEqual([
+		expect(choices(options, "mode")).toEqual([
 			["default", "Use agent permissions"],
-			["yolo", "Default"],
+			["yolo", "Never ask"],
+			["edits", "Ask outside worktree"],
+			["ao-auto", "Ask when unsure"],
+			["trust", "Never ask"],
+			["bypassPermissions", "Bypass Permissions"],
 		]);
+		const [mode] = options;
+		expect(mode.currentValue).toBe("yolo");
+		expect(mode.choices[1]).toMatchObject({ description: "Skips every prompt", permissionMode: "bypass-permissions" });
+		// The row and the summary print the selected choice's name.
+		expect(providerChoiceLabel(mode)).toBe("Never ask");
+		expect(turnSettingsSummary(claudeChat, [], options)).toContain("Never ask");
+		expect(resolveDefaultChoices(options)[0]).toBe(mode);
 	});
 
 	it("does not call an agent picker a model", () => {
