@@ -3010,7 +3010,6 @@ function ShowMoreRow({
 				initial={{ opacity: 0, y: 4 }}
 				animate={{ opacity: 1, y: 0 }}
 				exit={{ opacity: 0, y: -4 }}
-				layout
 				onClick={onClick}
 				transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }}
 				type="button"
