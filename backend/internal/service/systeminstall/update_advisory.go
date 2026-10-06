@@ -49,7 +49,8 @@ type updateAdvisoryCall struct {
 
 // UpdateAdvisory probes the adapter-selected binary and checks the npm or
 // Homebrew package that owns it, whether or not AO installed it. Binaries no
-// package manager owns and failed probes remain unknown; they never
+// package manager owns are compared with the vendor's release channel. A
+// harness with neither, and failed probes, remain unknown; they never
 // masquerade as up-to-date.
 func (s *Service) UpdateAdvisory(ctx context.Context, target Target) (UpdateAdvisory, error) {
 	if !IsAgentTarget(target) {
@@ -118,19 +119,20 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	if err != nil {
 		return advisory, err
 	}
-	if s.verifier == nil || s.ownsInstallation == nil || s.latestVersion == nil {
+	if s.verifier == nil {
 		return advisory, nil
 	}
-	planner, err := s.newRequestPlanner(ctx)
-	if err != nil {
-		return advisory, nil //nolint:nilerr // Unavailable package metadata leaves advisory status unknown.
+	var sources []Plan
+	if s.ownsInstallation != nil && s.latestVersion != nil {
+		if planner, err := s.newRequestPlanner(ctx); err == nil {
+			recordedMethod := ""
+			if job.Status == StatusSucceeded {
+				recordedMethod = job.Method
+			}
+			sources = packageSources(planner.agentMethodPlans(target, AgentOperationInstall), recordedMethod)
+		}
 	}
-	recordedMethod := ""
-	if job.Status == StatusSucceeded {
-		recordedMethod = job.Method
-	}
-	sources := packageSources(planner.agentMethodPlans(target, AgentOperationInstall), recordedMethod)
-	if len(sources) == 0 {
+	if len(sources) == 0 && s.officialVersion == nil {
 		return advisory, nil
 	}
 	verified, err := s.verifier.Verify(ctx, target)
@@ -147,17 +149,24 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 			break
 		}
 	}
-	if source.Package == "" {
+	if source.Package == "" && s.officialVersion == nil {
 		return advisory, nil
 	}
-	packageName := packageWithoutLatest(source.Package)
 	current := versionPattern.FindStringSubmatch(verified.Output)
 	if current == nil {
 		return advisory, nil
 	}
 	advisory.CurrentVersion = current[0]
-	advisory.Source = source.Method
-	latest, err := s.latestVersion(ctx, source.Method, packageName, source.PackageCask)
+	var latest string
+	if source.Package != "" {
+		advisory.Source = source.Method
+		latest, err = s.latestVersion(ctx, source.Method, packageWithoutLatest(source.Package), source.PackageCask)
+	} else {
+		// No package manager owns the binary, so compare against the vendor's
+		// own release channel, which every install method eventually follows.
+		advisory.Source = officialReleaseSource
+		latest, err = s.officialVersion(ctx, target)
+	}
 	if err != nil {
 		return advisory, nil //nolint:nilerr // A failed latest-version lookup is not an update verdict.
 	}

@@ -345,6 +345,9 @@ type Service struct {
 	ownsInstallation    func(context.Context, string, string, string, bool) (bool, error)
 	updateAdvisories    map[Target]UpdateAdvisory
 	updateAdvisoryCalls map[Target]*updateAdvisoryCall
+	// officialVersion reads a vendor release channel when no package manager
+	// owns the harness binary.
+	officialVersion func(context.Context, Target) (string, error)
 }
 
 // requestPlanner carries one immutable capability snapshot through all recipe
@@ -405,6 +408,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		stop:                stop,
 		backgroundContext:   backgroundContext,
 		latestVersion:       latestAvailableVersion(commands),
+		officialVersion:     officialReleaseVersion(runtime.GOOS, runtime.GOARCH),
 		ownsInstallation:    packageOwnsBinary(commands),
 		updateAdvisories:    make(map[Target]UpdateAdvisory),
 		updateAdvisoryCalls: make(map[Target]*updateAdvisoryCall),
