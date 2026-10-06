@@ -23,7 +23,7 @@ func clientPayloadHash(msg ports.ChatUserMessage) (string, error) {
 		Text            string
 		Content         []ports.ChatContent
 		Origin          domain.MessageOrigin
-		SenderSessionID string
+		SenderSessionID string `json:",omitempty"`
 		AuthoredByUser  bool
 		Settings        ports.ChatTurnSettings
 	}{msg.Text, content, normalizeOrigin(msg.Origin), msg.SenderSessionID, msg.AuthoredByUser, msg.Settings})
