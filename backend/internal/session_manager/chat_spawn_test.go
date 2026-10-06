@@ -905,6 +905,22 @@ func TestWakeHibernatedChatDoesNotRestoreMarkerAfterControllerPublished(t *testi
 	}
 }
 
+func TestWakeHibernatedChatDoesNotRestoreMarkerAfterNativeResumeFailure(t *testing.T) {
+	launcher := &recordingLauncher{startErr: ports.ErrChatResumeFailed}
+	mgr, store, _ := newChatManager(launcher)
+	seedChatResumeSession(store, domain.ActivityIdle)
+	rec := store.sessions["mer-1"]
+	at := time.Now().UTC()
+	rec.HibernatedAt = &at
+	store.sessions[rec.ID] = rec
+	if err := mgr.WakeHibernatedChat(context.Background(), rec.ID); !errors.Is(err, ports.ErrChatResumeFailed) {
+		t.Fatalf("wake error = %v, want native resume failure", err)
+	}
+	if got := store.sessions[rec.ID]; got.HibernatedAt != nil || got.Metadata.ProviderConversationID != rec.Metadata.ProviderConversationID {
+		t.Fatalf("failed wake must remain stopped with its native identity: %+v", got)
+	}
+}
+
 func TestResumeExitedChatSessionDoesNotRequireTerminalRuntimeHandle(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, store, runtime := newChatManager(launcher)

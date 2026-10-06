@@ -245,8 +245,37 @@ func TestOpeningViewDoesNotResumeExplicitlyStoppedAgent(t *testing.T) {
 	if err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "do not restart"}); !errors.Is(err, chatsvc.ErrNoController) {
+		t.Fatalf("Send after stop = %v, want no controller", err)
+	}
+	if _, err := h.svc.RelayChatTurnWithID(ctx, testSession, "do not restart", "stopped-relay"); !errors.Is(err, chatsvc.ErrNoController) {
+		t.Fatalf("Relay after stop = %v, want no controller", err)
+	}
+	if _, err := h.svc.SetTitle(ctx, testSession, "do not restart"); !errors.Is(err, chatsvc.ErrNoController) {
+		t.Fatalf("SetTitle after stop = %v, want no controller", err)
+	}
 	if got := wakeCalls.Load(); got != 0 {
 		t.Fatalf("opening an exited agent triggered %d native wakes", got)
+	}
+}
+
+func TestStopClearsHibernationEvenWhenHostStopFails(t *testing.T) {
+	h, _ := settledHibernationHarness(t, domain.TurnStateCompleted)
+	ctx := context.Background()
+	if slept, err := h.svc.HibernateChat(ctx, testSession); err != nil || !slept {
+		t.Fatalf("HibernateChat = %v, %v", slept, err)
+	}
+	hostErr := errors.New("host stop failed")
+	svc := chatsvc.New(chatsvc.Options{
+		Sessions:         h.st,
+		StopProviderHost: func(context.Context, domain.SessionID) error { return hostErr },
+	})
+	if err := svc.Stop(ctx, testSession); !errors.Is(err, hostErr) {
+		t.Fatalf("Stop = %v, want host error", err)
+	}
+	rec, _, err := h.st.GetSession(ctx, testSession)
+	if err != nil || rec.HibernatedAt != nil {
+		t.Fatalf("marker after failed stop = %v, err=%v", rec.HibernatedAt, err)
 	}
 }
 
@@ -343,6 +372,13 @@ func TestOpeningViewWaitsForHibernationThenWakes(t *testing.T) {
 		hibernated <- err
 	}()
 	<-conv.started
+	// A concurrent opportunistic sweep must skip the occupied gate, not block
+	// explicit Exit/Kill behind a hibernation operation waiting on provider I/O.
+	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
+	defer cancel()
+	if slept, err := h.svc.HibernateChat(probeCtx, testSession); slept || err != nil {
+		t.Fatalf("concurrent hibernation = %v, %v, want skipped", slept, err)
+	}
 	wakeCalled := make(chan struct{}, 1)
 	h.svc.SetWakeCallback(func(ctx context.Context, id domain.SessionID) error {
 		rec, found, err := h.st.GetSession(ctx, id)
@@ -449,6 +485,14 @@ func TestRelayChatTurnWithIDWakesHibernatedSession(t *testing.T) {
 }
 
 func TestSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t *testing.T) {
+	testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t, false)
+}
+
+func TestSendSurvivesCancelledViewWake(t *testing.T) {
+	testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t, true)
+}
+
+func testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t *testing.T, cancelView bool) {
 	h, old := settledHibernationHarness(t, domain.TurnStateCompleted)
 	ctx := context.Background()
 	if hibernated, err := h.svc.HibernateChat(ctx, testSession); err != nil || !hibernated {
@@ -469,7 +513,11 @@ func TestSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t *testing.T) {
 	releaseWake := make(chan struct{})
 	wakeService.SetWakeCallback(func(ctx context.Context, id domain.SessionID) error {
 		close(wakeEntered)
-		<-releaseWake
+		select {
+		case <-releaseWake:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		rec, found, err := h.st.GetSession(ctx, id)
 		if err != nil || !found || rec.HibernatedAt == nil {
 			return fmt.Errorf("read hibernated session: found=%v marker=%v err=%w", found, rec.HibernatedAt, err)
@@ -485,6 +533,17 @@ func TestSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t *testing.T) {
 		return err
 	})
 
+	if cancelView {
+		viewCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go func() { _ = wakeService.SetChatView(viewCtx, testSession, "cancelled-view", true) }()
+		select {
+		case <-wakeEntered:
+		case <-time.After(time.Second):
+			t.Fatal("view wake did not start")
+		}
+		cancel()
+	}
 	started := time.Now()
 	turn, err := wakeService.Send(ctx, testSession, ports.ChatUserMessage{
 		Text: "send while cold", ClientMessageID: "cold-send-1",

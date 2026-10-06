@@ -16,14 +16,17 @@ func TestPersistentChatHostKeepSetUsesDurableOwnership(t *testing.T) {
 		{ID: "other-provider", Mode: domain.SessionModeChat, Harness: domain.HarnessClaudeCode},
 		{ID: "hibernated-chat", Mode: domain.SessionModeChat, Harness: domain.HarnessCodex, HibernatedAt: &before},
 	}
-	keep := persistentChatHostKeepSet(records)
-	if len(keep) != 2 {
-		t.Fatalf("keep = %v, want both live Chat providers", keep)
+	keep := persistentChatHostKeepSet(records, []domain.Review{{ID: "recoverable-review"}})
+	if len(keep) != 3 {
+		t.Fatalf("keep = %v, want both live Chat providers and the reviewer", keep)
 	}
 	if _, ok := keep["live-chat"]; !ok {
 		t.Fatalf("keep = %v, missing live-chat", keep)
 	}
 	if _, ok := keep["other-provider"]; !ok {
 		t.Fatalf("keep = %v, missing other-provider", keep)
+	}
+	if _, ok := keep["review-recoverable-review"]; !ok {
+		t.Fatalf("keep = %v, missing recoverable reviewer host", keep)
 	}
 }

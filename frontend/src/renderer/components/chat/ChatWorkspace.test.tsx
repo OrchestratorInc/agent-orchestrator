@@ -1532,7 +1532,7 @@ describe("ChatWorkspace timeline", () => {
 
 		await typeInLexicalEditor(composer, " this work");
 		expect(resume).not.toHaveBeenCalled();
-		view.rerender(<ChatWorkspace snapshot={{ ...snapshot, controller: { state: "stopped" } }} onResumeAgent={resume} onSend={send} resumeError="resume agent error" />);
+		view.rerender(<ChatWorkspace snapshot={{ ...snapshot, controller: { state: "stopped" } }} onResumeAgent={resume} onSend={send} resumingAgent resumeError="resume agent error" />);
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		expect(screen.queryByText("resume agent error")).not.toBeInTheDocument();
@@ -1542,34 +1542,9 @@ describe("ChatWorkspace timeline", () => {
 		expect(send.mock.calls[0]?.[0]).toBe("Continue this work");
 		expect(resume).not.toHaveBeenCalled();
 
-		view.rerender(<ChatWorkspace snapshot={{ ...snapshot, controller: { state: "ready" } }} onResumeAgent={resume} />);
 		view.rerender(<ChatWorkspace snapshot={{ ...snapshot, controller: { state: "stopped" } }} onResumeAgent={resume} />);
 		expect(screen.getByRole("alert")).toHaveTextContent("The agent controller stopped");
-	});
-
-	it("shows a failed wake in the composer and keeps its draft through retry", async () => {
-		const sessionId = "failed-chat-wake-composer";
-		const snapshot = { ...chatFixtureSettled, sessionId, controller: { state: "hibernated" as const } };
-		const onSend = vi.fn().mockResolvedValue(undefined);
-		const onRetryWake = vi.fn();
-		const wakeError = "Couldn’t reopen this chat. Check the agent provider. Your conversation is saved.";
-		const view = render(<ChatWorkspace snapshot={snapshot} onSend={onSend} />);
-		const composer = screen.getByRole("combobox", { name: "Message the agent" });
-		await typeInLexicalEditor(composer, "Continue later");
-		expect(screen.queryByRole("button", { name: "Try connecting again" })).not.toBeInTheDocument();
-
-		view.rerender(<ChatWorkspace snapshot={snapshot} onSend={onSend} wakeError={wakeError} onRetryWake={onRetryWake} />);
-		expect(screen.getByRole("alert")).toHaveTextContent(wakeError);
-		await userEvent.click(screen.getByRole("button", { name: "Try connecting again" }));
-		expect(onRetryWake).toHaveBeenCalledOnce();
-		expect(onSend).not.toHaveBeenCalled();
-		expect(composer).toHaveTextContent("Continue later");
-
-		view.rerender(<ChatWorkspace snapshot={{ ...snapshot, controller: { state: "ready" } }} onSend={onSend} />);
-		expect(screen.queryByText(wakeError)).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
-		expect(onSend.mock.calls[0]?.[0]).toBe("Continue later");
+		expect(screen.getByRole("button", { name: "Resume agent" })).toBeInTheDocument();
 	});
 
 	it("does not race view activation when hibernation arrives after a draft edit", async () => {

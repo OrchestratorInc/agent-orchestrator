@@ -274,9 +274,6 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		workspaceTabs,
 		workspaceTabActions,
 		newWorkDisabled,
-		wakeError,
-		wakeRetrying,
-		onRetryWake,
 		onConversationWorkChange,
 		auxiliaryTabOrder,
 		onAuxiliaryTabOrderChange,
@@ -299,9 +296,6 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		workspaceTabs?: Array<{ key: string; content: ReactNode; onSelect: () => void }>;
 		workspaceTabActions?: ReactNode;
 		newWorkDisabled?: boolean;
-		wakeError?: string;
-		wakeRetrying?: boolean;
-		onRetryWake?: () => void;
 		onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void;
 		auxiliaryTabOrder?: string[];
 		onAuxiliaryTabOrderChange?: (keys: string[]) => void;
@@ -315,7 +309,6 @@ vi.mock("./chat/SessionChatSurface", async () => {
 			data-new-work-disabled={newWorkDisabled ? "true" : "false"}
 		>
 			chat surface
-			{wakeError ? <div role="alert">{wakeError}{onRetryWake ? <button type="button" disabled={wakeRetrying} onClick={onRetryWake}>Try connecting again</button> : null}</div> : null}
 			<div data-testid={`auxiliary-tab-order-${session.id}`}>
 				{auxiliaryTabOrder?.join("|") ?? ""}
 			</div>

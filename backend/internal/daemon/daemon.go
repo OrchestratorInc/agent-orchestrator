@@ -600,7 +600,13 @@ func Run() error {
 	if wake, ok := sessMgr.(interface {
 		WakeHibernatedChat(context.Context, domain.SessionID) error
 	}); ok {
-		chatSvc.SetWakeCallback(wake.WakeHibernatedChat)
+		chatSvc.SetWakeCallback(func(requestCtx context.Context, id domain.SessionID) error {
+			wakeCtx, cancel := context.WithCancel(requestCtx)
+			stopOnShutdown := context.AfterFunc(ctx, cancel)
+			defer stopOnShutdown()
+			defer cancel()
+			return wake.WakeHibernatedChat(wakeCtx, id)
+		})
 	}
 	if hibernate, ok := sessMgr.(interface {
 		HibernateChatIfIdle(context.Context, domain.SessionID) error
@@ -807,12 +813,6 @@ func Run() error {
 			log.Error("cdc pipeline shutdown", "err", cdcErr)
 		}
 		return fmt.Errorf("reconcile sessions on boot: %w", reconcileErr)
-	}
-	// Reviewer-owned Chat controllers are durable independently of the worker's
-	// currently selected reviewer. Recover them through the required review
-	// service contract before accepting new automatic review work.
-	if reconcileErr := reviewSvc.RecoverChatReviewers(ctx); reconcileErr != nil {
-		log.Warn("reviewer chat recovery deferred", "err", reconcileErr)
 	}
 	agentSvc.WarmCodexAccounts()
 	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, log)
@@ -1029,6 +1029,12 @@ func Run() error {
 				log.Error("persistent chat host reconciliation on boot failed", "err", reconcileErr)
 			}
 			close(persistentHostsReconciled)
+			// Reviewer-owned Chat controllers wait for persistent host reconciliation.
+			// Recover them only after the listener is ready and the gate is closed, or
+			// startup can deadlock before the daemon binds its port.
+			if reconcileErr := reviewSvc.RecoverChatReviewers(ctx); reconcileErr != nil {
+				log.Warn("reviewer chat recovery deferred", "err", reconcileErr)
+			}
 			if reconcileErr := sessMgr.ReconcileBackground(ctx); reconcileErr != nil {
 				log.Error("background session reconciliation on boot failed", "err", reconcileErr)
 			}

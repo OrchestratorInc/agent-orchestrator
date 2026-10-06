@@ -2896,11 +2896,10 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 		}
 		asleepAt := rec.HibernatedAt
 		nativeID := rec.Metadata.ProviderConversationID
-		// Native resume can fail after the marker is cleared. Keep a failed
-		// automatic wake retryable and visibly asleep, including when the HTTP
-		// request was canceled while the provider was starting.
+		// Restore sleep only after a failed launch. A definitive native-resume
+		// failure stays stopped so the existing recovery action is available.
 		defer func() {
-			if err == nil || errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+			if err == nil || errors.Is(err, ports.ErrChatRecoveryInconclusive) || errors.Is(err, ports.ErrChatResumeFailed) {
 				return
 			}
 			recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)

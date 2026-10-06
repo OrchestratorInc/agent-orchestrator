@@ -2146,10 +2146,13 @@ func (c *Controller) Compact(ctx context.Context) (ports.ChatCompactionResult, e
 	if c.busy() {
 		return ports.ChatCompactionResult{}, ErrCompactionWhileBusy
 	}
+	c.mu.Lock()
+	c.compactionPending = true
+	c.mu.Unlock()
 	result, err := compactor.Compact(ctx)
-	if err == nil {
+	if err != nil {
 		c.mu.Lock()
-		c.compactionPending = true
+		c.compactionPending = false
 		c.mu.Unlock()
 	}
 	return result, err
@@ -2550,7 +2553,7 @@ func (c *Controller) project() {
 		// A lifecycle event and a concurrent Send must agree on whether the root
 		// conversation is busy. Holding the same lock Send/dispatch use closes the
 		// window between the durable projection and the in-memory ownership update.
-		lifecycle := event.Kind == ports.ChatEventTurnStarted || event.Kind == ports.ChatEventTurnCompleted
+		lifecycle := event.Kind == ports.ChatEventTurnStarted || event.Kind == ports.ChatEventTurnCompleted || event.Kind == ports.ChatEventCompacted
 		if lifecycle {
 			c.sendMu.Lock()
 		}
@@ -2728,9 +2731,10 @@ func (c *Controller) applyCommittedTurnLifecycle(event ports.ChatEvent) bool {
 		c.state = ports.ChatControllerBusy
 		return true
 	case ports.ChatEventTurnCompleted:
-		if c.pendingTurnID != event.ProviderTurnID {
+		if c.pendingTurnID != event.ProviderTurnID && (!c.compactionPending || c.pendingTurnID != "") {
 			return false
 		}
+		c.compactionPending = false
 		c.pendingTurnID = ""
 		c.dispatchingTurnID = ""
 		if c.ackedTurnID == event.ProviderTurnID {
@@ -3186,6 +3190,20 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		c.reportActivity(ctx, domain.ActivityWaitingInput, "chat.input.requested", now)
 	case ports.ChatEventInputResolved:
 		c.reportInteractionResolved(ctx, "chat.input.resolved", now)
+	case ports.ChatEventCompacted:
+		if event.ProviderConversationID != "" && event.ProviderConversationID != c.conv.ProviderConversationID() {
+			return
+		}
+		c.mu.Lock()
+		settled := c.compactionPending && c.pendingTurnID == ""
+		if settled {
+			c.compactionPending = false
+			c.state = ports.ChatControllerReady
+		}
+		c.mu.Unlock()
+		if settled {
+			_ = c.drainLocked(ctx, true)
+		}
 	case ports.ChatEventControllerState:
 		// Volatile state moves only after the provider event and all of its durable
 		// cleanup committed. Otherwise a rollback can say "stopped" in memory while

@@ -554,18 +554,14 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// queued-only intake must survive a failed first drain.
 	queuedBeforeFirstController := false
 	preserveUndispatchedQueue := false
+	waking := s.isWaking(cfg.SessionID)
 	hadProviderHistory := false
-	_, queuedStartErr := s.store.NextQueuedTurn(ctx, conversation.ID)
-	if queuedStartErr != nil && !errors.Is(queuedStartErr, domain.ErrNoQueuedTurn) {
-		return nil, fmt.Errorf("read queued chat turns before start: %w", queuedStartErr)
-	}
-	hasQueuedBeforeStart := queuedStartErr == nil
 	if s.sessions != nil {
 		record, found, readErr := s.sessions.GetSession(ctx, cfg.SessionID)
 		if readErr != nil {
 			return nil, fmt.Errorf("read chat session before start: %w", readErr)
 		}
-		if found && (record.ProvisionState.IsProvisioning() || record.HibernatedAt != nil || hasQueuedBeforeStart) {
+		if found && (record.ProvisionState.IsProvisioning() || waking) {
 			hadProviderHistory = record.Metadata.ProviderConversationID != ""
 			running, listErr := s.store.ListVisibleRunningTurnProviderIDs(ctx, conversation.ID)
 			if listErr != nil {
@@ -573,7 +569,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			}
 			queuedBeforeFirstController = record.ProvisionState.IsProvisioning() && record.Metadata.ControllerGeneration == "" &&
 				record.Metadata.ProviderConversationID == "" && len(running) == 0
-			preserveUndispatchedQueue = len(running) == 0 && (record.ProvisionState.IsProvisioning() || hasQueuedBeforeStart)
+			preserveUndispatchedQueue = len(running) == 0 && (record.ProvisionState.IsProvisioning() || waking)
 		}
 	}
 	providerBoundaryID := ""
@@ -1335,12 +1331,11 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 		s.mu.Lock()
 		delete(s.startConfigs, owner)
 		s.mu.Unlock()
+		var stopErr error
 		if s.stopProviderHost != nil {
-			if err := s.stopProviderHost(ctx, id); err != nil {
-				return err
-			}
+			stopErr = s.stopProviderHost(ctx, id)
 		}
-		return s.clearHibernation(ctx, id)
+		return errors.Join(stopErr, s.clearHibernation(ctx, id))
 	}
 	err := controller.Terminate(ctx)
 	controller.mu.Lock()
@@ -1367,10 +1362,7 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 		s.mu.Unlock()
 	default:
 	}
-	if err == nil {
-		err = s.clearHibernation(ctx, id)
-	}
-	return err
+	return errors.Join(err, s.clearHibernation(ctx, id))
 }
 
 // StopForOwner closes a typed-owner controller without touching its parent

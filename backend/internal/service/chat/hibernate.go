@@ -162,8 +162,8 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 	}
 	owner := domain.SessionConversationOwner(id)
 	gate := s.controllerGate(owner)
-	if err := gate.lock(ctx); err != nil {
-		return false, err
+	if !gate.tryLock() {
+		return false, nil
 	}
 	defer gate.unlock()
 
@@ -185,7 +185,9 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 	}
 	// Send and provider lifecycle projection use the same dispatch lock. Fence
 	// intake only after verifying the durable queue and latest primary turn.
-	controller.sendMu.Lock()
+	if !controller.sendMu.TryLock() {
+		return false, nil
+	}
 	controller.mu.Lock()
 	busy := controller.state != ports.ChatControllerReady ||
 		controller.handoff != controllerHandoffNone ||
@@ -385,6 +387,10 @@ func (s *Service) workingController(ctx context.Context, id domain.SessionID) (*
 					return controller, gate.unlock, nil
 				}
 			}
+			if !s.isWaking(id) {
+				gate.unlock()
+				return nil, nil, ErrNoController
+			}
 		}
 		gate.unlock()
 		if err := s.wakeHibernated(ctx, id); err != nil {
@@ -398,11 +404,6 @@ func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error
 	if err != nil {
 		return err
 	}
-	if rec.HibernatedAt == nil {
-		if s.HasLiveChatController(id) {
-			return nil
-		}
-	}
 	if s.wakeChat == nil {
 		return ErrNoController
 	}
@@ -415,6 +416,13 @@ func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+	}
+	if rec.HibernatedAt == nil {
+		s.wakeMu.Unlock()
+		if s.HasLiveChatController(id) {
+			return nil
+		}
+		return ErrNoController
 	}
 	run := &wakeRun{done: make(chan struct{})}
 	s.wakeRuns[id] = run
@@ -432,7 +440,9 @@ func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error
 		s.wakeMu.Unlock()
 		return resultErr
 	}
-	if err := s.wakeChat(ctx, id); err != nil {
+	wakeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
+	defer cancel()
+	if err := s.wakeChat(wakeCtx, id); err != nil {
 		return finish(err)
 	}
 	if !s.HasLiveChatController(id) {
