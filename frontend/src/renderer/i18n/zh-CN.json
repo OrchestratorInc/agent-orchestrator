@@ -1106,6 +1106,7 @@
 	"settings.models.configureThenRefresh": "在 {{agent}} 中配置模型，然后刷新。",
 	"settings.models.currentDefaults": "已固定的模型",
 	"settings.models.recent": "最近使用",
+	"settings.models.otherModels": "其他模型",
 	"settings.models.loadFailed": "无法加载模型。",
 	"settings.models.loading": "正在加载模型…",
 	"settings.models.matchingCount": "正在显示 {{visible}} 个，共 {{total}} 个匹配模型",

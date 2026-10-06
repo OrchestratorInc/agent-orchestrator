@@ -1124,6 +1124,7 @@
 	"settings.models.configureThenRefresh": "Konfigurieren Sie das Modell in {{agent}} und aktualisieren Sie anschließend.",
 	"settings.models.currentDefaults": "Angeheftete Modelle",
 	"settings.models.recent": "Zuletzt verwendet",
+	"settings.models.otherModels": "Andere Modelle",
 	"settings.models.loadFailed": "Modelle konnten nicht geladen werden.",
 	"settings.models.loading": "Modelle werden geladen…",
 	"settings.models.matchingCount": "{{visible}} von {{total}} passenden Modellen werden angezeigt",

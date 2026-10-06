@@ -1144,6 +1144,7 @@
 	"settings.models.configureThenRefresh": "Configurez le modèle dans {{agent}}, puis actualisez.",
 	"settings.models.currentDefaults": "Modèles épinglés",
 	"settings.models.recent": "Récents",
+	"settings.models.otherModels": "Autres modèles",
 	"settings.models.loadFailed": "Impossible de charger les modèles.",
 	"settings.models.loading": "Chargement des modèles…",
 	"settings.models.matchingCount": "Affichage de {{visible}} modèles correspondants sur {{total}}",

@@ -9459,6 +9459,11 @@ components:
           type: boolean
         label:
           type: string
+        lastUsedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         provider:
           type: string
       required:

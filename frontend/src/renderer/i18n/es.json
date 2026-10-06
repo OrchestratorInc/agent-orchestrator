@@ -1144,6 +1144,7 @@
 	"settings.models.configureThenRefresh": "Configura el modelo en {{agent}} y luego actualiza.",
 	"settings.models.currentDefaults": "Modelos fijados",
 	"settings.models.recent": "Recientes",
+	"settings.models.otherModels": "Otros modelos",
 	"settings.models.loadFailed": "No se pudieron cargar los modelos.",
 	"settings.models.loading": "Cargando modelos…",
 	"settings.models.matchingCount": "Mostrando {{visible}} de {{total}} modelos coincidentes",

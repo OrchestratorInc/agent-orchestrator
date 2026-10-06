@@ -3,7 +3,7 @@ import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef, useState
 import { useTranslation } from "react-i18next";
 import type { AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useSuppressStrayFocusRing } from "../../hooks/useSuppressStrayFocusRing";
-import { isConcreteModelID, modelChoiceLabel } from "../../lib/agent-model-choices";
+import { isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../../lib/agent-model-choices";
 import { fallbackEffort, useApplyEffortDefault } from "../../lib/effort";
 import { cn } from "../../lib/utils";
 import { formatEffortLabel } from "./EffortPicker";
@@ -73,7 +73,7 @@ export function AgentModelCombobox({
 	renderTrigger,
 	recentScope,
 	compact = false,
-	showFollowAgentAction = true,
+	agentId,
 	tuning,
 	disabled = false,
 	"aria-label": ariaLabel,
@@ -91,7 +91,8 @@ export function AgentModelCombobox({
 	onCustom: (value: string) => void;
 	/** Shown when the agent does not report a concrete model. */
 	emptyLabel?: string;
-	showFollowAgentAction?: boolean;
+	/** Claude Code lists its newest model per family and folds the rest under "Other models". */
+	agentId?: string;
 	triggerLabel?: string;
 	triggerClassName?: string;
 	menuAlign?: "start" | "center" | "end";
@@ -167,14 +168,23 @@ export function AgentModelCombobox({
 		[concreteModels],
 	);
 
+	const claude = useMemo(
+		() => (agentId === "claude-code" ? splitClaudeModels(searchIndex.models) : undefined),
+		[agentId, searchIndex],
+	);
+	const [otherOpen, setOtherOpen] = useState(false);
+	const selectedIsOther = Boolean(claude?.other.some((item) => item.id === selected?.id));
+	const showOther = otherOpen || selectedIsOther;
+
 	const rankedModels = useMemo(() => {
 		if (!normalizedSearch) {
+			const base = claude ? (showOther ? [...claude.current, ...claude.other] : claude.current) : searchIndex.models;
 			// Compact mode reads as a plain, stable list — picking a model
 			// shouldn't reorder it to the top on the next open.
-			return compact ? searchIndex.models : rankInitialModels(searchIndex.models, effectiveModel, recentModelIDs);
+			return compact ? base : rankInitialModels(base, effectiveModel, recentModelIDs);
 		}
 		return searchModelIndex(searchIndex, normalizedSearch).models;
-	}, [compact, effectiveModel, normalizedSearch, recentModelIDs, searchIndex]);
+	}, [claude, compact, effectiveModel, normalizedSearch, recentModelIDs, searchIndex, showOther]);
 
 	const visibleModels = rankedModels.slice(0, MAX_VISIBLE_MODELS);
 	const groups = useMemo(
@@ -245,6 +255,7 @@ export function AgentModelCombobox({
 				setMenuOpen(open);
 				if (open) {
 					setSearch("");
+					setOtherOpen(false);
 				} else {
 					setRefreshFailed(false);
 					setEffortMenuOpen(false);
@@ -378,11 +389,6 @@ export function AgentModelCombobox({
 						className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
 						onScroll={updateScrollCue}
 					>
-						{normalizedSearch === "" && showFollowAgentAction && explicitModel && !defaultModel && (
-							<DropdownMenuItem onSelect={() => onChange("")} className={modelItemClass(false)}>
-								{t("settings.models.useAgentModel")}
-							</DropdownMenuItem>
-						)}
 						{groups.map((group, groupIndex) => (
 							<div key={group.key}>
 								{!compact && (groupIndex > 0 || normalizedSearch === "") && <DropdownMenuSeparator />}
@@ -420,6 +426,20 @@ export function AgentModelCombobox({
 								)}
 							</div>
 						))}
+
+						{claude?.other.length && normalizedSearch === "" && !selectedIsOther ? (
+							<DropdownMenuItem
+								onSelect={(event) => {
+									event.preventDefault();
+									setOtherOpen((open) => !open);
+								}}
+								className={cn(modelItemClass(false), "[&_svg]:size-icon-sm")}
+								aria-expanded={otherOpen}
+							>
+								<span className="truncate text-settings-muted">{t("settings.models.otherModels")}</span>
+								<ChevronDown className={cn("ml-auto opacity-70 transition-transform", otherOpen && "rotate-180")} aria-hidden="true" />
+							</DropdownMenuItem>
+						) : null}
 
 						{showCustomSearchAction && (
 							<DropdownMenuItem onSelect={() => onCustom(customSearchValue)} className={modelItemClass(false)}>

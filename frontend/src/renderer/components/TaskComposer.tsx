@@ -27,7 +27,7 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
-import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
 import { fallbackEffort } from "../lib/effort";
 import {
 	buildRankedAgentOptions,
@@ -459,6 +459,16 @@ export function TaskComposer({
 	const catalogDefaultOption =
 		catalogModels.find((item) => item.isDefault)?.id ?? "";
 	const catalogUsesModes = modelCatalogQuery.data?.selectionMode === "mode";
+	// The model this user ran most recently.
+	const lastUsedOption =
+		catalogModels
+			.filter((item) => item.lastUsedAt)
+			.sort((a, b) => Date.parse(b.lastUsedAt ?? "") - Date.parse(a.lastUsedAt ?? ""))[0]?.id ?? "";
+	// With nothing remembered, run, or configured, Claude Code opens on the newest Opus.
+	const claudeFallbackOption =
+		selectedAgent === "claude-code" && !catalogUsesModes
+			? (splitClaudeModels(catalogModels).current.find((item) => /opus/i.test(modelChoiceLabel(item)))?.id ?? "")
+			: "";
 	const rememberedConfigForSelectedAgent = agentDrafts[selectedAgent];
 	const rememberedModel = rememberedConfigForSelectedAgent?.model ?? "";
 	const rememberedMode = rememberedConfigForSelectedAgent?.mode ?? "";
@@ -472,10 +482,13 @@ export function TaskComposer({
 		isConcreteModelID(rememberedMode) && catalogModels.some((item) => item.id === rememberedMode);
 	const defaultModelForSelectedAgent =
 		(rememberedModelIsValid ? rememberedModel : "") ||
+		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
-		(catalogUsesModes ? "" : catalogDefaultOption);
+		(catalogUsesModes ? "" : catalogDefaultOption) ||
+		claudeFallbackOption;
 	const defaultModeForSelectedAgent =
 		(rememberedModeIsValid ? rememberedMode : "") ||
+		(catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(isConcreteModelID(projectModeForSelectedAgent) ? projectModeForSelectedAgent : "") ||
 		(catalogUsesModes ? catalogDefaultOption : "");
 	const selectedModel = model || (modelTouched ? (catalogUsesModes ? "" : catalogDefaultOption) : defaultModelForSelectedAgent);
@@ -899,7 +912,7 @@ function TaskModelPicker({
 			refreshError={catalog?.refreshError}
 			retryAt={catalog?.retryAt}
 			disabled={disabled || agentId === ""}
-			showFollowAgentAction={showFollowAgentAction}
+			agentId={agentId}
 			onChange={selectCatalogModel}
 			onCustom={selectCustomModel}
 			compact

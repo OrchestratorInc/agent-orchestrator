@@ -938,6 +938,7 @@ function AgentModelField({
 						allowCustom={catalog?.allowCustom}
 						customModelEntry={customModelEntry}
 						agentLabel={agentId}
+						agentId={agentId}
 						onRefresh={refreshCatalog}
 						refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
 						refreshError={catalog?.refreshError}
