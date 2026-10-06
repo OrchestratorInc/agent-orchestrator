@@ -17,6 +17,7 @@ import type { RenderRef } from "../../types/conversation";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { useChatRemoteHost } from "./chat-image-source";
 
 /** The app theme as handed to renders; follows data-theme and data-style-theme flips on <html>. */
 function useRenderTheme(): RenderTheme {
@@ -90,7 +91,18 @@ function RenderDocument({ render, fit, className }: { render: RenderRef; fit?: b
 
 export function RenderFrame({ render }: { render: RenderRef }) {
 	const { t } = useTranslation();
+	const remoteHost = useChatRemoteHost();
 	const [expanded, setExpanded] = useState(false);
+	// The local daemon has no copy of a remote host's render, and the remote
+	// proxy URL must not reach the page: its path carries the proxy's capability
+	// token, which the page could read from its own location.
+	if (remoteHost) {
+		return (
+			<p className="text-xs text-muted-foreground">
+				{render.title} · {t("chat.render.remoteHost")}
+			</p>
+		);
+	}
 	return (
 		<div className="group/render relative min-w-0">
 			<RenderDocument render={render} fit />

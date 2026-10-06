@@ -2168,6 +2168,7 @@
 	"chat.image.openUnnamed": "画像を開く",
 	"chat.image.untitled": "画像",
 	"chat.render.expand": "ページを拡大",
+	"chat.render.remoteHost": "ページを表示するには、このセッションをホスト上で開いてください。",
 	"chat.edit.cancel": "編集をキャンセル",
 	"chat.edit.send": "編集したメッセージを送信",
 	"chat.edit.sendShortcut": "編集したメッセージを送信（⌘/Ctrl+Enter）",

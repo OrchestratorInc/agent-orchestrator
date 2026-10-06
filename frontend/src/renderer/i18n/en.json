@@ -2172,6 +2172,7 @@
 	"chat.image.openUnnamed": "Open image",
 	"chat.image.untitled": "Image",
 	"chat.render.expand": "Expand page",
+	"chat.render.remoteHost": "Open this session on its host to see the page.",
 	"chat.edit.cancel": "Cancel edit",
 	"chat.edit.send": "Send edited message",
 	"chat.edit.sendShortcut": "Send edited message (⌘/Ctrl+Enter)",

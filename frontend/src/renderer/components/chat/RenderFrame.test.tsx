@@ -5,6 +5,7 @@ import { setApiBaseUrl } from "../../lib/api-client";
 import type { ConversationActivity } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 import { ActivityRow } from "./ChatTimelineItems";
+import { ChatImageSourceProvider } from "./chat-image-source";
 
 function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
@@ -47,6 +48,27 @@ describe("render activity", () => {
 		expect(frame().getAttribute("sandbox")).toBe("allow-scripts allow-forms");
 		expect(frame().getAttribute("src")).toMatch(/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/);
 		expect(frame().style.height).toBe("300px");
+	});
+
+	it("shows a note instead of a frame in a remote host's chat", () => {
+		// The local daemon has no copy of a remote host's render, and the remote
+		// proxy URL carries a capability token the page could read.
+		render(
+			<ChatImageSourceProvider sessionId="proj-1" remoteHost>
+				<ActivityRow activity={renderActivity()} />
+			</ChatImageSourceProvider>,
+		);
+		expect(document.querySelector("iframe")).toBeNull();
+		expect(screen.getByText(/Turns by day/)).toHaveTextContent("Turns by day · Open this session on its host to see the page.");
+	});
+
+	it("frames the page in a local chat", () => {
+		render(
+			<ChatImageSourceProvider sessionId="proj-1">
+				<ActivityRow activity={renderActivity()} />
+			</ChatImageSourceProvider>,
+		);
+		expect(frame().tagName).toBe("IFRAME");
 	});
 
 	it("fits the page's reported height, clamped, and ignores other windows", () => {

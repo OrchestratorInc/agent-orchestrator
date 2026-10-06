@@ -31,3 +31,8 @@ export function useChatImageSrc(src: string | undefined): string | undefined {
 	if (source.remoteHost && !source.baseUrl && src && !isAbsoluteMarkdownAssetSrc(src)) return undefined;
 	return resolveMarkdownImageSrc(source.sessionId, "", src, source.version, source.baseUrl);
 }
+
+/** Whether the open chat runs on a remote host, whose session files the local daemon cannot serve. */
+export function useChatRemoteHost(): boolean {
+	return useContext(ChatImageSourceContext)?.remoteHost ?? false;
+}

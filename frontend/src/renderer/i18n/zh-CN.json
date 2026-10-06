@@ -2150,6 +2150,7 @@
 	"chat.image.openUnnamed": "打开图片",
 	"chat.image.untitled": "图片",
 	"chat.render.expand": "放大页面",
+	"chat.render.remoteHost": "请在此会话所在的主机上打开它以查看页面。",
 	"chat.edit.cancel": "取消编辑",
 	"chat.edit.send": "发送编辑后的消息",
 	"chat.edit.sendShortcut": "发送编辑后的消息（⌘/Ctrl+Enter）",
