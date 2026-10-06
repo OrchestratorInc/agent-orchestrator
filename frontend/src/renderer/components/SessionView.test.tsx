@@ -988,6 +988,19 @@ describe("SessionView", () => {
 		expect(artifactFeedbackConsumes).toEqual([1]);
 	});
 
+	it.each(["idle", "exited"] as const)("opens imported history without Resume when activity is %s", async (state) => {
+		const session = workerSession("sess-1");
+		session.mode = "chat";
+		session.needsResume = true;
+		session.status = "working";
+		session.activity = { state, lastActivityAt: "" };
+		render(<StrictMode><SessionView sessionId="sess-1" /></StrictMode>);
+		await waitFor(() => expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "false"));
+		await act(async () => {});
+		expect(resumeAgentPostMock).not.toHaveBeenCalled();
+		session.needsResume = undefined;
+	});
+
 	it("resumes only the opened stopped session once, including in StrictMode", async () => {
 		for (const session of workspaces[0].sessions) {
 			session.status = "exited";

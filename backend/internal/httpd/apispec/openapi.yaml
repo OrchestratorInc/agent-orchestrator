@@ -4053,6 +4053,68 @@ paths:
       summary: Report a reviewer-owned hook signal
       tags:
       - reviews
+  /api/v1/session-import:
+    get:
+      operationId: scanSessionImport
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionImportPreview'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Preview readable local Claude Code and Codex histories for existing
+        projects or Standalone
+      tags:
+      - import
+    post:
+      operationId: importSelectedSessions
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionImportRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionImportResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Import selected histories as idle AO sessions without starting providers
+      tags:
+      - import
   /api/v1/sessions:
     get:
       operationId: listSessions
@@ -10753,6 +10815,8 @@ components:
           type: string
         model:
           type: string
+        needsResume:
+          type: boolean
         outputType:
           enum:
           - none
@@ -10861,6 +10925,7 @@ components:
           format: date-time
           type: string
       required:
+      - needsResume
       - id
       - kind
       - autoReviewEnabled
@@ -13903,6 +13968,83 @@ components:
       - kind
       - size
       - updatedAt
+      type: object
+    SessionImportCandidate:
+      properties:
+        harness:
+          type: string
+        id:
+          type: string
+        lastActivity:
+          format: date-time
+          type: string
+        messageCount:
+          type: integer
+        projectId:
+          type: string
+        sessionId:
+          type: string
+        suggested:
+          type: boolean
+        title:
+          type: string
+      required:
+      - id
+      - harness
+      - title
+      - lastActivity
+      - suggested
+      - messageCount
+      type: object
+    SessionImportPreview:
+      properties:
+        candidates:
+          items:
+            $ref: '#/components/schemas/SessionImportCandidate'
+          type: array
+        truncated:
+          type: boolean
+      required:
+      - candidates
+      - truncated
+      type: object
+    SessionImportRequest:
+      properties:
+        ids:
+          items:
+            type: string
+          maxItems: 500
+          minItems: 1
+          type: array
+      required:
+      - ids
+      type: object
+    SessionImportResponse:
+      properties:
+        results:
+          items:
+            $ref: '#/components/schemas/SessionImportResult'
+          type: array
+      required:
+      - results
+      type: object
+    SessionImportResult:
+      properties:
+        error:
+          type: string
+        id:
+          type: string
+        sessionId:
+          type: string
+        status:
+          enum:
+          - created
+          - already_imported
+          - failed
+          type: string
+      required:
+      - id
+      - status
       type: object
     SessionInterfaceTransition:
       properties:

@@ -3,7 +3,7 @@ import {
 	type SessionInterfaceTransition,
 	useSessionInterfaceTransitionStatus,
 } from "./useSessionInterfaceTransition";
-import { sessionAgentExited, type WorkspaceSession } from "../types/workspace";
+import { sessionAgentExited, sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 
@@ -33,7 +33,7 @@ export function canResumeAgent(
 ): boolean {
 	return Boolean(
 		session &&
-			sessionAgentExited(session) &&
+			(session.needsResume && sessionIsActive(session) || sessionAgentExited(session)) &&
 			!session.activeAgentSwitch &&
 			!session.cloud &&
 			!interfaceTransitionIsActive(transition),

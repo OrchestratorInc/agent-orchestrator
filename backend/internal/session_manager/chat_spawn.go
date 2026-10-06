@@ -433,6 +433,8 @@ func (m *Manager) resumeChatController(
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
 		m.augmentAgentRuntimeEnv(agent, env)
 	}
+	applyImportedConfigEnv(rec, env)
+
 	historyMode := ports.ChatHistoryImport
 	var providerHandoff *domain.ChatProviderHandoff
 	if requireNativeHistory {
@@ -444,6 +446,10 @@ func (m *Manager) resumeChatController(
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: recover provider ownership: %w", operation, rec.ID, err)
 	}
+	launchPath := ws.Path
+	if source := rec.Metadata.ImportSource; source != nil && source.WorkingSubdir != "" {
+		launchPath = filepath.Join(ws.Path, source.WorkingSubdir)
+	}
 	var completionErr error
 	_, err = m.chat.StartChat(ctx, ChatStart{
 		ReconnectOnly:           reconnectOnly,
@@ -452,7 +458,7 @@ func (m *Manager) resumeChatController(
 		Kind:                    rec.Kind,
 		Harness:                 rec.Harness,
 		DataDir:                 m.dataDir,
-		WorkspacePath:           ws.Path,
+		WorkspacePath:           launchPath,
 		Env:                     env,
 		Model:                   agentConfig.Model,
 		Effort:                  agentConfig.Effort,
@@ -470,6 +476,8 @@ func (m *Manager) resumeChatController(
 			if agent, ok := m.agents.Agent(rec.Harness); ok {
 				m.augmentAgentRuntimeEnv(agent, launchEnv)
 			}
+			applyImportedConfigEnv(rec, launchEnv)
+
 			rec = prepared
 			return launchEnv, nil
 		},
@@ -483,7 +491,17 @@ func (m *Manager) resumeChatController(
 		HistoryMode:          historyMode,
 		HistoryPolicy:        historyPolicy,
 		ControllerReady: func(started ChatStarted) (ChatControllerCommit, error) {
+			if rec.NeedsImportResume() && started.ProviderConversationID != rec.Metadata.ImportSource.NativeID {
+				return ChatControllerCommit{}, fmt.Errorf("%w: the provider did not resume the original conversation", ports.ErrChatResumeFailed)
+			}
+
 			metadata := rec.Metadata
+			if metadata.ImportSource != nil {
+				adopted := *metadata.ImportSource
+				adopted.Adopted = true
+				metadata.ImportSource = &adopted
+			}
+
 			metadata.WorkspacePath = ws.Path
 			metadata.WorkspaceRepoPath = ws.RepoPath
 			if ws.Branch != "" {
@@ -513,6 +531,9 @@ func (m *Manager) resumeChatController(
 		},
 	})
 	if err != nil {
+		if rec.NeedsImportResume() && providerRefusedImportOwnership(err) {
+			return RestoreResult{}, ErrSessionOpenElsewhere
+		}
 		if completionErr != nil {
 			m.stopChatBestEffort(ctx, rec.ID)
 			return RestoreResult{}, fmt.Errorf("%s %s: completed: %w", operation, rec.ID, completionErr)

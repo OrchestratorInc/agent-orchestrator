@@ -174,6 +174,7 @@ export type WorkspaceSession = {
 	/** Whether the cloud worker has a current control-plane connection. */
 	runtimeConnected?: boolean;
 	chatProviderPreserved?: boolean;
+	needsResume?: boolean;
 	/** User preference to tear down this session when its PR set completes through a merge. */
 	terminateOnPrMerge?: boolean;
 	/** Whether SCM review feedback is automatically injected into the worker. */
@@ -390,13 +391,13 @@ export function sessionIsActive(session: WorkspaceSession): boolean {
  * Not `sessionIsActive`, which reports row liveness and calls this state alive.
  */
 export function sessionAgentExited(session: WorkspaceSession | undefined): boolean {
-	return Boolean(session && session.activity?.state === "exited" && sessionIsActive(session));
+	return Boolean(session && !session.needsResume && session.activity?.state === "exited" && sessionIsActive(session));
 }
 
 /** Whether a session can accept a Cue from its topbar. The daemon makes the
  * final decision, including whether a command Cue's worktree still exists. */
 export function sessionCueTargetAvailable(session: WorkspaceSession | undefined): boolean {
-	return Boolean(session && sessionIsActive(session) && session.activity?.state !== "exited" && session.activity?.state !== "blocked");
+	return Boolean(session && sessionIsActive(session) && !session.needsResume && session.activity?.state !== "exited" && session.activity?.state !== "blocked");
 }
 
 export function sessionNeedsAttention(session: WorkspaceSession): boolean {

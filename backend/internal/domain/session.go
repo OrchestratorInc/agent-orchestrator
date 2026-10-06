@@ -112,9 +112,22 @@ type SessionArtifactFile struct {
 	UpdatedAt time.Time           `json:"updatedAt"`
 }
 
+// SessionImportSource keeps provider provenance and durable workspace adoption facts.
+// Importing does not grant AO ownership of the source working directory.
+type SessionImportSource struct {
+	NativeID      string `json:"nativeId"`
+	ConfigDir     string `json:"configDir"`
+	CWD           string `json:"cwd"`
+	Adopted       bool   `json:"adopted"`
+	Prepared      bool   `json:"prepared"`
+	WorkingSubdir string `json:"workingSubdir,omitempty"`
+}
+
 // SessionMetadata is the typed, off-status metadata for a session: operational
 // handles and seed inputs used by Session Manager and reaper.
 type SessionMetadata struct {
+	ImportSource *SessionImportSource `json:"-"`
+
 	// Permissions pins the resolved launch policy independently of future project defaults.
 	Permissions PermissionMode `json:"permissions,omitempty"`
 
@@ -389,6 +402,7 @@ func (r SessionRecord) ControllerOwner() SessionControllerOwner {
 // plus derived display facts. None of Status, SCMStatus, or KanbanColumn is
 // persisted.
 type Session struct {
+	NeedsResume bool `json:"needsResume"`
 	SessionRecord
 	// StatusReadiness describes startup verification, never a persisted status.
 	// Clients must withhold activity labels until ready; unavailable permits retry.
@@ -439,4 +453,9 @@ func (s Session) LastEventAt() time.Time {
 		consider(pr.LastReviewAt)
 	}
 	return latest
+}
+
+// NeedsImportResume reports history that has not yet acquired an AO controller.
+func (s SessionRecord) NeedsImportResume() bool {
+	return s.Metadata.ImportSource != nil && !s.Metadata.ImportSource.Adopted
 }

@@ -61,6 +61,7 @@ const {
 	resumeOrchestratorMock,
 	updateStatusMock,
 	commandPaletteEnabled,
+	trustedApi,
 } = vi.hoisted(
 	() => ({
 		cloudGateState: { cloudEnabled: true, localEnabled: true, client: "" },
@@ -85,6 +86,7 @@ const {
 		downloadUpdateMock: vi.fn(),
 		checkUpdateMock: vi.fn(),
 		commandPaletteEnabled: { current: true },
+		trustedApi: { current: false },
 	}),
 );
 
@@ -171,7 +173,7 @@ vi.mock("../hooks/useSettings", () => ({
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
-	hasTrustedApiBaseUrl: () => false,
+	hasTrustedApiBaseUrl: () => trustedApi.current,
 	apiErrorMessage: (error: unknown) => {
 		if (error instanceof Error) return error.message;
 		if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") {
@@ -445,6 +447,7 @@ beforeEach(() => {
 	dragStarts.clear();
 	document.documentElement.style.removeProperty("--ao-sidebar-w");
 	commandPaletteEnabled.current = true;
+	trustedApi.current = false;
 	cloudGateState.cloudEnabled = true;
 	cloudGateState.localEnabled = true;
 	cloudGateState.client = "";
@@ -518,6 +521,23 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
+	it.each([true, false])("only warms an adopted session on hover (needsResume=%s)", async (needsResume) => {
+		vi.useFakeTimers();
+		try {
+			trustedApi.current = true;
+			renderSidebar({
+				workspaces: [{ ...workspace, sessions: [{ ...session, mode: "chat", needsResume, activity: { state: "exited", lastActivityAt: session.updatedAt } }] }],
+				seed: (client) => client.setQueryData(["conversation", session.id], { pages: [], pageParams: [] }),
+			});
+			fireEvent.mouseEnter(screen.getByLabelText("Open fix login"));
+			await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+			if (needsResume) expect(postMock).not.toHaveBeenCalled();
+			else expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", { params: { path: { sessionId: session.id } } });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("creates local or remote projects from the header button", async () => {
 		const user = userEvent.setup();
 		renderSidebar({

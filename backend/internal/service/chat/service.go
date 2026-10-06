@@ -302,6 +302,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 
 	replayCheckpoint := nativeHistoryCheckpoint{}
 	nativeEvidence := ""
+	importingHistory := false
 	if cfg.HistoryMode == ports.ChatHistoryRequired {
 		if s.sessions == nil {
 			return nil, errors.New("native history replay requires a session reader")
@@ -313,6 +314,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		if !found {
 			return nil, ports.ErrSessionNotFound
 		}
+		importingHistory = rec.NeedsImportResume()
 		nativeEvidence = rec.Metadata.NativeCheckpointEvidence
 		replayCheckpoint.latestUserPromptAt = rec.Metadata.LatestUserPromptAt
 		replayCheckpoint.latestAssistantUpdateAt = rec.Metadata.LatestAssistantUpdateAt
@@ -866,6 +868,12 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			ctx, existing.Turns, existing.Messages, existing.Activities,
 			(cfg.HistoryMode == ports.ChatHistoryRequired), replayCheckpoint,
 		)
+		if historyErr == nil && importingHistory && !slices.ContainsFunc(events, func(event ports.ChatEvent) bool {
+			return (event.Kind == ports.ChatEventUserMessageCompleted || event.Kind == ports.ChatEventMessageCompleted) &&
+				strings.TrimSpace(event.Text) != ""
+		}) {
+			historyErr = fmt.Errorf("%w: the provider returned no readable messages for the imported conversation", ports.ErrChatHistoryUnavailable)
+		}
 		if historyErr != nil {
 			if cleanupErr := cleanupUnpublishedConversation(conv, false); cleanupErr != nil && (cfg.HistoryMode == ports.ChatHistoryRequired) {
 				return nil, fmt.Errorf("%w: failed history target shutdown: %w",
@@ -1510,6 +1518,10 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 		return Snapshot{}, err
 	}
 
+	if record.NeedsImportResume() {
+		return s.importedSnapshot(ctx, record, 0, 100)
+	}
+
 	conversation, err := s.store.ConversationForSession(ctx, id)
 	if errors.Is(err, domain.ErrNoConversation) {
 		// A chat session has no conversation until its controller first starts.
@@ -1605,6 +1617,10 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 	if err != nil {
 		return Snapshot{}, err
 	}
+	if record.NeedsImportResume() {
+		return s.importedSnapshot(ctx, record, beforeSequence, limit)
+	}
+
 	conversation, err := s.store.ConversationForSession(ctx, id)
 	if errors.Is(err, domain.ErrNoConversation) {
 		return Snapshot{

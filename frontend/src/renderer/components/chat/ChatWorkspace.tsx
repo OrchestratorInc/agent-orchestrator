@@ -1487,6 +1487,7 @@ function ChatWorkspaceContent({
 					<ControllerBanner
 						controller={snapshot.controller}
 						provisionState={session?.provisionState}
+						needsResume={session?.needsResume}
 						transitioning={controllerTransitioning || agentResuming}
 						onResume={newWorkDisabled ? undefined : onResumeAgent}
 						resuming={resumingAgent}
@@ -1979,6 +1980,7 @@ function ChatHeader({
 function ControllerBanner({
 	controller,
 	provisionState,
+	needsResume,
 	transitioning,
 	onResume,
 	resuming,
@@ -1989,6 +1991,7 @@ function ControllerBanner({
 }: {
 	controller: { state: ControllerState; error?: string };
 	provisionState?: WorkspaceSession["provisionState"];
+	needsResume?: boolean;
 	transitioning?: boolean;
 	onResume?: () => void;
 	resuming?: boolean;
@@ -2006,6 +2009,7 @@ function ControllerBanner({
 	if (transitioning && controller.state === "stopped") return null;
 	if (controller.state === "ready" || controller.state === "busy") return null;
 
+	const openElsewhere = resumeError?.toLowerCase().includes("this is open elsewhere") ?? false;
 	const copy: Partial<Record<ControllerState, { title: string; tone: string }>> = {
 		connecting: {
 			title: "Connecting to the agent…",
@@ -2016,8 +2020,8 @@ function ControllerBanner({
 			tone: "text-warning",
 		},
 		stopped: {
-			title: "The agent controller stopped",
-			tone: "text-destructive",
+			title: openElsewhere ? "This is open elsewhere" : needsResume ? "Ready to continue in AO" : "The agent controller stopped",
+			tone: needsResume ? "text-muted-foreground" : "text-destructive",
 		},
 	};
 	const shown = copy[controller.state];
@@ -2045,9 +2049,9 @@ function ControllerBanner({
 				{controller.state === "stopped" ? (
 					<>
 						<span className="text-[11px] leading-snug text-muted-foreground">
-							History is kept. Resume the agent or open a shell in the same worktree.
+							{openElsewhere ? "Close it there to continue here." : needsResume ? "Your imported history is saved. Resume when you want to start working." : "History is kept. Resume the agent or open a shell in the same worktree."}
 						</span>
-						{resumeError || shellError ? (
+						{!openElsewhere && (resumeError || shellError) ? (
 							<span className="text-[11px] leading-snug text-destructive">
 								{resumeError ?? shellError}
 							</span>
@@ -2061,10 +2065,10 @@ function ControllerBanner({
 									onClick={onResume}
 									disabled={resuming}
 								>
-									{resuming ? "Resuming…" : "Resume agent"}
+									{resuming ? "Resuming…" : resumeError ? "Retry" : "Resume agent"}
 								</Button>
 							) : null}
-							{onOpenShell ? (
+							{onOpenShell && !needsResume ? (
 								<Button
 									type="button"
 									size="sm"

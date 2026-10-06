@@ -20,7 +20,7 @@ import (
 func (s *Store) CreateSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	created, _, err := s.createSessionLocked(ctx, rec)
+	created, _, err := s.createSessionLocked(ctx, s.qw, rec)
 	return created, err
 }
 
@@ -32,7 +32,7 @@ func (s *Store) CreateClientRequestSession(ctx context.Context, rec domain.Sessi
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.createSessionLocked(ctx, rec)
+	return s.createSessionLocked(ctx, s.qw, rec)
 }
 
 // GetSessionByClientRequestID finds the session created for a retryable request.
@@ -82,18 +82,18 @@ func (s *Store) CreateAutomationSession(ctx context.Context, rec domain.SessionR
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.createSessionLocked(ctx, rec)
+	return s.createSessionLocked(ctx, s.qw, rec)
 }
 
-func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error) {
+func (s *Store) createSessionLocked(ctx context.Context, q *gen.Queries, rec domain.SessionRecord) (domain.SessionRecord, bool, error) {
 	if rec.ClientRequestID != "" {
-		existing, found, err := s.getSessionByClientRequestID(ctx, s.qw, rec.ClientRequestID)
+		existing, found, err := s.getSessionByClientRequestID(ctx, q, rec.ClientRequestID)
 		if err != nil || found {
 			return existing, false, err
 		}
 	}
 	if rec.AutomationRunID != nil {
-		existing, err := s.qw.GetSessionByAutomationRunID(ctx, rec.AutomationRunID)
+		existing, err := q.GetSessionByAutomationRunID(ctx, rec.AutomationRunID)
 		if err == nil {
 			return rowToRecord(gen.GetSessionRow(existing)), false, nil
 		}
@@ -106,17 +106,17 @@ func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecor
 	var err error
 	prefix := string(rec.ProjectID)
 	if rec.ProjectID == "" {
-		num, err = s.qw.NextStandaloneSessionNum(ctx)
+		num, err = q.NextStandaloneSessionNum(ctx)
 		prefix = "standalone"
 	} else {
-		num, err = s.qw.NextSessionNum(ctx, optionalProjectID(rec.ProjectID))
+		num, err = q.NextSessionNum(ctx, optionalProjectID(rec.ProjectID))
 	}
 	if err != nil {
 		return domain.SessionRecord{}, false, fmt.Errorf("next session num for %s: %w", rec.ProjectID, err)
 	}
 	for {
 		rec.ID = domain.SessionID(fmt.Sprintf("%s-%d", prefix, num))
-		exists, err := s.qw.SessionIDExists(ctx, rec.ID)
+		exists, err := q.SessionIDExists(ctx, rec.ID)
 		if err != nil {
 			return domain.SessionRecord{}, false, fmt.Errorf("check session id %s: %w", rec.ID, err)
 		}
@@ -125,15 +125,15 @@ func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecor
 		}
 		num++
 	}
-	if err := s.qw.InsertSession(ctx, recordToInsert(rec, num)); err != nil {
+	if err := q.InsertSession(ctx, recordToInsert(rec, num)); err != nil {
 		if rec.ClientRequestID != "" {
-			existing, found, reloadErr := s.getSessionByClientRequestID(ctx, s.qw, rec.ClientRequestID)
+			existing, found, reloadErr := s.getSessionByClientRequestID(ctx, q, rec.ClientRequestID)
 			if reloadErr == nil && found {
 				return existing, false, nil
 			}
 		}
 		if rec.AutomationRunID != nil {
-			existing, reloadErr := s.qw.GetSessionByAutomationRunID(ctx, rec.AutomationRunID)
+			existing, reloadErr := q.GetSessionByAutomationRunID(ctx, rec.AutomationRunID)
 			if reloadErr == nil {
 				return rowToRecord(gen.GetSessionRow(existing)), false, nil
 			}
@@ -796,6 +796,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		AutoInjectCI:       row.AutoInjectCI,
 		OutputType:         normalizeSessionOutputType(domain.SessionOutputType(row.SessionOutputType)),
 		Metadata: domain.SessionMetadata{
+			ImportSource:                     unmarshalImportSource(row.ImportSource),
 			Branch:                           row.Branch,
 			WorkspacePath:                    row.WorkspacePath,
 			WorkspaceRepoPath:                row.WorkspaceRepoPath,
@@ -870,6 +871,7 @@ func listAllSessionsRowToRecord(row gen.ListAllSessionsRow) domain.SessionRecord
 func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams {
 	activity := normalActivity(rec.Activity, rec.CreatedAt)
 	return gen.InsertSessionParams{
+		ImportSource:                     marshalImportSource(rec.Metadata.ImportSource),
 		ID:                               rec.ID,
 		ProjectID:                        optionalProjectID(rec.ProjectID),
 		Num:                              num,
@@ -940,6 +942,7 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 func recordToUpdate(rec domain.SessionRecord) gen.UpdateSessionParams {
 	activity := normalActivity(rec.Activity, rec.UpdatedAt)
 	return gen.UpdateSessionParams{
+		ImportSource:                     marshalImportSource(rec.Metadata.ImportSource),
 		ID:                               rec.ID,
 		IssueID:                          rec.IssueID,
 		Kind:                             rec.Kind,
@@ -1088,4 +1091,23 @@ func normalActivity(a domain.Activity, fallback time.Time) domain.Activity {
 	// rather than trusting each caller's clock.
 	a.LastActivityAt = a.LastActivityAt.UTC()
 	return a
+}
+
+func marshalImportSource(source *domain.SessionImportSource) string {
+	if source == nil {
+		return ""
+	}
+	b, _ := json.Marshal(source)
+	return string(b)
+}
+
+func unmarshalImportSource(raw string) *domain.SessionImportSource {
+	if raw == "" {
+		return nil
+	}
+	var source domain.SessionImportSource
+	if json.Unmarshal([]byte(raw), &source) != nil {
+		return nil
+	}
+	return &source
 }

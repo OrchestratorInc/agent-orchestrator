@@ -41,6 +41,7 @@ type APIDeps struct {
 	NotificationStream controllers.NotificationStream
 	Push               controllers.PushRegistry
 	Import             controllers.ImportService
+	SessionImport      controllers.SessionImportService
 	Directories        controllers.DirectoryBrowserService
 	ShellTerminals     controllers.ShellTerminalService
 	Cues               controllers.CueService
@@ -129,6 +130,7 @@ type API struct {
 	reports       *controllers.ReportsController
 	push          *controllers.PushController
 	imports       *controllers.ImportController
+	sessionImport *controllers.SessionImportController
 	fs            *controllers.FSController
 	shellTerms    *controllers.ShellTerminalsController
 	cues          *controllers.CuesController
@@ -185,6 +187,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		reports:       &controllers.ReportsController{Svc: deps.Reports},
 		push:          &controllers.PushController{Registry: deps.Push},
 		imports:       &controllers.ImportController{Svc: deps.Import},
+		sessionImport: &controllers.SessionImportController{Svc: deps.SessionImport},
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
@@ -245,6 +248,7 @@ func (a *API) Register(root chi.Router) {
 			a.reports.Register(r)
 			a.push.Register(r)
 			a.imports.Register(r)
+			a.sessionImport.Register(r)
 			a.fs.Register(r)
 			a.shellTerms.Register(r)
 			a.cues.Register(r)

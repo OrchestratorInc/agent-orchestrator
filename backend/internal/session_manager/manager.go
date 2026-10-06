@@ -375,6 +375,7 @@ type Store interface {
 	SetSessionProvisionState(ctx context.Context, id domain.SessionID, state domain.SessionProvisionState, message string, now time.Time) (bool, error)
 	SetSessionProvisionSteps(ctx context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error
 	SetSessionProvisionedWorkspace(ctx context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
+	SetSessionImportWorkspace(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, branch, path, repo string, now time.Time) (bool, error)
 	SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error)
 	PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error)
 	DeleteTaskPreparation(ctx context.Context, id domain.SessionID) (bool, error)
@@ -2845,6 +2846,14 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
 	}
+	if rec.NeedsImportResume() {
+		rec, err = m.prepareImportedWorkspace(ctx, rec, project)
+		if err != nil {
+			return RestoreResult{}, err
+		}
+		requireNativeHistory = true
+	}
+
 	meta := rec.Metadata
 	if meta.WorkspacePath == "" ||
 		(meta.Branch == "" && projectKindForSession(project, rec.ProjectID) != domain.ProjectKindScratch) {
@@ -2852,6 +2861,7 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 	}
 	ws := ports.WorkspaceInfo{
 		Path:      meta.WorkspacePath,
+		RepoPath:  meta.WorkspaceRepoPath,
 		Branch:    meta.Branch,
 		SessionID: rec.ID,
 		ProjectID: rec.ProjectID,
@@ -3241,6 +3251,9 @@ func (m *Manager) saveAndTeardownOne(ctx context.Context, rec domain.SessionReco
 // worktree, preserving conversation identity when recovery fails. Startup uses
 // checkSessionHealth instead so missing agents stay stopped.
 func (m *Manager) reconcileLive(ctx context.Context, rec domain.SessionRecord) error {
+	if rec.NeedsImportResume() {
+		return nil
+	}
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
 		return err
