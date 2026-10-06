@@ -47,9 +47,10 @@ type updateAdvisoryCall struct {
 	err      error
 }
 
-// UpdateAdvisory probes the adapter-selected binary and checks the package
-// source recorded by a successful AO install. Unattributed installations and
-// failed probes remain unknown; they never masquerade as up-to-date.
+// UpdateAdvisory probes the adapter-selected binary and checks the npm or
+// Homebrew package that owns it, whether or not AO installed it. Binaries no
+// package manager owns and failed probes remain unknown; they never
+// masquerade as up-to-date.
 func (s *Service) UpdateAdvisory(ctx context.Context, target Target) (UpdateAdvisory, error) {
 	if !IsAgentTarget(target) {
 		return UpdateAdvisory{}, fmt.Errorf("systeminstall: unknown harness %q", target)
@@ -117,42 +118,46 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	if err != nil {
 		return advisory, err
 	}
-	if job.Status != StatusSucceeded || (job.Method != "npm" && job.Method != "homebrew") || s.verifier == nil {
+	if s.verifier == nil || s.ownsInstallation == nil || s.latestVersion == nil {
 		return advisory, nil
 	}
 	planner, err := s.newRequestPlanner(ctx)
 	if err != nil {
 		return advisory, nil //nolint:nilerr // Unavailable package metadata leaves advisory status unknown.
 	}
-	var source Plan
-	for _, plan := range planner.agentMethodPlans(target, AgentOperationInstall) {
-		if plan.Method == job.Method {
-			source = plan
-			break
-		}
+	recordedMethod := ""
+	if job.Status == StatusSucceeded {
+		recordedMethod = job.Method
 	}
-	if source.Package == "" || s.latestVersion == nil {
+	sources := packageSources(planner.agentMethodPlans(target, AgentOperationInstall), recordedMethod)
+	if len(sources) == 0 {
 		return advisory, nil
 	}
 	verified, err := s.verifier.Verify(ctx, target)
 	if err != nil {
 		return advisory, nil //nolint:nilerr // An unverified binary cannot establish update availability.
 	}
-	packageName := strings.TrimSuffix(source.Package, "@latest")
-	if s.ownsInstallation == nil {
+	// The binary's package-manager root decides the source, so harnesses the
+	// user installed outside AO are covered as well as AO-installed ones.
+	var source Plan
+	for _, candidate := range sources {
+		owned, err := s.ownsInstallation(ctx, verified.ResolvedPath, candidate.Method, packageWithoutLatest(candidate.Package), candidate.PackageCask)
+		if err == nil && owned {
+			source = candidate
+			break
+		}
+	}
+	if source.Package == "" {
 		return advisory, nil
 	}
-	owned, err := s.ownsInstallation(ctx, verified.ResolvedPath, job.Method, packageName, source.PackageCask)
-	if err != nil || !owned {
-		return advisory, nil //nolint:nilerr // Unproven package ownership leaves advisory status unknown.
-	}
+	packageName := packageWithoutLatest(source.Package)
 	current := versionPattern.FindStringSubmatch(verified.Output)
 	if current == nil {
 		return advisory, nil
 	}
 	advisory.CurrentVersion = current[0]
-	advisory.Source = job.Method
-	latest, err := s.latestVersion(ctx, job.Method, packageName, source.PackageCask)
+	advisory.Source = source.Method
+	latest, err := s.latestVersion(ctx, source.Method, packageName, source.PackageCask)
 	if err != nil {
 		return advisory, nil //nolint:nilerr // A failed latest-version lookup is not an update verdict.
 	}
@@ -172,6 +177,23 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		advisory.Status = UpdateStatusCurrent
 	}
 	return advisory, nil
+}
+
+// packageSources lists the npm and Homebrew recipes that can report a latest
+// version, with the method of a successful AO install tried first.
+func packageSources(plans []Plan, preferred string) []Plan {
+	sources := make([]Plan, 0, len(plans))
+	for _, plan := range plans {
+		if plan.Package == "" || (plan.Method != "npm" && plan.Method != "homebrew") {
+			continue
+		}
+		if plan.Method == preferred {
+			sources = append([]Plan{plan}, sources...)
+		} else {
+			sources = append(sources, plan)
+		}
+	}
+	return sources
 }
 
 // packageOwnsBinary traces symlinks to the package-manager installation root.

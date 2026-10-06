@@ -107,7 +107,6 @@ func TestUpdateAdvisoryUnknownWhenOwnershipVersionOrLookupUnproven(t *testing.T)
 		latest string
 		err    error
 	}{
-		{name: "no owned method", output: "codex 1.2.3", latest: "1.3.0"},
 		{name: "unparseable installed", job: &Job{Status: StatusSucceeded, Method: "npm"}, output: "codex development", latest: "1.3.0"},
 		{name: "registry failure", job: &Job{Status: StatusSucceeded, Method: "npm"}, output: "codex 1.2.3", err: errors.New("offline")},
 		{name: "ahead of registry", job: &Job{Status: StatusSucceeded, Method: "npm"}, output: "codex 1.4.0", latest: "1.3.0"},
@@ -151,6 +150,51 @@ func TestUpdateAdvisoryCurrentAndHomebrewPackage(t *testing.T) {
 	}
 	if gotMethod != "homebrew" || gotPackage != "codex" || !gotCask {
 		t.Fatalf("lookup = %s %s cask=%t", gotMethod, gotPackage, gotCask)
+	}
+}
+
+func TestUpdateAdvisoryDetectsPackageOwnerWithoutAOInstallRecord(t *testing.T) {
+	s := newTestService("darwin", "npm", "brew")
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/opt/bin/codex", Output: "codex-cli 1.2.3\n"}, nil
+	})
+	s.ownsInstallation = func(_ context.Context, _ string, method, _ string, _ bool) (bool, error) { return method == "npm", nil }
+	var gotMethod, gotPackage string
+	s.latestVersion = func(_ context.Context, method, pkg string, _ bool) (string, error) {
+		gotMethod, gotPackage = method, pkg
+		return "1.3.0", nil
+	}
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if advisory.Status != UpdateStatusBehindLatest || advisory.Source != "npm" || advisory.CurrentVersion != "1.2.3" || advisory.LatestVersion != "1.3.0" {
+		t.Fatalf("advisory = %+v", advisory)
+	}
+	if gotMethod != "npm" || gotPackage != "@openai/codex" {
+		t.Fatalf("lookup = %s %s", gotMethod, gotPackage)
+	}
+}
+
+func TestUpdateAdvisoryFollowsBinaryOwnerOverRecordedMethod(t *testing.T) {
+	s := newTestService("darwin", "npm", "brew")
+	s.jobs[TargetCodex] = &Job{Target: TargetCodex, Status: StatusSucceeded, Method: "npm"}
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) { return VerifyResult{Output: "codex 1.3.0"}, nil })
+	var checked []string
+	s.ownsInstallation = func(_ context.Context, _ string, method, _ string, _ bool) (bool, error) {
+		checked = append(checked, method)
+		return method == "homebrew", nil
+	}
+	s.latestVersion = func(context.Context, string, string, bool) (string, error) { return "1.3.0", nil }
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if advisory.Status != UpdateStatusCurrent || advisory.Source != "homebrew" {
+		t.Fatalf("advisory = %+v", advisory)
+	}
+	if len(checked) != 2 || checked[0] != "npm" {
+		t.Fatalf("ownership checks = %v, want recorded npm first", checked)
 	}
 }
 
