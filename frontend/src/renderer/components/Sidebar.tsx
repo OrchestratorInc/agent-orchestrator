@@ -995,7 +995,6 @@ export function Sidebar({
 											? selection.activeRemoteHostId === session.hostId && selection.activeRemoteSessionId === session.id
 											: selection.activeSessionId === session.id}
 										hostLabel={session.hostId ? remoteHosts.find((host) => host.hostId === session.hostId)?.label ?? session.hostId : undefined}
-										layoutSettled={layoutSettled}
 										onKilled={handlePinnedSessionKilled}
 										onOpenSession={(target) => {
 											if (session.kind === "worker") recordManualWorkerOpen(target.id, target.hostId);
@@ -1141,7 +1140,6 @@ export function Sidebar({
 								workspace={standaloneWorkspace}
 								selection={selection}
 								isCollapsed={isIconRail}
-								layoutSettled={layoutSettled}
 								open={scratchpadOpen}
 								onToggle={() => setScratchpadOpen((open) => !open)}
 							/>
@@ -1777,7 +1775,6 @@ const ProjectItem = memo(function ProjectItem({
 												sessions={listedSessions}
 												sessionIds={listedSessionIds}
 												activeSessionId={selection.activeSessionId}
-												disableLayout={!layoutSettled}
 												plain={projectDragInProgress}
 												onReorder={commitSessionOrder}
 												onKilled={handleSessionKilled}
@@ -1857,14 +1854,12 @@ function ScratchpadSection({
 	workspace,
 	selection,
 	isCollapsed,
-	layoutSettled,
 	open,
 	onToggle,
 }: {
 	workspace: WorkspaceSummary;
 	selection: Selection;
 	isCollapsed: boolean;
-	layoutSettled: boolean;
 	open: boolean;
 	onToggle: () => void;
 }) {
@@ -1991,7 +1986,6 @@ function ScratchpadSection({
 						sessions={listedSessions}
 						sessionIds={listedSessionIds}
 						activeSessionId={selection.activeSessionId}
-						disableLayout={!layoutSettled}
 						indented={false}
 						onReorder={commitSessionOrder}
 						onKilled={handleSessionKilled}
@@ -2014,19 +2008,17 @@ const PinnedSessionRow = memo(function PinnedSessionRow({
 	session,
 	active,
 	hostLabel,
-	layoutSettled,
 	onKilled,
 	onOpenSession,
 }: {
 	session: WorkspaceSession;
 	active: boolean;
 	hostLabel?: string;
-	layoutSettled: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpenSession: (session: WorkspaceSession) => void;
 }) {
 	const onOpen = useCallback(() => onOpenSession(session), [onOpenSession, session]);
-	return <SessionRow session={session} active={active} hostLabel={hostLabel} disableLayout={!layoutSettled} indented={false} onKilled={onKilled} onOpen={onOpen} />;
+	return <SessionRow session={session} active={active} hostLabel={hostLabel} indented={false} onKilled={onKilled} onOpen={onOpen} />;
 });
 
 // A session row inside its project's drag context. The Pinned section renders
@@ -2035,9 +2027,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	session,
 	active,
 	consumeDragClick,
-	disableLayout = false,
 	indented = true,
-	layoutDependency,
 	listIsDragging,
 	dropTransitionDisabled,
 	onKilled,
@@ -2046,9 +2036,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	session: WorkspaceSession;
 	active: boolean;
 	consumeDragClick: (id: string) => boolean;
-	disableLayout?: boolean;
 	indented?: boolean;
-	layoutDependency: string;
 	listIsDragging: boolean;
 	dropTransitionDisabled: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
@@ -2066,8 +2054,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 			onOpen={() => {
 				if (!consumeDragClick(session.id)) onOpen(session.id);
 			}}
-			disableLayout={disableLayout}
-			layoutDependency={layoutDependency}
 			listIsDragging={listIsDragging}
 			reorder={{
 				isDragging,
@@ -2092,7 +2078,6 @@ function SessionReorderList({
 	sessions,
 	sessionIds,
 	activeSessionId,
-	disableLayout = false,
 	indented = true,
 	plain = false,
 	onReorder,
@@ -2105,7 +2090,6 @@ function SessionReorderList({
 	sessions: WorkspaceSession[];
 	sessionIds: string[];
 	activeSessionId?: string;
-	disableLayout?: boolean;
 	indented?: boolean;
 	/** While a project is being dragged, leave the session lists as plain rows:
 	 *  otherwise every expanded project's DnD context measures its sortable
@@ -2115,7 +2099,6 @@ function SessionReorderList({
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: (sessionId: string) => void;
 }) {
-	const layoutDependency = useMemo(() => sessionIds.join("\u0000"), [sessionIds]);
 	const sensors = useReorderSensors();
 	const dragClickGuard = usePostDragClickGuard();
 	const [listDragging, setListDragging] = useState(false);
@@ -2159,7 +2142,6 @@ function SessionReorderList({
 						key={session.id}
 						session={session}
 						active={activeSessionId === session.id}
-						disableLayout
 						indented={indented}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
@@ -2181,23 +2163,19 @@ function SessionReorderList({
 		>
 			<SortableContext items={sessionIds} strategy={verticalListSortingStrategy}>
 				<SidebarMenuSub className={className} data-testid={testId}>
-					<AnimatePresence initial={false}>
 					{sessions.map((session) => (
 						<SortableSessionRow
 							key={session.id}
 							session={session}
 							active={activeSessionId === session.id}
 							consumeDragClick={dragClickGuard.consumeClick}
-							disableLayout={disableLayout}
 							indented={indented}
-							layoutDependency={layoutDependency}
 							listIsDragging={listDragging}
 							dropTransitionDisabled={dropTransitionDisabledId === session.id}
 							onKilled={onKilled}
 							onOpen={onOpen}
 						/>
 					))}
-					</AnimatePresence>
 				</SidebarMenuSub>
 			</SortableContext>
 		</DndContext>
@@ -2216,9 +2194,7 @@ function SessionRow({
 	active,
 	hostLabel,
 	indented = true,
-	layoutDependency,
 	listIsDragging = false,
-	disableLayout = false,
 	onKilled,
 	onOpen,
 	reorder,
@@ -2227,17 +2203,14 @@ function SessionRow({
 	active: boolean;
 	hostLabel?: string;
 	indented?: boolean;
-	layoutDependency?: string;
 	listIsDragging?: boolean;
 	/** Project drags pause nested session projection work. */
-	disableLayout?: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: () => void;
 	/** Present only for rows inside a reorderable project list. */
 	reorder?: SessionReorder;
 }) {
 	const { t } = useTranslation();
-	const prefersReducedMotion = useReducedMotion();
 	useGrabbingCursor(Boolean(reorder?.isDragging));
 	const switchPresentation = deriveSessionAgentSwitchPresentation(session);
 	const switchLabel = switchPresentation
@@ -2314,14 +2287,7 @@ function SessionRow({
 					ref={reorder?.setNodeRef}
 					style={reorder ? sortableRowStyle(reorder) : undefined}
 				>
-			<motion.div
-				initial={{ opacity: 0, y: 4 }}
-				animate={{ opacity: 1, y: 0 }}
-				exit={{ opacity: 0, y: -4, transition: { duration: prefersReducedMotion ? 0 : 0.12, ease: "easeIn" } }}
-				layout={disableLayout || listIsDragging ? false : "position"}
-				layoutDependency={disableLayout ? undefined : layoutDependency}
-				transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 520, damping: 42, mass: 0.55 }}
-			>
+			<div>
 				<div
 					className={cn(
 						"group/session-row group/nav-row relative flex h-8 w-full items-center rounded-lg",
@@ -2411,7 +2377,7 @@ function SessionRow({
 						session={session}
 					/>
 				</div>
-			</motion.div>
+			</div>
 				</SidebarMenuSubItem>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-44">
