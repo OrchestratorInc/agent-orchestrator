@@ -26,6 +26,7 @@ export function BrowserLivePane({ sessionID }: { sessionID: string }) {
 	const [attempt, setAttempt] = useState(0);
 	const [status, setStatus] = useState<BrowserStatus>("connecting");
 	const [error, setError] = useState<string>();
+	const [notice, setNotice] = useState<string>();
 	const [frameURI, setFrameURI] = useState<string>();
 	const [frameSize, setFrameSize] = useState({ width: 1, height: 1 });
 	const [viewportSize, setViewportSize] = useState({ width: 1, height: 1 });
@@ -50,8 +51,16 @@ export function BrowserLivePane({ sessionID }: { sessionID: string }) {
 		const live = new BrowserLiveClient(config, sessionID, {
 			onStatus: (next, message) => {
 				if (disposed || next === "closed") return;
-				setStatus(next === "open" ? "open" : next === "connecting" ? "connecting" : "error");
-				setError(message);
+					setStatus(next === "open" ? "open" : next === "connecting" ? "connecting" : "error");
+					if (next === "open") {
+						setError(undefined);
+						if (message) {
+							setNotice(message);
+							setTimeout(() => setNotice(undefined), 2500);
+						}
+					} else {
+						setError(message);
+					}
 			},
 			onState: () => {},
 			onFrame: (frame) => {
@@ -116,8 +125,9 @@ export function BrowserLivePane({ sessionID }: { sessionID: string }) {
 			onLayout={(event) => setViewportSize(event.nativeEvent.layout)}
 			{...responder.panHandlers}
 		>
-			{frameURI ? <Image source={{ uri: frameURI }} resizeMode="contain" style={[styles.frame, frameRect]} /> : null}
-			{status === "open" && !frameURI ? <View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.supporting}>Waiting for the desktop browser…</Text></View> : null}
+			{frameURI ? <Image pointerEvents="none" source={{ uri: frameURI }} resizeMode="contain" style={[styles.frame, frameRect]} /> : null}
+			{status === "open" && !frameURI ? <View pointerEvents="none" style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.supporting}>Waiting for the desktop browser…</Text></View> : null}
+			{status === "open" && notice ? <View pointerEvents="none" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}
 			{status !== "open" ? <BrowserState status={status} error={error} retry={retry} /> : null}
 		</View>
 	</View>;
@@ -144,6 +154,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	center: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", gap: space.sm },
 	supporting: { color: t.textTertiary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize },
 	stateOverlay: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
+	notice: { position: "absolute", left: space.md, right: space.md, bottom: space.md, alignItems: "center", padding: space.sm, borderRadius: 10, backgroundColor: t.bgElevated },
+	noticeText: { color: t.textSecondary, fontFamily: "Geist_400Regular", fontSize: type.caption1.fontSize, textAlign: "center" },
 	stateIcon: { width: 52, height: 52, borderRadius: 26, alignItems: "center", justifyContent: "center", backgroundColor: t.accentTint },
 	stateIconError: { backgroundColor: t.tintRed },
 	stateTitle: { color: t.textPrimary, fontFamily: "Geist_600SemiBold", fontSize: type.body.fontSize, fontWeight: "600", textAlign: "center" },

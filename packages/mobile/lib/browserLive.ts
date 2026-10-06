@@ -77,7 +77,12 @@ export class BrowserLiveClient {
 			const message = JSON.parse(data) as { type?: string; payload?: BrowserLiveState; code?: string; message?: string };
 			if (message.type === "state" && message.payload) this.handlers.onState(message.payload);
 			if (message.type === "error") {
-				this.handlers.onStatus("error", message.message ?? message.code ?? "Browser host error");
+				const detail = message.message ?? message.code ?? "Browser host error";
+				if (message.code === "BROWSER_REMOTE_READ_ONLY" || message.code === "BROWSER_REMOTE_NOT_VIEWED" || message.code === "INVALID_ARGUMENT") {
+					this.handlers.onStatus("open", detail);
+				} else {
+					this.handlers.onStatus("error", detail);
+				}
 			}
 			return;
 		}

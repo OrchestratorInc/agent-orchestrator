@@ -484,7 +484,7 @@ export type BrowserViewHost = {
   // the page blank for the whole overlay lifetime.
   refreshLastFocusedPanelSurface: () => void;
 	startLiveStream: (sessionId: string, streamId: number, sink: BrowserLiveSink) => Promise<BrowserLiveState>;
-	stopLiveStream: (sessionId: string) => Promise<void>;
+	stopLiveStream: (sessionId: string, streamId: number) => Promise<void>;
 	stopAllLiveStreams: () => Promise<void>;
 	handleRemoteInput: (sessionId: string, input: BrowserRemoteInput) => Promise<void>;
 	handleRemoteNavigation: (sessionId: string, input: BrowserRemoteNavigation) => Promise<void>;
@@ -2296,6 +2296,7 @@ export function createBrowserViewHost(
     const session = entries.get(viewId);
     if (!session) return;
 		const live = session.live;
+		live?.sink.error("BROWSER_SESSION_CLOSED", "The desktop browser session was closed");
 		session.live = undefined;
 		if (live?.screencast) void live.screencast.stop();
     const partitionToClear =
@@ -3279,7 +3280,9 @@ export function createBrowserViewHost(
 	async function retargetLiveStream(session: BrowserSessionEntry): Promise<void> {
 		const live = session.live;
 		if (!live) return;
-		if (live.screencast) await live.screencast.stop();
+		const previousScreencast = live.screencast;
+		live.screencast = undefined;
+		if (previousScreencast) await previousScreencast.stop();
 		if (session.live !== live) return;
 		const entry = activeEntry(session);
 		await ensureDebugger(entry);
@@ -3297,6 +3300,10 @@ export function createBrowserViewHost(
 		live.screencast = cast;
 		live.tabId = entry.tabId;
 		await cast.start();
+		if (session.live !== live || live.screencast !== cast) {
+			await cast.stop();
+			return;
+		}
 		emitLiveState(session);
 	}
 
@@ -3326,10 +3333,10 @@ export function createBrowserViewHost(
 		return screencast?.stop();
 	}
 
-	async function stopLiveStream(sessionId: string): Promise<void> {
+	async function stopLiveStream(sessionId: string, streamId: number): Promise<void> {
 		const viewId = viewIdsBySessionId.get(sessionId);
 		const session = viewId ? entries.get(viewId) : undefined;
-		if (!session) return;
+		if (!session || session.live?.streamId !== streamId) return;
 		await detachLiveStream(session);
 	}
 
@@ -3350,7 +3357,12 @@ export function createBrowserViewHost(
 		if (session.agentBrowserCommands > 0 || session.profileSwitching) {
 			throw browserError("BROWSER_REMOTE_READ_ONLY", "Browser control is temporarily read-only while the agent is active");
 		}
-		if (session.visible && lastFocusedViewId === session.viewId) {
+		if (
+			session.visible &&
+			options.mainWindow.isFocused?.() !== false &&
+			options.mainWindow.isMinimized?.() !== true &&
+			lastFocusedViewId === session.viewId
+		) {
 			throw browserError("BROWSER_REMOTE_READ_ONLY", "Desktop browser control is active");
 		}
 	}

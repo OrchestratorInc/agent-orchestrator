@@ -24,6 +24,7 @@ const (
 	browserLiveReadLimit = 64 << 10
 	browserFrameVersion  = byte(1)
 	browserFrameJPEG     = byte(1)
+	browserLiveHeartbeat = 30 * time.Second
 )
 
 type browserLiveBroker interface {
@@ -177,10 +178,19 @@ func (h *BrowserLiveHub) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BrowserLiveHub) writeBrowserEvents(ctx context.Context, c *websocket.Conn, events <-chan browserstream.Event) error {
+	heartbeat := time.NewTicker(browserLiveHeartbeat)
+	defer heartbeat.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-heartbeat.C:
+			pingCtx, cancel := context.WithTimeout(ctx, browserLiveHeartbeat/2)
+			err := c.Ping(pingCtx)
+			cancel()
+			if err != nil {
+				return err
+			}
 		case event, ok := <-events:
 			if !ok {
 				return nil

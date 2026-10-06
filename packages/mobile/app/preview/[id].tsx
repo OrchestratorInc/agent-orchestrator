@@ -50,7 +50,10 @@ function SessionPreviewContent() {
 		try {
 			const value = await getPreview(config, sessionID, previewUrl);
 			if (currentConfig.current === config && currentRoute.current === route) {
-				setLoaded({ config, id: sessionID, value });
+				setLoaded((previous) => {
+					if (!previous || previous.id !== sessionID) setActive("app");
+					return { config, id: sessionID, value };
+				});
 				setPreviewError(undefined);
 			}
 		} catch (cause) {
