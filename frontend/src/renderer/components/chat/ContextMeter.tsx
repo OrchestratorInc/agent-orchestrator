@@ -122,6 +122,7 @@ export function ContextMeter({
 	const [compactError, setCompactError] = useState<string>();
 	const quota = rateLimits ? worstWindow(rateLimits) : undefined;
 	const hasContext = usage !== undefined && (usage.contextUsed > 0 || usage.contextWindow > 0);
+	const compactStatus = compactUnavailable ?? compactError;
 	// Only surfaced once it is actionable. A quota readout that is always on screen
 	// becomes furniture, and this one has to be noticed on the day it matters.
 	const showQuota = quota !== undefined && quota.percent >= QUOTA_WARN;
@@ -140,7 +141,7 @@ export function ContextMeter({
 		// throws rather than degrading.
 		<TooltipProvider>
 			<div className={cn("flex shrink-0 items-center gap-2", className)}>
-				{compactError ? <span role="status" aria-live="polite" className="sr-only">{compactError}</span> : null}
+				{compactStatus ? <span role="status" aria-live="polite" className="sr-only">{compactStatus}</span> : null}
 				{usage && hasContext ? <ContextReadout usage={usage} /> : null}
 				{onCompact && compactSupported && usage && hasContext && usage.contextUsed > 0 && usage.contextWindow > 0 && usage.contextUsed / usage.contextWindow >= CONTEXT_WARN ? (
 					<Tooltip>
@@ -162,11 +163,11 @@ export function ContextMeter({
 							</span>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">
-							{compactError ?? (compacting
+							{compactStatus ?? (compacting
 								? "Compacting conversation history"
 								: compactBlocked
 									? "Stop the current turn before compacting"
-									: compactUnavailable ?? "Compact conversation history")}
+									: "Compact conversation history")}
 						</TooltipContent>
 					</Tooltip>
 				) : null}

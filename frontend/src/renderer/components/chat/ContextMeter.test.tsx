@@ -119,6 +119,25 @@ describe("ContextMeter", () => {
 		expect(await screen.findByRole("status")).toHaveTextContent("Conversation history could not be compacted. Try again.");
 	});
 
+	it("prefers the typed unavailable reason after a rejected compaction", async () => {
+		const onCompact = vi.fn().mockRejectedValue(new Error("unsupported"));
+		const props = {
+			usage: usage({ contextUsed: 180_880 }),
+			onCompact,
+			compactSupported: true,
+		};
+		const { rerender } = render(<ContextMeter {...props} />);
+		const button = screen.getByRole("button", { name: "Compact conversation history" });
+		await userEvent.click(button);
+		expect(await screen.findByRole("status")).toHaveTextContent("Conversation history could not be compacted. Try again.");
+
+		rerender(<ContextMeter {...props} compactUnavailable="This agent cannot compact its history" />);
+		expect(screen.getByRole("status")).toHaveTextContent("This agent cannot compact its history");
+		expect(button).toBeDisabled();
+		await userEvent.hover(button);
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("This agent cannot compact its history");
+	});
+
 	it("clamps a provider that overreports past its own window", () => {
 		render(<ContextMeter usage={usage({ contextUsed: 300_000 })} />);
 		// Full, not overflowing the track and not claiming 116%.
