@@ -962,6 +962,8 @@ type KillSessionResponse struct {
 	Freed     bool             `json:"freed,omitempty"`
 }
 
+// StartupCueCancelResponse is returned after cancelling a startup cue.
+// StartupCueCancelResponse is returned after cancelling a startup cue.
 type StartupCueCancelResponse struct {
 	StartupCue domain.StartupCueRun `json:"startupCue"`
 }

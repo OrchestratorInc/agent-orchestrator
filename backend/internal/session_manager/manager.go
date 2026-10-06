@@ -276,6 +276,7 @@ type ShellTerminalCloser interface {
 	BeginSessionTeardown(ctx context.Context, id domain.SessionID) (release func(), err error)
 }
 
+// StartupCueRunner executes startup cues through the shell terminal service.
 type StartupCueRunner interface {
 	RunStartupCue(context.Context, shellterm.RunStartupCueInput) (shellterm.StartupCueCommandResult, error)
 	GetOutput(context.Context, string, int) (string, error)
@@ -612,6 +613,7 @@ func (m *Manager) SetShellTerminalCloser(closer ShellTerminalCloser) {
 	m.shellTerminals = closer
 }
 
+// SetStartupCueRunner configures the shell terminal runner used for startup cues.
 func (m *Manager) SetStartupCueRunner(runner StartupCueRunner) {
 	m.shellTerminalsMu.Lock()
 	defer m.shellTerminalsMu.Unlock()
@@ -3562,9 +3564,6 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 		if err := m.reconcileReap(ctx, rec); err != nil {
 			m.logger.Error("reconcile: reap pass failed, skipping", "sessionID", rec.ID, "error", err)
 		}
-	}
-	if err := m.RestoreAll(ctx); err != nil {
-		return err
 	}
 	if records, err := m.store.ListAllSessions(ctx); err == nil {
 		for _, rec := range records {

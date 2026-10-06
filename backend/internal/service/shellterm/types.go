@@ -91,6 +91,8 @@ type RunStartupCueInput struct {
 	Command   string
 }
 
+// StartupCueCommandResult describes the terminal and completion marker for a startup cue.
+// StartupCueCommandResult describes the terminal and completion marker for a startup cue.
 type StartupCueCommandResult struct {
 	Terminal ShellTerminal
 	Marker   string

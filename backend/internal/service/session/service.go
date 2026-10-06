@@ -810,6 +810,8 @@ func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	return freed, toAPIError(err)
 }
 
+// CancelStartupCue stops the active startup cue for a session.
+// CancelStartupCue stops the active startup cue for a session.
 func (s *Service) CancelStartupCue(ctx context.Context, id domain.SessionID) (domain.StartupCueRun, error) {
 	m, ok := s.manager.(startupCueCanceller)
 	if !ok {

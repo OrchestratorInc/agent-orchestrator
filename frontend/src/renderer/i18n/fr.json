@@ -2495,5 +2495,20 @@
 	"standalone.archive.heading_other": "{{count}} sessions archivées",
 	"standalone.archive.newAgent": "Nouvel agent",
 	"standalone.archive.empty.title": "Aucun agent autonome archivé",
-	"standalone.archive.empty.body": "Les agents autonomes que vous archivez depuis le bloc-notes apparaîtront ici. Les agents autonomes actifs restent dans la liste du bloc-notes."
+	"standalone.archive.empty.body": "Les agents autonomes que vous archivez depuis le bloc-notes apparaîtront ici. Les agents autonomes actifs restent dans la liste du bloc-notes.",
+	"cues.runOnWorktreeCreation": "Run on worktree creation",
+	"cues.startupSelected": "Runs on worktree creation",
+	"cues.startupBadge": "Runs on worktree creation",
+	"cues.startupSelectionHelp": "Only one cue can run on worktree creation. Saving this selection replaces the previously selected cue. The first turn waits for completion; failures let the session continue.",
+	"cues.backToCues": "Back to all cues",
+	"cues.startupInterrupted": "Startup cue interrupted.",
+	"cues.startupFailed": "Startup cue failed; session continued.",
+	"cues.startupRunning": "Running startup cue: {{name}}… ({{elapsed}}s)",
+	"cues.terminal": "Terminal",
+	"cues.startupQueued": "Preparing the worktree. Messages are queued until the command finishes.",
+	"cues.cancelling": "Cancelling…",
+	"cues.cancelSetup": "Cancel setup",
+	"cues.dismissStartupError": "Dismiss startup cue error",
+	"cues.commandAndOutput": "Command and output: {{name}}",
+	"cues.noCommandOutput": "No command output."
 }

@@ -162,12 +162,12 @@ func (g *sessionGate) acquire(ctx context.Context, id domain.SessionID) (release
 // NewService builds the shell terminal service. dataDir is the fallback working
 // directory for a shell opened with no project context. A nil logger falls back
 // to slog.Default.
-func NewService(runtime ShellRuntime, store Store, projects ProjectRootLocator, sessions SessionWorkspaceLocator, dataDir, appRunID string, log *slog.Logger) *Service {
+func NewService(shellRuntime ShellRuntime, store Store, projects ProjectRootLocator, sessions SessionWorkspaceLocator, dataDir, appRunID string, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Service{
-		runtime:             runtime,
+		runtime:             shellRuntime,
 		store:               store,
 		projects:            projects,
 		sessions:            sessions,
@@ -476,9 +476,9 @@ func startupCueCommand(command, marker, shell string) string {
 	if runtime.GOOS == "windows" {
 		base := strings.ToLower(filepath.Base(shell))
 		if base == "pwsh.exe" || base == "powershell.exe" {
-			return fmt.Sprintf("$aoCode = 0; try { %s; if (-not $?) { $aoCode = if ($LASTEXITCODE -ne $null) { [int]$LASTEXITCODE } else { 1 } } } catch { $aoCode = 1 }; Write-Output (\"%s\" + $aoCode)", command, marker)
+			return fmt.Sprintf("$aoCode = 0; try { %s; if (-not $?) { $aoCode = if ($LASTEXITCODE -ne $null) { [int]$LASTEXITCODE } else { 1 } } } catch { $aoCode = 1 }; Write-Output (%q + $aoCode)", command, marker)
 		}
-		return fmt.Sprintf("%s & echo %s%%ERRORLEVEL%%", command, marker)
+		return fmt.Sprintf("%s & echo %q%%ERRORLEVEL%%", command, marker)
 	}
 	return fmt.Sprintf("%s; printf '\\n%s%%s\\n' $?", command, marker)
 }

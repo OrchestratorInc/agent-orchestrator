@@ -2447,5 +2447,15 @@
 	"standalone.archive.heading_other": "{{count}} Archived Sessions",
 	"standalone.archive.newAgent": "New agent",
 	"standalone.archive.empty.title": "No archived standalone agents",
-	"standalone.archive.empty.body": "Standalone agents you archive from Scratchpad will appear here. Active standalone agents stay in the Scratchpad list."
+	"standalone.archive.empty.body": "Standalone agents you archive from Scratchpad will appear here. Active standalone agents stay in the Scratchpad list.",
+	"cues.startupInterrupted": "Startup cue interrupted.",
+	"cues.startupFailed": "Startup cue failed; session continued.",
+	"cues.startupRunning": "Running startup cue: {{name}}… ({{elapsed}}s)",
+	"cues.terminal": "Terminal",
+	"cues.startupQueued": "Preparing the worktree. Messages are queued until the command finishes.",
+	"cues.cancelling": "Cancelling…",
+	"cues.cancelSetup": "Cancel setup",
+	"cues.dismissStartupError": "Dismiss startup cue error",
+	"cues.commandAndOutput": "Command and output: {{name}}",
+	"cues.noCommandOutput": "No command output."
 }

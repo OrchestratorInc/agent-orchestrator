@@ -2698,7 +2698,7 @@ func sessionOperations() []operation {
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/startup-cue/cancel", id: "cancelSessionStartupCue", tag: "sessions",
-			summary: "Cancel a running startup cue",
+			summary:    "Cancel a running startup cue",
 			pathParams: []any{controllers.SessionIDParam{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.StartupCueCancelResponse{}},
