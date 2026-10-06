@@ -1,11 +1,23 @@
 // Runs before the page's own styles and scripts. It hands the page the host
-// theme, reports the page's content height, and asks the host to open links.
+// theme and display mode, reports the page's content height, and asks the host
+// to open links.
 // The messages are the MCP Apps postMessage methods T3 Code also uses, so this
 // host could later show upstream MCP apps.
 (function () {
   var theme = document.getElementById("ao-theme");
+  // Created now, so it precedes the page's own styles and they win over it.
+  var display = document.createElement("style");
+  display.id = "ao-display";
+  (document.head || document.documentElement).appendChild(display);
   var framed = window.parent !== window;
   var seq = 0;
+  // Fullscreen gives the page the whole dialog width: center a top-level block
+  // that has a max width, and show the scrollbar. Inline stays as it is.
+  function setDisplayMode(mode) {
+    display.textContent = mode === "fullscreen"
+      ? "body>*{margin-inline:auto}html{scrollbar-width:auto}html::-webkit-scrollbar{display:block}"
+      : "";
+  }
   function apply(t) {
     if (!theme || !t || typeof t !== "object" || !t.variables || typeof t.variables !== "object") return;
     var css = ":root{color-scheme:" + (t.appearance === "light" ? "light" : "dark") + ";";
@@ -17,17 +29,20 @@
   try {
     var m = /[#&]ao-theme=([^&]*)/.exec(location.hash);
     if (m) {
-      apply(JSON.parse(decodeURIComponent(m[1])));
+      var initial = JSON.parse(decodeURIComponent(m[1]));
+      apply(initial);
+      setDisplayMode(initial && initial.displayMode);
       history.replaceState(history.state, "", location.pathname + location.search);
     }
   } catch (e) {}
   window.addEventListener("message", function (e) {
     var d = e.data;
     var p = d && d.params;
-    if (e.source === window.parent && d && d.jsonrpc === "2.0" &&
-        d.method === "ui/notifications/host-context-changed" && p && p.styles) {
-      apply({ appearance: p.theme, variables: p.styles.variables });
-    }
+    if (e.source !== window.parent || !d || d.jsonrpc !== "2.0" ||
+        d.method !== "ui/notifications/host-context-changed" || !p) return;
+    // MCP Apps context updates may be partial; an absent field is unchanged.
+    if (p.displayMode !== undefined) setDisplayMode(p.displayMode);
+    if (p.styles) apply({ appearance: p.theme, variables: p.styles.variables });
   });
   if (!framed) return;
   document.addEventListener("click", function (e) {

@@ -26,6 +26,10 @@ function renderActivity(height = 300): ConversationActivity {
 	};
 }
 
+function fragmentOf(f: HTMLIFrameElement): { displayMode?: string } {
+	return JSON.parse(decodeURIComponent((f.getAttribute("src") ?? "").split("#ao-theme=")[1] ?? "{}"));
+}
+
 function frame() {
 	return screen.getByTitle("Turns by day") as HTMLIFrameElement;
 }
@@ -142,34 +146,49 @@ describe("render activity", () => {
 		}
 	});
 
-	it("expands the page at its inline width, centered in the dialog", async () => {
-		const user = userEvent.setup();
-		const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(660);
-		try {
-			render(<ActivityRow activity={renderActivity()} />);
-			const inline = frame();
-			await user.click(screen.getByRole("button", { name: "Expand page" }));
-			const frames = await screen.findAllByTitle("Turns by day");
-			expect(frames).toHaveLength(2);
-			const expanded = frames.find((f) => f !== inline) as HTMLIFrameElement;
-			expect(expanded.style.width).toBe("660px");
-			expect(expanded.className).toContain("max-w-full");
-			expect(expanded.parentElement?.className).toContain("justify-center");
-			expect(inline.isConnected).toBe(true);
-			expect(inline.style.width).toBe("");
-			expect(inline.style.height).toBe("300px");
-		} finally {
-			width.mockRestore();
-		}
-	});
-
-	it("falls back to a readable width when the inline box was not measured", async () => {
+	it("expands the page across the whole dialog, in fullscreen display mode", async () => {
 		const user = userEvent.setup();
 		render(<ActivityRow activity={renderActivity()} />);
+		const inline = frame();
 		await user.click(screen.getByRole("button", { name: "Expand page" }));
 		const frames = await screen.findAllByTitle("Turns by day");
-		const expanded = frames[1] as HTMLIFrameElement;
+		expect(frames).toHaveLength(2);
+		const expanded = frames.find((f) => f !== inline) as HTMLIFrameElement;
+		// The dialog gives the page its full width; the page centers itself.
+		expect(expanded.parentElement?.getAttribute("role")).toBe("dialog");
+		expect(expanded.className).toContain("w-full");
+		expect(expanded.className).toContain("flex-1");
+		expect(expanded.className).not.toContain("max-w");
 		expect(expanded.style.width).toBe("");
-		expect(expanded.className).toContain("max-w-3xl");
+		expect(expanded.style.height).toBe("");
+		expect(fragmentOf(expanded).displayMode).toBe("fullscreen");
+		expect(fragmentOf(inline).displayMode).toBe("inline");
+		expect(inline.isConnected).toBe(true);
+		expect(inline.style.height).toBe("300px");
+	});
+
+	it("tells each frame its display mode with every theme change", async () => {
+		const user = userEvent.setup();
+		render(<ActivityRow activity={renderActivity()} />);
+		const inline = frame();
+		await user.click(screen.getByRole("button", { name: "Expand page" }));
+		const expanded = (await screen.findAllByTitle("Turns by day")).find((f) => f !== inline) as HTMLIFrameElement;
+		const sent = new Map<HTMLIFrameElement, unknown[]>([
+			[inline, []],
+			[expanded, []],
+		]);
+		for (const [f, messages] of sent) {
+			Object.defineProperty(f.contentWindow!, "postMessage", { configurable: true, value: (m: unknown) => messages.push(m) });
+		}
+		act(() => document.documentElement.setAttribute("data-theme", "light"));
+		const changed = (displayMode: string) =>
+			expect.objectContaining({
+				method: "ui/notifications/host-context-changed",
+				params: expect.objectContaining({ theme: "light", displayMode }),
+			});
+		await waitFor(() => {
+			expect(sent.get(inline)).toContainEqual(changed("inline"));
+			expect(sent.get(expanded)).toContainEqual(changed("fullscreen"));
+		});
 	});
 });

@@ -5,6 +5,8 @@ import {
 	readRenderLinkRequest,
 	readRenderRef,
 	readRenderTheme,
+	renderThemeFragment,
+	renderThemeMessage,
 } from "./render-frame";
 
 describe("render-frame helpers", () => {
@@ -35,5 +37,21 @@ describe("render-frame helpers", () => {
 		expect(theme.appearance).toBe("light");
 		expect(theme.variables["--background"]).toBe("rgb(1, 2, 3)");
 		expect(theme.variables["--chart-6"]).toBeDefined();
+	});
+
+	it("hands the page its display mode in the fragment and in every context message", () => {
+		const theme = { appearance: "light" as const, variables: { "--background": "#fff" } };
+		const fragment = renderThemeFragment(theme, "fullscreen");
+		expect(fragment.startsWith("#ao-theme=")).toBe(true);
+		expect(JSON.parse(decodeURIComponent(fragment.slice("#ao-theme=".length)))).toEqual({
+			appearance: "light",
+			variables: { "--background": "#fff" },
+			displayMode: "fullscreen",
+		});
+		expect(renderThemeMessage(theme, "inline")).toEqual({
+			jsonrpc: "2.0",
+			method: "ui/notifications/host-context-changed",
+			params: { theme: "light", styles: { variables: { "--background": "#fff" } }, displayMode: "inline" },
+		});
 	});
 });

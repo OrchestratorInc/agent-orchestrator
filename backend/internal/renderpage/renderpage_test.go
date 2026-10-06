@@ -110,3 +110,14 @@ func TestVersionIsAShortDigestOfTheBootstrap(t *testing.T) {
 		t.Fatalf("Version = %q, want 12 hex chars", Version)
 	}
 }
+
+func TestBootstrapStylesFullscreenFromTheDisplayMode(t *testing.T) {
+	// Centers a width-capped top-level block and shows the scrollbar; the
+	// page's own margins win over this low-specificity rule.
+	const fullscreenCSS = `body>*{margin-inline:auto}html{scrollbar-width:auto}html::-webkit-scrollbar{display:block}`
+	for _, want := range []string{fullscreenCSS, `"ao-display"`, `"fullscreen"`, ".displayMode"} {
+		if !strings.Contains(bootstrapJS, want) {
+			t.Errorf("bootstrap missing %q", want)
+		}
+	}
+}

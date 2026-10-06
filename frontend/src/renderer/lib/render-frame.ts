@@ -82,17 +82,20 @@ export function renderThemesEqual(left: RenderTheme, right: RenderTheme): boolea
 	return left.appearance === right.appearance && JSON.stringify(left.variables) === JSON.stringify(right.variables);
 }
 
-/** URL fragment that hands a render its theme before first paint. */
-export function renderThemeFragment(theme: RenderTheme): string {
-	return `#ao-theme=${encodeURIComponent(JSON.stringify(theme))}`;
+/** Where the page shows: inline in the thread, or expanded in the dialog. */
+export type RenderDisplayMode = "inline" | "fullscreen";
+
+/** URL fragment that hands a render its theme and display mode before first paint. */
+export function renderThemeFragment(theme: RenderTheme, displayMode: RenderDisplayMode): string {
+	return `#ao-theme=${encodeURIComponent(JSON.stringify({ ...theme, displayMode }))}`;
 }
 
-/** The message a mounted render restyles from when the theme changes. */
-export function renderThemeMessage(theme: RenderTheme) {
+/** The message a mounted render restyles from when the theme changes; displayMode is the MCP Apps host-context field. */
+export function renderThemeMessage(theme: RenderTheme, displayMode: RenderDisplayMode) {
 	return {
 		jsonrpc: "2.0",
 		method: "ui/notifications/host-context-changed",
-		params: { theme: theme.appearance, styles: { variables: theme.variables } },
+		params: { theme: theme.appearance, styles: { variables: theme.variables }, displayMode },
 	} as const;
 }
 
