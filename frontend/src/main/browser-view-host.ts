@@ -416,6 +416,8 @@ type BrowserWindowLike = {
   getContentBounds: () => BrowserRect;
   webContents?: WebContents;
   isDestroyed?: () => boolean;
+  isFocused?: () => boolean;
+  isMinimized?: () => boolean;
 };
 
 type ShellLike = {
