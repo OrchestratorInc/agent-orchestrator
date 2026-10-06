@@ -204,7 +204,7 @@ func (h *BrowserLiveHub) writeBrowserEvents(ctx context.Context, c *websocket.Co
 				binary.BigEndian.PutUint16(packet[18:20], frame.Width)
 				binary.BigEndian.PutUint16(packet[20:22], frame.Height)
 				copy(packet[22:], frame.JPEG)
-				if err := c.Write(ctx, websocket.MessageBinary, packet); err != nil {
+				if err := writeBrowserMessage(ctx, c, websocket.MessageBinary, packet); err != nil {
 					return err
 				}
 				continue
@@ -223,11 +223,17 @@ func (h *BrowserLiveHub) writeBrowserEvents(ctx context.Context, c *websocket.Co
 			if marshalErr != nil {
 				return marshalErr
 			}
-			if err := c.Write(ctx, websocket.MessageText, payload); err != nil {
+			if err := writeBrowserMessage(ctx, c, websocket.MessageText, payload); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+func writeBrowserMessage(ctx context.Context, c *websocket.Conn, messageType websocket.MessageType, payload []byte) error {
+	writeCtx, cancel := context.WithTimeout(ctx, browserLiveHeartbeat/2)
+	defer cancel()
+	return c.Write(writeCtx, messageType, payload)
 }
 
 type browserLiveCommand struct {

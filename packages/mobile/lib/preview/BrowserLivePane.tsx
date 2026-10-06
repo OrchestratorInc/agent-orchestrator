@@ -23,6 +23,7 @@ export function BrowserLivePane({ sessionID }: { sessionID: string }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const client = useRef<BrowserLiveClient | null>(null);
+	const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const [attempt, setAttempt] = useState(0);
 	const [status, setStatus] = useState<BrowserStatus>("connecting");
 	const [error, setError] = useState<string>();
@@ -51,16 +52,23 @@ export function BrowserLivePane({ sessionID }: { sessionID: string }) {
 		const live = new BrowserLiveClient(config, sessionID, {
 			onStatus: (next, message) => {
 				if (disposed || next === "closed") return;
-					setStatus(next === "open" ? "open" : next === "connecting" ? "connecting" : "error");
-					if (next === "open") {
-						setError(undefined);
-						if (message) {
-							setNotice(message);
-							setTimeout(() => setNotice(undefined), 2500);
-						}
-					} else {
-						setError(message);
+				setStatus(next === "open" ? "open" : next === "connecting" ? "connecting" : "error");
+				if (next === "open") {
+					setError(undefined);
+					if (message) {
+						if (noticeTimer.current) clearTimeout(noticeTimer.current);
+						setNotice(message);
+						noticeTimer.current = setTimeout(() => {
+							noticeTimer.current = null;
+							setNotice(undefined);
+						}, 2500);
 					}
+				} else {
+					if (noticeTimer.current) clearTimeout(noticeTimer.current);
+					noticeTimer.current = null;
+					setNotice(undefined);
+					setError(message);
+				}
 			},
 			onState: () => {},
 			onFrame: (frame) => {
@@ -79,6 +87,8 @@ export function BrowserLivePane({ sessionID }: { sessionID: string }) {
 
 		return () => {
 			disposed = true;
+			if (noticeTimer.current) clearTimeout(noticeTimer.current);
+			noticeTimer.current = null;
 			live?.close();
 			if (client.current === live) client.current = null;
 		};

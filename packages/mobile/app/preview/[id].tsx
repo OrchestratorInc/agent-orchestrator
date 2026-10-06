@@ -31,6 +31,7 @@ function SessionPreviewContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const web = useRef<WebView>(null);
+	const userPickedTab = useRef(false);
 	const [active, setActive] = useState<"browser" | "app">("browser");
 	const [loaded, setLoaded] = useState<{ config: NonNullable<typeof config>; id: string; value: Awaited<ReturnType<typeof getPreview>> } | null>(null);
 	const preview = loaded?.id === sessionID ? previewForConfig(loaded, config, routeHostId) : null;
@@ -50,16 +51,19 @@ function SessionPreviewContent() {
 		try {
 			const value = await getPreview(config, sessionID, previewUrl);
 			if (currentConfig.current === config && currentRoute.current === route) {
-				setLoaded((previous) => {
-					if (!previous || previous.id !== sessionID) setActive("app");
-					return { config, id: sessionID, value };
-				});
+				setLoaded({ config, id: sessionID, value });
+				if (value && !userPickedTab.current) setActive("app");
 				setPreviewError(undefined);
 			}
 		} catch (cause) {
 			if (currentConfig.current === config && currentRoute.current === route) setPreviewError(userFacingError(cause));
 		}
 	}, [config, hostMatches, previewUrl, routeHostId, sessionID]);
+
+	useEffect(() => {
+		userPickedTab.current = false;
+		setActive("browser");
+	}, [sessionID]);
 
 	useEffect(() => {
 		setLoaded(null);
@@ -76,8 +80,8 @@ function SessionPreviewContent() {
 
 	return <View style={styles.screen}>
 		{preview ? <View accessibilityRole="tablist" style={styles.switcher}>
-			<PreviewTab label="Browser" icon="monitor" selected={active === "browser"} onPress={() => setActive("browser")} />
-			<PreviewTab label="App preview" icon="globe" selected={active === "app"} onPress={() => setActive("app")} />
+			<PreviewTab label="Browser" icon="monitor" selected={active === "browser"} onPress={() => { userPickedTab.current = true; setActive("browser"); }} />
+			<PreviewTab label="App preview" icon="globe" selected={active === "app"} onPress={() => { userPickedTab.current = true; setActive("app"); }} />
 		</View> : null}
 		{active === "browser" || !preview ? <BrowserLivePane sessionID={sessionID} /> : <View style={styles.appPane}>
 			<View style={styles.appBar}>
