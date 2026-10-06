@@ -13,7 +13,7 @@ import (
 // every reader (the API, Kanban derivation) trusts that column instead of
 // rescanning on every read.
 //
-// A session row created before artifact_dir existed carries it as ” (the
+// A session row created before artifact_dir existed carries it as an empty string (the
 // migration's default), even though session_manager always tells the agent
 // to write into the deterministic dataDir/artifacts/<id> path regardless of
 // what is stored. Backfilling that path here — the moment any reconcile call

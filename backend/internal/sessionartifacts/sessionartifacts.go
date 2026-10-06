@@ -19,7 +19,7 @@ import (
 // It is a pure, deterministic path computation (dataDir + "artifacts" + id),
 // so callers can derive the correct directory even for a session row whose
 // stored ArtifactDir is empty — notably rows created before that column
-// existed, which migration 0155 backfilled with ” rather than a real path.
+// existed, which the artifact migration initialized to an empty string.
 func Dir(dataDir string, id domain.SessionID) string {
 	dataDir = strings.TrimSpace(dataDir)
 	if dataDir == "" {
@@ -114,13 +114,10 @@ func inferKind(relPath string) domain.SessionArtifactKind {
 	return domain.SessionArtifactGeneric
 }
 
-// DeriveOutputType classifies a session's durable output from counts alone.
+// DeriveOutputType classifies a session's durable output from current counts.
 // PR and artifact are independent facts that combine into PRAndArtifact when
-// both are present. Once a PR row exists for a session it is never deleted
-// (merge/close does not remove it), so prCount only grows; combined with
-// artifact files only ever being added, never removed from this
-// classification's perspective, the result never reverts (none -> artifact
-// and/or pr -> pr_artifact).
+// both are present. Removing the last artifact drops the artifact component
+// on the next reconciliation; a retained PR row keeps the PR component.
 func DeriveOutputType(prCount, artifactFileCount int) domain.SessionOutputType {
 	hasPR := prCount > 0
 	hasArtifact := artifactFileCount > 0
