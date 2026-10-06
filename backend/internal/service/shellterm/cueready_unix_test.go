@@ -36,10 +36,10 @@ func TestCueReadinessFromInteractiveUnixShell(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if name == "bash" {
-				// Bash must not signal before a user startup hook finishes
+			if name == "bash" || name == "zsh" {
+				// The shell must not signal before a user startup hook finishes
 				// reading from its terminal.
-				if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte("printf 'startup-blocked\\n'; read -r _\n"), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(home, "."+name+"rc"), []byte("printf 'startup-blocked\\n'; read -r _\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -75,7 +75,7 @@ func TestCueReadinessFromInteractiveUnixShell(t *testing.T) {
 					}
 				}
 			}()
-			if name == "bash" || name == "fish" {
+			if name == "bash" || name == "zsh" || name == "fish" {
 				deadline := time.After(5 * time.Second)
 				var transcript string
 				for {
