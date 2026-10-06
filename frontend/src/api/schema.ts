@@ -5832,6 +5832,8 @@ export interface components {
             /** Format: date-time */
             capturedAt: string;
             height: number;
+            /** Format: double */
+            scale: number;
             screenshotId: string;
             width: number;
         };

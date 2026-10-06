@@ -16848,6 +16848,9 @@ components:
           type: string
         height:
           type: integer
+        scale:
+          format: double
+          type: number
         screenshotId:
           minLength: 1
           type: string
@@ -16858,6 +16861,7 @@ components:
       - bounds
       - width
       - height
+      - scale
       - capturedAt
       type: object
     TestEvidenceReceipt:
