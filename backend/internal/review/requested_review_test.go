@@ -470,3 +470,30 @@ func TestGitPushedHeadReadsTheRemoteTrackingRef(t *testing.T) {
 		}
 	}
 }
+
+func TestTriggerPRURLReviewsOnlyTheNamedPR(t *testing.T) {
+	prs := fakePRs{prs: []domain.PullRequest{
+		{URL: "https://api/pr/1", HTMLURL: "https://github.com/o/r/pull/1", Number: 1, HeadSHA: "sha1"},
+		{URL: "https://api/pr/2", HTMLURL: "https://github.com/o/r/pull/2", Number: 2, HeadSHA: "sha2"},
+	}}
+	eng := newEngineForTest(&fakeStore{}, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, &fakeLauncher{handle: "pane"})
+
+	res, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent, PRURL: "https://github.com/o/r/pull/2"})
+	if err != nil {
+		t.Fatalf("TriggerWithOptions: %v", err)
+	}
+	if len(res.CreatedRuns) != 1 || res.CreatedRuns[0].PRURL != "https://api/pr/2" {
+		t.Fatalf("created = %+v, want only PR #2", res.CreatedRuns)
+	}
+	if _, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent, PRURL: "https://github.com/o/r/pull/7"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("untracked PR: err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestTriggerWithNoTrackedPRPointsAtThePRFlag(t *testing.T) {
+	eng := newEngineForTest(&fakeStore{}, fakeSessions{rec: liveWorker(), ok: true}, fakePRs{}, fakeProjects{}, &fakeLauncher{})
+	_, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "ao review trigger --pr <url>") {
+		t.Fatalf("err = %v, want a pointer to --pr for a PR AO has not picked up", err)
+	}
+}

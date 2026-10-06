@@ -497,12 +497,12 @@ func TestReviewsTriggerForwardsAgentPolicyAndReportsAutoInject(t *testing.T) {
 	svc := &fakeReviewService{autoInjectEnabled: true}
 	srv := newReviewTestServer(t, svc)
 
-	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", `{"harness":"codex","agentConfig":{"model":"gpt-5.5"},"source":"agent","rejectReviewedHead":true,"enableAutoInject":true}`)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", `{"harness":"codex","agentConfig":{"model":"gpt-5.5"},"source":"agent","rejectReviewedHead":true,"enableAutoInject":true,"prUrl":"https://github.com/o/r/pull/3"}`)
 	if status != http.StatusCreated {
 		t.Fatalf("status = %d body=%s", status, body)
 	}
 	req := svc.triggerRequest
-	if req.Harness != domain.ReviewerCodex || req.Config.Model != "gpt-5.5" || req.Source != domain.ReviewTriggerAgent || !req.RejectReviewedHead || req.Rerun || !req.EnableAutoInject {
+	if req.Harness != domain.ReviewerCodex || req.Config.Model != "gpt-5.5" || req.Source != domain.ReviewTriggerAgent || !req.RejectReviewedHead || req.Rerun || !req.EnableAutoInject || req.PRURL != "https://github.com/o/r/pull/3" {
 		t.Fatalf("forwarded request = %+v", req)
 	}
 	var got controllers.TriggerReviewResponse
@@ -520,6 +520,7 @@ func TestReviewsTriggerMapsSameCommitConflictsTo409(t *testing.T) {
 		{fmt.Errorf("%w: codex is already reviewing PR #1 head abc", reviewcore.ErrReviewAlreadyRunning), "REVIEW_ALREADY_RUNNING"},
 		{fmt.Errorf("%w: PR #1 head abc was already reviewed (approved); push new commits, or pass --rerun", reviewcore.ErrHeadAlreadyReviewed), "REVIEW_HEAD_ALREADY_REVIEWED"},
 		{fmt.Errorf("%w: AO still sees PR #1 head abc, but def was pushed", reviewcore.ErrHeadNotObserved), "REVIEW_HEAD_NOT_OBSERVED"},
+		{fmt.Errorf("%w: PR #1 head abc belongs to active session mer-2", reviewcore.ErrPROwnedElsewhere), "REVIEW_PR_OWNED_BY_OTHER_SESSION"},
 	} {
 		srv := newReviewTestServer(t, &fakeReviewService{triggerErr: tc.err})
 		body, status, headers := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", `{"rejectReviewedHead":true}`)

@@ -661,7 +661,7 @@ func TestReviewTriggerForwardsReviewerAndPolicyFlags(t *testing.T) {
 	srv, capture := reviewServer(t, http.StatusCreated, `{"created":true}`)
 	writeRunFileFor(t, cfg, srv)
 
-	out, errOut, err := executeCLI(t, aliveDeps(), "review", "trigger", "mer-1", "--agent", "codex", "--model", "gpt-5.5", "--effort", "high", "--rerun", "--no-inject")
+	out, errOut, err := executeCLI(t, aliveDeps(), "review", "trigger", "mer-1", "--agent", "codex", "--model", "gpt-5.5", "--effort", "high", "--rerun", "--no-inject", "--pr", "https://github.com/o/r/pull/4")
 	if err != nil {
 		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
 	}
@@ -675,6 +675,9 @@ func TestReviewTriggerForwardsReviewerAndPolicyFlags(t *testing.T) {
 	}
 	if body["rerun"] != true {
 		t.Fatalf("body = %v, want rerun", body)
+	}
+	if body["prUrl"] != "https://github.com/o/r/pull/4" {
+		t.Fatalf("body = %v, want the --pr URL as prUrl", body)
 	}
 	for _, key := range []string{"rejectReviewedHead", "enableAutoInject", "source"} {
 		if _, ok := body[key]; ok {

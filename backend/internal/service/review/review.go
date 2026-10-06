@@ -34,6 +34,7 @@ var (
 	ErrReviewAlreadyRunning = reviewcore.ErrReviewAlreadyRunning
 	ErrHeadAlreadyReviewed  = reviewcore.ErrHeadAlreadyReviewed
 	ErrHeadNotObserved      = reviewcore.ErrHeadNotObserved
+	ErrPROwnedElsewhere     = reviewcore.ErrPROwnedElsewhere
 	ErrAgentBinaryNotFound  = ports.ErrAgentBinaryNotFound
 )
 
@@ -93,6 +94,7 @@ type Service struct {
 	telemetry          ports.EventSink
 	codexOperationGate ports.CodexOperationGate
 	notifications      reviewNotificationSink
+	prRefresher        PRRefresher
 	// engineTrigger indirects the engine's source-tagged trigger so the
 	// instrumented path can be exercised without standing up a full engine and
 	// its eighteen-method store. Defaulted in New; only tests replace it.
@@ -126,8 +128,25 @@ type Store interface {
 	MarkPRCommentResolved(ctx context.Context, prURL, commentID string) (bool, error)
 }
 
+// PRRefresher fetches one pull request fresh from its provider and records it
+// on the worker session. It attaches a PR the session does not track yet, but
+// never takes one over from another active session.
+type PRRefresher interface {
+	RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string) error
+}
+
+// prRefreshTimeout bounds the provider fetch a trigger waits for before
+// falling back to the PR facts AO already has.
+const prRefreshTimeout = 10 * time.Second
+
 // Option customizes the review service.
 type Option func(*Service)
+
+// WithPRRefresher refreshes a worker's PRs from the provider before a
+// requested review, so the pass covers the commit actually on the PR.
+func WithPRRefresher(r PRRefresher) Option {
+	return func(s *Service) { s.prRefresher = r }
+}
 
 // WithClock overrides the service clock for tests.
 func WithClock(clock func() time.Time) Option {
@@ -428,8 +447,11 @@ type TriggerRequest struct {
 	Config  domain.AgentConfig
 	// Source is manual (a person) or agent (an AO session through the CLI).
 	// Automatic passes come only from the daemon through TriggerAuto.
-	Source             domain.ReviewTriggerSource
-	InterfaceMode      domain.ReviewerInterfaceMode
+	Source        domain.ReviewTriggerSource
+	InterfaceMode domain.ReviewerInterfaceMode
+	// PRURL restricts the pass to one PR, attaching it to the worker first when
+	// AO does not track it yet.
+	PRURL              string
 	RejectReviewedHead bool
 	Rerun              bool
 	// EnableAutoInject turns on the worker session's review auto-inject once a
@@ -456,11 +478,15 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 	if req.Rerun && req.RejectReviewedHead {
 		return TriggerOutcome{}, fmt.Errorf("%w: rerun cannot be combined with rejecting an already-reviewed head", ErrInvalid)
 	}
+	if err := s.refreshPRs(ctx, workerID, strings.TrimSpace(req.PRURL)); err != nil {
+		return TriggerOutcome{}, err
+	}
 	result, err := s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{
 		Harness:            req.Harness,
 		Config:             req.Config,
 		Source:             source,
 		InterfaceMode:      req.InterfaceMode,
+		PRURL:              strings.TrimSpace(req.PRURL),
 		RejectReviewedHead: req.RejectReviewedHead,
 		Rerun:              req.Rerun,
 	})
@@ -490,6 +516,58 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 	}
 	outcome.AutoInjectEnabled = updated
 	return outcome, nil
+}
+
+// refreshPRs fetches the worker's PRs fresh from the provider before a
+// requested review, so the pass reviews the commit really on the PR rather than
+// whatever the SCM observer last saw. A named PR is attached first when AO does
+// not track it yet; failing to fetch it is an error, because there is nothing
+// else to review. Refreshing already-tracked PRs is best effort: on failure the
+// trigger proceeds with the facts AO has, and its same-commit checks still
+// report a push AO has not observed.
+func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prURL string) error {
+	if s.prRefresher == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, prRefreshTimeout)
+	defer cancel()
+	tracked, err := s.store.ListPRsBySession(ctx, workerID)
+	if err != nil {
+		return err
+	}
+	if prURL != "" {
+		known := false
+		for _, pr := range tracked {
+			if pr.URL == prURL || pr.HTMLURL == prURL {
+				known = true
+				break
+			}
+		}
+		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL); err != nil && !known {
+			return err
+		} else if err != nil {
+			slog.Default().WarnContext(ctx, "review trigger: refresh named PR failed; using stored facts", "session", workerID, "err", err)
+		}
+		return nil
+	}
+	for _, pr := range tracked {
+		if pr.Merged || pr.Closed {
+			continue
+		}
+		if err := s.prRefresher.RefreshPR(ctx, workerID, firstNonEmpty(pr.HTMLURL, pr.URL)); err != nil {
+			slog.Default().WarnContext(ctx, "review trigger: refresh PR failed; using stored facts", "session", workerID, "err", err)
+		}
+	}
+	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // TriggerWithMode starts a manual pass on the requested reviewer surface.

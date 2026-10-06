@@ -358,9 +358,9 @@ func workerNativeReviewPrompt(project promptProject, hasOrchestrator bool) strin
 	if project.WorkersRequestReview {
 		policy = `This project asks workers to request it:
 
-- Once your PR is pushed, the checks you can run locally pass, and you consider it ready, run ` + "`ao review trigger`" + `.
+- Once your PR is pushed, the checks you can run locally pass, and you consider it ready, run ` + "`ao review trigger`" + `. Right after opening a new PR, pass its URL: ` + "`ao review trigger --pr <url>`" + `.
 - The reviewer's findings arrive in this session as PR review comments. Address each one, push, and run ` + "`ao review trigger`" + ` again for the new head.
-- An approval adds no comments, so check ` + "`ao review ls`" + ` for the verdict before reporting the work done.`
+- An approval adds no comments, so check ` + "`ao review ls`" + ` for the verdict before reporting the work done. If it shows the run failed or was cancelled, run ` + "`ao review trigger`" + ` again; nothing else will tell you.`
 	}
 	return `## AO Native Review
 

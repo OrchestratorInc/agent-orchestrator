@@ -125,11 +125,16 @@ ao review trigger [worker-session-id] [flags]
 | Flag | Meaning | Default / Required |
 |---|---|---|
 | `--session string` | Worker session id (or pass it positionally) | The calling AO session |
+| `--pr string` | Review only this PR URL, attaching it to the session first if AO does not track it yet (never from another active session) | Every eligible PR on the session |
 | `--agent string` | Reviewer agent for this pass only (alias `--harness`) | Session reviewer, then project reviewer, then the project's default worker agent |
 | `--model string` | Reviewer model for this pass only | As above |
 | `--effort string` | Reviewer reasoning effort for this pass only | As above |
 | `--rerun` | Review a head that already has a review again, or add a reviewer with a different agent alongside one that is still running | - |
 | `--no-inject` | Leave the session's review auto-inject setting unchanged | Auto-inject is turned on |
+
+AO fetches the session's PRs fresh from the provider before deciding what is
+due, so the pass covers the commit really on the PR. Right after opening a PR,
+pass `--pr <url>`.
 
 A head that is already being reviewed, or already has a review, is not reviewed
 again: the command exits 1 with `REVIEW_ALREADY_RUNNING` or
@@ -140,7 +145,8 @@ picked up the new commit yet; it checks about every 30 seconds, so retry shortly
 By default the command turns on the worker session's review auto-inject. The
 reviewer posts an inline GitHub comment for each change it requires, and AO
 forwards those comments to the worker like any other review comments. An
-approval adds no comments, so check the verdict with `ao review ls`.
+approval adds no comments, so check the verdict with `ao review ls`. If a run
+shows `failed` or `cancelled`, trigger again; nothing else reports it.
 
 **Examples:**
 

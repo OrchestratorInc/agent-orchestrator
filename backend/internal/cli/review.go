@@ -67,6 +67,7 @@ type triggerReviewResponse struct {
 type triggerReviewRequest struct {
 	Harness            string             `json:"harness,omitempty"`
 	AgentConfig        *reviewAgentConfig `json:"agentConfig,omitempty"`
+	PRURL              string             `json:"prUrl,omitempty"`
 	Source             string             `json:"source,omitempty"`
 	RejectReviewedHead bool               `json:"rejectReviewedHead,omitempty"`
 	Rerun              bool               `json:"rerun,omitempty"`
@@ -119,6 +120,7 @@ type reviewSessionOptions struct {
 
 type reviewTriggerOptions struct {
 	session  string
+	prURL    string
 	harness  string
 	model    string
 	effort   string
@@ -355,7 +357,10 @@ func newReviewTriggerCommand(ctx *commandContext) *cobra.Command {
 		Long: `Start an independent AO reviewer on the worker session's open PR heads.
 
 With no session argument the calling AO session is reviewed, so a worker can
-request a review of its own PR. The reviewer defaults to the session's reviewer
+request a review of its own PR. AO fetches the session's PRs fresh from the
+provider first, so the pass reviews the commit really on the PR. Right after
+opening a PR, pass --pr <url>: AO attaches it to the session if it does not
+track it yet (never taking it from another active session) and reviews only it. The reviewer defaults to the session's reviewer
 choice, then the project's reviewer config, then the project's default worker
 agent and model; --agent, --model, and --effort override it for this pass only.
 
@@ -380,6 +385,7 @@ approval and does not authorize merging.`,
 		return pflag.NormalizedName(name)
 	})
 	f.StringVar(&opts.session, "session", "", "Worker session id (or pass it positionally; default: this AO session)")
+	f.StringVar(&opts.prURL, "pr", "", "Review only this pull request URL, attaching it to the session if AO does not track it yet (default: every eligible PR on the session)")
 	f.StringVar(&opts.harness, "harness", "", "Reviewer agent / --agent for this pass only (e.g. claude-code, codex)")
 	f.StringVar(&opts.model, "model", "", "Reviewer model for this pass only")
 	f.StringVar(&opts.effort, "effort", "", "Reviewer reasoning effort for this pass only")
@@ -398,6 +404,7 @@ func (c *commandContext) triggerReview(cmd *cobra.Command, args []string, opts r
 	}
 	req := triggerReviewRequest{
 		Harness:            strings.TrimSpace(opts.harness),
+		PRURL:              strings.TrimSpace(opts.prURL),
 		RejectReviewedHead: !opts.rerun,
 		Rerun:              opts.rerun,
 		EnableAutoInject:   !opts.noInject,

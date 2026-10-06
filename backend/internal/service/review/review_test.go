@@ -1026,3 +1026,74 @@ func TestTriggerRequestedRejectsDaemonOnlySourceAndContradictoryPolicy(t *testin
 		}
 	}
 }
+
+type fakePRRefresher struct {
+	calls []string
+	err   map[string]error
+	// order records refreshes relative to the engine trigger.
+	order *[]string
+}
+
+func (f *fakePRRefresher) RefreshPR(_ context.Context, _ domain.SessionID, prURL string) error {
+	f.calls = append(f.calls, prURL)
+	if f.order != nil {
+		*f.order = append(*f.order, "refresh "+prURL)
+	}
+	return f.err[prURL]
+}
+
+// A requested review fetches the worker's open PRs fresh first, so it reviews
+// the commit really on the PR, and only then plans the pass.
+func TestTriggerRequestedRefreshesOpenPRsBeforePlanning(t *testing.T) {
+	var order []string
+	st := &fakeStore{prs: []domain.PullRequest{
+		{URL: "https://api/pr/1", HTMLURL: "https://github.com/o/r/pull/1"},
+		{URL: "https://api/pr/2", HTMLURL: "https://github.com/o/r/pull/2", Merged: true},
+	}}
+	refresher := &fakePRRefresher{order: &order, err: map[string]error{"https://github.com/o/r/pull/1": errors.New("provider down")}}
+	svc := New(nil, st, WithPRRefresher(refresher))
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		order = append(order, "trigger")
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent, RejectReviewedHead: true}); err != nil {
+		t.Fatalf("a failed best-effort refresh must fall back to stored facts: %v", err)
+	}
+	if strings.Join(order, ",") != "refresh https://github.com/o/r/pull/1,trigger" {
+		t.Fatalf("order = %v, want the open PR refreshed (merged one skipped) before planning", order)
+	}
+
+	order = nil
+	if _, err := svc.TriggerAuto(context.Background(), "mer-1", "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(order, ",") != "trigger" {
+		t.Fatalf("auto-review must not refresh (the observer just ran): %v", order)
+	}
+}
+
+// Naming a PR AO does not track yet attaches it and reviews only it. If it
+// cannot be fetched there is nothing to review, so that is an error.
+func TestTriggerRequestedNamedPRAttachesItAndTargetsIt(t *testing.T) {
+	st := &fakeStore{}
+	refresher := &fakePRRefresher{}
+	svc := New(nil, st, WithPRRefresher(refresher))
+	var got reviewcore.TriggerOptions
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		got = opts
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	url := "https://github.com/o/r/pull/9"
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent, PRURL: " " + url + " "}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if len(refresher.calls) != 1 || refresher.calls[0] != url || got.PRURL != url {
+		t.Fatalf("refresh=%v target=%q, want the named PR attached then targeted", refresher.calls, got.PRURL)
+	}
+
+	refresher.err = map[string]error{url: fmt.Errorf("%w: owned", reviewcore.ErrPROwnedElsewhere)}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{PRURL: url}); !errors.Is(err, ErrPROwnedElsewhere) {
+		t.Fatalf("err = %v, want the attach failure for an untracked PR", err)
+	}
+}

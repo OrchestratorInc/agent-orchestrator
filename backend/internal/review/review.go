@@ -36,6 +36,9 @@ var (
 	// ErrHeadNotObserved means the worker pushed a commit AO has not seen yet:
 	// the head AO knows is reviewed, but the workspace's pushed branch is ahead.
 	ErrHeadNotObserved = fmt.Errorf("%w: pushed head not yet observed", ErrConflict)
+	// ErrPROwnedElsewhere means a named PR belongs to another active session,
+	// which a review trigger never takes over.
+	ErrPROwnedElsewhere = fmt.Errorf("%w: pull request owned by another session", ErrConflict)
 )
 
 // Store is the persistence surface the engine needs. *sqlite.Store satisfies it
@@ -251,6 +254,9 @@ type TriggerOptions struct {
 	// InterfaceMode chooses Chat or Terminal for the reviewer; empty keeps the
 	// reviewer's persisted surface or the adapter default.
 	InterfaceMode domain.ReviewerInterfaceMode
+	// PRURL restricts the pass to one of the worker's PRs; empty reviews every
+	// eligible PR on the session.
+	PRURL string
 	// RejectReviewedHead turns "nothing new to review" into an error instead of
 	// a silent reuse: ErrReviewAlreadyRunning when a pass is already running on
 	// a PR head, ErrHeadAlreadyReviewed when every head already has a review.
@@ -320,7 +326,20 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		return TriggerResult{}, err
 	}
 	if len(prs) == 0 {
-		return TriggerResult{}, fmt.Errorf("%w: worker %q has no PR to review", ErrInvalid, workerID)
+		return TriggerResult{}, fmt.Errorf("%w: AO is not tracking a PR for worker %q yet; if you just opened one, run `ao review trigger --pr <url>`", ErrInvalid, workerID)
+	}
+	if want := strings.TrimSpace(opts.PRURL); want != "" {
+		// A targeted pass reviews only the named PR, matched by API or web URL.
+		var only []domain.PullRequest
+		for _, pr := range prs {
+			if pr.URL == want || pr.HTMLURL == want {
+				only = append(only, pr)
+			}
+		}
+		if len(only) == 0 {
+			return TriggerResult{}, fmt.Errorf("%w: pull request %s is not tracked for worker %q", ErrNotFound, want, workerID)
+		}
+		prs = only
 	}
 	runs, err := e.store.ListReviewRunsBySession(ctx, workerID)
 	if err != nil {

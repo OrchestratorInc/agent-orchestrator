@@ -201,6 +201,7 @@ func (c *ReviewsController) trigger(w http.ResponseWriter, r *http.Request) {
 		Config:             in.AgentConfig,
 		Source:             domain.ReviewTriggerSource(strings.TrimSpace(in.Source)),
 		InterfaceMode:      in.InterfaceMode,
+		PRURL:              strings.TrimSpace(in.PRURL),
 		RejectReviewedHead: in.RejectReviewedHead,
 		Rerun:              in.Rerun,
 		EnableAutoInject:   in.EnableAutoInject,
@@ -440,6 +441,8 @@ func writeReviewError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_HEAD_ALREADY_REVIEWED", err.Error(), nil)
 	case errors.Is(err, reviewsvc.ErrHeadNotObserved):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_HEAD_NOT_OBSERVED", err.Error(), nil)
+	case errors.Is(err, reviewsvc.ErrPROwnedElsewhere):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_PR_OWNED_BY_OTHER_SESSION", err.Error(), nil)
 	case errors.Is(err, reviewsvc.ErrAgentBinaryNotFound):
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "REVIEWER_BINARY_NOT_FOUND", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatAuthRequired):
