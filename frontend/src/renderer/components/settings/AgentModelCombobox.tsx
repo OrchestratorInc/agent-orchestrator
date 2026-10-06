@@ -73,6 +73,7 @@ export function AgentModelCombobox({
 	renderTrigger,
 	recentScope,
 	compact = false,
+	collapseAfter,
 	showFollowAgentAction = true,
 	tuning,
 	disabled = false,
@@ -104,6 +105,10 @@ export function AgentModelCombobox({
 	 *  contexts where the menu should read like a simple choice, not a
 	 *  model-management surface. */
 	compact?: boolean;
+	/** Compact mode only: show this many leading models and fold the rest
+	 *  behind a "show more" row. For catalogs ordered newest-first, where the
+	 *  tail is older models most users never pick. */
+	collapseAfter?: number;
 	/** Callers opt into a combined model and reasoning-effort menu. */
 	tuning?: ModelEffortSelection;
 	disabled?: boolean;
@@ -177,15 +182,27 @@ export function AgentModelCombobox({
 	}, [compact, effectiveModel, normalizedSearch, recentModelIDs, searchIndex]);
 
 	const visibleModels = rankedModels.slice(0, MAX_VISIBLE_MODELS);
+	const [showOlderModels, setShowOlderModels] = useState(false);
+	// A selected model in the folded tail keeps the list open, so the current
+	// choice is never hidden behind the toggle.
+	const selectedIndex = visibleModels.findIndex((item) => item.id === selected?.id);
+	const collapseAt =
+		compact && collapseAfter && normalizedSearch === "" && visibleModels.length > collapseAfter && selectedIndex < collapseAfter
+			? collapseAfter
+			: 0;
+	const [leadingModels, olderModels] = useMemo(
+		() => (collapseAt ? [visibleModels.slice(0, collapseAt), visibleModels.slice(collapseAt)] : [visibleModels, []]),
+		[collapseAt, visibleModels],
+	);
 	const groups = useMemo(
 		() =>
 			compact
-				? [{ key: "all", label: "", kind: "provider" as const, models: visibleModels }]
+				? [{ key: "all", label: "", kind: "provider" as const, models: leadingModels }]
 				: groupModels(visibleModels, normalizedSearch === "", effectiveModel, recentModelIDs, {
 						pinned: t("settings.models.currentDefaults"),
 						recent: t("settings.models.recent"),
 					}),
-		[compact, effectiveModel, normalizedSearch, recentModelIDs, t, visibleModels],
+		[compact, effectiveModel, leadingModels, normalizedSearch, recentModelIDs, t, visibleModels],
 	);
 	const customSearchValue = search.trim();
 	const showCustomSearchAction = allowDirectCustom && customSearchValue !== "" && rankedModels.length === 0;
@@ -227,6 +244,17 @@ export function AgentModelCombobox({
 		setAwaitingEffort(openEffort);
 		if (!openEffort) setMenuOpen(false);
 	};
+	const renderCompactItem = (item: IndexedModel) => (
+		<DropdownMenuItem
+			key={item.id}
+			onSelect={(event) => selectCatalogModel(event, item)}
+			className={modelItemClass(item.id === effectiveModel)}
+			aria-current={tuning && item.id === effectiveModel ? true : undefined}
+		>
+			<span className="truncate text-settings-label">{item.label}</span>
+			{tuning && item.id === effectiveModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
+		</DropdownMenuItem>
+	);
 	const refreshBusy = refreshing || refreshingLocal;
 	const showManualRefresh = Boolean(
 		onRefresh && (concreteModels.length === 0 || (normalizedSearch !== "" && rankedModels.length === 0)),
@@ -245,6 +273,7 @@ export function AgentModelCombobox({
 				setMenuOpen(open);
 				if (open) {
 					setSearch("");
+					setShowOlderModels(false);
 				} else {
 					setRefreshFailed(false);
 					setEffortMenuOpen(false);
@@ -389,15 +418,7 @@ export function AgentModelCombobox({
 								{!compact && <DropdownMenuLabel className="normal-case tracking-normal">{group.label}</DropdownMenuLabel>}
 								{group.models.map((item) =>
 									compact ? (
-										<DropdownMenuItem
-											key={item.id}
-											onSelect={(event) => selectCatalogModel(event, item)}
-											className={modelItemClass(item.id === effectiveModel)}
-											aria-current={tuning && item.id === effectiveModel ? true : undefined}
-										>
-											<span className="truncate text-settings-label">{item.label}</span>
-											{tuning && item.id === effectiveModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
-										</DropdownMenuItem>
+										renderCompactItem(item)
 									) : (
 										<DropdownMenuItem
 											key={item.id}
@@ -420,6 +441,27 @@ export function AgentModelCombobox({
 								)}
 							</div>
 						))}
+						{olderModels.length > 0 && (
+							<>
+								<DropdownMenuItem
+									onSelect={(event) => {
+										event.preventDefault();
+										setShowOlderModels((current) => !current);
+									}}
+									className={cn(modelItemClass(false), "text-xs text-settings-muted")}
+									aria-expanded={showOlderModels}
+								>
+									<ChevronDown
+										className={cn("size-icon-sm shrink-0 transition-transform", showOlderModels && "rotate-180")}
+										aria-hidden="true"
+									/>
+									{showOlderModels
+										? t("settings.models.hideOlderModels")
+										: t("settings.models.showOlderModels", { count: olderModels.length })}
+								</DropdownMenuItem>
+								{showOlderModels && olderModels.map(renderCompactItem)}
+							</>
+						)}
 
 						{showCustomSearchAction && (
 							<DropdownMenuItem onSelect={() => onCustom(customSearchValue)} className={modelItemClass(false)}>

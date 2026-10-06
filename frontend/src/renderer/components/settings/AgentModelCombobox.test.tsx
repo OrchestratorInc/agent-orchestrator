@@ -232,6 +232,37 @@ describe("AgentModelCombobox", () => {
 		expect(screen.queryByText(/matching models/)).not.toBeInTheDocument();
 	});
 
+	it("folds older models behind a toggle after the collapse point", async () => {
+		const models = ["Opus 5.5", "Sonnet 5.5", "Fable 5.1", "Fable 5", "Opus 5", "Opus 4.8"].map((label) => ({
+			id: label.toLowerCase().replace(/[ .]/g, "-"),
+			label,
+		}));
+		renderCombobox(models, { compact: true, collapseAfter: 4 });
+
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+
+		expect(screen.getByRole("menuitem", { name: "Fable 5" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Opus 5" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: "Show 2 older models" }));
+
+		expect(screen.getByRole("menuitem", { name: "Opus 5" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Opus 4.8" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Hide older models" })).toBeInTheDocument();
+	});
+
+	it("does not fold away a selected older model", async () => {
+		const models = ["Opus 5.5", "Sonnet 5.5", "Opus 4.8"].map((label) => ({
+			id: label.toLowerCase().replace(/[ .]/g, "-"),
+			label,
+		}));
+		renderCombobox(models, { compact: true, collapseAfter: 2, value: "opus-4-8" });
+
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+
+		expect(screen.getByRole("menuitem", { name: "Opus 4.8" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /older models/ })).not.toBeInTheDocument();
+	});
+
 	it("uses the search field to enter a direct model ID for a compact catalog", async () => {
 		const { onCustom } = renderCombobox([
 			{ id: "gpt-5.6-sol", label: "Sol" },

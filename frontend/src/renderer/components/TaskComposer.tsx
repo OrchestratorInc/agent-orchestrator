@@ -910,6 +910,9 @@ function TaskModelPicker({
 			onChange={selectCatalogModel}
 			onCustom={selectCustomModel}
 			compact
+			// The Claude catalog arrives newest-first, so the head is the current
+			// lineup and the tail is older models.
+			collapseAfter={agentId === "claude-code" ? 4 : undefined}
 			recentScope={agentId}
 			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
 			menuAlign="start"

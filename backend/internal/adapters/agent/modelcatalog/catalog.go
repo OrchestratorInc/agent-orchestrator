@@ -342,7 +342,7 @@ func discoverClaudeCatalog(
 		}
 		normalized := normalize(models)
 		if len(normalized) > 0 {
-			base.Models = SortClaudeNewestFirst(applyClaudeConfiguredDefault(normalized, settings.Model))
+			base.Models = SortClaudeNewestFirst(applyClaudeConfiguredDefault(SortClaudeNewestFirst(normalized), settings.Model))
 			base.Source = "provider"
 			return base, nil
 		}
@@ -403,6 +403,9 @@ func applyClaudeConfiguredDefault(models []ports.AgentModelInfo, configured stri
 		models[i].IsDefault = strings.EqualFold(models[i].ID, configured)
 		matched = matched || models[i].IsDefault
 	}
+	if !matched && claudeMarkAliasFamilyDefault(models, configured) {
+		return models
+	}
 	if !matched {
 		// Claude accepts custom aliases and pinned snapshots beyond the static
 		// picker snapshot. Keep the effective configured model visible. When it
@@ -413,6 +416,37 @@ func applyClaudeConfiguredDefault(models []ports.AgentModelInfo, configured stri
 		models = append(models, ports.AgentModelInfo{ID: configured, Label: claudeConfiguredLabel(configured), IsDefault: true})
 	}
 	return models
+}
+
+// claudeFamilyAlias matches a plain family alias such as "sonnet", excluding
+// variants like "opus[1m]" that name a configuration rather than a family.
+var claudeFamilyAlias = regexp.MustCompile(`^[a-z]+$`)
+
+// claudeMarkAliasFamilyDefault resolves a configured Claude Code family alias
+// ("sonnet") against a provider catalog of concrete IDs. Claude Code runs the
+// family's latest model for an alias, so the newest catalog entry of that family
+// becomes the default instead of the alias appearing as an extra picker entry —
+// an entry no other machine's catalog would show. models must already be in
+// newest-first order. It reports false for anything that is not a plain family
+// alias, or when the catalog has no model in that family.
+func claudeMarkAliasFamilyDefault(models []ports.AgentModelInfo, configured string) bool {
+	family := strings.ToLower(strings.TrimSpace(configured))
+	known := false
+	for _, alias := range claudeCodeModels() {
+		known = known || strings.EqualFold(alias.ID, family)
+	}
+	if !known || !claudeFamilyAlias.MatchString(family) {
+		return false
+	}
+	for i := range models {
+		for _, token := range claudeIDSeparator.Split(strings.ToLower(models[i].ID), -1) {
+			if token == family {
+				models[i].IsDefault = true
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // claudeConfiguredLabel returns the human label Claude Code uses for a known
@@ -1204,7 +1238,7 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 
 // claudeCatalogOrderAlgorithm invalidates cached Claude catalogs when the
 // ordering rule changes.
-const claudeCatalogOrderAlgorithm = "5"
+const claudeCatalogOrderAlgorithm = "6"
 
 func claudeCatalogOrderFingerprint() string {
 	sum := sha256.Sum256([]byte(claudeCatalogOrderAlgorithm))

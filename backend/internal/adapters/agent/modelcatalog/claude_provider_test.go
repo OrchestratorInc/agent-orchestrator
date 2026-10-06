@@ -60,14 +60,14 @@ func TestClaudeCatalogPrefersProviderModels(t *testing.T) {
 }
 
 // A settings.json alias default (e.g. "sonnet") does not match the concrete
-// snapshot IDs provider discovery returns, so it is carried as its own entry.
-// It must surface with the human label the CLI uses, not the raw alias, so the
-// picker reads "Sonnet" instead of "sonnet" or "Model not reported".
-func TestClaudeConfiguredAliasDefaultCarriesHumanLabel(t *testing.T) {
+// IDs provider discovery returns. Claude Code runs the family's newest model
+// for it, so that model becomes the default and no alias entry is added.
+func TestClaudeConfiguredAliasDefaultsToNewestFamilyModel(t *testing.T) {
 	list := func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 		return []ports.AgentModelInfo{
 			{ID: "claude-sonnet-4-5-20250929", Label: "Claude Sonnet 4.5"},
-			{ID: "claude-opus-4-5-20251101", Label: "Claude Opus 4.5"},
+			{ID: "claude-opus-5-5", Label: "Claude Opus 5.5"},
+			{ID: "claude-sonnet-5-5", Label: "Claude Sonnet 5.5"},
 		}, nil
 	}
 	request := claudeRequest(t)
@@ -76,17 +76,33 @@ func TestClaudeConfiguredAliasDefaultCarriesHumanLabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var defaults []ports.AgentModelInfo
+	assertClaudeOrder(t, catalog.Models, []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-4-5-20250929"})
+	var defaults []string
 	for _, model := range catalog.Models {
 		if model.IsDefault {
-			defaults = append(defaults, model)
+			defaults = append(defaults, model.ID)
 		}
 	}
-	if len(defaults) != 1 {
-		t.Fatalf("default models = %+v, want exactly one", defaults)
+	if len(defaults) != 1 || defaults[0] != "claude-sonnet-5-5" {
+		t.Fatalf("defaults = %v, want [claude-sonnet-5-5]", defaults)
 	}
-	if defaults[0].ID != "sonnet" || defaults[0].Label != "Sonnet" {
-		t.Fatalf("default = %+v, want {ID: sonnet, Label: Sonnet}", defaults[0])
+}
+
+// An alias whose family the provider does not list still surfaces, so the
+// configured default stays visible with the CLI's human label.
+func TestClaudeConfiguredAliasWithoutFamilyCarriesHumanLabel(t *testing.T) {
+	list := func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+		return []ports.AgentModelInfo{{ID: "claude-opus-4-5-20251101", Label: "Claude Opus 4.5"}}, nil
+	}
+	request := claudeRequest(t)
+	request.Env = map[string]string{"ANTHROPIC_MODEL": "sonnet"}
+	catalog, err := discoverClaudeCatalog(context.Background(), request, list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := catalog.Models[len(catalog.Models)-1]
+	if last.ID != "sonnet" || last.Label != "Sonnet" || !last.IsDefault {
+		t.Fatalf("last = %+v, want default {ID: sonnet, Label: Sonnet}", last)
 	}
 }
 
