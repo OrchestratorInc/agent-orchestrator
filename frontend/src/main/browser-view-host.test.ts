@@ -586,6 +586,19 @@ describe("browser shortcut routing", () => {
 		expect(webContents.findInPage).toHaveBeenCalledOnce();
 	});
 
+	it("closes the browser panel on ⌘W when only one tab is open", async () => {
+		const { emitBeforeInput, invoke, shellSend } = setupHost();
+		const state = await invoke("browser:ensure", "sess-1");
+		shellSend.mockClear();
+
+		const closeEvent = emitBeforeInput({ key: "w", control: true });
+		expect(closeEvent.preventDefault).toHaveBeenCalled();
+		expect(shellSend).toHaveBeenCalledWith("browser:closePanel", state.viewId);
+		expect(shellSend).not.toHaveBeenCalledWith(CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL);
+		const tabs = (await invoke("browser:getTabs", state.viewId)) as unknown as BrowserTabsState;
+		expect(tabs.tabs).toHaveLength(1);
+	});
+
 	it("opens, focuses, and closes browser tabs without dispatching terminal shortcuts", async () => {
 		const { emitBeforeInput, invoke, shellSend, webContents } = setupHost();
 		const state = await invoke("browser:ensure", "sess-1");

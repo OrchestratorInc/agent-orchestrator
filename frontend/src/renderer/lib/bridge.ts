@@ -202,6 +202,7 @@ export const aoBridge: AoBridge =
 			onFocusLocation: () => () => undefined,
 			onFindOpen: () => () => undefined,
 			onReopenClosedTab: () => () => undefined,
+			onClosePanel: () => () => undefined,
 			devtools: async ({ viewId, operation }) => ({
 				viewId,
 				open: operation !== "close",

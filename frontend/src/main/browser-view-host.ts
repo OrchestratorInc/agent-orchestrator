@@ -1672,8 +1672,17 @@ export function createBrowserViewHost(
         ).catch(() => undefined);
         return;
       }
+      if (session.tabs.size === 1) {
+        // The last tab cannot close; ⌘W closes the browser panel instead.
+        // Move focus to the shell first so the next ⌘W does not land in the
+        // hidden page and fall through to the menu's Close item.
+        const shell = shellContents(options);
+        shell.focus();
+        shell.send("browser:closePanel", session.viewId);
+        return;
+      }
       const closingTabId = session.activeTabId;
-      if (isNativePage && session.tabs.size > 1) {
+      if (isNativePage) {
         // The focused view is about to be destroyed asynchronously. Move OS
         // focus to its replacement synchronously — making it visible first
         // so the focus sticks — or a fast second ⌘W lands in focus limbo
