@@ -106,7 +106,7 @@ const CLOUD_CP_WS_ORIGINS = (() => {
 // needs it. Enforcing CSP in dev keeps dev/packaged parity — a connect-src
 // gap then fails on the developer's screen, not weeks later in a packaged
 // build (that skew is exactly how the cloud-terminal block in #4666 shipped).
-function contentSecurityPolicy(mode: "build" | "serve"): string {
+export function contentSecurityPolicy(mode: "build" | "serve"): string {
 	return [
 		"default-src 'self'",
 		// react-refresh injects its inline preamble in serve mode; a hash is
@@ -133,7 +133,9 @@ function contentSecurityPolicy(mode: "build" | "serve"): string {
 			.join(" "),
 		"object-src 'none'",
 		"base-uri 'self'",
-		"frame-src 'none'",
+		// Agent HTML renders (RenderFrame) are the only frames: sandboxed pages
+		// served by the loopback daemon.
+		"frame-src http://127.0.0.1:*",
 	].join("; ");
 }
 
