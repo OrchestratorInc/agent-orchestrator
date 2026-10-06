@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -47,7 +48,7 @@ func fixture(t *testing.T) *fakeSystem {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	s := &launch{root: root, frontend: filepath.Join(root, "checkout", "frontend"), port: 32100,
+	s := &launch{root: root, frontend: filepath.Join(root, "checkout", "frontend"), tmux: "/fixture/ao/tmux", port: 32100,
 		target: domain.TestTargetIdentity{ID: "test", LaunchID: "target-test", Generation: 1, ElectronPID: 11, ElectronStartedAt: now, DaemonPID: 12, DaemonStartedAt: now.Add(time.Second), DataDir: filepath.Join(root, "data")},
 		owned:  map[int]time.Time{11: now, 12: now.Add(time.Second)}}
 	f := &fakeSystem{s: s, pids: map[int]processInfo{11: {PID: 11, Parent: 1}, 12: {PID: 12, Parent: 11}, 13: {PID: 13, Parent: 11}, 99: {PID: 99, Parent: 1}},
@@ -79,6 +80,16 @@ func fixture(t *testing.T) *fakeSystem {
 		windows:      func(context.Context, int) ([]string, error) { return f.windows, nil },
 		listenerGone: func(context.Context, int) error { return f.listener },
 		freePort:     func() (int, error) { return s.port, nil },
+		tmuxBinary:   func(string) (string, error) { return "/fixture/ao/tmux", nil },
+		run: func(ctx context.Context, exe string, args, _ []string) ([]byte, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if exe != f.s.tmux || len(args) != 3 || args[0] != "-L" || args[1] != "testing-"+f.s.target.ID || (args[2] != "kill-server" && args[2] != "list-sessions") {
+				t.Fatalf("unscoped tmux command: %s %v", exe, args)
+			}
+			return []byte("no server running on /tmp/testing-socket"), errors.New("exit 1")
+		},
 		client: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 			if r.Method != http.MethodGet || r.URL.Host != "127.0.0.1:32100" {
 				t.Errorf("unexpected endpoint %s %s", r.Method, r.URL)
@@ -118,7 +129,7 @@ func writeInfo(t *testing.T, s *launch) {
 
 func TestTargetEnvironmentStripsInheritedAO(t *testing.T) {
 	f := fixture(t)
-	inherited := []string{"PATH=/bin", "HOME=/private/home", "AO_DATA_DIR=/real/data", "AO_RUN_FILE=/real/run", "AO_BROWSER_TOKEN=secret-sentinel", "AO_TELEMETRY_TOKEN=secret-sentinel", "AO_FUTURE_VARIABLE=secret-sentinel", "NODE_OPTIONS=--require unsafe", "ELECTRON_RUN_AS_NODE=1", "ELECTRON_ENABLE_LOGGING=0"}
+	inherited := []string{"PATH=/bin", "HOME=/private/home", "AO_DATA_DIR=/real/data", "AO_RUN_FILE=/real/run", "AO_TMUX_BINARY=/real/tmux", "AO_TMUX_SOCKET_NAME=ao", "AO_BROWSER_TOKEN=secret-sentinel", "AO_TELEMETRY_TOKEN=secret-sentinel", "AO_FUTURE_VARIABLE=secret-sentinel", "NODE_OPTIONS=--require unsafe", "ELECTRON_RUN_AS_NODE=1", "ELECTRON_ENABLE_LOGGING=0"}
 	env := targetEnv(inherited, f.s, true)
 	values := make(map[string]string)
 	for _, entry := range env {
@@ -131,7 +142,7 @@ func TestTargetEnvironmentStripsInheritedAO(t *testing.T) {
 			t.Fatal("inherited AO state leaked")
 		}
 	}
-	for key, want := range map[string]string{"PATH": "/bin", "HOME": "/private/home", "AO_DATA_DIR": f.s.target.DataDir, "AO_RUN_FILE": filepath.Join(f.s.root, "running.json"), "AO_PORT": "32100", "AO_DEV_ELECTRON_DIR": filepath.Join(f.s.root, "electron"), "AO_FAKE_HARNESS": "1", "AO_APP_RUN_ID": f.s.target.LaunchID, "ELECTRON_ENABLE_LOGGING": "1", "AO_ALLOWED_ORIGINS": "app://renderer"} {
+	for key, want := range map[string]string{"PATH": "/bin", "HOME": "/private/home", "AO_DATA_DIR": f.s.target.DataDir, "AO_RUN_FILE": filepath.Join(f.s.root, "running.json"), "AO_PORT": "32100", "AO_DEV_ELECTRON_DIR": filepath.Join(f.s.root, "electron"), "AO_FAKE_HARNESS": "1", "AO_APP_RUN_ID": f.s.target.LaunchID, "ELECTRON_ENABLE_LOGGING": "1", "AO_ALLOWED_ORIGINS": "app://renderer", "AO_TMUX_BINARY": f.s.tmux, "AO_TMUX_SOCKET_NAME": "testing-test"} {
 		if values[key] != want {
 			t.Errorf("%s differs", key)
 		}
@@ -319,6 +330,9 @@ func TestStartUsesPreparedCheckoutAndCapturedIdentity(t *testing.T) {
 		if values["AO_FAKE_HARNESS"] != "1" || values["AO_DEV_ELECTRON_DIR"] != filepath.Join(base, "attempt", "electron") {
 			t.Fatal("missing isolation")
 		}
+		if values["AO_TMUX_BINARY"] != "/fixture/ao/tmux" {
+			t.Fatal("target did not receive the cleanup tmux binary")
+		}
 		f.s = f.a.launches[strings.TrimPrefix(values["AO_APP_RUN_ID"], "target-")]
 		f.s.target.DaemonPID = 12
 		f.s.target.DaemonStartedAt = f.times[12]
@@ -347,6 +361,92 @@ func TestStartUsesPreparedCheckoutAndCapturedIdentity(t *testing.T) {
 	spec.CheckoutPath = t.TempDir()
 	if _, err := f.a.Start(context.Background(), spec); err == nil {
 		t.Fatal("outside checkout admitted")
+	}
+}
+
+func TestCleanupStopsReparentedTmuxOnOnlyItsSocket(t *testing.T) {
+	f := fixture(t)
+	f.pids[88] = processInfo{PID: 88, Parent: 1}
+	f.times[88] = time.Now()
+	var commands []string
+	f.a.ops.run = func(_ context.Context, exe string, args, env []string) ([]byte, error) {
+		if exe != f.s.tmux || len(args) != 3 || args[0] != "-L" || args[1] != "testing-test" {
+			t.Fatalf("unscoped tmux command: %s %v", exe, args)
+		}
+		if len(f.signals) != 3 {
+			t.Fatal("tmux cleanup ran before owned tree teardown")
+		}
+		commands = append(commands, args[2])
+		switch args[2] {
+		case "kill-server":
+			delete(f.pids, 88)
+			return nil, nil
+		case "list-sessions":
+			return []byte("no server running on /tmp/testing-test"), errors.New("exit 1")
+		default:
+			t.Fatalf("unexpected tmux command %v", args)
+			return nil, nil
+		}
+	}
+	result, err := f.a.Stop(context.Background(), f.s.target)
+	if err != nil || result.State != domain.TestCleanupComplete || !reflect.DeepEqual(commands, []string{"kill-server", "list-sessions"}) {
+		t.Fatalf("orphan cleanup %+v: %v, commands %v", result, err, commands)
+	}
+	if _, alive := f.pids[99]; !alive {
+		t.Fatal("foreign server was removed")
+	}
+	for _, pid := range f.signals {
+		if pid == 88 || pid == 99 {
+			t.Fatal("reparented or foreign process was signalled by PID")
+		}
+	}
+}
+
+func TestCleanupReportsTmuxSocketLeftovers(t *testing.T) {
+	for _, mode := range []string{"server survives", "inventory fails", "kill fails"} {
+		t.Run(mode, func(t *testing.T) {
+			f := fixture(t)
+			f.a.ops.run = func(_ context.Context, _ string, args, _ []string) ([]byte, error) {
+				if args[2] == "kill-server" {
+					if mode == "kill fails" {
+						return []byte("permission denied"), errors.New("exit 1")
+					}
+					return nil, nil
+				}
+				if mode == "inventory fails" {
+					return []byte("connection refused"), errors.New("exit 1")
+				}
+				return []byte("session: 1 windows"), nil
+			}
+			result, err := f.a.Stop(context.Background(), f.s.target)
+			if err == nil || result.State != domain.TestCleanupFailed || !strings.Contains(strings.Join(result.Leftovers, " "), "tmux socket testing-test") {
+				t.Fatalf("tmux leftover not reported: %+v %v", result, err)
+			}
+		})
+	}
+}
+
+func TestTmuxAbsenceRequiresNoServerError(t *testing.T) {
+	for _, test := range []struct {
+		message string
+		absent  bool
+	}{
+		{"no server running on /tmp/testing-test", true},
+		{"error connecting to /tmp/testing-test (No such file or directory)", true},
+		{"error connecting to /tmp/testing-test (Permission denied)", false},
+		{"error connecting to /tmp/testing-test (Connection refused)", false},
+		{"unexpected client failure", false},
+	} {
+		t.Run(test.message, func(t *testing.T) {
+			f := fixture(t)
+			f.a.ops.run = func(context.Context, string, []string, []string) ([]byte, error) {
+				return []byte(test.message), errors.New("exit 1")
+			}
+			alive, err := f.a.tmuxCommand(context.Background(), f.s, "list-sessions")
+			if alive || (err == nil) != test.absent {
+				t.Fatalf("absence %v: alive %v, err %v", test.absent, alive, err)
+			}
+		})
 	}
 }
 

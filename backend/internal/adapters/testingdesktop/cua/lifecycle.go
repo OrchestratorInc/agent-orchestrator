@@ -45,6 +45,9 @@ func (a *Adapter) ensureDriver(ctx context.Context) error {
 	if a.driver.pid != 0 {
 		return a.checkDriver(ctx)
 	}
+	if a.pendingDriver.pid != 0 {
+		return a.admitDriver(ctx)
+	}
 	for _, dir := range []string{a.root, filepath.Join(a.root, "home"), filepath.Join(a.root, "tmp"), filepath.Join(a.root, "captures")} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
@@ -113,19 +116,10 @@ func (a *Adapter) ensureDriver(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			a.driver = driverIdentity{pid: pid, started: started}
+			// Keep cleanup ownership without admitting an unchecked driver.
+			a.pendingDriver = driverIdentity{pid: pid, started: started}
 			if info, err := os.Lstat(a.socket()); err == nil && info.Mode()&os.ModeSocket != 0 {
-				var permissions struct {
-					Accessibility   bool `json:"accessibility"`
-					ScreenRecording bool `json:"screen_recording"`
-				}
-				if err := a.call(ready, "check_permissions", map[string]any{"prompt": false, "probe_direct_capture": false}, &permissions); err != nil {
-					return err
-				}
-				if !permissions.Accessibility || !permissions.ScreenRecording {
-					return refuse("permissions", "Cua Driver needs its own Accessibility and Screen Recording grants")
-				}
-				return nil
+				return a.admitDriver(ready)
 			}
 		}
 		select {
@@ -136,16 +130,41 @@ func (a *Adapter) ensureDriver(ctx context.Context) error {
 	}
 }
 
+func (a *Adapter) admitDriver(ctx context.Context) error {
+	if err := a.checkDriver(ctx); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(a.socket()); err != nil || info.Mode()&os.ModeSocket == 0 {
+		return refuse("driver_socket", "owned driver socket is not ready")
+	}
+	var permissions struct {
+		Accessibility   bool `json:"accessibility"`
+		ScreenRecording bool `json:"screen_recording"`
+	}
+	if err := a.call(ctx, "check_permissions", map[string]any{"prompt": false, "probe_direct_capture": false}, &permissions); err != nil {
+		return err
+	}
+	if !permissions.Accessibility || !permissions.ScreenRecording {
+		return refuse("permissions", "Cua Driver needs its own Accessibility and Screen Recording grants")
+	}
+	a.driver, a.pendingDriver = a.pendingDriver, driverIdentity{}
+	return nil
+}
+
 func (a *Adapter) checkDriver(ctx context.Context) error {
-	if a.driver.pid <= 0 {
+	driver := a.driver
+	if driver.pid == 0 {
+		driver = a.pendingDriver
+	}
+	if driver.pid <= 0 {
 		return refuse("driver_missing", "driver is not running")
 	}
-	started, err := a.started(ctx, a.driver.pid)
-	if err != nil || !started.Equal(a.driver.started) {
+	started, err := a.started(ctx, driver.pid)
+	if err != nil || !started.Equal(driver.started) {
 		return refuse("driver_changed", "driver PID or birth time changed; refusing to reconnect")
 	}
 	data, err := os.ReadFile(a.pidFile())
-	if err != nil || strings.TrimSpace(string(data)) != strconv.Itoa(a.driver.pid) {
+	if err != nil || strings.TrimSpace(string(data)) != strconv.Itoa(driver.pid) {
 		return refuse("driver_changed", "driver PID file no longer names the owned process")
 	}
 	return nil
@@ -206,7 +225,11 @@ func (a *Adapter) Close(ctx context.Context) error {
 	if pending {
 		return cleanup // retain ownership for a later cleanup retry
 	}
-	if a.driver.pid == 0 {
+	driver := a.driver
+	if driver.pid == 0 {
+		driver = a.pendingDriver
+	}
+	if driver.pid == 0 {
 		return cleanup
 	}
 	if err := a.checkDriver(ctx); err != nil {
@@ -216,7 +239,7 @@ func (a *Adapter) Close(ctx context.Context) error {
 		cleanup = errors.Join(cleanup, a.call(ctx, "end_session", map[string]any{"session": b.session}, nil))
 	}
 	a.bindings = make(map[string]*binding)
-	_, err := a.run(ctx, a.binary(), "--socket", a.socket(), "--pid-file", a.pidFile(), "stop", "--expected-pid", strconv.Itoa(a.driver.pid))
+	_, err := a.run(ctx, a.binary(), "--socket", a.socket(), "--pid-file", a.pidFile(), "stop", "--expected-pid", strconv.Itoa(driver.pid))
 	if err != nil {
 		return errors.Join(cleanup, err)
 	}
@@ -225,14 +248,14 @@ func (a *Adapter) Close(ctx context.Context) error {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		started, probeErr := a.started(ctx, a.driver.pid)
-		if probeErr != nil || !started.Equal(a.driver.started) {
+		started, probeErr := a.started(ctx, driver.pid)
+		if probeErr != nil || !started.Equal(driver.started) {
 			// A failed probe is not enough: the daemon must also remove its own
 			// PID file and socket before cleanup is reported complete.
 			_, pidErr := os.Lstat(a.pidFile())
 			_, socketErr := os.Lstat(a.socket())
 			if errors.Is(pidErr, os.ErrNotExist) && errors.Is(socketErr, os.ErrNotExist) {
-				a.driver = driverIdentity{}
+				a.driver, a.pendingDriver = driverIdentity{}, driverIdentity{}
 				return cleanup
 			}
 		}

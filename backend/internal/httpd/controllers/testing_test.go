@@ -59,6 +59,7 @@ func testingRouter(f TestingService) http.Handler {
 }
 func testingRequest(h http.Handler, method, path, body, token string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		r.Header.Set(testingsvc.CapabilityHeader, token)
 	}
@@ -125,5 +126,32 @@ func TestTestingErrorsStrictBodiesAndProviderMissing(t *testing.T) {
 		if w.Code != test.status || !strings.Contains(w.Body.String(), "requestId") {
 			t.Fatal("service error envelope", w.Code, w.Body.String())
 		}
+	}
+}
+
+func TestTestingPostBodiesRequireJSONContentType(t *testing.T) {
+	paths := []string{"/api/v1/testing/runs", "/api/v1/testing/runs/run/attempts", "/api/v1/testing/attempts/attempt/cancel"}
+	for _, name := range testingsvc.ToolNames {
+		paths = append(paths, "/api/v1/testing/attempts/attempt/tools/"+name)
+	}
+	for _, path := range paths {
+		for _, contentType := range []string{"", "text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=test", "application/json; charset"} {
+			f := &testingServiceFake{}
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+			req.Header.Set("Content-Type", contentType)
+			w := httptest.NewRecorder()
+			testingRouter(f).ServeHTTP(w, req)
+			if w.Code != http.StatusUnsupportedMediaType || f.calls != 0 || !strings.Contains(w.Body.String(), "UNSUPPORTED_MEDIA_TYPE") {
+				t.Fatalf("%s content type %q: %d %s, calls %d", path, contentType, w.Code, w.Body.String(), f.calls)
+			}
+		}
+	}
+	f := &testingServiceFake{}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/testing/runs", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	w := httptest.NewRecorder()
+	testingRouter(f).ServeHTTP(w, req)
+	if w.Code != http.StatusCreated || f.calls != 1 {
+		t.Fatalf("JSON with charset rejected: %d %s", w.Code, w.Body.String())
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"mime"
 	"net/http"
 	"time"
 
@@ -29,6 +30,7 @@ type TestingController struct{ Svc TestingService }
 // Register mounts the exact testing routes on the loopback router.
 func (c *TestingController) Register(r chi.Router) {
 	r.Route("/api/v1/testing", func(r chi.Router) {
+		r.Use(testingContentTypeMiddleware)
 		r.Post("/runs", c.create)
 		r.Post("/runs/{runId}/attempts", c.start)
 		r.Post("/attempts/{attemptId}/cancel", c.cancel)
@@ -36,6 +38,18 @@ func (c *TestingController) Register(r chi.Router) {
 		for _, name := range testingsvc.ToolNames {
 			r.Post("/attempts/{attemptId}/tools/"+name, func(w http.ResponseWriter, r *http.Request) { c.tool(w, r, name) })
 		}
+	})
+}
+func testingContentTypeMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.Body != nil && r.Body != http.NoBody {
+			mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if err != nil || mediaType != "application/json" {
+				envelope.WriteAPIError(w, r, http.StatusUnsupportedMediaType, "unsupported_media_type", "UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json", nil)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 func (c *TestingController) available(w http.ResponseWriter, r *http.Request) bool {

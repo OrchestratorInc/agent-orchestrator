@@ -9532,6 +9532,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Conflict
+        "415":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unsupported Media Type
         "500":
           content:
             application/json:
@@ -9656,6 +9662,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Conflict
+        "415":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unsupported Media Type
         "500":
           content:
             application/json:
@@ -9725,6 +9737,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Conflict
+        "415":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unsupported Media Type
         "500":
           content:
             application/json:
@@ -9794,6 +9812,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Conflict
+        "415":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unsupported Media Type
         "500":
           content:
             application/json:
@@ -9863,6 +9887,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Conflict
+        "415":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unsupported Media Type
         "500":
           content:
             application/json:
@@ -9932,6 +9962,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Conflict
+        "415":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unsupported Media Type
         "500":
           content:
             application/json:
@@ -10001,6 +10037,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Conflict
+        "415":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unsupported Media Type
         "500":
           content:
             application/json:
@@ -10070,6 +10112,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Conflict
+        "415":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unsupported Media Type
         "500":
           content:
             application/json:
@@ -10125,6 +10173,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Conflict
+        "415":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unsupported Media Type
         "500":
           content:
             application/json:
@@ -10186,6 +10240,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Conflict
+        "415":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unsupported Media Type
         "500":
           content:
             application/json:

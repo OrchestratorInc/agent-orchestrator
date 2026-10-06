@@ -23,6 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
+	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
 
 const maxResponseBytes = 1 << 20
@@ -41,6 +42,8 @@ type operations struct {
 	windows      func(context.Context, int) ([]string, error)
 	freePort     func() (int, error)
 	listenerGone func(context.Context, int) error
+	tmuxBinary   func(string) (string, error)
+	run          func(context.Context, string, []string, []string) ([]byte, error)
 	client       *http.Client
 }
 
@@ -49,6 +52,8 @@ type launch struct {
 	target   domain.TestTargetIdentity
 	root     string
 	frontend string
+	tmux     string
+	env      []string
 	port     int
 	log      *os.File
 	owned    map[int]time.Time
@@ -76,6 +81,20 @@ func New() *Adapter {
 			home: os.UserHomeDir, start: startElectron, startTime: nativeStartTime,
 			processes: processSnapshot, signal: syscall.Kill, windows: nativeWindows,
 			freePort: unusedPort, listenerGone: listenerGone,
+			tmuxBinary: func(frontend string) (string, error) {
+				resolution, err := tmuxbin.ResolveWith("", func() (string, error) {
+					return filepath.Join(frontend, "daemon", "ao"), nil
+				}, exec.LookPath)
+				if err != nil {
+					return "", err
+				}
+				return filepath.Abs(resolution.Path)
+			},
+			run: func(ctx context.Context, executable string, args, env []string) ([]byte, error) {
+				command := exec.CommandContext(ctx, executable, args...)
+				command.Env = strippedEnv(env)
+				return command.CombinedOutput()
+			},
 			client: &http.Client{Transport: transport, Timeout: 2 * time.Second,
 				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		},
@@ -98,6 +117,10 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 	}
 	if err := prepared(ctx, frontend, spec.CommitSHA); err != nil {
 		return empty, err
+	}
+	tmux, err := a.ops.tmuxBinary(frontend)
+	if err != nil {
+		return empty, fmt.Errorf("resolve target tmux: %w", err)
 	}
 	var recipe struct {
 		VisualMarker bool `json:"visualMarker"`
@@ -123,7 +146,7 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 		_ = log.Close()
 		return empty, err
 	}
-	s := &launch{root: root, frontend: frontend, port: port, log: log, owned: make(map[int]time.Time),
+	s := &launch{root: root, frontend: frontend, tmux: tmux, port: port, log: log, owned: make(map[int]time.Time),
 		target: domain.TestTargetIdentity{ID: id, LaunchID: "target-" + id, Generation: spec.Generation,
 			DataDir: filepath.Join(root, "data")}}
 	a.mu.Lock()
@@ -140,7 +163,8 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 	a.launches[id] = s
 	a.mu.Unlock()
 	s.mu.Lock()
-	pid, err := a.ops.start(electronPath(frontend), frontend, targetEnv(os.Environ(), s, recipe.VisualMarker), log)
+	s.env = targetEnv(os.Environ(), s, recipe.VisualMarker)
+	pid, err := a.ops.start(electronPath(frontend), frontend, s.env, log)
 	if err != nil {
 		s.stopped = true
 		_ = log.Close()
@@ -269,6 +293,7 @@ func targetEnv(inherited []string, s *launch, marker bool) []string {
 		"AO_RUN_FILE="+filepath.Join(s.root, "running.json"), "AO_PORT="+strconv.Itoa(s.port),
 		"AO_DEV_ELECTRON_DIR="+filepath.Join(s.root, "electron"), "AO_APP_RUN_ID="+s.target.LaunchID,
 		"AO_FAKE_HARNESS=1", "AO_TMUX_SOCKET_NAME=testing-"+s.target.ID,
+		"AO_TMUX_BINARY="+s.tmux,
 		// Node URL reports an opaque origin for the privileged app:// scheme.
 		// An explicit valid origin prevents the dev helper adding "null".
 		"AO_ALLOWED_ORIGINS=app://renderer",

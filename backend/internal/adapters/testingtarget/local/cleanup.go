@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -174,10 +175,22 @@ func (a *Adapter) Stop(ctx context.Context, target domain.TestTargetIdentity) (p
 			}
 		}
 	}
+	if _, err := a.tmuxCommand(ctx, s, "kill-server"); err != nil {
+		problems = append(problems, err)
+	}
 	leftovers, err := a.remaining(ctx, s)
 	if err != nil {
 		problems = append(problems, err)
 		leftovers = append(leftovers, "process inventory unavailable")
+	}
+	socket := "tmux socket testing-" + s.target.ID
+	if alive, err := a.tmuxCommand(ctx, s, "list-sessions"); err != nil {
+		problems = append(problems, err)
+		leftovers = append(leftovers, socket+" inventory unavailable")
+	} else if alive {
+		// A successful list means the server still exists, even if its process
+		// daemonized before the descendant inventory could capture it.
+		leftovers = append(leftovers, socket)
 	}
 	windows, err := a.ops.windows(ctx, s.target.ElectronPID)
 	if err != nil {
@@ -228,6 +241,22 @@ func (a *Adapter) Stop(ctx context.Context, target domain.TestTargetIdentity) (p
 		s.log = nil
 	}
 	return ports.TestingCleanupResult{State: domain.TestCleanupComplete}, nil
+}
+
+func (a *Adapter) tmuxCommand(ctx context.Context, s *launch, command string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	output, err := a.ops.run(ctx, s.tmux, []string{"-L", "testing-" + s.target.ID, command}, s.env)
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if ctx.Err() == nil && (strings.HasPrefix(message, "no server running on ") ||
+			(strings.HasPrefix(message, "error connecting to ") && strings.HasSuffix(message, " (No such file or directory)"))) {
+			return false, nil
+		}
+		return false, fmt.Errorf("target tmux %s: %w", command, err)
+	}
+	return true, nil
 }
 
 func (a *Adapter) terminate(ctx context.Context, s *launch, pid int) error {

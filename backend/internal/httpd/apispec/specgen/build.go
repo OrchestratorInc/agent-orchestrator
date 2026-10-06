@@ -3169,11 +3169,12 @@ func prOperations() []operation {
 // Testing tools are loopback-only. The capability header is launch-only data.
 func testingOperations() []operation {
 	errors := []respUnit{{http.StatusBadRequest, envelope.APIError{}}, {http.StatusForbidden, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}}
+	postErrors := append(append([]respUnit(nil), errors...), respUnit{http.StatusUnsupportedMediaType, envelope.APIError{}})
 	ops := make([]operation, 0, 11)
 	ops = append(ops,
-		operation{method: http.MethodPost, path: "/api/v1/testing/runs", id: "createTestingRun", tag: "testing", summary: "Create an investigation using a configured recipe", reqBody: controllers.CreateTestingRunRequest{}, resps: append([]respUnit{{http.StatusCreated, controllers.TestingRunResponse{}}}, errors...)},
-		operation{method: http.MethodPost, path: "/api/v1/testing/runs/{runId}/attempts", id: "startTestingAttempt", tag: "testing", summary: "Start a target and investigator worker", pathParams: []any{controllers.TestingRunIDParam{}}, reqBody: controllers.StartTestingAttemptRequest{}, resps: append([]respUnit{{http.StatusCreated, controllers.TestingAttemptStartResponse{}}}, errors...)},
-		operation{method: http.MethodPost, path: "/api/v1/testing/attempts/{attemptId}/cancel", id: "cancelTestingAttempt", tag: "testing", summary: "Cancel an attempt and revoke its tools", pathParams: []any{controllers.TestingAttemptIDParam{}}, resps: append([]respUnit{{http.StatusOK, controllers.TestingAttemptResponse{}}}, errors...)},
+		operation{method: http.MethodPost, path: "/api/v1/testing/runs", id: "createTestingRun", tag: "testing", summary: "Create an investigation using a configured recipe", reqBody: controllers.CreateTestingRunRequest{}, resps: append([]respUnit{{http.StatusCreated, controllers.TestingRunResponse{}}}, postErrors...)},
+		operation{method: http.MethodPost, path: "/api/v1/testing/runs/{runId}/attempts", id: "startTestingAttempt", tag: "testing", summary: "Start a target and investigator worker", pathParams: []any{controllers.TestingRunIDParam{}}, reqBody: controllers.StartTestingAttemptRequest{}, resps: append([]respUnit{{http.StatusCreated, controllers.TestingAttemptStartResponse{}}}, postErrors...)},
+		operation{method: http.MethodPost, path: "/api/v1/testing/attempts/{attemptId}/cancel", id: "cancelTestingAttempt", tag: "testing", summary: "Cancel an attempt and revoke its tools", pathParams: []any{controllers.TestingAttemptIDParam{}}, resps: append([]respUnit{{http.StatusOK, controllers.TestingAttemptResponse{}}}, postErrors...)},
 		operation{method: http.MethodGet, path: "/api/v1/testing/attempts/{attemptId}/evidence", id: "listTestingEvidence", tag: "testing", summary: "List evidence retained after cancellation or target shutdown", pathParams: []any{controllers.TestingAttemptIDParam{}}, resps: append([]respUnit{{http.StatusOK, controllers.TestingEvidenceResponse{}}}, errors...)},
 	)
 	tools := []struct {
@@ -3189,7 +3190,7 @@ func testingOperations() []operation {
 		{"submit_report", "testingSubmitReport", controllers.TestingReportCall{}},
 	}
 	for _, tool := range tools {
-		ops = append(ops, operation{method: http.MethodPost, path: "/api/v1/testing/attempts/{attemptId}/tools/" + tool.name, id: tool.id, tag: "testing", summary: "Call the target-bound " + tool.name + " tool", pathParams: []any{controllers.TestingAttemptIDParam{}, controllers.TestingCapabilityHeader{}}, reqBody: tool.input, resps: append([]respUnit{{http.StatusOK, controllers.TestingToolResponse{}}}, errors...)})
+		ops = append(ops, operation{method: http.MethodPost, path: "/api/v1/testing/attempts/{attemptId}/tools/" + tool.name, id: tool.id, tag: "testing", summary: "Call the target-bound " + tool.name + " tool", pathParams: []any{controllers.TestingAttemptIDParam{}, controllers.TestingCapabilityHeader{}}, reqBody: tool.input, resps: append([]respUnit{{http.StatusOK, controllers.TestingToolResponse{}}}, postErrors...)})
 	}
 	return ops
 }

@@ -123,6 +123,7 @@ type Adapter struct {
 	root          string
 	bindings      map[string]*binding
 	driver        driverIdentity
+	pendingDriver driverIdentity
 	closed        bool
 	now           func() time.Time
 	startRecorder func(args, env []string, stdout, stderr string) (*recordingProcess, error)
