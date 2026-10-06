@@ -54,7 +54,6 @@ import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfac
 import { conversationQueryKey } from "../hooks/useConversation";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
 import { useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility";
-import { conversationQueryKey } from "../hooks/useConversation";
 import {
 	toCloudWorkspaceSession,
 	useCloudSessionQuery,
@@ -68,7 +67,7 @@ import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
 import { clearSwitchAgentState } from "../hooks/useSwitchAgent";
-import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
+import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useHostConnection } from "../hooks/useHostConnection";
 import { sessionReviewsQueryKey } from "../lib/session-reviews";
@@ -370,7 +369,6 @@ function CloudPausedStatus() {
 
 export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: SessionViewProps) {
 
- 83e39a3b5 (fix(chat): keep wake error until recovery is confirmed)
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const uiSessionId = sessionUiKey(sessionId, hostId);
@@ -1266,12 +1264,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		!fileTabs.activePath;
 	useEffect(() => {
 		if (!chatViewActive) return;
-		setChatWakeError(null);
-		setChatWakeRetrying(false);
 		const viewId = crypto.randomUUID();
 		let left = false;
 		let refreshed = false;
-		let retrying = false;
 		let pending = Promise.resolve();
 		const setViewActive = (active: boolean) => {
 			pending = pending.catch(() => {}).then(async () => {
@@ -1288,47 +1283,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			});
 			return pending;
 		};
-		const refreshAfterWakeError = (error: unknown) => {
+		const refreshAfterWakeError = () => {
 			if (left) return;
-			const code = apiErrorCode(error);
-			setChatWakeError({
-				sessionId,
-				message: code === "CHAT_RESUME_FAILED"
-					? "Couldn’t reopen this chat. Check the agent provider. Your conversation is saved."
-					: code === "SESSION_NOT_FOUND"
-						? "This chat no longer exists. Refresh the session list."
-						: "Couldn’t reconnect to this chat. Try again.",
-				retryable: code !== "SESSION_NOT_FOUND",
-			});
 			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId) });
 		};
-		retryChatWakeRef.current = async () => {
-			if (left || retrying) return;
-			retrying = true;
-			setChatWakeRetrying(true);
-			try {
-				// Renewal of a failed view deliberately does not retry native resume.
-				// Release it first so this activation is a new view registration.
-				await setViewActive(false);
-				if (left) return;
-				await setViewActive(true);
-				if (left) return;
-				setChatWakeError(null);
-				void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId) });
-			} catch (error) {
-				refreshAfterWakeError(error);
-			} finally {
-				retrying = false;
-				if (!left) setChatWakeRetrying(false);
-			}
-		};
 		void setViewActive(true).catch(refreshAfterWakeError);
-		const renewal = window.setInterval(() => {
-			if (!retrying) void setViewActive(true).catch(refreshAfterWakeError);
-		}, 10_000);
+		const renewal = window.setInterval(() => { void setViewActive(true).catch(refreshAfterWakeError); }, 10_000);
 		return () => {
 			left = true;
-			retryChatWakeRef.current = null;
 			window.clearInterval(renewal);
 			void setViewActive(false).catch(() => {});
 		};
