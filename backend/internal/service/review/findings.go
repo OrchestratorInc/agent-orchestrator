@@ -29,23 +29,20 @@ const (
 	summaryPostTimeout   = 20 * time.Second
 )
 
-// ReviewSummaryPoster posts a pass's summary on the provider.
-type ReviewSummaryPoster = ports.SCMReviewSummaryPoster
-
-// ReviewDeliverer tells a worker about its completed AO review passes once.
-type ReviewDeliverer interface {
+// Deliverer tells a worker about its completed AO review passes once.
+type Deliverer interface {
 	DeliverReviewRuns(ctx context.Context, id domain.SessionID, prURL string) error
 }
 
 // WithReviewSummaryPoster lets the daemon post each completed pass's summary to
 // the PR. Without it nothing is posted and the pass lives only in AO.
-func WithReviewSummaryPoster(poster ReviewSummaryPoster) Option {
+func WithReviewSummaryPoster(poster ports.SCMReviewSummaryPoster) Option {
 	return func(s *Service) { s.poster = poster }
 }
 
 // WithReviewDeliverer delivers completed passes to the worker as soon as the
 // reviewer submits them, instead of waiting for the next delivery sweep.
-func WithReviewDeliverer(deliverer ReviewDeliverer) Option {
+func WithReviewDeliverer(deliverer Deliverer) Option {
 	return func(s *Service) { s.deliverer = deliverer }
 }
 

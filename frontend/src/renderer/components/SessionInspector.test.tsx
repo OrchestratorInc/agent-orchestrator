@@ -2847,7 +2847,7 @@ describe("SessionInspector summary reviews", () => {
       id, runId: run.id, sessionId: "sess-1", prUrl: run.prUrl, targetSha: "abc123", ordinal: 1, createdAt: run.createdAt, ...extra,
     });
     const base = commonGetsResponder([], "reviewer-pane", [{ ...reviewState(3, "changes_requested", "abc123"), latestRun: run }]);
-    getMock.mockImplementation(async (path: string, opts?: unknown) => {
+    getMock.mockImplementation(async (path: string) => {
       if (path === "/api/v1/sessions/{sessionId}/reviews") {
         const response = await base(path);
         return { data: { ...response.data, runs: [run], findings: [

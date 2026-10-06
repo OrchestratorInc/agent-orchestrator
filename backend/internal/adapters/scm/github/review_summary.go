@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -35,7 +36,7 @@ func (p *Provider) PostReviewSummary(ctx context.Context, request ports.SCMRevie
 		repoPath(request.PR.Repo.Owner, request.PR.Repo.Name, "pulls", strconv.Itoa(request.PR.Number), "reviews"),
 		nil, payload)
 	if err != nil {
-		if resp.StatusCode == http.StatusNotFound {
+		if resp.StatusCode == http.StatusNotFound && !errors.Is(err, ports.ErrSCMNotFound) {
 			return "", fmt.Errorf("%w: %w", ports.ErrSCMNotFound, err)
 		}
 		return "", err

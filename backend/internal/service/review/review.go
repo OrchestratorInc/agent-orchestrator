@@ -87,8 +87,8 @@ type Service struct {
 	store              Store
 	requester          ports.SCMReviewRequester
 	resolver           ports.SCMReviewResolver
-	poster             ReviewSummaryPoster
-	deliverer          ReviewDeliverer
+	poster             ports.SCMReviewSummaryPoster
+	deliverer          Deliverer
 	clock              func() time.Time
 	telemetry          ports.EventSink
 	codexOperationGate ports.CodexOperationGate
