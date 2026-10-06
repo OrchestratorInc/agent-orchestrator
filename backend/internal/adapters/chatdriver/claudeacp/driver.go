@@ -426,10 +426,9 @@ func requireNodeVersion(ctx context.Context, node string) error {
 	return nil
 }
 
-// claudeOrderChoices presents the chat model picker in the same order as the
-// session-launch catalog: newest family first, newest version within it. Claude
-// Code advertises availableModels in its own picker order, which is neither
-// alphabetical nor by recency, so the chat list drifted from the settings list.
+// claudeOrderChoices presents dated models in global descending snapshot-date
+// order, matching the session-launch catalog. Claude Code advertises
+// availableModels in its own picker order, which is not chronological.
 //
 // Only the model option is reordered. Every other option — approval modes,
 // output styles — carries meaning in the order the agent reports it.
@@ -453,15 +452,6 @@ func claudeOrderChoices(optionID string, choices []ports.ChatConfigOptionChoice)
 		}
 	}
 	sort.SliceStable(choices, func(i, j int) bool {
-		// A "Default (recommended)" entry is the agent's own lead choice, not a
-		// model in the family order. Keep it at the top where Claude puts it.
-		if left, right := isClaudeDefaultChoice(choices[i]), isClaudeDefaultChoice(choices[j]); left != right {
-			return left
-		}
 		return rank[choices[i].Value] < rank[choices[j].Value]
 	})
-}
-
-func isClaudeDefaultChoice(choice ports.ChatConfigOptionChoice) bool {
-	return strings.EqualFold(strings.TrimSpace(choice.Value), "default")
 }

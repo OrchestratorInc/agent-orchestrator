@@ -346,10 +346,9 @@ func TestClaudeAuthRejectionNotifiesDaemon(t *testing.T) {
 	}
 }
 
-// The chat picker must read like the session-launch catalog: newest family
-// first, newest version within it. Claude Code advertises availableModels in
-// its own picker order, so without this the two lists disagree.
-func TestClaudeOrderChoicesGroupsModelsByFamily(t *testing.T) {
+// The chat picker follows global snapshot-date order; undated choices retain
+// their order after dated choices.
+func TestClaudeOrderChoicesBySnapshotDateGlobally(t *testing.T) {
 	choices := []ports.ChatConfigOptionChoice{
 		{Value: "haiku", Name: "Haiku"},
 		{Value: "claude-sonnet-4-5-20250929", Name: "Claude Sonnet 4.5"},
@@ -360,7 +359,7 @@ func TestClaudeOrderChoicesGroupsModelsByFamily(t *testing.T) {
 	}
 	claudeOrderChoices("model", choices)
 	assertChoiceOrder(t, choices, []string{
-		"fable", "opus", "claude-opus-4-1", "opus[1m]", "claude-sonnet-4-5-20250929", "haiku",
+		"claude-sonnet-4-5-20250929", "haiku", "opus", "claude-opus-4-1", "fable", "opus[1m]",
 	})
 }
 
@@ -370,24 +369,24 @@ func TestClaudeACPConfigWiresModelChoiceOrdering(t *testing.T) {
 		t.Fatal("Claude ACP config has no model ordering hook")
 	}
 	choices := []ports.ChatConfigOptionChoice{
-		{Value: "haiku", Name: "Haiku"},
-		{Value: "opus", Name: "Opus"},
+		{Value: "claude-haiku-4-5-20250201", Name: "Haiku"},
+		{Value: "claude-opus-4-5-20260101", Name: "Opus"},
 	}
 
 	cfg.OrderChoices("model", choices)
 
-	assertChoiceOrder(t, choices, []string{"opus", "haiku"})
+	assertChoiceOrder(t, choices, []string{"claude-opus-4-5-20260101", "claude-haiku-4-5-20250201"})
 }
 
-// "Default" is the agent's own lead entry, not a member of the family order.
-func TestClaudeOrderChoicesKeepsDefaultFirst(t *testing.T) {
+// Entries without dates do not receive priority over dated models.
+func TestClaudeOrderChoicesDoesNotPrioritizeDefaultWithoutDate(t *testing.T) {
 	choices := []ports.ChatConfigOptionChoice{
-		{Value: "haiku", Name: "Haiku"},
+		{Value: "claude-haiku-4-5-20250201", Name: "Haiku"},
 		{Value: "default", Name: "Default (recommended)"},
-		{Value: "opus", Name: "Opus"},
+		{Value: "claude-opus-4-5-20260101", Name: "Opus"},
 	}
 	claudeOrderChoices("model", choices)
-	assertChoiceOrder(t, choices, []string{"default", "opus", "haiku"})
+	assertChoiceOrder(t, choices, []string{"claude-opus-4-5-20260101", "claude-haiku-4-5-20250201", "default"})
 }
 
 // Approval modes, output styles and the rest carry meaning in the order the
