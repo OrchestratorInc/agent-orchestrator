@@ -46,15 +46,19 @@ UPDATE review_run SET status = 'delivered', delivered_at = ? WHERE id = ? AND st
 -- name: ListUndeliveredReviewRunsForPR :many
 -- Completed AO review passes for a PR that the worker has not been told about
 -- yet. Callers still fence on the PR's current head.
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, provider_post_error
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, provider_post_error, delivery_skipped_reason
 FROM review_run
-WHERE session_id = ? AND pr_url = ? AND status = 'complete' AND delivered_at IS NULL AND verdict != '' AND auto_inject_review
+WHERE session_id = ? AND pr_url = ? AND status = 'complete' AND delivered_at IS NULL AND delivery_skipped_reason = '' AND verdict != '' AND auto_inject_review
 ORDER BY created_at, id;
 
 -- name: ListUndeliveredReviewRuns :many
 -- Every worker's completed, undelivered passes, for the delivery sweep that
 -- retries a delivery the worker could not take when its review finished.
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, provider_post_error
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, provider_post_error, delivery_skipped_reason
 FROM review_run
-WHERE status = 'complete' AND delivered_at IS NULL AND verdict != '' AND auto_inject_review
+WHERE status = 'complete' AND delivered_at IS NULL AND delivery_skipped_reason = '' AND verdict != '' AND auto_inject_review
 ORDER BY created_at, id;
+
+-- name: RetireReviewRunDelivery :execrows
+UPDATE review_run SET delivery_skipped_reason = ?
+WHERE id = ? AND status = 'complete' AND delivered_at IS NULL AND delivery_skipped_reason = '';

@@ -61,12 +61,19 @@ END;
 -- visible on the run instead of being retried behind the user's back.
 ALTER TABLE review_run ADD COLUMN provider_post_error TEXT NOT NULL DEFAULT '';
 
+-- Why a completed pass will never be delivered to its worker (the PR moved
+-- past the reviewed commit, a newer pass replaced it, the PR closed or changed
+-- hands, or the worker was terminated). A retired pass leaves the delivery
+-- queue for good instead of being re-examined by every sweep.
+ALTER TABLE review_run ADD COLUMN delivery_skipped_reason TEXT NOT NULL DEFAULT '';
+
 -- A reply AO's own provider identity wrote on an existing review thread: the
 -- worker answering feedback. It is never review work for that worker (#5574).
 ALTER TABLE pr_comment ADD COLUMN own_reply BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- +goose Down
 ALTER TABLE pr_comment DROP COLUMN own_reply;
+ALTER TABLE review_run DROP COLUMN delivery_skipped_reason;
 ALTER TABLE review_run DROP COLUMN provider_post_error;
 DROP TRIGGER IF EXISTS review_finding_cdc_update;
 DROP INDEX IF EXISTS idx_review_finding_session;

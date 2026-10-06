@@ -16,12 +16,13 @@ type deliveryStore struct {
 	runs      []domain.ReviewRun
 	findings  map[string][]domain.ReviewFinding
 	delivered []string
+	retired   []string
 }
 
 func (d *deliveryStore) ListUndeliveredReviewRunsForPR(_ context.Context, id domain.SessionID, prURL string) ([]domain.ReviewRun, error) {
 	var out []domain.ReviewRun
 	for _, r := range d.runs {
-		if r.SessionID == id && r.PRURL == prURL && r.Status == domain.ReviewRunComplete && r.DeliveredAt == nil && r.AutoInjectReview {
+		if r.SessionID == id && r.PRURL == prURL && r.Status == domain.ReviewRunComplete && r.DeliveredAt == nil && r.DeliverySkippedReason == "" && r.AutoInjectReview {
 			out = append(out, r)
 		}
 	}
@@ -31,7 +32,7 @@ func (d *deliveryStore) ListUndeliveredReviewRunsForPR(_ context.Context, id dom
 func (d *deliveryStore) ListUndeliveredReviewRuns(ctx context.Context) ([]domain.ReviewRun, error) {
 	var out []domain.ReviewRun
 	for _, r := range d.runs {
-		if r.Status == domain.ReviewRunComplete && r.DeliveredAt == nil && r.AutoInjectReview {
+		if r.Status == domain.ReviewRunComplete && r.DeliveredAt == nil && r.DeliverySkippedReason == "" && r.AutoInjectReview {
 			out = append(out, r)
 		}
 	}
@@ -44,6 +45,16 @@ func (d *deliveryStore) ListReviewRunsBySession(_ context.Context, id domain.Ses
 
 func (d *deliveryStore) ListReviewFindingsByRun(_ context.Context, runID string) ([]domain.ReviewFinding, error) {
 	return d.findings[runID], nil
+}
+
+func (d *deliveryStore) RetireReviewRunDelivery(_ context.Context, id, reason string) error {
+	for i := range d.runs {
+		if d.runs[i].ID == id && d.runs[i].DeliveredAt == nil && d.runs[i].DeliverySkippedReason == "" {
+			d.runs[i].DeliverySkippedReason = reason
+			d.retired = append(d.retired, id+"="+reason)
+		}
+	}
+	return nil
 }
 
 func (d *deliveryStore) MarkReviewRunDelivered(_ context.Context, id string, at time.Time) (bool, error) {
@@ -109,8 +120,8 @@ func TestDeliverReviewRunsWaitsForAWorkerThatCannotTakeMessages(t *testing.T) {
 	if err := m.DeliverPendingReviews(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(msg.msgs) != 0 || len(st.delivered) != 0 {
-		t.Fatalf("delivered to a worker waiting for input: %v", msg.msgs)
+	if len(msg.msgs) != 0 || len(st.delivered) != 0 || len(st.retired) != 0 {
+		t.Fatalf("a worker waiting for input must be retried, not delivered to or retired: msgs=%v retired=%v", msg.msgs, st.retired)
 	}
 
 	st.sessions["mer-1"] = working("mer-1")
@@ -136,6 +147,13 @@ func TestDeliverReviewRunsSkipsStaleReplacedAndReassignedPasses(t *testing.T) {
 	if len(st.delivered) != 1 || st.delivered[0] != "run-current" || len(msg.msgs) != 1 {
 		t.Fatalf("delivered=%v, want only the current head's newest pass", st.delivered)
 	}
+	// Undeliverable passes are retired, not re-examined by every sweep.
+	if strings.Join(st.retired, ",") != "run-old-head=head_moved,run-replaced=replaced_by_newer_pass" {
+		t.Fatalf("retired = %v", st.retired)
+	}
+	if pending, _ := st.ListUndeliveredReviewRuns(context.Background()); len(pending) != 0 {
+		t.Fatalf("the next sweep still sees %d pass(es)", len(pending))
+	}
 
 	// A PR another session now owns is never delivered to the old owner.
 	m2, st2, msg2 := newDeliveryFixture("sha-1")
@@ -146,6 +164,9 @@ func TestDeliverReviewRunsSkipsStaleReplacedAndReassignedPasses(t *testing.T) {
 	}
 	if len(msg2.msgs) != 0 {
 		t.Fatalf("delivered a pass for a reassigned PR: %v", msg2.msgs)
+	}
+	if len(st2.retired) != 1 || st2.retired[0] != "run-1=pr_owned_by_other_session" {
+		t.Fatalf("a reassigned PR's pass must be retired: %v", st2.retired)
 	}
 }
 
@@ -194,5 +215,29 @@ func TestDeliverReviewRunsDoesNotResendAfterRestartBeforeStamp(t *testing.T) {
 	}
 	if st.runs[0].DeliveredAt == nil {
 		t.Fatal("the restarted daemon must still stamp the already-sent pass delivered")
+	}
+}
+
+func TestDeliverReviewRunsRetiresPassesForTerminatedWorkersAndClosedPRs(t *testing.T) {
+	m, st, msg := newDeliveryFixture("sha-1")
+	st.runs = []domain.ReviewRun{completedRun("run-1", "sha-1", domain.VerdictApproved, time.Now())}
+	st.prs["mer-1"][0].Merged = true
+	if err := m.DeliverPendingReviews(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 0 || len(st.retired) != 1 || st.retired[0] != "run-1=pr_closed" {
+		t.Fatalf("msgs=%v retired=%v", msg.msgs, st.retired)
+	}
+
+	m2, st2, msg2 := newDeliveryFixture("sha-1")
+	st2.runs = []domain.ReviewRun{completedRun("run-2", "sha-1", domain.VerdictApproved, time.Now())}
+	rec := working("mer-1")
+	rec.IsTerminated = true
+	st2.sessions["mer-1"] = rec
+	if err := m2.DeliverPendingReviews(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg2.msgs) != 0 || len(st2.retired) != 1 || st2.retired[0] != "run-2=session_terminated" {
+		t.Fatalf("msgs=%v retired=%v", msg2.msgs, st2.retired)
 	}
 }

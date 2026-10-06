@@ -20,7 +20,19 @@ type reviewDeliveryStore interface {
 	ListReviewRunsBySession(ctx context.Context, id domain.SessionID) ([]domain.ReviewRun, error)
 	ListReviewFindingsByRun(ctx context.Context, runID string) ([]domain.ReviewFinding, error)
 	MarkReviewRunDelivered(ctx context.Context, id string, deliveredAt time.Time) (bool, error)
+	RetireReviewRunDelivery(ctx context.Context, id, reason string) error
 }
+
+// Reasons a completed pass is retired from delivery. They are permanent facts;
+// a worker that merely cannot take a message right now is retried instead.
+const (
+	reviewSkipSessionTerminated = "session_terminated"
+	reviewSkipPRGone            = "pr_untracked"
+	reviewSkipPROwnedElsewhere  = "pr_owned_by_other_session"
+	reviewSkipPRClosed          = "pr_closed"
+	reviewSkipHeadMoved         = "head_moved"
+	reviewSkipReplaced          = "replaced_by_newer_pass"
+)
 
 // reviewApprovalBoundary keeps an AO approval from being mistaken for the
 // approval a protected branch may require. AO's reviewer is not an independent
@@ -31,9 +43,10 @@ const reviewApprovalBoundary = "This approval is AO's internal review only. It i
 // of its PRs that it has not heard about yet: the verdict, and for requested
 // changes every open finding with the command that resolves it. A pass is
 // delivered once. It is skipped, and retried by a later call, while the worker
-// cannot take a message; it is never delivered when the PR has moved past the
-// reviewed commit, the PR now belongs to another session, or a newer pass by
-// the same reviewer replaced it.
+// cannot take a message. A pass that can never be delivered (the worker was
+// terminated, the PR closed, changed hands, or moved past the reviewed commit,
+// or a newer pass by the same reviewer replaced it) is retired with the reason,
+// so later calls and the sweep no longer examine it.
 func (m *Manager) DeliverReviewRuns(ctx context.Context, id domain.SessionID, prURL string) error {
 	store, ok := m.store.(reviewDeliveryStore)
 	if !ok || m.guard == nil || prURL == "" {
@@ -43,18 +56,35 @@ func (m *Manager) DeliverReviewRuns(ctx context.Context, id domain.SessionID, pr
 	if err != nil || len(runs) == 0 {
 		return err
 	}
+	retireAll := func(reason string) error {
+		errs := make([]error, 0, len(runs))
+		for _, run := range runs {
+			errs = append(errs, store.RetireReviewRunDelivery(ctx, run.ID, reason))
+		}
+		return errors.Join(errs...)
+	}
 	rec, ok, err := m.store.GetSession(ctx, id)
-	if err != nil || !ok {
+	if err != nil {
 		return err
+	}
+	if !ok || rec.IsTerminated {
+		return retireAll(reviewSkipSessionTerminated)
 	}
 	if cannotNudge(rec) {
 		return nil
 	}
 	pr, ok, err := m.store.GetPR(ctx, prURL)
-	if err != nil || !ok {
+	switch {
+	case err != nil:
 		return err
-	}
-	if pr.SessionID != id || pr.Merged || pr.Closed || pr.HeadSHA == "" {
+	case !ok:
+		return retireAll(reviewSkipPRGone)
+	case pr.SessionID != id:
+		return retireAll(reviewSkipPROwnedElsewhere)
+	case pr.Merged || pr.Closed:
+		return retireAll(reviewSkipPRClosed)
+	case pr.HeadSHA == "":
+		// Head not observed yet; a later observation decides.
 		return nil
 	}
 	all, err := store.ListReviewRunsBySession(ctx, id)
@@ -63,7 +93,12 @@ func (m *Manager) DeliverReviewRuns(ctx context.Context, id domain.SessionID, pr
 	}
 	var errs []error
 	for _, run := range runs {
-		if run.TargetSHA != pr.HeadSHA || replacedByNewerRun(run, all) {
+		if run.TargetSHA != pr.HeadSHA {
+			errs = append(errs, store.RetireReviewRunDelivery(ctx, run.ID, reviewSkipHeadMoved))
+			continue
+		}
+		if replacedByNewerRun(run, all) {
+			errs = append(errs, store.RetireReviewRunDelivery(ctx, run.ID, reviewSkipReplaced))
 			continue
 		}
 		findings, err := store.ListReviewFindingsByRun(ctx, run.ID)

@@ -506,7 +506,8 @@ func reviewRunFromRow(r gen.ReviewRun) domain.ReviewRun {
 		DeliveredAt:      deliveredAt,
 		AutoInjectReview: r.AutoInjectReview,
 
-		ProviderPostError: r.ProviderPostError,
+		ProviderPostError:     r.ProviderPostError,
+		DeliverySkippedReason: r.DeliverySkippedReason,
 	}
 }
 

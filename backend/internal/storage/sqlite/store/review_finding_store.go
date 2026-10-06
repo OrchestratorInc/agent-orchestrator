@@ -156,6 +156,15 @@ func (s *Store) MarkReviewRunDelivered(ctx context.Context, id string, delivered
 	return n > 0, nil
 }
 
+// RetireReviewRunDelivery records why a completed, undelivered pass will never
+// reach its worker, which removes it from the delivery queue for good.
+func (s *Store) RetireReviewRunDelivery(ctx context.Context, id, reason string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	_, err := s.qw.RetireReviewRunDelivery(ctx, gen.RetireReviewRunDeliveryParams{DeliverySkippedReason: reason, ID: id})
+	return err
+}
+
 // ListUndeliveredReviewRunsForPR returns a worker's completed, not yet
 // delivered passes on one PR whose session wanted review feedback.
 func (s *Store) ListUndeliveredReviewRunsForPR(ctx context.Context, id domain.SessionID, prURL string) ([]domain.ReviewRun, error) {

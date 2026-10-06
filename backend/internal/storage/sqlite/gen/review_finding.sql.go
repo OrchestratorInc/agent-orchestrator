@@ -164,9 +164,9 @@ func (q *Queries) ListReviewFindingsBySession(ctx context.Context, sessionID dom
 }
 
 const listUndeliveredReviewRuns = `-- name: ListUndeliveredReviewRuns :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, provider_post_error
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, provider_post_error, delivery_skipped_reason
 FROM review_run
-WHERE status = 'complete' AND delivered_at IS NULL AND verdict != '' AND auto_inject_review
+WHERE status = 'complete' AND delivered_at IS NULL AND delivery_skipped_reason = '' AND verdict != '' AND auto_inject_review
 ORDER BY created_at, id
 `
 
@@ -198,6 +198,7 @@ func (q *Queries) ListUndeliveredReviewRuns(ctx context.Context) ([]ReviewRun, e
 			&i.AutoInjectReview,
 			&i.TriggerSource,
 			&i.ProviderPostError,
+			&i.DeliverySkippedReason,
 		); err != nil {
 			return nil, err
 		}
@@ -213,9 +214,9 @@ func (q *Queries) ListUndeliveredReviewRuns(ctx context.Context) ([]ReviewRun, e
 }
 
 const listUndeliveredReviewRunsForPR = `-- name: ListUndeliveredReviewRunsForPR :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, provider_post_error
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, provider_post_error, delivery_skipped_reason
 FROM review_run
-WHERE session_id = ? AND pr_url = ? AND status = 'complete' AND delivered_at IS NULL AND verdict != '' AND auto_inject_review
+WHERE session_id = ? AND pr_url = ? AND status = 'complete' AND delivered_at IS NULL AND delivery_skipped_reason = '' AND verdict != '' AND auto_inject_review
 ORDER BY created_at, id
 `
 
@@ -252,6 +253,7 @@ func (q *Queries) ListUndeliveredReviewRunsForPR(ctx context.Context, arg ListUn
 			&i.AutoInjectReview,
 			&i.TriggerSource,
 			&i.ProviderPostError,
+			&i.DeliverySkippedReason,
 		); err != nil {
 			return nil, err
 		}
@@ -303,6 +305,24 @@ func (q *Queries) ResolveReviewFinding(ctx context.Context, arg ResolveReviewFin
 		arg.ResolvedAt,
 		arg.ID,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const retireReviewRunDelivery = `-- name: RetireReviewRunDelivery :execrows
+UPDATE review_run SET delivery_skipped_reason = ?
+WHERE id = ? AND status = 'complete' AND delivered_at IS NULL AND delivery_skipped_reason = ''
+`
+
+type RetireReviewRunDeliveryParams struct {
+	DeliverySkippedReason string
+	ID                    string
+}
+
+func (q *Queries) RetireReviewRunDelivery(ctx context.Context, arg RetireReviewRunDeliveryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, retireReviewRunDelivery, arg.DeliverySkippedReason, arg.ID)
 	if err != nil {
 		return 0, err
 	}

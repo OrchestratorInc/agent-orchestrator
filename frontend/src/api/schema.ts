@@ -4765,6 +4765,7 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             deliveredAt?: null | string;
+            deliverySkippedReason?: string;
             githubReviewId: string;
             harness: string;
             id: string;

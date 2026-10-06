@@ -100,6 +100,9 @@ type ReviewRun struct {
 	// ProviderPostError is why AO could not post this pass's summary review to
 	// the PR. Empty when it was posted or not attempted.
 	ProviderPostError string `json:"providerPostError,omitempty"`
+	// DeliverySkippedReason is why this completed pass will never be delivered
+	// to its worker; it is then no longer retried.
+	DeliverySkippedReason string `json:"deliverySkippedReason,omitempty"`
 }
 
 // ReviewFindingStatus is where one AO review finding stands.

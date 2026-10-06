@@ -21,7 +21,7 @@ func TestMigration0189ReviewFindingsUpDown(t *testing.T) {
 		}
 		return n == 1
 	}
-	for _, c := range [][2]string{{"review_finding", "status"}, {"review_finding", "resolved_by_session_id"}, {"review_run", "provider_post_error"}, {"pr_comment", "own_reply"}} {
+	for _, c := range [][2]string{{"review_finding", "status"}, {"review_finding", "resolved_by_session_id"}, {"review_run", "provider_post_error"}, {"review_run", "delivery_skipped_reason"}, {"pr_comment", "own_reply"}} {
 		if !columnPresent(c[0], c[1]) {
 			t.Fatalf("up: %s.%s missing", c[0], c[1])
 		}
@@ -46,7 +46,7 @@ func TestMigration0189ReviewFindingsUpDown(t *testing.T) {
 	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE name = 'review_finding'`).Scan(&name); err != sql.ErrNoRows {
 		t.Fatalf("down: review_finding still present (err=%v)", err)
 	}
-	if columnPresent("review_run", "provider_post_error") || columnPresent("pr_comment", "own_reply") {
+	if columnPresent("review_run", "provider_post_error") || columnPresent("review_run", "delivery_skipped_reason") || columnPresent("pr_comment", "own_reply") {
 		t.Fatal("down: added columns still present")
 	}
 }

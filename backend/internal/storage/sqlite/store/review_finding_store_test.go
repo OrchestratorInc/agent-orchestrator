@@ -200,3 +200,36 @@ func TestUndeliveredReviewRunsAndDeliveryStamp(t *testing.T) {
 		t.Fatalf("provider post error = %q", got.ProviderPostError)
 	}
 }
+
+// A pass retired from delivery (stale head, replaced, PR gone) must leave both
+// delivery queues for good, so the sweep stops re-examining it.
+func TestRetiredReviewRunLeavesTheDeliveryQueues(t *testing.T) {
+	f := newFindingFixture(t)
+	ctx := context.Background()
+	run := f.run(t, "run-1", "sha-1", domain.ReviewerClaudeCode, 0)
+	complete(t, f.s, run, domain.VerdictApproved)
+	if err := f.s.RetireReviewRunDelivery(ctx, run.ID, "head_moved"); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := f.s.ListUndeliveredReviewRuns(ctx); err != nil || len(pending) != 0 {
+		t.Fatalf("sweep queue = %+v err=%v, want empty", pending, err)
+	}
+	if pending, err := f.s.ListUndeliveredReviewRunsForPR(ctx, f.session, f.review.PRURL); err != nil || len(pending) != 0 {
+		t.Fatalf("PR queue = %+v err=%v, want empty", pending, err)
+	}
+	if ok, err := f.s.MarkReviewRunDelivered(ctx, run.ID, f.now); err != nil || !ok {
+		// Retirement only drops the pass from the queue; it is still a
+		// complete pass and its history stays readable.
+		t.Fatalf("mark delivered after retire ok=%v err=%v", ok, err)
+	}
+	got, _, _ := f.s.GetReviewRun(ctx, run.ID)
+	if got.DeliverySkippedReason != "head_moved" {
+		t.Fatalf("reason = %q", got.DeliverySkippedReason)
+	}
+	if err := f.s.RetireReviewRunDelivery(ctx, run.ID, "replaced_by_newer_pass"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := f.s.GetReviewRun(ctx, run.ID); got.DeliverySkippedReason != "head_moved" {
+		t.Fatalf("a second retirement overwrote the first reason: %q", got.DeliverySkippedReason)
+	}
+}

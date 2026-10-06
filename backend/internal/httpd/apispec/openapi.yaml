@@ -13857,6 +13857,8 @@ components:
           type:
           - "null"
           - string
+        deliverySkippedReason:
+          type: string
         githubReviewId:
           type: string
         harness:
