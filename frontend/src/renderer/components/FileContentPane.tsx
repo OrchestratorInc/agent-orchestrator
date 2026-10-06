@@ -224,7 +224,10 @@ export function FileContentPane({
 		(detail.status === "unmodified" && mode === "diff") || (mode === "rendered" && !renderedAvailable)
 			? "file"
 			: mode;
-	const fileView = sourceHighlightReady ? (
+	// Binary image previews do not use Pierre's syntax highlighter. Do not let a
+	// lazy grammar load (or an unsupported image extension) keep the image stuck
+	// behind the generic file-loading state.
+	const fileView = sourceHighlightReady || Boolean(detail.imageMediaType) ? (
 		<CompleteFileView
 			annotation={annotation}
 			detail={detail}
