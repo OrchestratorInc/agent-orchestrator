@@ -20,12 +20,13 @@ func clientPayloadHash(msg ports.ChatUserMessage) (string, error) {
 		content = nil
 	}
 	payload, err := json.Marshal(struct {
-		Text           string
-		Content        []ports.ChatContent
-		Origin         domain.MessageOrigin
-		AuthoredByUser bool
-		Settings       ports.ChatTurnSettings
-	}{msg.Text, content, normalizeOrigin(msg.Origin), msg.AuthoredByUser, msg.Settings})
+		Text            string
+		Content         []ports.ChatContent
+		Origin          domain.MessageOrigin
+		SenderSessionID string `json:",omitempty"`
+		AuthoredByUser  bool
+		Settings        ports.ChatTurnSettings
+	}{msg.Text, content, normalizeOrigin(msg.Origin), msg.SenderSessionID, msg.AuthoredByUser, msg.Settings})
 	if err != nil {
 		return "", fmt.Errorf("encode client message payload: %w", err)
 	}

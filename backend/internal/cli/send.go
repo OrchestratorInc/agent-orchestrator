@@ -32,6 +32,7 @@ type sendAPIRequest struct {
 type conversationMessageAPIRequest struct {
 	Text            string `json:"text"`
 	ClientMessageID string `json:"clientMessageId"`
+	SenderSessionID string `json:"senderSessionId,omitempty"`
 	RecoverOnly     bool   `json:"recoverOnly,omitempty"`
 }
 
@@ -103,7 +104,7 @@ func (c *commandContext) steerMessage(
 	}
 	var result steerOrSendAPIResponse
 	err := c.postJSON(ctx, sessionPath+"/conversation/steer-or-send", conversationMessageAPIRequest{
-		Text: message, ClientMessageID: clientMessageID, RecoverOnly: recoverOnly,
+		Text: message, ClientMessageID: clientMessageID, SenderSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")), RecoverOnly: recoverOnly,
 	}, &result)
 	if err != nil {
 		var responseErr apiResponseError
