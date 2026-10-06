@@ -31,13 +31,13 @@ Ein Coding-Agent kann eine Aufgabe erledigen. Sobald mehrere Agenten parallel an
 
 Orchestrator.inc ist ein lokaler Desktop-Workspace für genau diese Aufgabe. Füge ein Repository hinzu und erstelle eine Worker-Session mit dem Coding-Agenten, dem Modell und der Oberfläche, die am besten zur Aufgabe passen. Bei Git-basierter Arbeit erhält der Worker einen eigenen Branch und Worktree. Aufgabe, Konversation, Terminal, geänderte Dateien, Browser-Vorschau, Pull Request, CI- und Review-Status bleiben von Anfang bis Ende mit dieser Session verbunden.
 
-Hinter der Desktop-App beobachtet AOs lokaler Daemon die Aktivität der Agenten und den Zustand der Versionsverwaltung. So entsteht eine gemeinsame Live-Ansicht des Projekts statt einer Sammlung unverbundener Terminals, Branches und Browser-Tabs.
+Hinter der Desktop-App beobachtet der lokale Daemon von Orchestrator.inc die Aktivität der Agenten und den Zustand der Versionsverwaltung. So entsteht eine gemeinsame Live-Ansicht des Projekts statt einer Sammlung unverbundener Terminals, Branches und Browser-Tabs.
 
 <img src="../docs/assets/readme/tui.png" alt="Orchestrator.inc workspace with a supervised native agent interface" width="100%" />
 
 ## Worker erledigen klar abgegrenzte Aufgaben
 
-Ein Worker ist AOs Ausführungseinheit: eine Aufgabe, ein Coding-Agent und ein isolierter Workspace. Nutze **New task**, wenn die Aufgabe bereits klar ist. Beschreibe das gewünschte Ergebnis, wähle Agent und Modell, hänge relevante Dateien an und arbeite mit dem Agenten im strukturierten Chat oder in seiner nativen Terminal-Oberfläche.
+Ein Worker ist die Ausführungseinheit von Orchestrator.inc: eine Aufgabe, ein Coding-Agent und ein isolierter Workspace. Nutze **New task**, wenn die Aufgabe bereits klar ist. Beschreibe das gewünschte Ergebnis, wähle Agent und Modell, hänge relevante Dateien an und arbeite mit dem Agenten im strukturierten Chat oder in seiner nativen Terminal-Oberfläche.
 
 Du kannst einen Worker jederzeit öffnen, um das Gespräch fortzusetzen, sein Terminal aufzurufen, Änderungen zu prüfen, den isolierten Browser zu verwenden, den Pull Request zu begutachten oder CI- und Review-Feedback an denselben Agenten zurückzugeben. Dadurch bleibt jede Aufgabe für sich verständlich und parallele Arbeit landet nicht in einem gemeinsamen Kontext.
 
@@ -45,9 +45,9 @@ Du kannst einen Worker jederzeit öffnen, um das Gespräch fortzusetzen, sein Te
 
 ## Der Orchestrator plant über das gesamte Projekt hinweg
 
-Der Projekt-Orchestrator ist AOs dauerhafter Planungs- und Koordinationsagent. Er arbeitet eine Ebene über einzelnen Aufgaben und behält Produktentwicklung, technische Strategie, Prioritäten und die Reihenfolge der Arbeit im gesamten Repository im Blick.
+Der Projekt-Orchestrator ist der dauerhafte Planungs- und Koordinationsagent von Orchestrator.inc. Er arbeitet eine Ebene über einzelnen Aufgaben und behält Produktentwicklung, technische Strategie, Prioritäten und die Reihenfolge der Arbeit im gesamten Repository im Blick.
 
-Nutze den Orchestrator, um eine Idee vor der Umsetzung zu erkunden, Produkt- und Technikansätze zu entwickeln, Zielkonflikte abzuwägen, besonders wirkungsvolle Aufgaben zu erkennen und aus einem unklaren Vorhaben einen konkreten Plan zu machen. Seine projektbezogene Konversation bewahrt Ziele, Entscheidungen, Einschränkungen und frühere Überlegungen. Diese Planungshistorie verbindet er mit dem Repository-Kontext und AOs aktuellem Zustand, darunter aktive Worker, Zuständigkeiten, Pull Requests, CI und Reviews. Damit bleibt die Planung sowohl im Projekt als auch in der bereits laufenden Arbeit verankert.
+Nutze den Orchestrator, um eine Idee vor der Umsetzung zu erkunden, Produkt- und Technikansätze zu entwickeln, Zielkonflikte abzuwägen, besonders wirkungsvolle Aufgaben zu erkennen und aus einem unklaren Vorhaben einen konkreten Plan zu machen. Seine projektbezogene Konversation bewahrt Ziele, Entscheidungen, Einschränkungen und frühere Überlegungen. Diese Planungshistorie verbindet er mit dem Repository-Kontext und dem aktuellen Zustand von Orchestrator.inc, darunter aktive Worker, Zuständigkeiten, Pull Requests, CI und Reviews. Damit bleibt die Planung sowohl im Projekt als auch in der bereits laufenden Arbeit verankert.
 
 Sobald ein Plan umsetzbar ist, kann der Orchestrator ihn in klar abgegrenzte Aufgaben zerlegen, Worker starten oder neu ausrichten, jedem Worker den relevanten Kontext mitgeben, den Fortschritt verfolgen und Folgearbeiten koordinieren. Der Orchestrator verantwortet Planung und Delegation. Worker verantworten Umsetzung, Tests, Commits und Pull Requests.
 
