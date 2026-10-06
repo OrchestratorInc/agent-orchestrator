@@ -586,15 +586,20 @@ describe("browser shortcut routing", () => {
 		expect(webContents.findInPage).toHaveBeenCalledOnce();
 	});
 
-	it("closes the browser panel on ⌘W when only one tab is open", async () => {
-		const { emitBeforeInput, invoke, shellSend } = setupHost();
+	it("empties the last tab and closes the browser panel on ⌘W", async () => {
+		const { emitBeforeInput, invoke, shellSend, webContents } = setupHost();
 		const state = await invoke("browser:ensure", "sess-1");
+		await invoke("browser:navigate", { viewId: state.viewId, url: "https://example.test/" });
 		shellSend.mockClear();
+		webContents.loadURL.mockClear();
 
 		const closeEvent = emitBeforeInput({ key: "w", control: true });
 		expect(closeEvent.preventDefault).toHaveBeenCalled();
 		expect(shellSend).toHaveBeenCalledWith("browser:closePanel", state.viewId);
 		expect(shellSend).not.toHaveBeenCalledWith(CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL);
+		await vi.waitFor(() => {
+			expect(webContents.loadURL).toHaveBeenCalledWith("about:blank");
+		});
 		const tabs = (await invoke("browser:getTabs", state.viewId)) as unknown as BrowserTabsState;
 		expect(tabs.tabs).toHaveLength(1);
 	});
@@ -711,22 +716,14 @@ describe("browser shortcut routing", () => {
 		expect(shellSend).not.toHaveBeenCalledWith(CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL);
 		expect(host.isLastUsedBrowser()).toBe(true);
 
-		// Second ⌘W with one tab left is a safe no-op — still browser-owned, so
-		// main.ts keeps suppressing the terminal/window close chord.
+		// Second ⌘W with one tab left empties it and closes the panel; the
+		// cleared browser then releases the shortcut target to the shell.
 		shellSend.mockClear();
 		const secondClose = emitShellBeforeInput({ key: "w", control: true });
 		expect(secondClose.preventDefault).toHaveBeenCalled();
-		await vi.waitFor(async () => {
-			const tabs = (await invoke("browser:getTabs", state.viewId)) as unknown as BrowserTabsState;
-			expect(tabs.tabs).toHaveLength(1);
-		});
+		expect(shellSend).toHaveBeenCalledWith("browser:closePanel", state.viewId);
 		expect(shellSend).not.toHaveBeenCalledWith(CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL);
-		expect(host.isLastUsedBrowser()).toBe(true);
-
-		// Same from the native page: no-op, target retained.
-		emitBeforeInput({ key: "w", control: true });
-		await Promise.resolve();
-		expect(host.isLastUsedBrowser()).toBe(true);
+		await vi.waitFor(() => expect(host.isLastUsedBrowser()).toBe(false));
 		const tabs = (await invoke("browser:getTabs", state.viewId)) as unknown as BrowserTabsState;
 		expect(tabs.tabs).toHaveLength(1);
 	});

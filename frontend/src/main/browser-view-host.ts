@@ -1673,12 +1673,14 @@ export function createBrowserViewHost(
         return;
       }
       if (session.tabs.size === 1) {
-        // The last tab cannot close; ⌘W closes the browser panel instead.
-        // Move focus to the shell first so the next ⌘W does not land in the
-        // hidden page and fall through to the menu's Close item.
+        // The last tab cannot be removed, so ⌘W empties it (blank page, no
+        // history) and closes the browser panel. Move focus to the shell
+        // first so the next ⌘W does not land in the hidden page and fall
+        // through to the menu's Close item.
         const shell = shellContents(options);
         shell.focus();
         shell.send("browser:closePanel", session.viewId);
+        void clear(session.viewId).catch(() => undefined);
         return;
       }
       const closingTabId = session.activeTabId;
