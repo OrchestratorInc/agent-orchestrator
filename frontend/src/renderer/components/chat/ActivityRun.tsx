@@ -23,11 +23,29 @@ import {
 } from "./activity-command";
 import { fileChangeFiles, type ConversationActivity } from "../../types/conversation";
 
-export function ActivityRun({ activities }: { activities: ConversationActivity[] }) {
+export function ActivityRun({
+	activities,
+	disclosureKey,
+	disclosureOverrides,
+	onDisclosureChange,
+}: {
+	activities: ConversationActivity[];
+	disclosureKey?: string;
+	disclosureOverrides?: Readonly<Record<string, boolean>>;
+	onDisclosureChange?: (key: string, open: boolean) => void;
+}) {
 	// null until someone decides, so a run holding a command that is printing right
 	// now can open itself and close again once everything settles. A click pins the
 	// choice either way.
-	const [override, setOverride] = useState<boolean | null>(null);
+	const [localOverride, setLocalOverride] = useState<boolean | null>(null);
+	const override = disclosureKey && disclosureOverrides
+		? disclosureOverrides[disclosureKey] ?? null
+		: localOverride;
+	const updateOverride = (key: string, open: boolean) => {
+		if (disclosureKey && onDisclosureChange) onDisclosureChange(key, open);
+		else setLocalOverride(open);
+	};
+	const overrides = disclosureOverrides ?? {};
 	const reducedMotion = useReducedMotion();
 	const running = activities.some((a) => a.status === "running");
 	const nonzeroExits = activities.filter(isNonzeroCommandExit).length;
@@ -72,7 +90,7 @@ export function ActivityRun({ activities }: { activities: ConversationActivity[]
 		>
 			<button
 				type="button"
-				onClick={() => setOverride(!open)}
+				onClick={() => updateOverride(disclosureKey ?? "", !open)}
 				aria-expanded={open}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-run-toggle")}
 			>
@@ -139,7 +157,14 @@ export function ActivityRun({ activities }: { activities: ConversationActivity[]
 										);
 								  })
 								: subgroups.map((group) => (
-										<ActivitySubgroup key={group.key} activities={group.activities} nodesByActivityID={nodesByActivityID} />
+										<ActivitySubgroup
+											key={group.activities.map((activity) => activity.id).join(":")}
+											disclosureKey={disclosureKey ? `${disclosureKey}:sub:${group.activities.map((activity) => activity.id).join(":")}` : undefined}
+											disclosureOverrides={overrides}
+											onDisclosureChange={updateOverride}
+											activities={group.activities}
+											nodesByActivityID={nodesByActivityID}
+										/>
 								  ))}
 						</div>
 					</motion.div>
@@ -173,16 +198,28 @@ function activityGroupKey(activity: ConversationActivity): string {
 function ActivitySubgroup({
 	activities,
 	nodesByActivityID,
+	disclosureKey,
+	disclosureOverrides,
+	onDisclosureChange,
 }: {
 	activities: ConversationActivity[];
 	nodesByActivityID: ReadonlyMap<string, ActivityNode>;
+	disclosureKey?: string;
+	disclosureOverrides: Readonly<Record<string, boolean>>;
+	onDisclosureChange?: (key: string, open: boolean) => void;
 }) {
-	const [override, setOverride] = useState<boolean | null>(null);
+	const [localOverride, setLocalOverride] = useState<boolean | null>(null);
 	const reducedMotion = useReducedMotion();
 	const streamingOutput = activities.some((activity) =>
 		activity.status === "running" && Boolean(activity.detail?.output),
 	);
-	const open = override ?? streamingOutput;
+	const open = disclosureKey
+		? disclosureOverrides[disclosureKey] ?? streamingOutput
+		: localOverride ?? streamingOutput;
+	const updateOverride = (next: boolean) => {
+		if (disclosureKey && onDisclosureChange) onDisclosureChange(disclosureKey, next);
+		else setLocalOverride(next);
+	};
 	const hasNestedAgent = activities.some((activity) =>
 		nodesByActivityID.get(activity.id)?.children.length,
 	);
@@ -206,7 +243,7 @@ function ActivitySubgroup({
 		<div className="activity-subgroup">
 			<button
 				type="button"
-				onClick={() => setOverride(!open)}
+				onClick={() => updateOverride(!open)}
 				aria-expanded={open}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-subgroup-toggle")}
 			>

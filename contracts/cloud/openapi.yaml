@@ -3,11 +3,14 @@ info:
   title: AO Cloud Public API
   version: 1.0.0
   description: |
-    Client-facing contract for a separate AO Cloud implementation. This
-    repository does not serve these routes. The worker surface documents the
-    exact outbound HTTP protocol used by sandbox workers, including one-time
-    bootstrap, rotating credentials, fenced turn execution, orchestration, and
-    durable workspace and terminal transport.
+    Client-facing contract for AO Cloud. The Cloud server implementation lives
+    under `cloud/` in this repository, while this file is the versioned contract
+    used to generate the runtime-neutral client types. The worker surface
+    documents the exact outbound HTTP protocol used by sandbox workers,
+    including one-time bootstrap, rotating credentials, fenced turn execution,
+    orchestration, and durable workspace and terminal transport.
+    This is the currently documented Cloud API subset; broader route parity is
+    tracked in https://github.com/Untrivial-ai/agent-orchestrator/issues/6220.
 security:
   - bearerAuth: []
 tags:
@@ -38,6 +41,63 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CurrentAccount"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/providers:
+    get:
+      operationId: listUserProviderConnections
+      tags: [Providers]
+      responses:
+        "200":
+          description: Redacted provider connections owned by the authenticated user.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [providerConnections]
+                properties:
+                  providerConnections:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RedactedProviderConnection"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/providers/{agent}:
+    parameters:
+      - name: agent
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [claude-code, codex, cursor, opencode]
+    put:
+      operationId: putUserAgentConnection
+      tags: [Providers]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutAgentProviderConnectionInput"
+      responses:
+        "200":
+          description: The validated personal coding-agent credential was encrypted and stored.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [providerConnection]
+                properties:
+                  providerConnection:
+                    $ref: "#/components/schemas/RedactedProviderConnection"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteUserAgentConnection
+      tags: [Providers]
+      responses:
+        "204":
+          description: The personal coding-agent credential was disconnected.
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/github/user:
@@ -394,6 +454,28 @@ paths:
                 properties:
                   session:
                     $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/wake:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    post:
+      operationId: wakePausedSessions
+      tags: [Sessions]
+      description: Ask the reconciler to resume the user's idle-paused sandboxes.
+      responses:
+        "202":
+          description: The resume requests were accepted for asynchronous processing.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [woken]
+                properties:
+                  woken:
+                    type: integer
+                    format: int64
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}:
@@ -910,7 +992,7 @@ paths:
         required: true
         schema:
           type: string
-          enum: [claude-code, codex, cursor]
+          enum: [claude-code, codex, cursor, opencode]
     put:
       operationId: putAgentProviderConnection
       tags: [Providers]
@@ -4309,7 +4391,7 @@ components:
               type: boolean
     ProviderName:
       type: string
-      enum: [daytona, claude-code, codex, cursor]
+      enum: [daytona, claude-code, codex, cursor, opencode, github, coder, nodeops]
     ProviderPublicConfig:
       type: object
       additionalProperties: false
@@ -4322,7 +4404,27 @@ components:
           enum: [us, eu]
         credentialType:
           type: string
-          enum: [oauth_token, api_key, access_token, auth_json]
+          enum: [oauth_token, api_key, access_token, auth_json, personal_access_token, opencode_api_key, anthropic_api_key, openai_api_key, openrouter_api_key]
+        baseUrl:
+          type: string
+          format: uri
+        owner:
+          type: string
+        templateId:
+          type: string
+          format: uuid
+        agentName:
+          type: string
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+        durableRoot:
+          type: string
+        endpointServiceName:
+          type: string
+        region:
+          type: string
     PutAgentProviderConnectionInput:
       type: object
       additionalProperties: false
@@ -4330,7 +4432,7 @@ components:
       properties:
         credentialType:
           type: string
-          enum: [oauth_token, api_key, access_token, auth_json]
+          enum: [oauth_token, api_key, access_token, auth_json, opencode_api_key, anthropic_api_key, openai_api_key, openrouter_api_key]
         secret:
           type: string
           minLength: 1

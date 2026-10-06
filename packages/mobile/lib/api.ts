@@ -1020,7 +1020,7 @@ export async function sendMessage(cfg: ServerConfig, id: string, message: string
 
 export async function spawnSession(
 	cfg: ServerConfig,
-	opts: { projectId: string; prompt?: string; issueId?: string; harness?: string; mode?: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
+	opts: { projectId?: string; prompt?: string; issueId?: string; harness?: string; model?: string; mode?: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/sessions`, {
 		method: "POST",
@@ -1032,6 +1032,7 @@ export async function spawnSession(
 			// The daemon needs an agent harness unless the project configures a
 			// default worker.agent; the spawn screen lets the user pick one.
 			harness: opts.harness || undefined,
+			model: opts.model || undefined,
 			// Mobile is Chat-first. Callers may deliberately request TUI for a harness
 			// that cannot expose a structured controller, but omission must never make
 			// the phone depend on a desktop preference it cannot see.

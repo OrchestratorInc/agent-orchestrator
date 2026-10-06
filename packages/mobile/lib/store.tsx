@@ -18,6 +18,7 @@ import {
 	restoreSession,
 	resumeSessionAgent,
 	sendMessage,
+	spawnSession,
 	unpinSession as apiUnpinSession,
 	type DashboardPR,
 	type DashboardSession,
@@ -41,7 +42,7 @@ import { isDesktopUnreachable, shouldKeepPolling, userFacingError } from "./conn
 import { IncompatibleHostVersionError } from "./race";
 import { primeInstallId } from "./installId";
 import { collectPRs } from "./prView";
-import { ALL_PROJECTS, NO_PROJECTS_KNOWN, projectsForMachine, resolveActiveProject, retainProjects, sessionRowsForMachine, type KnownProjects } from "./projectFilter";
+import { ALL_PROJECTS, NO_PROJECTS_KNOWN, STANDALONE_PROJECT, projectsForMachine, resolveActiveProject, retainProjects, sessionRowsForMachine, type KnownProjects } from "./projectFilter";
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry, trackFeature } from "./telemetry/runtime";
 import { useConversationEventTransport } from "./chat/conversationEvents";
@@ -60,7 +61,7 @@ export type ConnStatus = "closed" | "connecting" | "open";
 export type SpawnOptions = {
 	/** Prevent a stale composer from posting a same-ID project to a new machine. */
 	hostId: string;
-	/** Falls back to the active project, or the only project. */
+	/** Falls back to the active project, or the only project. The standalone picker value skips that fallback. */
 	projectId?: string;
 	prompt?: string;
 	harness?: string;
@@ -701,6 +702,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			const resolvedMode = mode ?? "chat";
 			return trackFeature("spawn", async () => {
 				const c = requireConfig(hostId);
+				if (projectId === STANDALONE_PROJECT) {
+					const session = await spawnSession(c, { prompt, harness, model, mode: resolvedMode, attachments, clientRequestId });
+					await refreshHost(hostId);
+					return session;
+				}
 				const hostProjects = hostStates.find((host) => host.hostId === hostId)?.projects ?? [];
 				const proj = projectId ?? (hostId === selectedHostId ? targetProject() : hostProjects.length === 1 ? hostProjects[0].id : null);
 				if (!proj) throw new Error("Pick a project first");

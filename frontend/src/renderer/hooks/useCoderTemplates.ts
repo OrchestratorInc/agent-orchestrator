@@ -13,6 +13,10 @@ import { useCloudCp } from "./useCloudCp";
 export interface UseCoderTemplatesResult {
 	templates: CloudCpCoderTemplate[];
 	isLoading: boolean;
+	// True when the list could not be loaded — most often an unreachable Coder or a
+	// bad API token. Callers that only drive a dropdown can ignore it; the settings
+	// page uses it to show a "couldn't load" state.
+	isError: boolean;
 }
 
 export function useCoderTemplates(orgId: string | undefined, enabled: boolean): UseCoderTemplatesResult {
@@ -30,5 +34,6 @@ export function useCoderTemplates(orgId: string | undefined, enabled: boolean): 
 	return {
 		templates: query.data ?? [],
 		isLoading: query.isLoading,
+		isError: query.isError,
 	};
 }

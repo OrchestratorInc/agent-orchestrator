@@ -207,6 +207,30 @@ describe("SessionFileExplorer", () => {
 		expect(onOpenFile).toHaveBeenCalledWith("docs/notes.txt", { mode: "file" });
 	});
 
+	it("reports a reveal handled once it opens the file, and keeps it pending while maximized", () => {
+		const onOpenFile = vi.fn();
+		const onRevealHandled = vi.fn();
+		const reveal = { path: "docs/notes.txt", key: 3 };
+		const { client, rerender } = renderWithQuery(
+			<SessionFileExplorer isMaximized onOpenFile={onOpenFile} onRevealHandled={onRevealHandled} revealRequest={reveal} sessionId="sess-explorer-reveal-once" />,
+		);
+		// Maximized, the file shows in this view's own preview; the request stays pending.
+		expect(onOpenFile).not.toHaveBeenCalled();
+		expect(onRevealHandled).not.toHaveBeenCalled();
+
+		rerender(
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<SessionFileExplorer onOpenFile={onOpenFile} onRevealHandled={onRevealHandled} revealRequest={reveal} sessionId="sess-explorer-reveal-once" />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(onOpenFile).toHaveBeenCalledOnce();
+		expect(onOpenFile).toHaveBeenCalledWith("docs/notes.txt", { mode: "file" });
+		expect(onRevealHandled).toHaveBeenCalledOnce();
+		expect(onRevealHandled).toHaveBeenCalledWith(3);
+	});
+
 	it("keeps the tree and content side by side when maximized", async () => {
 		const widthSpy = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(500);
 		useUiStore.getState().setFilesChangedOnly("sess-explorer-maximized", false);

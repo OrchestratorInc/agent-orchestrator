@@ -102,16 +102,12 @@ func (s *Store) OrchestratorAgentCredentialAvailable(
 		}
 		return tx.QueryRow(
 			ctx,
-			`SELECT EXISTS (
-				SELECT 1 FROM ao_provider_connections
-				WHERE org_id = $1 AND provider = $2 AND label = 'default'
-				  AND validation_state = 'valid'
-			) OR ($3::uuid IS NOT NULL AND EXISTS (
+			`SELECT $1::uuid IS NOT NULL AND EXISTS (
 				SELECT 1 FROM ao_user_provider_connections
-				WHERE user_id = $3::uuid AND provider = $2 AND label = 'default'
+				WHERE user_id = $1::uuid AND provider = $2 AND label = 'default'
 				  AND validation_state = 'valid'
-			))`,
-			orgID, provider, createdByUserID,
+			)`,
+			createdByUserID, provider,
 		).Scan(&available)
 	})
 	return available, err

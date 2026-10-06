@@ -1,4 +1,4 @@
-import { useCallback, useRef, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { useCallback, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { useResizable } from "../hooks/useResizable";
 import { INSPECTOR_SEPARATOR_RESERVE_PX, inspectorMaxWidthPx } from "../lib/inspector-width";
@@ -58,6 +58,7 @@ export function sizingGeometryEqual(a: InspectorSizing, b: InspectorSizing): boo
 // One inspector layout for local, cloud, and remote sessions. The host only
 // changes where the inspector's data comes from, not how its rail behaves.
 export function SessionInspectorRail({
+	sessionKey,
 	showCollapsedHandle = true,
 	children,
 	isOpen,
@@ -68,6 +69,7 @@ export function SessionInspectorRail({
 	settledClosed,
 	splitRef,
 }: {
+	sessionKey: string;
 	showCollapsedHandle?: boolean;
 	children: ReactNode;
 	isOpen: boolean;
@@ -109,7 +111,13 @@ export function SessionInspectorRail({
 		// Restore the preferred width after a narrow window or zoom level widens again.
 		reclampOnWindowResize: true,
 	});
-	const transition = prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING;
+	// Restore a destination session's layout immediately. Only subsequent open/
+	// close changes within that session should animate; keep the content mounted.
+	const [motionState, setMotionState] = useState({ sessionKey, isOpen, animate: false });
+	if (motionState.sessionKey !== sessionKey || motionState.isOpen !== isOpen) {
+		setMotionState({ sessionKey, isOpen, animate: motionState.sessionKey === sessionKey });
+	}
+	const transition = prefersReducedMotion || !motionState.animate ? { duration: 0 } : SHELL_PANEL_SPRING;
 	const hidden = !isOpen && settledClosed;
 	const handleAnimationComplete = useCallback(() => {
 		if (!isOpen) onCloseAnimationComplete?.();

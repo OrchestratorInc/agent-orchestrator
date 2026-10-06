@@ -124,6 +124,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
+	controllerResumeError,
 	newWorkDisabled,
 	onConversationWorkChange,
 }: {
@@ -154,7 +155,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** Opens the Files inspector from a turn's changed-files Review control. */
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
-	onOpenFile?: (path: string) => void;
+	onOpenFile?: (path: string, line?: number) => void;
 	/** Opens a chat link in the active blank tab or a new tab in this session's AO Browser. */
 	onOpenLinkInBrowser?: (uri: string) => Promise<void>;
 	headerActions?: ReactNode;
@@ -172,6 +173,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** The target controller is being installed by an interface handoff. */
 	controllerTransitioning?: boolean;
+	controllerResumeError?: string;
 	/** An interface handoff fences new agent work while current-turn decisions remain available. */
 	newWorkDisabled?: boolean;
 	/** Reports accepted Chat work that must inform an interface-switch policy choice. */
@@ -544,7 +546,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					void commands.resumeAgent().catch(() => {});
 				}}
 				resumingAgent={commands.resumingAgent}
-				resumeError={commands.resumeError}
+				resumeError={commands.resumeError ?? controllerResumeError}
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}

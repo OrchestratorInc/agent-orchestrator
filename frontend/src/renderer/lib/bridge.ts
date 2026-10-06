@@ -41,6 +41,8 @@ export const aoBridge: AoBridge =
 			onFontSizeShortcut: () => () => undefined,
 		},
 		window: {
+			getZoomFactor: async () => 1,
+			onZoomFactor: () => () => undefined,
 			isMaximized: async () => false,
 			onMaximized: () => () => undefined,
 			isFullScreen: async () => false,
@@ -155,6 +157,30 @@ export const aoBridge: AoBridge =
 				canGoForward: false,
 				isLoading: false,
 			}),
+			getFindState: async (viewId: string) => ({
+				viewId,
+				tabId: "t1",
+				query: "",
+				activeMatchOrdinal: 0,
+				matches: 0,
+				finalUpdate: true,
+			}),
+			findInPage: async ({ viewId, query }) => ({
+				viewId,
+				tabId: "t1",
+				query,
+				activeMatchOrdinal: 0,
+				matches: 0,
+				finalUpdate: true,
+			}),
+			stopFindInPage: async ({ viewId }) => ({
+				viewId,
+				tabId: "t1",
+				query: "",
+				activeMatchOrdinal: 0,
+				matches: 0,
+				finalUpdate: true,
+			}),
 			captureScreenshot: async () => {
 				throw new Error("Desktop app is required to take a browser screenshot.");
 			},
@@ -174,6 +200,7 @@ export const aoBridge: AoBridge =
 			notifyPanelUsed: () => undefined,
 			notifyPanelBlur: () => undefined,
 			onFocusLocation: () => () => undefined,
+			onFindOpen: () => () => undefined,
 			onReopenClosedTab: () => () => undefined,
 			devtools: async ({ viewId, operation }) => ({
 				viewId,
@@ -186,6 +213,7 @@ export const aoBridge: AoBridge =
 			discardAnnotations: async () => undefined,
 			annotationAction: async () => undefined,
 			onNavState: () => () => undefined,
+			onFindState: () => () => undefined,
 			onPageFocus: () => () => undefined,
 			onTabsState: () => () => undefined,
 			onAgentActivity: () => () => undefined,

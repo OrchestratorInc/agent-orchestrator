@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	codexreview "github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -19,6 +20,50 @@ type fakeReviewer struct {
 	gotInv           ports.ReviewInvocation
 	workingDirectory string
 	env              map[string]string
+}
+
+type recordingReviewChatStop struct {
+	ReviewerChatController
+	stopped      string
+	interrupted  string
+	interruptErr error
+}
+
+func (c *recordingReviewChatStop) StopReviewChat(_ context.Context, reviewID string) error {
+	c.stopped = reviewID
+	return nil
+}
+
+func (c *recordingReviewChatStop) InterruptReviewChat(_ context.Context, reviewID string) error {
+	c.interrupted = reviewID
+	return c.interruptErr
+}
+
+func TestCancelReviewerChatInterruptsWithoutStoppingItsController(t *testing.T) {
+	for _, harness := range []domain.ReviewerHarness{domain.ReviewerCodex, domain.ReviewerClaudeCode} {
+		t.Run(string(harness), func(t *testing.T) {
+			chat := &recordingReviewChatStop{}
+			launcher := NewLauncher(fakeReviewerResolver{}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat))
+			if err := launcher.Cancel(context.Background(), "review-chat:review-1", harness); err != nil {
+				t.Fatalf("Cancel: %v", err)
+			}
+			if chat.stopped != "" || chat.interrupted != "review-1" {
+				t.Fatalf("reviewer Chat cancel: stopped=%q interrupted=%q", chat.stopped, chat.interrupted)
+			}
+		})
+	}
+}
+
+func TestCancelReviewerChatPreservesInterruptFailure(t *testing.T) {
+	want := errors.New("provider interrupt failed")
+	chat := &recordingReviewChatStop{interruptErr: want}
+	launcher := NewLauncher(fakeReviewerResolver{}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat))
+	if err := launcher.Cancel(context.Background(), "review-chat:review-1", domain.ReviewerCodex); !errors.Is(err, want) {
+		t.Fatalf("Cancel = %v, want %v", err, want)
+	}
+	if chat.stopped != "" {
+		t.Fatal("failed cancellation must not tear down the controller")
+	}
 }
 
 func (f *fakeReviewer) ReviewCommand(_ context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
@@ -987,6 +1032,22 @@ func TestLauncherSpawnUsesReviewerWorkingDirectoryAndInitialMessage(t *testing.T
 	}
 }
 
+func TestLauncherSpawnCanDeferReviewerInitialMessage(t *testing.T) {
+	reviewer := &fakeReviewerWithLaunchSpec{spec: ports.ReviewCommandSpec{
+		Argv: []string{"kiro-cli", "chat"}, InitialMessage: "task ref",
+	}}
+	rt := &fakeRuntime{}
+	l := newTestLauncher(t, reviewer, rt)
+	spec := launchSpec()
+	spec.DeferInitialMessage = true
+	if _, err := l.Spawn(context.Background(), spec); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if rt.sentMsg != "" {
+		t.Fatalf("deferred launch sent %q, want no initial message", rt.sentMsg)
+	}
+}
+
 func TestLauncherWaitsForReviewerPromptMarkerBeforeInitialMessage(t *testing.T) {
 	reviewer := &fakeReviewerWithLaunchSpec{
 		spec: ports.ReviewCommandSpec{Argv: []string{"agent"}, InitialMessage: "task ref"},
@@ -1158,5 +1219,62 @@ func TestLauncherPreflightEnvPrefixWithMissingBinary(t *testing.T) {
 	l := NewLauncher(fakeReviewerResolver{reviewer: reviewer, ok: true}, &fakeRuntime{}, "")
 	if err := l.Preflight(context.Background(), domain.ReviewerClaudeCode, "/ws/mer-1"); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("err = %v, want 'not found'", err)
+	}
+}
+
+func TestDeferredCodexTerminalDispatchesTaskOnlyOnNotify(t *testing.T) {
+	t.Setenv("AO_DATA_DIR", t.TempDir())
+	t.Setenv("AO_RUN_FILE", filepath.Join(t.TempDir(), "running.json"))
+	// Resolve a harmless binary; no provider process is started by fakeRuntime.
+	bin := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	rt := &fakeRuntime{}
+	l := newTestLauncher(t, codexreview.New(), rt)
+	spec := launchSpec()
+	spec.Harness = domain.ReviewerCodex
+	spec.WorkspacePath = t.TempDir()
+	spec.InterfaceMode = domain.ReviewerInterfaceTUI
+	spec.DeferInitialMessage = true
+	result, err := l.Spawn(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, arg := range rt.createCfg.Argv {
+		if strings.Contains(arg, "Read and follow the AO review task") {
+			t.Fatal("deferred replacement received task in argv")
+		}
+	}
+	if rt.sentMsg != "" {
+		t.Fatal("deferred replacement received initial message")
+	}
+	if err := l.Notify(context.Background(), result.HandleID, spec); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rt.sentMsg, "Read and follow the AO review task") {
+		t.Fatal("notification omitted review task")
+	}
+}
+
+type recordingReviewBatch struct {
+	ReviewerChatController
+	reviewID, batchID string
+}
+
+func (c *recordingReviewBatch) SendReviewChat(_ context.Context, reviewID, _ string, batchID string) error {
+	c.reviewID, c.batchID = reviewID, batchID
+	return nil
+}
+
+func TestNotifyReviewerChatCarriesItsBatch(t *testing.T) {
+	chat := &recordingReviewBatch{}
+	launcher := NewLauncher(fakeReviewerResolver{reviewer: &fakeReviewer{}, ok: true}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat))
+	if err := launcher.Notify(context.Background(), "review-chat:review-1", LaunchSpec{ReviewSessionID: "review-1", WorkerID: "worker-1", BatchID: "batch-1", RunID: "run-1", Harness: domain.ReviewerCodex, WorkspacePath: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	if chat.reviewID != "review-1" || chat.batchID != "batch-1" {
+		t.Fatalf("review notification: %+v", chat)
 	}
 }

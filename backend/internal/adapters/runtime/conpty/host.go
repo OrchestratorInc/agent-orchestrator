@@ -10,8 +10,10 @@ package conpty
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -19,11 +21,18 @@ import (
 const (
 	initialConPTYColumns = 220
 	initialConPTYRows    = 50
-	// A pty-host must never let one stalled viewer block PTY output, status
-	// probes, or every other viewer. Each client gets a bounded writer queue;
-	// filling it drops only that client and lets the terminal layer re-attach.
+	// Each client gets a bounded writer queue. Output waits for a full queue to
+	// drain, so every viewer sees every byte and a burst pauses the program the
+	// way a real terminal does, instead of dropping the viewer and replaying a
+	// truncated ring on re-attach. A viewer that stops reading for
+	// slowClientGrace is still dropped, so one stalled viewer cannot hold the
+	// PTY; status probes, attaches and input never wait on a viewer's queue.
 	hostClientWriteBuffer = 256
 )
+
+// slowClientGrace is how long output waits on a viewer that frees no queue
+// space before dropping it (a variable so tests can shorten it).
+var slowClientGrace = 3 * time.Second
 
 // ptyConn is the host's handle to the running agent's pseudo-terminal.
 // The real impl (conptyConn) lives in host_conpty_windows.go; tests use a fake.
@@ -43,6 +52,9 @@ type ServeConfig struct {
 	Listener  net.Listener // caller provides (loopback); engine owns Accept loop
 	PTY       ptyConn
 	Ring      *Ring
+	// LazySurface defers the rendered surface until a styled-output read
+	// first asks for it, then keeps it current; see asyncSurface.
+	LazySurface bool
 }
 
 // Serve runs the host event loop until the listener closes or Shutdown is
@@ -54,9 +66,10 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 	h := &host{
 		cfg:       cfg,
 		clients:   make(map[net.Conn]*clientState),
-		surface:   newRenderedSurface(initialConPTYColumns, initialConPTYRows),
 		shutdownC: make(chan struct{}),
 	}
+	h.surface = newAsyncSurface(initialConPTYColumns, initialConPTYRows,
+		func(cols, rows int) surfaceSink { return newRenderedSurface(cols, rows) }, cfg.Ring.Replay, cfg.LazySurface)
 	return h.run(ctx)
 }
 
@@ -70,16 +83,20 @@ type clientState struct {
 	sized      bool
 
 	out       chan []byte
+	drained   chan struct{} // signalled when the writer frees queue space
 	done      chan struct{}
 	closeOnce sync.Once
 }
 
 func newClientState() *clientState {
 	return &clientState{
-		out:  make(chan []byte, hostClientWriteBuffer),
-		done: make(chan struct{}),
+		out:     make(chan []byte, hostClientWriteBuffer),
+		drained: make(chan struct{}, 1),
+		done:    make(chan struct{}),
 	}
 }
+
+func (c *clientState) hasRoom() bool { return len(c.out) < cap(c.out) }
 
 // enqueue is deliberately non-blocking. A slow client is disposable; the
 // shared PTY and every other viewer are not.
@@ -111,7 +128,7 @@ type host struct {
 	cfg     ServeConfig
 	mu      sync.Mutex
 	clients map[net.Conn]*clientState
-	surface *renderedSurface
+	surface *asyncSurface
 
 	// curCols/curRows are the grid the host last applied to the shared PTY (0,0
 	// = none applied yet). Guarded by mu; used to skip redundant resizes.
@@ -202,6 +219,7 @@ func (h *host) runAcceptLoop() {
 func (h *host) shutdown() {
 	h.shutdownOnce.Do(func() {
 		close(h.shutdownC)
+		h.surface.stop()
 
 		// 1. Dispose the PTY first (critical ordering).
 		_ = h.cfg.PTY.Close()
@@ -257,36 +275,58 @@ func (h *host) pumpPTY() {
 	// still connect and read scrollback.
 }
 
-// broadcast queues msg to all connected clients. Socket writes happen only in
-// each client's writer goroutine, never while h.mu is held: a viewer that stops
-// reading therefore cannot freeze status probes, new attaches, or other
-// viewers. A full queue drops that one client and lets the terminal layer
-// re-attach it with a fresh snapshot.
+// broadcast queues msg to all connected clients. It is called only from the
+// PTY read loop. Socket writes happen only in each client's writer goroutine,
+// never while h.mu is held, so status probes, new attaches and other viewers
+// never wait on a viewer's socket.
+//
+// When a client's queue is full, broadcast waits (outside h.mu) for it to
+// drain rather than dropping it: the read loop stops reading, the PTY fills,
+// and the program pauses until the viewer catches up. A client that frees no
+// space for slowClientGrace is dropped and re-attaches with a fresh snapshot.
 func (h *host) broadcast(msg []byte) {
-	h.mu.Lock()
-	removed := false
-	var dropped []struct {
-		conn   net.Conn
-		client *clientState
-	}
-	for conn, client := range h.clients {
-		if !client.enqueue(msg) {
-			delete(h.clients, conn)
-			dropped = append(dropped, struct {
-				conn   net.Conn
-				client *clientState
-			}{conn: conn, client: client})
-			removed = true
+	var waitingOn *clientState
+	var deadline time.Time
+	for {
+		h.mu.Lock()
+		var full *clientState
+		var fullConn net.Conn
+		for conn, client := range h.clients {
+			if !client.hasRoom() {
+				full, fullConn = client, conn
+				break
+			}
 		}
-	}
-	// A dropped client may have been the largest viewer; recompute the shared
-	// grid so it follows the remaining clients.
-	if removed {
-		h.applyLargestLocked()
-	}
-	h.mu.Unlock()
-	for _, client := range dropped {
-		client.client.close(client.conn)
+		if full == nil {
+			// Every queue has room, and only writers (which free space) touch the
+			// queues while h.mu is held, so these cannot fail.
+			for _, client := range h.clients {
+				client.enqueue(msg)
+			}
+			h.mu.Unlock()
+			return
+		}
+		if full != waitingOn {
+			waitingOn, deadline = full, time.Now().Add(slowClientGrace)
+		}
+		if !time.Now().Before(deadline) {
+			// Stalled: drop it so it cannot hold the PTY. A dropped client may
+			// have been the largest viewer; the grid follows the rest.
+			delete(h.clients, fullConn)
+			h.applyLargestLocked()
+			h.mu.Unlock()
+			full.close(fullConn)
+			waitingOn = nil
+			continue
+		}
+		h.mu.Unlock()
+		select {
+		case <-full.drained:
+		case <-full.done:
+		case <-h.shutdownC:
+			return
+		case <-time.After(time.Until(deadline)):
+		}
 	}
 }
 
@@ -313,13 +353,30 @@ func (h *host) sendTo(conn net.Conn, msg []byte) {
 // writeClient is the only goroutine that writes to conn. Keeping all writes
 // here gives every client an ordered frame stream without putting socket
 // back-pressure under the host's global lock.
+//
+// Frames already queued are written together in one call, so a burst of small
+// PTY reads does not cost a syscall per read.
 func (h *host) writeClient(conn net.Conn, client *clientState) {
 	for {
 		select {
 		case <-client.done:
 			return
 		case frame := <-client.out:
-			if _, err := conn.Write(frame); err != nil {
+			batch := net.Buffers{frame}
+		drain:
+			for len(batch) < cap(client.out) {
+				select {
+				case next := <-client.out:
+					batch = append(batch, next)
+				default:
+					break drain
+				}
+			}
+			select {
+			case client.drained <- struct{}{}:
+			default:
+			}
+			if _, err := batch.WriteTo(conn); err != nil {
 				h.removeClient(conn, client)
 				return
 			}
@@ -387,7 +444,9 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 	switch msgType {
 	case MsgTerminalInput:
 		if _, alive := h.cfg.PTY.ExitCode(); !alive {
-			_, _ = h.cfg.PTY.Write(payload)
+			if n, err := h.cfg.PTY.Write(payload); err != nil {
+				fmt.Fprintf(os.Stderr, "pty-host [%s]: input: wrote %d of %d bytes: %v\n", h.cfg.SessionID, n, len(payload), err)
+			}
 		}
 
 	case MsgResize:

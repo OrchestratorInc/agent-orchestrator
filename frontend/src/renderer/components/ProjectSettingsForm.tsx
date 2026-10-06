@@ -174,6 +174,7 @@ function SettingsBody({
 		reviewerEffort: config.reviewers?.[0]?.agentConfig?.effort ?? config.agentConfig?.effort ?? "",
 		reviewerPermissions: config.reviewers?.[0]?.agentConfig?.permissions ?? config.agentConfig?.permissions ?? "",
 		autoReview: config.autoReview ?? false,
+		workersRequestReview: config.workersRequestReview ?? false,
 		intakeEnabled: intake.enabled ?? false,
 		intakeRepo: intake.repo ?? "",
 		intakeAssignee: intake.assignee ?? "",
@@ -220,6 +221,17 @@ function SettingsBody({
 	const intakeSetupIncomplete = intakeVisible && intakeNeedsRule(intakeForm);
 	const reviewerWarning = reviewerTrustWarning(form.reviewerHarness);
 	const defaultReviewerHarness = WORKER_DEFAULT_REVIEWERS[form.workerAgent] ?? "claude-code";
+	// With no reviewer configured, the daemon reviews with the default worker
+	// agent and its model and effort when that agent is also the reviewer. Show
+	// that, and keep it when the user pins the reviewer by editing one field.
+	const reviewerInheritsWorker = form.reviewerHarness === "" && defaultReviewerHarness === form.workerAgent;
+	const pinReviewer = (f: typeof form) =>
+		f.reviewerHarness
+			? {}
+			: {
+					reviewerHarness: defaultReviewerHarness,
+					...(defaultReviewerHarness === f.workerAgent ? { reviewerModel: f.workerModel, reviewerEffort: f.workerEffort } : {}),
+				};
 	const mutation = useMutation({
 		mutationFn: async (values: typeof form) => {
 			const savedKey = JSON.stringify(values);
@@ -301,6 +313,7 @@ function SettingsBody({
 							config.trackerIntake,
 						),
 						autoReview: values.autoReview,
+						workersRequestReview: values.workersRequestReview || undefined,
 					};
 			const { error } = await (hostId ? clientForHost(hostId) : apiClient).PUT("/api/v1/projects/{id}", {
 				params: { path: { id: projectId } },
@@ -597,6 +610,33 @@ function SettingsBody({
 										/>
 									</div>
 								</div>
+								<div className="settings-row-bar">
+									<div className="flex shrink-0 items-center gap-1.5">
+										<span className="whitespace-nowrap text-sm leading-5 text-settings-label">{t("settings.project.workersRequestReviewToggle")}</span>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<button
+													type="button"
+													className="inline-flex size-5 items-center justify-center rounded-md text-settings-muted transition-colors hover:bg-settings-menu-selected hover:text-settings-label focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+													aria-label={t("settings.project.workersRequestReviewDescription")}
+												>
+													<Info className="size-icon-sm" aria-hidden="true" />
+												</button>
+											</TooltipTrigger>
+											<TooltipContent className="max-w-72 leading-normal" side="top">
+												{t("settings.project.workersRequestReviewDescription")}
+											</TooltipContent>
+										</Tooltip>
+									</div>
+									<div className="flex min-w-0 flex-1 items-center justify-end">
+										<Switch
+											aria-label={t("settings.project.workersRequestReviewToggle")}
+											checked={form.workersRequestReview}
+											id="project-workers-request-review"
+											onCheckedChange={(checked) => setForm((f) => ({ ...f, workersRequestReview: checked }))}
+										/>
+									</div>
+								</div>
 							</ProjectSettingsSection>
 						</>
 					)}
@@ -733,12 +773,12 @@ function SettingsBody({
 									agentId={form.reviewerHarness || defaultReviewerHarness}
 									projectId={projectId}
 									hostId={hostId}
-									model={form.reviewerModel}
+									model={reviewerInheritsWorker ? form.workerModel : form.reviewerModel}
 									mode={form.reviewerMode}
-									effort={form.reviewerEffort}
-									onModelChange={(reviewerModel) => setForm((f) => ({ ...f, reviewerHarness: f.reviewerHarness || defaultReviewerHarness, reviewerModel }))}
-									onModeChange={(reviewerMode) => setForm((f) => ({ ...f, reviewerHarness: f.reviewerHarness || defaultReviewerHarness, reviewerMode }))}
-									onEffortChange={(reviewerEffort) => setForm((f) => ({ ...f, reviewerHarness: f.reviewerHarness || defaultReviewerHarness, reviewerEffort }))}
+									effort={reviewerInheritsWorker ? form.workerEffort : form.reviewerEffort}
+									onModelChange={(reviewerModel) => setForm((f) => ({ ...f, ...pinReviewer(f), reviewerModel }))}
+									onModeChange={(reviewerMode) => setForm((f) => ({ ...f, ...pinReviewer(f), reviewerMode }))}
+									onEffortChange={(reviewerEffort) => setForm((f) => ({ ...f, ...pinReviewer(f), reviewerEffort }))}
 									onValidityChange={(valid) =>
 										setTuningValidity((value) => ({
 											...value,
@@ -761,7 +801,7 @@ function SettingsBody({
 						{!isScratchProject && (
 							<div className="min-w-0 space-y-1.5">
 								<span className="text-xs text-settings-muted">{t("settings.project.roleApproval", { role: t("settings.models.reviewerRole") })}</span>
-								<PermissionModeSelect ariaLabel={t("settings.project.roleApproval", { role: t("settings.models.reviewerRole") })} value={form.reviewerPermissions} agentId={form.reviewerHarness || defaultReviewerHarness} onChange={(reviewerPermissions) => setForm((f) => ({ ...f, reviewerHarness: f.reviewerHarness || defaultReviewerHarness, reviewerPermissions }))} />
+								<PermissionModeSelect ariaLabel={t("settings.project.roleApproval", { role: t("settings.models.reviewerRole") })} value={form.reviewerPermissions} agentId={form.reviewerHarness || defaultReviewerHarness} onChange={(reviewerPermissions) => setForm((f) => ({ ...f, ...pinReviewer(f), reviewerPermissions }))} />
 							</div>
 						)}
 					</div>
@@ -986,7 +1026,14 @@ function repositoryHref(repository: string): string | undefined {
 }
 
 function scratchSupportedConfig(config: ProjectConfig): ProjectConfig {
-	const { defaultBranch: _defaultBranch, reviewers: _reviewers, autoReview: _legacyAutoReview, trackerIntake: _trackerIntake, ...supported } = config as ProjectConfig;
+	const {
+		defaultBranch: _defaultBranch,
+		reviewers: _reviewers,
+		autoReview: _legacyAutoReview,
+		workersRequestReview: _workersRequestReview,
+		trackerIntake: _trackerIntake,
+		...supported
+	} = config as ProjectConfig;
 	return supported;
 }
 
