@@ -101,6 +101,7 @@ describe("Android native compatibility boundaries", () => {
 	// top one answered a swipe down.
 	it("shows Spawn's choices inside Spawn's own sheet", () => {
 		const android = source("./spawn-composer-controls.android.tsx");
+		const icons = source("./icons.tsx");
 		expect(android).toContain("OptionList");
 		expect(android).not.toMatch(/\bModal\b/);
 		expect(android).not.toContain("@expo/ui/community/bottom-sheet");
@@ -108,6 +109,10 @@ describe("Android native compatibility boundaries", () => {
 		expect(android).not.toContain("@expo/ui");
 		expect(android).toContain("AgentLogo");
 		expect(android).toContain("option.sectionBreakBefore && styles.optionSectionBreak");
+		expect(android).toContain('icon={selectedProject?.icon ?? "folder"}');
+		expect(android).toContain('option.icon ? <Feather name={option.icon}');
+		expect(icons).toContain('import MessageSquarePlus from "lucide-react-native/icons/message-square-plus";');
+		expect(icons).toContain('"message-square-plus": MessageSquarePlus');
 	});
 
 	it("uses a rounded native Android attachment chooser instead of the square popup menu", () => {

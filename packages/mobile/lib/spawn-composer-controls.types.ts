@@ -3,6 +3,7 @@ import type { VoiceMode, VoiceState } from "./voice/types";
 export type SpawnComposerOption = {
 	id: string;
 	label: string;
+	icon?: "folder" | "message-square-plus";
 	sectionBreakBefore?: boolean;
 };
 

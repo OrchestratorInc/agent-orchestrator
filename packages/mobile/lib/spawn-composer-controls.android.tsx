@@ -30,7 +30,8 @@ export function SpawnComposerControls({
 	const t = useTheme();
 	const styles = makeStyles(t);
 	const [openMenu, setOpenMenu] = useState<OpenMenu>(null);
-	const projectLabel = projects.find((project) => project.id === projectId)?.label ?? "Choose project";
+	const selectedProject = projects.find((project) => project.id === projectId);
+	const projectLabel = selectedProject?.label ?? "Choose project";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
 	const modelOptions = [{ id: "__auto__", label: "Automatic" }, ...models];
 	const options = openMenu === "project" ? projects : openMenu === "harness" ? agents : modelOptions;
@@ -62,7 +63,7 @@ export function SpawnComposerControls({
 
 	return (
 		<View style={styles.stack}>
-			<SelectorButton label={projectLabel} icon="folder" onPress={() => setOpenMenu("project")} style={styles.projectButton} />
+			<SelectorButton label={projectLabel} icon={selectedProject?.icon ?? "folder"} onPress={() => setOpenMenu("project")} style={styles.projectButton} />
 
 			<View style={styles.rail}>
 				<Pressable
@@ -168,7 +169,7 @@ function OptionList({ title, options, selectedValue, showAgentLogos, onSelect, o
 							onPress={() => onSelect(option.id)}
 							style={[styles.optionRow, index > 0 && !option.sectionBreakBefore && styles.optionBorder, option.sectionBreakBefore && styles.optionSectionBreak, selected && styles.optionSelected]}
 						>
-							{showAgentLogos ? <AgentLogo harness={option.id} size={24} /> : null}
+							{showAgentLogos ? <AgentLogo harness={option.id} size={24} /> : option.icon ? <Feather name={option.icon} size={20} color={t.textSecondary} /> : null}
 							<Text numberOfLines={2} style={[styles.optionLabel, selected && styles.optionLabelSelected]}>{option.label}</Text>
 							{selected ? <Feather name="check" size={20} color={t.accent} /> : null}
 						</Pressable>

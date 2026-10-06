@@ -61,7 +61,8 @@ export function SpawnComposerControls({
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const logoUris = useHarnessLogoUris(agents);
-	const projectLabel = projects.find((project) => project.id === projectId)?.label ?? "Choose project";
+	const selectedProject = projects.find((project) => project.id === projectId);
+	const projectLabel = selectedProject?.label ?? "Choose project";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
 
 	return (
@@ -71,27 +72,25 @@ export function SpawnComposerControls({
 				<Menu
 					label={
 						<HStack spacing={7}>
-							<Image systemName="folder" size={iconSize.sm} />
+							<Image systemName={projectSystemImage(selectedProject)} size={iconSize.sm} />
 							<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{projectLabel}</Text>
 							<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
 						</HStack>
 					}
 					modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ width: PROJECT_MENU_WIDTH, alignment: "leading" }), accessibilityIdentifier("spawn-project")]}
 				>
-					{projects.map((project) => project.sectionBreakBefore ? <Group key={project.id}>
-						<Divider />
-						<Button
-							label={project.label}
-							systemImage={project.id === projectId ? "checkmark" : "folder"}
-							onPress={() => { haptics.select(); onSelectProject(project.id); }}
-						/>
-					</Group> : (
-						<Button
-							key={project.id}
-							label={project.label}
-							systemImage={project.id === projectId ? "checkmark" : "folder"}
-							onPress={() => { haptics.select(); onSelectProject(project.id); }}
-						/>
+					{projects.map((project) => (
+						<Group key={project.id}>
+							{project.sectionBreakBefore ? <Divider /> : null}
+							<Button onPress={() => { haptics.select(); onSelectProject(project.id); }}>
+								<HStack spacing={9}>
+									<Image systemName={projectSystemImage(project)} size={iconSize.sm} />
+									<Text>{project.label}</Text>
+									<Spacer />
+									{project.id === projectId ? <Image systemName="checkmark" size={iconSize.xs} /> : null}
+								</HStack>
+							</Button>
+						</Group>
 					))}
 				</Menu>
 
@@ -212,6 +211,10 @@ export function SpawnComposerControls({
 			</Pressable>
 		</View>
 	);
+}
+
+function projectSystemImage(project?: SpawnComposerOption): "plus.bubble" | "folder" {
+	return project?.icon === "message-square-plus" ? "plus.bubble" : "folder";
 }
 
 const styles = StyleSheet.create({

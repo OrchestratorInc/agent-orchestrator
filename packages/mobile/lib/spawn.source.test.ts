@@ -7,7 +7,7 @@ const voiceInput = readFileSync(fileURLToPath(new URL("./voice/useVoiceInput.ts"
 
 describe("spawn composer", () => {
 	it("puts Standalone agent after projects with a section break", () => {
-		expect(spawn).toContain('...projects.map((item) => ({ id: item.id, label: item.name })), { id: STANDALONE_PROJECT, label: "Standalone agent", sectionBreakBefore: true }');
+		expect(spawn).toContain('...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }');
 		expect(spawn).not.toContain('label: "Standalone worker"');
 	});
 
