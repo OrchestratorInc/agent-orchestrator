@@ -1,5 +1,6 @@
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { StartupCueBanner } from "../StartupCueBanner";
+import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 /**
  * The Chat surface for a session whose persisted mode is `chat`.
  *
@@ -33,6 +34,7 @@ import {
 import { ArrowDown, ChevronRight, Loader2, TriangleAlert, Undo2 } from "lucide-react";
 import { Reorder, useDragControls } from "motion/react";
 import { useTranslation } from "react-i18next";
+import { useScrollFollow } from "../../hooks/useScrollFollow";
 import {
 	defaultRangeExtractor,
 	measureElement,
@@ -2052,6 +2054,10 @@ function ControllerBanner({
  * an unbounded history in every snapshot response.
  */
 const CHAT_VIRTUALIZE_THRESHOLD = 20;
+/** Opening a chat snaps to the end for this long while rows measure and history arrives. */
+const INITIAL_SNAP_MS = 1000;
+/** Wheel, key and touch intent pause the follow this long so the resulting scroll decides. */
+const READER_INTENT_HOLD_MS = 250;
 const CHAT_ESTIMATED_TURN_HEIGHT = 600;
 const CHAT_TURN_GAP = 18;
 const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
@@ -2122,6 +2128,37 @@ function Timeline({
 	} | null>(null);
 	const pinnedRef = useRef(true);
 	const [pinned, setPinned] = useState(true);
+	const getScroller = useCallback(() => scroller.current, []);
+	const {
+		glideToEnd,
+		followEnd,
+		cancel: cancelScrollFollow,
+		hold: holdScrollFollow,
+		markWritten,
+		isOwnScroll,
+		isFlying,
+		reaim,
+		endFlight,
+	} = useScrollFollow(getScroller);
+	// Set when the reader sends or jumps to the latest: the next layout glides there
+	// instead of snapping. Opening a chat never animates, so the first layout snaps.
+	const glideRequested = useRef(false);
+	const initialLayoutDone = useRef(false);
+	const initialLayoutAt = useRef(0);
+	const lastScrollTop = useRef(0);
+	const setPinnedNow = useCallback((next: boolean) => {
+		pinnedRef.current = next;
+		setPinned(next);
+	}, []);
+	// The reader took over (scrolled up, opened a disclosure): stop following.
+	const releaseFollow = useCallback(() => {
+		cancelScrollFollow();
+		if (pinnedRef.current) setPinnedNow(false);
+	}, [cancelScrollFollow, setPinnedNow]);
+	const requestGlideToEnd = useCallback(() => {
+		glideRequested.current = true;
+		setPinnedNow(true);
+	}, [setPinnedNow]);
 	const [activityDisclosureOverrides, setActivityDisclosureOverrides] = useState<Record<string, boolean>>({});
 	const onActivityDisclosureChange = useCallback((key: string, open: boolean) => {
 		setActivityDisclosureOverrides((current) => ({ ...current, [key]: open }));
@@ -2243,7 +2280,7 @@ function Timeline({
 			)?.turnId,
 		[snapshot.items],
 	);
-	const { editableTurns, reconstructedTurns } = useMemo(() => {
+	const { editableTurns: editableTurnsNow, reconstructedTurns } = useMemo(() => {
 		const editable = new Set<string>();
 		const reconstructed = new Set<string>();
 		if (snapshot.controller.state !== "ready") {
@@ -2468,6 +2505,7 @@ function Timeline({
 		inlineEditMutation.accepted,
 	]);
 
+	const editableTurns = useStableSet(editableTurnsNow);
 	const startMessageEdit = useCallback((message: ConversationMessage) => {
 		if (!message.turnId || inlineEditLocked) return;
 		const result = writeChatInlineEdit(draftScope, {
@@ -2612,6 +2650,10 @@ function Timeline({
 		],
 	);
 
+	// Both churn with their deps while streaming; a stable identity keeps memoized turn groups from re-rendering.
+	const stableStartMessageEdit = useLatestCallback(startMessageEdit);
+	const stableSubmitMessageEdit = useLatestCallback(submitMessageEdit);
+
 	const readable = useMemo(() => readableItems(snapshot), [snapshot]);
 	const items = useStableList(readable, itemKey, sameContent);
 	const seenHumanMessageIds = useRef<Set<string> | undefined>(undefined);
@@ -2676,6 +2718,15 @@ function Timeline({
 			}));
 	}, [items, localEchos, snapshot.latestSequence]);
 	const timelineItems = useStableList([...items, ...localItems], itemKey, sameContent);
+	const previousEchoIds = useRef<ReadonlySet<string>>(new Set(localEchos.map((echo) => echo.clientMessageId)));
+	useLayoutEffect(() => {
+		const ids = new Set(localEchos.map((echo) => echo.clientMessageId));
+		const sent = [...ids].some((id) => !previousEchoIds.current.has(id));
+		previousEchoIds.current = ids;
+		if (!sent) return;
+		// The reader just sent: bring them to their prompt even if they had scrolled away.
+		requestGlideToEnd();
+	}, [localEchos, requestGlideToEnd]);
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		return groupByTurn({ ...snapshot, items: timelineItems }).filter(
@@ -2683,6 +2734,10 @@ function Timeline({
 		);
 	}, [snapshot, timelineItems]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
+	// Read by syncScrollLayout (a stable callback) so the initial snap only latches
+	// once real conversation content exists (history can load after the chat opens).
+	const groupCountRef = useRef(groups.length);
+	groupCountRef.current = groups.length;
 	const navigableGroups = useMemo(() => groups.filter(groupHasHumanPrompt), [groups]);
 	const previews = useMemo(() => navigableGroups.map(groupPreview), [navigableGroups]);
 	const virtualized = groups.length > CHAT_VIRTUALIZE_THRESHOLD;
@@ -2710,7 +2765,9 @@ function Timeline({
 		// Disable end anchoring while unpinned so streamed output cannot mistake the
 		// reader's position for the physical end of the scroll container.
 		scrollEndThreshold: pinned ? 1 : -1,
-		followOnAppend: virtualized && pinned,
+		// Appends are followed by syncScrollLayout, which glides and accounts for the
+		// prompt spacer; the virtualizer's own follow would snap past both.
+		followOnAppend: false,
 		// Bootstrap unmeasurable panels until their real geometry is available.
 		observeElementRect: (instance, callback) => observeElementRect(instance, (rect) =>
 			callback(rect.height ? rect : { width: rect.width, height: CHAT_INITIAL_VIEWPORT_HEIGHT })),
@@ -2723,7 +2780,17 @@ function Timeline({
 			return measureElement(element, entry, instance) || CHAT_ESTIMATED_TURN_HEIGHT;
 		},
 		scrollToFn: (offset, { adjustments = 0 }, instance) => {
-			if (instance.scrollElement) instance.scrollElement.scrollTop = offset + adjustments;
+			if (!instance.scrollElement) return;
+			// An instant write would abort our smooth glide (and land at a stale offset).
+			// Let the glide carry the adjustment: re-aim it at the new end instead. The
+			// next scroll event re-syncs the virtualizer's offset.
+			if (isFlying()) {
+				reaim();
+				return;
+			}
+			instance.scrollElement.scrollTop = offset + adjustments;
+			// Anchoring writes are ours; they must never read as the reader leaving the end.
+			markWritten(instance.scrollElement.scrollTop);
 		},
 		rangeExtractor: (range) => {
 			const indexes = defaultRangeExtractor(range);
@@ -2854,15 +2921,48 @@ function Timeline({
 		}
 	}, [virtualized, virtualizer, groups]);
 
+	// Opening a chat lands at the end instantly. Long histories measure their rows
+	// over the first frames (and may arrive in more than one snapshot), so keep
+	// snapping briefly after the first real layout instead of animating across them.
+	const followOrSnapToEnd = useCallback((node: HTMLElement) => {
+		if (!initialLayoutDone.current || performance.now() - initialLayoutAt.current < INITIAL_SNAP_MS) {
+			node.scrollTop = node.scrollHeight;
+			markWritten(node.scrollTop);
+			return;
+		}
+		followEnd();
+	}, [followEnd, markWritten]);
+
 	const syncScrollLayout = useCallback(() => {
 		anchorGeometry.current = null;
 		syncPromptSpacer();
 		const node = scroller.current;
 		if (node && pinnedRef.current) {
-			node.scrollTop = node.scrollHeight;
+			if (glideRequested.current) {
+				glideRequested.current = false;
+				glideToEnd();
+			} else {
+				followOrSnapToEnd(node);
+			}
+		}
+		if (groupCountRef.current > 0 && !initialLayoutDone.current) {
+			initialLayoutDone.current = true;
+			initialLayoutAt.current = performance.now();
 		}
 		updateScrollbar();
-	}, [syncPromptSpacer, updateScrollbar]);
+	}, [syncPromptSpacer, updateScrollbar, glideToEnd, followOrSnapToEnd]);
+
+	// Streamed text grows the content without a new sequence. While following, let
+	// the reply fill the prompt spacer first (the view holds still), then follow the
+	// end smoothly once the reply is taller than the viewport.
+	const syncStreamedGrowth = useCallback(() => {
+		if (!pinnedRef.current || !initialLayoutDone.current) return;
+		anchorGeometry.current = null;
+		syncPromptSpacer();
+		const node = scroller.current;
+		if (node) followOrSnapToEnd(node);
+		updateScrollbar();
+	}, [syncPromptSpacer, followOrSnapToEnd, updateScrollbar]);
 
 	// A disclosure animation changes the content box but is not new conversation
 	// content. Re-measure it without re-pinning the viewport to the bottom; doing
@@ -2903,24 +3003,71 @@ function Timeline({
 		};
 	}, []);
 
+	// Read through a ref so a streamed chunk (new `groups` identity) does not tear
+	// down and re-arm the observer, which would re-run a full layout per chunk.
+	const onContentResize = useRef(syncScrollMetrics);
+	onContentResize.current = () => {
+		if (pinnedRef.current) syncStreamedGrowth();
+		else syncScrollMetrics();
+	};
 	useEffect(() => {
 		syncScrollLayout();
 		if (typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(syncScrollMetrics);
+		const observer = new ResizeObserver(() => onContentResize.current());
 		if (scroller.current) observer.observe(scroller.current);
 		if (scrollContent.current) observer.observe(scrollContent.current);
 		return () => observer.disconnect();
-	}, [groups.length, syncScrollMetrics]);
+	}, [groups.length]);
 
 	function onScroll() {
 		const node = scroller.current;
 		if (!node) return;
-		const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
-		setPinned(distance < 64);
+		const top = node.scrollTop;
+		const movedUp = top < lastScrollTop.current - 1;
+		lastScrollTop.current = top;
+		const distance = node.scrollHeight - top - node.clientHeight;
+		// Classified by where the scroll landed, not when: our own glide, follow and
+		// anchoring writes are recognized by position and never unpin. A reader scroll
+		// releases the follow once it is away from the end, or whenever it moves up
+		// (so a small nudge up is not pulled straight back). A scroll that only clamps
+		// to the end after content shrank is not the reader leaving.
+		if (isOwnScroll(top)) {
+			// Ours: no change.
+		} else if (distance >= 64 || (movedUp && distance > 2)) {
+			if (pinnedRef.current) releaseFollow();
+		} else if (!pinnedRef.current && !movedUp) {
+			setPinnedNow(true);
+		}
 		updateScrollbar();
 	}
 
+	function onViewportWheel(event: ReactWheelEvent<HTMLDivElement>) {
+		// Wheel intent arrives before the scroll it causes. Hold the follow so a
+		// concurrent stream commit cannot pull the reader back, and let the scroll
+		// itself decide: a wheel consumed by a nested scroller (a code block) never
+		// moves the log, so it must not unpin it.
+		if (event.deltaY < 0) holdScrollFollow(READER_INTENT_HOLD_MS);
+	}
+
+	function onViewportKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+		const target = event.target as HTMLElement;
+		if (event.defaultPrevented || target.closest("input, textarea, select, [contenteditable='true'], [contenteditable=''], [role='menu'], [role='listbox'], [role='textbox']")) return;
+		if (event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" || (event.key === " " && event.shiftKey)) {
+			holdScrollFollow(READER_INTENT_HOLD_MS);
+		}
+	}
+
+	function onViewportPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+		// A disclosure the reader is opening: following the end would pull it out from
+		// under them. Menu triggers (aria-haspopup) open a popup, not content, so they
+		// keep the follow; so do clicks on empty margins.
+		if ((event.target as HTMLElement).closest("[aria-expanded]:not([aria-haspopup])")) {
+			releaseFollow();
+		}
+	}
+
 	function setScrollFromTrack(clientY: number) {
+		cancelScrollFollow();
 		const node = scroller.current;
 		const track = scrollTrack.current;
 		if (!node || !track) return;
@@ -2932,6 +3079,7 @@ function Timeline({
 	}
 
 	function onScrollbarPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+		cancelScrollFollow();
 		if (!minimapEnabled || inspectorOpenRef.current) return;
 		const track = scrollTrack.current;
 		const node = scroller.current;
@@ -2992,6 +3140,7 @@ function Timeline({
 	}
 
 	function onScrollbarWheel(event: ReactWheelEvent<HTMLDivElement>) {
+		cancelScrollFollow();
 		if (!minimapEnabled || inspectorOpenRef.current) return;
 		const node = scroller.current;
 		if (!node) return;
@@ -3001,6 +3150,7 @@ function Timeline({
 	}
 
 	function onScrollbarKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+		cancelScrollFollow();
 		if (!minimapEnabled || inspectorOpenRef.current) return;
 		const node = scroller.current;
 		if (!node) return;
@@ -3036,6 +3186,11 @@ function Timeline({
 			<div
 				ref={scroller}
 				onScroll={onScroll}
+				onScrollEnd={endFlight}
+				onWheel={onViewportWheel}
+				onTouchMove={() => holdScrollFollow(READER_INTENT_HOLD_MS)}
+				onKeyDown={onViewportKeyDown}
+				onPointerDown={onViewportPointerDown}
 				className="chat-scroll-viewport cursor-chat-timeline h-full min-w-0 select-text overflow-x-hidden overflow-y-auto px-4 pt-5 pb-0"
 				role="log"
 				aria-live="polite"
@@ -3107,13 +3262,13 @@ function Timeline({
 									retry={retry}
 									onEditHumanMessage={canEditHumanMessage ? editHumanMessage : undefined}
 									messageEdit={messageEdit}
-									onStartMessageEdit={startMessageEdit}
+									onStartMessageEdit={stableStartMessageEdit}
 									onUpdateMessageEdit={updateMessageEdit}
 									onCancelMessageEdit={cancelMessageEdit}
 									onAbandonEditRecovery={
 										canAbandonInlineEditRecovery ? abandonUncertainInlineEdit : undefined
 									}
-									onSubmitMessageEdit={submitMessageEdit}
+									onSubmitMessageEdit={stableSubmitMessageEdit}
 									editPending={inlineEditPending}
 									editSendBlocked={inlineEditSendBlocked}
 									editRecoveryLabel={translateDraft(inlineEditRecoveryLabel)}
@@ -3278,7 +3433,7 @@ function Timeline({
 					variant="outline"
 					aria-label="Jump to latest"
 					title="Jump to latest"
-					onClick={() => setPinned(true)}
+					onClick={requestGlideToEnd}
 					className="absolute bottom-3 left-1/2 size-12 -translate-x-1/2 rounded-full border-border-strong bg-raised p-0 text-foreground shadow-sm hover:bg-surface dark:bg-raised dark:hover:bg-surface"
 				>
 					<ArrowDown aria-hidden="true" className="size-5" />
