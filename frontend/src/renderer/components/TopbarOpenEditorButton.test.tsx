@@ -286,6 +286,30 @@ describe("TopbarOpenEditorButton", () => {
 		}
 	});
 
+	it("stops checking after three failed checks and shows the reason", async () => {
+		vi.useFakeTimers();
+		try {
+			const getState = vi.fn().mockResolvedValue({
+				...availableState,
+				workspaceAvailable: false,
+				unavailableReason: "AO daemon is not ready.",
+				unavailableCode: "SERVICE_UNAVAILABLE",
+			});
+			window.ao!.editorHandoff.getState = getState;
+			renderButton();
+
+			for (let i = 0; i < 6; i += 1) {
+				await act(async () => {
+					await vi.advanceTimersByTimeAsync(5_000);
+				});
+			}
+			expect(getState).toHaveBeenCalledTimes(3);
+			expect(screen.getByRole("button", { name: "AO daemon is not ready." })).toBeDisabled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("does not poll a terminated session whose workspace is gone", async () => {
 		const getState = vi.fn().mockResolvedValue({
 			...availableState,

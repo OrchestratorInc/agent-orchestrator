@@ -63,7 +63,7 @@ func TestWorkspaceLocationRejectsFileInPlaceOfDirectory(t *testing.T) {
 	assertAPIErrorCode(t, err, "SESSION_WORKSPACE_NOT_FOUND")
 }
 
-func TestWorkspaceLocationDoesNotCallUnreadableWorkspaceMissing(t *testing.T) {
+func TestWorkspaceLocationReportsUnreadableWorkspace(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses directory permissions")
 	}
@@ -83,10 +83,7 @@ func TestWorkspaceLocationDoesNotCallUnreadableWorkspaceMissing(t *testing.T) {
 	}
 
 	_, err := (&Service{store: store}).WorkspaceLocation(context.Background(), "ao-1")
-	var apiError *apierr.Error
-	if err == nil || errors.As(err, &apiError) || !errors.Is(err, os.ErrPermission) {
-		t.Fatalf("WorkspaceLocation() error = %v, want wrapped permission failure", err)
-	}
+	assertAPIErrorCode(t, err, "SESSION_WORKSPACE_UNREADABLE")
 }
 
 func TestWorkspaceLocationPreservesStoreFailure(t *testing.T) {

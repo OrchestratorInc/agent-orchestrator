@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRef } from "react";
 import { isEditorId, type EditorHandoffState, type OpenTargetId } from "../../shared/editor-handoff";
 import { aoBridge } from "../lib/bridge";
 import { captureRendererEvent } from "../lib/telemetry";
@@ -10,6 +11,7 @@ const NEW_SESSION_READINESS_WINDOW_MS = 30_000;
 const WORKSPACE_READINESS_RETRY_MS = 500;
 const WORKSPACE_READINESS_MAX_RETRIES = 10;
 const WORKSPACE_CHECK_RETRY_MS = 5_000;
+const WORKSPACE_CHECK_MAX_FAILURES = 3;
 
 type EditorHandoffReadiness = {
 	sessionCreatedAt?: string;
@@ -62,6 +64,7 @@ export function workspaceCheckFailed(state: EditorHandoffState | undefined): boo
 
 export function useEditorHandoffState(sessionId: string, readiness: EditorHandoffReadiness = {}) {
 	const awaitWorkspace = shouldAwaitWorkspace(readiness);
+	const failedChecks = useRef(0);
 	return useQuery<EditorHandoffState>({
 		queryKey: editorHandoffQueryKey(sessionId),
 		enabled: Boolean(sessionId),
@@ -76,7 +79,13 @@ export function useEditorHandoffState(sessionId: string, readiness: EditorHandof
 			for (let retries = 0; ; retries += 1) {
 				const state = await aoBridge.editorHandoff.getState(sessionId);
 				if (state.workspaceAvailable || !awaitWorkspace || retries >= WORKSPACE_READINESS_MAX_RETRIES) {
-					return state;
+					if (!workspaceCheckFailed(state)) {
+						failedChecks.current = 0;
+						return state;
+					}
+					// After a few failed checks stop treating it as transient: polling ends and the reason shows.
+					failedChecks.current += 1;
+					return failedChecks.current < WORKSPACE_CHECK_MAX_FAILURES ? state : { ...state, unavailableCode: undefined };
 				}
 				await waitForWorkspaceRetry(signal);
 			}
