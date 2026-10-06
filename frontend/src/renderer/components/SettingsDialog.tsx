@@ -45,8 +45,9 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const closeSettings = useUiStore((state) => state.closeSettings);
-	// Diagnostics (memory and CPU) is listed only in Developer mode.
 	const developerMode = useUiStore((state) => state.developerMode);
+	// Diagnostics (memory and CPU) is listed only with its toggle on in Developer mode.
+	const diagnostics = useUiStore((state) => state.developerMode && state.diagnostics);
 	// Reads the daemon settings the dialog tree already queries; no extra fetch.
 	const { cloudEnabled } = useCloudGate();
 	// The bring-your-own-Coder page is for @11x.ai users, plus a small allowlist
@@ -73,7 +74,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 	}, [deferSettingsBody, settingsModal]);
 	const isBodyReady = bodySettings === displaySettings;
 
-	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, is11x });
+	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, is11x });
 	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
 
 	const projectSections: Array<{
@@ -108,7 +109,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 
 	const activeLabel = isProjectSettings
 		? (projectSections.find((s) => s.id === activeProjectSection)?.label ?? t("settings.project.general"))
-		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, is11x }).label(t);
+		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, diagnostics, is11x }).label(t);
 
 	const closeSettingsDialog = () => {
 		if (cueBusy) return;
@@ -164,14 +165,14 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
-			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, is11x }).id);
+			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, is11x }).id);
 		}
 		if (settingsModal?.scope === "project") {
 			setActiveProjectSection(settingsModal.section ?? "general");
 			setProjectSaveState(initialProjectSaveState());
 			setCueBusy(false);
 		}
-	}, [cloudEnabled, developerMode, is11x, settingsModal]);
+	}, [cloudEnabled, developerMode, diagnostics, is11x, settingsModal]);
 
 	useEffect(() => {
 		setFocusAgentId(settingsModal?.scope === "global" ? settingsModal.focusAgentId : undefined);

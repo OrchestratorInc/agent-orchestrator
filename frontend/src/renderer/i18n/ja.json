@@ -1988,6 +1988,7 @@
 	"settings.browserImport.warning.cookie-write-failed": "{{count}} 件のCookieを新しいプロファイルに書き込めませんでした。",
 	"settings.help": "Help",
 	"settings.diagnostics": "診断",
+	"settings.diagnosticsToggleHint": "セッションカードとボードにメモリと CPU の使用量を表示し、診断ページを表示します。",
 	"settings.harness": "Harness",
 	"settings.harness.thisComputer": "このコンピューター",
 	"settings.harness.remoteBrowserAuthNote": "ブラウザーでのサインインには、ホスト上のブラウザーまたはコールバックポートの転送が必要な場合があります。",
