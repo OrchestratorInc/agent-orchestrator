@@ -590,7 +590,7 @@ func TestTriggerSpawnsNewReviewerAndRecordsRunAfterLaunch(t *testing.T) {
 	launcher := &fakeLauncher{handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -621,7 +621,7 @@ func TestTriggerPersistsChatModeBeforeCreatingReviewerConversation(t *testing.T)
 	launcher := NewLauncher(singleReviewerResolver{reviewer: chatReviewAdapter{}}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat))
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	result, err := eng.Trigger(ctx, worker.ID, domain.ReviewerCodex, domain.AgentConfig{Model: "gpt-6-sol", Effort: "high"})
+	result, err := trigger(ctx, eng, worker.ID, domain.ReviewerCodex, domain.AgentConfig{Model: "gpt-6-sol", Effort: "high"})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -648,7 +648,7 @@ func TestTriggerCanChooseTerminalForChatCapableReviewer(t *testing.T) {
 	launcher := &fakeLauncher{interfaceMode: domain.ReviewerInterfaceChat, handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.TriggerWithSourceAndMode(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceTUI)
+	res, err := triggerWithSourceAndMode(context.Background(), eng, "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceTUI)
 	if err != nil {
 		t.Fatalf("TriggerWithSourceAndMode: %v", err)
 	}
@@ -659,7 +659,7 @@ func TestTriggerCanChooseTerminalForChatCapableReviewer(t *testing.T) {
 
 func TestTriggerRejectsChatForTerminalOnlyReviewer(t *testing.T) {
 	eng := newEngineForTest(&fakeStore{}, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{})
-	if _, err := eng.TriggerWithSourceAndMode(context.Background(), "mer-1", "", domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceChat); !errors.Is(err, ErrInvalid) {
+	if _, err := triggerWithSourceAndMode(context.Background(), eng, "mer-1", "", domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceChat); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("TriggerWithSourceAndMode error = %v, want invalid", err)
 	}
 }
@@ -669,7 +669,7 @@ func TestTriggerRejectsUnsupportedChatWithoutDestroyingOtherReviewer(t *testing.
 	store := &fakeStore{review: &old, reviews: map[domain.ReviewerHarness]domain.Review{domain.ReviewerCodex: old}, runs: []domain.ReviewRun{{ID: "run-1", SessionID: "mer-1", Harness: domain.ReviewerCodex, Status: domain.ReviewRunRunning}}}
 	launcher := &fakeLauncher{alive: true}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
-	_, err := eng.TriggerWithSourceAndMode(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceChat)
+	_, err := triggerWithSourceAndMode(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceChat)
 	if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("error = %v, want invalid", err)
 	}
@@ -693,7 +693,7 @@ func TestTriggerFailedModeSwitchRestoresPreviousConversationAndPane(t *testing.T
 			store := &fakeStore{review: &old, reviews: map[domain.ReviewerHarness]domain.Review{domain.ReviewerCodex: old}, runs: []domain.ReviewRun{{ID: "run-1", ReviewID: old.ID, SessionID: "mer-1", Harness: domain.ReviewerCodex, PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning}}}
 			launcher := &fakeLauncher{interfaceMode: domain.ReviewerInterfaceChat, alive: true, spawnErr: errors.New("launch failed")}
 			eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
-			if _, err := eng.TriggerWithSourceAndMode(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, tt.next); err == nil {
+			if _, err := triggerWithSourceAndMode(context.Background(), eng, "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, tt.next); err == nil {
 				t.Fatal("expected launch failure")
 			}
 			if launcher.destroyed || store.runs[0].Status != domain.ReviewRunRunning {
@@ -716,7 +716,7 @@ func TestTriggerFailedPreviousPaneTeardownRestoresOldSurface(t *testing.T) {
 	launcher := &fakeLauncher{interfaceMode: domain.ReviewerInterfaceChat, alive: true,
 		handle: "review-chat:rev-1", destroyErr: errors.New("old pane still alive"), destroyErrCall: 1}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
-	if _, err := eng.TriggerWithSourceAndMode(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceChat); err == nil {
+	if _, err := triggerWithSourceAndMode(context.Background(), eng, "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceChat); err == nil {
 		t.Fatal("expected previous pane teardown failure")
 	}
 	got := store.reviews[domain.ReviewerCodex]
@@ -735,7 +735,7 @@ func TestTriggerFailedDeferredReviewerNotificationRestoresPreviousSurface(t *tes
 	launcher := &fakeLauncher{interfaceMode: domain.ReviewerInterfaceChat, alive: true, handle: "replacement-pane",
 		notifyErr: errors.New("replacement prompt failed")}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
-	if _, err := eng.TriggerWithSourceAndMode(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceTUI); err == nil {
+	if _, err := triggerWithSourceAndMode(context.Background(), eng, "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceTUI); err == nil {
 		t.Fatal("expected deferred notification failure")
 	}
 	got := store.reviews[domain.ReviewerCodex]
@@ -752,7 +752,7 @@ func TestTriggerFallsBackWhenPersistedChatIsUnavailable(t *testing.T) {
 	store := &fakeStore{review: &old, reviews: map[domain.ReviewerHarness]domain.Review{domain.ReviewerCodex: old}}
 	launcher := &fakeLauncher{handle: "terminal-pane"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
-	res, err := eng.TriggerWithSourceAndMode(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, "")
+	res, err := triggerWithSourceAndMode(context.Background(), eng, "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, "")
 	if err != nil {
 		t.Fatalf("TriggerWithSourceAndMode: %v", err)
 	}
@@ -772,7 +772,7 @@ func TestAutoTriggerHealsUnavailableChatWithoutRereviewingApprovedCommit(t *test
 	worker := liveWorker()
 	worker.ReviewerHarness = domain.ReviewerCodex
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
-	res, err := eng.TriggerWithSourceAndMode(context.Background(), worker.ID, "", domain.AgentConfig{}, domain.ReviewTriggerAuto, "")
+	res, err := triggerWithSourceAndMode(context.Background(), eng, worker.ID, "", domain.AgentConfig{}, domain.ReviewTriggerAuto, "")
 	if err != nil {
 		t.Fatalf("automatic trigger: %v", err)
 	}
@@ -800,7 +800,7 @@ func TestTriggerKeepsOldReviewerUntilReplacementStarts(t *testing.T) {
 		}
 	}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
-	res, err := eng.TriggerWithSourceAndMode(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceTUI)
+	res, err := triggerWithSourceAndMode(context.Background(), eng, "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceTUI)
 	if err != nil {
 		t.Fatalf("TriggerWithSourceAndMode: %v", err)
 	}
@@ -828,7 +828,7 @@ func TestTriggerChatDoesNotResumeTerminalNativeSession(t *testing.T) {
 	}
 	launcher := &fakeLauncher{interfaceMode: domain.ReviewerInterfaceChat, alive: true, handle: "review-chat:rev-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
-	if _, err := eng.TriggerWithSourceAndMode(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceChat); err != nil {
+	if _, err := triggerWithSourceAndMode(context.Background(), eng, "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceChat); err != nil {
 		t.Fatalf("switch to Chat: %v", err)
 	}
 	if launcher.gotSpec.AgentSessionID != "" || launcher.gotSpec.ProviderConversationID != "" {
@@ -855,7 +855,7 @@ func TestTriggerPreservesHookOwnedActivityStateAfterLaunch(t *testing.T) {
 	}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -912,7 +912,7 @@ func TestTriggerClaimsNewLaunchBeforeSpawnHooksWithFencedStore(t *testing.T) {
 	}
 	eng := newEngineForTest(st, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(ctx, worker.ID, "", domain.AgentConfig{})
+	res, err := trigger(ctx, eng, worker.ID, "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -1519,7 +1519,7 @@ func TestTerminateReviewerWaitsForInFlightTriggerSpawn(t *testing.T) {
 
 	triggerDone := make(chan error, 1)
 	go func() {
-		_, err := eng.Trigger(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{})
+		_, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerCodex, domain.AgentConfig{})
 		triggerDone <- err
 	}()
 	<-spawnStarted
@@ -1605,7 +1605,7 @@ func TestTriggerConcurrentSameWorkerSpawnsOnce(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func(i int) {
 			defer wg.Done()
-			results[i], errs[i] = eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+			results[i], errs[i] = trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 		}(i)
 	}
 	wg.Wait()
@@ -1638,7 +1638,7 @@ func TestTriggerSnapshotsDisabledInjectionPolicy(t *testing.T) {
 	worker.AutoInjectReview = false
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{handle: "review-mer-1"})
 
-	result, err := eng.Trigger(context.Background(), worker.ID, "", domain.AgentConfig{})
+	result, err := trigger(context.Background(), eng, worker.ID, "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1654,7 +1654,7 @@ func TestTriggerFallsBackToExistingRunOnUniqueConflict(t *testing.T) {
 	launcher := &fakeLauncher{handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -1682,7 +1682,7 @@ func TestTriggerDuplicateFallbackUsesRequestedHarness(t *testing.T) {
 	launcher := &fakeLauncher{handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerCodex, domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -1708,7 +1708,7 @@ func TestTriggerIsIdempotentForSameCommit(t *testing.T) {
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -1739,7 +1739,7 @@ func TestTriggerRunsAnotherHarnessOnAnAlreadyApprovedCommit(t *testing.T) {
 	launcher := &fakeLauncher{alive: true}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerCodex, domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -1769,7 +1769,7 @@ func TestTriggerHarnessOverrideDoesNotRestartRunningReviewJustBecauseResolvedCon
 	launcher := &fakeLauncher{alive: true, handle: "codex-pane"}
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerCodex, domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -1807,7 +1807,7 @@ func TestTriggerWithoutOverrideStillSkipsAnApprovedCommit(t *testing.T) {
 	launcher := &fakeLauncher{alive: true}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -1831,7 +1831,7 @@ func TestTriggerWithPersistedReviewerConfigStillReusesSameCommit(t *testing.T) {
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{Model: "gpt-5"})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{Model: "gpt-5"})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -1858,7 +1858,7 @@ func TestTriggerWithPersistedReviewerConfigAndSameHarnessOverrideStillReusesSame
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5"})
+	res, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5"})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -1884,7 +1884,7 @@ func TestTriggerWithSameHarnessOverrideStillReuses(t *testing.T) {
 	launcher := &fakeLauncher{alive: true}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -1908,7 +1908,7 @@ func TestTriggerConfigOnlyOverrideUsesResolvedHarnessAndConfig(t *testing.T) {
 	}}}}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), projects, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{Model: "claude-new"})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{Model: "claude-new"})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -1938,7 +1938,7 @@ func TestTriggerConfigOnlyOverrideMergesResolvedConfig(t *testing.T) {
 	}}}}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), projects, launcher)
 
-	if _, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{Model: "claude-new"}); err != nil {
+	if _, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{Model: "claude-new"}); err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
 	if got := launcher.gotSpec.AgentConfig; got.Model != "claude-new" || got.Permissions != domain.PermissionModeBypassPermissions {
@@ -1961,7 +1961,7 @@ func TestTriggerSameHarnessOverrideMergesResolvedConfig(t *testing.T) {
 	}}}}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), projects, launcher)
 
-	if _, err := eng.Trigger(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "claude-new"}); err != nil {
+	if _, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "claude-new"}); err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
 	if got := launcher.gotSpec.AgentConfig; got.Model != "claude-new" || got.Permissions != domain.PermissionModeBypassPermissions {
@@ -2004,7 +2004,7 @@ func TestTriggerConfigOverrideRestartsAliveReviewerPane(t *testing.T) {
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-2"}
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5-mini"})
+	res, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5-mini"})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2042,7 +2042,7 @@ func TestTriggerConfigOverrideRollbackUpsertFailureKeepsReplacementHandleTracked
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-2", destroyErr: errors.New("destroy old failed"), destroyErrCall: 1}
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	if _, err := eng.Trigger(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5-mini"}); err == nil || !strings.Contains(err.Error(), "rollback review row") {
+	if _, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5-mini"}); err == nil || !strings.Contains(err.Error(), "rollback review row") {
 		t.Fatalf("Trigger error = %v, want rollback review row failure", err)
 	}
 	if store.review == nil || store.review.ReviewerHandleID != "review-mer-2" || store.review.AgentSessionID != "" {
@@ -2068,7 +2068,7 @@ func TestTriggerConfigOverrideDestroyPreviousFailureRestoresOldNativeSessionID(t
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-2", destroyErr: errors.New("destroy old failed"), destroyErrCall: 1}
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	if _, err := eng.Trigger(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5-mini"}); err == nil || !strings.Contains(err.Error(), "destroy previous reviewer") {
+	if _, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5-mini"}); err == nil || !strings.Contains(err.Error(), "destroy previous reviewer") {
 		t.Fatalf("Trigger error = %v, want destroy previous reviewer failure", err)
 	}
 	if store.review == nil || store.review.ReviewerHandleID != "review-mer-1" || store.review.AgentSessionID != "native-reviewer-1" {
@@ -2093,7 +2093,7 @@ func TestTriggerConfigOverrideFinalUpsertFailurePreservesStoredReviewerHandle(t 
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-2"}
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	if _, err := eng.Trigger(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5-mini"}); err == nil || !strings.Contains(err.Error(), "write failed") {
+	if _, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5-mini"}); err == nil || !strings.Contains(err.Error(), "write failed") {
 		t.Fatalf("Trigger error = %v, want final upsert failure", err)
 	}
 	if !launcher.spawned || !launcher.destroyed || launcher.destroyedHandle != "review-mer-2" {
@@ -2119,7 +2119,7 @@ func TestTriggerConfigOverridePreflightFailurePreservesRunningReviewer(t *testin
 	launcher := &fakeLauncher{alive: true, preflightErr: errors.New("missing binary")}
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha2"), fakeProjects{}, launcher)
 
-	if _, err := eng.Trigger(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5-mini"}); err == nil || !strings.Contains(err.Error(), "reviewer preflight") {
+	if _, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5-mini"}); err == nil || !strings.Contains(err.Error(), "reviewer preflight") {
 		t.Fatalf("Trigger error = %v, want reviewer preflight failure", err)
 	}
 	if !launcher.preflighted || launcher.destroyed || launcher.notified || launcher.spawned {
@@ -2148,7 +2148,7 @@ func TestTriggerConfigOverrideLaunchFailurePreservesRunningReviewer(t *testing.T
 	launcher := &fakeLauncher{alive: true, spawnErr: errors.New("create failed")}
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha2"), fakeProjects{}, launcher)
 
-	if _, err := eng.Trigger(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5-mini"}); err == nil || !strings.Contains(err.Error(), "launch reviewer") {
+	if _, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5-mini"}); err == nil || !strings.Contains(err.Error(), "launch reviewer") {
 		t.Fatalf("Trigger error = %v, want launch failure", err)
 	}
 	if !launcher.preflighted || !launcher.spawned || launcher.destroyed || launcher.notified {
@@ -2164,7 +2164,7 @@ func TestTriggerConfigOverrideLaunchFailurePreservesRunningReviewer(t *testing.T
 
 func TestTriggerRejectsInvalidReviewerConfig(t *testing.T) {
 	eng := newEngineForTest(&fakeStore{}, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{})
-	if _, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{Mode: "turbo"}); !errors.Is(err, ErrInvalid) {
+	if _, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{Mode: "turbo"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
 	}
 }
@@ -2184,7 +2184,7 @@ func TestTriggerConfigOverrideWhileSameCommitRunningRestartsReview(t *testing.T)
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-2"}
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5-mini"})
+	res, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{Model: "gpt-5-mini"})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2213,7 +2213,7 @@ func TestTriggerReusesRunningRowWithNoVerdict(t *testing.T) {
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-2"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2236,7 +2236,7 @@ func TestTriggerRetriesRunningRowWhenReviewerDead(t *testing.T) {
 	launcher := &fakeLauncher{alive: false, handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2265,7 +2265,7 @@ func TestTriggerRetriesTerminalRowWithNoVerdict(t *testing.T) {
 	launcher := &fakeLauncher{handle: "review-mer-2"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2285,7 +2285,7 @@ func TestTriggerReusesReviewerOnNewCommit(t *testing.T) {
 	launcher := &fakeLauncher{alive: true}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2308,7 +2308,7 @@ func TestTriggerSupersedesOlderRunningRunOnNewCommit(t *testing.T) {
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2331,7 +2331,7 @@ func TestTriggerReusesRunningReviewerBeforeAgentSessionIDRecorded(t *testing.T) 
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	if _, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{}); err != nil {
+	if _, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{}); err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
 	if !launcher.notified || launcher.spawned {
@@ -2347,7 +2347,7 @@ func TestTriggerRestoresWhenRecordedReviewerDead(t *testing.T) {
 	launcher := &fakeLauncher{alive: false, handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	if _, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{}); err != nil {
+	if _, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{}); err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
 	if !launcher.spawned || launcher.restored || launcher.notified {
@@ -2364,7 +2364,7 @@ func TestTriggerSpawnsFreshPassForNonReusableReviewer(t *testing.T) {
 	projects := fakeProjects{cfg: domain.ProjectConfig{Reviewers: []domain.ReviewerConfig{{Harness: domain.ReviewerAuggie}}}}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), projects, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2387,7 +2387,7 @@ func TestTriggerRespawnsLivePaneWithoutReviewerAgentSession(t *testing.T) {
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	if _, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{}); err != nil {
+	if _, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{}); err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
 	if !launcher.spawned || launcher.notified {
@@ -2409,7 +2409,7 @@ func TestTriggerRespawnsWhenReviewerHarnessChanged(t *testing.T) {
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2441,7 +2441,7 @@ func TestTriggerSwitchKillsOldReviewerWhenNothingCreated(t *testing.T) {
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2472,7 +2472,7 @@ func TestTriggerRespawnsOnNextCommitAfterHarnessSwitchWithNoRun(t *testing.T) {
 	// the worker now resolves to claude-code but the live pane is still codex.
 	l1 := &fakeLauncher{alive: true, handle: "review-mer-1"}
 	eng1 := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, l1)
-	if _, err := eng1.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{}); err != nil {
+	if _, err := trigger(context.Background(), eng1, "mer-1", "", domain.AgentConfig{}); err != nil {
 		t.Fatalf("trigger 1: %v", err)
 	}
 	if l1.spawned || l1.notified {
@@ -2483,7 +2483,7 @@ func TestTriggerRespawnsOnNextCommitAfterHarnessSwitchWithNoRun(t *testing.T) {
 	// respawn under claude-code, not Notify the stale codex pane.
 	l2 := &fakeLauncher{alive: true, handle: "review-mer-1"}
 	eng2 := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha2"), fakeProjects{}, l2)
-	res, err := eng2.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng2, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("trigger 2: %v", err)
 	}
@@ -2500,7 +2500,7 @@ func TestTriggerLaunchFailureRecordsFailedRun(t *testing.T) {
 	launcher := &fakeLauncher{spawnErr: fmt.Errorf("claude: %w", ports.ErrAgentBinaryNotFound)}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	if _, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{}); !errors.Is(err, ports.ErrAgentBinaryNotFound) {
+	if _, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{}); !errors.Is(err, ports.ErrAgentBinaryNotFound) {
 		t.Fatalf("err = %v, want ports.ErrAgentBinaryNotFound", err)
 	}
 	if store.review == nil || len(store.runs) != 1 {
@@ -2523,7 +2523,7 @@ func TestTriggerRetriesAfterFailedRunForSameCommit(t *testing.T) {
 	launcher := &fakeLauncher{handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2543,7 +2543,7 @@ func TestTriggerRetriesAfterCancelledRunForSameCommit(t *testing.T) {
 	launcher := &fakeLauncher{handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2563,7 +2563,7 @@ func TestAutoTriggerWaitsForNewCommitAfterCancelledRun(t *testing.T) {
 	launcher := &fakeLauncher{handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.TriggerWithSource(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
+	res, err := triggerWithSource(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
 	if err != nil {
 		t.Fatalf("TriggerWithSource: %v", err)
 	}
@@ -2584,7 +2584,7 @@ func TestAutoTriggerStopsRetryingAfterThreeFailedRunsOnSameHead(t *testing.T) {
 	launcher := &fakeLauncher{handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.TriggerWithSource(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
+	res, err := triggerWithSource(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
 	if err != nil {
 		t.Fatalf("TriggerWithSource: %v", err)
 	}
@@ -2673,7 +2673,7 @@ func TestAutoTriggerSkipsCappedFailedHeadButRunsOtherEligiblePRs(t *testing.T) {
 	}}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
 
-	res, err := eng.TriggerWithSource(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
+	res, err := triggerWithSource(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
 	if err != nil {
 		t.Fatalf("TriggerWithSource: %v", err)
 	}
@@ -2702,7 +2702,7 @@ func TestAutoTriggerDoesNotAppendPRToLiveRunningReviewer(t *testing.T) {
 	}}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
 
-	res, err := eng.TriggerWithSource(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
+	res, err := triggerWithSource(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
 	if err != nil {
 		t.Fatalf("TriggerWithSource: %v", err)
 	}
@@ -2731,7 +2731,7 @@ func TestAutoTriggerReconcilesDeadReviewerBeforeRunningGate(t *testing.T) {
 	}}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
 
-	res, err := eng.TriggerWithSource(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
+	res, err := triggerWithSource(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
 	if err != nil {
 		t.Fatalf("TriggerWithSource: %v", err)
 	}
@@ -2764,7 +2764,7 @@ func TestAutoTriggerRevalidatesSessionPolicyUnderLock(t *testing.T) {
 			launcher := &fakeLauncher{handle: "review-mer-1"}
 			eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-			result, err := eng.TriggerWithSource(context.Background(), "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
+			result, err := triggerWithSource(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
 			if err != nil {
 				t.Fatalf("TriggerWithSource: %v", err)
 			}
@@ -2784,7 +2784,7 @@ func TestTriggerCreatesRunsForMultipleEligiblePRsWithOneReviewer(t *testing.T) {
 	}}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2824,7 +2824,7 @@ func TestTriggerAllowsTwoPRsWithSameHeadSHA(t *testing.T) {
 	}}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2851,7 +2851,7 @@ func TestTriggerRerunsApprovedAndReusesRunningCurrentHead(t *testing.T) {
 	}}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2880,7 +2880,7 @@ func TestTriggerRerunsChangesRequestedCurrentHead(t *testing.T) {
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2898,7 +2898,7 @@ func TestTriggerUsesConfiguredReviewerHarness(t *testing.T) {
 	launcher := &fakeLauncher{handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), projects, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2915,7 +2915,7 @@ func TestTriggerUsesSessionReviewerHarnessBeforeProjectDefault(t *testing.T) {
 	worker.ReviewerHarness = domain.ReviewerOpenCode
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), projects, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -2927,13 +2927,13 @@ func TestTriggerUsesSessionReviewerHarnessBeforeProjectDefault(t *testing.T) {
 func TestTriggerRejectsBadWorkerState(t *testing.T) {
 	t.Run("unknown worker", func(t *testing.T) {
 		eng := newEngineForTest(&fakeStore{}, fakeSessions{ok: false}, prAt("sha1"), fakeProjects{}, &fakeLauncher{})
-		if _, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{}); !errors.Is(err, ErrNotFound) {
+		if _, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{}); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("err = %v, want ErrNotFound", err)
 		}
 	})
 	t.Run("no pr", func(t *testing.T) {
 		eng := newEngineForTest(&fakeStore{}, fakeSessions{rec: liveWorker(), ok: true}, fakePRs{}, fakeProjects{}, &fakeLauncher{})
-		if _, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{}); !errors.Is(err, ErrInvalid) {
+		if _, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{}); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("err = %v, want ErrInvalid", err)
 		}
 	})
@@ -3030,7 +3030,7 @@ func TestTriggerPreflightFailureRecordsFailedRun(t *testing.T) {
 	launcher := &fakeLauncher{preflightErr: fmt.Errorf("codex: %w", ports.ErrAgentBinaryNotFound)}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	_, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	_, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err == nil {
 		t.Fatal("expected error from preflight, got nil")
 	}
@@ -3060,7 +3060,7 @@ func TestTriggerProceedsNormallyAfterSuccessfulPreflight(t *testing.T) {
 	launcher := &fakeLauncher{handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	res, err := eng.Trigger(context.Background(), "mer-1", "", domain.AgentConfig{})
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -3102,7 +3102,7 @@ func TestChatConfigReplacementStopsOldFenceAndStartsFreshProvider(t *testing.T) 
 			worker.ReviewerHarness = domain.ReviewerCodex
 			worker.ReviewerConfig = domain.AgentConfig{Model: "model-A"}
 			eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
-			_, err := eng.TriggerWithSourceAndMode(context.Background(), worker.ID, domain.ReviewerCodex, domain.AgentConfig{Model: "model-B", Effort: "high"}, domain.ReviewTriggerManual, domain.ReviewerInterfaceChat)
+			_, err := triggerWithSourceAndMode(context.Background(), eng, worker.ID, domain.ReviewerCodex, domain.AgentConfig{Model: "model-B", Effort: "high"}, domain.ReviewTriggerManual, domain.ReviewerInterfaceChat)
 			if fail {
 				if err == nil {
 					t.Fatal("expected failed replacement")
@@ -3254,7 +3254,7 @@ func TestArchiveReviewerHidesSurfaceAndPreservesHistoryUntilNewReview(t *testing
 			if nextLauncher.spawned || nextLauncher.restored {
 				t.Fatal("archived reviewer resurrected during recovery")
 			}
-			result, err := next.Trigger(ctx, worker.ID, review.Harness, domain.AgentConfig{})
+			result, err := trigger(ctx, next, worker.ID, review.Harness, domain.AgentConfig{})
 			if err != nil || !result.Created || result.ReviewerSurface.ReviewID != review.ID {
 				t.Fatalf("new review: %+v, %v", result, err)
 			}
@@ -3291,7 +3291,7 @@ func TestTriggerAlreadyReviewedHeadKeepsReviewerArchived(t *testing.T) {
 			if err := engine.ArchiveReviewer(ctx, worker.ID); err != nil {
 				t.Fatal(err)
 			}
-			result, err := engine.Trigger(ctx, worker.ID, review.Harness, domain.AgentConfig{})
+			result, err := trigger(ctx, engine, worker.ID, review.Harness, domain.AgentConfig{})
 			if err != nil || result.Created || result.ReviewerSurface.ReviewID != "" || result.ReviewerHandleID != "" {
 				t.Fatalf("no-op trigger reopened reviewer: %+v, %v", result, err)
 			}
@@ -3333,7 +3333,7 @@ func TestFailedReviewLaunchKeepsArchivedReviewerHidden(t *testing.T) {
 				}
 			}
 			engine := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
-			if _, err := engine.Trigger(ctx, worker.ID, old.Harness, domain.AgentConfig{}); err == nil {
+			if _, err := trigger(ctx, engine, worker.ID, old.Harness, domain.AgentConfig{}); err == nil {
 				t.Fatal("expected launch failure")
 			}
 			saved, _, err := store.GetReviewByID(ctx, old.ID)

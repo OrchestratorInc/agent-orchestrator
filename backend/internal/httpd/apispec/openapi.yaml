@@ -12610,6 +12610,10 @@ components:
       type: object
     ListReviewsResponse:
       properties:
+        activeReviewers:
+          items:
+            $ref: '#/components/schemas/DomainReviewerSurface'
+          type: array
         reviewerActivityState:
           enum:
           - active
@@ -12636,6 +12640,7 @@ components:
       - reviewerHandleId
       - reviews
       - runs
+      - activeReviewers
       type: object
     ListSessionMemoryResponse:
       properties:
@@ -13269,6 +13274,8 @@ components:
           $ref: '#/components/schemas/TrackerIntakeConfig'
         worker:
           $ref: '#/components/schemas/RoleOverride'
+        workersRequestReview:
+          type: boolean
       type: object
     ProjectGetResponse:
       properties:
@@ -13684,6 +13691,7 @@ components:
         triggerSource:
           enum:
           - manual
+          - agent
           - auto
           type: string
         verdict:
@@ -15167,6 +15175,10 @@ components:
       properties:
         agentConfig:
           $ref: '#/components/schemas/AgentConfig'
+        enableAutoInject:
+          description: Turn on the worker session's review auto-inject once a pass
+            has started, so the reviewer's PR review comments reach the worker.
+          type: boolean
         harness:
           enum:
           - claude-code
@@ -15197,13 +15209,35 @@ components:
           - chat
           - tui
           type: string
-        rerun:
-          description: Start a fresh manual pass for already-reviewed current heads;
-            reuse an active pass from the same reviewer.
+        prUrl:
+          description: Restrict the pass to this pull request, attaching it to the
+            session first if AO does not track it yet (never from another active session).
+            Omit to review every eligible PR on the session.
+          type: string
+        rejectReviewedHead:
+          description: Return 409 instead of reusing when every open PR head is already
+            being reviewed or already has a review.
           type: boolean
+        rerun:
+          description: Start a fresh pass for already-reviewed current heads; a different
+            reviewer may run alongside one that is still running. A person's rerun
+            reuses an active pass from the same reviewer; an agent's rerun returns
+            409 REVIEW_ALREADY_RUNNING instead.
+          type: boolean
+        source:
+          description: 'Who requested the pass: manual (a person, the default) or
+            agent (an AO session through the CLI).'
+          enum:
+          - manual
+          - agent
+          type: string
       type: object
     TriggerReviewResponse:
       properties:
+        autoInjectEnabled:
+          description: True when this request turned the worker session's review auto-inject
+            on.
+          type: boolean
         created:
           description: True when a new review pass was started; false when an existing
             run for the same commit was reused.
@@ -15225,6 +15259,7 @@ components:
       - reviews
       - runs
       - created
+      - autoInjectEnabled
       type: object
     UnregisterPushDeviceResponse:
       properties:

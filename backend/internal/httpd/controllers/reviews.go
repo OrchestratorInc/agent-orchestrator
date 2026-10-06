@@ -30,6 +30,9 @@ type ListReviewsResponse struct {
 	// show one summary across reviewers without this.
 	Runs            []domain.ReviewRun      `json:"runs"`
 	ReviewerSurface *domain.ReviewerSurface `json:"reviewerSurface,omitempty"`
+	// ActiveReviewers is every reviewer with a live pane or a running pass,
+	// selected reviewer first. Several reviewers can work on one worker at once.
+	ActiveReviewers []domain.ReviewerSurface `json:"activeReviewers"`
 }
 
 // ReviewRunResponse is the body of submit (200). It carries the run plus the
@@ -50,6 +53,9 @@ type TriggerReviewResponse struct {
 	// Created is true when a new review pass was started (HTTP 201) and false
 	// when an existing run for the same commit was reused (HTTP 200).
 	Created bool `json:"created" description:"True when a new review pass was started; false when an existing run for the same commit was reused."`
+	// AutoInjectEnabled is true when this request turned the worker session's
+	// review auto-inject on.
+	AutoInjectEnabled bool `json:"autoInjectEnabled" description:"True when this request turned the worker session's review auto-inject on."`
 }
 
 // CancelReviewResponse is the body of cancel (200). reviews carries the
@@ -190,15 +196,16 @@ func (c *ReviewsController) trigger(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	var res reviewcore.TriggerResult
-	var err error
-	if in.Rerun {
-		res, err = c.Svc.TriggerWithOptions(r.Context(), sessionID(r), reviewcore.TriggerOptions{Harness: in.Harness, Config: in.AgentConfig, Source: domain.ReviewTriggerManual, InterfaceMode: in.InterfaceMode, Rerun: true})
-	} else if in.InterfaceMode != "" {
-		res, err = c.Svc.TriggerWithMode(r.Context(), sessionID(r), in.Harness, in.AgentConfig, in.InterfaceMode)
-	} else {
-		res, err = c.Svc.Trigger(r.Context(), sessionID(r), in.Harness, in.AgentConfig)
-	}
+	res, err := c.Svc.TriggerRequested(r.Context(), sessionID(r), reviewsvc.TriggerRequest{
+		Harness:            in.Harness,
+		Config:             in.AgentConfig,
+		Source:             domain.ReviewTriggerSource(strings.TrimSpace(in.Source)),
+		InterfaceMode:      in.InterfaceMode,
+		PRURL:              strings.TrimSpace(in.PRURL),
+		RejectReviewedHead: in.RejectReviewedHead,
+		Rerun:              in.Rerun,
+		EnableAutoInject:   in.EnableAutoInject,
+	})
 	if err != nil {
 		writeReviewError(w, r, err)
 		return
@@ -218,11 +225,12 @@ func (c *ReviewsController) trigger(w http.ResponseWriter, r *http.Request) {
 		runs = []domain.ReviewRun{}
 	}
 	envelope.WriteJSON(w, status, TriggerReviewResponse{
-		ReviewerHandleID: res.ReviewerHandleID,
-		Reviews:          reviews,
-		Runs:             runs,
-		Created:          res.Created,
-		ReviewerSurface:  reviewerSurfacePayload(res.ReviewerSurface),
+		ReviewerHandleID:  res.ReviewerHandleID,
+		Reviews:           reviews,
+		Runs:              runs,
+		Created:           res.Created,
+		AutoInjectEnabled: res.AutoInjectEnabled,
+		ReviewerSurface:   reviewerSurfacePayload(res.ReviewerSurface),
 	})
 }
 
@@ -363,7 +371,15 @@ func reviewsResponse(res reviewcore.SessionReviews, reviews []reviewcore.PRRevie
 		Reviews:               reviews,
 		Runs:                  runs,
 		ReviewerSurface:       reviewerSurfacePayload(res.ReviewerSurface),
+		ActiveReviewers:       activeReviewersPayload(res.ActiveReviewers),
 	}
+}
+
+func activeReviewersPayload(surfaces []domain.ReviewerSurface) []domain.ReviewerSurface {
+	if surfaces == nil {
+		return []domain.ReviewerSurface{}
+	}
+	return surfaces
 }
 
 func reviewerSurfacePayload(surface domain.ReviewerSurface) *domain.ReviewerSurface {
@@ -419,6 +435,12 @@ func writeReviewError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "REVIEW_INVALID", err.Error(), nil)
 	case errors.Is(err, reviewsvc.ErrNotFound):
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "REVIEW_NOT_FOUND", err.Error(), nil)
+	case errors.Is(err, reviewsvc.ErrReviewAlreadyRunning):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_ALREADY_RUNNING", err.Error(), nil)
+	case errors.Is(err, reviewsvc.ErrHeadAlreadyReviewed):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_HEAD_ALREADY_REVIEWED", err.Error(), nil)
+	case errors.Is(err, reviewsvc.ErrPROwnedElsewhere):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_PR_OWNED_BY_OTHER_SESSION", err.Error(), nil)
 	case errors.Is(err, reviewsvc.ErrAgentBinaryNotFound):
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "REVIEWER_BINARY_NOT_FOUND", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatAuthRequired):

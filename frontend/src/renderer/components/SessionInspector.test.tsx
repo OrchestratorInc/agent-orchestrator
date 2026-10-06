@@ -2660,6 +2660,107 @@ describe("SessionInspector summary reviews", () => {
     );
   });
 
+  // Reviews an agent asked for must be distinguishable from a person's click.
+  it("labels an agent-requested review run", async () => {
+    mockCommonGets([], "reviewer-pane", [
+      {
+        ...reviewState(3, "up_to_date", "abc123"),
+        latestRun: { ...approvedReview, triggerSource: "agent" },
+      },
+    ]);
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    expect(await screen.findByText(/Requested by agent/)).toBeInTheDocument();
+  });
+
+  // Several reviewers can run on one worker at once; each must be reachable.
+  it("offers to open each of several live reviewers", async () => {
+    const base = commonGetsResponder([], "claude-pane", [
+      { ...reviewState(3, "running"), latestRun: { ...approvedReview, status: "running", verdict: "", body: "" } },
+    ]);
+    getMock.mockImplementation(async (path: string) => {
+      if (path === "/api/v1/sessions/{sessionId}/reviews") {
+        return {
+          data: {
+            reviewerHandleId: "claude-pane",
+            reviews: [{ ...reviewState(3, "running"), latestRun: { ...approvedReview, status: "running", verdict: "", body: "" } }],
+            activeReviewers: [
+              { mode: "tui", reviewId: "review-claude", harness: "claude-code", handleId: "claude-pane" },
+              { mode: "tui", reviewId: "review-codex", harness: "codex", handleId: "codex-pane" },
+            ],
+          },
+        };
+      }
+      return base(path);
+    });
+    const onOpenReviewerTerminal = vi.fn();
+
+    renderWithQuery(
+      <SessionInspector onOpenReviewerTerminal={onOpenReviewerTerminal} session={session([pr(3, "open")])} />,
+    );
+    await openReviewsSection();
+
+    const openButtons = await screen.findAllByRole("button", { name: "Open" });
+    expect(openButtons).toHaveLength(2);
+    await userEvent.click(openButtons[1]!);
+    expect(onOpenReviewerTerminal).toHaveBeenCalledWith({ handleId: "codex-pane", harness: "codex" });
+  });
+
+  it("does not list reviewers when only one is live", async () => {
+    const base = commonGetsResponder([], "claude-pane", [reviewState(3, "up_to_date", "abc123")]);
+    getMock.mockImplementation(async (path: string) => {
+      if (path === "/api/v1/sessions/{sessionId}/reviews") {
+        return {
+          data: {
+            reviewerHandleId: "claude-pane",
+            reviews: [reviewState(3, "up_to_date", "abc123")],
+            reviewerSurface: { mode: "tui", reviewId: "review-claude", harness: "claude-code", handleId: "claude-pane" },
+            activeReviewers: [{ mode: "tui", reviewId: "review-claude", harness: "claude-code", handleId: "claude-pane" }],
+          },
+        };
+      }
+      return base(path);
+    });
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    await screen.findByTestId("review-run-summary");
+    expect(screen.queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
+  });
+
+  // An agent can ask a reviewer other than the selected one. The selected
+  // reviewer stays selected; the working one must still be reachable.
+  it("offers to open a working reviewer that is not the selected one", async () => {
+    const base = commonGetsResponder([], "", [
+      { ...reviewState(3, "running"), latestRun: { ...approvedReview, status: "running", verdict: "", body: "" } },
+    ]);
+    getMock.mockImplementation(async (path: string) => {
+      if (path === "/api/v1/sessions/{sessionId}/reviews") {
+        return {
+          data: {
+            reviewerHandleId: "",
+            reviews: [{ ...reviewState(3, "running"), latestRun: { ...approvedReview, status: "running", verdict: "", body: "" } }],
+            reviewerSurface: { mode: "tui", reviewId: "review-claude", harness: "claude-code" },
+            activeReviewers: [{ mode: "tui", reviewId: "review-codex", harness: "codex", handleId: "codex-pane" }],
+          },
+        };
+      }
+      return base(path);
+    });
+    const onOpenReviewerTerminal = vi.fn();
+
+    renderWithQuery(
+      <SessionInspector onOpenReviewerTerminal={onOpenReviewerTerminal} session={session([pr(3, "open")])} />,
+    );
+    await openReviewsSection();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open" }));
+    expect(onOpenReviewerTerminal).toHaveBeenCalledWith({ handleId: "codex-pane", harness: "codex" });
+  });
+
   // Nothing to hide, so offering to expand would be noise.
   it("does not offer to expand a short review summary", async () => {
     mockCommonGets([], "reviewer-pane", [
