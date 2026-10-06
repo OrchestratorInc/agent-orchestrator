@@ -299,7 +299,7 @@ describe("steer message", () => {
 			/>,
 		);
 		expect(screen.getByText("Skip the integration tests")).toBeInTheDocument();
-		 expect(screen.getByText(/Steered into the running turn/i)).toBeInTheDocument();
+		expect(screen.getByText(/Steered into the running turn/i)).toBeInTheDocument();
 	});
 
 	it("renders a CLI steer as an attributed automation block with a session link", () => {
