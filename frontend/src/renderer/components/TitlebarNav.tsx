@@ -136,7 +136,7 @@ export function TitlebarNav({
             className="col-start-1 row-start-1 ml-1.5 inline-flex select-none items-center gap-1.5 whitespace-nowrap px-0.5 text-base font-semibold leading-tight tracking-tight-lg text-foreground"
             data-sidebar-brand=""
           >
-            <AOMascot className="h-5.5 w-5.5 shrink-0" />
+            <AOMascot className="h-5.5 w-5.5 shrink-0 -translate-y-px" />
             Orchestrator.inc
           </span>
         ) : null}
