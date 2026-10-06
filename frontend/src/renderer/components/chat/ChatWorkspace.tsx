@@ -2126,8 +2126,15 @@ function Timeline({
 	const pinnedRef = useRef(true);
 	const [pinned, setPinned] = useState(true);
 	const getScroller = useCallback(() => scroller.current, []);
-	const { glideToEnd, followEnd, cancel: cancelScrollFollow, hold: holdScrollFollow, markWritten, isOwnScroll } =
-		useScrollFollow(getScroller);
+	const {
+		glideToEnd,
+		followEnd,
+		cancel: cancelScrollFollow,
+		hold: holdScrollFollow,
+		markWritten,
+		isOwnScroll,
+		endFlight,
+	} = useScrollFollow(getScroller);
 	// Set when the reader sends or jumps to the latest: the next layout glides there
 	// instead of snapping. Opening a chat never animates, so the first layout snaps.
 	const glideRequested = useRef(false);
@@ -3162,6 +3169,7 @@ function Timeline({
 			<div
 				ref={scroller}
 				onScroll={onScroll}
+				onScrollEnd={endFlight}
 				onWheel={onViewportWheel}
 				onTouchMove={() => holdScrollFollow(READER_INTENT_HOLD_MS)}
 				onKeyDown={onViewportKeyDown}
