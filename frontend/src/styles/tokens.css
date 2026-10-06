@@ -645,9 +645,9 @@
 
 	--background: oklch(0.97 0 0);
 	--foreground: oklch(0.18 0 0);
-	--card: oklch(0.975 0 0);
+	--card: oklch(1 0 0);
 	--card-foreground: oklch(0.18 0 0);
-	--popover: oklch(0.99 0 0);
+	--popover: oklch(1 0 0);
 	--popover-foreground: oklch(0.18 0 0);
 	--primary: oklch(0.24 0 0);
 	--primary-foreground: oklch(0.97 0 0);
@@ -658,16 +658,17 @@
 	--accent: oklch(0.935 0 0);
 	--accent-foreground: oklch(0.18 0 0);
 	--destructive: oklch(0.577 0.245 27.325);
-	/* Same intent as dark: one step lighter than the shadcn default hairline. */
-	--border: oklch(0.91 0 0);
-	--input: oklch(0.86 0 0);
+	/* Translucent like dark: hairlines and input wells are overlays on whatever
+	 * surface they sit on, so a card edge never reads as an opaque gray stroke. */
+	--border: oklch(0 0 0 / 7%);
+	--input: oklch(0 0 0 / 4%);
 	--ring: oklch(0.64 0 0);
 	--chart-1: oklch(0.72 0 0);
 	--chart-2: oklch(0.52 0 0);
 	--chart-3: oklch(0.4 0 0);
 	--chart-4: oklch(0.32 0 0);
 	--chart-5: oklch(0.24 0 0);
-	--sidebar: oklch(0.985 0 0);
+	--sidebar: oklch(0.95 0 0);
 	--sidebar-foreground: oklch(0.18 0 0);
 	--sidebar-primary: oklch(0.24 0 0);
 	--sidebar-primary-foreground: oklch(0.97 0 0);
@@ -687,7 +688,7 @@
 
 	--color-text-primary: var(--foreground);
 	--color-text-muted: var(--muted-foreground);
-	--color-text-passive: var(--chart-3);
+	--color-text-passive: oklch(0.62 0 0);
 	--color-brand-logo: #304c83;
 	--color-brand-logo-bright: #466daa;
 	--color-brand-logo-foreground: #ffffff;
@@ -707,7 +708,7 @@
 	--color-border-topbar-strong: var(--input);
 	--color-text-topbar: var(--foreground);
 	--color-text-topbar-muted: var(--muted-foreground);
-	--color-text-topbar-passive: var(--chart-3);
+	--color-text-topbar-passive: var(--color-text-passive);
 
 	--color-accent: var(--primary);
 	--color-accent-foreground: var(--primary-foreground);
@@ -725,8 +726,8 @@
 	--color-status-merged: #9333ea;
 	--color-status-idle: var(--muted-foreground);
 	--color-status-exited: var(--destructive);
-	--color-status-terminated: var(--chart-3);
-	--color-status-terminated-foreground: var(--chart-3);
+	--color-status-terminated: var(--color-text-passive);
+	--color-status-terminated-foreground: var(--color-text-passive);
 	--color-status-unknown: var(--chart-4);
 
 	--color-working: var(--color-status-working);
@@ -787,12 +788,12 @@
 
 	--color-bg-settings-row: var(--card);
 	--color-bg-settings-menu: var(--popover);
-	--color-bg-settings-menu-selected: color-mix(in oklch, var(--popover) 92%, var(--foreground) 8%);
+	--color-bg-settings-menu-selected: color-mix(in oklch, var(--popover) 96%, var(--foreground) 4%);
 	--color-bg-settings-dialog: var(--card);
 	--color-text-settings-title: var(--foreground);
 	--color-text-settings-muted: var(--muted-foreground);
 	--color-text-settings-row: var(--foreground);
-	--color-border-settings-menu: color-mix(in oklch, var(--border) 60%, var(--foreground) 40%);
+	--color-border-settings-menu: color-mix(in oklch, var(--border) 70%, var(--foreground) 12%);
 	--color-border-settings-dialog: var(--border);
 	--color-border-settings-dialog-header: color-mix(in oklch, var(--border) 70%, transparent);
 	--color-bg-settings-input: var(--input);

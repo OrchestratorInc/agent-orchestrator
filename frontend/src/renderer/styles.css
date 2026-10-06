@@ -2727,12 +2727,6 @@ html.sidebar-reordering * {
 	box-shadow: none;
 }
 
-/* Keyboard focus ring without a border, so layout never shifts. Must stay
-   after, and not be overridden by, any theme-specific box-shadow. */
-.cursor-chat-composer:has(:focus-visible) {
-	box-shadow: 0 0 0 1px var(--color-border-strong);
-}
-
 .cursor-chat-composer[data-attached-top] {
 	border-top-left-radius: 0;
 	border-top-right-radius: 0;
@@ -3052,14 +3046,10 @@ html.sidebar-reordering * {
 	--composer-bg: var(--color-bg-tertiary);
 }
 
-/* Light theme collapses the surface stack the dark bubble relies on: `--card`
-   and `--background` are the same near-white, so `--color-bg-secondary` cannot
-   sit above the canvas. Take the unwashed tertiary step and paint the hairline
-   this rule has always declared, so the message still reads as enclosed. */
+/* Light needs the tertiary fill to lift a sent message off the canvas; like
+   dark, it carries no border. */
 :root[data-theme="light"] .cursor-chat-human-message:not([data-queued]) {
-	border-width: 1px;
 	background: var(--color-bg-tertiary);
-	border-color: color-mix(in oklch, var(--color-text-primary) 14%, transparent);
 }
 
 /* Queued keeps its dashed, unfilled outline: the agent has not seen it yet, and
