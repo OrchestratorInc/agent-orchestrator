@@ -182,6 +182,9 @@ var shippedMigrations = map[int64]string{
 	176: "0176_claude_subagent_activity.sql",
 	177: "0177_review_run_rerun_same_head.sql",
 	178: "0178_archive_reviewers.sql",
+	181: "0181_worktree_startup_cues.sql",
+	182: "0182_remove_cue_description.sql",
+	183: "0183_remove_cue_startup_options.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
