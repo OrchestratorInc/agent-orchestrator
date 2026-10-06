@@ -33,6 +33,7 @@ import {
 	useContext,
 	useEffect,
 	useImperativeHandle,
+	useRef,
 	type ClipboardEvent,
 	type JSX,
 	type KeyboardEvent,
@@ -74,6 +75,11 @@ export type ComposerEditorHandle = {
 	fillImages(reservation: string, paths: string[]): void;
 	/** Drop every inline chip for an image that left the attachment list. */
 	removeImage(path: string): void;
+	/**
+	 * Drop chips whose image is not in `attached` (an undo can restore a chip
+	 * after its image was removed). Typed text is never touched.
+	 */
+	pruneImages(attached: string[]): void;
 	getSnapshot(): ComposerEditorSnapshot;
 };
 
@@ -265,13 +271,14 @@ function $insertComposerToken(trigger: ComposerTrigger, value: string): boolean 
 	return true;
 }
 
-function $replaceEditorText(text: string): void {
+function $replaceEditorText(text: string, attached: string[] = []): void {
 	const root = $getRoot();
 	root.clear();
 	for (const line of text.split("\n")) {
 		const paragraph = $createParagraphNode();
-		// A restored draft is plain text; its staged image paths become chips again.
-		for (const segment of splitInlineImagePaths(line)) {
+		// A restored draft is plain text; paths of still-attached images become chips
+		// again. Any other path stays the text the user typed.
+		for (const segment of splitInlineImagePaths(line, (path) => attached.includes(path))) {
 			paragraph.append(
 				segment.path === undefined
 					? $createTextNode(segment.text)
@@ -342,11 +349,11 @@ function $removeChip(chip: LexicalNode): void {
 	chip.remove();
 }
 
-function $removeImageTokens(path: string): void {
+function $removeImageTokens(remove: (path: string) => boolean): void {
 	for (const paragraph of $getRoot().getChildren()) {
 		if (!$isElementNode(paragraph)) continue;
 		for (const child of paragraph.getChildren()) {
-			if (child instanceof ComposerTokenNode && child.__kind === "image" && child.__value === path) $removeChip(child);
+			if (child instanceof ComposerTokenNode && child.__kind === "image" && remove(child.__value)) $removeChip(child);
 		}
 	}
 }
@@ -388,11 +395,13 @@ const EditorBridge = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		/** Staged paths of the images attached right now. */
+		attachedImages: () => string[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
 		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
->(function EditorBridge({ disabled, onChange, onComplete, onEnter }, ref) {
+>(function EditorBridge({ disabled, attachedImages, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
@@ -412,7 +421,7 @@ const EditorBridge = forwardRef<
 			},
 			setText: (text) => {
 				editor.update(() => {
-					$replaceEditorText(text);
+					$replaceEditorText(text, attachedImages());
 					editor.dispatchCommand(CLEAR_HISTORY_COMMAND, undefined);
 				}, {
 					discrete: true,
@@ -435,11 +444,14 @@ const EditorBridge = forwardRef<
 				editor.update(() => $fillImages(reservation, paths), { discrete: true });
 			},
 			removeImage: (path) => {
-				editor.update(() => $removeImageTokens(path), { discrete: true });
+				editor.update(() => $removeImageTokens((candidate) => candidate === path), { discrete: true });
+			},
+			pruneImages: (attached) => {
+				editor.update(() => $removeImageTokens((candidate) => !attached.includes(candidate)), { discrete: true });
 			},
 			getSnapshot: () => editor.getEditorState().read(editorSnapshot),
 		}),
-		[editor],
+		[attachedImages, editor],
 	);
 
 	useEffect(
@@ -543,6 +555,12 @@ export const ComposerEditor = forwardRef<
 		},
 	};
 
+	// Read at setText time, not render time, so a draft restore sees the
+	// attachments it was restored with.
+	const imagesRef = useRef(images);
+	imagesRef.current = images;
+	const attachedImages = useCallback(() => imagesRef.current.map((image) => image.path), []);
+
 	const placeholderNode = useCallback(
 		() => (
 			<div className="pointer-events-none absolute inset-x-0 top-0 py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground">
@@ -591,6 +609,7 @@ export const ComposerEditor = forwardRef<
 				<EditorBridge
 					ref={ref}
 					disabled={disabled}
+					attachedImages={attachedImages}
 					onChange={onChange}
 					onComplete={onComplete}
 					onEnter={onEnter}

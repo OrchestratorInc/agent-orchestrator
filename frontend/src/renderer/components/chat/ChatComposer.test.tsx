@@ -1485,6 +1485,31 @@ describe("attachments", () => {
 		));
 	});
 
+	it("sends a staged path the user typed exactly as written", async () => {
+		const { onSend, field } = renderComposer({ onStageAttachments: vi.fn() });
+		await typeInComposer(field, "No, look at .ao/attachments/attachment-old.png again");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("No, look at .ao/attachments/attachment-old.png again"));
+	});
+
+	it("does not send a chip that undo restored after its image was removed", async () => {
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png"]);
+		const { onSend, field } = renderComposer({ onStageAttachments: stage });
+		await typeInComposer(field, "look");
+		fireEvent.paste(field, { clipboardData: clipboardData([png("a.png")]) });
+		await screen.findByLabelText("Remove a.png");
+		await userEvent.click(screen.getByLabelText("Remove a.png"));
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).toBeNull());
+
+		await userEvent.click(field);
+		await userEvent.keyboard("{Control>}z{/Control}");
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).not.toBeNull());
+		await userEvent.keyboard("{Enter}");
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		expect(onSend.mock.calls[0]?.[0]).toBe("look");
+	});
+
 	it("ignores a paste that carries no file", async () => {
 		const { field } = renderComposer({ onStageAttachments: vi.fn() });
 		fireEvent.paste(field, { clipboardData: clipboardData([]) });
@@ -1781,6 +1806,48 @@ describe("attachments", () => {
 			fireEvent.paste(field, { clipboardData: clipboardData([textFile("safe-attachment.txt")]) });
 			await screen.findByLabelText("Remove safe-attachment.txt");
 			expect(getChatDraftBoundary(sessionId)).toBe("persistence-failed");
+		} finally {
+			view.unmount();
+			localStorage.mockRestore();
+		}
+	});
+
+	// Pasting an image writes its chip into the text, so a later successful write
+	// makes the whole text durable again, chip included.
+	it("makes text durable again, with the chip, when an image is pasted after a failed text save", async () => {
+		const sessionId = "composer-image-after-text-failure";
+		const durableStorage = window.localStorage;
+		let failTextWrite = true;
+		const storage = {
+			getItem: durableStorage.getItem.bind(durableStorage),
+			removeItem: durableStorage.removeItem.bind(durableStorage),
+			setItem: (key: string, value: string) => {
+				if (failTextWrite && key.includes(encodeURIComponent(sessionId))) {
+					failTextWrite = false;
+					throw new DOMException("full", "QuotaExceededError");
+				}
+				durableStorage.setItem(key, value);
+			},
+		} as Storage;
+		const localStorage = vi.spyOn(window, "localStorage", "get").mockReturnValue(storage);
+		const view = render(
+			<ChatComposer
+				onSend={vi.fn()}
+				draftSessionId={sessionId}
+				onStageAttachments={vi.fn().mockResolvedValue([".ao/attachments/attachment-after-failure.png"])}
+			/>,
+		);
+		try {
+			const field = screen.getByLabelText("Message the agent");
+			await typeInComposer(field, "unsafe text");
+			await waitFor(() => expect(getChatDraftBoundary(sessionId)).toBe("persistence-failed"));
+
+			fireEvent.paste(field, { clipboardData: clipboardData([png("after.png")]) });
+			await screen.findByLabelText("Remove after.png");
+			await waitFor(() => expect(getChatDraftBoundary(sessionId)).not.toBe("persistence-failed"));
+			expect(readChatSessionDraft(sessionId).composer.text).toBe(
+				"unsafe text .ao/attachments/attachment-after-failure.png ",
+			);
 		} finally {
 			view.unmount();
 			localStorage.mockRestore();

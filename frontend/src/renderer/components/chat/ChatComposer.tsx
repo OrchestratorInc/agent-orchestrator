@@ -97,7 +97,7 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachedInlineImages, attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath } from "./messageAttachments";
+import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages } from "./messageAttachments";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 
 // These responses precede AppendUserMessage. Provider/transport errors can
@@ -1062,8 +1062,6 @@ export const ChatComposer = memo(function ChatComposer({
 		await fileAttachments.toSettledPayload();
 		// A replacement hook can still have staging work owned by the old surface.
 		if (fileAttachments.hasPendingReads()) return;
-		// Staging that just settled has filled its inline chips; send what the user sees.
-		currentText = textRef.current;
 		const settledAttachments = fileAttachments.getAttachments();
 		const settledPaths = settledAttachments.flatMap((attachment) =>
 			attachment.stagedPath ? [attachment.stagedPath] : []);
@@ -1071,7 +1069,12 @@ export const ChatComposer = memo(function ChatComposer({
 			...visibleRetainedAttachments.flatMap((attachment) => attachment.path ? [attachment.path] : []),
 			...settledPaths,
 		];
-		body = attachedInlineImages(currentText.trim(), attachedPaths);
+		// Staging that just settled has filled its inline chips, so read the text the
+		// user sees now. First drop chips whose image is gone (an undo can restore
+		// one); typed paths are the user's text and stay.
+		editor.current?.pruneImages(attachedPaths);
+		currentText = textRef.current;
+		body = proseBesideImages(currentText.trim(), attachedPaths);
 		const hasAttachments = settledAttachments.length > 0 || visibleRetainedAttachments.length > 0;
 		const canSubmitNow =
 			(body.length > 0 || hasAttachments || Boolean(recoveringDelivery)) &&

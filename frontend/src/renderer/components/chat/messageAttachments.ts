@@ -66,24 +66,15 @@ export function splitInlineImagePaths(text: string, keep: (path: string) => bool
 }
 
 /**
- * The prose a composer sends: inline image paths survive only for images this
- * message attaches (an undo can restore a chip whose image was removed), and a
- * message that is nothing but its images keeps no prose at all, since the
- * reference block already names them.
+ * A message that is nothing but its attached images keeps no prose, since the
+ * reference block already names them. Anything else is sent exactly as written:
+ * a path the user typed is their text, and only the composer can tell a stale
+ * chip from it (see the editor's pruneImages).
  */
-export function attachedInlineImages(text: string, attached: string[]): string {
-	let result = "";
-	let words = false;
-	for (const segment of splitInlineImagePaths(text)) {
-		if (segment.path === undefined) {
-			// A dropped chip takes its trailing space with it.
-			result += result.endsWith(" ") && segment.text.startsWith(" ") ? segment.text.slice(1) : segment.text;
-			words ||= segment.text.trim() !== "";
-		} else if (attached.includes(segment.path)) {
-			result += segment.path;
-		}
-	}
-	return words ? result.trim() : "";
+export function proseBesideImages(text: string, attached: string[]): string {
+	const onlyImages = splitInlineImagePaths(text).every((segment) =>
+		segment.path === undefined ? segment.text.trim() === "" : attached.includes(segment.path));
+	return onlyImages ? "" : text;
 }
 
 /** Plain-text form for one-line surfaces: attached inline images read as `[Image N]`. */
