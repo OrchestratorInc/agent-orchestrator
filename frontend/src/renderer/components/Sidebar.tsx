@@ -309,6 +309,10 @@ function useGrabbingCursor(active: boolean) {
 	}, [active]);
 }
 
+/** How the sidebar collapses. Only the "icon" mode shows a rail where every list
+ *  must be fully open; "offcanvas" slides the whole sidebar away, and its lists
+ *  must keep their open/closed and Show more state while it is hidden. */
+const SIDEBAR_COLLAPSIBLE: "offcanvas" | "icon" = "offcanvas";
 export const SIDEBAR_DEFAULT_WIDTH = 240;
 /** Floor/ceiling for sidebar resize — pass the same values to useResizable AND ResizeHandle. */
 export const SIDEBAR_MIN_WIDTH = 200;
@@ -619,6 +623,9 @@ export function Sidebar({
 	const selection = useSelection();
 	const { state, setOpen, toggleSidebar } = useSidebar();
 	const isCollapsed = state === "collapsed";
+	// List behavior (force-open sections, lifted Show more caps) belongs to the
+	// icon rail only; toggling an offcanvas sidebar must not change any list.
+	const isIconRail = isCollapsed && SIDEBAR_COLLAPSIBLE === "icon";
 	const [expandedChromeVisible, setExpandedChromeVisible] = useState(!isCollapsed);
 	// One IPC subscription for both footer variants of the restart-to-update prompt.
 	const updateStatus = useUpdateStatus();
@@ -755,8 +762,8 @@ export function Sidebar({
 		hiddenCount: hiddenProjectCount,
 		showAll: showAllProjects,
 		toggleShowAll: toggleShowAllProjects,
-	} = useShowMoreCap(projectWorkspaces, SIDEBAR_INITIAL_SECTION_LIMIT, selection.activeProjectId, isCollapsed);
-	const projectContentOpen = (projectWorkspaces.length > 0 || remoteHosts.length > 0) && (projectsOpen || isCollapsed);
+	} = useShowMoreCap(projectWorkspaces, SIDEBAR_INITIAL_SECTION_LIMIT, selection.activeProjectId, isIconRail);
+	const projectContentOpen = (projectWorkspaces.length > 0 || remoteHosts.length > 0) && (projectsOpen || isIconRail);
 	const projectIds = useMemo(
 		() => projectWorkspaces.map((workspace) => workspace.id),
 		[projectWorkspaces],
@@ -880,7 +887,7 @@ export function Sidebar({
 	return (
 		// Pinned sidebars start below shell chrome.
 		<SidebarRoot
-			collapsible="offcanvas"
+			collapsible={SIDEBAR_COLLAPSIBLE}
 			resizeScopeRef={resizeScopeRef}
 			data-expanded-chrome={expandedChromeVisible ? "visible" : "hidden"}
 			data-topbar-offset={underTopbar ? topbarOffset : undefined}
@@ -1107,7 +1114,7 @@ export function Sidebar({
 											}}
 											onRetry={onRetryRemoteHosts}
 										/>
-										{isCollapsed && <CreateProjectListItem />}
+										{isIconRail && <CreateProjectListItem />}
 										<div
 											aria-hidden="true"
 											data-project-drop-line=""
@@ -1116,7 +1123,7 @@ export function Sidebar({
 										/>
 									</SidebarMenu>
 								</SidebarSectionScroller>
-								{!isCollapsed && hiddenProjectCount > 0 ? (
+								{!isIconRail && hiddenProjectCount > 0 ? (
 									<ShowMoreRow
 										expanded={showAllProjects}
 										label={
@@ -1133,7 +1140,7 @@ export function Sidebar({
 							<ScratchpadSection
 								workspace={standaloneWorkspace}
 								selection={selection}
-								isCollapsed={isCollapsed}
+								isCollapsed={isIconRail}
 								layoutSettled={layoutSettled}
 								open={scratchpadOpen}
 								onToggle={() => setScratchpadOpen((open) => !open)}

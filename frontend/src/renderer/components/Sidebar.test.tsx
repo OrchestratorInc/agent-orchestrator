@@ -2423,7 +2423,7 @@ describe("Sidebar", () => {
 		expect(screen.queryByRole("button", { name: /Show (more|fewer) projects/ })).not.toBeInTheDocument();
 	});
 
-	it("shows the full project list in the collapsed icon rail without Show more", () => {
+	it("keeps the project list capped behind Show more while the sidebar is toggled off", () => {
 		const manyProjects = Array.from({ length: 14 }, (_, index) => ({
 			...workspace,
 			id: `proj-${index + 1}`,
@@ -2432,9 +2432,27 @@ describe("Sidebar", () => {
 		}));
 		renderSidebar({ workspaces: manyProjects, initialOpen: false });
 
-		expect(screen.getByText("Project 11")).toBeInTheDocument();
-		expect(screen.getByText("Project 14")).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /more projects/ })).not.toBeInTheDocument();
+		// The sidebar slides away (offcanvas); it has no icon rail, so its lists
+		// must not lift their caps just because it is collapsed.
+		expect(screen.queryByText("Project 11")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /more projects/ })).toBeInTheDocument();
+	});
+
+	it("does not reopen a closed Projects section when the sidebar is toggled off and on", async () => {
+		const user = userEvent.setup();
+		renderSidebar();
+
+		await user.click(screen.getByRole("button", { name: "Projects" }));
+		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
+		await waitFor(() => expect(screen.queryByText(workspace.name)).not.toBeInTheDocument());
+
+		await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+		// While the sidebar is off, the closed section must not be forced open.
+		expect(screen.queryByText(workspace.name)).not.toBeInTheDocument();
+		await user.click(screen.getAllByRole("button", { name: "Expand sidebar" })[0]);
+
+		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByText(workspace.name)).not.toBeInTheDocument();
 	});
 
 	it("clamps width at minimum when dragged past the resize floor (no auto-collapse)", async () => {
