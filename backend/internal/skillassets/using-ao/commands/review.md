@@ -139,8 +139,8 @@ pass `--pr <url>`.
 A head that is already being reviewed, or already has a review, is not reviewed
 again: the command exits 1 with `REVIEW_ALREADY_RUNNING` or
 `REVIEW_HEAD_ALREADY_REVIEWED` and says what to do. Push new commits, or pass
-`--rerun`. Right after a push, `REVIEW_HEAD_NOT_OBSERVED` means the provider
-does not report the new commit yet; it usually catches up within a few seconds, so retry. The same reviewer agent never runs twice on one head at the same time.
+`--rerun`. The trigger re-reads the PR from the provider first; if you
+just pushed and it still says already reviewed, wait a few seconds and retry. The same reviewer agent never runs twice on one head at the same time.
 
 By default the command turns on the worker session's review auto-inject. The
 reviewer posts an inline GitHub comment for each change it requires, and AO

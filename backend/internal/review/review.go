@@ -12,7 +12,6 @@ import (
 	stdctx "context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -33,9 +32,6 @@ var (
 
 	ErrReviewAlreadyRunning = fmt.Errorf("%w: review already running", ErrConflict)
 	ErrHeadAlreadyReviewed  = fmt.Errorf("%w: head already reviewed", ErrConflict)
-	// ErrHeadNotObserved means the worker pushed a commit AO has not seen yet:
-	// the head AO knows is reviewed, but the workspace's pushed branch is ahead.
-	ErrHeadNotObserved = fmt.Errorf("%w: pushed head not yet observed", ErrConflict)
 	// ErrPROwnedElsewhere means a named PR belongs to another active session,
 	// which a review trigger never takes over.
 	ErrPROwnedElsewhere = fmt.Errorf("%w: pull request owned by another session", ErrConflict)
@@ -96,9 +92,6 @@ type Deps struct {
 	// Clock and NewID are injectable for deterministic tests.
 	Clock func() time.Time
 	NewID func() string
-	// PushedHead reports the commit a workspace last pushed for branch, from
-	// its remote-tracking ref, or "" when unknown. Defaults to local git.
-	PushedHead func(ctx stdctx.Context, workspacePath, branch string) string
 }
 
 // Engine is the core code-review engine.
@@ -110,8 +103,6 @@ type Engine struct {
 	launcher Launcher
 	clock    func() time.Time
 	newID    func() string
-	// pushedHead reads a workspace's pushed branch head (see Deps.PushedHead).
-	pushedHead func(ctx stdctx.Context, workspacePath, branch string) string
 
 	// triggerMu guards triggerLocks; triggerLocks holds one mutex per worker
 	// session so concurrent Trigger calls for the same worker serialise (see
@@ -132,12 +123,7 @@ func New(d Deps) *Engine {
 	if newID == nil {
 		newID = uuid.NewString
 	}
-	pushedHead := d.PushedHead
-	if pushedHead == nil {
-		pushedHead = gitPushedHead
-	}
 	return &Engine{
-		pushedHead:   pushedHead,
 		store:        d.Store,
 		sessions:     d.Sessions,
 		prs:          d.PRs,
@@ -221,29 +207,6 @@ type RestoreReviewerResult struct {
 	Restored         bool
 }
 
-// Trigger starts reviews for every PR on the worker session that needs review.
-// It reuses running/up-to-date runs, retries failed/current changes-requested
-// heads, and uses one reviewer pane for every new run in the batch. Automatic
-// retries against the same PR head stop after three failed auto-review runs.
-//
-// An empty override keeps the project's configured reviewer. A known one runs
-// this pass under it without editing project config, so picking a reviewer for
-// one session cannot change what any other session in the project runs. The
-// harness-change path below already handles the swap by respawning the pane.
-func (e *Engine) Trigger(ctx stdctx.Context, workerID domain.SessionID, override domain.ReviewerHarness, config domain.AgentConfig) (TriggerResult, error) {
-	return e.TriggerWithSource(ctx, workerID, override, config, domain.ReviewTriggerManual)
-}
-
-// TriggerWithSource starts a review and records who initiated the pass.
-func (e *Engine) TriggerWithSource(ctx stdctx.Context, workerID domain.SessionID, override domain.ReviewerHarness, overrideConfig domain.AgentConfig, source domain.ReviewTriggerSource) (TriggerResult, error) {
-	return e.TriggerWithSourceAndMode(ctx, workerID, override, overrideConfig, source, "")
-}
-
-// TriggerWithSourceAndMode lets a manual review choose its actual reviewer surface.
-func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.SessionID, override domain.ReviewerHarness, overrideConfig domain.AgentConfig, source domain.ReviewTriggerSource, mode domain.ReviewerInterfaceMode) (TriggerResult, error) {
-	return e.TriggerWithOptions(ctx, workerID, TriggerOptions{Harness: override, Config: overrideConfig, Source: source, InterfaceMode: mode})
-}
-
 // TriggerOptions selects the reviewer, its surface, and the same-commit policy
 // for one trigger.
 type TriggerOptions struct {
@@ -268,7 +231,15 @@ type TriggerOptions struct {
 	Rerun bool
 }
 
-// TriggerWithOptions starts a pass, preserving default same-commit idempotency.
+// TriggerWithOptions starts reviews for every PR on the worker session that needs review.
+// It reuses running/up-to-date runs, retries failed/current changes-requested
+// heads, and uses one reviewer pane for every new run in the batch. Automatic
+// retries against the same PR head stop after three failed auto-review runs.
+//
+// An empty override keeps the project's configured reviewer. A known one runs
+// this pass under it without editing project config, so picking a reviewer for
+// one session cannot change what any other session in the project runs. The
+// harness-change path below already handles the swap by respawning the pane.
 func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionID, opts TriggerOptions) (TriggerResult, error) {
 	override, overrideConfig, source, mode := opts.Harness, opts.Config, opts.Source, opts.InterfaceMode
 	if source == "" {
@@ -542,14 +513,6 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			reviewRow.ProviderConversationID = ""
 			reviewRow.ControllerGeneration = ""
 		}
-		if opts.RejectReviewedHead {
-			// A worker that has just pushed can get here before the SCM observer
-			// has seen its new commit. Say so instead of claiming the commit it
-			// pushed was already reviewed.
-			if err := e.unobservedPushError(ctx, worker, prs, reviews, runs); err != nil {
-				return TriggerResult{}, err
-			}
-		}
 		if opts.RejectReviewedHead || (opts.Rerun && source == domain.ReviewTriggerAgent) {
 			return TriggerResult{}, nothingToReviewError(reviews, runs, harness, opts.Rerun)
 		}
@@ -805,46 +768,9 @@ func nothingToReviewError(reviews []PRReviewState, runs []domain.ReviewRun, harn
 		if review.LatestRun != nil && review.LatestRun.Verdict != domain.VerdictNone {
 			verdict = string(review.LatestRun.Verdict)
 		}
-		return fmt.Errorf("%w: PR #%d head %s was already reviewed (%s); push new commits, or pass --rerun to review this commit again", ErrHeadAlreadyReviewed, review.PRNumber, sha, verdict)
+		return fmt.Errorf("%w: PR #%d head %s was already reviewed (%s); push new commits, or pass --rerun to review this commit again. If you just pushed, wait a few seconds and run it again", ErrHeadAlreadyReviewed, review.PRNumber, sha, verdict)
 	}
 	return fmt.Errorf("%w: no open PR head to review", ErrInvalid)
-}
-
-// unobservedPushError reports ErrHeadNotObserved when an already-reviewed PR
-// head is behind what the worker's workspace has pushed for that PR branch.
-func (e *Engine) unobservedPushError(ctx stdctx.Context, worker domain.SessionRecord, prs []domain.PullRequest, reviews []PRReviewState, runs []domain.ReviewRun) error {
-	if worker.Metadata.WorkspacePath == "" {
-		return nil
-	}
-	branches := make(map[string]string, len(prs))
-	for _, pr := range prs {
-		branches[pr.URL] = pr.SourceBranch
-	}
-	for _, review := range reviews {
-		branch := branches[review.PRURL]
-		if review.Status == ReviewStateIneligible || branch == "" || !headHasReview(runs, review.PRURL, review.TargetSHA) {
-			continue
-		}
-		pushed := e.pushedHead(ctx, worker.Metadata.WorkspacePath, branch)
-		if pushed == "" || pushed == review.TargetSHA {
-			continue
-		}
-		return fmt.Errorf("%w: AO still sees PR #%d at %s, but %s was pushed to %s and the provider does not report it yet. It usually catches up within a few seconds; run `ao review trigger` again", ErrHeadNotObserved, review.PRNumber, shortSHA(review.TargetSHA), shortSHA(pushed), branch)
-	}
-	return nil
-}
-
-// gitPushedHead reads refs/remotes/origin/<branch> in the workspace, which
-// git push updates. Any failure means "unknown", never an error.
-func gitPushedHead(ctx stdctx.Context, workspacePath, branch string) string {
-	if strings.TrimSpace(branch) == "" || strings.HasPrefix(branch, "-") {
-		return ""
-	}
-	out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
 
 func shortSHA(sha string) string {
@@ -1510,11 +1436,9 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 		return SessionReviews{}, err
 	}
 	active := []domain.ReviewerSurface{}
-	selectedActive := reviewerRowActive(reviewRow, runs)
-	if selectedActive {
+	if reviewerRowActive(reviewRow, runs) {
 		active = append(active, reviewerSurface(reviewRow))
 	}
-	var firstOtherActive domain.Review
 	for i := range reviewRows {
 		other := reviewRows[i]
 		if other.ID == reviewRow.ID {
@@ -1532,18 +1456,7 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 		}
 		if reviewerRowActive(other, runs) {
 			active = append(active, reviewerSurface(other))
-			if firstOtherActive.ID == "" {
-				firstOtherActive = other
-			}
 		}
-	}
-	// The current reviewer is the one a client should open. When the selected
-	// reviewer is idle but another is working (an agent asked a different
-	// reviewer with --agent), that working reviewer is current; otherwise its
-	// pane would be listed nowhere a single-reviewer client looks.
-	if !selectedActive && firstOtherActive.ID != "" {
-		reviewRow = firstOtherActive
-		reviewerHarness = firstOtherActive.Harness
 	}
 	prs, err := e.prs.ListPRsBySession(ctx, workerID)
 	if err != nil {
@@ -1708,14 +1621,19 @@ func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelRe
 		cancelledHarness[review.Harness] = true
 	}
 	primary := reviewers[0]
+	// Legacy rows have no harness; they belong to the reported reviewer.
+	hasLegacy := false
+	for _, run := range running {
+		hasLegacy = hasLegacy || run.Harness == ""
+	}
+	if hasLegacy {
+		if _, err := e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, workerID, "", "cancelled by user"); err != nil {
+			return CancelResult{}, err
+		}
+	}
 	cancelled := make([]domain.ReviewRun, 0, len(running))
 	for _, run := range running {
-		if run.Harness == "" {
-			// Legacy rows have no harness; they belong to the reported reviewer.
-			if _, err := e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, workerID, "", "cancelled by user"); err != nil {
-				return CancelResult{}, err
-			}
-		} else if !cancelledHarness[run.Harness] {
+		if run.Harness != "" && !cancelledHarness[run.Harness] {
 			continue
 		}
 		run.Status = domain.ReviewRunCancelled

@@ -33,7 +33,6 @@ var (
 	ErrConflict             = reviewcore.ErrConflict
 	ErrReviewAlreadyRunning = reviewcore.ErrReviewAlreadyRunning
 	ErrHeadAlreadyReviewed  = reviewcore.ErrHeadAlreadyReviewed
-	ErrHeadNotObserved      = reviewcore.ErrHeadNotObserved
 	ErrPROwnedElsewhere     = reviewcore.ErrPROwnedElsewhere
 	ErrAgentBinaryNotFound  = ports.ErrAgentBinaryNotFound
 )
@@ -65,9 +64,6 @@ func reviewErrorKind(err error) string {
 // Manager is the reviews surface the HTTP controller depends on.
 type Manager interface {
 	RecoverChatReviewers(ctx context.Context) error
-	Trigger(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig) (reviewcore.TriggerResult, error)
-	TriggerWithMode(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig, mode domain.ReviewerInterfaceMode) (reviewcore.TriggerResult, error)
-	TriggerWithOptions(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error)
 	TriggerRequested(ctx context.Context, workerID domain.SessionID, req TriggerRequest) (TriggerOutcome, error)
 	RequestRereview(ctx context.Context, workerID domain.SessionID, prURL, reviewer string) error
 	ResolveReviewComment(ctx context.Context, workerID domain.SessionID, prURL, commentURL string) error
@@ -427,19 +423,6 @@ func (s *Service) ResolveReviewComment(ctx context.Context, workerID domain.Sess
 	return nil
 }
 
-// Trigger starts (or reuses) a review pass for a worker's PR. An empty harness
-// runs under the project's configured reviewer; a non-empty one overrides it for
-// this pass only, so choosing a reviewer for one session leaves every other
-// session in the project untouched.
-func (s *Service) Trigger(
-	ctx context.Context,
-	workerID domain.SessionID,
-	harness domain.ReviewerHarness,
-	config domain.AgentConfig,
-) (reviewcore.TriggerResult, error) {
-	return s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{Harness: harness, Config: config, Source: domain.ReviewTriggerManual})
-}
-
 // TriggerRequest is a client-requested review pass with its same-commit and
 // feedback policy.
 type TriggerRequest struct {
@@ -474,6 +457,9 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 	}
 	if source != domain.ReviewTriggerManual && source != domain.ReviewTriggerAgent {
 		return TriggerOutcome{}, fmt.Errorf("%w: review trigger source must be %q or %q", ErrInvalid, domain.ReviewTriggerManual, domain.ReviewTriggerAgent)
+	}
+	if mode := req.InterfaceMode; mode != "" && mode != domain.ReviewerInterfaceChat && mode != domain.ReviewerInterfaceTUI {
+		return TriggerOutcome{}, fmt.Errorf("%w: unknown reviewer interface mode %q", ErrInvalid, mode)
 	}
 	if req.Rerun && req.RejectReviewedHead {
 		return TriggerOutcome{}, fmt.Errorf("%w: rerun cannot be combined with rejecting an already-reviewed head", ErrInvalid)
@@ -568,22 +554,6 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-// TriggerWithMode starts a manual pass on the requested reviewer surface.
-func (s *Service) TriggerWithMode(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig, mode domain.ReviewerInterfaceMode) (reviewcore.TriggerResult, error) {
-	if mode != domain.ReviewerInterfaceChat && mode != domain.ReviewerInterfaceTUI {
-		return reviewcore.TriggerResult{}, fmt.Errorf("%w: unknown reviewer interface mode %q", ErrInvalid, mode)
-	}
-	return s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{Harness: harness, Config: config, Source: domain.ReviewTriggerManual, InterfaceMode: mode})
-}
-
-// TriggerWithOptions starts a pass with an explicit same-commit policy.
-func (s *Service) TriggerWithOptions(ctx context.Context, workerID domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
-	if opts.Source == "" {
-		opts.Source = domain.ReviewTriggerManual
-	}
-	return s.triggerWithOptions(ctx, workerID, opts)
 }
 
 // TriggerAuto starts a daemon-initiated review pass.

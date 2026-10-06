@@ -99,9 +99,6 @@ UPDATE review_run SET status = 'cancelled', body = ? WHERE session_id = ? AND st
 -- name: CancelRunningReviewRunsBySessionAndHarness :execrows
 UPDATE review_run SET status = 'cancelled', body = ? WHERE session_id = ? AND harness = ? AND status = 'running' AND verdict = '';
 
--- name: MarkReviewRunDelivered :execrows
-UPDATE review_run SET status = 'delivered', delivered_at = ? WHERE id = ? AND status = 'complete' AND delivered_at IS NULL;
-
 -- name: GetReviewRun :one
 SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
 FROM review_run WHERE id = ?;

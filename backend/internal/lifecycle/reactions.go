@@ -682,7 +682,7 @@ func (m *Manager) ApplyTrackerFacts(ctx context.Context, id domain.SessionID, o 
 // carve-out so the merge-conflict nudge alone can bypass the needs-input
 // condition below (see its needsInput comment), so it inlines the
 // terminated/exited half of this check and evaluates needs-input separately.
-// Every other nudge path in this package (ApplyReviewBatch, ApplyTrackerFacts)
+// Every other nudge path in this package (ApplyTrackerFacts)
 // still gates on the full condition here, unchanged.
 func cannotNudge(rec domain.SessionRecord) bool {
 	return rec.IsTerminated || rec.Activity.State.NeedsInput() || rec.Activity.State == domain.ActivityExited

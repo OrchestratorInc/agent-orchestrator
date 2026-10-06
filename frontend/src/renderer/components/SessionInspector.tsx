@@ -2477,9 +2477,10 @@ function ReviewPanel({
 						/>
 					</div>
 					{/* Several reviewers can work on one worker at once (an agent may
-					    ask more than one). The reviewer tab shows one at a time, so
-					    each live reviewer gets a row to open it. */}
-					{activeReviewers.length > 1
+					    ask a reviewer other than the selected one). The reviewer tab
+					    shows one at a time, so each live reviewer gets a row to open it
+					    whenever any of them is not the selected reviewer. */}
+					{activeReviewers.some((surface) => surface.reviewId !== reviewerSurface?.reviewId)
 						? activeReviewers.map((surface) => (
 								<div className="flex min-h-10 min-w-0 items-center justify-between gap-3 py-2" key={surface.reviewId}>
 									<span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-foreground">

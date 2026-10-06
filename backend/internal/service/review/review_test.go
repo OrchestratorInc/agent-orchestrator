@@ -29,8 +29,6 @@ type fakeStore struct {
 
 	updateCalls        int
 	activityUpdates    int
-	markCalls          int
-	markedIDs          []string
 	resolvedCommentIDs []string
 }
 
@@ -126,26 +124,6 @@ func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status d
 	f.run.Body = body
 	f.run.GithubReviewID = githubReviewID
 	f.run.AutoInjectReview = autoInjectReview
-	return true, nil
-}
-
-func (f *fakeStore) MarkReviewRunDelivered(_ context.Context, id string, deliveredAt time.Time) (bool, error) {
-	f.markCalls++
-	f.markedIDs = append(f.markedIDs, id)
-	if f.run.ID == id && f.run.Status == domain.ReviewRunComplete && f.run.DeliveredAt == nil {
-		f.run.Status = domain.ReviewRunDelivered
-		f.run.DeliveredAt = &deliveredAt
-	}
-	for i := range f.batchRuns {
-		if f.batchRuns[i].ID == id && f.batchRuns[i].Status == domain.ReviewRunComplete && f.batchRuns[i].DeliveredAt == nil {
-			f.batchRuns[i].Status = domain.ReviewRunDelivered
-			f.batchRuns[i].DeliveredAt = &deliveredAt
-			return true, nil
-		}
-	}
-	if f.run.ID != id || f.run.Status != domain.ReviewRunDelivered {
-		return false, nil
-	}
 	return true, nil
 }
 
@@ -306,8 +284,8 @@ func TestSubmitRecordsTheResultWithoutASeparateDelivery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: Submit: %v", verdict, err)
 		}
-		if run.Status != domain.ReviewRunComplete || run.DeliveredAt != nil || st.markCalls != 0 {
-			t.Fatalf("%s: run = %+v markCalls=%d, want complete and never stamped delivered", verdict, run, st.markCalls)
+		if run.Status != domain.ReviewRunComplete || run.DeliveredAt != nil {
+			t.Fatalf("%s: run = %+v, want complete and never stamped delivered", verdict, run)
 		}
 	}
 }
@@ -432,8 +410,8 @@ func TestSubmitSnapshotsDisabledPolicyAndNeverDeliversOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview || st.markCalls != 0 {
-		t.Fatalf("disabled review = %+v markCalls=%d", run, st.markCalls)
+	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview {
+		t.Fatalf("disabled review = %+v", run)
 	}
 
 	enabled := true
@@ -442,8 +420,8 @@ func TestSubmitSnapshotsDisabledPolicyAndNeverDeliversOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview || st.markCalls != 0 {
-		t.Fatalf("retry rewrote disabled review = %+v markCalls=%d", run, st.markCalls)
+	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview {
+		t.Fatalf("retry rewrote disabled review = %+v", run)
 	}
 }
 
@@ -551,8 +529,8 @@ func TestSubmitCompletedRetryRejectsDifferentRecordedFields(t *testing.T) {
 			if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, tt.body, tt.githubReviewID); !errors.Is(err, ErrInvalid) {
 				t.Fatalf("err = %v, want ErrInvalid", err)
 			}
-			if st.updateCalls != 0 || st.markCalls != 0 {
-				t.Fatalf("mismatched retry should not rewrite: update=%d mark=%d", st.updateCalls, st.markCalls)
+			if st.updateCalls != 0 {
+				t.Fatalf("mismatched retry should not rewrite: update=%d", st.updateCalls)
 			}
 		})
 	}
@@ -738,7 +716,7 @@ func TestTriggerReportsWhoStartedThePass(t *testing.T) {
 		want string
 	}{
 		{"manual", func(s *Service) error {
-			_, err := s.Trigger(context.Background(), "worker-1", "", domain.AgentConfig{})
+			_, err := s.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Config: domain.AgentConfig{}})
 			return err
 		}, "manual"},
 		{"auto", func(s *Service) error {
@@ -812,7 +790,7 @@ func TestTriggerRejectsInvalidReviewerConfigBeforeEngine(t *testing.T) {
 		return reviewcore.TriggerResult{}, nil
 	}
 
-	if _, err := svc.Trigger(context.Background(), "worker-1", "", domain.AgentConfig{Mode: "turbo"}); !errors.Is(err, ErrInvalid) {
+	if _, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Config: domain.AgentConfig{Mode: "turbo"}}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
 	}
 	if called {
@@ -867,7 +845,7 @@ func TestRestartedManualPassIsNotReportedAsReused(t *testing.T) {
 		return reviewcore.TriggerResult{Run: domain.ReviewRun{Harness: "codex"}, Created: true, CreatedRuns: nil}, nil
 	}
 
-	if _, err := svc.Trigger(context.Background(), "worker-1", "", domain.AgentConfig{Model: "gpt-5-mini"}); err != nil {
+	if _, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Config: domain.AgentConfig{Model: "gpt-5-mini"}}); err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
 	got := sink.named("ao.review.triggered")
@@ -888,7 +866,7 @@ func TestReusedManualPassStaysATrigger(t *testing.T) {
 		return reviewcore.TriggerResult{Run: domain.ReviewRun{Harness: "codex"}, CreatedRuns: nil}, nil
 	}
 
-	if _, err := svc.Trigger(context.Background(), "worker-1", "", domain.AgentConfig{}); err != nil {
+	if _, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Config: domain.AgentConfig{}}); err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
 	got := sink.named("ao.review.triggered")

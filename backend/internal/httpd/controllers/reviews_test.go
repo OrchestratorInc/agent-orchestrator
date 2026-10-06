@@ -52,7 +52,7 @@ type fakeReviewService struct {
 
 func (*fakeReviewService) RecoverChatReviewers(context.Context) error { return nil }
 
-func (f *fakeReviewService) Trigger(
+func (f *fakeReviewService) runTrigger(
 	_ context.Context,
 	_ domain.SessionID,
 	harness domain.ReviewerHarness,
@@ -69,22 +69,11 @@ func (f *fakeReviewService) Trigger(
 	return reviewcore.TriggerResult{Run: domain.ReviewRun{ID: "run-1"}, Created: true}, nil
 }
 
-func (f *fakeReviewService) TriggerWithMode(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig, mode domain.ReviewerInterfaceMode) (reviewcore.TriggerResult, error) {
-	f.triggeredMode = mode
-	return f.Trigger(ctx, workerID, harness, config)
-}
-
-func (f *fakeReviewService) TriggerWithOptions(ctx context.Context, workerID domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
-	f.triggeredRerun = opts.Rerun
-	f.triggeredMode = opts.InterfaceMode
-	return f.Trigger(ctx, workerID, opts.Harness, opts.Config)
-}
-
 func (f *fakeReviewService) TriggerRequested(ctx context.Context, workerID domain.SessionID, req reviewsvc.TriggerRequest) (reviewsvc.TriggerOutcome, error) {
 	f.triggerRequest = req
 	f.triggeredRerun = req.Rerun
 	f.triggeredMode = req.InterfaceMode
-	res, err := f.Trigger(ctx, workerID, req.Harness, req.Config)
+	res, err := f.runTrigger(ctx, workerID, req.Harness, req.Config)
 	if err != nil {
 		return reviewsvc.TriggerOutcome{}, err
 	}
@@ -519,7 +508,6 @@ func TestReviewsTriggerMapsSameCommitConflictsTo409(t *testing.T) {
 	}{
 		{fmt.Errorf("%w: codex is already reviewing PR #1 head abc", reviewcore.ErrReviewAlreadyRunning), "REVIEW_ALREADY_RUNNING"},
 		{fmt.Errorf("%w: PR #1 head abc was already reviewed (approved); push new commits, or pass --rerun", reviewcore.ErrHeadAlreadyReviewed), "REVIEW_HEAD_ALREADY_REVIEWED"},
-		{fmt.Errorf("%w: AO still sees PR #1 head abc, but def was pushed", reviewcore.ErrHeadNotObserved), "REVIEW_HEAD_NOT_OBSERVED"},
 		{fmt.Errorf("%w: PR #1 head abc belongs to active session mer-2", reviewcore.ErrPROwnedElsewhere), "REVIEW_PR_OWNED_BY_OTHER_SESSION"},
 	} {
 		srv := newReviewTestServer(t, &fakeReviewService{triggerErr: tc.err})

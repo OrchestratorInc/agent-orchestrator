@@ -3,8 +3,6 @@ package review
 import (
 	"context"
 	"errors"
-	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -352,10 +350,10 @@ func TestRestoreReviewerKeepsALiveParallelReviewerAndCancelsADeadOne(t *testing.
 	}
 }
 
-// When an agent asks a reviewer other than the selected one, the reviewer
-// actually working is the current one clients open; the idle selected reviewer
-// must not hide it.
-func TestListReportsTheWorkingReviewerWhenTheSelectedOneIsIdle(t *testing.T) {
+// When an agent asks a reviewer other than the selected one, the selected
+// reviewer fields keep meaning the session's selected reviewer; the working
+// reviewer is reported through ActiveReviewers.
+func TestListKeepsTheSelectedReviewerAndListsTheWorkingOneAsActive(t *testing.T) {
 	store := &fakeStore{
 		reviews: map[domain.ReviewerHarness]domain.Review{
 			domain.ReviewerClaudeCode: {ID: "rev-claude-code", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode},
@@ -373,8 +371,8 @@ func TestListReportsTheWorkingReviewerWhenTheSelectedOneIsIdle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if got.ReviewerHarness != domain.ReviewerCodex || got.ReviewerHandleID != "codex-pane" || got.ReviewerSurface.ReviewID != "rev-codex" {
-		t.Fatalf("current reviewer = %s/%q/%+v, want the working codex reviewer", got.ReviewerHarness, got.ReviewerHandleID, got.ReviewerSurface)
+	if got.ReviewerHarness != domain.ReviewerClaudeCode || got.ReviewerHandleID != "" || got.ReviewerSurface.ReviewID != "rev-claude-code" {
+		t.Fatalf("selected reviewer = %s/%q/%+v, want the selected claude-code reviewer", got.ReviewerHarness, got.ReviewerHandleID, got.ReviewerSurface)
 	}
 	if len(got.ActiveReviewers) != 1 || got.ActiveReviewers[0].Harness != domain.ReviewerCodex {
 		t.Fatalf("active = %+v, want only codex", got.ActiveReviewers)
@@ -404,73 +402,6 @@ func TestRestoreReviewerLeavesARunningChatReviewerToChatRecovery(t *testing.T) {
 	}
 }
 
-// Right after a push, the SCM observer may not have seen the new commit yet,
-// so AO still knows only the reviewed head. The worker must be told AO hasn't
-// picked up its push, not that the commit it just pushed was already reviewed.
-func TestTriggerRejectReviewedHeadReportsAPushAONotYetObserved(t *testing.T) {
-	store := &fakeStore{
-		runs: []domain.ReviewRun{requestedRun("run-1", domain.ReviewerClaudeCode, domain.ReviewRunComplete, domain.VerdictApproved, 1)},
-	}
-	prs := fakePRs{prs: []domain.PullRequest{{URL: requestedPRURL, Number: 1, HeadSHA: "sha1", SourceBranch: "feature"}}}
-	for _, tc := range []struct {
-		name   string
-		pushed string
-		want   error
-	}{
-		{"pushed ahead", "sha2pushed", ErrHeadNotObserved},
-		{"pushed head is the reviewed one", "sha1", ErrHeadAlreadyReviewed},
-		{"push unknown", "", ErrHeadAlreadyReviewed},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var gotPath, gotBranch string
-			eng := New(Deps{
-				Store: store, Sessions: fakeSessions{rec: liveWorker(), ok: true}, PRs: prs, Projects: fakeProjects{}, Launcher: &fakeLauncher{},
-				PushedHead: func(_ context.Context, path, branch string) string {
-					gotPath, gotBranch = path, branch
-					return tc.pushed
-				},
-			})
-			_, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent, RejectReviewedHead: true})
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("err = %v, want %v", err, tc.want)
-			}
-			if gotPath != "/ws/mer-1" || gotBranch != "feature" {
-				t.Fatalf("pushed head lookup = %q %q, want the worker workspace and PR branch", gotPath, gotBranch)
-			}
-			if errors.Is(tc.want, ErrHeadNotObserved) && (!strings.Contains(err.Error(), "AO still sees PR #1 at sha1") || !strings.Contains(err.Error(), "sha2pushed was pushed to feature") || !strings.Contains(err.Error(), "run `ao review trigger` again")) {
-				t.Fatalf("err = %q, want the stale/pushed heads and a retry hint", err)
-			}
-		})
-	}
-}
-
-func TestGitPushedHeadReadsTheRemoteTrackingRef(t *testing.T) {
-	dir := t.TempDir()
-	run := func(args ...string) string {
-		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-		return strings.TrimSpace(string(out))
-	}
-	run("init", "-q")
-	run("commit", "-q", "--allow-empty", "-m", "one")
-	head := run("rev-parse", "HEAD")
-	run("update-ref", "refs/remotes/origin/feature", head)
-
-	if got := gitPushedHead(context.Background(), dir, "feature"); got != head {
-		t.Fatalf("pushed head = %q, want %q", got, head)
-	}
-	for _, branch := range []string{"missing", "", "-x"} {
-		if got := gitPushedHead(context.Background(), dir, branch); got != "" {
-			t.Fatalf("branch %q: pushed head = %q, want unknown", branch, got)
-		}
-	}
-}
-
 func TestTriggerPRURLReviewsOnlyTheNamedPR(t *testing.T) {
 	prs := fakePRs{prs: []domain.PullRequest{
 		{URL: "https://api/pr/1", HTMLURL: "https://github.com/o/r/pull/1", Number: 1, HeadSHA: "sha1"},
@@ -496,4 +427,18 @@ func TestTriggerWithNoTrackedPRPointsAtThePRFlag(t *testing.T) {
 	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "ao review trigger --pr <url>") {
 		t.Fatalf("err = %v, want a pointer to --pr for a PR AO has not picked up", err)
 	}
+}
+
+// trigger, triggerWithSource and triggerWithSourceAndMode keep the older
+// engine tests readable now that TriggerWithOptions is the only entry point.
+func trigger(ctx context.Context, e *Engine, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig) (TriggerResult, error) {
+	return e.TriggerWithOptions(ctx, workerID, TriggerOptions{Harness: harness, Config: config})
+}
+
+func triggerWithSource(ctx context.Context, e *Engine, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig, source domain.ReviewTriggerSource) (TriggerResult, error) {
+	return e.TriggerWithOptions(ctx, workerID, TriggerOptions{Harness: harness, Config: config, Source: source})
+}
+
+func triggerWithSourceAndMode(ctx context.Context, e *Engine, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig, source domain.ReviewTriggerSource, mode domain.ReviewerInterfaceMode) (TriggerResult, error) {
+	return e.TriggerWithOptions(ctx, workerID, TriggerOptions{Harness: harness, Config: config, Source: source, InterfaceMode: mode})
 }
