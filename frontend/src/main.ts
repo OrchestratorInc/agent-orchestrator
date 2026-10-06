@@ -6,6 +6,7 @@ import { consumeUpdateRelaunchFlag } from "./main/update-relaunch-flag";
 import {
 	app,
 	BaseWindow,
+	BrowserWindow,
 	clipboard,
 	dialog,
 	ipcMain,
@@ -1332,13 +1333,11 @@ function establishBrowserRuntimeLink(): void {
 	browserRuntimeLink = connectBrowserRuntime(address, {
 		token,
 		execute: (command, signal) => {
-			// A render check uses a throwaway hidden view, never the session's
-			// Browser panel, so it does not need (or disturb) the view host.
+			// A render check uses its own hidden offscreen window, never the main
+			// window or the session's Browser panel, so it does not need (or
+			// disturb) the view host.
 			if (command.action === "__render-check") {
-				if (!mainWindow) {
-					throw Object.assign(new Error("AO window is unavailable"), { code: "BROWSER_TARGET_UNAVAILABLE" });
-				}
-				return checkRender({ WebContentsView, window: mainWindow }, command.args ?? {}, signal);
+				return checkRender({ BrowserWindow }, command.args ?? {}, signal);
 			}
 			const host = browserViewHost;
 			if (!host) {
