@@ -1441,6 +1441,9 @@ type Snapshot struct {
 	BranchedFromEarlierMessage       bool
 	OldestSequence                   int64
 	HasMoreBefore                    bool
+	// PendingUserInputRequestIDs is every open input request on the
+	// conversation, including those outside this page. Nil when unknown.
+	PendingUserInputRequestIDs []string
 	// Usage and RateLimits are current state carried on the snapshot the client
 	// already polls, rather than timeline entries or a second request. Both are nil
 	// until the provider has reported, so a client can tell "not known yet" from a
@@ -1485,6 +1488,7 @@ type ConversationRows struct {
 	BranchedFromEarlierMessage       bool
 	OldestSequence                   int64
 	HasMoreBefore                    bool
+	PendingUserInputRequestIDs       []string
 }
 
 // idleControllerState is what a session with no live controller reports. A
@@ -1595,7 +1599,7 @@ func (s *Service) snapshotForReviewRows(review domain.Review, rows ConversationR
 	if controller, err := s.ControllerForOwner(domain.ReviewConversationOwner(review.ID)); err == nil {
 		state, caps = controller.State(), controller.Capabilities()
 	}
-	return Snapshot{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, EditFloorSequence: rows.EditFloorSequence, NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence, SessionID: review.SessionID, Harness: domain.AgentHarness(review.Harness), Mode: domain.SessionModeChat, Controller: state, Turns: rows.Turns, Messages: rows.Messages, Activities: rows.Activities, BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage, OldestSequence: rows.OldestSequence, HasMoreBefore: rows.HasMoreBefore, Capabilities: caps, Usage: rows.Conversation.Usage, RateLimits: rows.Conversation.RateLimits}
+	return Snapshot{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, EditFloorSequence: rows.EditFloorSequence, NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence, SessionID: review.SessionID, Harness: domain.AgentHarness(review.Harness), Mode: domain.SessionModeChat, Controller: state, Turns: rows.Turns, Messages: rows.Messages, Activities: rows.Activities, BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage, OldestSequence: rows.OldestSequence, HasMoreBefore: rows.HasMoreBefore, PendingUserInputRequestIDs: rows.PendingUserInputRequestIDs, Capabilities: caps, Usage: rows.Conversation.Usage, RateLimits: rows.Conversation.RateLimits}
 }
 
 // SnapshotPage reads one bounded timeline page. The live conversation metadata
@@ -1648,6 +1652,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
 		OldestSequence:                   rows.OldestSequence,
 		HasMoreBefore:                    rows.HasMoreBefore,
+		PendingUserInputRequestIDs:       rows.PendingUserInputRequestIDs,
 		Capabilities:                     caps,
 		Usage:                            rows.Conversation.Usage,
 		RateLimits:                       rows.Conversation.RateLimits,
