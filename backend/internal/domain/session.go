@@ -414,3 +414,27 @@ type Session struct {
 	// serialized here: the HTTP boundary maps them to the curated wire shape.
 	PRs []PRFacts `json:"-"`
 }
+
+// LastEventAt is when something a person would notice last happened to the
+// session: an activity-state transition (started, finished, waiting, exited),
+// a PR lifecycle change, a CI result change, or a review submission. Mobile
+// orders its workers list by it.
+//
+// It is derived at read time from durable fact timestamps and never stored.
+// Deliberately not UpdatedAt: that advances on metadata writes and PR polls,
+// so a busy session would keep floating to the top without anything changing.
+func (s Session) LastEventAt() time.Time {
+	latest := s.CreatedAt
+	consider := func(t time.Time) {
+		if t.After(latest) {
+			latest = t
+		}
+	}
+	consider(s.Activity.LastActivityAt)
+	for _, pr := range s.PRs {
+		consider(pr.StateChangedAt)
+		consider(pr.CIChangedAt)
+		consider(pr.LastReviewAt)
+	}
+	return latest
+}

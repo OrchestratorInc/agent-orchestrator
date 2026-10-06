@@ -10733,6 +10733,9 @@ components:
           type: string
         kind:
           type: string
+        lastEventAt:
+          format: date-time
+          type: string
         lastUserMessageAt:
           format: date-time
           type:
@@ -10871,6 +10874,7 @@ components:
       - status
       - kanbanColumn
       - displayStatus
+      - lastEventAt
       - prs
       type: object
     ControllersSetKeepAwakeRequest:

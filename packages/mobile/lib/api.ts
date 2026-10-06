@@ -83,6 +83,12 @@ export type DashboardSession = {
 	summary: string | null;
 	createdAt: string;
 	lastActivityAt: string;
+	/**
+	 * When something a person would notice last happened (activity-state change,
+	 * PR lifecycle or CI change, review). Absent from daemons that predate it;
+	 * read it through `eventAtOf`, which falls back.
+	 */
+	lastEventAt?: string;
 	pr?: DashboardPR | null;
 	prs?: DashboardPR[];
 	metadata?: Record<string, string>;
@@ -201,6 +207,7 @@ type WireSession = {
 	branch?: string;
 	createdAt?: string;
 	updatedAt?: string;
+	lastEventAt?: string;
 	previewUrl?: string;
 	isPinned?: boolean;
 	pinnedAt?: string | null;
@@ -290,6 +297,7 @@ function mapSession(s: WireSession): DashboardSession {
 		summary: null,
 		createdAt: s.createdAt ?? "",
 		lastActivityAt: activityLastAt(s.activity) ?? s.updatedAt ?? s.createdAt ?? "",
+		lastEventAt: s.lastEventAt || undefined,
 		pr: prs[0] ?? null,
 		prs,
 		previewUrl: s.previewUrl ?? null,

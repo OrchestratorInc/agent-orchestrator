@@ -2485,6 +2485,7 @@ func sessionView(r *http.Request, s domain.Session) SessionView {
 			at := s.Metadata.LatestUserPromptAt
 			return &at
 		}(),
+		LastEventAt:   s.LastEventAt(),
 		PRs:           sessionPRFacts(s.PRs),
 		ArtifactFiles: sessionArtifactFiles(r, s),
 	}

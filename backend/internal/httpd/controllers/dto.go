@@ -364,7 +364,11 @@ type SessionView struct {
 	Model string `json:"model,omitempty"`
 	// LastUserMessageAt is the latest real user-authored task direction time.
 	// Lifecycle and internal automation updates do not advance it.
-	LastUserMessageAt *time.Time            `json:"lastUserMessageAt,omitempty"`
+	LastUserMessageAt *time.Time `json:"lastUserMessageAt,omitempty"`
+	// LastEventAt is when something a person would notice last happened: an
+	// activity-state transition, a PR lifecycle or CI change, or a review
+	// submission. Derived at read time; see domain.Session.LastEventAt.
+	LastEventAt       time.Time             `json:"lastEventAt"`
 	PRs               []SessionPRFacts      `json:"prs"`
 	ArtifactFiles     []SessionArtifactView `json:"artifactFiles,omitempty"`
 	ActiveAgentSwitch *AgentSwitchView      `json:"activeAgentSwitch,omitempty"`
