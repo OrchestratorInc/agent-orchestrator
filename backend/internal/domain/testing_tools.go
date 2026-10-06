@@ -81,7 +81,11 @@ type TestDesktopFrame struct {
 	Bounds       TestWindowBounds   `json:"bounds"`
 	Width        int                `json:"width"`
 	Height       int                `json:"height"`
-	CapturedAt   time.Time          `json:"capturedAt"`
+	Scale        float64            `json:"scale"`
+	// CaptureHandle is an in-memory adapter receipt. Preserve it when assigning
+	// ScreenshotID after evidence storage; never accept it from worker input.
+	CaptureHandle string    `json:"-"`
+	CapturedAt    time.Time `json:"capturedAt"`
 }
 
 // TestScreenshot carries original encoded pixels, not a provider file path.
