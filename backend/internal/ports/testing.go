@@ -71,15 +71,17 @@ type TestingDesktopRecorder interface {
 // TestingRecordingResult is provider-neutral recording metadata. Path is private
 // daemon staging input, never a worker argument or a durable evidence path.
 type TestingRecordingResult struct {
-	Path        string
-	MIMEType    string
-	Width       int
-	Height      int
-	Duration    time.Duration
-	StartedAt   time.Time
-	StoppedAt   time.Time
-	RecorderPID int
-	Gap         string
+	Path           string        `json:"path"`
+	MIMEType       string        `json:"mimeType"`
+	Width          int           `json:"width"`
+	Height         int           `json:"height"`
+	Duration       time.Duration `json:"duration"`
+	StartedAt      time.Time     `json:"startedAt"`
+	StoppedAt      time.Time     `json:"stoppedAt"`
+	RecorderPID    int           `json:"recorderPid"`
+	Gap            string        `json:"gap,omitempty"`
+	StagingPath    string        `json:"stagingPath,omitempty"`
+	StagingCleanup string        `json:"stagingCleanup,omitempty"`
 }
 
 // TestingDesktopReleaser revokes one attempt's desktop session at cleanup.

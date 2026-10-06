@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -149,5 +150,15 @@ func TestTestingProductionCompositionConstructsAdaptersWithoutLaunching(t *testi
 	}
 	if err := providers.Close(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTestingRecordingBridgePreservesFullMetadata(t *testing.T) {
+	r := cua.RecordingResult{Path: "/supervisor/window.mov", MIMEType: "video/quicktime", Width: 2, Height: 2, Duration: time.Second,
+		StartedAt: time.Now(), StoppedAt: time.Now(), RecorderPID: 42, Gap: "declared gap", StagingPath: "/native/owned.mov", StagingCleanup: "verified absent"}
+	want, err := json.Marshal(r)
+	got, gotErr := json.Marshal(recordingResult(r))
+	if err != nil || gotErr != nil || !reflect.DeepEqual(got, want) {
+		t.Fatal("provider recording metadata changed during translation", string(got), err, gotErr)
 	}
 }

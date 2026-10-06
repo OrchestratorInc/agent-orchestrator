@@ -151,6 +151,8 @@ func (s *Store) Write(ctx context.Context, id domain.TestAttemptID, a ports.Test
 		extension = ".json"
 	case "video/mp4":
 		extension = ".mp4"
+	case "video/quicktime":
+		extension = ".mov"
 	}
 	name := a.Kind + "-" + artifactID + extension
 	if err := writeSynced(root, name, bytes); err != nil {

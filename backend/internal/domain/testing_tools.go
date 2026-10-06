@@ -136,6 +136,7 @@ type TestActionRecord struct {
 	DeliveryMode           string          `json:"deliveryMode,omitempty"`
 	ConfiguredDeliveryMode string          `json:"configuredDeliveryMode,omitempty"`
 	RecordingGap           string          `json:"recordingGap,omitempty"`
+	Recording              json.RawMessage `json:"recording,omitempty"`
 	At                     time.Time       `json:"at"`
 }
 

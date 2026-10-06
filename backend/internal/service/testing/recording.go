@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -57,11 +60,12 @@ func (s *Service) startRecording(ctx context.Context, st *attemptState, target d
 		}
 	}
 	s.mu.Lock()
-	st.recording = result.Gap == ""
+	st.recording = result.Gap == "" || result.RecorderPID > 0
 	s.mu.Unlock()
 	record.At = s.deps.Clock.Now().UTC()
 	record.State = "completed"
 	record.RecordingGap = result.Gap
+	record.Recording, _ = json.Marshal(result)
 	if result.Gap != "" {
 		record.State = "failed"
 	}
@@ -93,14 +97,63 @@ func (s *Service) stopRecording(ctx context.Context, st *attemptState, target do
 		result.Gap = "Window-only recording failed to stop."
 	}
 	if result.Gap == "" {
-		// TODO(testing-recorder): persist the recording file after D's recorder
-		// lands. Its current adapter returns a declared gap at StartRecording.
-		result.Gap = "Recording provider returned no durable recording evidence."
+		if e := s.saveRecording(ctx, st, result); e != nil {
+			err = errors.Join(err, e)
+			result.Gap = "Finalized recording could not be saved as evidence."
+		}
 	}
 	record.At = s.deps.Clock.Now().UTC()
-	record.State = "failed"
+	record.State = "completed"
+	if result.Gap != "" || err != nil {
+		record.State = "failed"
+	}
 	record.RecordingGap = result.Gap
+	record.Recording, _ = json.Marshal(result)
+	metadata, _ := json.Marshal(result)
+	_, metadataErr := s.deps.Evidence.Write(ctx, st.record.ID, ports.TestingEvidenceArtifact{Kind: "recording_metadata", MIMEType: "application/json"}, strings.NewReader(string(metadata)))
+	if metadataErr != nil {
+		result.Gap = "Recording metadata could not be saved as evidence."
+		record.State, record.RecordingGap = "failed", result.Gap
+		record.Recording, _ = json.Marshal(result)
+		metadataErr = apierr.Internal("TEST_EVIDENCE_WRITE_FAILED", "Cannot save recording metadata")
+	}
 	completionErr := s.recordingJournal(ctx, record)
 	gapErr := s.setRecordingGap(ctx, st, result.Gap)
-	return errors.Join(journalErr, err, completionErr, gapErr)
+	return errors.Join(journalErr, err, metadataErr, completionErr, gapErr)
+}
+
+func (s *Service) saveRecording(ctx context.Context, st *attemptState, result ports.TestingRecordingResult) error {
+	if result.MIMEType != "video/quicktime" || result.Duration <= 0 || result.Width < 1 || result.Height < 1 || result.StartedAt.IsZero() || result.StoppedAt.Before(result.StartedAt) || !filepath.IsAbs(result.Path) {
+		return fmt.Errorf("recording provider returned invalid finalized movie metadata")
+	}
+	dir, err := filepath.EvalSymlinks(s.recordingDirectory(st))
+	if err != nil {
+		return err
+	}
+	path, err := filepath.EvalSymlinks(result.Path)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(dir, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("recording path is outside attempt evidence storage")
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	movie, err := root.Open(rel)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = movie.Close() }()
+	info, err := movie.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+		return fmt.Errorf("recording path is not a nonempty regular movie")
+	}
+	if _, err := s.deps.Evidence.Write(ctx, st.record.ID, ports.TestingEvidenceArtifact{Kind: "recording", MIMEType: result.MIMEType}, movie); err != nil {
+		return apierr.Internal("TEST_EVIDENCE_WRITE_FAILED", "Cannot save finalized recording")
+	}
+	return nil
 }

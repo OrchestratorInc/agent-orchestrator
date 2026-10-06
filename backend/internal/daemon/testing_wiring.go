@@ -58,8 +58,9 @@ func (d testingDesktopBridge) StopRecording(ctx context.Context, target domain.T
 	return recordingResult(result), err
 }
 func recordingResult(result cua.RecordingResult) ports.TestingRecordingResult {
-	// TODO(testing-recorder): copy recording metadata once D's recorder lands.
-	return ports.TestingRecordingResult{Gap: result.Gap}
+	return ports.TestingRecordingResult{Path: result.Path, MIMEType: result.MIMEType, Width: result.Width, Height: result.Height,
+		Duration: result.Duration, StartedAt: result.StartedAt, StoppedAt: result.StoppedAt, RecorderPID: result.RecorderPID,
+		Gap: result.Gap, StagingPath: result.StagingPath, StagingCleanup: result.StagingCleanup}
 }
 
 func configuredTestingProviders(cfg config.Config) (testingProviders, error) {
