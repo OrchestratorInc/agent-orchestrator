@@ -41,6 +41,9 @@ type Review struct {
 	ControllerError        string                `json:"controllerError"`
 	CreatedAt              time.Time             `json:"createdAt"`
 	UpdatedAt              time.Time             `json:"updatedAt"`
+
+	// IsArchived retires the reviewer surface without deleting its history.
+	IsArchived bool `json:"-"`
 }
 
 // ReviewerInterfaceMode selects the durable UI surface for a reviewer.

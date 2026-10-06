@@ -67,6 +67,7 @@ type Manager interface {
 	TriggerAuto(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness) (reviewcore.TriggerResult, error)
 	Cancel(ctx context.Context, workerID domain.SessionID) (reviewcore.CancelResult, error)
 	TerminateReviewer(ctx context.Context, workerID domain.SessionID, body string) error
+	ArchiveReviewer(ctx context.Context, workerID domain.SessionID) error
 	TeardownReviewerTerminal(ctx context.Context, workerID domain.SessionID) error
 	RestoreReviewer(ctx context.Context, workerID domain.SessionID) error
 	SwitchReviewer(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig) (reviewcore.SessionReviews, error)
@@ -900,4 +901,9 @@ func (s *Service) currentHeadsByPR(ctx context.Context, workerID domain.SessionI
 // List returns a worker's review state.
 func (s *Service) List(ctx context.Context, workerID domain.SessionID) (reviewcore.SessionReviews, error) {
 	return s.engine.List(ctx, workerID)
+}
+
+// ArchiveReviewer retires the reviewer surface while preserving its history.
+func (s *Service) ArchiveReviewer(ctx context.Context, workerID domain.SessionID) error {
+	return s.engine.ArchiveReviewer(ctx, workerID)
 }

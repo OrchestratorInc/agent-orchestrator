@@ -181,6 +181,7 @@ var shippedMigrations = map[int64]string{
 	175: "0175_codex_subagent_activity.sql",
 	176: "0176_claude_subagent_activity.sql",
 	177: "0177_review_run_rerun_same_head.sql",
+	178: "0178_archive_reviewers.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

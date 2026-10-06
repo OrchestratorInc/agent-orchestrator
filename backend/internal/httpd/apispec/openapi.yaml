@@ -7480,7 +7480,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Kill a worker's reviewer terminal session
+      summary: Archive a worker's reviewer and hide its surface while retaining history
       tags:
       - reviews
   /api/v1/sessions/{sessionId}/reviews/rerequest:

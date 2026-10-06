@@ -32,7 +32,6 @@ import {
 	GitMerge,
 	Info,
 	Play,
-	Square,
 	Loader2,
 	MessageSquare,
 	X,
@@ -2424,6 +2423,7 @@ function ReviewPanel({
 			? t("inspector.review.cancelling")
 			: t("inspector.review.cancel")
 		: runAction;
+	const archiveActionLabel = isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession");
 	const killDisabled = isKilling || isCancelling || isTriggering || isSwitchingReviewer || !hasReviewerSession;
 
 	return (
@@ -2487,18 +2487,24 @@ function ReviewPanel({
 								{reviewRunning ? <X aria-hidden="true" /> : <Play aria-hidden="true" />}
 								<span className="review-run-action-label">{primaryReviewActionLabel}</span>
 							</Button>
-							<Button
-								aria-label={isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}
-								className="shrink-0 gap-1 px-1.5 text-xs text-error [&_svg]:size-icon-sm"
-								disabled={killDisabled}
-								onClick={onKill}
-								size="sm"
-								type="button"
-								variant="ghost"
-							>
-								<Square aria-hidden="true" fill="currentColor" />
-								<span>{isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}</span>
-							</Button>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<Button
+											aria-label={archiveActionLabel}
+											className="shrink-0 [&_svg]:size-icon-sm"
+											disabled={killDisabled}
+											onClick={onKill}
+											size="icon-sm"
+											type="button"
+											variant="ghost"
+										>
+											<Archive aria-hidden="true" />
+										</Button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent>{archiveActionLabel}</TooltipContent>
+							</Tooltip>
 						</div>
 					</div>
 				</div>
