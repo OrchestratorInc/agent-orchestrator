@@ -1255,6 +1255,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		(chatTargetKind === "worker" || chatTargetKind === "reviewer" || chatTargetKind === "shell");
 	const chatViewActive =
 		session?.mode === "chat" &&
+		!hostId &&
 		!session.cloud &&
 		daemonStatus.state === "ready" &&
 		routedTerminalTarget.kind === "worker" &&
