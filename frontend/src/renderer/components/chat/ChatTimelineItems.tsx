@@ -467,7 +467,7 @@ export function ResponseSpinner() {
 			role="status"
 			aria-label="Generating response"
 			data-testid="response-spinner"
-			className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
+			className="size-3 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
 		/>
 	);
 }
@@ -841,25 +841,28 @@ export function LiveResponseStatus({ startedAt, settling = false }: { startedAt?
 		return () => window.clearInterval(timer);
 	}, [settling]);
 	const elapsedMs = Math.max(0, now - started);
-	// Settling animates opacity and transform only, never layout: the spinner fades
-	// out in place while the label slides left by the spinner's footprint (16px +
-	// 6px gap), landing exactly where the settled "Worked for" row puts it.
+	// Settling animates opacity and transform only, never layout, so it stays smooth
+	// even when the main thread is busy finishing the turn. These are keyframe
+	// animations rather than transitions so they also play when the row first
+	// mounts already settled. The spinner shrinks and fades in place while the label
+	// slides left by the spinner's footprint (12px + 6px gap), landing exactly where
+	// the settled "Worked for" row puts it. The label keeps its shimmer class
+	// throughout (only the highlight fades), so the text never changes paint
+	// technique and cannot blink.
 	return (
 		<div className="-mx-1 flex h-7 select-none items-center gap-1.5 border-b border-border px-1 py-0">
 			<span
 				aria-hidden={settling || undefined}
-				className={`flex shrink-0 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${
-					settling ? "scale-75 opacity-0" : "scale-100 opacity-100"
-				}`}
+				data-settling={settling || undefined}
+				className="chat-working-spinner-slot flex shrink-0 origin-center"
 			>
 				<ResponseSpinner />
 			</span>
 			<span
 				role="status"
 				data-testid="live-working-label"
-				className={`text-sm font-normal transition-[transform,color] duration-200 ease-out motion-reduce:transition-none ${
-					settling ? "-translate-x-[22px] text-muted-foreground" : "chat-working-shimmer"
-				}`}
+				data-settling={settling || undefined}
+				className="chat-working-shimmer text-sm font-normal"
 			>
 				{settling ? "Worked for" : "Working for"} {formatDuration(elapsedMs)}
 			</span>

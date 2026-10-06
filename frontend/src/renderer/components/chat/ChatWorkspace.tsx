@@ -149,6 +149,13 @@ import {
 	type TurnSettings,
 } from "../../types/conversation";
 
+const EMPTY_CHAT_PLACEHOLDERS = [
+	"Fix a failing test in this project",
+	"Explain how this project is structured",
+	"Plan the next step for this feature",
+	"Find and fix a bug in this project",
+] as const;
+
 /**
  * The newest pending approval or question the live turn is waiting on.
  *
@@ -1239,6 +1246,10 @@ function ChatWorkspaceContent({
 	// Empty chats center the prompt; once a turn or item exists the composer docks
 	// at the bottom and stays there for the rest of the session.
 	const conversationEmpty = snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0;
+	const { t } = useTranslation();
+	const [emptyChatPlaceholder] = useState(
+		() => EMPTY_CHAT_PLACEHOLDERS[Math.floor(Math.random() * EMPTY_CHAT_PLACEHOLDERS.length)],
+	);
 	const composerDockRef = useRef<HTMLDivElement>(null);
 	const composerCenteredTopRef = useRef<number | null>(null);
 	const composerFlipDyRef = useRef<number | null>(null);
@@ -1469,6 +1480,11 @@ function ChatWorkspaceContent({
 								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
 							>
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
+								{conversationEmpty ? (
+									<h1 className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl">
+										{t("chat.welcome.heading")}
+									</h1>
+								) : null}
 								<ChatComposer
 									focusRef={composerFocusRef}
 									key={`${draftScopeKey}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
@@ -1498,6 +1514,11 @@ function ChatWorkspaceContent({
 									disabledPlaceholder={
 										controllerTransitioning || newWorkDisabled ? "" : undefined
 									}
+									// Keep the composer useful outside the centered welcome state too. A
+									// task can have non-message activity before its first visible chat
+									// message, and the generic placeholder makes a still-empty composer
+									// look like a regression.
+									emptyPlaceholder={conversationEmpty ? emptyChatPlaceholder : undefined}
 									skills={skills}
 									filePaths={filePaths}
 									filePathsTruncated={filePathsTruncated}
@@ -3391,7 +3412,7 @@ const TurnGroup = memo(function TurnGroup({
 			setShowSettledStatus(false);
 			return;
 		}
-		const timer = window.setTimeout(() => setShowSettledStatus(true), 220);
+		const timer = window.setTimeout(() => setShowSettledStatus(true), 440);
 		return () => window.clearTimeout(timer);
 	}, [group.live]);
 	const renderRun = (run: TimelineRun) =>

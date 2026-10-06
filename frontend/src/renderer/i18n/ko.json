@@ -2364,6 +2364,7 @@
 	"chat.draftDiscard.stay": "머무르기",
 	"chat.draftDiscard.leaveAnyway": "그래도 나가기",
 	"chat.edit.abandonRecovery": "편집 복구 포기",
+	"chat.welcome.heading": "무엇을 작업하고 싶으신가요?",
 	"settings.harness.summary": "{{installed}} of {{total}} installed",
 	"shell.goHome": "홈으로 이동",
 	"settings.cloudAgents.github.title": "GitHub private repositories",

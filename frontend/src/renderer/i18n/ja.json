@@ -2364,6 +2364,7 @@
 	"chat.draftDiscard.stay": "留まる",
 	"chat.draftDiscard.leaveAnyway": "離れる",
 	"chat.edit.abandonRecovery": "編集の復旧を中止",
+	"chat.welcome.heading": "何に取り組みますか？",
 	"settings.harness.summary": "{{installed}} of {{total}} installed",
 	"shell.goHome": "ホームに移動",
 	"settings.cloudAgents.github.title": "GitHub private repositories",

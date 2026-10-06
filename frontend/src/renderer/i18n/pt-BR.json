@@ -2396,6 +2396,7 @@
 	"chat.draftDiscard.stay": "Ficar",
 	"chat.draftDiscard.leaveAnyway": "Sair mesmo assim",
 	"chat.edit.abandonRecovery": "Abandonar recuperação da edição",
+	"chat.welcome.heading": "Em que você quer trabalhar?",
 	"settings.harness.summary": "{{installed}} of {{total}} installed",
 	"shell.goHome": "Ir para o início",
 	"settings.cloudAgents.github.title": "GitHub private repositories",

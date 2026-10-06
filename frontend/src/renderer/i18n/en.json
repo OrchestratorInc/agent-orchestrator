@@ -2351,6 +2351,7 @@
 	"chat.draftDiscard.stay": "Stay",
 	"chat.draftDiscard.leaveAnyway": "Leave anyway",
 	"chat.edit.abandonRecovery": "Abandon edit recovery",
+	"chat.welcome.heading": "What do you want to work on?",
 	"common.or": "or",
 	"home.newStandaloneAgent": "New standalone agent",
 	"createProject.standaloneDesc": "Start an agent without a project, repository, or workspace.",

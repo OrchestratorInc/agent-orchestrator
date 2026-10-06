@@ -1846,10 +1846,18 @@ textarea,
 }
 
 /* Live "Working for" label: solid muted text with a soft brighter band sweeping across it.
-   The muted layer keeps every glyph painted; the band fades in and out so it has no hard edge. */
+   The muted layer keeps every glyph painted; the band fades in and out so it has no hard edge.
+   The band's strength is a registered property so it can fade out when the turn settles
+   without the text ever switching paint technique (which would blink). */
+@property --working-shimmer {
+	syntax: "<number>";
+	inherits: false;
+	initial-value: 1;
+}
+
 .chat-working-shimmer {
 	background-image:
-		linear-gradient(100deg, transparent 35%, var(--color-foreground) 50%, transparent 65%),
+		linear-gradient(100deg, transparent 35%, color-mix(in srgb, var(--color-foreground) calc(var(--working-shimmer) * 100%), transparent) 50%, transparent 65%),
 		linear-gradient(var(--color-muted-foreground), var(--color-muted-foreground));
 	background-size: 250% 100%, 100% 100%;
 	background-repeat: no-repeat, no-repeat;
@@ -1858,6 +1866,40 @@ textarea,
 	-webkit-background-clip: text;
 	color: transparent;
 	animation: chat-working-shimmer 2.4s ease-in-out infinite;
+	will-change: transform;
+}
+
+/* Settling: the highlight fades, the label slides over the spinner's footprint, the
+   spinner shrinks away. Keyframes (not transitions) so a row that first mounts
+   already settled still plays them. */
+.chat-working-shimmer[data-settling] {
+	animation:
+		chat-working-shimmer 2.4s ease-in-out infinite,
+		chat-working-shift 400ms cubic-bezier(0.22, 1, 0.36, 1) both,
+		chat-working-fade 300ms ease-out both;
+}
+
+.chat-working-spinner-slot {
+	will-change: transform, opacity;
+}
+
+.chat-working-spinner-slot[data-settling] {
+	animation: chat-working-close 400ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes chat-working-close {
+	from { opacity: 1; transform: scale(1); }
+	to { opacity: 0; transform: scale(0); }
+}
+
+@keyframes chat-working-shift {
+	from { transform: translateX(0); }
+	to { transform: translateX(-18px); }
+}
+
+@keyframes chat-working-fade {
+	from { --working-shimmer: 1; }
+	to { --working-shimmer: 0; }
 }
 
 @keyframes chat-working-shimmer {
@@ -1866,10 +1908,19 @@ textarea,
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.chat-working-shimmer {
+	.chat-working-shimmer,
+	.chat-working-shimmer[data-settling] {
 		animation: none;
 		background: none;
 		color: var(--color-muted-foreground);
+	}
+	.chat-working-shimmer[data-settling] {
+		transform: translateX(-18px);
+	}
+	.chat-working-spinner-slot[data-settling] {
+		animation: none;
+		opacity: 0;
+		transform: scale(0);
 	}
 }
 

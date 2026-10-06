@@ -193,6 +193,7 @@ export const ChatComposer = memo(function ChatComposer({
 	remoteHost = false,
 	assetSessionId,
 	acceptedClientMessageIds,
+	emptyPlaceholder,
 }: {
 	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (
@@ -213,6 +214,8 @@ export const ChatComposer = memo(function ChatComposer({
 	disabled?: boolean;
 	/** Explains why message entry is temporarily blocked. */
 	disabledPlaceholder?: string;
+	/** A contextual prompt shown before an otherwise empty conversation begins. */
+	emptyPlaceholder?: string;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
@@ -1546,7 +1549,7 @@ export const ChatComposer = memo(function ChatComposer({
 							? "The controller is not connected"
 							: willQueue
 								? "Agent is working — this sends when it finishes"
-								: "Message the agent…")
+								: emptyPlaceholder ?? "Message the agent…")
 					}
 					menuOpen={menuOpen}
 					menuId={menuId}
