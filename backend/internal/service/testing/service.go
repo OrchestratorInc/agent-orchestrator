@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -32,26 +33,30 @@ type capability struct {
 	cancel context.CancelFunc
 }
 type attemptState struct {
-	record      domain.TestAttemptRecord
-	ctx         context.Context
-	cancel      context.CancelFunc
-	gate        chan struct{}
-	timer       Timer
-	seen        map[string]bool
-	frames      map[string]domain.TestDesktopFrame
-	cleanupDone chan struct{}
-	cleanupErr  error
-	finishErr   error
-	recording   bool
+	record          domain.TestAttemptRecord
+	ctx             context.Context
+	cancel          context.CancelFunc
+	gate            chan struct{}
+	timer           Timer
+	seen            map[string]bool
+	frames          map[string]domain.TestDesktopFrame
+	cleanupDone     chan struct{}
+	cleanupErr      error
+	finishErr       error
+	recording       bool
+	desktopReleased bool
+	cleanupRunning  bool
 }
 
 // Service owns target-bound tool dispatch and in-memory capabilities.
 type Service struct {
-	deps     Deps
-	mu       sync.Mutex
-	attempts map[domain.TestAttemptID]*attemptState
-	caps     map[domain.SessionID]capability
-	closed   bool
+	deps      Deps
+	mu        sync.Mutex
+	attempts  map[domain.TestAttemptID]*attemptState
+	caps      map[domain.SessionID]capability
+	closed    bool
+	closeDone chan struct{}
+	closeErr  error
 }
 
 // New constructs a testing service without starting any target.
@@ -135,7 +140,9 @@ func (s *Service) stateLocked(r domain.TestAttemptRecord) *attemptState {
 	st := &attemptState{record: r, ctx: ctx, cancel: cancel, gate: make(chan struct{}, 1), seen: map[string]bool{}, frames: map[string]domain.TestDesktopFrame{}, cleanupDone: make(chan struct{})}
 	st.gate <- struct{}{}
 	s.attempts[r.ID] = st
-	st.timer = s.deps.Clock.AfterFunc(r.Deadline.Sub(s.deps.Clock.Now()), func() { _, _ = s.finish(context.Background(), r.ID, domain.TestOutcomePartial, false) })
+	if r.Phase != domain.TestAttemptFinished {
+		st.timer = s.deps.Clock.AfterFunc(r.Deadline.Sub(s.deps.Clock.Now()), func() { _, _ = s.finish(context.Background(), r.ID, domain.TestOutcomePartial, false) })
+	}
 	return st
 }
 
@@ -352,7 +359,7 @@ func (s *Service) finish(ctx context.Context, id domain.TestAttemptID, outcome d
 		if !ok {
 			return r, apierr.NotFound("TEST_ATTEMPT_NOT_FOUND", "Unknown test attempt")
 		}
-		if r.Phase == domain.TestAttemptFinished {
+		if r.Phase == domain.TestAttemptFinished && r.CleanupState != domain.TestCleanupFailed {
 			return r, nil
 		}
 		st = s.stateLocked(r)
@@ -360,6 +367,12 @@ func (s *Service) finish(ctx context.Context, id domain.TestAttemptID, outcome d
 	if st.record.Phase == domain.TestAttemptFinished {
 		if st.finishErr != nil {
 			st.finishErr = s.deps.Store.UpdateTestAttempt(ctx, st.record)
+		}
+		if st.record.CleanupState == domain.TestCleanupFailed && !st.cleanupRunning {
+			st.cleanupDone = make(chan struct{})
+			st.cleanupErr = nil
+			st.cleanupRunning = true
+			go s.cleanup(context.WithoutCancel(ctx), st, st.cleanupDone)
 		}
 		return st.record, st.finishErr
 	}
@@ -385,17 +398,35 @@ func (s *Service) finish(ctx context.Context, id domain.TestAttemptID, outcome d
 	defer cancel()
 	err := s.deps.Store.UpdateTestAttempt(durableCtx, st.record)
 	st.finishErr = err
-	go s.cleanup(context.WithoutCancel(ctx), st)
+	st.cleanupRunning = true
+	go s.cleanup(context.WithoutCancel(ctx), st, st.cleanupDone)
 	return st.record, err
 }
-func (s *Service) cleanup(ctx context.Context, st *attemptState) {
-	<-st.gate
-	defer func() { st.gate <- struct{}{}; close(st.cleanupDone) }()
+func (s *Service) cleanup(ctx context.Context, st *attemptState, done chan struct{}) {
+	defer func() {
+		s.mu.Lock()
+		st.cleanupRunning = false
+		close(done)
+		s.mu.Unlock()
+	}()
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	select {
+	case <-st.gate:
+		defer func() { st.gate <- struct{}{} }()
+	case <-ctx.Done():
+		s.mu.Lock()
+		st.record.CleanupState = domain.TestCleanupFailed
+		persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		st.cleanupErr = errors.Join(ctx.Err(), s.deps.Store.UpdateTestAttempt(persistCtx, st.record))
+		persistCancel()
+		s.mu.Unlock()
+		return
+	}
 	s.mu.Lock()
 	rec := st.record
 	rec.CleanupState = domain.TestCleanupRunning
+	st.record.CleanupState = rec.CleanupState
 	err := s.deps.Store.UpdateTestAttempt(ctx, rec)
 	s.mu.Unlock()
 	var cleanupErr error
@@ -410,9 +441,11 @@ func (s *Service) cleanup(ctx context.Context, st *attemptState) {
 		if e := s.stopRecording(ctx, st, rec.Target); e != nil {
 			cleanupErr = e
 		}
-		if desktop, ok := s.deps.Desktop.(ports.TestingDesktopReleaser); ok && rec.Target.WindowID != "" {
+		if desktop, ok := s.deps.Desktop.(ports.TestingDesktopReleaser); ok && rec.Target.WindowID != "" && !st.desktopReleased {
 			if e := desktop.Release(ctx, rec.Target); e != nil {
 				cleanupErr = e
+			} else {
+				st.desktopReleased = true
 			}
 		}
 		logs, e := s.deps.Target.ReadLogs(ctx, rec.Target, domain.TestReadLogsRequest{MaxBytes: 65536})
@@ -452,6 +485,10 @@ func (s *Service) cleanup(ctx context.Context, st *attemptState) {
 func (s *Service) WaitCleanup(ctx context.Context, id domain.TestAttemptID) error {
 	s.mu.Lock()
 	st := s.attempts[id]
+	var done chan struct{}
+	if st != nil {
+		done = st.cleanupDone
+	}
 	s.mu.Unlock()
 	if st == nil {
 		return inactive()
@@ -459,7 +496,7 @@ func (s *Service) WaitCleanup(ctx context.Context, id domain.TestAttemptID) erro
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-st.cleanupDone:
+	case <-done:
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		return st.cleanupErr
@@ -481,17 +518,51 @@ func (s *Service) ListEvidence(ctx context.Context, id domain.TestAttemptID) ([]
 	return s.deps.Evidence.List(ctx, id)
 }
 
-// Close revokes capabilities and cancels work. It does not restart or replace
-// persisted targets. Restore must explicitly validate and issue a new token.
-func (s *Service) Close() {
+// Close cancels active attempts, joins bounded cleanup and closes the desktop
+// provider before the supervisor loses its in-memory process ownership.
+func (s *Service) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.closeDone != nil {
+		done := s.closeDone
+		s.mu.Unlock()
+		<-done
+		return s.closeErr
+	}
+	s.closeDone = make(chan struct{})
 	s.closed = true
+	for _, grant := range s.caps {
+		grant.cancel()
+	}
 	clear(s.caps)
-	for _, st := range s.attempts {
-		st.cancel()
-		if st.timer != nil {
-			st.timer.Stop()
+	var ids []domain.TestAttemptID
+	for id, st := range s.attempts {
+		if st.record.Phase != domain.TestAttemptFinished || st.cleanupRunning || st.record.CleanupState == domain.TestCleanupFailed {
+			st.cancel()
+			if st.timer != nil {
+				st.timer.Stop()
+			}
+			ids = append(ids, id)
 		}
 	}
+	s.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	var closeErr error
+	for _, id := range ids {
+		_, err := s.finish(ctx, id, domain.TestOutcomeCancelled, true)
+		closeErr = errors.Join(closeErr, err)
+	}
+	for _, id := range ids {
+		closeErr = errors.Join(closeErr, s.WaitCleanup(ctx, id))
+	}
+	if desktop, ok := s.deps.Desktop.(ports.TestingDesktopCloser); ok {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		closeErr = errors.Join(closeErr, desktop.Close(closeCtx))
+		closeCancel()
+	}
+	s.mu.Lock()
+	s.closeErr = closeErr
+	close(s.closeDone)
+	s.mu.Unlock()
+	return closeErr
 }

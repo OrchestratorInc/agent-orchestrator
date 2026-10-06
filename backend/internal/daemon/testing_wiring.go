@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,6 +40,25 @@ type testingDesktopAdapter interface {
 }
 
 type testingDesktopBridge struct{ testingDesktopAdapter }
+
+func testingInputError(err error) error {
+	if errors.Is(err, cua.ErrRefused) {
+		return errors.Join(ports.ErrTestingInputRefused, err)
+	}
+	return err
+}
+func (d testingDesktopBridge) Click(ctx context.Context, target domain.TestTargetIdentity, frame domain.TestDesktopFrame, request domain.TestClickRequest) (domain.TestActionResult, error) {
+	result, err := d.testingDesktopAdapter.Click(ctx, target, frame, request)
+	return result, testingInputError(err)
+}
+func (d testingDesktopBridge) Type(ctx context.Context, target domain.TestTargetIdentity, frame domain.TestDesktopFrame, request domain.TestTypeRequest) (domain.TestActionResult, error) {
+	result, err := d.testingDesktopAdapter.Type(ctx, target, frame, request)
+	return result, testingInputError(err)
+}
+func (d testingDesktopBridge) Key(ctx context.Context, target domain.TestTargetIdentity, frame domain.TestDesktopFrame, request domain.TestKeyRequest) (domain.TestActionResult, error) {
+	result, err := d.testingDesktopAdapter.Key(ctx, target, frame, request)
+	return result, testingInputError(err)
+}
 
 func (d testingDesktopBridge) DeliveryMode() string {
 	return string(d.testingDesktopAdapter.DeliveryMode())

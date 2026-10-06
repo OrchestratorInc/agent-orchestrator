@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 
@@ -88,6 +89,15 @@ type TestingRecordingResult struct {
 type TestingDesktopReleaser interface {
 	Release(ctx context.Context, target domain.TestTargetIdentity) error
 }
+
+// TestingDesktopCloser stops only this supervisor's desktop provider on shutdown.
+type TestingDesktopCloser interface {
+	Close(ctx context.Context) error
+}
+
+// ErrTestingInputRefused means no input was dispatched. Wiring translates a
+// provider's refusal into this class without exposing providers to the service.
+var ErrTestingInputRefused = errors.New("testing input refused before dispatch")
 
 // TestingEvidenceStore writes attempt-owned artifacts and a durable journal
 // outside the target, under ~/.ao. It returns receipts only after saving data.

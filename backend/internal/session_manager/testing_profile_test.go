@@ -185,6 +185,10 @@ func (testingProfileProviders) ReadLogs(_ context.Context, _ domain.TestTargetId
 	return domain.TestLogResult{Text: "target log"}, nil
 }
 
+func (testingProfileProviders) Stop(context.Context, domain.TestTargetIdentity) (ports.TestingCleanupResult, error) {
+	return ports.TestingCleanupResult{State: domain.TestCleanupComplete}, nil
+}
+
 func TestTestingChatRestoreReissuesCapabilityAndRevokesOld(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, store, _ := newChatManager(launcher)
@@ -222,6 +226,12 @@ func TestTestingChatRestoreReissuesCapabilityAndRevokesOld(t *testing.T) {
 	old, err := svc.IssueCapability(context.Background(), "mer-1")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err := mgr.checkSessionHealth(context.Background(), store.sessions["mer-1"]); !errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+		t.Fatal("testing health probe did not refuse adoption", err)
+	}
+	if _, err := svc.Execute(context.Background(), attempt.ID, "mer-1", old.Capability, "health-check-token", "read_target_logs", json.RawMessage(`{}`)); err != nil {
+		t.Fatal("health probe revoked the live capability", err)
 	}
 	if _, err := mgr.ResumeAgentWithMode(context.Background(), "mer-1"); err != nil {
 		t.Fatal(err)
@@ -324,7 +334,25 @@ func TestTestingChatHealthProbeDoesNotStopOrStartReplacementProvider(t *testing.
 	if err := mgr.checkSessionHealth(context.Background(), store.sessions["mer-1"]); !errors.Is(err, ports.ErrChatRecoveryInconclusive) {
 		t.Fatal("health probe adopted a provider with a revoked capability", err)
 	}
-	if len(launcher.stopped) != 0 || len(launcher.started) != 1 || !launcher.started[0].ReconnectOnly {
-		t.Fatal("testing health probe replaced the provider")
+	if len(launcher.stopped) != 0 || len(launcher.started) != 0 || profile.issued != 0 {
+		t.Fatal("testing health probe stopped, started or revoked a provider capability")
+	}
+}
+
+type boundTestingStore struct{ *fakeStore }
+
+func (s boundTestingStore) GetTestToolBinding(_ context.Context, id domain.SessionID) (domain.TestToolProfileLink, bool, error) {
+	return domain.TestToolProfileLink{SessionID: id, AttemptID: "attempt", ProfileID: domain.TestToolProfileNativeV1}, true, nil
+}
+
+func TestBoundTestingRestoreWithoutResolverFailsBeforeStartingProvider(t *testing.T) {
+	launcher := &recordingLauncher{}
+	mgr, store, _ := newChatManager(launcher)
+	seedChatResumeSession(store, domain.ActivityExited)
+	mgr.store = boundTestingStore{store}
+	_, err := mgr.ResumeAgentWithMode(context.Background(), "mer-1")
+	var failure *apierr.Error
+	if !errors.As(err, &failure) || failure.Code != "TESTING_PROVIDER_NOT_CONFIGURED" || len(launcher.started) != 0 || len(launcher.stopped) != 0 {
+		t.Fatal("bound restore silently omitted testing tools", err)
 	}
 }

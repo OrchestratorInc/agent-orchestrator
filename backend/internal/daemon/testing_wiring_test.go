@@ -162,3 +162,12 @@ func TestTestingRecordingBridgePreservesFullMetadata(t *testing.T) {
 		t.Fatal("provider recording metadata changed during translation", string(got), err, gotErr)
 	}
 }
+
+func TestTestingInputRefusalBridge(t *testing.T) {
+	if !errors.Is(testingInputError(errors.Join(cua.ErrRefused, errors.New("stale frame"))), ports.ErrTestingInputRefused) {
+		t.Fatal("Cua refusal was not mapped to the provider-neutral refusal")
+	}
+	if errors.Is(testingInputError(cua.ErrProvider), ports.ErrTestingInputRefused) {
+		t.Fatal("uncertain delivery was reported as no input")
+	}
+}

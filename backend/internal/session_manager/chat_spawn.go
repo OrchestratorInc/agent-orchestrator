@@ -211,7 +211,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		controllerCommitted bool
 		completionErr       error
 	)
-	mcpServers, err := m.testingMCPServers(ctx, id, false)
+	mcpServers, err := m.testingMCPServers(ctx, id, false, false)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
 		return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, err)
@@ -482,7 +482,7 @@ func (m *Manager) resumeChatController(
 	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var completionErr error
-	mcpServers, err := m.testingMCPServers(ctx, rec.ID, !reconnectOnly)
+	mcpServers, err := m.testingMCPServers(ctx, rec.ID, !reconnectOnly, reconnectOnly)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: testing profile: %w", operation, rec.ID, err)
 	}

@@ -155,6 +155,9 @@ func (a *Adapter) Stop(ctx context.Context, target domain.TestTargetIdentity) (p
 		}
 	}
 	if len(problems) == 0 {
+		grace, graceCancel := context.WithTimeout(ctx, 2*time.Second)
+		defer graceCancel()
+		escalated := false
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 		for {
@@ -164,6 +167,20 @@ func (a *Adapter) Stop(ctx context.Context, target domain.TestTargetIdentity) (p
 					problems = append(problems, err)
 				}
 				break
+			}
+			if !escalated && grace.Err() != nil && ctx.Err() == nil {
+				// Capture any last descendants, then recheck each exact kernel
+				// birth immediately before escalation. Reused PIDs stay untouched.
+				if err := a.captureTree(ctx, s); err != nil {
+					problems = append(problems, err)
+					break
+				}
+				for pid := range s.owned {
+					if err := a.signalOwned(ctx, s, pid, syscall.SIGKILL); err != nil {
+						problems = append(problems, err)
+					}
+				}
+				escalated = true
 			}
 			select {
 			case <-ctx.Done():
@@ -260,6 +277,10 @@ func (a *Adapter) tmuxCommand(ctx context.Context, s *launch, command string) (b
 }
 
 func (a *Adapter) terminate(ctx context.Context, s *launch, pid int) error {
+	return a.signalOwned(ctx, s, pid, syscall.SIGTERM)
+}
+
+func (a *Adapter) signalOwned(ctx context.Context, s *launch, pid int, signal syscall.Signal) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -295,7 +316,7 @@ func (a *Adapter) terminate(ctx context.Context, s *launch, pid int) error {
 	if err != nil || !current.Equal(started) {
 		return errors.Join(fmt.Errorf("refusing signal to changed PID %d", pid), err)
 	}
-	if err := a.ops.signal(pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) && (!errors.Is(err, syscall.EIO) || core) {
+	if err := a.ops.signal(pid, signal); err != nil && !errors.Is(err, syscall.ESRCH) && (!errors.Is(err, syscall.EIO) || core) {
 		return err
 	}
 	return nil

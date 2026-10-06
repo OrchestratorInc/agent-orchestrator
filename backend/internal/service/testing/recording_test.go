@@ -23,6 +23,13 @@ type movieDesktop struct {
 	escapePath        string
 }
 
+func (d *movieDesktop) Close(ctx context.Context) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.cleanupEvents = append(d.cleanupEvents, "desktop_close")
+	return ctx.Err()
+}
+
 func (d *movieDesktop) StartRecording(_ context.Context, _ domain.TestTargetIdentity, dir string) (ports.TestingRecordingResult, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return ports.TestingRecordingResult{}, err

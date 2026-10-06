@@ -49,8 +49,19 @@ func (m *Manager) LaunchTestingWorker(ctx context.Context, request testingsvc.Wo
 	return rec.ID, err
 }
 
-func (m *Manager) testingMCPServers(ctx context.Context, id domain.SessionID, replaceProvider bool) ([]ports.ChatMCPServerConfig, error) {
+func (m *Manager) testingMCPServers(ctx context.Context, id domain.SessionID, replaceProvider, reconnectOnly bool) ([]ports.ChatMCPServerConfig, error) {
 	if m.testingProfile == nil {
+		if bindings, ok := m.store.(interface {
+			GetTestToolBinding(context.Context, domain.SessionID) (domain.TestToolProfileLink, bool, error)
+		}); ok {
+			_, bound, err := bindings.GetTestToolBinding(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			if bound {
+				return nil, testingsvc.ProviderNotConfigured()
+			}
+		}
 		return nil, nil
 	}
 	link, ok, err := m.testingProfile.LookupBinding(ctx, id)
@@ -59,6 +70,9 @@ func (m *Manager) testingMCPServers(ctx context.Context, id domain.SessionID, re
 	}
 	if !ok {
 		return nil, nil
+	}
+	if reconnectOnly {
+		return nil, fmt.Errorf("%w: testing worker health adoption cannot refresh its capability", ports.ErrChatRecoveryInconclusive)
 	}
 	// Pin both the binary and run file to this daemon. Never discover an installed
 	// AO through PATH or inherit another instance's AO_RUN_FILE.
@@ -72,7 +86,7 @@ func (m *Manager) testingMCPServers(ctx context.Context, id domain.SessionID, re
 	// ACP live adoption bypasses session/load and cannot apply a new MCP child
 	// environment. Explicit restore stops only this worker's provider, then
 	// resumes its stored conversation in a new process. Health probes never stop
-	// or start providers and instead refuse adoption at ControllerReady.
+	// or start providers and refuse before capability issuance.
 	if replaceProvider {
 		if err := m.chat.StopChat(ctx, id); err != nil {
 			return nil, fmt.Errorf("stop testing worker provider for capability refresh: %w", err)

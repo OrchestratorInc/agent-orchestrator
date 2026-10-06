@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"image/png"
 	"io"
 	"strings"
@@ -235,6 +236,11 @@ func (s *Service) Execute(ctx context.Context, id domain.TestAttemptID, session 
 		if err != nil {
 			record.State = "failed"
 			record.Detail = "Tool failed or was cancelled; partial action may have been delivered"
+			var failure *apierr.Error
+			if errors.As(err, &failure) && failure.Code == "TEST_INPUT_REFUSED" {
+				record.State = "refused"
+				record.Detail = "Input refused before dispatch; nothing was sent"
+			}
 		}
 		if e := s.deps.Evidence.AppendAction(journalCtx, record); e != nil {
 			err = apierr.Internal("TEST_EVIDENCE_WRITE_FAILED", "Cannot save action completion; partial action may have been delivered")
@@ -315,7 +321,7 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 		}
 		action, e := s.deps.Desktop.Click(ctx, target, f, *v)
 		if e != nil {
-			return result, apierr.Unavailable("TEST_INPUT_FAILED", "Target click failed; delivery is unverified")
+			return result, inputFailure(e)
 		}
 		result.Action = &action
 	case *domain.TestTypeRequest:
@@ -325,7 +331,7 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 		}
 		action, e := s.deps.Desktop.Type(ctx, target, f, *v)
 		if e != nil {
-			return result, apierr.Unavailable("TEST_INPUT_FAILED", "Target typing failed; delivery is unverified")
+			return result, inputFailure(e)
 		}
 		result.Action = &action
 	case *domain.TestKeyRequest:
@@ -335,7 +341,7 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 		}
 		action, e := s.deps.Desktop.Key(ctx, target, f, *v)
 		if e != nil {
-			return result, apierr.Unavailable("TEST_INPUT_FAILED", "Target key failed; delivery is unverified")
+			return result, inputFailure(e)
 		}
 		result.Action = &action
 	case *domain.TestReadLogsRequest:
@@ -382,4 +388,11 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 		}
 	}
 	return result, nil
+}
+
+func inputFailure(err error) error {
+	if errors.Is(err, ports.ErrTestingInputRefused) {
+		return apierr.Conflict("TEST_INPUT_REFUSED", "Target input refused before dispatch; nothing was sent", nil)
+	}
+	return apierr.Unavailable("TEST_INPUT_FAILED", "Target input failed; delivery is unverified")
 }

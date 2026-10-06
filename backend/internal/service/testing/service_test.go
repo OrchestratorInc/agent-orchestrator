@@ -79,6 +79,7 @@ type fakeProviders struct {
 	shots, clicks, stops, probes int
 	probeFailAt                  int
 	bindWrong                    bool
+	inputErr                     error
 	stopFail                     bool
 	screenshotHook               func(context.Context) error
 	inputFrames                  []domain.TestDesktopFrame
@@ -143,6 +144,9 @@ func (p *fakeProviders) Click(ctx context.Context, _ domain.TestTargetIdentity, 
 	defer p.mu.Unlock()
 	p.clicks++
 	p.inputFrames = append(p.inputFrames, frame)
+	if p.inputErr != nil {
+		return domain.TestActionResult{}, p.inputErr
+	}
 	return domain.TestActionResult{Delivered: true}, ctx.Err()
 }
 func (p *fakeProviders) Type(ctx context.Context, t domain.TestTargetIdentity, f domain.TestDesktopFrame, _ domain.TestTypeRequest) (domain.TestActionResult, error) {
@@ -393,24 +397,20 @@ func TestCapabilitiesWrongSessionAttemptReissueAndRestart(t *testing.T) {
 	if _, err = f.call("pre-restart", "screenshot", map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
-	f.svc.Close()
+	if err := f.svc.Close(); err != nil {
+		t.Fatal(err)
+	}
 	f.svc = New(f.deps)
 	if _, err = f.call("restart", "screenshot", map[string]any{}); code(err) != "INVALID_TEST_CAPABILITY" {
 		t.Fatal("restart did not fail closed", err)
 	}
-	binding, err = f.svc.IssueCapability(context.Background(), f.start.WorkerSessionID)
-	if err != nil {
-		t.Fatal(err)
+	if _, err = f.svc.IssueCapability(context.Background(), f.start.WorkerSessionID); code(err) != "TEST_ATTEMPT_INACTIVE" {
+		t.Fatal("shutdown attempt was restored", err)
 	}
-	f.worker.binding = binding
-	if _, err = f.call("restored", "screenshot", map[string]any{}); err != nil {
-		t.Fatal(err)
-	}
-	// Durable journal prevents replay even though the in-memory duplicate map reset.
 	if _, err = f.call("pre-restart", "screenshot", map[string]any{}); err == nil {
 		t.Fatal("journaled request replayed after restart")
 	}
-	if f.provider.shots != 2 {
+	if f.provider.shots != 1 || f.provider.stops != 1 {
 		t.Fatal("duplicate input reached provider")
 	}
 	link, ok, err := f.svc.LookupBinding(context.Background(), "ordinary")
@@ -647,7 +647,10 @@ func TestCancellationAfterRestartWithoutTargetProviderKeepsEvidence(t *testing.T
 	if _, err := f.call("saved", "screenshot", map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
-	f.svc.Close()
+	f.provider.stopFail = true
+	if err := f.svc.Close(); err == nil {
+		t.Fatal("failed shutdown cleanup was hidden")
+	}
 	deps := f.deps
 	deps.Target = nil
 	f.svc = New(deps)
