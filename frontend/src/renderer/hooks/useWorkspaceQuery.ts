@@ -116,7 +116,6 @@ function toWorkspaceSession(
 		statusReadiness,
 		provisionState: session.provisionState,
 		provisionError: session.provisionError || undefined,
-		startupCue: session.startupCue,
 		isTerminated: session.isTerminated,
 		chatProviderPreserved: session.chatProviderPreserved,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,

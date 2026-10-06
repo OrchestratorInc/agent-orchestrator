@@ -61,7 +61,7 @@ func (q *Queries) InsertCue(ctx context.Context, arg InsertCueParams) error {
 }
 
 const selectCueByID = `-- name: SelectCueByID :one
-SELECT id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation
+SELECT id, project_id, name, type, command, prompt, created_at, updated_at
 FROM cues
 WHERE id = ?
 `
@@ -78,13 +78,12 @@ func (q *Queries) SelectCueByID(ctx context.Context, id domain.CueID) (Cue, erro
 		&i.Prompt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.RunOnWorktreeCreation,
 	)
 	return i, err
 }
 
 const selectCuesByProject = `-- name: SelectCuesByProject :many
-SELECT id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation
+SELECT id, project_id, name, type, command, prompt, created_at, updated_at
 FROM cues
 WHERE project_id = ?
 ORDER BY name
@@ -108,7 +107,6 @@ func (q *Queries) SelectCuesByProject(ctx context.Context, projectID domain.Proj
 			&i.Prompt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.RunOnWorktreeCreation,
 		); err != nil {
 			return nil, err
 		}
@@ -127,7 +125,7 @@ const updateCue = `-- name: UpdateCue :one
 UPDATE cues
 SET name = ?, type = ?, command = ?, prompt = ?, updated_at = ?
 WHERE id = ?
-RETURNING id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation
+RETURNING id, project_id, name, type, command, prompt, created_at, updated_at
 `
 
 type UpdateCueParams struct {
@@ -158,7 +156,6 @@ func (q *Queries) UpdateCue(ctx context.Context, arg UpdateCueParams) (Cue, erro
 		&i.Prompt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.RunOnWorktreeCreation,
 	)
 	return i, err
 }

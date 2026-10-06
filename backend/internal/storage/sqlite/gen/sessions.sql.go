@@ -175,7 +175,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts, startup_cue_json
+    claude_activity_facts, codex_activity_facts
 FROM sessions WHERE id = ?
 `
 
@@ -241,7 +241,6 @@ type GetSessionRow struct {
 	AutomationLaunchCompleted        bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
-	StartupCueJson                   string
 }
 
 func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessionRow, error) {
@@ -309,7 +308,6 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.AutomationLaunchCompleted,
 		&i.ClaudeActivityFacts,
 		&i.CodexActivityFacts,
-		&i.StartupCueJson,
 	)
 	return i, err
 }
@@ -328,7 +326,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts, startup_cue_json
+    claude_activity_facts, codex_activity_facts
 FROM sessions WHERE automation_run_id = ?
 `
 
@@ -394,7 +392,6 @@ type GetSessionByAutomationRunIDRow struct {
 	AutomationLaunchCompleted        bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
-	StartupCueJson                   string
 }
 
 func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRunID *domain.AutomationRunID) (GetSessionByAutomationRunIDRow, error) {
@@ -462,7 +459,6 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.AutomationLaunchCompleted,
 		&i.ClaudeActivityFacts,
 		&i.CodexActivityFacts,
-		&i.StartupCueJson,
 	)
 	return i, err
 }
@@ -630,7 +626,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts, startup_cue_json
+    claude_activity_facts, codex_activity_facts
 FROM sessions ORDER BY project_id, num
 `
 
@@ -696,7 +692,6 @@ type ListAllSessionsRow struct {
 	AutomationLaunchCompleted        bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
-	StartupCueJson                   string
 }
 
 func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, error) {
@@ -770,7 +765,6 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.AutomationLaunchCompleted,
 			&i.ClaudeActivityFacts,
 			&i.CodexActivityFacts,
-			&i.StartupCueJson,
 		); err != nil {
 			return nil, err
 		}
@@ -799,7 +793,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts, startup_cue_json
+    claude_activity_facts, codex_activity_facts
 FROM sessions WHERE project_id IS ? ORDER BY num
 `
 
@@ -865,7 +859,6 @@ type ListSessionsByProjectRow struct {
 	AutomationLaunchCompleted        bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
-	StartupCueJson                   string
 }
 
 func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.ProjectID) ([]ListSessionsByProjectRow, error) {
@@ -939,7 +932,6 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.AutomationLaunchCompleted,
 			&i.ClaudeActivityFacts,
 			&i.CodexActivityFacts,
-			&i.StartupCueJson,
 		); err != nil {
 			return nil, err
 		}

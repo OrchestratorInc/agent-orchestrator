@@ -47,6 +47,7 @@ type CueDraft = {
 };
 
 function emptyDraft(): CueDraft {
+	return { name: "", type: "command", command: "", prompt: "" };
 }
 
 function draftFromDTO(cue: CueDTO): CueDraft {
@@ -295,6 +296,7 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 						{ value: "command", label: t("cues.typeName.command"), icon: <CueTypeIcon type="command" className="size-3! shrink-0 text-settings-muted" /> },
 						{ value: "agent", label: t("cues.typeName.agent"), icon: <CueTypeIcon type="agent" className="size-3! shrink-0 text-settings-muted" /> },
 					]}
+					onChange={(type) => setDraft((current) => ({ ...current, type }))}
 					triggerClassName="w-fit self-start"
 					menuAlign="start"
 					menuClassName="border-0! shadow-md!"
