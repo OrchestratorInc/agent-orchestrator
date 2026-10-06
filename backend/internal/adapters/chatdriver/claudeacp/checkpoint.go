@@ -19,6 +19,17 @@ type checkpointDriver struct {
 	plugin claudePlugin
 }
 
+// Reconnect forwards to the wrapped driver. Embedding ports.ChatDriver exposes
+// only that interface's methods, so without this the startup health check never
+// finds a reconnector and marks every live Claude chat as exited.
+func (d *checkpointDriver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	reconnector, ok := d.ChatDriver.(ports.ChatDriverReconnector)
+	if !ok {
+		return nil, ports.ErrChatHostNotRunning
+	}
+	return reconnector.Reconnect(ctx, cfg)
+}
+
 func (d *checkpointDriver) VerifyNativeCheckpoint(ctx context.Context, request ports.NativeCheckpointRequest) (ports.NativeCheckpointBoundary, error) {
 	config, ok := d.plugin.(ports.AgentNativeSessionConfigProvider)
 	if !ok {

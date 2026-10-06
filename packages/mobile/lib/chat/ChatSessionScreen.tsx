@@ -361,7 +361,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		void openGitHub(mobileReachablePreviewURL(url, config?.host ?? "")?.href ?? url);
 	}, [config?.host]);
 
-	const resume = useCallback(async () => {
+	const resume = useCallback(async (quiet = false) => {
 		if (resuming) return;
 		setResuming(true);
 		try {
@@ -371,9 +371,21 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			await refreshBoard();
 			await conversation.refresh();
 		} catch (cause) {
-			Alert.alert("Couldn't resume the agent", userFacingError(cause));
+			// An automatic attempt leaves the Resume banner to explain a failure.
+			if (!quiet) Alert.alert("Couldn't resume the agent", userFacingError(cause));
 		} finally { setResuming(false); }
 	}, [config, conversation.refresh, refreshBoard, resuming, session.id, terminated]);
+
+	// The daemon leaves agents stopped after a restart and starts them when their
+	// session is opened, as the desktop does. One attempt per opening: a failure
+	// or a later exit stays stopped behind the Resume banner.
+	const autoResumeTried = useRef<string | undefined>(undefined);
+	useEffect(() => {
+		if (autoResumeTried.current === session.id) return;
+		if ("projectName" in session || terminated || session.status !== "exited" || session.provisionState === "failed" || !config) return;
+		autoResumeTried.current = session.id;
+		void resume(true);
+	}, [config, resume, session, terminated]);
 
 	const startInterfaceSwitch = useCallback(
 		async (policy: "drain" | "interrupt") => {
