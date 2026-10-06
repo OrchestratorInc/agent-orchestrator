@@ -1958,26 +1958,41 @@ textarea,
 	background: color-mix(in srgb, var(--color-success) 16%, transparent);
 }
 
+/* A crisp ease-out pop, not a back-out bounce: the overshoot made the check
+   read as a jitter. 180ms keeps it fully settled before the resolve swap. */
 .agent-switch-handoff-toast[data-phase="resolved"] .agent-switch-handoff-toast-orb svg {
-	animation: agent-switch-handoff-tick 280ms var(--ease-out);
+	animation: agent-switch-handoff-tick 180ms var(--ease-out) both;
+}
+
+/* The label lives in a stacked grid cell so the outgoing and incoming labels
+   crossfade over the same footprint instead of leaving a gap between the tick
+   and the next loader. */
+.agent-switch-handoff-toast-label-wrap {
+	display: grid;
+	align-items: center;
 }
 
 .agent-switch-handoff-toast-label {
+	grid-area: 1 / 1;
 	font-size: 0.625rem;
 	line-height: 0.75rem;
 	color: var(--color-foreground);
-	animation: agent-switch-handoff-toast-in 300ms var(--ease-out);
-	transition: opacity 180ms var(--ease-out);
+	white-space: nowrap;
+	will-change: transform, opacity;
 }
 
-.agent-switch-handoff-toast[data-phase="resolved"] .agent-switch-handoff-toast-label {
-	opacity: 0;
+.agent-switch-handoff-toast-label.is-leaving {
+	animation: agent-switch-handoff-toast-out 200ms var(--ease-out) both;
+}
+
+.agent-switch-handoff-toast-label.is-entering {
+	animation: agent-switch-handoff-toast-in 240ms var(--ease-out) 40ms both;
 }
 
 @keyframes agent-switch-handoff-tick {
 	from {
 		opacity: 0;
-		transform: scale(0.4);
+		transform: scale(0.9);
 	}
 	to {
 		opacity: 1;
@@ -1985,14 +2000,25 @@ textarea,
 	}
 }
 
+@keyframes agent-switch-handoff-toast-out {
+	from {
+		opacity: 1;
+		transform: translateY(0);
+	}
+	to {
+		opacity: 0;
+		transform: translateY(-4px);
+	}
+}
+
 @keyframes agent-switch-handoff-toast-in {
 	from {
 		opacity: 0;
-		transform: translateY(3px);
+		transform: translateY(4px);
 	}
 	to {
 		opacity: 1;
-		transform: none;
+		transform: translateY(0);
 	}
 }
 
@@ -2085,13 +2111,15 @@ textarea,
 		animation: none;
 	}
 
-	.agent-switch-handoff-toast-label {
+	/* Motion-free handoff: hide the outgoing label so the two stacked labels
+	   don't overlap while the next stage takes over. */
+	.agent-switch-handoff-toast-label.is-leaving,
+	.agent-switch-handoff-toast-label.is-entering {
 		animation: none;
-		opacity: 1;
 	}
 
-	.agent-switch-handoff-toast[data-phase="resolved"] .agent-switch-handoff-toast-label {
-		opacity: 1;
+	.agent-switch-handoff-toast-label.is-leaving {
+		opacity: 0;
 	}
 
 	.agent-switch-progress-step.is-current .agent-switch-progress-dot {

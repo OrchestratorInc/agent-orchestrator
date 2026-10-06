@@ -36,6 +36,11 @@ function stepIndex(stage: AgentSwitchPresentation["stage"]): number {
 	return i < 0 ? 0 : i;
 }
 
+// How long the completing stage holds its green tick while the next stage's
+// label crossfades in. Keep it short so tick → label → loader reads as one
+// continuous motion instead of three separate beats.
+export const agentSwitchHandoffResolveMs = 300;
+
 export function AgentSwitchHandoffVisual({ fromHarness, targetHarness, stage, variant = "full" }: Props) {
 	const { t } = useTranslation();
 	const active = stepIndex(stage);
@@ -56,10 +61,14 @@ export function AgentSwitchHandoffVisual({ fromHarness, targetHarness, stage, va
 		const timer = window.setTimeout(() => {
 			setDisplayed(active);
 			setResolved(false);
-		}, 480);
+		}, agentSwitchHandoffResolveMs);
 		return () => window.clearTimeout(timer);
 	}, [active, displayed]);
 	const shown = agentSwitchHandoffSteps[displayed];
+	// During the resolve window the next stage's label crossfades in while the
+	// completing stage slides out, so the two labels overlap instead of leaving
+	// a gap between the green tick and the next loader.
+	const entering = resolved && active !== displayed ? agentSwitchHandoffSteps[active] : null;
 	return (
 		<div className="flex w-full flex-col items-center gap-1" data-testid="agent-switch-handoff-visual" data-stage={stage ?? "unknown"} data-active-step={shown.key}>
 			<div className={cn("flex w-full items-center justify-center", compact ? "gap-2" : "gap-1 sm:gap-2")}>
@@ -81,8 +90,24 @@ export function AgentSwitchHandoffVisual({ fromHarness, targetHarness, stage, va
 				<span aria-hidden="true" className={cn("agent-switch-handoff-toast-orb", compact && "size-4")}>
 					{resolved ? <Check aria-hidden="true" className="size-3" strokeWidth={3} /> : <span aria-hidden="true" className="agent-switch-handoff-orb-core" />}
 				</span>
-				<span key={shown.key} data-testid="agent-switch-handoff-toast-label" className={cn("agent-switch-handoff-toast-label", compact && "text-[11px] leading-4")}>
-					{t(shown.labelKey)}
+				<span className="agent-switch-handoff-toast-label-wrap">
+					<span
+						key={shown.key}
+						data-testid="agent-switch-handoff-toast-label"
+						className={cn("agent-switch-handoff-toast-label", compact && "text-[11px] leading-4", resolved && "is-leaving")}
+					>
+						{t(shown.labelKey)}
+					</span>
+					{entering ? (
+						<span
+							key={entering.key}
+							aria-hidden="true"
+							data-testid="agent-switch-handoff-toast-label-entering"
+							className={cn("agent-switch-handoff-toast-label is-entering", compact && "text-[11px] leading-4")}
+						>
+							{t(entering.labelKey)}
+						</span>
+					) : null}
 				</span>
 			</div>
 		</div>

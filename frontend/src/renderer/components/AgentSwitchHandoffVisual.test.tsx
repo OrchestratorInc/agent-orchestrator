@@ -1,6 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { AgentSwitchHandoffVisual } from "./AgentSwitchHandoffVisual";
+import { AgentSwitchHandoffVisual, agentSwitchHandoffResolveMs } from "./AgentSwitchHandoffVisual";
 
 describe("AgentSwitchHandoffVisual", () => {
 	it("renders both agent marks joined by an animated dotted curve", () => {
@@ -62,14 +62,16 @@ describe("AgentSwitchHandoffVisual", () => {
 		// Daemon advances to the next stage.
 		rerender(<AgentSwitchHandoffVisual fromHarness="codex" targetHarness="claude-code" stage="stopping_source" />);
 
-		// The completing stage flashes a green tick while its label stays put.
+		// The completing stage flashes a green tick while its label stays put, and
+		// the next label crossfades in beside it.
 		expect(toast()).toHaveAttribute("data-phase", "resolved");
 		expect(toast()).toHaveAttribute("data-step", "preparing");
 		expect(screen.getByTestId("agent-switch-handoff-toast-label")).toHaveTextContent("Preparing handoff");
+		expect(screen.getByTestId("agent-switch-handoff-toast-label-entering")).toHaveTextContent("Stopping source agent");
 
-		// After the 480 ms handoff delay the toast moves on to the next stage.
+		// After the resolve delay the toast moves on to the next stage.
 		act(() => {
-			vi.advanceTimersByTime(500);
+			vi.advanceTimersByTime(agentSwitchHandoffResolveMs + 20);
 		});
 		expect(toast()).toHaveAttribute("data-step", "stopping_source");
 		expect(toast()).toHaveAttribute("data-phase", "working");
