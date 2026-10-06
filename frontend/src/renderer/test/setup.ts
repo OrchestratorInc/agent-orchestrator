@@ -132,6 +132,7 @@ if (typeof window !== "undefined") {
 		},
 		window: {
 			getZoomFactor: async () => 1,
+					onTitlebarPointer: () => () => undefined,
 			onZoomFactor: () => () => undefined,
 			isMaximized: async () => false,
 			onMaximized: () => () => undefined,

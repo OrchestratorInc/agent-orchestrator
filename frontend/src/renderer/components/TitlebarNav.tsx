@@ -1,6 +1,7 @@
 import { useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, PanelLeft } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { aoBridge } from "../lib/bridge";
 import { useTranslation } from "react-i18next";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
@@ -48,13 +49,13 @@ const REVEAL_LEAVE_DELAY_MS = 60;
 
 function useSidebarReveal(isSidebarOpen: boolean) {
   const [revealed, setRevealed] = useState(false);
-  const inside = useRef({ zone: false, sidebar: false });
+  const inside = useRef({ zone: false, sidebar: false, band: false });
   const timer = useRef<number | undefined>(undefined);
 
-  const update = useCallback((source: "zone" | "sidebar", value: boolean) => {
+  const update = useCallback((source: "zone" | "sidebar" | "band", value: boolean) => {
     inside.current[source] = value;
     window.clearTimeout(timer.current);
-    if (inside.current.zone || inside.current.sidebar) {
+    if (inside.current.zone || inside.current.sidebar || inside.current.band) {
       setRevealed(true);
     } else {
       timer.current = window.setTimeout(() => setRevealed(false), REVEAL_LEAVE_DELAY_MS);
@@ -63,12 +64,21 @@ function useSidebarReveal(isSidebarOpen: boolean) {
 
   useEffect(() => {
     if (!isSidebarOpen) {
-      inside.current = { zone: false, sidebar: false };
+      inside.current = { zone: false, sidebar: false, band: false };
       window.clearTimeout(timer.current);
       setRevealed(false);
       return;
     }
     let el: HTMLElement | null = null;
+    // The titlebar row over the sidebar is a window-drag region, so the page
+    // never sees the pointer there. The main process reports the cursor's x
+    // (CSS px) while it is in that row, or null when it is elsewhere.
+    const offPointer = aoBridge.window.onTitlebarPointer((x) => {
+      const right = document
+        .querySelector<HTMLElement>('[data-slot="sidebar-container"]')
+        ?.getBoundingClientRect().right;
+      update("band", x !== null && right !== undefined && x < right);
+    });
     const enter = () => update("sidebar", true);
     const leave = () => update("sidebar", false);
     const frame = requestAnimationFrame(() => {
@@ -80,6 +90,7 @@ function useSidebarReveal(isSidebarOpen: boolean) {
     return () => {
       cancelAnimationFrame(frame);
       window.clearTimeout(timer.current);
+      offPointer();
       el?.removeEventListener("pointerenter", enter);
       el?.removeEventListener("pointerleave", leave);
     };
