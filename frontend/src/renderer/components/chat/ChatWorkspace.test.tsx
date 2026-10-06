@@ -1514,6 +1514,8 @@ describe("ChatWorkspace timeline", () => {
 
 		const startup = screen.getByTestId("session-startup");
 		expect(within(startup).getByRole("status")).toHaveTextContent("Setting up session…");
+		// It takes the Working row's slot inside the brief's turn, so the handoff moves nothing.
+		expect(startup.closest("[data-chat-scroll-anchor]")).toContainElement(screen.getByText("Fix clicking attachments"));
 		const steps = within(startup).getAllByRole("listitem");
 		expect(steps.map((step) => [step.dataset.step, step.dataset.status])).toEqual([
 			["fetch", "done"],

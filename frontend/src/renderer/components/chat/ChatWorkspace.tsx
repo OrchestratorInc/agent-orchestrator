@@ -663,6 +663,37 @@ function ChatWorkspaceContent({
 	const openingTurnId = startupState
 		? snapshot.turns.find((queuedTurn) => queuedTurn.state === "queued")?.id
 		: undefined;
+	const provisionSteps = session?.provisionSteps;
+	const provisionError = session?.provisionError;
+	const sessionBranch = session?.branch;
+	const startup = useMemo(
+		() =>
+			startupState
+				? {
+						failed: startupState === "failed",
+						steps: provisionSteps ?? [],
+						error: provisionError,
+						agentName: agentLabel(snapshot.harness),
+						branch: sessionBranch,
+						openingTurnId,
+						onRetry: newWorkDisabled ? undefined : onResumeAgent,
+						retrying: resumingAgent,
+						retryError: resumeError,
+					}
+				: undefined,
+		[
+			newWorkDisabled,
+			onResumeAgent,
+			openingTurnId,
+			provisionError,
+			provisionSteps,
+			resumeError,
+			resumingAgent,
+			sessionBranch,
+			snapshot.harness,
+			startupState,
+		],
+	);
 	const hasPendingInteraction = snapshot.items.some(
 		(item) =>
 			item.kind === "activity" &&
@@ -1475,17 +1506,7 @@ function ChatWorkspaceContent({
 									newWorkDisabled={newWorkDisabled}
 									rollbackDisabled={Boolean(turn || rollbackPending || newWorkDisabled)}
 									localEchos={localEchos}
-									startup={startupState ? {
-										failed: startupState === "failed",
-										steps: session?.provisionSteps ?? [],
-										error: session?.provisionError,
-										agentName: agentLabel(snapshot.harness),
-										branch: session?.branch,
-										openingTurnId,
-										onRetry: newWorkDisabled ? undefined : onResumeAgent,
-										retrying: resumingAgent,
-										retryError: resumeError,
-									} : undefined}
+									startup={startup}
 								/>
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
@@ -2242,6 +2263,14 @@ function Timeline({
 	// stop overflowing and used to lose the minimap exactly then.
 	const minimapEnabled = scrollbar.markers.length > 0;
 	const openingTurnId = startup?.openingTurnId;
+	// Like T3, the checklist holds the working slot until the agent is up and its
+	// first turn is live; a clean start then leaves no trace.
+	const showStartup = Boolean(
+		startup &&
+			(startup.failed ||
+				!(turn?.state === "running" &&
+					startup.steps.some((step) => step.id === "agent" && step.status === "done"))),
+	);
 	const queued = useMemo(() => {
 		const ids = queuedTurnIds(snapshot);
 		if (openingTurnId) ids.delete(openingTurnId);
@@ -3249,6 +3278,7 @@ function Timeline({
 							>
 								<TurnGroup
 									group={group}
+									startup={showStartup && group.turnId === openingTurnId ? startup : undefined}
 									activityDisclosureOverrides={activityDisclosureOverrides}
 									onActivityDisclosureChange={onActivityDisclosureChange}
 									sessionId={snapshot.sessionId}
@@ -3293,12 +3323,9 @@ function Timeline({
 						);
 					})}
 					</div>
-					{/* Like T3, the checklist holds the working slot until the agent is up and
-					    its first turn is live; a clean start then leaves no trace. */}
-					{startup &&
-					(startup.failed ||
-						!(turn?.state === "running" &&
-							startup.steps.some((step) => step.id === "agent" && step.status === "done"))) ? (
+					{/* Normally drawn inside the opening turn's group; this covers a start
+					    whose brief is not in the timeline. */}
+					{startup && showStartup && !groups.some((group) => group.turnId === openingTurnId) ? (
 						<SessionStartup {...startup} />
 					) : turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
 						<LiveResponseStatus startedAt={turn.startedAt ?? turn.requestedAt} />
@@ -3486,6 +3513,7 @@ const TurnGroup = memo(function TurnGroup({
 	busy,
 	queued,
 	newHumanMessageIds,
+	startup,
 }: {
 	group: TimelineGroup;
 	activityDisclosureOverrides: Readonly<Record<string, boolean>>;
@@ -3523,6 +3551,8 @@ const TurnGroup = memo(function TurnGroup({
 	/** This turn was recorded but not sent, so its message can say so. */
 	queued: boolean;
 	newHumanMessageIds: ReadonlySet<string>;
+	/** The opening turn of a starting session: its setup checklist. */
+	startup?: ComponentProps<typeof SessionStartup>;
 }) {
 	const hasTerminalFailure =
 		group.outcome?.state === "failed" && Boolean(group.outcome.error);
@@ -3635,7 +3665,11 @@ const TurnGroup = memo(function TurnGroup({
 	const body: ReactNode[] = humanRuns.map(renderRun);
 	// A live provider failure replaces the Working row with its reconnect card, and a
 	// turn that stops without an outcome (cancelled) has no settled row to hand over to.
-	if (!group.liveProviderFailure && (group.live || (group.outcome && !showSettledStatus))) {
+	// The setup checklist sits exactly where the Working row will, so the handoff
+	// does not move anything.
+	if (startup) {
+		body.push(<SessionStartup key="turn-working" {...startup} />);
+	} else if (!group.liveProviderFailure && (group.live || (group.outcome && !showSettledStatus))) {
 		body.push(<LiveResponseStatus key="turn-working" startedAt={group.liveStartedAt} settling={!group.live} />);
 	}
 	const outcome = showSettledStatus ? group.outcome : undefined;
