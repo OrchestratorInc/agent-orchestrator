@@ -520,6 +520,7 @@
 	"editor.open": "Ouvrir",
 	"editor.opening": "Ouverture…",
 	"editor.preparingWorkspace": "Préparation de l’espace de travail…",
+	"editor.checkingWorkspace": "Vérification de l’espace de travail…",
 	"editor.chooseEditor": "Choisir un éditeur",
 	"editor.chooseEditorTitle": "Choisir un éditeur installé ou une option native",
 	"editor.noEditorInstalled": "Aucun éditeur installé",

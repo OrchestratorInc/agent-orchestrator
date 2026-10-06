@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,9 +28,14 @@ func (s *Service) WorkspaceLocation(ctx context.Context, id domain.SessionID) (s
 	if workspacePath == "" || !filepath.IsAbs(workspacePath) {
 		return "", apierr.NotFound("SESSION_WORKSPACE_NOT_FOUND", "Session workspace is not available")
 	}
+	// Only a definite absence is "not found"; any other stat failure may be transient
+	// and must not tell callers the worktree is gone.
 	info, err := os.Stat(workspacePath)
-	if err != nil || !info.IsDir() {
+	if errors.Is(err, os.ErrNotExist) || (err == nil && !info.IsDir()) {
 		return "", apierr.NotFound("SESSION_WORKSPACE_NOT_FOUND", "Session workspace is not available")
+	}
+	if err != nil {
+		return "", fmt.Errorf("stat session %s workspace: %w", id, err)
 	}
 	return filepath.Clean(workspacePath), nil
 }

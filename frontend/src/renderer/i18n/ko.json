@@ -517,6 +517,7 @@
 	"editor.open": "열기",
 	"editor.opening": "여는 중…",
 	"editor.preparingWorkspace": "워크스페이스 준비 중…",
+	"editor.checkingWorkspace": "워크스페이스 확인 중…",
 	"editor.chooseEditor": "편집기 선택",
 	"editor.chooseEditorTitle": "설치된 편집기 또는 기본 앱 선택",
 	"editor.noEditorInstalled": "설치된 편집기가 없습니다",

@@ -252,6 +252,40 @@ describe("TopbarOpenEditorButton", () => {
 		}
 	});
 
+	it("does not call the workspace missing when the check itself failed, and checks again", async () => {
+		vi.useFakeTimers();
+		try {
+			const getState = vi
+				.fn()
+				.mockResolvedValueOnce({
+					...availableState,
+					workspaceAvailable: false,
+					unavailableReason: "Internal server error",
+					unavailableCode: "INTERNAL_ERROR",
+				})
+				.mockResolvedValue(availableState);
+			window.ao!.editorHandoff.getState = getState;
+			renderButton();
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(0);
+			});
+			expect(screen.getByRole("button", { name: "Checking workspace…" })).toBeDisabled();
+			expect(screen.queryByText(/Internal server error|not available/)).not.toBeInTheDocument();
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(5_000);
+			});
+			await act(async () => {
+				await vi.runOnlyPendingTimersAsync();
+			});
+			expect(getState).toHaveBeenCalledTimes(2);
+			expect(screen.getByRole("button", { name: "Open in Cursor" })).toBeEnabled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("does not poll a terminated session whose workspace is gone", async () => {
 		const getState = vi.fn().mockResolvedValue({
 			...availableState,

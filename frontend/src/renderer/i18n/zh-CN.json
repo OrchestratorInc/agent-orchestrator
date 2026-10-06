@@ -517,6 +517,7 @@
 	"editor.open": "打开",
 	"editor.opening": "正在打开…",
 	"editor.preparingWorkspace": "正在准备工作区…",
+	"editor.checkingWorkspace": "正在检查工作区…",
 	"editor.chooseEditor": "选择编辑器",
 	"editor.chooseEditorTitle": "选择已安装的编辑器或系统应用",
 	"editor.noEditorInstalled": "未安装编辑器",

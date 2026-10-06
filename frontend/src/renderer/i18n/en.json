@@ -513,6 +513,7 @@
 	"editor.open": "Open",
 	"editor.opening": "Opening…",
 	"editor.preparingWorkspace": "Preparing workspace…",
+	"editor.checkingWorkspace": "Checking workspace…",
 	"editor.chooseEditor": "Choose editor",
 	"editor.chooseEditorTitle": "Choose an installed editor or use a native fallback",
 	"editor.noEditorInstalled": "No editor installed",

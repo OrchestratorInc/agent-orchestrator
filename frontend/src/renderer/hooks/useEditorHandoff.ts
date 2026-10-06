@@ -9,6 +9,7 @@ export const editorHandoffQueryRoot = ["editor-handoff"] as const;
 const NEW_SESSION_READINESS_WINDOW_MS = 30_000;
 const WORKSPACE_READINESS_RETRY_MS = 500;
 const WORKSPACE_READINESS_MAX_RETRIES = 10;
+const WORKSPACE_CHECK_RETRY_MS = 5_000;
 
 type EditorHandoffReadiness = {
 	sessionCreatedAt?: string;
@@ -53,13 +54,20 @@ export function editorHandoffErrorMessage(error: unknown): string | null {
 	return message || error.message;
 }
 
+/** The daemon failed while checking, which says nothing about whether the worktree exists. */
+export function workspaceCheckFailed(state: EditorHandoffState | undefined): boolean {
+	return state?.workspaceAvailable === false &&
+		(state.unavailableCode === "INTERNAL_ERROR" || state.unavailableCode === "SERVICE_UNAVAILABLE");
+}
+
 export function useEditorHandoffState(sessionId: string, readiness: EditorHandoffReadiness = {}) {
 	const awaitWorkspace = shouldAwaitWorkspace(readiness);
-	return useQuery({
+	return useQuery<EditorHandoffState>({
 		queryKey: editorHandoffQueryKey(sessionId),
 		enabled: Boolean(sessionId),
 		staleTime: 10_000,
 		retry: false,
+		refetchInterval: (query) => (workspaceCheckFailed(query.state.data) ? WORKSPACE_CHECK_RETRY_MS : false),
 		queryFn: async ({ signal }) => {
 			// A missing workspace is returned as successful state rather than an
 			// exception, so TanStack's retry option cannot recover it. Poll only
