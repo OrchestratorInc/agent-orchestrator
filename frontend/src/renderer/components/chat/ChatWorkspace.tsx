@@ -32,6 +32,12 @@ import {
 import { ArrowDown, Loader2, TriangleAlert, Undo2 } from "lucide-react";
 import { Reorder, useDragControls } from "motion/react";
 import { useTranslation } from "react-i18next";
+import {
+	defaultRangeExtractor,
+	measureElement,
+	observeElementRect,
+	useVirtualizer,
+} from "@tanstack/react-virtual";
 import { cn } from "../../lib/utils";
 import {
 	acknowledgeChatInlineEditMutation,
@@ -104,7 +110,7 @@ import {
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
-import { ChatComposer, type StoredComposerAttachment } from "./ChatComposer";
+import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
@@ -212,12 +218,6 @@ function DraggableChatTab({ children, value }: { children: ReactNode; value: str
 const isMac = isMacPlatform();
 const isLinux = isLinuxPlatform();
 
-type TopbarBounds = {
-	leftInset: number;
-	rightInset: number;
-	width: number;
-};
-
 type MessageEditDraft = ChatDraftInlineEdit;
 
 /**
@@ -263,6 +263,8 @@ export interface ChatWorkspaceProps {
 	snapshot: ConversationSnapshot;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
 	uiSessionId?: string;
+	/** Durable draft owner for a conversation that is not a worker session. */
+	draftOwner?: ChatDraftScope;
 	/** The session title from the sidebar (matches what users see in the left sidebar) */
 	sessionTitle?: string;
 	/** The AO role using this shared conversation surface. */
@@ -380,7 +382,7 @@ export interface ChatWorkspaceProps {
 	/** Opens the session Files inspector from a turn's changed-files Review control. */
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
-	onOpenFile?: (path: string) => void;
+	onOpenFile?: (path: string, line?: number) => void;
 	/**
 	 * Re-dispatch a failed turn's durable prompt as a new turn. Offered only for
 	 * eligible failed human turns, so the affordance is drawn on the failed-turn
@@ -462,15 +464,15 @@ function OfflineRemoteTerminal() {
  */
 export function ChatWorkspace(props: ChatWorkspaceProps) {
 	const translateDraft = useChatDraftTranslation();
-	const { snapshot, session, uiSessionId = snapshot.sessionId } = props;
+	const { snapshot, session, draftOwner, uiSessionId = draftOwner?.sessionId ?? snapshot.sessionId } = props;
 	const draftScope = useMemo<ChatDraftScope>(
-		() => ({
+		() => draftOwner ?? ({
 			sessionId: uiSessionId,
 			// Live surfaces carry the daemon-created session timestamp. Snapshot-only
 			// fixtures retain the legacy logical scope for deterministic previews.
 			incarnation: session?.createdAt ?? uiSessionId,
 		}),
-		[session?.createdAt, uiSessionId],
+		[draftOwner, session?.createdAt, uiSessionId],
 	);
 	const scopeKey = chatDraftScopeKey(draftScope);
 	const [activation, setActivation] = useState<ChatWorkspaceActivation>();
@@ -479,7 +481,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 	useLayoutEffect(() => {
 		// Snapshot-only previews have no daemon session incarnation to arbitrate.
 		// Their legacy logical scope remains isolated to fixture/demo surfaces.
-		if (!session?.createdAt) {
+		if (!session?.createdAt && !draftOwner) {
 			setActivation({ key: scopeKey, state: "active" });
 			return;
 		}
@@ -490,7 +492,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 		}
 		if (result.replaced) purgeFileAttachmentsForSession(draftScope.sessionId);
 		setActivation({ key: scopeKey, state: "active" });
-	}, [activationAttempt, draftScope, scopeKey, session?.createdAt]);
+	}, [activationAttempt, draftOwner, draftScope, scopeKey, session?.createdAt]);
 
 	if (activation?.key !== scopeKey || activation.state !== "active") {
 		const failure = activation?.key === scopeKey && activation.state === "failed"
@@ -683,7 +685,7 @@ function ChatWorkspaceContent({
 		const composer = surfaceRef.current?.querySelector<HTMLElement>(
 			'[aria-label="Message the agent"]',
 		);
-		if (composer?.getAttribute("aria-disabled") !== "true") composer?.focus();
+		if (composer?.getAttribute("aria-disabled") !== "true") composerFocusRef.current?.focus();
 	}, []);
 	// Selection is durable UI state; availability only controls whether the tab is
 	// offered. Keeping these separate preserves a selected reviewer while an active
@@ -787,9 +789,9 @@ function ChatWorkspaceContent({
 		return result;
 	}, [draftScope]);
 	useEffect(() => {
-		setChatDraftBoundary(uiSessionId, "queued-edit", queueDraftError ? "persistence-failed" : undefined);
-		return () => setChatDraftBoundary(uiSessionId, "queued-edit", undefined);
-	}, [queueDraftError, uiSessionId]);
+		setChatDraftBoundary(draftScope.sessionId, "queued-edit", queueDraftError ? "persistence-failed" : undefined);
+		return () => setChatDraftBoundary(draftScope.sessionId, "queued-edit", undefined);
+	}, [queueDraftError, draftScope.sessionId]);
 	// Text equality cannot prove an attachment-only edit was accepted. Keep an
 	// uncertain edit and its original daemon revision until a save is acknowledged.
 	const changeQueuedDraft = useCallback((text: string) => {
@@ -937,44 +939,11 @@ function ChatWorkspaceContent({
 	// the agent knows, so it is never one click.
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
 	const surfaceRef = useRef<HTMLElement | null>(null);
+	const composerFocusRef = useRef<ChatComposerHandle>(null);
 	const lastWheelZoomAtRef = useRef(0);
 	const wheelZoomRemainderRef = useRef(0);
 	const [terminalFontSize, setTerminalFontSize] = useState(initialTerminalFontSize);
 	const [isFullscreen, setIsFullscreen] = useState(false);
-	const [topbarBounds, setTopbarBounds] = useState<TopbarBounds>({
-		leftInset: 0,
-		rightInset: 0,
-		width: 0,
-	});
-
-	useEffect(() => {
-		const surface = surfaceRef.current;
-		if (!surface) return;
-		const workspaceSurface = surface.closest<HTMLElement>(".center-panel-surface");
-		const measure = () => {
-			const surfaceRect = surface.getBoundingClientRect();
-			const workspaceRect = workspaceSurface?.getBoundingClientRect() ?? surfaceRect;
-			const next = {
-				leftInset: workspaceRect.left,
-				rightInset: Math.max(0, window.innerWidth - workspaceRect.right),
-				width: surfaceRect.width,
-			};
-			setTopbarBounds((current) =>
-				current.leftInset === next.leftInset &&
-				current.rightInset === next.rightInset &&
-				current.width === next.width
-					? current
-					: next,
-			);
-		};
-		measure();
-		if (typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(measure);
-		observer.observe(surface);
-		if (workspaceSurface) observer.observe(workspaceSurface);
-		return () => observer.disconnect();
-	}, []);
-
 	useEffect(() => {
 		const handleFullscreenChange = () => {
 			setIsFullscreen(document.fullscreenElement === surfaceRef.current);
@@ -1167,10 +1136,15 @@ function ChatWorkspaceContent({
 					configOptions={configOptions ?? []}
 					onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
 					configPending={configOptionPending}
+					autoSelectEffortOnOpen={snapshot.items.length === 0 && !turn}
 					error={configOptionError}
+					// Turn settings require a live controller even while messages can queue.
 					disabled={
-						snapshot.controller.state === "stopped" || controllerTransitioning || configOptionPending || newWorkDisabled
-					}
+							snapshot.controller.state === "connecting" ||
+							snapshot.controller.state === "stopped" ||
+							session?.provisionState === "provisioning" ||
+							controllerTransitioning || configOptionPending || newWorkDisabled
+						}
 				/>
 			) : null,
 		[
@@ -1180,6 +1154,7 @@ function ChatWorkspaceContent({
 			controllerTransitioning,
 			models,
 			newWorkDisabled,
+			session?.provisionState,
 			onChooseConfigOption,
 			onChooseSettings,
 			onRememberPermissions,
@@ -1190,6 +1165,8 @@ function ChatWorkspaceContent({
 			approvalModes,
 			session?.cloud,
 			snapshot.controller.state,
+			snapshot.items.length,
+			turn,
 			stableModelReroute,
 			stableSettings,
 		],
@@ -1320,7 +1297,7 @@ function ChatWorkspaceContent({
 			onKeyDown={handleChatKeyDown}
 			onClick={handleChatSurfaceClick}
 			aria-label="Chat"
-			className="cursor-chat-surface flex h-full min-h-0 flex-col [font-size:var(--chat-font-size)]"
+			className="cursor-chat-surface flex h-full min-h-0 min-w-0 w-full flex-col overflow-hidden [font-size:var(--chat-font-size)]"
 			data-session-mode={snapshot.mode}
 			data-session-role={sessionRole}
 			style={
@@ -1353,7 +1330,6 @@ function ChatWorkspaceContent({
 				orderedAuxiliaryTabs={orderedAuxiliaryTabs}
 				onReorderAuxiliaryTabs={reorderAuxiliaryTabs}
 				inline={isFullscreen}
-				topbarBounds={topbarBounds}
 			/>}
 			<div className="relative flex min-h-0 flex-1 flex-col">
 				{reviewerTarget && session ? (
@@ -1420,7 +1396,7 @@ function ChatWorkspaceContent({
 				>
 					{/* Keep sign-in guidance available without repeating the error from chat. */}
 					{snapshot.account ? (
-						<ReauthBanner account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
+						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
 					) : null}
 					<ControllerBanner
 						controller={snapshot.controller}
@@ -1486,6 +1462,7 @@ function ChatWorkspaceContent({
 							>
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
 								<ChatComposer
+									focusRef={composerFocusRef}
 									key={`${draftScopeKey}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
 									queuedDock={composerQueuedDock}
 									approval={composerApproval}
@@ -1519,7 +1496,7 @@ function ChatWorkspaceContent({
 									onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
 									nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 									autoFocus={!reviewerActive}
-									autoFocusKey={uiSessionId}
+									autoFocusKey={draftScope.sessionId}
 									// Steering is only meaningful into a turn that is running. A queued turn
 									// has not reached the provider, so there is nothing to steer.
 									onSteer={newWorkDisabled ? undefined : steer}
@@ -1532,7 +1509,7 @@ function ChatWorkspaceContent({
 									compacting={compacting}
 									compactUnavailable={compactUnavailable}
 									compactBlocked={Boolean(turn)}
-									draftSessionId={queueEdit ? undefined : uiSessionId}
+									draftSessionId={queueEdit ? undefined : draftScope.sessionId}
 									draftSessionIncarnation={draftScope.incarnation}
 									assetBaseUrl={assetBaseUrl}
 									assetSessionId={snapshot.sessionId}
@@ -1707,7 +1684,6 @@ function ChatHeader({
 	orderedAuxiliaryTabs,
 	onReorderAuxiliaryTabs,
 	inline,
-	topbarBounds,
 	session,
 	onSessionRenamed,
 }: {
@@ -1738,7 +1714,6 @@ function ChatHeader({
 	onSessionRenamed?: () => void | Promise<void>;
 	/** Fullscreen content cannot see the normal topbar portal outside its subtree. */
 	inline?: boolean;
-	topbarBounds: TopbarBounds;
 }) {
 	const { t } = useTranslation();
 	const providerLabel = agentLabel(snapshot.harness);
@@ -1775,13 +1750,11 @@ function ChatHeader({
 				<div
 					className={cn(
 						"flex min-w-0 shrink items-stretch",
-						!isSidebarOpen && isMac && "session-topbar-titlebar-clearance-mac",
+						isMac && "session-topbar-titlebar-clearance-mac",
 						!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
 					)}
 					data-testid="session-terminal-region"
-					style={{
-						width: topbarBounds.width > 0 ? topbarBounds.width : "100%",
-					}}
+					style={{ width: "100%" }}
 				>
 					<div
 						aria-label="Chat tabs"
@@ -2052,6 +2025,11 @@ function ControllerBanner({
  * the turn that changed. Older pages are prepended explicitly instead of keeping
  * an unbounded history in every snapshot response.
  */
+const CHAT_VIRTUALIZE_THRESHOLD = 20;
+const CHAT_ESTIMATED_TURN_HEIGHT = 600;
+const CHAT_TURN_GAP = 18;
+const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
+
 function Timeline({
 	snapshot,
 	assetBaseUrl,
@@ -2087,7 +2065,7 @@ function Timeline({
 	busy?: boolean;
 	onRollback?: (turnId: string) => void;
 	onOpenFiles?: () => void;
-	onOpenFile?: (path: string) => void;
+	onOpenFile?: (path: string, line?: number) => void;
 	retryControl?: ChatRetryControl;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	editPending?: boolean;
@@ -2103,6 +2081,10 @@ function Timeline({
 	const uiSessionId = draftScope.sessionId;
 	const scroller = useRef<HTMLDivElement>(null);
 	const scrollContent = useRef<HTMLDivElement>(null);
+	const virtualContent = useRef<HTMLDivElement>(null);
+	const [virtualScrollMargin, setVirtualScrollMargin] = useState(20);
+	const measuredVirtualGroups = useRef(new WeakSet<TimelineGroup>());
+	const pendingVirtualLayout = useRef(false);
 	const promptSpacer = useRef<HTMLDivElement>(null);
 	const scrollTrack = useRef<HTMLDivElement>(null);
 	const drag = useRef<{
@@ -2112,6 +2094,10 @@ function Timeline({
 	} | null>(null);
 	const pinnedRef = useRef(true);
 	const [pinned, setPinned] = useState(true);
+	const [activityDisclosureOverrides, setActivityDisclosureOverrides] = useState<Record<string, boolean>>({});
+	const onActivityDisclosureChange = useCallback((key: string, open: boolean) => {
+		setActivityDisclosureOverrides((current) => ({ ...current, [key]: open }));
+	}, []);
 	const [hoveredMarker, setHoveredMarker] = useState<number | null>(null);
 	const hoveredMarkerRef = useRef<number | null>(null);
 	hoveredMarkerRef.current = hoveredMarker;
@@ -2163,16 +2149,16 @@ function Timeline({
 	);
 	useEffect(() => {
 		setChatDraftBoundary(
-			uiSessionId,
+			draftScope.sessionId,
 			"inline-edit",
 			[
 				...(draftPersistenceError ? (["persistence-failed"] as const) : []),
 			],
 		);
-	}, [draftPersistenceError, uiSessionId]);
+	}, [draftPersistenceError, draftScope.sessionId]);
 	useEffect(
-		() => () => setChatDraftBoundary(uiSessionId, "inline-edit", undefined),
-		[uiSessionId],
+		() => () => setChatDraftBoundary(draftScope.sessionId, "inline-edit", undefined),
+		[draftScope.sessionId],
 	);
 	// The inspector changes the minimap's visibility, but it must not cause this
 	// entire timeline to rerender. A live conversation can contain hundreds of
@@ -2671,9 +2657,72 @@ function Timeline({
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	const navigableGroups = useMemo(() => groups.filter(groupHasHumanPrompt), [groups]);
 	const previews = useMemo(() => navigableGroups.map(groupPreview), [navigableGroups]);
+	const virtualized = groups.length > CHAT_VIRTUALIZE_THRESHOLD;
+	const virtualItemKey = useCallback((index: number) => groups[index]!.key, [groups]);
+	const virtualizer = useVirtualizer({
+		// Scroll anchoring may notify during a layout effect; defer the React
+		// update rather than attempting a synchronous flush inside that effect.
+		useFlushSync: false,
+		// Measure short histories too, so crossing the windowing threshold can
+		// preserve the visible turn by key rather than restarting at the bottom.
+		enabled: groups.length > 0,
+		count: groups.length,
+		getScrollElement: () => scroller.current,
+		getItemKey: virtualItemKey,
+		estimateSize: () => CHAT_ESTIMATED_TURN_HEIGHT,
+		gap: CHAT_TURN_GAP,
+		overscan: 2,
+		scrollMargin: virtualScrollMargin,
+		initialRect: { width: 768, height: CHAT_INITIAL_VIEWPORT_HEIGHT },
+		initialOffset: () => virtualized
+			? Math.max(0, groups.length * (CHAT_ESTIMATED_TURN_HEIGHT + CHAT_TURN_GAP) - CHAT_INITIAL_VIEWPORT_HEIGHT)
+			: 0,
+		anchorTo: virtualized ? "end" : "start",
+		// The virtualizer's distance-from-end excludes the trailing prompt spacer.
+		// Disable end anchoring while unpinned so streamed output cannot mistake the
+		// reader's position for the physical end of the scroll container.
+		scrollEndThreshold: pinned ? 1 : -1,
+		followOnAppend: virtualized && pinned,
+		// Bootstrap unmeasurable panels until their real geometry is available.
+		observeElementRect: (instance, callback) => observeElementRect(instance, (rect) =>
+			callback(rect.height ? rect : { width: rect.width, height: CHAT_INITIAL_VIEWPORT_HEIGHT })),
+		measureElement: (element, entry, instance) => {
+			const group = groups[Number(element.getAttribute("data-index"))];
+			if (group && !measuredVirtualGroups.current.has(group)) {
+				measuredVirtualGroups.current.add(group);
+				pendingVirtualLayout.current = true;
+			}
+			return measureElement(element, entry, instance) || CHAT_ESTIMATED_TURN_HEIGHT;
+		},
+		scrollToFn: (offset, { adjustments = 0 }, instance) => {
+			if (instance.scrollElement) instance.scrollElement.scrollTop = offset + adjustments;
+		},
+		rangeExtractor: (range) => {
+			const indexes = defaultRangeExtractor(range);
+			// Keep an in-progress inline edit mounted while its row leaves view.
+			const editing = messageEdit ? groups.findIndex((group) => group.turnId === messageEdit.turnId) : -1;
+			if (editing >= 0 && !indexes.includes(editing)) indexes.push(editing);
+			if (pinned && !indexes.includes(groups.length - 1)) indexes.push(groups.length - 1);
+			return indexes.sort((a, b) => a - b);
+		},
+	});
+	virtualizer.shouldAdjustScrollPositionOnItemSizeChange = virtualized ? undefined : () => false;
+	const virtualRows = virtualizer.getVirtualItems();
+	const virtualHeight = virtualizer.getTotalSize();
+	const renderedGroups = virtualized
+		? virtualRows.map((row) => ({ group: groups[row.index]!, row, index: row.index }))
+		: groups.map((group, index) => ({ group, row: undefined, index }));
+	useEffect(() => {
+		const node = scroller.current;
+		const content = virtualized ? virtualContent.current
+			: virtualContent.current?.querySelector<HTMLElement>('[data-index="0"]');
+		if (node && content) {
+			setVirtualScrollMargin(content.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop);
+		}
+	}, [virtualized, hasOlder]);
 
-	// Keep the full transcript mounted (selection/find still work), but measure
-	// prompt positions only when content geometry changes, not on every scroll.
+	// Long transcripts use measured/estimated row positions for the full minimap,
+	// including turns that are currently outside the mounted viewport.
 	const anchorGeometry = useRef<{ height: number; width: number; positions: number[] } | null>(null);
 	const contentMutations = useRef<MutationObserver | null>(null);
 
@@ -2692,7 +2741,7 @@ function Timeline({
 		const fraction = maxScroll > 0 ? Math.min(1, Math.max(0, node.scrollTop / maxScroll)) : 0;
 		if (contentMutations.current?.takeRecords().length) anchorGeometry.current = null;
 		let geometry = anchorGeometry.current;
-		if (!geometry || geometry.height !== node.scrollHeight || geometry.width !== node.clientWidth) {
+		if (virtualized || !geometry || geometry.height !== node.scrollHeight || geometry.width !== node.clientWidth) {
 			const viewportRect = node.getBoundingClientRect();
 			const anchors = Array.from(
 				scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-scroll-anchor]") ?? [],
@@ -2700,7 +2749,10 @@ function Timeline({
 			geometry = {
 				height: node.scrollHeight,
 				width: node.clientWidth,
-				positions: anchors.map((anchor) => {
+				positions: virtualized ? groups.flatMap((group, index) => {
+					const row = virtualizer.measurementsCache[index];
+					return groupHasHumanPrompt(group) && row ? [row.start + row.size / 2] : [];
+				}) : anchors.map((anchor) => {
 					const rect = anchor.getBoundingClientRect();
 					return rect.top - viewportRect.top + node.scrollTop + rect.height / 2;
 				}),
@@ -2741,7 +2793,7 @@ function Timeline({
 				? current
 				: next,
 		);
-	}, []);
+	}, [virtualized, virtualizer, groups]);
 
 	/**
 	 * Size the trailing spacer so scrolling to the bottom parks the latest human
@@ -2758,19 +2810,21 @@ function Timeline({
 			"[data-chat-scroll-anchor]",
 		);
 		const anchor = anchors && anchors.length > 0 ? anchors[anchors.length - 1] : null;
-		const nextHeight = anchor
+		const lastPromptIndex = groups.findLastIndex(groupHasHumanPrompt);
+		const virtualAnchor = virtualized && lastPromptIndex >= 0 ? virtualizer.measurementsCache[lastPromptIndex] : undefined;
+		const nextHeight = (virtualAnchor || anchor)
 			? promptSpacerHeight({
 					viewportHeight: node.clientHeight,
 					contentHeightWithoutSpacer: node.scrollHeight - pad.offsetHeight,
 					anchorOffset:
-						anchor.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop,
+						virtualAnchor?.start ?? (anchor!.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop),
 					topInset: promptTopInset(node.clientHeight),
 				})
 			: 0;
 		if (Math.abs(pad.offsetHeight - nextHeight) > 0.5) {
 			pad.style.height = `${nextHeight}px`;
 		}
-	}, []);
+	}, [virtualized, virtualizer, groups]);
 
 	const syncScrollLayout = useCallback(() => {
 		anchorGeometry.current = null;
@@ -2796,6 +2850,15 @@ function Timeline({
 	useEffect(() => {
 		syncScrollLayout();
 	}, [pinned, snapshot.latestSequence, groups.length, messageEdit?.turnId, syncScrollLayout]);
+	useEffect(() => {
+		if (!virtualized) return;
+		// Wait for measured sizes to reach the DOM before following new content.
+		// Resizing an already measured group only refreshes scroll metrics.
+		if (pendingVirtualLayout.current && virtualHeight === virtualizer.getTotalSize()) {
+			pendingVirtualLayout.current = false;
+			syncScrollLayout();
+		} else syncScrollMetrics();
+	}, [virtualized, virtualHeight, virtualizer, syncScrollLayout, syncScrollMetrics]);
 
 	useEffect(() => {
 		const content = scrollContent.current;
@@ -2847,7 +2910,12 @@ function Timeline({
 		if (!track || !node) return;
 		const marker = (event.target as HTMLElement).closest<HTMLElement>("[data-chat-scroll-marker]");
 		if (marker?.dataset.scrollTarget) {
-			node.scrollTop = Number(marker.dataset.scrollTarget);
+			const group = navigableGroups[Number(marker.dataset.markerIndex)];
+			if (virtualized && group) {
+				virtualizer.scrollToIndex(groups.findIndex((candidate) => candidate.key === group.key), { align: "center" });
+			} else {
+				node.scrollTop = Number(marker.dataset.scrollTarget);
+			}
 			onScroll();
 			return;
 		}
@@ -2944,6 +3012,7 @@ function Timeline({
 				role="log"
 				aria-live="polite"
 				aria-label="Conversation"
+				style={virtualized ? { overflowAnchor: "none" } : undefined}
 			>
 				<div ref={scrollContent} className="mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5">
 					{hasOlder ? (
@@ -2963,7 +3032,9 @@ function Timeline({
 							</Button>
 						</div>
 					) : null}
-					{groups.map((group) => {
+					<div ref={virtualContent} className={virtualized ? "relative w-full" : "contents"}
+						style={virtualized ? { height: virtualHeight } : undefined}>
+					{renderedGroups.map(({ group, row, index }) => {
 						const retrySelected = !retryControl?.turnId || retryControl.turnId === group.turnId;
 						const retry =
 							group.turnId &&
@@ -2987,10 +3058,18 @@ function Timeline({
 						return (
 							<div
 								key={group.key}
+								ref={virtualizer.measureElement}
+								data-index={index}
+								style={row ? {
+									position: "absolute", top: 0, left: 0, width: "100%",
+									transform: `translateY(${row.start - virtualScrollMargin}px)`,
+								} : undefined}
 								data-chat-scroll-anchor={groupHasHumanPrompt(group) ? "" : undefined}
 							>
 								<TurnGroup
 									group={group}
+									activityDisclosureOverrides={activityDisclosureOverrides}
+									onActivityDisclosureChange={onActivityDisclosureChange}
 									sessionId={snapshot.sessionId}
 									apiBaseUrl={apiBaseUrl}
 									onDecide={decide}
@@ -3031,6 +3110,7 @@ function Timeline({
 							</div>
 						);
 					})}
+					</div>
 					{turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
 						<TurnLiveStatus startedAt={turn.startedAt ?? turn.requestedAt} />
 					) : null}
@@ -3118,6 +3198,7 @@ function Timeline({
 										key={index}
 										data-chat-scroll-marker=""
 										data-scroll-target={marker.scrollTop}
+										data-marker-index={index}
 										onPointerEnter={() => setHoveredMarker(index)}
 										className="chat-scroll-marker-hit"
 										style={{ top: marker.top }}
@@ -3185,6 +3266,8 @@ function Timeline({
  */
 const TurnGroup = memo(function TurnGroup({
 	group,
+	activityDisclosureOverrides,
+	onActivityDisclosureChange,
 	sessionId,
 	apiBaseUrl,
 	onDecide,
@@ -3215,12 +3298,14 @@ const TurnGroup = memo(function TurnGroup({
 	newHumanMessageIds,
 }: {
 	group: TimelineGroup;
+	activityDisclosureOverrides: Readonly<Record<string, boolean>>;
+	onActivityDisclosureChange: (key: string, open: boolean) => void;
 	sessionId: string;
 	apiBaseUrl: string | null;
 	onDecide: (requestId: string, decisionId: string) => void;
 	onRollback: (turnId: string) => void;
 	onOpenFiles?: () => void;
-	onOpenFile?: (path: string) => void;
+	onOpenFile?: (path: string, line?: number) => void;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	messageEdit?: MessageEditDraft;
 	onStartMessageEdit: (message: ConversationMessage) => void;
@@ -3276,6 +3361,9 @@ const TurnGroup = memo(function TurnGroup({
 				run.kind === "activities" ? (
 					<ActivityRun
 						key={run.key}
+						disclosureKey={`${group.key}:${run.key}`}
+						disclosureOverrides={activityDisclosureOverrides}
+						onDisclosureChange={onActivityDisclosureChange}
 						activities={run.items.filter(
 							(item): item is ConversationActivity => item.kind === "activity",
 						)}

@@ -321,6 +321,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							typeof payload?.conversationId !== "string" &&
 							typeof payload?.interfaceTransitionId !== "string"
 						) {
+							// Async chat startup changes the session's provisionState, but
+							// does not emit a conversationId. Refresh the open conversation
+							// so its controller state can leave "connecting".
+							pendingConversationSessions.add(decoded.sessionId);
 							pendingEditorHandoffSessions.add(decoded.sessionId);
 						}
 					} catch {

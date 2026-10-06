@@ -151,7 +151,7 @@ it("renders unrelated release-note links as plain text", async () => {
 
 it("links the generated nightly comparison without allowing arbitrary compare URLs", async () => {
 	useUiStore.setState({ updateInstallPromptOpen: true });
-	const comparisonUrl = "https://github.com/Untrivial-ai/agent-orchestrator/compare/v0.13.1...v0.13.2-nightly.202609271025";
+	const comparisonUrl = "https://github.com/OrchestratorInc/agent-orchestrator/compare/v0.13.1...v0.13.2-nightly.202609271025";
 	renderDialog({
 		state: "downloaded",
 		version: "0.13.2-nightly.202609271025",

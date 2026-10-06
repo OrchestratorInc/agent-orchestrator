@@ -1,4 +1,4 @@
-import { useId, useRef } from "react";
+import { useCallback, useEffect, useId, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { type FileContents, type LineAnnotation } from "@pierre/diffs";
 import { File } from "@pierre/diffs/react";
@@ -31,7 +31,10 @@ export function ReadOnlyFileView({
 	annotation,
 	detail,
 	editing = false,
+	onContentReady,
 	onEditChange,
+	onRevealLineConsumed,
+	revealLine,
 	scope = "combined",
 	sessionId,
 	hostId,
@@ -40,7 +43,10 @@ export function ReadOnlyFileView({
 	annotation: FileAnnotationModel;
 	detail: WorkspaceFileDetail;
 	editing?: boolean;
+	onContentReady?: () => void;
 	onEditChange?: (content: string) => void;
+	onRevealLineConsumed?: (requestKey: number) => void;
+	revealLine?: { line: number; requestKey: number };
 	scope?: WorkspaceDiffScope;
 	sessionId: string;
 	hostId?: string;
@@ -50,8 +56,34 @@ export function ReadOnlyFileView({
 	const { baseUrl: remoteBaseUrl } = useHostConnection(hostId);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const pendingRevealRef = useRef(revealLine);
+	const consumedRevealRequestKeysRef = useRef(new Set<number>());
 	const editorInstanceId = useId();
 	const gutterHover = usePersistentGutterUtility(containerRef);
+	const revealRequestedLine = useCallback(() => {
+		const target = pendingRevealRef.current;
+		if (!target) return;
+		if (consumedRevealRequestKeysRef.current.has(target.requestKey)) {
+			pendingRevealRef.current = undefined;
+			return;
+		}
+		const diffsContainer = containerRef.current?.querySelector("diffs-container");
+		const line = diffsContainer?.shadowRoot?.querySelector<HTMLElement>(`[data-line="${target.line}"]`);
+		if (!line) return;
+		line.scrollIntoView({ block: "center" });
+		consumedRevealRequestKeysRef.current.add(target.requestKey);
+		pendingRevealRef.current = undefined;
+		onRevealLineConsumed?.(target.requestKey);
+	}, [onRevealLineConsumed]);
+	useEffect(() => {
+		if (!revealLine || consumedRevealRequestKeysRef.current.has(revealLine.requestKey)) {
+			pendingRevealRef.current = undefined;
+			return;
+		}
+		pendingRevealRef.current = revealLine;
+		const frame = requestAnimationFrame(revealRequestedLine);
+		return () => cancelAnimationFrame(frame);
+	}, [revealLine?.line, revealLine?.requestKey, revealRequestedLine]);
 	if (detail.binary) {
 		if (detail.imageMediaType) {
 			return (
@@ -118,7 +150,11 @@ export function ReadOnlyFileView({
 					disableFileHeader: true,
 					enableGutterUtility: true,
 					lineHoverHighlight: "line",
-					onPostRender: gutterHover.restoreAfterRender,
+					onPostRender: () => {
+						gutterHover.restoreAfterRender();
+						onContentReady?.();
+						revealRequestedLine();
+					},
 					overflow: "wrap",
 					theme: { dark: "github-dark", light: "github-light" },
 					themeType: resolvedTheme,

@@ -10,8 +10,8 @@
 @custom-media --layout-narrow (width <= 680px); /* --breakpoint-layout-narrow */
 
 /*
- * Design system — see DESIGN_TOKENS.md. Flat near-black neutral ramp, hairline
- * borders, system font, refined-blue accent. Dark is primary (:root); light is the supported override
+ * Design system — see DESIGN_TOKENS.md. Flat neutral graphite ramp, hairline
+ * borders, and system font. Dark is primary (:root); light is the supported override
  * (:root[data-theme="light"]). apply-initial-theme runs before CSS load; the
  * Zustand theme toggle updates data-theme on <html>.
  */
@@ -489,7 +489,7 @@
 	min-height: 0;
 	width: 100%;
 	background-color: var(--color-bg-sidebar);
-	padding-top: var(--size-center-panel-inset);
+	padding-top: var(--size-center-panel-bottom-inset);
 	padding-right: var(--size-center-panel-inline-inset);
 	padding-bottom: var(--size-center-panel-bottom-inset);
 	padding-left: 0;
@@ -519,12 +519,27 @@
 	padding-left: var(--size-center-panel-inline-inset);
 }
 
-/* macOS + Linux: inset on all sides except left (flush with sidebar). */
+/* macOS: use the same block inset above and below the surface. */
 .center-panel-shell.center-panel-shell--mac {
 	padding-top: var(--size-center-panel-inset-mac);
 	padding-right: var(--size-center-panel-inset-mac);
 	padding-bottom: var(--size-center-panel-inset-mac);
 	padding-left: 0;
+}
+
+/* Keep the center surface closed on all four edges, including macOS where the
+ * native titlebar sits above the panel rather than replacing its border. */
+.center-panel-shell--mac > .center-panel-surface {
+	border-top-width: 1px;
+}
+
+/* Keep empty header space draggable while tabs and actions remain interactive.
+ * Linux retains its separate strip; macOS uses the actual shared header. */
+html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] {
+	-webkit-app-region: drag;
+}
+html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] :is(button, a, input, [role="tab"], [role="menuitem"]) {
+	-webkit-app-region: no-drag;
 }
 
 .center-panel-shell.center-panel-shell--mac.center-panel-shell--fullscreen {
@@ -623,8 +638,20 @@
 /* When the sidebar is off-canvas, clear only the fixed navigation cluster.
  * Native macOS fullscreen removes the traffic lights, so the cluster moves to
  * the compact panel inset instead of retaining the windowed 79px reserve. */
+.app-shell-root {
+	--ao-titlebar-content-left: var(--size-titlebar-content-offset);
+}
+.native-fullscreen {
+	--ao-titlebar-content-left: calc(var(--space-2) + var(--size-titlebar-cluster-width) + var(--size-titlebar-content-gap));
+}
 .session-topbar-titlebar-clearance-mac {
-	padding-left: var(--size-titlebar-content-offset);
+	/* Follow the actual sidebar animation, never snap to the collapsed inset.
+	 * The width floor also keeps controls clear at small renderer zoom factors. */
+	padding-left: max(
+		0px,
+		calc(var(--ao-titlebar-content-left) - var(--ao-sidebar-layout-width, 0px)),
+		calc(var(--ao-titlebar-content-left) * var(--ao-sidebar-collapse-progress, 0))
+	);
 }
 
 /* Browser pressure keeps a 48px navigation rail in layout. Native macOS
@@ -660,12 +687,6 @@
 	.session-topbar-terminal-region {
 		transition-duration: 0ms;
 	}
-}
-
-.native-fullscreen .session-topbar-titlebar-clearance-mac {
-	padding-left: calc(
-		var(--space-2) + var(--size-titlebar-cluster-width) + var(--size-titlebar-content-gap)
-	);
 }
 
 .session-topbar-titlebar-clearance-linux {
@@ -730,7 +751,7 @@
  * Pad the title past that cluster so it sits next to the buttons. Fullscreen
  * drops the traffic-light reserve so title sits next to the left-edge buttons. */
 .center-panel-shell--titlebar-clearance .center-panel-titlebar {
-	padding-left: calc(var(--size-titlebar-content-offset) - var(--size-center-panel-inset-mac));
+	padding-left: var(--size-titlebar-content-offset);
 }
 
 /* Linux: same cluster clearance without the traffic-light reserve. Keep the
@@ -746,20 +767,12 @@
 	);
 }
 
-/* Windows / Linux: a ShellTopbar already supplies the top chrome, so the
- * framed panel needs no additional top inset. Windows uses its custom
- * frameless titlebar; Linux uses the standard ShellTopbar. The right/bottom
- * insets and the shared --radius-center-panel rounding are kept so the panel
- * matches the macOS framed look. */
+/* Platform chrome may change the inset size, but never breaks the equal
+ * block spacing contract. */
 .platform-windows {
 	--size-center-panel-inset: 8px;
 	--size-center-panel-inline-inset: 8px;
 	--size-center-panel-bottom-inset: 8px;
-}
-
-.platform-windows .center-panel-shell,
-.platform-linux .center-panel-shell {
-	padding-top: 0;
 }
 
 @utility settings-row-bar {
@@ -2045,6 +2058,14 @@ textarea,
 .ao-startup-logo {
 	animation: ao-startup-logo-breathe 3.2s ease-in-out infinite;
 	filter: drop-shadow(0 7px 20px rgb(0 0 0 / 0.28));
+}
+
+.ao-mascot-eyes {
+	fill: transparent;
+}
+
+:root[data-theme="light"] .ao-mascot-eyes {
+	fill: #000;
 }
 
 .ao-startup-status {
@@ -5000,6 +5021,67 @@ body:has(#root .platform-linux) > .files-popout-overlay {
 	overflow: hidden;
 	padding: 0 var(--space-1);
 	background: var(--bg);
+}
+
+.browser-panel__find-row {
+	display: flex;
+	height: 36px;
+	flex-shrink: 0;
+	align-items: center;
+	gap: var(--space-1);
+	padding: 3px 6px;
+	border-top: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
+	background: var(--bg);
+}
+
+.browser-panel__find-input {
+	min-width: 0;
+	flex: 1;
+	height: 28px;
+	border: 0;
+	outline: 0;
+	background: transparent;
+	color: var(--fg);
+	font-size: var(--font-size-sm);
+}
+
+.browser-panel__find-input::placeholder {
+	color: var(--muted-foreground);
+}
+
+.browser-panel__find-status {
+	min-width: 52px;
+	color: var(--muted-foreground);
+	font-size: var(--font-size-xs);
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+	white-space: nowrap;
+}
+
+.browser-panel__find-button {
+	display: inline-flex;
+	width: 26px;
+	height: 26px;
+	align-items: center;
+	justify-content: center;
+	border-radius: var(--radius-sm);
+	color: var(--muted-foreground);
+}
+
+.browser-panel__find-button:hover:not(:disabled),
+.browser-panel__find-button:focus-visible {
+	background: var(--surface-hover);
+	color: var(--fg);
+}
+
+.browser-panel__find-button:disabled {
+	opacity: 0.4;
+}
+
+.browser-panel__find-button > svg {
+	width: 14px;
+	height: 14px;
 }
 
 .browser-panel__toolbar--annotation {

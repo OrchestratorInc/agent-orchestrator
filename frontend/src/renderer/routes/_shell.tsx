@@ -1,3 +1,4 @@
+import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { createFileRoute, Outlet, useMatchRoute, useNavigate, useParams } from "@tanstack/react-router";
@@ -65,6 +66,7 @@ import { clientForHost } from "../lib/host-clients";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
+import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 
 export const Route = createFileRoute("/_shell")({
 	// Prefetch the workspace list for the whole shell (parent loaders run before
@@ -146,12 +148,10 @@ const ShellCenter = memo(function ShellCenter({
 	selfFramedCenterPanel: boolean;
 }) {
 	const panelClassName = isSessionRoute ? "center-panel-shell--session" : undefined;
-	// Only frameless session chrome needs this strip. On macOS and Linux the
-	// session tabs sit flush against the top edge with no OS titlebar, so without
-	// it there is no window-drag target. Windows must stay excluded: WindowTitlebar
-	// already paints a full-width drag region above every route, and adding the
-	// strip there would duplicate that region and leave a dead 8px band below it.
-	const draggableSessionFrame = isSessionRoute && !isWindows;
+	// Linux retains an outer drag strip. macOS uses the shared header itself;
+	// an extra strip there would displace session tabs from the native controls.
+	// Windows already owns a separate WindowTitlebar.
+	const draggableSessionFrame = isSessionRoute && isLinux;
 	if (hideShellTopbar) {
 		return selfFramedCenterPanel ? (
 			<Outlet />
@@ -233,6 +233,7 @@ function ShellLayout() {
 	const openShellTerminal = useOpenShellTerminal();
 	// Single subscription for sidebar clearance + drag strip (macOS no-ops inside the hook).
 	const isFullScreen = useWindowFullScreen();
+	useWindowZoomFactor();
 	// Drag is on immediately for a normal windowed launch. After leaving fullscreen,
 	// wait for the pad/height transition so the growing strip cannot steal clicks.
 	const [trafficLightDragActive, setTrafficLightDragActive] = useState(isMac);
@@ -338,9 +339,18 @@ function ShellLayout() {
 		: routeParams.sessionId
 			? workspaces.find((workspace) => workspace.sessions.some((session) => session.id === routeParams.sessionId))?.id
 			: undefined;
-	const scopedSession = !routeParams.hostId && routeParams.sessionId
-		? workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === routeParams.sessionId)
+	const scopedSession = routeParams.sessionId
+		? (routeParams.hostId ? remoteWorkspaces : workspaces)
+			.flatMap((workspace) => workspace.sessions)
+			.find((session) => session.id === routeParams.sessionId)
 		: undefined;
+	useEffect(() => {
+		recordSessionSurface(
+			scopedSession?.kind === "orchestrator" || scopedSession?.kind === "worker"
+				? { kind: scopedSession.kind, sessionId: sessionUiKey(scopedSession.id, routeParams.hostId) }
+				: null,
+		);
+	}, [routeParams.hostId, scopedSession?.id, scopedSession?.kind]);
 	// Warms the New Task composer's model-catalog cache while the user is just
 	// looking at the project, so the picker never shows a loading flash the
 	// first time they actually open the dialog.
@@ -422,6 +432,7 @@ function ShellLayout() {
 					: (currentIndex + direction + sessions.length) % sessions.length;
 			const session = sessions[nextIndex];
 			if (!session || session.id === routeParams.sessionId) return;
+			if (session.kind === "worker") recordManualWorkerOpen(sessionUiKey(session.id, hostId));
 			void navigate(sessionNavigateTarget(projectId, session.id, hostId));
 		},
 		[navigate, routeParams.hostId, routeParams.projectId, routeParams.sessionId, scopedProjectId],
@@ -1030,14 +1041,11 @@ function ShellLayout() {
 		if (handledShellNonceRef.current === newShellTerminalNonce) return;
 		handledShellNonceRef.current = newShellTerminalNonce;
 		if (routeParams.hostId) return;
-		const shell = openShellTerminal.open(
-			{ projectId: scopedProjectId, sessionId: routeParams.sessionId, cloud: scopedSession?.cloud },
-			{
-				onSuccess: (openedShell) => {
-					setActiveShellTerminal(openedShell.handleId);
-				},
-			},
-		);
+		const shell = openShellTerminal.open({
+			projectId: scopedProjectId,
+			sessionId: routeParams.sessionId,
+			cloud: scopedSession?.cloud,
+		});
 		if (!shell) return;
 		setActiveShellTerminal(shell.handleId);
 		if (!routeParams.sessionId) {
@@ -1283,8 +1291,10 @@ function ShellLayout() {
 					{hideShellTopbar && isMac ? (
 						<div
 							aria-hidden="true"
+							data-slot="titlebar-drag-region"
 							className={cn(
-								"fixed top-0 left-0 z-chrome w-(--ao-sidebar-w,var(--size-sidebar-default)) transition-[height] duration-200 ease-out motion-reduce:transition-none",
+								"fixed top-0 left-0 z-chrome transition-[height] duration-200 ease-out motion-reduce:transition-none",
+								sidebarHasLayout ? "w-(--ao-sidebar-w,var(--size-sidebar-default))" : "w-titlebar-content-offset",
 								isFullScreen ? "pointer-events-none h-0" : "h-traffic-light-clearance",
 							)}
 							ref={sidebarDragStripRef}
@@ -1302,7 +1312,6 @@ function ShellLayout() {
               Rendered first, real clicks get swallowed by window-drag even
               though DOM hit-testing looks correct. */}
 					<TitlebarNav
-						hasSessionTopbar={Boolean(routeParams.sessionId)}
 						historyLocked={isHomeRoute}
 						isFullScreen={isFullScreen}
 					/>

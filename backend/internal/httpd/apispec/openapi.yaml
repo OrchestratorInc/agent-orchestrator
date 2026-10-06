@@ -3898,6 +3898,108 @@ paths:
       summary: Send a message to a Chat reviewer
       tags:
       - conversations
+  /api/v1/reviews/{reviewId}/conversation/models:
+    get:
+      operationId: listReviewerConversationModels
+      parameters:
+      - description: Reviewer conversation identifier.
+        in: path
+        name: reviewId
+        required: true
+        schema:
+          description: Reviewer conversation identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationModelsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the models offered for a Chat reviewer
+      tags:
+      - conversations
+  /api/v1/reviews/{reviewId}/conversation/settings:
+    patch:
+      operationId: setReviewerConversationSettings
+      parameters:
+      - description: Reviewer conversation identifier.
+        in: path
+        name: reviewId
+        required: true
+        schema:
+          description: Reviewer conversation identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationTurnSettingsPayload'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationTurnSettingsPayload'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Select model and effort for the reviewer's next Chat turn
+      tags:
+      - conversations
   /api/v1/reviews/{reviewSessionID}/activity:
     post:
       operationId: setReviewActivity
@@ -7378,7 +7480,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Kill a worker's reviewer terminal session
+      summary: Archive a worker's reviewer and hide its surface while retaining history
       tags:
       - reviews
   /api/v1/sessions/{sessionId}/reviews/rerequest:
@@ -8904,6 +9006,31 @@ paths:
       summary: Cancel an unclaimed speculative task worktree
       tags:
       - projects
+  /api/v1/usage/memory/pressure:
+    get:
+      operationId: getMemoryPressure
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryPressureResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the machine's memory-pressure verdict without sampling any process
+      tags:
+      - usage
   /api/v1/usage/sessions:
     get:
       operationId: listCompactSessionUsage
@@ -8973,6 +9100,38 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Get detailed token and estimated cost usage for one session
+      tags:
+      - usage
+  /api/v1/usage/sessions/memory:
+    get:
+      operationId: listSessionMemory
+      parameters:
+      - description: Optional project id filter for dashboard cards.
+        in: query
+        name: projectId
+        schema:
+          description: Optional project id filter for dashboard cards.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSessionMemoryResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List resident memory of each live session's runtime process tree
       tags:
       - usage
 components:
@@ -9487,6 +9646,34 @@ components:
           $ref: '#/components/schemas/AgentSwitch'
       required:
       - switch
+      type: object
+    AppMemoryResponse:
+      properties:
+        cpuMeasured:
+          description: 'False when there was no earlier sample to measure against:
+            cpuPercent is unknown, not zero.'
+          type: boolean
+        cpuPercent:
+          format: double
+          minimum: 0
+          type: number
+        own:
+          $ref: '#/components/schemas/SessionMemoryResponse'
+        processCount:
+          minimum: 0
+          type: integer
+        reviewers:
+          items:
+            $ref: '#/components/schemas/ControllersReviewerMemoryResponse'
+          type: array
+        rssBytes:
+          minimum: 0
+          type: integer
+      required:
+      - rssBytes
+      - processCount
+      - cpuPercent
+      - cpuMeasured
       type: object
     AttachmentInput:
       properties:
@@ -10416,6 +10603,24 @@ components:
       required:
       - ok
       type: object
+    ControllersReviewerMemoryResponse:
+      properties:
+        harness:
+          type: string
+        memory:
+          $ref: '#/components/schemas/SessionMemoryResponse'
+        reviewId:
+          type: string
+        sessionId:
+          description: The worker session this reviewer reviews, not the reviewer's
+            own identity.
+          type: string
+      required:
+      - reviewId
+      - sessionId
+      - harness
+      - memory
+      type: object
     ControllersSecurePairingStatus:
       properties:
         active:
@@ -10664,7 +10869,25 @@ components:
       type: object
     ConversationAccountPayload:
       properties:
+        authFailureId:
+          type: string
         authMode:
+          type: string
+        authVerifiedAt:
+          type:
+          - "null"
+          - string
+        authenticationState:
+          enum:
+          - unknown
+          - required
+          - authenticated
+          type: string
+        lastAuthFailureAt:
+          type:
+          - "null"
+          - string
+        lastAuthFailureReason:
           type: string
         planLabel:
           type: string
@@ -12414,6 +12637,19 @@ components:
       - reviews
       - runs
       type: object
+    ListSessionMemoryResponse:
+      properties:
+        app:
+          $ref: '#/components/schemas/AppMemoryResponse'
+        sessions:
+          items:
+            $ref: '#/components/schemas/SessionMemoryResponse'
+          type: array
+        system:
+          $ref: '#/components/schemas/SystemMemoryResponse'
+      required:
+      - sessions
+      type: object
     ListSessionPRsResponse:
       properties:
         linkedPrs:
@@ -12558,6 +12794,22 @@ components:
           type: string
       required:
       - status
+      type: object
+    MemoryPressureResponse:
+      properties:
+        pressureRaw:
+          format: double
+          minimum: 0
+          type: number
+        pressureSource:
+          enum:
+          - psi
+          - available_pct
+          - memorystatus
+          type: string
+      required:
+      - pressureRaw
+      - pressureSource
       type: object
     MergePRRequest:
       properties:
@@ -12813,6 +13065,17 @@ components:
         shell:
           description: 'Windows shell selector: auto, git-bash, pwsh, powershell,
             cmd, or a custom executable path. Ignored on macOS and Linux.'
+          type: string
+        startOnAttach:
+          description: Start the shell when the requesting client attaches with its
+            terminal grid instead of immediately, so the shell starts at the size
+            that client shows. Only for clients that attach as a sized viewer; omitted
+            starts the shell immediately at the default grid.
+          type: boolean
+        title:
+          description: Tab title for the new shell, for a client that already shows
+            its tab. Trimmed; omitted or empty numbers it after the existing shells
+            (Terminal N).
           type: string
       type: object
     OrchestratorResponse:
@@ -13547,6 +13810,17 @@ components:
       - sessionId
       - message
       type: object
+    SessionActivityResponse:
+      properties:
+        current:
+          $ref: '#/components/schemas/SessionStepResponse'
+        recent:
+          items:
+            $ref: '#/components/schemas/SessionStepResponse'
+          type: array
+      required:
+      - recent
+      type: object
     SessionInterfaceTransition:
       properties:
         completedAt:
@@ -13636,6 +13910,64 @@ components:
       required:
       - supported
       - targetMode
+      type: object
+    SessionMemoryProcessResponse:
+      properties:
+        command:
+          type: string
+        cpuPercent:
+          description: Share of one core used since the previous sample; zero on the
+            first.
+          format: double
+          minimum: 0
+          type: number
+        pid:
+          type: integer
+        ppid:
+          type: integer
+        rssBytes:
+          minimum: 0
+          type: integer
+      required:
+      - pid
+      - ppid
+      - rssBytes
+      - cpuPercent
+      - command
+      type: object
+    SessionMemoryResponse:
+      properties:
+        activity:
+          $ref: '#/components/schemas/SessionActivityResponse'
+        cpuPercent:
+          description: Share of one core the whole tree used since the previous sample;
+            zero on the first.
+          format: double
+          minimum: 0
+          type: number
+        processCount:
+          minimum: 0
+          type: integer
+        processes:
+          items:
+            $ref: '#/components/schemas/SessionMemoryProcessResponse'
+          type: array
+        rssBytes:
+          description: Resident set size summed over the runtime process tree.
+          minimum: 0
+          type: integer
+        sampledAt:
+          format: date-time
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - rssBytes
+      - processCount
+      - cpuPercent
+      - sampledAt
+      - processes
       type: object
     SessionPRCISummary:
       properties:
@@ -13982,6 +14314,26 @@ components:
       required:
       - session
       type: object
+    SessionStepResponse:
+      properties:
+        endedAt:
+          description: Absent while the tool is still running.
+          format: date-time
+          type:
+          - "null"
+          - string
+        failed:
+          type: boolean
+        startedAt:
+          format: date-time
+          type: string
+        tool:
+          type: string
+      required:
+      - tool
+      - startedAt
+      - failed
+      type: object
     SessionUsageResponse:
       properties:
         harnesses:
@@ -14037,6 +14389,14 @@ components:
         providerTurnId:
           description: Native main-turn identity reported by the hook, when supported.
           type: string
+        runningSubagentIds:
+          description: Running Claude subagent ids observed in a parent Stop hook;
+            empty means none, absent means no snapshot.
+          items:
+            type: string
+          type:
+          - "null"
+          - array
         state:
           description: Agent activity state reported by an agent hook. Optional for
             metadata-only hooks.
@@ -14046,6 +14406,9 @@ components:
           - waiting_input
           - blocked
           - exited
+          type: string
+        subagentId:
+          description: Native child agent id for this hook event.
           type: string
         submissionId:
           description: AO prompt-hook context correlation UUID, when supported.
@@ -14686,6 +15049,60 @@ components:
       required:
       - targetHarness
       type: object
+    SystemMemoryResponse:
+      properties:
+        availableBytes:
+          description: What the kernel would hand out without swapping (MemAvailable).
+          minimum: 0
+          type: integer
+        cpuCount:
+          minimum: 0
+          type: integer
+        cpuMeasured:
+          type: boolean
+        cpuPercent:
+          format: double
+          minimum: 0
+          type: number
+        load1:
+          format: double
+          type: number
+        pressureRaw:
+          format: double
+          minimum: 0
+          type: number
+        pressureSource:
+          enum:
+          - psi
+          - available_pct
+          - memorystatus
+          type: string
+        swapBytesPerSec:
+          format: double
+          minimum: 0
+          type: number
+        swapTotalBytes:
+          minimum: 0
+          type: integer
+        swapUsedBytes:
+          minimum: 0
+          type: integer
+        totalBytes:
+          minimum: 0
+          type: integer
+      required:
+      - totalBytes
+      - availableBytes
+      - swapTotalBytes
+      - swapUsedBytes
+      - swapBytesPerSec
+      - cpuCount
+      - load1
+      - cpuPercent
+      - cpuMeasured
+      - pressureRaw
+      - pressureSource
+      type: object
     SystemRequirement:
       properties:
         detail:
@@ -14775,6 +15192,15 @@ components:
           - cline
           - autohand
           type: string
+        interfaceMode:
+          enum:
+          - chat
+          - tui
+          type: string
+        rerun:
+          description: Start a fresh manual pass for already-reviewed current heads;
+            reuse an active pass from the same reviewer.
+          type: boolean
       type: object
     TriggerReviewResponse:
       properties:

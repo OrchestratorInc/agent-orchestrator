@@ -1568,7 +1568,7 @@ func (m *Manager) hasActiveInterfaceTransition(ctx context.Context, id domain.Se
 // recoverInterruptedInterfaceTransitions closes every durable handoff left
 // active by a daemon exit. A TUI -> Chat transition whose mode commit landed is
 // rolled back first: ordinary Chat restore is context-only and cannot satisfy
-// the handoff's mandatory replay barrier. Reconcile can then restore the source
+// the handoff's mandatory replay barrier. Explicit Resume can restore the source
 // TUI, and a later retry performs native replay again idempotently. A failed
 // target shutdown retains the same rollback obligation in either direction.
 func (m *Manager) recoverInterruptedInterfaceTransitions(

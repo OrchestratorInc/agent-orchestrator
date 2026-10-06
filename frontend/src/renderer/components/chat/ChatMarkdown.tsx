@@ -54,6 +54,7 @@ import { AppLink } from "../AppLink";
 import {
 	explicitWorkspaceFilePath,
 	findWorkspaceFilePath,
+	workspaceFileReferenceLine,
 } from "../../lib/workspace-file-path";
 import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
@@ -91,7 +92,7 @@ const InsideMarkdownLink = createContext(false);
 const REMOTE_PREVIEW_UNAVAILABLE = "This link points to the remote host. Preview is unavailable on this device.";
 const OpenChatLink = createContext<{
 	open?: (url: string) => void;
-	openFile?: (path: string) => void;
+	openFile?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
 	openSession?: (url: string) => void;
 	workspacePaths: string[];
@@ -107,7 +108,7 @@ export function ChatLinkProvider({
 	children,
 }: {
 	onLinkOpen?: (url: string) => void;
-	onFileOpen?: (path: string) => void;
+	onFileOpen?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
 	onSessionLinkOpen?: (url: string) => void;
 	workspacePaths?: string[];
@@ -292,7 +293,9 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 				}
 				if (openInFiles && onFileOpen) {
 					event.preventDefault();
-					onFileOpen(openInFiles);
+					const line = workspaceFileReferenceLine(href ?? "");
+					if (line == null) onFileOpen(openInFiles);
+					else onFileOpen(openInFiles, line);
 					return;
 				}
 				if (href && !browserLink) {
@@ -374,7 +377,11 @@ function InlineCode({ children }: { children?: ReactNode }) {
 	return (
 		<button
 			type="button"
-			onClick={() => onFileOpen(filePath)}
+			onClick={() => {
+				const line = workspaceFileReferenceLine(text ?? "");
+				if (line == null) onFileOpen(filePath);
+				else onFileOpen(filePath, line);
+			}}
 			aria-label={`Open ${filePath} in Files`}
 			className="inline rounded text-left transition-colors hover:bg-interactive-hover"
 		>

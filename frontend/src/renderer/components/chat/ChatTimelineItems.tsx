@@ -147,7 +147,10 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 	const [visibleText, setVisibleText] = useState(() => message.text);
 	const visibleRef = useRef(visibleText);
 	const targetRef = useRef(message.text);
-	const targetGraphemes = useMemo(() => streamGraphemes(message.text), [message.text]);
+	const targetGraphemes = useMemo(
+		() => message.streaming ? streamGraphemes(message.text) : [],
+		[message.text, message.streaming],
+	);
 	const visibleGraphemeCountRef = useRef(targetGraphemes.length);
 	const targetGraphemesRef = useRef(targetGraphemes);
 	const messageIdRef = useRef(message.id);
@@ -265,9 +268,9 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 		// different target grapheme. Reconcile that trailing fragment before using
 		// the old grapheme count, otherwise the drain can skip the merged suffix.
 		const reconciled = reconciledStreamPrefix(visibleRef.current, targetGraphemesRef.current);
+		visibleGraphemeCountRef.current = reconciled.count;
 		if (reconciled.text !== visibleRef.current) {
 			visibleRef.current = reconciled.text;
-			visibleGraphemeCountRef.current = reconciled.count;
 			setVisibleText(reconciled.text);
 		}
 		if (visibleGraphemeCountRef.current < targetGraphemesRef.current.length) scheduleDrain();
@@ -2544,7 +2547,7 @@ export function TurnChangedFiles({
 	/** Opens the session Files inspector for the full workspace diff. */
 	onReview?: () => void;
 	/** Opens the Files inspector focused on this path. */
-	onOpenFile?: (path: string) => void;
+	onOpenFile?: (path: string, line?: number) => void;
 	/**
 	 * Timeline items from the same turn. Turn diffs often carry repo-relative
 	 * basenames (`random_words.txt`); file_change rows and command cwds often

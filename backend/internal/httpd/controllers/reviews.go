@@ -190,7 +190,15 @@ func (c *ReviewsController) trigger(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	res, err := c.Svc.Trigger(r.Context(), sessionID(r), in.Harness, in.AgentConfig)
+	var res reviewcore.TriggerResult
+	var err error
+	if in.Rerun {
+		res, err = c.Svc.TriggerWithOptions(r.Context(), sessionID(r), reviewcore.TriggerOptions{Harness: in.Harness, Config: in.AgentConfig, Source: domain.ReviewTriggerManual, InterfaceMode: in.InterfaceMode, Rerun: true})
+	} else if in.InterfaceMode != "" {
+		res, err = c.Svc.TriggerWithMode(r.Context(), sessionID(r), in.Harness, in.AgentConfig, in.InterfaceMode)
+	} else {
+		res, err = c.Svc.Trigger(r.Context(), sessionID(r), in.Harness, in.AgentConfig)
+	}
 	if err != nil {
 		writeReviewError(w, r, err)
 		return
@@ -278,7 +286,7 @@ func (c *ReviewsController) kill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workerID := sessionID(r)
-	if err := c.Svc.TerminateReviewer(r.Context(), workerID, "cancelled because reviewer session was killed"); err != nil {
+	if err := c.Svc.ArchiveReviewer(r.Context(), workerID); err != nil {
 		writeReviewError(w, r, err)
 		return
 	}
@@ -287,15 +295,8 @@ func (c *ReviewsController) kill(w http.ResponseWriter, r *http.Request) {
 		writeReviewError(w, r, err)
 		return
 	}
-	reviews := res.Reviews
-	if reviews == nil {
-		reviews = []reviewcore.PRReviewState{}
-	}
-	runs := res.Runs
-	if runs == nil {
-		runs = []domain.ReviewRun{}
-	}
-	envelope.WriteJSON(w, http.StatusOK, KillReviewResponse{ReviewerHandleID: res.ReviewerHandleID, ReviewerHarness: res.ReviewerHarness, Reviews: reviews, Runs: runs})
+	response := reviewsResponse(res, nil, nil)
+	envelope.WriteJSON(w, http.StatusOK, KillReviewResponse{ReviewerHandleID: response.ReviewerHandleID, ReviewerHarness: response.ReviewerHarness, Reviews: response.Reviews, Runs: response.Runs})
 }
 
 func (c *ReviewsController) restore(w http.ResponseWriter, r *http.Request) {

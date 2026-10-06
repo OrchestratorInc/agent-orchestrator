@@ -9,6 +9,9 @@ import type {
 	BrowserAgentActivityState,
 	BrowserDevToolsInput,
 	BrowserDevToolsState,
+	BrowserFindInput,
+	BrowserFindState,
+	BrowserFindStopInput,
 	BrowserNavState,
 	BrowserRect,
 	BrowserTabsState,
@@ -307,6 +310,12 @@ const api = {
 		},
 	},
 	window: {
+		getZoomFactor: () => ipcRenderer.invoke("window:getZoomFactor") as Promise<number>,
+		onZoomFactor: (listener: (zoomFactor: number) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, zoomFactor: number) => listener(zoomFactor);
+			ipcRenderer.on("window:zoom", wrapped);
+			return () => { ipcRenderer.off("window:zoom", wrapped); };
+		},
 		isMaximized: () => ipcRenderer.invoke("window:isMaximized") as Promise<boolean>,
 		onMaximized: (listener: (maximized: boolean) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, maximized: boolean) => listener(maximized);
@@ -407,6 +416,12 @@ const api = {
 		goForward: (viewId: string) => ipcRenderer.invoke("browser:goForward", viewId) as Promise<BrowserNavState>,
 		reload: (viewId: string) => ipcRenderer.invoke("browser:reload", viewId) as Promise<BrowserNavState>,
 		stop: (viewId: string) => ipcRenderer.invoke("browser:stop", viewId) as Promise<BrowserNavState>,
+		getFindState: (viewId: string) =>
+			ipcRenderer.invoke("browser:find:get", viewId) as Promise<BrowserFindState>,
+		findInPage: (input: BrowserFindInput) =>
+			ipcRenderer.invoke("browser:find", input) as Promise<BrowserFindState>,
+		stopFindInPage: (input: BrowserFindStopInput) =>
+			ipcRenderer.invoke("browser:find:stop", input) as Promise<BrowserFindState>,
 		captureScreenshot: (viewId: string) => ipcRenderer.invoke("browser:captureScreenshot", viewId) as Promise<void>,
 		downloads: {
 			list: () => ipcRenderer.invoke("browser:downloads:list") as Promise<BrowserDownloadsState>,
@@ -443,6 +458,13 @@ const api = {
 				ipcRenderer.off("browser:focusLocation", wrapped);
 			};
 		},
+		onFindOpen: (listener: (state: BrowserFindState) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: BrowserFindState) => listener(state);
+			ipcRenderer.on("browser:findOpen", wrapped);
+			return () => {
+				ipcRenderer.off("browser:findOpen", wrapped);
+			};
+		},
 		onReopenClosedTab: (listener: (viewId: string) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, viewId: string) => listener(viewId);
 			ipcRenderer.on("browser:reopenClosedTab", wrapped);
@@ -466,6 +488,13 @@ const api = {
 			ipcRenderer.on("browser:navState", wrapped);
 			return () => {
 				ipcRenderer.off("browser:navState", wrapped);
+			};
+		},
+		onFindState: (listener: (state: BrowserFindState) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: BrowserFindState) => listener(state);
+			ipcRenderer.on("browser:findState", wrapped);
+			return () => {
+				ipcRenderer.off("browser:findState", wrapped);
 			};
 		},
 		onPageFocus: (listener: (viewId: string) => void) => {

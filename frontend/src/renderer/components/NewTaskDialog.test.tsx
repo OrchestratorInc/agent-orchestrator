@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
@@ -15,6 +15,25 @@ const { deleteMock, getMock, postMock, ensureAgentReadinessMock } = vi.hoisted((
 vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../hooks/useAgentReadinessQuery")>();
 	return { ...actual, useEnsureAgentReadiness: ensureAgentReadinessMock };
+});
+
+vi.mock("../hooks/useWorkspaceQuery", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useWorkspaceQuery")>();
+	return {
+		...actual,
+		useWorkspaceQuery: () => ({
+			data: [
+				{ id: "proj-1", name: "careerops", kind: "local", workspaceRepos: [
+					{ name: "web", relativePath: "web", repo: "github.com/team/careerops" },
+					{ name: "api", relativePath: "api", repo: "git@github.com:partner/careerops-api.git" },
+				] },
+				{ id: "proj-2", name: "agent-orchestrator", kind: "local", workspaceRepos: [
+					{ name: "app", relativePath: "app", repo: "https://github.com/aoagents/agent-orchestrator.git" },
+				] },
+				{ id: "__standalone__", name: "Scratchpad", kind: "standalone" },
+			],
+		}),
+	};
 });
 
 vi.mock("../lib/api-client", () => ({
@@ -37,15 +56,21 @@ vi.mock("../lib/api-client", () => ({
 			: undefined,
 }));
 
-function renderDialog() {
+function renderDialog({ onProjectChange = vi.fn() }: { onProjectChange?: (projectId: string) => void } = {}) {
 	const onCreated = vi.fn();
 	const onOpenChange = vi.fn();
 	const view = render(
 		<QueryClientProvider client={new QueryClient()}>
-			<NewTaskDialog open projectId="proj-1" onCreated={onCreated} onOpenChange={onOpenChange} />
+			<NewTaskDialog
+				open
+				projectId="proj-1"
+				onProjectChange={onProjectChange}
+				onCreated={onCreated}
+				onOpenChange={onOpenChange}
+			/>
 		</QueryClientProvider>,
 	);
-	return { ...view, onCreated, onOpenChange };
+	return { ...view, onCreated, onOpenChange, onProjectChange };
 }
 
 function requestBody() {
@@ -86,12 +111,33 @@ beforeEach(() => {
 	window.localStorage.removeItem("ao.taskComposer.preferences.v1");
 	ensureAgentReadinessMock.mockReset();
 	deleteMock.mockReset().mockResolvedValue({ data: undefined, error: undefined });
-	getMock.mockReset().mockImplementation(async (path: string) => {
+	getMock.mockReset().mockImplementation(async (path: string, options?: unknown) => {
 		if (path === "/api/v1/agents/readiness") {
 			return { data: agentInventory, error: undefined };
 		}
 		if (path === "/api/v1/agents/{agent}/models") {
 			return { data: directModelCatalog, error: undefined };
+		}
+		if (path === "/api/v1/projects/{id}") {
+			const id = (options as { params?: { path?: { id?: string } } } | undefined)?.params?.path?.id;
+			const project = id === "proj-2"
+				? {
+					id: "proj-2",
+					name: "agent-orchestrator",
+					repo: "https://github.com/aoagents/agent-orchestrator.git",
+					workspaceRepos: [],
+					config: { worker: { agent: "claude-code" }, orchestrator: { agent: "codex" } },
+				}
+				: {
+					id: "proj-1",
+					name: "careerops",
+					repo: "github.com/team/careerops",
+					defaultBranch: "main",
+					path: "/work/careerops",
+					workspaceRepos: [{ name: "api", relativePath: "api", repo: "github.com/partner/careerops-api" }],
+					config: { worker: { agent: "claude-code" }, orchestrator: { agent: "codex" } },
+				};
+			return { data: { status: "ok", project }, error: undefined };
 		}
 		return {
 			data: {
@@ -130,9 +176,11 @@ describe("NewTaskDialog", () => {
 			}),
 		);
 
-		const dialog = screen.getByRole("dialog", { name: "Create a new task" });
+		const dialog = screen.getByRole("dialog");
 		expect(dialog.querySelector(".composer-prompt-surface")).not.toBeNull();
-		expect(screen.getByText("Create a new task")).toHaveClass("settings-dialog-title");
+		expect(screen.getByRole("heading", { level: 2 })).toHaveClass("settings-dialog-title");
+		expect(screen.getByRole("heading", { level: 2 })).not.toHaveTextContent("Create a new task");
+		expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("careerops");
 		expect(screen.queryByText("Runs with")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Close new task dialog" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
@@ -143,6 +191,43 @@ describe("NewTaskDialog", () => {
 		expect(screen.getByLabelText("Task").getAttribute("placeholder")).toBeTruthy();
 		expect(screen.queryByLabelText("Title")).not.toBeInTheDocument();
 		expect(screen.queryByLabelText("Branch")).not.toBeInTheDocument();
+	});
+
+	it("puts Scratchpad first and switches the task destination from the selector", async () => {
+		const { onProjectChange } = renderDialog();
+		const user = userEvent.setup();
+		const trigger = screen.getByRole("button", { name: "Project" });
+
+		await user.click(trigger);
+
+		const options = await screen.findAllByRole("menuitem");
+		await waitFor(() => expect(getMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({ params: { path: { id: "proj-2" } } })));
+		expect(options.map((option) => option.querySelector(".text-settings-label")?.textContent?.trim())).toEqual([
+			"Scratchpad",
+			"careerops",
+			"agent-orchestrator",
+		]);
+		await waitFor(() => expect(options[1]?.querySelectorAll("img")).toHaveLength(2));
+		expect(options[1]?.querySelectorAll("img")).toHaveLength(2);
+		expect(options[1]?.querySelector("img")).toHaveAttribute("src", "https://github.com/team.png?size=64");
+		const avatar = options[1]?.querySelector("img");
+		if (!avatar) throw new Error("Expected repository owner avatar");
+		fireEvent.error(avatar);
+		expect(avatar).toHaveStyle({ visibility: "hidden" });
+		expect(avatar.parentElement).toHaveTextContent("T");
+		expect(options[1]?.querySelectorAll("img")[1]).toHaveAttribute("src", "https://github.com/partner.png?size=64");
+		expect(options[2]?.querySelector("img")).toHaveAttribute("src", "https://github.com/aoagents.png?size=64");
+		expect(options[0]?.querySelector("img")).not.toBeInTheDocument();
+		expect(trigger).toHaveClass("w-fit");
+		expect(options[0]).toHaveClass("settings-menu-item");
+		expect(options[1]).toHaveClass("settings-menu-item");
+		expect(options[0]).toHaveClass("gap-1!");
+		expect(options[1]?.querySelector("img")?.parentElement).toHaveClass("size-[18px]");
+		expect(options[1]?.querySelector("img")?.parentElement?.parentElement?.parentElement).toHaveClass("w-5");
+		expect(document.querySelector('[data-slot="settings-option-menu-scroll-region"]')).toBeInTheDocument();
+
+		await user.click(options[0]);
+		expect(onProjectChange).toHaveBeenCalledWith("__standalone__");
 	});
 
 	it("dismisses the chrome-free card with Escape", async () => {
@@ -187,7 +272,7 @@ describe("NewTaskDialog", () => {
 		const user = userEvent.setup();
 		await waitForAgentCatalog();
 		await user.type(screen.getByLabelText("Task"), "Fix the race");
-		await user.click(screen.getByRole("button", { name: "Start task" }));
+		await user.click(screen.getByRole("button", { name: "Create task" }));
 		await waitFor(() => expect(delegateCalls()).toHaveLength(1));
 		expect(requestBody()).not.toHaveProperty("taskPreparation");
 
@@ -223,7 +308,7 @@ describe("NewTaskDialog", () => {
 		await user.click(await screen.findByRole("button", { name: "Model" }));
 		await user.type(screen.getByRole("searchbox", { name: "Search model" }), "placeholder-model");
 		await user.click(screen.getByRole("menuitem", { name: "Use “placeholder-model” as a custom model" }));
-		await user.click(screen.getByRole("button", { name: "Start task" }));
+		await user.click(screen.getByRole("button", { name: "Create task" }));
 
 		await waitFor(() => expect(requestBody).not.toThrow());
 		expect(postMock).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({
@@ -266,7 +351,7 @@ describe("NewTaskDialog", () => {
 		await waitForAgentCatalog();
 
 		await user.type(screen.getByLabelText("Task"), "Fix it");
-		await user.click(screen.getByRole("button", { name: "Start task" }));
+		await user.click(screen.getByRole("button", { name: "Create task" }));
 
 		const fallback = await screen.findByRole("button", { name: "Create as Terminal UI" });
 		expect(requestBody()).not.toHaveProperty("mode");
@@ -288,7 +373,7 @@ describe("NewTaskDialog", () => {
 		await user.click(screen.getByRole("button", { name: "Agent" }));
 		await user.click(await screen.findByRole("menuitem", { name: "Cursor" }));
 
-		await user.click(screen.getByRole("button", { name: "Start task" }));
+		await user.click(screen.getByRole("button", { name: "Create task" }));
 
 		await waitFor(() => expect(requestBody).not.toThrow());
 		expect(requestBody().agent).toBe("cursor");
@@ -305,7 +390,7 @@ describe("NewTaskDialog", () => {
 		await user.keyboard("{Escape}");
 
 		await user.type(screen.getByLabelText("Task"), "B");
-		await user.click(screen.getByRole("button", { name: "Start task" }));
+		await user.click(screen.getByRole("button", { name: "Create task" }));
 
 		await waitFor(() => expect(requestBody).not.toThrow());
 		expect(requestBody().agent).toBe("claude-code");
@@ -316,7 +401,7 @@ describe("NewTaskDialog", () => {
 		const user = userEvent.setup();
 		await waitForAgentCatalog();
 
-		await user.click(screen.getByRole("button", { name: "Start task" }));
+		await user.click(screen.getByRole("button", { name: "Create task" }));
 
 		await waitFor(() => expect(requestBody).not.toThrow());
 		expect(requestBody()).toMatchObject({
@@ -358,7 +443,7 @@ describe("NewTaskDialog", () => {
 		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("Select model");
 
 		await user.type(screen.getByLabelText("Task"), "Build a quick prototype in scratch.");
-		await user.click(screen.getByRole("button", { name: "Start task" }));
+		await user.click(screen.getByRole("button", { name: "Create task" }));
 
 		await waitFor(() => expect(requestBody).not.toThrow());
 		expect(requestBody()).not.toHaveProperty("branch");
@@ -431,7 +516,7 @@ describe("NewTaskDialog", () => {
 		await waitForAgentCatalog();
 
 		await user.type(screen.getByLabelText("Task"), "Restore fallback renderer.");
-		await user.click(screen.getByRole("button", { name: "Start task" }));
+		await user.click(screen.getByRole("button", { name: "Create task" }));
 
 		expect(await screen.findByText(`${message} (${code})`)).toBeInTheDocument();
 	});
