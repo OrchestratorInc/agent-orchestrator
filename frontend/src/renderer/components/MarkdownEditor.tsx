@@ -7,6 +7,7 @@ import { EditorState } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, keymap, lineNumbers } from "@codemirror/view";
 import { Bold, Heading1, Heading2, Heading3, Heading4, Heading5, Image, Italic, Link, List, ListChecks, ListOrdered, MoreHorizontal, Pilcrow, Quote, Strikethrough } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
@@ -26,6 +27,7 @@ const editorTheme = EditorView.theme({
 }, { dark: false });
 
 export function MarkdownEditor({ value, onChange, filePath }: { value: string; onChange: (value: string) => void; filePath: string }) {
+	const { t } = useTranslation();
 	const containerRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView | null>(null);
 	const onChangeRef = useRef(onChange);
@@ -112,34 +114,34 @@ export function MarkdownEditor({ value, onChange, filePath }: { value: string; o
 	);
 	return (
 		<div className="flex h-full min-h-64 flex-col">
-			<div aria-label="Markdown formatting" className="flex min-h-9 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border bg-background px-2 py-1" role="toolbar">
-				{action("Paragraph", <Pilcrow />, () => setBlockPrefix(""))}
-				{action("Heading 1", <Heading1 />, () => setBlockPrefix("# "))}
-				{action("Heading 2", <Heading2 />, () => setBlockPrefix("## "))}
-				{action("Heading 3", <Heading3 />, () => setBlockPrefix("### "))}
+			<div aria-label={t("markdownEditor.toolbarLabel")} className="flex min-h-9 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border bg-background px-2 py-1" role="toolbar">
+				{action(t("markdownEditor.paragraph"), <Pilcrow />, () => setBlockPrefix(""))}
+				{action(t("markdownEditor.heading", { level: 1 }), <Heading1 />, () => setBlockPrefix("# "))}
+				{action(t("markdownEditor.heading", { level: 2 }), <Heading2 />, () => setBlockPrefix("## "))}
+				{action(t("markdownEditor.heading", { level: 3 }), <Heading3 />, () => setBlockPrefix("### "))}
 				<span aria-hidden="true" className="mx-1 h-5 w-px bg-border" />
-				{action("Bold", <Bold />, () => wrapSelection("**", "**"))}
-				{action("Italic", <Italic />, () => wrapSelection("*", "*"))}
-				{action("Strikethrough", <Strikethrough />, () => wrapSelection("~~", "~~"))}
+				{action(t("markdownEditor.bold"), <Bold />, () => wrapSelection("**", "**"))}
+				{action(t("markdownEditor.italic"), <Italic />, () => wrapSelection("*", "*"))}
+				{action(t("markdownEditor.strikethrough"), <Strikethrough />, () => wrapSelection("~~", "~~"))}
 				<span aria-hidden="true" className="mx-1 h-5 w-px bg-border" />
-				{action("Bulleted list", <List />, () => setBlockPrefix("- "))}
-				{action("Numbered list", <ListOrdered />, () => setBlockPrefix("1. "))}
-				{action("Task list", <ListChecks />, () => setBlockPrefix("- [ ] "))}
-				{action("Block quote", <Quote />, () => setBlockPrefix("> "))}
-				{action("Insert link", <Link />, insertLink)}
-				{action("Insert image", <Image />, insertImage)}
+				{action(t("markdownEditor.bulletedList"), <List />, () => setBlockPrefix("- "))}
+				{action(t("markdownEditor.numberedList"), <ListOrdered />, () => setBlockPrefix("1. "))}
+				{action(t("markdownEditor.taskList"), <ListChecks />, () => setBlockPrefix("- [ ] "))}
+				{action(t("markdownEditor.blockQuote"), <Quote />, () => setBlockPrefix("> "))}
+				{action(t("markdownEditor.insertLink"), <Link />, insertLink)}
+				{action(t("markdownEditor.insertImage"), <Image />, insertImage)}
 				<DropdownMenu>
-					<DropdownMenuTrigger asChild>{action("More Markdown formatting", <MoreHorizontal />, () => undefined)}</DropdownMenuTrigger>
+					<DropdownMenuTrigger asChild>{action(t("markdownEditor.moreFormatting"), <MoreHorizontal />, () => undefined)}</DropdownMenuTrigger>
 					<DropdownMenuContent align="end" className="w-48">
-						<DropdownMenuLabel>Headings</DropdownMenuLabel>
-						<DropdownMenuItem onSelect={() => setBlockPrefix("#### ")}><Heading4 /> Heading 4</DropdownMenuItem>
-						<DropdownMenuItem onSelect={() => setBlockPrefix("##### ")}><Heading5 /> Heading 5</DropdownMenuItem>
+						<DropdownMenuLabel>{t("markdownEditor.headings")}</DropdownMenuLabel>
+						<DropdownMenuItem onSelect={() => setBlockPrefix("#### ")}><Heading4 /> {t("markdownEditor.heading", { level: 4 })}</DropdownMenuItem>
+						<DropdownMenuItem onSelect={() => setBlockPrefix("##### ")}><Heading5 /> {t("markdownEditor.heading", { level: 5 })}</DropdownMenuItem>
 						<DropdownMenuSeparator />
-						<DropdownMenuItem onSelect={() => setBlockPrefix("")}><Pilcrow /> Paragraph</DropdownMenuItem>
+						<DropdownMenuItem onSelect={() => setBlockPrefix("")}><Pilcrow /> {t("markdownEditor.paragraph")}</DropdownMenuItem>
 					</DropdownMenuContent>
 				</DropdownMenu>
 			</div>
-			<div aria-label={`Edit ${filePath}`} className="min-h-0 flex-1 overflow-hidden" ref={containerRef} role="textbox" />
+			<div aria-label={t("markdownEditor.edit", { filePath })} className="min-h-0 flex-1 overflow-hidden" ref={containerRef} role="textbox" />
 		</div>
 	);
 }
