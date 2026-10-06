@@ -962,8 +962,6 @@ type KillSessionResponse struct {
 	Freed     bool             `json:"freed,omitempty"`
 }
 
-
-
 // RollbackSessionResponse is the body of POST /api/v1/sessions/{sessionId}/rollback.
 // Exactly one of Deleted/Killed is true on a successful rollback; both are
 // false when the session was already absent or already terminated (benign).

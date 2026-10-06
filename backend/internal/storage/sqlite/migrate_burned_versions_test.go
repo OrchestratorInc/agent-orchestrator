@@ -185,6 +185,7 @@ var shippedMigrations = map[int64]string{
 	181: "0181_worktree_startup_cues.sql",
 	182: "0182_remove_cue_description.sql",
 	183: "0183_remove_cue_startup_options.sql",
+	184: "0184_remove_worktree_startup_cues.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

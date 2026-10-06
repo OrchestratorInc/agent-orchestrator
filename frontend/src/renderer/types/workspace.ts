@@ -1,4 +1,3 @@
-import type { components } from "../../api/schema";
 import { attentionZone as presentationAttentionZone } from "../lib/session-presentation";
 import {
 	AGENT_OPTIONS,

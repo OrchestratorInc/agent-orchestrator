@@ -208,8 +208,6 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	}
 	m.logAsyncChatSpawnStage(id, "attachment_restore", stageStarted)
 
-	if !reusePublishedWorkspace && in.projectKind != domain.ProjectKindScratch {
-	}
 	record, err := m.getRecord(ctx, id)
 	if err != nil {
 		m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)

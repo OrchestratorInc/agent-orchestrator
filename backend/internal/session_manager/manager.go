@@ -383,11 +383,10 @@ type conversationSettingsStore interface {
 // Manager coordinates internal session spawn, restore, kill, and cleanup over
 // the outbound ports. User-facing read-model assembly lives in the service package.
 type Manager struct {
-	runtime              runtimeController
-	agents               ports.AgentResolver
-	workspace            ports.Workspace
-	store                Store
-	startupDeliveryLocks sync.Map
+	runtime   runtimeController
+	agents    ports.AgentResolver
+	workspace ports.Workspace
+	store     Store
 	// agentSwitchReporting supplies the exact authorization snapshot immediately
 	// before each failure-aware store transaction. Nil is fail-closed.
 	agentSwitchReporting ports.AgentSwitchReportingPolicy
