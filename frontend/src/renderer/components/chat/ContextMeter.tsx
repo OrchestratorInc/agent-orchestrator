@@ -14,6 +14,7 @@
  */
 
 import { AlertTriangle, Minimize2 } from "lucide-react";
+import { useState } from "react";
 import { cn } from "../../lib/utils";
 import { formatTokenCount } from "../../lib/format-token-count";
 import { Button } from "../ui/button";
@@ -118,11 +119,18 @@ export function ContextMeter({
 	compactBlocked?: boolean;
 	compactUnavailable?: string;
 }) {
+	const [compactError, setCompactError] = useState<string>();
 	const quota = rateLimits ? worstWindow(rateLimits) : undefined;
 	const hasContext = usage !== undefined && (usage.contextUsed > 0 || usage.contextWindow > 0);
 	// Only surfaced once it is actionable. A quota readout that is always on screen
 	// becomes furniture, and this one has to be noticed on the day it matters.
 	const showQuota = quota !== undefined && quota.percent >= QUOTA_WARN;
+	const handleCompact = () => {
+		setCompactError(undefined);
+		return Promise.resolve()
+			.then(() => onCompact?.())
+			.catch(() => setCompactError("Conversation history could not be compacted. Try again."));
+	};
 
 	if (!hasContext && !showQuota) return null;
 
@@ -132,6 +140,7 @@ export function ContextMeter({
 		// throws rather than degrading.
 		<TooltipProvider>
 			<div className={cn("flex shrink-0 items-center gap-2", className)}>
+				{compactError ? <span role="status" aria-live="polite" className="sr-only">{compactError}</span> : null}
 				{usage && hasContext ? <ContextReadout usage={usage} /> : null}
 				{onCompact && compactSupported && usage && hasContext && usage.contextUsed > 0 && usage.contextWindow > 0 && usage.contextUsed / usage.contextWindow >= CONTEXT_WARN ? (
 					<Tooltip>
@@ -145,7 +154,7 @@ export function ContextMeter({
 									aria-busy={compacting}
 									aria-label="Compact conversation history"
 									data-compact-control=""
-									onClick={() => void onCompact()}
+									onClick={() => void handleCompact()}
 									className="size-7 rounded-full text-muted-foreground hover:bg-white/5! hover:text-foreground"
 								>
 									<Minimize2 aria-hidden="true" className={cn("size-3.5", compacting && "animate-pulse")} />
@@ -153,11 +162,11 @@ export function ContextMeter({
 							</span>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">
-							{compacting
+							{compactError ?? (compacting
 								? "Compacting conversation history"
 								: compactBlocked
 									? "Stop the current turn before compacting"
-									: compactUnavailable ?? "Compact conversation history"}
+									: compactUnavailable ?? "Compact conversation history")}
 						</TooltipContent>
 					</Tooltip>
 				) : null}

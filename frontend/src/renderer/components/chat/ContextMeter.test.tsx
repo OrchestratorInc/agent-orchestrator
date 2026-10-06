@@ -106,6 +106,19 @@ describe("ContextMeter", () => {
 		expect(screen.getByRole("button", { name: "Compact conversation history" })).toBeDisabled();
 	});
 
+	it("surfaces a rejected compaction without an unhandled promise", async () => {
+		const onCompact = vi.fn().mockRejectedValue(new Error("server rejected compaction"));
+		render(
+			<ContextMeter
+				usage={usage({ contextUsed: 180_880 })}
+				onCompact={onCompact}
+				compactSupported
+			/>,
+		);
+		await userEvent.click(screen.getByRole("button", { name: "Compact conversation history" }));
+		expect(await screen.findByRole("status")).toHaveTextContent("Conversation history could not be compacted. Try again.");
+	});
+
 	it("clamps a provider that overreports past its own window", () => {
 		render(<ContextMeter usage={usage({ contextUsed: 300_000 })} />);
 		// Full, not overflowing the track and not claiming 116%.
