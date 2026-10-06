@@ -26,6 +26,8 @@ export type InspectorView = "summary" | "reviews" | "browser" | "files";
 
 export type InspectorTab = {
 	badge?: boolean;
+	/** Shown beside the icon when positive, e.g. the number of changed files. */
+	count?: number;
 	displayLabel?: string;
 	icon: ReactNode;
 	id: InspectorView;
@@ -161,6 +163,15 @@ export function SessionInspectorShellView({
 										</span>
 									) : null}
 								</span>
+								{tab.count ? (
+									// Same corner count as the notification bell (NotificationCenter).
+									<span
+										aria-hidden="true"
+										className="pointer-events-none absolute right-px top-px z-[2] grid h-3 min-w-3 place-items-center rounded-full bg-accent-strong px-0.5 font-mono text-[7px] font-semibold leading-none text-accent-foreground shadow-sm ring-1 ring-background"
+									>
+										{tab.count > 99 ? "99+" : tab.count}
+									</span>
+								) : null}
 								<span className="sr-only">
 									{tab.displayLabel ?? tab.label}
 								</span>
@@ -234,6 +245,7 @@ export function SessionInspectorSummaryView({
 	activityTitle,
 	artifactCards,
 	artifactTitle,
+	branch,
 	completion,
 	context,
 	pullRequestCards,
@@ -247,6 +259,8 @@ export function SessionInspectorSummaryView({
 	/** Omit alongside {@link artifactTitle} to skip the artifacts section entirely. */
 	artifactCards?: ReactNode;
 	artifactTitle?: string;
+	/** The session branch: its pull requests, uncommitted/unpushed work, and the next git action. */
+	branch?: ReactNode;
 	completion?: ReactNode;
 	context?: ReactNode;
 	/** Omit alongside {@link pullRequestTitle} to skip the PR section entirely (e.g. no known PR output). */
@@ -264,6 +278,7 @@ export function SessionInspectorSummaryView({
 		<div role="tabpanel">
 			{workers}
 			{context}
+			{branch}
 			{pullRequestTitle ? (
 				<InspectorSection surface={false} title={pullRequestTitle}>
 					<div className="flex flex-col gap-1.5">{pullRequestCards}</div>
@@ -400,34 +415,21 @@ const timelineNodeTone: Record<InspectorTimelineTone, string> = {
 
 export function InspectorActivityTimelineView({ events }: { events: InspectorTimelineEvent[] }) {
 	return (
-		<div className="relative pl-5">
+		<div className="flex flex-col">
 			{events.map((event, index) => (
-				<div key={index} className="relative pb-4 last:pb-0" data-testid="inspector-timeline-event">
-					{index < events.length - 1 ? (
-						<span
-							aria-hidden="true"
-							className={cn(
-								"absolute -bottom-[10.5px] -left-3.5 w-px bg-border",
-								event.tone === "now" ? "top-1/2" : "top-[10.5px]",
-							)}
-							data-testid="inspector-timeline-connector"
-						/>
-					) : null}
-					<div className="relative flex min-h-icon-xs items-center">
-						<span
-							aria-hidden="true"
-							className={cn(
-								"absolute -left-4.5 size-icon-xs rounded-full",
-								event.tone === "now" ? "top-1/2 -translate-y-1/2" : "top-1.5",
-								timelineNodeTone[event.tone],
-								event.markerBreathe && "animate-status-pulse",
-							)}
-							style={event.markerTone ? { background: event.markerTone } : undefined}
-						/>
-						<div className="text-xs leading-normal text-foreground [&_b]:font-semibold">{event.content}</div>
-					</div>
+				<div key={index} className="flex min-h-7 items-center gap-2.5" data-testid="inspector-timeline-event">
+					<span
+						aria-hidden="true"
+						className={cn(
+							"size-1.5 shrink-0 rounded-full",
+							timelineNodeTone[event.tone],
+							event.markerBreathe && "animate-status-pulse",
+						)}
+						style={event.markerTone ? { background: event.markerTone } : undefined}
+					/>
+					<div className="min-w-0 flex-1 truncate text-control text-foreground [&_b]:font-semibold">{event.content}</div>
 					{event.timestamp ? (
-						<div className="mt-1 font-mono text-2xs text-passive">{event.timestamp}</div>
+						<span className="shrink-0 font-mono text-caption tabular-nums text-passive">{event.timestamp}</span>
 					) : null}
 				</div>
 			))}
