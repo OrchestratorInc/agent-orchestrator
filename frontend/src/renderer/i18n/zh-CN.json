@@ -2364,7 +2364,7 @@
 	"chat.draft.clearRefusedSteerFailed": "投递被拒绝，但无法清除本地恢复记录。不会自动重新发送任何内容。",
 	"chat.draft.steerUncertain": "AO 无法确定代理是否已收到此内容。请使用相同的投递 ID 安全重试，或放弃恢复后再编辑。放弃后再次发送可能导致重复投递。",
 	"chat.draft.sendUncertain": "消息投递尚未确认。请使用相同的投递 ID 重试；确认前草稿将保持锁定。",
-	"chat.draft.storageUnavailable": "无法启用聊天草稿存储。请恢复本地存储访问权限，并在聊天前重试。",
+	"chat.draft.storageUnavailable": "暂时无法保存草稿。你可以继续聊天，但离开此聊天后，未发送的文字将不会保留。",
 	"chat.draft.queueSaveLocalFailed": "无法保存草稿。请保持此聊天打开，或在离开前复制草稿。",
 	"chat.draft.queueUnavailable": "目前无法编辑排队消息。",
 	"chat.draft.queueMissing": "此消息已不在队列中。请复制或取消此编辑以继续。",

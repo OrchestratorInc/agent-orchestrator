@@ -469,10 +469,10 @@ function OfflineRemoteTerminal() {
  * Do not mount any renderer draft owner until the daemon incarnation has
  * authoritatively claimed its storage scope. The activation transition itself
  * owns cleanup of the predecessor; callbacks from that obsolete surface can
- * then only fail closed against the successor lease.
+ * then only fail closed against the successor lease. If the claim fails, Chat
+ * still mounts, but with an in-memory composer that owns no saved drafts.
  */
 export function ChatWorkspace(props: ChatWorkspaceProps) {
-	const translateDraft = useChatDraftTranslation();
 	const { snapshot, session, draftOwner, uiSessionId = draftOwner?.sessionId ?? snapshot.sessionId } = props;
 	const draftScope = useMemo<ChatDraftScope>(
 		() => draftOwner ?? ({
@@ -485,7 +485,6 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 	);
 	const scopeKey = chatDraftScopeKey(draftScope);
 	const [activation, setActivation] = useState<ChatWorkspaceActivation>();
-	const [activationAttempt, setActivationAttempt] = useState(0);
 
 	useLayoutEffect(() => {
 		// Snapshot-only previews have no daemon session incarnation to arbitrate.
@@ -501,43 +500,27 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 		}
 		if (result.replaced) purgeFileAttachmentsForSession(draftScope.sessionId);
 		setActivation({ key: scopeKey, state: "active" });
-	}, [activationAttempt, draftOwner, draftScope, scopeKey, session?.createdAt]);
+	}, [draftOwner, draftScope, scopeKey, session?.createdAt]);
 
-	if (activation?.key !== scopeKey || activation.state !== "active") {
-		const failure = activation?.key === scopeKey && activation.state === "failed"
-			? activation.reason
-			: undefined;
+	if (activation?.key !== scopeKey) {
 		return (
 			<section
 				aria-label="Chat"
 				className="cursor-chat-surface flex h-full min-h-0 flex-col items-center justify-center px-6 [font-size:var(--chat-font-size)]"
 				data-session-mode={snapshot.mode}
 				style={{ "--chat-font-size": `${CHAT_FONT_SIZE_DEFAULT}px` } as CSSProperties}
-			>
-				{failure ? (
-					<div className="max-w-lg rounded-lg border border-border bg-card p-4">
-						<p className="text-sm text-foreground" role="alert">
-							{failure === "obsolete"
-								? "This Chat view belongs to an older session incarnation. Reopen the current session to continue."
-								: translateDraft("chat.draft.storageUnavailable")}
-						</p>
-						{failure === "storage" ? (
-							<Button
-								className="mt-3"
-								onClick={() => setActivationAttempt((attempt) => attempt + 1)}
-								type="button"
-								variant="outline"
-							>
-								Retry draft restore
-							</Button>
-						) : null}
-					</div>
-				) : null}
-			</section>
+			/>
 		);
 	}
 
-	return <ChatWorkspaceContent key={scopeKey} {...props} draftScope={draftScope} />;
+	return (
+		<ChatWorkspaceContent
+			key={scopeKey}
+			{...props}
+			draftScope={draftScope}
+			draftPersistenceAvailable={activation.state === "active"}
+		/>
+	);
 }
 
 function ChatWorkspaceContent({
@@ -638,7 +621,8 @@ function ChatWorkspaceContent({
 	cancelQueuedTurnPendingTurnId,
 	editQueuedTurnPendingTurnId,
 	draftScope,
-}: ChatWorkspaceProps & { draftScope: ChatDraftScope }) {
+	draftPersistenceAvailable,
+}: ChatWorkspaceProps & { draftScope: ChatDraftScope; draftPersistenceAvailable: boolean }) {
 	const draftScopeKey = chatDraftScopeKey(draftScope);
 	const uiSessionId = draftScope.sessionId;
 	const activeRemoteHostId = remoteHostId ?? session?.hostId;
@@ -817,7 +801,7 @@ function ChatWorkspaceContent({
 	const stablePromoteQueuedTurn = useStableCallback(onPromoteQueuedTurn);
 	const stableCancelQueuedTurn = useStableCallback(onCancelQueuedTurn);
 	const [queueEdit, setQueueEdit] = useState<ChatDraftQueuedEdit | undefined>(
-		() => readChatSessionDraft(draftScope).queuedEdit,
+		() => (draftPersistenceAvailable ? readChatSessionDraft(draftScope).queuedEdit : undefined),
 	);
 	const queueEditRef = useRef(queueEdit);
 	const [queueDraftError, setQueueDraftError] = useState<string>();
@@ -1255,7 +1239,7 @@ function ChatWorkspaceContent({
 					canSteer={canSteerQueuedMessage}
 					onPromoteQueuedTurn={newWorkDisabled ? undefined : promoteQueuedTurn}
 					onBeginQueuedEdit={
-						newWorkDisabled || !onEditQueuedTurn ? undefined : beginQueuedEdit
+						newWorkDisabled || !draftPersistenceAvailable || !onEditQueuedTurn ? undefined : beginQueuedEdit
 					}
 					onCancelQueuedTurn={newWorkDisabled ? undefined : handleCancelQueuedTurn}
 					onReorderQueuedTurns={newWorkDisabled ? undefined : onReorderQueuedTurns}
@@ -1267,6 +1251,7 @@ function ChatWorkspaceContent({
 			beginQueuedEdit,
 			canSteerQueuedMessage,
 			cancelQueuedTurnPendingTurnId,
+			draftPersistenceAvailable,
 			handleCancelQueuedTurn,
 			newWorkDisabled,
 			onEditQueuedTurn,
@@ -1455,6 +1440,12 @@ function ChatWorkspaceContent({
 					{snapshot.account ? (
 						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
 					) : null}
+					{!draftPersistenceAvailable ? (
+						<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-2 text-[11px] text-muted-foreground">
+							<TriangleAlert aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
+							{t("chat.draft.storageUnavailable")}
+						</div>
+					) : null}
 					<ControllerBanner
 						controller={snapshot.controller}
 						provisionState={session?.provisionState}
@@ -1488,7 +1479,7 @@ function ChatWorkspaceContent({
 									onOpenFiles={onOpenFiles}
 									onOpenFile={onOpenFile}
 									retryControl={retryControl}
-									onEditHumanMessage={editHumanMessage}
+									onEditHumanMessage={draftPersistenceAvailable ? editHumanMessage : undefined}
 									editPending={editMessagePending}
 									editBusy={Boolean(turn)}
 									editError={editMessageError}
@@ -1581,8 +1572,8 @@ function ChatWorkspaceContent({
 										compacting={compacting}
 										compactUnavailable={compactUnavailable}
 										compactBlocked={Boolean(turn)}
-										draftSessionId={queueEdit ? undefined : draftScope.sessionId}
-										draftSessionIncarnation={draftScope.incarnation}
+										draftSessionId={draftPersistenceAvailable && !queueEdit ? draftScope.sessionId : undefined}
+										draftSessionIncarnation={draftPersistenceAvailable ? draftScope.incarnation : undefined}
 										assetBaseUrl={assetBaseUrl}
 										assetSessionId={snapshot.sessionId}
 										remoteHost={Boolean(activeRemoteHostId)}
