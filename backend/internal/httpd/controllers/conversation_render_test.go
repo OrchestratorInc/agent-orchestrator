@@ -3,6 +3,7 @@ package controllers_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
+	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
@@ -154,6 +156,8 @@ func TestRenderCheckRouteReturnsTheScreenshotAndNamesTheOrigin(t *testing.T) {
 	}{
 		{"ok", nil, http.StatusOK, ""},
 		{"no desktop app", chatsvc.ErrRenderCheckUnavailable, http.StatusServiceUnavailable, "RENDER_CHECK_UNAVAILABLE"},
+		{"desktop could not check the page", browserruntime.CommandError{Code: "BROWSER_COMMAND_FAILED", Message: "render check page did not load within 15000 ms"},
+			http.StatusUnprocessableEntity, "RENDER_CHECK_FAILED"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := &renderCheckStub{renderStub: &renderStub{fakeConversationService: &fakeConversationService{}}, checkErr: tc.err}
@@ -170,7 +174,9 @@ func TestRenderCheckRouteReturnsTheScreenshotAndNamesTheOrigin(t *testing.T) {
 			}
 			defer func() { _ = resp.Body.Close() }()
 			var body struct {
-				Code       string `json:"code"`
+				Code       string         `json:"code"`
+				Message    string         `json:"message"`
+				Details    map[string]any `json:"details"`
 				Screenshot struct {
 					MimeType string `json:"mimeType"`
 					Data     string `json:"data"`
@@ -180,6 +186,11 @@ func TestRenderCheckRouteReturnsTheScreenshotAndNamesTheOrigin(t *testing.T) {
 			_ = json.NewDecoder(resp.Body).Decode(&body)
 			if resp.StatusCode != tc.status || body.Code != tc.code {
 				t.Fatalf("status=%d code=%q, want %d %q", resp.StatusCode, body.Code, tc.status, tc.code)
+			}
+			if code := (browserruntime.CommandError{}); errors.As(tc.err, &code) {
+				if body.Message != code.Message || body.Details["desktopCode"] != code.Code {
+					t.Fatalf("message=%q details=%v, want the desktop's own reason", body.Message, body.Details)
+				}
 			}
 			if tc.err != nil {
 				return

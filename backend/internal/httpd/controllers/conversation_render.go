@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
@@ -75,6 +76,7 @@ func (c *ConversationsController) checkRender(w http.ResponseWriter, r *http.Req
 	result, err := svc.CheckRender(r.Context(), sessionID(r), chatsvc.RenderCheckInput{
 		HTML: req.HTML, Width: req.Width, BaseURL: "http://" + r.Host,
 	})
+	var desktopErr browserruntime.CommandError
 	switch {
 	case err == nil:
 		messages := make([]RenderConsoleMessage, 0, len(result.ConsoleMessages))
@@ -91,6 +93,11 @@ func (c *ConversationsController) checkRender(w http.ResponseWriter, r *http.Req
 	case errors.Is(err, chatsvc.ErrRenderCheckUnavailable):
 		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "RENDER_CHECK_UNAVAILABLE",
 			"render check needs the AO desktop app; open it, or publish without a check", nil)
+	case errors.As(err, &desktopErr):
+		// The desktop app reached the page but could not check it (it did not
+		// load in time, say). The agent needs the reason, not an opaque 500.
+		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "RENDER_CHECK_FAILED",
+			desktopErr.Message, map[string]any{"desktopCode": desktopErr.Code})
 	default:
 		writeConversationError(w, r, err)
 	}
