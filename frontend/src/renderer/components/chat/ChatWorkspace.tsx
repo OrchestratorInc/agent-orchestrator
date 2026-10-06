@@ -1,4 +1,5 @@
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 /**
  * The Chat surface for a session whose persisted mode is `chat`.
  *
@@ -2277,7 +2278,7 @@ function Timeline({
 			)?.turnId,
 		[snapshot.items],
 	);
-	const { editableTurns, reconstructedTurns } = useMemo(() => {
+	const { editableTurns: editableTurnsNow, reconstructedTurns } = useMemo(() => {
 		const editable = new Set<string>();
 		const reconstructed = new Set<string>();
 		if (snapshot.controller.state !== "ready") {
@@ -2502,6 +2503,7 @@ function Timeline({
 		inlineEditMutation.accepted,
 	]);
 
+	const editableTurns = useStableSet(editableTurnsNow);
 	const startMessageEdit = useCallback((message: ConversationMessage) => {
 		if (!message.turnId || inlineEditLocked) return;
 		const result = writeChatInlineEdit(draftScope, {
@@ -2645,6 +2647,10 @@ function Timeline({
 			draftScope,
 		],
 	);
+
+	// Both churn with their deps while streaming; a stable identity keeps memoized turn groups from re-rendering.
+	const stableStartMessageEdit = useLatestCallback(startMessageEdit);
+	const stableSubmitMessageEdit = useLatestCallback(submitMessageEdit);
 
 	const readable = useMemo(() => readableItems(snapshot), [snapshot]);
 	const items = useStableList(readable, itemKey, sameContent);
@@ -3254,13 +3260,13 @@ function Timeline({
 									retry={retry}
 									onEditHumanMessage={canEditHumanMessage ? editHumanMessage : undefined}
 									messageEdit={messageEdit}
-									onStartMessageEdit={startMessageEdit}
+									onStartMessageEdit={stableStartMessageEdit}
 									onUpdateMessageEdit={updateMessageEdit}
 									onCancelMessageEdit={cancelMessageEdit}
 									onAbandonEditRecovery={
 										canAbandonInlineEditRecovery ? abandonUncertainInlineEdit : undefined
 									}
-									onSubmitMessageEdit={submitMessageEdit}
+									onSubmitMessageEdit={stableSubmitMessageEdit}
 									editPending={inlineEditPending}
 									editSendBlocked={inlineEditSendBlocked}
 									editRecoveryLabel={translateDraft(inlineEditRecoveryLabel)}
