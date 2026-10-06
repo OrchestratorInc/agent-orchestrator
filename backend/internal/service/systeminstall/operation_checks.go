@@ -111,7 +111,8 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 	if !s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
 		return nil, fmt.Errorf("%w: the %s that AO runs (%s) was not installed with %s; update or remove it manually with the tool that installed it", ErrInstallOwner, target, verified.ResolvedPath, installMethodLabel(plan.Method))
 	}
-	baseline := &installedBaseline{path: verified.ResolvedPath, version: versionPattern.FindString(verified.Output)}
+	version, _ := findUpdateVersion(verified.Output)
+	baseline := &installedBaseline{path: verified.ResolvedPath, version: version.display}
 	s.mu.Lock()
 	if advisory, ok := s.updateAdvisories[target]; ok && advisory.Status == UpdateStatusBehindLatest {
 		baseline.latest = advisory.LatestVersion
@@ -147,19 +148,19 @@ func updateOutcome(baseline *installedBaseline, result VerifyResult) (failure, n
 	if baseline.path != "" && result.ResolvedPath != "" && baseline.path != result.ResolvedPath {
 		note = fmt.Sprintf("AO now runs %s (was %s).", result.ResolvedPath, baseline.path)
 	}
-	after := versionPattern.FindStringSubmatch(result.Output)
-	before := versionPattern.FindStringSubmatch(baseline.version)
-	if after == nil || before == nil {
+	after, afterOK := findUpdateVersion(result.Output)
+	before, beforeOK := parseUpdateVersion(baseline.version)
+	if !afterOK || !beforeOK {
 		return "", note
 	}
-	if compareVersions(after, before) > 0 {
-		return "", strings.TrimSpace(fmt.Sprintf("Updated %s to %s. %s", before[0], after[0], note))
+	if comparison, comparable := compareUpdateVersions(after, before); comparable && comparison > 0 {
+		return "", strings.TrimSpace(fmt.Sprintf("Updated %s to %s. %s", before.display, after.display, note))
 	}
-	latest := versionPattern.FindStringSubmatch(baseline.latest)
-	if latest != nil && compareVersions(after, latest) < 0 {
-		return fmt.Sprintf("the update finished, but %s still reports %s (latest is %s); it may have changed a different installation", result.ResolvedPath, after[0], latest[0]), note
+	latest, latestOK := parseUpdateVersion(baseline.latest)
+	if comparison, comparable := compareUpdateVersions(after, latest); latestOK && comparable && comparison < 0 {
+		return fmt.Sprintf("the update finished, but %s still reports %s (latest is %s); it may have changed a different installation", result.ResolvedPath, after.display, latest.display), note
 	}
-	return "", strings.TrimSpace(fmt.Sprintf("Version unchanged at %s. %s", after[0], note))
+	return "", strings.TrimSpace(fmt.Sprintf("Version unchanged at %s. %s", after.display, note))
 }
 
 // uninstallOutcome reports a failure when the exact binary sessions ran

@@ -8,9 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
-	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -39,8 +37,6 @@ type UpdateAdvisory struct {
 	Source         string       `json:"source,omitempty"`
 	CheckedAt      time.Time    `json:"checkedAt"`
 }
-
-var versionPattern = regexp.MustCompile(`\bv?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?\b`)
 
 type updateAdvisoryCall struct {
 	done     chan struct{}
@@ -153,11 +149,11 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	if source.Package == "" && s.officialVersion == nil {
 		return advisory, nil
 	}
-	current := versionPattern.FindStringSubmatch(verified.Output)
-	if current == nil {
+	current, ok := findUpdateVersion(verified.Output)
+	if !ok {
 		return advisory, nil
 	}
-	advisory.CurrentVersion = current[0]
+	advisory.CurrentVersion = current.display
 	var latest string
 	if source.Package != "" {
 		advisory.Source = source.Method
@@ -176,15 +172,15 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	if err != nil {
 		return advisory, nil //nolint:nilerr // A failed latest-version lookup is not an update verdict.
 	}
-	parsedLatest := versionPattern.FindStringSubmatch(latest)
-	if len(parsedLatest) != 5 {
+	parsedLatest, ok := parseUpdateVersion(latest)
+	if !ok {
 		return advisory, nil
 	}
-	if parsedLatest[0] != latest {
+	comparison, comparable := compareUpdateVersions(current, parsedLatest)
+	if !comparable {
 		return advisory, nil
 	}
-	advisory.LatestVersion = latest
-	comparison := compareVersions(current, parsedLatest)
+	advisory.LatestVersion = parsedLatest.display
 	switch {
 	case comparison < 0:
 		advisory.Status = UpdateStatusBehindLatest
@@ -264,31 +260,6 @@ func packageOwnsBinary(commands ports.CommandRunner) func(context.Context, strin
 		}
 		return false, nil
 	}
-}
-
-func compareVersions(current, latest []string) int {
-	for i := 1; i <= 3; i++ {
-		left, _ := strconv.Atoi(current[i])
-		right, _ := strconv.Atoi(latest[i])
-		if left < right {
-			return -1
-		}
-		if left > right {
-			return 1
-		}
-	}
-	if current[4] == latest[4] {
-		return 0
-	}
-	if current[4] == "" {
-		return 1
-	}
-	if latest[4] == "" {
-		return -1
-	}
-	// A prerelease comparison that cannot be proven from these CLI formats is
-	// treated as ahead/unknown rather than reporting a potentially false update.
-	return 1
 }
 
 func latestAvailableVersion(commands ports.CommandRunner) func(context.Context, string, string, bool) (string, error) {

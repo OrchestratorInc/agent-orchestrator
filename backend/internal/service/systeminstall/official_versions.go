@@ -179,9 +179,9 @@ func parseOfficialVersion(source officialSource, body []byte) (string, error) {
 		}
 	}
 	// Tags such as v1.2.3 and rust-v0.160.1 carry the version after a prefix.
-	version := versionPattern.FindString(raw)
-	if version == "" {
+	version, ok := findUpdateVersion(raw)
+	if !ok {
 		return "", fmt.Errorf("no version in official release metadata %q", raw)
 	}
-	return strings.TrimPrefix(version, "v"), nil
+	return version.display, nil
 }
