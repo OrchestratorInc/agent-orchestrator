@@ -240,6 +240,7 @@ export interface CloudCpCreateSessionRequest {
 	 * omitted uses the harness default.
 	 */
 	model?: string;
+	reasoningEffort?: string;
 	deniedCommands?: string[];
 	sandboxProviderConnectionId?: string;
 	/**
@@ -280,10 +281,16 @@ export interface CloudCpCoderTemplatesResponse {
 export interface CloudCpOrgCoderConfig {
 	/** Coder deployment base URL or IP (http or https). */
 	baseUrl: string;
-	/** Coder owner/username new workspaces are created under. */
-	owner: string;
-	/** Default Coder template id (a UUID) new workspaces use. */
-	defaultTemplateId: string;
+	/**
+	 * Coder owner/username new workspaces are created under. The control plane
+	 * derives it from the API token on save, so it is always present once stored.
+	 */
+	owner?: string;
+	/**
+	 * Default Coder template id (a UUID) new workspaces use. Optional: a
+	 * bring-your-own org leaves it empty and picks the template per project.
+	 */
+	defaultTemplateId?: string;
 	/** Optional agent name the sandbox connects through. */
 	agentName?: string;
 	/**
@@ -303,13 +310,19 @@ export interface CloudCpOrgCoderConfigResponse {
 	coderConfig: CloudCpOrgCoderConfig | null;
 }
 
-/** PUT /orgs/{orgId}/coder-config */
+/**
+ * PUT /orgs/{orgId}/coder-config. The slimmed form sends only `baseUrl` and
+ * `token`; the control plane derives the workspace owner from the token and the
+ * template is chosen per project, so `owner` and `defaultTemplateId` are optional.
+ */
 export interface CloudCpPutOrgCoderConfigRequest {
 	baseUrl: string;
 	/** Raw Coder API token; stored encrypted and never echoed back. Omit to keep the existing token. */
 	token?: string;
-	owner: string;
-	defaultTemplateId: string;
+	/** Optional: derived from the token when omitted. */
+	owner?: string;
+	/** Optional: the template is chosen per project, not at the org level. */
+	defaultTemplateId?: string;
 	agentName?: string;
 	/** Optional PrivateLink VPC endpoint service name; omit for a directly reachable Coder. */
 	endpointServiceName?: string;
@@ -758,6 +771,7 @@ export interface CloudCpSendMessageRequest {
 }
 
 export interface CloudCpChatModelsResponse {
+	modes?: string[];
 	model?: string;
 	reasoningEffort?: string;
 	models: Array<{

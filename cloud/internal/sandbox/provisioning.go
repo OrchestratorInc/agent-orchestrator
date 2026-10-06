@@ -21,6 +21,13 @@ const (
 	DefaultWorkerTokenTTL = 15 * time.Minute
 )
 
+// ErrCoderTemplateRequired is returned when a Coder session resolves to no
+// template at all — the organization set no default template and the project
+// chose none. A bring-your-own-Coder org picks its template per project, so this
+// is a user-fixable condition the HTTP edge surfaces as "choose a template"
+// rather than a deployment misconfiguration.
+var ErrCoderTemplateRequired = errors.New("a Coder template must be selected for this session")
+
 type NodeOpsConfig struct {
 	BaseURL       string
 	APIKey        string
@@ -395,6 +402,21 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 				coderCfg.WorkerTokenTTL = DefaultWorkerTokenTTL
 			}
 		}
+		// Resolve the effective template first: a per-project pick wins, otherwise
+		// the org/deployment default. A bring-your-own-Coder org leaves its default
+		// empty and chooses the template per project, so a session with neither is a
+		// user error surfaced as ErrCoderTemplateRequired — not a deployment misconfig
+		// buried deep in reconcile. The resolved value is folded back into the config
+		// so the shared Validate (which requires a template) sees it.
+		pickedTemplate := coder != nil && strings.TrimSpace(coder.TemplateID) != ""
+		templateID := strings.TrimSpace(coderCfg.TemplateID)
+		if pickedTemplate {
+			templateID = strings.TrimSpace(coder.TemplateID)
+		}
+		if templateID == "" {
+			return Plan{}, ErrCoderTemplateRequired
+		}
+		coderCfg.TemplateID = templateID
 		if err := coderCfg.Validate(); err != nil {
 			return Plan{}, err
 		}
@@ -402,13 +424,11 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 		if err != nil {
 			return Plan{}, err
 		}
-		// Default template + default params unless the client explicitly picked a
-		// non-default template. Only then do we override the template and layer on
-		// its size/startup form values — the default template does not declare
-		// those rich parameters, so sending them would make Coder reject the build.
-		templateID := strings.TrimSpace(coderCfg.TemplateID)
-		if coder != nil && strings.TrimSpace(coder.TemplateID) != "" {
-			templateID = strings.TrimSpace(coder.TemplateID)
+		// Layer on the picked template's size/startup form values only when the
+		// client explicitly picked a non-default template — the default template
+		// does not declare those rich parameters, so sending them would make Coder
+		// reject the build.
+		if pickedTemplate {
 			if size := strings.TrimSpace(coder.Size); size != "" {
 				parameters["size"] = size
 			}

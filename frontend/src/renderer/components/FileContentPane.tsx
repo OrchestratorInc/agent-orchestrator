@@ -224,7 +224,10 @@ export function FileContentPane({
 		(detail.status === "unmodified" && mode === "diff") || (mode === "rendered" && !renderedAvailable)
 			? "file"
 			: mode;
-	const fileView = sourceHighlightReady ? (
+	// Binary image previews do not use Pierre's syntax highlighter. Do not let a
+	// lazy grammar load (or an unsupported image extension) keep the image stuck
+	// behind the generic file-loading state.
+	const fileView = sourceHighlightReady || Boolean(detail.imageMediaType) ? (
 		<CompleteFileView
 			annotation={annotation}
 			detail={detail}
@@ -424,7 +427,12 @@ function CompleteFileView({ annotation, commitSha, detail, editing, onContentRea
 	const { t } = useTranslation();
 	const revision = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ commitSha, path: detail.path, scope, sessionId, hostId, side: detail.deleted ? "before" : "after", source, workspaceVersion: detail.workspaceVersion }),
-		enabled: detail.deleted || detail.contentTruncated,
+		// Images are streamed from the blob endpoint by ReadOnlyFileView. A
+		// truncated binary image must not go through the text revision endpoint:
+		// that request carries an expected workspace snapshot and can lose a race
+		// with the file watcher, leaving the center tab stuck on a stale-snapshot
+		// error even though the current image is available.
+		enabled: (detail.deleted || detail.contentTruncated) && !detail.imageMediaType,
 	});
 	if (revision.isPending && revision.isFetching) return <PanelMessage>{t("files.loading")}</PanelMessage>;
 	if (revision.error) return <PanelMessage>{revision.error.message}</PanelMessage>;

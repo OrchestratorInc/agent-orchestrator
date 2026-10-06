@@ -2410,7 +2410,7 @@ describe("SessionInspector summary reviews", () => {
     );
   });
 
-  it.each(["chat", "tui"])("stops a %s reviewer and refreshes its conversation without changing review history", async (mode) => {
+  it.each(["chat", "tui"])("archives a %s reviewer and refreshes its conversation without changing review history", async (mode) => {
     const reviews = [reviewState(3, "up_to_date")];
     const common = commonGetsResponder([], "", reviews);
     getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/reviews"
@@ -2420,8 +2420,12 @@ describe("SessionInspector summary reviews", () => {
     const { queryClient } = renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
     await openReviewsSection();
-    const stop = await screen.findByRole("button", { name: "Stop reviewer" });
+    const stop = await screen.findByRole("button", { name: "Archive reviewer" });
     expect(stop).toBeEnabled();
+    expect(stop.textContent).toBe("");
+    await userEvent.hover(stop);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Archive reviewer");
+    await userEvent.unhover(stop);
     await userEvent.click(stop);
     await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/kill", { params: { path: { sessionId: "sess-1" } } }));
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "review-1"] }));
@@ -2429,11 +2433,32 @@ describe("SessionInspector summary reviews", () => {
     expect(putMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/auto-review", expect.anything());
   });
 
-  it("shows a disabled Stop reviewer control before any reviewer exists", async () => {
+  it("shows a disabled Archive reviewer control before any reviewer exists", async () => {
     mockCommonGets([], "", []);
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
-    expect(screen.getByRole("button", { name: "Stop reviewer" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Archive reviewer" })).toBeDisabled();
+  });
+
+  it("removes the archived Chat surface while the reviews refresh is pending", async () => {
+    const reviews = [reviewState(3, "up_to_date")];
+    const reviewerSurface = { mode: "chat", reviewId: "review-1", harness: "codex" };
+    const response = { data: { reviewerHandleId: "", reviewerSurface, reviews } };
+    const common = commonGetsResponder([], "", reviews);
+    let stopped = false;
+    let finishRefresh!: (value: typeof response) => void;
+    const refresh = new Promise<typeof response>((resolve) => { finishRefresh = resolve; });
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/reviews"
+      ? stopped ? refresh : response
+      : common(path));
+    postMock.mockImplementation(async () => { stopped = true; return { data: { reviewerHandleId: "", reviews } }; });
+    const { queryClient } = renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+    await userEvent.click(await screen.findByRole("button", { name: "Archive reviewer" }));
+    await waitFor(() => expect(queryClient.getQueryState(["session-reviews", "sess-1"])?.fetchStatus).toBe("fetching"));
+    await waitFor(() => expect(queryClient.getQueryData<{ reviewerSurface: unknown }>(["session-reviews", "sess-1"])?.reviewerSurface).toBeUndefined());
+    expect(stopped).toBe(true);
+    finishRefresh(response);
   });
 
   it("shows reviewing status and cancel action while auto-review is running", async () => {
@@ -2489,7 +2514,7 @@ describe("SessionInspector summary reviews", () => {
       screen.getByRole("button", { name: "Stop review" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Stop reviewer" }),
+      screen.getByRole("button", { name: "Archive reviewer" }),
     ).toBeEnabled();
     expect(
       screen.queryByRole("button", { name: "Re-run review" }),
@@ -2633,6 +2658,107 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.getByTestId("review-run-summary")).toHaveClass(
       "line-clamp-4",
     );
+  });
+
+  // Reviews an agent asked for must be distinguishable from a person's click.
+  it("labels an agent-requested review run", async () => {
+    mockCommonGets([], "reviewer-pane", [
+      {
+        ...reviewState(3, "up_to_date", "abc123"),
+        latestRun: { ...approvedReview, triggerSource: "agent" },
+      },
+    ]);
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    expect(await screen.findByText(/Requested by agent/)).toBeInTheDocument();
+  });
+
+  // Several reviewers can run on one worker at once; each must be reachable.
+  it("offers to open each of several live reviewers", async () => {
+    const base = commonGetsResponder([], "claude-pane", [
+      { ...reviewState(3, "running"), latestRun: { ...approvedReview, status: "running", verdict: "", body: "" } },
+    ]);
+    getMock.mockImplementation(async (path: string) => {
+      if (path === "/api/v1/sessions/{sessionId}/reviews") {
+        return {
+          data: {
+            reviewerHandleId: "claude-pane",
+            reviews: [{ ...reviewState(3, "running"), latestRun: { ...approvedReview, status: "running", verdict: "", body: "" } }],
+            activeReviewers: [
+              { mode: "tui", reviewId: "review-claude", harness: "claude-code", handleId: "claude-pane" },
+              { mode: "tui", reviewId: "review-codex", harness: "codex", handleId: "codex-pane" },
+            ],
+          },
+        };
+      }
+      return base(path);
+    });
+    const onOpenReviewerTerminal = vi.fn();
+
+    renderWithQuery(
+      <SessionInspector onOpenReviewerTerminal={onOpenReviewerTerminal} session={session([pr(3, "open")])} />,
+    );
+    await openReviewsSection();
+
+    const openButtons = await screen.findAllByRole("button", { name: "Open" });
+    expect(openButtons).toHaveLength(2);
+    await userEvent.click(openButtons[1]!);
+    expect(onOpenReviewerTerminal).toHaveBeenCalledWith({ handleId: "codex-pane", harness: "codex" });
+  });
+
+  it("does not list reviewers when only one is live", async () => {
+    const base = commonGetsResponder([], "claude-pane", [reviewState(3, "up_to_date", "abc123")]);
+    getMock.mockImplementation(async (path: string) => {
+      if (path === "/api/v1/sessions/{sessionId}/reviews") {
+        return {
+          data: {
+            reviewerHandleId: "claude-pane",
+            reviews: [reviewState(3, "up_to_date", "abc123")],
+            reviewerSurface: { mode: "tui", reviewId: "review-claude", harness: "claude-code", handleId: "claude-pane" },
+            activeReviewers: [{ mode: "tui", reviewId: "review-claude", harness: "claude-code", handleId: "claude-pane" }],
+          },
+        };
+      }
+      return base(path);
+    });
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    await screen.findByTestId("review-run-summary");
+    expect(screen.queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
+  });
+
+  // An agent can ask a reviewer other than the selected one. The selected
+  // reviewer stays selected; the working one must still be reachable.
+  it("offers to open a working reviewer that is not the selected one", async () => {
+    const base = commonGetsResponder([], "", [
+      { ...reviewState(3, "running"), latestRun: { ...approvedReview, status: "running", verdict: "", body: "" } },
+    ]);
+    getMock.mockImplementation(async (path: string) => {
+      if (path === "/api/v1/sessions/{sessionId}/reviews") {
+        return {
+          data: {
+            reviewerHandleId: "",
+            reviews: [{ ...reviewState(3, "running"), latestRun: { ...approvedReview, status: "running", verdict: "", body: "" } }],
+            reviewerSurface: { mode: "tui", reviewId: "review-claude", harness: "claude-code" },
+            activeReviewers: [{ mode: "tui", reviewId: "review-codex", harness: "codex", handleId: "codex-pane" }],
+          },
+        };
+      }
+      return base(path);
+    });
+    const onOpenReviewerTerminal = vi.fn();
+
+    renderWithQuery(
+      <SessionInspector onOpenReviewerTerminal={onOpenReviewerTerminal} session={session([pr(3, "open")])} />,
+    );
+    await openReviewsSection();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open" }));
+    expect(onOpenReviewerTerminal).toHaveBeenCalledWith({ handleId: "codex-pane", harness: "codex" });
   });
 
   // Nothing to hide, so offering to expand would be noise.

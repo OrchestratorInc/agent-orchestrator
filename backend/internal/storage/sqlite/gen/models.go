@@ -326,6 +326,9 @@ type ConversationMessage struct {
 	DeliveryContentJson string
 	BranchID            string
 	ClientPayloadHash   sql.NullString
+	SenderSessionID     string
+	SenderProjectID     string
+	SenderDisplayName   string
 }
 
 type ConversationProviderEvent struct {
@@ -595,6 +598,7 @@ type Review struct {
 	ProviderConversationID string
 	ControllerGeneration   string
 	ControllerError        string
+	IsArchived             bool
 }
 
 type ReviewRun struct {
@@ -680,6 +684,7 @@ type Session struct {
 	ClientRequestCommitted           bool
 	CodexActivityFacts               string
 	ClaudeActivityFacts              string
+	ProvisionSteps                   string
 }
 
 type SessionCleanupFact struct {
