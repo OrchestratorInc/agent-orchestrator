@@ -2198,6 +2198,7 @@
 	"chat.image.open": "Ouvrir l’image : {{name}}",
 	"chat.image.openUnnamed": "Ouvrir l’image",
 	"chat.image.untitled": "Image",
+	"chat.render.expand": "Agrandir la page",
 	"chat.edit.cancel": "Annuler la modification",
 	"chat.edit.send": "Envoyer le message modifié",
 	"chat.edit.sendShortcut": "Envoyer le message modifié (⌘/Ctrl+Entrée)",

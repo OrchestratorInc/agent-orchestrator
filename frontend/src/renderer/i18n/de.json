@@ -2167,6 +2167,7 @@
 	"chat.image.open": "Bild öffnen: {{name}}",
 	"chat.image.openUnnamed": "Bild öffnen",
 	"chat.image.untitled": "Bild",
+	"chat.render.expand": "Seite vergrößern",
 	"chat.edit.cancel": "Bearbeitung abbrechen",
 	"chat.edit.send": "Bearbeitete Nachricht senden",
 	"chat.edit.sendShortcut": "Bearbeitete Nachricht senden (⌘/Strg+Enter)",

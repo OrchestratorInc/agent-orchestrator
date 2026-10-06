@@ -387,6 +387,15 @@ export interface AutoReviewDetail {
 	commandSource?: string;
 }
 
+/** An agent HTML page published with `ao render`, shown inline in its turn. */
+export interface RenderRef {
+	id: string;
+	title: string;
+	height: number;
+	/** Daemon-relative route, `/api/v1/sessions/{id}/renders/{renderId}`. */
+	path: string;
+}
+
 /**
  * A `system` activity's discriminator and the fields that belong to it.
  *
@@ -403,7 +412,10 @@ export interface SystemEventDetail {
 		| "steer"
 		| "plan"
 		| "context.reset"
-		| "context.boundary";
+		| "context.boundary"
+		| "render";
+	/** render */
+	render?: RenderRef;
 	/** model.rerouted */
 	fromModel?: string;
 	toModel?: string;

@@ -60,11 +60,13 @@ const activityIcon: Record<ActivityKind, typeof SquareTerminal> = {
 import { cn } from "../../lib/utils";
 import { caretNotation, stripAnsi } from "../../lib/ansi";
 import { getApiBaseUrl } from "../../lib/api-client";
+import { readRenderRef } from "../../lib/render-frame";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { ActivityTitle, ChatMarkdown, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
 import { HumanMessageEditor } from "./HumanMessageEditor";
+import { RenderFrame } from "./RenderFrame";
 import { ConversationBranchNavigator } from "./ConversationBranchNavigator";
 import { ConversationContentItems } from "./ConversationContentItems";
 import {
@@ -853,6 +855,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 		activity.activityKind === "file_change" ||
 		activity.activityKind === "mcp_tool" ||
 		activity.activityKind === "auto_review";
+	const renderRef = readRenderRef(activity.detail);
 
 	let content: ReactNode;
 	if (activity.activityKind === "mcp_tool") content = <McpToolRow activity={activity} />;
@@ -861,6 +864,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.activityKind === "error") content = <ErrorActivityRow activity={activity} />;
 	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
+	else if (renderRef) content = <RenderFrame render={renderRef} />;
 	else content = <GenericActivityRow activity={activity} />;
 
 	if (!toolActivity) return content;
