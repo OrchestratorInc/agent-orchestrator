@@ -1,16 +1,24 @@
 package controllers
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
@@ -120,18 +128,26 @@ func (c *ConversationsController) renderFile(w http.ResponseWriter, r *http.Requ
 		apispec.NotImplemented(w, r, "GET", renderFilePath)
 		return
 	}
-	file, info, err := c.Renders.OpenRender(r.Context(), sessionID(r), chi.URLParam(r, "renderId"))
+	file, _, err := c.Renders.OpenRender(r.Context(), sessionID(r), chi.URLParam(r, "renderId"))
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "RENDER_NOT_FOUND", "render not found", nil)
 		return
 	}
-	defer func() { _ = file.Close() }()
+	stored, err := io.ReadAll(io.LimitReader(file, attachmentstore.MaxFileBytes))
+	_ = file.Close()
+	if err != nil {
+		envelope.WriteError(w, r, fmt.Errorf("read render: %w", err))
+		return
+	}
+	sum := sha256.Sum256(stored)
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Content-Security-Policy", renderContentSecurityPolicy)
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
-	// A render never changes after publish; its id is its version.
-	h.Set("Cache-Control", "private, max-age=31536000, immutable")
-	http.ServeContent(w, r, "", info.ModTime(), file)
+	// The page is stored raw and gets the bootstrap as it is served, so a
+	// daemon upgrade changes the document; the ETag names both parts.
+	h.Set("Cache-Control", "private, no-cache")
+	h.Set("ETag", `"`+renderpage.Version+"-"+hex.EncodeToString(sum[:])[:16]+`"`)
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(renderpage.Document(stored)))
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
@@ -45,7 +46,8 @@ func renderRouter(t *testing.T, dataDir string, svc *renderStub) *httptest.Serve
 
 func TestRenderRouteServesTheStoredPageSandboxed(t *testing.T) {
 	dir := t.TempDir()
-	if err := attachmentstore.New(dir).PutRender(context.Background(), "proj-1", "r1", []byte("<p>chart</p>")); err != nil {
+	store := attachmentstore.New(dir)
+	if err := store.PutRender(context.Background(), "proj-1", "r1", []byte("<p>chart</p>")); err != nil {
 		t.Fatal(err)
 	}
 	srv := renderRouter(t, dir, &renderStub{fakeConversationService: &fakeConversationService{}})
@@ -56,17 +58,45 @@ func TestRenderRouteServesTheStoredPageSandboxed(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || string(body) != "<p>chart</p>" {
-		t.Fatalf("status=%d body=%q", resp.StatusCode, body)
+	// The bootstrap is added as the page is served; the stored file stays raw.
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `<style id="ao-theme">`) || !strings.HasSuffix(string(body), "<p>chart</p>") {
+		t.Fatalf("status=%d body=%.200q", resp.StatusCode, body)
+	}
+	file, _, err := store.OpenRender(context.Background(), "proj-1", "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := io.ReadAll(file)
+	_ = file.Close()
+	if string(stored) != "<p>chart</p>" {
+		t.Fatalf("stored file = %q, want the raw page", stored)
 	}
 	for header, want := range map[string]string{
 		"Content-Security-Policy": "sandbox allow-scripts allow-forms",
 		"Content-Type":            "text/html; charset=utf-8",
 		"X-Content-Type-Options":  "nosniff",
+		"Referrer-Policy":         "no-referrer",
+		"Cache-Control":           "private, no-cache",
 	} {
 		if got := resp.Header.Get(header); got != want {
 			t.Errorf("%s = %q, want %q", header, got, want)
 		}
+	}
+	// The ETag names both the bootstrap and the stored page, so a daemon
+	// upgrade or a different page never revalidates to a stale document.
+	etag := resp.Header.Get("ETag")
+	if want := `"` + renderpage.Version + "-"; !strings.HasPrefix(etag, want) || len(etag) != len(want)+16+1 {
+		t.Fatalf("ETag = %q, want %s<16 hex>\"", etag, want)
+	}
+	revalidate, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/sessions/proj-1/renders/r1", nil)
+	revalidate.Header.Set("If-None-Match", etag)
+	notModified, err := http.DefaultClient.Do(revalidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = notModified.Body.Close()
+	if notModified.StatusCode != http.StatusNotModified {
+		t.Fatalf("If-None-Match: %s = %d, want 304", etag, notModified.StatusCode)
 	}
 
 	// The page's own scripts run with an opaque origin; the daemon refuses it,

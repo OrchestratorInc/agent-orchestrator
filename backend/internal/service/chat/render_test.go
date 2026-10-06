@@ -57,8 +57,9 @@ func TestPublishRenderLandsOnTheRunningTurn(t *testing.T) {
 	}
 	page, _ := io.ReadAll(file)
 	_ = file.Close()
-	if !strings.Contains(string(page), `<style id="ao-theme">`) || !strings.HasSuffix(string(page), "<p>chart</p>") {
-		t.Errorf("stored page lacks the bootstrap or the agent's body: %.200s", page)
+	// The render route adds the bootstrap when it serves the page.
+	if string(page) != "<!doctype html><p>chart</p>" {
+		t.Errorf("stored page = %.200q, want the agent's raw page", page)
 	}
 
 	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(renderRows(s)) == 1 })
@@ -142,8 +143,9 @@ func TestCheckRenderLoadsTheStoredPageAndDeletesIt(t *testing.T) {
 	if !strings.HasPrefix(gotArgs["url"].(string), "http://127.0.0.1:3001/api/v1/sessions/"+string(testSession)+"/renders/check-") || gotArgs["width"] != 720 {
 		t.Fatalf("args = %v", gotArgs)
 	}
-	if !strings.Contains(string(pageDuringCheck), `<style id="ao-theme">`) {
-		t.Fatal("the check did not see the bootstrapped page readers get")
+	// The desktop app loads it through the render route, which adds the bootstrap.
+	if string(pageDuringCheck) != "<p>chart</p>" {
+		t.Fatalf("page during the check = %.200q, want the agent's raw page", pageDuringCheck)
 	}
 	if result.ContentHeight != 412 || result.PNG != "iVBORw0KGgo=" || len(result.ConsoleMessages) != 1 || result.ConsoleMessages[0].Level != "error" {
 		t.Fatalf("result = %+v", result)

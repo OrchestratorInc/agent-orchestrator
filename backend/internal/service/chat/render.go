@@ -71,7 +71,7 @@ func (s *Service) PublishRender(ctx context.Context, id domain.SessionID, in Ren
 		return RenderResult{}, err
 	}
 	renderID := s.newID()
-	if err := s.renders.PutRender(ctx, id, renderID, []byte(injectRenderBootstrap(in.HTML))); err != nil {
+	if err := s.renders.PutRender(ctx, id, renderID, []byte(in.HTML)); err != nil {
 		return RenderResult{}, fmt.Errorf("store render: %w", err)
 	}
 	path := "/api/v1/sessions/" + url.PathEscape(string(id)) + "/renders/" + url.PathEscape(renderID)
@@ -154,8 +154,9 @@ func (s *Service) SetRenderCheck(check RenderCheck) {
 	s.renderCheck = check
 }
 
-// CheckRender shows the agent its page as readers will see it: the same
-// stored, bootstrapped document, loaded by the desktop app in a hidden view.
+// CheckRender shows the agent its page as readers will see it: the page is
+// stored, and the desktop app loads it in a hidden view through the render
+// route, which adds the bootstrap as it does for readers.
 func (s *Service) CheckRender(ctx context.Context, id domain.SessionID, in RenderCheckInput) (RenderCheckResult, error) {
 	width := in.Width
 	if width == 0 {
@@ -175,7 +176,7 @@ func (s *Service) CheckRender(ctx context.Context, id domain.SessionID, in Rende
 		return RenderCheckResult{}, err
 	}
 	renderID := "check-" + s.newID()
-	if err := s.renders.PutRender(ctx, id, renderID, []byte(injectRenderBootstrap(in.HTML))); err != nil {
+	if err := s.renders.PutRender(ctx, id, renderID, []byte(in.HTML)); err != nil {
 		return RenderCheckResult{}, fmt.Errorf("store render check: %w", err)
 	}
 	defer func() {
