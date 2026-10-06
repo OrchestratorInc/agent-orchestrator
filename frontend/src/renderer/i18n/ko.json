@@ -485,6 +485,7 @@
 	"cues.commandRequired": "명령을 입력하세요.",
 	"cues.promptRequired": "프롬프트를 입력하세요.",
 	"cues.fieldTooLong": "{{field}}은(는) UTF-8 기준 {{limit}}바이트 이하여야 합니다.",
+	"cues.settingsDescription": "명령과 에이전트 프롬프트를 이 프로젝트에서 재사용할 수 있는 바로 가기로 저장하세요.",
 	"cues.title": "Cues",
 	"cues.typeLabel": "Type",
 	"cues.typeName.agent": "Agent",

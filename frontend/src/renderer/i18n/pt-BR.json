@@ -488,6 +488,7 @@
 	"cues.commandRequired": "É necessário um comando.",
 	"cues.promptRequired": "É necessária uma instrução.",
 	"cues.fieldTooLong": "{{field}} deve ter no máximo {{limit}} bytes UTF-8.",
+	"cues.settingsDescription": "Salve comandos e instruções para agentes como atalhos reutilizáveis para este projeto.",
 	"cues.title": "Cues",
 	"cues.typeLabel": "Type",
 	"cues.typeName.agent": "Agent",

@@ -481,6 +481,7 @@
 	"cues.commandRequired": "A command is required.",
 	"cues.promptRequired": "A prompt is required.",
 	"cues.fieldTooLong": "{{field}} must be at most {{limit}} UTF-8 bytes.",
+	"cues.settingsDescription": "Save commands and agent prompts as reusable shortcuts for this project.",
 	"cues.title": "Cues",
 	"cues.typeLabel": "Type",
 	"cues.typeName.agent": "Agent",

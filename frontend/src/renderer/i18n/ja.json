@@ -485,6 +485,7 @@
 	"cues.commandRequired": "コマンドを入力してください。",
 	"cues.promptRequired": "プロンプトを入力してください。",
 	"cues.fieldTooLong": "{{field}} は UTF-8 で {{limit}} バイト以下にしてください。",
+	"cues.settingsDescription": "コマンドやエージェントへのプロンプトを、このプロジェクトで繰り返し使えるショートカットとして保存できます。",
 	"cues.title": "Cues",
 	"cues.typeLabel": "Type",
 	"cues.typeName.agent": "Agent",

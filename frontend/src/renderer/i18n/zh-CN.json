@@ -485,6 +485,7 @@
 	"cues.commandRequired": "请输入命令。",
 	"cues.promptRequired": "请输入提示词。",
 	"cues.fieldTooLong": "{{field}} 的 UTF-8 长度不得超过 {{limit}} 字节。",
+	"cues.settingsDescription": "将命令和智能体提示词保存为此项目中可重复使用的快捷操作。",
 	"cues.title": "Cues",
 	"cues.typeLabel": "Type",
 	"cues.typeName.agent": "Agent",

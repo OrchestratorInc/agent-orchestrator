@@ -488,6 +488,7 @@
 	"cues.commandRequired": "Une commande est requise.",
 	"cues.promptRequired": "Une instruction est requise.",
 	"cues.fieldTooLong": "{{field}} doit contenir au maximum {{limit}} octets UTF-8.",
+	"cues.settingsDescription": "Enregistrez des commandes et des instructions pour les agents comme raccourcis réutilisables pour ce projet.",
 	"cues.title": "Cues",
 	"cues.typeLabel": "Type",
 	"cues.typeName.agent": "Agent",

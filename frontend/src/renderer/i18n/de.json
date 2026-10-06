@@ -485,6 +485,7 @@
 	"cues.commandRequired": "Ein Befehl ist erforderlich.",
 	"cues.promptRequired": "Eine Anweisung ist erforderlich.",
 	"cues.fieldTooLong": "{{field}} darf höchstens {{limit}} UTF-8-Bytes umfassen.",
+	"cues.settingsDescription": "Speichere Befehle und Agent-Prompts als wiederverwendbare Kurzbefehle für dieses Projekt.",
 	"cues.title": "Cues",
 	"cues.typeLabel": "Type",
 	"cues.typeName.agent": "Agent",
