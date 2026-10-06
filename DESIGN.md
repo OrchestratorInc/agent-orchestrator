@@ -322,6 +322,7 @@ Motion is functional and modest.
 - Use ease-out for entry, ease-in for exit, and ease-in-out for positional movement.
 - The working spinner/pulse may animate to show liveness. Do not animate text, metrics, or layout merely to make the interface feel busy.
 - Respect reduced-motion preferences: remove nonessential transforms and reduce transitions to immediate state changes.
+- Sidebar disclosure (project session lists, the Projects / Pinned / Scratchpad sections) opens and closes with a CSS-only height + opacity transition on a body that stays mounted after its first open (`CollapsibleBody`: `inert` and `content-visibility: hidden` while closed). Show more / Show less fade the rows that join or leave. Do not use Motion `layout`, `AnimatePresence`, or per-row measurement in sidebar lists, and keep expansion state out of the `Sidebar` component so a toggle never re-renders its siblings.
 
 ## 11. Platform and responsive behavior
 

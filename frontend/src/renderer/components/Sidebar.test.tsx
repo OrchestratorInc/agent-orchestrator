@@ -455,6 +455,28 @@ function fireDrag(
 	fireEvent(element, event);
 }
 
+function manyScratchpadSessions(count: number): WorkspaceSession[] {
+	return Array.from({ length: count }, (_, index) => ({
+		...session,
+		id: `adhoc-${index + 1}`,
+		title: `Agent ${index + 1}`,
+		workspaceId: STANDALONE_WORKSPACE_ID,
+		workspaceName: "Scratchpad",
+		// Descending so sortedWorkerSessions keeps the fixture order.
+		updatedAt: `2026-06-${30 - index}T00:00:00Z`,
+	}));
+}
+
+/** A collapsed disclosure body stays mounted (so re-opening rebuilds nothing) but is
+ *  `inert` and `aria-hidden`: unreachable by focus, pointer, and assistive tech. */
+function expectCollapsedBody(element: Element | null) {
+	const body = element?.closest("[data-sidebar-collapse]");
+	expect(body).not.toBeNull();
+	expect(body).toHaveAttribute("data-open", "false");
+	expect(body).toHaveAttribute("aria-hidden", "true");
+	expect(body).toHaveAttribute("inert");
+}
+
 beforeEach(() => {
 	window.localStorage.clear();
 	dragEnds.clear();
@@ -555,6 +577,141 @@ describe("Sidebar", () => {
 		switchPresentationSpy.mockClear();
 		act(() => rerenderSidebarWorkspaces(data));
 		expect(switchPresentationSpy).not.toHaveBeenCalled();
+	});
+
+	describe("disclosure", () => {
+		const twoProjectsAndScratchpad = (): WorkspaceSummary[] => [
+			{
+				...workspace,
+				id: "proj-a",
+				name: "Alpha",
+				sessions: ["a1", "a2"].map((id) => ({ ...session, id, title: `task ${id}`, workspaceId: "proj-a", workspaceName: "Alpha" })),
+			},
+			{
+				...workspace,
+				id: "proj-b",
+				name: "Beta",
+				sessions: ["b1", "b2"].map((id) => ({ ...session, id, title: `task ${id}`, workspaceId: "proj-b", workspaceName: "Beta" })),
+			},
+			{
+				id: STANDALONE_WORKSPACE_ID,
+				name: "Scratchpad",
+				kind: STANDALONE_PROJECT_KIND,
+				path: "",
+				sessions: [{ ...session, id: "s1", title: "scratch s1", workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad" }],
+			},
+		];
+
+		it("re-renders no session row, in any project or the Scratchpad, when one project toggles", async () => {
+			const user = userEvent.setup();
+			renderSidebar({ workspaces: twoProjectsAndScratchpad() });
+			switchPresentationSpy.mockClear();
+
+			await user.click(screen.getByRole("button", { name: "Toggle Alpha sessions" }));
+			expect(screen.getByRole("button", { name: "Toggle Alpha sessions" })).toHaveAttribute("aria-expanded", "false");
+			await user.click(screen.getByRole("button", { name: "Toggle Alpha sessions" }));
+			expect(screen.getByRole("button", { name: "Toggle Alpha sessions" })).toHaveAttribute("aria-expanded", "true");
+
+			// Rows are keyed on their own session props: closing and reopening Alpha
+			// neither re-renders its rows nor touches Beta's or the Scratchpad's.
+			expect(switchPresentationSpy).not.toHaveBeenCalled();
+		});
+
+		it("keeps a closed project's rows mounted, inert, and the very same nodes when it reopens", async () => {
+			const user = userEvent.setup();
+			renderSidebar({ workspaces: twoProjectsAndScratchpad() });
+			const row = screen.getByRole("button", { name: "Open task a1" });
+
+			await user.click(screen.getByRole("button", { name: "Toggle Alpha sessions" }));
+			expect(screen.queryByRole("button", { name: "Open task a1" })).not.toBeInTheDocument();
+			expectCollapsedBody(row);
+			// Beta did not move.
+			expect(screen.getByRole("button", { name: "Open task b1" })).toBeInTheDocument();
+
+			await user.click(screen.getByRole("button", { name: "Toggle Alpha sessions" }));
+			expect(screen.getByRole("button", { name: "Open task a1" })).toBe(row);
+			expect(row.closest("[data-sidebar-collapse]")).toHaveAttribute("data-open", "true");
+			expect(row.closest("[data-sidebar-collapse]")).not.toHaveAttribute("inert");
+		});
+
+		it("mounts a project's rows on first expand only, then keeps them", async () => {
+			const user = userEvent.setup();
+			renderSidebar({ workspaces: twoProjectsAndScratchpad(), expandedProjectIds: [] });
+			expect(screen.queryByText("task a1")).not.toBeInTheDocument();
+
+			await user.click(screen.getByRole("button", { name: "Toggle Alpha sessions" }));
+			const row = screen.getByRole("button", { name: "Open task a1" });
+			expect(row.closest("[data-sidebar-collapse]")).toHaveAttribute("data-open", "true");
+
+			await user.click(screen.getByRole("button", { name: "Toggle Alpha sessions" }));
+			expect(screen.getByText("task a1")).toBe(row.querySelector("[data-session-name]"));
+		});
+
+		it("keeps the Scratchpad section mounted after it closes and never re-renders other sections", async () => {
+			const user = userEvent.setup();
+			renderSidebar({ workspaces: twoProjectsAndScratchpad() });
+			const scroller = screen.getByTestId("sidebar-scratchpad-scroller");
+			switchPresentationSpy.mockClear();
+
+			await user.click(screen.getByRole("button", { name: "Scratchpad" }));
+			expect(screen.getByTestId("sidebar-scratchpad-scroller")).toBe(scroller);
+			expectCollapsedBody(scroller);
+			await user.click(screen.getByRole("button", { name: "Scratchpad" }));
+			expect(screen.getByTestId("sidebar-scratchpad-scroller")).toBe(scroller);
+			expect(scroller.closest("[data-sidebar-collapse]")).toHaveAttribute("data-open", "true");
+			expect(switchPresentationSpy).not.toHaveBeenCalled();
+		});
+
+		it("keeps the Projects section mounted after it closes, with no project re-rendered by the toggle", async () => {
+			const user = userEvent.setup();
+			renderSidebar({ workspaces: twoProjectsAndScratchpad() });
+			const scroller = screen.getByTestId("sidebar-projects-scroller");
+			switchPresentationSpy.mockClear();
+
+			await user.click(screen.getByRole("button", { name: "Projects" }));
+			expect(screen.getByTestId("sidebar-projects-scroller")).toBe(scroller);
+			await user.click(screen.getByRole("button", { name: "Projects" }));
+			expect(screen.getByTestId("sidebar-projects-scroller")).toBe(scroller);
+			expect(switchPresentationSpy).not.toHaveBeenCalled();
+		});
+
+		it("fades Show less rows out with CSS and unmounts them after the fade", async () => {
+			const user = userEvent.setup();
+			renderSidebar({ workspaces: [{ ...twoProjectsAndScratchpad()[2], sessions: manyScratchpadSessions(13) }] });
+			await user.click(screen.getByRole("button", { name: "Show 3 more agents" }));
+			const tail = screen.getByText("Agent 12").closest("li");
+			expect(tail).toHaveClass("sidebar-row-enter");
+
+			await user.click(screen.getByRole("button", { name: "Show fewer agents" }));
+			expect(screen.getByText("Agent 12").closest("li")).toHaveClass("sidebar-row-leave");
+			await waitFor(() => expect(screen.queryByText("Agent 12")).not.toBeInTheDocument());
+		});
+
+		it("skips the Show more and Show less fades when the user prefers reduced motion", async () => {
+			const original = window.matchMedia;
+			window.matchMedia = ((query: string) => ({
+				matches: query.includes("prefers-reduced-motion"),
+				media: query,
+				addEventListener: () => undefined,
+				removeEventListener: () => undefined,
+				addListener: () => undefined,
+				removeListener: () => undefined,
+				dispatchEvent: () => false,
+				onchange: null,
+			})) as typeof window.matchMedia;
+			try {
+				const user = userEvent.setup();
+				renderSidebar({ workspaces: [{ ...twoProjectsAndScratchpad()[2], sessions: manyScratchpadSessions(13) }] });
+				await user.click(screen.getByRole("button", { name: "Show 3 more agents" }));
+				expect(screen.getByText("Agent 12").closest("li")).not.toHaveClass("sidebar-row-enter");
+
+				await user.click(screen.getByRole("button", { name: "Show fewer agents" }));
+				// No fade to wait for: the tail is gone in the same commit.
+				expect(screen.queryByText("Agent 12")).not.toBeInTheDocument();
+			} finally {
+				window.matchMedia = original;
+			}
+		});
 	});
 
 	it("creates local or remote projects from the header button", async () => {
@@ -1029,7 +1186,8 @@ describe("Sidebar", () => {
 		});
 
 		await user.click(screen.getByRole("button", { name: "Scratchpad" }));
-		expect(screen.queryByText("baby")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open baby" })).not.toBeInTheDocument();
+		expectCollapsedBody(screen.getByText("baby"));
 
 		await user.click(screen.getByRole("button", { name: "Scratchpad" }));
 		expect(screen.getByText("baby")).toBeInTheDocument();
@@ -1075,7 +1233,8 @@ describe("Sidebar", () => {
 
 		await user.click(screen.getByRole("button", { name: "Show fewer agents" }));
 
-		expect(screen.queryByText("Agent 11")).not.toBeInTheDocument();
+		// The tail fades out for one short CSS animation before it unmounts.
+		await waitFor(() => expect(screen.queryByText("Agent 11")).not.toBeInTheDocument());
 		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
 	});
 
@@ -1256,7 +1415,8 @@ describe("Sidebar", () => {
 		expect(folder).toBeTruthy();
 		await user.click(folder);
 
-		expect(screen.queryByText("other task")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open other task" })).not.toBeInTheDocument();
+		expectCollapsedBody(screen.getByText("other task"));
 		expect(screen.getByText("fix login")).toBeInTheDocument();
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
@@ -1372,7 +1532,7 @@ describe("Sidebar", () => {
 		await user.click(screen.getByText("Project One"));
 
 		expect(navigateMock).not.toHaveBeenCalled();
-		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open fix login" })).not.toBeInTheDocument();
 		expect(screen.getByText("Project One").closest("button")).toHaveAttribute("aria-expanded", "false");
 	});
 
@@ -1389,7 +1549,7 @@ describe("Sidebar", () => {
 		});
 
 		await user.click(screen.getByRole("button", { name: "Toggle Project One sessions" }));
-		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open fix login" })).not.toBeInTheDocument();
 		expect(screen.getByText("Project One").closest("button")).toHaveAttribute("aria-expanded", "false");
 
 		await user.click(screen.getByRole("button", { name: "Open Project One orchestrator" }));
@@ -2313,7 +2473,7 @@ describe("Sidebar", () => {
 
 		await user.click(screen.getByRole("button", { name: "Show fewer projects" }));
 
-		expect(screen.queryByText("Project 11")).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByText("Project 11")).not.toBeInTheDocument());
 		expect(screen.getByRole("button", { name: "Show 4 more projects" })).toBeInTheDocument();
 	});
 
@@ -2360,7 +2520,7 @@ describe("Sidebar", () => {
 
 		await user.click(screen.getByRole("button", { name: "Show fewer agents" }));
 
-		expect(screen.queryByText("Agent 7")).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByText("Agent 7")).not.toBeInTheDocument());
 		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
 	});
 
@@ -2452,8 +2612,8 @@ describe("Sidebar", () => {
 
 		await user.click(screen.getByRole("button", { name: "Projects" }));
 		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
-		expect(screen.queryByTestId("sidebar-projects-scroller")).not.toBeInTheDocument();
-		expect(screen.queryByText("Project One")).not.toBeInTheDocument();
+		expectCollapsedBody(screen.getByTestId("sidebar-projects-scroller"));
+		expect(screen.queryByRole("button", { name: "Project One" })).not.toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Projects" }));
 		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "true");
@@ -2691,8 +2851,8 @@ describe("Sidebar", () => {
 		expect(folder).toBeTruthy();
 		await user.click(folder);
 
-		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Open second task")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open fix login" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open second task" })).not.toBeInTheDocument();
 	});
 
 	it("starts every project collapsed when the expanded-project store is empty", () => {
@@ -2701,7 +2861,7 @@ describe("Sidebar", () => {
 			workspaces: [{ ...workspace, sessions: [session] }],
 		});
 
-		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open fix login" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Toggle Project One sessions" })).toHaveAttribute(
 			"aria-expanded",
 			"false",
@@ -2724,7 +2884,7 @@ describe("Sidebar", () => {
 		);
 
 		await user.click(screen.getByRole("button", { name: "Toggle Project One sessions" }));
-		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open fix login" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Toggle Project One sessions" })).toHaveAttribute(
 			"aria-expanded",
 			"false",
@@ -2745,7 +2905,7 @@ describe("Sidebar", () => {
 		});
 
 		expect(screen.getByLabelText("Open fix login")).toBeInTheDocument();
-		expect(screen.queryByLabelText("Open second task")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open second task" })).not.toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Toggle Project One sessions" }));
 		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.expanded-projects") ?? "null")).toEqual([]);
@@ -2776,8 +2936,8 @@ describe("Sidebar", () => {
 		await user.click(folder);
 
 		expect(projectRow).toHaveAttribute("aria-expanded", "false");
-		expect(screen.queryByLabelText("Open second task")).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open second task" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open fix login" })).not.toBeInTheDocument();
 	});
 
 	it("keeps merged sessions in the list until they are terminated", async () => {

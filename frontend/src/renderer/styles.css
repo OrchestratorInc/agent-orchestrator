@@ -616,25 +616,98 @@ html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] :is(button, 
 	background: linear-gradient(0deg, var(--color-bg-sidebar) 0%, transparent 100%);
 }
 
-/* One-shot open animation for sidebar disclosure bodies (sections, project
- * session lists): a CSS keyframe, no JS measurement. Closing is immediate. */
-@keyframes sidebar-section-enter {
+/* Sidebar disclosure bodies (sections, project session lists). A CSS-only
+ * open/close: the wrapper's height eases 0 <-> auto (`interpolate-size`) while
+ * the inner wrapper fades (and, for project lists, slides 12px). No JS
+ * measurement, no Motion layout. A 0fr <-> 1fr grid track was tried first, but
+ * Chromium squares a fractional fr track inside an auto-height container, so the
+ * rows lag behind the space they open. The body stays mounted after its first
+ * open; closed, it is visibility/content-visibility hidden (and `inert` from
+ * React), so its rows cost no layout or paint and cannot take focus. Hover
+ * feedback is untouched and stays instant. */
+.sidebar-collapse {
+	--sidebar-collapse-duration: 180ms;
+	--sidebar-collapse-ease: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+	interpolate-size: allow-keywords;
+	display: grid;
+	grid-template-rows: minmax(0, 1fr);
+	height: 0;
+	overflow: hidden;
+	visibility: hidden;
+	transition:
+		height var(--sidebar-collapse-duration) var(--sidebar-collapse-ease),
+		visibility 0s linear var(--sidebar-collapse-duration);
+}
+
+.sidebar-collapse--project {
+	--sidebar-collapse-duration: 140ms;
+}
+
+.sidebar-collapse[data-open="true"] {
+	height: auto;
+	visibility: visible;
+	transition-delay: 0s, 0s;
+}
+
+.sidebar-collapse__inner {
+	min-height: 0;
+	overflow: hidden;
+	opacity: 0;
+	content-visibility: hidden;
+	transition:
+		opacity var(--sidebar-collapse-duration) var(--sidebar-collapse-ease),
+		translate var(--sidebar-collapse-duration) var(--sidebar-collapse-ease),
+		content-visibility var(--sidebar-collapse-duration) allow-discrete;
+}
+
+.sidebar-collapse--project > .sidebar-collapse__inner {
+	translate: 0 -12px;
+}
+
+.sidebar-collapse[data-open="true"] > .sidebar-collapse__inner {
+	opacity: 1;
+	translate: 0 0;
+	content-visibility: visible;
+}
+
+/* Show more / Show less: rows that join or leave a capped list fade for one
+ * short CSS animation (applied only for the 180ms after the toggle), and the
+ * button's label swaps with the same fade. */
+@keyframes sidebar-row-enter {
 	from {
-		grid-template-rows: 0fr;
 		opacity: 0;
-	}
-	to {
-		grid-template-rows: 1fr;
-		opacity: 1;
+		translate: 0 4px;
 	}
 }
 
-.sidebar-section-enter {
-	animation: sidebar-section-enter 160ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+@keyframes sidebar-row-leave {
+	to {
+		opacity: 0;
+		translate: 0 -4px;
+	}
+}
+
+.sidebar-row-enter {
+	animation: sidebar-row-enter 140ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.sidebar-row-leave {
+	animation: sidebar-row-leave 120ms ease-in forwards;
+	pointer-events: none;
+}
+
+.sidebar-label-swap {
+	animation: sidebar-row-enter 140ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.sidebar-section-enter {
+	.sidebar-collapse,
+	.sidebar-collapse__inner {
+		transition: none;
+	}
+	.sidebar-row-enter,
+	.sidebar-row-leave,
+	.sidebar-label-swap {
 		animation: none;
 	}
 }
