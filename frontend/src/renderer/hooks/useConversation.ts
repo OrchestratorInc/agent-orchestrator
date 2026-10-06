@@ -1694,6 +1694,9 @@ function toMessage(wire: WireMessage): ConversationMessage {
 		})),
 		editAvailable: wire.editAvailable ?? undefined,
 		streaming: wire.streaming,
+		senderSessionId: wire.senderSessionId,
+		senderProjectId: wire.senderProjectId,
+		senderDisplayName: wire.senderDisplayName,
 		createdAt: wire.createdAt,
 	};
 }

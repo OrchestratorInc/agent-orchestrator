@@ -617,7 +617,12 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		if err := e.setReviewerInterfaceMode(ctx, reviewRow.ID, selectedMode, now); err != nil {
 			return TriggerResult{}, rollbackReplacement(err)
 		}
+		projectEnv, err := e.projectEnv(ctx, worker.ProjectID)
+		if err != nil {
+			return TriggerResult{}, rollbackReplacement(err)
+		}
 		launchSpec := reviewLaunchSpec(worker, harness, config, launchRun, queue, 0, launchAgentSessionID, launchID)
+		launchSpec.ProjectEnv = projectEnv
 		launchSpec.InterfaceMode = selectedMode
 		launchSpec.DeferInitialMessage = deferInitialMessage
 		if selectedMode == domain.ReviewerInterfaceChat && !hasConfigOverride {
@@ -1017,7 +1022,11 @@ func (e *Engine) restorePersistedChatReviewerLocked(ctx stdctx.Context, worker d
 		review.ProviderConversationID = ""
 	}
 	launchID := e.newID()
-	launch, err := e.launcher.RestoreTerminal(ctx, LaunchSpec{ReviewSessionID: review.ID, LaunchID: launchID, WorkerID: worker.ID, ProjectID: worker.ProjectID, Harness: review.Harness, WorkspacePath: worker.Metadata.WorkspacePath, AgentSessionID: review.AgentSessionID, ProviderConversationID: review.ProviderConversationID, PreviousRuns: previousRuns, InterfaceMode: review.InterfaceMode})
+	projectEnv, err := e.projectEnv(ctx, worker.ProjectID)
+	if err != nil {
+		return RestoreReviewerResult{}, err
+	}
+	launch, err := e.launcher.RestoreTerminal(ctx, LaunchSpec{ReviewSessionID: review.ID, LaunchID: launchID, WorkerID: worker.ID, ProjectID: worker.ProjectID, ProjectEnv: projectEnv, Harness: review.Harness, WorkspacePath: worker.Metadata.WorkspacePath, AgentSessionID: review.AgentSessionID, ProviderConversationID: review.ProviderConversationID, PreviousRuns: previousRuns, InterfaceMode: review.InterfaceMode})
 	if err != nil {
 		return RestoreReviewerResult{}, fmt.Errorf("restore reviewer: %w", err)
 	}
@@ -1132,11 +1141,16 @@ func (e *Engine) restoreReviewerLocked(
 		reviewRow.AgentSessionID = ""
 		agentSessionID = ""
 	}
+	projectEnv, err := e.projectEnv(ctx, worker.ProjectID)
+	if err != nil {
+		return RestoreReviewerResult{}, err
+	}
 	launch, err := e.launcher.RestoreTerminal(ctx, LaunchSpec{
 		ReviewSessionID:      reviewRow.ID,
 		LaunchID:             launchID,
 		WorkerID:             worker.ID,
 		ProjectID:            worker.ProjectID,
+		ProjectEnv:           projectEnv,
 		Harness:              harness,
 		AgentConfig:          config,
 		WorkspacePath:        worker.Metadata.WorkspacePath,
@@ -1858,6 +1872,17 @@ func (e *Engine) projectReviewerSelection(
 		return harness, config, nil
 	}
 	return cfg.ResolveReviewerHarness(worker.Harness), domain.AgentConfig{}, nil
+}
+
+func (e *Engine) projectEnv(ctx stdctx.Context, id domain.ProjectID) (map[string]string, error) {
+	if e.projects == nil {
+		return nil, nil
+	}
+	project, ok, err := e.projects.GetProject(ctx, string(id))
+	if err != nil || !ok {
+		return nil, err
+	}
+	return project.Config.Env, nil
 }
 
 func (e *Engine) upsertReview(ctx stdctx.Context, worker domain.SessionRecord, harness domain.ReviewerHarness, handleID, agentSessionID, reviewerLaunchID string, activityState domain.ActivityState, now time.Time) (domain.Review, error) {

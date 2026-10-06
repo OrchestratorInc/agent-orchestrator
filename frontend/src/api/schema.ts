@@ -3790,6 +3790,9 @@ export interface components {
             revision: number;
             /** @enum {string} */
             role: "user" | "assistant";
+            senderDisplayName?: string;
+            senderProjectId?: string;
+            senderSessionId?: string;
             /** Format: int64 */
             sequence: number;
             streaming: boolean;
@@ -5241,6 +5244,7 @@ export interface components {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];
             clientMessageId?: string;
             recoverOnly?: boolean;
+            senderSessionId?: string;
             text: string;
         };
         SteerConversationResponse: {

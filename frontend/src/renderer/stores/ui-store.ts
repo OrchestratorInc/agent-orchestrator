@@ -36,7 +36,7 @@ export type GlobalSettingsSection =
 	| "help";
 
 /** Project settings pages: the project form sections plus the cues manager. */
-export type ProjectSettingsSection = ProjectFormSection | "cues";
+export type ProjectSettingsSection = ProjectFormSection | "environment" | "cues";
 
 export type SettingsModal =
 	| {

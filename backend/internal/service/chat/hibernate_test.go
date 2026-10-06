@@ -92,6 +92,10 @@ func settledHibernationHarness(t *testing.T, state domain.TurnState, gate ...fun
 		h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 			return len(s.Turns) == 1 && s.Turns[0].State == state
 		})
+		// The durable receipt precedes the projector releasing its dispatch lock.
+		if err := h.svc.DrainQueued(ctx, testSession); err != nil {
+			t.Fatal(err)
+		}
 	}
 	rec, found, err := h.st.GetSession(ctx, testSession)
 	if err != nil || !found {
@@ -647,8 +651,10 @@ func TestSendAfterTimedOutHibernationWaitsForProviderStop(t *testing.T) {
 	if err := conv.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-sent; !errors.Is(err, wakeReached) {
-		t.Fatalf("send after provider stopped = %v, want wake callback", err)
+	// Shutdown failed before a sleep marker was committed. Once the provider
+	// exits, use explicit recovery rather than resurrecting an unmarked agent.
+	if err := <-sent; !errors.Is(err, chatsvc.ErrNoController) {
+		t.Fatalf("send after provider stopped = %v, want ErrNoController", err)
 	}
 }
 

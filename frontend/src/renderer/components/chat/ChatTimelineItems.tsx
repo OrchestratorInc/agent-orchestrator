@@ -61,7 +61,7 @@ import { cn } from "../../lib/utils";
 import { caretNotation, stripAnsi } from "../../lib/ansi";
 import { getApiBaseUrl } from "../../lib/api-client";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
-import { ActivityTitle, ChatMarkdown, SessionLinkedText } from "./ChatMarkdown";
+import { ActivityTitle, ChatMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -674,42 +674,67 @@ export function OriginMessage({ message }: { message: ConversationMessage }) {
 		return <BrowserAnnotationOrigin message={message} annotations={browserAnnotations} />;
 	}
 
-	const longReport = message.text.length > ORIGIN_REPORT_COLLAPSE_AT;
+	const senderSessionId = message.senderSessionId?.trim();
+	const senderProjectId = message.senderProjectId?.trim();
+	const senderLabel = message.senderDisplayName?.trim() || senderSessionId;
+	const senderHref = senderSessionId && senderProjectId
+		? `ao://sessions/${encodeURIComponent(senderProjectId)}/${encodeURIComponent(senderSessionId)}`
+		: undefined;
+	const visibleText = senderSessionId ? stripSteerSenderPrefix(message.text, senderSessionId) : message.text;
+	const longReport = visibleText.length > ORIGIN_REPORT_COLLAPSE_AT;
 	const preview = longReport
-		? `${message.text.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
-		: message.text;
+		? `${visibleText.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
+		: visibleText;
 
 	return (
-		<div className="cursor-chat-origin-message rounded-md border border-border border-l-2 border-l-logo-accent/60 px-3.5 py-2.5">
-			<div className="mb-1.5 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-				<CircleAlert aria-hidden="true" className="size-3.5 shrink-0 text-logo-accent" />
-				<span className="truncate">{message.senderLabel ?? message.origin}</span>
-				<span className="ml-auto shrink-0 font-normal tabular-nums">
-					{formatTime(message.createdAt)}
-				</span>
-			</div>
+		<AutomationMessageFrame
+			label={senderSessionId ? <>{"[from "}{senderHref ? <SessionLabelLink href={senderHref}>{senderLabel}</SessionLabelLink> : senderLabel}{"]"}</> : message.senderLabel ?? message.origin}
+			createdAt={message.createdAt}
+		>
 			{longReport && expanded ? (
-				<ChatMarkdown text={message.text} muted />
+				<ChatMarkdown text={visibleText} muted />
 			) : (
 				<p className={cn("whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
 					<SessionLinkedText text={preview} />
 				</p>
 			)}
-			{longReport ? (
-				<button
-					type="button"
-					onClick={() => setExpanded((current) => !current)}
-					aria-expanded={expanded}
-					className="mt-2 flex items-center gap-1 text-[11px] font-medium text-logo-accent transition-colors hover:text-markdown-link-hover"
-				>
-					<ChevronRight
-						aria-hidden="true"
-						className={cn("size-3 transition-transform", expanded && "rotate-90")}
-					/>
-					{expanded ? "Hide report" : "Show full report"}
-				</button>
-			) : null}
+			{longReport ? <AutomationExpandButton expanded={expanded} onClick={() => setExpanded((current) => !current)} /> : null}
+		</AutomationMessageFrame>
+	);
+}
+
+function AutomationMessageFrame({
+	label,
+	createdAt,
+	children,
+}: {
+	label: ReactNode;
+	createdAt: string;
+	children: ReactNode;
+}) {
+	return (
+		<div className="cursor-chat-origin-message rounded-md border border-border border-l-2 border-l-logo-accent/60 px-3.5 py-2.5">
+			<div className="mb-1.5 flex min-w-0 items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+				<CircleAlert aria-hidden="true" className="size-3.5 shrink-0 text-logo-accent" />
+				<span className="min-w-0 truncate">{label}</span>
+				<span className="ml-auto shrink-0 font-normal tabular-nums">{formatTime(createdAt)}</span>
+			</div>
+			{children}
 		</div>
+	);
+}
+
+function AutomationExpandButton({ expanded, onClick }: { expanded: boolean; onClick: () => void }) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			aria-expanded={expanded}
+			className="mt-2 flex items-center gap-1 text-[11px] font-medium text-logo-accent transition-colors hover:text-markdown-link-hover"
+		>
+			<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform", expanded && "rotate-90")} />
+			{expanded ? "Hide report" : "Show full report"}
+		</button>
 	);
 }
 
@@ -2241,8 +2266,21 @@ export function SteerMessage({
 	sessionId: string;
 	apiBaseUrl?: string | null;
 }) {
+	const [expanded, setExpanded] = useState(false);
 	const text = activity.detail?.text ?? activity.summary;
-	const { body, attachments } = stagedAttachmentParts(text);
+	const senderSessionId = activity.detail?.senderSessionId?.trim();
+	const senderProjectId = activity.detail?.senderProjectId?.trim();
+	const senderLabel = activity.detail?.senderDisplayName?.trim() || senderSessionId;
+	const automationSteer = Boolean(senderSessionId);
+	const senderHref = senderSessionId && senderProjectId
+		? `ao://sessions/${encodeURIComponent(senderProjectId)}/${encodeURIComponent(senderSessionId)}`
+		: undefined;
+	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : text;
+	const { body, attachments } = stagedAttachmentParts(visibleText);
+	const longReport = body.length > ORIGIN_REPORT_COLLAPSE_AT;
+	const preview = longReport
+		? `${body.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
+		: body;
 	let stagedImagesToMatch = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path)).length;
 	// Composer images are recorded twice: once as durable staged paths and once as
 	// native prompt blocks. Suppress only the corresponding leading native images;
@@ -2252,10 +2290,15 @@ export function SteerMessage({
 		stagedImagesToMatch -= 1;
 		return false;
 	});
-	return (
-		<div className="flex flex-col items-end gap-1">
-			<div className="w-fit max-w-[min(78%,560px)] break-words whitespace-pre-wrap rounded-[10px] border border-accent-dim bg-raised px-3 py-2.5 text-sm leading-[1.55] text-foreground">
-				{body ? <p>{body}</p> : null}
+	const automationBody = (
+		<>
+			{longReport && expanded ? (
+				<ChatMarkdown text={body} muted />
+			) : body ? (
+				<p className={cn("whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
+					<SessionLinkedText text={preview} />
+				</p>
+			) : null}
 				<StagedAttachmentItems
 					paths={attachments}
 					sessionId={sessionId}
@@ -2270,13 +2313,48 @@ export function SteerMessage({
 					imageAlt={(position) => `Steered attachment ${position}`}
 					className={cn((body || attachments.length > 0) && "mt-2")}
 				/>
-			</div>
+			{longReport ? <AutomationExpandButton expanded={expanded} onClick={() => setExpanded((current) => !current)} /> : null}
+		</>
+	);
+	return (
+		<div className={cn("flex flex-col gap-1", automationSteer ? "items-stretch" : "items-end")}>
+			{automationSteer ? (
+				<AutomationMessageFrame
+					label={<>[from {senderHref ? <SessionLabelLink href={senderHref}>{senderLabel}</SessionLabelLink> : senderLabel}]</>}
+					createdAt={activity.createdAt}
+				>
+					{automationBody}
+				</AutomationMessageFrame>
+			) : (
+				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] border border-accent-dim bg-raised px-3 py-2.5 text-foreground">
+					{body ? <p>{body}</p> : null}
+					<StagedAttachmentItems
+						paths={attachments}
+						sessionId={sessionId}
+						apiBaseUrl={apiBaseUrl}
+						ariaLabel="Steered attachments"
+						className={cn(body && "mt-2")}
+					/>
+					<ConversationContentItems
+						content={remainingContent}
+						ariaLabel={attachments.length > 0 ? "Steered content" : "Steered attachments"}
+						imageLabel="Image"
+						imageAlt={(position) => `Steered attachment ${position}`}
+						className={cn((body || attachments.length > 0) && "mt-2")}
+					/>
+				</div>
+			)}
 			<span className="flex items-center gap-1 text-[11px] text-muted-foreground">
 				<CornerDownRight aria-hidden="true" className="size-3" />
 				Steered into the running turn
 			</span>
 		</div>
 	);
+}
+
+function stripSteerSenderPrefix(text: string, senderSessionId: string): string {
+	const prefix = `[from ${senderSessionId}]`;
+	return text.startsWith(prefix) ? text.slice(prefix.length).replace(/^\s+/, "") : text;
 }
 
 /* -------------------------------------------------------------------------- */
