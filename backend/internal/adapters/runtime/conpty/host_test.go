@@ -1128,8 +1128,8 @@ func TestOutputDuringAttachIsDeliveredOnce(t *testing.T) {
 // whose queue is full (see broadcast). A client that attaches during that wait
 // must get the waiting chunk exactly once, live, and a snapshot whose restored
 // modes do not include it. Recorded into the ring and the tracker before the
-// wait, the chunk would reach the new client twice (in its snapshot and again
-// once the wait ends), and Restore would already prefix the chunk's ?1049h.
+// wait, the chunk would reach the new client twice: in its snapshot, and again
+// once the wait ends.
 func TestOutputHeldForASlowViewerReachesANewAttachOnce(t *testing.T) {
 	f := startServe(t, 305)
 	defer f.cancel()
