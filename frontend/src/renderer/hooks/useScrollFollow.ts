@@ -12,8 +12,8 @@ const GLIDE_MAX_SECONDS = 0.6;
 const FOLLOW_TAU_MS = 90;
 /** Writes this close to the current position are skipped. */
 const SETTLE_PX = 0.5;
-/** Scroll events within this window after our own write are ours, not the reader's. */
-const PROGRAMMATIC_WINDOW_MS = 120;
+/** A scroll event within this distance of our last written position is ours. */
+const OWN_SCROLL_PX = 2;
 
 /**
  * Tests snap, as under reduced motion, because they assert scroll positions
@@ -43,13 +43,17 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 	snap.current = CANNOT_ANIMATE || Boolean(reducedMotion);
 	const glide = useRef<{ stop: () => void } | null>(null);
 	const frame = useRef<number | null>(null);
-	const lastWrite = useRef(0);
+	// Where our last write left the viewport (read back, so browser clamping counts).
+	// Scroll events are classified by position rather than by time: an event that
+	// lands here is ours however late it arrives, and anything else is the reader's.
+	const lastWritten = useRef<number | null>(null);
+	const holdUntil = useRef(0);
 
 	const endOf = (node: HTMLElement) => Math.max(0, node.scrollHeight - node.clientHeight);
 	const write = (node: HTMLElement, top: number) => {
 		if (Math.abs(node.scrollTop - top) <= SETTLE_PX) return;
-		lastWrite.current = performance.now();
 		node.scrollTop = top;
+		lastWritten.current = node.scrollTop;
 	};
 
 	const cancel = useCallback(() => {
@@ -57,19 +61,40 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		glide.current = null;
 		if (frame.current != null) cancelAnimationFrame(frame.current);
 		frame.current = null;
-		// The reader has taken over: their next scroll event must not read as ours.
-		lastWrite.current = 0;
 	}, []);
+
+	/**
+	 * Stop following and stay still for `ms`, without deciding yet whether the reader
+	 * left the end. Used for wheel and key intent: the scroll it causes (if any) then
+	 * decides, so a gesture consumed by a nested scroller never unpins the log.
+	 */
+	const hold = useCallback((ms: number) => {
+		cancel();
+		holdUntil.current = performance.now() + ms;
+	}, [cancel]);
+
+	/** Record a write made outside this hook (e.g. virtualizer anchoring) as ours. */
+	const markWritten = useCallback((top: number) => {
+		lastWritten.current = top;
+	}, []);
+
+	/** True when a scroll event at `top` was caused by one of our writes. */
+	const isOwnScroll = useCallback(
+		(top: number) => lastWritten.current != null && Math.abs(top - lastWritten.current) < OWN_SCROLL_PX,
+		[],
+	);
 
 	const followEnd = useCallback(() => {
 		const node = getNode();
 		if (!node || glide.current || frame.current != null) return;
+		if (performance.now() < holdUntil.current) return;
 		if (snap.current) {
 			// The browser clamps to the real maximum; writing scrollHeight is the plain snap.
 			write(node, node.scrollHeight);
 			return;
 		}
-		let previous = performance.now();
+		// Seeded from the first frame's own timestamp: rAF time can precede performance.now().
+		let previous: number | null = null;
 		const step = (now: number) => {
 			const current = getNode();
 			if (!current) {
@@ -84,7 +109,7 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 				frame.current = null;
 				return;
 			}
-			const blend = 1 - Math.exp(-(now - previous) / FOLLOW_TAU_MS);
+			const blend = 1 - Math.exp(-(now - (previous ?? now - 16)) / FOLLOW_TAU_MS);
 			previous = now;
 			// At least 1px per frame so a small gap can't fall under SETTLE_PX and stall.
 			const advance = Math.max(gap * blend, Math.min(gap, 1));
@@ -103,6 +128,8 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		const node = getNode();
 		if (!node) return;
 		cancel();
+		// A deliberate jump (send, Jump to latest) overrides any pending wheel hold.
+		holdUntil.current = 0;
 		const from = node.scrollTop;
 		if (snap.current) {
 			// The browser clamps to the real maximum; writing scrollHeight is the plain snap.
@@ -124,13 +151,7 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		});
 	}, [cancel, followEnd, getNode]);
 
-	/** True while a scroll event most likely came from our own write. */
-	const isProgrammaticScroll = useCallback(
-		() => glide.current != null || performance.now() - lastWrite.current < PROGRAMMATIC_WINDOW_MS,
-		[],
-	);
-
 	useEffect(() => cancel, [cancel]);
 
-	return { glideToEnd, followEnd, cancel, isProgrammaticScroll };
+	return { glideToEnd, followEnd, cancel, hold, markWritten, isOwnScroll };
 }

@@ -2051,6 +2051,10 @@ function ControllerBanner({
  * an unbounded history in every snapshot response.
  */
 const CHAT_VIRTUALIZE_THRESHOLD = 20;
+/** Opening a chat snaps to the end for this long while rows measure and history arrives. */
+const INITIAL_SNAP_MS = 1000;
+/** Wheel, key and touch intent pause the follow this long so the resulting scroll decides. */
+const READER_INTENT_HOLD_MS = 250;
 const CHAT_ESTIMATED_TURN_HEIGHT = 600;
 const CHAT_TURN_GAP = 18;
 const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
@@ -2122,11 +2126,14 @@ function Timeline({
 	const pinnedRef = useRef(true);
 	const [pinned, setPinned] = useState(true);
 	const getScroller = useCallback(() => scroller.current, []);
-	const { glideToEnd, followEnd, cancel: cancelScrollFollow, isProgrammaticScroll } = useScrollFollow(getScroller);
+	const { glideToEnd, followEnd, cancel: cancelScrollFollow, hold: holdScrollFollow, markWritten, isOwnScroll } =
+		useScrollFollow(getScroller);
 	// Set when the reader sends or jumps to the latest: the next layout glides there
 	// instead of snapping. Opening a chat never animates, so the first layout snaps.
 	const glideRequested = useRef(false);
 	const initialLayoutDone = useRef(false);
+	const initialLayoutAt = useRef(0);
+	const lastScrollTop = useRef(0);
 	const setPinnedNow = useCallback((next: boolean) => {
 		pinnedRef.current = next;
 		setPinned(next);
@@ -2756,7 +2763,10 @@ function Timeline({
 			return measureElement(element, entry, instance) || CHAT_ESTIMATED_TURN_HEIGHT;
 		},
 		scrollToFn: (offset, { adjustments = 0 }, instance) => {
-			if (instance.scrollElement) instance.scrollElement.scrollTop = offset + adjustments;
+			if (!instance.scrollElement) return;
+			instance.scrollElement.scrollTop = offset + adjustments;
+			// Anchoring writes are ours; they must never read as the reader leaving the end.
+			markWritten(instance.scrollElement.scrollTop);
 		},
 		rangeExtractor: (range) => {
 			const indexes = defaultRangeExtractor(range);
@@ -2887,23 +2897,36 @@ function Timeline({
 		}
 	}, [virtualized, virtualizer, groups]);
 
+	// Opening a chat lands at the end instantly. Long histories measure their rows
+	// over the first frames (and may arrive in more than one snapshot), so keep
+	// snapping briefly after the first real layout instead of animating across them.
+	const followOrSnapToEnd = useCallback((node: HTMLElement) => {
+		if (!initialLayoutDone.current || performance.now() - initialLayoutAt.current < INITIAL_SNAP_MS) {
+			node.scrollTop = node.scrollHeight;
+			markWritten(node.scrollTop);
+			return;
+		}
+		followEnd();
+	}, [followEnd, markWritten]);
+
 	const syncScrollLayout = useCallback(() => {
 		anchorGeometry.current = null;
 		syncPromptSpacer();
 		const node = scroller.current;
 		if (node && pinnedRef.current) {
-			if (!initialLayoutDone.current) {
-				node.scrollTop = node.scrollHeight;
-			} else if (glideRequested.current) {
+			if (glideRequested.current) {
 				glideRequested.current = false;
 				glideToEnd();
 			} else {
-				followEnd();
+				followOrSnapToEnd(node);
 			}
 		}
-		if (groupCountRef.current > 0) initialLayoutDone.current = true;
+		if (groupCountRef.current > 0 && !initialLayoutDone.current) {
+			initialLayoutDone.current = true;
+			initialLayoutAt.current = performance.now();
+		}
 		updateScrollbar();
-	}, [syncPromptSpacer, updateScrollbar, glideToEnd, followEnd]);
+	}, [syncPromptSpacer, updateScrollbar, glideToEnd, followOrSnapToEnd]);
 
 	// Streamed text grows the content without a new sequence. While following, let
 	// the reply fill the prompt spacer first (the view holds still), then follow the
@@ -2912,9 +2935,10 @@ function Timeline({
 		if (!pinnedRef.current || !initialLayoutDone.current) return;
 		anchorGeometry.current = null;
 		syncPromptSpacer();
-		followEnd();
+		const node = scroller.current;
+		if (node) followOrSnapToEnd(node);
 		updateScrollbar();
-	}, [syncPromptSpacer, followEnd, updateScrollbar]);
+	}, [syncPromptSpacer, followOrSnapToEnd, updateScrollbar]);
 
 	// A disclosure animation changes the content box but is not new conversation
 	// content. Re-measure it without re-pinning the viewport to the bottom; doing
@@ -2974,38 +2998,46 @@ function Timeline({
 	function onScroll() {
 		const node = scroller.current;
 		if (!node) return;
-		const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
-		// Returning near the end re-latches. Leaving it only counts when the reader
-		// did it; our own glide or follow writes must never unpin.
-		if (distance < 64) {
-			if (!pinnedRef.current) setPinnedNow(true);
-		} else if (pinnedRef.current && !isProgrammaticScroll()) {
-			releaseFollow();
+		const top = node.scrollTop;
+		const movedUp = top < lastScrollTop.current - 1;
+		lastScrollTop.current = top;
+		const distance = node.scrollHeight - top - node.clientHeight;
+		// Classified by where the scroll landed, not when: our own glide, follow and
+		// anchoring writes are recognized by position and never unpin. A reader scroll
+		// releases the follow once it is away from the end, or whenever it moves up
+		// (so a small nudge up is not pulled straight back). A scroll that only clamps
+		// to the end after content shrank is not the reader leaving.
+		if (isOwnScroll(top)) {
+			// Ours: no change.
+		} else if (distance >= 64 || (movedUp && distance > 2)) {
+			if (pinnedRef.current) releaseFollow();
+		} else if (!pinnedRef.current && !movedUp) {
+			setPinnedNow(true);
 		}
 		updateScrollbar();
 	}
 
 	function onViewportWheel(event: ReactWheelEvent<HTMLDivElement>) {
-		// Wheel intent arrives before the scroll it causes: release on an upward
-		// gesture right away so a concurrent stream commit cannot pull the reader back.
-		if (event.deltaY < 0 && (scroller.current?.scrollTop ?? 0) > 0) releaseFollow();
-		else cancelScrollFollow();
+		// Wheel intent arrives before the scroll it causes. Hold the follow so a
+		// concurrent stream commit cannot pull the reader back, and let the scroll
+		// itself decide: a wheel consumed by a nested scroller (a code block) never
+		// moves the log, so it must not unpin it.
+		if (event.deltaY < 0) holdScrollFollow(READER_INTENT_HOLD_MS);
 	}
 
 	function onViewportKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
 		const target = event.target as HTMLElement;
 		if (event.defaultPrevented || target.closest("input, textarea, select, [contenteditable='true'], [contenteditable=''], [role='menu'], [role='listbox'], [role='textbox']")) return;
 		if (event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" || (event.key === " " && event.shiftKey)) {
-			releaseFollow();
-		} else if (event.key === "ArrowDown" || event.key === "PageDown" || event.key === "End" || event.key === " ") {
-			cancelScrollFollow();
+			holdScrollFollow(READER_INTENT_HOLD_MS);
 		}
 	}
 
 	function onViewportPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-		// The native scrollbar, or a disclosure the reader is opening: either way they
-		// are reading, so following the end would pull the content out from under them.
-		if (event.target === event.currentTarget || (event.target as HTMLElement).closest("[aria-expanded]")) {
+		// A disclosure the reader is opening: following the end would pull it out from
+		// under them. Menu triggers (aria-haspopup) open a popup, not content, so they
+		// keep the follow; so do clicks on empty margins.
+		if ((event.target as HTMLElement).closest("[aria-expanded]:not([aria-haspopup])")) {
 			releaseFollow();
 		}
 	}
@@ -3131,7 +3163,7 @@ function Timeline({
 				ref={scroller}
 				onScroll={onScroll}
 				onWheel={onViewportWheel}
-				onTouchMove={cancelScrollFollow}
+				onTouchMove={() => holdScrollFollow(READER_INTENT_HOLD_MS)}
 				onKeyDown={onViewportKeyDown}
 				onPointerDown={onViewportPointerDown}
 				className="chat-scroll-viewport cursor-chat-timeline h-full min-w-0 select-text overflow-x-hidden overflow-y-auto px-4 pt-5 pb-0"

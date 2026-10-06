@@ -20,15 +20,15 @@ describe("glideSeconds", () => {
 });
 
 describe("useScrollFollow", () => {
-	it("lands on the end and marks the resulting scroll as its own until cancelled", () => {
+	it("lands on the end and recognizes the resulting scroll as its own by position", () => {
 		const node = viewport({ scrollHeight: 2000, clientHeight: 500, scrollTop: 100 });
 		const { result } = renderHook(() => useScrollFollow(() => node));
-		// jsdom has no layout to animate, so the glide snaps to the end.
+		// Tests snap (no layout to animate): the plain snap writes scrollHeight.
 		result.current.glideToEnd();
 		expect(node.scrollTop).toBe(2000);
-		expect(result.current.isProgrammaticScroll()).toBe(true);
-		result.current.cancel();
-		expect(result.current.isProgrammaticScroll()).toBe(false);
+		expect(result.current.isOwnScroll(2000)).toBe(true);
+		// A reader scroll lands somewhere else, however soon after the write.
+		expect(result.current.isOwnScroll(1700)).toBe(false);
 	});
 
 	it("leaves a viewport that is already at its end alone", () => {
@@ -37,6 +37,24 @@ describe("useScrollFollow", () => {
 		const { result } = renderHook(() => useScrollFollow(() => node));
 		result.current.followEnd();
 		expect(node.scrollTop).toBe(2000);
-		expect(result.current.isProgrammaticScroll()).toBe(false);
+		expect(result.current.isOwnScroll(2000)).toBe(false);
+	});
+
+	it("records writes made elsewhere, such as virtualizer anchoring, as its own", () => {
+		const node = viewport({ scrollHeight: 2000, clientHeight: 500, scrollTop: 0 });
+		const { result } = renderHook(() => useScrollFollow(() => node));
+		result.current.markWritten(640);
+		expect(result.current.isOwnScroll(640)).toBe(true);
+		expect(result.current.isOwnScroll(600)).toBe(false);
+	});
+
+	it("does not follow while held for reader intent, but a deliberate glide still runs", () => {
+		const node = viewport({ scrollHeight: 2000, clientHeight: 500, scrollTop: 100 });
+		const { result } = renderHook(() => useScrollFollow(() => node));
+		result.current.hold(10_000);
+		result.current.followEnd();
+		expect(node.scrollTop).toBe(100);
+		result.current.glideToEnd();
+		expect(node.scrollTop).toBe(2000);
 	});
 });

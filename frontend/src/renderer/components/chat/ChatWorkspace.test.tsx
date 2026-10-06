@@ -444,7 +444,7 @@ describe("ChatWorkspace timeline", () => {
 		const view = render(<ChatWorkspace snapshot={snapshot} />);
 		const log = screen.getByRole("log");
 		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 1000 });
-		// Reading older turns: an upward wheel releases the follow before the scroll lands.
+		// Reading older turns: the upward wheel holds the follow, and the scroll it causes releases it.
 		fireEvent.wheel(log, { deltaY: -120 });
 		fireEvent.scroll(log);
 		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
@@ -453,6 +453,34 @@ describe("ChatWorkspace timeline", () => {
 		view.rerender(<ChatWorkspace snapshot={snapshot} localEchos={localEchos} />);
 		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
 		expect(log.scrollTop).toBe(4000);
+	});
+
+	it("releases on a small nudge up from the end and re-latches when the reader scrolls back down", () => {
+		render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		fireEvent.scroll(log);
+		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+
+		// 30px up is inside the re-latch zone, but an upward move is the reader leaving.
+		log.scrollTop = 3170;
+		fireEvent.scroll(log);
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+
+		log.scrollTop = 3190;
+		fireEvent.scroll(log);
+		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+	});
+
+	it("keeps following when a wheel is consumed by a nested scroller or the reader clicks the margin", () => {
+		render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		fireEvent.scroll(log);
+		// A code block scrolls itself; the log never moves, so no scroll event follows.
+		fireEvent.wheel(log.firstElementChild ?? log, { deltaY: -120 });
+		fireEvent.pointerDown(log);
+		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
 	});
 
 	it("shows a local human echo until the matching durable turn arrives", () => {
