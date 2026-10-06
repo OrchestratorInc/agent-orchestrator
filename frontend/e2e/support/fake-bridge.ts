@@ -108,7 +108,6 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				window: {
 					getZoomFactor: async () => 1,
-					onTitlebarPointer: () => () => undefined,
 					onZoomFactor: () => () => undefined,
 					isMaximized: async () => false,
 					onMaximized: () => () => undefined,
@@ -717,7 +716,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				window: {
 					getZoomFactor: async () => 1,
-					onTitlebarPointer: () => () => undefined,
 					onZoomFactor: () => () => undefined,
 					isMaximized: async () => false,
 					onMaximized: () => () => undefined,

@@ -1,5 +1,4 @@
 import { syncMacWindowButtons } from "./main/window-chrome";
-import { startTitlebarPointerTracking } from "./main/titlebar-pointer";
 import { MAC_TITLEBAR_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
 import { finishUpdateQuit } from "./main/update-quit";
 import { acknowledgeMacUpdateRestart } from "./main/mac-update-progress";
@@ -11,7 +10,6 @@ import {
 	dialog,
 	ipcMain,
 	Menu,
-	screen,
 	nativeTheme,
 	net,
 	nativeImage,
@@ -863,19 +861,7 @@ async function createWindowInternal(): Promise<void> {
 	});
 	shellWebContents.on("render-process-gone", () => trayLifecycle.clear());
 
-	// The titlebar row is a window-drag region, which never reports hover to the
-	// page; feed the page the cursor position so the sidebar can reveal its
-	// history buttons there too.
-	const stopTitlebarPointer =
-		process.platform === "darwin"
-			? startTitlebarPointerTracking({
-					window: mainWindow,
-					shell: getShellWebContents,
-					getCursorScreenPoint: () => screen.getCursorScreenPoint(),
-				})
-			: undefined;
 	mainWindow.on("closed", () => {
-		stopTitlebarPointer?.();
 		chatDraftRisks = [];
 		chatDraftDialog = undefined;
 		chatDraftQuitConfirmed = false;

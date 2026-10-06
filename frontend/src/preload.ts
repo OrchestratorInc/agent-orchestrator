@@ -311,11 +311,6 @@ const api = {
 	},
 	window: {
 		getZoomFactor: () => ipcRenderer.invoke("window:getZoomFactor") as Promise<number>,
-		onTitlebarPointer: (listener: (x: number | null) => void) => {
-			const wrapped = (_event: Electron.IpcRendererEvent, x: number | null) => listener(x);
-			ipcRenderer.on("window:titlebar-pointer", wrapped);
-			return () => { ipcRenderer.off("window:titlebar-pointer", wrapped); };
-		},
 		onZoomFactor: (listener: (zoomFactor: number) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, zoomFactor: number) => listener(zoomFactor);
 			ipcRenderer.on("window:zoom", wrapped);

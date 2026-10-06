@@ -1,7 +1,6 @@
 import { useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, PanelLeft } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { aoBridge } from "../lib/bridge";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
@@ -39,68 +38,6 @@ export function useCanGoForward(): boolean {
     });
   }, [router]);
   return canGoForward;
-}
-
-// Reveals the history arrows while the pointer is over the sidebar body or the
-// button cluster. The rest of the titlebar band stays a window-drag region
-// (double-click to maximize), so it cannot report hover. A short leave delay
-// absorbs the one-frame gap when the pointer crosses between the two.
-const REVEAL_LEAVE_DELAY_MS = 60;
-
-function useSidebarReveal(isSidebarOpen: boolean) {
-  const [revealed, setRevealed] = useState(false);
-  const inside = useRef({ zone: false, sidebar: false, band: false });
-  const timer = useRef<number | undefined>(undefined);
-
-  const update = useCallback((source: "zone" | "sidebar" | "band", value: boolean) => {
-    inside.current[source] = value;
-    window.clearTimeout(timer.current);
-    if (inside.current.zone || inside.current.sidebar || inside.current.band) {
-      setRevealed(true);
-    } else {
-      timer.current = window.setTimeout(() => setRevealed(false), REVEAL_LEAVE_DELAY_MS);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!isSidebarOpen) {
-      inside.current = { zone: false, sidebar: false, band: false };
-      window.clearTimeout(timer.current);
-      setRevealed(false);
-      return;
-    }
-    let el: HTMLElement | null = null;
-    // The titlebar row over the sidebar is a window-drag region, so the page
-    // never sees the pointer there. The main process reports the cursor's x
-    // (CSS px) while it is in that row, or null when it is elsewhere.
-    const offPointer = aoBridge.window.onTitlebarPointer((x) => {
-      const right = document
-        .querySelector<HTMLElement>('[data-slot="sidebar-container"]')
-        ?.getBoundingClientRect().right;
-      update("band", x !== null && right !== undefined && x < right);
-    });
-    const enter = () => update("sidebar", true);
-    const leave = () => update("sidebar", false);
-    const frame = requestAnimationFrame(() => {
-      el = document.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
-      if (!el) return;
-      el.addEventListener("pointerenter", enter);
-      el.addEventListener("pointerleave", leave);
-    });
-    return () => {
-      cancelAnimationFrame(frame);
-      window.clearTimeout(timer.current);
-      offPointer();
-      el?.removeEventListener("pointerenter", enter);
-      el?.removeEventListener("pointerleave", leave);
-    };
-  }, [isSidebarOpen, update]);
-
-  return {
-    revealed,
-    onZoneEnter: () => update("zone", true),
-    onZoneLeave: () => update("zone", false),
-  };
 }
 
 // The brand replaces the arrows only once the sidebar has fully slid open, and
@@ -147,10 +84,7 @@ export function TitlebarNav({
   const router = useRouter();
   const canGoBack = useCanGoBack();
   const canGoForward = useCanGoForward();
-  const { revealed, onZoneEnter, onZoneLeave } =
-    useSidebarReveal(isSidebarOpen);
   const showBrand = useSidebarSettledOpen(isSidebarOpen);
-  const [keyboardFocus, setKeyboardFocus] = useState(false);
   // The sidebar's minimum width is measured from the brand label, which only
   // exists once this mounts it. Nudge the sidebar's resize re-clamp so a stored
   // or default width narrower than the label grows to fit it.
@@ -171,23 +105,16 @@ export function TitlebarNav({
   const topClass = isMac ? "top-px" : "top-0.75";
   const heightClass = "h-traffic-light-clearance";
 
-  // With the sidebar open the brand and the history arrows share one slot: the
-  // brand shows at rest, the arrows while the pointer is over the sidebar or the
-  // cluster (or on keyboard focus). Collapsed, there is no brand, so the arrows
-  // stay put. The arrows are only mounted while visible, so hidden arrows never
-  // leave an invisible no-drag hole in the window-drag region.
-  const arrowsVisible = !showBrand || revealed || keyboardFocus;
+  // With the sidebar open the brand sits where the history arrows would be.
+  // Collapsed (or while the sidebar is still sliding open) there is no brand, so
+  // the arrows show instead. The two are never mounted together, so the arrows
+  // never leave an invisible no-drag hole in the window-drag region.
+  const arrowsVisible = !showBrand;
 
   return (
     <div
       className={`fixed ${topClass} ${leftClass} z-titlebar flex ${heightClass} items-center gap-1`}
       data-slot="titlebar-nav"
-      onBlur={() => setKeyboardFocus(false)}
-      onFocus={(event) =>
-        setKeyboardFocus(event.target.matches(":focus-visible"))
-      }
-      onPointerEnter={onZoneEnter}
-      onPointerLeave={onZoneLeave}
     >
       <TitlebarButton
         label={
@@ -205,12 +132,8 @@ export function TitlebarNav({
       <div className="grid items-center">
         {showBrand ? (
           // Not a button on purpose: it stays part of the window-drag region.
-          // `invisible` (not unmounted) keeps its width, which both holds the
-          // slot steady and feeds the sidebar's minimum-width measurement.
           <span
-            className={`col-start-1 row-start-1 ml-1.5 inline-flex select-none items-center gap-1.5 whitespace-nowrap px-0.5 text-base font-semibold leading-tight tracking-tight-lg text-foreground ${
-              arrowsVisible ? "invisible" : ""
-            }`}
+            className="col-start-1 row-start-1 ml-1.5 inline-flex select-none items-center gap-1.5 whitespace-nowrap px-0.5 text-base font-semibold leading-tight tracking-tight-lg text-foreground"
             data-sidebar-brand=""
           >
             <AOMascot className="h-5.5 w-5.5 shrink-0" />
