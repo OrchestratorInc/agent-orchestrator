@@ -10,12 +10,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -296,9 +294,10 @@ func Run() error {
 		},
 	})
 
-	// signal.NotifyContext cancels ctx on SIGINT/SIGTERM, which drives the
-	// graceful shutdown inside Server.Run and stops the background goroutines.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	// Signals cancel the worker context, but stay registered during cleanup so
+	// a repeated SIGINT/SIGTERM cannot interrupt the graceful shutdown.
+	ctx, stop, stopSignals := daemonContext()
+	defer stopSignals()
 	defer stop()
 	policyCoordinator.StartWatcher(ctx)
 	defer func() { _ = policyCoordinator.CloseAndDrain(context.Background()) }()
