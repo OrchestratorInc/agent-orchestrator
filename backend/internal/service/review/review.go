@@ -905,6 +905,5 @@ func (s *Service) List(ctx context.Context, workerID domain.SessionID) (reviewco
 
 // ArchiveReviewer retires the reviewer surface while preserving its history.
 func (s *Service) ArchiveReviewer(ctx context.Context, workerID domain.SessionID) error {
-	_, err := s.engine.ArchiveReviewer(ctx, workerID)
-	return err
+	return s.engine.ArchiveReviewer(ctx, workerID)
 }

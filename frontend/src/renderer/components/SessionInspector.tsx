@@ -2423,6 +2423,7 @@ function ReviewPanel({
 			? t("inspector.review.cancelling")
 			: t("inspector.review.cancel")
 		: runAction;
+	const archiveActionLabel = isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession");
 	const killDisabled = isKilling || isCancelling || isTriggering || isSwitchingReviewer || !hasReviewerSession;
 
 	return (
@@ -2490,7 +2491,7 @@ function ReviewPanel({
 								<TooltipTrigger asChild>
 									<span className="inline-flex">
 										<Button
-											aria-label={isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}
+											aria-label={archiveActionLabel}
 											className="shrink-0 [&_svg]:size-icon-sm"
 											disabled={killDisabled}
 											onClick={onKill}
@@ -2502,7 +2503,7 @@ function ReviewPanel({
 										</Button>
 									</span>
 								</TooltipTrigger>
-								<TooltipContent>{isKilling ? t("inspector.review.killingSession") : t("inspector.review.killSession")}</TooltipContent>
+								<TooltipContent>{archiveActionLabel}</TooltipContent>
 							</Tooltip>
 						</div>
 					</div>

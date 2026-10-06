@@ -551,6 +551,15 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		if err != nil {
 			return TriggerResult{}, rollbackReplacement(err)
 		}
+		if reviewRow.IsArchived {
+			// Chat must be active before its controller can claim ownership. Only
+			// reopen once launch work is due; rollback restores the archive on failure.
+			reviewRow.IsArchived = false
+			reviewRow.ReviewerActivityState = domain.ActivityActive
+			if err := e.store.UpsertReview(ctx, reviewRow); err != nil {
+				return TriggerResult{}, rollbackReplacement(err)
+			}
+		}
 		if err := e.setReviewerInterfaceMode(ctx, reviewRow.ID, selectedMode, now); err != nil {
 			return TriggerResult{}, rollbackReplacement(err)
 		}
@@ -580,7 +589,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	}
 	for _, stale := range pendingSupersedes {
 		if _, err := e.store.SupersedeStaleRunningReviewRuns(ctx, workerID, stale.prURL, stale.targetSHA, "superseded by a review trigger for a newer commit"); err != nil {
-			if modeChanging {
+			if previousReview.IsArchived || modeChanging {
 				return TriggerResult{}, rollbackReplacement(err)
 			}
 			if handleID != "" {
@@ -591,7 +600,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	}
 	if hasConfigOverride && persistedAgentSessionID == "" && reviewRow.ID != "" {
 		if _, err := e.store.UpdateReviewAgentSessionID(ctx, reviewRow.ID, ""); err != nil {
-			if modeChanging {
+			if previousReview.IsArchived || modeChanging {
 				return TriggerResult{}, rollbackReplacement(err)
 			}
 			if handleID != "" {
@@ -602,7 +611,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	}
 	reviewRow, err = e.upsertReview(ctx, worker, harness, handleID, persistedAgentSessionID, reviewRow.ReviewerLaunchID, "", now)
 	if err != nil {
-		if modeChanging {
+		if previousReview.IsArchived || modeChanging {
 			return TriggerResult{}, rollbackReplacement(err)
 		}
 		if handleID != "" {
@@ -1476,8 +1485,9 @@ func (e *Engine) TerminateReviewer(ctx stdctx.Context, workerID domain.SessionID
 }
 
 // ArchiveReviewer retires all reviewer surfaces but retains conversations and results.
-func (e *Engine) ArchiveReviewer(ctx stdctx.Context, workerID domain.SessionID) (TerminateResult, error) {
-	return e.terminateReviewer(ctx, workerID, "cancelled because reviewer was archived", true)
+func (e *Engine) ArchiveReviewer(ctx stdctx.Context, workerID domain.SessionID) error {
+	_, err := e.terminateReviewer(ctx, workerID, "cancelled because reviewer was archived", true)
+	return err
 }
 
 func (e *Engine) terminateReviewer(ctx stdctx.Context, workerID domain.SessionID, body string, archive bool) (TerminateResult, error) {
@@ -1509,7 +1519,7 @@ func (e *Engine) terminateReviewer(ctx stdctx.Context, workerID domain.SessionID
 			destroyedHandle = review.ReviewerHandleID
 		}
 	}
-	if len(reviews) > 0 {
+	if !archive && len(reviews) > 0 {
 		if err := e.store.ClearReviewerHandle(ctx, workerID); err != nil {
 			return TerminateResult{}, err
 		}
@@ -1524,6 +1534,7 @@ func (e *Engine) terminateReviewer(ctx stdctx.Context, workerID domain.SessionID
 		if err := e.store.ArchiveReviewsBySession(ctx, workerID, e.clock()); err != nil {
 			return TerminateResult{}, err
 		}
+		return TerminateResult{}, nil
 	}
 	cancelled := make([]domain.ReviewRun, 0, len(running))
 	for _, run := range running {
@@ -1619,6 +1630,10 @@ func (e *Engine) upsertReview(ctx stdctx.Context, worker domain.SessionRecord, h
 		// Reuse the existing row's identity and creation time; UpsertReview
 		// refreshes harness/pr_url/reviewer_handle_id/updated_at.
 		review.ID = existing.ID
+		review.IsArchived = existing.IsArchived
+		if existing.IsArchived {
+			review.ReviewerActivityState = existing.ReviewerActivityState
+		}
 		review.CreatedAt = existing.CreatedAt
 		if review.ReviewerLaunchID == "" {
 			review.ReviewerLaunchID = existing.ReviewerLaunchID
