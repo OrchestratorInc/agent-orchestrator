@@ -2065,23 +2065,6 @@ textarea,
 	}
 }
 
-@keyframes agent-switch-transfer {
-	0% {
-		left: -2.5rem;
-		opacity: 0;
-	}
-	18% {
-		opacity: 1;
-	}
-	82% {
-		opacity: 1;
-	}
-	100% {
-		left: 100%;
-		opacity: 0;
-	}
-}
-
 @media (prefers-reduced-motion: reduce) {
 	.agent-switch-handoff-flow {
 		animation: none;
@@ -2109,12 +2092,6 @@ textarea,
 
 	.agent-switch-handoff-toast[data-phase="resolved"] .agent-switch-handoff-toast-label {
 		opacity: 1;
-	}
-
-	.agent-switch-transfer-pulse {
-		left: calc(50% - 1.25rem);
-		opacity: 0.85;
-		animation: none;
 	}
 
 	.agent-switch-progress-step.is-current .agent-switch-progress-dot {
