@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // TestLiveElectron requires an explicitly created disposable fixture. Ordinary
@@ -37,7 +38,7 @@ func TestLiveElectron(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	started, err := ProcessStartedAt(ctx, fixture.PID)
+	started, err := process.StartTime(fixture.PID)
 	if err != nil {
 		t.Fatal(err)
 	}

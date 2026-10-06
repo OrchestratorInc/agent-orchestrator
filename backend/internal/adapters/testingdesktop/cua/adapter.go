@@ -20,6 +20,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // ErrRefused means validation prevented input dispatch.
@@ -156,7 +157,12 @@ func New(cfg Config) (*Adapter, error) {
 	}
 	started := cfg.ProcessStartedAt
 	if started == nil {
-		started = ProcessStartedAt
+		started = func(ctx context.Context, pid int) (time.Time, error) {
+			if err := ctx.Err(); err != nil {
+				return time.Time{}, err
+			}
+			return process.StartTime(pid)
+		}
 	}
 	root := filepath.Join(cfg.DataDir, "testing", "cua")
 	if len(filepath.Join(root, "driver.sock")) > 103 {

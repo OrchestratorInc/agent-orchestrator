@@ -15,7 +15,7 @@ desktop, err := cua.New(cua.Config{
 
 `New` starts nothing. `BindWindow` validates the target Electron PID and kernel birth timestamp, then starts Driver through LaunchServices with its own signed app permission identity. It refuses pre-existing socket/PID paths and verifies the app's signature, bundle/team identity and exact version before launch. It accepts one usable layer-zero window or a daemon-specified exact window ID, and refuses ambiguous results. IDs, generations, PID birth times and windows cannot be supplied or changed through worker tool arguments.
 
-Slice E must use the same birth timestamp as `ProcessStartedAt`: macOS `kern.proc.pid`, converted with `time.Unix(P_starttime.Sec, int64(P_starttime.Usec)*1000).UTC()`. A timestamp taken around process launch or from second-resolution `ps` is not interchangeable.
+Both adapters use the shared `process.StartTime`: macOS `kern.proc.pid`, converted with `time.Unix(P_starttime.Sec, int64(P_starttime.Usec)*1000).UTC()`. A timestamp taken around process launch or from second-resolution `ps` is not interchangeable.
 
 The supervising daemon calls `Release(ctx, target)` at attempt cleanup and `Close(ctx)` on shutdown, including after a startup error. Release revokes the attempt's Cua session. Close stops only the daemon this instance launched, using its custom socket, PID file, saved birth timestamp and `stop --expected-pid`. Cleanup errors retain the owned PID and paths for diagnosis. Nothing kills arbitrary Cua or Electron processes.
 
