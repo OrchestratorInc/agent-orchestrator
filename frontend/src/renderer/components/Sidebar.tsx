@@ -319,9 +319,16 @@ function sidebarMinWidth(): number {
 		(el) => el.getBoundingClientRect().width > 0,
 	);
 	if (!brand) return SIDEBAR_MIN_WIDTH;
-	// Measure the whole brand element: it holds the mascot and the label, so its
-	// scrollWidth is the full width the sidebar has to clear.
-	const fit = Math.ceil(brand.getBoundingClientRect().left + brand.scrollWidth + SIDEBAR_BRAND_TRAILING_GAP);
+	// Measure the label's natural width (its scrollWidth), not its painted width:
+	// the titlebar clips the label to the sidebar, so the painted width would
+	// shrink the floor to whatever the sidebar already is. Without a separate
+	// label (the Windows header), the whole brand element is the label.
+	const label = brand.querySelector<HTMLElement>("[data-brand-label]");
+	// +1px of slack: scrollWidth is rounded, and a fractional label width would
+	// otherwise clip the last letter at exactly the floor.
+	const fit = label
+		? Math.ceil(label.getBoundingClientRect().left + label.scrollWidth + SIDEBAR_BRAND_TRAILING_GAP + 1)
+		: Math.ceil(brand.getBoundingClientRect().left + brand.scrollWidth + SIDEBAR_BRAND_TRAILING_GAP);
 	return Math.min(SIDEBAR_MAX_WIDTH, fit);
 }
 /** Initial item count shown in expanded sections; Show more/less toggles the remainder.

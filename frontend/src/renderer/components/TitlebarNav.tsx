@@ -1,6 +1,6 @@
 import { useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, PanelLeft } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
@@ -111,6 +111,31 @@ export function TitlebarNav({
   // never leave an invisible no-drag hole in the window-drag region.
   const arrowsVisible = !showBrand;
 
+  // The brand sits in this fixed row, not inside the sidebar, so it does not
+  // shrink when a small window caps the sidebar narrower than the label. Cap it
+  // to the sidebar's right edge so it truncates instead of overlapping the tabs.
+  const brandRef = useRef<HTMLSpanElement>(null);
+  const [brandMaxWidth, setBrandMaxWidth] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    if (!showBrand) return;
+    const sidebar = document.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
+    if (!sidebar) return;
+    const fit = () => {
+      const brand = brandRef.current;
+      if (!brand) return;
+      const available = sidebar.getBoundingClientRect().right - brand.getBoundingClientRect().left - 12;
+      setBrandMaxWidth(Math.max(24, Math.floor(available)));
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(sidebar);
+    window.addEventListener("resize", fit);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", fit);
+    };
+  }, [showBrand]);
+
   return (
     <div
       className={`fixed ${topClass} ${leftClass} z-titlebar flex ${heightClass} items-center gap-1`}
@@ -133,11 +158,13 @@ export function TitlebarNav({
         {showBrand ? (
           // Not a button on purpose: it stays part of the window-drag region.
           <span
-            className="col-start-1 row-start-1 ml-1.5 inline-flex select-none items-center gap-1.5 whitespace-nowrap px-0.5 text-base font-semibold leading-tight tracking-tight-lg text-foreground"
+            className="col-start-1 row-start-1 inline-flex select-none items-center gap-1.5 whitespace-nowrap text-base font-semibold leading-tight tracking-tight-lg text-foreground"
             data-sidebar-brand=""
+            ref={brandRef}
+            style={{ maxWidth: brandMaxWidth }}
           >
             <AOMascot className="h-5.5 w-5.5 shrink-0 -translate-y-px" />
-            Orchestrator.inc
+            <span className="min-w-0 truncate" data-brand-label="">Orchestrator.inc</span>
           </span>
         ) : null}
         {arrowsVisible ? (
