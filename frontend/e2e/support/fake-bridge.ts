@@ -49,7 +49,6 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 	const updateSettings =
 		opts.updateSettings ??
 		({ enabled: false, channel: "latest", nightlyAck: false, feature: null } satisfies UpdateSettings);
-
 	await page.addInitScript(
 		({ version, daemonState, daemonPort, updateStatus, updateSettings }) => {
 			const unsubscribe = () => () => undefined;
@@ -108,6 +107,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onFontSizeShortcut: () => () => undefined,
 				},
 				window: {
+					getZoomFactor: async () => 1,
+					onZoomFactor: () => () => undefined,
 					isMaximized: async () => false,
 					onMaximized: () => () => undefined,
 					isFullScreen: async () => false,
@@ -167,6 +168,30 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					goForward: async (viewId: string) => navState(viewId),
 					reload: async (viewId: string) => navState(viewId),
 					stop: async (viewId: string) => navState(viewId),
+					getFindState: async (viewId: string) => ({
+						viewId,
+						tabId: "t1",
+						query: "",
+						activeMatchOrdinal: 0,
+						matches: 0,
+						finalUpdate: true,
+					}),
+					findInPage: async ({ viewId, query }: { viewId: string; query: string }) => ({
+						viewId,
+						tabId: "t1",
+						query,
+						activeMatchOrdinal: 0,
+						matches: 0,
+						finalUpdate: true,
+					}),
+					stopFindInPage: async ({ viewId }: { viewId: string }) => ({
+						viewId,
+						tabId: "t1",
+						query: "",
+						activeMatchOrdinal: 0,
+						matches: 0,
+						finalUpdate: true,
+					}),
 					getTabs: async (viewId: string) => ({
 						viewId,
 						activeTabId: "t1",
@@ -200,6 +225,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					notifyPanelUsed: () => undefined,
 					notifyPanelBlur: () => undefined,
 					onFocusLocation: unsubscribe,
+					onFindOpen: unsubscribe,
 					onReopenClosedTab: unsubscribe,
 					devtools: async (input: { viewId: string }) => ({ viewId: input.viewId, open: false, activeTabId: "" }),
 					destroy: () => undefined,
@@ -214,6 +240,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onAnnotationCancel: unsubscribe,
 					onAnnotationState: unsubscribe,
 					onNavState: unsubscribe,
+					onFindState: unsubscribe,
 					onTabsState: unsubscribe,
 					onAgentActivity: unsubscribe,
 					onDevToolsState: unsubscribe,
@@ -298,8 +325,12 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					add: async () => "offline" as const,
 					update: async () => "offline" as const,
 					remove: async () => undefined,
-					probe: async () => "offline" as const,
-					request: async () => ({ status: 0, body: null }),
+					connect: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
+					disconnect: async () => undefined,
+					previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
+					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 				},
 				cloud: {
 					getSession: async () => null,
@@ -684,6 +715,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onFontSizeShortcut: () => () => undefined,
 				},
 				window: {
+					getZoomFactor: async () => 1,
+					onZoomFactor: () => () => undefined,
 					isMaximized: async () => false,
 					onMaximized: () => () => undefined,
 					isFullScreen: async () => false,
@@ -741,6 +774,30 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					goForward: async (viewId: string) => navState(viewId),
 					reload: async (viewId: string) => navState(viewId),
 					stop: async (viewId: string) => navState(viewId),
+					getFindState: async (viewId: string) => ({
+						viewId,
+						tabId: "t1",
+						query: "",
+						activeMatchOrdinal: 0,
+						matches: 0,
+						finalUpdate: true,
+					}),
+					findInPage: async ({ viewId, query }: { viewId: string; query: string }) => ({
+						viewId,
+						tabId: "t1",
+						query,
+						activeMatchOrdinal: 0,
+						matches: 0,
+						finalUpdate: true,
+					}),
+					stopFindInPage: async ({ viewId }: { viewId: string }) => ({
+						viewId,
+						tabId: "t1",
+						query: "",
+						activeMatchOrdinal: 0,
+						matches: 0,
+						finalUpdate: true,
+					}),
 					getTabs: async (viewId: string) => ({
 						viewId,
 						activeTabId: "t1",
@@ -774,6 +831,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					notifyPanelUsed: () => undefined,
 					notifyPanelBlur: () => undefined,
 					onFocusLocation: unsubscribe,
+					onFindOpen: unsubscribe,
 					onReopenClosedTab: unsubscribe,
 					devtools: async (input: { viewId: string }) => ({ viewId: input.viewId, open: false, activeTabId: "" }),
 					destroy: () => undefined,
@@ -788,6 +846,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onAnnotationCancel: unsubscribe,
 					onAnnotationState: unsubscribe,
 					onNavState: unsubscribe,
+					onFindState: unsubscribe,
 					onTabsState: unsubscribe,
 					onAgentActivity: unsubscribe,
 					onDevToolsState: unsubscribe,
@@ -863,8 +922,12 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					add: async () => "offline" as const,
 					update: async () => "offline" as const,
 					remove: async () => undefined,
-					probe: async () => "offline" as const,
-					request: async () => ({ status: 0, body: null }),
+					connect: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
+					disconnect: async () => undefined,
+					previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
+					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 				},
 				cloud: {
 					getSession: async () => null,

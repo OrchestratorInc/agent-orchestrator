@@ -38,7 +38,9 @@ import {
 	Bug,
 	Camera,
 	Check,
+	ChevronDown,
 	ChevronRight,
+	ChevronUp,
 	Copy,
 	Download,
 	Eye,
@@ -47,6 +49,7 @@ import {
 	Maximize2,
 	Minimize2,
 	RotateCcw,
+	Search,
 	Monitor,
 	MoreVertical,
 	MousePointer2,
@@ -59,7 +62,8 @@ import {
 	UserRound,
 	X,
 } from "lucide-react";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiErrorMessage } from "../lib/api-client";
+import { clientForSessionHost } from "../lib/host-clients";
 import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { formatBrowserAnnotationMessage, type BrowserAnnotationSubmitPayload } from "../../shared/browser-annotations";
@@ -174,9 +178,13 @@ export type BrowserAnnotationQueueModel = {
 
 export function useBrowserAnnotationQueue({
 	sessionId,
+	hostId,
+	sourcePreviewUrl,
 	navUrl,
 }: {
 	sessionId?: string;
+	hostId?: string;
+	sourcePreviewUrl?: string;
 	navUrl?: string;
 }): BrowserAnnotationQueueModel {
 	const [state, setState] = useState<{ status: AnnotationStatus; error: string; queuedCount: number }>({
@@ -188,6 +196,8 @@ export function useBrowserAnnotationQueue({
 	const stagedScreenshotPathsRef = useRef(new Map<BrowserAnnotationSubmitPayload, string[]>());
 	const annotationSendingRef = useRef(false);
 	const sessionIdRef = useRef(sessionId ?? "");
+	const hostIdRef = useRef(hostId);
+	const sourcePreviewUrlRef = useRef(sourcePreviewUrl);
 	const generationRef = useRef(0);
 	const sentTimerRef = useRef<number | null>(null);
 
@@ -213,6 +223,7 @@ export function useBrowserAnnotationQueue({
 		annotationSendingRef.current = true;
 		const sendGeneration = generationRef.current;
 		const sendSessionId = sessionIdRef.current;
+		const client = clientForSessionHost(hostIdRef.current);
 		setState({ status: "sending", error: "", queuedCount: annotationQueueRef.current.length });
 
 		void (async () => {
@@ -226,7 +237,7 @@ export function useBrowserAnnotationQueue({
 						...(payload.snapshot ? [payload.snapshot] : []),
 					];
 					if (attachments.length > 0) {
-						const staged = await apiClient.POST("/api/v1/sessions/{sessionId}/attachments", {
+						const staged = await client.POST("/api/v1/sessions/{sessionId}/attachments", {
 							params: { path: { sessionId: sendSessionId } },
 							body: { attachments },
 						});
@@ -240,8 +251,16 @@ export function useBrowserAnnotationQueue({
 						screenshotPaths = [];
 					}
 				}
-				const message = formatBrowserAnnotationMessage(payload, { screenshotPaths });
-				const { error } = await apiClient.POST("/api/v1/sessions/{sessionId}/send", {
+				let sendPayload = payload;
+				if (hostIdRef.current && sourcePreviewUrlRef.current) {
+					let pageUrl = "";
+					try {
+						pageUrl = await aoBridge.remotes.resolvePreviewUrl(hostIdRef.current, sendSessionId, payload.session.page.url);
+					} catch { /* A disconnected host cannot resolve a preview capability. */ }
+					sendPayload = { ...payload, session: { ...payload.session, page: { ...payload.session.page, url: pageUrl } } };
+				}
+				const message = formatBrowserAnnotationMessage(sendPayload, { screenshotPaths });
+				const { error } = await client.POST("/api/v1/sessions/{sessionId}/send", {
 					params: { path: { sessionId: sendSessionId } },
 					body: { message, userAuthored: true },
 				});
@@ -292,8 +311,10 @@ export function useBrowserAnnotationQueue({
 
 	useEffect(() => {
 		sessionIdRef.current = sessionId ?? "";
+		hostIdRef.current = hostId;
+		sourcePreviewUrlRef.current = sourcePreviewUrl;
 		resetQueue();
-	}, [resetQueue, sessionId]);
+	}, [hostId, resetQueue, sessionId, sourcePreviewUrl]);
 
 	useEffect(() => {
 		if (navUrl) return;
@@ -400,6 +421,10 @@ export function BrowserPanelView({
 		goForward,
 		reload,
 		stop,
+		findState = { viewId: "", tabId: "", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true },
+		findOpenRequest = 0,
+		findInPage = async () => undefined,
+		stopFindInPage = async () => undefined,
 		tabs,
 		activeTabId,
 		tabNotice,
@@ -444,6 +469,14 @@ export function BrowserPanelView({
 			? clampDeviceFrameWidth(Number(customDeviceWidth))
 			: DEVICE_PRESETS.find((preset) => preset.id === devicePreset)?.width;
 	const urlInputRef = useRef<HTMLInputElement>(null);
+	const findInputRef = useRef<HTMLInputElement>(null);
+	const findComposingRef = useRef(false);
+	const findStateRef = useRef(findState);
+	findStateRef.current = findState;
+	const [findOpen, setFindOpen] = useState(false);
+	const findOpenRef = useRef(findOpen);
+	findOpenRef.current = findOpen;
+	const [findQuery, setFindQuery] = useState("");
 	const historyMenuRef = useRef<HTMLDivElement>(null);
 	const historyRequestGenerationRef = useRef(0);
 	const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -560,6 +593,49 @@ export function BrowserPanelView({
 				urlInputRef.current?.select();
 			}),
 		[viewId],
+	);
+	useEffect(() => {
+		if (findOpenRequest <= 0) return;
+		if (findOpenRef.current) {
+			setFindOpen(false);
+			setFindQuery("");
+			void stopFindInPage(true);
+			return;
+		}
+		setFindOpen(true);
+		setFindQuery(findStateRef.current.query);
+		requestAnimationFrame(() => {
+			findInputRef.current?.focus();
+			findInputRef.current?.select();
+		});
+	}, [findOpenRequest, stopFindInPage]);
+	useEffect(() => {
+		if (!findOpen || findState.tabId !== activeTabId) return;
+		setFindQuery(findState.query);
+	}, [activeTabId, findOpen, findState.query, findState.tabId]);
+	const closeFind = useCallback(() => {
+		setFindOpen(false);
+		setFindQuery("");
+		void stopFindInPage(true);
+	}, [stopFindInPage]);
+	const runFind = useCallback(
+		(query: string, forward = true, newSession = true) => {
+			void findInPage(query, forward, newSession);
+		},
+		[findInPage],
+	);
+	const handleFindKeyDown = useCallback(
+		(event: KeyboardEvent<HTMLInputElement>) => {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				closeFind();
+				return;
+			}
+			if (event.key !== "Enter" || findComposingRef.current || !findQuery) return;
+			event.preventDefault();
+			runFind(findQuery, !event.shiftKey, false);
+		},
+		[closeFind, findQuery, runFind],
 	);
 	useEffect(
 		() =>
@@ -1465,20 +1541,18 @@ export function BrowserPanelView({
 							</>
 						) : (
 							<>
-								<DropdownMenuItem
-									className="gap-2"
-									onSelect={() => onTogglePopOut(!poppedOut)}
-								>
-									{poppedOut ? (
-										<Minimize2 aria-hidden="true" className="size-icon-base shrink-0" />
-									) : (
+								{!poppedOut ? (
+									<>
+										<DropdownMenuItem
+											className="gap-2"
+											onSelect={() => onTogglePopOut(true)}
+										>
 										<Maximize2 aria-hidden="true" className="size-icon-base shrink-0" />
-									)}
-									<span className="flex-1">
-										{poppedOut ? t("browser.returnToPanel") : t("browser.popOut")}
-									</span>
-								</DropdownMenuItem>
-								<div className="my-1 h-px bg-border" role="separator" />
+											<span className="flex-1">{t("browser.popOut")}</span>
+										</DropdownMenuItem>
+										<div className="my-1 h-px bg-border" role="separator" />
+									</>
+								) : null}
 								<DropdownMenuItem
 									className="gap-2"
 									onSelect={(event) => {
@@ -1553,6 +1627,71 @@ export function BrowserPanelView({
 					</motion.div>
 				) : null}
 			</AnimatePresence>
+			{findOpen ? (
+				<div className="browser-panel__find-row" role="search" data-testid="browser-find-row">
+					<Search aria-hidden="true" className="size-3.5 shrink-0 text-passive" />
+					<input
+						ref={findInputRef}
+						className="browser-panel__find-input"
+						value={findQuery}
+						placeholder={t("browser.find.placeholder")}
+						aria-label={t("browser.find.placeholder")}
+						onChange={(event) => {
+							const query = event.currentTarget.value;
+							setFindQuery(query);
+							if (!findComposingRef.current) runFind(query);
+						}}
+						onCompositionStart={() => {
+							findComposingRef.current = true;
+						}}
+						onCompositionEnd={(event) => {
+							findComposingRef.current = false;
+							const query = event.currentTarget.value;
+							setFindQuery(query);
+							runFind(query);
+						}}
+						onKeyDown={handleFindKeyDown}
+					/>
+					<span className="browser-panel__find-status" aria-live="polite" aria-atomic="true">
+						{findQuery
+							? findState.matches > 0
+								? t("browser.find.matchCount", {
+									active: findState.activeMatchOrdinal,
+									total: findState.matches,
+								})
+								: findState.finalUpdate
+									? t("browser.find.noResults")
+									: ""
+							: ""}
+					</span>
+					<button
+						type="button"
+						className="browser-panel__find-button"
+						disabled={!findQuery}
+						aria-label={t("browser.find.previous")}
+						onClick={() => runFind(findQuery, false, false)}
+					>
+						<ChevronUp aria-hidden="true" />
+					</button>
+					<button
+						type="button"
+						className="browser-panel__find-button"
+						disabled={!findQuery}
+						aria-label={t("browser.find.next")}
+						onClick={() => runFind(findQuery, true, false)}
+					>
+						<ChevronDown aria-hidden="true" />
+					</button>
+					<button
+						type="button"
+						className="browser-panel__find-button"
+						aria-label={t("browser.find.close")}
+						onClick={closeFind}
+					>
+						<X aria-hidden="true" />
+					</button>
+				</div>
+			) : null}
 			<div className="browser-panel__body flex min-h-0 flex-1 overflow-hidden">
 				<div
 					className="browser-panel__viewport relative min-h-0 flex-1 overflow-hidden"

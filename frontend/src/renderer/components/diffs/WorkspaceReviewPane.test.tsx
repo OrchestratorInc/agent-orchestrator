@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceFilesResponse } from "../../hooks/useSessionWorkspaceFiles";
+import { prefetchDefaultWorkspaceReviewDiffs, type WorkspaceFilesResponse } from "../../hooks/useSessionWorkspaceFiles";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
 import { TooltipProvider } from "../ui/tooltip";
 import { WorkspaceReviewPane } from "./WorkspaceReviewPane";
@@ -25,7 +25,7 @@ vi.mock("@pierre/diffs", () => ({
 		type: "change",
 		isPartial: true,
 		deletionLines: [],
-		additionLines: [],
+		additionLines: [patch],
 		hunks: [{
 			deletionStart: 1,
 			deletionCount: 3,
@@ -43,7 +43,7 @@ vi.mock("@pierre/diffs", () => ({
 vi.mock("@pierre/diffs/react", () => ({
 	CodeView: ({ className, items, options, renderAnnotation, renderCustomHeader, renderGutterUtility }: {
 		className: string;
-		items: Array<{ id: string; collapsed?: boolean; fileDiff?: { isPartial?: boolean }; annotations?: Array<{ lineNumber: number; side: string }> }>;
+		items: Array<{ id: string; collapsed?: boolean; fileDiff?: { isPartial?: boolean; additionLines?: string[] }; annotations?: Array<{ lineNumber: number; side: string }> }>;
 		options: { enableGutterUtility?: boolean; overflow?: string; unsafeCSS?: string };
 		renderAnnotation?: () => ReactNode;
 		renderCustomHeader: (item: { id: string }) => ReactNode;
@@ -53,6 +53,7 @@ vi.mock("@pierre/diffs/react", () => ({
 			{items.map((item) => (
 				<div data-collapsed={String(Boolean(item.collapsed))} data-partial={String(item.fileDiff?.isPartial)} key={item.id}>
 					{renderCustomHeader(item)}
+					<pre data-testid="review-patch">{item.fileDiff?.additionLines?.join("\n")}</pre>
 					{item.annotations?.map((entry) => <div data-annotation-line={entry.lineNumber} data-annotation-side={entry.side} key={`${entry.side}:${entry.lineNumber}`}>{renderAnnotation?.()}</div>)}
 				</div>
 			))}
@@ -126,6 +127,71 @@ describe("WorkspaceReviewPane", () => {
 				groups: [{ repository: "", patch: "diff --git a/src/App.tsx b/src/App.tsx\n", truncated: false, includedPaths: ["src/App.tsx"], deferred: [] }],
 			},
 		});
+	});
+
+	it("reuses the matching prefetch query without another diff request", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
+		await prefetchDefaultWorkspaceReviewDiffs(queryClient, "sess-1", data);
+
+		render(<QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+
+		expect(screen.getByTestId("code-view")).toBeInTheDocument();
+		expect(screen.queryByText("Loading diff...")).not.toBeInTheDocument();
+		expect(postMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not reuse parsed metadata when an equal-length patch changes", async () => {
+		const firstPatch = "diff --git a/src/App.tsx b/src/App.tsx\n-old\n+one\n";
+		const secondPatch = "diff --git a/src/App.tsx b/src/App.tsx\n-old\n+two\n";
+		postMock
+			.mockResolvedValueOnce({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: firstPatch, truncated: false, includedPaths: ["src/App.tsx"], deferred: [] }] } })
+			.mockResolvedValueOnce({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: secondPatch, truncated: false, includedPaths: ["src/App.tsx"], deferred: [] }] } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
+		const view = render(<QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+
+		expect((await screen.findByTestId("review-patch")).textContent).toBe(firstPatch);
+		view.unmount();
+		await queryClient.invalidateQueries({ queryKey: ["session-workspace-diffs", "sess-1"], refetchType: "none" });
+		render(<QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+
+		await waitFor(() => expect(screen.getByTestId("review-patch").textContent).toBe(secondPatch));
+		expect(postMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("reuses prefetched batches when opening a review with more than 24 files", async () => {
+		const files = Array.from({ length: 57 }, (_, index) => ({ path: index === 0 ? "src/App.tsx" : `file-${index}.ts`, status: "modified" as const, additions: 1, deletions: 1, size: 20, binary: false }));
+		const data = workspace(files);
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		await prefetchDefaultWorkspaceReviewDiffs(client, "sess-1", data);
+		expect(postMock.mock.calls.map((call) => call[1].body.paths.length)).toEqual([24, 24, 9]);
+		render(<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+		expect(screen.getByTestId("code-view")).toBeInTheDocument();
+		expect(screen.queryByText("Loading diff...")).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" })).toBeInTheDocument());
+		expect(postMock).toHaveBeenCalledTimes(3);
+	});
+
+	it.each([false, true])("renders a same-sized edit with an unchanged version (pane already open: %s)", async (alreadyOpen) => {
+		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false }]);
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		// Both patches have identical lengths and first/last 80 characters.
+		const patch = (change: string) => `diff --git a/src/App.tsx b/src/App.tsx\n${"x".repeat(120)}${change}${"x".repeat(120)}`;
+		const response = (change: string) => ({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: patch(change), truncated: false, includedPaths: ["src/App.tsx"], deferred: [], errors: [] }] } });
+		const mount = () => render(<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+		postMock.mockResolvedValue(response("old-content"));
+		await prefetchDefaultWorkspaceReviewDiffs(client, "sess-1", data);
+		if (alreadyOpen) {
+			mount();
+			expect(screen.getByTestId("review-patch")).toHaveTextContent("old-content");
+		}
+		postMock.mockResolvedValue(response("new-content"));
+		await client.invalidateQueries({ queryKey: ["session-workspace-diffs", "sess-1"], refetchType: "none" });
+		await prefetchDefaultWorkspaceReviewDiffs(client, "sess-1", data);
+		if (!alreadyOpen) mount();
+		await waitFor(() => expect(screen.getByTestId("review-patch")).toHaveTextContent("new-content"));
+		expect(screen.getByTestId("review-patch")).not.toHaveTextContent("old-content");
 	});
 
 	it("requests grouped patches and renders a continuous review for a selected commit", async () => {
