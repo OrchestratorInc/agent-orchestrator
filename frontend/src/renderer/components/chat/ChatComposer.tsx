@@ -57,6 +57,7 @@ import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import {
 	ComposerEditor,
 	type ComposerEditorHandle,
+	type ComposerImage,
 	type ComposerEditorSnapshot,
 	type ComposerTrigger,
 } from "./ComposerEditor";
@@ -490,6 +491,15 @@ export const ChatComposer = memo(function ChatComposer({
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
 
 	const staged = fileAttachments.attachments.length > 0 || visibleRetainedAttachments.length > 0;
+	const stripAttachments = [...visibleRetainedAttachments, ...fileAttachments.attachments].map((file) => {
+		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
+		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
+		const preview = file.dataUrl ?? (path && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
+			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
+		return { file, path, preview };
+	});
+	const composerImages: ComposerImage[] = stripAttachments.flatMap(({ file, path, preview }) =>
+		path && IMAGE_ATTACHMENT_PATH.test(path) ? [{ path, name: file.name, src: preview }] : []);
 	const controlsDisabled = Boolean(disabled || submitting);
 	const hasDraft = hasText || staged;
 	const savingQueuedEdit = Boolean(editingQueuedTurnId);
@@ -1361,6 +1371,14 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 	}
 
+	// Images also get an inline chip at the caret so the prose can say which image
+	// it means; the chip serializes to the staged path the agent reads.
+	function attachFiles(files: File[]) {
+		void fileAttachments.addFiles(files).then((added) =>
+			editor.current?.insertImages(added.flatMap((attachment) =>
+				attachment.stagedPath && IMAGE_ATTACHMENT_PATH.test(attachment.stagedPath) ? [attachment.stagedPath] : [])));
+	}
+
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
 		if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return;
 		const clipboard = event.clipboardData;
@@ -1370,7 +1388,7 @@ export const ChatComposer = memo(function ChatComposer({
 		// carrying both should still paste its text.
 		const hasText = typeof clipboard?.getData === "function" && clipboard.getData("text/plain") !== "";
 		if (!hasText) event.preventDefault();
-		void fileAttachments.addFiles(files);
+		attachFiles(files);
 	}
 
 	function onDrop(event: DragEvent<HTMLFormElement>) {
@@ -1380,7 +1398,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (files.length === 0) return;
 		event.preventDefault();
 		event.stopPropagation();
-		void fileAttachments.addFiles(files);
+		attachFiles(files);
 	}
 
 	// Only modifier transitions re-render: React bails out when the value is unchanged.
@@ -1504,11 +1522,7 @@ export const ChatComposer = memo(function ChatComposer({
 				) : null}
 				{staged ? (
 					<ul className="flex flex-wrap gap-1.5" aria-label="Attached files">
-						{[...visibleRetainedAttachments, ...fileAttachments.attachments].map((file) => {
-							const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
-							const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
-							const preview = file.dataUrl ?? (path && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
-								? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
+						{stripAttachments.map(({ file, path, preview }) => {
 							return (
 							<li
 								key={file.id}
@@ -1531,6 +1545,7 @@ export const ChatComposer = memo(function ChatComposer({
 									type="button"
 									onClick={() => {
 									if (submitInFlight.current) return;
+									if (path) editor.current?.removeImage(path);
 									if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
 										const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
 										setRetainedAttachments(next);
@@ -1551,6 +1566,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 				<ComposerEditor
 					ref={editor}
+					images={composerImages}
 					disabled={controlsDisabled || queuedEditRecovery || draftMutationPending}
 					label="Message the agent"
 					placeholder={
@@ -1615,7 +1631,7 @@ export const ChatComposer = memo(function ChatComposer({
 									disabled={controlsDisabled}
 									onChange={(event) => {
 										if (!disabled && !submitInFlight.current && !draftMutationPending && !fileAttachments.preparing) {
-											void fileAttachments.addFiles(Array.from(event.target.files ?? []));
+											attachFiles(Array.from(event.target.files ?? []));
 										}
 										// Cleared so picking the same file twice still fires a change.
 										event.target.value = "";

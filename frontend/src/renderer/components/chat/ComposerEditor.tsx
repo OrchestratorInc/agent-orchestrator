@@ -8,6 +8,7 @@ import {
 	$getNodeByKey,
 	$getRoot,
 	$getSelection,
+	$isElementNode,
 	$isRangeSelection,
 	$isTextNode,
 	$createParagraphNode,
@@ -21,22 +22,26 @@ import {
 	type LexicalEditor,
 	type LexicalNode,
 	type NodeKey,
+	type RangeSelection,
 	type SerializedLexicalNode,
 	type Spread,
 } from "lexical";
 import {
+	createContext,
 	forwardRef,
 	useCallback,
+	useContext,
 	useEffect,
 	useImperativeHandle,
 	type ClipboardEvent,
 	type JSX,
 	type KeyboardEvent,
 } from "react";
-import { Box } from "lucide-react";
+import { Box, Image as ImageIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { composerFileIcon } from "./composerFileIcon";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
+import { splitInlineImagePaths } from "./messageAttachments";
 
 export type ComposerTrigger = {
 	kind: TriggerKind;
@@ -58,10 +63,39 @@ export type ComposerEditorHandle = {
 	clear(): void;
 	setText(text: string): void;
 	insertToken(trigger: ComposerTrigger, value: string): void;
+	/** Insert an inline chip per staged image path at the caret (or the end). */
+	insertImages(paths: string[]): void;
+	/** Drop every inline chip for an image that left the attachment list. */
+	removeImage(path: string): void;
 	getSnapshot(): ComposerEditorSnapshot;
 };
 
-type TokenKind = "skill" | "file";
+/** What an inline image chip shows for a staged path; the path itself is the wire text. */
+export type ComposerImage = { path: string; name: string; src?: string };
+
+const ComposerImages = createContext<ComposerImage[]>([]);
+
+function ComposerImageChip({ path }: { path: string }) {
+	const image = useContext(ComposerImages).find((candidate) => candidate.path === path);
+	return (
+		<span
+			data-composer-token="image"
+			data-value={path}
+			contentEditable={false}
+			title={image?.name}
+			className="mx-0.5 inline-flex max-w-48 items-center gap-1 rounded-md border border-border-strong bg-interactive-hover py-0.5 pl-0.5 pr-1.5 align-middle text-[0.9em] leading-none text-foreground select-none"
+		>
+			{image?.src ? (
+				<img src={image.src} alt="" className="size-4 shrink-0 rounded-sm object-cover" />
+			) : (
+				<ImageIcon aria-hidden="true" className="size-3 shrink-0" />
+			)}
+			<span className="truncate">{image?.name ?? "Image"}</span>
+		</span>
+	);
+}
+
+type TokenKind = "skill" | "file" | "image";
 
 const completionHandledEvents = new WeakSet<Event>();
 const PROGRAMMATIC_TEXT_UPDATE_TAG = "ao:composer-programmatic-text";
@@ -146,6 +180,7 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 	}
 
 	decorate(): JSX.Element {
+		if (this.__kind === "image") return <ComposerImageChip path={this.__value} />;
 		const Icon = this.__kind === "skill" ? Box : composerFileIcon(this.__value);
 		return (
 			<span
@@ -167,6 +202,7 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 }
 
 function $createComposerTokenNode(kind: TokenKind, value: string): ComposerTokenNode {
+	if (kind === "image") return new ComposerTokenNode(kind, value, value, value);
 	const wire = kind === "skill" ? `/${value}` : /\s/.test(value) ? `"${value}"` : value;
 	const slash = value.lastIndexOf("/");
 	const display = kind === "skill" ? wire : slash >= 0 ? value.slice(slash + 1) : value;
@@ -208,10 +244,63 @@ function $replaceEditorText(text: string): void {
 	root.clear();
 	for (const line of text.split("\n")) {
 		const paragraph = $createParagraphNode();
-		if (line !== "") paragraph.append($createTextNode(line));
+		// A restored draft is plain text; its staged image paths become chips again.
+		for (const segment of splitInlineImagePaths(line)) {
+			paragraph.append(
+				segment.path === undefined
+					? $createTextNode(segment.text)
+					: $createComposerTokenNode("image", segment.path),
+			);
+		}
 		root.append(paragraph);
 	}
 	root.selectEnd();
+}
+
+/** True when the character before the caret would run into an inserted chip's text. */
+function $joinsPreviousWord(selection: RangeSelection): boolean {
+	const { anchor } = selection;
+	const node = anchor.getNode();
+	const before = $isTextNode(node)
+		? node.getTextContent().slice(0, anchor.offset) || (node.getPreviousSibling()?.getTextContent() ?? "")
+		: $isElementNode(node) && anchor.offset > 0
+			? (node.getChildAtIndex(anchor.offset - 1)?.getTextContent() ?? "")
+			: "";
+	return /\S$/.test(before);
+}
+
+function $insertImageTokens(paths: string[]): void {
+	if (paths.length === 0) return;
+	const nodes: LexicalNode[] = paths.flatMap((path) => [
+		$createComposerTokenNode("image", path),
+		$createTextNode(" "),
+	]);
+	let selection = $getSelection();
+	if (!$isRangeSelection(selection)) {
+		// A drop or the file picker can leave no selection; the end is the natural place.
+		$getRoot().selectEnd();
+		selection = $getSelection();
+	}
+	if (!$isRangeSelection(selection)) return;
+	if ($joinsPreviousWord(selection)) nodes.unshift($createTextNode(" "));
+	selection.insertNodes(nodes);
+}
+
+function $removeImageTokens(path: string): void {
+	for (const paragraph of $getRoot().getChildren()) {
+		if (!$isElementNode(paragraph)) continue;
+		for (const child of paragraph.getChildren()) {
+			if (child instanceof ComposerTokenNode && child.__kind === "image" && child.__value === path) {
+				// Take one neighbouring space with the chip so words don't double-space.
+				const next = child.getNextSibling();
+				if ($isTextNode(next) && next.getTextContent().startsWith(" ")) {
+					if (next.getTextContent() === " ") next.remove();
+					else next.setTextContent(next.getTextContent().slice(1));
+				}
+				child.remove();
+			}
+		}
+	}
 }
 
 function editorSnapshot(): ComposerEditorSnapshot {
@@ -287,6 +376,12 @@ const EditorBridge = forwardRef<
 					$insertComposerToken(trigger, value);
 				}, { discrete: true });
 			},
+			insertImages: (paths) => {
+				editor.update(() => $insertImageTokens(paths), { discrete: true });
+			},
+			removeImage: (path) => {
+				editor.update(() => $removeImageTokens(path), { discrete: true });
+			},
 			getSnapshot: () => editor.getEditorState().read(editorSnapshot),
 		}),
 		[editor],
@@ -357,6 +452,7 @@ export const ComposerEditor = forwardRef<
 		menuOpen: boolean;
 		menuId: string;
 		activeIndex: number;
+		images?: ComposerImage[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
 		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
@@ -372,6 +468,7 @@ export const ComposerEditor = forwardRef<
 		menuOpen,
 		menuId,
 		activeIndex,
+		images = [],
 		onChange,
 		onComplete,
 		onEnter,
@@ -402,6 +499,7 @@ export const ComposerEditor = forwardRef<
 
 	return (
 		<LexicalComposer initialConfig={initialConfig}>
+			<ComposerImages.Provider value={images}>
 			<div className="relative">
 				<PlainTextPlugin
 					contentEditable={
@@ -443,6 +541,7 @@ export const ComposerEditor = forwardRef<
 					onEnter={onEnter}
 				/>
 			</div>
+			</ComposerImages.Provider>
 		</LexicalComposer>
 	);
 });

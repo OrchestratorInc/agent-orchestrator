@@ -36,3 +36,24 @@ export function attachmentURL(apiBaseUrl: string, sessionId: string, path: strin
 		.join("/")}`;
 	return apiBaseUrl ? `${apiBaseUrl.replace(/\/+$/, "")}${route}` : route;
 }
+
+// A staged image path written into the prose itself: the composer's inline image
+// chip serializes to exactly this, so the agent can tell which image a sentence
+// is about.
+const INLINE_IMAGE_PATH = /\.ao\/attachments\/(?:attachment|image)-[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp|bmp)(?![A-Za-z0-9_-])/gi;
+
+export type InlineImageSegment = { text: string; path?: undefined } | { path: string; text?: undefined };
+
+/** Split prose around inline staged image paths, optionally only those `keep` accepts. */
+export function splitInlineImagePaths(text: string, keep: (path: string) => boolean = () => true): InlineImageSegment[] {
+	const segments: InlineImageSegment[] = [];
+	let last = 0;
+	for (const match of text.matchAll(INLINE_IMAGE_PATH)) {
+		if (!keep(match[0])) continue;
+		if (match.index > last) segments.push({ text: text.slice(last, match.index) });
+		segments.push({ path: match[0] });
+		last = match.index + match[0].length;
+	}
+	if (last < text.length) segments.push({ text: text.slice(last) });
+	return segments;
+}

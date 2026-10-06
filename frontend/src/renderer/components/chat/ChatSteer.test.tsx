@@ -188,7 +188,7 @@ describe("ChatComposer steering", () => {
 		await userEvent.keyboard("{Control>}{Enter}{/Control}");
 		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
 		expect(onSteer).toHaveBeenCalledWith(
-			"Attached files (read these files in the workspace):\n- .ao/attachments/shot.png",
+			".ao/attachments/shot.png\n\nAttached files (read these files in the workspace):\n- .ao/attachments/shot.png",
 			[{ mimeType: "image/png", data: expect.any(String) }],
 		);
 		expect(onSend).not.toHaveBeenCalled();

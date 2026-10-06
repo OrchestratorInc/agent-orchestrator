@@ -1444,6 +1444,26 @@ describe("attachments", () => {
 		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
 	});
 
+	it("places a pasted image inline at the caret and drops it with its attachment", async () => {
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png"]);
+		const { onSend, field } = renderComposer({ onStageAttachments: stage });
+		await typeInComposer(field, "compare");
+		fireEvent.paste(field, { clipboardData: clipboardData([png("a.png")]) });
+
+		const chip = await waitFor(() => {
+			const node = field.querySelector('[data-composer-token="image"]');
+			expect(node).not.toBeNull();
+			return node as HTMLElement;
+		});
+		expect(chip).toHaveTextContent("a.png");
+		expect(field.textContent).toBe("compare a.png ");
+
+		await userEvent.click(screen.getByLabelText("Remove a.png"));
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).toBeNull());
+		expect(field.textContent?.trimEnd()).toBe("compare");
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
 	it("ignores a paste that carries no file", async () => {
 		const { field } = renderComposer({ onStageAttachments: vi.fn() });
 		fireEvent.paste(field, { clipboardData: clipboardData([]) });
@@ -1468,7 +1488,8 @@ describe("attachments", () => {
 		]);
 		await waitFor(() =>
 			expect(onSend).toHaveBeenCalledWith(
-				"what is wrong here\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-ab12cd34ef.png",
+				// The inline chip pasted at the caret names the same path in the prose.
+				".ao/attachments/attachment-ab12cd34ef.png what is wrong here\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-ab12cd34ef.png",
 			),
 		);
 		// Consumed, so the next message does not silently resend them.
@@ -1486,7 +1507,7 @@ describe("attachments", () => {
 
 		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
 		expect(onSend.mock.calls[0]?.[0]).toBe(
-			"Attached files (read these files in the workspace):\n- .ao/attachments/attachment-1.png",
+			".ao/attachments/attachment-1.png\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-1.png",
 		);
 	});
 
@@ -1613,7 +1634,7 @@ describe("attachments", () => {
 		await userEvent.keyboard("{Enter}");
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("attachments were kept");
-		expect(field.textContent).toBe("inspect this");
+		expect(field.textContent).toBe("shot.png inspect this");
 		expect(screen.getAllByRole("listitem")).toHaveLength(1);
 
 		await userEvent.keyboard("{Enter}");
