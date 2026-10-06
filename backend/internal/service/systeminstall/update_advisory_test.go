@@ -21,10 +21,10 @@ func TestUpdateAdvisoryComparesKnownNPMInstallationAndCachesResult(t *testing.T)
 	calls := 0
 	var gotMethod, gotPackage string
 	var gotCask bool
-	s.latestVersion = func(_ context.Context, method, pkg string, cask bool) (string, error) {
+	s.managedVersion = func(_ context.Context, plan Plan, _ updateVersion) (managedVersionResult, error) {
 		calls++
-		gotMethod, gotPackage, gotCask = method, pkg, cask
-		return "1.3.0", nil
+		gotMethod, gotPackage, gotCask = plan.Method, packageWithoutLatest(plan.Package), plan.PackageCask
+		return managedVersionResult{Latest: "1.3.0", Channel: "latest"}, nil
 	}
 	for range 2 {
 		advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
@@ -53,12 +53,12 @@ func TestUpdateAdvisoryPageRequestCanCancelWhileStartupJoinsSameCheck(t *testing
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var lookups atomic.Int32
-	s.latestVersion = func(context.Context, string, string, bool) (string, error) {
+	s.managedVersion = func(context.Context, Plan, updateVersion) (managedVersionResult, error) {
 		if lookups.Add(1) == 1 {
 			close(started)
 		}
 		<-release
-		return "1.3.0", nil
+		return managedVersionResult{Latest: "1.3.0", Channel: "latest"}, nil
 	}
 	pageCtx, cancelPage := context.WithCancel(context.Background())
 	pageDone := make(chan error, 1)
@@ -118,7 +118,7 @@ func TestUpdateAdvisoryUnknownWhenOwnershipVersionOrLookupUnproven(t *testing.T)
 			}
 			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) { return VerifyResult{Output: tt.output}, nil })
 			s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
-			s.latestVersion = func(context.Context, string, string, bool) (string, error) { return tt.latest, tt.err }
+			s.managedVersion = fixedManagedVersion(tt.latest, tt.err)
 			advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
 			if err != nil {
 				t.Fatal(err)
@@ -137,9 +137,9 @@ func TestUpdateAdvisoryCurrentAndHomebrewPackage(t *testing.T) {
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
 	var gotMethod, gotPackage string
 	var gotCask bool
-	s.latestVersion = func(_ context.Context, method, pkg string, cask bool) (string, error) {
-		gotMethod, gotPackage, gotCask = method, pkg, cask
-		return "1.3.0", nil
+	s.managedVersion = func(_ context.Context, plan Plan, _ updateVersion) (managedVersionResult, error) {
+		gotMethod, gotPackage, gotCask = plan.Method, packageWithoutLatest(plan.Package), plan.PackageCask
+		return managedVersionResult{Latest: "1.3.0", Channel: "latest"}, nil
 	}
 	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
 	if err != nil {
@@ -160,9 +160,9 @@ func TestUpdateAdvisoryDetectsPackageOwnerWithoutAOInstallRecord(t *testing.T) {
 	})
 	s.ownsInstallation = func(_ context.Context, _ string, method, _ string, _ bool) (bool, error) { return method == "npm", nil }
 	var gotMethod, gotPackage string
-	s.latestVersion = func(_ context.Context, method, pkg string, _ bool) (string, error) {
-		gotMethod, gotPackage = method, pkg
-		return "1.3.0", nil
+	s.managedVersion = func(_ context.Context, plan Plan, _ updateVersion) (managedVersionResult, error) {
+		gotMethod, gotPackage = plan.Method, packageWithoutLatest(plan.Package)
+		return managedVersionResult{Latest: "1.3.0", Channel: "latest"}, nil
 	}
 	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
 	if err != nil {
@@ -185,7 +185,7 @@ func TestUpdateAdvisoryFollowsBinaryOwnerOverRecordedMethod(t *testing.T) {
 		checked = append(checked, method)
 		return method == "homebrew", nil
 	}
-	s.latestVersion = func(context.Context, string, string, bool) (string, error) { return "1.3.0", nil }
+	s.managedVersion = fixedManagedVersion("1.3.0", nil)
 	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
 	if err != nil {
 		t.Fatal(err)
@@ -206,9 +206,9 @@ func TestUpdateAdvisoryRequiresVerifiedPackageOwnership(t *testing.T) {
 	})
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return false, nil }
 	var latestCalled atomic.Bool
-	s.latestVersion = func(context.Context, string, string, bool) (string, error) {
+	s.managedVersion = func(context.Context, Plan, updateVersion) (managedVersionResult, error) {
 		latestCalled.Store(true)
-		return "1.3.0", nil
+		return managedVersionResult{Latest: "1.3.0", Channel: "latest"}, nil
 	}
 	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
 	if err != nil {
@@ -219,6 +219,12 @@ func TestUpdateAdvisoryRequiresVerifiedPackageOwnership(t *testing.T) {
 	}
 	if latestCalled.Load() {
 		t.Fatal("latest was queried without package ownership")
+	}
+}
+
+func fixedManagedVersion(latest string, err error) managedVersionChecker {
+	return func(context.Context, Plan, updateVersion) (managedVersionResult, error) {
+		return managedVersionResult{Latest: latest, Channel: "latest"}, err
 	}
 }
 
@@ -253,26 +259,19 @@ func TestManagerOwnsBinaryTracesSymlinkIntoNPMPackage(t *testing.T) {
 	}
 }
 
-func TestLatestAvailableVersionParsesHomebrewMetadata(t *testing.T) {
+func TestParseHomebrewVersionMetadata(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		cask bool
 		json string
 	}{
-		{name: "formula", json: `{"formulae":[{"versions":{"stable":"1.3.0"}}]}`},
-		{name: "cask", cask: true, json: `{"casks":[{"version":"1.3.0"}]}`},
+		{name: "formula", json: `{"formulae":[{"name":"codex","versions":{"stable":"1.3.0"}}]}`},
+		{name: "cask", cask: true, json: `{"casks":[{"token":"codex","version":"1.3.0"}]}`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			lookup := latestAvailableVersion(commandRunnerFunc(func(_ context.Context, argv []string, stdout, _ io.Writer) error {
-				if argv[0] != "brew" || argv[len(argv)-1] != "codex" {
-					t.Fatalf("argv=%v", argv)
-				}
-				_, err := io.WriteString(stdout, tt.json)
-				return err
-			}))
-			version, err := lookup(context.Background(), "homebrew", "codex", tt.cask)
-			if err != nil || version != "1.3.0" {
-				t.Fatalf("version=%q err=%v", version, err)
+			version := parseHomebrewVersion(tt.json, "codex", tt.cask, false)
+			if version != "1.3.0" {
+				t.Fatalf("version=%q", version)
 			}
 		})
 	}

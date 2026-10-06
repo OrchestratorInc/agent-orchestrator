@@ -343,7 +343,7 @@ type Service struct {
 	// persistenceTimeout bounds worker-owned transition and terminal writes.
 	persistenceTimeout  time.Duration
 	onSucceeded         func(Target)
-	latestVersion       func(context.Context, string, string, bool) (string, error)
+	managedVersion      managedVersionChecker
 	ownsInstallation    func(context.Context, string, string, string, bool) (bool, error)
 	updateAdvisories    map[Target]UpdateAdvisory
 	updateAdvisoryCalls map[Target]*updateAdvisoryCall
@@ -409,7 +409,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		persistenceTimeout:  defaultPersistenceTimeout,
 		stop:                stop,
 		backgroundContext:   backgroundContext,
-		latestVersion:       latestAvailableVersion(commands),
+		managedVersion:      newManagedVersionChecker(commands, nil),
 		officialVersion:     officialReleaseVersion(runtime.GOOS, runtime.GOARCH),
 		ownsInstallation:    managerOwnsBinary(commands),
 		updateAdvisories:    make(map[Target]UpdateAdvisory),

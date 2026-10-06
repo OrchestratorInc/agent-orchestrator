@@ -71,9 +71,9 @@ func TestUpdateAdvisoryFallsBackToOfficialReleaseForUnownedBinary(t *testing.T) 
 	})
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return false, nil }
 	var packageLookup atomic.Bool
-	s.latestVersion = func(context.Context, string, string, bool) (string, error) {
+	s.managedVersion = func(context.Context, Plan, updateVersion) (managedVersionResult, error) {
 		packageLookup.Store(true)
-		return "9.9.9", nil
+		return managedVersionResult{Latest: "9.9.9", Channel: "latest"}, nil
 	}
 	s.officialVersion = func(_ context.Context, target Target) (string, error) {
 		if target != TargetClaudeCode {
@@ -99,7 +99,7 @@ func TestUpdateAdvisoryPrefersOwningPackageOverOfficialRelease(t *testing.T) {
 		return VerifyResult{Output: "codex-cli 1.3.0"}, nil
 	})
 	s.ownsInstallation = func(_ context.Context, _ string, method, _ string, _ bool) (bool, error) { return method == "npm", nil }
-	s.latestVersion = func(context.Context, string, string, bool) (string, error) { return "1.3.0", nil }
+	s.managedVersion = fixedManagedVersion("1.3.0", nil)
 	s.officialVersion = func(context.Context, Target) (string, error) {
 		t.Fatal("official release queried for a package-owned binary")
 		return "", nil
@@ -118,6 +118,21 @@ func TestUpdateAdvisoryUnknownWithoutOfficialSource(t *testing.T) {
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) { return VerifyResult{Output: "qwen 0.1.0"}, nil })
 	s.officialVersion = func(context.Context, Target) (string, error) { return "", errNoOfficialSource }
 	advisory, err := s.UpdateAdvisory(context.Background(), TargetQwen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if advisory.Status != UpdateStatusUnknown || advisory.LatestVersion != "" {
+		t.Fatalf("advisory = %+v", advisory)
+	}
+}
+
+func TestUpdateAdvisoryDoesNotMoveOfficialPrereleaseToStableChannel(t *testing.T) {
+	s := newTestService("darwin")
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/Users/test/.local/bin/claude", Output: "claude 2.0.0-beta.1"}, nil
+	})
+	s.officialVersion = func(context.Context, Target) (string, error) { return "2.0.0", nil }
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetClaudeCode)
 	if err != nil {
 		t.Fatal(err)
 	}

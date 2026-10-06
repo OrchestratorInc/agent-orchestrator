@@ -2,15 +2,9 @@ package systeminstall
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"runtime"
 	"time"
-
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // UpdateStatus describes observed version availability, not whether AO knows
@@ -119,7 +113,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	}
 	var plans []Plan
 	recordedMethod := ""
-	if s.ownsInstallation != nil && s.latestVersion != nil {
+	if s.ownsInstallation != nil && s.managedVersion != nil {
 		if planner, err := s.newRequestPlanner(ctx); err == nil {
 			if job.Status == StatusSucceeded {
 				recordedMethod = job.Method
@@ -156,7 +150,9 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	var latest string
 	if source.Package != "" {
 		advisory.Source = source.Method
-		latest, err = s.latestVersion(ctx, source.Method, packageWithoutLatest(source.Package), source.PackageCask)
+		var result managedVersionResult
+		result, err = s.managedVersion(ctx, source, current)
+		latest = result.Latest
 	} else {
 		// No package manager provably owns the binary, so compare against the
 		// vendor's own release channel, unless the binary sits in another
@@ -166,6 +162,9 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 			return advisory, nil
 		}
 		advisory.Source = officialReleaseSource
+		if len(current.prerelease) != 0 {
+			return advisory, nil
+		}
 		latest, err = s.officialVersion(ctx, target)
 	}
 	if err != nil {
@@ -187,71 +186,4 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		advisory.Status = UpdateStatusCurrent
 	}
 	return advisory, nil
-}
-
-func latestAvailableVersion(commands ports.CommandRunner) func(context.Context, string, string, bool) (string, error) {
-	client := &http.Client{Timeout: 4 * time.Second}
-	return func(ctx context.Context, method, pkg string, cask bool) (string, error) {
-		switch method {
-		case "npm":
-			request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://registry.npmjs.org/"+url.PathEscape(pkg)+"/latest", http.NoBody)
-			if err != nil {
-				return "", err
-			}
-			response, err := client.Do(request)
-			if err != nil {
-				return "", err
-			}
-			defer func() { _ = response.Body.Close() }()
-			if response.StatusCode != http.StatusOK {
-				return "", fmt.Errorf("npm registry status %d", response.StatusCode)
-			}
-			var metadata struct {
-				Version string `json:"version"`
-			}
-			if err := json.NewDecoder(io.LimitReader(response.Body, 8192)).Decode(&metadata); err != nil {
-				return "", err
-			}
-			return metadata.Version, nil
-		case "homebrew":
-			if commands == nil {
-				return "", fmt.Errorf("homebrew command runner unavailable")
-			}
-			output := &capturedOutput{max: maxOutputBytes}
-			argv := []string{"brew", "info", "--json=v2"}
-			if cask {
-				argv = append(argv, "--cask")
-			} else {
-				argv = append(argv, "--formula")
-			}
-			argv = append(argv, pkg)
-			probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			defer cancel()
-			if err := commands.Run(probeCtx, argv, output, output); err != nil {
-				return "", err
-			}
-			var info struct {
-				Formulae []struct {
-					Versions struct {
-						Stable string `json:"stable"`
-					} `json:"versions"`
-				} `json:"formulae"`
-				Casks []struct {
-					Version string `json:"version"`
-				} `json:"casks"`
-			}
-			if err := json.Unmarshal([]byte(output.String()), &info); err != nil {
-				return "", err
-			}
-			if cask && len(info.Casks) > 0 {
-				return info.Casks[0].Version, nil
-			}
-			if !cask && len(info.Formulae) > 0 {
-				return info.Formulae[0].Versions.Stable, nil
-			}
-			return "", fmt.Errorf("homebrew returned no version for %s", pkg)
-		default:
-			return "", fmt.Errorf("unsupported version source %s", method)
-		}
-	}
 }

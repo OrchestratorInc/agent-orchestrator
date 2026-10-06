@@ -43,6 +43,9 @@ func layoutOf(path string) string {
 	// rewrites the host separator, and paths may come from either platform.
 	segments := strings.Split(strings.ToLower(strings.ReplaceAll(filepath.ToSlash(path), `\`, "/")), "/")
 	for i, segment := range segments {
+		if segment == "npm" && i >= 2 && segments[i-1] == "roaming" && segments[i-2] == "appdata" {
+			return layoutNPM
+		}
 		switch segment {
 		case "shims", ".volta", ".asdf", "mise":
 			return layoutVersionManager

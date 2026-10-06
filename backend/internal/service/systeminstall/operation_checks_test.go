@@ -22,6 +22,7 @@ func TestLayoutOfRecognisesPackageToolDirectories(t *testing.T) {
 		"/Users/me/.asdf/shims/codex":                                         layoutVersionManager,
 		"/Users/me/.volta/bin/codex":                                          layoutVersionManager,
 		`C:\Users\me\AppData\Local\Microsoft\WinGet\Packages\copilot.exe`:     layoutWinget,
+		`C:\Users\me\AppData\Roaming\npm\codex.cmd`:                           layoutNPM,
 		"/Users/me/Library/pnpm/global/5/node_modules/@openai/codex":          layoutPNPM,
 		"/Users/me/.config/yarn/global/node_modules/@openai/codex/bin/codex":  layoutYarn,
 	} {
@@ -57,7 +58,7 @@ func TestUpdateAdvisoryIgnoresOfficialChannelForUnownedPackageLayout(t *testing.
 		return VerifyResult{ResolvedPath: "/Users/me/.nvm/versions/node/v22.1.0/lib/node_modules/@openai/codex/bin/codex.js", Output: "codex-cli 0.150.0"}, nil
 	})
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return false, nil }
-	s.latestVersion = func(context.Context, string, string, bool) (string, error) { return "0.160.1", nil }
+	s.managedVersion = fixedManagedVersion("0.160.1", nil)
 	s.officialVersion = func(context.Context, Target) (string, error) {
 		t.Fatal("official channel queried for a binary inside another npm installation")
 		return "", nil
