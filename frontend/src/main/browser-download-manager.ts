@@ -62,10 +62,25 @@ function collisionSafePath(directory: string, fileName: string, unavailable: Set
 	let candidate = path.join(directory, fileName);
 	let suffix = 1;
 	while (existsSync(candidate) || unavailable.has(candidate.toLowerCase())) {
-		candidate = path.join(directory, `${parsed.name} (${suffix})${parsed.ext}`);
+		const marker = ` (${suffix})`;
+		const budget = 255 - Buffer.byteLength(marker);
+		const extension = truncateFilenamePart(parsed.ext, budget - Buffer.byteLength([...parsed.name][0] ?? ""));
+		const name = truncateFilenamePart(parsed.name, budget - Buffer.byteLength(extension));
+		candidate = path.join(directory, `${name}${marker}${extension}`);
 		suffix += 1;
 	}
 	return candidate;
+}
+
+function truncateFilenamePart(value: string, maxBytes: number): string {
+	let bytes = 0;
+	let result = "";
+	for (const character of value) {
+		bytes += Buffer.byteLength(character);
+		if (bytes > maxBytes) break;
+		result += character;
+	}
+	return result;
 }
 
 function isInsideDirectory(directory: string, candidate: string): boolean {

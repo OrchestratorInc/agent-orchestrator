@@ -66,6 +66,58 @@ class FakeDownloadItem extends EventEmitter {
 }
 
 describe("browser download manager", () => {
+	it.each([
+		["ASCII", `${"a".repeat(251)}.txt`],
+		["UTF-8", `${"😀".repeat(62)}abc.txt`],
+		["no extension", "a".repeat(255)],
+		["dotfile", `.${"a".repeat(254)}`],
+		["long extension", `a.${"é".repeat(126)}x`],
+		["ordinary", "report.txt"],
+	])("keeps %s collision names writable through three-digit suffixes", (_label, fileName) => {
+		const test = setup();
+		mkdirSync(test.downloadsDirectory, { recursive: true });
+		const originalPath = path.join(test.downloadsDirectory, fileName);
+		writeFileSync(originalPath, "original");
+		const paths = new Set<string>();
+		for (let suffix = 1; suffix <= 100; suffix += 1) {
+			const item = new FakeDownloadItem();
+			item.getFilename = () => fileName;
+			test.start(item);
+			const savePath = item.setSavePath.mock.calls[0]?.[0] as string;
+			expect(savePath).toBeDefined();
+			const basename = path.basename(savePath);
+			expect(path.dirname(savePath)).toBe(test.downloadsDirectory);
+			expect(Buffer.byteLength(basename)).toBeLessThanOrEqual(255);
+			expect(Buffer.from(basename).toString("utf8")).toBe(basename);
+			expect(basename).not.toContain("�");
+			expect(basename).toContain(` (${suffix})`);
+			if (fileName.endsWith(".txt")) expect(basename).toMatch(/\.txt$/u);
+			if (fileName === "report.txt") expect(basename).toBe(`report (${suffix}).txt`);
+			expect(paths.has(savePath)).toBe(false);
+			paths.add(savePath);
+			if (suffix % 2 === 0) writeFileSync(savePath, "downloaded", { flag: "wx" });
+		}
+		for (const savePath of paths) {
+			if (!existsSync(savePath)) writeFileSync(savePath, "downloaded", { flag: "wx" });
+			expect(readFileSync(savePath, "utf8")).toBe("downloaded");
+		}
+		expect(readFileSync(originalPath, "utf8")).toBe("original");
+		test.manager.dispose();
+	});
+
+	it("preserves a legal maximum-length name on its first download after removing directories", () => {
+		const test = setup();
+		const fileName = `${"a".repeat(251)}.txt`;
+		const item = new FakeDownloadItem();
+		item.getFilename = () => `../../${fileName}`;
+		test.start(item);
+		const savePath = path.join(test.downloadsDirectory, fileName);
+		expect(item.setSavePath).toHaveBeenCalledWith(savePath);
+		writeFileSync(savePath, "downloaded", { flag: "wx" });
+		expect(test.manager.list().downloads[0]?.fileName).toBe(fileName);
+		test.manager.dispose();
+	});
+
 	it("contains destination setup failures and reports them without exposing the path", () => {
 		const root = mkdtempSync(path.join(os.tmpdir(), "ao-browser-download-failure-"));
 		temporaryDirectories.push(root);
