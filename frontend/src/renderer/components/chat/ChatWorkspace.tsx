@@ -2133,6 +2133,8 @@ function Timeline({
 		hold: holdScrollFollow,
 		markWritten,
 		isOwnScroll,
+		isFlying,
+		reaim,
 		endFlight,
 	} = useScrollFollow(getScroller);
 	// Set when the reader sends or jumps to the latest: the next layout glides there
@@ -2771,6 +2773,13 @@ function Timeline({
 		},
 		scrollToFn: (offset, { adjustments = 0 }, instance) => {
 			if (!instance.scrollElement) return;
+			// An instant write would abort our smooth glide (and land at a stale offset).
+			// Let the glide carry the adjustment: re-aim it at the new end instead. The
+			// next scroll event re-syncs the virtualizer's offset.
+			if (isFlying()) {
+				reaim();
+				return;
+			}
 			instance.scrollElement.scrollTop = offset + adjustments;
 			// Anchoring writes are ours; they must never read as the reader leaving the end.
 			markWritten(instance.scrollElement.scrollTop);
