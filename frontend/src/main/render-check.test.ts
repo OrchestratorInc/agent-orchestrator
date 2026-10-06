@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import { checkRender } from "./render-check";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { CONTENT_HEIGHT_SCRIPT, checkRender } from "./render-check";
 
 const url = "http://127.0.0.1:3001/api/v1/sessions/p-1/renders/check-id-001";
 
-function fakes(options: { loadError?: Error } = {}) {
+function fakes(options: { loadError?: Error; measureNeverReturns?: boolean } = {}) {
 	const listeners = new Map<string, (...args: unknown[]) => void>();
 	const permissionRequest = vi.fn();
 	const contents = {
@@ -17,7 +17,7 @@ function fakes(options: { loadError?: Error } = {}) {
 			if (options.loadError) throw options.loadError;
 			listeners.get("console-message")?.({}, 3, "Uncaught ReferenceError: d3 is not defined", 1, url);
 		}),
-		executeJavaScript: vi.fn(async () => 412),
+		executeJavaScript: vi.fn(() => (options.measureNeverReturns ? new Promise<number>(() => {}) : Promise.resolve(412))),
 		debugger: {
 			attach: vi.fn(),
 			sendCommand: vi.fn(async () => ({ data: "iVBORw0KGgo=" })),
@@ -60,6 +60,7 @@ describe("checkRender", () => {
 		expect(decide).toHaveBeenCalledWith(false);
 		expect(f.window.contentView.removeChildView).toHaveBeenCalledWith(f.view);
 		expect(f.contents.close).toHaveBeenCalled();
+		expect(f.contents.executeJavaScript).toHaveBeenCalledWith(CONTENT_HEIGHT_SCRIPT);
 	});
 
 	it("removes the view when the page fails to load", async () => {
@@ -67,5 +68,81 @@ describe("checkRender", () => {
 		await expect(checkRender(f as never, { url, width: 720 })).rejects.toThrow(/ERR_CONNECTION_REFUSED/);
 		expect(f.window.contentView.removeChildView).toHaveBeenCalledWith(f.view);
 		expect(f.contents.close).toHaveBeenCalled();
+	});
+});
+
+describe("CONTENT_HEIGHT_SCRIPT", () => {
+	const measure = (documentElement: { scrollHeight: number; clientHeight: number; rectHeight: number }) =>
+		new Function("document", `return ${CONTENT_HEIGHT_SCRIPT}`)({
+			documentElement: {
+				scrollHeight: documentElement.scrollHeight,
+				clientHeight: documentElement.clientHeight,
+				getBoundingClientRect: () => ({ height: documentElement.rectHeight }),
+			},
+		});
+
+	it("reports a short page's own height, not the viewport's", () => {
+		expect(measure({ scrollHeight: 800, clientHeight: 800, rectHeight: 300 })).toBe(300);
+	});
+
+	it("reports a tall page's scroll height", () => {
+		expect(measure({ scrollHeight: 1500, clientHeight: 800, rectHeight: 1500 })).toBe(1500);
+	});
+
+	it("rounds a fractional height up", () => {
+		expect(measure({ scrollHeight: 800, clientHeight: 800, rectHeight: 300.2 })).toBe(301);
+	});
+});
+
+describe("checkRender deadline and cancellation", () => {
+	afterEach(() => vi.useRealTimers());
+
+	it("gives up on a page that stops answering after it loads, and removes the view", async () => {
+		vi.useFakeTimers();
+		const f = fakes({ measureNeverReturns: true });
+		const result = checkRender(f as never, { url, width: 720 });
+		const rejected = expect(result).rejects.toMatchObject({
+			code: "BROWSER_COMMAND_FAILED",
+			message: expect.stringMatching(/timed out after 20000 ms while measuring the page/),
+		});
+		await vi.advanceTimersByTimeAsync(20_000);
+		await rejected;
+		expect(f.window.contentView.removeChildView).toHaveBeenCalledWith(f.view);
+		expect(f.contents.close).toHaveBeenCalled();
+	});
+
+	it("stops when the daemon cancels during the settle wait", async () => {
+		vi.useFakeTimers();
+		const f = fakes();
+		const controller = new AbortController();
+		const result = checkRender(f as never, { url, width: 720 }, controller.signal);
+		const rejected = expect(result).rejects.toMatchObject({ code: "BROWSER_COMMAND_CANCELED" });
+		await vi.advanceTimersByTimeAsync(100);
+		controller.abort();
+		await rejected;
+		expect(f.contents.executeJavaScript).not.toHaveBeenCalled();
+		expect(f.window.contentView.removeChildView).toHaveBeenCalledWith(f.view);
+		expect(f.contents.close).toHaveBeenCalled();
+	});
+
+	it("refuses to start for a signal that is already aborted", async () => {
+		vi.useFakeTimers();
+		const f = fakes();
+		const result = checkRender(f as never, { url, width: 720 }, AbortSignal.abort());
+		await expect(result).rejects.toMatchObject({ code: "BROWSER_COMMAND_CANCELED" });
+		expect(f.window.contentView.removeChildView).toHaveBeenCalledWith(f.view);
+		expect(f.contents.close).toHaveBeenCalled();
+	});
+
+	it("leaves no timer or abort listener behind after a successful check", async () => {
+		vi.useFakeTimers();
+		const f = fakes();
+		const controller = new AbortController();
+		const removeListener = vi.spyOn(controller.signal, "removeEventListener");
+		const result = checkRender(f as never, { url, width: 720 }, controller.signal);
+		await vi.advanceTimersByTimeAsync(300);
+		await expect(result).resolves.toMatchObject({ contentHeight: 412 });
+		expect(vi.getTimerCount()).toBe(0);
+		expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
 	});
 });

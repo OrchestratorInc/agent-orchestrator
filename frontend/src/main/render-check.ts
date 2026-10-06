@@ -22,22 +22,21 @@ const LEVELS = ["debug", "log", "warning", "error"] as const;
 const MAX_MESSAGES = 20;
 const MAX_MESSAGE_CHARS = 500;
 const MAX_CAPTURE_HEIGHT = 2_000;
-const LOAD_TIMEOUT_MS = 15_000;
+// One deadline for the whole check (load, settle, measure, capture): a page that
+// blocks its main thread after loading must not keep the hidden view alive.
+const CHECK_DEADLINE_MS = 20_000;
 // ponytail: fixed settle for CDN scripts and first animation frames; wait on network idle if pages race it.
 const SETTLE_MS = 300;
 
+// The same measurement the reader frame reports (render_bootstrap.js report()):
+// a page shorter than the viewport reports its own height, not the viewport's.
+export const CONTENT_HEIGHT_SCRIPT = `(() => {
+	const r = document.documentElement;
+	return Math.ceil(r.scrollHeight > r.clientHeight ? r.scrollHeight : r.getBoundingClientRect().height);
+})()`;
+
 function renderCheckError(code: string, message: string): Error & { code: string } {
 	return Object.assign(new Error(message), { code });
-}
-
-function wait(ms: number, signal?: AbortSignal): Promise<void> {
-	return new Promise((resolve, reject) => {
-		const timer = setTimeout(resolve, ms);
-		signal?.addEventListener("abort", () => {
-			clearTimeout(timer);
-			reject(renderCheckError("BROWSER_COMMAND_CANCELED", "render check canceled"));
-		}, { once: true });
-	});
 }
 
 /**
@@ -81,21 +80,16 @@ export async function checkRender(
 	});
 	view.setBounds({ x: -10_000, y: -10_000, width, height: 800 });
 	deps.window.contentView.addChildView(view);
-	try {
-		await Promise.race([
-			contents.loadURL(url),
-			wait(LOAD_TIMEOUT_MS, signal).then(() => {
-				throw renderCheckError("BROWSER_COMMAND_FAILED", `render check page did not load within ${LOAD_TIMEOUT_MS} ms`);
-			}),
-		]);
-		await wait(SETTLE_MS, signal);
-		const contentHeight = Number(
-			await contents.executeJavaScript(
-				"Math.ceil(Math.max(document.documentElement.scrollHeight, document.documentElement.getBoundingClientRect().height))",
-			),
-		);
+	let stage = "loading the page";
+	const capture = async (): Promise<RenderCheckResult> => {
+		await contents.loadURL(url);
+		stage = "settling";
+		await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+		stage = "measuring the page";
+		const contentHeight = Number(await contents.executeJavaScript(CONTENT_HEIGHT_SCRIPT));
 		const height = Math.min(Math.max(contentHeight, 1), MAX_CAPTURE_HEIGHT);
 		view.setBounds({ x: -10_000, y: -10_000, width, height });
+		stage = "capturing the screenshot";
 		contents.debugger.attach("1.3");
 		try {
 			const shot = (await contents.debugger.sendCommand("Page.captureScreenshot", {
@@ -106,7 +100,27 @@ export async function checkRender(
 		} finally {
 			contents.debugger.detach();
 		}
+	};
+	let deadline: ReturnType<typeof setTimeout> | undefined;
+	let onAbort: (() => void) | undefined;
+	try {
+		// Whichever settles first wins; the loser's later rejection stays handled
+		// by the race, and the view is torn down below either way.
+		return await Promise.race([
+			capture(),
+			new Promise<never>((_resolve, reject) => {
+				deadline = setTimeout(
+					() => reject(renderCheckError("BROWSER_COMMAND_FAILED", `render check timed out after ${CHECK_DEADLINE_MS} ms while ${stage}`)),
+					CHECK_DEADLINE_MS,
+				);
+				onAbort = () => reject(renderCheckError("BROWSER_COMMAND_CANCELED", "render check canceled"));
+				if (signal?.aborted) onAbort();
+				else signal?.addEventListener("abort", onAbort, { once: true });
+			}),
+		]);
 	} finally {
+		clearTimeout(deadline);
+		if (onAbort) signal?.removeEventListener("abort", onAbort);
 		deps.window.contentView.removeChildView(view);
 		contents.close();
 	}
