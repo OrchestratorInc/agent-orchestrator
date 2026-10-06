@@ -3,6 +3,7 @@ package systeminstall
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 )
 
 const maxRegistryMetadataBytes = 1 << 20
+
+var errUpdateChannelUnconfirmed = errors.New("update channel could not be confirmed")
 
 type managedVersionResult struct {
 	Latest  string
@@ -73,7 +76,7 @@ func updateChannel(current updateVersion) (string, error) {
 	}
 	channel := prereleaseChannel(current.prerelease)
 	if channel == "" {
-		return "", fmt.Errorf("installed prerelease has no named channel")
+		return "", fmt.Errorf("%w: installed prerelease has no named channel", errUpdateChannelUnconfirmed)
 	}
 	return channel, nil
 }
@@ -184,6 +187,7 @@ func homebrewManagedVersion(ctx context.Context, commands ports.CommandRunner, p
 		if result, ok := managedResult(latest, channel); ok {
 			return result, nil
 		}
+		return managedVersionResult{}, fmt.Errorf("%w: Homebrew outdated version", errUpdateChannelUnconfirmed)
 	}
 	infoArgv := []string{"brew", "info", "--json=v2", selector, plan.Package}
 	out, infoErr := runManagedVersionCommand(ctx, commands, infoArgv)
@@ -191,6 +195,7 @@ func homebrewManagedVersion(ctx context.Context, commands ports.CommandRunner, p
 		if result, ok := managedResult(latest, channel); ok {
 			return result, nil
 		}
+		return managedVersionResult{}, fmt.Errorf("%w: Homebrew current version", errUpdateChannelUnconfirmed)
 	}
 	if infoErr != nil {
 		return managedVersionResult{}, infoErr
@@ -255,7 +260,7 @@ func wingetManagedVersion(ctx context.Context, commands ports.CommandRunner, pla
 		if result, ok := managedResult(latest, channel); ok {
 			return result, nil
 		}
-		return managedVersionResult{}, fmt.Errorf("winget returned an incompatible version for %s", plan.Package)
+		return managedVersionResult{}, fmt.Errorf("%w: Winget version for %s", errUpdateChannelUnconfirmed, plan.Package)
 	}
 	if matches > 1 {
 		return managedVersionResult{}, fmt.Errorf("winget returned ambiguous rows for %s", plan.Package)
@@ -330,12 +335,12 @@ func npmRegistryVersion(ctx context.Context, client *http.Client, pkg string, cu
 	}
 	latest := metadata.DistTags[channel]
 	if latest == "" {
-		return managedVersionResult{}, fmt.Errorf("npm package %s has no %s dist-tag", pkg, channel)
+		return managedVersionResult{}, fmt.Errorf("%w: npm package %s has no %s dist-tag", errUpdateChannelUnconfirmed, pkg, channel)
 	}
 	if result, ok := managedResult(latest, channel); ok {
 		return result, nil
 	}
-	return managedVersionResult{}, fmt.Errorf("npm %s dist-tag is incompatible with installed version", channel)
+	return managedVersionResult{}, fmt.Errorf("%w: npm %s dist-tag is incompatible with installed version", errUpdateChannelUnconfirmed, channel)
 }
 
 func pypiManagedVersion(ctx context.Context, client *http.Client, pkg string, current updateVersion, channel string) (managedVersionResult, error) {
@@ -350,7 +355,7 @@ func pypiManagedVersion(ctx context.Context, client *http.Client, pkg string, cu
 	if result, ok := managedResult(metadata.Info.Version, channel); ok {
 		return result, nil
 	}
-	return managedVersionResult{}, fmt.Errorf("PyPI version is incompatible with installed channel")
+	return managedVersionResult{}, fmt.Errorf("%w: PyPI version is incompatible with installed channel", errUpdateChannelUnconfirmed)
 }
 
 func fetchRegistryJSON(ctx context.Context, client *http.Client, endpoint string, destination any) error {

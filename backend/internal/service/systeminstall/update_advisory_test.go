@@ -31,7 +31,7 @@ func TestUpdateAdvisoryComparesKnownNPMInstallationAndCachesResult(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if advisory.Status != UpdateStatusBehindLatest || advisory.CurrentVersion != "1.2.3" || advisory.LatestVersion != "1.3.0" || advisory.Source != "npm" {
+		if advisory.Status != UpdateStatusBehindLatest || advisory.CurrentVersion != "1.2.3" || advisory.LatestVersion != "1.3.0" || advisory.Source != "npm" || advisory.Reason != "" {
 			t.Fatalf("advisory = %+v", advisory)
 		}
 	}
@@ -106,10 +106,11 @@ func TestUpdateAdvisoryUnknownWhenOwnershipVersionOrLookupUnproven(t *testing.T)
 		output string
 		latest string
 		err    error
+		reason UpdateUnknownReason
 	}{
-		{name: "unparseable installed", job: &Job{Status: StatusSucceeded, Method: "npm"}, output: "codex development", latest: "1.3.0"},
-		{name: "registry failure", job: &Job{Status: StatusSucceeded, Method: "npm"}, output: "codex 1.2.3", err: errors.New("offline")},
-		{name: "ahead of registry", job: &Job{Status: StatusSucceeded, Method: "npm"}, output: "codex 1.4.0", latest: "1.3.0"},
+		{name: "unparseable installed", job: &Job{Status: StatusSucceeded, Method: "npm"}, output: "codex development", latest: "1.3.0", reason: "version_unparseable"},
+		{name: "registry failure", job: &Job{Status: StatusSucceeded, Method: "npm"}, output: "codex 1.2.3", err: errors.New("offline"), reason: "lookup_failed"},
+		{name: "ahead of registry", job: &Job{Status: StatusSucceeded, Method: "npm"}, output: "codex 1.4.0", latest: "1.3.0", reason: "channel_unconfirmed"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newTestService("darwin", "npm")
@@ -123,7 +124,7 @@ func TestUpdateAdvisoryUnknownWhenOwnershipVersionOrLookupUnproven(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if advisory.Status != UpdateStatusUnknown {
+			if advisory.Status != UpdateStatusUnknown || advisory.Reason != tt.reason {
 				t.Fatalf("advisory = %+v", advisory)
 			}
 		})

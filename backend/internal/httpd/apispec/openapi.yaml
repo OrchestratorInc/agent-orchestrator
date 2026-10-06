@@ -9712,6 +9712,8 @@ components:
           type: string
         latestVersion:
           type: string
+        reason:
+          type: string
         source:
           type: string
         status:

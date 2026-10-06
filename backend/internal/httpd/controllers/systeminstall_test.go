@@ -110,8 +110,13 @@ func TestAgentUpdateAdvisoryRoute(t *testing.T) {
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Installer: installer}, httpd.ControlDeps{}))
 	defer srv.Close()
 	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/agents/codex/update-advisory", "")
-	if status != http.StatusOK || installer.lastTarget != systeminstall.TargetCodex || !strings.Contains(string(body), `"status":"behind_latest"`) || !strings.Contains(string(body), `"latestVersion":"1.3.0"`) {
+	if status != http.StatusOK || installer.lastTarget != systeminstall.TargetCodex || !strings.Contains(string(body), `"status":"behind_latest"`) || !strings.Contains(string(body), `"latestVersion":"1.3.0"`) || strings.Contains(string(body), `"reason"`) {
 		t.Fatalf("status=%d target=%q body=%s", status, installer.lastTarget, body)
+	}
+	installer.advisory = systeminstall.UpdateAdvisory{AgentID: "codex", Status: systeminstall.UpdateStatusUnknown, Reason: "lookup_failed"}
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/agents/codex/update-advisory", "")
+	if status != http.StatusOK || !strings.Contains(string(body), `"reason":"lookup_failed"`) || strings.Contains(string(body), "/Users/") {
+		t.Fatalf("unknown advisory status=%d body=%s", status, body)
 	}
 	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/agents/not-real/update-advisory", "")
 	if status != http.StatusBadRequest || !strings.Contains(string(body), `"code":"UNKNOWN_AGENT_INSTALL_TARGET"`) {

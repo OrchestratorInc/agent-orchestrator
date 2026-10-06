@@ -3237,6 +3237,7 @@ export interface components {
             checkedAt: string;
             currentVersion?: string;
             latestVersion?: string;
+            reason?: string;
             source?: string;
             status: string;
         };

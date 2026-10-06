@@ -121,7 +121,7 @@ func TestUpdateAdvisoryUnknownWithoutOfficialSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if advisory.Status != UpdateStatusUnknown || advisory.LatestVersion != "" {
+	if advisory.Status != UpdateStatusUnknown || advisory.LatestVersion != "" || advisory.Reason != "unsupported_source" {
 		t.Fatalf("advisory = %+v", advisory)
 	}
 }
@@ -136,7 +136,7 @@ func TestUpdateAdvisoryDoesNotMoveOfficialPrereleaseToStableChannel(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if advisory.Status != UpdateStatusUnknown || advisory.LatestVersion != "" {
+	if advisory.Status != UpdateStatusUnknown || advisory.LatestVersion != "" || advisory.Reason != "channel_unconfirmed" {
 		t.Fatalf("advisory = %+v", advisory)
 	}
 }

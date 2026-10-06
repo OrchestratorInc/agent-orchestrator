@@ -2,6 +2,7 @@ package systeminstall
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"time"
@@ -20,14 +21,26 @@ const (
 	UpdateStatusBehindLatest UpdateStatus = "behind_latest"
 )
 
+// UpdateUnknownReason gives a stable diagnostic category when Status is unknown.
+type UpdateUnknownReason string
+
+const (
+	UpdateReasonOwnershipUnconfirmed UpdateUnknownReason = "ownership_unconfirmed"
+	UpdateReasonUnsupportedSource    UpdateUnknownReason = "unsupported_source"
+	UpdateReasonVersionUnparseable   UpdateUnknownReason = "version_unparseable"
+	UpdateReasonChannelUnconfirmed   UpdateUnknownReason = "channel_unconfirmed"
+	UpdateReasonLookupFailed         UpdateUnknownReason = "lookup_failed"
+)
+
 // UpdateAdvisory is the daemon's non-mutating comparison for one harness.
 type UpdateAdvisory struct {
-	AgentID        string       `json:"agentId"`
-	Status         UpdateStatus `json:"status"`
-	CurrentVersion string       `json:"currentVersion,omitempty"`
-	LatestVersion  string       `json:"latestVersion,omitempty"`
-	Source         string       `json:"source,omitempty"`
-	CheckedAt      time.Time    `json:"checkedAt"`
+	AgentID        string              `json:"agentId"`
+	Status         UpdateStatus        `json:"status"`
+	CurrentVersion string              `json:"currentVersion,omitempty"`
+	LatestVersion  string              `json:"latestVersion,omitempty"`
+	Source         string              `json:"source,omitempty"`
+	Reason         UpdateUnknownReason `json:"reason,omitempty"`
+	CheckedAt      time.Time           `json:"checkedAt"`
 }
 
 type updateAdvisoryCall struct {
@@ -103,7 +116,7 @@ func (s *Service) runUpdateAdvisory(target Target, call *updateAdvisoryCall) {
 }
 
 func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (UpdateAdvisory, error) {
-	advisory := UpdateAdvisory{AgentID: string(target), Status: UpdateStatusUnknown, CheckedAt: time.Now().UTC()}
+	advisory := UpdateAdvisory{AgentID: string(target), Status: UpdateStatusUnknown, Reason: UpdateReasonUnsupportedSource, CheckedAt: time.Now().UTC()}
 	job, err := s.Status(ctx, target)
 	if err != nil {
 		return advisory, err
@@ -126,9 +139,11 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	}
 	verified, err := s.verifier.Verify(ctx, target)
 	if err != nil {
+		advisory.Reason = UpdateReasonOwnershipUnconfirmed
 		return advisory, nil //nolint:nilerr // An unverified binary cannot establish update availability.
 	}
-	sources := advisoryPackageSources(plans, recordedMethod, packageLayout(verified.ResolvedPath))
+	layout := packageLayout(verified.ResolvedPath)
+	sources := advisoryPackageSources(plans, recordedMethod, layout)
 	// The binary's package-manager root decides the source, so harnesses the
 	// user installed outside AO are covered as well as AO-installed ones.
 	var source Plan
@@ -140,10 +155,14 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		}
 	}
 	if source.Package == "" && s.officialVersion == nil {
+		if layout != "" {
+			advisory.Reason = UpdateReasonOwnershipUnconfirmed
+		}
 		return advisory, nil
 	}
 	current, ok := findUpdateVersion(verified.Output)
 	if !ok {
+		advisory.Reason = UpdateReasonVersionUnparseable
 		return advisory, nil
 	}
 	advisory.CurrentVersion = current.display
@@ -158,32 +177,50 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		// vendor's own release channel, unless the binary sits in another
 		// tool's layout whose channel may differ from the vendor's.
 		official, ok := officialSourceFor(target, s.goos, runtime.GOARCH)
-		if !ok || !officialChannelFits(official.kind, packageLayout(verified.ResolvedPath)) {
+		if !ok {
+			return advisory, nil
+		}
+		if !officialChannelFits(official.kind, layout) {
+			advisory.Reason = UpdateReasonOwnershipUnconfirmed
 			return advisory, nil
 		}
 		advisory.Source = officialReleaseSource
 		if len(current.prerelease) != 0 {
+			advisory.Reason = UpdateReasonChannelUnconfirmed
 			return advisory, nil
 		}
 		latest, err = s.officialVersion(ctx, target)
 	}
 	if err != nil {
+		if errors.Is(err, errUpdateChannelUnconfirmed) {
+			advisory.Reason = UpdateReasonChannelUnconfirmed
+		} else if errors.Is(err, errNoOfficialSource) {
+			advisory.Reason = UpdateReasonUnsupportedSource
+		} else {
+			advisory.Reason = UpdateReasonLookupFailed
+		}
 		return advisory, nil //nolint:nilerr // A failed latest-version lookup is not an update verdict.
 	}
 	parsedLatest, ok := parseUpdateVersion(latest)
 	if !ok {
+		advisory.Reason = UpdateReasonVersionUnparseable
 		return advisory, nil
 	}
 	comparison, comparable := compareUpdateVersions(current, parsedLatest)
 	if !comparable {
+		advisory.Reason = UpdateReasonChannelUnconfirmed
 		return advisory, nil
 	}
 	advisory.LatestVersion = parsedLatest.display
 	switch {
 	case comparison < 0:
 		advisory.Status = UpdateStatusBehindLatest
+		advisory.Reason = ""
 	case comparison == 0:
 		advisory.Status = UpdateStatusCurrent
+		advisory.Reason = ""
+	default:
+		advisory.Reason = UpdateReasonChannelUnconfirmed
 	}
 	return advisory, nil
 }

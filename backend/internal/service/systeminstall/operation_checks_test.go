@@ -67,7 +67,7 @@ func TestUpdateAdvisoryIgnoresOfficialChannelForUnownedPackageLayout(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if advisory.Status != UpdateStatusUnknown {
+	if advisory.Status != UpdateStatusUnknown || advisory.Reason != "ownership_unconfirmed" {
 		t.Fatalf("advisory = %+v", advisory)
 	}
 }
