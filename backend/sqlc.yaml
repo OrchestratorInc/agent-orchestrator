@@ -278,6 +278,16 @@ sql:
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
               type: "ReviewTriggerSource"
+          - column: "review_finding.session_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "SessionID"
+          - column: "review_finding.status"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "ReviewFindingStatus"
+          - column: "pr_comment.own_reply"
+            go_type: "bool"
           - column: "app_settings.default_session_mode"
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"

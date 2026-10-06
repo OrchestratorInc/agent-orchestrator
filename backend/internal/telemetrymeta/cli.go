@@ -161,6 +161,7 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao review":                 {},
 	"ao review cancel":          {},
 	"ao review ls":              {},
+	"ao review resolve":         {},
 	"ao review submit":          {},
 	"ao review trigger":         {},
 	"ao send":                   {},

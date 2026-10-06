@@ -77,6 +77,7 @@ type Manager interface {
 	ApplyReviewActivitySignal(ctx context.Context, reviewSessionID string, signal ActivitySignal) error
 	Submit(ctx context.Context, workerID domain.SessionID, runID string, verdict domain.ReviewVerdict, body, githubReviewID string) (domain.ReviewRun, error)
 	SubmitMany(ctx context.Context, workerID domain.SessionID, reviews []SubmittedReview) ([]domain.ReviewRun, error)
+	ResolveFindings(ctx context.Context, workerID domain.SessionID, req ResolveFindingsRequest) ([]domain.ReviewFinding, error)
 	List(ctx context.Context, workerID domain.SessionID) (reviewcore.SessionReviews, error)
 }
 
@@ -86,6 +87,8 @@ type Service struct {
 	store              Store
 	requester          ports.SCMReviewRequester
 	resolver           ports.SCMReviewResolver
+	poster             ports.SCMReviewSummaryPoster
+	deliverer          Deliverer
 	clock              func() time.Time
 	telemetry          ports.EventSink
 	codexOperationGate ports.CodexOperationGate
@@ -117,7 +120,14 @@ type Store interface {
 	GetReviewRun(ctx context.Context, id string) (domain.ReviewRun, bool, error)
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 	SetSessionAutoInjectReview(ctx context.Context, id domain.SessionID, autoInject bool, updatedAt time.Time) (bool, error)
-	UpdateReviewRunResult(ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error)
+	// CompleteReviewRun records a running pass's result and files its findings
+	// in one transaction; false means the run was no longer running.
+	CompleteReviewRun(ctx context.Context, run domain.ReviewRun, findings []domain.ReviewFindingInput, now time.Time) (bool, error)
+	SetReviewRunProviderPost(ctx context.Context, id, githubReviewID, postError string) error
+	ListReviewFindingsByRun(ctx context.Context, runID string) ([]domain.ReviewFinding, error)
+	ListReviewFindingsBySession(ctx context.Context, id domain.SessionID) ([]domain.ReviewFinding, error)
+	GetReviewFinding(ctx context.Context, id string) (domain.ReviewFinding, bool, error)
+	ResolveReviewFinding(ctx context.Context, id, note string, resolvedBy domain.SessionID, at time.Time) (bool, error)
 	ListPRsBySession(ctx context.Context, id domain.SessionID) ([]domain.PullRequest, error)
 	ListPRReviews(ctx context.Context, prURL string) ([]domain.PullRequestReview, error)
 	ListPRComments(ctx context.Context, prURL string) ([]domain.PullRequestComment, error)
@@ -721,10 +731,14 @@ func (s *Service) ApplyReviewActivitySignal(ctx context.Context, reviewSessionID
 
 // SubmittedReview is one review result supplied by the reviewer CLI.
 type SubmittedReview struct {
-	RunID          string
-	Verdict        domain.ReviewVerdict
-	Body           string
+	RunID   string
+	Verdict domain.ReviewVerdict
+	Body    string
+	// GithubReviewID is set only by reviewer panes started before findings
+	// moved into AO, which posted their own provider review.
 	GithubReviewID string
+	// Findings are the changes the reviewer requires, each tracked in AO.
+	Findings []domain.ReviewFindingInput
 }
 
 // Submit records a reviewer's result for a specific worker review pass.
@@ -779,10 +793,10 @@ func (s *Service) SubmitMany(ctx context.Context, workerID domain.SessionID, rev
 		}
 		return nil, fmt.Errorf("%w: no submittable review runs in submission", ErrInvalid)
 	}
-	// The result reaches the worker through the PR itself: the reviewer posts
-	// its review on the provider, and the SCM observer forwards unresolved
-	// review comments to the worker like any other reviewer's. AO does not send
-	// a second, separate verdict message.
+	// AO's review reaches the worker through AO, once per pass, with its
+	// findings to resolve in AO. The PR only gets a summary comment, so the
+	// review-comment watcher never forwards AO's review a second time (#6300).
+	s.deliver(ctx, workerID, runs)
 	return runs, nil
 }
 
@@ -799,6 +813,10 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 	}
 	if verdict == domain.VerdictChangesRequested && body == "" {
 		return domain.ReviewRun{}, fmt.Errorf("%w: a changes_requested review requires a body", ErrInvalid)
+	}
+	findings, err := normalizeFindings(review)
+	if err != nil {
+		return domain.ReviewRun{}, err
 	}
 	run, ok, err := s.store.GetReviewRun(ctx, runID)
 	if err != nil {
@@ -820,18 +838,20 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		if !found {
 			return domain.ReviewRun{}, fmt.Errorf("%w: worker session %q", ErrNotFound, workerID)
 		}
-		updated, err := s.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunComplete, verdict, body, githubReviewID, session.AutoInjectReview)
+		completed := run
+		completed.Status = domain.ReviewRunComplete
+		completed.Verdict = verdict
+		completed.Body = body
+		completed.GithubReviewID = githubReviewID
+		completed.AutoInjectReview = session.AutoInjectReview
+		updated, err := s.store.CompleteReviewRun(ctx, completed, findings, s.clock())
 		if err != nil {
 			return domain.ReviewRun{}, err
 		}
 		if !updated {
 			return domain.ReviewRun{}, fmt.Errorf("%w: review run %q is not running", errRunSuperseded, runID)
 		}
-		run.Status = domain.ReviewRunComplete
-		run.Verdict = verdict
-		run.Body = body
-		run.GithubReviewID = githubReviewID
-		run.AutoInjectReview = session.AutoInjectReview
+		run = completed
 		// Only on the real running -> complete transition. Re-submitting an
 		// already-complete run returns early below, so telemetry stays idempotent
 		// the same way the store does.
@@ -851,7 +871,12 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 			// Whether the session policy will let this result reach the worker at
 			// all, recorded at the moment it is snapshotted onto the run.
 			"auto_inject": session.AutoInjectReview,
+			"findings":    len(findings),
 		})
+		// A pre-findings reviewer pane already posted its own provider review.
+		if githubReviewID == "" {
+			run = s.postSummary(ctx, run, findings)
+		}
 	case domain.ReviewRunComplete:
 		if run.Verdict != verdict {
 			return domain.ReviewRun{}, fmt.Errorf("%w: review run %q already recorded verdict %q", ErrInvalid, runID, run.Verdict)
@@ -861,6 +886,15 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		}
 		if githubReviewID != "" && githubReviewID != run.GithubReviewID {
 			return domain.ReviewRun{}, fmt.Errorf("%w: review run %q already recorded GitHub review id %q", ErrInvalid, runID, run.GithubReviewID)
+		}
+		if len(findings) > 0 {
+			recorded, err := s.store.ListReviewFindingsByRun(ctx, run.ID)
+			if err != nil {
+				return domain.ReviewRun{}, err
+			}
+			if !sameFindings(recorded, findings) {
+				return domain.ReviewRun{}, fmt.Errorf("%w: review run %q already recorded different findings", ErrInvalid, runID)
+			}
 		}
 	case domain.ReviewRunDelivered:
 		return run, nil
@@ -905,7 +939,16 @@ func (s *Service) emitReviewNotification(ctx context.Context, run domain.ReviewR
 
 // List returns a worker's review state.
 func (s *Service) List(ctx context.Context, workerID domain.SessionID) (reviewcore.SessionReviews, error) {
-	return s.engine.List(ctx, workerID)
+	res, err := s.engine.List(ctx, workerID)
+	if err != nil {
+		return res, err
+	}
+	findings, err := s.store.ListReviewFindingsBySession(ctx, workerID)
+	if err != nil {
+		return res, err
+	}
+	res.Findings = findings
+	return res, nil
 }
 
 // ArchiveReviewer retires the reviewer surface while preserving its history.

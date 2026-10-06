@@ -54,10 +54,12 @@ type lifecycleStack struct {
 	activityDone   <-chan struct{}
 	artifactsDone  <-chan struct{}
 	autoReviewDone <-chan struct{}
-	scmDone        <-chan struct{}
-	trackerDone    <-chan struct{}
-	herdr          *herdr.Server
-	automationDone <-chan struct{}
+	// reviewDeliveryDone closes when the AO-review delivery sweep has stopped.
+	reviewDeliveryDone <-chan struct{}
+	scmDone            <-chan struct{}
+	trackerDone        <-chan struct{}
+	herdr              *herdr.Server
+	automationDone     <-chan struct{}
 }
 
 // startLifecycle constructs the Lifecycle Manager over the store and starts the
@@ -172,6 +174,9 @@ func (l *lifecycleStack) Stop() {
 	}
 	if l.autoReviewDone != nil {
 		<-l.autoReviewDone
+	}
+	if l.reviewDeliveryDone != nil {
+		<-l.reviewDeliveryDone
 	}
 	if l.scmDone != nil {
 		<-l.scmDone
@@ -361,9 +366,13 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		reviewOpts = append(reviewOpts,
 			reviewsvc.WithReviewRequester(scmProvider),
 			reviewsvc.WithReviewResolver(scmProvider),
+			reviewsvc.WithReviewSummaryPoster(scmProvider),
 		)
 	}
-	reviewOpts = append(reviewOpts, reviewsvc.WithPRRefresher(reviewPRRefresher{sessions: sessionSvc}))
+	reviewOpts = append(reviewOpts,
+		reviewsvc.WithPRRefresher(reviewPRRefresher{sessions: sessionSvc}),
+		reviewsvc.WithReviewDeliverer(lcm),
+	)
 	reviewSvc := reviewsvc.New(reviewEngine, store, reviewOpts...)
 	mgr.SetReviewerTerminator(reviewSvc)
 	return sessionSvc, reviewSvc, mgr, nil

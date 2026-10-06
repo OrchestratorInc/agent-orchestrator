@@ -335,6 +335,10 @@ type persistenceOptions struct {
 	preserveLocalCIHash         bool
 	preserveLocalReviewHash     bool
 	preserveLocalReviewDecision bool
+	// ownLogin is the provider identity AO authenticates as for this PR's
+	// repository, when known. A later comment it wrote on a review thread is
+	// the worker's own reply, never review feedback for it.
+	ownLogin string
 }
 
 // Poll runs one synchronous SCM observation cycle.
@@ -403,7 +407,7 @@ func (o *Observer) Poll(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	listedPRs, listedRepos := o.discoverNewPRs(ctx, sessionRepos, subjects, repoGuards, now, markRepoListFailed)
+	listedPRs, listedRepos, identities := o.discoverNewPRs(ctx, sessionRepos, subjects, repoGuards, now, markRepoListFailed)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -558,6 +562,7 @@ func (o *Observer) Poll(ctx context.Context) error {
 			preserveLocalCIHash:         localOnlyObservations[key] || obs.CI.Partial,
 			preserveLocalReviewHash:     reviewStale[key],
 			preserveLocalReviewDecision: reviewStale[key],
+			ownLogin:                    identities[identityKey(subj.repo.Provider, subj.repo.Host)].Login,
 		}
 		prepared := o.prepareForPersistence(obs, local, opts, now)
 		if !prepared.Changed.Metadata && !prepared.Changed.CI && !prepared.Changed.Review {
@@ -959,8 +964,8 @@ func pendingRepoRefreshes(guards map[string]repoGuardState) map[string]bool {
 // PRs (its root plus stacked children). Repos whose PR-list guard reports
 // NotModified against a known ETag are skipped, since nothing new can have
 // appeared since the last poll.
-func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRepo, subjects map[string]*subject, guards map[string]repoGuardState, now time.Time, markRepoFailed func(ports.SCMRepo)) (listedPRs, listedRepos map[string]bool) {
-	identities := o.resolveIdentities(ctx, sessionRepos)
+func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRepo, subjects map[string]*subject, guards map[string]repoGuardState, now time.Time, markRepoFailed func(ports.SCMRepo)) (listedPRs, listedRepos map[string]bool, identities map[string]ports.SCMIdentity) {
+	identities = o.resolveIdentities(ctx, sessionRepos)
 	byRepo := map[string][]sessionRepo{}
 	repos := map[string]ports.SCMRepo{}
 	for _, sr := range sessionRepos {
@@ -1125,7 +1130,7 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 			}
 		}
 	}
-	return listedPRs, listedRepos
+	return listedPRs, listedRepos, identities
 }
 
 // resolveIdentities resolves each provider/host once per poll. Unknown or bot
@@ -1686,7 +1691,7 @@ func (o *Observer) prepareForPersistence(obs ports.SCMObservation, local domain.
 	}
 	reviewHash := local.ReviewHash
 	if !opts.preserveLocalReviewHash && (opts.reviewFetched || local.ReviewHash == "" || obs.Review.Decision != string(local.Review)) {
-		reviewHash = reviewSemanticHash(obs.Review)
+		reviewHash = reviewSemanticHash(obs.Review, opts.ownLogin)
 	}
 	obs.Changed = ports.SCMChanged{
 		Metadata: metadataHash != local.MetadataHash,
@@ -1715,7 +1720,7 @@ func domainFromObservation(sessionID domain.SessionID, sessionRecord domain.Sess
 	if opts.preserveLocalCIHash {
 		ciHash = local.CIHash
 	}
-	reviewHash := reviewSemanticHash(obs.Review)
+	reviewHash := reviewSemanticHash(obs.Review, opts.ownLogin)
 	reviewDecision := domain.ReviewDecision(firstNonEmpty(obs.Review.Decision, string(domain.ReviewNone)))
 	if opts.preserveLocalReviewDecision {
 		reviewDecision = local.Review
@@ -1817,8 +1822,13 @@ func domainFromObservation(sessionID domain.SessionID, sessionRecord domain.Sess
 	comments := make([]domain.PullRequestComment, 0, commentCount)
 	for _, th := range obs.Review.Threads {
 		threads = append(threads, domain.PullRequestReviewThread{ThreadID: th.ID, Path: th.Path, Line: th.Line, Resolved: th.Resolved, IsBot: th.IsBot, SemanticHash: threadSemanticHash(th), UpdatedAt: now})
-		for _, c := range th.Comments {
-			comments = append(comments, domain.PullRequestComment{ThreadID: th.ID, ReviewID: c.ReviewID, ID: c.ID, Author: c.Author, File: th.Path, Line: th.Line, Body: c.Body, URL: c.URL, Resolved: th.Resolved, IsBot: c.IsBot, CreatedAt: now, AutoInjectReview: sessionRecord.AutoInjectReview})
+		for i, c := range th.Comments {
+			// Thread roots always count, whoever wrote them: a person who shares
+			// AO's account can still open review feedback. Only a later comment
+			// from AO's own identity is marked, because that is the worker
+			// replying (#6300, #5574).
+			ownReply := i > 0 && opts.ownLogin != "" && strings.EqualFold(strings.TrimSpace(c.Author), opts.ownLogin)
+			comments = append(comments, domain.PullRequestComment{ThreadID: th.ID, ReviewID: c.ReviewID, ID: c.ID, Author: c.Author, File: th.Path, Line: th.Line, Body: c.Body, URL: c.URL, Resolved: th.Resolved, IsBot: c.IsBot, CreatedAt: now, AutoInjectReview: sessionRecord.AutoInjectReview, OwnReply: ownReply})
 		}
 	}
 	return pr, checks, reviews, threads, comments
@@ -2006,14 +2016,20 @@ func ciSemanticHash(ci ports.SCMCIObservation) string {
 	return h
 }
 
-func reviewSemanticHash(review ports.SCMReviewObservation) string {
+// reviewSemanticHash covers everything the persisted review rows derive from.
+// ownLogin is part of it because the own-reply marks are derived from it: when
+// AO first learns its identity (including on upgrade to own-reply marking) or
+// the identity changes, the unchanged threads are written once more with the
+// right marks. It is omitted when unknown, so those hashes do not churn.
+func reviewSemanticHash(review ports.SCMReviewObservation, ownLogin string) string {
 	type reviewHashPayload struct {
 		Decision string
 		Reviews  []ports.SCMReviewSummaryObservation
 		Threads  []ports.SCMReviewThreadObservation
-		Partial  bool `json:",omitempty"`
+		Partial  bool   `json:",omitempty"`
+		OwnLogin string `json:",omitempty"`
 	}
-	return stableHash(reviewHashPayload{Decision: review.Decision, Reviews: review.Reviews, Threads: review.Threads, Partial: review.Partial})
+	return stableHash(reviewHashPayload{Decision: review.Decision, Reviews: review.Reviews, Threads: review.Threads, Partial: review.Partial, OwnLogin: strings.ToLower(ownLogin)})
 }
 
 func threadSemanticHash(th ports.SCMReviewThreadObservation) string {

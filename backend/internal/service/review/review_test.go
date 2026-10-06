@@ -30,6 +30,81 @@ type fakeStore struct {
 	updateCalls        int
 	activityUpdates    int
 	resolvedCommentIDs []string
+
+	findings     []domain.ReviewFinding
+	providerPost map[string][2]string
+	sessions     map[domain.SessionID]domain.SessionRecord
+}
+
+func (f *fakeStore) CompleteReviewRun(ctx context.Context, run domain.ReviewRun, findings []domain.ReviewFindingInput, now time.Time) (bool, error) {
+	ok, err := f.UpdateReviewRunResult(ctx, run.ID, run.Status, run.Verdict, run.Body, run.GithubReviewID, run.AutoInjectReview)
+	if err != nil || !ok {
+		return ok, err
+	}
+	for i := range f.findings {
+		if f.findings[i].Status == domain.ReviewFindingOpen && f.findings[i].RunID != run.ID && f.findings[i].PRURL == run.PRURL && f.findings[i].SessionID == run.SessionID {
+			f.findings[i].Status = domain.ReviewFindingSuperseded
+			f.findings[i].SupersededByRunID = run.ID
+		}
+	}
+	for i, in := range findings {
+		f.findings = append(f.findings, domain.ReviewFinding{
+			ID: fmt.Sprintf("%s-f%d", run.ID, i+1), RunID: run.ID, SessionID: run.SessionID, PRURL: run.PRURL,
+			TargetSHA: run.TargetSHA, Ordinal: i + 1, Path: in.Path, Line: in.Line, Body: in.Body,
+			Status: domain.ReviewFindingOpen, CreatedAt: now,
+		})
+	}
+	return true, nil
+}
+
+func (f *fakeStore) SetReviewRunProviderPost(_ context.Context, id, githubReviewID, postError string) error {
+	if f.providerPost == nil {
+		f.providerPost = map[string][2]string{}
+	}
+	f.providerPost[id] = [2]string{githubReviewID, postError}
+	return nil
+}
+
+func (f *fakeStore) ListReviewFindingsByRun(_ context.Context, runID string) ([]domain.ReviewFinding, error) {
+	var out []domain.ReviewFinding
+	for _, finding := range f.findings {
+		if finding.RunID == runID {
+			out = append(out, finding)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListReviewFindingsBySession(_ context.Context, id domain.SessionID) ([]domain.ReviewFinding, error) {
+	var out []domain.ReviewFinding
+	for _, finding := range f.findings {
+		if finding.SessionID == id {
+			out = append(out, finding)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) GetReviewFinding(_ context.Context, id string) (domain.ReviewFinding, bool, error) {
+	for _, finding := range f.findings {
+		if finding.ID == id {
+			return finding, true, nil
+		}
+	}
+	return domain.ReviewFinding{}, false, nil
+}
+
+func (f *fakeStore) ResolveReviewFinding(_ context.Context, id, note string, resolvedBy domain.SessionID, at time.Time) (bool, error) {
+	for i := range f.findings {
+		if f.findings[i].ID == id && f.findings[i].Status == domain.ReviewFindingOpen {
+			f.findings[i].Status = domain.ReviewFindingResolved
+			f.findings[i].ResolutionNote = note
+			f.findings[i].ResolvedBySessionID = resolvedBy
+			f.findings[i].ResolvedAt = &at
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 type fakeNotificationSink struct {
@@ -84,6 +159,9 @@ func (f *fakeStore) GetReviewRun(_ context.Context, id string) (domain.ReviewRun
 }
 
 func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
+	if rec, ok := f.sessions[id]; ok {
+		return rec, true, nil
+	}
 	enabled := true
 	if f.sessionAutoInjectReview != nil {
 		enabled = *f.sessionAutoInjectReview
@@ -456,7 +534,7 @@ func TestSubmitEmitsChangesRequestedNotification(t *testing.T) {
 	sink := &fakeNotificationSink{}
 	svc := New(nil, st, WithNotificationSink(sink))
 
-	if _, err := svc.Submit(context.Background(), "mer-1", "run-2", domain.VerdictChangesRequested, "fix it", ""); err != nil {
+	if _, err := svc.SubmitMany(context.Background(), "mer-1", []SubmittedReview{{RunID: "run-2", Verdict: domain.VerdictChangesRequested, Body: "fix it", Findings: []domain.ReviewFindingInput{{Body: "fix it"}}}}); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	if len(sink.intents) != 1 || sink.intents[0].Type != domain.NotificationReviewChangesRequested {
@@ -479,8 +557,8 @@ func TestSubmitManySkipsSupersededRunAndRecordsSiblings(t *testing.T) {
 	svc := New(nil, st, WithClock(func() time.Time { return now }))
 
 	runs, err := svc.SubmitMany(context.Background(), "mer-1", []SubmittedReview{
-		{RunID: "run-1", Verdict: domain.VerdictChangesRequested, Body: "fix pr1"},
-		{RunID: "run-2", Verdict: domain.VerdictChangesRequested, Body: "fix pr2"},
+		{RunID: "run-1", Verdict: domain.VerdictChangesRequested, Body: "fix pr1", Findings: []domain.ReviewFindingInput{{Body: "fix pr1"}}},
+		{RunID: "run-2", Verdict: domain.VerdictChangesRequested, Body: "fix pr2", Findings: []domain.ReviewFindingInput{{Body: "fix pr2"}}},
 	})
 	if err != nil {
 		t.Fatalf("SubmitMany must record valid siblings when one run was superseded: %v", err)
@@ -621,8 +699,8 @@ func TestSubmitNeverReportsReviewProseOrRepoIdentifiers(t *testing.T) {
 	svc := New(nil, store, WithTelemetry(sink))
 
 	body := "leaks credentials in src/config/prod.ts"
-	if _, err := svc.Submit(context.Background(), "worker-1", "run-1",
-		domain.VerdictChangesRequested, body, ""); err != nil {
+	if _, err := svc.SubmitMany(context.Background(), "worker-1", []SubmittedReview{{RunID: "run-1",
+		Verdict: domain.VerdictChangesRequested, Body: body, Findings: []domain.ReviewFindingInput{{Path: "src/config/prod.ts", Line: 3, Body: body}}}}); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 
@@ -821,8 +899,8 @@ func TestSubmitReportsPassShapeNotItsContents(t *testing.T) {
 	svc := New(nil, store, WithTelemetry(sink))
 
 	body := "rename this symbol"
-	if _, err := svc.Submit(context.Background(), "worker-1", "run-1",
-		domain.VerdictChangesRequested, body, ""); err != nil {
+	if _, err := svc.SubmitMany(context.Background(), "worker-1", []SubmittedReview{{RunID: "run-1",
+		Verdict: domain.VerdictChangesRequested, Body: body, Findings: []domain.ReviewFindingInput{{Path: "src/config/prod.ts", Line: 3, Body: body}}}}); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	p := sink.named("ao.review.submitted")[0].Payload

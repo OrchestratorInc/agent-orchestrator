@@ -48,6 +48,16 @@ type fakeReviewService struct {
 	resolvePRURL      string
 	resolveCommentURL string
 	resolveErr        error
+	findingsSession   domain.SessionID
+	findingsRequest   reviewsvc.ResolveFindingsRequest
+	findingsResult    []domain.ReviewFinding
+	findingsErr       error
+}
+
+func (f *fakeReviewService) ResolveFindings(_ context.Context, id domain.SessionID, req reviewsvc.ResolveFindingsRequest) ([]domain.ReviewFinding, error) {
+	f.findingsSession = id
+	f.findingsRequest = req
+	return f.findingsResult, f.findingsErr
 }
 
 func (*fakeReviewService) RecoverChatReviewers(context.Context) error { return nil }
@@ -545,5 +555,32 @@ func TestReviewsListIncludesEveryActiveReviewer(t *testing.T) {
 	body, _, _ = doRequest(t, empty, "GET", "/api/v1/sessions/mer-1/reviews", "")
 	if !strings.Contains(string(body), `"activeReviewers":[]`) {
 		t.Fatalf("body = %s, want an empty activeReviewers array, never null", body)
+	}
+}
+
+func TestReviewsResolveFindingsForwardsActorAndMapsErrors(t *testing.T) {
+	svc := &fakeReviewService{findingsResult: []domain.ReviewFinding{{ID: "f-1", Status: domain.ReviewFindingResolved, ResolutionNote: "fixed"}}}
+	srv := newReviewTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/findings/resolve", `{"findingIds":["f-1"],"note":"fixed","actorSessionId":"mer-orc"}`)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d body=%s", status, body)
+	}
+	if svc.findingsSession != "mer-1" || svc.findingsRequest.ActorSessionID != "mer-orc" || svc.findingsRequest.Note != "fixed" || len(svc.findingsRequest.FindingIDs) != 1 {
+		t.Fatalf("forwarded session=%q request=%+v", svc.findingsSession, svc.findingsRequest)
+	}
+	if !strings.Contains(string(body), `"status":"resolved"`) {
+		t.Fatalf("body = %s", body)
+	}
+
+	for err, want := range map[error]int{
+		reviewsvc.ErrFindingForbidden:  http.StatusForbidden,
+		reviewsvc.ErrFindingSuperseded: http.StatusConflict,
+		reviewsvc.ErrNotFound:          http.StatusNotFound,
+	} {
+		svc.findingsErr = err
+		if _, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/findings/resolve", `{"findingIds":["f-1"]}`); status != want {
+			t.Fatalf("%v: status = %d, want %d", err, status, want)
+		}
 	}
 }

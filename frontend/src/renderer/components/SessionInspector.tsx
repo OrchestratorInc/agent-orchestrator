@@ -107,6 +107,20 @@ import {
 type ProjectConfig = components["schemas"]["ProjectConfig"];
 type OpenReviewerTerminal = (target: { handleId: string; harness: string }) => void;
 type ReviewerSurface = components["schemas"]["DomainReviewerSurface"];
+type ReviewFinding = components["schemas"]["ReviewFinding"];
+
+/** Who closed an AO finding and how, from AO session identity only. */
+function findingResolution(finding: ReviewFinding, workerId: string, t: TFunction): string | undefined {
+	if (finding.status === "superseded") return t("inspector.review.findingSuperseded");
+	if (finding.status !== "resolved") return undefined;
+	const by = finding.resolvedBySessionId;
+	const resolution = !by
+		? t("inspector.review.findingResolvedManually")
+		: by === workerId
+			? t("inspector.review.findingResolvedByWorker")
+			: t("inspector.review.findingResolvedBySession", { session: by });
+	return finding.resolutionNote ? t("inspector.review.findingResolutionWithNote", { resolution, note: finding.resolutionNote }) : resolution;
+}
 
 export type { InspectorView } from "@aoagents/product-ui";
 
@@ -1986,6 +2000,7 @@ function ReviewsSection({
 				isLoading={scmSummary.isLoading}
 				onOpenReviewFile={onOpenReviewFile}
 				onWorkerMessageSent={onWorkerMessageSent}
+				findings={reviewsQuery.data?.findings ?? []}
 				reviewStates={reviewStates}
 				runs={reviewsQuery.data?.runs ?? []}
 				session={session}
@@ -2002,6 +2017,7 @@ function ReviewsSection({
  * "AO codex" against the agent that ran, "On GitHub" for everyone else.
  */
 function MergedReviewsSection({
+	findings,
 	githubPRs,
 	hostId,
 	isLoading,
@@ -2011,6 +2027,7 @@ function MergedReviewsSection({
 	runs,
 	session,
 }: {
+	findings: ReviewFinding[];
 	githubPRs: SessionPRSummary[];
 	hostId?: string;
 	isLoading: boolean;
@@ -2046,6 +2063,16 @@ function MergedReviewsSection({
 		if (error) throw new Error(apiErrorMessage(error, "Unable to request re-review"));
 	};
 	const resolveInlineComment = async (comment: InspectorInlineComment) => {
+		if (comment.findingId) {
+			// AO findings are resolved in AO. No acting session: a person did it.
+			const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/findings/resolve", {
+				params: { path: { sessionId: session.id } },
+				body: { findingIds: [comment.findingId] },
+			});
+			if (error) throw new Error(apiErrorMessage(error, "Unable to resolve review finding"));
+			void queryClient.invalidateQueries({ queryKey: sessionReviewsQueryKey(session.id, hostId) });
+			return;
+		}
 		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/comments/resolve", {
 			params: { path: { sessionId: session.id } },
 			body: { pullRequestUrl: comment.pullRequestUrl, commentUrl: comment.url ?? "" },
@@ -2077,6 +2104,10 @@ function MergedReviewsSection({
 		await sendMessageToWorker(formatReviewSummaryMessage(summary), "Unable to send review summary to worker agent");
 		onWorkerMessageSent?.();
 	};
+	const findingsByRun = new Map<string, ReviewFinding[]>();
+	for (const finding of findings) {
+		findingsByRun.set(finding.runId, [...(findingsByRun.get(finding.runId) ?? []), finding]);
+	}
 	const groups: InspectorReviewGroup[] = rows.map(([number, { ao, github }]) => {
 		const aoRuns = ao ? [...(runsByPR.get(ao.prUrl) ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : [];
 		const entries = (github?.review?.reviews ?? []).filter(
@@ -2125,6 +2156,17 @@ function MergedReviewsSection({
 		const unresolved = unresolvedReviewers.reduce((count, reviewer) => count + reviewer.count, 0);
 		const reviewRuns = aoRuns.map((run) => {
 			const reviewUrl = aoReviewCommentUrl(run);
+			const runFindings = findingsByRun.get(run.id) ?? [];
+			const toComment = (finding: ReviewFinding): InspectorInlineComment => ({
+				autoInjectReview: run.autoInjectReview,
+				body: finding.body,
+				file: finding.path || undefined,
+				findingId: finding.id,
+				line: finding.line || undefined,
+				pullRequestUrl: run.prUrl,
+				resolution: findingResolution(finding, session.id, t),
+				resolved: finding.status !== "open",
+			});
 			return {
 				autoInjectReview: run.autoInjectReview,
 				body: run.body,
@@ -2134,8 +2176,15 @@ function MergedReviewsSection({
 						: formatTimeCompact(run.createdAt),
 				harness: run.harness || "reviewer",
 				id: run.id,
-				inlineComments: agentComments.get(run.githubReviewId)?.inlineComments ?? [],
-				resolvedComments: agentComments.get(run.githubReviewId)?.resolvedComments ?? [],
+				inlineComments: [
+					...(agentComments.get(run.githubReviewId)?.inlineComments ?? []),
+					...runFindings.filter((finding) => finding.status === "open").map(toComment),
+				],
+				notice: run.providerPostError ? t("inspector.review.summaryNotPosted", { error: run.providerPostError }) : undefined,
+				resolvedComments: [
+					...(agentComments.get(run.githubReviewId)?.resolvedComments ?? []),
+					...runFindings.filter((finding) => finding.status !== "open").map(toComment),
+				],
 				status: run.status,
 				url: reviewUrl ?? (ao?.prUrl || null),
 				verdict: githubVerdict(run.verdict, t),

@@ -97,6 +97,59 @@ type ReviewRun struct {
 	// AutoInjectReview snapshots the session policy when this result is first
 	// recorded. Later toggle changes must not rewrite or deliver this run.
 	AutoInjectReview bool `json:"autoInjectReview"`
+	// ProviderPostError is why AO could not post this pass's summary review to
+	// the PR. Empty when it was posted or not attempted.
+	ProviderPostError string `json:"providerPostError,omitempty"`
+	// DeliverySkippedReason is why this completed pass will never be delivered
+	// to its worker; it is then no longer retried.
+	DeliverySkippedReason string `json:"deliverySkippedReason,omitempty"`
+}
+
+// ReviewFindingStatus is where one AO review finding stands.
+type ReviewFindingStatus string
+
+// Review finding statuses.
+const (
+	// ReviewFindingOpen is a finding nobody has resolved yet.
+	ReviewFindingOpen ReviewFindingStatus = "open"
+	// ReviewFindingResolved is a finding the worker, an orchestrator, or a
+	// person marked handled, with an optional note.
+	ReviewFindingResolved ReviewFindingStatus = "resolved"
+	// ReviewFindingSuperseded is an open finding a later completed pass on the
+	// same PR replaced.
+	ReviewFindingSuperseded ReviewFindingStatus = "superseded"
+)
+
+// ReviewFinding is one change AO's reviewer asked for in one pass. Findings
+// live in AO, not as provider review threads, so the worker resolves them here
+// and AO never confuses the worker's replies with new feedback (#6300).
+type ReviewFinding struct {
+	ID        string    `json:"id"`
+	RunID     string    `json:"runId"`
+	SessionID SessionID `json:"sessionId"`
+	PRURL     string    `json:"prUrl"`
+	TargetSHA string    `json:"targetSha"`
+	Ordinal   int       `json:"ordinal"`
+	// Path and Line anchor the finding; both are empty for a design-level one.
+	Path   string              `json:"path,omitempty"`
+	Line   int                 `json:"line,omitempty"`
+	Body   string              `json:"body"`
+	Status ReviewFindingStatus `json:"status" enum:"open,resolved,superseded"`
+	// ResolutionNote is what the resolver said about how it was handled.
+	ResolutionNote string `json:"resolutionNote,omitempty"`
+	// ResolvedBySessionID is the AO session that resolved it. Empty on a
+	// resolved finding means a person resolved it outside any agent session.
+	ResolvedBySessionID SessionID  `json:"resolvedBySessionId,omitempty"`
+	ResolvedAt          *time.Time `json:"resolvedAt,omitempty"`
+	SupersededByRunID   string     `json:"supersededByRunId,omitempty"`
+	CreatedAt           time.Time  `json:"createdAt"`
+}
+
+// ReviewFindingInput is one finding a reviewer submits with its verdict.
+type ReviewFindingInput struct {
+	Path string
+	Line int
+	Body string
 }
 
 // ReviewTriggerSource identifies who initiated a review pass.

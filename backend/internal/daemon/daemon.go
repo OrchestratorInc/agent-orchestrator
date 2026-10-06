@@ -802,6 +802,9 @@ func Run() error {
 	lcStack.automationDone = automationDone
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
 	lcStack.autoReviewDone = autoReview.Start(ctx)
+	// A completed AO review the worker could not take yet (it was waiting for
+	// input) has no other event to bring it back; retry it on this cadence.
+	lcStack.reviewDeliveryDone = lcStack.LCM.StartReviewDeliverySweep(ctx, autoreview.DefaultSweepInterval)
 	// Push-device registry: persisted phones that receive OS push notifications.
 	// A load failure must not block boot — degrade to no push rather than refusing
 	// to start the daemon. pushRegistry (interface) is assigned only when load

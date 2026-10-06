@@ -2432,6 +2432,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/reviews/findings/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve a worker's AO review findings */
+        post: operations["resolveReviewFindings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/reviews/kill": {
         parameters: {
             query?: never;
@@ -4302,6 +4319,7 @@ export interface components {
         };
         ListReviewsResponse: {
             activeReviewers: components["schemas"]["DomainReviewerSurface"][];
+            findings: components["schemas"]["ReviewFinding"][];
             /** @enum {string} */
             reviewerActivityState?: "active" | "idle" | "waiting_input" | "blocked" | "exited";
             reviewerHandleId: string;
@@ -4682,6 +4700,17 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        ResolveReviewFindingsRequest: {
+            /** @description AO session resolving the findings (the worker or an orchestrator of its project). Empty when a person resolves them. */
+            actorSessionId?: string;
+            /** @description Ids of the worker's AO review findings to resolve. */
+            findingIds: string[];
+            /** @description How the finding was handled: what changed, or why no change is needed. */
+            note?: string;
+        };
+        ResolveReviewFindingsResponse: {
+            findings: components["schemas"]["ReviewFinding"][];
+        };
         RestoreReviewResponse: {
             reviewerHandleId: string;
             reviewerHarness?: string;
@@ -4708,6 +4737,26 @@ export interface components {
             state?: "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed";
             turnId?: string;
         };
+        ReviewFinding: {
+            body: string;
+            /** Format: date-time */
+            createdAt: string;
+            id: string;
+            line?: number;
+            ordinal: number;
+            path?: string;
+            prUrl: string;
+            resolutionNote?: string;
+            /** Format: date-time */
+            resolvedAt?: null | string;
+            resolvedBySessionId?: string;
+            runId: string;
+            sessionId: string;
+            /** @enum {string} */
+            status: "open" | "resolved" | "superseded";
+            supersededByRunId?: string;
+            targetSha: string;
+        };
         ReviewRun: {
             autoInjectReview: boolean;
             batchId: string;
@@ -4716,10 +4765,12 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             deliveredAt?: null | string;
+            deliverySkippedReason?: string;
             githubReviewId: string;
             harness: string;
             id: string;
             prUrl: string;
+            providerPostError?: string;
             reviewId: string;
             sessionId: string;
             status: string;
@@ -5251,6 +5302,14 @@ export interface components {
             /** @description Source invocation generation that authored this handoff. */
             sourceGenerationId: string;
         };
+        SubmitReviewFinding: {
+            /** @description What must change and why. */
+            body: string;
+            /** @description Line in path the finding is anchored to; 0 for the whole file or a design-level finding. */
+            line?: number;
+            /** @description Changed file the finding is about; empty for a design-level finding. */
+            path?: string;
+        };
         SubmitReviewInput: {
             /** @description Review body recorded by AO. Required for changes_requested. */
             body?: string;
@@ -5264,9 +5323,11 @@ export interface components {
             verdict?: string;
         };
         SubmitReviewItem: {
-            /** @description Review body recorded by AO. Required for changes_requested. */
+            /** @description Review summary recorded by AO. Required for changes_requested. */
             body?: string;
-            /** @description Id of the GitHub PR review the reviewer posted, if any. */
+            /** @description Changes the reviewer requires, each tracked and resolved in AO. A changes_requested result needs at least one; an approval has none. */
+            findings?: components["schemas"]["SubmitReviewFinding"][];
+            /** @description Id of a GitHub PR review the reviewer posted itself. Only reviewers started before findings moved into AO send this. */
             githubReviewId?: string;
             /** @description Review run id being completed. */
             runId: string;
@@ -15002,6 +15063,87 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    resolveReviewFindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveReviewFindingsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolveReviewFindingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

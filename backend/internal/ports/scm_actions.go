@@ -62,3 +62,19 @@ type SCMReviewResolveRequest struct {
 type SCMReviewResolver interface {
 	ResolveReviewThread(ctx context.Context, request SCMReviewResolveRequest) error
 }
+
+// SCMReviewSummaryRequest asks the provider to post one plain review comment
+// on a pull request: a body, no inline comments, and no approval state.
+type SCMReviewSummaryRequest struct {
+	PR SCMPRRef
+	// CommitSHA pins the review to the commit that was reviewed.
+	CommitSHA string
+	Body      string
+}
+
+// SCMReviewSummaryPoster posts AO's own review summaries. It never opens review
+// threads: AO's findings live in AO, so nothing posted here becomes a comment
+// the review-comment watcher would forward back to the worker.
+type SCMReviewSummaryPoster interface {
+	PostReviewSummary(ctx context.Context, request SCMReviewSummaryRequest) (reviewID string, err error)
+}

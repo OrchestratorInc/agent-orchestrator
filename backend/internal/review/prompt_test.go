@@ -26,7 +26,7 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 		"Do not ask the user whether to continue to the next PR",
 		"* 1. https://github.com/o/r/pull/1 (head commit sha1, run run-1)",
 		"* 2. https://github.com/o/r/pull/2 (head commit sha2, run run-2)",
-		"After every PR has its own GitHub review from step 1",
+		"Review every PR below, then record all results with one command",
 		"printf '%s'",
 		"do not use a heredoc",
 		"ao review submit --session mer-1 --reviews -",
@@ -38,26 +38,32 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 	}
 }
 
-// The worker hears about a review only through the reviewer's inline GitHub
-// comments, each forwarded as a required change. Required findings must be
-// inline, and optional suggestions must not be.
-func TestReviewPromptRequiresInlineCommentsForRequiredChanges(t *testing.T) {
+// AO's reviewer files every required change as a finding in AO and never posts
+// to the PR itself: AO posts one summary comment and delivers the findings, so
+// no provider review thread exists for the worker's replies to re-enter (#6300).
+func TestReviewPromptFilesRequiredChangesAsAOFindings(t *testing.T) {
 	prompt, system := reviewTexts(LaunchSpec{WorkerID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", RunID: "run-1"})
 	for _, want := range []string{
-		"The worker receives only your inline comments, never the summary",
-		"Put every finding that requires a change in \"comments\" as its own inline comment",
-		"including design-level findings",
-		"Leave optional or nice-to-have suggestions out of \"comments\"",
-		"Omit \"comments\" only when nothing needs to change.",
+		`"findings": [ { "path": "<file>", "line": <n>, "body": "<finding>" } ]`,
+		"Every change the worker must make is its own entry in \"findings\", including design-level findings",
+		"Leave optional or nice-to-have suggestions out of \"findings\"",
+		"\"changes_requested\" needs at least one finding. \"approved\" has no \"findings\".",
+		"Do not post, reply, or resolve anything on the PR yourself.",
+		"ao review submit --session mer-1 --reviews -",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("review prompt missing %q:\n%s", want, prompt)
 		}
 	}
-	if !strings.Contains(system, "Every finding that requires a change must be its own inline comment") {
-		t.Fatalf("reviewer system prompt must require inline findings:\n%s", system)
+	for _, banned := range []string{"gh api", "githubReviewId", "inline comment", "gh pr review"} {
+		if strings.Contains(prompt, banned) || strings.Contains(system, banned) {
+			t.Fatalf("reviewer texts still mention %q:\nprompt:\n%s\nsystem:\n%s", banned, prompt, system)
+		}
 	}
-	if strings.Contains(prompt, "omit the field for a review with no inline comments") {
-		t.Fatalf("review prompt still makes inline comments optional:\n%s", prompt)
+	if !strings.Contains(system, "Every change the worker must make must be its own finding") {
+		t.Fatalf("reviewer system prompt must require findings:\n%s", system)
+	}
+	if !strings.Contains(system, "Never post, reply, or resolve anything on the pull request yourself") {
+		t.Fatalf("reviewer system prompt must forbid provider writes:\n%s", system)
 	}
 }

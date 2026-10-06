@@ -227,6 +227,23 @@ func (m *Provider) ResolveReviewThread(ctx context.Context, request ports.SCMRev
 	return resolver.ResolveReviewThread(ctx, request)
 }
 
+// PostReviewSummary delegates to the sub-provider matching request.PR.Repo.Provider
+// when that provider can post review summaries.
+func (m *Provider) PostReviewSummary(ctx context.Context, request ports.SCMReviewSummaryRequest) (string, error) {
+	if m == nil {
+		return "", fmt.Errorf("%w: review summary provider is unavailable", ports.ErrSCMUnsupported)
+	}
+	p, err := m.resolve(request.PR.Repo.Provider)
+	if err != nil {
+		return "", err
+	}
+	poster, ok := p.(ports.SCMReviewSummaryPoster)
+	if !ok {
+		return "", fmt.Errorf("%w: review summaries for provider %q", ports.ErrSCMUnsupported, request.PR.Repo.Provider)
+	}
+	return poster.PostReviewSummary(ctx, request)
+}
+
 type credentialChecker interface {
 	SCMCredentialsAvailable(ctx context.Context) (bool, error)
 }

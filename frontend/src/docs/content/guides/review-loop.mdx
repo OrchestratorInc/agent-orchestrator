@@ -16,7 +16,7 @@ Delivery follows the session interface:
 - Chat receives a durable provider turn in the conversation.
 - Terminal UI receives the message through the running agent session.
 
-Feedback is signature-deduplicated. AO does not repeat an unchanged comment set on every poll.
+Feedback is signature-deduplicated. AO does not repeat an unchanged comment set on every poll. A worker's own replies on a review thread are not sent back to it: AO skips later comments on a thread written by the account AO authenticates as. A new thread opened from that account is still delivered.
 
 If feedback does not arrive, confirm the PR is claimed by this worker, the repository host is authenticated, and the comment remains unresolved on the current head. A claim records ownership but does not check out the PR branch. Read the linked review on GitHub or GitLab before asking the worker to act on an older comment.
 
@@ -32,7 +32,15 @@ ao review ls <worker-session-id>
 ao review cancel <worker-session-id>
 ```
 
-Reviewer runs are separate from worker sessions. Their verdict and body are recorded against the worker.
+Reviewer runs are separate from worker sessions. Their verdict, summary, and findings are recorded against the worker.
+
+### Findings
+
+AO's reviewer files each change it requires as a finding in AO, not as a GitHub review thread. AO posts one summary comment on the PR with the verdict and the findings list, and opens no threads. If that post fails, the run shows why in the inspector; AO does not retry it.
+
+- With the session's review auto-inject on, AO delivers each finished pass to the worker once: the verdict, and for requested changes every open finding with its id. A pass that finishes while the worker waits for input is delivered when it can take messages again.
+- The worker resolves each finding in AO with `ao review resolve <finding-id> --note "..."`, saying what changed or why no change is needed. An orchestrator can resolve a worker's findings with `--session <worker>`, and a person can resolve them from the inspector. The inspector shows who resolved each one.
+- When a later pass of the same PR completes, findings still open from earlier passes are marked superseded; the new pass raises again whatever still applies. Parallel reviewers on the same commit keep their own findings.
 
 ### Reviews requested by agents
 
@@ -40,7 +48,7 @@ A worker can request a review of its own PR: inside the worker, `ao review trigg
 
 - The project setting **Workers request AO review** (`workersRequestReview`) tells new workers to request a review once their PR is ready and again after each fix. When it is off, workers ask the user or orchestrator first.
 - A head that already has a review, or a review still running, is not reviewed again; the command says so. `--rerun` reviews the same commit again, and with a different `--agent` it adds a reviewer that runs alongside the first. Each live reviewer can be opened from the inspector.
-- The command turns on the session's review auto-inject unless `--no-inject` is passed. The reviewer posts an inline comment for each change it requires; with auto-inject on, AO forwards those comments to the worker like any other review comments. Optional suggestions stay in the review summary. An approval adds no comments, so the worker checks `ao review ls` for the verdict. AO's approval is never a GitHub approval.
+- The command turns on the session's review auto-inject unless `--no-inject` is passed, so AO delivers the verdict and findings to the worker. Optional suggestions stay in the review summary. AO's approval is never a GitHub approval.
 
 In the inspector, choose the reviewer harness (and offered model/mode), start the run, then open its Chat or terminal surface. Read the result, then use **Send to worker agent** in the review actions to send its findings to the worker. A reviewer harness can have different permissions from the worker; an experimental reviewer is not automatically sandboxed. If the trigger is unavailable, check the linked PR, reviewer readiness, and the reason shown by the UI. `ao review ls` shows the run state; `ao review cancel` stops a run that should not continue.
 
@@ -51,6 +59,7 @@ Enable automatic review per session, or use the project `autoReview` default for
 - Keep the PR claimed by the worker that should act on feedback.
 - Resolve addressed GitHub threads so later nudges contain only remaining work.
 - Use inline comments for localized changes and a top-level review body for design-level feedback.
+- Resolve AO findings in AO, with a note; do not reply to them on GitHub.
 - Inspect the current PR head before replaying old feedback after a force-push.
 
 ## Approval and merge

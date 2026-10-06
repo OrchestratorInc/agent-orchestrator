@@ -183,3 +183,28 @@ func TestResolveReviewThread_RejectsUnresolvedMutation(t *testing.T) {
 		t.Fatalf("error = %v, want an unresolved mutation error", err)
 	}
 }
+
+func TestPostReviewSummary_PostsCommentReviewWithoutInlineComments(t *testing.T) {
+	f := newFakeGH(t)
+	f.on(http.MethodPost, "/repos/octocat/hello/pulls/42/reviews", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["event"] != "COMMENT" || body["commit_id"] != "abc123" || body["body"] != "**AO review: approved**" {
+			t.Fatalf("body = %#v", body)
+		}
+		if _, ok := body["comments"]; ok {
+			t.Fatalf("summary must open no review threads: %#v", body)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id": 5424806602}`))
+	})
+
+	id, err := newProviderForTest(t, f).PostReviewSummary(ctx(), ports.SCMReviewSummaryRequest{
+		PR: validMergeRequest().PR, CommitSHA: "abc123", Body: "**AO review: approved**",
+	})
+	if err != nil || id != "5424806602" {
+		t.Fatalf("id=%q err=%v", id, err)
+	}
+}

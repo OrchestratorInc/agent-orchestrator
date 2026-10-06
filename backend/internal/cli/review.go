@@ -36,6 +36,23 @@ type reviewRun struct {
 	GithubReviewID string     `json:"githubReviewId"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	DeliveredAt    *time.Time `json:"deliveredAt,omitempty"`
+
+	ProviderPostError string `json:"providerPostError,omitempty"`
+}
+
+// reviewFinding mirrors the daemon's domain.ReviewFinding.
+type reviewFinding struct {
+	ID                  string     `json:"id"`
+	RunID               string     `json:"runId"`
+	PRURL               string     `json:"prUrl"`
+	TargetSHA           string     `json:"targetSha"`
+	Path                string     `json:"path,omitempty"`
+	Line                int        `json:"line,omitempty"`
+	Body                string     `json:"body"`
+	Status              string     `json:"status"`
+	ResolutionNote      string     `json:"resolutionNote,omitempty"`
+	ResolvedBySessionID string     `json:"resolvedBySessionId,omitempty"`
+	ResolvedAt          *time.Time `json:"resolvedAt,omitempty"`
 }
 
 type reviewState struct {
@@ -49,8 +66,21 @@ type reviewState struct {
 }
 
 type listReviewsResponse struct {
-	ReviewerHandleID string        `json:"reviewerHandleId"`
-	Reviews          []reviewState `json:"reviews"`
+	ReviewerHandleID string          `json:"reviewerHandleId"`
+	Reviews          []reviewState   `json:"reviews"`
+	Findings         []reviewFinding `json:"findings"`
+}
+
+// resolveFindingsRequest mirrors controllers.ResolveReviewFindingsRequest.
+type resolveFindingsRequest struct {
+	FindingIDs     []string `json:"findingIds"`
+	Note           string   `json:"note,omitempty"`
+	ActorSessionID string   `json:"actorSessionId,omitempty"`
+}
+
+// resolveFindingsResponse mirrors controllers.ResolveReviewFindingsResponse.
+type resolveFindingsResponse struct {
+	Findings []reviewFinding `json:"findings"`
 }
 
 // triggerReviewResponse mirrors controllers.TriggerReviewResponse: Created
@@ -88,12 +118,20 @@ type reviewRunResponse struct {
 	ReviewerHandleID string      `json:"reviewerHandleId"`
 }
 
+// submitReviewFinding mirrors controllers.SubmitReviewFinding.
+type submitReviewFinding struct {
+	Path string `json:"path,omitempty"`
+	Line int    `json:"line,omitempty"`
+	Body string `json:"body"`
+}
+
 // submitReviewItem mirrors controllers.SubmitReviewItem.
 type submitReviewItem struct {
-	RunID          string `json:"runId"`
-	Verdict        string `json:"verdict"`
-	Body           string `json:"body,omitempty"`
-	GithubReviewID string `json:"githubReviewId,omitempty"`
+	RunID          string                `json:"runId"`
+	Verdict        string                `json:"verdict"`
+	Body           string                `json:"body,omitempty"`
+	GithubReviewID string                `json:"githubReviewId,omitempty"`
+	Findings       []submitReviewFinding `json:"findings,omitempty"`
 }
 
 // submitReviewRequest mirrors controllers.SubmitReviewInput.
@@ -148,6 +186,11 @@ type reviewListOptions struct {
 	json bool
 }
 
+type reviewResolveOptions struct {
+	session string
+	note    string
+}
+
 func newReviewCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "review",
@@ -157,7 +200,63 @@ func newReviewCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newReviewSubmitCommand(ctx))
 	cmd.AddCommand(newReviewCancelCommand(ctx))
 	cmd.AddCommand(newReviewTriggerCommand(ctx))
+	cmd.AddCommand(newReviewResolveCommand(ctx))
 	return cmd
+}
+
+func newReviewResolveCommand(ctx *commandContext) *cobra.Command {
+	var opts reviewResolveOptions
+	cmd := &cobra.Command{
+		Use:   "resolve <finding-id>...",
+		Short: "Resolve AO review findings on a worker's PR (default: this session's)",
+		Long: `Mark one or more of AO's review findings resolved, with a note saying how
+each was handled: what changed, or why no change is needed.
+
+AO's reviewer files findings in AO, not as GitHub review threads, and delivers
+them to the worker with their ids. The worker resolves its own findings; an
+orchestrator resolves a worker's findings with --session <worker>. Findings a
+newer review replaced cannot be resolved. ` + "`ao review ls`" + ` lists open findings.`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return ctx.resolveFindings(cmd, args, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.session, "session", "", "Worker session that owns the findings (default: this AO session)")
+	cmd.Flags().StringVar(&opts.note, "note", "", "How the findings were handled")
+	return cmd
+}
+
+func (c *commandContext) resolveFindings(cmd *cobra.Command, args []string, opts reviewResolveOptions) error {
+	if strings.TrimSpace(os.Getenv(envReviewSessionID)) != "" {
+		return usageError{errors.New("ao review resolve cannot run inside a reviewer: the worker resolves the findings it handled")}
+	}
+	session := reviewTargetSession(nil, opts.session)
+	if session == "" {
+		return usageError{errors.New("usage: --session <worker-session-id> is required outside an AO session")}
+	}
+	ids := make([]string, 0, len(args))
+	for _, arg := range args {
+		if id := strings.TrimSpace(arg); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return usageError{errors.New("usage: at least one finding id is required")}
+	}
+	req := resolveFindingsRequest{
+		FindingIDs: ids,
+		Note:       strings.TrimSpace(opts.note),
+		// The acting AO session, so AO records who resolved the finding. A
+		// person running this outside a session is recorded as a person.
+		ActorSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")),
+	}
+	path := "sessions/" + url.PathEscape(session) + "/reviews/findings/resolve"
+	var res resolveFindingsResponse
+	if err := c.postJSON(cmd.Context(), path, req, &res); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "resolved %d finding(s) for %s\n", len(res.Findings), session)
+	return err
 }
 
 func newReviewListCommand(ctx *commandContext) *cobra.Command {
@@ -368,9 +467,9 @@ A head that is already being reviewed, or already has a review, is not reviewed
 again: the command fails and says why. Pass --rerun to review the same commit
 again, or to add a different --agent alongside one that is still running.
 
-The worker session's review auto-inject is turned on so the reviewer's inline
-review comments are delivered to the worker; pass --no-inject to leave
-that setting unchanged. AO's review is internal: an approval is not a GitHub
+The worker session's review auto-inject is turned on so AO delivers the
+reviewer's verdict and findings to the worker; pass --no-inject to leave that
+setting unchanged. AO's review is internal: an approval is not a GitHub
 approval and does not authorize merging.`,
 		Args: atMostOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -439,7 +538,7 @@ func (c *commandContext) triggerReview(cmd *cobra.Command, args []string, opts r
 	}
 	switch {
 	case res.AutoInjectEnabled:
-		_, err := fmt.Fprintf(out, "turned on review auto-inject for %s; the reviewer's comments will be delivered to the session, and `ao review ls` shows the verdict\n", session)
+		_, err := fmt.Fprintf(out, "turned on review auto-inject for %s; AO will deliver the verdict and findings to the session, and `ao review ls` shows them\n", session)
 		return err
 	case opts.noInject:
 		_, err := fmt.Fprintf(out, "left review auto-inject unchanged for %s; check results with `ao review ls %s`\n", session, session)
@@ -499,7 +598,41 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 			return err
 		}
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	return writeOpenFindings(out, res.Findings)
+}
+
+// writeOpenFindings lists the findings still waiting for the worker, with the
+// ids `ao review resolve` takes. Resolved and superseded ones are history.
+func writeOpenFindings(out io.Writer, findings []reviewFinding) error {
+	open := make([]reviewFinding, 0, len(findings))
+	for _, f := range findings {
+		if f.Status == "open" {
+			open = append(open, f)
+		}
+	}
+	if len(open) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(out, "\nOpen findings (resolve with `ao review resolve <id> --note ...`):\n"); err != nil {
+		return err
+	}
+	for _, f := range open {
+		location := "(general)"
+		if f.Path != "" {
+			location = f.Path
+			if f.Line > 0 {
+				location = fmt.Sprintf("%s:%d", f.Path, f.Line)
+			}
+		}
+		summary, _, _ := strings.Cut(strings.TrimSpace(f.Body), "\n")
+		if _, err := fmt.Fprintf(out, "  %s  %s  %s\n", f.ID, location, summary); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func readReviewItems(cmd *cobra.Command, path string) ([]submitReviewItem, error) {

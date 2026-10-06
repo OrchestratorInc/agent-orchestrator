@@ -459,8 +459,13 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersRestoreReviewResponse": "RestoreReviewResponse",
 	"ControllersSubmitReviewItem":      "SubmitReviewItem",
 	"ControllersSubmitReviewInput":     "SubmitReviewInput",
+	"ControllersSubmitReviewFinding":   "SubmitReviewFinding",
+
+	"ControllersResolveReviewFindingsRequest":  "ResolveReviewFindingsRequest",
+	"ControllersResolveReviewFindingsResponse": "ResolveReviewFindingsResponse",
 	// domain review entities
 	"DomainReviewRun":     "ReviewRun",
+	"DomainReviewFinding": "ReviewFinding",
 	"ReviewPRReviewState": "PRReviewState",
 	// httpd/controllers: import wire envelopes
 	"ControllersImportStatusResponse": "ImportStatusResponse",
@@ -1960,6 +1965,21 @@ func reviewOperations() []operation {
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusUnprocessableEntity, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/reviews/findings/resolve", id: "resolveReviewFindings", tag: "reviews",
+			summary:    "Resolve a worker's AO review findings",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.ResolveReviewFindingsRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ResolveReviewFindingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusUnprocessableEntity, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},

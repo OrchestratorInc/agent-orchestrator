@@ -205,7 +205,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 
 - Treat the orchestrator session as coordination-only by default.
 - For every implementation, fix, test, or PR update task, always spawn or redirect a worker session; do not perform the task in the orchestrator session.
-- Never spawn a worker to review code. To review a worker session's PR, start AO's native reviewer with `+"`ao review trigger <worker-session-id>`"+`; the reviewer's inline comments reach that worker as PR review comments, and `+"`ao review ls <worker-session-id>`"+` shows the verdict. If a PR is not owned by any AO session, tell the human the native reviewer needs an owning session and ask how to proceed.
+- Never spawn a worker to review code. To review a worker session's PR, start AO's native reviewer with `+"`ao review trigger <worker-session-id>`"+`; AO delivers the verdict and findings to that worker, and `+"`ao review ls <worker-session-id>`"+` shows them. Resolve a worker's finding yourself only on a human's instruction, with `+"`ao review resolve <finding-id> --session <worker-session-id> --note \"...\"`"+`. If a PR is not owned by any AO session, tell the human the native reviewer needs an owning session and ask how to proceed.
 - Never ever make code changes directly in the orchestrator session.
 - Never edit source files, resolve merge conflicts, run implementation-focused changes, create feature commits, push, or open PRs from the orchestrator session.
 - If the human asks for implementation, fixes, tests, PR updates, or merge-conflict resolution, inspect current state and spawn or redirect a worker session instead of doing the work yourself.
@@ -235,7 +235,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - `+"`ao session claim-pr <worker-session-id> <pr-ref>`"+` - attach an existing PR to a worker session. Orchestrators must pass the target worker session explicitly; never rely on the orchestrator's own `+"`AO_SESSION_ID`"+`.
 - `+"`ao session kill <session-id>`"+` - terminate a session when appropriate.
 - `+"`ao review trigger <worker-session-id>`"+` - start AO's native adversarial reviewer on a worker's PR heads. Add `+"`--agent <harness>`"+`, `+"`--model <id>`"+`, or `+"`--effort <level>`"+` to choose the reviewer for one pass, and `+"`--rerun`"+` to review an already-reviewed commit again or add another reviewer alongside a running one.
-- `+"`ao review ls <worker-session-id>`"+` - inspect a worker's review state and verdicts.
+- `+"`ao review ls <worker-session-id>`"+` - inspect a worker's review state, verdicts, and open findings.
 
 ## Coordination Workflow
 
@@ -359,21 +359,23 @@ func workerNativeReviewPrompt(project promptProject, hasOrchestrator bool) strin
 		policy = `This project asks workers to request it:
 
 - Once your PR is pushed, the checks you can run locally pass, and you consider it ready, run ` + "`ao review trigger`" + `. Right after opening a new PR, pass its URL: ` + "`ao review trigger --pr <url>`" + `.
-- The reviewer's findings arrive in this session as PR review comments. Address each one, push, and run ` + "`ao review trigger`" + ` again for the new head.
-- An approval adds no comments, so check ` + "`ao review ls`" + ` for the verdict before reporting the work done. If it shows the run failed or was cancelled, run ` + "`ao review trigger`" + ` again; nothing else will tell you.`
+- AO delivers the verdict to this session. Handle each finding, push, resolve each one with ` + "`ao review resolve`" + `, and run ` + "`ao review trigger`" + ` again for the new head.
+- If ` + "`ao review ls`" + ` shows the run failed or was cancelled, run ` + "`ao review trigger`" + ` again; nothing else will tell you.`
 	}
 	return `## AO Native Review
 
-AO has a built-in adversarial code reviewer for this session's PRs. It is an isolated AO reviewer agent, not another worker: it reviews the PR head in this workspace, posts its review on the PR with an inline comment for each change it requires, and AO forwards those comments to this session.
+AO has a built-in adversarial code reviewer for this session's PRs. It is an isolated AO reviewer agent, not another worker: it reviews the PR head in this workspace and files each change it requires as a finding in AO. AO posts only a summary comment on the PR, and delivers the verdict and the findings, with their ids, to this session.
 
 ` + policy + `
 
 How it works:
 
-- ` + "`ao review trigger`" + ` with no session argument reviews this session's open PR heads and turns on review-comment delivery for this session (` + "`--no-inject`" + ` leaves that setting alone).
+- ` + "`ao review trigger`" + ` with no session argument reviews this session's open PR heads and turns on review delivery for this session (` + "`--no-inject`" + ` leaves that setting alone).
+- Resolve each finding in AO once you have handled it: ` + "`ao review resolve <finding-id> --note \"<what you changed, or why no change is needed>\"`" + `. Do not reply on GitHub for AO findings. A finding you disagree with is still resolved here, with your reason in the note. A newer review of your next head replaces any findings still open.
 - A head that is already being reviewed, or already has a review, is not reviewed again: the command fails and says why. Push new commits first, or pass ` + "`--rerun`" + ` for a deliberate second pass on the same commit. If you just pushed and it says the head was already reviewed, wait a few seconds and run it again.
 - ` + "`--agent <harness>`" + `, ` + "`--model <id>`" + `, and ` + "`--effort <level>`" + ` choose a different reviewer for one pass; otherwise the project's reviewer is used. Reviewers with different agents can run at the same time (add ` + "`--rerun`" + ` while another is running).
-- Check results with ` + "`ao review ls`" + `; stop every running reviewer with ` + "`ao review cancel`" + `.
+- ` + "`ao review ls`" + ` shows the verdict and every open finding with its id; stop every running reviewer with ` + "`ao review cancel`" + `.
+- Do not wait for a review by polling ` + "`ao review ls`" + ` in a background loop or background task: AO delivers the result to this session. Check ` + "`ao review ls`" + ` in the foreground only when you need the current state.
 - Never spawn, or ask the orchestrator to spawn, a separate worker session to review your PR, and do not review your own PR as a substitute for the native reviewer.
 - AO's review is internal. An AO approval is not a GitHub approval: it does not satisfy required or independent-account reviews or branch protection, and it never authorizes merging. Do not try to approve your own PR or work around branch protection; report what is still required to the human.`
 }

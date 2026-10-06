@@ -33,6 +33,9 @@ type ListReviewsResponse struct {
 	// ActiveReviewers is every reviewer with a live pane or a running pass,
 	// selected reviewer first. Several reviewers can work on one worker at once.
 	ActiveReviewers []domain.ReviewerSurface `json:"activeReviewers"`
+	// Findings is every finding AO's reviewer filed for this worker, oldest
+	// first, with resolved and superseded ones kept as history.
+	Findings []domain.ReviewFinding `json:"findings"`
 }
 
 // ReviewRunResponse is the body of submit (200). It carries the run plus the
@@ -81,12 +84,33 @@ type KillReviewResponse struct {
 	Runs             []domain.ReviewRun         `json:"runs"`
 }
 
+// SubmitReviewFinding is one change the reviewer requires.
+type SubmitReviewFinding struct {
+	Path string `json:"path,omitempty" description:"Changed file the finding is about; empty for a design-level finding."`
+	Line int    `json:"line,omitempty" description:"Line in path the finding is anchored to; 0 for the whole file or a design-level finding."`
+	Body string `json:"body" description:"What must change and why."`
+}
+
 // SubmitReviewItem is one review result in a batched submit request.
 type SubmitReviewItem struct {
-	RunID          string `json:"runId" description:"Review run id being completed."`
-	Verdict        string `json:"verdict" description:"Review verdict: approved or changes_requested."`
-	Body           string `json:"body,omitempty" description:"Review body recorded by AO. Required for changes_requested."`
-	GithubReviewID string `json:"githubReviewId,omitempty" description:"Id of the GitHub PR review the reviewer posted, if any."`
+	RunID          string                `json:"runId" description:"Review run id being completed."`
+	Verdict        string                `json:"verdict" description:"Review verdict: approved or changes_requested."`
+	Body           string                `json:"body,omitempty" description:"Review summary recorded by AO. Required for changes_requested."`
+	GithubReviewID string                `json:"githubReviewId,omitempty" description:"Id of a GitHub PR review the reviewer posted itself. Only reviewers started before findings moved into AO send this."`
+	Findings       []SubmitReviewFinding `json:"findings,omitempty" description:"Changes the reviewer requires, each tracked and resolved in AO. A changes_requested result needs at least one; an approval has none."`
+}
+
+// ResolveReviewFindingsRequest is the body of POST
+// /api/v1/sessions/{sessionId}/reviews/findings/resolve.
+type ResolveReviewFindingsRequest struct {
+	FindingIDs     []string `json:"findingIds" description:"Ids of the worker's AO review findings to resolve."`
+	Note           string   `json:"note,omitempty" description:"How the finding was handled: what changed, or why no change is needed."`
+	ActorSessionID string   `json:"actorSessionId,omitempty" description:"AO session resolving the findings (the worker or an orchestrator of its project). Empty when a person resolves them."`
+}
+
+// ResolveReviewFindingsResponse is the body of a successful findings resolve.
+type ResolveReviewFindingsResponse struct {
+	Findings []domain.ReviewFinding `json:"findings"`
 }
 
 // SubmitReviewInput is the body of POST /api/v1/sessions/{sessionId}/reviews/submit.
@@ -110,6 +134,7 @@ func (c *ReviewsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/reviews/trigger", c.trigger)
 	r.Post("/sessions/{sessionId}/reviews/rerequest", c.rerequest)
 	r.Post("/sessions/{sessionId}/reviews/comments/resolve", c.resolveComment)
+	r.Post("/sessions/{sessionId}/reviews/findings/resolve", c.resolveFindings)
 	r.Post("/sessions/{sessionId}/reviews/cancel", c.cancel)
 	r.Post("/sessions/{sessionId}/reviews/kill", c.kill)
 	r.Post("/sessions/{sessionId}/reviews/restore", c.restore)
@@ -251,6 +276,31 @@ func (c *ReviewsController) resolveComment(w http.ResponseWriter, r *http.Reques
 	envelope.WriteJSON(w, http.StatusOK, ResolveReviewCommentResponse{OK: true})
 }
 
+func (c *ReviewsController) resolveFindings(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/reviews/findings/resolve")
+		return
+	}
+	var in ResolveReviewFindingsRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	findings, err := c.Svc.ResolveFindings(r.Context(), sessionID(r), reviewsvc.ResolveFindingsRequest{
+		FindingIDs:     in.FindingIDs,
+		Note:           in.Note,
+		ActorSessionID: domain.SessionID(strings.TrimSpace(in.ActorSessionID)),
+	})
+	if err != nil {
+		writeReviewError(w, r, err)
+		return
+	}
+	if findings == nil {
+		findings = []domain.ReviewFinding{}
+	}
+	envelope.WriteJSON(w, http.StatusOK, ResolveReviewFindingsResponse{Findings: findings})
+}
+
 func (c *ReviewsController) rerequest(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/reviews/rerequest")
@@ -372,7 +422,15 @@ func reviewsResponse(res reviewcore.SessionReviews, reviews []reviewcore.PRRevie
 		Runs:                  runs,
 		ReviewerSurface:       reviewerSurfacePayload(res.ReviewerSurface),
 		ActiveReviewers:       activeReviewersPayload(res.ActiveReviewers),
+		Findings:              findingsPayload(res.Findings),
 	}
+}
+
+func findingsPayload(findings []domain.ReviewFinding) []domain.ReviewFinding {
+	if findings == nil {
+		return []domain.ReviewFinding{}
+	}
+	return findings
 }
 
 func activeReviewersPayload(surfaces []domain.ReviewerSurface) []domain.ReviewerSurface {
@@ -407,6 +465,7 @@ func (c *ReviewsController) submit(w http.ResponseWriter, r *http.Request) {
 				Verdict:        domain.ReviewVerdict(item.Verdict),
 				Body:           item.Body,
 				GithubReviewID: item.GithubReviewID,
+				Findings:       submittedFindings(item.Findings),
 			})
 		}
 	} else {
@@ -429,8 +488,23 @@ func (c *ReviewsController) submit(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, ReviewRunResponse{Review: first, Reviews: runs})
 }
 
+func submittedFindings(in []SubmitReviewFinding) []domain.ReviewFindingInput {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]domain.ReviewFindingInput, 0, len(in))
+	for _, f := range in {
+		out = append(out, domain.ReviewFindingInput{Path: f.Path, Line: f.Line, Body: f.Body})
+	}
+	return out
+}
+
 func writeReviewError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, reviewsvc.ErrFindingForbidden):
+		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "REVIEW_FINDING_FORBIDDEN", err.Error(), nil)
+	case errors.Is(err, reviewsvc.ErrFindingSuperseded):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_FINDING_SUPERSEDED", err.Error(), nil)
 	case errors.Is(err, reviewsvc.ErrInvalid):
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "REVIEW_INVALID", err.Error(), nil)
 	case errors.Is(err, reviewsvc.ErrNotFound):

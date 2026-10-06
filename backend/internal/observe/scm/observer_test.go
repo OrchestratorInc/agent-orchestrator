@@ -1279,7 +1279,7 @@ func TestPoll_UnchangedHashesDoNotWriteOrNotify(t *testing.T) {
 	local := knownPR(1)
 	local.MetadataHash = metadataSemanticHash(obsValue)
 	local.CIHash = ciSemanticHash(obsValue.CI)
-	local.ReviewHash = reviewSemanticHash(obsValue.Review)
+	local.ReviewHash = reviewSemanticHash(obsValue.Review, "")
 	store.prs["p-1"] = []domain.PullRequest{local}
 	provider := &fakeProvider{repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo"}}, observations: map[string]ports.SCMObservation{prKey(testRepo, 1): obsValue}}
 	lc := &fakeLifecycle{}
@@ -1359,8 +1359,8 @@ func TestPoll_PartialReviewRefreshUsesMergeMode(t *testing.T) {
 	if store.writes[0].reviewMode != ports.ReviewWriteMerge {
 		t.Fatalf("review mode = %v, want merge", store.writes[0].reviewMode)
 	}
-	if store.writes[0].pr.ReviewHash != reviewSemanticHash(review) {
-		t.Fatalf("review hash = %q, want partial hash %q", store.writes[0].pr.ReviewHash, reviewSemanticHash(review))
+	if store.writes[0].pr.ReviewHash != reviewSemanticHash(review, "alice") {
+		t.Fatalf("review hash = %q, want partial hash %q", store.writes[0].pr.ReviewHash, reviewSemanticHash(review, "alice"))
 	}
 }
 
@@ -1488,7 +1488,7 @@ func TestPoll_ReviewFetchFailureDoesNotUpdateReviewDecision(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
 	local.Review = domain.ReviewChangesRequest
-	local.ReviewHash = reviewSemanticHash(ports.SCMReviewObservation{Decision: string(domain.ReviewChangesRequest), Threads: []ports.SCMReviewThreadObservation{{ID: "old", Comments: []ports.SCMReviewCommentObservation{{ID: "c-old", Body: "old"}}}}})
+	local.ReviewHash = reviewSemanticHash(ports.SCMReviewObservation{Decision: string(domain.ReviewChangesRequest), Threads: []ports.SCMReviewThreadObservation{{ID: "old", Comments: []ports.SCMReviewCommentObservation{{ID: "c-old", Body: "old"}}}}}, "")
 	obsValue := testObs(1)
 	obsValue.Review.Decision = string(domain.ReviewApproved)
 	local.MetadataHash = metadataSemanticHash(obsValue)
@@ -1692,7 +1692,7 @@ func TestPoll_UpdatedAtProviderStaleDoesNotTriggerReviewRefresh(t *testing.T) {
 	local.ReviewObservedAt = time.Unix(200, 0).UTC()
 	local.MetadataHash = metadataSemanticHash(obsValue)
 	local.CIHash = ciSemanticHash(obsValue.CI)
-	local.ReviewHash = reviewSemanticHash(obsValue.Review)
+	local.ReviewHash = reviewSemanticHash(obsValue.Review, "")
 	store.prs["p-1"] = []domain.PullRequest{local}
 
 	provider := &fakeProvider{
@@ -2248,10 +2248,10 @@ func TestPoll_IncrementalDiscovery_OnlyUpdatedMRsRefreshed(t *testing.T) {
 	o1, o3 := testObs(1), testObs(3)
 	pr1.MetadataHash = metadataSemanticHash(o1)
 	pr1.CIHash = ciSemanticHash(o1.CI)
-	pr1.ReviewHash = reviewSemanticHash(o1.Review)
+	pr1.ReviewHash = reviewSemanticHash(o1.Review, "")
 	pr3.MetadataHash = metadataSemanticHash(o3)
 	pr3.CIHash = ciSemanticHash(o3.CI)
-	pr3.ReviewHash = reviewSemanticHash(o3.Review)
+	pr3.ReviewHash = reviewSemanticHash(o3.Review, "")
 	store.prs["p-1"] = []domain.PullRequest{pr1, pr2, pr3}
 	provider.fetchBatches = nil
 	provider.mu.Unlock()
@@ -2612,7 +2612,7 @@ func TestPoll_GitHubTerminalReconciliation_StillOpenNoOp(t *testing.T) {
 	// is semantically a no-op (unchanged hashes → no write, no ETag advance).
 	local.MetadataHash = metadataSemanticHash(stillOpen)
 	local.CIHash = ciSemanticHash(stillOpen.CI)
-	local.ReviewHash = reviewSemanticHash(stillOpen.Review)
+	local.ReviewHash = reviewSemanticHash(stillOpen.Review, "")
 	store.prs["p-1"] = []domain.PullRequest{local}
 
 	provider := &fakeProvider{
@@ -3497,5 +3497,42 @@ func TestMergeabilityFromProviderFacts_UnstableOutranksBlockers(t *testing.T) {
 				t.Fatalf("Blockers = %v, want %v", got.Blockers, tc.wantBlockers)
 			}
 		})
+	}
+}
+
+// A later comment from AO's own provider identity on a review thread is the
+// worker's reply and is marked so lifecycle never nudges it back (#6300). The
+// thread's first comment is review feedback whoever wrote it.
+func TestDomainFromObservationMarksOwnRepliesButNotThreadRoots(t *testing.T) {
+	obs := testObs(1)
+	obs.Review = ports.SCMReviewObservation{Threads: []ports.SCMReviewThreadObservation{
+		{ID: "t1", Comments: []ports.SCMReviewCommentObservation{{ID: "root", Author: "alice"}, {ID: "reply", Author: "agentwrapper"}, {ID: "human", Author: "alice"}}},
+		{ID: "t2", Comments: []ports.SCMReviewCommentObservation{{ID: "own-root", Author: "AgentWrapper"}}},
+	}}
+	_, _, _, _, comments := domainFromObservation("p-1", domain.SessionRecord{}, obs, domain.PullRequest{}, persistenceOptions{ownLogin: "AgentWrapper"}, time.Unix(1, 0).UTC())
+	own := map[string]bool{}
+	for _, c := range comments {
+		own[c.ID] = c.OwnReply
+	}
+	if !own["reply"] || own["root"] || own["human"] || own["own-root"] {
+		t.Fatalf("own-reply marks = %v, want only the later comment by AO's login", own)
+	}
+	_, _, _, _, comments = domainFromObservation("p-1", domain.SessionRecord{}, obs, domain.PullRequest{}, persistenceOptions{}, time.Unix(1, 0).UTC())
+	for _, c := range comments {
+		if c.OwnReply {
+			t.Fatalf("without a known identity nothing is marked: %+v", c)
+		}
+	}
+}
+
+// Learning AO's identity must change the review hash, or threads persisted
+// before own-reply marking existed would never be rewritten with their marks.
+func TestReviewSemanticHashTracksOwnLogin(t *testing.T) {
+	review := ports.SCMReviewObservation{Threads: []ports.SCMReviewThreadObservation{{ID: "t1", Comments: []ports.SCMReviewCommentObservation{{ID: "c1", Author: "AgentWrapper"}}}}}
+	if reviewSemanticHash(review, "") == reviewSemanticHash(review, "AgentWrapper") {
+		t.Fatal("hash ignores the identity own-reply marks derive from")
+	}
+	if reviewSemanticHash(review, "agentwrapper") != reviewSemanticHash(review, "AgentWrapper") {
+		t.Fatal("login case must not churn the hash")
 	}
 }

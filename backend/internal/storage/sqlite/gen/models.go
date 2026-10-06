@@ -506,6 +506,7 @@ type PRComment struct {
 	IsBot            int64
 	AutoInjectReview bool
 	ReviewID         string
+	OwnReply         bool
 }
 
 type PRReview struct {
@@ -600,22 +601,42 @@ type Review struct {
 	IsArchived             bool
 }
 
+type ReviewFinding struct {
+	ID                  string
+	RunID               string
+	SessionID           domain.SessionID
+	PRURL               string
+	TargetSha           string
+	Ordinal             int64
+	Path                string
+	Line                int64
+	Body                string
+	Status              domain.ReviewFindingStatus
+	ResolutionNote      string
+	ResolvedBySessionID string
+	ResolvedAt          sql.NullTime
+	SupersededByRunID   string
+	CreatedAt           time.Time
+}
+
 type ReviewRun struct {
-	ID               string
-	ReviewID         string
-	SessionID        domain.SessionID
-	Harness          domain.ReviewerHarness
-	PRURL            string
-	TargetSha        string
-	Status           domain.ReviewRunStatus
-	Verdict          domain.ReviewVerdict
-	Body             string
-	CreatedAt        time.Time
-	GithubReviewID   string
-	DeliveredAt      sql.NullTime
-	BatchID          string
-	AutoInjectReview bool
-	TriggerSource    domain.ReviewTriggerSource
+	ID                    string
+	ReviewID              string
+	SessionID             domain.SessionID
+	Harness               domain.ReviewerHarness
+	PRURL                 string
+	TargetSha             string
+	Status                domain.ReviewRunStatus
+	Verdict               domain.ReviewVerdict
+	Body                  string
+	CreatedAt             time.Time
+	GithubReviewID        string
+	DeliveredAt           sql.NullTime
+	BatchID               string
+	AutoInjectReview      bool
+	TriggerSource         domain.ReviewTriggerSource
+	ProviderPostError     string
+	DeliverySkippedReason string
 }
 
 type Session struct {

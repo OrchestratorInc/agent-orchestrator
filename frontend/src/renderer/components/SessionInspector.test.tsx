@@ -2839,6 +2839,43 @@ describe("SessionInspector summary reviews", () => {
     expect(await screen.findByText(/Requested by agent/)).toBeInTheDocument();
   });
 
+  // AO's own findings live in AO (#6300): they list under their run, resolve
+  // through AO rather than GitHub, and say who closed them.
+  it("shows AO review findings under their run and resolves them in AO", async () => {
+    const run = { ...approvedReview, verdict: "changes_requested", autoInjectReview: false, providerPostError: "github scm: 403" };
+    const finding = (id: string, extra: Record<string, unknown>) => ({
+      id, runId: run.id, sessionId: "sess-1", prUrl: run.prUrl, targetSha: "abc123", ordinal: 1, createdAt: run.createdAt, ...extra,
+    });
+    const base = commonGetsResponder([], "reviewer-pane", [{ ...reviewState(3, "changes_requested", "abc123"), latestRun: run }]);
+    getMock.mockImplementation(async (path: string) => {
+      if (path === "/api/v1/sessions/{sessionId}/reviews") {
+        const response = await base(path);
+        return { data: { ...response.data, runs: [run], findings: [
+          finding("f-open", { path: "greet.js", line: 12, body: "Add tests for initials.", status: "open" }),
+          finding("f-done", { body: "Use a function declaration.", status: "resolved", resolvedBySessionId: "sess-1", resolutionNote: "Requester wants the one-liner." }),
+        ] } };
+      }
+      return base(path);
+    });
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    expect(await screen.findByText("Add tests for initials.")).toBeInTheDocument();
+    expect(screen.getByTestId("review-run-notice")).toHaveTextContent("Summary not posted to GitHub: github scm: 403");
+    await userEvent.click(screen.getByText("Resolved comments · 1"));
+    expect(screen.getByTestId("finding-resolution")).toHaveTextContent("Resolved by the worker: Requester wants the one-liner.");
+
+    await userEvent.click(screen.getAllByRole("button", { name: "Comment actions" })[0]!);
+    expect(screen.queryByText("Open on GitHub")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Resolve comment" }));
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/{sessionId}/reviews/findings/resolve",
+      { params: { path: { sessionId: "sess-1" } }, body: { findingIds: ["f-open"] } },
+    ));
+    expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/comments/resolve", expect.anything());
+  });
+
   // Several reviewers can run on one worker at once; each must be reachable.
   it("offers to open each of several live reviewers", async () => {
     const base = commonGetsResponder([], "claude-pane", [
