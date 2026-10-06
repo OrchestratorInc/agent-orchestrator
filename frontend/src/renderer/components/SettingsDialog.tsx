@@ -290,8 +290,8 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 
 						{/* Main area — same bg as the app page */}
 						<div className="flex min-w-0 flex-1 flex-col bg-card">
-							<DialogHeader className={cn(settingsDialogHeaderClass, "flex h-auto shrink-0 flex-row items-center justify-between border-b-0 pb-3")}>
-								<Dialog.Title className="text-2xl font-bold text-foreground">{activeLabel}{remoteHostId && <span className="ml-2 text-sm font-normal text-muted-foreground">· {labelForHost(remoteHostId) ?? remoteHostId}</span>}</Dialog.Title>
+							<DialogHeader className={cn(settingsDialogHeaderClass, "flex h-auto shrink-0 flex-row items-center justify-between border-b-0 px-(--size-modal-padding) py-3")}>
+								<Dialog.Title className={cn(isProjectSettings ? "settings-dialog-title" : "text-2xl font-bold text-foreground")}>{activeLabel}{remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(remoteHostId) ?? remoteHostId}</span>}</Dialog.Title>
 								<Dialog.Description className="sr-only">
 									{isProjectSettings
 										? t("settings.project.dialogDescription")

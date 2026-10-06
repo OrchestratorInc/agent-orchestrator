@@ -143,23 +143,25 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		setError(null);
 		mutation.mutate(env);
 	};
-	return <form id="project-settings-form" className="space-y-5 pb-6" onSubmit={(event) => { event.preventDefault(); save(); }}>
-		<div className="flex flex-wrap items-start justify-between gap-3">
+	return <form id="project-settings-form" className="flex min-h-full flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save(); }}>
+		<div className="flex flex-wrap items-start justify-between gap-2">
 			<div className="min-w-0">
-				<h2 className="text-base font-semibold text-settings-label">{t("settings.project.environmentVariables")}</h2>
-				<p className="mt-1 max-w-2xl text-sm leading-5 text-settings-muted">{t("settings.project.environmentHint")}</p>
+				<div className="flex flex-wrap items-center gap-2">
+					<h2 className="text-sm font-semibold text-settings-label">{t("settings.project.environmentVariables")}</h2>
+					<span className="rounded-full border border-border bg-muted/30 px-2 py-0.5 text-2xs font-medium text-muted-foreground">{t("settings.project.environmentCount", { count: variableCount })}</span>
+				</div>
+				<p className="mt-1 max-w-2xl text-xs leading-4 text-settings-muted">{t("settings.project.environmentHint")}</p>
 			</div>
-			<span className="rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs font-medium text-muted-foreground">{t("settings.project.environmentCount", { count: variableCount })}</span>
 		</div>
 		<div className="overflow-hidden rounded-lg border border-border bg-muted/10">
 			{rows.length > 0 ? <>
-				<div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-border bg-muted/20 px-4 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+				<div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-border bg-muted/20 px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 					<span>{t("settings.project.envName")}</span>
 					<span>{t("settings.project.envValue")}</span>
 					<span className="sr-only">{t("settings.project.showVariable")}</span>
 					<span aria-hidden="true" className="sr-only">{t("settings.project.envValue")}</span>
 				</div>
-				{rows.map((row, index) => <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-border px-4 py-3 last:border-b-0" key={index}>
+				{rows.map((row, index) => <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-border px-3 py-2.5 last:border-b-0" key={index}>
 					<input aria-label={`${t("settings.project.envName")} ${index + 1}`} className="settings-field-control min-w-0" placeholder={t("settings.project.envName")} value={row.name} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} />
 					<input aria-label={`${t("settings.project.envValue")} ${index + 1}`} autoComplete="off" className="settings-field-control min-w-0" placeholder={t("settings.project.envValue")} type={row.visible ? "text" : "password"} value={row.value} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />
 					<button aria-label={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} className="rounded p-2 text-settings-muted hover:text-settings-label focus-visible:ring-2 focus-visible:ring-ring" onClick={() => update(rows.map((item, i) => i === index ? { ...item, visible: !item.visible } : item))} title={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} type="button">{row.visible ? <EyeOff size={16} /> : <Eye size={16} />}</button>
@@ -170,17 +172,17 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 				<p className="text-sm font-medium text-settings-label">{t("settings.project.environmentEmptyTitle")}</p>
 				<p className="mt-1 max-w-sm text-sm text-settings-muted">{t("settings.project.environmentEmptyHint")}</p>
 			</div>}
-			<div className="flex flex-wrap items-center gap-2 border-t border-border bg-background/30 px-4 py-3">
+			<div className="flex flex-wrap items-center gap-2 border-t border-border bg-background/30 px-3 py-2.5">
 				<Button className="gap-1.5" onClick={() => update([...rows, { name: "", value: "", visible: false }])} size="sm" type="button" variant="outline"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
 				<Button className="gap-1.5" onClick={() => { setPasteOpen(!pasteOpen); setError(null); }} size="sm" type="button" variant="ghost"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
 			</div>
 		</div>
-		{pasteOpen && <div className="space-y-3 rounded-lg border border-border bg-muted/10 p-4">
+		{pasteOpen && <div className="space-y-2.5 rounded-lg border border-border bg-muted/10 p-3">
 			<div>
 				<label className="text-sm font-medium text-settings-label" htmlFor="project-env-paste">{t("settings.project.pasteVariables")}</label>
 				<p className="mt-1 text-sm text-settings-muted">{t("settings.project.envPasteHint")}</p>
 			</div>
-			<textarea autoComplete="off" className="settings-field-control min-h-36 w-full font-mono text-sm" id="project-env-paste" onChange={(event) => setPasteText(event.target.value)} spellCheck={false} value={pasteText} />
+			<textarea autoComplete="off" className="settings-field-control min-h-28 w-full font-mono text-sm" id="project-env-paste" onChange={(event) => setPasteText(event.target.value)} spellCheck={false} value={pasteText} />
 			<div className="flex justify-end gap-2">
 				<Button onClick={() => { setPasteOpen(false); setPasteText(""); setError(null); }} size="sm" type="button" variant="outline">{t("settings.project.envPasteCancel")}</Button>
 				<Button disabled={!pasteText.trim()} onClick={importPasted} size="sm" type="button">{t("settings.project.importVariables")}</Button>
@@ -189,6 +191,9 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		{importedCount !== null && <p role="status" className="text-sm text-settings-muted">{t("settings.project.envImported", { count: importedCount })}</p>}
 		{error && <p role="alert" className="text-sm text-error">{error}</p>}
 		{mutation.isError && <p role="alert" className="text-sm text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
-		<div className="flex justify-end border-t border-border pt-4"><Button disabled={!dirty || mutation.isPending} type="submit">{t("settings.project.saveChanges")}</Button></div>
+		<div className="sticky bottom-0 z-chrome mt-auto flex items-center justify-between gap-3 border-t border-border bg-card py-3">
+			<span aria-live="polite" className="min-w-0 truncate text-xs text-settings-muted">{dirty ? t("settings.project.unsavedChanges") : savedAt ? t("settings.project.saved") : ""}</span>
+			<Button disabled={!dirty || mutation.isPending} type="submit">{t("settings.project.saveChanges")}</Button>
+		</div>
 	</form>;
 }
