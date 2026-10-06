@@ -242,6 +242,25 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).getByRole("button", { name: "Update" })).toBeEnabled();
 	});
 
+	it("updates through the package manager that owns the binary over a stale saved method", async () => {
+		mockInstalledOperations("npm");
+		const get = vi.mocked(apiClient.GET);
+		const previous = get.getMockImplementation()!;
+		get.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/{agent}/update-advisory") {
+				const agentId = (options as { params: { path: { agent: string } } }).params.path.agent;
+				return { data: { agentId, status: "current", currentVersion: "1.3.0", latestVersion: "1.3.0", source: "homebrew", checkedAt: "2026-10-04T00:00:00Z" } } as never;
+			}
+			return (previous as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		renderSection();
+		const row = (await screen.findByRole("button", { name: "Expand Codex options" })).closest('[data-agent="codex"]') as HTMLElement;
+		await userEvent.click(within(row).getByRole("button", { name: "Expand Codex options" }));
+		expect(await within(row).findByText("Up to date (1.3.0)")).toBeInTheDocument();
+		await userEvent.click(within(row).getByRole("button", { name: "Update" }));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "homebrew", operation: "update" } });
+	});
+
 	it("updates using the saved method and shows Updating rather than Installing", async () => {
 		mockInstalledOperations("npm");
 		renderSection();

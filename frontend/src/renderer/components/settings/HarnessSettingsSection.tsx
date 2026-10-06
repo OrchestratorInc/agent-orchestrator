@@ -524,8 +524,11 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 
 	const requestInstalledOperation = (agentId: AgentId, operation: InstalledOperation) => {
 		if (!installed.has(agentId) || pendingActions.current.has(agentId) || isActive(jobMap.get(agentId))) return;
-		const method = jobMap.get(agentId)?.method ?? "";
 		const methods = plans.get(agentId)?.methods ?? [];
+		// The package manager that owns the running binary outranks AO's job
+		// record, which is missing for manual installs and stale after reinstalls.
+		const detected = queryClient.getQueryData<AgentUpdateAdvisory>(updateAdvisoryQueryKey(agentId, hostId))?.source;
+		const method = (detected && methods.some((candidate) => candidate.id === detected) ? detected : jobMap.get(agentId)?.method) ?? "";
 		if (method ? !supportsOperation(methods.find((candidate) => candidate.id === method), operation) : !methods.some((candidate) => supportsOperation(candidate, operation))) return;
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
 		if (method && operation === "update") {
