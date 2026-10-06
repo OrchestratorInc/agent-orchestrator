@@ -47,7 +47,7 @@ type officialSource struct {
 	match *regexp.Regexp
 }
 
-var cursorDownloadVersion = regexp.MustCompile(`downloads\.cursor\.com/lab/([0-9][0-9A-Za-z.-]*)/`)
+var cursorDownloadVersion = regexp.MustCompile(`downloads\.cursor\.com/lab/(\d[0-9A-Za-z.-]*)/`)
 
 func officialSourceFor(target Target, goos, goarch string) (officialSource, bool) {
 	switch target {
