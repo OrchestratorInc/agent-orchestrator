@@ -21,6 +21,9 @@ import (
 )
 
 type fakeCueService struct {
+	createCalls     int
+	updateCalls     int
+	getCalls        int
 	gotProject      domain.ProjectID
 	gotCueID        domain.CueID
 	gotInvoke       cuesvc.InvokeInput
@@ -36,6 +39,7 @@ type fakeCueService struct {
 }
 
 func (f *fakeCueService) Create(_ context.Context, projectID domain.ProjectID, input cuesvc.Input) (domain.Cue, error) {
+	f.createCalls++
 	f.gotProject = projectID
 	f.gotCreateIn = input
 	return f.created, f.err
@@ -47,11 +51,13 @@ func (f *fakeCueService) List(_ context.Context, projectID domain.ProjectID) ([]
 }
 
 func (f *fakeCueService) Get(_ context.Context, cueID domain.CueID) (domain.Cue, error) {
+	f.getCalls++
 	f.gotCueID = cueID
 	return f.got, f.err
 }
 
 func (f *fakeCueService) Update(_ context.Context, cueID domain.CueID, input cuesvc.Input) (domain.Cue, error) {
+	f.updateCalls++
 	f.gotCueID = cueID
 	f.gotUpdateIn = input
 	return f.updated, f.err
@@ -294,6 +300,81 @@ func newCueLANTestServer(t *testing.T, svc controllers.CueService) *httptest.Ser
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func TestCuesAPI_CommandAuthoringRequiresLoopback(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		lan          bool
+		method       string
+		existingType domain.CueType
+		body         string
+		wantStatus   int
+	}{
+		{"LAN create command without startup", true, "POST", "", `{"name":"Tests","type":"command","command":"pnpm test","runOnWorktreeCreation":false}`, http.StatusForbidden},
+		{"LAN create startup command", true, "POST", "", `{"name":"Tests","type":"command","command":"pnpm test","runOnWorktreeCreation":true}`, http.StatusForbidden},
+		{"LAN create agent", true, "POST", "", `{"name":"Tests","type":"agent","prompt":"Run tests"}`, http.StatusCreated},
+		{"LAN update agent", true, "PATCH", domain.CueTypeAgent, `{"name":"Tests","type":"agent","prompt":"Run tests"}`, http.StatusOK},
+		{"LAN convert agent to command", true, "PATCH", domain.CueTypeAgent, `{"name":"Tests","type":"command","command":"pnpm test"}`, http.StatusForbidden},
+		{"LAN update command without startup", true, "PATCH", domain.CueTypeCommand, `{"name":"Tests","type":"command","command":"pnpm test","runOnWorktreeCreation":false}`, http.StatusForbidden},
+		{"LAN update startup command", true, "PATCH", domain.CueTypeCommand, `{"name":"Tests","type":"command","command":"pnpm test","runOnWorktreeCreation":true}`, http.StatusForbidden},
+		{"LAN convert command to agent", true, "PATCH", domain.CueTypeCommand, `{"name":"Tests","type":"agent","prompt":"Run tests"}`, http.StatusForbidden},
+		{"loopback create command", false, "POST", "", `{"name":"Tests","type":"command","command":"pnpm test"}`, http.StatusCreated},
+		{"loopback update command", false, "PATCH", domain.CueTypeCommand, `{"name":"Tests","type":"command","command":"pnpm test"}`, http.StatusOK},
+		{"loopback convert command to agent", false, "PATCH", domain.CueTypeCommand, `{"name":"Tests","type":"agent","prompt":"Run tests"}`, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeCueService{created: sampleCue(), updated: sampleCue(), got: domain.Cue{Type: tc.existingType}}
+			var srv *httptest.Server
+			if tc.lan {
+				srv = newCueLANTestServer(t, svc)
+			} else {
+				srv = newCueTestServer(t, svc)
+			}
+			path := "/api/v1/projects/portfolio/cues"
+			if tc.method == "PATCH" {
+				path = "/api/v1/cues/cue-def456"
+			}
+			body, status, _ := doRequest(t, srv, tc.method, path, tc.body)
+			if status != tc.wantStatus {
+				t.Fatalf("status=%d want=%d body=%s", status, tc.wantStatus, body)
+			}
+			wantWrites := 1
+			if tc.wantStatus == http.StatusForbidden {
+				wantWrites = 0
+				if !strings.Contains(string(body), "CUE_COMMAND_LOOPBACK_REQUIRED") || !strings.Contains(string(body), "Command cues must be configured on the owning desktop") {
+					t.Fatalf("unexpected forbidden envelope: %s", body)
+				}
+			}
+			if svc.createCalls+svc.updateCalls != wantWrites {
+				t.Fatalf("create calls=%d update calls=%d want writes=%d", svc.createCalls, svc.updateCalls, wantWrites)
+			}
+			wantGets := 0
+			if tc.lan && tc.method == "PATCH" {
+				wantGets = 1
+			}
+			if svc.getCalls != wantGets {
+				t.Fatalf("get calls=%d want=%d", svc.getCalls, wantGets)
+			}
+		})
+	}
+}
+
+func TestCuesAPI_LANUpdateMissingCueReturnsNotFound(t *testing.T) {
+	for _, body := range []string{
+		`{"name":"Tests","type":"agent","prompt":"Run tests"}`,
+		`{"name":"Tests","type":"command","command":"pnpm test"}`,
+	} {
+		svc := &fakeCueService{err: apierr.NotFound("CUE_NOT_FOUND", "Unknown cue")}
+		srv := newCueLANTestServer(t, svc)
+		response, status, _ := doRequest(t, srv, "PATCH", "/api/v1/cues/cue-missing", body)
+		if status != http.StatusNotFound || !strings.Contains(string(response), "CUE_NOT_FOUND") {
+			t.Fatalf("status=%d body=%s", status, response)
+		}
+		if svc.getCalls != 1 || svc.updateCalls != 0 {
+			t.Fatalf("get calls=%d update calls=%d", svc.getCalls, svc.updateCalls)
+		}
+	}
 }
 
 func TestCuesAPI_InvokeReturnsCommandTerminal(t *testing.T) {

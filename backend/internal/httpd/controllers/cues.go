@@ -100,8 +100,7 @@ func (c *CuesController) create(w http.ResponseWriter, r *http.Request) {
 	if !decodeCueBody(w, r, &req, 128<<10) {
 		return
 	}
-	if req.RunOnWorktreeCreation && requestscope.IsLAN(r.Context()) {
-		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "CUE_COMMAND_LOOPBACK_REQUIRED", "Startup command cues must be configured on the owning desktop", nil)
+	if rejectLANCommandCueWrite(w, r, domain.CueType(req.Type)) {
 		return
 	}
 
@@ -124,15 +123,20 @@ func (c *CuesController) update(w http.ResponseWriter, r *http.Request) {
 	if !decodeCueBody(w, r, &req, 128<<10) {
 		return
 	}
-	if req.RunOnWorktreeCreation && requestscope.IsLAN(r.Context()) {
-		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "CUE_COMMAND_LOOPBACK_REQUIRED", "Startup command cues must be configured on the owning desktop", nil)
-		return
-	}
-
 	cueID, err := url.PathUnescape(chi.URLParam(r, "cueId"))
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "CUE_ID_INVALID", "Invalid cue id", nil)
 		return
+	}
+	if requestscope.IsLAN(r.Context()) {
+		existing, err := c.Svc.Get(r.Context(), domain.CueID(cueID))
+		if err != nil {
+			envelope.WriteError(w, r, err)
+			return
+		}
+		if rejectLANCommandCueWrite(w, r, domain.CueType(req.Type), existing.Type) {
+			return
+		}
 	}
 	cue, err := c.Svc.Update(r.Context(), domain.CueID(cueID), cueInput(req))
 	if err != nil {
@@ -142,6 +146,21 @@ func (c *CuesController) update(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, CueEnvelope{
 		Cue: cueResponse(cue),
 	})
+}
+
+// Check both the replacement and stored type so remote clients cannot convert
+// a desktop-owned command cue into an agent cue to bypass the write policy.
+func rejectLANCommandCueWrite(w http.ResponseWriter, r *http.Request, types ...domain.CueType) bool {
+	if !requestscope.IsLAN(r.Context()) {
+		return false
+	}
+	for _, cueType := range types {
+		if cueType == domain.CueTypeCommand {
+			envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "CUE_COMMAND_LOOPBACK_REQUIRED", "Command cues must be configured on the owning desktop", nil)
+			return true
+		}
+	}
+	return false
 }
 
 func (c *CuesController) delete(w http.ResponseWriter, r *http.Request) {
