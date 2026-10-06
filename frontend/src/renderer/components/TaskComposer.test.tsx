@@ -26,7 +26,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ client: { createSession: h.cloudCreateSession } }),
 }));
 vi.mock("../hooks/useCloudOrg", () => ({
-	useCloudOrg: () => ({ org: h.cloudProject ? { id: "org-1" } : undefined }),
+	useCloudOrg: () => ({ org: h.cloudProject || h.cloudProjects.length > 0 ? { id: "org-1" } : undefined }),
 }));
 vi.mock("../hooks/useWorkspaceQuery", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../hooks/useWorkspaceQuery")>();
@@ -1095,6 +1095,28 @@ describe("TaskComposer", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("File attachments are not supported for cloud tasks yet.");
 		expect(onCreated).not.toHaveBeenCalled();
 		expect(h.post).not.toHaveBeenCalled();
+	});
+
+	it("defaults cloud effort to medium and sends explicit effort choices", async () => {
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
+		h.get.mockImplementation(async () => ({ data: { agent: "claude-code", selectionMode: "catalog", models: [
+			{ id: "claude-sonnet-test", label: "Sonnet", isDefault: true, efforts: ["low", "medium", "high"] },
+		], allowCustom: true } }));
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
+		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Effort" });
+		await waitFor(() => expect(picker).toHaveTextContent("Medium"));
+		await userEvent.click(picker);
+		expect(screen.queryByRole("menuitem", { name: "Use agent effort" })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		fireEvent.change(task(), { target: { value: "Do the work" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ reasoningEffort: "medium" })));
+		await userEvent.click(picker);
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+		fireEvent.change(task(), { target: { value: "Another task" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ reasoningEffort: "high" })));
 	});
 
 	it("uses the control plane default when a saved sandbox provider is unavailable", async () => {

@@ -280,3 +280,77 @@ func TestBuildTaskPromptPreservesExplicitPublishingScope(t *testing.T) {
 		}
 	}
 }
+
+// The orchestrator once spawned a generic worker to review another worker's PR
+// because its prompt routed every code-review task to a new worker. It must
+// start AO's native reviewer instead.
+func TestBuildSystemPrompt_OrchestratorUsesNativeReviewNotReviewerWorkers(t *testing.T) {
+	got := buildSystemPromptText(systemPromptConfig{
+		Role:    sessionPromptRoleOrchestrator,
+		Project: promptProject{ID: "mer", Name: "Mercury"},
+	})
+	for _, want := range []string{
+		"Never spawn a worker to review code",
+		"`ao review trigger <worker-session-id>`",
+		"`ao review ls <worker-session-id>`",
+		"not a GitHub approval",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("orchestrator prompt missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "code-review task, always spawn") {
+		t.Fatalf("orchestrator prompt still routes code review to spawned workers:\n%s", got)
+	}
+}
+
+func TestBuildSystemPrompt_WorkerNativeReviewFollowsProjectPolicy(t *testing.T) {
+	build := func(requestReview, orchestrated bool) string {
+		cfg := systemPromptConfig{
+			Role:    sessionPromptRoleWorker,
+			Project: promptProject{ID: "mer", Name: "Mercury", Repo: "https://github.com/acme/mercury", WorkersRequestReview: requestReview},
+		}
+		if orchestrated {
+			cfg.OrchestratorSessionID = "mer-orchestrator"
+		}
+		return buildSystemPromptText(cfg)
+	}
+	common := []string{
+		"## AO Native Review",
+		"isolated AO reviewer agent, not another worker",
+		"--rerun",
+		"Never spawn, or ask the orchestrator to spawn, a separate worker session to review your PR",
+		"An AO approval is not a GitHub approval",
+	}
+
+	on := build(true, true)
+	for _, want := range append(common, "This project asks workers to request it", "run `ao review trigger` again for the new head", "findings arrive in this session as PR review comments", "check `ao review ls` for the verdict before reporting the work done", "`ao review trigger --pr <url>`", "If it shows the run failed or was cancelled") {
+		if !strings.Contains(on, want) {
+			t.Fatalf("opted-in worker prompt missing %q:\n%s", want, on)
+		}
+	}
+	if strings.Contains(on, "leaves starting a review to people") {
+		t.Fatalf("opted-in worker prompt still asks before reviewing:\n%s", on)
+	}
+
+	off := build(false, true)
+	for _, want := range append(common, "ask the user or the orchestrator whether to start an AO review") {
+		if !strings.Contains(off, want) {
+			t.Fatalf("default worker prompt missing %q:\n%s", want, off)
+		}
+	}
+	if strings.Contains(off, "This project asks workers to request it") {
+		t.Fatalf("default worker prompt requests review without the opt-in:\n%s", off)
+	}
+	if solo := build(false, false); !strings.Contains(solo, "ask the user whether to start an AO review") {
+		t.Fatalf("worker prompt without an orchestrator should only ask the user:\n%s", solo)
+	}
+	if strings.Contains(on, "- - ") || strings.Contains(off, "- - ") {
+		t.Fatalf("worker prompt renders a doubled bullet")
+	}
+
+	local := buildSystemPromptText(systemPromptConfig{Role: sessionPromptRoleWorker, Project: promptProject{ID: "mer"}})
+	if strings.Contains(local, "## AO Native Review") {
+		t.Fatalf("a project with no remote has no PRs to review:\n%s", local)
+	}
+}

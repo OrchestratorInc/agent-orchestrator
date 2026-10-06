@@ -4611,9 +4611,11 @@ describe("SessionView", () => {
 
 		render(<SessionView sessionId="sess-1" />);
 
-		await waitFor(() => expect(screen.getByTestId("session-file-workspace")).toHaveTextContent("src/from-command.ts"));
+		const workspace = await screen.findByTestId("session-file-workspace");
+		expect(workspace).toHaveTextContent("src/from-command.ts");
 		expect(screen.getByRole("tab", { name: "from-command.ts" })).toHaveAttribute("aria-selected", "true");
 		expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("summary");
 	});
 
 	it("resolves a basename against workspace files before opening on a cold cache", async () => {

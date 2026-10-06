@@ -8,6 +8,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/coder"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -140,26 +141,46 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "The Coder configuration could not be stored.")
 		return
 	}
-	// Validate the non-secret contract exactly as the deployment default is
-	// validated. The URL may be any absolute http(s) origin — an IP or host:port is
-	// allowed on purpose (bring-your-own Coder is often reached privately); only
-	// empty or malformed values are rejected, and public HTTPS is NOT forced. The
-	// token TTL is deployment policy, so a placeholder satisfies the shared check.
-	if err := (sandbox.CoderConfig{
-		BaseURL:        normalized.BaseURL,
-		Owner:          normalized.Owner,
-		TemplateID:     normalized.TemplateID,
-		AgentName:      normalized.AgentName,
-		Parameters:     normalized.Parameters,
-		DurableRoot:    normalized.DurableRoot,
-		WorkerTokenTTL: time.Minute,
-	}).Validate(); err != nil {
+	// The slimmed connection is just a base URL and a token. Validate that shape by
+	// building a probe client: it checks the URL is an absolute http(s) origin — an
+	// IP or host:port is allowed on purpose (bring-your-own Coder is often reached
+	// privately), public HTTPS is NOT forced — and that the token is present. The
+	// same client resolves the workspace owner below. Owner and template are no
+	// longer pasted: owner is derived from the token, the template is chosen per
+	// project, so neither is required here.
+	probe, err := coder.New(coder.Config{BaseURL: normalized.BaseURL, Token: string(token)})
+	if err != nil {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The Coder configuration is invalid: "+err.Error())
 		return
 	}
-	if _, err := uuid.Parse(normalized.TemplateID); err != nil {
-		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The Coder template ID must be a UUID.")
+	// The durable root must still expand to a safe mount path (normalize fills the
+	// default when the request omits it, which the slimmed form always does).
+	if _, err := sandbox.NewCoderWorkspaceLayout(normalized.DurableRoot); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The Coder configuration is invalid: "+err.Error())
 		return
+	}
+	// A template is optional at the org level — it is chosen per project now — but a
+	// value that IS present (a legacy or explicit caller) must still be a UUID.
+	if normalized.TemplateID != "" {
+		if _, err := uuid.Parse(normalized.TemplateID); err != nil {
+			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The Coder template ID must be a UUID.")
+			return
+		}
+	}
+	// Derive the workspace owner from the token when the caller did not supply one
+	// (the slimmed form never does). Resolving and storing it here keeps every
+	// downstream path — session creation, the resolver, the reconciler — working
+	// against a concrete owner with no further change, and validates the token and
+	// Coder reachability as a side effect. An explicit owner is left untouched for
+	// backward compatibility with configs that already carry one.
+	if normalized.Owner == "" {
+		owner, resolveErr := probe.CurrentUser(r.Context())
+		if resolveErr != nil {
+			s.logger.Error("resolve coder owner from token", "error", resolveErr, "request_id", requestID(r))
+			writeError(w, r, http.StatusBadGateway, "coder_unavailable", "Could not reach your Coder to resolve the workspace owner. Check the URL and API token.")
+			return
+		}
+		normalized.Owner = owner
 	}
 	// The PrivateLink fields are optional (blank for a directly reachable Coder).
 	// When present, apply only a loose shape check — AO ops provisions the endpoint
@@ -172,6 +193,12 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if normalized.Region != "" && !awsRegionPattern.MatchString(normalized.Region) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The AWS region must look like eu-north-1.")
+		return
+	}
+	// Re-encode with the resolved owner so the stored config and the response agree.
+	configJSON, err = domain.EncodeOrgCoderConfig(normalized)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "The Coder configuration could not be stored.")
 		return
 	}
 	encrypted, nonce, err := s.secretCipher.Encrypt(token, providerSecretAssociatedData(orgID, sandbox.ProviderCoder))

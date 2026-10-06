@@ -2,12 +2,14 @@ import type { ProjectSource } from "@aoagents/product-ui";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Cloud, Folder, Folders, FolderOpen, GitFork, MessageSquarePlus, Star } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
+import { isMacPlatform } from "../lib/platform";
 import { getProjectLastOpenedAt } from "../lib/project-history";
+import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { useShell } from "../lib/shell-context";
 import { cn } from "../lib/utils";
@@ -40,6 +42,7 @@ import { Badge } from "./ui/badge";
  *   is not a project: it never appears in Recent projects or counts toward
  *   the heading — the grid's standalone action and the sidebar own it.
  */
+const isMac = isMacPlatform();
 const GITHUB_REPOSITORY_URL = "https://github.com/Untrivial-ai/agent-orchestrator";
 const RECENT_PROJECT_LIMIT = 3;
 const HOME_BUTTON_CLASS =
@@ -197,7 +200,17 @@ export function HomePage() {
 	}
 
 	return (
-		<div className="flex min-h-full items-center justify-center px-6 py-16">
+		<div className="relative flex min-h-full items-center justify-center px-6 py-16">
+			{/* The home route hides the shell topbar, so on macOS this strip is the
+			    center pane's window-drag handle (the sidebar has its own). */}
+			{isMac ? (
+				<div
+					aria-hidden="true"
+					className="absolute inset-x-0 top-0 h-traffic-light-clearance"
+					data-slot="home-drag-region"
+					style={{ WebkitAppRegion: "drag" } as CSSProperties}
+				/>
+			) : null}
 			<div className="w-full max-w-[640px]">
 				<div className="space-y-6">
 					<section className="space-y-3 px-3">
@@ -256,7 +269,17 @@ export function HomePage() {
 									<ProjectRow
 										key={project.id}
 										project={project}
-										onClick={() => openProject(project.id)}
+										onClick={() => {
+										if (project.kind === STANDALONE_PROJECT_KIND) {
+											const session = project.sessions.find((candidate) => candidate.kind === "worker");
+											if (session) recordManualWorkerOpen(session.id);
+											session
+												? void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } })
+												: requestNewTask(STANDALONE_WORKSPACE_ID);
+											return;
+										}
+										openProject(project.id);
+									}}
 										emptyTimeLabel={t("home.never")}
 										justNowLabel={t("time.justNow")}
 									/>

@@ -134,7 +134,7 @@ export function WorkerBoardList({
 	);
 	const multipleHosts = hostStates.length > 1;
 	const projectNameFor = useCallback((entry: Scoped<DashboardSession>) => {
-		const name = projectNames.get(resourceKey(entry.source, entry.value.projectId)) ?? entry.value.projectId;
+		const name = entry.value.projectId ? projectNames.get(resourceKey(entry.source, entry.value.projectId)) ?? entry.value.projectId : "Standalone";
 		const host = entry.source.kind === "local" ? hostStates.find((item) => item.hostId === entry.source.id) : undefined;
 		return multipleHosts && host ? `${name} · ${host.name}${host.connection === "closed" ? " (offline)" : ""}` : name;
 	}, [hostStates, multipleHosts, projectNames]);

@@ -1,6 +1,6 @@
 import { Host, RNHostView } from "@expo/ui";
 import { Asset } from "expo-asset";
-import { Button, Group, HStack, Image, Menu, Spacer, Text } from "@expo/ui/swift-ui";
+import { Button, Divider, Group, HStack, Image, Menu, Spacer, Text } from "@expo/ui/swift-ui";
 import {
 	accessibilityIdentifier,
 	aspectRatio,
@@ -13,6 +13,7 @@ import {
 	labelStyle,
 	layoutPriority,
 	lineLimit,
+	menuOrder,
 	opacity,
 	padding,
 	resizable,
@@ -63,7 +64,8 @@ export function SpawnComposerControls({
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const logoUris = useHarnessLogoUris(agents);
-	const projectLabel = projects.find((project) => project.id === projectId)?.label ?? "Choose project";
+	const selectedProject = projects.find((project) => project.id === projectId);
+	const projectLabel = selectedProject?.label ?? "Choose project";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
 	const destinationLabel = destinations.find((option) => destination && sourceKey(option.source) === sourceKey(destination))?.label ?? "Choose where to run";
 
@@ -85,20 +87,25 @@ export function SpawnComposerControls({
 						<Menu
 							label={
 								<HStack spacing={7}>
-									<Image systemName="folder" size={iconSize.sm} />
+									<Image systemName={projectSystemImage(selectedProject)} size={iconSize.sm} />
 									<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{projectLabel}</Text>
 									<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
 								</HStack>
 							}
-							modifiers={[buttonStyle("plain"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ maxWidth: 1000, alignment: "leading" }), accessibilityIdentifier("spawn-project")]}
+							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ maxWidth: 1000, alignment: "leading" }), accessibilityIdentifier("spawn-project")]}
 						>
 							{projects.map((project) => (
-								<Button
-									key={project.id}
-									label={project.label}
-									systemImage={project.id === projectId ? "checkmark" : "folder"}
-									onPress={() => { haptics.select(); onSelectProject(project.id); }}
-								/>
+								<Group key={project.id}>
+									{project.sectionBreakBefore ? <Divider /> : null}
+									<Button onPress={() => { haptics.select(); onSelectProject(project.id); }}>
+										<HStack spacing={9}>
+											<Image systemName={projectSystemImage(project)} size={iconSize.sm} />
+											<Text>{project.label}</Text>
+											<Spacer />
+											{project.id === projectId ? <Image systemName="checkmark" size={iconSize.xs} /> : null}
+										</HStack>
+									</Button>
+								</Group>
 							))}
 						</Menu>
 					</Host>
@@ -221,6 +228,10 @@ export function SpawnComposerControls({
 			</Pressable>
 		</View>
 	);
+}
+
+function projectSystemImage(project?: SpawnComposerOption): "plus.bubble" | "folder" {
+	return project?.icon === "message-square-plus" ? "plus.bubble" : "folder";
 }
 
 const styles = StyleSheet.create({

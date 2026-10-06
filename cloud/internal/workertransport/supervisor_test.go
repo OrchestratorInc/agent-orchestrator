@@ -29,6 +29,59 @@ type outputSequenceControl struct {
 	output chan int64
 }
 
+type terminalFrameControl struct {
+	supervisorControlStub
+	output chan []byte
+}
+
+func (s *terminalFrameControl) PublishTerminalOutput(_ context.Context, _ string, _ int64, data []byte) error {
+	s.output <- append([]byte(nil), data...)
+	return nil
+}
+
+func TestReopenedAgentTerminalClearsPreviousDisplay(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		kind  string
+		next  int64
+		clear bool
+	}{
+		{"first agent startup", "agent", 1, false},
+		{"agent after interface switch", "agent", 41, true},
+		{"workspace shell", "workspace", 41, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			control := &terminalFrameControl{output: make(chan []byte, 32)}
+			supervisor := &Supervisor{
+				Control: control, Workspace: t.TempDir(), Shell: "/bin/sh",
+				terminals: make(map[string]*terminalProcess),
+			}
+			supervisor.AgentCommand = workerexec.Command{Path: "/bin/sh", Args: []string{"-c", "printf ready; cat"}, Dir: supervisor.Workspace}
+			defer supervisor.closeAllTerminals()
+			id := "00000000-0000-0000-0000-000000000040"
+			if err := supervisor.openTerminal(ctx, worker.TerminalCommand{TerminalID: id, Kind: test.kind, NextOutputSequence: test.next}); err != nil {
+				t.Fatal(err)
+			}
+			if test.kind == "workspace" {
+				if err := supervisor.writeTerminal(worker.TerminalCommand{TerminalID: id, Data: []byte("printf ready\n")}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			select {
+			case data := <-control.output:
+				cleared := strings.HasPrefix(string(data), "\x1b[3J\x1b[H\x1b[2J")
+				if cleared != test.clear {
+					t.Fatalf("first output = %q; clear previous display = %v, want %v", data, cleared, test.clear)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("terminal produced no output")
+			}
+		})
+	}
+}
+
 func (s *outputSequenceControl) PublishTerminalOutput(_ context.Context, _ string, sequence int64, _ []byte) error {
 	s.output <- sequence
 	return nil

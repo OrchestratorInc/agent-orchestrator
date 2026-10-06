@@ -7,8 +7,9 @@ import { AdditionalRepositoriesPicker, CoderTemplatePicker } from "./CoderTempla
 vi.mock("../hooks/useCoderTemplates", () => ({
 	useCoderTemplates: () => ({
 		templates: [
-			{ id: "template-1", name: "fast", displayName: "Fast workspace", description: "More CPU", parameters: ["size"] },
-			{ id: "template-2", name: "lean", displayName: "Lean workspace", description: "Less CPU", parameters: [] },
+			// The picker curates to the ao-devkit family, so the mock names match.
+			{ id: "template-1", name: "ao-devkit", displayName: "Fast workspace", description: "More CPU", parameters: ["size"] },
+			{ id: "template-2", name: "ao-devkit-large", displayName: "Lean workspace", description: "Less CPU", parameters: [] },
 		],
 		isLoading: false,
 	}),

@@ -17,91 +17,6 @@ import (
 
 const reviewMaxNudge = 3
 
-// ReviewDeliveryOutcome reports what ApplyReviewBatch did with completed
-// AO-internal review passes.
-type ReviewDeliveryOutcome string
-
-const (
-	// ReviewDeliveryNoop means lifecycle did not send or confirm a review nudge
-	// because the result was not relevant for delivery.
-	ReviewDeliveryNoop ReviewDeliveryOutcome = "no_op"
-	// ReviewDeliverySent means the worker nudge was sent or was already covered
-	// by sendOnce dedup state and may be stamped delivered.
-	ReviewDeliverySent ReviewDeliveryOutcome = "sent"
-)
-
-// ReviewResult is the already-persisted result of an AO-internal review pass.
-// Lifecycle treats it as input to the reaction reducer; it does not write the
-// review_run row.
-type ReviewResult struct {
-	RunID          string
-	BatchID        string
-	WorkerID       domain.SessionID
-	PRURL          string
-	TargetSHA      string
-	Verdict        domain.ReviewVerdict
-	Body           string
-	GithubReviewID string
-	DeliveredAt    *time.Time
-}
-
-// ApplyReviewBatch reacts to one reviewer CLI submission after the review
-// service has decided which current-head changes-requested results are
-// deliverable.
-func (m *Manager) ApplyReviewBatch(ctx context.Context, workerID domain.SessionID, batchID string, results []ReviewResult) (ReviewDeliveryOutcome, error) {
-	if batchID == "" || len(results) == 0 {
-		return ReviewDeliveryNoop, nil
-	}
-	rec, ok, err := m.store.GetSession(ctx, workerID)
-	if err != nil || !ok {
-		return ReviewDeliveryNoop, err
-	}
-	if cannotNudge(rec) {
-		return ReviewDeliveryNoop, nil
-	}
-	if m.guard == nil {
-		return ReviewDeliveryNoop, nil
-	}
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].PRURL != results[j].PRURL {
-			return results[i].PRURL < results[j].PRURL
-		}
-		return results[i].RunID < results[j].RunID
-	})
-	var msg strings.Builder
-	fmt.Fprintf(&msg, "[AO reviewer] AO's internal code reviewer submitted %d review(s) requesting changes.\n", len(results))
-	var sigParts []string
-	for i, r := range results {
-		fmt.Fprintf(&msg, "\nReview %d\nPR: %s\nVerdict: %s", i+1, domain.SanitizeControlChars(r.PRURL), domain.SanitizeControlChars(string(r.Verdict)))
-		if r.TargetSHA != "" {
-			fmt.Fprintf(&msg, "\nHead commit: %s", domain.SanitizeControlChars(r.TargetSHA))
-		}
-		if r.GithubReviewID != "" {
-			safeReviewID := domain.SanitizeControlChars(r.GithubReviewID)
-			fmt.Fprintf(&msg, "\nGitHub review: %s", safeReviewID)
-			fmt.Fprintf(&msg, "\nOnce you have addressed it, reply on GitHub review %s with how you addressed it, then resolve the review comment threads you addressed.", safeReviewID)
-		}
-		if r.Body != "" {
-			fmt.Fprintf(&msg, "\n\nReview body:\n%s\n", domain.SanitizeControlChars(r.Body))
-		}
-		sigParts = append(sigParts, strings.Join([]string{r.RunID, r.PRURL, r.TargetSHA, r.GithubReviewID, r.Body}, "\x00"))
-	}
-	anchorPR := results[0].PRURL
-	key := "review-batch:" + anchorPR + ":" + batchID
-	sig := strings.Join(sigParts, "\x01")
-	outcome, err := m.sendOnce(ctx, workerID, anchorPR, key, sig, msg.String(), reviewMaxNudge, false)
-	if err != nil {
-		return ReviewDeliveryNoop, err
-	}
-	if outcome == sendOnceSuppressed {
-		// The worker went terminated/exited/needs-input between the entry guard and the
-		// paste: nothing reached it, so do NOT let the caller stamp the run
-		// delivered — it must re-fire once the session is workable again.
-		return ReviewDeliveryNoop, nil
-	}
-	return ReviewDeliverySent, nil
-}
-
 type reactionState struct {
 	mu       sync.Mutex
 	seen     map[string]string
@@ -767,7 +682,7 @@ func (m *Manager) ApplyTrackerFacts(ctx context.Context, id domain.SessionID, o 
 // carve-out so the merge-conflict nudge alone can bypass the needs-input
 // condition below (see its needsInput comment), so it inlines the
 // terminated/exited half of this check and evaluates needs-input separately.
-// Every other nudge path in this package (ApplyReviewBatch, ApplyTrackerFacts)
+// Every other nudge path in this package (ApplyTrackerFacts)
 // still gates on the full condition here, unchanged.
 func cannotNudge(rec domain.SessionRecord) bool {
 	return rec.IsTerminated || rec.Activity.State.NeedsInput() || rec.Activity.State == domain.ActivityExited

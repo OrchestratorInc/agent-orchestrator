@@ -41,6 +41,7 @@ ao project rm <project-id>
 | --- | --- |
 | `canonicalRepoURL` | Trusted upstream for numeric PR claims. It does not change where AO checks out or pushes. |
 | `autoReview` | Default automatic-review setting copied to new worker sessions. |
+| `workersRequestReview` | When `true`, new workers request an AO review of their own PR once it is ready, and again after each fix. When unset, workers ask the user or orchestrator before starting one. |
 | `defaultBranch` | Base branch for new Git worktrees. Defaults to `auto`. |
 | `sessionPrefix` | Prefix for generated session identifiers. |
 | `env` | Extra environment variables passed to agent runtimes. |
@@ -122,7 +123,7 @@ For a reusable manual action, use a project **Cue**. An agent Cue sends a prompt
 
 <span id="choose-a-reviewer" />
 
-Choose reviewers separately in Project Settings. The [agent catalog](/plugins/agents) lists reviewer support and its limits. If you do not choose one, AO uses Claude Code, Codex, OpenCode, Muse, or Kimchi when the worker uses one of those harnesses. Other workers default to Claude Code. Select another reviewer harness explicitly.
+Choose reviewers separately in Project Settings. The [agent catalog](/plugins/agents) lists reviewer support and its limits. If you do not choose one, AO reviews with the project's default worker agent, using that worker's model and effort, when it is Claude Code, Codex, OpenCode, Muse, or Kimchi. Without a default worker agent, AO uses the session's worker harness when it is one of those, and Claude Code otherwise. Worker permissions never carry over to a reviewer. Select another reviewer harness explicitly.
 
 These configuration fields choose a reviewer and enable automatic review for new workers. The JSON is a fragment, so keep other fields when using the API:
 

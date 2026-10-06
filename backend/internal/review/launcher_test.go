@@ -24,8 +24,9 @@ type fakeReviewer struct {
 
 type recordingReviewChatStop struct {
 	ReviewerChatController
-	stopped     string
-	interrupted bool
+	stopped      string
+	interrupted  string
+	interruptErr error
 }
 
 func (c *recordingReviewChatStop) StopReviewChat(_ context.Context, reviewID string) error {
@@ -33,19 +34,35 @@ func (c *recordingReviewChatStop) StopReviewChat(_ context.Context, reviewID str
 	return nil
 }
 
-func (c *recordingReviewChatStop) InterruptReviewChat(context.Context, string) error {
-	c.interrupted = true
-	return nil
+func (c *recordingReviewChatStop) InterruptReviewChat(_ context.Context, reviewID string) error {
+	c.interrupted = reviewID
+	return c.interruptErr
 }
 
-func TestCancelReviewerChatStopsItsController(t *testing.T) {
-	chat := &recordingReviewChatStop{}
-	launcher := NewLauncher(fakeReviewerResolver{}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat))
-	if err := launcher.Cancel(context.Background(), "review-chat:review-1", domain.ReviewerCodex); err != nil {
-		t.Fatalf("Cancel: %v", err)
+func TestCancelReviewerChatInterruptsWithoutStoppingItsController(t *testing.T) {
+	for _, harness := range []domain.ReviewerHarness{domain.ReviewerCodex, domain.ReviewerClaudeCode} {
+		t.Run(string(harness), func(t *testing.T) {
+			chat := &recordingReviewChatStop{}
+			launcher := NewLauncher(fakeReviewerResolver{}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat))
+			if err := launcher.Cancel(context.Background(), "review-chat:review-1", harness); err != nil {
+				t.Fatalf("Cancel: %v", err)
+			}
+			if chat.stopped != "" || chat.interrupted != "review-1" {
+				t.Fatalf("reviewer Chat cancel: stopped=%q interrupted=%q", chat.stopped, chat.interrupted)
+			}
+		})
 	}
-	if chat.stopped != "review-1" || chat.interrupted {
-		t.Fatalf("reviewer Chat cancel: stopped=%q interrupted=%v", chat.stopped, chat.interrupted)
+}
+
+func TestCancelReviewerChatPreservesInterruptFailure(t *testing.T) {
+	want := errors.New("provider interrupt failed")
+	chat := &recordingReviewChatStop{interruptErr: want}
+	launcher := NewLauncher(fakeReviewerResolver{}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat))
+	if err := launcher.Cancel(context.Background(), "review-chat:review-1", domain.ReviewerCodex); !errors.Is(err, want) {
+		t.Fatalf("Cancel = %v, want %v", err, want)
+	}
+	if chat.stopped != "" {
+		t.Fatal("failed cancellation must not tear down the controller")
 	}
 }
 

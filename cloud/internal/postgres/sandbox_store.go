@@ -850,7 +850,7 @@ func (s *Store) WorkerLaunchSpec(
 				session.display_name, session.branch, session.prompt,
 				session.agent_session_id, session.mode,
 				COALESCE(NULLIF(selection.selected_model, ''), session.model),
-				COALESCE(selection.selected_effort, ''), COALESCE(selection.created_at, to_timestamp(0)), session.denied_commands, session.interface,
+				COALESCE(selection.selected_effort, session.reasoning_effort), COALESCE(selection.created_at, to_timestamp(0)), session.denied_commands, session.interface,
 				COALESCE(session.parent_session_id::text, ''),
 				project.repository_url, project.default_branch
 			FROM ao_sessions session

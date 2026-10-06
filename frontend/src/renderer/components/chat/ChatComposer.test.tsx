@@ -209,7 +209,8 @@ describe("send keys", () => {
 
 		await typeInComposer(field, "queue this next");
 		expect(screen.queryByRole("button", { name: "Stop turn" })).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+		expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Queue message" })).toBeEnabled();
 	});
 
 	it("sends on Enter", async () => {
@@ -847,11 +848,12 @@ describe("steering", () => {
 		const { onSend, onSteer, field } = renderSteerable();
 
 		await typeInComposer(field, "pointer agrees with the chip");
+		expect(screen.getByRole("button", { name: "Queue message" })).toBeEnabled();
 		act(() => {
 			window.dispatchEvent(new KeyboardEvent("keydown", { key: "Meta", metaKey: true }));
 		});
 
-		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await userEvent.click(screen.getByRole("button", { name: "Steer message" }));
 
 		await waitFor(() => expect(onSteer).toHaveBeenCalledWith("pointer agrees with the chip"));
 		expect(onSend).not.toHaveBeenCalled();
@@ -868,7 +870,7 @@ describe("steering", () => {
 			window.dispatchEvent(new KeyboardEvent("keyup", { key: "Meta", metaKey: false }));
 		});
 
-		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await userEvent.click(screen.getByRole("button", { name: "Queue message" }));
 
 		await waitFor(() => expect(onSend).toHaveBeenCalledWith("back to the queue"));
 		expect(onSteer).not.toHaveBeenCalled();
@@ -1981,7 +1983,7 @@ describe("unavailable states", () => {
 		render(<ChatComposer onSend={onSend} willQueue onInterrupt={onInterrupt} />);
 
 		await typeInComposer(screen.getByLabelText("Message the agent"), "follow up");
-		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await userEvent.click(screen.getByRole("button", { name: "Queue message" }));
 
 		expect(onSend).toHaveBeenCalledWith("follow up");
 		expect(onInterrupt).not.toHaveBeenCalled();

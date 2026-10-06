@@ -43,6 +43,10 @@ const hookState = vi.hoisted(() => ({
 	goForward: vi.fn(),
 	reload: vi.fn(),
 	stop: vi.fn(),
+	findInPage: vi.fn(),
+	stopFindInPage: vi.fn(),
+	findOpenRequest: 0,
+	findState: { viewId: "42:sess-1", tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true },
 	selectTab: vi.fn(),
 	closeTab: vi.fn(),
 	openTab: vi.fn(),
@@ -85,6 +89,10 @@ vi.mock("../hooks/useBrowserView", () => ({
 			goForward: hookState.goForward,
 			reload: hookState.reload,
 			stop: hookState.stop,
+			findInPage: hookState.findInPage,
+			stopFindInPage: hookState.stopFindInPage,
+			findOpenRequest: hookState.findOpenRequest,
+			findState: hookState.findState,
 			tabs: hookState.tabs,
 			activeTabId: hookState.activeTabId,
 			tabNotice: hookState.tabNotice,
@@ -242,6 +250,12 @@ describe("BrowserPanel", () => {
 		hookState.goForward.mockReset();
 		hookState.reload.mockReset();
 		hookState.stop.mockReset();
+		hookState.findInPage.mockReset();
+		hookState.stopFindInPage.mockReset();
+		hookState.findOpenRequest = 0;
+		hookState.findState = {
+			viewId: "42:sess-1", tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true,
+		};
 		hookState.selectTab.mockReset();
 		hookState.closeTab.mockReset();
 		hookState.reopenClosedTab.mockReset();
@@ -333,6 +347,55 @@ describe("BrowserPanel", () => {
 
 		expect(hookState.navigate).toHaveBeenCalledWith("localhost:5173");
 		expect(input).not.toHaveFocus();
+	});
+
+	it("toggles find-in-page, searches as text changes, and supports keyboard navigation", async () => {
+		let focusFrame: FrameRequestCallback | undefined;
+		vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			focusFrame = callback;
+			return 1;
+		});
+		const view = render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		expect(screen.queryByRole("search")).not.toBeInTheDocument();
+
+		hookState.findOpenRequest = 1;
+		view.rerender(
+			<TooltipProvider>
+				<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />
+			</TooltipProvider>,
+		);
+		const input = await screen.findByRole("textbox", { name: "Find in page" });
+		act(() => focusFrame?.(0));
+		expect(input).toHaveFocus();
+
+		await userEvent.type(input, "alpha");
+		expect(hookState.findInPage).toHaveBeenLastCalledWith("alpha", true, true);
+
+		await userEvent.keyboard("{Enter}");
+		expect(hookState.findInPage).toHaveBeenLastCalledWith("alpha", true, false);
+		await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+		expect(hookState.findInPage).toHaveBeenLastCalledWith("alpha", false, false);
+
+		hookState.findOpenRequest = 2;
+		view.rerender(
+			<TooltipProvider>
+				<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />
+			</TooltipProvider>,
+		);
+		expect(screen.queryByRole("search")).not.toBeInTheDocument();
+		expect(hookState.stopFindInPage).toHaveBeenCalledWith(true);
+
+		hookState.findOpenRequest = 3;
+		view.rerender(
+			<TooltipProvider>
+				<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />
+			</TooltipProvider>,
+		);
+		expect(await screen.findByRole("textbox", { name: "Find in page" })).toBeInTheDocument();
+		act(() => focusFrame?.(0));
+		await userEvent.keyboard("{Escape}");
+		expect(screen.queryByRole("search")).not.toBeInTheDocument();
+		expect(hookState.stopFindInPage).toHaveBeenCalledTimes(2);
 	});
 
 	it("supports consecutive address-bar navigations after refocusing", async () => {

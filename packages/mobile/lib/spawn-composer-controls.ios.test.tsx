@@ -40,6 +40,8 @@ vi.mock("@expo/ui/swift-ui", async () => {
 		React.createElement(name, props, children);
 	return {
 		Button: host("Button"),
+		Divider: host("Divider"),
+		Group: host("Group"),
 		HStack: host("HStack"),
 		Image: host("Image"),
 		Menu: host("Menu"),
@@ -51,7 +53,7 @@ vi.mock("@expo/ui/swift-ui", async () => {
 vi.mock("@expo/ui/swift-ui/modifiers", () => ({
 	accessibilityIdentifier: vi.fn(), aspectRatio: vi.fn(), backgroundOverlay: vi.fn(), buttonStyle: vi.fn(),
 	clipShape: vi.fn(), containerRelativeFrame: vi.fn(), font: vi.fn(), frame: vi.fn(), glassEffect: vi.fn(),
-	labelStyle: vi.fn(), layoutPriority: vi.fn(), lineLimit: vi.fn(), opacity: vi.fn(), padding: vi.fn(),
+	labelStyle: vi.fn(), layoutPriority: vi.fn(), lineLimit: vi.fn(), menuOrder: vi.fn(), opacity: vi.fn(), padding: vi.fn(),
 	resizable: vi.fn(), tint: vi.fn(), truncationMode: vi.fn(),
 }));
 
@@ -107,8 +109,10 @@ describe("SpawnComposerControls on iOS", () => {
 		expect(selectorRow).toBeDefined();
 		const labels = menus[0].findAll((node) => String(node.type) === "Button").map((node) => node.props.label);
 		expect(labels).toEqual(["Local · Paired desktop", "Cloud"]);
-		const projectButton = menus[1].findAll((node) => String(node.type) === "Button").find((node) => node.props.label === "Tap");
-		await act(async () => projectButton?.props.onPress());
+		const projectButton = menus[1].findAll((node) => String(node.type) === "Button")
+			.find((node) => node.findAll((child) => String(child.type) === "Text" && child.props.children === "Tap").length > 0);
+		expect(projectButton).toBeDefined();
+		await act(async () => projectButton!.props.onPress());
 		expect(onSelectProject).toHaveBeenCalledWith("project-1");
 	});
 	it("keeps the Cloud harness picker while hiding attachment and model controls", async () => {

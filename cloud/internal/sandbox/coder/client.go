@@ -105,12 +105,20 @@ func New(config Config) (*Client, error) {
 	if strings.TrimSpace(config.Token) == "" {
 		return nil, errors.New("coder: API token is required")
 	}
-	if strings.TrimSpace(config.Owner) == "" {
-		return nil, errors.New("coder: workspace owner is required")
-	}
-	templateID, err := uuid.Parse(strings.TrimSpace(config.TemplateID))
-	if err != nil {
-		return nil, errors.New("coder: template ID must be a UUID")
+	// Owner and template are optional at construction so a client can be built
+	// from only a base URL and token — the shape a bring-your-own-Coder org first
+	// saves, where the owner is derived from the token and the template is chosen
+	// per project. They are required at the point they are used: Create guards both,
+	// and a real session always carries them on its immutable profile (see
+	// ForSandbox). A template that IS supplied must still be a UUID.
+	owner := strings.TrimSpace(config.Owner)
+	templateID := strings.TrimSpace(config.TemplateID)
+	if templateID != "" {
+		parsed, err := uuid.Parse(templateID)
+		if err != nil {
+			return nil, errors.New("coder: template ID must be a UUID")
+		}
+		templateID = parsed.String()
 	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
@@ -127,8 +135,8 @@ func New(config Config) (*Client, error) {
 	return &Client{
 		baseURL:    strings.TrimRight(endpoint.String(), "/"),
 		token:      strings.TrimSpace(config.Token),
-		owner:      strings.TrimSpace(config.Owner),
-		templateID: templateID.String(),
+		owner:      owner,
+		templateID: templateID,
 		agentName:  strings.TrimSpace(config.AgentName),
 		parameters: parameters,
 		http:       httpClient,
@@ -197,6 +205,25 @@ func (c *Client) ForSandbox(record domain.Sandbox) (sandbox.Provider, error) {
 	sessionClient.parameters = parameters
 	sessionClient.expectedWorkspaceName = WorkspaceName(record.SessionID)
 	return &sessionClient, nil
+}
+
+// CurrentUser returns the username of the Coder account the client's API token
+// authenticates as (GET /api/v2/users/me). A bring-your-own-Coder organization
+// saves only a base URL and token; the workspace owner is this user, derived once
+// at save time instead of being pasted. The call needs neither an owner nor a
+// template, so a minimal client (base URL + token) can make it.
+func (c *Client) CurrentUser(ctx context.Context) (string, error) {
+	var me struct {
+		Username string `json:"username"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v2/users/me", nil, &me); err != nil {
+		return "", fmt.Errorf("coder: resolve current user: %w", err)
+	}
+	username := strings.TrimSpace(me.Username)
+	if username == "" {
+		return "", errors.New("coder: current user has no username")
+	}
+	return username, nil
 }
 
 // Template is a non-secret summary of a Coder template a client may pick from.
@@ -339,6 +366,15 @@ func (c *Client) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Environ
 			"coder: session workspace name mismatch: got %q, want %q",
 			name, c.expectedWorkspaceName,
 		)
+	}
+	// Owner and template are optional on a freshly-connected client but required to
+	// create a workspace. A real session always supplies both via its immutable
+	// profile (ForSandbox); failing here gives a clear message if one is ever missing.
+	if strings.TrimSpace(c.owner) == "" {
+		return sandbox.Environment{}, errors.New("coder: workspace owner is required")
+	}
+	if strings.TrimSpace(c.templateID) == "" {
+		return sandbox.Environment{}, errors.New("coder: a template must be selected")
 	}
 	parameterNames := make([]string, 0, len(c.parameters))
 	for parameterName := range c.parameters {

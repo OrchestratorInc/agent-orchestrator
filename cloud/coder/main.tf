@@ -33,6 +33,12 @@ variable "workspace_cpu_shares" {
   type        = number
 }
 
+variable "devkit_apt_packages" {
+  default     = ""
+  description = "Space-separated apt packages installed at workspace start. The dev-kit templates set this; the plain default template leaves it empty so its behavior is unchanged. Installed on the already-approved base image, so no new image has to be distributed to the Coder host."
+  type        = string
+}
+
 provider "docker" {
   host = var.docker_socket != "" ? var.docker_socket : null
 }
@@ -50,6 +56,11 @@ resource "coder_agent" "main" {
     if [ ! -f ~/.init_done ]; then
       cp -rT /etc/skel ~
       touch ~/.init_done
+    fi
+    DEVKIT_PKGS="${var.devkit_apt_packages}"
+    if [ -n "$DEVKIT_PKGS" ]; then
+      echo "Installing dev-kit tooling: $DEVKIT_PKGS"
+      sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $DEVKIT_PKGS || true
     fi
     claude --version
   EOT

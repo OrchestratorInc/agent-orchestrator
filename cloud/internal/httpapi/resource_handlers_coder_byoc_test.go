@@ -35,6 +35,12 @@ type stubCoderBYOCStore struct {
 	captured                    domain.CreateSession
 	created                     bool
 	personalCredentialAvailable bool
+	// omitOrgTemplate drops the template from the org's bring-your-own config, the
+	// shape after the slimmed settings form (template chosen per project instead).
+	omitOrgTemplate bool
+	// projectConfig is the project's stored Config JSON (its coder dev-kit config
+	// lives under the "coder" key). Nil => a bare project with no coder config.
+	projectConfig json.RawMessage
 }
 
 func (s *stubCoderBYOCStore) UserAgentCredentialAvailable(
@@ -46,14 +52,18 @@ func (s *stubCoderBYOCStore) UserAgentCredentialAvailable(
 func (s *stubCoderBYOCStore) GetProject(
 	_ context.Context, _ domain.Principal, _, projectID string,
 ) (domain.Project, error) {
-	return domain.Project{ID: projectID}, nil
+	return domain.Project{ID: projectID, Config: s.projectConfig}, nil
 }
 
 func (s *stubCoderBYOCStore) ListProviderConnections(
 	_ context.Context, _ domain.Principal, _ string,
 ) ([]domain.ProviderConnection, error) {
+	orgTemplate := byocTemplate
+	if s.omitOrgTemplate {
+		orgTemplate = ""
+	}
 	orgCoder, _ := domain.EncodeOrgCoderConfig(domain.OrgCoderConfig{
-		BaseURL: byocBaseURL, Owner: byocOwner, TemplateID: byocTemplate,
+		BaseURL: byocBaseURL, Owner: byocOwner, TemplateID: orgTemplate,
 		AgentName: byocAgentName, DurableRoot: byocDurableDir,
 		Parameters: map[string]string{"region": "eu"},
 	})
@@ -134,6 +144,53 @@ func TestCreateSessionBindsOrgCoderConnection(t *testing.T) {
 		profile.TemplateID != byocTemplate || profile.AgentName != byocAgentName ||
 		profile.DurableRoot != byocDurableDir || profile.Parameters["region"] != "eu" {
 		t.Fatalf("stamped profile did not use the org override: %+v", profile)
+	}
+}
+
+// A bring-your-own-Coder org whose config carries no template still runs: the
+// template comes from the project's dev-kit config, chosen per project.
+func TestCreateSessionUsesProjectTemplateWhenOrgHasNone(t *testing.T) {
+	t.Parallel()
+	projectConfig, err := domain.MergeProjectCoderConfig(nil, domain.ProjectCoderConfig{TemplateID: byocTemplate})
+	if err != nil {
+		t.Fatalf("build project config: %v", err)
+	}
+	store := &stubCoderBYOCStore{personalCredentialAvailable: true, omitOrgTemplate: true, projectConfig: projectConfig}
+	srv := newBYOCServer(store)
+
+	rec := httptest.NewRecorder()
+	srv.createSession(rec, byocCreateSessionRequest(t))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	profile, err := sandbox.DecodeCoderSessionProfile(store.captured.ResourceProfile)
+	if err != nil {
+		t.Fatalf("decode stamped profile: %v", err)
+	}
+	if profile.TemplateID != byocTemplate || profile.Owner != byocOwner {
+		t.Fatalf("project template not applied over a templateless org: %+v", profile)
+	}
+}
+
+// When neither the org config nor the project supplies a template, the session
+// create fails with a clear, user-fixable 422 rather than a 500.
+func TestCreateSessionRequiresTemplateWhenNeitherOrgNorProjectHasOne(t *testing.T) {
+	t.Parallel()
+	store := &stubCoderBYOCStore{personalCredentialAvailable: true, omitOrgTemplate: true}
+	srv := newBYOCServer(store)
+
+	rec := httptest.NewRecorder()
+	srv.createSession(rec, byocCreateSessionRequest(t))
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.created {
+		t.Fatal("a session with no resolvable template must not be created")
+	}
+	if !strings.Contains(rec.Body.String(), "coder_template_required") {
+		t.Fatalf("expected coder_template_required error, got %s", rec.Body.String())
 	}
 }
 

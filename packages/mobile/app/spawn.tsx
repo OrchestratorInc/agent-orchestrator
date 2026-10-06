@@ -23,7 +23,7 @@ import { readyHarnesses } from "../lib/cloud/agentReadiness";
 import { useCloudAuth } from "../lib/cloud/authStore";
 import { sourceKey, type SourceRef } from "../lib/environment/scopedBoard";
 import { haptics } from "../lib/haptics";
-import { resolveSpawnProject } from "../lib/projectFilter";
+import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, readSpawnAttachments, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
@@ -51,7 +51,7 @@ function SpawnModalContent() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const { projectId: routeProjectId, source: routeKind, sourceId: routeSourceId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; source?: string; sourceId?: string; hostId?: string }>();
-	const { scopedBoard, availableSources, sourceFor, spawnOn, configForHost, hostStates, configResolved } = useApp();
+	const { scopedBoard, availableSources, sourceFor, spawnOn, configForHost, hostStates, configResolved, setActiveProject } = useApp();
 	const { client: cloudClient, orgId: cloudOrgId } = useCloudAuth();
 	const routeDestination = routeSource({ source: routeKind, sourceId: routeSourceId }) ?? (routeHostId ? { kind: "local" as const, id: routeHostId } : null);
 	const sourceResolutionComplete = configResolved;
@@ -219,7 +219,6 @@ function SpawnModalContent() {
 	// copy of it — see app/sheets/agent.tsx.
 	const allAgents = useMemo(() => rankAgents(catalog), [catalog]);
 	const agents = useMemo(() => mode === "chat" ? allAgents.filter((agent) => chatHarnesses.includes(agent.id)) : allAgents, [allAgents, chatHarnesses, mode]);
-	const project = projects.find((item) => item.id === projectId);
 	const projectWorkerAgent = projectDetail?.config?.worker?.agent ?? projectDetail?.agent ?? "";
 	const projectWorkerModel = projectDetail?.config?.worker?.agentConfig?.model ?? projectDetail?.config?.agentConfig?.model ?? "";
 	const resolvedModel = resolveSpawnModel({ selectedAgent: harness, projectWorkerAgent, projectWorkerModel });
@@ -258,7 +257,7 @@ function SpawnModalContent() {
 	);
 
 	useEffect(() => {
-		if (destination?.kind !== "local" || !config || !projectId) { setProjectDetail(undefined); setProjectDetailLoadedFor(projectId); return; }
+		if (destination?.kind !== "local" || !config || !projectId || projectId === STANDALONE_PROJECT) { setProjectDetail(undefined); setProjectDetailLoadedFor(projectId); return; }
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		setProjectDetailLoadedFor(null);
@@ -271,7 +270,7 @@ function SpawnModalContent() {
 
 	useEffect(() => {
 		if (agentTouched || loading || !catalog) return;
-		if (destination?.kind === "local" && projectId && projectDetailLoadedFor !== projectId) return;
+		if (destination?.kind === "local" && projectId && projectId !== STANDALONE_PROJECT && projectDetailLoadedFor !== projectId) return;
 		const nextHarness = resolveSpawnAgent({
 			projectWorkerAgent: projectDetail?.config?.worker?.agent,
 			projectAgent: projectDetail?.agent,
@@ -285,7 +284,7 @@ function SpawnModalContent() {
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		setModelLoading(true);
-		getAgentModels(config, harness, projectId)
+		getAgentModels(config, harness, projectId === STANDALONE_PROJECT ? undefined : projectId)
 			.then((nextCatalog) => { if (!cancelled && generation === catalogGeneration.current) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
 			.catch((cause) => { if (!cancelled && generation === catalogGeneration.current) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled && generation === catalogGeneration.current) setModelLoading(false); });
@@ -442,6 +441,7 @@ function SpawnModalContent() {
 				requestRef.current = { payload, attachments: attachmentsRef.current, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
 			}
 			const session = await spawnOn(destination, { ...request, clientRequestId: requestRef.current.id });
+			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
 			haptics.success();
 			// Dismiss the modal first, then open the freshly spawned session's mode-aware surface
 			// once the dismiss transition has settled. Firing both navigations in the
@@ -529,8 +529,8 @@ function SpawnModalContent() {
 					destinations={destinations}
 					destination={destination}
 					onSelectDestination={selectDestination}
-					projects={projects.map((item) => ({ id: item.id, label: item.name }))}
-					projectId={project?.id ?? null}
+					projects={[...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), ...(destination?.kind === "local" ? [{ id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }] : [])]}
+					projectId={projectId}
 					onSelectProject={changeProject}
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
 					harness={harness}

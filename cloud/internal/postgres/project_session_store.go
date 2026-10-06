@@ -687,10 +687,10 @@ func createSessionTx(
 		`WITH generated AS (SELECT gen_random_uuid() AS id)
 		INSERT INTO ao_sessions (
 			id, org_id, project_id, kind, harness, display_name, branch,
-			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id
+			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort
 		)
 		SELECT id, $1, $2, $3, $4, $5, 'ao/' || left(id::text, 8),
-			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid
+			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13
 		FROM generated
 		RETURNING id, org_id, project_id, kind, harness, display_name, branch,
 			mode, model, denied_commands, interface, activity_state, is_terminated,
@@ -708,6 +708,7 @@ func createSessionTx(
 		input.Interface,
 		parentSessionID,
 		actorUserID,
+		input.ReasoningEffort,
 	), &session)
 	if err != nil {
 		return domain.Session{}, normalizeConstraintError(err)
@@ -761,7 +762,7 @@ func createSessionTx(
 	}
 	if input.Prompt != "" {
 		if _, err := appendUserMessageEvent(
-			ctx, tx, orgID, session.ID, input.Prompt,
+			ctx, tx, orgID, session.ID, input.Prompt, domain.ChatTurnSettings{Model: input.Model, ReasoningEffort: input.ReasoningEffort},
 		); err != nil {
 			return domain.Session{}, err
 		}

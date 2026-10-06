@@ -68,18 +68,18 @@
 	--color-bg-sidebar: var(--sidebar);
 	/* Keep the terminal plate opaque so the p-2 gutter cannot composite into
 	   retained frames during terminal swaps. */
-	--color-bg-terminal-opaque: #252525;
-	--color-bg-terminal: #252525e7;
+	--color-bg-terminal-opaque: var(--background);
+	--color-bg-terminal: var(--background);
 	/* Opaque backing for terminal swaps/covers; prevents retained frames leaking through. */
-	--color-bg-terminal-opaque: #252525;
+	--color-bg-terminal-opaque: var(--background);
 
 	/* Text */
 	--color-text-primary: var(--foreground);
 	--color-text-muted: var(--muted-foreground);
 	--color-text-passive: var(--chart-3);
-	--color-brand-logo: #a6a6a6;
-	--color-brand-logo-bright: #d2d2d2;
-	--color-brand-logo-foreground: #252525;
+	--color-brand-logo: #79b0dc;
+	--color-brand-logo-bright: #a5cde7;
+	--color-brand-logo-foreground: #0a0b0d;
 	--color-text-markdown-code: var(--color-brand-logo);
 	--color-text-markdown-link: var(--color-brand-logo); /* underline distinguishes links */
 	--color-text-markdown-link-hover: var(--color-brand-logo-bright);
@@ -681,16 +681,16 @@
 	--color-bg-tertiary: var(--muted);
 	--color-bg-elevated: var(--popover);
 	--color-bg-sidebar: var(--sidebar);
-	--color-bg-terminal-opaque: #f5f5f5;
-	--color-bg-terminal: #f5f5f5;
-	--color-bg-terminal-opaque: #f5f5f5;
+	--color-bg-terminal-opaque: var(--background);
+	--color-bg-terminal: var(--background);
+	--color-bg-terminal-opaque: var(--background);
 
 	--color-text-primary: var(--foreground);
 	--color-text-muted: var(--muted-foreground);
 	--color-text-passive: var(--chart-3);
-	--color-brand-logo: #6f6f6f;
-	--color-brand-logo-bright: #8d8d8d;
-	--color-brand-logo-foreground: #fafafa;
+	--color-brand-logo: #304c83;
+	--color-brand-logo-bright: #466daa;
+	--color-brand-logo-foreground: #ffffff;
 	--color-text-markdown-code: var(--color-brand-logo);
 	--color-text-markdown-link: var(--color-brand-logo);
 	--color-text-markdown-link-hover: var(--color-brand-logo-bright);

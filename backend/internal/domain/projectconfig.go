@@ -73,6 +73,14 @@ type ProjectConfig struct {
 	// new session at spawn time. Users can still override the per-session toggle
 	// after spawn.
 	AutoReview bool `json:"autoReview,omitempty"`
+
+	// WorkersRequestReview changes what worker sessions are told about AO's
+	// native reviewer. When set, a worker requests an AO review of its own PR
+	// (`ao review trigger`) once the PR is pushed and verified, and again after
+	// each fix it pushes. When unset (the default), workers are still taught
+	// the feature but check with the user or orchestrator before using it.
+	// Read at spawn, when the worker prompt is built.
+	WorkersRequestReview bool `json:"workersRequestReview,omitempty"`
 }
 
 // ContainerReapConfig is the project-level opt-out for #2652's Docker
@@ -116,6 +124,34 @@ func (c ProjectConfig) ResolveReviewerHarness(worker AgentHarness) ReviewerHarne
 		return ReviewerKimchi
 	}
 	return FallbackReviewerHarness
+}
+
+// DefaultWorkerReviewer is the reviewer a project gets when it configures no
+// reviewer: the project's default worker agent, with that worker's model and
+// effort. It returns an empty harness when the project pins no worker agent,
+// or when that agent has no unattended-safe reviewer (see
+// ResolveReviewerHarness), so callers keep their existing fallback.
+//
+// Only model and effort carry over. Permissions and mode are worker settings;
+// a reviewer's sandbox is owned by its adapter and must never inherit a
+// worker's bypass permissions.
+func (c ProjectConfig) DefaultWorkerReviewer() (ReviewerHarness, AgentConfig) {
+	worker := c.Worker.Harness
+	if worker == "" {
+		return "", AgentConfig{}
+	}
+	harness := c.ResolveReviewerHarness(worker)
+	if string(harness) != string(worker) {
+		return "", AgentConfig{}
+	}
+	config := AgentConfig{Model: c.AgentConfig.Model, Effort: c.AgentConfig.Effort}
+	if c.Worker.AgentConfig.Model != "" {
+		config.Model = c.Worker.AgentConfig.Model
+	}
+	if c.Worker.AgentConfig.Effort != "" {
+		config.Effort = c.Worker.AgentConfig.Effort
+	}
+	return harness, config
 }
 
 // RoleOverride overrides the harness and/or agent config for a session role.

@@ -4,6 +4,9 @@ import { isArchived } from "./agentsView";
 /** The board filter that means "every project". */
 export const ALL_PROJECTS = "all";
 
+/** Picker-only value; the daemon represents standalone sessions with no project id. */
+export const STANDALONE_PROJECT = "__standalone__";
+
 /**
  * What the app knows about one machine's projects.
  *
@@ -129,6 +132,7 @@ export function resolveSpawnProject(
 	projectsKnown: boolean,
 	preferredProjectId?: string | null,
 ): string | null {
+	if (currentProjectId === STANDALONE_PROJECT) return STANDALONE_PROJECT;
 	if (
 		currentProjectId
 		&& resolveActiveProject(currentProjectId, projects, projectsKnown) === currentProjectId

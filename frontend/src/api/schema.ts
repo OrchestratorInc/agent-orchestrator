@@ -2441,7 +2441,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Kill a worker's reviewer terminal session */
+        /** Archive a worker's reviewer and hide its surface while retaining history */
         post: operations["killReviewSession"];
         delete?: never;
         options?: never;
@@ -4295,6 +4295,7 @@ export interface components {
             reports: components["schemas"]["ReportResponse"][];
         };
         ListReviewsResponse: {
+            activeReviewers: components["schemas"]["DomainReviewerSurface"][];
             /** @enum {string} */
             reviewerActivityState?: "active" | "idle" | "waiting_input" | "blocked" | "exited";
             reviewerHandleId: string;
@@ -4549,6 +4550,7 @@ export interface components {
             symlinks?: string[];
             trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
             worker?: components["schemas"]["RoleOverride"];
+            workersRequestReview?: boolean;
         };
         ProjectGetResponse: {
             project: components["schemas"]["ProjectOrDegraded"];
@@ -4717,7 +4719,7 @@ export interface components {
             status: string;
             targetSha: string;
             /** @enum {string} */
-            triggerSource: "manual" | "auto";
+            triggerSource: "manual" | "agent" | "auto";
             verdict: string;
         };
         ReviewRunResponse: {
@@ -5302,14 +5304,27 @@ export interface components {
         };
         TriggerReviewRequest: {
             agentConfig?: components["schemas"]["AgentConfig"];
+            /** @description Turn on the worker session's review auto-inject once a pass has started, so the reviewer's PR review comments reach the worker. */
+            enableAutoInject?: boolean;
             /** @enum {string} */
             harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
             /** @enum {string} */
             interfaceMode?: "chat" | "tui";
-            /** @description Start a fresh manual pass for already-reviewed current heads; reuse an active pass from the same reviewer. */
+            /** @description Restrict the pass to this pull request, attaching it to the session first if AO does not track it yet (never from another active session). Omit to review every eligible PR on the session. */
+            prUrl?: string;
+            /** @description Return 409 instead of reusing when every open PR head is already being reviewed or already has a review. */
+            rejectReviewedHead?: boolean;
+            /** @description Start a fresh pass for already-reviewed current heads; a different reviewer may run alongside one that is still running. A person's rerun reuses an active pass from the same reviewer; an agent's rerun returns 409 REVIEW_ALREADY_RUNNING instead. */
             rerun?: boolean;
+            /**
+             * @description Who requested the pass: manual (a person, the default) or agent (an AO session through the CLI).
+             * @enum {string}
+             */
+            source?: "manual" | "agent";
         };
         TriggerReviewResponse: {
+            /** @description True when this request turned the worker session's review auto-inject on. */
+            autoInjectEnabled: boolean;
             /** @description True when a new review pass was started; false when an existing run for the same commit was reused. */
             created: boolean;
             reviewerHandleId: string;

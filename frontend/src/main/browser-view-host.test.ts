@@ -182,6 +182,8 @@ function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").Agent
 	let insertedStyleNumber = 0;
 	insertCSS.mockImplementation(async () => `ao-browser-scrollbars-${++insertedStyleNumber}`);
 	const removeInsertedCSS = vi.fn(async (_key: string) => undefined);
+	const findInPage = vi.fn(() => 17);
+	const stopFindInPage = vi.fn();
 	const writeImage = vi.fn();
 	const debuggerSendCommand = vi.fn(async (method: string, params?: Record<string, unknown>): Promise<unknown> => {
 		if (method === "Page.navigate" && typeof params?.url === "string") currentURL = params.url;
@@ -230,10 +232,12 @@ function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").Agent
 		},
 		executeJavaScript: vi.fn(async (_script: string) => undefined),
 		focus: vi.fn(),
+		findInPage,
 		reload: vi.fn(),
 		send: vi.fn(),
 		setWindowOpenHandler: () => undefined,
 		stop: () => undefined,
+		stopFindInPage,
 		close: vi.fn(),
 		openDevTools,
 		closeDevTools,
@@ -465,6 +469,7 @@ describe("browser shortcut matching", () => {
 		expect(browserShortcutAction({ ...input, key: "T" }, false)).toBe("new-tab");
 		expect(browserShortcutAction({ ...input, key: "w" }, false)).toBe("close-tab");
 		expect(browserShortcutAction({ ...input, key: "l" }, false)).toBe("focus-location");
+		expect(browserShortcutAction({ ...input, key: "f" }, false)).toBe("find");
 		expect(browserShortcutAction({ ...input, key: "r" }, false)).toBe("reload");
 		expect(browserShortcutAction({ ...input, key: "t", shift: true }, false)).toBe("reopen-tab");
 		expect(browserShortcutAction({ ...input, key: "t", control: false, meta: true }, true)).toBe("new-tab");
@@ -485,6 +490,102 @@ describe("browser shortcut matching", () => {
 });
 
 describe("browser shortcut routing", () => {
+	it("opens find-in-page from the native page and the shell", async () => {
+		const { emitBeforeInput, emitShellBeforeInput, invoke, shellSend } = setupHost();
+		const state = await invoke("browser:ensure", "sess-1");
+		shellSend.mockClear();
+
+		const nativeEvent = emitBeforeInput({ key: "f", control: true });
+		expect(nativeEvent.preventDefault).toHaveBeenCalledOnce();
+		expect(shellSend).toHaveBeenCalledWith(
+			"browser:findOpen",
+			expect.objectContaining({ viewId: state.viewId, tabId: "t1", query: "" }),
+		);
+
+		shellSend.mockClear();
+		const shellEvent = emitShellBeforeInput({ key: "f", control: true });
+		expect(shellEvent.preventDefault).toHaveBeenCalledOnce();
+		expect(shellSend).toHaveBeenCalledWith("browser:findOpen", expect.objectContaining({ viewId: state.viewId }));
+	});
+
+	it("runs native per-tab find sessions and ignores stale result events", async () => {
+		const { invoke, shellSend, webContents, webContentsListeners } = setupHost();
+		const state = await invoke("browser:ensure", "sess-1");
+		await invoke("browser:navigate", { viewId: state.viewId, url: "https://example.test/" });
+		shellSend.mockClear();
+
+		await invoke("browser:find", {
+			viewId: state.viewId,
+			query: "alpha",
+			forward: true,
+			newSession: true,
+		});
+		expect(webContents.findInPage).toHaveBeenCalledWith("alpha", {
+			forward: true,
+			findNext: true,
+			matchCase: false,
+		});
+
+		webContentsListeners.get("found-in-page")?.({} as never, {
+			requestId: 9,
+			activeMatchOrdinal: 8,
+			matches: 8,
+			finalUpdate: true,
+		} as never);
+		expect(shellSend).not.toHaveBeenCalledWith(
+			"browser:findState",
+			expect.objectContaining({ activeMatchOrdinal: 8 }),
+		);
+
+		webContentsListeners.get("found-in-page")?.({} as never, {
+			requestId: 17,
+			activeMatchOrdinal: 2,
+			matches: 4,
+			finalUpdate: true,
+		} as never);
+		expect(shellSend).toHaveBeenCalledWith(
+			"browser:findState",
+			expect.objectContaining({ query: "alpha", activeMatchOrdinal: 2, matches: 4 }),
+		);
+
+		await invoke("browser:find:stop", { viewId: state.viewId, focusPage: true });
+		expect(webContents.stopFindInPage).toHaveBeenCalledWith("clearSelection");
+		expect(webContents.focus).toHaveBeenCalled();
+	});
+
+	it("flushes Chromium's delay for find queries shorter than four characters", async () => {
+		const { invoke, webContents } = setupHost();
+		const state = await invoke("browser:ensure", "sess-1");
+		await invoke("browser:navigate", { viewId: state.viewId, url: "https://example.test/" });
+		webContents.findInPage.mockClear();
+
+		await invoke("browser:find", {
+			viewId: state.viewId,
+			query: "api",
+			forward: true,
+			newSession: true,
+		});
+		expect(webContents.findInPage).toHaveBeenNthCalledWith(1, "api", {
+			forward: true,
+			findNext: true,
+			matchCase: false,
+		});
+		expect(webContents.findInPage).toHaveBeenNthCalledWith(2, "api", {
+			forward: true,
+			findNext: false,
+			matchCase: false,
+		});
+
+		webContents.findInPage.mockClear();
+		await invoke("browser:find", {
+			viewId: state.viewId,
+			query: "apis",
+			forward: true,
+			newSession: true,
+		});
+		expect(webContents.findInPage).toHaveBeenCalledOnce();
+	});
+
 	it("opens, focuses, and closes browser tabs without dispatching terminal shortcuts", async () => {
 		const { emitBeforeInput, invoke, shellSend, webContents } = setupHost();
 		const state = await invoke("browser:ensure", "sess-1");

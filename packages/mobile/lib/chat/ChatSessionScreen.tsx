@@ -213,7 +213,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 	const title = sessionName || conversation.snapshot?.title || session.id;
 	const projectName = "projectName" in session
 		? session.projectName
-		: scopedBoard.projects.find((entry) => entry.source.kind === source.kind && entry.source.id === source.id && entry.value.id === session.projectId)?.value.name;
+		: session.projectId ? scopedBoard.projects.find((entry) => entry.source.kind === source.kind && entry.source.id === source.id && entry.value.id === session.projectId)?.value.name : "Standalone";
 	const headerHarness = conversation.snapshot?.harness || session.harness || "Agent";
 	const headerState = cloudHeaderControllerState(cloudStage, conversation.snapshot?.controller.state ?? "connecting");
 	const reviewPromptPRCandidate = cloudSession || "projectName" in session ? undefined : sessionPRReadyForReview(session);

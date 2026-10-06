@@ -193,9 +193,9 @@ ao report --done --note "Focused tests passed" --artifact ./test-results.txt
 | --- | --- |
 | `ao pr merge <pr-number>` | Request a merge through the owning SCM provider. |
 | `ao pr resolve-comments <pr-number> [comment-id...]` | Resolve selected or eligible review comments. |
-| `ao review ls <worker-session-id>` | List review state for a worker. |
-| `ao review trigger [worker-session-id]` | Start or restart a reviewer run. Aliases: `execute`, `restart`. |
-| `ao review cancel [worker-session-id]` | Cancel a reviewer run. Alias: `stop`. |
+| `ao review ls [worker-session-id]` | List review state for a worker. Defaults to the calling session. |
+| `ao review trigger [worker-session-id]` | Start AO's reviewer on a worker's PR heads; defaults to the calling session. Fetches the PRs fresh from the provider first; `--pr <url>` reviews only that PR, attaching it if needed. Fails on a head that already has a review unless `--rerun`. `--agent`, `--model`, `--effort` pick the reviewer for one pass; `--no-inject` keeps auto-inject unchanged. Aliases: `execute`, `restart`. |
+| `ao review cancel [worker-session-id]` | Cancel every running reviewer. Defaults to the calling session. Alias: `stop`. |
 | `ao review submit [worker-session-id]` | Submit a reviewer verdict and results. |
 
 Use each subcommand's help for required review-run IDs, verdict values, and file/stdin inputs.

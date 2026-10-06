@@ -4,6 +4,8 @@ import type { SourceRef } from "./environment/scopedBoard";
 export type SpawnComposerOption = {
 	id: string;
 	label: string;
+	icon?: "folder" | "message-square-plus";
+	sectionBreakBefore?: boolean;
 };
 
 export type SpawnComposerVoice = {
