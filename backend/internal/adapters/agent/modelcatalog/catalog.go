@@ -264,13 +264,15 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 	}
 	env := request.Env
 	if request.AgentID == "opencode-v2" {
-		if dataHome, ok := opencodev2.DataHome(); ok {
-			env = make(map[string]string, len(request.Env)+1)
-			for key, value := range request.Env {
-				env[key] = value
-			}
-			env["XDG_DATA_HOME"] = dataHome
+		dataHome, err := opencodev2.DataHome()
+		if err != nil {
+			return ports.AgentModelCatalog{}, fmt.Errorf("opencode-v2 model catalog: prepare data home: %w", err)
 		}
+		env = make(map[string]string, len(request.Env)+1)
+		for key, value := range request.Env {
+			env[key] = value
+		}
+		env["XDG_DATA_HOME"] = dataHome
 	}
 	return Discover(ctx, request.AgentID, request.Binary, request.WorkingDir, env)
 }

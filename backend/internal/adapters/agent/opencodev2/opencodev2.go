@@ -96,10 +96,12 @@ func command(ctx context.Context, binary string, cfg ports.LaunchConfig, nativeI
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	var envArgs []string
-	if dataHome, ok := DataHome(); ok {
-		envArgs = append(envArgs, "XDG_DATA_HOME="+dataHome)
+	dataHome, err := DataHome()
+	if err != nil {
+		return nil, fmt.Errorf("opencode-v2: prepare data home: %w", err)
 	}
+	var envArgs []string
+	envArgs = append(envArgs, "XDG_DATA_HOME="+dataHome)
 	if content != "" {
 		envArgs = append(envArgs, "OPENCODE_CONFIG_CONTENT="+content)
 	}
@@ -280,9 +282,11 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	cmd := aoprocess.CommandContext(probeCtx, binary, "auth", "list", "--standalone", "--format", "json")
-	if dataHome, ok := DataHome(); ok {
-		cmd.Env = append(os.Environ(), "XDG_DATA_HOME="+dataHome)
+	dataHome, err := DataHome()
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, err
 	}
+	cmd.Env = append(os.Environ(), "XDG_DATA_HOME="+dataHome)
 	cmd.WaitDelay = 100 * time.Millisecond
 	out, err := cmd.Output()
 	if ctx.Err() != nil {

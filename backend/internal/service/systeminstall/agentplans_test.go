@@ -3,6 +3,7 @@ package systeminstall
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -60,6 +61,27 @@ func (s installCapabilitiesStub) Probe(ctx context.Context) (ports.InstallCapabi
 			Formulae: formulae, Casks: casks, Err: s.homebrewErr,
 		},
 	}, nil
+}
+
+func TestOpenCodeV2NPMPlanUsesPrivatePrefixWhenGlobalPrefixIsReadOnly(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.installCapabilities = installCapabilitiesStub{prefix: "/usr/local", writable: false}
+	privatePrefix := s.privateNPMPrefixes[TargetOpencodeV2]
+	var probed string
+	s.pathWritable = pathWritableProbeFunc(func(_ context.Context, path string) (bool, error) {
+		probed = path
+		return true, nil
+	})
+	plan := s.planNPM(TargetOpencodeV2, "@opencode/cli")
+	if plan.Unsupported {
+		t.Fatalf("plan = %+v, want private install available", plan)
+	}
+	if probed != privatePrefix || plan.ExpectedDestination != filepath.Join(privatePrefix, "bin") {
+		t.Fatalf("private prefix probe/destination = (%q, %q), want %q", probed, plan.ExpectedDestination, privatePrefix)
+	}
+	if !slices.Contains(plan.Command, privatePrefix) {
+		t.Fatalf("command = %v, want private prefix %q", plan.Command, privatePrefix)
+	}
 }
 
 func TestAgentPlansSnapshotsCapabilitiesOnce(t *testing.T) {

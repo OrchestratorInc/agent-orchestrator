@@ -44,10 +44,11 @@ func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[str
 	if err != nil {
 		return nil, nil, err
 	}
-	env := map[string]string{"OPENCODE_CONFIG_CONTENT": content}
-	if dataHome, ok := opencodev2.DataHome(); ok {
-		env["XDG_DATA_HOME"] = dataHome
+	dataHome, err := opencodev2.DataHome()
+	if err != nil {
+		return nil, nil, fmt.Errorf("opencode-v2 ACP: prepare data home: %w", err)
 	}
+	env := map[string]string{"OPENCODE_CONFIG_CONTENT": content, "XDG_DATA_HOME": dataHome}
 	return []string{"acp"}, env, nil
 }
 

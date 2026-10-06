@@ -550,6 +550,9 @@ export function HarnessSettingsSection({
 						// the installer plan so install controls stay usable.
 						const installationPending = !agents.error
 							&& (agents.isPending || readinessAgent?.installation.state === "unknown");
+						const incompatibleVersionReason = readinessAgent?.installation.reasonCode === "install_incompatible_version"
+							? readinessAgent.installation.reason
+							: undefined;
 						const authPlan = agentAuthPlans.get(agentId);
 						const isSetupAction = authPlan?.action === "setup";
 						const authState = authStates[agentId];
@@ -601,7 +604,7 @@ export function HarnessSettingsSection({
 								</div>
 							);
 						}
-						const rowHasError = failed || Boolean(authState?.error);
+						const rowHasError = failed || Boolean(authState?.error) || Boolean(incompatibleVersionReason);
 						const rowAuthWorkflow = authWorkflow?.agentId === agentId ? authWorkflow : null;
 						const hasDiagnostics = Boolean(
 							job &&
@@ -716,8 +719,8 @@ export function HarnessSettingsSection({
 								<div className="flex items-center gap-1.5">
 									<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
 								</div>
-								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? authPlan?.reason ?? plan?.reason}>
-									{isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired"))))}
+								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? incompatibleVersionReason ?? authPlan?.reason ?? plan?.reason}>
+									{isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : incompatibleVersionReason ?? (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired"))))}
 								</p>
 							</div>
 

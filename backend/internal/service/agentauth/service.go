@@ -178,9 +178,11 @@ func (s *Service) Start(ctx context.Context, agentID string) (StartResult, error
 		InitialInputReadyStates: plan.initialInputReadyStates,
 	}
 	if plan.AgentID == "opencode-v2" {
-		if dataHome, ok := opencodev2.DataHome(); ok {
-			input.Env = map[string]string{"XDG_DATA_HOME": dataHome}
+		dataHome, err := opencodev2.DataHome()
+		if err != nil {
+			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", err.Error())
 		}
+		input.Env = map[string]string{"XDG_DATA_HOME": dataHome}
 	}
 	if plan.prepareWorkspace != nil {
 		workingDir, err := s.prepareAuthWorkspace(ctx, plan)

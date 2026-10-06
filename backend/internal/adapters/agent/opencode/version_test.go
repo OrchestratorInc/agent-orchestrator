@@ -180,3 +180,41 @@ func TestResolveBinaryForMajorPicksMatchingBinaryFromSeveralOnPath(t *testing.T)
 		t.Fatalf("major 3 err = %v, want first-candidate mismatch", err)
 	}
 }
+
+func TestResolveBinaryForMajorPrefersMismatchOverEarlierProbeFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	broken, mismatch := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(broken, "opencode"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mismatch, "opencode"), []byte("#!/bin/sh\nprintf '1.18.33\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", broken+string(os.PathListSeparator)+mismatch)
+	_, err := ResolveBinaryForMajor(context.Background(), 2)
+	var incompatible *IncompatibleVersionError
+	if !errors.As(err, &incompatible) || incompatible.Path != filepath.Join(mismatch, "opencode") {
+		t.Fatalf("error = %#v, want mismatch from later candidate", err)
+	}
+}
+
+func TestResolveBinaryForMajorSharesOneProbeDeadline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	oldTimeout := versionProbeTimeout
+	versionProbeTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { versionProbeTimeout = oldTimeout })
+	first, second := t.TempDir(), t.TempDir()
+	for _, dir := range []string{first, second} {
+		if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte("#!/bin/sh\nsleep 0.1\nprintf '2.0.0\\n'\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", first+string(os.PathListSeparator)+second)
+	if _, err := ResolveBinaryForMajor(context.Background(), 1); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want one overall deadline", err)
+	}
+}

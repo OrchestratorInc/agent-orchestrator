@@ -654,7 +654,7 @@ func BinaryCandidates(ctx context.Context) ([]string, error) {
 			candidates = append(candidates, nodeManagerCandidates...)
 		}
 	}
-	if dir, ok := V2NPMBinDir(); ok {
+	if dir, err := V2NPMBinDir(); err == nil {
 		if runtime.GOOS == "windows" {
 			candidates = append(candidates, filepath.Join(dir, "opencode.cmd"), filepath.Join(dir, "opencode.exe"))
 		} else {
