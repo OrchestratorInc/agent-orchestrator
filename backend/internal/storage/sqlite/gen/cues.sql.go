@@ -25,37 +25,22 @@ func (q *Queries) DeleteCueByID(ctx context.Context, id domain.CueID) (int64, er
 	return result.RowsAffected()
 }
 
-const disableOtherStartupCues = `-- name: DisableOtherStartupCues :exec
-UPDATE cues SET run_on_worktree_creation = 0 WHERE project_id = ? AND id <> ? AND run_on_worktree_creation = 1
-`
-
-type DisableOtherStartupCuesParams struct {
-	ProjectID domain.ProjectID
-	ID        domain.CueID
-}
-
-func (q *Queries) DisableOtherStartupCues(ctx context.Context, arg DisableOtherStartupCuesParams) error {
-	_, err := q.db.ExecContext(ctx, disableOtherStartupCues, arg.ProjectID, arg.ID)
-	return err
-}
-
 const insertCue = `-- name: InsertCue :exec
 
 INSERT INTO cues (
-    id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    id, project_id, name, type, command, prompt, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertCueParams struct {
-	ID                    domain.CueID
-	ProjectID             domain.ProjectID
-	Name                  string
-	Type                  domain.CueType
-	Command               string
-	Prompt                string
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	RunOnWorktreeCreation bool
+	ID        domain.CueID
+	ProjectID domain.ProjectID
+	Name      string
+	Type      domain.CueType
+	Command   string
+	Prompt    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // User-managed reusable quick actions (Cues) scoped to a project. The
@@ -71,7 +56,6 @@ func (q *Queries) InsertCue(ctx context.Context, arg InsertCueParams) error {
 		arg.Prompt,
 		arg.CreatedAt,
 		arg.UpdatedAt,
-		arg.RunOnWorktreeCreation,
 	)
 	return err
 }
@@ -139,42 +123,20 @@ func (q *Queries) SelectCuesByProject(ctx context.Context, projectID domain.Proj
 	return items, nil
 }
 
-const selectStartupCue = `-- name: SelectStartupCue :one
-SELECT id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation FROM cues WHERE project_id = ? AND run_on_worktree_creation = 1
-`
-
-func (q *Queries) SelectStartupCue(ctx context.Context, projectID domain.ProjectID) (Cue, error) {
-	row := q.db.QueryRowContext(ctx, selectStartupCue, projectID)
-	var i Cue
-	err := row.Scan(
-		&i.ID,
-		&i.ProjectID,
-		&i.Name,
-		&i.Type,
-		&i.Command,
-		&i.Prompt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.RunOnWorktreeCreation,
-	)
-	return i, err
-}
-
 const updateCue = `-- name: UpdateCue :one
 UPDATE cues
-SET name = ?, type = ?, command = ?, prompt = ?, updated_at = ?, run_on_worktree_creation = ?
+SET name = ?, type = ?, command = ?, prompt = ?, updated_at = ?
 WHERE id = ?
 RETURNING id, project_id, name, type, command, prompt, created_at, updated_at, run_on_worktree_creation
 `
 
 type UpdateCueParams struct {
-	Name                  string
-	Type                  domain.CueType
-	Command               string
-	Prompt                string
-	UpdatedAt             time.Time
-	RunOnWorktreeCreation bool
-	ID                    domain.CueID
+	Name      string
+	Type      domain.CueType
+	Command   string
+	Prompt    string
+	UpdatedAt time.Time
+	ID        domain.CueID
 }
 
 func (q *Queries) UpdateCue(ctx context.Context, arg UpdateCueParams) (Cue, error) {
@@ -184,7 +146,6 @@ func (q *Queries) UpdateCue(ctx context.Context, arg UpdateCueParams) (Cue, erro
 		arg.Command,
 		arg.Prompt,
 		arg.UpdatedAt,
-		arg.RunOnWorktreeCreation,
 		arg.ID,
 	)
 	var i Cue

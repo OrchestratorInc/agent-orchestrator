@@ -311,13 +311,9 @@ func TestCuesAPI_CommandAuthoringRequiresLoopback(t *testing.T) {
 		body         string
 		wantStatus   int
 	}{
-		{"LAN create command without startup", true, "POST", "", `{"name":"Tests","type":"command","command":"pnpm test","runOnWorktreeCreation":false}`, http.StatusForbidden},
-		{"LAN create startup command", true, "POST", "", `{"name":"Tests","type":"command","command":"pnpm test","runOnWorktreeCreation":true}`, http.StatusForbidden},
 		{"LAN create agent", true, "POST", "", `{"name":"Tests","type":"agent","prompt":"Run tests"}`, http.StatusCreated},
 		{"LAN update agent", true, "PATCH", domain.CueTypeAgent, `{"name":"Tests","type":"agent","prompt":"Run tests"}`, http.StatusOK},
 		{"LAN convert agent to command", true, "PATCH", domain.CueTypeAgent, `{"name":"Tests","type":"command","command":"pnpm test"}`, http.StatusForbidden},
-		{"LAN update command without startup", true, "PATCH", domain.CueTypeCommand, `{"name":"Tests","type":"command","command":"pnpm test","runOnWorktreeCreation":false}`, http.StatusForbidden},
-		{"LAN update startup command", true, "PATCH", domain.CueTypeCommand, `{"name":"Tests","type":"command","command":"pnpm test","runOnWorktreeCreation":true}`, http.StatusForbidden},
 		{"LAN convert command to agent", true, "PATCH", domain.CueTypeCommand, `{"name":"Tests","type":"agent","prompt":"Run tests"}`, http.StatusForbidden},
 		{"loopback create command", false, "POST", "", `{"name":"Tests","type":"command","command":"pnpm test"}`, http.StatusCreated},
 		{"loopback update command", false, "PATCH", domain.CueTypeCommand, `{"name":"Tests","type":"command","command":"pnpm test"}`, http.StatusOK},

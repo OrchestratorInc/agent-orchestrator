@@ -680,7 +680,6 @@ func Run() error {
 	// worktree is torn down (shellTermSvc cannot exist before sessMgr does; see
 	// SetShellTerminalCloser).
 	sessMgr.SetShellTerminalCloser(shellTermSvc)
-	sessMgr.SetStartupCueRunner(shellTermSvc)
 	var (
 		usageCollector *usagesvc.Collector
 		usagePipeline  *usagepipeline.Pipeline

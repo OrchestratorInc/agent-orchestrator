@@ -985,7 +985,6 @@ func (*fakeSessionLifecycle) WaitAgentSwitchWorkers(context.Context) error { ret
 func (*fakeSessionLifecycle) WaitBackgroundWorkers(context.Context) error  { return nil }
 
 func (f *fakeSessionLifecycle) SetShellTerminalCloser(sessionmanager.ShellTerminalCloser) {}
-func (f *fakeSessionLifecycle) SetStartupCueRunner(sessionmanager.StartupCueRunner)       {}
 func (f *fakeSessionLifecycle) SetTerminalInputGate(sessionmanager.TerminalInputGate)     {}
 func (f *fakeSessionLifecycle) AcquireSessionInput(domain.SessionID) (func(), bool) {
 	return func() {}, true

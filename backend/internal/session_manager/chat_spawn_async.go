@@ -209,10 +209,6 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	m.logAsyncChatSpawnStage(id, "attachment_restore", stageStarted)
 
 	if !reusePublishedWorkspace && in.projectKind != domain.ProjectKindScratch {
-		if err := m.prepareStartupCue(ctx, id, domain.ProjectID(in.project.ID)); err != nil {
-			m.failAsyncChatSpawn(ctx, id, err)
-			return
-		}
 	}
 	record, err := m.getRecord(ctx, id)
 	if err != nil {
@@ -272,16 +268,6 @@ func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, c
 	cleanupCtx, cancel := spawnRollbackContext(ctx)
 	defer cancel()
 	m.stopChatBestEffort(cleanupCtx, id)
-	if store, ok := m.store.(startupCueStore); ok {
-		if rec, found, err := m.store.GetSession(cleanupCtx, id); err == nil && found && rec.StartupCue.HoldsInput() {
-			run := *rec.StartupCue
-			now := m.clock()
-			run.State, run.DeliveryHeld, run.Error, run.CompletedAt = "cancelled", false, "The agent could not start; the startup cue was not completed", &now
-			if err := store.FinishStartupCue(cleanupCtx, id, run); err != nil {
-				m.logger.Warn("startup cue: cancel failed startup", "sessionID", id, "error", err)
-			}
-		}
-	}
 	if _, err := m.setProvisionState(cleanupCtx, id, domain.SessionProvisionFailed, cause.Error()); err != nil {
 		m.logger.Error("spawn: record failed start", "sessionID", id, "error", err)
 	}
@@ -395,9 +381,6 @@ func (m *Manager) FailInterruptedProvisioning(ctx context.Context) error {
 	recs, err := m.store.ListAllSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("list sessions for interrupted starts: %w", err)
-	}
-	if err := m.recoverStartupCues(ctx, recs); err != nil {
-		return err
 	}
 	_, err = m.failInterruptedProvisioningRecords(ctx, recs)
 	return err

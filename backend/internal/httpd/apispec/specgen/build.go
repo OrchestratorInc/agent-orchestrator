@@ -154,7 +154,6 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
-	"DomainStartupCueRun":                                  "StartupCueRun",
 	"ControllersSettingsResponse":                          "SettingsResponse",
 	"ControllersDesktopWorkspaceLocationResponse":          "DesktopWorkspaceLocationResponse",
 	"ControllersUpdateSessionInterfaceRequest":             "UpdateSessionInterfaceRequest",
@@ -2690,18 +2689,6 @@ func sessionOperations() []operation {
 			pathParams: []any{controllers.SessionIDParam{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.ExitAgentResponse{}},
-				{http.StatusNotFound, envelope.APIError{}},
-				{http.StatusConflict, envelope.APIError{}},
-				{http.StatusInternalServerError, envelope.APIError{}},
-				{http.StatusNotImplemented, envelope.APIError{}},
-			},
-		},
-		{
-			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/startup-cue/cancel", id: "cancelSessionStartupCue", tag: "sessions",
-			summary:    "Cancel a running startup cue",
-			pathParams: []any{controllers.SessionIDParam{}},
-			resps: []respUnit{
-				{http.StatusOK, controllers.StartupCueCancelResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},

@@ -197,7 +197,6 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}", c.get)
 	r.Get("/sessions/{sessionId}/preview", c.preview)
 	r.Post("/sessions/{sessionId}/preview", c.setPreview)
-	r.Post("/sessions/{sessionId}/startup-cue/cancel", c.cancelStartupCue)
 	r.Delete("/sessions/{sessionId}/preview", c.clearPreview)
 	r.Get("/sessions/{sessionId}/preview/server", c.previewServerStatus)
 	r.Post("/sessions/{sessionId}/preview/server", c.startPreviewServer)
@@ -1715,32 +1714,6 @@ func (c *SessionsController) kill(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, KillSessionResponse{OK: true, SessionID: sessionID(r), Freed: freed})
 }
 
-func (c *SessionsController) cancelStartupCue(w http.ResponseWriter, r *http.Request) {
-	if c.Svc == nil {
-		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/startup-cue/cancel")
-		return
-	}
-	canceller, ok := c.Svc.(interface {
-		CancelStartupCue(context.Context, domain.SessionID) (domain.StartupCueRun, error)
-	})
-	if !ok {
-		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/startup-cue/cancel")
-		return
-	}
-	run, err := canceller.CancelStartupCue(r.Context(), sessionID(r))
-	if err != nil {
-		envelope.WriteError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, StartupCueCancelResponse{StartupCue: run})
-}
-
-// rollback undoes a partially-completed spawn: if the session row is still in
-// seed state (no workspace, no runtime handle yet), the row is deleted
-// outright. If anything observable has landed it falls back to Kill so the
-// runtime/workspace are torn down. Used by `ao spawn --claim-pr` to undo a
-// session whose claim step failed, avoiding the orphan terminated row a
-// plain Kill would leave behind.
 func (c *SessionsController) rollback(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/rollback")

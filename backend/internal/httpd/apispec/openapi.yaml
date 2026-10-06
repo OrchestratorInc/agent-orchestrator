@@ -7816,51 +7816,6 @@ paths:
       summary: Send a message to a running session's agent
       tags:
       - sessions
-  /api/v1/sessions/{sessionId}/startup-cue/cancel:
-    post:
-      operationId: cancelSessionStartupCue
-      parameters:
-      - description: Session identifier, e.g. project-1.
-        in: path
-        name: sessionId
-        required: true
-        schema:
-          description: Session identifier, e.g. project-1.
-          type: string
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ControllersStartupCueCancelResponse'
-          description: OK
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Internal Server Error
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Implemented
-      summary: Cancel a running startup cue
-      tags:
-      - sessions
   /api/v1/sessions/{sessionId}/switch-agent:
     post:
       operationId: switchSessionAgent
@@ -10829,8 +10784,6 @@ components:
           - mergeable
           - merged
           type: string
-        startupCue:
-          $ref: '#/components/schemas/StartupCueRun'
         status:
           enum:
           - working
@@ -10904,13 +10857,6 @@ components:
           type: boolean
       required:
       - enabled
-      type: object
-    ControllersStartupCueCancelResponse:
-      properties:
-        startupCue:
-          $ref: '#/components/schemas/StartupCueRun'
-      required:
-      - startupCue
       type: object
     ControllersUpdateCloudOfferingRequest:
       properties:
@@ -11655,8 +11601,6 @@ components:
             when saving command cues.
           maxLength: 16384
           type: string
-        runOnWorktreeCreation:
-          type: boolean
         type:
           description: 'Cue kind: command sends to a project- or session-scoped shell
             terminal; agent sends an authored prompt. Definition body limit: 128 KiB.'
@@ -11687,8 +11631,6 @@ components:
           type: string
         prompt:
           type: string
-        runOnWorktreeCreation:
-          type: boolean
         type:
           type: string
         updatedAt:
@@ -14985,50 +14927,6 @@ components:
       - ok
       - sessionId
       - transition
-      type: object
-    StartupCueRun:
-      properties:
-        command:
-          type: string
-        completedAt:
-          format: date-time
-          type:
-          - "null"
-          - string
-        cueId:
-          type: string
-        deliveryHeld:
-          type: boolean
-        error:
-          type: string
-        exitCode:
-          type:
-          - "null"
-          - integer
-        name:
-          type: string
-        output:
-          type: string
-        startedAt:
-          format: date-time
-          type: string
-        state:
-          enum:
-          - pending
-          - running
-          - succeeded
-          - failed
-          - interrupted
-          - cancelled
-          type: string
-        terminalHandle:
-          type: string
-      required:
-      - cueId
-      - name
-      - command
-      - state
-      - startedAt
       type: object
     SteerConversationRequest:
       properties:

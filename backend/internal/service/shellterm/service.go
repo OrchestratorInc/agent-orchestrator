@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -449,50 +448,6 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 		return ShellTerminal{}, fmt.Errorf("run cue command: send to terminal %s: %w", terminal.HandleID, err)
 	}
 	return terminal, nil
-}
-
-// RunStartupCue starts a visible, session-scoped terminal using AO's platform
-// shell and appends a marker containing the command exit code.
-func (s *Service) RunStartupCue(ctx context.Context, in RunStartupCueInput) (StartupCueCommandResult, error) {
-	marker := "__AO_STARTUP_CUE_DONE_" + strings.ReplaceAll(string(in.SessionID), "-", "_") + "__"
-	argv, usedFallback := resolveUserLoginShell("")
-	if usedFallback || len(argv) == 0 {
-		return StartupCueCommandResult{}, apierr.Internal("SHELL_TERMINAL_NO_SHELL", "Could not determine a shell to launch. Set SHELL (macOS/Linux) or ComSpec (Windows).")
-	}
-	command := startupCueCommand(in.Command, marker, argv[0])
-	terminal, err := s.RunCueCommand(ctx, RunCueCommandInput{ProjectID: in.ProjectID, SessionID: in.SessionID, Shell: argv[0], Command: command})
-	if err != nil {
-		return StartupCueCommandResult{}, err
-	}
-	return StartupCueCommandResult{Terminal: terminal, Marker: marker}, nil
-}
-
-// startupCueCommand appends a completion marker using the syntax of the
-// resolved interactive shell. Windows commonly resolves to PowerShell, whose
-// variable and command-list syntax differs from cmd.exe. Keeping the marker in
-// the same shell language ensures startup execution can always release the
-// queued turn after the command exits.
-func startupCueCommand(command, marker, shell string) string {
-	if runtime.GOOS == "windows" {
-		base := strings.ToLower(filepath.Base(shell))
-		if base == "pwsh.exe" || base == "powershell.exe" {
-			return fmt.Sprintf("$aoCode = 0; try { %s; if (-not $?) { $aoCode = if ($LASTEXITCODE -ne $null) { [int]$LASTEXITCODE } else { 1 } } } catch { $aoCode = 1 }; Write-Output (%q + $aoCode)", command, marker)
-		}
-		return fmt.Sprintf("%s & echo %q%%ERRORLEVEL%%", command, marker)
-	}
-	return fmt.Sprintf("%s; printf '\\n%s%%s\\n' $?", command, marker)
-}
-
-// GetOutput returns the latest bounded terminal output for startup polling.
-func (s *Service) GetOutput(ctx context.Context, handleID string, lines int) (string, error) {
-	rec, found, err := s.store.SelectShellTerminalByHandleID(ctx, handleID)
-	if err != nil {
-		return "", err
-	}
-	if !found {
-		return "", apierr.NotFound("SHELL_TERMINAL_NOT_FOUND", "No shell terminal: "+handleID)
-	}
-	return s.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: rec.HandleID}, lines)
 }
 
 func (s *Service) resolveCueCommandWorkingDir(ctx context.Context, projectID domain.ProjectID, sessionID domain.SessionID) (string, domain.ProjectID, error) {

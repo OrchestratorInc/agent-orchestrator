@@ -312,9 +312,6 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		}
 	}
 
-	if in.record.StartupCue.HoldsInput() {
-		m.startStartupCue(id, in.project, in.workspace.Path, func(releaseCtx context.Context) error { return m.drainStartupChatQueue(releaseCtx, id) })
-	}
 	return m.getRecord(ctx, id)
 }
 
@@ -544,11 +541,6 @@ func (m *Manager) resumeChatController(
 	restored, err := m.getRecord(ctx, rec.ID)
 	if err != nil {
 		return RestoreResult{}, err
-	}
-	if restored.StartupCue != nil && !restored.StartupCue.HoldsInput() {
-		if err := m.chat.DrainChatQueue(ctx, rec.ID); err != nil {
-			return RestoreResult{}, err
-		}
 	}
 	// Native continuity: the provider still holds the conversation, so the agent
 	// resumes with its own history rather than a replayed prompt.

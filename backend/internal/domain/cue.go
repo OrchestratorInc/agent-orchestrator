@@ -68,10 +68,9 @@ type Cue struct {
 	Command string
 	// Prompt is the agent instruction for an agent cue. It is unused for
 	// command cues.
-	Prompt                string
-	RunOnWorktreeCreation bool
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	Prompt    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // Validate checks the required fields, enum values, and size bounds of a cue
@@ -80,9 +79,6 @@ type Cue struct {
 func (c Cue) Validate() error {
 	if strings.TrimSpace(c.Name) == "" || len(c.Name) > MaxCueNameLength {
 		return ErrInvalidCueName
-	}
-	if c.RunOnWorktreeCreation && c.Type != CueTypeCommand {
-		return ErrInvalidCueType
 	}
 	if !c.Type.Valid() {
 		return ErrInvalidCueType

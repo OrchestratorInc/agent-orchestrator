@@ -12,7 +12,6 @@ import {
 import { CUE_LIMITS } from "../lib/cues";
 import type { CueDTO, CueInput } from "../lib/cues";
 import { Button } from "./ui/button";
-import { Switch } from "./ui/switch";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
 	Dialog,
@@ -45,11 +44,9 @@ type CueDraft = {
 	type: CueType;
 	command: string;
 	prompt: string;
-	runOnWorktreeCreation: boolean;
 };
 
 function emptyDraft(): CueDraft {
-	return { name: "", type: "command", command: "", prompt: "", runOnWorktreeCreation: false };
 }
 
 function draftFromDTO(cue: CueDTO): CueDraft {
@@ -58,7 +55,6 @@ function draftFromDTO(cue: CueDTO): CueDraft {
 		type: cueType(cue),
 		command: cue.command ?? "",
 		prompt: cue.prompt ?? "",
-		runOnWorktreeCreation: cue.runOnWorktreeCreation ?? false,
 	};
 }
 
@@ -131,7 +127,6 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 		};
 		if (draft.type === "command") {
 			input.command = draft.command;
-			input.runOnWorktreeCreation = draft.runOnWorktreeCreation;
 		} else {
 			input.prompt = draft.prompt;
 		}
@@ -232,7 +227,6 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 										<div className="flex items-baseline gap-2 text-sm leading-5 text-foreground">
 											<span className="truncate font-medium">{cue.name}</span>
 											<span className="shrink-0 text-xs text-settings-muted">{cueKind === "agent" ? t("cues.typeName.agent") : t("cues.typeName.command")}</span>
-											{cue.runOnWorktreeCreation ? <span className="shrink-0 rounded-full bg-accent-weak px-2 py-0.5 text-2xs font-medium text-accent-foreground">{t("cues.startupBadge")}</span> : null}
 										</div>
 									</div>
 									{hideCueActions ? null : <div className="flex shrink-0 items-center gap-0.5">
@@ -304,7 +298,6 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 					triggerClassName="w-fit self-start"
 					menuAlign="start"
 					menuClassName="border-0! shadow-md!"
-					onChange={(type) => setDraft((current) => ({ ...current, type, runOnWorktreeCreation: type === "command" && current.runOnWorktreeCreation }))}
 				/>
 			</div>
 
@@ -324,13 +317,6 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 				/>
 			</div>
 
-			{command ? <div className="flex items-start justify-between gap-3 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-2.5">
-				<div className="min-w-0 space-y-1">
-					<span className="block text-base font-medium leading-4 text-settings-label">{t("cues.runOnWorktreeCreation")}</span>
-					<span className="block text-xs leading-4 text-settings-muted">{t("cues.startupSelectionHelp")}</span>
-				</div>
-				<Switch className="mt-0.5 shrink-0" checked={draft.runOnWorktreeCreation} onCheckedChange={(checked) => setDraft((d) => ({ ...d, runOnWorktreeCreation: checked }))} aria-label={t("cues.runOnWorktreeCreation")} />
-			</div> : null}
 
 			{formError ? (
 				<p role="alert" className="text-caption leading-4 text-error">

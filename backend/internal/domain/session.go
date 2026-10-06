@@ -231,7 +231,6 @@ type SessionRecord struct {
 	// the row rather than discarded with it, because the user is already looking
 	// at the session by the time the start can fail.
 	ProvisionError string         `json:"provisionError,omitempty"`
-	StartupCue     *StartupCueRun `json:"startupCue,omitempty"`
 }
 
 // SessionProvisionState is a session's start-up progress.

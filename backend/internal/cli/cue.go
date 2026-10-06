@@ -12,13 +12,12 @@ import (
 
 // These DTOs mirror the daemon's Cue API without importing controller types.
 type cueDTO struct {
-	RunOnWorktreeCreation bool   `json:"runOnWorktreeCreation,omitempty"`
-	ID                    string `json:"id"`
-	ProjectID             string `json:"projectId"`
-	Name                  string `json:"name"`
-	Type                  string `json:"type"`
-	Command               string `json:"command"`
-	Prompt                string `json:"prompt"`
+	ID        string `json:"id"`
+	ProjectID string `json:"projectId"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Command   string `json:"command"`
+	Prompt    string `json:"prompt"`
 }
 
 type cueEnvelopeDTO struct {
@@ -30,11 +29,10 @@ type cueListDTO struct {
 }
 
 type cueCreateDTO struct {
-	RunOnWorktreeCreation bool   `json:"runOnWorktreeCreation,omitempty"`
-	Name                  string `json:"name"`
-	Type                  string `json:"type"`
-	Command               string `json:"command,omitempty"`
-	Prompt                string `json:"prompt,omitempty"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Command string `json:"command,omitempty"`
+	Prompt  string `json:"prompt,omitempty"`
 }
 
 func newCueCommand(ctx *commandContext) *cobra.Command {
@@ -50,7 +48,7 @@ func newCueCommand(ctx *commandContext) *cobra.Command {
 
 func newCueCreateCommand(ctx *commandContext) *cobra.Command {
 	var project, name, command, prompt string
-	var jsonOutput, startup bool
+	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a command or agent Cue",
@@ -66,10 +64,7 @@ func newCueCreateCommand(ctx *commandContext) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if startup && strings.TrimSpace(command) == "" {
-				return usageError{errors.New("--on-worktree-creation requires --command")}
-			}
-			body := cueCreateDTO{Name: name, RunOnWorktreeCreation: startup}
+			body := cueCreateDTO{Name: name}
 			if strings.TrimSpace(command) != "" {
 				body.Type, body.Command = "command", command
 			} else {
@@ -86,7 +81,6 @@ func newCueCreateCommand(ctx *commandContext) *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().BoolVar(&startup, "on-worktree-creation", false, "Run this command Cue before the first turn of each new worktree (replaces the current selection)")
 	cmd.Flags().StringVar(&project, "project", "", "Project id (default: AO_PROJECT_ID, current session, or current registered repo)")
 	cmd.Flags().StringVar(&name, "name", "", "Cue name")
 	cmd.Flags().StringVar(&command, "command", "", "Exact shell command for a command Cue")

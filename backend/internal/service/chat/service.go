@@ -805,14 +805,6 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	controller := newController(
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
 	if owner.Kind == domain.ConversationOwnerSession {
-		controller.startupCueConfigured = func(readCtx context.Context) (bool, error) {
-			rec, _, err := s.sessions.GetSession(readCtx, cfg.SessionID)
-			return rec.StartupCue != nil, err
-		}
-		controller.startupInputHeld = func(readCtx context.Context) (bool, error) {
-			rec, _, err := s.sessions.GetSession(readCtx, cfg.SessionID)
-			return rec.StartupCue.HoldsInput(), err
-		}
 	}
 
 	var commitProviderHistory func(context.Context) error

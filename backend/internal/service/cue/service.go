@@ -150,11 +150,10 @@ func (s *Service) Delete(ctx context.Context, cueID domain.CueID) error {
 
 func normalizeInput(input Input) domain.Cue {
 	return domain.Cue{
-		RunOnWorktreeCreation: input.RunOnWorktreeCreation,
-		Name:                  strings.TrimSpace(input.Name),
-		Type:                  input.Type,
-		Command:               input.Command,
-		Prompt:                input.Prompt,
+		Name:    strings.TrimSpace(input.Name),
+		Type:    input.Type,
+		Command: input.Command,
+		Prompt:  input.Prompt,
 	}
 }
 

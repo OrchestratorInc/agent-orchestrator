@@ -23,7 +23,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 	"github.com/aoagents/agent-orchestrator/backend/internal/termtheme"
@@ -276,13 +275,6 @@ type ShellTerminalCloser interface {
 	BeginSessionTeardown(ctx context.Context, id domain.SessionID) (release func(), err error)
 }
 
-// StartupCueRunner executes startup cues through the shell terminal service.
-type StartupCueRunner interface {
-	RunStartupCue(context.Context, shellterm.RunStartupCueInput) (shellterm.StartupCueCommandResult, error)
-	GetOutput(context.Context, string, int) (string, error)
-	CloseShellTerminal(context.Context, string) error
-}
-
 // HarnessUseGate coordinates session lifecycle operations with harness binary
 // replacement so a launch cannot observe a partially installed executable.
 type HarnessUseGate interface {
@@ -531,14 +523,6 @@ type Manager struct {
 	// under lock rather than through the constructor.
 	shellTerminalsMu sync.Mutex
 	shellTerminals   ShellTerminalCloser
-	startupCueRunner StartupCueRunner
-
-	// startupCueExecMu guards the in-memory executions that are currently
-	// running. The durable StartupCueRun is the recovery source of truth, while
-	// this registry closes the race between starting a terminal and persisting
-	// its handle for cancellation.
-	startupCueExecMu sync.Mutex
-	startupCueExec   map[domain.SessionID]*startupCueExecution
 
 	terminalInputGateMu sync.Mutex
 	terminalInputGate   TerminalInputGate
@@ -611,13 +595,6 @@ func (m *Manager) SetShellTerminalCloser(closer ShellTerminalCloser) {
 	m.shellTerminalsMu.Lock()
 	defer m.shellTerminalsMu.Unlock()
 	m.shellTerminals = closer
-}
-
-// SetStartupCueRunner configures the shell terminal runner used for startup cues.
-func (m *Manager) SetStartupCueRunner(runner StartupCueRunner) {
-	m.shellTerminalsMu.Lock()
-	defer m.shellTerminalsMu.Unlock()
-	m.startupCueRunner = runner
 }
 
 // SetTerminalInputGate late-binds the daemon's terminal mux after Session
@@ -859,7 +836,6 @@ func New(d Deps) *Manager {
 		// Leave enough headroom to avoid a false delivery failure.
 		switchDeliveryAckWait:  150 * time.Second,
 		transitions:            make(map[domain.SessionID]*interfaceTransitionRun),
-		startupCueExec:         make(map[domain.SessionID]*startupCueExecution),
 		transitionDeliveryWake: make(chan struct{}, 1),
 		sendConfirm: sendConfirmConfig{
 			pollInterval:    sendConfirmPollInterval,
@@ -1218,12 +1194,6 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
 	}
 
-	if projectKind != domain.ProjectKindScratch {
-		if err := m.prepareStartupCue(ctx, id, domain.ProjectID(project.ID)); err != nil {
-			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
-			return domain.SessionRecord{}, 0, 0, err
-		}
-	}
 	rec, err = m.getRecord(ctx, id)
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, err
@@ -1320,30 +1290,6 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		Config:           adapterConfig,
 		Permissions:      adapterConfig.Permissions,
 	}
-	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
-	if err != nil {
-		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPromptDelivery, err)
-	}
-	afterStartPrompt := prompt
-	if rec.StartupCue.HoldsInput() {
-		delivery = ports.PromptDeliveryAfterStart
-	}
-	if delivery == ports.PromptDeliveryAfterStart {
-		afterStartPrompt, err = buildAfterStartPrompt(ctx, agent, launchCfg)
-		if err != nil {
-			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPromptDelivery, err)
-		}
-		launchCfg.Prompt = ""
-	}
-	if rec.StartupCue.HoldsInput() && afterStartPrompt != "" {
-		if store, ok := m.store.(startupCueStore); ok {
-			if _, err := store.EnqueueStartupCueMessage(ctx, id, "startup-initial:"+string(id), afterStartPrompt); err != nil {
-				return domain.SessionRecord{}, 0, 0, err
-			}
-		}
-	}
 	argv, err := agent.GetLaunchCommand(ctx, launchCfg)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
@@ -1422,36 +1368,6 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, rec, ws, workspaceProject, runtimeDestroyed)
 		m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
-	}
-	if rec.StartupCue.HoldsInput() {
-		m.startStartupCue(id, project, ws.Path, func(releaseCtx context.Context) error {
-			if afterStartPrompt != "" {
-				if err := m.deliverAfterStartPrompt(releaseCtx, agent, launchCfg, handle, id, afterStartPrompt); err != nil {
-					return err
-				}
-				if store, ok := m.store.(startupCueStore); ok {
-					messages, err := store.ListStartupCueMessages(releaseCtx, id)
-					if err != nil {
-						return err
-					}
-					for _, msg := range messages {
-						if msg.ClientMessageID == "startup-initial:"+string(id) {
-							if err := store.MarkStartupCueMessageDelivered(releaseCtx, msg.ID); err != nil {
-								return err
-							}
-						}
-					}
-				}
-			}
-			return m.drainStartupCueMessages(releaseCtx, id)
-		})
-	} else if delivery == ports.PromptDeliveryAfterStart && afterStartPrompt != "" {
-		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, id, afterStartPrompt); err != nil {
-			runtimeDestroyed := m.destroySpawnRuntimeAfterFailure(ctx, handle)
-			workspaceDestroyed := m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, rec, ws, workspaceProject, runtimeDestroyed)
-			m.markSpawnFailedTerminatedAfterFailure(ctx, id, runtimeDestroyed && workspaceDestroyed)
-			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnDeliverPrompt, err)
-		}
 	}
 	if cfg.AutomationRunID != nil {
 		if err := m.markAutomationLaunchCompleted(ctx, id); err != nil {
@@ -2807,13 +2723,6 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 	if rec.ProvisionState.IsProvisioning() {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrResumeInProgress)
 	}
-	if rec.ProvisionState == domain.SessionProvisionFailed && rec.StartupCue != nil && rec.StartupCue.DeliveryHeld {
-		if err := m.releasePersistedStartupCueDelivery(ctx, id); err != nil {
-			return RestoreResult{}, err
-		}
-		updated, err := m.getRecord(ctx, id)
-		return RestoreResult{Session: updated, Mode: RestoreModeNative}, err
-	}
 	if rec.ProvisionState == domain.SessionProvisionFailed {
 		result, handedOff, err := m.retryFailedChatSpawn(ctx, rec, releaseHarness)
 		if handedOff {
@@ -3501,9 +3410,6 @@ func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 	// "starting" after a restart has no one left to finish it, so say so rather
 	// than leaving a session that spins forever.
 	if err == nil {
-		if recoverErr := m.recoverStartupCues(ctx, recs); recoverErr != nil {
-			return recoverErr
-		}
 		m.startupProvisioningRetries, err = m.failInterruptedProvisioningRecords(ctx, recs)
 		if err != nil {
 			m.logger.Warn("reconcile: interrupted session starts could not be settled", "error", err)
@@ -3563,15 +3469,6 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 		}
 		if err := m.reconcileReap(ctx, rec); err != nil {
 			m.logger.Error("reconcile: reap pass failed, skipping", "sessionID", rec.ID, "error", err)
-		}
-	}
-	if records, err := m.store.ListAllSessions(ctx); err == nil {
-		for _, rec := range records {
-			if !rec.IsTerminated && rec.StartupCue != nil && rec.StartupCue.DeliveryHeld {
-				if err := m.releasePersistedStartupCueDelivery(ctx, rec.ID); err != nil {
-					m.logger.Warn("startup cue: recover held messages", "sessionID", rec.ID, "error", err)
-				}
-			}
 		}
 	}
 	if err := m.deliverAllTransitionMessages(ctx); err != nil {
@@ -4266,29 +4163,6 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 // retries. Ordinary callers leave it empty; the outbox preserves the key across
 // restart, rollback, and even a second overlapping handoff.
 func (m *Manager) send(ctx context.Context, id domain.SessionID, message, clientMessageID string, authoredByUser bool) error {
-	if store, ok := m.store.(startupCueStore); ok {
-		rec, found, err := m.store.GetSession(ctx, id)
-		if err != nil {
-			return err
-		}
-		if found && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && rec.StartupCue != nil {
-			releaseDelivery := m.lockStartupDelivery(id)
-			defer releaseDelivery()
-			rec, _, err = m.store.GetSession(ctx, id)
-			if err != nil {
-				return err
-			}
-			if rec.StartupCue.HoldsInput() {
-				if clientMessageID == "" {
-					clientMessageID = "startup-cue:" + m.newLaunchID()
-				}
-				queued, err := store.EnqueueStartupCueMessage(ctx, id, clientMessageID, message)
-				if err != nil || queued {
-					return err
-				}
-			}
-		}
-	}
 
 	// A controller transition deliberately has a short interval with no writer.
 	// Queue internal/lifecycle sends durably instead of racing either controller
@@ -5626,15 +5500,7 @@ func (m *Manager) deliverAfterStartPrompt(ctx context.Context, agent ports.Agent
 	// into success would report a spawn/restore that never delivered its prompt.
 	var outcome sessionguard.Outcome
 	var err error
-	rec, _, readErr := m.store.GetSession(ctx, id)
-	if readErr != nil {
-		return readErr
-	}
-	if m.SessionMutationInProgress(id) || (rec.StartupCue != nil && rec.StartupCue.DeliveryHeld) {
-		outcome, err = m.messenger.DeliverUnderMutation(ctx, id, prompt)
-	} else {
-		outcome, err = m.messenger.Deliver(ctx, id, prompt)
-	}
+	outcome, err = m.messenger.Deliver(ctx, id, prompt)
 	if err != nil {
 		return fmt.Errorf("send %s: %w", id, err)
 	}

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
@@ -34,14 +33,6 @@ var _ sessionguard.InputLease = (*Manager)(nil)
 // close admission and wait for every already-admitted write to finish.
 func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok bool) {
 	id = domain.SessionID(strings.TrimSpace(string(id)))
-	if _, supportsStartup := m.store.(startupCueStore); supportsStartup {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		rec, _, err := m.store.GetSession(ctx, id)
-		cancel()
-		if err != nil || rec.StartupCue.HoldsInput() {
-			return nil, false
-		}
-	}
 
 	m.agentOpMu.Lock()
 	if m.agentOperationActiveLocked(id) && !m.agentSwitchDecisionInputAllowedLocked(id) {

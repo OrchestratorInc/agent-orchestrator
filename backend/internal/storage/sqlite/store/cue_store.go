@@ -24,21 +24,15 @@ func (s *Store) InsertCue(ctx context.Context, cue domain.Cue) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.qw.WithTx(tx)
-	if cue.RunOnWorktreeCreation {
-		if err := q.DisableOtherStartupCues(ctx, gen.DisableOtherStartupCuesParams{ProjectID: cue.ProjectID, ID: cue.ID}); err != nil {
-			return err
-		}
-	}
 	err = q.InsertCue(ctx, gen.InsertCueParams{
-		ID:                    cue.ID,
-		ProjectID:             cue.ProjectID,
-		RunOnWorktreeCreation: cue.RunOnWorktreeCreation,
-		Name:                  cue.Name,
-		Type:                  cue.Type,
-		Command:               cue.Command,
-		Prompt:                cue.Prompt,
-		CreatedAt:             cue.CreatedAt,
-		UpdatedAt:             cue.UpdatedAt,
+		ID:        cue.ID,
+		ProjectID: cue.ProjectID,
+		Name:      cue.Name,
+		Type:      cue.Type,
+		Command:   cue.Command,
+		Prompt:    cue.Prompt,
+		CreatedAt: cue.CreatedAt,
+		UpdatedAt: cue.UpdatedAt,
 	})
 	if err != nil {
 		if isSQLiteUnique(err) {
@@ -90,26 +84,20 @@ func (s *Store) UpdateCue(ctx context.Context, cue domain.Cue) (domain.Cue, bool
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.qw.WithTx(tx)
-	old, err := q.SelectCueByID(ctx, cue.ID)
+	_, err = q.SelectCueByID(ctx, cue.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Cue{}, false, nil
 	}
 	if err != nil {
 		return domain.Cue{}, false, err
 	}
-	if cue.RunOnWorktreeCreation {
-		if err := q.DisableOtherStartupCues(ctx, gen.DisableOtherStartupCuesParams{ProjectID: old.ProjectID, ID: cue.ID}); err != nil {
-			return domain.Cue{}, false, err
-		}
-	}
 	row, err := q.UpdateCue(ctx, gen.UpdateCueParams{
-		RunOnWorktreeCreation: cue.RunOnWorktreeCreation,
-		Name:                  cue.Name,
-		Type:                  cue.Type,
-		Command:               cue.Command,
-		Prompt:                cue.Prompt,
-		UpdatedAt:             cue.UpdatedAt,
-		ID:                    cue.ID,
+		Name:      cue.Name,
+		Type:      cue.Type,
+		Command:   cue.Command,
+		Prompt:    cue.Prompt,
+		UpdatedAt: cue.UpdatedAt,
+		ID:        cue.ID,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Cue{}, false, nil
@@ -145,26 +133,13 @@ func isSQLiteForeignKey(err error) bool {
 
 func cueFromGen(row gen.Cue) domain.Cue {
 	return domain.Cue{
-		ID:                    row.ID,
-		ProjectID:             row.ProjectID,
-		RunOnWorktreeCreation: row.RunOnWorktreeCreation,
-		Name:                  row.Name,
-		Type:                  row.Type,
-		Command:               row.Command,
-		Prompt:                row.Prompt,
-		CreatedAt:             row.CreatedAt,
-		UpdatedAt:             row.UpdatedAt,
+		ID:        row.ID,
+		ProjectID: row.ProjectID,
+		Name:      row.Name,
+		Type:      row.Type,
+		Command:   row.Command,
+		Prompt:    row.Prompt,
+		CreatedAt: row.CreatedAt,
+		UpdatedAt: row.UpdatedAt,
 	}
-}
-
-// SelectStartupCue returns the one opted-in command for this project.
-func (s *Store) SelectStartupCue(ctx context.Context, projectID domain.ProjectID) (domain.Cue, bool, error) {
-	row, err := s.qr.SelectStartupCue(ctx, projectID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return domain.Cue{}, false, nil
-	}
-	if err != nil {
-		return domain.Cue{}, false, err
-	}
-	return cueFromGen(row), true, nil
 }

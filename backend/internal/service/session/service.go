@@ -214,10 +214,6 @@ type Service struct {
 	titleRefinementCancels map[domain.SessionID]context.CancelFunc
 }
 
-type startupCueCanceller interface {
-	CancelStartupCue(context.Context, domain.SessionID) (domain.StartupCueRun, error)
-}
-
 // SetChatProviderPreserver wires the live Chat lifetime observation after both
 // services have been constructed. It performs no provider or filesystem probes.
 func (s *Service) SetChatProviderPreserver(preserves func(domain.SessionID) bool) {
@@ -808,17 +804,6 @@ func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	s.cancelTitleRefinement(id)
 	freed, err := s.manager.Kill(ctx, id)
 	return freed, toAPIError(err)
-}
-
-// CancelStartupCue stops the active startup cue for a session.
-// CancelStartupCue stops the active startup cue for a session.
-func (s *Service) CancelStartupCue(ctx context.Context, id domain.SessionID) (domain.StartupCueRun, error) {
-	m, ok := s.manager.(startupCueCanceller)
-	if !ok {
-		return domain.StartupCueRun{}, apierr.Internal("STARTUP_CUE_UNAVAILABLE", "Startup cue control is unavailable")
-	}
-	run, err := m.CancelStartupCue(ctx, id)
-	return run, toAPIError(err)
 }
 
 // RollbackSpawn deletes a seed-state session row, or falls back to a Kill if
