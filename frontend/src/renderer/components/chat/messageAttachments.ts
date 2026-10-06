@@ -40,7 +40,14 @@ export function attachmentURL(apiBaseUrl: string, sessionId: string, path: strin
 // A staged image path written into the prose itself: the composer's inline image
 // chip serializes to exactly this, so the agent can tell which image a sentence
 // is about.
-const INLINE_IMAGE_PATH = /\.ao\/attachments\/(?:attachment|image)-[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp|bmp)(?![A-Za-z0-9_-])/gi;
+// The lookbehind keeps a longer path such as `/wt/.ao/attachments/...` whole.
+const INLINE_IMAGE_PATH = /(?<!\/)\.ao\/attachments\/(?:attachment|image)-[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp|bmp)(?![A-Za-z0-9_-])/gi;
+
+/** Whether a staged path is one the inline-image renderers can read back out of prose. */
+export function isInlineImagePath(path: string): boolean {
+	const segments = splitInlineImagePaths(path);
+	return segments.length === 1 && segments[0]?.path === path;
+}
 
 export type InlineImageSegment = { text: string; path?: undefined } | { path: string; text?: undefined };
 
@@ -56,4 +63,36 @@ export function splitInlineImagePaths(text: string, keep: (path: string) => bool
 	}
 	if (last < text.length) segments.push({ text: text.slice(last) });
 	return segments;
+}
+
+/**
+ * The prose a composer sends: inline image paths survive only for images this
+ * message attaches (an undo can restore a chip whose image was removed), and a
+ * message that is nothing but its images keeps no prose at all, since the
+ * reference block already names them.
+ */
+export function attachedInlineImages(text: string, attached: string[]): string {
+	let result = "";
+	let words = false;
+	for (const segment of splitInlineImagePaths(text)) {
+		if (segment.path === undefined) {
+			// A dropped chip takes its trailing space with it.
+			result += result.endsWith(" ") && segment.text.startsWith(" ") ? segment.text.slice(1) : segment.text;
+			words ||= segment.text.trim() !== "";
+		} else if (attached.includes(segment.path)) {
+			result += segment.path;
+		}
+	}
+	return words ? result.trim() : "";
+}
+
+/** Plain-text form for one-line surfaces: attached inline images read as `[Image N]`. */
+export function labelInlineImages(text: string): string {
+	const { body, attachments } = stagedAttachmentParts(text);
+	const images = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
+	if (images.length === 0) return text;
+	const labelled = splitInlineImagePaths(body, (path) => images.includes(path))
+		.map((segment) => segment.path === undefined ? segment.text : `[Image ${images.indexOf(segment.path) + 1}]`)
+		.join("");
+	return labelled + text.slice(body.length);
 }

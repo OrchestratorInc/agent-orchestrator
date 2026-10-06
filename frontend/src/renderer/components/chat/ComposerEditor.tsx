@@ -63,8 +63,14 @@ export type ComposerEditorHandle = {
 	clear(): void;
 	setText(text: string): void;
 	insertToken(trigger: ComposerTrigger, value: string): void;
-	/** Insert an inline chip per staged image path at the caret (or the end). */
-	insertImages(paths: string[]): void;
+	/**
+	 * Hold the caret's place for images still being staged. Returns a reservation
+	 * for fillImages, so the chips land where the user pasted, not wherever the
+	 * caret has moved by the time staging finishes.
+	 */
+	reserveImages(): string | undefined;
+	/** Replace a reservation with one chip per staged image path (none removes it). */
+	fillImages(reservation: string, paths: string[]): void;
 	/** Drop every inline chip for an image that left the attachment list. */
 	removeImage(path: string): void;
 	getSnapshot(): ComposerEditorSnapshot;
@@ -75,8 +81,21 @@ export type ComposerImage = { path: string; name: string; src?: string };
 
 const ComposerImages = createContext<ComposerImage[]>([]);
 
+/** An empty path is a reservation whose image is still being staged. */
 function ComposerImageChip({ path }: { path: string }) {
 	const image = useContext(ComposerImages).find((candidate) => candidate.path === path);
+	if (!path) {
+		return (
+			<span
+				data-composer-token="image-pending"
+				contentEditable={false}
+				className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-dashed border-border-strong px-1.5 py-0.5 align-middle text-[0.9em] leading-none text-muted-foreground select-none"
+			>
+				<ImageIcon aria-hidden="true" className="size-3 shrink-0" />
+				…
+			</span>
+		);
+	}
 	return (
 		<span
 			data-composer-token="image"
@@ -269,36 +288,58 @@ function $joinsPreviousWord(selection: RangeSelection): boolean {
 	return /\S$/.test(before);
 }
 
-function $insertImageTokens(paths: string[]): void {
-	if (paths.length === 0) return;
-	const nodes: LexicalNode[] = paths.flatMap((path) => [
-		$createComposerTokenNode("image", path),
-		$createTextNode(" "),
-	]);
+function $reserveImages(): string | undefined {
+	const reservation = $createComposerTokenNode("image", "");
+	const nodes: LexicalNode[] = [reservation, $createTextNode(" ")];
 	let selection = $getSelection();
 	if (!$isRangeSelection(selection)) {
 		// A drop or the file picker can leave no selection; the end is the natural place.
 		$getRoot().selectEnd();
 		selection = $getSelection();
 	}
-	if (!$isRangeSelection(selection)) return;
+	if (!$isRangeSelection(selection)) return undefined;
 	if ($joinsPreviousWord(selection)) nodes.unshift($createTextNode(" "));
 	selection.insertNodes(nodes);
+	return reservation.getKey();
+}
+
+function $fillImages(reservation: string, paths: string[]): void {
+	const node = $getNodeByKey(reservation);
+	// Deleted while staging: the user removed it on purpose, so add nothing back.
+	if (!(node instanceof ComposerTokenNode)) return;
+	if (paths.length === 0) {
+		$removeChip(node);
+		return;
+	}
+	let last: LexicalNode = node;
+	paths.forEach((path, index) => {
+		const chip = $createComposerTokenNode("image", path);
+		if (index === 0) {
+			node.replace(chip);
+		} else {
+			const space = $createTextNode(" ");
+			last.insertAfter(space);
+			space.insertAfter(chip);
+		}
+		last = chip;
+	});
+}
+
+/** Remove a chip and one following space so the words around it don't double-space. */
+function $removeChip(chip: LexicalNode): void {
+	const next = chip.getNextSibling();
+	if ($isTextNode(next) && next.getTextContent().startsWith(" ")) {
+		if (next.getTextContent() === " ") next.remove();
+		else next.setTextContent(next.getTextContent().slice(1));
+	}
+	chip.remove();
 }
 
 function $removeImageTokens(path: string): void {
 	for (const paragraph of $getRoot().getChildren()) {
 		if (!$isElementNode(paragraph)) continue;
 		for (const child of paragraph.getChildren()) {
-			if (child instanceof ComposerTokenNode && child.__kind === "image" && child.__value === path) {
-				// Take one neighbouring space with the chip so words don't double-space.
-				const next = child.getNextSibling();
-				if ($isTextNode(next) && next.getTextContent().startsWith(" ")) {
-					if (next.getTextContent() === " ") next.remove();
-					else next.setTextContent(next.getTextContent().slice(1));
-				}
-				child.remove();
-			}
+			if (child instanceof ComposerTokenNode && child.__kind === "image" && child.__value === path) $removeChip(child);
 		}
 	}
 }
@@ -376,8 +417,15 @@ const EditorBridge = forwardRef<
 					$insertComposerToken(trigger, value);
 				}, { discrete: true });
 			},
-			insertImages: (paths) => {
-				editor.update(() => $insertImageTokens(paths), { discrete: true });
+			reserveImages: () => {
+				let reservation: string | undefined;
+				editor.update(() => {
+					reservation = $reserveImages();
+				}, { discrete: true });
+				return reservation;
+			},
+			fillImages: (reservation, paths) => {
+				editor.update(() => $fillImages(reservation, paths), { discrete: true });
 			},
 			removeImage: (path) => {
 				editor.update(() => $removeImageTokens(path), { discrete: true });

@@ -1464,6 +1464,26 @@ describe("attachments", () => {
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
+	// Staging can be slow: the chip holds the paste position while the user types on,
+	// and Enter during staging still sends the chip the user saw.
+	it("keeps a slow image where it was pasted and sends it when Enter beats staging", async () => {
+		let finishStaging!: (paths: string[]) => void;
+		const stage = vi.fn(() => new Promise<string[]>((resolve) => { finishStaging = resolve; }));
+		const { onSend, field } = renderComposer({ onStageAttachments: stage });
+		await typeInComposer(field, "make");
+		fireEvent.paste(field, { clipboardData: clipboardData([png("a.png")]) });
+		expect(field.querySelector('[data-composer-token="image-pending"]')).not.toBeNull();
+		await typeInComposer(field, "shorter");
+		await waitFor(() => expect(stage).toHaveBeenCalledTimes(1));
+
+		await userEvent.keyboard("{Enter}");
+		finishStaging([".ao/attachments/attachment-a.png"]);
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith(
+			"make .ao/attachments/attachment-a.png shorter\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-a.png",
+		));
+	});
+
 	it("ignores a paste that carries no file", async () => {
 		const { field } = renderComposer({ onStageAttachments: vi.fn() });
 		fireEvent.paste(field, { clipboardData: clipboardData([]) });
@@ -1507,7 +1527,7 @@ describe("attachments", () => {
 
 		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
 		expect(onSend.mock.calls[0]?.[0]).toBe(
-			".ao/attachments/attachment-1.png\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-1.png",
+			"Attached files (read these files in the workspace):\n- .ao/attachments/attachment-1.png",
 		);
 	});
 
@@ -1757,8 +1777,8 @@ describe("attachments", () => {
 			await typeInComposer(field, "unsafe text");
 			await waitFor(() => expect(getChatDraftBoundary(sessionId)).toBe("persistence-failed"));
 
-			fireEvent.paste(field, { clipboardData: clipboardData([png("safe-attachment.png")]) });
-			await screen.findByLabelText("Remove safe-attachment.png");
+			fireEvent.paste(field, { clipboardData: clipboardData([textFile("safe-attachment.txt")]) });
+			await screen.findByLabelText("Remove safe-attachment.txt");
 			expect(getChatDraftBoundary(sessionId)).toBe("persistence-failed");
 		} finally {
 			view.unmount();
@@ -1799,7 +1819,7 @@ describe("attachments", () => {
 			await typeInComposer(field, "unsafe text");
 			await waitFor(() => expect(getChatDraftBoundary(sessionId)).toBe("persistence-failed"));
 
-			fireEvent.paste(field, { clipboardData: clipboardData([png("pending.png")]) });
+			fireEvent.paste(field, { clipboardData: clipboardData([textFile("pending.txt")]) });
 			await waitFor(() => expect(finishStaging).toBeTypeOf("function"));
 			expect(getChatDraftBoundaries(sessionId)).toEqual([
 				"persistence-failed",
@@ -1840,8 +1860,8 @@ describe("attachments", () => {
 		);
 		try {
 			const field = screen.getByLabelText("Message the agent");
-			fireEvent.paste(field, { clipboardData: clipboardData([png("unsafe-attachment.png")]) });
-			await screen.findByLabelText("Remove unsafe-attachment.png");
+			fireEvent.paste(field, { clipboardData: clipboardData([textFile("unsafe-attachment.txt")]) });
+			await screen.findByLabelText("Remove unsafe-attachment.txt");
 			await waitFor(() => expect(getChatDraftBoundary(sessionId)).toBe("persistence-failed"));
 
 			await typeInComposer(field, "safely persisted text");

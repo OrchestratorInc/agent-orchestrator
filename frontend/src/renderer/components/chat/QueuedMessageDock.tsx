@@ -15,6 +15,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { ChevronDown, Circle, CornerDownLeft, GripVertical, Pencil, Trash2 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { ConversationMessage } from "../../types/conversation";
+import { labelInlineImages } from "./messageAttachments";
 
 export type QueuedMessage = { turnId: string; message: ConversationMessage };
 
@@ -111,9 +112,9 @@ function QueuedMessageRowContent({
 			<div className="min-w-0 flex-1 overflow-hidden">
 				<p
 					className="queue-dock-row-text truncate text-xs leading-relaxed text-foreground"
-					title={message.text}
+					title={labelInlineImages(message.text)}
 				>
-					{message.text}
+					{labelInlineImages(message.text)}
 				</p>
 			</div>
 			<div className="queue-dock-actions flex shrink-0 items-center gap-0.5 whitespace-nowrap">

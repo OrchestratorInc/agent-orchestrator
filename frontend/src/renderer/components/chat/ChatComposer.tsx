@@ -97,7 +97,7 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentURL, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
+import { attachedInlineImages, attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath } from "./messageAttachments";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 
 // These responses precede AppendUserMessage. Provider/transport errors can
@@ -1019,8 +1019,8 @@ export const ChatComposer = memo(function ChatComposer({
 	}
 
 	async function performClaimedSubmit(forceSteer?: boolean, mutationToken?: ChatDraftMutationToken) {
-		const currentText = textRef.current;
-		const body = currentText.trim();
+		let currentText = textRef.current;
+		let body = currentText.trim();
 		const recoveringDelivery = durableDelivery;
 		const sendNativeImages = recoveringDelivery?.nativeImages ?? Boolean(nativeImages);
 		setSendError(null);
@@ -1062,9 +1062,16 @@ export const ChatComposer = memo(function ChatComposer({
 		await fileAttachments.toSettledPayload();
 		// A replacement hook can still have staging work owned by the old surface.
 		if (fileAttachments.hasPendingReads()) return;
+		// Staging that just settled has filled its inline chips; send what the user sees.
+		currentText = textRef.current;
 		const settledAttachments = fileAttachments.getAttachments();
 		const settledPaths = settledAttachments.flatMap((attachment) =>
 			attachment.stagedPath ? [attachment.stagedPath] : []);
+		const attachedPaths = [
+			...visibleRetainedAttachments.flatMap((attachment) => attachment.path ? [attachment.path] : []),
+			...settledPaths,
+		];
+		body = attachedInlineImages(currentText.trim(), attachedPaths);
 		const hasAttachments = settledAttachments.length > 0 || visibleRetainedAttachments.length > 0;
 		const canSubmitNow =
 			(body.length > 0 || hasAttachments || Boolean(recoveringDelivery)) &&
@@ -1085,10 +1092,7 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 		const shouldSteer = Boolean(forceSteer && !savingQueuedEdit);
-		const message = withAttachmentReferences(body, [
-			...visibleRetainedAttachments.flatMap((attachment) => attachment.path ? [attachment.path] : []),
-			...settledPaths,
-		]);
+		const message = withAttachmentReferences(body, attachedPaths);
 		// Ordinary delivery reserves its exact draft before these staged reads await.
 		// Queue editors use their existing owner/revision CAS before mutation.
 		const attachmentScope = queuedDraftScope ?? draftScope;
@@ -1374,9 +1378,15 @@ export const ChatComposer = memo(function ChatComposer({
 	// Images also get an inline chip at the caret so the prose can say which image
 	// it means; the chip serializes to the staged path the agent reads.
 	function attachFiles(files: File[]) {
-		void fileAttachments.addFiles(files).then((added) =>
-			editor.current?.insertImages(added.flatMap((attachment) =>
-				attachment.stagedPath && IMAGE_ATTACHMENT_PATH.test(attachment.stagedPath) ? [attachment.stagedPath] : [])));
+		// Reserve the spot now: staging can take a while, and the user keeps typing.
+		const reservation = files.some((file) => file.type.startsWith("image/"))
+			? editor.current?.reserveImages()
+			: undefined;
+		void fileAttachments.addFiles(files).then((added) => {
+			if (!reservation) return;
+			editor.current?.fillImages(reservation, added.flatMap((attachment) =>
+				attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+		});
 	}
 
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
