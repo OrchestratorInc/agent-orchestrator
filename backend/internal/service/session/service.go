@@ -536,6 +536,10 @@ func (s *Service) SpawnOrchestrator(
 ) (domain.Session, error) {
 	unlock := s.lockOrchestratorProject(projectID)
 	defer unlock()
+	if clean {
+		// Finish replacement even when untimed cleanup outlives the request.
+		ctx = context.WithoutCancel(ctx)
+	}
 
 	project, err := s.requireProject(ctx, projectID)
 	if err != nil {

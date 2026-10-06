@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -21,6 +20,9 @@ var ErrCleanupScript = errors.New("workspace cleanup script failed")
 // runPreRemove is called only for permanent AO-owned workspace retirement,
 // after the session's processes have stopped and before worktree removal.
 func (m *Manager) runPreRemove(ctx context.Context, projectID domain.ProjectID, workspacePath string) error {
+	// Cleanup commands have no time limit. A request or teardown deadline must
+	// not interrupt them after the session's processes have already stopped.
+	ctx = context.WithoutCancel(ctx)
 	if workspacePath == "" {
 		return nil
 	}
@@ -52,12 +54,11 @@ func (m *Manager) runPreRemove(ctx context.Context, projectID domain.ProjectID, 
 		if strings.TrimSpace(command) == "" {
 			continue
 		}
-		stepCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		var cmd *exec.Cmd
 		if runtime.GOOS == "windows" {
-			cmd = aoprocess.CommandContext(stepCtx, "cmd", "/c", command)
+			cmd = aoprocess.CommandContext(ctx, "cmd", "/c", command)
 		} else {
-			cmd = aoprocess.CommandContext(stepCtx, "sh", "-c", command)
+			cmd = aoprocess.CommandContext(ctx, "sh", "-c", command)
 		}
 		cmd.Dir = workspacePath
 		cmd.Env = os.Environ()
@@ -68,7 +69,6 @@ func (m *Manager) runPreRemove(ctx context.Context, projectID domain.ProjectID, 
 		out := &cleanupOutput{}
 		cmd.Stdout, cmd.Stderr = out, out
 		err := cmd.Run()
-		cancel()
 		if err != nil {
 			message := strings.TrimSpace(string(out.tail))
 			for _, value := range project.Config.Env {

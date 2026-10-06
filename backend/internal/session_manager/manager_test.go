@@ -3472,6 +3472,34 @@ func TestKill_TearsDownRuntimeAndWorkspace(t *testing.T) {
 	requireNoPromptDir(t, dataDir, "mer-1")
 }
 
+func TestKillCleanupScriptHasNoTimeLimit(t *testing.T) {
+	m, st, _, ws := newManager()
+	m.killTeardown = 2 * time.Second
+	m.dataDir = t.TempDir()
+	workspace := filepath.Join(m.dataDir, "worktrees", "mer", "mer-1")
+	if err := os.MkdirAll(workspace, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	rec := mkLive("mer-1")
+	rec.Metadata.WorkspacePath = workspace
+	st.sessions[rec.ID] = rec
+	project := st.projects["mer"]
+	command := "sleep 31 && echo finished > cleanup-marker"
+	if runtime.GOOS == "windows" {
+		command = "powershell -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 31\" && echo finished > cleanup-marker"
+	}
+	project.Config.PreRemove = []string{command}
+	st.projects["mer"] = project
+
+	freed, err := m.Kill(ctx, rec.ID)
+	if err != nil || !freed || ws.destroyCtxErr != nil || !st.sessions[rec.ID].IsTerminated {
+		t.Fatalf("long cleanup must finish before workspace removal: freed=%v err=%v workspaceCtx=%v terminated=%v", freed, err, ws.destroyCtxErr, st.sessions[rec.ID].IsTerminated)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "cleanup-marker")); err != nil {
+		t.Fatalf("cleanup command did not finish: %v", err)
+	}
+}
+
 func TestKillCleanupScriptFailurePreservesWorkspaceForRetry(t *testing.T) {
 	m, st, rt, ws := newManager()
 	m.dataDir = t.TempDir()

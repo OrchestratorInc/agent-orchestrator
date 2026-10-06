@@ -1821,6 +1821,8 @@ func (m *Manager) destroySpawnWorkspace(ctx context.Context, ws ports.WorkspaceI
 		m.logger.Warn("spawn rollback: workspace cleanup failed; preserving workspace", "sessionID", ws.SessionID, "error", err)
 		return false
 	}
+	ctx, cancel := spawnRollbackContext(ctx)
+	defer cancel()
 	var err error
 	if workspaceProject != nil {
 		if adapter, ok := m.workspace.(ports.WorkspaceProject); ok {
@@ -2181,7 +2183,8 @@ func (m *Manager) terminateWithPreservedWorkspace(ctx context.Context, id domain
 	return m.recordTermination(ctx, id, dropRestoreMarker)
 }
 
-// killTeardownBudget bounds the detached teardown Kill runs below. Sized just
+// killTeardownBudget bounds each detached teardown phase around cleanup scripts.
+// User cleanup commands have no time limit. Sized just
 // past the REST layer's default 60s request cap: long enough that a teardown
 // which was going to finish still finishes coherently after the caller has
 // given up, short enough that a genuinely wedged git or runtime call does not
@@ -2333,6 +2336,11 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 		if err := m.runPreRemove(ctx, rec.ProjectID, ws.Path); err != nil {
 			return false, errors.Join(err, m.terminateWithPreservedWorkspace(ctx, id, err, !workspaceProject))
 		}
+		// Give workspace removal its own budget after untimed user commands.
+		cancelTeardown()
+		var cancelWorkspace context.CancelFunc
+		ctx, cancelWorkspace = context.WithTimeout(context.WithoutCancel(ctx), budget)
+		defer cancelWorkspace()
 	}
 	if workspaceProject {
 		reclaim, err := m.destroyWorkspaceProjectRows(ctx, workspaceProjectRows)
@@ -2447,6 +2455,8 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 	if err := m.runPreRemove(ctx, rec.ProjectID, ws.Path); err != nil {
 		return fmt.Errorf("retire replacement %s: %w", id, err)
 	}
+	ctx, cancelWorkspace := context.WithTimeout(context.WithoutCancel(ctx), killTeardownBudget)
+	defer cancelWorkspace()
 	if err := m.workspace.ForceDestroy(ctx, ws); err != nil {
 		if staleWorkspace {
 			m.logger.Warn("retire replacement: stale workspace cleanup failed", "sessionID", id, "path", ws.Path, "error", err)
@@ -2528,6 +2538,8 @@ func (m *Manager) retireWorkspaceProjectForReplacement(ctx context.Context, rec 
 	if err := m.runPreRemove(ctx, rec.ProjectID, rec.Metadata.WorkspacePath); err != nil {
 		return fmt.Errorf("retire replacement %s: %w", rec.ID, err)
 	}
+	ctx, cancelWorkspace := context.WithTimeout(context.WithoutCancel(ctx), killTeardownBudget)
+	defer cancelWorkspace()
 	for i := len(rows) - 1; i >= 0; i-- {
 		if err := m.workspace.ForceDestroy(ctx, workspaceInfoFromRepoInfo(rows[i])); err != nil {
 			if staleRepos[rows[i].RepoName] {
@@ -4553,6 +4565,9 @@ func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 func (m *Manager) cleanupWorkspaceUnderGate(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo) (ports.WorkspaceReclaim, string) {
 	release := m.acquireWorkspaceGate(rec.ProjectID)
 	defer release()
+	// A preceding session's cleanup commands can outlive the request deadline.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killTeardownBudget)
+	defer cancel()
 
 	inUse, err := m.isWorkspaceInUse(ctx, rec.ProjectID, ws.Path)
 	if err != nil {
@@ -4605,6 +4620,8 @@ func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws p
 		m.logger.Warn("cleanup: workspace script failed; preserving workspace", "sessionID", rec.ID, "error", err)
 		return ports.WorkspaceReclaimRemoved, cleanupSkipReason(err)
 	}
+	ctx, cancelWorkspace := context.WithTimeout(context.WithoutCancel(ctx), killTeardownBudget)
+	defer cancelWorkspace()
 
 	if rows, ok, rowErr := m.workspaceProjectRows(ctx, rec); rowErr != nil {
 		m.logger.Warn("cleanup: workspace rows failed", "sessionID", rec.ID, "error", rowErr)

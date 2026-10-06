@@ -1190,7 +1190,7 @@
 	"settings.project.cleanupRetryResult": "Cleaned {{cleaned}}; skipped {{skipped}}.",
 	"settings.project.workspaceCleanup": "Workspace cleanup",
 	"settings.project.cleanupHint": "Runs inside a managed Git worktree after its processes stop and before AO permanently removes it. It does not run when you quit AO or when an agent exits while its worktree remains. Failed steps preserve the worktree for a later Cleanup retry; make commands safe to retry.",
-	"settings.project.cleanupShellHint": "Steps run in order, each in a fresh shell (sh on macOS/Linux, cmd on Windows). Each step has a 30-second limit.",
+	"settings.project.cleanupShellHint": "Steps run in order, each in a fresh shell (sh on macOS/Linux, cmd on Windows). Commands have no time limit.",
 	"settings.project.cleanupPaths": "Available paths",
 	"settings.project.cleanupSourcePath": "original project folder",
 	"settings.project.cleanupWorktreePath": "worktree being removed",
