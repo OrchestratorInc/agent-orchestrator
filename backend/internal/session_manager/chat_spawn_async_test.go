@@ -238,6 +238,9 @@ func TestSpawnAsyncChat_DrainFailureLeavesRetryableSession(t *testing.T) {
 	if len(launcher.stopped) != 1 || launcher.stopped[0] != rec.ID {
 		t.Fatalf("stopped controllers = %v, want failed controller stopped", launcher.stopped)
 	}
+	if got := runningProvisionStep(stored.ProvisionSteps); got != domain.SessionProvisionStepAgent {
+		t.Fatalf("failed step = %q, want agent", got)
+	}
 }
 
 func TestResumeFailedAsyncChatSpawnRetriesSameSessionAndQueue(t *testing.T) {
@@ -436,6 +439,49 @@ func TestResumeFailedAsyncChatSpawnAdoptsLiveController(t *testing.T) {
 	if result.Session.ProvisionState != domain.SessionProvisionReady || len(launcher.started) != 0 || len(launcher.drained) != 1 {
 		t.Fatalf("adoption = %+v, controllers started = %d, queues drained = %d", result.Session, len(launcher.started), len(launcher.drained))
 	}
+	if len(result.Session.ProvisionSteps) != 1 || result.Session.ProvisionSteps[0].ID != domain.SessionProvisionStepAgent || result.Session.ProvisionSteps[0].Status != domain.SessionProvisionStepDone {
+		t.Fatalf("retry steps = %+v, want completed agent step", result.Session.ProvisionSteps)
+	}
+}
+
+func TestResumeFailedAsyncChatSpawnResetsChecklist(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		for _, failure := range []string{"", "drain", "ready"} {
+			name := "provider/" + failure
+			if live {
+				name = "live/" + failure
+			}
+			t.Run(name, func(t *testing.T) {
+				launcher := &recordingLauncher{live: live}
+				if failure == "drain" {
+					launcher.drainErr = errors.New("drain failed")
+				}
+				m, st, _ := newChatManager(launcher)
+				if failure == "ready" {
+					m.store = &failReadyProvisionStore{fakeStore: st}
+				}
+				st.sessions["mer-1"] = domain.SessionRecord{
+					ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker,
+					Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+					ProvisionState: domain.SessionProvisionFailed,
+					ProvisionSteps: []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepWorktree, Status: domain.SessionProvisionStepDone}},
+					Metadata:       domain.SessionMetadata{WorkspacePath: t.TempDir(), Branch: "ao/mer-1", ProviderConversationID: "thread-existing"},
+				}
+				result, err := m.ResumeAgentWithMode(context.Background(), "mer-1")
+				stored := st.sessions["mer-1"]
+				if len(stored.ProvisionSteps) != 1 || stored.ProvisionSteps[0].ID != domain.SessionProvisionStepAgent {
+					t.Fatalf("retry retained stale checklist: %+v", stored.ProvisionSteps)
+				}
+				if failure != "" {
+					if err == nil || stored.ProvisionState != domain.SessionProvisionFailed || runningProvisionStep(stored.ProvisionSteps) != domain.SessionProvisionStepAgent {
+						t.Fatalf("failed retry = %+v, error = %v", stored, err)
+					}
+				} else if err != nil || result.Session.ProvisionState != domain.SessionProvisionReady || result.Session.ProvisionSteps[0].Status != domain.SessionProvisionStepDone {
+					t.Fatalf("successful retry = %+v, error = %v", result.Session, err)
+				}
+			})
+		}
+	}
 }
 
 func TestCancelAsyncChatSpawnClearsStaleStartingState(t *testing.T) {
@@ -557,6 +603,9 @@ func TestSpawnAsyncChat_ReadyWriteFailureMarksSessionFailed(t *testing.T) {
 	stored := st.sessions[rec.ID]
 	if stored.ProvisionState != domain.SessionProvisionFailed || !strings.Contains(stored.ProvisionError, "ready write failed") {
 		t.Fatalf("ready write failure left session %+v", stored)
+	}
+	if got := runningProvisionStep(stored.ProvisionSteps); got != domain.SessionProvisionStepAgent {
+		t.Fatalf("failed step = %q, want agent", got)
 	}
 }
 

@@ -1536,6 +1536,18 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
 	});
 
+	it("localizes the startup composer queue hint", async () => {
+		await appI18n.changeLanguage("zh-CN");
+		render(
+			<ChatWorkspace
+				snapshot={startingSnapshot("queued")}
+				session={{ ...chatSession, provisionState: "provisioning", provisionSteps: startingSteps("running") }}
+				onResumeAgent={vi.fn()}
+			/>,
+		);
+		expect(screen.getByText("Codex 正在启动 · 消息将按顺序发送")).toBeInTheDocument();
+	});
+
 	// The checklist keeps the working slot until the agent is up and its first
 	// turn is live, then leaves nothing behind.
 	it("hands a clean start over to the working line while preserving its spinner and collapsing the checklist", async () => {

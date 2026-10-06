@@ -1556,7 +1556,7 @@ function ChatWorkspaceContent({
 									willQueue={Boolean(turn) || session?.provisionState === "provisioning"}
 									queuePlaceholder={
 										session?.provisionState === "provisioning"
-											? `${agentLabel(snapshot.harness)} is starting · messages send in order`
+											? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 											: undefined
 									}
 									disabled={(snapshot.controller.state === "stopped" || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}

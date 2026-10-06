@@ -1,4 +1,5 @@
 {
+	"chat.startup.queuePlaceholder": "{{agent}} 正在启动 · 消息将按顺序发送",
 	"settings.coder11x.navLabel": "Coder",
 	"settings.coder11x.templatesListLabel": "Templates on your Coder",
 	"settings.coder11x.templatesListHint": "The workspace templates available on your connected Coder deployment.",

@@ -243,7 +243,6 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		return
 	}
 	m.logAsyncChatSpawnStage(id, "controller_start", stageStarted)
-	progress.complete(ctx, domain.SessionProvisionStepAgent)
 	stageStarted = time.Now()
 	if err := m.chat.DrainChatQueue(ctx, id); err != nil {
 		m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrSpawnDeliverPrompt, err))
@@ -256,6 +255,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		return
 	}
 	m.logAsyncChatSpawnStage(id, "mark_ready", stageStarted)
+	progress.complete(ctx, domain.SessionProvisionStepAgent)
 	m.logAsyncChatSpawnStage(id, "total", totalStarted)
 }
 
@@ -357,10 +357,28 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		return RestoreResult{}, false, fmt.Errorf("retry start %s: %w", rec.ID, ports.ErrChatUnsupported)
 	}
 	if m.chat.HasLiveChatController(rec.ID) {
-		if err := m.chat.DrainChatQueue(ctx, rec.ID); err != nil {
+		if _, err := m.setProvisionState(ctx, rec.ID, domain.SessionProvisionProvisioning, ""); err != nil {
 			return RestoreResult{}, false, err
 		}
-		ready, err := m.setProvisionState(ctx, rec.ID, domain.SessionProvisionReady, "")
+		progress := m.startProvisionProgress(ctx, rec.ID, []domain.SessionProvisionStepID{domain.SessionProvisionStepAgent})
+		if err := m.chat.DrainChatQueue(ctx, rec.ID); err != nil {
+			cleanupCtx, cancel := spawnRollbackContext(ctx)
+			defer cancel()
+			if _, writeErr := m.setProvisionState(cleanupCtx, rec.ID, domain.SessionProvisionFailed, err.Error()); writeErr != nil {
+				return RestoreResult{}, false, errors.Join(err, writeErr)
+			}
+			return RestoreResult{}, false, err
+		}
+		if _, err := m.setProvisionState(ctx, rec.ID, domain.SessionProvisionReady, ""); err != nil {
+			cleanupCtx, cancel := spawnRollbackContext(ctx)
+			defer cancel()
+			if _, writeErr := m.setProvisionState(cleanupCtx, rec.ID, domain.SessionProvisionFailed, err.Error()); writeErr != nil {
+				return RestoreResult{}, false, errors.Join(err, writeErr)
+			}
+			return RestoreResult{}, false, err
+		}
+		progress.complete(ctx, domain.SessionProvisionStepAgent)
+		ready, err := m.getRecord(ctx, rec.ID)
 		return RestoreResult{Session: ready, Mode: RestoreModeNative}, false, err
 	}
 	if rec.Metadata.ProviderConversationID != "" {
@@ -369,6 +387,7 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		if err != nil {
 			return RestoreResult{}, false, err
 		}
+		progress := m.startProvisionProgress(ctx, rec.ID, []domain.SessionProvisionStepID{domain.SessionProvisionStepAgent})
 		fail := func(cause error) (RestoreResult, bool, error) {
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
 			defer cancel()
@@ -387,6 +406,11 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		resumed.Session, err = m.setProvisionState(ctx, rec.ID, domain.SessionProvisionReady, "")
 		if err != nil {
 			return fail(err)
+		}
+		progress.complete(ctx, domain.SessionProvisionStepAgent)
+		resumed.Session, err = m.getRecord(ctx, rec.ID)
+		if err != nil {
+			return RestoreResult{}, false, err
 		}
 		return resumed, false, nil
 	}
