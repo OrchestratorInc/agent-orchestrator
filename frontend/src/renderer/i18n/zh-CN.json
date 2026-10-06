@@ -2064,7 +2064,6 @@
 	"settings.harness.updateConfirmDescription": "使用最初安装时采用的方式运行更新命令。",
 	"settings.harness.methodOwnershipHint": "AO 尚未确认由哪种方式管理此安装。请使用原来的方式。",
 	"settings.harness.confirmOriginalMethod": "我使用此方式安装了 {{agent}}。",
-	"settings.harness.setupGuide": "设置指南",
 	"settings.harness.retryUpdate": "重试更新",
 	"settings.harness.retryUninstall": "重试卸载",
 	"settings.harness.authFailed": "Authentication failed.",

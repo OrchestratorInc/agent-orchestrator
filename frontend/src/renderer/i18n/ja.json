@@ -1998,7 +1998,6 @@
 	"settings.harness.updateConfirmDescription": "最初のインストールに使用した方法で更新コマンドを実行します。",
 	"settings.harness.methodOwnershipHint": "AO はインストールを管理する方法を確認していません。最初に使用した方法を選んでください。",
 	"settings.harness.confirmOriginalMethod": "これは {{agent}} のインストールに使用した方法です。",
-	"settings.harness.setupGuide": "セットアップガイド",
 	"settings.harness.retryUpdate": "更新を再試行",
 	"settings.harness.retryUninstall": "アンインストールを再試行",
 	"settings.harness.authFailed": "Authentication failed.",

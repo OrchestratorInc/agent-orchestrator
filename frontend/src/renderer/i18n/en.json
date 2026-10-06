@@ -1244,7 +1244,6 @@
 	"settings.harness.updateConfirmDescription": "Run the update command using the method you originally installed with.",
 	"settings.harness.methodOwnershipHint": "AO hasn’t verified installation ownership. Use your original method.",
 	"settings.harness.confirmOriginalMethod": "This is the method I used to install {{agent}}.",
-	"settings.harness.setupGuide": "Setup guide",
 	"settings.harness.retryUpdate": "Retry update",
 	"settings.harness.retryUninstall": "Retry uninstall",
 	"settings.harness.chooseMethod": "Choose method",

@@ -2026,7 +2026,6 @@
 	"settings.harness.updateConfirmDescription": "Ejecuta el comando de actualización con el método que usaste para la instalación original.",
 	"settings.harness.methodOwnershipHint": "AO no ha verificado qué método gestiona la instalación. Usa el método original.",
 	"settings.harness.confirmOriginalMethod": "Este es el método que usé para instalar {{agent}}.",
-	"settings.harness.setupGuide": "Guía de configuración",
 	"settings.harness.retryUpdate": "Reintentar actualización",
 	"settings.harness.retryUninstall": "Reintentar desinstalación",
 	"settings.harness.authFailed": "Authentication failed.",

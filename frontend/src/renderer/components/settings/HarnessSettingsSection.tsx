@@ -927,7 +927,6 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 						<div className="flex flex-wrap items-center gap-2">
 							<Button size="sm" variant="outline" disabled={pending || active || !canUpdate} aria-describedby={!canUpdate ? `harness-update-reason-${agentId}` : undefined} onClick={() => requestInstalledOperation(agentId, "update")}><RefreshCw aria-hidden="true" />{t(failed && currentOperation === "update" ? "settings.harness.retryUpdate" : "settings.harness.update")}</Button>
 							<Button size="sm" variant="outline" className="text-error" disabled={pending || active || !canUninstall} aria-describedby={!canUninstall ? `harness-uninstall-reason-${agentId}` : undefined} onClick={() => requestInstalledOperation(agentId, "uninstall")}><Trash2 aria-hidden="true" />{t(failed && currentOperation === "uninstall" ? "settings.harness.retryUninstall" : "settings.harness.uninstall")}</Button>
-							{plan?.documentationUrl ? <Button size="sm" variant="ghost" className="ml-auto text-settings-muted" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl!)}>{t("settings.harness.setupGuide")}</Button> : null}
 						</div>
 						{!canUpdate ? <p id={`harness-update-reason-${agentId}`} className="text-xs text-settings-muted">{updateReason}</p> : null}
 						{!canUninstall ? <p id={`harness-uninstall-reason-${agentId}`} className="text-xs text-settings-muted">{uninstallReason}</p> : null}

@@ -1998,7 +1998,6 @@
 	"settings.harness.updateConfirmDescription": "처음 설치할 때 사용한 방법으로 업데이트 명령을 실행합니다.",
 	"settings.harness.methodOwnershipHint": "AO는 설치를 관리하는 방법을 확인하지 않았습니다. 처음 사용한 방법을 선택하세요.",
 	"settings.harness.confirmOriginalMethod": "이 방법으로 {{agent}}을(를) 설치했습니다.",
-	"settings.harness.setupGuide": "설정 가이드",
 	"settings.harness.retryUpdate": "업데이트 다시 시도",
 	"settings.harness.retryUninstall": "제거 다시 시도",
 	"settings.harness.authFailed": "Authentication failed.",

@@ -1998,7 +1998,6 @@
 	"settings.harness.updateConfirmDescription": "Führe den Aktualisierungsbefehl mit der ursprünglich verwendeten Installationsmethode aus.",
 	"settings.harness.methodOwnershipHint": "AO hat die Installationszuordnung nicht überprüft. Verwende die ursprüngliche Methode.",
 	"settings.harness.confirmOriginalMethod": "Mit dieser Methode habe ich {{agent}} installiert.",
-	"settings.harness.setupGuide": "Einrichtungsanleitung",
 	"settings.harness.retryUpdate": "Aktualisierung wiederholen",
 	"settings.harness.retryUninstall": "Deinstallation wiederholen",
 	"settings.harness.authFailed": "Authentication failed.",
