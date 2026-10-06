@@ -115,6 +115,12 @@ func (s sessionListerStub) ListAllSessions(context.Context) ([]domain.SessionRec
 	return s.sessions, s.err
 }
 
+type sessionListerFunc func(context.Context) ([]domain.SessionRecord, error)
+
+func (f sessionListerFunc) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error) {
+	return f(ctx)
+}
+
 type commandRunnerFunc func(context.Context, []string, io.Writer, io.Writer) error
 
 func (f commandRunnerFunc) Run(ctx context.Context, argv []string, stdout, stderr io.Writer) error {
@@ -1163,6 +1169,135 @@ func TestDroidInstallAllowsTerminatedSessionAndOtherHarnesses(t *testing.T) {
 				t.Fatalf("StartAgent: %v", err)
 			}
 		})
+	}
+}
+
+func TestHarnessLaunchGateBlocksCodexMaintenanceBeforeSessionEnumeration(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.maintenance = maintenanceResolverFunc(func(context.Context, Target) (MaintenanceResolution, error) {
+		return MaintenanceResolution{Target: TargetCodex, Method: "npm", UpdateArgv: []string{"npm", "update-codex"}}, nil
+	})
+	sessionCalls := 0
+	s.sessions = sessionListerFunc(func(context.Context) ([]domain.SessionRecord, error) {
+		sessionCalls++
+		return nil, nil
+	})
+	release, ok := s.TryBeginHarnessUse(domain.HarnessCodex)
+	if !ok {
+		t.Fatal("Codex launch lease was unexpectedly rejected")
+	}
+	defer release()
+
+	for _, operation := range []AgentOperation{AgentOperationReinstall, AgentOperationUpdate, AgentOperationUninstall} {
+		method := "npm"
+		if _, err := s.StartAgentOperation(context.Background(), TargetCodex, method, operation); !errors.Is(err, ErrHarnessActive) {
+			t.Fatalf("%s error = %v, want ErrHarnessActive", operation, err)
+		}
+	}
+	if sessionCalls != 0 {
+		t.Fatalf("session enumeration calls = %d, want 0 before acquiring maintenance gate", sessionCalls)
+	}
+}
+
+func TestHarnessMaintenanceGateBlocksCodexLaunchThroughWorkerLifetime(t *testing.T) {
+	s := newTestService("darwin")
+	s.maintenance = maintenanceResolverFunc(func(context.Context, Target) (MaintenanceResolution, error) {
+		return MaintenanceResolution{Target: TargetCodex, Method: "npm", UpdateArgv: []string{"npm", "update-codex"}}, nil
+	})
+	started := make(chan struct{})
+	releaseCommand := make(chan struct{})
+	s.commands = commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error {
+		close(started)
+		<-releaseCommand
+		return nil
+	})
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/verified/codex", Output: "codex 2.0.0"}, nil
+	})
+
+	if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate); err != nil {
+		t.Fatalf("StartAgentOperation: %v", err)
+	}
+	<-started
+	if release, ok := s.TryBeginHarnessUse(domain.HarnessCodex); ok {
+		release()
+		t.Fatal("Codex launch acquired the gate while maintenance worker was running")
+	}
+	close(releaseCommand)
+	waitForStatus(t, s, TargetCodex, StatusSucceeded)
+	if release, ok := s.TryBeginHarnessUse(domain.HarnessCodex); !ok {
+		t.Fatal("Codex launch remained blocked after maintenance completed")
+	} else {
+		release()
+	}
+}
+
+func TestHarnessMaintenanceSeesSessionCreatedBeforeLaunchGateRelease(t *testing.T) {
+	s := newTestService("darwin")
+	s.maintenance = maintenanceResolverFunc(func(context.Context, Target) (MaintenanceResolution, error) {
+		return MaintenanceResolution{Target: TargetCodex, Method: "npm", UpdateArgv: []string{"npm", "update-codex"}}, nil
+	})
+	release, ok := s.TryBeginHarnessUse(domain.HarnessCodex)
+	if !ok {
+		t.Fatal("Codex launch lease was unexpectedly rejected")
+	}
+	s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex}}}
+	release()
+
+	if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate); !errors.Is(err, ErrHarnessActive) {
+		t.Fatalf("StartAgentOperation error = %v, want ErrHarnessActive", err)
+	}
+}
+
+func TestHarnessMaintenanceAllowsTerminatedAndOtherHarnessSessions(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		sessions []domain.SessionRecord
+	}{
+		{name: "terminated Codex", sessions: []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex, IsTerminated: true}}},
+		{name: "active Claude", sessions: []domain.SessionRecord{{ID: "claude-1", Harness: domain.HarnessClaudeCode}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestService("darwin")
+			s.sessions = sessionListerStub{sessions: tt.sessions}
+			s.maintenance = maintenanceResolverFunc(func(context.Context, Target) (MaintenanceResolution, error) {
+				return MaintenanceResolution{Target: TargetCodex, Method: "npm", UpdateArgv: []string{"npm", "update-codex"}}, nil
+			})
+			s.commands = commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error { return errors.New("stop after guard") })
+
+			if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate); err != nil {
+				t.Fatalf("StartAgentOperation: %v", err)
+			}
+			waitForStatus(t, s, TargetCodex, StatusFailed)
+		})
+	}
+}
+
+func TestHarnessGatesAllowDifferentHarnessesConcurrently(t *testing.T) {
+	s := newTestService("darwin")
+	releaseCodex, ok := s.TryBeginHarnessUse(domain.HarnessCodex)
+	if !ok {
+		t.Fatal("Codex launch lease was unexpectedly rejected")
+	}
+	defer releaseCodex()
+
+	releaseClaude, ok := s.TryBeginHarnessUse(domain.HarnessClaudeCode)
+	if !ok {
+		t.Fatal("Claude launch should not share the Codex gate")
+	}
+	releaseClaude()
+}
+
+func TestHarnessDroidGateBehaviorRemainsProtected(t *testing.T) {
+	s := newTestService("darwin", "brew")
+	release, ok := s.TryBeginHarnessUse(domain.HarnessDroid)
+	if !ok {
+		t.Fatal("Droid launch lease was unexpectedly rejected")
+	}
+	defer release()
+
+	if _, err := s.StartAgent(context.Background(), TargetDroid, "homebrew"); !errors.Is(err, ErrHarnessActive) {
+		t.Fatalf("Droid install error = %v, want ErrHarnessActive", err)
 	}
 }
 

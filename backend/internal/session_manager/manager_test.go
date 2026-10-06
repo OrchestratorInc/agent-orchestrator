@@ -1670,7 +1670,7 @@ func (g *rejectingHarnessUseGate) TryBeginHarnessUse(harness domain.AgentHarness
 	return nil, false
 }
 
-func TestSpawnGatesResolvedProjectDefaultHarness(t *testing.T) {
+func TestSpawnHarnessGateUsesResolvedProjectDefault(t *testing.T) {
 	m, st, rt, _ := newManager()
 	project := st.projects["mer"]
 	project.Config.Worker.Harness = domain.HarnessDroid
@@ -1687,6 +1687,38 @@ func TestSpawnGatesResolvedProjectDefaultHarness(t *testing.T) {
 	}
 	if rt.created != 0 {
 		t.Fatal("runtime was created while Droid installer owned the gate")
+	}
+}
+
+func TestRestoreHarnessGateRejectsCodexMaintenance(t *testing.T) {
+	m, st, _, _ := newManager()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Harness: domain.HarnessCodex, IsTerminated: true,
+	}
+	gate := &rejectingHarnessUseGate{}
+	m.SetHarnessUseGate(gate)
+
+	if _, err := m.RestoreWithMode(context.Background(), "mer-1"); !errors.Is(err, ErrHarnessInstallActive) {
+		t.Fatalf("RestoreWithMode error = %v, want ErrHarnessInstallActive", err)
+	}
+	if gate.harness != domain.HarnessCodex {
+		t.Fatalf("gated harness = %q, want codex", gate.harness)
+	}
+}
+
+func TestResumeHarnessGateRejectsCodexMaintenance(t *testing.T) {
+	m, st, _, _ := newManager()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Harness: domain.HarnessCodex,
+	}
+	gate := &rejectingHarnessUseGate{}
+	m.SetHarnessUseGate(gate)
+
+	if _, err := m.ResumeAgentWithMode(context.Background(), "mer-1"); !errors.Is(err, ErrHarnessInstallActive) {
+		t.Fatalf("ResumeAgentWithMode error = %v, want ErrHarnessInstallActive", err)
+	}
+	if gate.harness != domain.HarnessCodex {
+		t.Fatalf("gated harness = %q, want codex", gate.harness)
 	}
 }
 

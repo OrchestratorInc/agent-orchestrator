@@ -300,8 +300,8 @@ type HarnessVerifier interface {
 	Verify(ctx context.Context, target Target) (VerifyResult, error)
 }
 
-// SessionLister exposes durable lifecycle facts used to keep the Droid vendor
-// installer away from active Droid processes.
+// SessionLister exposes durable lifecycle facts used to keep maintenance
+// operations away from active harness processes.
 type SessionLister interface {
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
 }
@@ -321,8 +321,8 @@ type Service struct {
 	stop              context.CancelFunc
 	stopping          bool
 	workers           sync.WaitGroup
-	droidGate         sync.RWMutex
-	fxGate            sync.RWMutex
+	harnessGatesMu    sync.Mutex
+	harnessGates      map[domain.AgentHarness]*sync.RWMutex
 
 	executables         ports.ExecutableFinder
 	commands            ports.CommandRunner
@@ -396,6 +396,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 	backgroundContext, stop := context.WithCancel(context.Background())
 	return &Service{
 		jobs:                make(map[Target]*Job),
+		harnessGates:        make(map[domain.AgentHarness]*sync.RWMutex),
 		executables:         executables,
 		commands:            commands,
 		installCommands:     installCommands,
@@ -587,28 +588,24 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		return Job{}, fmt.Errorf("systeminstall: unknown harness target %q", target)
 	}
 	var releaseHarness func()
-	if target == TargetDroid || target == TargetFX || operation == AgentOperationUpdate || operation == AgentOperationUninstall {
-		gate := &s.droidGate
-		if target == TargetFX {
-			gate = &s.fxGate
-		}
-		if target == TargetDroid || target == TargetFX {
-			s.mu.Lock()
-			if current, ok := s.jobs[target]; ok && activeStatus(current.Status) {
-				s.mu.Unlock()
-				return Job{}, ErrInstallActive
-			}
+	requiresHarnessGate := target == TargetDroid || target == TargetFX || operation == AgentOperationReinstall || operation == AgentOperationUpdate || operation == AgentOperationUninstall
+	if requiresHarnessGate {
+		s.mu.Lock()
+		if current, ok := s.jobs[target]; ok && activeStatus(current.Status) {
 			s.mu.Unlock()
-			if !gate.TryLock() {
-				return Job{}, fmt.Errorf("%w: a %s session is starting", ErrHarnessActive, target)
-			}
-			releaseHarness = gate.Unlock
-			defer func() {
-				if releaseHarness != nil {
-					releaseHarness()
-				}
-			}()
+			return Job{}, ErrInstallActive
 		}
+		s.mu.Unlock()
+		gate := s.harnessGate(domain.AgentHarness(target))
+		if !gate.TryLock() {
+			return Job{}, fmt.Errorf("%w: a %s session is starting", ErrHarnessActive, target)
+		}
+		releaseHarness = gate.Unlock
+		defer func() {
+			if releaseHarness != nil {
+				releaseHarness()
+			}
+		}()
 		if s.sessions != nil {
 			sessions, err := s.sessions.ListAllSessions(ctx)
 			if err != nil {
@@ -699,18 +696,24 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 	return initial, nil
 }
 
-// TryBeginHarnessUse prevents Droid and fx session launches from racing
-// replacement of their executables. The returned release must be called after launch.
-func (s *Service) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool) {
-	var gate *sync.RWMutex
-	switch harness {
-	case domain.HarnessDroid:
-		gate = &s.droidGate
-	case domain.HarnessFX:
-		gate = &s.fxGate
-	default:
-		return func() {}, true
+func (s *Service) harnessGate(harness domain.AgentHarness) *sync.RWMutex {
+	s.harnessGatesMu.Lock()
+	defer s.harnessGatesMu.Unlock()
+	if s.harnessGates == nil {
+		s.harnessGates = make(map[domain.AgentHarness]*sync.RWMutex)
 	}
+	gate := s.harnessGates[harness]
+	if gate == nil {
+		gate = &sync.RWMutex{}
+		s.harnessGates[harness] = gate
+	}
+	return gate
+}
+
+// TryBeginHarnessUse prevents session launches from racing replacement of the
+// selected harness executable. The returned release must be called after launch.
+func (s *Service) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool) {
+	gate := s.harnessGate(harness)
 	if !gate.TryRLock() {
 		return nil, false
 	}
