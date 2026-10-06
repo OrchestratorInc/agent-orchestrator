@@ -2469,22 +2469,42 @@ describe("browser profile partitions and replacement", () => {
 		expect(constructorOptions[0]!.webPreferences.partition).toBe(browserProfilePartition(profile.id));
 	});
 
-	it("refuses switching while renderer navigation is still in flight", async () => {
+	it("stops an in-flight page load to switch profiles and reloads it in the new profile", async () => {
 		const store = fakeBrowserProfileStore(profile, { "worker-1": profile.id });
 		const { host, invoke, views } = setupTabHost(store);
 		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
-		let release!: () => void;
-		const held = new Promise<void>((resolve) => {
-			release = resolve;
-		});
-		views[0]!.webContents.loadURL.mockImplementationOnce(async () => held);
+		let abort!: () => void;
+		views[0]!.webContents.loadURL.mockImplementationOnce(
+			() =>
+				new Promise<void>((_resolve, reject) => {
+					abort = () => reject(Object.assign(new Error("ERR_ABORTED (-3)"), { errorCode: -3 }));
+				}),
+		);
+		const stop = vi.fn(() => abort());
+		(views[0]!.webContents as unknown as { stop: () => void }).stop = stop;
 
 		const navigation = invoke("browser:navigate", { viewId: nav.viewId, url: "https://example.com/" });
 		await new Promise<void>((resolve) => setImmediate(resolve));
-		expect(host.getProfileSwitchInfo(nav.viewId)).toMatchObject({ agentActive: true });
-		await expect(host.switchProfile(nav.viewId, null)).rejects.toMatchObject({ code: "BROWSER_PROFILE_ACTIVE" });
-		release();
+		expect(host.getProfileSwitchInfo(nav.viewId)).toMatchObject({ agentActive: false });
+
+		await expect(host.switchProfile(nav.viewId, null)).resolves.toMatchObject({ profileId: null, temporary: true });
 		await navigation;
+		expect(stop).toHaveBeenCalled();
+		expect(views[1]!.webContents.loadURL).toHaveBeenCalledWith("https://example.com/");
+	});
+
+	it("starts an unbound worker in a configured profile until the human picks temporary", async () => {
+		const bindings: Record<string, string> = {};
+		const store = fakeBrowserProfileStore(profile, bindings);
+		const { constructorOptions, host, invoke } = setupTabHost(store);
+		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		expect(constructorOptions[0]!.webPreferences.partition).toBe(browserProfilePartition(profile.id));
+		expect(host.getProfileState(nav.viewId)).toMatchObject({ profileId: profile.id, temporary: false });
+
+		await host.switchProfile(nav.viewId, null);
+		host.destroy(nav.viewId);
+		const again = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		expect(host.getProfileState(again.viewId)).toMatchObject({ profileId: null, temporary: true });
 	});
 
 	it("releases profile usage when worker tab startup fails", async () => {
@@ -2529,21 +2549,22 @@ describe("browser profile partitions and replacement", () => {
 			clearBrowserProfileData,
 		);
 		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
-		const temporaryPartition = constructorOptions[0]!.webPreferences.partition!;
+		await host.switchProfile(nav.viewId, null);
+		const temporaryPartition = constructorOptions.at(-1)!.webPreferences.partition!;
 
 		const switched = await host.switchProfile(nav.viewId, profile.id);
 
 		expect(switched).toMatchObject({ profileId: profile.id, temporary: false });
 		expect(bindings["worker-1"]).toBe(profile.id);
 		expect(clearBrowserProfileData).toHaveBeenCalledWith(temporaryPartition);
-		expect(constructorOptions[1]!.webPreferences.partition).toBe(browserProfilePartition(profile.id));
+		expect(constructorOptions.at(-1)!.webPreferences.partition).toBe(browserProfilePartition(profile.id));
 	});
 
 	it("does not clear a temporary partition when a failed profile switch rolls back to it", async () => {
 		const bindings: Record<string, string> = {};
 		const store = fakeBrowserProfileStore(profile, bindings);
 		const clearBrowserProfileData = vi.fn(async (_partition: string) => undefined);
-		let failReplacementStartup = true;
+		let failReplacementStartup = false;
 		const { constructorOptions, host, invoke } = setupTabHost(
 			store,
 			false,
@@ -2557,8 +2578,10 @@ describe("browser profile partitions and replacement", () => {
 			clearBrowserProfileData,
 		);
 		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
-		const temporaryPartition = constructorOptions[0]!.webPreferences.partition!;
+		await host.switchProfile(nav.viewId, null);
+		const temporaryPartition = constructorOptions.at(-1)!.webPreferences.partition!;
 		await invoke("browser:navigate", { viewId: nav.viewId, url: "https://example.com/" });
+		failReplacementStartup = true;
 
 		await expect(host.switchProfile(nav.viewId, profile.id)).rejects.toThrow("replacement startup failed");
 
@@ -2566,6 +2589,47 @@ describe("browser profile partitions and replacement", () => {
 		expect(host.getProfileState(nav.viewId)).toMatchObject({ profileId: null, temporary: true });
 		expect(constructorOptions.at(-1)!.webPreferences.partition).toBe(temporaryPartition);
 		expect(clearBrowserProfileData).not.toHaveBeenCalled();
+	});
+
+	// Regression, reproduced live: after a profile pick the dropdown returns
+	// focus to "Browser controls", whose tooltip raises the overlay while the
+	// replacement tabs are still reloading. The macOS surface refresh then hit
+	// the empty activeTabId and crashed the main process ("A JavaScript error
+	// occurred in the main process: Active browser tab is unavailable").
+	it("keeps an active tab for overlay refreshes and renderer calls while a profile switch reloads tabs", async () => {
+		const store = fakeBrowserProfileStore(profile, { "worker-1": profile.id });
+		let releaseReload!: () => void;
+		let replacementReloadStarted!: () => void;
+		const reloadHeld = new Promise<void>((resolve) => {
+			releaseReload = resolve;
+		});
+		const replacementStarted = new Promise<void>((resolve) => {
+			replacementReloadStarted = resolve;
+		});
+		const fixture = setupTabHost(store, false, async (viewIndex, url) => {
+			if (viewIndex > 0 && url === "https://example.com/") {
+				replacementReloadStarted();
+				await reloadHeld;
+			}
+		});
+		const nav = (await fixture.invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		fixture.emit("browser:setBounds", {
+			viewId: nav.viewId,
+			revision: 1,
+			rect: { x: 24, y: 32, width: 640, height: 420 },
+			visible: true,
+		});
+		await fixture.invoke("browser:navigate", { viewId: nav.viewId, url: "https://example.com/" });
+
+		const switching = fixture.host.switchProfile(nav.viewId, null);
+		await replacementStarted;
+		expect(() => fixture.host.refreshLastFocusedPanelSurface()).not.toThrow();
+		await expect(fixture.invoke("browser:ensure", "worker-1")).resolves.toMatchObject({ viewId: nav.viewId });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		releaseReload();
+
+		await expect(switching).resolves.toMatchObject({ profileId: null, temporary: true });
+		expect(() => fixture.host.refreshLastFocusedPanelSurface()).not.toThrow();
 	});
 
 	it("does not recreate tabs after a worker is destroyed during profile replacement", async () => {
@@ -2600,7 +2664,7 @@ describe("browser profile partitions and replacement", () => {
 		expect(bindings["worker-1"]).toBe(profile.id);
 	});
 
-	it("refuses a profile switch while agent-browser activity is still running", async () => {
+	it("waits for an in-flight agent-browser command, refuses new ones, then switches", async () => {
 		const store = fakeBrowserProfileStore(profile, { "worker-1": profile.id });
 		const { host, invoke, runtime } = setupTabHost(store);
 		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
@@ -2616,9 +2680,14 @@ describe("browser profile partitions and replacement", () => {
 		const command = host.execute("worker-1", "open", { url: "http://localhost:3000/" });
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		expect(host.getProfileSwitchInfo(nav.viewId)).toMatchObject({ agentActive: true });
-		await expect(host.switchProfile(nav.viewId, null)).rejects.toMatchObject({ code: "BROWSER_PROFILE_ACTIVE" });
+		const switching = host.switchProfile(nav.viewId, null);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		await expect(host.execute("worker-1", "get", { property: "url" })).rejects.toMatchObject({
+			code: "BROWSER_PROFILE_SWITCHING",
+		});
 		release();
 		await command;
+		await expect(switching).resolves.toMatchObject({ profileId: null, temporary: true });
 	});
 });
 
