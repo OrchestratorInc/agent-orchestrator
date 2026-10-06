@@ -389,7 +389,9 @@ func claudeFallbackModels(settings agentcreds.ClaudeSettings) []ports.AgentModel
 	for _, item := range static {
 		appendModel(item)
 	}
-	return SortClaudeNewestFirst(applyClaudeConfiguredDefault(models, settings.Model))
+	// Gateway-configured models lead in configuration order: they are the IDs
+	// the gateway actually serves, which the static aliases may not be.
+	return applyClaudeConfiguredDefault(models, settings.Model)
 }
 
 func applyClaudeConfiguredDefault(models []ports.AgentModelInfo, configured string) []ports.AgentModelInfo {
@@ -1178,6 +1180,9 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 			if previous.Provider == "" {
 				previous.Provider = item.Provider
 			}
+			if previous.ReleasedAt == nil {
+				previous.ReleasedAt = item.ReleasedAt
+			}
 			previous.IsDefault = previous.IsDefault || item.IsDefault
 			byID[item.ID] = previous
 			continue
@@ -1198,8 +1203,8 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 }
 
 // claudeCatalogOrderAlgorithm invalidates cached Claude catalogs when the
-// date-only ordering rule changes.
-const claudeCatalogOrderAlgorithm = "4"
+// ordering rule changes.
+const claudeCatalogOrderAlgorithm = "5"
 
 func claudeCatalogOrderFingerprint() string {
 	sum := sha256.Sum256([]byte(claudeCatalogOrderAlgorithm))
@@ -1210,19 +1215,31 @@ func claudeCatalogOrderFingerprint() string {
 // (claude-opus-4-5-20251101). It is a release date, not a version component.
 var claudeSnapshotDate = regexp.MustCompile(`^\d{8}$`)
 
+// claudeVersionPart matches one version component (the 4 and 5 of
+// claude-opus-4-5). Longer numeric tokens are snapshot dates or build numbers.
+var claudeVersionPart = regexp.MustCompile(`^\d{1,2}$`)
+
 // claudeIDSeparator splits a model ID into tokens across every spelling the
 // providers use: claude-opus-4-5, us.anthropic.claude-opus-4-5-v1:0 and the
 // Vertex claude-opus-4-5@20251101 all tokenize the same way.
 var claudeIDSeparator = regexp.MustCompile(`[^a-z0-9]+`)
 
-// claudeSortKey carries a release snapshot date when the provider reports one.
+// claudeSortKey is what is known about how new a model is: its model version
+// (Opus 4.8 -> 4, 8) and its release date (YYYYMMDD).
 type claudeSortKey struct {
-	snapshot int
+	major, minor int
+	versioned    bool
+	released     int
 }
 
-// SortClaudeNewestFirst orders dated models globally by descending snapshot
-// date. Models without a date, and models with equal dates, keep their relative
-// order. The function sorts models in place and returns the same slice.
+// SortClaudeNewestFirst orders models newest-first. The model version decides
+// first, because every Claude model carries one in its ID or label while
+// release dates are only reported by some providers: Fable 5.1 precedes Fable 5,
+// which precedes Opus 4.8. Models sharing a version follow their release date,
+// so Opus 4.5 (November 2025) precedes Haiku 4.5 (October 2025). Models with
+// neither keep their relative order after the rest.
+//
+// The function sorts models in place and returns the same slice.
 func SortClaudeNewestFirst(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 	keys := make(map[string]claudeSortKey, len(models))
 	for _, item := range models {
@@ -1230,28 +1247,67 @@ func SortClaudeNewestFirst(models []ports.AgentModelInfo) []ports.AgentModelInfo
 	}
 	sort.SliceStable(models, func(i, j int) bool {
 		a, b := keys[models[i].ID], keys[models[j].ID]
-		if a.snapshot == 0 {
-			return false
+		if a.versioned != b.versioned {
+			return a.versioned
 		}
-		if b.snapshot == 0 {
-			return true
+		if a.major != b.major {
+			return a.major > b.major
 		}
-		if a.snapshot == b.snapshot {
-			return false
+		if a.minor != b.minor {
+			return a.minor > b.minor
 		}
-		return a.snapshot > b.snapshot
+		return a.released > b.released
 	})
 	return models
 }
 
 func claudeModelSortKey(item ports.AgentModelInfo) claudeSortKey {
+	key := claudeSortKey{}
+	if item.ReleasedAt != nil && !item.ReleasedAt.IsZero() {
+		released := item.ReleasedAt.UTC()
+		key.released = released.Year()*10000 + int(released.Month())*100 + released.Day()
+	}
+	// The ID is authoritative; the label only fills in what an alias ID such
+	// as "fable" does not spell out.
 	for _, source := range []string{item.ID, item.Label} {
-		for _, token := range claudeIDSeparator.Split(strings.ToLower(source), -1) {
-			if claudeSnapshotDate.MatchString(token) {
-				snapshot, _ := strconv.Atoi(token)
-				return claudeSortKey{snapshot: snapshot}
+		parts, date := claudeVersionTokens(source)
+		if key.released == 0 {
+			key.released = date
+		}
+		if !key.versioned && len(parts) > 0 {
+			key.versioned = true
+			key.major = parts[0]
+			if len(parts) > 1 {
+				key.minor = parts[1]
 			}
 		}
 	}
-	return claudeSortKey{}
+	return key
+}
+
+// claudeVersionTokens returns the first run of version components in a model ID
+// or label and its snapshot date, if any. claude-opus-4-5-20251101 yields
+// [4 5] and 20251101, the legacy claude-3-5-sonnet yields [3 5], and the run
+// ends at a date or a provider suffix such as Bedrock's -v1:0.
+func claudeVersionTokens(source string) ([]int, int) {
+	var parts []int
+	date := 0
+	ended := false
+	for _, token := range claudeIDSeparator.Split(strings.ToLower(source), -1) {
+		switch {
+		case claudeSnapshotDate.MatchString(token):
+			if date == 0 {
+				date, _ = strconv.Atoi(token)
+			}
+			ended = ended || len(parts) > 0
+		case claudeVersionPart.MatchString(token) && !ended:
+			if len(parts) < 2 {
+				part, _ := strconv.Atoi(token)
+				parts = append(parts, part)
+			}
+		default:
+			ended = ended || len(parts) > 0
+		}
+	}
+	return parts, date
 }

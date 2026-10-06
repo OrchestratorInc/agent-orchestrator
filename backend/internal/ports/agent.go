@@ -223,6 +223,9 @@ type AgentModelInfo struct {
 	// persisted on the catalog, so it is absent for a model with no matching
 	// session. Pickers order by it before static family and version ordering.
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+	// ReleasedAt is the provider-reported release time of this model, when the
+	// provider reports one. Pickers use it to present newer models first.
+	ReleasedAt *time.Time `json:"releasedAt,omitempty"`
 }
 
 // AgentModelCatalog is AO's normalized model-picker response.

@@ -430,9 +430,12 @@ func ProviderModels(ctx context.Context, binary, workingDir string, env map[stri
 
 	models := make([]ports.AgentModelInfo, 0, len(result.Models))
 	for _, model := range result.Models {
-		models = append(models, ports.AgentModelInfo{
-			ID: model.ID, Label: model.DisplayName, Efforts: model.Efforts,
-		})
+		info := ports.AgentModelInfo{ID: model.ID, Label: model.DisplayName, Efforts: model.Efforts}
+		if !model.ReleasedAt.IsZero() {
+			released := model.ReleasedAt.UTC()
+			info.ReleasedAt = &released
+		}
+		models = append(models, info)
 	}
 	return models, nil
 }

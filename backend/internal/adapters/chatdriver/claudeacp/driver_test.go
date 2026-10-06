@@ -346,20 +346,20 @@ func TestClaudeAuthRejectionNotifiesDaemon(t *testing.T) {
 	}
 }
 
-// The chat picker follows global snapshot-date order; undated choices retain
-// their order after dated choices.
-func TestClaudeOrderChoicesBySnapshotDateGlobally(t *testing.T) {
+// The chat picker orders by version, release date breaking ties; aliases with
+// no version in their ID or label keep their order last.
+func TestClaudeOrderChoicesNewestFirst(t *testing.T) {
 	choices := []ports.ChatConfigOptionChoice{
 		{Value: "haiku", Name: "Haiku"},
 		{Value: "claude-sonnet-4-5-20250929", Name: "Claude Sonnet 4.5"},
 		{Value: "opus", Name: "Opus"},
-		{Value: "claude-opus-4-1", Name: "Claude Opus 4.1"},
+		{Value: "claude-opus-4-8", Name: "Claude Opus 4.8"},
 		{Value: "fable", Name: "Fable 5.1"},
 		{Value: "opus[1m]", Name: "Opus (1M context)"},
 	}
 	claudeOrderChoices("model", choices)
 	assertChoiceOrder(t, choices, []string{
-		"claude-sonnet-4-5-20250929", "haiku", "opus", "claude-opus-4-1", "fable", "opus[1m]",
+		"fable", "claude-opus-4-8", "claude-sonnet-4-5-20250929", "haiku", "opus", "opus[1m]",
 	})
 }
 
@@ -378,7 +378,7 @@ func TestClaudeACPConfigWiresModelChoiceOrdering(t *testing.T) {
 	assertChoiceOrder(t, choices, []string{"claude-opus-4-5-20260101", "claude-haiku-4-5-20250201"})
 }
 
-// Entries without dates do not receive priority over dated models.
+// Entries without a version do not receive priority over versioned models.
 func TestClaudeOrderChoicesDoesNotPrioritizeDefaultWithoutDate(t *testing.T) {
 	choices := []ports.ChatConfigOptionChoice{
 		{Value: "claude-haiku-4-5-20250201", Name: "Haiku"},

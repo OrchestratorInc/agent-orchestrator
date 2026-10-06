@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Provider is the API surface a credential belongs to. Claude Code selects one
@@ -137,6 +138,7 @@ func parseAnthropicCompatibleModels(body []byte, claudeOnly bool) ([]Model, erro
 		Data []struct {
 			ID           string `json:"id"`
 			DisplayName  string `json:"display_name"`
+			CreatedAt    string `json:"created_at"`
 			Capabilities struct {
 				Effort map[string]json.RawMessage `json:"effort"`
 			} `json:"capabilities"`
@@ -150,10 +152,14 @@ func parseAnthropicCompatibleModels(body []byte, claudeOnly bool) ([]Model, erro
 		if strings.TrimSpace(entry.ID) == "" || claudeOnly && !isClaudeModelID(entry.ID) {
 			continue
 		}
+		// created_at is the model's release time. A gateway may omit or
+		// garble it, which only costs the picker its date ordering.
+		released, _ := time.Parse(time.RFC3339, strings.TrimSpace(entry.CreatedAt))
 		models = append(models, Model{
 			ID:          entry.ID,
 			DisplayName: strings.TrimSpace(entry.DisplayName),
 			Efforts:     supportedEfforts(entry.Capabilities.Effort),
+			ReleasedAt:  released,
 		})
 	}
 	return models, nil

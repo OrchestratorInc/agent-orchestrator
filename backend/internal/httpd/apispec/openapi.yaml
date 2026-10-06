@@ -9446,6 +9446,11 @@ components:
           - string
         provider:
           type: string
+        releasedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
       required:
       - id
       - label

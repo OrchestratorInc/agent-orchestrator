@@ -122,6 +122,9 @@ type Model struct {
 	// Opus 4.6 omits xhigh, and the 5 family accepts all five. A hardcoded list
 	// would be wrong for most of the catalog within a release.
 	Efforts []string
+	// ReleasedAt is the provider-reported release time (created_at on the
+	// Anthropic models API). Zero when the provider does not report one.
+	ReleasedAt time.Time
 }
 
 // Result is a validation outcome together with what can be said about it.

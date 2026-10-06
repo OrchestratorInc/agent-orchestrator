@@ -3142,6 +3142,8 @@ export interface components {
             /** Format: date-time */
             lastUsedAt?: null | string;
             provider?: string;
+            /** Format: date-time */
+            releasedAt?: null | string;
         };
         AgentModelsResponse: {
             agentId: string;

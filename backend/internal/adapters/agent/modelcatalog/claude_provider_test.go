@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -294,36 +295,59 @@ func TestProviderEffortsSurviveNormalization(t *testing.T) {
 	}
 }
 
-// The picker orders models globally by descending snapshot date, without
-// grouping families or comparing versions. Undated models retain their order.
-func TestClaudeCatalogOrdersBySnapshotDateGlobally(t *testing.T) {
+// The exact list from the first-party picker that regressed: only the 4.5
+// models carry a snapshot date, and the undated newer models used to sink
+// below them. Version decides first, release date breaks version ties.
+func TestClaudeCatalogOrdersNewestFirstAcrossDatedAndUndatedIDs(t *testing.T) {
 	list := func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 		return []ports.AgentModelInfo{
+			{ID: "claude-opus-4-5-20251101", Label: "Claude Opus 4.5"},
 			{ID: "claude-haiku-4-5-20251001", Label: "Claude Haiku 4.5"},
-			{ID: "claude-opus-4-1-20251115", Label: "Claude Opus 4.1"},
-			{ID: "claude-sonnet-5-20260115", Label: "Claude Sonnet 5"},
-			{ID: "us.anthropic.claude-opus-4-5-v1:0", Label: "Claude Opus 4.5"},
-			{ID: "claude-fable-5-1-20251210", Label: "Claude Fable 5.1"},
-			{ID: "claude-opus-5-20251101", Label: "Claude Opus 5"},
+			{ID: "claude-sonnet-4-5-20250929", Label: "Claude Sonnet 4.5"},
+			{ID: "claude-fable-5", Label: "Claude Fable 5"},
+			{ID: "claude-fable-5-1", Label: "Claude Fable 5.1"},
+			{ID: "claude-opus-4-6", Label: "Claude Opus 4.6"},
+			{ID: "claude-opus-4-7", Label: "Claude Opus 4.7"},
+			{ID: "claude-opus-4-8", Label: "Claude Opus 4.8"},
 		}, nil
 	}
 	catalog, err := discoverClaudeCatalog(context.Background(), claudeRequest(t), list)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{
-		"claude-sonnet-5-20260115",
-		"claude-fable-5-1-20251210",
-		"claude-opus-4-1-20251115",
-		"claude-opus-5-20251101",
+	assertClaudeOrder(t, catalog.Models, []string{
+		"claude-fable-5-1",
+		"claude-fable-5",
+		"claude-opus-4-8",
+		"claude-opus-4-7",
+		"claude-opus-4-6",
+		"claude-opus-4-5-20251101",
 		"claude-haiku-4-5-20251001",
-		"us.anthropic.claude-opus-4-5-v1:0",
-	}
-	assertClaudeOrder(t, catalog.Models, want)
+		"claude-sonnet-4-5-20250929",
+	})
 }
 
-// Static aliases lack snapshot dates, so the sort keeps their input order.
-func TestClaudeFallbackAliasesKeepTheirOrder(t *testing.T) {
+// The provider-reported release time breaks a version tie even when no ID
+// carries a snapshot date.
+func TestClaudeReleasedAtBreaksVersionTies(t *testing.T) {
+	at := func(value string) *time.Time {
+		parsed, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &parsed
+	}
+	models := []ports.AgentModelInfo{
+		{ID: "claude-sonnet-5", Label: "Claude Sonnet 5", ReleasedAt: at("2026-01-10T00:00:00Z")},
+		{ID: "claude-opus-5", Label: "Claude Opus 5", ReleasedAt: at("2026-03-02T00:00:00Z")},
+		{ID: "claude-haiku-5", Label: "Claude Haiku 5"},
+	}
+	assertClaudeOrder(t, SortClaudeNewestFirst(models), []string{"claude-opus-5", "claude-sonnet-5", "claude-haiku-5"})
+}
+
+// Alias IDs carry no version, so the label supplies it; aliases with neither
+// keep their order after every versioned model.
+func TestClaudeFallbackAliasesUseLabelVersions(t *testing.T) {
 	catalog, err := discoverClaudeCatalog(context.Background(), claudeRequest(t), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -331,26 +355,24 @@ func TestClaudeFallbackAliasesKeepTheirOrder(t *testing.T) {
 	assertClaudeOrder(t, catalog.Models, []string{"fable", "haiku", "opus", "opus[1m]", "sonnet"})
 }
 
-func TestClaudeUndatedAliasesKeepOrderAfterDatedModels(t *testing.T) {
+func TestClaudeUnversionedAliasesFollowVersionedModels(t *testing.T) {
 	models := []ports.AgentModelInfo{
 		{ID: "opus[1m]", Label: "Opus (1M context)"},
 		{ID: "claude-opus-5-20260101", Label: "Claude Opus 5"},
 		{ID: "opus", Label: "Opus"},
 	}
-
-	assertClaudeOrder(t, SortClaudeNewestFirst(models), []string{
-		"claude-opus-5-20260101", "opus[1m]", "opus",
-	})
+	assertClaudeOrder(t, SortClaudeNewestFirst(models), []string{"claude-opus-5-20260101", "opus[1m]", "opus"})
 }
 
-func TestClaudeLegacyIDsSortBySnapshotDate(t *testing.T) {
+// Legacy IDs put the version before the family.
+func TestClaudeLegacyIDsSortByVersion(t *testing.T) {
 	models := []ports.AgentModelInfo{
 		{ID: "claude-3-5-sonnet-20241022", Label: "Claude 3.5 Sonnet"},
+		{ID: "claude-sonnet-4-20250514", Label: "Claude Sonnet 4"},
 		{ID: "claude-3-7-sonnet-20250219", Label: "Claude 3.7 Sonnet"},
 	}
-
 	assertClaudeOrder(t, SortClaudeNewestFirst(models), []string{
-		"claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022",
+		"claude-sonnet-4-20250514", "claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022",
 	})
 }
 
@@ -360,32 +382,31 @@ func TestClaudeSameVersionSnapshotsSortNewestFirst(t *testing.T) {
 		{ID: "claude-opus-4-5-20251201", Label: "Claude Opus 4.5"},
 		{ID: "claude-opus-4-5-20250901", Label: "Claude Opus 4.5"},
 	}
-
 	assertClaudeOrder(t, SortClaudeNewestFirst(models), []string{
 		"claude-opus-4-5-20251201", "claude-opus-4-5-20251101", "claude-opus-4-5-20250901",
 	})
 }
 
-func TestClaudeSnapshotDatesSortGloballyAndKeepUndatedOrder(t *testing.T) {
+// Bedrock and Vertex spellings parse the same version and date.
+func TestClaudeProviderSpellingsSortByVersion(t *testing.T) {
 	models := []ports.AgentModelInfo{
-		{ID: "claude-sonnet-5-20251001", Label: "Claude Sonnet 5"},
-		{ID: "claude-opus-4-5-20260115", Label: "Claude Opus 4.5"},
-		{ID: "opus", Label: "Opus"},
-		{ID: "fable", Label: "Fable"},
+		{ID: "us.anthropic.claude-opus-4-5-20251101-v1:0", Label: "Claude Opus 4.5"},
+		{ID: "claude-opus-4-8@20260801", Label: "Claude Opus 4.8"},
+		{ID: "us.anthropic.claude-haiku-4-5-20251001-v1:0", Label: "Claude Haiku 4.5"},
 	}
-
 	assertClaudeOrder(t, SortClaudeNewestFirst(models), []string{
-		"claude-opus-4-5-20260115", "claude-sonnet-5-20251001", "opus", "fable",
+		"claude-opus-4-8@20260801", "us.anthropic.claude-opus-4-5-20251101-v1:0", "us.anthropic.claude-haiku-4-5-20251001-v1:0",
 	})
 }
 
-func TestClaudeOpaqueIDsWithoutDatesKeepOrder(t *testing.T) {
+// Opaque gateway IDs fall back to the version in the label.
+func TestClaudeOpaqueIDsUseLabelVersion(t *testing.T) {
 	models := []ports.AgentModelInfo{
-		{ID: "gateway-model-a", Label: "Claude Sonnet 5"},
+		{ID: "gateway-model-a", Label: "Claude Sonnet 4.5"},
 		{ID: "gateway-model-b", Label: "Claude Opus 5"},
+		{ID: "gateway-model-c", Label: "House model"},
 	}
-
-	assertClaudeOrder(t, SortClaudeNewestFirst(models), []string{"gateway-model-a", "gateway-model-b"})
+	assertClaudeOrder(t, SortClaudeNewestFirst(models), []string{"gateway-model-b", "gateway-model-a", "gateway-model-c"})
 }
 
 func TestClaudeRequestScrubsAmbientGatewayConfiguration(t *testing.T) {
@@ -402,8 +423,8 @@ func TestClaudeRequestScrubsAmbientGatewayConfiguration(t *testing.T) {
 	assertClaudeOrder(t, catalog.Models, []string{"fable", "haiku", "opus", "opus[1m]", "sonnet"})
 }
 
-// The configured alias is undated, so it remains in the stable undated group.
-func TestClaudeConfiguredAliasKeepsUndatedOrder(t *testing.T) {
+// The configured alias is unversioned, so it keeps its place among aliases.
+func TestClaudeConfiguredAliasKeepsAliasOrder(t *testing.T) {
 	request := claudeRequest(t)
 	t.Setenv("ANTHROPIC_MODEL", "haiku")
 	catalog, err := discoverClaudeCatalog(context.Background(), request, nil)
@@ -413,20 +434,20 @@ func TestClaudeConfiguredAliasKeepsUndatedOrder(t *testing.T) {
 	assertClaudeOrder(t, catalog.Models, []string{"fable", "haiku", "opus", "opus[1m]", "sonnet"})
 }
 
-// Without snapshot dates, provider order is left alone regardless of family.
-func TestClaudeUndatedUnknownFamilyKeepsProviderOrder(t *testing.T) {
+// Unknown families still sort by version; models with no version stay last.
+func TestClaudeUnknownFamilySortsByVersion(t *testing.T) {
 	list := func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 		return []ports.AgentModelInfo{
-			{ID: "internal-preview-9", Label: "Internal Preview 9"},
+			{ID: "internal-preview", Label: "Internal Preview"},
 			{ID: "claude-sonnet-5", Label: "Claude Sonnet 5"},
-			{ID: "claude-opus-5", Label: "Claude Opus 5"},
+			{ID: "claude-opus-5-1", Label: "Claude Opus 5.1"},
 		}, nil
 	}
 	catalog, err := discoverClaudeCatalog(context.Background(), claudeRequest(t), list)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertClaudeOrder(t, catalog.Models, []string{"claude-opus-5", "claude-sonnet-5", "internal-preview-9"})
+	assertClaudeOrder(t, catalog.Models, []string{"claude-opus-5-1", "claude-sonnet-5", "internal-preview"})
 }
 
 func assertClaudeOrder(t *testing.T, models []ports.AgentModelInfo, want []string) {

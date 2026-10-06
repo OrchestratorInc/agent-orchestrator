@@ -307,3 +307,25 @@ func TestEffortOrderIsStableAndAscending(t *testing.T) {
 		}
 	}
 }
+
+// created_at is the model's release time; the picker orders by it, so it is
+// carried through, and a missing or malformed value degrades to zero.
+func TestParseAnthropicModelsCarriesReleaseTime(t *testing.T) {
+	models, err := parseAnthropicModels([]byte(`{"data":[
+		{"id":"claude-opus-4-8","display_name":"Claude Opus 4.8","created_at":"2026-08-05T00:00:00Z"},
+		{"id":"claude-fable-5","display_name":"Claude Fable 5","created_at":"not a time"},
+		{"id":"claude-haiku-4-5-20251001","display_name":"Claude Haiku 4.5"}
+	]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 3 {
+		t.Fatalf("models = %+v, want 3", models)
+	}
+	if got := models[0].ReleasedAt.Format("2006-01-02"); got != "2026-08-05" {
+		t.Fatalf("released = %s, want 2026-08-05", got)
+	}
+	if !models[1].ReleasedAt.IsZero() || !models[2].ReleasedAt.IsZero() {
+		t.Fatalf("malformed or missing created_at must be zero: %+v", models[1:])
+	}
+}
