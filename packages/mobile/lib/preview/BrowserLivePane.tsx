@@ -125,7 +125,7 @@ export function BrowserLivePane({ sessionID }: { sessionID: string }) {
 			onLayout={(event) => setViewportSize(event.nativeEvent.layout)}
 			{...responder.panHandlers}
 		>
-			{frameURI ? <Image pointerEvents="none" source={{ uri: frameURI }} resizeMode="contain" style={[styles.frame, frameRect]} /> : null}
+			{frameURI ? <View pointerEvents="none" style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} /></View> : null}
 			{status === "open" && !frameURI ? <View pointerEvents="none" style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.supporting}>Waiting for the desktop browser…</Text></View> : null}
 			{status === "open" && notice ? <View pointerEvents="none" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}
 			{status !== "open" ? <BrowserState status={status} error={error} retry={retry} /> : null}
@@ -151,6 +151,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	root: { flex: 1, backgroundColor: t.bgBase },
 	viewport: { flex: 1, overflow: "hidden", backgroundColor: "#050505" },
 	frame: { position: "absolute" },
+	frameImage: { width: "100%", height: "100%" },
 	center: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", gap: space.sm },
 	supporting: { color: t.textTertiary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize },
 	stateOverlay: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
