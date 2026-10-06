@@ -411,7 +411,6 @@ beforeEach(() => {
 });
 
 describe("shell workspace startup", () => {
-<<<<<<< HEAD
 	it("rechecks a connected host when its session queries fail", async () => {
 		useUiStore.setState({ developerMode: true, remoteHosts: true });
 		const view = await renderShell();
