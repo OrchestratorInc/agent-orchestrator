@@ -40,6 +40,20 @@ func (s *Store) CompleteReviewRun(ctx context.Context, run domain.ReviewRun, fin
 	if n == 0 {
 		return false, nil
 	}
+	// A pass that finishes after a newer one already completed on the same PR
+	// is history on arrival: its findings are filed superseded by that pass,
+	// never left open for a worker the newer review already addressed.
+	status, supersededBy := domain.ReviewFindingOpen, ""
+	newer, err := q.FindSupersedingReviewRun(ctx, gen.FindSupersedingReviewRunParams{
+		SessionID: run.SessionID, PRURL: run.PRURL, RunID: run.ID,
+		CreatedAt: run.CreatedAt, TargetSha: run.TargetSHA, Harness: run.Harness,
+	})
+	switch {
+	case err == nil:
+		status, supersededBy = domain.ReviewFindingSuperseded, newer
+	case !errors.Is(err, sql.ErrNoRows):
+		return false, fmt.Errorf("find pass superseding review run %s: %w", run.ID, err)
+	}
 	for i, f := range findings {
 		if err := q.InsertReviewFinding(ctx, gen.InsertReviewFindingParams{
 			ID:        uuid.NewString(),
@@ -51,7 +65,10 @@ func (s *Store) CompleteReviewRun(ctx context.Context, run domain.ReviewRun, fin
 			Path:      f.Path,
 			Line:      int64(f.Line),
 			Body:      f.Body,
-			CreatedAt: now,
+			Status:    status,
+
+			SupersededByRunID: supersededBy,
+			CreatedAt:         now,
 		}); err != nil {
 			return false, fmt.Errorf("insert review finding %d for run %s: %w", i+1, run.ID, err)
 		}

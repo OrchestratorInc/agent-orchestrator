@@ -13,6 +13,47 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+const findSupersedingReviewRun = `-- name: FindSupersedingReviewRun :one
+SELECT newer.id
+FROM review_run newer
+WHERE newer.session_id = ?1
+  AND newer.pr_url = ?2
+  AND newer.id != ?3
+  AND newer.status IN ('complete', 'delivered')
+  AND (newer.created_at > ?4
+       OR (newer.created_at = ?4 AND newer.id > ?3))
+  AND (newer.target_sha != ?5 OR newer.harness = ?6)
+ORDER BY newer.created_at, newer.id
+LIMIT 1
+`
+
+type FindSupersedingReviewRunParams struct {
+	SessionID domain.SessionID
+	PRURL     string
+	RunID     string
+	CreatedAt time.Time
+	TargetSha string
+	Harness   domain.ReviewerHarness
+}
+
+// The earliest pass that already completed on the same PR and replaces the
+// given one under the same rule as SupersedeOpenReviewFindings: it started
+// later and reviewed a different head or used the same reviewer. A pass that
+// finishes after such a pass files its findings as already superseded.
+func (q *Queries) FindSupersedingReviewRun(ctx context.Context, arg FindSupersedingReviewRunParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, findSupersedingReviewRun,
+		arg.SessionID,
+		arg.PRURL,
+		arg.RunID,
+		arg.CreatedAt,
+		arg.TargetSha,
+		arg.Harness,
+	)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getReviewFinding = `-- name: GetReviewFinding :one
 SELECT id, run_id, session_id, pr_url, target_sha, ordinal, path, line, body, status, resolution_note, resolved_by_session_id, resolved_at, superseded_by_run_id, created_at
 FROM review_finding WHERE id = ?
@@ -42,21 +83,23 @@ func (q *Queries) GetReviewFinding(ctx context.Context, id string) (ReviewFindin
 }
 
 const insertReviewFinding = `-- name: InsertReviewFinding :exec
-INSERT INTO review_finding (id, run_id, session_id, pr_url, target_sha, ordinal, path, line, body, status, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+INSERT INTO review_finding (id, run_id, session_id, pr_url, target_sha, ordinal, path, line, body, status, superseded_by_run_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertReviewFindingParams struct {
-	ID        string
-	RunID     string
-	SessionID domain.SessionID
-	PRURL     string
-	TargetSha string
-	Ordinal   int64
-	Path      string
-	Line      int64
-	Body      string
-	CreatedAt time.Time
+	ID                string
+	RunID             string
+	SessionID         domain.SessionID
+	PRURL             string
+	TargetSha         string
+	Ordinal           int64
+	Path              string
+	Line              int64
+	Body              string
+	Status            domain.ReviewFindingStatus
+	SupersededByRunID string
+	CreatedAt         time.Time
 }
 
 func (q *Queries) InsertReviewFinding(ctx context.Context, arg InsertReviewFindingParams) error {
@@ -70,6 +113,8 @@ func (q *Queries) InsertReviewFinding(ctx context.Context, arg InsertReviewFindi
 		arg.Path,
 		arg.Line,
 		arg.Body,
+		arg.Status,
+		arg.SupersededByRunID,
 		arg.CreatedAt,
 	)
 	return err
@@ -357,7 +402,8 @@ WHERE review_finding.session_id = ?2
   AND EXISTS (
       SELECT 1 FROM review_run older
       WHERE older.id = review_finding.run_id
-        AND older.created_at <= ?4
+        AND (older.created_at < ?4
+             OR (older.created_at = ?4 AND older.id < ?1))
         AND (older.target_sha != ?5 OR older.harness = ?6)
   )
 `

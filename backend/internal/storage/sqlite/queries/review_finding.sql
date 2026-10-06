@@ -1,6 +1,23 @@
 -- name: InsertReviewFinding :exec
-INSERT INTO review_finding (id, run_id, session_id, pr_url, target_sha, ordinal, path, line, body, status, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?);
+INSERT INTO review_finding (id, run_id, session_id, pr_url, target_sha, ordinal, path, line, body, status, superseded_by_run_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: FindSupersedingReviewRun :one
+-- The earliest pass that already completed on the same PR and replaces the
+-- given one under the same rule as SupersedeOpenReviewFindings: it started
+-- later and reviewed a different head or used the same reviewer. A pass that
+-- finishes after such a pass files its findings as already superseded.
+SELECT newer.id
+FROM review_run newer
+WHERE newer.session_id = sqlc.arg(session_id)
+  AND newer.pr_url = sqlc.arg(pr_url)
+  AND newer.id != sqlc.arg(run_id)
+  AND newer.status IN ('complete', 'delivered')
+  AND (newer.created_at > sqlc.arg(created_at)
+       OR (newer.created_at = sqlc.arg(created_at) AND newer.id > sqlc.arg(run_id)))
+  AND (newer.target_sha != sqlc.arg(target_sha) OR newer.harness = sqlc.arg(harness))
+ORDER BY newer.created_at, newer.id
+LIMIT 1;
 
 -- name: SupersedeOpenReviewFindings :execrows
 -- A completed pass replaces the open findings of every earlier pass on the same
@@ -16,7 +33,8 @@ WHERE review_finding.session_id = sqlc.arg(session_id)
   AND EXISTS (
       SELECT 1 FROM review_run older
       WHERE older.id = review_finding.run_id
-        AND older.created_at <= sqlc.arg(created_at)
+        AND (older.created_at < sqlc.arg(created_at)
+             OR (older.created_at = sqlc.arg(created_at) AND older.id < sqlc.arg(new_run_id)))
         AND (older.target_sha != sqlc.arg(target_sha) OR older.harness = sqlc.arg(harness))
   );
 

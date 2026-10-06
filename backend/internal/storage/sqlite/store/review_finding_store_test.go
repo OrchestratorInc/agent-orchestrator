@@ -233,3 +233,44 @@ func TestRetiredReviewRunLeavesTheDeliveryQueues(t *testing.T) {
 		t.Fatalf("a second retirement overwrote the first reason: %q", got.DeliverySkippedReason)
 	}
 }
+
+// A pass that completes after a newer pass on the same PR already completed is
+// filed superseded on arrival, so `ao review ls` and the inspector never show
+// it as open work. A different reviewer's pass on the same head stays open.
+// (The same reviewer cannot finish late on one head: the running-pass unique
+// index admits only one running pass per session, PR, head, and reviewer.)
+func TestLateCompletingPassFilesItsFindingsSuperseded(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		lateSHA       string
+		lateHarness   domain.ReviewerHarness
+		wantStatus    domain.ReviewFindingStatus
+		wantSupersede bool
+	}{
+		{name: "older head", lateSHA: "sha-1", lateHarness: domain.ReviewerClaudeCode, wantStatus: domain.ReviewFindingSuperseded, wantSupersede: true},
+		{name: "parallel reviewer on the same head", lateSHA: "sha-2", lateHarness: domain.ReviewerCodex, wantStatus: domain.ReviewFindingOpen},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFindingFixture(t)
+			ctx := context.Background()
+			late := f.run(t, "run-late", tc.lateSHA, tc.lateHarness, 0)
+			newer := f.run(t, "run-newer", "sha-2", domain.ReviewerClaudeCode, time.Second)
+			complete(t, f.s, newer, domain.VerdictChangesRequested, domain.ReviewFindingInput{Body: "newer finding"})
+			complete(t, f.s, late, domain.VerdictChangesRequested, domain.ReviewFindingInput{Body: "late finding"})
+
+			lateFindings, err := f.s.ListReviewFindingsByRun(ctx, late.ID)
+			if err != nil || len(lateFindings) != 1 {
+				t.Fatalf("late findings = %+v err=%v", lateFindings, err)
+			}
+			if lateFindings[0].Status != tc.wantStatus {
+				t.Fatalf("late finding status = %q, want %q", lateFindings[0].Status, tc.wantStatus)
+			}
+			if tc.wantSupersede != (lateFindings[0].SupersededByRunID == newer.ID) {
+				t.Fatalf("late finding superseded by %q", lateFindings[0].SupersededByRunID)
+			}
+			if got := findingStatuses(t, f.s, newer.ID); got[0] != domain.ReviewFindingOpen {
+				t.Fatalf("the newer pass's finding = %v, want open: a late pass never supersedes a newer one", got)
+			}
+		})
+	}
+}
