@@ -22,6 +22,14 @@ ao render "$TMPDIR/turns-by-day.html" --title "Turns by day" --height 420
   page's real height.
 - Chat sessions only. In a terminal session, open the file with `ao preview`.
 
+## Check before you publish
+
+Run `ao render --check <file>` first. It loads the page in the AO desktop app
+the way readers see it and writes a PNG. It prints the page's content height
+and its console messages. Read the PNG. Fix every `console.error` line. Use the
+content height as `--height`. Use `--width 390` to check a phone layout. The
+check needs the desktop app. Without it, publish without a check.
+
 ## ao render or the Browser panel
 
 Use `ao render` when the page is the answer: a chart, table, diagram, or
@@ -60,9 +68,3 @@ light/dark mode live:
 The base stylesheet sets the page background, text color, and font from these,
 sets `body` margin to 0, and hides the page scrollbar. Use the variables rather
 than hard-coded colors so the page reads correctly in both themes.
-
-## Checking a page
-
-If the file is inside the workspace and the Browser panel is not showing an app
-the user is working with, `ao preview <path>` then `ao browser screenshot` shows
-roughly how it looks (without the theme variables).

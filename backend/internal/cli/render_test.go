@@ -16,8 +16,8 @@ func renderServer(t *testing.T, status int, respBody string) (*httptest.Server, 
 	capture := &previewCapture{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The root command pings /internal/telemetry/cli-invoked before every
-		// run; only the render route counts as the CLI calling the daemon.
-		if !strings.HasSuffix(r.URL.Path, "/renders") {
+		// run; only the render routes count as the CLI calling the daemon.
+		if !strings.HasSuffix(r.URL.Path, "/renders") && !strings.HasSuffix(r.URL.Path, "/renders/check") {
 			http.NotFound(w, r)
 			return
 		}
@@ -98,5 +98,45 @@ func TestRenderRefusesOversizedFilesBeforeSending(t *testing.T) {
 		"render", writePage(t, make([]byte, 1<<20+1)), "--title", "x")
 	if err == nil || capture.called {
 		t.Fatalf("err=%v called=%v; want a size error and no request", err, capture.called)
+	}
+}
+
+func TestRenderCheckWritesTheScreenshotAndPrintsConsole(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "aa-47")
+	cfg := setConfigEnv(t)
+	srv, capture := renderServer(t, http.StatusOK,
+		`{"screenshot":{"mimeType":"image/png","data":"iVBORw0KGgo=","width":390,"height":412},"contentHeight":412,`+
+			`"consoleMessages":[{"level":"error","text":"Uncaught ReferenceError: d3 is not defined"}]}`)
+	writeRunFileFor(t, cfg, srv)
+	out := filepath.Join(t.TempDir(), "check.png")
+
+	stdout, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"render", "--check", writePage(t, []byte("<p>chart</p>")), "--width", "390", "--out", out)
+	if err != nil {
+		t.Fatalf("render --check: %v\nstderr=%s", err, errOut)
+	}
+	if capture.path != "/api/v1/sessions/aa-47/renders/check" || !strings.Contains(capture.body, `"width":390`) {
+		t.Fatalf("hit %s with %s", capture.path, capture.body)
+	}
+	if png, err := os.ReadFile(out); err != nil || len(png) == 0 {
+		t.Fatalf("screenshot not written: %v", err)
+	}
+	for _, want := range []string{out, "412", "console.error: Uncaught ReferenceError: d3 is not defined"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout missing %q:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestRenderWithoutTitleOrCheckDoesNotCallTheDaemon(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "aa-47")
+	cfg := setConfigEnv(t)
+	srv, capture := renderServer(t, http.StatusCreated, `{}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"render", writePage(t, []byte("<p>x</p>")))
+	if err == nil || !strings.Contains(err.Error(), "--title") || capture.called {
+		t.Fatalf("err=%v called=%v; want a --title usage error and no request", err, capture.called)
 	}
 }
