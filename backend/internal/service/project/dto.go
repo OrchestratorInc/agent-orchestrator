@@ -75,12 +75,14 @@ type UpdateConfigInput struct {
 	DryRun           bool    `json:"dryRun,omitempty"`
 }
 
+// ConfigChange describes one changed project config field.
 type ConfigChange struct {
 	Path string `json:"path"`
 	From string `json:"from"`
 	To   string `json:"to"`
 }
 
+// UpdateConfigResult reports a focused config update and its resulting project.
 type UpdateConfigResult struct {
 	Project *Project       `json:"project"`
 	Changes []ConfigChange `json:"changes"`
