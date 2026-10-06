@@ -5314,22 +5314,6 @@ func (m *Manager) provisionWorkspace(ctx context.Context, project domain.Project
 	return runPostCreate(ctx, workspacePath, project.Config.PostCreate, project.Config.Env)
 }
 
-// runPostCreate preserves the historical project setup contract while sharing
-// shell execution, environment construction, and output handling with cues.
-func runPostCreate(ctx context.Context, workspacePath string, commands []string) error {
-	for _, command := range commands {
-		command = strings.TrimSpace(command)
-		if command == "" {
-			continue
-		}
-		result := runWorkspaceCommand(ctx, command, "", workspacePath, nil, 0)
-		if result.Err != nil {
-			return fmt.Errorf("postCreate %q: %w: %s", command, result.Err, strings.TrimSpace(result.Output))
-		}
-	}
-	return nil
-}
-
 // applySymlinks links each repo-relative path into the workspace. A source that
 // does not exist is skipped (symlinks are a convenience for optional files like
 // .env); a real link failure aborts. Paths must be repo-relative with no
