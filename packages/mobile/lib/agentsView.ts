@@ -269,16 +269,18 @@ export function groupSessions(
  * that order; rows still update in place. Section membership stays live, so a
  * worker that starts waiting on you still moves to Needs you at once.
  */
-export type OrderSnapshot = { rank: Record<string, number>; eventAt: Record<string, string> };
+export type OrderSnapshot = { rank: Record<string, number>; eventAt: Record<string, string>; pinned: Record<string, true> };
 
 export function snapshotOrder(ordered: DashboardSession[], keyOf: (s: DashboardSession) => string): OrderSnapshot {
 	const rank: Record<string, number> = {};
 	const eventAt: Record<string, string> = {};
+	const pinned: Record<string, true> = {};
 	ordered.forEach((s, i) => {
 		rank[keyOf(s)] = i;
 		eventAt[keyOf(s)] = eventAtOf(s);
+		if (s.isPinned) pinned[keyOf(s)] = true;
 	});
-	return { rank, eventAt };
+	return { rank, eventAt, pinned };
 }
 
 /**
@@ -307,6 +309,32 @@ export function updatedSince(
 		const before = snapshot.eventAt[keyOf(s)];
 		return before === undefined || time(eventAtOf(s)) > time(before);
 	}).length;
+}
+
+/**
+ * Whether the board should take a new snapshot from the fresh order.
+ *
+ * - No snapshot yet, or one taken before anything loaded.
+ * - The user pinned or unpinned a worker. It is their own action, so it applies
+ *   at once, even while the pill is holding other news back.
+ * - The held order differs from the fresh one with no news behind it.
+ * - News arrived without moving anything (the row was already in place). It is
+ *   already in view, so the snapshot absorbs it. Otherwise the pill would count
+ *   it later, and a pin made after it would stay ranked by its old position.
+ *
+ * Only a reorder with news behind it is held, behind the "N updated" pill. A
+ * snapshot taken from `fresh` never asks for another, so this cannot loop.
+ */
+export function shouldResnapshot(
+	snapshot: OrderSnapshot | null,
+	fresh: DashboardSession[],
+	stale: boolean,
+	keyOf: (s: DashboardSession) => string,
+): boolean {
+	if (snapshot === null || Object.keys(snapshot.rank).length === 0) return true;
+	if (fresh.some((s) => !!s.isPinned !== (snapshot.pinned[keyOf(s)] === true))) return true;
+	const news = updatedSince(snapshot, fresh, keyOf) > 0;
+	return stale !== news;
 }
 
 /**

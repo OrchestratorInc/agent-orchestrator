@@ -7,6 +7,7 @@ import {
 	holdOrder,
 	kanbanColumnOf,
 	sectionMeta,
+	shouldResnapshot,
 	snapshotOrder,
 	updatedSince,
 	workerStatusGlyph,
@@ -290,6 +291,34 @@ describe("held order", () => {
 
 	it("counts nothing when nothing changed", () => {
 		expect(updatedSince(snapshotOrder([a, b, c], key), [a, b, c], key)).toBe(0);
+	});
+
+	it("absorbs news that did not move a row, so a later pin ranks most recent first", () => {
+		const snapshot = snapshotOrder([a, b, c], key);
+		// a was already first: news, but the shown order equals the fresh one.
+		const aNews = { ...a, lastEventAt: "2026-08-09T11:00:00Z" };
+		expect(shouldResnapshot(snapshot, [aNews, b, c], false, key)).toBe(true);
+
+		const absorbed = snapshotOrder([aNews, b, c], key);
+		expect(shouldResnapshot(absorbed, [aNews, b, c], false, key)).toBe(false);
+		// Pinning c now moves it with no news pending, and applies at once.
+		const cPinned = { ...c, isPinned: true };
+		expect(shouldResnapshot(absorbed, [cPinned, aNews, b], true, key)).toBe(true);
+	});
+
+	it("applies a pin at once even while news is held behind the pill", () => {
+		const snapshot = snapshotOrder([a, b, c], key);
+		const cNews = { ...c, lastEventAt: "2026-08-09T11:00:00Z" };
+		// Held: c has news that would move it to the top.
+		expect(shouldResnapshot(snapshot, [cNews, a, b], true, key)).toBe(false);
+		const bPinned = { ...b, isPinned: true };
+		expect(shouldResnapshot(snapshot, [bPinned, cNews, a], true, key)).toBe(true);
+	});
+
+	it("never asks again for a snapshot taken from the fresh order", () => {
+		const pinnedA = { ...a, isPinned: true };
+		expect(shouldResnapshot(snapshotOrder([pinnedA, b, c], key), [pinnedA, b, c], false, key)).toBe(false);
+		expect(shouldResnapshot(null, [a], false, key)).toBe(true);
 	});
 });
 

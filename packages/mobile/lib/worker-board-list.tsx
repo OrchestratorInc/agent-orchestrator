@@ -6,6 +6,7 @@ import { LayoutAnimationConfig } from "react-native-reanimated";
 import {
 	groupSessions,
 	holdOrder,
+	shouldResnapshot,
 	snapshotOrder,
 	updatedSince,
 	type BoardSection,
@@ -167,12 +168,10 @@ export function WorkerBoardList({
 	const { pinned, sections } = held;
 	useEffect(() => {
 		if (freshLive.length === 0) return;
-		// No snapshot yet, one taken before anything loaded, or a reorder with no
-		// news behind it (the user pinned something): take the fresh order now.
-		if (snapshot === null || Object.keys(snapshot.rank).length === 0 || (held.stale && held.updated === 0)) {
+		if (shouldResnapshot(snapshot, freshLive, held.stale, hostedSessionKey)) {
 			setSnapshot(snapshotOrder(freshLive, hostedSessionKey));
 		}
-	}, [snapshot, freshLive, held]);
+	}, [snapshot, freshLive, held.stale]);
 	const resort = useCallback(() => setSnapshot(null), []);
 	// Opening the board, coming back to the app, or a different set of workers
 	// is looking again, so each re-sorts.
