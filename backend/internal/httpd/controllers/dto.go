@@ -2420,6 +2420,9 @@ type SendConversationMessageResponse struct {
 type SteerConversationRequest struct {
 	// Text is the correction to hand the agent mid-turn.
 	Text string `json:"text"`
+	// SenderSessionID identifies the AO session that authored an automation steer.
+	// It is optional so older callers and in-app human steering remain unchanged.
+	SenderSessionID string `json:"senderSessionId,omitempty"`
 	// Attachments are native image prompt blocks delivered with the correction.
 	Attachments []ConversationImageContentRequest `json:"attachments,omitempty"`
 	// ClientMessageID makes a retry idempotent at AO's durable daemon boundary. The
@@ -2695,16 +2698,19 @@ type ConversationDiffFileResponse struct {
 
 // ConversationMessageResponse is one readable block of text.
 type ConversationMessageResponse struct {
-	Kind          string                               `json:"kind" enum:"message"`
-	ID            string                               `json:"id"`
-	TurnID        string                               `json:"turnId,omitempty"`
-	Sequence      int64                                `json:"sequence"`
-	Revision      int64                                `json:"revision"`
-	Role          string                               `json:"role" enum:"user,assistant"`
-	Origin        string                               `json:"origin" enum:"human,automation,daemon,provider"`
-	Text          string                               `json:"text"`
-	Content       []ConversationContentSummaryResponse `json:"content,omitempty"`
-	EditAvailable bool                                 `json:"editAvailable"`
+	Kind              string                               `json:"kind" enum:"message"`
+	ID                string                               `json:"id"`
+	TurnID            string                               `json:"turnId,omitempty"`
+	Sequence          int64                                `json:"sequence"`
+	Revision          int64                                `json:"revision"`
+	Role              string                               `json:"role" enum:"user,assistant"`
+	Origin            string                               `json:"origin" enum:"human,automation,daemon,provider"`
+	Text              string                               `json:"text"`
+	Content           []ConversationContentSummaryResponse `json:"content,omitempty"`
+	SenderSessionID   string                               `json:"senderSessionId,omitempty"`
+	SenderProjectID   string                               `json:"senderProjectId,omitempty"`
+	SenderDisplayName string                               `json:"senderDisplayName,omitempty"`
+	EditAvailable     bool                                 `json:"editAvailable"`
 	// Streaming is true while more deltas are expected for this message.
 	Streaming bool   `json:"streaming"`
 	CreatedAt string `json:"createdAt"`
