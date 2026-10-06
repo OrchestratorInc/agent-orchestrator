@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"image/png"
 	"math"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/image/draw"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -45,7 +47,7 @@ func refuse(code, detail string) error {
 	return &Error{Code: code, Detail: detail, cause: ErrRefused}
 }
 
-// DeliveryMode selects the type/key policy. Clicks always use background.
+// DeliveryMode selects the policy for clicks, typing and keys.
 // Foreground can interrupt the current app and must be journaled before input.
 type DeliveryMode string
 
@@ -82,11 +84,12 @@ type typedFocus struct {
 }
 
 type captureReceipt struct {
-	frame        domain.TestDesktopFrame
-	providerID   string
-	screenshotID string
-	keyToken     string
-	elements     []capturedElement
+	frame         domain.TestDesktopFrame
+	providerID    string
+	screenshotID  string
+	keyToken      string
+	elements      []capturedElement
+	width, height int // original provider capture pixels, never worker-supplied
 }
 
 type captureState struct {
@@ -127,6 +130,8 @@ type Adapter struct {
 	closed        bool
 	now           func() time.Time
 	startRecorder func(args, env []string, stdout, stderr string) (*recordingProcess, error)
+	interruptWait time.Duration
+	terminateWait time.Duration
 	stagingDir    string
 }
 
@@ -178,6 +183,7 @@ func New(cfg Config) (*Adapter, error) {
 	}
 	return &Adapter{cfg: cfg, runner: runner, started: started, root: root,
 		bindings: make(map[string]*binding), now: time.Now, startRecorder: startScreencapture,
+		interruptWait: 15 * time.Second, terminateWait: 3 * time.Second,
 		stagingDir: filepath.Join(home, "Library", "Group Containers", "group.com.apple.screencapture", "ScreenRecordings")}, nil
 }
 
@@ -235,7 +241,8 @@ func (a *Adapter) BindWindow(ctx context.Context, target domain.TestTargetIdenti
 	return b.target, nil
 }
 
-// Screenshot captures only the bound window at original resolution. The
+// Screenshot captures only the bound window and returns a preview capped at
+// 1568 pixels on its long edge, retaining original PNG bytes for evidence. The
 // service must preserve Frame, including CaptureHandle, when assigning the
 // evidence ScreenshotID. No provider identifier or provider path is returned.
 func (a *Adapter) Screenshot(ctx context.Context, target domain.TestTargetIdentity) (shot domain.TestScreenshot, err error) {
@@ -296,7 +303,16 @@ func (a *Adapter) screenshot(ctx context.Context, target domain.TestTargetIdenti
 	}
 	frame := domain.TestDesktopFrame{Target: target, Bounds: state.Bounds, Width: state.Width, Height: state.Height,
 		Scale: state.Scale, CaptureHandle: uuid.NewString(), CapturedAt: capturedAt}
-	b.receipt = &captureReceipt{frame: frame, providerID: state.Capture, elements: state.Elements}
+	preview, width, height, err := screenshotPreview(data, state.Width, state.Height)
+	if err != nil {
+		return shot, fmt.Errorf("resize captured PNG: %w", err)
+	}
+	shot = domain.TestScreenshot{Frame: frame, MIMEType: "image/png", Data: preview}
+	if width != state.Width || height != state.Height {
+		shot.Original = &domain.TestScreenshot{Frame: frame, MIMEType: "image/png", Data: data}
+		shot.Frame.Width, shot.Frame.Height = width, height
+	}
+	b.receipt = &captureReceipt{frame: shot.Frame, providerID: state.Capture, elements: state.Elements, width: state.Width, height: state.Height}
 	if b.lastTyped != nil {
 		if b.lastTyped.bounds != frame.Bounds {
 			b.lastTyped = nil
@@ -304,7 +320,40 @@ func (a *Adapter) screenshot(ctx context.Context, target domain.TestTargetIdenti
 			b.receipt.keyToken = typedFieldToken(state.Elements, b.lastTyped.point)
 		}
 	}
-	return domain.TestScreenshot{Frame: frame, MIMEType: "image/png", Data: data}, nil
+	return shot, nil
+}
+
+func screenshotPreview(data []byte, width, height int) ([]byte, int, int, error) {
+	const maxDimension = 1568
+	if max(width, height) <= maxDimension {
+		return data, width, height, nil
+	}
+	ratio := float64(maxDimension) / float64(max(width, height))
+	w, h := max(1, int(math.Round(float64(width)*ratio))), max(1, int(math.Round(float64(height)*ratio)))
+	source, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	preview := image.NewRGBA(image.Rect(0, 0, w, h))
+	draw.CatmullRom.Scale(preview, preview.Bounds(), source, source.Bounds(), draw.Src, nil)
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, preview); err != nil {
+		return nil, 0, 0, err
+	}
+	return encoded.Bytes(), w, h, nil
+}
+
+// Map the full returned pixel range onto the full provider pixel range. Use
+// each rounded preview dimension separately, and leave Retina conversion to
+// Cua. Both first and last pixels map exactly to the original image's edges.
+func (r *captureReceipt) originalPoint(p pixel) pixel {
+	mapAxis := func(value, returned, original int) int {
+		if returned <= 1 {
+			return 0
+		}
+		return int(math.Round(float64(value) * float64(original-1) / float64(returned-1)))
+	}
+	return pixel{mapAxis(p.x, r.frame.Width, r.width), mapAxis(p.y, r.frame.Height, r.height)}
 }
 
 func coherentScale(s captureState) bool {
@@ -324,8 +373,8 @@ func (a *Adapter) Click(ctx context.Context, target domain.TestTargetIdentity, f
 		return domain.TestActionResult{}, err
 	}
 	args := a.inputArgs(b)
-	args["delivery_mode"] = string(Background)
-	args["x"], args["y"] = request.X, request.Y
+	point := receipt.originalPoint(pixel{request.X, request.Y})
+	args["x"], args["y"] = point.x, point.y
 	args["capture_id"] = receipt.providerID
 	if request.Button != "" {
 		args["button"] = string(request.Button)
@@ -334,8 +383,8 @@ func (a *Adapter) Click(ctx context.Context, target domain.TestTargetIdentity, f
 	return a.dispatch(ctx, "click", args)
 }
 
-// Type uses pixel focus in background mode. Explicit foreground mode resolves
-// the addressed field from this screenshot and focuses its exact AX token.
+// Type uses pixel focus, or a fresh AX token when foreground capture resolves
+// exactly one field. An incomplete AX tree does not prevent pixel input.
 func (a *Adapter) Type(ctx context.Context, target domain.TestTargetIdentity, frame domain.TestDesktopFrame, request domain.TestTypeRequest) (domain.TestActionResult, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -344,20 +393,20 @@ func (a *Adapter) Type(ctx context.Context, target domain.TestTargetIdentity, fr
 		return domain.TestActionResult{}, err
 	}
 	args := a.inputArgs(b)
-	args["x"], args["y"], args["text"] = request.X, request.Y, request.Text
+	point := receipt.originalPoint(pixel{request.X, request.Y})
+	args["x"], args["y"], args["text"] = point.x, point.y, request.Text
 	b.lastTyped = nil
 	if a.cfg.DeliveryMode == Foreground {
-		token := typedFieldToken(receipt.elements, pixel{request.X, request.Y})
-		if token == "" {
-			return domain.TestActionResult{}, refuse("type_focus_unresolved", "fresh screenshot does not resolve exactly one text field at this point")
+		token := typedFieldToken(receipt.elements, point)
+		if token != "" {
+			delete(args, "x")
+			delete(args, "y")
+			args["element_token"] = token
 		}
-		delete(args, "x")
-		delete(args, "y")
-		args["element_token"] = token
 	}
 	// Remember the addressed field, including uncertain partial delivery. A
 	// subsequent key still requires a new screenshot and a fresh field token.
-	b.lastTyped = &typedFocus{point: pixel{request.X, request.Y}, bounds: frame.Bounds}
+	b.lastTyped = &typedFocus{point: point, bounds: frame.Bounds}
 	return a.dispatch(ctx, "type_text", args)
 }
 
@@ -421,7 +470,7 @@ func (a *Adapter) admit(ctx context.Context, target domain.TestTargetIdentity, f
 		return nil, nil, refuse("screenshot_stale", "capture expired; take a new screenshot")
 	}
 	if p != nil && (p.x < 0 || p.y < 0 || p.x >= frame.Width || p.y >= frame.Height) {
-		return nil, nil, refuse("coordinate_outside_window", "point lies outside original screenshot pixels")
+		return nil, nil, refuse("coordinate_outside_window", "point lies outside returned screenshot pixels")
 	}
 	r.screenshotID = screenshotID
 	w, err := a.liveWindow(ctx, b)

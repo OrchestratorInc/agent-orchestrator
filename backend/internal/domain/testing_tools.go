@@ -20,7 +20,7 @@ const (
 	TestMouseButtonMiddle TestMouseButton = "middle"
 )
 
-// TestClickRequest uses pixels from an unscaled screenshot, with origin at its
+// TestClickRequest uses pixels from the returned screenshot, with origin at its
 // top-left. The service resolves ScreenshotID within the current attempt.
 type TestClickRequest struct {
 	_            struct{}        `additionalProperties:"false"`
@@ -95,12 +95,14 @@ type TestDesktopFrame struct {
 	CapturedAt    time.Time `json:"capturedAt"`
 }
 
-// TestScreenshot carries original encoded pixels, not a provider file path.
+// TestScreenshot carries the returned encoded pixels, not a provider file path.
 // JSON encodes Data as base64; the MCP adapter returns it as image content.
 type TestScreenshot struct {
 	Frame    TestDesktopFrame `json:"frame"`
 	MIMEType string           `json:"mimeType"`
 	Data     []byte           `json:"data"`
+	// Original is optional full-resolution evidence, excluded from worker output.
+	Original *TestScreenshot `json:"-"`
 }
 
 // TestActionResult reports delivery, not proof that the application changed.

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -105,6 +106,22 @@ func TestRecordingWindowOnlyAndSIGINTFinalization(t *testing.T) {
 	}
 }
 
+func TestRecordingKeepsOriginalDimensionsAfterPreviewResize(t *testing.T) {
+	f := newFixture(t)
+	f.width, f.height = 2640, 1560
+	f.bounds.Width, f.bounds.Height = 1320, 780
+	r := prepareRecording(t, f)
+	r.info = strings.ReplaceAll(validMovieInfo, "1280 x 800", "2640 x 1560")
+	start := startFakeRecording(t, f)
+	if start.Width != 2640 || start.Height != 1560 {
+		t.Fatalf("video inherited preview dimensions: %+v", start)
+	}
+	result, err := f.adapter.StopRecording(context.Background(), f.target)
+	if err != nil || result.Width != 2640 || result.Height != 1560 || result.Duration <= 0 {
+		t.Fatalf("original-size movie failed validation: %+v %v", result, err)
+	}
+}
+
 func TestRecordingStopAfterTargetClosed(t *testing.T) {
 	f := newFixture(t)
 	r := prepareRecording(t, f)
@@ -119,6 +136,90 @@ func TestRecordingStopAfterTargetClosed(t *testing.T) {
 	result, err := f.adapter.StopRecording(context.Background(), f.target)
 	if err != nil || result.Duration <= 0 || result.Gap != "" {
 		t.Fatalf("closed target prevented movie finalization: %+v %v", result, err)
+	}
+}
+
+func TestRecordingEscalatesIgnoredSIGINTAfterTargetClosed(t *testing.T) {
+	f := newFixture(t)
+	r := prepareRecording(t, f)
+	startFakeRecording(t, f)
+	f.adapter.interruptWait = time.Millisecond
+	var probed []int
+	f.adapter.started = func(_ context.Context, pid int) (time.Time, error) {
+		probed = append(probed, pid)
+		if pid != r.process.pid {
+			return time.Time{}, errors.New("target and Driver already gone")
+		}
+		return f.born, nil
+	}
+	r.process.signal = func(signal os.Signal) error {
+		r.signals = append(r.signals, signal)
+		if signal == syscall.SIGTERM {
+			if err := os.Rename(r.staged, r.path); err != nil {
+				return err
+			}
+			close(r.process.done)
+		}
+		return nil
+	}
+	result, err := f.adapter.StopRecording(context.Background(), f.target)
+	if err == nil || !strings.Contains(result.Gap, "SIGINT; SIGTERM was required") || result.StoppedAt.IsZero() {
+		t.Fatalf("forced stop lost its gap: %+v %v", result, err)
+	}
+	if !reflect.DeepEqual(r.signals, []os.Signal{os.Interrupt, syscall.SIGTERM}) || !reflect.DeepEqual(probed, []int{42, 42}) {
+		t.Fatalf("signals lacked exact recorder probes: signals=%v probes=%v", r.signals, probed)
+	}
+	if result.StagingPath != r.staged || result.StagingCleanup != "verified absent after final move" {
+		t.Fatalf("forced stop changed staging audit: %+v", result)
+	}
+	again, err := f.adapter.StopRecording(context.Background(), f.target)
+	if err == nil || again.Gap != result.Gap || len(r.signals) != 2 {
+		t.Fatalf("retry erased forced-stop gap: %+v %v", again, err)
+	}
+}
+
+func TestRecordingEscalationRechecksBirthAndPID(t *testing.T) {
+	for _, changePID := range []bool{false, true} {
+		t.Run(map[bool]string{false: "birth", true: "PID"}[changePID], func(t *testing.T) {
+			f := newFixture(t)
+			r := prepareRecording(t, f)
+			r.finish = false
+			startFakeRecording(t, f)
+			f.adapter.interruptWait = time.Millisecond
+			f.adapter.started = func(_ context.Context, pid int) (time.Time, error) {
+				if len(r.signals) > 0 && !changePID {
+					return f.born.Add(time.Microsecond), nil
+				}
+				return f.born, nil
+			}
+			interrupt := r.process.signal
+			r.process.signal = func(signal os.Signal) error {
+				err := interrupt(signal)
+				if changePID {
+					r.process.pid++
+				}
+				return err
+			}
+			result, err := f.adapter.StopRecording(context.Background(), f.target)
+			if !errors.Is(err, ErrRefused) || !strings.Contains(result.Gap, "recorder_changed") || !reflect.DeepEqual(r.signals, []os.Signal{os.Interrupt}) {
+				t.Fatalf("changed recorder received SIGTERM: %+v %v signals=%v", result, err, r.signals)
+			}
+		})
+	}
+}
+
+func TestRecordingSIGTERMWaitIsBounded(t *testing.T) {
+	f := newFixture(t)
+	r := prepareRecording(t, f)
+	r.finish = false
+	startFakeRecording(t, f)
+	f.adapter.interruptWait, f.adapter.terminateWait = time.Millisecond, time.Millisecond
+	result, err := f.adapter.StopRecording(context.Background(), f.target)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(result.Gap, "pending after SIGTERM") || !result.StoppedAt.IsZero() || !reflect.DeepEqual(r.signals, []os.Signal{os.Interrupt, syscall.SIGTERM}) {
+		t.Fatalf("SIGTERM wait did not retain pending gap: %+v %v signals=%v", result, err, r.signals)
+	}
+	if _, err := os.Stat(r.staged); err != nil {
+		t.Fatalf("unproved staging file was touched: %v", err)
 	}
 }
 

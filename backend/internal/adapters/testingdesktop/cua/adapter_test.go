@@ -67,11 +67,13 @@ type fixture struct {
 	hidden        bool
 	providerError bool
 	elements      []capturedElement
+	width, height int
+	captureData   []byte
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	f := &fixture{born: time.Date(2026, 10, 6, 1, 2, 3, 456000, time.UTC), bounds: domain.TestWindowBounds{X: 70, Y: 90, Width: 640, Height: 400}}
+	f := &fixture{born: time.Date(2026, 10, 6, 1, 2, 3, 456000, time.UTC), bounds: domain.TestWindowBounds{X: 70, Y: 90, Width: 640, Height: 400}, width: 1280, height: 800}
 	f.target = domain.TestTargetIdentity{ID: "target", LaunchID: "launch", Generation: 1, ElectronPID: 123, ElectronStartedAt: f.born, DataDir: "/scratch/target"}
 	f.runner = &fakeRunner{}
 	f.runner.hook = func(_ string, args []string) (Output, error) {
@@ -95,13 +97,14 @@ func newFixture(t *testing.T) *fixture {
 				t.Fatal("missing output path")
 			}
 			var data bytes.Buffer
-			if err := png.Encode(&data, image.NewRGBA(image.Rect(0, 0, 1280, 800))); err != nil {
+			if err := png.Encode(&data, image.NewRGBA(image.Rect(0, 0, f.width, f.height))); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(path, data.Bytes(), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			return jsonOutput(captureState{PID: 123, WindowID: 456, Bounds: f.bounds, Width: 1280, Height: 800, Scale: 2, Capture: "private-provider-capture", Elements: f.elements}), nil
+			f.captureData = data.Bytes()
+			return jsonOutput(captureState{PID: 123, WindowID: 456, Bounds: f.bounds, Width: f.width, Height: f.height, Scale: 2, Capture: "private-provider-capture", Elements: f.elements}), nil
 		case "click", "type_text", "press_key":
 			if f.providerError {
 				return jsonOutput(map[string]any{"code": "ax_window_unresolved", "effect": "refused", "summary": "exact window unavailable"}), errors.New("exit 1")
@@ -287,7 +290,7 @@ func TestPixelTypeAndKeyInjection(t *testing.T) {
 	}
 }
 
-func TestForegroundKeyUsesFreshTypedFieldAndBackgroundClick(t *testing.T) {
+func TestForegroundKeyUsesFreshTypedFieldAndForegroundClick(t *testing.T) {
 	f := newFixture(t)
 	f.adapter.cfg.DeliveryMode = Foreground
 	f.elements = []capturedElement{{Role: "AXTextField", Token: "first-field", Frame: &pixelBounds{X: 100, Y: 100, Width: 500, Height: 200}}}
@@ -312,8 +315,89 @@ func TestForegroundKeyUsesFreshTypedFieldAndBackgroundClick(t *testing.T) {
 		t.Fatal(err)
 	}
 	last = f.runner.calls[len(f.runner.calls)-1]
-	if !strings.Contains(last.args[4], `"delivery_mode":"background"`) || !strings.HasPrefix(result.Detail, "delivery_mode=background;") {
-		t.Fatal("click unexpectedly requested foreground")
+	if !strings.Contains(last.args[4], `"delivery_mode":"foreground"`) || !strings.HasPrefix(result.Detail, "delivery_mode=foreground;") {
+		t.Fatal("click did not follow configured foreground policy")
+	}
+}
+
+func TestScreenshotPreviewAndCoordinateEdges(t *testing.T) {
+	for _, portrait := range []bool{false, true} {
+		for _, tool := range []string{"click", "type"} {
+			for _, farEdge := range []bool{false, true} {
+				name := tool + map[bool]string{false: "/landscape", true: "/portrait"}[portrait] + map[bool]string{false: "/first", true: "/last"}[farEdge]
+				t.Run(name, func(t *testing.T) {
+					f := newFixture(t)
+					f.width, f.height = 2640, 1560
+					if portrait {
+						f.width, f.height = f.height, f.width
+					}
+					f.bounds.Width, f.bounds.Height = float64(f.width)/2, float64(f.height)/2
+					shot, err := f.adapter.Screenshot(context.Background(), f.target)
+					if err != nil {
+						t.Fatal(err)
+					}
+					w, h := 1568, 927
+					if portrait {
+						w, h = h, w
+					}
+					geometry, err := png.DecodeConfig(bytes.NewReader(shot.Data))
+					if err != nil || geometry.Width != w || geometry.Height != h || shot.Frame.Width != w || shot.Frame.Height != h {
+						t.Fatalf("preview metadata disagrees: %+v %+v %v", geometry, shot.Frame, err)
+					}
+					if shot.Original == nil || !bytes.Equal(shot.Original.Data, f.captureData) || shot.Original.Frame.Width != f.width || shot.Original.Frame.Height != f.height {
+						t.Fatal("original PNG evidence was lost or rescaled")
+					}
+					frame := shot.Frame
+					frame.ScreenshotID = "preview-evidence"
+					point, want := pixel{}, pixel{}
+					if farEdge {
+						point, want = pixel{w - 1, h - 1}, pixel{f.width - 1, f.height - 1}
+					}
+					if tool == "click" {
+						_, err = f.adapter.Click(context.Background(), f.target, frame, domain.TestClickRequest{ScreenshotID: frame.ScreenshotID, X: point.x, Y: point.y})
+					} else {
+						_, err = f.adapter.Type(context.Background(), f.target, frame, domain.TestTypeRequest{ScreenshotID: frame.ScreenshotID, X: point.x, Y: point.y, Text: "edge"})
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					var args map[string]any
+					last := f.runner.calls[len(f.runner.calls)-1]
+					if err := json.Unmarshal([]byte(last.args[4]), &args); err != nil {
+						t.Fatal(err)
+					}
+					if args["x"] != float64(want.x) || args["y"] != float64(want.y) || args["delivery_mode"] != "background" {
+						t.Fatalf("preview pixels did not map once onto capture edges: %v", args)
+					}
+					if tool == "click" && args["capture_id"] != "private-provider-capture" {
+						t.Fatal("preview click lost original capture admission")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestPreviewTypingResolvesOriginalAXCoordinates(t *testing.T) {
+	f := newFixture(t)
+	f.adapter.cfg.DeliveryMode = Foreground
+	f.width, f.height = 2640, 1560
+	f.bounds.Width, f.bounds.Height = 1320, 780
+	f.elements = []capturedElement{{Role: "AXTextField", Token: "clone-url", Frame: &pixelBounds{X: 1200, Y: 650, Width: 300, Height: 100}}}
+	frame := f.screenshot(t)
+	_, err := f.adapter.Type(context.Background(), f.target, frame, domain.TestTypeRequest{ScreenshotID: frame.ScreenshotID, X: 784, Y: 416, Text: "typed-by-investigator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := f.runner.calls[len(f.runner.calls)-1]
+	if !strings.Contains(last.args[4], `"element_token":"clone-url"`) || strings.Contains(last.args[4], `"x":`) {
+		t.Fatalf("preview point missed original AX field: %v", last.args)
+	}
+	f.elements[0].Token = "fresh-clone-url"
+	frame = f.screenshot(t)
+	_, err = f.adapter.Key(context.Background(), f.target, frame, domain.TestKeyRequest{ScreenshotID: frame.ScreenshotID, Keys: []string{"return"}})
+	if err != nil || !strings.Contains(f.runner.calls[len(f.runner.calls)-1].args[4], `"element_token":"fresh-clone-url"`) {
+		t.Fatalf("preview typing lost original remembered focus: %v", err)
 	}
 }
 
@@ -337,6 +421,56 @@ func TestForegroundKeyRefusesMissingTypedField(t *testing.T) {
 		if call.args[3] == "press_key" {
 			t.Fatal("unresolved field dispatched a key")
 		}
+	}
+}
+
+func TestForegroundTypingWithoutAXFieldUsesGuardedPixels(t *testing.T) {
+	f := newFixture(t)
+	f.adapter.cfg.DeliveryMode = Foreground
+	f.width, f.height = 2640, 1560
+	f.bounds.Width, f.bounds.Height = 1320, 780
+	frame := f.screenshot(t)
+	result, err := f.adapter.Type(context.Background(), f.target, frame, domain.TestTypeRequest{ScreenshotID: frame.ScreenshotID, X: 784, Y: 416, Text: "typed-by-investigator"})
+	if err != nil || !result.Delivered {
+		t.Fatalf("foreground pixel typing failed: %+v %v", result, err)
+	}
+	last := f.runner.calls[len(f.runner.calls)-1]
+	var args map[string]any
+	if err := json.Unmarshal([]byte(last.args[4]), &args); err != nil {
+		t.Fatal(err)
+	}
+	if last.args[3] != "type_text" || args["x"] != float64(1320) || args["y"] != float64(700) || args["pid"] != float64(123) || args["window_id"] != float64(456) || args["delivery_mode"] != "foreground" || args["element_token"] != nil {
+		t.Fatalf("pixel typing lost exact target or coordinates: %v", args)
+	}
+	if _, err := f.adapter.Type(context.Background(), f.target, frame, domain.TestTypeRequest{ScreenshotID: frame.ScreenshotID, X: 400, Y: 200, Text: "do not repeat"}); !errors.Is(err, ErrRefused) {
+		t.Fatalf("pixel typing reused its frame: %v", err)
+	}
+}
+
+func TestPreviewRejectsOutsideAndForgedDimensions(t *testing.T) {
+	for _, boundary := range []string{"negative", "right", "bottom", "forged"} {
+		t.Run(boundary, func(t *testing.T) {
+			f := newFixture(t)
+			f.width, f.height = 2640, 1560
+			f.bounds.Width, f.bounds.Height = 1320, 780
+			frame := f.screenshot(t)
+			point := pixel{}
+			switch boundary {
+			case "negative":
+				point.x = -1
+			case "right":
+				point.x = frame.Width
+			case "bottom":
+				point.y = frame.Height
+			case "forged":
+				frame.Width, frame.Height = f.width, f.height
+			}
+			before := len(f.runner.calls)
+			_, err := f.adapter.Type(context.Background(), f.target, frame, domain.TestTypeRequest{ScreenshotID: frame.ScreenshotID, X: point.x, Y: point.y, Text: "refuse"})
+			if !errors.Is(err, ErrRefused) || len(f.runner.calls) != before {
+				t.Fatalf("invalid preview reached provider: %v", err)
+			}
+		})
 	}
 }
 

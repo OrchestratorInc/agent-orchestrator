@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -87,8 +88,12 @@ func (a *Adapter) StartRecording(ctx context.Context, target domain.TestTargetId
 		return recordingGap(RecordingResult{}, err)
 	}
 	stem := filepath.Join(dir, "window-"+uuid.NewString())
-	result := RecordingResult{Path: stem + ".mov", MIMEType: "video/quicktime", Width: shot.Frame.Width,
-		Height: shot.Frame.Height, StartedAt: a.now().UTC(), StagingCleanup: "pending: recording in progress"}
+	original := shot.Frame
+	if shot.Original != nil {
+		original = shot.Original.Frame
+	}
+	result := RecordingResult{Path: stem + ".mov", MIMEType: "video/quicktime", Width: original.Width,
+		Height: original.Height, StartedAt: a.now().UTC(), StagingCleanup: "pending: recording in progress"}
 	f, err := os.OpenFile(result.Path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return recordingGap(result, err)
@@ -144,11 +149,18 @@ func (a *Adapter) StopRecording(ctx context.Context, target domain.TestTargetIde
 	return a.stopRecording(ctx, b)
 }
 
-func (a *Adapter) stopRecording(ctx context.Context, b *binding) (RecordingResult, error) {
+func (a *Adapter) stopRecording(ctx context.Context, b *binding) (result RecordingResult, err error) {
 	r := b.recording
 	if r == nil {
 		return recordingGap(RecordingResult{}, refuse("recording_missing", "binding has no recording"))
 	}
+	// A forced stop remains a recording gap even if the resulting container
+	// validates, and even when cleanup later retries finalization.
+	defer func() {
+		if r.result.Gap != "" {
+			result, err = recordingGap(result, errors.Join(errors.New(r.result.Gap), err))
+		}
+	}()
 	if r.stopped {
 		if r.result.StagingPath != "" {
 			if err := verifyStagingAbsent(r.result.StagingPath); err != nil {
@@ -168,26 +180,23 @@ func (a *Adapter) stopRecording(ctx context.Context, b *binding) (RecordingResul
 	} else {
 		r.result.StagingCleanup = "unresolved: staging metadata observation failed: " + err.Error()
 	}
-	select {
-	case <-p.done:
-	default:
-		birth, err := a.started(context.WithoutCancel(ctx), p.pid)
-		if err != nil || !birth.Equal(r.birth) || r.birth.IsZero() {
-			select {
-			case <-p.done: // recorder may have exited during its birth probe
-			default:
-				return recordingGap(r.result, refuse("recorder_changed", "owned recorder birth identity cannot be proved"))
-			}
-		} else if err := p.signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			return recordingGap(r.result, fmt.Errorf("interrupt owned recorder: %w", err))
-		}
+	if _, err := a.signalRecorder(ctx, r, os.Interrupt); err != nil {
+		return recordingGap(r.result, err)
 	}
-	deadline, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	select {
-	case <-p.done:
-	case <-deadline.Done():
-		return recordingGap(r.result, fmt.Errorf("recorder finalization pending for PID %d: %w", p.pid, deadline.Err()))
+	if err := waitRecorder(ctx, p, a.interruptWait); err != nil {
+		if ctx.Err() != nil {
+			return recordingGap(r.result, fmt.Errorf("recorder finalization pending for PID %d: %w", p.pid, ctx.Err()))
+		}
+		sent, err := a.signalRecorder(ctx, r, syscall.SIGTERM)
+		if err != nil {
+			return recordingGap(r.result, fmt.Errorf("recorder PID %d did not exit after SIGINT: %w", p.pid, err))
+		}
+		if sent {
+			r.result.Gap = fmt.Sprintf("recorder PID %d did not exit within %s after SIGINT; SIGTERM was required", p.pid, a.interruptWait)
+		}
+		if err := waitRecorder(ctx, p, a.terminateWait); err != nil {
+			return recordingGap(r.result, fmt.Errorf("recorder finalization pending after SIGTERM for PID %d: %w", p.pid, err))
+		}
 	}
 	r.result.StoppedAt = a.now().UTC()
 	if err := a.finishStaging(ctx, r); err != nil {
@@ -211,10 +220,46 @@ func (a *Adapter) stopRecording(ctx context.Context, b *binding) (RecordingResul
 		}
 		return recordingGap(r.result, err)
 	}
-	r.result.Duration, r.result.Gap, r.stopped = duration, "", true
+	r.result.Duration, r.stopped = duration, true
 	// Window closure can end the stream with a nonzero status. A validated,
 	// finalized movie is still usable evidence; validation above is mandatory.
 	return r.result, nil
+}
+
+func (a *Adapter) signalRecorder(ctx context.Context, r *windowRecording, signal os.Signal) (bool, error) {
+	p := r.process
+	select {
+	case <-p.done:
+		return false, nil
+	default:
+	}
+	birth, err := a.started(context.WithoutCancel(ctx), p.pid)
+	if err != nil || r.birth.IsZero() || !birth.Equal(r.birth) || p.pid != r.result.RecorderPID {
+		select {
+		case <-p.done: // the owned recorder may have exited during the probe
+			return false, nil
+		default:
+			return false, refuse("recorder_changed", "owned recorder PID and birth identity cannot be proved")
+		}
+	}
+	if err := p.signal(signal); err != nil {
+		if errors.Is(err, os.ErrProcessDone) {
+			return false, nil
+		}
+		return false, fmt.Errorf("signal %s to owned recorder PID %d: %w", signal, p.pid, err)
+	}
+	return true, nil
+}
+
+func waitRecorder(ctx context.Context, p *recordingProcess, timeout time.Duration) error {
+	deadline, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	select {
+	case <-p.done:
+		return nil
+	case <-deadline.Done():
+		return deadline.Err()
+	}
 }
 
 func recordingGap(result RecordingResult, err error) (RecordingResult, error) {
