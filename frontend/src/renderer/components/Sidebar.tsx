@@ -435,19 +435,14 @@ function SidebarSectionScroller({
 		};
 	}, [updateScrollEdges]);
 
-	const prefersReducedMotion = useReducedMotion();
 	return (
-		<motion.div
-			className={`relative min-h-0 ${wrapperClassName ?? ""}`}
-			layout
-			transition={prefersReducedMotion ? { duration: 0 } : { layout: { type: "spring", stiffness: 520, damping: 42 } }}
-		>
+		<div className={`relative min-h-0 ${wrapperClassName ?? ""}`}>
 			<div ref={scrollerRef} className={className} data-testid={testId} style={style}>
 				{children}
 			</div>
 			{scrollEdges.top ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--top" /> : null}
 			{scrollEdges.bottom ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--bottom" /> : null}
-		</motion.div>
+		</div>
 	);
 }
 
@@ -732,14 +727,6 @@ export function Sidebar({
 		reclampOnWindowResize: true,
 		onExpand: () => setOpen(true),
 	});
-
-	// Suppress layout animations for the first 500ms so background session
-	// re-sorts during daemon settle don't cause visible row shuffling.
-	const [layoutSettled, setLayoutSettled] = useState(false);
-	useEffect(() => {
-		const timer = window.setTimeout(() => setLayoutSettled(true), 500);
-		return () => window.clearTimeout(timer);
-	}, []);
 
 	const [projectOrder, setProjectOrder] = useState<string[]>([]);
 	const orderedWorkspaces = useMemo(
@@ -1061,7 +1048,6 @@ export function Sidebar({
 													selection={selection}
 													isDragged={draggingProjectId === workspace.id}
 													projectDragInProgress={draggingProjectId !== null}
-													layoutSettled={layoutSettled}
 													consumeDragClick={projectDragClickGuard.consumeClick}
 													onToggle={toggleProjectDisclosure}
 													onRemoveProject={onRemoveProject}
@@ -1096,7 +1082,6 @@ export function Sidebar({
 													isDragged={false}
 													projectDragInProgress={false}
 													consumeDragClick={() => false}
-													layoutSettled={layoutSettled}
 													onToggle={() => setCollapsedRemoteProjects((previous) => {
 														const next = new Set(previous);
 														next.has(projectKey) ? next.delete(projectKey) : next.add(projectKey);
@@ -1288,7 +1273,6 @@ type ProjectItemProps = {
 	isDragged: boolean;
 	projectDragInProgress: boolean;
 	consumeDragClick: (id: string) => boolean;
-	layoutSettled: boolean;
 	onToggle: (projectId: string) => void;
 	onRemoveProject: (projectId: string) => Promise<void>;
 	suppressInitialExpandAnimation: boolean;
@@ -1307,7 +1291,6 @@ const ProjectItem = memo(function ProjectItem({
 	isDragged,
 	projectDragInProgress,
 	consumeDragClick,
-	layoutSettled,
 	onToggle,
 	onRemoveProject,
 	suppressInitialExpandAnimation,
@@ -1542,7 +1525,6 @@ const ProjectItem = memo(function ProjectItem({
 					initial={{ opacity: 0, y: -4 }}
 					animate={{ opacity: 1, y: 0 }}
 					exit={{ opacity: 0, y: -4, transition: { duration: prefersReducedMotion ? 0 : 0.12, ease: "easeIn" } }}
-					layout={!layoutSettled || projectDragInProgress ? false : "position"}
 					onDragOver={(event) => onProjectDragOver(event, workspace.id)}
 					onDrop={onProjectDrop}
 					transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 520, damping: 42, mass: 0.55 }}
@@ -2028,6 +2010,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	active,
 	consumeDragClick,
 	indented = true,
+	layoutDependency,
 	listIsDragging,
 	dropTransitionDisabled,
 	onKilled,
@@ -2037,6 +2020,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	active: boolean;
 	consumeDragClick: (id: string) => boolean;
 	indented?: boolean;
+	layoutDependency?: string;
 	listIsDragging: boolean;
 	dropTransitionDisabled: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
@@ -2054,6 +2038,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 			onOpen={() => {
 				if (!consumeDragClick(session.id)) onOpen(session.id);
 			}}
+			layoutDependency={layoutDependency}
 			listIsDragging={listIsDragging}
 			reorder={{
 				isDragging,
@@ -2099,6 +2084,15 @@ function SessionReorderList({
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: (sessionId: string) => void;
 }) {
+	// Suppress the vertical glide for the first 500ms after the list mounts, so the
+	// re-sorts that follow a daemon settle or a project expanding do not shuffle rows.
+	const [layoutSettled, setLayoutSettled] = useState(false);
+	useEffect(() => {
+		const timer = window.setTimeout(() => setLayoutSettled(true), 500);
+		return () => window.clearTimeout(timer);
+	}, []);
+	const orderKey = useMemo(() => sessionIds.join("\u0000"), [sessionIds]);
+	const layoutDependency = layoutSettled ? orderKey : undefined;
 	const sensors = useReorderSensors();
 	const dragClickGuard = usePostDragClickGuard();
 	const [listDragging, setListDragging] = useState(false);
@@ -2170,6 +2164,7 @@ function SessionReorderList({
 							active={activeSessionId === session.id}
 							consumeDragClick={dragClickGuard.consumeClick}
 							indented={indented}
+							layoutDependency={layoutDependency}
 							listIsDragging={listDragging}
 							dropTransitionDisabled={dropTransitionDisabledId === session.id}
 							onKilled={onKilled}
@@ -2194,6 +2189,7 @@ function SessionRow({
 	active,
 	hostLabel,
 	indented = true,
+	layoutDependency,
 	listIsDragging = false,
 	onKilled,
 	onOpen,
@@ -2203,6 +2199,9 @@ function SessionRow({
 	active: boolean;
 	hostLabel?: string;
 	indented?: boolean;
+	/** The list order. Present only for rows in a reorderable list: the row then
+	 *  animates its vertical position (and nothing else) when the order changes. */
+	layoutDependency?: string;
 	listIsDragging?: boolean;
 	/** Project drags pause nested session projection work. */
 	onKilled?: (session: WorkspaceSession) => void;
@@ -2211,6 +2210,7 @@ function SessionRow({
 	reorder?: SessionReorder;
 }) {
 	const { t } = useTranslation();
+	const prefersReducedMotion = useReducedMotion();
 	useGrabbingCursor(Boolean(reorder?.isDragging));
 	const switchPresentation = deriveSessionAgentSwitchPresentation(session);
 	const switchLabel = switchPresentation
@@ -2287,7 +2287,11 @@ function SessionRow({
 					ref={reorder?.setNodeRef}
 					style={reorder ? sortableRowStyle(reorder) : undefined}
 				>
-			<div>
+			<motion.div
+				layout={layoutDependency !== undefined && !listIsDragging ? "y" : false}
+				layoutDependency={layoutDependency}
+				transition={prefersReducedMotion ? { duration: 0 } : { layout: { type: "spring", stiffness: 520, damping: 42, mass: 0.55 } }}
+			>
 				<div
 					className={cn(
 						"group/session-row group/nav-row relative flex h-8 w-full items-center rounded-lg",
@@ -2377,7 +2381,7 @@ function SessionRow({
 						session={session}
 					/>
 				</div>
-			</div>
+			</motion.div>
 				</SidebarMenuSubItem>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-44">
