@@ -163,6 +163,7 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 	"ao.review.triggered": {
 		"created_runs": {},
 		"harness":      {},
+		"rerun":        {},
 		"reused":       {},
 		"trigger":      {},
 	},

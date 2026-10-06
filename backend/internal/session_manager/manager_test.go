@@ -194,6 +194,17 @@ func (f *fakeStore) SetSessionProvisionState(_ context.Context, id domain.Sessio
 	return true, nil
 }
 
+func (f *fakeStore) SetSessionProvisionSteps(_ context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error {
+	rec, ok := f.sessions[id]
+	if !ok {
+		return nil
+	}
+	rec.ProvisionSteps = append([]domain.SessionProvisionStep(nil), steps...)
+	rec.UpdatedAt = now
+	f.sessions[id] = rec
+	return nil
+}
+
 func (f *fakeStore) PromoteTaskPreparation(_ context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error) {
 	if f.promoteTaskErr != nil {
 		err := f.promoteTaskErr
@@ -3145,9 +3156,12 @@ func TestWrapSpawnStagePreservesInnerSentinel(t *testing.T) {
 
 func TestSpawn_RollsBackOnRuntimeFailure(t *testing.T) {
 	m, st, _, ws := newManager()
-	m.runtime = &fakeRuntime{createErr: errors.New("boom")}
-	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer"}); err == nil {
-		t.Fatal("expected failure")
+	project := st.projects["mer"]
+	project.Config.Env = map[string]string{"PROJECT_TOKEN": "runtime-secret"}
+	st.projects["mer"] = project
+	m.runtime = &fakeRuntime{createErr: errors.New("boom with runtime-secret")}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer"}); err == nil || strings.Contains(err.Error(), "runtime-secret") || !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("Spawn error = %v, want redacted runtime failure", err)
 	}
 	if ws.destroyed != 1 {
 		t.Fatal("workspace should roll back")

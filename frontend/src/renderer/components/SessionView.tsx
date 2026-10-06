@@ -119,6 +119,7 @@ const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as CSSProperties) : 
 const newTerminalShortcutLabel = shortcutBindingLabel(defaultShortcutBindings("new-shell-terminal", isMac)[0], isMac);
 
 type ReviewsResponse = components["schemas"]["ListReviewsResponse"];
+type ReviewerSurface = components["schemas"]["DomainReviewerSurface"];
 type ReviewerTerminalTarget = { handleId: string; harness: string };
 type ReviewerChatTarget = { reviewId: string; harness: string };
 
@@ -145,7 +146,25 @@ function browserIsVisible(sessionId: string, browserPoppedOut: boolean): boolean
 	return inspectorIsOpen(inspectorSessions, sessionId) && (inspectorSessions[sessionId]?.view ?? "summary") === "browser";
 }
 
-function reviewerTerminalFromReviews(data?: ReviewsResponse): ReviewerTerminalTarget | undefined {
+// workingReviewerSurface is the live reviewer to show when the selected one is
+// idle but another is working (an agent asked a different reviewer). The
+// selected reviewer fields keep meaning the session's selected reviewer.
+function workingReviewerSurface(data?: ReviewsResponse): ReviewerSurface | undefined {
+	const active = data?.activeReviewers ?? [];
+	if (active.some((surface) => surface.reviewId === data?.reviewerSurface?.reviewId)) return undefined;
+	return active[0];
+}
+
+function reviewerTerminalFromReviews(data?: ReviewsResponse, selected?: TerminalTarget): ReviewerTerminalTarget | undefined {
+	// Several reviewers can run on one worker at once. The reviewer tab follows
+	// whichever live reviewer the user opened (from the inspector), and
+	// otherwise shows the selected reviewer, or the working one when it is idle.
+	if (selected?.kind === "reviewer") {
+		const opened = data?.activeReviewers?.find((surface) => surface.mode !== "chat" && surface.handleId === selected.handleId);
+		if (opened?.handleId) return { handleId: opened.handleId, harness: opened.harness || selected.harness };
+	}
+	const working = workingReviewerSurface(data);
+	if (working) return working.mode !== "chat" && working.handleId ? { handleId: working.handleId, harness: working.harness || "codex" } : undefined;
 	if (data?.reviewerSurface?.mode === "chat") return undefined;
 	const handleId = data?.reviewerHandleId?.trim();
 	if (!handleId) return undefined;
@@ -154,7 +173,7 @@ function reviewerTerminalFromReviews(data?: ReviewsResponse): ReviewerTerminalTa
 }
 
 function reviewerChatFromReviews(data?: ReviewsResponse): ReviewerChatTarget | undefined {
-	const surface = data?.reviewerSurface;
+	const surface = workingReviewerSurface(data) ?? data?.reviewerSurface;
 	if (surface?.mode !== "chat" || !surface.reviewId) return undefined;
 	return { reviewId: surface.reviewId, harness: surface.harness || "codex" };
 }
@@ -692,13 +711,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				params: { path: { sessionId } },
 			});
 			if (error) throw new Error(apiErrorMessage(error, "Unable to load reviews"));
-			return data ?? ({ reviewerHandleId: "", reviews: [], runs: [] } satisfies ReviewsResponse);
+			return data ?? ({ reviewerHandleId: "", reviews: [], runs: [], activeReviewers: [] } satisfies ReviewsResponse);
 		},
 	});
 	const reviewerSwitchPending = useIsMutating({
 		mutationKey: [...sessionReviewsQueryKey(sessionId, hostId), "switch-reviewer"],
 	}) > 0;
-	const availableReviewerTerminal = reviewerTerminalFromReviews(reviewerQuery.data);
+	const availableReviewerTerminal = reviewerTerminalFromReviews(reviewerQuery.data, terminalTarget);
 	const reviewerTerminal = session && sessionIsActive(session) ? availableReviewerTerminal : undefined;
 	const availableReviewerChat = reviewerChatFromReviews(reviewerQuery.data);
 	const reviewerChat = session && sessionIsActive(session) ? availableReviewerChat : undefined;

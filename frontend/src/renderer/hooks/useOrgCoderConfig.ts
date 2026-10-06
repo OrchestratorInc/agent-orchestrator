@@ -21,9 +21,14 @@ export function useOrgCoderConfig() {
 		queryKey: [...orgCoderConfigQueryKey, orgId],
 		enabled: ready && orgId !== "",
 		staleTime: 60_000,
-		queryFn: async (): Promise<CloudCpOrgCoderConfig | null> =>
+		queryFn: async (): Promise<CloudCpOrgCoderConfig | null> => {
+			const response = await client.getOrgCoderConfig(orgId);
 			// Default to null (never undefined) so React Query accepts the "no
-			// config yet" case — the common state for a newly-onboarded org.
-			(await client.getOrgCoderConfig(orgId)).coderConfig ?? null,
+			// config yet" case — the common state for a newly-onboarded org. A stored
+			// connection always carries a token (the PUT requires one) and the token
+			// itself is never returned, so surface its presence as tokenSet — the flag
+			// the templates catalog and the live template fetch unlock on.
+			return response.coderConfig ? { ...response.coderConfig, tokenSet: true } : null;
+		},
 	});
 }

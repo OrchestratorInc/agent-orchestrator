@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
@@ -276,5 +277,44 @@ func TestSessionPlanForProviderWithCoderOverride(t *testing.T) {
 	if profile.BaseURL != "https://coder.example.com" || profile.Owner != "deploy-owner" ||
 		profile.TemplateID != deployTemplate {
 		t.Fatalf("nil override disturbed the deployment default: %+v", profile)
+	}
+}
+
+// A bring-your-own-Coder org carries no default template (it is chosen per
+// project). The per-project pick supplies the template; with neither the org nor
+// the project supplying one, the plan fails with ErrCoderTemplateRequired so the
+// edge can tell the user to choose a template.
+func TestSessionPlanForProviderWithCoderTemplatelessOverride(t *testing.T) {
+	t.Parallel()
+	const projectTemplate = "3b3f373d-c42d-5313-a57e-b2abe56e2fe3"
+	// A bring-your-own-only deployment may leave the deployment default unset.
+	defaults := ProvisioningDefaults{Provider: ProviderCoder, Release: "test"}
+	templateless := &CoderDeploymentOverride{
+		BaseURL: "https://org-coder.example.com", Owner: "org-owner",
+		DurableRoot: "/srv/org",
+	}
+
+	// Project supplies the template.
+	plan, err := defaults.SessionPlanForProviderWithCoder(
+		"codex", ProviderCoder, &CoderSessionOptions{TemplateID: projectTemplate}, templateless,
+	)
+	if err != nil {
+		t.Fatalf("project-supplied template: %v", err)
+	}
+	profile, err := DecodeCoderSessionProfile(plan.ResourceProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.TemplateID != projectTemplate || profile.Owner != "org-owner" {
+		t.Fatalf("project template not applied over templateless org: %+v", profile)
+	}
+
+	// No template anywhere => a clear, user-fixable error.
+	if _, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, nil, templateless); !errors.Is(err, ErrCoderTemplateRequired) {
+		t.Fatalf("templateless session error = %v, want ErrCoderTemplateRequired", err)
+	}
+	// An options object that carries only size (no template) still resolves nothing.
+	if _, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, &CoderSessionOptions{Size: "large"}, templateless); !errors.Is(err, ErrCoderTemplateRequired) {
+		t.Fatalf("size-only templateless session error = %v, want ErrCoderTemplateRequired", err)
 	}
 }

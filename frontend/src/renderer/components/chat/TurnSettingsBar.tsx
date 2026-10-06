@@ -78,7 +78,7 @@ const CODEX_APPROVAL_ORDER: ApprovalMode[] = [
 ];
 
 const TRIGGER_CLASS =
-	"h-7 gap-1 bg-transparent rounded-lg px-3 text-[12px]! leading-none text-muted-foreground hover:bg-white/5 hover:text-foreground data-[state=open]:bg-white/5 data-[state=open]:text-foreground";
+	"h-7 gap-1 bg-transparent rounded-lg px-3 text-[12px]! leading-none text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground";
 const CHAT_MENU_CLASS = "chat-settings-menu text-[12px]!";
 
 export function TurnSettingsBar({
@@ -396,8 +396,8 @@ function ModelEffortPicker({
 
 	return (
 		<OptionMenu>
-			
 				<OptionMenuTrigger
+					showCaret={false}
 					disabled={disabled}
 					aria-label="Model and reasoning effort for the next turn"
 					title={
@@ -427,10 +427,12 @@ function ModelEffortPicker({
 					    events do not reliably reach an outer overflow on nested submenus. */}
 					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
 						<ModelMenuChoices models={catalog}>
-							{(matches) => matches.map((model) => (
+							{(matches, searchActiveID, optionID) => matches.map((model) => (
 								<OptionMenuItem
 									key={model.id}
+									id={optionID?.(model.id)}
 									active={model.id === settings.model}
+									searchActive={model.id === searchActiveID}
 									radio
 									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
 									className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
@@ -534,8 +536,8 @@ function ClubbedConfigPicker({
 
 	return (
 		<OptionMenu>
-			
 				<OptionMenuTrigger
+					showCaret={false}
 					disabled={disabled}
 					aria-label="Model and reasoning effort for the next turn"
 					title="Model and reasoning effort for the next turn"
@@ -700,6 +702,7 @@ function ExecutionModePicker({
 	return (
 		<OptionMenu>
 			<OptionMenuTrigger
+				showCaret={false}
 				disabled={disabled}
 				aria-label="Model mode for the next turn"
 				title="Model mode for the next turn"
@@ -820,7 +823,14 @@ function ConfigModelChoices({
 	})), [option.choices]);
 	return (
 		<ModelMenuChoices models={models}>
-			{(matches) => <ConfigOptionChoices option={{ ...option, choices: matches }} onChange={onChange} />}
+			{(matches, searchActiveID, optionID) => (
+				<ConfigOptionChoices
+					option={{ ...option, choices: matches }}
+					onChange={onChange}
+					searchActiveID={searchActiveID}
+					optionID={optionID}
+				/>
+			)}
 		</ModelMenuChoices>
 	);
 }
@@ -828,9 +838,13 @@ function ConfigModelChoices({
 function ConfigOptionChoices({
 	option,
 	onChange,
+	searchActiveID,
+	optionID,
 }: {
 	option: ChatConfigOption;
 	onChange: (value: ChatConfigOptionValue) => void;
+	searchActiveID?: string;
+	optionID?: (id: string) => string;
 }) {
 	if (option.type === "boolean") {
 		return (
@@ -870,7 +884,9 @@ function ConfigOptionChoices({
 							</OptionMenuLabel>
 						) : null}
 						<OptionMenuItem
+							id={optionID?.(choice.value)}
 							active={choice.value === option.currentValue}
+							searchActive={choice.value === searchActiveID}
 							radio
 							onSelect={() => onChange({ value: choice.value })}
 							className={cn("text-xs")}
@@ -919,8 +935,13 @@ function Picker({
 }) {
 	return (
 		<OptionMenu>
-			
-				<OptionMenuTrigger aria-label={title} title={title} disabled={disabled} className={TRIGGER_CLASS}>
+				<OptionMenuTrigger
+					showCaret={false}
+					aria-label={title}
+					title={title}
+					disabled={disabled}
+					className={TRIGGER_CLASS}
+				>
 					<span className="min-w-0 max-w-[16ch] truncate">{label}</span>
 					{badge}
 				</OptionMenuTrigger>

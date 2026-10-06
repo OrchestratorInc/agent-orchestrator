@@ -13,6 +13,7 @@ const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { POST: postMock, GET: getMock },
 	apiErrorMessage: (error: unknown, fallback = "Request failed") => error instanceof Error ? error.message : fallback,
+	getApiBaseUrl: () => "",
 }));
 
 // Minimal patch-only "change" metadata. A patch containing "ends-at-eof" gets a
@@ -139,6 +140,18 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.getByTestId("code-view")).toBeInTheDocument();
 		expect(screen.queryByText("Loading diff...")).not.toBeInTheDocument();
 		expect(postMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("renders an image preview for a binary image in the Changes panel", async () => {
+		const data = workspace([{ path: "sample.png", status: "added", additions: 0, deletions: 0, size: 128, binary: true }]);
+
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+
+		expect(await screen.findByAltText("After version of sample.png")).toHaveAttribute(
+			"src",
+			expect.stringContaining("/api/v1/sessions/sess-1/workspace/file/blob"),
+		);
+		expect(screen.queryByText("Binary file preview is not available.")).not.toBeInTheDocument();
 	});
 
 	it("does not reuse parsed metadata when an equal-length patch changes", async () => {

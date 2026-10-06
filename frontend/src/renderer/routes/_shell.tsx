@@ -208,6 +208,24 @@ function ShellLayout() {
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
 	const sidebarHasLayout = useUiStore(sidebarOccupiesLayout);
+	// The drag strip above the sidebar must be exactly as wide as the sidebar.
+	// `--ao-sidebar-w` only reaches the strip if it already exists when the
+	// sidebar first applies its saved width, so measure the sidebar instead.
+	const [sidebarWidthPx, setSidebarWidthPx] = useState<number | null>(null);
+	useEffect(() => {
+		if (!isMac || !sidebarHasLayout) return;
+		let observer: ResizeObserver | undefined;
+		const frame = requestAnimationFrame(() => {
+			const el = document.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
+			if (!el) return;
+			observer = new ResizeObserver(([entry]) => setSidebarWidthPx(entry.target.getBoundingClientRect().width));
+			observer.observe(el);
+		});
+		return () => {
+			cancelAnimationFrame(frame);
+			observer?.disconnect();
+		};
+	}, [sidebarHasLayout]);
 	const syncSystemTheme = useUiStore((state) => state.syncSystemTheme);
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const openProjectSettings = useUiStore((state) => state.openProjectSettings);
@@ -1247,7 +1265,10 @@ function ShellLayout() {
 								isFullScreen ? "pointer-events-none h-0" : "h-traffic-light-clearance",
 							)}
 							ref={sidebarDragStripRef}
-							style={trafficLightDragActive ? ({ WebkitAppRegion: "drag" } as CSSProperties) : undefined}
+							style={{
+								...(sidebarHasLayout && sidebarWidthPx ? { width: sidebarWidthPx } : null),
+								...(trafficLightDragActive ? ({ WebkitAppRegion: "drag" } as CSSProperties) : null),
+							}}
 						/>
 					) : null}
 					{/* Fixed macOS titlebar cluster beside the traffic lights — rendered

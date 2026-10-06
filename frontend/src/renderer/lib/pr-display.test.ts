@@ -221,6 +221,14 @@ describe("prDiffSummary", () => {
 });
 
 describe("prCardPresentation", () => {
+	it("renders when the provider returns null merge reasons", () => {
+		const malformed = summary({
+			mergeability: { state: "blocked", reasons: null, prUrl: "https://github.com/acme/repo/pull/7" } as unknown as SessionPRSummary["mergeability"],
+		});
+
+		expect(() => prCardPresentation(malformed)).not.toThrow();
+	});
+
 	const priorityCases: Array<[string, Partial<SessionPRSummary>, string]> = [
 		["conflict + passing + approval", { mergeability: { state: "conflicting", reasons: [], prUrl: "" } }, "Not mergeable yet"],
 		["clean + passing + approval", { mergeability: { state: "mergeable", reasons: [], prUrl: "" } }, "Mergeable"],

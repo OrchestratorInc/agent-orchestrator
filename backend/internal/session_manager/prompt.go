@@ -20,6 +20,9 @@ type promptProject struct {
 	Repo          string
 	DefaultBranch string
 	Path          string
+	// WorkersRequestReview is the project's opt-in for workers to request an
+	// AO review of their own PR when it is ready.
+	WorkersRequestReview bool
 }
 
 type taskPromptConfig struct {
@@ -85,6 +88,9 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 		sections = append(sections, workerSystemPrompt(cfg.Project, orchestratorID != ""))
 		if orchestratorID != "" {
 			sections = append(sections, workerOrchestratorPrompt(orchestratorID))
+		}
+		if strings.TrimSpace(cfg.Project.Repo) != "" {
+			sections = append(sections, workerNativeReviewPrompt(cfg.Project, orchestratorID != ""))
 		}
 		sections = append(sections, workerMultiPRPrompt(), workerContainerLabelPrompt(), workerGitIsolationPrompt())
 		if rules := strings.TrimSpace(cfg.ProjectRules); rules != "" {
@@ -198,7 +204,8 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 ## Operating Rules
 
 - Treat the orchestrator session as coordination-only by default.
-- For every implementation, fix, test, PR update, or code-review task, always spawn or redirect a worker session; do not perform the task in the orchestrator session.
+- For every implementation, fix, test, or PR update task, always spawn or redirect a worker session; do not perform the task in the orchestrator session.
+- Never spawn a worker to review code. To review a worker session's PR, start AO's native reviewer with `+"`ao review trigger <worker-session-id>`"+`; the reviewer's inline comments reach that worker as PR review comments, and `+"`ao review ls <worker-session-id>`"+` shows the verdict. If a PR is not owned by any AO session, tell the human the native reviewer needs an owning session and ask how to proceed.
 - Never ever make code changes directly in the orchestrator session.
 - Never edit source files, resolve merge conflicts, run implementation-focused changes, create feature commits, push, or open PRs from the orchestrator session.
 - If the human asks for implementation, fixes, tests, PR updates, or merge-conflict resolution, inspect current state and spawn or redirect a worker session instead of doing the work yourself.
@@ -227,6 +234,8 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - `+"`ao send --session <session-id> --message \"<message>\"`"+` - message a worker.
 - `+"`ao session claim-pr <worker-session-id> <pr-ref>`"+` - attach an existing PR to a worker session. Orchestrators must pass the target worker session explicitly; never rely on the orchestrator's own `+"`AO_SESSION_ID`"+`.
 - `+"`ao session kill <session-id>`"+` - terminate a session when appropriate.
+- `+"`ao review trigger <worker-session-id>`"+` - start AO's native adversarial reviewer on a worker's PR heads. Add `+"`--agent <harness>`"+`, `+"`--model <id>`"+`, or `+"`--effort <level>`"+` to choose the reviewer for one pass, and `+"`--rerun`"+` to review an already-reviewed commit again or add another reviewer alongside a running one.
+- `+"`ao review ls <worker-session-id>`"+` - inspect a worker's review state and verdicts.
 
 ## Coordination Workflow
 
@@ -250,6 +259,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - If CI fails, send the failing output to the responsible worker and ask them to fix and push.
 - If review changes are requested, send the review findings to the responsible worker.
 - If work is green and approved, report that state to the human. Do not merge unless explicitly asked and supported by project rules.
+- An AO review approval is internal. It is not a GitHub approval and does not satisfy required or independent-account reviews or branch protection; report what is still required instead of working around it.
 
 %s`, projectName(project), project.ID, project.ID, project.ID, projectContextSection(project))
 }
@@ -325,12 +335,47 @@ Use `+"`ao report`"+` to persist meaningful progress for the active project orch
 - When you address PR/MR review comments, address each relevant thread, push the fix, and mark every thread you fixed as resolved when the platform supports it.
 - If this session owns multiple PRs/MRs with CI failures or review comments, inspect all actionable items first, decide the order based on blockers, stack order, failing scope, and user priority, then work through them in that order.
 - Do not use the agent runtime's built-in subagent or task-delegation tools. Complete the assigned task in this AO session only.
-- %s
+%s
 - For complex tasks, write a short implementation plan before editing. Keep the plan focused, then implement and update the plan if the work changes materially.
 
 %s
 
 %s`, taskSourceRules, parallelHelpRules, repoRules, projectContextSection(project))
+}
+
+// workerNativeReviewPrompt teaches a worker AO's native reviewer. The project
+// opt-in decides whether the worker requests it on its own when its PR is
+// ready, or checks first. Either way it must never stand in a separate worker
+// as the reviewer, and an AO approval is never presented as a GitHub approval.
+func workerNativeReviewPrompt(project promptProject, hasOrchestrator bool) string {
+	askWho := "the user"
+	if hasOrchestrator {
+		askWho = "the user or the orchestrator"
+	}
+	policy := fmt.Sprintf(`This project leaves starting a review to people:
+
+- Before running `+"`ao review trigger`"+`, ask %s whether to start an AO review of your PR, and run it once they agree. When they ask you to request one, run it.`, askWho)
+	if project.WorkersRequestReview {
+		policy = `This project asks workers to request it:
+
+- Once your PR is pushed, the checks you can run locally pass, and you consider it ready, run ` + "`ao review trigger`" + `. Right after opening a new PR, pass its URL: ` + "`ao review trigger --pr <url>`" + `.
+- The reviewer's findings arrive in this session as PR review comments. Address each one, push, and run ` + "`ao review trigger`" + ` again for the new head.
+- An approval adds no comments, so check ` + "`ao review ls`" + ` for the verdict before reporting the work done. If it shows the run failed or was cancelled, run ` + "`ao review trigger`" + ` again; nothing else will tell you.`
+	}
+	return `## AO Native Review
+
+AO has a built-in adversarial code reviewer for this session's PRs. It is an isolated AO reviewer agent, not another worker: it reviews the PR head in this workspace, posts its review on the PR with an inline comment for each change it requires, and AO forwards those comments to this session.
+
+` + policy + `
+
+How it works:
+
+- ` + "`ao review trigger`" + ` with no session argument reviews this session's open PR heads and turns on review-comment delivery for this session (` + "`--no-inject`" + ` leaves that setting alone).
+- A head that is already being reviewed, or already has a review, is not reviewed again: the command fails and says why. Push new commits first, or pass ` + "`--rerun`" + ` for a deliberate second pass on the same commit. If you just pushed and it says the head was already reviewed, wait a few seconds and run it again.
+- ` + "`--agent <harness>`" + `, ` + "`--model <id>`" + `, and ` + "`--effort <level>`" + ` choose a different reviewer for one pass; otherwise the project's reviewer is used. Reviewers with different agents can run at the same time (add ` + "`--rerun`" + ` while another is running).
+- Check results with ` + "`ao review ls`" + `; stop every running reviewer with ` + "`ao review cancel`" + `.
+- Never spawn, or ask the orchestrator to spawn, a separate worker session to review your PR, and do not review your own PR as a substitute for the native reviewer.
+- AO's review is internal. An AO approval is not a GitHub approval: it does not satisfy required or independent-account reviews or branch protection, and it never authorizes merging. Do not try to approve your own PR or work around branch protection; report what is still required to the human.`
 }
 
 func workerOrchestratorPrompt(orchestratorID string) string {

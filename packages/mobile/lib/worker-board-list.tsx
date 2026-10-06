@@ -121,7 +121,9 @@ export function WorkerBoardList({
 	const multipleHosts = hostStates.length > 1;
 	const projectNameFor = useCallback((session: DashboardSession) => {
 		const hostId = sessionHostId(session);
-		const name = projectNames.get(hostId ? hostedRowKey(hostId, session.projectId) : session.projectId) ?? session.projectId;
+		const name = session.projectId
+			? projectNames.get(hostId ? hostedRowKey(hostId, session.projectId) : session.projectId) ?? session.projectId
+			: "Standalone";
 		const hostName = "hostName" in session && typeof session.hostName === "string" ? session.hostName : undefined;
 		const offline = hostStates.find((host) => host.hostId === hostId)?.connection === "closed";
 		return multipleHosts && hostName ? `${name ? `${name} · ` : ""}${hostName}${offline ? " (offline)" : ""}` : name;

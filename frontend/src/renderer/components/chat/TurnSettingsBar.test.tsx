@@ -102,7 +102,7 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s model se
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(count);
 		if (count === 10) {
 			expect(screen.getByRole("searchbox", { name: "Search models" })).toBeInTheDocument();
-			expect(screen.getByText("Showing 10 of 10 matching models", { exact: true })).toBeInTheDocument();
+			expect(screen.queryByText("Showing 10 of 10 matching models", { exact: true })).not.toBeInTheDocument();
 		} else {
 			expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
 		}
@@ -142,10 +142,24 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s model se
 		await user.keyboard("Model 99");
 		expect(search).toHaveValue("Model 99");
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
-		await user.keyboard("{ArrowDown}");
-		expect(screen.getByRole("menuitemradio", { name: "Model 99" })).toHaveFocus();
+		expect(screen.getByRole("menuitemradio", { name: "Model 99" })).toHaveAttribute(
+			"data-search-active",
+			"true",
+		);
 		await user.keyboard("{Enter}");
 		expect(onChange).toHaveBeenCalledOnce();
+	});
+
+	it("does not change models when Enter is pressed before searching", async () => {
+		const { user, onChange, open } = setup();
+		await open();
+		if (path === "ACP standalone") {
+			await user.keyboard("{Escape}{Enter}");
+		}
+		const search = screen.getByRole("searchbox", { name: "Search models" });
+		expect(search).toHaveFocus();
+		await user.keyboard("{Enter}");
+		expect(onChange).not.toHaveBeenCalled();
 	});
 
 	it.each(["ArrowUp", "Shift+Tab"])("returns to the query with %s so it can be refined", async (key) => {
@@ -440,7 +454,7 @@ describe("ACP session config options", () => {
 		expect(screen.getByRole("menuitemradio", { name: "Claude Opus 4.8" })).toBeInTheDocument();
 		expect(screen.getByRole("menuitemradio", { name: "Claude Sonnet 4" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitemradio", { name: "GPT-5.3" })).not.toBeInTheDocument();
-		expect(screen.getByText("Showing 2 of 2 matching models", { exact: true })).toBeInTheDocument();
+		expect(screen.queryByText("Showing 2 of 2 matching models", { exact: true })).not.toBeInTheDocument();
 	});
 
 	it.each(["ao-plan-project-1", "agents/plan-reviewer", "my_plan_agent"])(
@@ -524,6 +538,11 @@ describe("ACP session config options", () => {
 		expect(within(tools).getByRole("button", { name: "Permission mode" })).toHaveTextContent(
 			"Bypass Permissions",
 		);
+		expect(
+			within(tools).getByRole("button", { name: "Model and reasoning effort for the next turn" })
+				.querySelector(".lucide-chevron-down"),
+		).toBeNull();
+		expect(within(tools).getByRole("button", { name: "Permission mode" }).querySelector(".lucide-chevron-down")).toBeNull();
 		expect(within(tools).queryByRole("button", { name: "Fast mode" })).not.toBeInTheDocument();
 		expect(within(tools).queryByRole("button", { name: "Agent" })).not.toBeInTheDocument();
 		expect(screen.queryByText("Default")).not.toBeInTheDocument();

@@ -41,6 +41,9 @@ type Review struct {
 	ControllerError        string                `json:"controllerError"`
 	CreatedAt              time.Time             `json:"createdAt"`
 	UpdatedAt              time.Time             `json:"updatedAt"`
+
+	// IsArchived retires the reviewer surface without deleting its history.
+	IsArchived bool `json:"-"`
 }
 
 // ReviewerInterfaceMode selects the durable UI surface for a reviewer.
@@ -72,9 +75,9 @@ type ReviewRun struct {
 	// legacy/single-run delivery.
 	BatchID string          `json:"batchId"`
 	Harness ReviewerHarness `json:"harness"`
-	// TriggerSource records whether this pass was requested by a user or by the
-	// daemon auto-review coordinator.
-	TriggerSource ReviewTriggerSource `json:"triggerSource" enum:"manual,auto"`
+	// TriggerSource records whether this pass was requested by a user, by an
+	// AO agent session through the CLI, or by the daemon auto-review coordinator.
+	TriggerSource ReviewTriggerSource `json:"triggerSource" enum:"manual,agent,auto"`
 	PRURL         string              `json:"prUrl"`
 	// TargetSHA is the PR head commit this pass reviewed.
 	TargetSHA string          `json:"targetSha"`
@@ -102,6 +105,9 @@ type ReviewTriggerSource string
 const (
 	// ReviewTriggerManual marks a user-initiated review pass.
 	ReviewTriggerManual ReviewTriggerSource = "manual"
+	// ReviewTriggerAgent marks a pass an AO agent session (a worker reviewing
+	// its own PR, or an orchestrator) requested through `ao review trigger`.
+	ReviewTriggerAgent ReviewTriggerSource = "agent"
 	// ReviewTriggerAuto marks a daemon-initiated review pass.
 	ReviewTriggerAuto ReviewTriggerSource = "auto"
 )

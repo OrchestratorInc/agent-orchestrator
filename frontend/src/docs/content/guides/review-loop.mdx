@@ -22,7 +22,7 @@ If feedback does not arrive, confirm the PR is claimed by this worker, the repos
 
 ## AO reviewer agents
 
-Select reviewers independently in project settings; the [agent catalog](/plugins/agents) distinguishes reviewer support from worker and Chat support. Without an explicit reviewer, AO inherits Claude Code, Codex, OpenCode, Muse, or Kimchi from the worker; other workers fall back to Claude Code. Other reviewer harnesses must be selected explicitly.
+Select reviewers independently in project settings; the [agent catalog](/plugins/agents) distinguishes reviewer support from worker and Chat support. Without an explicit reviewer, AO reviews with the project's default worker agent and its model when that agent is Claude Code, Codex, OpenCode, Muse, or Kimchi; otherwise it inherits one of those from the worker, or falls back to Claude Code. Other reviewer harnesses must be selected explicitly.
 
 From the desktop, open the worker and use the Reviews section in the inspector. From the CLI:
 
@@ -33,6 +33,14 @@ ao review cancel <worker-session-id>
 ```
 
 Reviewer runs are separate from worker sessions. Their verdict and body are recorded against the worker.
+
+### Reviews requested by agents
+
+A worker can request a review of its own PR: inside the worker, `ao review trigger` reviews the calling session. An orchestrator runs `ao review trigger <worker-session-id>` instead of spawning a worker to review. These runs are labelled **Requested by agent** in the inspector.
+
+- The project setting **Workers request AO review** (`workersRequestReview`) tells new workers to request a review once their PR is ready and again after each fix. When it is off, workers ask the user or orchestrator first.
+- A head that already has a review, or a review still running, is not reviewed again; the command says so. `--rerun` reviews the same commit again, and with a different `--agent` it adds a reviewer that runs alongside the first. Each live reviewer can be opened from the inspector.
+- The command turns on the session's review auto-inject unless `--no-inject` is passed. The reviewer posts an inline comment for each change it requires; with auto-inject on, AO forwards those comments to the worker like any other review comments. Optional suggestions stay in the review summary. An approval adds no comments, so the worker checks `ao review ls` for the verdict. AO's approval is never a GitHub approval.
 
 In the inspector, choose the reviewer harness (and offered model/mode), start the run, then open its Chat or terminal surface. Read the result, then use **Send to worker agent** in the review actions to send its findings to the worker. A reviewer harness can have different permissions from the worker; an experimental reviewer is not automatically sandboxed. If the trigger is unavailable, check the linked PR, reviewer readiness, and the reason shown by the UI. `ao review ls` shows the run state; `ao review cancel` stops a run that should not continue.
 

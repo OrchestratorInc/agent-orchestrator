@@ -1,5 +1,5 @@
 import userEvent from "@testing-library/user-event";
-import { render as rtlRender, screen } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -188,6 +188,9 @@ describe("provider state chrome", () => {
 			});
 		}
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot} />);
+		for (const trigger of screen.getAllByRole("button", { name: /Worked for/ })) {
+			fireEvent.click(trigger);
+		}
 		expect(screen.getByRole("alert")).toHaveTextContent("Provider authentication needs attention");
 		expect(screen.getByRole("alert")).toHaveTextContent("login");
 		expect(screen.getByRole("alert")).not.toHaveTextContent("Provider access denied");
@@ -266,6 +269,9 @@ describe("model reroute", () => {
 				onChooseSettings={vi.fn()}
 			/>,
 		);
+		for (const trigger of screen.getAllByRole("button", { name: /Worked for/ })) {
+			fireEvent.click(trigger);
+		}
 		expect(
 			screen.getByText(/The requested model is at capacity for this account tier/),
 		).toBeInTheDocument();

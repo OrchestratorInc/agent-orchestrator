@@ -85,6 +85,7 @@ type createSessionRequest struct {
 	// id, e.g. "anthropic/claude-opus-4-8" for opencode). Optional: empty uses
 	// the harness default.
 	Model                       string   `json:"model,omitempty"`
+	ReasoningEffort             string   `json:"reasoningEffort,omitempty"`
 	DeniedCommands              []string `json:"deniedCommands,omitempty"`
 	SandboxProviderConnectionID string   `json:"sandboxProviderConnectionId,omitempty"`
 	// Provider selects which configured sandbox provider runs this session. It
@@ -581,6 +582,16 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	// a later config change cannot disturb a session already in flight.
 	plan, err := s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts, coderOverride)
 	if err != nil {
+		// A bring-your-own-Coder org with no org-default template must pick one per
+		// project; that is user-fixable, so surface it as a clear 422 rather than a
+		// deployment-misconfiguration 500.
+		if errors.Is(err, sandbox.ErrCoderTemplateRequired) {
+			writeError(
+				w, r, http.StatusUnprocessableEntity, "coder_template_required",
+				"Choose a Coder template for this project before starting a session.",
+			)
+			return
+		}
 		s.logger.Error("resolve sandbox provisioning plan", "error", err, "request_id", requestID(r))
 		writeError(
 			w, r, http.StatusInternalServerError, "internal_error",
@@ -602,6 +613,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			Prompt:              request.Prompt,
 			Mode:                request.Mode,
 			Model:               request.Model,
+			ReasoningEffort:     request.ReasoningEffort,
 			DeniedCommands:      request.DeniedCommands,
 			Provider:            plan.Provider,
 			SandboxConnectionID: request.SandboxProviderConnectionID,
@@ -1087,6 +1099,9 @@ func validProjectUpdate(request updateProjectRequest) bool {
 }
 
 func validSessionInput(request createSessionRequest) bool {
+	if validateChatTurnSettings("", request.ReasoningEffort, "", "") != nil {
+		return false
+	}
 	if requireUUID(request.ProjectID, "projectId") != nil ||
 		(request.Kind != "worker" && request.Kind != "orchestrator") ||
 		(request.Mode != "read-only" && request.Mode != "standard" && request.Mode != "trusted") ||

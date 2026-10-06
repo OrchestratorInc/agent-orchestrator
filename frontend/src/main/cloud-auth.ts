@@ -1,5 +1,6 @@
 import { createWorkOS, type User } from "@workos-inc/node";
 import { app, dialog, ipcMain, safeStorage, shell } from "electron";
+import { createHash } from "node:crypto";
 import {
   chmod,
   mkdir,
@@ -98,6 +99,9 @@ export interface StoredSession extends CloudAccount {
 
 export interface AuthStore {
   session: StoredSession | null;
+  // Digest of the verified callback, retained with its session so a browser
+  // return button can be clicked again without replaying a single-use code.
+  completedCallback?: string;
   pkce: {
     codeVerifier: string;
     state: string;
@@ -463,28 +467,46 @@ async function completeCloudSignIn(
   if (!workos) throw new Error("WorkOS is not configured.");
   if (!code || !callbackState) throw new Error("WorkOS callback is incomplete.");
 
-  const store = await readAuthStore(dataDir);
-  if (!store.pkce) throw new Error("No WorkOS sign-in is pending.");
-  if (store.pkce.expiresAt < Date.now()) {
-    await writeAuthStore(dataDir, { ...store, pkce: null });
-    throw new Error("The WorkOS sign-in request expired.");
-  }
-  if (callbackState !== store.pkce.state) {
-    throw new Error("WorkOS callback state did not match.");
-  }
+  const callbackDigest = createHash("sha256")
+    .update(JSON.stringify([code, callbackState]))
+    .digest("hex");
+  return withAuthMutation(dataDir, async () => {
+    const store = await readAuthStore(dataDir);
+    if (
+      store.session &&
+      !isLocalSession(store.session) &&
+      (!store.pkce || store.completedCallback === callbackDigest)
+    ) {
+      // With no login pending, returning to an already signed-in app cannot
+      // change its account. This also covers sessions saved before deduping.
+      return publicAccount(store.session);
+    }
+    if (!store.pkce) throw new Error("No WorkOS sign-in is pending.");
+    if (store.pkce.expiresAt < Date.now()) {
+      await writeAuthStore(dataDir, { ...store, pkce: null });
+      throw new Error("The WorkOS sign-in request expired.");
+    }
+    if (callbackState !== store.pkce.state) {
+      throw new Error("WorkOS callback state did not match.");
+    }
 
-  const result = await workos.userManagement.authenticateWithCode({
-    clientId: CLIENT_ID,
-    code,
-    codeVerifier: store.pkce.codeVerifier,
+    const result = await workos!.userManagement.authenticateWithCode({
+      clientId: CLIENT_ID,
+      code,
+      codeVerifier: store.pkce.codeVerifier,
+    });
+    const session = toStoredSession(
+      result.accessToken,
+      result.refreshToken,
+      result.user,
+    );
+    await writeAuthStore(dataDir, {
+      session,
+      pkce: null,
+      completedCallback: callbackDigest,
+    });
+    return publicAccount(session);
   });
-  const session = toStoredSession(
-    result.accessToken,
-    result.refreshToken,
-    result.user,
-  );
-  await writeAuthStore(dataDir, { session, pkce: null });
-  return publicAccount(session);
 }
 
 export async function handleCloudDeepLink(

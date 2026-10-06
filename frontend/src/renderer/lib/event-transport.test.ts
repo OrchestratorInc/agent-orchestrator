@@ -451,6 +451,37 @@ describe("createEventTransport", () => {
 		}
 	});
 
+	// An agent can start a review with `ao review trigger`, and a reviewer can
+	// finish one, without this window asking. The session's reviews must refresh
+	// or the inspector keeps showing the previous verdict.
+	it("refreshes the session's reviews when a review run starts or changes", () => {
+		vi.useFakeTimers();
+		try {
+			for (const type of ["review_run_created", "review_run_updated"]) {
+				const queryClient = fakeQueryClient();
+				const disconnect = createEventTransport(queryClient).connect();
+				cdcSources().at(-1)!.emit(
+					type,
+					JSON.stringify({
+						seq: 7,
+						projectId: "proj-1",
+						sessionId: "worker-1",
+						type,
+						payload: { id: "run-1", reviewId: "review-1", sessionId: "worker-1", pr: "https://github.com/o/r/pull/1" },
+						createdAt: "2026-10-05T06:10:36Z",
+					}),
+				);
+				vi.advanceTimersByTime(1000);
+				expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+					queryKey: ["session-reviews", "worker-1"],
+				}, { cancelRefetch: false });
+				disconnect();
+			}
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("invalidates editor-handoff readiness for a durable session update", () => {
 		vi.useFakeTimers();
 		try {

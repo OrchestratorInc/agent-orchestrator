@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DashboardSession } from "./api";
 import {
 	ALL_PROJECTS,
+	STANDALONE_PROJECT,
 	NO_PROJECTS_KNOWN,
 	activeProjectLabel,
 	filteredEmptyCopy,
@@ -65,6 +66,10 @@ describe("resolveActiveProject", () => {
 });
 
 describe("resolveSpawnProject", () => {
+	it("keeps an explicit standalone choice when the project list changes", () => {
+		expect(resolveSpawnProject(STANDALONE_PROJECT, "scratch", "ao", listed, true)).toBe(STANDALONE_PROJECT);
+		expect(resolveSpawnProject(STANDALONE_PROJECT, undefined, ALL_PROJECTS, [], true)).toBe(STANDALONE_PROJECT);
+	});
 	it("drops a selected project after the daemon confirms it was deleted", () => {
 		expect(resolveSpawnProject("removed", undefined, ALL_PROJECTS, listed, true)).toBeNull();
 	});

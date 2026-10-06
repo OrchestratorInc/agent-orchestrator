@@ -54,7 +54,7 @@ func (c *ConversationsController) steerOrSend(w http.ResponseWriter, r *http.Req
 		domain.SessionID(chi.URLParam(r, "sessionId")),
 		ports.ChatUserMessage{
 			Text: req.Text, Content: content, ClientMessageID: req.ClientMessageID,
-			Origin: domain.MessageOriginHuman,
+			SenderSessionID: req.SenderSessionID, Origin: domain.MessageOriginHuman,
 		},
 		req.RecoverOnly,
 	)
@@ -121,6 +121,7 @@ func (c *ConversationsController) steer(w http.ResponseWriter, r *http.Request) 
 			Text:            req.Text,
 			Content:         content,
 			ClientMessageID: req.ClientMessageID,
+			SenderSessionID: req.SenderSessionID,
 			Origin:          domain.MessageOriginHuman,
 		})
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
@@ -40,6 +41,8 @@ type fakeReviewService struct {
 	rereviewSession   domain.SessionID
 	rereviewPRURL     string
 	rereviewReviewer  string
+	triggerRequest    reviewsvc.TriggerRequest
+	autoInjectEnabled bool
 	rereviewErr       error
 	resolveSession    domain.SessionID
 	resolvePRURL      string
@@ -49,7 +52,7 @@ type fakeReviewService struct {
 
 func (*fakeReviewService) RecoverChatReviewers(context.Context) error { return nil }
 
-func (f *fakeReviewService) Trigger(
+func (f *fakeReviewService) runTrigger(
 	_ context.Context,
 	_ domain.SessionID,
 	harness domain.ReviewerHarness,
@@ -66,15 +69,15 @@ func (f *fakeReviewService) Trigger(
 	return reviewcore.TriggerResult{Run: domain.ReviewRun{ID: "run-1"}, Created: true}, nil
 }
 
-func (f *fakeReviewService) TriggerWithMode(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig, mode domain.ReviewerInterfaceMode) (reviewcore.TriggerResult, error) {
-	f.triggeredMode = mode
-	return f.Trigger(ctx, workerID, harness, config)
-}
-
-func (f *fakeReviewService) TriggerWithOptions(ctx context.Context, workerID domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
-	f.triggeredRerun = opts.Rerun
-	f.triggeredMode = opts.InterfaceMode
-	return f.Trigger(ctx, workerID, opts.Harness, opts.Config)
+func (f *fakeReviewService) TriggerRequested(ctx context.Context, workerID domain.SessionID, req reviewsvc.TriggerRequest) (reviewsvc.TriggerOutcome, error) {
+	f.triggerRequest = req
+	f.triggeredRerun = req.Rerun
+	f.triggeredMode = req.InterfaceMode
+	res, err := f.runTrigger(ctx, workerID, req.Harness, req.Config)
+	if err != nil {
+		return reviewsvc.TriggerOutcome{}, err
+	}
+	return reviewsvc.TriggerOutcome{TriggerResult: res, AutoInjectEnabled: req.EnableAutoInject && f.autoInjectEnabled}, nil
 }
 
 func (f *fakeReviewService) RequestRereview(_ context.Context, workerID domain.SessionID, prURL, reviewer string) error {
@@ -116,6 +119,11 @@ func (f *fakeReviewService) TerminateReviewer(context.Context, domain.SessionID,
 	f.killed = true
 	f.list.ReviewerHandleID = ""
 	return nil
+}
+
+func (f *fakeReviewService) ArchiveReviewer(ctx context.Context, id domain.SessionID) error {
+	f.list.ReviewerSurface = domain.ReviewerSurface{}
+	return f.TerminateReviewer(ctx, id, "")
 }
 
 func (f *fakeReviewService) TeardownReviewerTerminal(context.Context, domain.SessionID) error {
@@ -370,10 +378,11 @@ func TestReviewsCancelIncludesReviewStates(t *testing.T) {
 	}
 }
 
-func TestReviewsKillClearsReviewerHandle(t *testing.T) {
+func TestReviewsKillArchivesReviewerSurface(t *testing.T) {
 	svc := &fakeReviewService{list: reviewcore.SessionReviews{
 		ReviewerHandleID: "review-mer-1",
 		ReviewerHarness:  domain.ReviewerCodex,
+		ReviewerSurface:  domain.ReviewerSurface{Mode: domain.ReviewerInterfaceChat, ReviewID: "review-1", Harness: domain.ReviewerCodex},
 		Reviews:          []reviewcore.PRReviewState{{PRURL: "https://github.com/o/r/pull/1", PRNumber: 1, TargetSHA: "sha1", Status: reviewcore.ReviewStateNeedsReview}},
 		Runs:             []domain.ReviewRun{{ID: "run-1", SessionID: "mer-1", Harness: domain.ReviewerCodex}},
 	}}
@@ -385,12 +394,17 @@ func TestReviewsKillClearsReviewerHandle(t *testing.T) {
 		t.Fatalf("status = %d body=%s", status, body)
 	}
 	if !svc.killed {
-		t.Fatal("TerminateReviewer was not called")
+		t.Fatal("ArchiveReviewer was not called")
 	}
 	for _, want := range []string{`"reviewerHandleId":""`, `"reviews"`, `"runs"`, `"run-1"`} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("body missing %s: %s", want, body)
 		}
+	}
+
+	refreshed, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/mer-1/reviews", "")
+	if status != http.StatusOK || strings.Contains(string(refreshed), `"reviewerSurface"`) || !strings.Contains(string(refreshed), `"run-1"`) {
+		t.Fatalf("archived refresh: %d %s", status, refreshed)
 	}
 }
 
@@ -465,5 +479,71 @@ func TestReviewsTriggerForwardsExplicitRerun(t *testing.T) {
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", `{"rerun":true,"harness":"codex","interfaceMode":"chat","agentConfig":{"model":"test-model"}}`)
 	if status != http.StatusCreated || !svc.triggeredRerun || svc.triggeredHarness != domain.ReviewerCodex || svc.triggeredMode != domain.ReviewerInterfaceChat || svc.triggeredConfig.Model != "test-model" {
 		t.Fatalf("forwarding: status=%d service=%+v body=%s", status, svc, body)
+	}
+}
+
+func TestReviewsTriggerForwardsAgentPolicyAndReportsAutoInject(t *testing.T) {
+	svc := &fakeReviewService{autoInjectEnabled: true}
+	srv := newReviewTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", `{"harness":"codex","agentConfig":{"model":"gpt-5.5"},"source":"agent","rejectReviewedHead":true,"enableAutoInject":true,"prUrl":"https://github.com/o/r/pull/3"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", status, body)
+	}
+	req := svc.triggerRequest
+	if req.Harness != domain.ReviewerCodex || req.Config.Model != "gpt-5.5" || req.Source != domain.ReviewTriggerAgent || !req.RejectReviewedHead || req.Rerun || !req.EnableAutoInject || req.PRURL != "https://github.com/o/r/pull/3" {
+		t.Fatalf("forwarded request = %+v", req)
+	}
+	var got controllers.TriggerReviewResponse
+	mustJSON(t, body, &got)
+	if !got.Created || !got.AutoInjectEnabled {
+		t.Fatalf("response = %+v, want created with auto-inject enabled", got)
+	}
+}
+
+func TestReviewsTriggerMapsSameCommitConflictsTo409(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		code string
+	}{
+		{fmt.Errorf("%w: codex is already reviewing PR #1 head abc", reviewcore.ErrReviewAlreadyRunning), "REVIEW_ALREADY_RUNNING"},
+		{fmt.Errorf("%w: PR #1 head abc was already reviewed (approved); push new commits, or pass --rerun", reviewcore.ErrHeadAlreadyReviewed), "REVIEW_HEAD_ALREADY_REVIEWED"},
+		{fmt.Errorf("%w: PR #1 head abc belongs to active session mer-2", reviewcore.ErrPROwnedElsewhere), "REVIEW_PR_OWNED_BY_OTHER_SESSION"},
+	} {
+		srv := newReviewTestServer(t, &fakeReviewService{triggerErr: tc.err})
+		body, status, headers := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", `{"rejectReviewedHead":true}`)
+		assertJSON(t, headers)
+		assertErrorCode(t, body, status, http.StatusConflict, tc.code)
+		var got errorBody
+		mustJSON(t, body, &got)
+		if !strings.Contains(got.Message, "PR #1 head abc") {
+			t.Fatalf("message = %q, want the actionable explanation", got.Message)
+		}
+	}
+}
+
+func TestReviewsListIncludesEveryActiveReviewer(t *testing.T) {
+	svc := &fakeReviewService{list: reviewcore.SessionReviews{
+		ActiveReviewers: []domain.ReviewerSurface{
+			{Mode: domain.ReviewerInterfaceTUI, ReviewID: "rev-claude", Harness: domain.ReviewerClaudeCode, HandleID: "claude-pane"},
+			{Mode: domain.ReviewerInterfaceTUI, ReviewID: "rev-codex", Harness: domain.ReviewerCodex, HandleID: "codex-pane"},
+		},
+	}}
+	srv := newReviewTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/mer-1/reviews", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d body=%s", status, body)
+	}
+	var got controllers.ListReviewsResponse
+	mustJSON(t, body, &got)
+	if len(got.ActiveReviewers) != 2 || got.ActiveReviewers[1].HandleID != "codex-pane" {
+		t.Fatalf("activeReviewers = %+v, want both reviewers", got.ActiveReviewers)
+	}
+
+	empty := newReviewTestServer(t, &fakeReviewService{})
+	body, _, _ = doRequest(t, empty, "GET", "/api/v1/sessions/mer-1/reviews", "")
+	if !strings.Contains(string(body), `"activeReviewers":[]`) {
+		t.Fatalf("body = %s, want an empty activeReviewers array, never null", body)
 	}
 }

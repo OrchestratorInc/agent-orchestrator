@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"reflect"
 	"runtime"
 	"testing"
 	"time"
@@ -109,7 +110,7 @@ func TestHerdrSocketPersistsNativeMetadataAndFencesRuntimeGenerations(t *testing
 	before := store.session("mer-1")
 	report("mer-1", "launch-1", "pane.report_agent", "state", "blocked")
 	report("mer-1", "launch-1", "pane.report_agent_session", "agent_session_id", "stale-native")
-	if got := store.session("mer-1"); got != before {
+	if got := store.session("mer-1"); !reflect.DeepEqual(got, before) {
 		t.Fatalf("old-generation report mutated restored session: %+v", got)
 	}
 	report("mer-2", "launch-2", "pane.report_agent", "state", "blocked")
@@ -119,7 +120,7 @@ func TestHerdrSocketPersistsNativeMetadataAndFencesRuntimeGenerations(t *testing
 	before.Harness = domain.HarnessCodex
 	store.setSession(before)
 	report("mer-1", "launch-2", "pane.report_agent", "state", "blocked")
-	if got := store.session("mer-1"); got != before {
+	if got := store.session("mer-1"); !reflect.DeepEqual(got, before) {
 		t.Fatalf("report crossed harness identity: %+v", got)
 	}
 }

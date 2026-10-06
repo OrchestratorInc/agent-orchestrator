@@ -231,6 +231,42 @@ type SessionRecord struct {
 	// the row rather than discarded with it, because the user is already looking
 	// at the session by the time the start can fail.
 	ProvisionError string `json:"provisionError,omitempty"`
+	// ProvisionSteps is the checklist an asynchronous Chat start works through,
+	// in order. It is written only by that background start, at each stage
+	// boundary, and kept after the start settles. A step still running when the
+	// session reads ProvisionState failed is the step that failed.
+	ProvisionSteps []SessionProvisionStep `json:"provisionSteps,omitempty"`
+}
+
+// SessionProvisionStepID names one stage of an asynchronous Chat start.
+type SessionProvisionStepID string
+
+// Start-up stages, in the order a start runs them. A start includes only the
+// stages it will actually run: a prepared worktree skips the fetch, and setup
+// appears only when the project has post-create commands.
+const (
+	SessionProvisionStepFetch    SessionProvisionStepID = "fetch"
+	SessionProvisionStepWorktree SessionProvisionStepID = "worktree"
+	SessionProvisionStepSetup    SessionProvisionStepID = "setup"
+	SessionProvisionStepAgent    SessionProvisionStepID = "agent"
+)
+
+// SessionProvisionStepStatus is how far one start-up stage has got.
+type SessionProvisionStepStatus string
+
+// Start-up stage statuses.
+const (
+	SessionProvisionStepPending SessionProvisionStepStatus = "pending"
+	SessionProvisionStepRunning SessionProvisionStepStatus = "running"
+	SessionProvisionStepDone    SessionProvisionStepStatus = "done"
+)
+
+// SessionProvisionStep is one row of a start's checklist.
+type SessionProvisionStep struct {
+	ID        SessionProvisionStepID     `json:"id" enum:"fetch,worktree,setup,agent"`
+	Status    SessionProvisionStepStatus `json:"status" enum:"pending,running,done"`
+	StartedAt *time.Time                 `json:"startedAt,omitempty"`
+	EndedAt   *time.Time                 `json:"endedAt,omitempty"`
 }
 
 // SessionProvisionState is a session's start-up progress.

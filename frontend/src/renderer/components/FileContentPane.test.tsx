@@ -8,10 +8,14 @@ import { FileContentPane } from "./FileContentPane";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { getMock, putMock } = vi.hoisted(() => ({ getMock: vi.fn(), putMock: vi.fn() }));
+const { getMock, putMock, highlightReady } = vi.hoisted(() => ({
+	getMock: vi.fn(),
+	putMock: vi.fn(),
+	highlightReady: { value: true },
+}));
 
 vi.mock("../hooks/usePierreFileHighlight", () => ({
-	usePierreFileHighlightReady: () => true,
+	usePierreFileHighlightReady: () => highlightReady.value,
 }));
 
 vi.mock("../lib/api-client", () => ({
@@ -24,7 +28,9 @@ vi.mock("../lib/api-client", () => ({
 }));
 
 vi.mock("./ReadOnlyFileView", () => ({
-	ReadOnlyFileView: ({ detail, editing, onEditChange }: { detail: { content: string; path: string }; editing?: boolean; onEditChange?: (content: string) => void }) => editing ? (
+	ReadOnlyFileView: ({ detail, editing, onEditChange }: { detail: { content: string; path: string; imageMediaType?: string }; editing?: boolean; onEditChange?: (content: string) => void }) => detail.imageMediaType ? (
+		<img alt={detail.path} src="/api/v1/sessions/sess-1/workspace/file/blob" />
+	) : editing ? (
 		<textarea
 			aria-label={`Edit ${detail.path}`}
 			defaultValue={detail.content}
@@ -46,6 +52,7 @@ describe("FileContentPane", () => {
 	beforeEach(() => {
 		getMock.mockReset();
 		putMock.mockReset();
+		highlightReady.value = true;
 		useUiStore.setState({ inspectorSessions: {} });
 	});
 
@@ -103,6 +110,33 @@ describe("FileContentPane", () => {
 		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="README.md" sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByText("hello")).toBeInTheDocument();
+	});
+
+	it("renders an image without waiting for syntax highlighting", async () => {
+		highlightReady.value = false;
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1",
+				path: "assets/logo.png",
+				status: "unmodified",
+				additions: 0,
+				deletions: 0,
+				size: 128,
+				binary: true,
+				imageMediaType: "image/png",
+				deleted: false,
+				content: "",
+				contentTruncated: true,
+				diff: "",
+				diffTruncated: false,
+			},
+		});
+
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="assets/logo.png" sessionId="sess-1" split={false} />);
+
+		expect(await screen.findByRole("img", { name: "assets/logo.png" })).toBeInTheDocument();
+		expect(screen.queryByText("Loading files...")).not.toBeInTheDocument();
+		expect(getMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows the filename instead of a redundant File tab for an untouched non-Markdown file", async () => {

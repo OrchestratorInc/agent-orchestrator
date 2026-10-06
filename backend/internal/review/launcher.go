@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -55,7 +56,7 @@ type Launcher interface {
 	// Reusable reports whether the harness accepts another review task in its
 	// existing TUI. Reviewers with launch-fixed context return false.
 	Reusable(harness domain.ReviewerHarness) bool
-	// Cancel interrupts a running reviewer pane while keeping the terminal alive.
+	// Cancel interrupts reviewer work while keeping its Chat or terminal alive.
 	Cancel(ctx context.Context, handleID string, harness domain.ReviewerHarness) error
 	// Destroy tears down a reviewer pane entirely. This is used when the owning
 	// worker session itself is torn down, not for user-facing review cancellation.
@@ -70,6 +71,7 @@ type LaunchSpec struct {
 	LaunchID        string
 	WorkerID        domain.SessionID
 	ProjectID       domain.ProjectID
+	ProjectEnv      map[string]string
 	Harness         domain.ReviewerHarness
 	AgentConfig     domain.AgentConfig
 	WorkspacePath   string
@@ -501,7 +503,7 @@ func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, 
 		providerID, err = l.chat.StartReviewChat(ctx, start)
 	}
 	if err != nil {
-		return LaunchResult{}, err
+		return LaunchResult{}, agentlaunch.RedactError(err, spec.ProjectEnv)
 	}
 	return LaunchResult{HandleID: reviewerChatHandlePrefix + spec.ReviewSessionID, LaunchID: strings.TrimSpace(spec.LaunchID), AgentSessionID: providerID}, nil
 }
@@ -581,7 +583,7 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 		Env:           env,
 	})
 	if err != nil {
-		return LaunchResult{}, fmt.Errorf("reviewer runtime: %w", err)
+		return LaunchResult{}, fmt.Errorf("reviewer runtime: %w", agentlaunch.RedactError(err, spec.ProjectEnv))
 	}
 	if cmd.InitialMessage != "" && !spec.DeferInitialMessage {
 		if err := l.waitForPromptReadiness(ctx, reviewer, handle); err != nil {
@@ -659,10 +661,7 @@ func outputContainsAny(output string, patterns []string) bool {
 }
 
 func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []string, base map[string]string) map[string]string {
-	env := make(map[string]string, len(base)+3)
-	for k, v := range base {
-		env[k] = v
-	}
+	env := agentlaunch.MergeEnv(spec.ProjectEnv, base)
 	delete(env, sessionmanager.EnvSessionID)
 	env["AO_REVIEW_SESSION_ID"] = spec.ReviewSessionID
 	env["AO_REVIEW_WORKER_SESSION_ID"] = string(spec.WorkerID)
@@ -808,9 +807,9 @@ func (l *agentLauncher) Cancel(ctx context.Context, handleID string, harness dom
 		return nil
 	}
 	if reviewID, ok := reviewerChatID(handleID); ok && l.chat != nil {
-		// A cancelled review must not leave its Chat controller accepting work or
-		// its in-flight turn looking active. The next trigger starts a fresh one.
-		return l.chat.StopReviewChat(ctx, reviewID)
+		// Stop review cancels the turn, just like Stop in the Chat composer.
+		// Keep the controller and conversation usable; Archive owns teardown.
+		return l.chat.InterruptReviewChat(ctx, reviewID)
 	}
 	reviewer, ok := l.reviewers.Reviewer(harness)
 	if !ok {

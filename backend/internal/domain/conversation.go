@@ -644,11 +644,16 @@ type ConversationMessage struct {
 	ProviderItemID string `json:"providerItemId,omitempty"`
 	// ClientMessageID is the caller-supplied idempotency key for user messages.
 	// A retry carrying the same key must not create a second provider turn.
-	ClientMessageID     string    `json:"clientMessageId,omitempty"`
-	ClientPayloadHash   string    `json:"-"`
-	DeliveryContentJSON string    `json:"-"`
-	CreatedAt           time.Time `json:"createdAt"`
-	UpdatedAt           time.Time `json:"updatedAt"`
+	ClientMessageID     string `json:"clientMessageId,omitempty"`
+	ClientPayloadHash   string `json:"-"`
+	DeliveryContentJSON string `json:"-"`
+	// Sender metadata is presentation data for automation-origin messages. The
+	// display name is intentionally a send-time snapshot; the session id is stable.
+	SenderSessionID   string    `json:"senderSessionId,omitempty"`
+	SenderProjectID   string    `json:"senderProjectId,omitempty"`
+	SenderDisplayName string    `json:"senderDisplayName,omitempty"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
 }
 
 // ConversationActivity is one non-message timeline entry: a command, a diff, a

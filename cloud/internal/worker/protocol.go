@@ -193,6 +193,7 @@ type ChatModel struct {
 }
 
 type ChatModelsResponse struct {
+	Modes           []string    `json:"modes,omitempty"`
 	Models          []ChatModel `json:"models"`
 	Model           string      `json:"model,omitempty"`
 	ReasoningEffort string      `json:"reasoningEffort,omitempty"`

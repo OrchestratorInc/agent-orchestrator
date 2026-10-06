@@ -205,6 +205,30 @@ func (s *Store) SetSessionProvisionState(
 	return rows > 0, nil
 }
 
+// SetSessionProvisionSteps publishes an asynchronous Chat start's checklist. Like
+// SetSessionProvisionState it writes only its own column.
+func (s *Store) SetSessionProvisionSteps(
+	ctx context.Context,
+	id domain.SessionID,
+	steps []domain.SessionProvisionStep,
+	now time.Time,
+) error {
+	raw, err := json.Marshal(steps)
+	if err != nil {
+		return fmt.Errorf("encode provision steps for %s: %w", id, err)
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if _, err := s.qw.SetSessionProvisionSteps(ctx, gen.SetSessionProvisionStepsParams{
+		ProvisionSteps: string(raw),
+		UpdatedAt:      now,
+		ID:             id,
+	}); err != nil {
+		return fmt.Errorf("set provision steps for %s: %w", id, err)
+	}
+	return nil
+}
+
 // PromoteTaskPreparation makes a hidden speculative row visible without
 // touching workspace facts that may be published by the preparation goroutine.
 func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error) {
@@ -788,8 +812,23 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		UpdatedAt:         row.UpdatedAt,
 		ProvisionState:    row.ProvisionState.WithDefault(),
 		ProvisionError:    row.ProvisionError,
+		ProvisionSteps:    decodeProvisionSteps(row.ProvisionSteps),
 		IsTaskPreparation: row.IsTaskPreparation,
 	}
+}
+
+// decodeProvisionSteps reads the start-up checklist. A malformed value reads as
+// no checklist: it only drives display, and ProvisionState stays the start's
+// authoritative outcome.
+func decodeProvisionSteps(raw string) []domain.SessionProvisionStep {
+	if raw == "" {
+		return nil
+	}
+	var steps []domain.SessionProvisionStep
+	if err := json.Unmarshal([]byte(raw), &steps); err != nil {
+		return nil
+	}
+	return steps
 }
 
 func getSessionRowToRecord(row gen.GetSessionRow) domain.SessionRecord {

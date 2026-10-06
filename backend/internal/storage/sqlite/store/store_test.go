@@ -2266,3 +2266,54 @@ func TestClaimChatControllerGenerationPreservesRecency(t *testing.T) {
 		t.Fatalf("claim changed user-visible facts: before=%+v after=%+v", before, after)
 	}
 }
+
+// The chat surface refetches a session on session_updated, so publishing a
+// start's checklist must persist it and fire that event exactly when it changes.
+func TestSessionProvisionStepsRoundTripAndCDC(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.ProvisionSteps) != 0 {
+		t.Fatalf("new session steps = %+v, want none", r.ProvisionSteps)
+	}
+
+	base, _ := s.LatestSeq(ctx)
+	at := r.UpdatedAt.Add(time.Second)
+	steps := []domain.SessionProvisionStep{
+		{ID: domain.SessionProvisionStepWorktree, Status: domain.SessionProvisionStepDone, StartedAt: &at, EndedAt: &at},
+		{ID: domain.SessionProvisionStepAgent, Status: domain.SessionProvisionStepRunning, StartedAt: &at},
+	}
+	if err := s.SetSessionProvisionSteps(ctx, r.ID, steps, at); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := s.GetSession(ctx, r.ID)
+	if err != nil || !found {
+		t.Fatalf("get session: found=%v err=%v", found, err)
+	}
+	if len(got.ProvisionSteps) != 2 ||
+		got.ProvisionSteps[0].ID != domain.SessionProvisionStepWorktree || got.ProvisionSteps[0].Status != domain.SessionProvisionStepDone ||
+		got.ProvisionSteps[0].EndedAt == nil || !got.ProvisionSteps[0].EndedAt.Equal(at) ||
+		got.ProvisionSteps[1].ID != domain.SessionProvisionStepAgent || got.ProvisionSteps[1].Status != domain.SessionProvisionStepRunning ||
+		got.ProvisionSteps[1].EndedAt != nil {
+		t.Fatalf("steps did not round-trip: %+v", got.ProvisionSteps)
+	}
+	evs, err := s.EventsAfter(ctx, base, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || string(evs[0].Type) != "session_updated" {
+		t.Fatalf("checklist events = %+v, want one session_updated", evs)
+	}
+
+	base, _ = s.LatestSeq(ctx)
+	if err := s.SetSessionProvisionSteps(ctx, r.ID, steps, at.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if evs, err := s.EventsAfter(ctx, base, 100); err != nil || len(evs) != 0 {
+		t.Fatalf("unchanged checklist events = %+v err=%v, want none", evs, err)
+	}
+}

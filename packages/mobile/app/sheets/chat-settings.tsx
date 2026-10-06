@@ -45,7 +45,7 @@ export default function ChatSettingsRoute() {
 		}, setError);
 		setRefreshing(false);
 	};
-	return <ChatSettingsSheet snapshot={snapshot} models={models} options={options} disabled={entry.disabled || saving || refreshing} refreshing={refreshing} error={error} onRefresh={() => { void refresh(); }} onSettings={(settings) => { void changeSettings(settings); }} onOption={(id, value) => { void changeOption(id, value); }} />;
+	return <ChatSettingsSheet snapshot={snapshot} models={models} options={options} disabled={entry.disabled || saving || refreshing} refreshing={refreshing} error={error} onRefresh={() => { void refresh(); }} onSettings={changeSettings} onOption={changeOption} />;
 }
 
 function Unavailable({ onClose }: { onClose(): void }) {

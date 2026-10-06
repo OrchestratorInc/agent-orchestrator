@@ -516,8 +516,10 @@ func (s *Supervisor) handle(
 			}
 			var models []worker.ChatModel
 			var nativeModel, nativeEffort string
+			var catalog worker.ChatModelsResponse
 			if err == nil {
-				models, nativeModel, nativeEffort, err = workerexec.DiscoverClaudeModels(ctx, command, nativeID)
+				catalog, err = workerexec.DiscoverClaudeModels(ctx, command, nativeID, selectedModel)
+				models, nativeModel, nativeEffort = catalog.Models, catalog.Model, catalog.ReasoningEffort
 			}
 			if err == nil {
 				model, effort, settingsErr := workerexec.ClaudeConversationSettingsAfter(s.DataDir, nativeID, selectionAt)
@@ -532,7 +534,7 @@ func (s *Supervisor) handle(
 					} else if claudeCatalogHasModel(models, selectedModel) {
 						nativeModel, nativeEffort = selectedModel, selectedEffort
 					}
-					response = worker.ChatModelsResponse{Models: models, Model: nativeModel, ReasoningEffort: nativeEffort}
+					response = worker.ChatModelsResponse{Models: models, Model: nativeModel, ReasoningEffort: nativeEffort, Modes: catalog.Modes}
 				}
 			}
 		} else {
@@ -681,7 +683,7 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 	}
 	s.mu.Unlock()
 
-	go s.copyTerminalOutput(processCtx, input.TerminalID, terminal)
+	go s.copyTerminalOutput(processCtx, input.TerminalID, terminal, input.Kind == "agent" && input.NextOutputSequence > 1)
 	if s.Streams != nil {
 		go s.runTerminalStream(processCtx, input.TerminalID, terminal)
 	}
@@ -760,12 +762,21 @@ func (s *Supervisor) copyTerminalOutput(
 	ctx context.Context,
 	terminalID string,
 	terminal *terminalProcess,
+	clearPreviousDisplay bool,
 ) {
 	buffer := make([]byte, 16<<10)
 	for {
 		count, err := terminal.pty.Read(buffer)
 		if count > 0 {
 			data := append([]byte(nil), buffer[:count]...)
+			if clearPreviousDisplay {
+				// A handoff resumes the conversation in a new PTY but reuses its
+				// durable output stream. Clear the old screen and scrollback at
+				// that process boundary, both live and when replayed on reconnect.
+				// Prefix actual output so the reset never reveals an empty screen.
+				data = append([]byte("\x1b[3J\x1b[H\x1b[2J"), data...)
+				clearPreviousDisplay = false
+			}
 			id := terminal.outputID.Add(1)
 			if stream := terminal.stream.Load(); stream != nil && stream.sendOutput(id, data) {
 				// Sent over the persistent stream. The control plane acknowledges it

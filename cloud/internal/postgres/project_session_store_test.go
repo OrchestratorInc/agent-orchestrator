@@ -48,6 +48,26 @@ func TestCreateSessionReturnsCompleteSession(t *testing.T) {
 	}
 }
 
+func TestCreateSessionPreservesInitialEffort(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	session, err := store.CreateSession(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID,
+		"create-effort-"+uuid.NewString(), 10, domain.CreateSession{
+			ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "Effort test",
+			Prompt: "hello", Provider: "docker", ReasoningEffort: "medium",
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch, err := store.WorkerLaunchSpec(ctx, fixture.orgID, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launch.ReasoningEffort != "medium" {
+		t.Fatalf("launch effort = %q, want medium", launch.ReasoningEffort)
+	}
+}
+
 func TestQueuedTurnDoesNotOverrideIdleWorkerActivity(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()

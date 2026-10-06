@@ -67,6 +67,14 @@ export type AgentSwitchSummary = {
 	updatedAt?: string;
 };
 
+/** One stage of an asynchronous Chat start. */
+export type SessionProvisionStep = {
+	id: "fetch" | "worktree" | "setup" | "agent";
+	status: "pending" | "running" | "done";
+	startedAt?: string;
+	endedAt?: string;
+};
+
 export type WorkspaceSession = {
 	id: string;
 	/** Installation ID of the daemon that owns this session; absent for local and Cloud. */
@@ -131,6 +139,11 @@ export type WorkspaceSession = {
 	provisionState?: "provisioning" | "ready" | "failed";
 	/** Why a failed start stopped, in the daemon's words. */
 	provisionError?: string;
+	/**
+	 * The checklist an asynchronous start works through, in order. A step still
+	 * "running" on a failed session is the step that failed.
+	 */
+	provisionSteps?: SessionProvisionStep[];
 	/** Durable runtime fact from the daemon; independent of the derived SCM-aware status. */
 	isTerminated?: boolean;
 	/** Whether the cloud worker has a current control-plane connection. */

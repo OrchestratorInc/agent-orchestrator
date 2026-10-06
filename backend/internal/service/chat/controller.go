@@ -1406,6 +1406,9 @@ func (c *Controller) sendLocked(
 		ClientMessageID:     msg.ClientMessageID,
 		ClientPayloadHash:   msg.ClientPayloadHash,
 		DeliveryContentJSON: deliveryContent,
+		SenderSessionID:     msg.SenderSessionID,
+		SenderProjectID:     msg.SenderProjectID,
+		SenderDisplayName:   msg.SenderDisplayName,
 		AuthoredByUser:      msg.AuthoredByUser,
 	}
 
