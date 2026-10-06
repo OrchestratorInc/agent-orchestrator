@@ -72,7 +72,7 @@ func (m *Manager) DeliverReviewRuns(ctx context.Context, id domain.SessionID, pr
 			continue
 		}
 		msg := formatReviewRunMessage(pr, run, findings)
-		outcome, err := m.sendOnce(ctx, id, prURL, "ao-review:"+run.ID, run.ID, msg, 0, false)
+		outcome, err := m.sendOnce(ctx, id, prURL, reviewRunDeliveryKey(prURL, run.ID), run.ID, msg, 0, false)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -215,4 +215,12 @@ func formatReviewRunMessage(pr domain.PullRequest, run domain.ReviewRun, finding
 		msg.WriteString("\nFix what needs fixing and push. Then resolve each finding in AO, saying what you changed or why no change is needed:\n  ao review resolve <finding-id> --note \"<how it was handled>\"\nDo not reply on GitHub for these findings.")
 	}
 	return msg.String()
+}
+
+// reviewRunDeliveryKey is the sendOnce key for one AO review pass. It must
+// carry the PR URL in the "<type>:<url>:<extra>" shape: only keys that
+// reactionKeyTargetsPR matches are persisted, and the persisted entry is what
+// stops a restart between the send and the delivered stamp from resending.
+func reviewRunDeliveryKey(prURL, runID string) string {
+	return "ao-review:" + prURL + ":" + runID
 }

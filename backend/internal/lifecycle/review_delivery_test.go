@@ -170,3 +170,29 @@ func TestPRObservationDoesNotNudgeTheWorkersOwnReply(t *testing.T) {
 		t.Fatalf("the worker's own reply was delivered back to it:\n%s", joined)
 	}
 }
+
+// A daemon that dies after sending but before stamping the run delivered must
+// not resend after restart: the persisted sendOnce entry covers that window.
+func TestDeliverReviewRunsDoesNotResendAfterRestartBeforeStamp(t *testing.T) {
+	m, st, msg := newDeliveryFixture("sha-1")
+	st.runs = []domain.ReviewRun{completedRun("run-1", "sha-1", domain.VerdictApproved, time.Now())}
+	if err := m.DeliverReviewRuns(context.Background(), "mer-1", deliveryPR); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(st.signatures[deliveryPR], "run-1") {
+		t.Fatalf("delivery dedup entry was not persisted with the PR: %q", st.signatures[deliveryPR])
+	}
+	// Simulate the lost stamp, then a fresh process over the same store.
+	st.runs[0].DeliveredAt = nil
+	st.runs[0].Status = domain.ReviewRunComplete
+	restarted := New(st, msg)
+	if err := restarted.DeliverReviewRuns(context.Background(), "mer-1", deliveryPR); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("resent after restart: %d messages", len(msg.msgs))
+	}
+	if st.runs[0].DeliveredAt == nil {
+		t.Fatal("the restarted daemon must still stamp the already-sent pass delivered")
+	}
+}

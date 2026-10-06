@@ -1691,7 +1691,7 @@ func (o *Observer) prepareForPersistence(obs ports.SCMObservation, local domain.
 	}
 	reviewHash := local.ReviewHash
 	if !opts.preserveLocalReviewHash && (opts.reviewFetched || local.ReviewHash == "" || obs.Review.Decision != string(local.Review)) {
-		reviewHash = reviewSemanticHash(obs.Review)
+		reviewHash = reviewSemanticHash(obs.Review, opts.ownLogin)
 	}
 	obs.Changed = ports.SCMChanged{
 		Metadata: metadataHash != local.MetadataHash,
@@ -1720,7 +1720,7 @@ func domainFromObservation(sessionID domain.SessionID, sessionRecord domain.Sess
 	if opts.preserveLocalCIHash {
 		ciHash = local.CIHash
 	}
-	reviewHash := reviewSemanticHash(obs.Review)
+	reviewHash := reviewSemanticHash(obs.Review, opts.ownLogin)
 	reviewDecision := domain.ReviewDecision(firstNonEmpty(obs.Review.Decision, string(domain.ReviewNone)))
 	if opts.preserveLocalReviewDecision {
 		reviewDecision = local.Review
@@ -2016,14 +2016,20 @@ func ciSemanticHash(ci ports.SCMCIObservation) string {
 	return h
 }
 
-func reviewSemanticHash(review ports.SCMReviewObservation) string {
+// reviewSemanticHash covers everything the persisted review rows derive from.
+// ownLogin is part of it because the own-reply marks are derived from it: when
+// AO first learns its identity (including on upgrade to own-reply marking) or
+// the identity changes, the unchanged threads are written once more with the
+// right marks. It is omitted when unknown, so those hashes do not churn.
+func reviewSemanticHash(review ports.SCMReviewObservation, ownLogin string) string {
 	type reviewHashPayload struct {
 		Decision string
 		Reviews  []ports.SCMReviewSummaryObservation
 		Threads  []ports.SCMReviewThreadObservation
-		Partial  bool `json:",omitempty"`
+		Partial  bool   `json:",omitempty"`
+		OwnLogin string `json:",omitempty"`
 	}
-	return stableHash(reviewHashPayload{Decision: review.Decision, Reviews: review.Reviews, Threads: review.Threads, Partial: review.Partial})
+	return stableHash(reviewHashPayload{Decision: review.Decision, Reviews: review.Reviews, Threads: review.Threads, Partial: review.Partial, OwnLogin: strings.ToLower(ownLogin)})
 }
 
 func threadSemanticHash(th ports.SCMReviewThreadObservation) string {
