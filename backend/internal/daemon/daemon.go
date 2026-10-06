@@ -30,6 +30,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
@@ -404,6 +405,7 @@ func Run() error {
 	chatSvc := chatsvc.New(chatsvc.Options{
 		Store:    store,
 		Sessions: store,
+		Renders:  attachmentstore.New(cfg.DataDir),
 		StopProviderHost: func(ctx context.Context, id domain.SessionID) error {
 			return persistenthost.Shutdown(ctx, cfg.DataDir, string(id))
 		},

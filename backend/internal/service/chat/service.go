@@ -52,6 +52,7 @@ type Service struct {
 	onModelChanged   func(domain.SessionID, string)
 	stopProviderHost func(context.Context, domain.SessionID) error
 	reports          *reportsvc.Coordinator
+	renders          RenderFiles
 
 	mu               sync.RWMutex
 	controllers      map[domain.SessionID]*Controller
@@ -120,6 +121,8 @@ type Options struct {
 	// StopProviderHost destroys current session ownership on explicit teardown,
 	// even if its daemon attachment already failed. Never used by StopAll.
 	StopProviderHost func(context.Context, domain.SessionID) error
+	// Renders stores agent HTML renders. Nil refuses PublishRender.
+	Renders RenderFiles
 }
 
 // New builds a Chat service.
@@ -146,6 +149,7 @@ func New(opts Options) *Service {
 		onCodexCapacityChanged: opts.OnCodexCapacityChanged,
 		onModelChanged:         opts.OnModelChanged,
 		stopProviderHost:       opts.StopProviderHost,
+		renders:                opts.Renders,
 		controllers:            make(map[domain.SessionID]*Controller),
 		ownerControllers:       make(map[domain.ConversationOwner]*Controller),
 		startConfigs:           make(map[domain.ConversationOwner]StartConfig),

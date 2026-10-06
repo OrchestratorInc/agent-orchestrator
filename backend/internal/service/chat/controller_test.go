@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -3099,12 +3100,14 @@ func TestFreshProjectControllerStartFailureKeepsPreviousHistoryHidden(t *testing
 /* ---- harness ----------------------------------------------------------- */
 
 type harness struct {
-	svc       *chatsvc.Service
-	st        *sqlite.Store
-	conv      *fakeConversation
-	ctrl      *chatsvc.Controller
-	activity  *recordingActivity
-	hostStops atomic.Int32
+	svc        *chatsvc.Service
+	st         *sqlite.Store
+	conv       *fakeConversation
+	ctrl       *chatsvc.Controller
+	activity   *recordingActivity
+	hostStops  atomic.Int32
+	renders    *attachmentstore.Store
+	rendersDir string
 
 	clockMu sync.Mutex
 	clock   time.Time
@@ -3171,6 +3174,8 @@ func newHarnessWithConversationAndStoreForHarness(
 		activity: &recordingActivity{},
 		clock:    time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC),
 	}
+	h.rendersDir = t.TempDir()
+	h.renders = attachmentstore.New(h.rendersDir)
 
 	// Guarded because the id factory is called from both the projection goroutine and
 	// whichever goroutine a test drives commands from, and an unsynchronized counter
@@ -3196,7 +3201,8 @@ func newHarnessWithConversationAndStoreForHarness(
 			counter++
 			return fmt.Sprintf("id-%03d", counter)
 		},
-		Now: h.now,
+		Now:     h.now,
+		Renders: h.renders,
 	})
 
 	ctrl, err := svc.Start(context.Background(), chatsvc.StartConfig{
