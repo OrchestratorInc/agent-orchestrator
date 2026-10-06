@@ -371,7 +371,7 @@ AO has a built-in adversarial code reviewer for this session's PRs. It is an iso
 How it works:
 
 - ` + "`ao review trigger`" + ` with no session argument reviews this session's open PR heads and turns on review-comment delivery for this session (` + "`--no-inject`" + ` leaves that setting alone).
-- A head that is already being reviewed, or already has a review, is not reviewed again: the command fails and says why. Push new commits first, or pass ` + "`--rerun`" + ` for a deliberate second pass on the same commit. If it says AO has not picked up your push yet, wait about 30 seconds and run it again.
+- A head that is already being reviewed, or already has a review, is not reviewed again: the command fails and says why. Push new commits first, or pass ` + "`--rerun`" + ` for a deliberate second pass on the same commit. If it says your push is not visible yet, wait a few seconds and run it again.
 - ` + "`--agent <harness>`" + `, ` + "`--model <id>`" + `, and ` + "`--effort <level>`" + ` choose a different reviewer for one pass; otherwise the project's reviewer is used. Reviewers with different agents can run at the same time (add ` + "`--rerun`" + ` while another is running).
 - Check results with ` + "`ao review ls`" + `; stop every running reviewer with ` + "`ao review cancel`" + `.
 - Never spawn, or ask the orchestrator to spawn, a separate worker session to review your PR, and do not review your own PR as a substitute for the native reviewer.

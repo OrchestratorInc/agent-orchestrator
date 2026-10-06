@@ -829,7 +829,7 @@ func (e *Engine) unobservedPushError(ctx stdctx.Context, worker domain.SessionRe
 		if pushed == "" || pushed == review.TargetSHA {
 			continue
 		}
-		return fmt.Errorf("%w: AO still sees PR #%d at %s, but %s was pushed to %s and has not been picked up yet. AO checks the provider about every 30 seconds; run `ao review trigger` again shortly", ErrHeadNotObserved, review.PRNumber, shortSHA(review.TargetSHA), shortSHA(pushed), branch)
+		return fmt.Errorf("%w: AO still sees PR #%d at %s, but %s was pushed to %s and the provider does not report it yet. It usually catches up within a few seconds; run `ao review trigger` again", ErrHeadNotObserved, review.PRNumber, shortSHA(review.TargetSHA), shortSHA(pushed), branch)
 	}
 	return nil
 }

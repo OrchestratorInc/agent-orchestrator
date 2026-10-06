@@ -437,7 +437,7 @@ func TestTriggerRejectReviewedHeadReportsAPushAONotYetObserved(t *testing.T) {
 			if gotPath != "/ws/mer-1" || gotBranch != "feature" {
 				t.Fatalf("pushed head lookup = %q %q, want the worker workspace and PR branch", gotPath, gotBranch)
 			}
-			if errors.Is(tc.want, ErrHeadNotObserved) && (!strings.Contains(err.Error(), "AO still sees PR #1 at sha1") || !strings.Contains(err.Error(), "sha2pushed was pushed to feature") || !strings.Contains(err.Error(), "again shortly")) {
+			if errors.Is(tc.want, ErrHeadNotObserved) && (!strings.Contains(err.Error(), "AO still sees PR #1 at sha1") || !strings.Contains(err.Error(), "sha2pushed was pushed to feature") || !strings.Contains(err.Error(), "run `ao review trigger` again")) {
 				t.Fatalf("err = %q, want the stale/pushed heads and a retry hint", err)
 			}
 		})
