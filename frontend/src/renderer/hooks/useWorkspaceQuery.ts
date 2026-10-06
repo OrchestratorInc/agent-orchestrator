@@ -116,6 +116,12 @@ function toWorkspaceSession(
 		statusReadiness,
 		provisionState: session.provisionState,
 		provisionError: session.provisionError || undefined,
+		provisionSteps: session.provisionSteps?.map((step) => ({
+			id: step.id,
+			status: step.status,
+			startedAt: step.startedAt ?? undefined,
+			endedAt: step.endedAt ?? undefined,
+		})),
 		isTerminated: session.isTerminated,
 		chatProviderPreserved: session.chatProviderPreserved,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,

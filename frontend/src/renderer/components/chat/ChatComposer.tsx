@@ -152,6 +152,7 @@ export const ChatComposer = memo(function ChatComposer({
 	onSend,
 	busy,
 	willQueue,
+	queuePlaceholder,
 	disabled,
 	disabledPlaceholder,
 	settings,
@@ -211,6 +212,8 @@ export const ChatComposer = memo(function ChatComposer({
 	busy?: boolean;
 	/** The agent is mid-turn, so this message is held until the turn ends. */
 	willQueue?: boolean;
+	/** Replaces the default queueing hint, e.g. while the agent is still starting. */
+	queuePlaceholder?: string;
 	disabled?: boolean;
 	/** Explains why message entry is temporarily blocked. */
 	disabledPlaceholder?: string;
@@ -1557,7 +1560,7 @@ export const ChatComposer = memo(function ChatComposer({
 						disabledPlaceholder ?? (disabled
 							? "The controller is not connected"
 							: willQueue
-								? "Agent is working — this sends when it finishes"
+								? (queuePlaceholder ?? "Agent is working — this sends when it finishes")
 								: emptyPlaceholder ?? "Message the agent…")
 					}
 					menuOpen={menuOpen}

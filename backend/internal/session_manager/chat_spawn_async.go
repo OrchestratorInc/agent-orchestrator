@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -112,6 +114,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	var workspaceProject *ports.WorkspaceProjectInfo
 	var err error
 	reusePublishedWorkspace := in.retry && in.record.Metadata.WorkspacePath != ""
+	progress := m.startProvisionProgress(ctx, id, provisionPlan(in, reusePublishedWorkspace))
 	if reusePublishedWorkspace {
 		ws = workspaceInfo(in.record)
 		if in.projectKind == domain.ProjectKindWorkspace {
@@ -143,6 +146,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	if ws.Path == "" {
 		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, in.project)
 		m.logAsyncChatSpawnStage(id, "default_branch_refresh", stageStarted)
+		progress.complete(ctx, domain.SessionProvisionStepFetch)
 		stageStarted = time.Now()
 		ws, workspaceProject, err = m.createSessionWorkspace(ctx, in.project, in.cfg, id, in.branch, baseRefs)
 	} else {
@@ -162,6 +166,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		return
 	}
 	m.logAsyncChatSpawnStage(id, "workspace_create", stageStarted)
+	progress.complete(ctx, domain.SessionProvisionStepWorktree)
 	stageStarted = time.Now()
 	if !reusePublishedWorkspace {
 		if err := m.provisionWorkspace(ctx, in.project, ws.Path); err != nil {
@@ -176,6 +181,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		return
 	}
 	m.logAsyncChatSpawnStage(id, "workspace_provision", stageStarted)
+	progress.complete(ctx, domain.SessionProvisionStepSetup)
 	// Publish the worktree now rather than at the controller commit. Until the
 	// row carries it, every workspace-scoped read answers
 	// SESSION_WORKSPACE_NOT_FOUND, and the provider start that follows is long
@@ -237,6 +243,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		return
 	}
 	m.logAsyncChatSpawnStage(id, "controller_start", stageStarted)
+	progress.complete(ctx, domain.SessionProvisionStepAgent)
 	stageStarted = time.Now()
 	if err := m.chat.DrainChatQueue(ctx, id); err != nil {
 		m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrSpawnDeliverPrompt, err))
@@ -250,6 +257,78 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	}
 	m.logAsyncChatSpawnStage(id, "mark_ready", stageStarted)
 	m.logAsyncChatSpawnStage(id, "total", totalStarted)
+}
+
+// provisionProgress publishes a start's checklist. Finishing one stage and
+// starting the next is a single write, so the checklist never shows a gap
+// between them. Writes are best effort: the checklist is display, and a start
+// must not fail because it could not be drawn.
+type provisionProgress struct {
+	m     *Manager
+	id    domain.SessionID
+	steps []domain.SessionProvisionStep
+}
+
+// startProvisionProgress plans the stages this start will run and marks the
+// first one running. A failed start leaves its stage running; readers treat a
+// running stage on a failed session as the stage that failed.
+func (m *Manager) startProvisionProgress(ctx context.Context, id domain.SessionID, plan []domain.SessionProvisionStepID) *provisionProgress {
+	p := &provisionProgress{m: m, id: id, steps: make([]domain.SessionProvisionStep, len(plan))}
+	for i, step := range plan {
+		p.steps[i] = domain.SessionProvisionStep{ID: step, Status: domain.SessionProvisionStepPending}
+	}
+	p.startNext()
+	p.publish(ctx)
+	return p
+}
+
+// complete finishes stage id, if it is the one running, and starts the next
+// pending stage. It is a no-op for a stage that is not running.
+func (p *provisionProgress) complete(ctx context.Context, id domain.SessionProvisionStepID) {
+	i := slices.IndexFunc(p.steps, func(step domain.SessionProvisionStep) bool {
+		return step.ID == id && step.Status == domain.SessionProvisionStepRunning
+	})
+	if i < 0 {
+		return
+	}
+	now := p.m.clock()
+	p.steps[i].Status, p.steps[i].EndedAt = domain.SessionProvisionStepDone, &now
+	p.startNext()
+	p.publish(ctx)
+}
+
+func (p *provisionProgress) startNext() {
+	i := slices.IndexFunc(p.steps, func(step domain.SessionProvisionStep) bool {
+		return step.Status == domain.SessionProvisionStepPending
+	})
+	if i < 0 {
+		return
+	}
+	now := p.m.clock()
+	p.steps[i].Status, p.steps[i].StartedAt = domain.SessionProvisionStepRunning, &now
+}
+
+func (p *provisionProgress) publish(ctx context.Context) {
+	if err := p.m.store.SetSessionProvisionSteps(ctx, p.id, p.steps, p.m.clock()); err != nil {
+		p.m.logger.Warn("spawn: publish start-up progress", "sessionID", p.id, "error", err)
+	}
+}
+
+// provisionPlan lists the stages completeAsyncChatSpawn will run, in order.
+func provisionPlan(in asyncChatSpawn, reusePublishedWorkspace bool) []domain.SessionProvisionStepID {
+	var plan []domain.SessionProvisionStepID
+	if !reusePublishedWorkspace {
+		if in.preparation == nil {
+			plan = append(plan, domain.SessionProvisionStepFetch)
+		}
+		plan = append(plan, domain.SessionProvisionStepWorktree)
+		if slices.ContainsFunc(in.project.Config.PostCreate, func(command string) bool {
+			return strings.TrimSpace(command) != ""
+		}) {
+			plan = append(plan, domain.SessionProvisionStepSetup)
+		}
+	}
+	return append(plan, domain.SessionProvisionStepAgent)
 }
 
 func (m *Manager) logAsyncChatSpawnStage(id domain.SessionID, stage string, started time.Time) {

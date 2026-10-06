@@ -10741,6 +10741,10 @@ components:
           - ready
           - failed
           type: string
+        provisionSteps:
+          items:
+            $ref: '#/components/schemas/SessionProvisionStep'
+          type: array
         prs:
           items:
             $ref: '#/components/schemas/SessionPRFacts'
@@ -14314,6 +14318,35 @@ components:
           type: string
       required:
       - sessionId
+      type: object
+    SessionProvisionStep:
+      properties:
+        endedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          enum:
+          - fetch
+          - worktree
+          - setup
+          - agent
+          type: string
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        status:
+          enum:
+          - pending
+          - running
+          - done
+          type: string
+      required:
+      - id
+      - status
       type: object
     SessionResponse:
       properties:
