@@ -227,21 +227,21 @@ describe("provider state chrome", () => {
 
 	it("notes tool servers that did not start, without a reload control", () => {
 		render(<ChatWorkspace snapshot={chatFixtureMcpFailed} />);
-		expect(screen.getByText("Playwright, Postgres MCPs unavailable").closest("[role=status]")).not.toBeNull();
+		expect(screen.getByText("Playwright, Postgres didn’t start. Continuing without them.").closest("[role=status]")).not.toBeNull();
 		expect(screen.queryByRole("button", { name: /Reload/ })).not.toBeInTheDocument();
 	});
 
 	it("says nothing about tool servers when they all started", () => {
 		render(<ChatWorkspace snapshot={chatFixture} />);
-		expect(screen.queryByText(/MCPs? unavailable/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/didn’t start/)).not.toBeInTheDocument();
 	});
 
 	it("does not use up the note while the chat panel is behind another tab", () => {
 		const snapshot = { ...chatFixtureMcpFailed, sessionId: "ao-mcp-hidden" };
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot} workspaceActiveTabKey="file:README.md" />);
-		expect(screen.queryByText(/MCPs? unavailable/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/didn’t start/)).not.toBeInTheDocument();
 		rerender(<ChatWorkspace snapshot={snapshot} />);
-		expect(screen.getByText("Playwright, Postgres MCPs unavailable")).toBeInTheDocument();
+		expect(screen.getByText("Playwright, Postgres didn’t start. Continuing without them.")).toBeInTheDocument();
 	});
 });
 

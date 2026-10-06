@@ -1703,7 +1703,7 @@ describe("ChatWorkspace timeline", () => {
 		rerender(<ChatWorkspace snapshot={chatFixtureMcpFailed} />);
 		// The live turn's Working row is a status too, so pick out the tool-server note.
 		expect(
-			screen.getAllByRole("status").find((status) => /MCPs? unavailable/.test(status.textContent ?? "")),
+			screen.getAllByRole("status").find((status) => /didn’t start/.test(status.textContent ?? "")),
 		).toBeInTheDocument();
 	});
 

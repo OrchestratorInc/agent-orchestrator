@@ -18,7 +18,6 @@ import { useTranslation } from "react-i18next";
 import { KeyRound, Plug, TriangleAlert, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import type { ConversationAccount, ConversationThreadState, McpServer } from "../../types/conversation";
 
 /** A current provider credential demand; dismissal affects presentation only. */
@@ -178,16 +177,19 @@ function rememberMcpNotice(sessionId: string): void {
  * A brief, once-per-session note that some tool servers did not start.
  *
  * The agent never mentions tools it does not have, so without this a user sees a
- * worse answer with no cause. The fix lives in the agent's own config, so there is
- * nothing to do here: say it once, quietly, and get out of the way.
+ * worse answer with no cause. There is nothing to do from here, so say it once,
+ * quietly, and get out of the way; a restarted session gets its own note.
  */
 export const McpServerBanner = memo(function McpServerBanner({
 	sessionId,
+	incarnation,
 	servers,
 	placement = "above",
 	active = true,
 }: {
 	sessionId: string;
+	/** Which run of the session; a restart starts its tool servers again. */
+	incarnation?: string;
 	/** Only the broken ones. The caller filters, so an empty list means nothing to say. */
 	servers: McpServer[];
 	/** Relative to the composer, which the parent wraps in a positioned box. */
@@ -198,12 +200,13 @@ export const McpServerBanner = memo(function McpServerBanner({
 	const { t } = useTranslation();
 	const [phase, setPhase] = useState<"waiting" | "shown" | "fading" | "done">("waiting");
 	const hasFailures = servers.length > 0;
+	const noticeKey = incarnation ? `${sessionId}:${incarnation}` : sessionId;
 
 	useEffect(() => {
-		if (phase !== "waiting" || !active || !hasFailures || mcpNoticeWasShown(sessionId)) return;
-		rememberMcpNotice(sessionId);
+		if (phase !== "waiting" || !active || !hasFailures || mcpNoticeWasShown(noticeKey)) return;
+		rememberMcpNotice(noticeKey);
 		setPhase("shown");
-	}, [active, hasFailures, phase, sessionId]);
+	}, [active, hasFailures, noticeKey, phase]);
 
 	useEffect(() => {
 		if (phase !== "shown" && phase !== "fading") return;
@@ -220,27 +223,18 @@ export const McpServerBanner = memo(function McpServerBanner({
 		.join(", ");
 
 	return (
-		<TooltipProvider>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<div
-						role={phase === "shown" ? "status" : undefined}
-						className={cn(
-							"absolute left-1/2 z-10 flex w-max max-w-full -translate-x-1/2 items-center gap-1.5 rounded-md bg-background px-2 py-0.5 text-[11px] text-muted-foreground transition-opacity duration-200 ease-out motion-reduce:transition-none",
-							placement === "below" ? "top-full mt-1.5" : "bottom-full mb-1.5",
-							phase === "fading" && "opacity-0",
-						)}
-					>
-						<Plug aria-hidden="true" className="size-3 shrink-0" />
-						<span className="truncate">
-							{t("chat.mcpNotice.unavailable", { names, count: servers.length })}
-						</span>
-					</div>
-				</TooltipTrigger>
-				<TooltipContent side={placement === "below" ? "bottom" : "top"}>
-					{t("chat.mcpNotice.detail")}
-				</TooltipContent>
-			</Tooltip>
-		</TooltipProvider>
+		<div
+			role={phase === "shown" ? "status" : undefined}
+			className={cn(
+				"pointer-events-none absolute left-1/2 z-10 flex w-max max-w-full -translate-x-1/2 items-center gap-1.5 rounded-md bg-background px-2 py-0.5 text-[11px] text-muted-foreground transition-opacity duration-200 ease-out motion-reduce:transition-none",
+				placement === "below" ? "top-full mt-1.5" : "bottom-full mb-1.5",
+				phase === "fading" && "opacity-0",
+			)}
+		>
+			<Plug aria-hidden="true" className="size-3 shrink-0" />
+			<span className="truncate">
+				{t("chat.mcpNotice.unavailable", { names, count: servers.length })}
+			</span>
+		</div>
 	);
 });

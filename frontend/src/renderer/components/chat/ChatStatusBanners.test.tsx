@@ -120,14 +120,16 @@ describe("McpServerBanner", () => {
 
 	it("names the missing tools in one quiet line, without diagnostics or controls", () => {
 		render(<McpServerBanner sessionId="mcp-line" servers={broken} />);
-		expect(screen.getByRole("status")).toHaveTextContent("Playwright MCP unavailable");
+		expect(screen.getByRole("status")).toHaveTextContent("Playwright didn’t start. Continuing without it.");
 		expect(screen.queryByText(/startup_timeout|did not report ready/)).not.toBeInTheDocument();
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		// It overlays the end of the timeline for a few seconds; clicks must pass through.
+		expect(screen.getByRole("status")).toHaveClass("pointer-events-none");
 	});
 
 	it("lists several servers together", () => {
 		render(<McpServerBanner sessionId="mcp-several" servers={[...broken, { name: "notion", status: "failed" }]} />);
-		expect(screen.getByRole("status")).toHaveTextContent("Playwright, Notion MCPs unavailable");
+		expect(screen.getByRole("status")).toHaveTextContent("Playwright, Notion didn’t start. Continuing without them.");
 	});
 
 	it("goes away on its own after a few seconds", () => {
@@ -137,17 +139,26 @@ describe("McpServerBanner", () => {
 		act(() => vi.advanceTimersByTime(3_000));
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 		act(() => vi.advanceTimersByTime(200));
-		expect(screen.queryByText("Playwright MCP unavailable")).not.toBeInTheDocument();
+		expect(screen.queryByText("Playwright didn’t start. Continuing without it.")).not.toBeInTheDocument();
 	});
 
 	it("shows once per session, even when the chat remounts", () => {
 		const first = render(<McpServerBanner sessionId="mcp-once" servers={broken} />);
-		expect(screen.getByText("Playwright MCP unavailable")).toBeInTheDocument();
+		expect(screen.getByText("Playwright didn’t start. Continuing without it.")).toBeInTheDocument();
 		first.unmount();
 
 		render(<McpServerBanner sessionId="mcp-once" servers={broken} />);
-		expect(screen.queryByText("Playwright MCP unavailable")).not.toBeInTheDocument();
+		expect(screen.queryByText("Playwright didn’t start. Continuing without it.")).not.toBeInTheDocument();
 		expect(window.localStorage.getItem("ao:mcp-notice-shown:mcp-once")).toBe("1");
+	});
+
+	it("tells a restarted session again", () => {
+		const first = render(<McpServerBanner sessionId="mcp-restart" incarnation="run-1" servers={broken} />);
+		expect(screen.getByRole("status")).toBeInTheDocument();
+		first.unmount();
+
+		render(<McpServerBanner sessionId="mcp-restart" incarnation="run-2" servers={broken} />);
+		expect(screen.getByRole("status")).toHaveTextContent("Playwright didn’t start. Continuing without it.");
 	});
 
 	it("does not replay for a session that already showed it before a reload", () => {
@@ -162,7 +173,7 @@ describe("McpServerBanner", () => {
 		expect(window.localStorage.getItem("ao:mcp-notice-shown:mcp-hidden")).toBeNull();
 
 		rerender(<McpServerBanner sessionId="mcp-hidden" servers={broken} active />);
-		expect(screen.getByRole("status")).toHaveTextContent("Playwright MCP unavailable");
+		expect(screen.getByRole("status")).toHaveTextContent("Playwright didn’t start. Continuing without it.");
 	});
 
 	// A healthy server is not news. The caller filters, and an empty list must not

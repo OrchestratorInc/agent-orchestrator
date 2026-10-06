@@ -1537,8 +1537,9 @@ function ChatWorkspaceContent({
 								) : null}
 								<div className="relative">
 									<McpServerBanner
-										key={uiSessionId}
+										key={draftScopeKey}
 										sessionId={uiSessionId}
+										incarnation={draftScope.incarnation}
 										servers={brokenServers}
 										placement={conversationEmpty ? "below" : "above"}
 										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
