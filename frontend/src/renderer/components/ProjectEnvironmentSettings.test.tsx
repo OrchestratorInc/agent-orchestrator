@@ -32,7 +32,7 @@ it("imports pasted .env entries into the draft, replacing matching names without
 	render(<QueryClientProvider client={client}><ProjectEnvironmentSettings projectId="p" /></QueryClientProvider>);
 	await screen.findByLabelText("Value 1");
 	await userEvent.click(screen.getByRole("button", { name: "Paste .env" }));
-	fireEvent.change(screen.getByLabelText("Paste .env"), { target: { value: "# copied config\nexisting=replaced\nexport NEW_KEY=\"hello world\"\nURL=https://example.com/?a=b" } });
+	fireEvent.change(screen.getByRole("textbox", { name: "Paste .env" }), { target: { value: "# copied config\nexisting=replaced\nexport NEW_KEY=\"hello world\"\nURL=https://example.com/?a=b" } });
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	expect(screen.getByRole("alert")).toHaveTextContent("Add the pasted entries to the draft before saving");
 	expect(putMock).not.toHaveBeenCalled();
@@ -51,10 +51,11 @@ it("rejects a pasted reserved name without partially changing the draft", async 
 	render(<QueryClientProvider client={client}><ProjectEnvironmentSettings projectId="p" onSaveState={onSaveState} /></QueryClientProvider>);
 	await screen.findByLabelText("Value 1");
 	await userEvent.click(screen.getByRole("button", { name: "Paste .env" }));
-	fireEvent.change(screen.getByLabelText("Paste .env"), { target: { value: "NEW=good\nAO_SESSION_ID=spoof" } });
+	fireEvent.change(screen.getByRole("textbox", { name: "Paste .env" }), { target: { value: "NEW=good\nAO_SESSION_ID=spoof" } });
 	await userEvent.click(screen.getByRole("button", { name: "Add to draft" }));
 	expect(screen.getByRole("alert")).toHaveTextContent("Check line 2");
 	expect(screen.queryByLabelText("Value 2")).not.toBeInTheDocument();
+	await userEvent.click(screen.getByRole("tab", { name: "Environment variables" }));
 	expect(screen.getByLabelText("Value 1")).toHaveValue("old");
 	expect(putMock).not.toHaveBeenCalled();
 	expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "idle", dirty: false }));
