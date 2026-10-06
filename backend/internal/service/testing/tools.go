@@ -145,6 +145,15 @@ func (s *Service) authorize(ctx context.Context, id domain.TestAttemptID, sessio
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	grant, ok := s.caps[session]
+	if !ok && token != "" && (s.closed || s.attempts[id] == nil) {
+		link, bound, err := s.deps.Store.GetTestToolBinding(ctx, session)
+		if err != nil {
+			return nil, capability{}, err
+		}
+		if bound && link.AttemptID == id {
+			return nil, capability{}, WorkerNotRunning()
+		}
+	}
 	if !ok || token == "" || grant.link.AttemptID != id || subtle.ConstantTimeCompare(grant.hash[:], hash[:]) != 1 {
 		return nil, capability{}, apierr.Forbidden("INVALID_TEST_CAPABILITY", "Testing capability is missing, revoked or does not own this attempt")
 	}
@@ -216,7 +225,7 @@ func (s *Service) Execute(ctx context.Context, id domain.TestAttemptID, session 
 	if err = s.deps.Target.Probe(callCtx, grant.target); err != nil {
 		return result, targetChanged()
 	}
-	record := domain.TestActionRecord{AttemptID: id, RequestID: requestID, Tool: name, Input: canonical, State: "dispatching", At: s.deps.Clock.Now().UTC()}
+	record := domain.TestActionRecord{AttemptID: id, WindowID: grant.target.WindowID, LaunchID: grant.target.LaunchID, RequestID: requestID, Tool: name, Input: canonical, State: "dispatching", At: s.deps.Clock.Now().UTC()}
 	if name == "click" || name == "type" || name == "key" {
 		record.ConfiguredDeliveryMode = s.deliveryMode()
 		record.DeliveryMode = record.ConfiguredDeliveryMode

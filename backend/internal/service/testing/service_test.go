@@ -6,9 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/png"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -102,11 +104,14 @@ func (p *fakeProviders) Probe(ctx context.Context, _ domain.TestTargetIdentity) 
 	}
 	return ctx.Err()
 }
-func (p *fakeProviders) Stop(_ context.Context, _ domain.TestTargetIdentity) (ports.TestingCleanupResult, error) {
+func (p *fakeProviders) Stop(ctx context.Context, _ domain.TestTargetIdentity) (ports.TestingCleanupResult, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.stops++
 	p.cleanupEvents = append(p.cleanupEvents, "target_stop")
+	if err := ctx.Err(); err != nil {
+		return ports.TestingCleanupResult{State: domain.TestCleanupFailed}, err
+	}
 	if p.stopFail {
 		return ports.TestingCleanupResult{State: domain.TestCleanupFailed, Leftovers: []string{"owned PID remains"}}, errors.New("stop failed")
 	}
@@ -162,6 +167,7 @@ type fakeWorkers struct {
 	request     WorkerLaunchRequest
 	skipPrepare bool
 	launches    int
+	launchError func(WorkerBinding) error
 }
 
 func (w *fakeWorkers) LaunchTestingWorker(ctx context.Context, r WorkerLaunchRequest) (domain.SessionID, error) {
@@ -174,6 +180,9 @@ func (w *fakeWorkers) LaunchTestingWorker(ctx context.Context, r WorkerLaunchReq
 	}
 	if !w.skipPrepare {
 		w.binding, err = r.Prepare(ctx, session.ID)
+	}
+	if err == nil && w.launchError != nil {
+		err = w.launchError(w.binding)
 	}
 	return session.ID, err
 }
@@ -363,6 +372,14 @@ func TestHappyPathReportAndEvidenceSurviveTargetStop(t *testing.T) {
 		if bytes.Contains(data, []byte(f.worker.binding.Capability)) {
 			t.Fatal("capability leaked to evidence")
 		}
+		if receipt.Kind == "journal" {
+			for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+				var action domain.TestActionRecord
+				if err := json.Unmarshal(line, &action); err != nil || action.WindowID != rec.Target.WindowID || action.LaunchID != rec.Target.LaunchID {
+					t.Fatal("journal entry lost bound target identity", action, err)
+				}
+			}
+		}
 	}
 	for _, kind := range []string{"screenshot", "logs", "daemon_query", "delivery", "journal", "report", "final_logs", "cleanup"} {
 		if !kinds[kind] {
@@ -374,6 +391,44 @@ func TestHappyPathReportAndEvidenceSurviveTargetStop(t *testing.T) {
 	}
 	if _, err = f.call("after", "screenshot", map[string]any{}); err == nil {
 		t.Fatal("finished attempt admitted a call")
+	}
+}
+
+func TestWorkerLaunchFailurePreservesCauseAndWarnsWithoutSecrets(t *testing.T) {
+	for _, secret := range []bool{false, true} {
+		t.Run(fmt.Sprint(secret), func(t *testing.T) {
+			f := newFixture(t)
+			_, _ = f.svc.Cancel(context.Background(), f.start.AttemptID)
+			f.wait(t)
+			var logs bytes.Buffer
+			f.svc.deps.Log = slog.New(slog.NewTextHandler(&logs, nil))
+			f.worker.launchError = func(binding WorkerBinding) error {
+				cause := apierr.Conflict("DEFAULT_BRANCH_UNRESOLVED", "Scratch repository has no default branch", nil)
+				if secret {
+					cause.Message += " AO_TEST_CAPABILITY=" + binding.Capability + ` password="private password with spaces" Bearer private-bearer`
+				}
+				return fmt.Errorf("spawn investigator: %w", cause)
+			}
+			result, err := f.svc.StartAttempt(context.Background(), f.run.ID, StartAttemptInput{WorkerPrompt: "investigate"})
+			if code(err) != "TEST_WORKER_START_FAILED" || !strings.Contains(err.Error(), "DEFAULT_BRANCH_UNRESOLVED") || !strings.Contains(err.Error(), "Scratch repository has no default branch") {
+				t.Fatal("worker launch cause was hidden", err)
+			}
+			if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "DEFAULT_BRANCH_UNRESOLVED") {
+				t.Fatal("worker launch cause was not logged at WARN", logs.String())
+			}
+			if secret {
+				for _, value := range []string{f.worker.binding.Capability, "private password with spaces", "private-bearer"} {
+					if strings.Contains(err.Error(), value) || strings.Contains(logs.String(), value) {
+						t.Fatal("worker launch error leaked a secret")
+					}
+				}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := f.svc.WaitCleanup(ctx, result.AttemptID); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 func TestCapabilitiesWrongSessionAttemptReissueAndRestart(t *testing.T) {
@@ -407,7 +462,7 @@ func TestCapabilitiesWrongSessionAttemptReissueAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.svc = New(f.deps)
-	if _, err = f.call("restart", "screenshot", map[string]any{}); code(err) != "INVALID_TEST_CAPABILITY" {
+	if _, err = f.call("restart", "screenshot", map[string]any{}); code(err) != "TEST_WORKER_NOT_RUNNING" {
 		t.Fatal("restart did not fail closed", err)
 	}
 	if _, err = f.svc.IssueCapability(context.Background(), f.start.WorkerSessionID); code(err) != "TEST_ATTEMPT_INACTIVE" {
@@ -422,6 +477,26 @@ func TestCapabilitiesWrongSessionAttemptReissueAndRestart(t *testing.T) {
 	link, ok, err := f.svc.LookupBinding(context.Background(), "ordinary")
 	if err != nil || ok || link.SessionID != "" {
 		t.Fatal("ordinary worker got testing profile")
+	}
+}
+
+func TestTestingToolAfterRestartWithoutCapabilityReturnsExplicitError(t *testing.T) {
+	f := newFixture(t)
+	restarted := New(f.deps)
+	defer restarted.Close()
+	_, err := restarted.Execute(context.Background(), f.start.AttemptID, f.start.WorkerSessionID, f.worker.binding.Capability, "restart", "screenshot", json.RawMessage(`{}`))
+	if code(err) != "TEST_WORKER_NOT_RUNNING" || f.provider.shots != 0 {
+		t.Fatal("restart tool did not explicitly refuse before dispatch", err)
+	}
+	for _, test := range []struct {
+		session domain.SessionID
+		attempt domain.TestAttemptID
+		token   string
+	}{{f.start.WorkerSessionID, f.start.AttemptID, ""}, {"other", f.start.AttemptID, "wrong"}, {f.start.WorkerSessionID, "other", f.worker.binding.Capability}} {
+		_, err := restarted.Execute(context.Background(), test.attempt, test.session, test.token, "foreign", "screenshot", json.RawMessage(`{}`))
+		if code(err) != "INVALID_TEST_CAPABILITY" {
+			t.Fatal("restart refusal bypassed capability ownership checks", err)
+		}
 	}
 }
 func TestWrongTargetIdentityFields(t *testing.T) {

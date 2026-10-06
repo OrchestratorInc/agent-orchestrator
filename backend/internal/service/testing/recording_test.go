@@ -22,13 +22,14 @@ type movieDesktop struct {
 	startErr, stopErr error
 	escapePath        string
 	startGap, stopGap string
+	closeErr          error
 }
 
 func (d *movieDesktop) Close(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.cleanupEvents = append(d.cleanupEvents, "desktop_close")
-	return ctx.Err()
+	return errors.Join(ctx.Err(), d.closeErr)
 }
 
 func (d *movieDesktop) StartRecording(_ context.Context, _ domain.TestTargetIdentity, dir string) (ports.TestingRecordingResult, error) {
@@ -146,6 +147,9 @@ func TestRecordingFinishCancelAndDeadlineSaveEvidenceBeforeTargetStop(t *testing
 				if err := json.Unmarshal(line, &record); err != nil {
 					t.Fatal(err)
 				}
+				if record.WindowID != rec.Target.WindowID || record.LaunchID != rec.Target.LaunchID {
+					t.Fatal("recording journal lost target identity", record)
+				}
 				if record.Tool != "stop_recording" || record.State != "completed" {
 					continue
 				}
@@ -160,6 +164,132 @@ func TestRecordingFinishCancelAndDeadlineSaveEvidenceBeforeTargetStop(t *testing
 			}
 		})
 	}
+}
+
+func TestCloseMidAttemptFinalizesRecordingStopsTargetAndClosesDesktop(t *testing.T) {
+	for _, failure := range []string{"", "recording_deadline", "desktop_close"} {
+		t.Run(failure, func(t *testing.T) {
+			f, _ := movieFixture(t, func(d *movieDesktop) {
+				if failure == "recording_deadline" {
+					d.stopErr = context.DeadlineExceeded
+				}
+				if failure == "desktop_close" {
+					d.closeErr = errors.New("owned driver stop failed")
+				}
+			})
+			entered := make(chan struct{})
+			f.provider.screenshotHook = func(ctx context.Context) error {
+				close(entered)
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			toolDone := make(chan error, 1)
+			go func() {
+				_, err := f.call("inflight", "screenshot", map[string]any{})
+				toolDone <- err
+			}()
+			<-entered
+			closed := make(chan error, 1)
+			go func() { closed <- f.svc.Close() }()
+			select {
+			case err := <-closed:
+				if (err != nil) != (failure != "") {
+					t.Fatal("shutdown error", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("shutdown did not finish within the test bound")
+			}
+			if err := <-toolDone; err == nil {
+				t.Fatal("shutdown admitted the in-flight tool")
+			}
+			wantEvents := []string{"recording_stop", "desktop_release", "target_stop", "desktop_close"}
+			if !reflect.DeepEqual(f.provider.cleanupEvents, wantEvents) {
+				t.Fatal("shutdown cleanup order", f.provider.cleanupEvents)
+			}
+			rec, ok, err := f.store.GetTestAttempt(context.Background(), f.start.AttemptID)
+			wantState := domain.TestCleanupComplete
+			if failure != "" {
+				wantState = domain.TestCleanupFailed
+			}
+			if err != nil || !ok || rec.Phase != domain.TestAttemptFinished || rec.Outcome != domain.TestOutcomeCancelled || rec.CancelledAt == nil || rec.CleanupState != wantState {
+				t.Fatal("shutdown did not persist terminal cleanup", rec, err)
+			}
+			wantGap := ""
+			if failure == "recording_deadline" {
+				wantGap = context.DeadlineExceeded.Error()
+			}
+			if rec.RecordingGap != wantGap {
+				t.Fatal("shutdown recording gap", rec.RecordingGap)
+			}
+			receipts, err := f.svc.ListEvidence(context.Background(), rec.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			kinds := map[string]bool{}
+			dir := filepath.Join(f.dir, "testing", string(f.run.ID), string(rec.ID))
+			for _, receipt := range receipts {
+				kinds[receipt.Kind] = true
+				if receipt.Kind == "recording_metadata" {
+					data, err := os.ReadFile(filepath.Join(dir, receipt.RelativePath))
+					var result ports.TestingRecordingResult
+					if err != nil || json.Unmarshal(data, &result) != nil || result.Gap != wantGap {
+						t.Fatal("shutdown recording metadata receipt missing", err)
+					}
+				}
+			}
+			for _, kind := range []string{"journal", "recording_metadata", "final_logs", "cleanup"} {
+				if !kinds[kind] {
+					t.Fatal("shutdown evidence missing", kind)
+				}
+			}
+			if kinds["recording"] != (failure != "recording_deadline") {
+				t.Fatal("shutdown recording receipt", receipts)
+			}
+			if _, err := f.call("after-close", "screenshot", map[string]any{}); code(err) != "TEST_WORKER_NOT_RUNNING" {
+				t.Fatal("shutdown tool refusal was not explicit", err)
+			}
+		})
+	}
+}
+
+func TestExpiredCleanupContextStillSavesRecordingGapAndStopsTarget(t *testing.T) {
+	f, _ := movieFixture(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// Simulate cleanup already running when the supervisor begins Close.
+	f.svc.mu.Lock()
+	st := f.svc.attempts[f.start.AttemptID]
+	now := f.clock.Now()
+	st.record.Phase = domain.TestAttemptFinished
+	st.record.Outcome = domain.TestOutcomeCancelled
+	st.record.CancelledAt, st.record.FinishedAt = &now, &now
+	st.cancel()
+	st.timer.Stop()
+	st.cleanupRunning = true
+	<-st.gate // the cancelled in-flight operation has not released its gate
+	if err := f.store.UpdateTestAttempt(context.Background(), st.record); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.mu.Unlock()
+	go f.svc.cleanup(ctx, st, st.cleanupDone)
+	if err := f.svc.Close(); !errors.Is(err, context.Canceled) {
+		t.Fatal("expired cleanup failure hidden", err)
+	}
+	st.gate <- struct{}{}
+	rec, _, err := f.store.GetTestAttempt(context.Background(), f.start.AttemptID)
+	if err != nil || rec.CleanupState != domain.TestCleanupFailed || rec.RecordingGap != context.Canceled.Error() || f.provider.stops != 1 {
+		t.Fatal("expired cleanup skipped gap persistence or target stop", rec, err)
+	}
+	receipts, err := f.svc.ListEvidence(context.Background(), rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, receipt := range receipts {
+		if receipt.Kind == "recording_metadata" {
+			return
+		}
+	}
+	t.Fatal("expired cleanup lost final recording metadata")
 }
 
 func TestRecordingFailureOnlySetsGapForRecorderErrorAndStillStopsTarget(t *testing.T) {

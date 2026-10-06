@@ -582,6 +582,7 @@ func Run() error {
 	if err != nil {
 		return fmt.Errorf("wire testing providers: %w", err)
 	}
+	testingDeps.Log = log
 	testingSvc := wireTestingService(cfg, store, wiredSessMgr, testingDeps)
 	defer func() {
 		if err := testingSvc.Close(); err != nil {
@@ -1100,6 +1101,11 @@ func Run() error {
 	// via defer) avoids the LIFO trap where a Stop() that blocks on ctx-cancel
 	// runs before the cancel: a non-signal exit path would hang otherwise.
 	stop()
+	// Testing owns ephemeral targets and recorders. Finish their evidence and
+	// stop the private desktop driver before waiting on other shutdown workers.
+	if err := testingSvc.Close(); err != nil {
+		log.Error("testing shutdown cleanup", "err", err)
+	}
 	if agentSwitchDispatcher != nil {
 		dispatcherStopContext, dispatcherStopCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		if err := agentSwitchDispatcher.Stop(dispatcherStopContext); err != nil {

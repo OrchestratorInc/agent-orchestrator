@@ -3,6 +3,7 @@ package testing
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -81,6 +82,8 @@ type Deps struct {
 	Recipes         map[string]Recipe
 	TargetStateRoot string
 	EvidenceRoot    string
+	Log             *slog.Logger
+	CloseDesktop    func(context.Context) error
 }
 
 // CreateRunInput selects an issue, revision and configured recipe.

@@ -43,7 +43,7 @@ func (s *Service) setRecordingGap(ctx context.Context, st *attemptState, gap str
 }
 
 func (s *Service) startRecording(ctx context.Context, st *attemptState, target domain.TestTargetIdentity) error {
-	record := domain.TestActionRecord{AttemptID: st.record.ID, RequestID: "recording-" + uuid.NewString(), Tool: "start_recording", Input: json.RawMessage(`{}`), State: "dispatching", At: s.deps.Clock.Now().UTC()}
+	record := domain.TestActionRecord{AttemptID: st.record.ID, WindowID: target.WindowID, LaunchID: target.LaunchID, RequestID: "recording-" + uuid.NewString(), Tool: "start_recording", Input: json.RawMessage(`{}`), State: "dispatching", At: s.deps.Clock.Now().UTC()}
 	if err := s.recordingJournal(ctx, record); err != nil {
 		return err
 	}
@@ -97,7 +97,7 @@ func (s *Service) stopRecording(ctx context.Context, st *attemptState, target do
 	if !ok {
 		return ProviderNotConfigured()
 	}
-	record := domain.TestActionRecord{AttemptID: st.record.ID, RequestID: "recording-" + uuid.NewString(), Tool: "stop_recording", Input: json.RawMessage(`{}`), State: "dispatching", At: s.deps.Clock.Now().UTC()}
+	record := domain.TestActionRecord{AttemptID: st.record.ID, WindowID: target.WindowID, LaunchID: target.LaunchID, RequestID: "recording-" + uuid.NewString(), Tool: "stop_recording", Input: json.RawMessage(`{}`), State: "dispatching", At: s.deps.Clock.Now().UTC()}
 	journalErr := s.recordingJournal(ctx, record)
 	// Stop even when the journal fails: cancellation must not leave a recorder
 	// running. The cleanup still reports the evidence failure explicitly.
@@ -106,8 +106,11 @@ func (s *Service) stopRecording(ctx context.Context, st *attemptState, target do
 	if err != nil {
 		result.Gap = err.Error()
 	}
+	// Final evidence must survive an expired recording-stop deadline.
+	completionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
 	if err == nil {
-		if e := s.saveRecording(ctx, st, result); e != nil {
+		if e := s.saveRecording(completionCtx, st, result); e != nil {
 			err = e
 		}
 	}
@@ -120,14 +123,14 @@ func (s *Service) stopRecording(ctx context.Context, st *attemptState, target do
 	record.RecordingGap = result.Gap
 	record.Recording, _ = json.Marshal(result)
 	metadata, _ := json.Marshal(result)
-	_, metadataErr := s.deps.Evidence.Write(ctx, st.record.ID, ports.TestingEvidenceArtifact{Kind: "recording_metadata", MIMEType: "application/json"}, strings.NewReader(string(metadata)))
+	_, metadataErr := s.deps.Evidence.Write(completionCtx, st.record.ID, ports.TestingEvidenceArtifact{Kind: "recording_metadata", MIMEType: "application/json"}, strings.NewReader(string(metadata)))
 	if metadataErr != nil {
 		record.State = "failed"
 		record.Detail = "Recording metadata could not be saved as evidence."
 		metadataErr = apierr.Internal("TEST_EVIDENCE_WRITE_FAILED", "Cannot save recording metadata")
 	}
-	completionErr := s.recordingJournal(ctx, record)
-	gapErr := s.setRecordingGap(ctx, st, result.Gap)
+	completionErr := s.recordingJournal(completionCtx, record)
+	gapErr := s.setRecordingGap(completionCtx, st, result.Gap)
 	return errors.Join(journalErr, err, metadataErr, completionErr, gapErr)
 }
 

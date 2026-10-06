@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	testingsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/testing"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
@@ -165,6 +166,33 @@ func TestOrdinaryChatSpawnAndRestoreDoNotInjectTestingServer(t *testing.T) {
 		if len(cfg.MCPServers) != 0 {
 			t.Fatal("ordinary worker received a testing server")
 		}
+	}
+}
+
+func TestSendToTestingWorkerWithoutControllerReturnsExplicitError(t *testing.T) {
+	for _, bound := range []bool{false, true} {
+		t.Run(fmt.Sprint(bound), func(t *testing.T) {
+			launcher := &recordingLauncher{turnErr: chatsvc.ErrNoController}
+			mgr, store, _ := newChatManager(launcher)
+			seedChatResumeSession(store, domain.ActivityExited)
+			profile := &fakeTestingProfile{}
+			if bound {
+				profile.link = domain.TestToolProfileLink{SessionID: "mer-1", AttemptID: "attempt", ProfileID: domain.TestToolProfileNativeV1}
+			}
+			mgr.SetTestingProfileResolver(profile)
+			err := mgr.Send(context.Background(), "mer-1", "Take a screenshot", nil)
+			var failure *apierr.Error
+			if bound {
+				if !errors.As(err, &failure) || failure.Code != "TEST_WORKER_NOT_RUNNING" || failure.Kind != apierr.KindConflict || !strings.Contains(failure.Message, "supervisor shutdown") {
+					t.Fatal("testing worker send returned a generic error", err)
+				}
+			} else if !errors.Is(err, chatsvc.ErrNoController) {
+				t.Fatal("ordinary worker error changed", err)
+			}
+			if profile.issued != 0 || len(launcher.started) != 0 {
+				t.Fatal("send tried to start a testing worker")
+			}
+		})
 	}
 }
 

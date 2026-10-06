@@ -108,8 +108,8 @@ func TestTestingProviderComposition(t *testing.T) {
 				}
 			}
 			if tc.configured {
-				if err := providers.Close(context.Background()); err != nil || !desktop.closed {
-					t.Fatal("desktop close was not wired", err)
+				if err := svc.Close(); err != nil || !desktop.closed {
+					t.Fatal("service shutdown did not close the desktop provider", err)
 				}
 			}
 		})

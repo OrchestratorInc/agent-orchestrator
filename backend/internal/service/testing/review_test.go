@@ -26,7 +26,7 @@ func TestCloseCancelsAttemptSavesRecordingAndStopsProviders(t *testing.T) {
 	if err != nil || rec.Phase != domain.TestAttemptFinished || rec.Outcome != domain.TestOutcomeCancelled || rec.CancelledAt == nil || rec.CleanupState != domain.TestCleanupComplete {
 		t.Fatal("shutdown did not persist cancelled cleanup", rec, err)
 	}
-	if _, err := f.call("closed", "screenshot", domain.TestScreenshotRequest{}); code(err) != "INVALID_TEST_CAPABILITY" {
+	if _, err := f.call("closed", "screenshot", domain.TestScreenshotRequest{}); code(err) != "TEST_WORKER_NOT_RUNNING" {
 		t.Fatal("shutdown retained a capability", err)
 	}
 	if err := f.svc.Close(); err != nil || len(f.provider.cleanupEvents) != 4 {

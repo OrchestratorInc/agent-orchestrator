@@ -155,3 +155,24 @@ func TestTestingPostBodiesRequireJSONContentType(t *testing.T) {
 		t.Fatalf("JSON with charset rejected: %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestTestingWorkerErrorsKeepCodeCauseAndRequestID(t *testing.T) {
+	for _, tc := range []struct {
+		path, body, code, message string
+		err                       error
+		status                    int
+	}{
+		{path: "/api/v1/testing/runs/run/attempts", body: `{"workerPrompt":"investigate"}`, code: "TEST_WORKER_START_FAILED", message: "DEFAULT_BRANCH_UNRESOLVED: Scratch repository has no default branch", err: apierr.Unavailable("TEST_WORKER_START_FAILED", "Investigator worker start failed: DEFAULT_BRANCH_UNRESOLVED: Scratch repository has no default branch"), status: 503},
+		{path: "/api/v1/testing/attempts/attempt/tools/screenshot", body: `{"sessionId":"worker","requestId":"shot","input":{}}`, code: "TEST_WORKER_NOT_RUNNING", message: "supervisor shutdown", err: testingsvc.WorkerNotRunning(), status: 409},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			w := testingRequest(testingRouter(&testingServiceFake{fail: tc.err}), http.MethodPost, tc.path, tc.body, "capability")
+			var result struct {
+				Code, Message, RequestID string
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || w.Code != tc.status || result.Code != tc.code || !strings.Contains(result.Message, tc.message) || result.RequestID == "" {
+				t.Fatal("testing worker error lost its API details", w.Code, w.Body.String(), err)
+			}
+		})
+	}
+}

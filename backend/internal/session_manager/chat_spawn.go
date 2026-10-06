@@ -10,6 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
 // The chat-mode controller launch.
@@ -389,6 +390,11 @@ func (m *Manager) sendChat(ctx context.Context, id domain.SessionID, message, cl
 	}
 	_, relayErr := m.chat.RelaySessionChatTurn(ctx, id, message, clientMessageID, options)
 	if relayErr != nil {
+		if errors.Is(relayErr, chatsvc.ErrNoController) {
+			if err := m.testingWorkerSendError(ctx, id); err != nil {
+				return true, err
+			}
+		}
 		return true, fmt.Errorf("send %s: %w", id, relayErr)
 	}
 	return true, nil

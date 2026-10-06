@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +66,9 @@ func New(deps Deps) *Service {
 	if deps.Clock == nil {
 		deps.Clock = realClock{}
 	}
+	if deps.Log == nil {
+		deps.Log = slog.Default()
+	}
 	return &Service{deps: deps, attempts: map[domain.TestAttemptID]*attemptState{}, caps: map[domain.SessionID]capability{}}
 }
 
@@ -80,6 +85,23 @@ func (s *Service) configured() error {
 func invalid(message string) error { return apierr.Invalid("INVALID_TESTING_REQUEST", message, nil) }
 func inactive() error {
 	return apierr.Conflict("TEST_ATTEMPT_INACTIVE", "Test attempt is cancelled, finished or past its deadline", nil)
+}
+
+// WorkerNotRunning is a 409 for a bound investigator without a live controller
+// or capability after supervisor shutdown. A cancelled attempt needs a new attempt.
+func WorkerNotRunning() error {
+	return apierr.Conflict("TEST_WORKER_NOT_RUNNING", "Testing worker is not running. Restore it while its attempt is active, or start a new attempt after supervisor shutdown.", nil)
+}
+
+var launchSecret = regexp.MustCompile(`(?i)(?:AO_TEST_CAPABILITY|api[_-]?key|access[_-]?token|token|password|secret)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s"',;]+)|\bBearer\s+[^\s"',;]+|[A-Za-z0-9_-]{43,}`)
+
+func workerLaunchCause(err error) string {
+	cause := err.Error()
+	var failure *apierr.Error
+	if errors.As(err, &failure) {
+		cause = failure.Code + ": " + cause
+	}
+	return launchSecret.ReplaceAllString(cause, "[redacted]")
 }
 func targetChanged() error {
 	return apierr.Conflict("TEST_TARGET_CHANGED", "Target identity is missing or changed", nil)
@@ -240,7 +262,9 @@ func (s *Service) StartAttempt(ctx context.Context, id domain.TestRunID, in Star
 	}}
 	session, err := s.deps.Workers.LaunchTestingWorker(startCtx, request)
 	if err != nil {
-		return fail(apierr.Unavailable("TEST_WORKER_START_FAILED", "Investigator worker start failed"))
+		cause := workerLaunchCause(err)
+		s.deps.Log.Warn("testing worker start failed", "attemptID", rec.ID, "cause", cause)
+		return fail(apierr.Unavailable("TEST_WORKER_START_FAILED", "Investigator worker start failed: "+cause))
 	}
 	s.mu.Lock()
 	grant, prepared := s.caps[session]
@@ -359,7 +383,7 @@ func (s *Service) finish(ctx context.Context, id domain.TestAttemptID, outcome d
 		if !ok {
 			return r, apierr.NotFound("TEST_ATTEMPT_NOT_FOUND", "Unknown test attempt")
 		}
-		if r.Phase == domain.TestAttemptFinished && r.CleanupState != domain.TestCleanupFailed {
+		if r.Phase == domain.TestAttemptFinished && r.CleanupState == domain.TestCleanupComplete {
 			return r, nil
 		}
 		st = s.stateLocked(r)
@@ -368,7 +392,7 @@ func (s *Service) finish(ctx context.Context, id domain.TestAttemptID, outcome d
 		if st.finishErr != nil {
 			st.finishErr = s.deps.Store.UpdateTestAttempt(ctx, st.record)
 		}
-		if st.record.CleanupState == domain.TestCleanupFailed && !st.cleanupRunning {
+		if st.record.CleanupState != domain.TestCleanupComplete && !st.cleanupRunning {
 			st.cleanupDone = make(chan struct{})
 			st.cleanupErr = nil
 			st.cleanupRunning = true
@@ -411,17 +435,12 @@ func (s *Service) cleanup(ctx context.Context, st *attemptState, done chan struc
 	}()
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	var cleanupErr error
 	select {
 	case <-st.gate:
 		defer func() { st.gate <- struct{}{} }()
 	case <-ctx.Done():
-		s.mu.Lock()
-		st.record.CleanupState = domain.TestCleanupFailed
-		persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		st.cleanupErr = errors.Join(ctx.Err(), s.deps.Store.UpdateTestAttempt(persistCtx, st.record))
-		persistCancel()
-		s.mu.Unlock()
-		return
+		cleanupErr = ctx.Err()
 	}
 	s.mu.Lock()
 	rec := st.record
@@ -429,44 +448,53 @@ func (s *Service) cleanup(ctx context.Context, st *attemptState, done chan struc
 	st.record.CleanupState = rec.CleanupState
 	err := s.deps.Store.UpdateTestAttempt(ctx, rec)
 	s.mu.Unlock()
-	var cleanupErr error
 	if err != nil {
-		cleanupErr = err
+		cleanupErr = errors.Join(cleanupErr, err)
 	}
 	result := ports.TestingCleanupResult{State: domain.TestCleanupComplete}
 	if rec.Target.ID != "" && s.deps.Target == nil {
-		cleanupErr = ProviderNotConfigured()
+		cleanupErr = errors.Join(cleanupErr, ProviderNotConfigured())
 		result.State = domain.TestCleanupFailed
 	} else if rec.Target.ID != "" {
-		if e := s.stopRecording(ctx, st, rec.Target); e != nil {
-			cleanupErr = e
-		}
+		recordingCtx, recordingCancel := context.WithTimeout(ctx, 20*time.Second)
+		cleanupErr = errors.Join(cleanupErr, s.stopRecording(recordingCtx, st, rec.Target))
+		recordingCancel()
 		if desktop, ok := s.deps.Desktop.(ports.TestingDesktopReleaser); ok && rec.Target.WindowID != "" && !st.desktopReleased {
-			if e := desktop.Release(ctx, rec.Target); e != nil {
-				cleanupErr = e
+			releaseCtx, releaseCancel := context.WithTimeout(ctx, 5*time.Second)
+			if e := desktop.Release(releaseCtx, rec.Target); e != nil {
+				cleanupErr = errors.Join(cleanupErr, e)
 			} else {
 				st.desktopReleased = true
 			}
+			releaseCancel()
 		}
-		logs, e := s.deps.Target.ReadLogs(ctx, rec.Target, domain.TestReadLogsRequest{MaxBytes: 65536})
+		logsCtx, logsCancel := context.WithTimeout(ctx, 5*time.Second)
+		logs, e := s.deps.Target.ReadLogs(logsCtx, rec.Target, domain.TestReadLogsRequest{MaxBytes: 65536})
 		if e == nil {
-			_, e = s.deps.Evidence.Write(ctx, rec.ID, ports.TestingEvidenceArtifact{Kind: "final_logs", MIMEType: "text/plain"}, strings.NewReader(logs.Text))
+			_, e = s.deps.Evidence.Write(logsCtx, rec.ID, ports.TestingEvidenceArtifact{Kind: "final_logs", MIMEType: "text/plain"}, strings.NewReader(logs.Text))
 		}
+		logsCancel()
 		if e != nil {
-			cleanupErr = e
+			cleanupErr = errors.Join(cleanupErr, e)
 		}
-		stopped, e := s.deps.Target.Stop(ctx, rec.Target)
+		// Target stop and terminal persistence get their own deadlines even if
+		// recording or logs have exhausted the earlier cleanup budget.
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		stopped, e := s.deps.Target.Stop(stopCtx, rec.Target)
+		stopCancel()
 		result = stopped
 		if e != nil || stopped.State != domain.TestCleanupComplete || len(stopped.Leftovers) > 0 {
-			cleanupErr = fmt.Errorf("target cleanup incomplete")
+			cleanupErr = errors.Join(cleanupErr, e, fmt.Errorf("target cleanup incomplete"))
 		}
 	}
 	if cleanupErr != nil {
 		result.State = domain.TestCleanupFailed
 	}
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer persistCancel()
 	data, _ := json.Marshal(result)
-	if _, e := s.deps.Evidence.Write(ctx, rec.ID, ports.TestingEvidenceArtifact{Kind: "cleanup", MIMEType: "application/json"}, strings.NewReader(string(data))); e != nil {
-		cleanupErr = e
+	if _, e := s.deps.Evidence.Write(persistCtx, rec.ID, ports.TestingEvidenceArtifact{Kind: "cleanup", MIMEType: "application/json"}, strings.NewReader(string(data))); e != nil {
+		cleanupErr = errors.Join(cleanupErr, e)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -474,9 +502,9 @@ func (s *Service) cleanup(ctx context.Context, st *attemptState, done chan struc
 	if cleanupErr != nil {
 		st.record.CleanupState = domain.TestCleanupFailed
 	}
-	st.finishErr = s.deps.Store.UpdateTestAttempt(ctx, st.record)
+	st.finishErr = s.deps.Store.UpdateTestAttempt(persistCtx, st.record)
 	if st.finishErr != nil {
-		cleanupErr = st.finishErr
+		cleanupErr = errors.Join(cleanupErr, st.finishErr)
 	}
 	st.cleanupErr = cleanupErr
 }
@@ -536,7 +564,7 @@ func (s *Service) Close() error {
 	clear(s.caps)
 	var ids []domain.TestAttemptID
 	for id, st := range s.attempts {
-		if st.record.Phase != domain.TestAttemptFinished || st.cleanupRunning || st.record.CleanupState == domain.TestCleanupFailed {
+		if st.record.Phase != domain.TestAttemptFinished || st.cleanupRunning || st.record.CleanupState != domain.TestCleanupComplete {
 			st.cancel()
 			if st.timer != nil {
 				st.timer.Stop()
@@ -545,20 +573,41 @@ func (s *Service) Close() error {
 		}
 	}
 	s.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
 	defer cancel()
 	var closeErr error
+	results := make(chan error, len(ids))
 	for _, id := range ids {
-		_, err := s.finish(ctx, id, domain.TestOutcomeCancelled, true)
-		closeErr = errors.Join(closeErr, err)
+		go func() {
+			_, err := s.finish(ctx, id, domain.TestOutcomeCancelled, true)
+			results <- errors.Join(err, s.WaitCleanup(ctx, id))
+		}()
 	}
-	for _, id := range ids {
-		closeErr = errors.Join(closeErr, s.WaitCleanup(ctx, id))
+	for range ids {
+		closeErr = errors.Join(closeErr, <-results)
 	}
-	if desktop, ok := s.deps.Desktop.(ports.TestingDesktopCloser); ok {
+	closeDesktop := s.deps.CloseDesktop
+	if closeDesktop == nil {
+		if desktop, ok := s.deps.Desktop.(ports.TestingDesktopCloser); ok {
+			closeDesktop = desktop.Close
+		}
+	}
+	if closeDesktop != nil {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		closeErr = errors.Join(closeErr, desktop.Close(closeCtx))
+		desktopErr := closeDesktop(closeCtx)
 		closeCancel()
+		closeErr = errors.Join(closeErr, desktopErr)
+		if desktopErr != nil {
+			// A failed driver close is terminal cleanup failure, not success.
+			persistCtx, persistCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			s.mu.Lock()
+			for _, st := range s.attempts {
+				st.record.CleanupState = domain.TestCleanupFailed
+				closeErr = errors.Join(closeErr, s.deps.Store.UpdateTestAttempt(persistCtx, st.record))
+			}
+			s.mu.Unlock()
+			persistCancel()
+		}
 	}
 	s.mu.Lock()
 	s.closeErr = closeErr

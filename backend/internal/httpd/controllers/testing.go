@@ -127,6 +127,9 @@ func (c *TestingController) evidence(w http.ResponseWriter, r *http.Request) {
 	}
 	envelope.WriteJSON(w, http.StatusOK, TestingEvidenceResponse{Evidence: receipts})
 }
+
+// A bound worker whose controller/capability was lost at supervisor shutdown
+// returns TEST_WORKER_NOT_RUNNING as HTTP 409 through the standard envelope.
 func (c *TestingController) tool(w http.ResponseWriter, r *http.Request, name string) {
 	if !c.available(w, r) {
 		return

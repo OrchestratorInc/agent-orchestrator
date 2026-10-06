@@ -22,6 +22,25 @@ func (m *Manager) SetTestingProfileResolver(resolver TestingProfileResolver) {
 	m.testingProfile = resolver
 }
 
+func (m *Manager) testingWorkerSendError(ctx context.Context, id domain.SessionID) error {
+	var bound bool
+	var err error
+	if m.testingProfile != nil {
+		_, bound, err = m.testingProfile.LookupBinding(ctx, id)
+	} else if bindings, ok := m.store.(interface {
+		GetTestToolBinding(context.Context, domain.SessionID) (domain.TestToolProfileLink, bool, error)
+	}); ok {
+		_, bound, err = bindings.GetTestToolBinding(ctx, id)
+	}
+	if err != nil {
+		return err
+	}
+	if bound {
+		return testingsvc.WorkerNotRunning()
+	}
+	return nil
+}
+
 var _ testingsvc.WorkerLauncher = (*Manager)(nil)
 
 // LaunchTestingWorker creates an ordinary visible worker and binds it before Chat starts.

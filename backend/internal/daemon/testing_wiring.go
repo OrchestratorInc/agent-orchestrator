@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -26,6 +27,7 @@ type testingProviders struct {
 	Workers testingsvc.WorkerLauncher
 	Recipes map[string]testingsvc.Recipe
 	Close   func(context.Context) error
+	Log     *slog.Logger
 }
 
 // Provider-specific recording and policy types are translated here; the
@@ -110,7 +112,7 @@ func testingProvidersFromEnv(cfg config.Config, getenv func(string) string, targ
 
 func newTestingService(cfg config.Config, store testingsvc.Store, providers testingProviders) *testingsvc.Service {
 	home, _ := os.UserHomeDir()
-	return testingsvc.New(testingsvc.Deps{Store: store, Target: providers.Target, Desktop: providers.Desktop, Workers: providers.Workers, Recipes: providers.Recipes, Evidence: testingevidence.New(cfg.DataDir, store), EvidenceRoot: filepath.Join(cfg.DataDir, "testing"), TargetStateRoot: filepath.Join(home, ".ao", "dev", "agentic-target")})
+	return testingsvc.New(testingsvc.Deps{Store: store, Target: providers.Target, Desktop: providers.Desktop, Workers: providers.Workers, Recipes: providers.Recipes, Evidence: testingevidence.New(cfg.DataDir, store), EvidenceRoot: filepath.Join(cfg.DataDir, "testing"), TargetStateRoot: filepath.Join(home, ".ao", "dev", "agentic-target"), Log: providers.Log, CloseDesktop: providers.Close})
 }
 
 // wireTestingService binds both sides before startup recovery can restore workers.

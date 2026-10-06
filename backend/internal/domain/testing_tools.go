@@ -128,6 +128,8 @@ type TestDaemonQueryResult struct {
 // Inputs are validated tool data; headers, capability tokens and env are excluded.
 type TestActionRecord struct {
 	AttemptID              TestAttemptID   `json:"attemptId"`
+	WindowID               string          `json:"windowId"`
+	LaunchID               string          `json:"launchId"`
 	RequestID              string          `json:"requestId"`
 	Tool                   string          `json:"tool"`
 	Input                  json.RawMessage `json:"input"`
