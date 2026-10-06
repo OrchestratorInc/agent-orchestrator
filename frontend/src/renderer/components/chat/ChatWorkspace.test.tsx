@@ -452,7 +452,7 @@ describe("ChatWorkspace timeline", () => {
 		const localEchos = [{ clientMessageId: "send-after-reading", text: "New question", createdAt: "2026-09-09T00:00:00Z" }];
 		view.rerender(<ChatWorkspace snapshot={snapshot} localEchos={localEchos} />);
 		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
-		expect(log.scrollTop).toBe(3200);
+		expect(log.scrollTop).toBe(4000);
 	});
 
 	it("shows a local human echo until the matching durable turn arrives", () => {

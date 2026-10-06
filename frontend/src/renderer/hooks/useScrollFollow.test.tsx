@@ -25,17 +25,18 @@ describe("useScrollFollow", () => {
 		const { result } = renderHook(() => useScrollFollow(() => node));
 		// jsdom has no layout to animate, so the glide snaps to the end.
 		result.current.glideToEnd();
-		expect(node.scrollTop).toBe(1500);
+		expect(node.scrollTop).toBe(2000);
 		expect(result.current.isProgrammaticScroll()).toBe(true);
 		result.current.cancel();
 		expect(result.current.isProgrammaticScroll()).toBe(false);
 	});
 
 	it("leaves a viewport that is already at its end alone", () => {
-		const node = viewport({ scrollHeight: 2000, clientHeight: 500, scrollTop: 1500 });
+		// The app's plain snap writes scrollHeight (the browser clamps it), so "at the end" is that value.
+		const node = viewport({ scrollHeight: 2000, clientHeight: 500, scrollTop: 2000 });
 		const { result } = renderHook(() => useScrollFollow(() => node));
 		result.current.followEnd();
-		expect(node.scrollTop).toBe(1500);
+		expect(node.scrollTop).toBe(2000);
 		expect(result.current.isProgrammaticScroll()).toBe(false);
 	});
 });

@@ -65,7 +65,8 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		const node = getNode();
 		if (!node || glide.current || frame.current != null) return;
 		if (snap.current) {
-			write(node, endOf(node));
+			// The browser clamps to the real maximum; writing scrollHeight is the plain snap.
+			write(node, node.scrollHeight);
 			return;
 		}
 		let previous = performance.now();
@@ -104,7 +105,8 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		cancel();
 		const from = node.scrollTop;
 		if (snap.current) {
-			write(node, endOf(node));
+			// The browser clamps to the real maximum; writing scrollHeight is the plain snap.
+			write(node, node.scrollHeight);
 			return;
 		}
 		glide.current = animate(0, 1, {
