@@ -1535,8 +1535,8 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
 	});
 
-	// Like T3: the checklist keeps the working slot until the agent is up and its
-	// first turn is live, then leaves nothing behind.
+	// The checklist keeps the working slot until the agent is up and its first
+	// turn is live, then leaves nothing behind.
 	it("hands a clean start over to the working line without leaving the checklist", () => {
 		const view = render(
 			<ChatWorkspace

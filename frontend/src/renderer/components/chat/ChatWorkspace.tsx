@@ -2263,8 +2263,8 @@ function Timeline({
 	// stop overflowing and used to lose the minimap exactly then.
 	const minimapEnabled = scrollbar.markers.length > 0;
 	const openingTurnId = startup?.openingTurnId;
-	// Like T3, the checklist holds the working slot until the agent is up and its
-	// first turn is live; a clean start then leaves no trace.
+	// The checklist holds the working slot until the agent is up and its first
+	// turn is live; a clean start then leaves no trace.
 	const showStartup = Boolean(
 		startup &&
 			(startup.failed ||
