@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -93,21 +94,33 @@ func PrepareV2DataHome() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("opencode: stage legacy data migration: %w", err)
 	}
-	defer os.RemoveAll(staging)
 	if err := copyTree(source, staging); err != nil {
-		return "", fmt.Errorf("opencode: copy legacy data store: %w", err)
+		cleanupErr := os.RemoveAll(staging)
+		return "", errors.Join(fmt.Errorf("opencode: copy legacy data store: %w", err), cleanupErr)
 	}
 	if err := os.Rename(staging, destination); err != nil {
 		if _, statErr := os.Stat(destination); statErr == nil {
+			if cleanupErr := os.RemoveAll(staging); cleanupErr != nil {
+				return "", fmt.Errorf("opencode: remove redundant migration staging: %w", cleanupErr)
+			}
 			return destinationHome, nil
 		}
-		return "", fmt.Errorf("opencode: activate migrated data store: %w", err)
+		cleanupErr := os.RemoveAll(staging)
+		return "", errors.Join(fmt.Errorf("opencode: activate migrated data store: %w", err), cleanupErr)
 	}
 	return destinationHome, nil
 }
 
 func copyTree(source, destination string) error {
-	return filepath.Walk(source, func(path string, info os.FileInfo, walkErr error) error {
+	sourceRoot, err := os.OpenRoot(source)
+	if err != nil {
+		return err
+	}
+	destinationRoot, err := os.OpenRoot(destination)
+	if err != nil {
+		return errors.Join(err, sourceRoot.Close())
+	}
+	walkErr := filepath.Walk(source, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -115,21 +128,20 @@ func copyTree(source, destination string) error {
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(destination, relative)
 		if info.IsDir() {
 			if relative == "." {
 				return nil
 			}
-			return os.Mkdir(target, info.Mode().Perm())
+			return destinationRoot.Mkdir(relative, info.Mode().Perm())
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("unsupported legacy data entry %q", path)
 		}
-		input, err := os.Open(path)
+		input, err := sourceRoot.Open(relative)
 		if err != nil {
 			return err
 		}
-		output, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
+		output, err := destinationRoot.OpenFile(relative, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
 		if err != nil {
 			_ = input.Close()
 			return err
@@ -145,4 +157,5 @@ func copyTree(source, destination string) error {
 		}
 		return closeErr
 	})
+	return errors.Join(walkErr, sourceRoot.Close(), destinationRoot.Close())
 }
