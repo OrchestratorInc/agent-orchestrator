@@ -1672,18 +1672,23 @@ export function createBrowserViewHost(
         ).catch(() => undefined);
         return;
       }
+      const closingTabId = session.activeTabId;
       if (session.tabs.size === 1) {
-        // The last tab cannot be removed, so ⌘W empties it (blank page, no
-        // history) and closes the browser panel. Move focus to the shell
-        // first so the next ⌘W does not land in the hidden page and fall
-        // through to the menu's Close item.
+        // A browser always keeps one tab, so ⌘W on the last one swaps it for
+        // a fresh blank tab and closes the browser panel. Move focus to the
+        // shell first so the next ⌘W does not land in the hidden page and
+        // fall through to the menu's Close item; the hidden browser then
+        // stops owning tab shortcuts.
         const shell = shellContents(options);
         shell.focus();
+        forgetNativeFocus(session.viewId);
+        forgetBrowserShortcutTarget(session.viewId);
         shell.send("browser:closePanel", session.viewId);
-        void clear(session.viewId).catch(() => undefined);
+        void openUserTab(session)
+          .then(() => closeUserTab(session, closingTabId))
+          .catch(() => undefined);
         return;
       }
-      const closingTabId = session.activeTabId;
       if (isNativePage) {
         // The focused view is about to be destroyed asynchronously. Move OS
         // focus to its replacement synchronously — making it visible first
