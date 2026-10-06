@@ -850,7 +850,7 @@ func TestWakeHibernatedChatClearsMarkerBeforeNativeResume(t *testing.T) {
 	}
 }
 
-func TestWakeHibernatedChatRetainsMarkerAfterFailedNativeResume(t *testing.T) {
+func TestWakeHibernatedChatLeavesRecoveryAvailableAfterFailedLaunch(t *testing.T) {
 	providerErr := errors.New("provider failed to start")
 	launcher := &recordingLauncher{startErr: providerErr}
 	mgr, store, _ := newChatManager(launcher)
@@ -871,12 +871,12 @@ func TestWakeHibernatedChatRetainsMarkerAfterFailedNativeResume(t *testing.T) {
 	if err := mgr.WakeHibernatedChat(context.Background(), rec.ID); !errors.Is(err, providerErr) {
 		t.Fatalf("first wake error = %v, want provider failure", err)
 	}
-	if got := store.sessions[rec.ID]; got.HibernatedAt == nil || got.IsTerminated || got.Metadata.ProviderConversationID != rec.Metadata.ProviderConversationID {
-		t.Fatalf("failed wake lost retryable native identity: %+v", got)
+	if got := store.sessions[rec.ID]; got.HibernatedAt != nil || got.IsTerminated || got.Metadata.ProviderConversationID != rec.Metadata.ProviderConversationID {
+		t.Fatalf("failed wake must remain stopped with its native identity: %+v", got)
 	}
 	launcher.startErr = nil
-	if err := mgr.WakeHibernatedChat(context.Background(), rec.ID); err != nil {
-		t.Fatalf("retry wake: %v", err)
+	if _, err := mgr.ResumeAgentWithMode(context.Background(), rec.ID); err != nil {
+		t.Fatalf("explicit resume: %v", err)
 	}
 	if len(launcher.started) != 2 || launcher.started[1].ProviderConversationID != rec.Metadata.ProviderConversationID {
 		t.Fatalf("native resume attempts = %+v, want two with same provider id", launcher.started)

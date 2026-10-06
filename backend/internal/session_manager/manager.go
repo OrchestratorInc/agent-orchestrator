@@ -2894,39 +2894,8 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 		if !ok {
 			return RestoreResult{}, fmt.Errorf("resume agent %s: hibernation store unavailable", id)
 		}
-		asleepAt := rec.HibernatedAt
-		nativeID := rec.Metadata.ProviderConversationID
-		// Restore sleep only after a failed launch. A definitive native-resume
-		// failure stays stopped so the existing recovery action is available.
-		defer func() {
-			if err == nil || errors.Is(err, ports.ErrChatRecoveryInconclusive) || errors.Is(err, ports.ErrChatResumeFailed) {
-				return
-			}
-			recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-			defer cancel()
-			for range 3 {
-				fresh, found, readErr := m.store.GetSession(recoveryCtx, id)
-				if readErr != nil {
-					err = errors.Join(err, fmt.Errorf("restore hibernation marker: %w", readErr))
-					return
-				}
-				if !found || fresh.HibernatedAt != nil || fresh.IsTerminated ||
-					domain.NormalizeSessionMode(fresh.Mode) != domain.SessionModeChat ||
-					fresh.Metadata.ProviderConversationID != nativeID ||
-					(m.chat != nil && m.chat.HasLiveChatController(id)) {
-					return
-				}
-				restored, restoreErr := store.SetSessionHibernated(recoveryCtx, id, fresh.Revision, asleepAt)
-				if restoreErr != nil {
-					err = errors.Join(err, fmt.Errorf("restore hibernation marker: %w", restoreErr))
-					return
-				}
-				if restored {
-					return
-				}
-			}
-			err = errors.Join(err, errors.New("restore hibernation marker: session changed concurrently"))
-		}()
+		// A failed launch stays stopped. Keep its native identity for the existing
+		// Resume action instead of hiding the failure behind a sleep marker.
 		for range 3 {
 			if rec.HibernatedAt == nil {
 				break
