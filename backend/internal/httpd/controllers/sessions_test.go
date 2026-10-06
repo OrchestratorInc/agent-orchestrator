@@ -1624,6 +1624,15 @@ func TestSessionsAPI_GetExposesArtifactFilesAndServesHTMLArtifact(t *testing.T) 
 		t.Fatalf("direct artifact body = %q, want html artifact content, not the colliding workspace file's", directBody)
 	}
 
+	remoteBody, remoteStatus, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/files/site/index.html?source=artifact", "")
+	if remoteStatus != http.StatusOK || !bytes.Contains(remoteBody, []byte("artifact preview")) {
+		t.Fatalf("GET artifact through API = %d, body=%q", remoteStatus, remoteBody)
+	}
+	workspaceBody, workspaceStatus, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/files/site/index.html", "")
+	if workspaceStatus != http.StatusNotFound {
+		t.Fatalf("GET default workspace root = %d, body=%q", workspaceStatus, workspaceBody)
+	}
+
 	// The colliding workspace file, addressed on the ordinary (non-artifact)
 	// preview origin at its own literal path, is unaffected and still opens
 	// its own real content.
@@ -2680,7 +2689,7 @@ func TestSessionsAPI_PreviewRoutesRejectSymlinkOutsideWorkspace(t *testing.T) {
 
 	svc := newFakeSessionService()
 	s := svc.sessions["ao-1"]
-	s.Metadata = domain.SessionMetadata{WorkspacePath: workspace}
+	s.Metadata = domain.SessionMetadata{WorkspacePath: workspace, ArtifactDir: workspace}
 	svc.sessions["ao-1"] = s
 	srv := newSessionTestServer(t, svc)
 	previewURL := mustPreviewFileURL(t, srv, "ao-1", "index.html")
@@ -2691,6 +2700,9 @@ func TestSessionsAPI_PreviewRoutesRejectSymlinkOutsideWorkspace(t *testing.T) {
 	}{
 		{name: "isolated origin", do: func() ([]byte, int, http.Header) {
 			return doPreviewOriginRequest(t, srv, previewURL, "/escape.css")
+		}},
+		{name: "artifact API route", do: func() ([]byte, int, http.Header) {
+			return doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/files/escape.css?source=artifact", "")
 		}},
 		{name: "legacy route", do: func() ([]byte, int, http.Header) {
 			return doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/files/escape.css", "")

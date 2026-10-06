@@ -500,6 +500,10 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	assetPath := chi.URLParam(r, "*")
+	if r.URL.Query().Get("source") == "artifact" {
+		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
+		return
+	}
 	if name, ok := attachmentstore.NameFromWorkspacePath(assetPath); ok && c.Attachments != nil {
 		file, info, openErr := c.Attachments.Open(r.Context(), sess.ID, name)
 		if openErr == nil {

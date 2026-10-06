@@ -206,7 +206,8 @@ type SessionIDParam struct {
 // PreviewFileQuery is the query string accepted by GET
 // /api/v1/sessions/{sessionId}/preview/files/*.
 type PreviewFileQuery struct {
-	Raw bool `query:"raw,omitempty" description:"When true, serve Markdown files as raw source instead of rendering them to HTML for Browser preview."`
+	Source string `query:"source,omitempty" enum:"workspace,artifact" description:"File root to serve from. Defaults to the session workspace; artifact selects the session artifact directory."`
+	Raw    bool   `query:"raw,omitempty" description:"When true, serve Markdown files as raw source instead of rendering them to HTML for Browser preview."`
 }
 
 // PRNumberParam is the associated pull-request number in Files routes.

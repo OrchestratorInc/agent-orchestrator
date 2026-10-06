@@ -11,6 +11,7 @@ import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { toReviewerHarnessId } from "../lib/reviewer-harnesses";
 import { captureRendererEvent } from "../lib/telemetry";
 import { agentSwitchVisibility } from "../lib/agent-switch-visibility";
+import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
 import { requestRemoteHostsRefresh } from "./useRemoteHosts";
@@ -323,7 +324,13 @@ async function fetchRemoteSessions(hostId: string) {
 		recheckRemoteHost(hostId, response.status);
 		throw error;
 	}
-	return data?.sessions ?? [];
+	return Promise.all((data?.sessions ?? []).map(async (session) => ({
+		...session,
+		artifactFiles: await Promise.all((session.artifactFiles ?? []).map(async (artifact) => ({
+			...artifact,
+			rawUrl: artifact.rawUrl ? await aoBridge.remotes.previewUrl(hostId, session.id, artifact.rawUrl) : undefined,
+		}))),
+	})));
 }
 
 function toRemoteWorkspaces(

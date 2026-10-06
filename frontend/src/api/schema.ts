@@ -2301,7 +2301,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Serve a static browser preview file from a session workspace */
+        /** Serve a static browser preview file from a session workspace or artifact directory */
         get: operations["getSessionPreviewFile"];
         put?: never;
         post?: never;
@@ -14384,6 +14384,8 @@ export interface operations {
     getSessionPreviewFile: {
         parameters: {
             query?: {
+                /** @description File root to serve from. Defaults to the session workspace; artifact selects the session artifact directory. */
+                source?: "workspace" | "artifact";
                 /** @description When true, serve Markdown files as raw source instead of rendering them to HTML for Browser preview. */
                 raw?: boolean;
             };

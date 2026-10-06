@@ -6928,6 +6928,17 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      - description: File root to serve from. Defaults to the session workspace; artifact
+          selects the session artifact directory.
+        in: query
+        name: source
+        schema:
+          description: File root to serve from. Defaults to the session workspace;
+            artifact selects the session artifact directory.
+          enum:
+          - workspace
+          - artifact
+          type: string
       - description: When true, serve Markdown files as raw source instead of rendering
           them to HTML for Browser preview.
         in: query
@@ -6961,7 +6972,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Serve a static browser preview file from a session workspace
+      summary: Serve a static browser preview file from a session workspace or artifact
+        directory
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/preview/server:
