@@ -194,10 +194,7 @@ type policyDesktop struct {
 }
 
 func (d *policyDesktop) DeliveryMode() string { return d.mode }
-func (d *policyDesktop) InputDeliveryMode(tool string) string {
-	if tool == "click" {
-		return "background"
-	}
+func (d *policyDesktop) InputDeliveryMode(string) string {
 	return d.mode
 }
 func (d *policyDesktop) StartRecording(_ context.Context, _ domain.TestTargetIdentity, _ string) (ports.TestingRecordingResult, error) {

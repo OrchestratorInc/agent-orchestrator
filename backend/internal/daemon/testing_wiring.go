@@ -65,10 +65,7 @@ func (d testingDesktopBridge) Key(ctx context.Context, target domain.TestTargetI
 func (d testingDesktopBridge) DeliveryMode() string {
 	return string(d.testingDesktopAdapter.DeliveryMode())
 }
-func (d testingDesktopBridge) InputDeliveryMode(tool string) string {
-	if tool == "click" {
-		return string(cua.Background)
-	}
+func (d testingDesktopBridge) InputDeliveryMode(string) string {
 	return d.DeliveryMode()
 }
 func (d testingDesktopBridge) StartRecording(ctx context.Context, target domain.TestTargetIdentity, dir string) (ports.TestingRecordingResult, error) {

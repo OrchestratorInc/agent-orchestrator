@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -64,11 +66,7 @@ func TestFullFrameAndDeliveryPolicyReachInput(t *testing.T) {
 		if record.Tool != "click" && record.Tool != "type" && record.Tool != "key" {
 			continue
 		}
-		want := "foreground"
-		if record.Tool == "click" {
-			want = "background"
-		}
-		if record.ConfiguredDeliveryMode != "foreground" || record.DeliveryMode != want {
+		if record.ConfiguredDeliveryMode != "foreground" || record.DeliveryMode != "foreground" {
 			t.Fatalf("input policy missing from %s journal: %+v", record.State, record)
 		}
 		counts[record.Tool]++
@@ -81,6 +79,85 @@ func TestFullFrameAndDeliveryPolicyReachInput(t *testing.T) {
 	var recipe Recipe
 	if err := json.Unmarshal([]byte(f.run.RecipeSnapshot), &recipe); err != nil || recipe.DeliveryMode != "foreground" {
 		t.Fatal("recipe did not retain delivery policy", err)
+	}
+}
+
+type originalScreenshotDesktop struct {
+	*fakeProviders
+	original domain.TestScreenshot
+	corrupt  func(*domain.TestScreenshot)
+}
+
+func (d *originalScreenshotDesktop) Screenshot(ctx context.Context, target domain.TestTargetIdentity) (domain.TestScreenshot, error) {
+	shot, err := d.fakeProviders.Screenshot(ctx, target)
+	if err != nil {
+		return shot, err
+	}
+	var full bytes.Buffer
+	if err := png.Encode(&full, image.NewRGBA(image.Rect(0, 0, 4, 4))); err != nil {
+		return shot, err
+	}
+	d.original = shot
+	d.original.Data = full.Bytes()
+	d.original.Frame.Width, d.original.Frame.Height = 4, 4
+	if d.corrupt != nil {
+		d.corrupt(&d.original)
+	}
+	shot.Original = &d.original
+	return shot, nil
+}
+
+func TestScreenshotSavesOriginalEvidenceAndReturnsPreviewForInput(t *testing.T) {
+	var desktop *originalScreenshotDesktop
+	f := newFixture(t, func(deps *Deps) {
+		desktop = &originalScreenshotDesktop{fakeProviders: deps.Desktop.(*fakeProviders)}
+		deps.Desktop = desktop
+	})
+	result, err := f.call("preview", "screenshot", domain.TestScreenshotRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shot := result.Screenshot
+	geometry, err := png.DecodeConfig(bytes.NewReader(shot.Data))
+	if err != nil || geometry.Width != 2 || geometry.Height != 2 || shot.Frame.Width != 2 || shot.Frame.Height != 2 {
+		t.Fatal("worker did not receive the preview", shot.Frame, err)
+	}
+	dir := filepath.Join(f.dir, "testing", string(f.run.ID), string(f.start.AttemptID))
+	receipt := result.Evidence[0]
+	data, err := os.ReadFile(filepath.Join(dir, receipt.RelativePath))
+	if err != nil || !bytes.Equal(data, desktop.original.Data) {
+		t.Fatal("evidence did not preserve the original PNG", err)
+	}
+	metadata, err := os.ReadFile(filepath.Join(dir, receipt.ID+".receipt.json"))
+	var saved struct{ Frame domain.TestDesktopFrame }
+	if err != nil || json.Unmarshal(metadata, &saved) != nil || saved.Frame.Width != 4 || saved.Frame.Height != 4 || saved.Frame.CaptureHandle != "" || saved.Frame.Target.ID != "" {
+		t.Fatal("original frame evidence metadata was lost or leaked private identity", string(metadata), err)
+	}
+	wire, err := json.Marshal(result)
+	if err != nil || bytes.Contains(wire, []byte(`"Original"`)) || bytes.Contains(wire, []byte(`"original"`)) {
+		t.Fatal("original screenshot leaked into the worker JSON", err)
+	}
+	if _, err := f.call("preview-click", "click", domain.TestClickRequest{ScreenshotID: shot.Frame.ScreenshotID, X: 1, Y: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if frame := f.provider.inputFrames[0]; !reflect.DeepEqual(frame, shot.Frame) {
+		t.Fatal("input received the original frame instead of the preview frame", frame)
+	}
+}
+
+func TestScreenshotRefusesInvalidOriginalEvidence(t *testing.T) {
+	for _, corrupt := range []func(*domain.TestScreenshot){
+		func(s *domain.TestScreenshot) { s.Frame.Target.WindowID = "foreign" },
+		func(s *domain.TestScreenshot) { s.Frame.Width++ },
+		func(s *domain.TestScreenshot) { s.Data = []byte("invalid PNG") },
+	} {
+		f := newFixture(t, func(deps *Deps) {
+			deps.Desktop = &originalScreenshotDesktop{fakeProviders: deps.Desktop.(*fakeProviders), corrupt: corrupt}
+		})
+		result, err := f.call("invalid-original", "screenshot", domain.TestScreenshotRequest{})
+		if code(err) != "TEST_TARGET_CHANGED" || len(result.Evidence) != 0 {
+			t.Fatal("invalid original was saved as evidence", result, err)
+		}
 	}
 }
 

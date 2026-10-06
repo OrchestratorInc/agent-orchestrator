@@ -301,20 +301,26 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 		if e != nil {
 			return result, apierr.Unavailable("TEST_SCREENSHOT_FAILED", "Bound target screenshot failed")
 		}
-		if !sameTarget(shot.Frame.Target, target) || shot.Frame.Width < 1 || shot.Frame.Height < 1 || shot.Frame.Bounds.Width <= 0 || shot.Frame.Bounds.Height <= 0 || shot.MIMEType != "image/png" || len(shot.Data) == 0 {
-			return result, targetChanged()
+		evidenceShot := &shot
+		if shot.Original != nil {
+			evidenceShot = shot.Original
 		}
-		geometry, e := png.DecodeConfig(bytes.NewReader(shot.Data))
-		if e != nil || geometry.Width != shot.Frame.Width || geometry.Height != shot.Frame.Height {
-			return result, targetChanged()
+		for _, capture := range []*domain.TestScreenshot{&shot, evidenceShot} {
+			if !sameTarget(capture.Frame.Target, target) || capture.Frame.Width < 1 || capture.Frame.Height < 1 || capture.Frame.Bounds.Width <= 0 || capture.Frame.Bounds.Height <= 0 || capture.MIMEType != "image/png" || len(capture.Data) == 0 {
+				return result, targetChanged()
+			}
+			geometry, e := png.DecodeConfig(bytes.NewReader(capture.Data))
+			if e != nil || geometry.Width != capture.Frame.Width || geometry.Height != capture.Frame.Height {
+				return result, targetChanged()
+			}
 		}
 		// Evidence receives metadata only. Keep the adapter's private capture
 		// receipt intact in memory for subsequent input, even if a store mutates
 		// the metadata pointer it receives.
-		metadata := shot.Frame
+		metadata := evidenceShot.Frame
 		metadata.Target = domain.TestTargetIdentity{}
 		metadata.CaptureHandle = ""
-		receipt, e := s.save(ctx, st, &result, "screenshot", shot.MIMEType, shot.Data, &metadata)
+		receipt, e := s.save(ctx, st, &result, "screenshot", evidenceShot.MIMEType, evidenceShot.Data, &metadata)
 		if e != nil {
 			return result, e
 		}

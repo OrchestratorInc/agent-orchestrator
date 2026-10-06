@@ -78,7 +78,7 @@ func TestTestingProviderComposition(t *testing.T) {
 			}
 			if tc.configured {
 				policy := providers.Desktop.(ports.TestingDesktopPolicy)
-				if policy.DeliveryMode() != string(tc.wantMode) || policy.InputDeliveryMode("click") != "background" || policy.InputDeliveryMode("type") != string(tc.wantMode) || policy.InputDeliveryMode("key") != string(tc.wantMode) {
+				if policy.DeliveryMode() != string(tc.wantMode) || policy.InputDeliveryMode("click") != string(tc.wantMode) || policy.InputDeliveryMode("type") != string(tc.wantMode) || policy.InputDeliveryMode("key") != string(tc.wantMode) {
 					t.Fatal("desktop policy bridge lost mode")
 				}
 				gap, err := providers.Desktop.(ports.TestingDesktopRecorder).StartRecording(context.Background(), domain.TestTargetIdentity{}, "")
