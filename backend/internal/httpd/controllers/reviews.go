@@ -438,6 +438,8 @@ func writeReviewError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_ALREADY_RUNNING", err.Error(), nil)
 	case errors.Is(err, reviewsvc.ErrHeadAlreadyReviewed):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_HEAD_ALREADY_REVIEWED", err.Error(), nil)
+	case errors.Is(err, reviewsvc.ErrHeadNotObserved):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_HEAD_NOT_OBSERVED", err.Error(), nil)
 	case errors.Is(err, reviewsvc.ErrAgentBinaryNotFound):
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "REVIEWER_BINARY_NOT_FOUND", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatAuthRequired):

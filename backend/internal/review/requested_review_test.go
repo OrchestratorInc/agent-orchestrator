@@ -3,6 +3,8 @@ package review
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -399,5 +401,72 @@ func TestRestoreReviewerLeavesARunningChatReviewerToChatRecovery(t *testing.T) {
 	}
 	if got := store.runs[1]; got.Status != domain.ReviewRunRunning {
 		t.Fatalf("codex chat run = %+v, want still running", got)
+	}
+}
+
+// Right after a push, the SCM observer may not have seen the new commit yet,
+// so AO still knows only the reviewed head. The worker must be told AO hasn't
+// picked up its push, not that the commit it just pushed was already reviewed.
+func TestTriggerRejectReviewedHeadReportsAPushAONotYetObserved(t *testing.T) {
+	store := &fakeStore{
+		runs: []domain.ReviewRun{requestedRun("run-1", domain.ReviewerClaudeCode, domain.ReviewRunComplete, domain.VerdictApproved, 1)},
+	}
+	prs := fakePRs{prs: []domain.PullRequest{{URL: requestedPRURL, Number: 1, HeadSHA: "sha1", SourceBranch: "feature"}}}
+	for _, tc := range []struct {
+		name   string
+		pushed string
+		want   error
+	}{
+		{"pushed ahead", "sha2pushed", ErrHeadNotObserved},
+		{"pushed head is the reviewed one", "sha1", ErrHeadAlreadyReviewed},
+		{"push unknown", "", ErrHeadAlreadyReviewed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotPath, gotBranch string
+			eng := New(Deps{
+				Store: store, Sessions: fakeSessions{rec: liveWorker(), ok: true}, PRs: prs, Projects: fakeProjects{}, Launcher: &fakeLauncher{},
+				PushedHead: func(_ context.Context, path, branch string) string {
+					gotPath, gotBranch = path, branch
+					return tc.pushed
+				},
+			})
+			_, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent, RejectReviewedHead: true})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+			if gotPath != "/ws/mer-1" || gotBranch != "feature" {
+				t.Fatalf("pushed head lookup = %q %q, want the worker workspace and PR branch", gotPath, gotBranch)
+			}
+			if errors.Is(tc.want, ErrHeadNotObserved) && (!strings.Contains(err.Error(), "AO still sees PR #1 at sha1") || !strings.Contains(err.Error(), "sha2pushed was pushed to feature") || !strings.Contains(err.Error(), "again shortly")) {
+				t.Fatalf("err = %q, want the stale/pushed heads and a retry hint", err)
+			}
+		})
+	}
+}
+
+func TestGitPushedHeadReadsTheRemoteTrackingRef(t *testing.T) {
+	dir := t.TempDir()
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run("init", "-q")
+	run("commit", "-q", "--allow-empty", "-m", "one")
+	head := run("rev-parse", "HEAD")
+	run("update-ref", "refs/remotes/origin/feature", head)
+
+	if got := gitPushedHead(context.Background(), dir, "feature"); got != head {
+		t.Fatalf("pushed head = %q, want %q", got, head)
+	}
+	for _, branch := range []string{"missing", "", "-x"} {
+		if got := gitPushedHead(context.Background(), dir, branch); got != "" {
+			t.Fatalf("branch %q: pushed head = %q, want unknown", branch, got)
+		}
 	}
 }

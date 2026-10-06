@@ -12,6 +12,7 @@ import (
 	stdctx "context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,9 @@ var (
 
 	ErrReviewAlreadyRunning = fmt.Errorf("%w: review already running", ErrConflict)
 	ErrHeadAlreadyReviewed  = fmt.Errorf("%w: head already reviewed", ErrConflict)
+	// ErrHeadNotObserved means the worker pushed a commit AO has not seen yet:
+	// the head AO knows is reviewed, but the workspace's pushed branch is ahead.
+	ErrHeadNotObserved = fmt.Errorf("%w: pushed head not yet observed", ErrConflict)
 )
 
 // Store is the persistence surface the engine needs. *sqlite.Store satisfies it
@@ -89,6 +93,9 @@ type Deps struct {
 	// Clock and NewID are injectable for deterministic tests.
 	Clock func() time.Time
 	NewID func() string
+	// PushedHead reports the commit a workspace last pushed for branch, from
+	// its remote-tracking ref, or "" when unknown. Defaults to local git.
+	PushedHead func(ctx stdctx.Context, workspacePath, branch string) string
 }
 
 // Engine is the core code-review engine.
@@ -100,6 +107,8 @@ type Engine struct {
 	launcher Launcher
 	clock    func() time.Time
 	newID    func() string
+	// pushedHead reads a workspace's pushed branch head (see Deps.PushedHead).
+	pushedHead func(ctx stdctx.Context, workspacePath, branch string) string
 
 	// triggerMu guards triggerLocks; triggerLocks holds one mutex per worker
 	// session so concurrent Trigger calls for the same worker serialise (see
@@ -120,7 +129,12 @@ func New(d Deps) *Engine {
 	if newID == nil {
 		newID = uuid.NewString
 	}
+	pushedHead := d.PushedHead
+	if pushedHead == nil {
+		pushedHead = gitPushedHead
+	}
 	return &Engine{
+		pushedHead:   pushedHead,
 		store:        d.Store,
 		sessions:     d.Sessions,
 		prs:          d.PRs,
@@ -509,6 +523,14 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			reviewRow.ProviderConversationID = ""
 			reviewRow.ControllerGeneration = ""
 		}
+		if opts.RejectReviewedHead {
+			// A worker that has just pushed can get here before the SCM observer
+			// has seen its new commit. Say so instead of claiming the commit it
+			// pushed was already reviewed.
+			if err := e.unobservedPushError(ctx, worker, prs, reviews, runs); err != nil {
+				return TriggerResult{}, err
+			}
+		}
 		if opts.RejectReviewedHead || (opts.Rerun && source == domain.ReviewTriggerAgent) {
 			return TriggerResult{}, nothingToReviewError(reviews, runs, harness, opts.Rerun)
 		}
@@ -767,6 +789,43 @@ func nothingToReviewError(reviews []PRReviewState, runs []domain.ReviewRun, harn
 		return fmt.Errorf("%w: PR #%d head %s was already reviewed (%s); push new commits, or pass --rerun to review this commit again", ErrHeadAlreadyReviewed, review.PRNumber, sha, verdict)
 	}
 	return fmt.Errorf("%w: no open PR head to review", ErrInvalid)
+}
+
+// unobservedPushError reports ErrHeadNotObserved when an already-reviewed PR
+// head is behind what the worker's workspace has pushed for that PR branch.
+func (e *Engine) unobservedPushError(ctx stdctx.Context, worker domain.SessionRecord, prs []domain.PullRequest, reviews []PRReviewState, runs []domain.ReviewRun) error {
+	if worker.Metadata.WorkspacePath == "" {
+		return nil
+	}
+	branches := make(map[string]string, len(prs))
+	for _, pr := range prs {
+		branches[pr.URL] = pr.SourceBranch
+	}
+	for _, review := range reviews {
+		branch := branches[review.PRURL]
+		if review.Status == ReviewStateIneligible || branch == "" || !headHasReview(runs, review.PRURL, review.TargetSHA) {
+			continue
+		}
+		pushed := e.pushedHead(ctx, worker.Metadata.WorkspacePath, branch)
+		if pushed == "" || pushed == review.TargetSHA {
+			continue
+		}
+		return fmt.Errorf("%w: AO still sees PR #%d at %s, but %s was pushed to %s and has not been picked up yet. AO checks the provider about every 30 seconds; run `ao review trigger` again shortly", ErrHeadNotObserved, review.PRNumber, shortSHA(review.TargetSHA), shortSHA(pushed), branch)
+	}
+	return nil
+}
+
+// gitPushedHead reads refs/remotes/origin/<branch> in the workspace, which
+// git push updates. Any failure means "unknown", never an error.
+func gitPushedHead(ctx stdctx.Context, workspacePath, branch string) string {
+	if strings.TrimSpace(branch) == "" || strings.HasPrefix(branch, "-") {
+		return ""
+	}
+	out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func shortSHA(sha string) string {

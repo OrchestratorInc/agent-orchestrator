@@ -519,6 +519,7 @@ func TestReviewsTriggerMapsSameCommitConflictsTo409(t *testing.T) {
 	}{
 		{fmt.Errorf("%w: codex is already reviewing PR #1 head abc", reviewcore.ErrReviewAlreadyRunning), "REVIEW_ALREADY_RUNNING"},
 		{fmt.Errorf("%w: PR #1 head abc was already reviewed (approved); push new commits, or pass --rerun", reviewcore.ErrHeadAlreadyReviewed), "REVIEW_HEAD_ALREADY_REVIEWED"},
+		{fmt.Errorf("%w: AO still sees PR #1 head abc, but def was pushed", reviewcore.ErrHeadNotObserved), "REVIEW_HEAD_NOT_OBSERVED"},
 	} {
 		srv := newReviewTestServer(t, &fakeReviewService{triggerErr: tc.err})
 		body, status, headers := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", `{"rejectReviewedHead":true}`)
