@@ -10,10 +10,8 @@ type StepStatus = SessionProvisionStep["status"] | "failed";
 
 /**
  * The checklist a starting Chat session shows under its opening brief. The
- * header row copies LiveResponseStatus's metrics and keeps its spinner slot
- * empty, so the handoff to the agent's first turn only swaps the text, and a
- * clean start leaves nothing behind. A failed start stays, with the step that
- * failed and Retry.
+ * shared LiveResponseStatus header stays mounted while this checklist collapses
+ * on handoff. A failed start keeps its failed step and Retry.
  */
 export function SessionStartup({
 	failed,
@@ -38,18 +36,6 @@ export function SessionStartup({
 	const now = useNowWhile(!failed && steps.some((step) => step.status === "running"));
 	return (
 		<section aria-label={t("chat.startup.label")} data-testid="session-startup" data-failed={failed || undefined}>
-			<div
-				role={failed ? "alert" : "status"}
-				aria-live="polite"
-				className="-mx-1 flex h-7 select-none items-center gap-1.5 border-b border-border px-1 py-0"
-			>
-				<span aria-hidden="true" className="flex size-3 shrink-0 items-center justify-center">
-					{failed ? <X className="size-3 text-destructive" /> : null}
-				</span>
-				<span className={cn("text-sm font-normal", failed ? "text-destructive" : "chat-working-shimmer")}>
-					{failed ? t("chat.startup.failed") : t("chat.startup.running")}
-				</span>
-			</div>
 			<ol aria-label={t("chat.startup.steps")} className="mt-1 flex flex-col">
 				{steps.map((step) => {
 					// The daemon leaves the stage it stopped in "running"; the failed
@@ -102,7 +88,7 @@ export function SessionStartup({
 							{retrying ? t("chat.startup.retrying") : t("chat.startup.retry")}
 						</Button>
 					) : null}
-					{retryError ? <p className="text-xs leading-snug text-destructive">{retryError}</p> : null}
+					{retryError ? <p role="alert" className="text-xs leading-snug text-destructive">{retryError}</p> : null}
 				</div>
 			) : null}
 		</section>

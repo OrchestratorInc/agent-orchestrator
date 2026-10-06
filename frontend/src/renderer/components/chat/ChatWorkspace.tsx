@@ -660,15 +660,21 @@ function ChatWorkspaceContent({
 			: undefined;
 	// While a session starts, its opening brief reads as sent: the setup checklist
 	// under it explains why nothing has answered yet. Later messages still queue.
-	const openingTurnId = startupState
-		? snapshot.turns.find((queuedTurn) => queuedTurn.state === "queued")?.id
-		: undefined;
 	const provisionSteps = session?.provisionSteps;
+	// Ready can arrive before the first turn does. Keep its setup slot through
+	// that gap; selecting the first turn also never promotes a queued follow-up.
+	const hasStartup = Boolean(
+		startupState || (provisionSteps?.length &&
+			(snapshot.turns[0]?.state === "queued" || snapshot.turns[0]?.state === "running")),
+	);
+	const openingTurnId = hasStartup
+		? snapshot.turns[0]?.id
+		: undefined;
 	const provisionError = session?.provisionError;
 	const sessionBranch = session?.branch;
 	const startup = useMemo(
 		() =>
-			startupState
+			hasStartup
 				? {
 						failed: startupState === "failed",
 						steps: provisionSteps ?? [],
@@ -682,6 +688,7 @@ function ChatWorkspaceContent({
 					}
 				: undefined,
 		[
+			hasStartup,
 			newWorkDisabled,
 			onResumeAgent,
 			openingTurnId,
@@ -2262,14 +2269,15 @@ function Timeline({
 	// widens chat; shorter histories (common on non-Codex harnesses) often
 	// stop overflowing and used to lose the minimap exactly then.
 	const minimapEnabled = scrollbar.markers.length > 0;
+	const { t } = useTranslation();
 	const openingTurnId = startup?.openingTurnId;
 	// The checklist holds the working slot until the agent is up and its first
 	// turn is live; a clean start then leaves no trace.
 	const showStartup = Boolean(
 		startup &&
 			(startup.failed ||
-				!(turn?.state === "running" &&
-					startup.steps.some((step) => step.id === "agent" && step.status === "done"))),
+				!(turn?.state === "running" && turn.id === openingTurnId &&
+					startup.steps.length > 0 && startup.steps.every((step) => step.status === "done"))),
 	);
 	const queued = useMemo(() => {
 		const ids = queuedTurnIds(snapshot);
@@ -3326,7 +3334,9 @@ function Timeline({
 					{/* Normally drawn inside the opening turn's group; this covers a start
 					    whose brief is not in the timeline. */}
 					{startup && showStartup && !groups.some((group) => group.turnId === openingTurnId) ? (
-						<SessionStartup {...startup} />
+						<LiveResponseStatus startupLabel={t(startup.failed ? "chat.startup.failed" : "chat.startup.running")} failed={startup.failed}>
+							<SessionStartup {...startup} />
+						</LiveResponseStatus>
 					) : turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
 						<LiveResponseStatus startedAt={turn.startedAt ?? turn.requestedAt} />
 					) : null}
@@ -3554,6 +3564,7 @@ const TurnGroup = memo(function TurnGroup({
 	/** The opening turn of a starting session: its setup checklist. */
 	startup?: ComponentProps<typeof SessionStartup>;
 }) {
+	const { t } = useTranslation();
 	const hasTerminalFailure =
 		group.outcome?.state === "failed" && Boolean(group.outcome.error);
 	const runs = useMemo(
@@ -3667,10 +3678,18 @@ const TurnGroup = memo(function TurnGroup({
 	// turn that stops without an outcome (cancelled) has no settled row to hand over to.
 	// The setup checklist sits exactly where the Working row will, so the handoff
 	// does not move anything.
-	if (startup) {
-		body.push(<SessionStartup key="turn-working" {...startup} />);
-	} else if (!group.liveProviderFailure && (group.live || (group.outcome && !showSettledStatus))) {
-		body.push(<LiveResponseStatus key="turn-working" startedAt={group.liveStartedAt} settling={!group.live} />);
+	if (startup || (!group.liveProviderFailure && (group.live || (group.outcome && !showSettledStatus)))) {
+		body.push(
+			<LiveResponseStatus
+				key="turn-working"
+				startedAt={group.liveStartedAt}
+				settling={!startup && !group.live}
+				startupLabel={startup ? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : undefined}
+				failed={startup?.failed}
+			>
+				{startup ? <SessionStartup {...startup} /> : null}
+			</LiveResponseStatus>,
+		);
 	}
 	const outcome = showSettledStatus ? group.outcome : undefined;
 	if (!outcome) {

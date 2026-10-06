@@ -1513,7 +1513,8 @@ describe("ChatWorkspace timeline", () => {
 		);
 
 		const startup = screen.getByTestId("session-startup");
-		expect(within(startup).getByRole("status")).toHaveTextContent("Setting up session…");
+		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Setting up session$/);
+		expect(screen.getByTestId("live-working-label").previousElementSibling?.querySelector("svg")).toBeInTheDocument();
 		// It takes the Working row's slot inside the brief's turn, so the handoff moves nothing.
 		expect(startup.closest("[data-chat-scroll-anchor]")).toContainElement(screen.getByText("Fix clicking attachments"));
 		const steps = within(startup).getAllByRole("listitem");
@@ -1537,7 +1538,7 @@ describe("ChatWorkspace timeline", () => {
 
 	// The checklist keeps the working slot until the agent is up and its first
 	// turn is live, then leaves nothing behind.
-	it("hands a clean start over to the working line without leaving the checklist", () => {
+	it("hands a clean start over to the working line while preserving its spinner and collapsing the checklist", async () => {
 		const view = render(
 			<ChatWorkspace
 				snapshot={startingSnapshot("queued")}
@@ -1545,6 +1546,17 @@ describe("ChatWorkspace timeline", () => {
 			/>,
 		);
 		expect(screen.getByTestId("session-startup")).toBeInTheDocument();
+		const label = screen.getByTestId("live-working-label");
+		const spinner = label.previousElementSibling?.querySelector("svg");
+		view.rerender(
+			<ChatWorkspace
+				snapshot={startingSnapshot("queued")}
+				session={{ ...chatSession, provisionState: "ready", provisionSteps: startingSteps("done") }}
+			/>,
+		);
+		expect(screen.getByTestId("live-working-label")).toBe(label);
+		expect(label).toHaveTextContent(/^Setting up session$/);
+		expect(label.previousElementSibling?.querySelector("svg")).toBe(spinner);
 
 		view.rerender(
 			<ChatWorkspace
@@ -1552,7 +1564,9 @@ describe("ChatWorkspace timeline", () => {
 				session={{ ...chatSession, provisionState: "provisioning", provisionSteps: startingSteps("done") }}
 			/>,
 		);
-		expect(screen.queryByTestId("session-startup")).not.toBeInTheDocument();
+		expect(screen.getByTestId("live-working-label")).toBe(label);
+		expect(label.previousElementSibling?.querySelector("svg")).toBe(spinner);
+		await waitFor(() => expect(screen.queryByTestId("session-startup")).not.toBeInTheDocument());
 		expect(screen.getByText(/^Working for /)).toBeInTheDocument();
 
 		view.rerender(
@@ -1563,6 +1577,32 @@ describe("ChatWorkspace timeline", () => {
 		);
 		expect(screen.queryByTestId("session-startup")).not.toBeInTheDocument();
 		expect(screen.getByText("Fix clicking attachments")).toBeInTheDocument();
+		expect(label.previousElementSibling?.querySelector("svg")).toBe(spinner);
+	});
+
+	it("keeps follow-up messages queued when the opening brief starts running", () => {
+		const snapshot = startingSnapshot("running");
+		snapshot.turns.push({ id: "follow-up", state: "queued", requestedAt: "2026-08-15T00:00:08Z" });
+		snapshot.items.push({ ...humanMessage("And add a regression check"), id: "follow-up-message", turnId: "follow-up", sequence: 2 });
+		render(
+			<ChatWorkspace
+				snapshot={snapshot}
+				session={{ ...chatSession, provisionState: "provisioning", provisionSteps: startingSteps("running") }}
+			/>,
+		);
+		expect(screen.getByTestId("queued-message-dock")).toHaveTextContent("And add a regression check");
+		expect(screen.getByTestId("session-startup").closest("[data-chat-scroll-anchor]")).toContainElement(screen.getByText("Fix clicking attachments"));
+	});
+
+	it("waits for every startup step before handing over to Working", () => {
+		render(
+			<ChatWorkspace
+				snapshot={startingSnapshot("running")}
+				session={{ ...chatSession, provisionState: "provisioning", provisionSteps: startingSteps("done").map((step) => step.id === "worktree" ? { ...step, status: "running", endedAt: undefined } : step) }}
+			/>,
+		);
+		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Setting up session$/);
+		expect(screen.getByTestId("session-startup")).toBeInTheDocument();
 	});
 
 	it("waits for controller and provisioning readiness before enabling permission changes", () => {
@@ -1608,7 +1648,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 
 		const startup = screen.getByTestId("session-startup");
-		expect(within(startup).getByRole("alert")).toHaveTextContent("Session setup failed");
+		expect(screen.getByRole("alert")).toHaveTextContent("Session setup failed");
 		expect(startup).toHaveTextContent("branch already checked out");
 		expect(startup.querySelector('[data-step="worktree"]')).toHaveAttribute("data-status", "failed");
 		expect(screen.getByText("Fix clicking attachments")).toBeInTheDocument();
