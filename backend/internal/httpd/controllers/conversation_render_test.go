@@ -94,17 +94,21 @@ func TestRenderRouteServesTheStoredPageSandboxed(t *testing.T) {
 	}
 }
 
+// A terminal session has no chat thread; the agent is pointed at ao preview instead.
+const renderNeedsChatMessage = "ao render works only in chat sessions; in a terminal session, open the file with ao preview <file>"
+
 func TestPublishRenderRouteMapsOutcomes(t *testing.T) {
 	cases := []struct {
-		name   string
-		err    error
-		status int
-		code   string
+		name    string
+		err     error
+		status  int
+		code    string
+		message string
 	}{
-		{"created", nil, http.StatusCreated, ""},
-		{"invalid", fmt.Errorf("%w: the page is empty", chatsvc.ErrRenderInvalid), http.StatusBadRequest, "RENDER_INVALID"},
-		{"no turn", chatsvc.ErrNoActiveTurn, http.StatusConflict, "RENDER_NO_ACTIVE_TURN"},
-		{"tui session", chatsvc.ErrNotChatMode, http.StatusConflict, "SESSION_MODE_MISMATCH"},
+		{"created", nil, http.StatusCreated, "", ""},
+		{"invalid", fmt.Errorf("%w: the page is empty", chatsvc.ErrRenderInvalid), http.StatusBadRequest, "RENDER_INVALID", ""},
+		{"no turn", chatsvc.ErrNoActiveTurn, http.StatusConflict, "RENDER_NO_ACTIVE_TURN", ""},
+		{"tui session", chatsvc.ErrNotChatMode, http.StatusConflict, "SESSION_MODE_MISMATCH", renderNeedsChatMessage},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -122,11 +126,15 @@ func TestPublishRenderRouteMapsOutcomes(t *testing.T) {
 			defer func() { _ = resp.Body.Close() }()
 			var body struct {
 				Code     string `json:"code"`
+				Message  string `json:"message"`
 				RenderID string `json:"renderId"`
 			}
 			_ = json.NewDecoder(resp.Body).Decode(&body)
 			if resp.StatusCode != tc.status || body.Code != tc.code {
 				t.Fatalf("status=%d code=%q, want %d %q", resp.StatusCode, body.Code, tc.status, tc.code)
+			}
+			if tc.message != "" && body.Message != tc.message {
+				t.Fatalf("message=%q, want %q", body.Message, tc.message)
 			}
 			if tc.err == nil && (body.RenderID != "r1" || svc.input != (chatsvc.RenderInput{HTML: "<p>x</p>", Title: "Chart", Height: 420})) {
 				t.Fatalf("renderId=%q input=%+v", body.RenderID, svc.input)
@@ -149,15 +157,17 @@ func (s *renderCheckStub) CheckRender(_ context.Context, _ domain.SessionID, in 
 
 func TestRenderCheckRouteReturnsTheScreenshotAndNamesTheOrigin(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		err    error
-		status int
-		code   string
+		name    string
+		err     error
+		status  int
+		code    string
+		message string
 	}{
-		{"ok", nil, http.StatusOK, ""},
-		{"no desktop app", chatsvc.ErrRenderCheckUnavailable, http.StatusServiceUnavailable, "RENDER_CHECK_UNAVAILABLE"},
+		{"ok", nil, http.StatusOK, "", ""},
+		{"no desktop app", chatsvc.ErrRenderCheckUnavailable, http.StatusServiceUnavailable, "RENDER_CHECK_UNAVAILABLE", ""},
 		{"desktop could not check the page", browserruntime.CommandError{Code: "BROWSER_COMMAND_FAILED", Message: "render check page did not load within 15000 ms"},
-			http.StatusUnprocessableEntity, "RENDER_CHECK_FAILED"},
+			http.StatusUnprocessableEntity, "RENDER_CHECK_FAILED", ""},
+		{"tui session", chatsvc.ErrNotChatMode, http.StatusConflict, "SESSION_MODE_MISMATCH", renderNeedsChatMessage},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := &renderCheckStub{renderStub: &renderStub{fakeConversationService: &fakeConversationService{}}, checkErr: tc.err}
@@ -186,6 +196,9 @@ func TestRenderCheckRouteReturnsTheScreenshotAndNamesTheOrigin(t *testing.T) {
 			_ = json.NewDecoder(resp.Body).Decode(&body)
 			if resp.StatusCode != tc.status || body.Code != tc.code {
 				t.Fatalf("status=%d code=%q, want %d %q", resp.StatusCode, body.Code, tc.status, tc.code)
+			}
+			if tc.message != "" && body.Message != tc.message {
+				t.Fatalf("message=%q, want %q", body.Message, tc.message)
 			}
 			if code := (browserruntime.CommandError{}); errors.As(tc.err, &code) {
 				if body.Message != code.Message || body.Details["desktopCode"] != code.Code {

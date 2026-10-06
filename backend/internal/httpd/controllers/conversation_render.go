@@ -23,6 +23,14 @@ const (
 	// render opened top-level cannot call the daemon. No popups, no modals,
 	// no top navigation.
 	renderContentSecurityPolicy = "sandbox allow-scripts allow-forms"
+	// A terminal session has no thread to show a page in; point the agent at
+	// the command that does work there.
+	renderNeedsChatMessage = "ao render works only in chat sessions; in a terminal session, open the file with ao preview <file>"
+)
+
+var (
+	_ renderPublisher = (*chatsvc.Service)(nil)
+	_ renderChecker   = (*chatsvc.Service)(nil)
 )
 
 type renderPublisher interface {
@@ -52,6 +60,8 @@ func (c *ConversationsController) publishRender(w http.ResponseWriter, r *http.R
 	case errors.Is(err, chatsvc.ErrNoActiveTurn):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "RENDER_NO_ACTIVE_TURN",
 			"a render is shown in the turn the agent is running, and no turn is in flight", nil)
+	case errors.Is(err, chatsvc.ErrNotChatMode):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "SESSION_MODE_MISMATCH", renderNeedsChatMessage, nil)
 	default:
 		writeConversationError(w, r, err)
 	}
@@ -98,6 +108,8 @@ func (c *ConversationsController) checkRender(w http.ResponseWriter, r *http.Req
 		// load in time, say). The agent needs the reason, not an opaque 500.
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "RENDER_CHECK_FAILED",
 			desktopErr.Message, map[string]any{"desktopCode": desktopErr.Code})
+	case errors.Is(err, chatsvc.ErrNotChatMode):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "SESSION_MODE_MISMATCH", renderNeedsChatMessage, nil)
 	default:
 		writeConversationError(w, r, err)
 	}
