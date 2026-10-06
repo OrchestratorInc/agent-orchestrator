@@ -1289,6 +1289,20 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		Config:           adapterConfig,
 		Permissions:      adapterConfig.Permissions,
 	}
+	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
+	if err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPromptDelivery, err)
+	}
+	afterStartPrompt := prompt
+	if delivery == ports.PromptDeliveryAfterStart {
+		afterStartPrompt, err = buildAfterStartPrompt(ctx, agent, launchCfg)
+		if err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPromptDelivery, err)
+		}
+		launchCfg.Prompt = ""
+	}
 	argv, err := agent.GetLaunchCommand(ctx, launchCfg)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
@@ -1367,6 +1381,14 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, rec, ws, workspaceProject, runtimeDestroyed)
 		m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
+	}
+	if delivery == ports.PromptDeliveryAfterStart && afterStartPrompt != "" {
+		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, id, afterStartPrompt); err != nil {
+			runtimeDestroyed := m.destroySpawnRuntimeAfterFailure(ctx, handle)
+			workspaceDestroyed := m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, rec, ws, workspaceProject, runtimeDestroyed)
+			m.markSpawnFailedTerminatedAfterFailure(ctx, id, runtimeDestroyed && workspaceDestroyed)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnDeliverPrompt, err)
+		}
 	}
 	if cfg.AutomationRunID != nil {
 		if err := m.markAutomationLaunchCompleted(ctx, id); err != nil {
@@ -5507,7 +5529,11 @@ func (m *Manager) deliverAfterStartPrompt(ctx context.Context, agent ports.Agent
 	// into success would report a spawn/restore that never delivered its prompt.
 	var outcome sessionguard.Outcome
 	var err error
-	outcome, err = m.messenger.Deliver(ctx, id, prompt)
+	if m.SessionMutationInProgress(id) {
+		outcome, err = m.messenger.DeliverUnderMutation(ctx, id, prompt)
+	} else {
+		outcome, err = m.messenger.Deliver(ctx, id, prompt)
+	}
 	if err != nil {
 		return fmt.Errorf("send %s: %w", id, err)
 	}
