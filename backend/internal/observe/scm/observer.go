@@ -1078,7 +1078,13 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 			// Head eligibility includes the registered origin and every configured
 			// fetch and push URL, limited to the scanned base's provider and host.
 			// Reject unconfigured or deleted heads before matching branch ownership.
-			eligible := candidatesForHeadRepo(byRepo[repoKey], pr.HeadRepo)
+			headRepo := pr.HeadRepo
+			// A renamed or transferred repo reports its new name for head and
+			// base; a same-repo PR's head is the repo listed here.
+			if pr.BaseRepo != "" && strings.EqualFold(pr.HeadRepo, pr.BaseRepo) {
+				headRepo = repoFullName(repo)
+			}
+			eligible := candidatesForHeadRepo(byRepo[repoKey], headRepo)
 			sr, ok := matchSession(eligible, pr.SourceBranch)
 			if !ok {
 				continue
