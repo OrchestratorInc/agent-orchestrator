@@ -3,7 +3,7 @@ import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef, useState
 import { useTranslation } from "react-i18next";
 import type { AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useSuppressStrayFocusRing } from "../../hooks/useSuppressStrayFocusRing";
-import { isConcreteModelID, modelChoiceLabel } from "../../lib/agent-model-choices";
+import { isConcreteModelID, CLAUDE_FAMILY_ORDER, legacyModelIDs, modelChoiceLabel, sortModelsByFamilyVersion } from "../../lib/agent-model-choices";
 import { fallbackEffort, useApplyEffortDefault } from "../../lib/effort";
 import { cn } from "../../lib/utils";
 import { formatEffortLabel } from "./EffortPicker";
@@ -39,6 +39,7 @@ type IndexedModel = {
 	normalizedLabel: string;
 	normalizedProvider: string;
 	index: number;
+	legacy: boolean;
 };
 
 type ModelSearchIndex = {
@@ -60,6 +61,7 @@ export function AgentModelCombobox({
 	allowCustom,
 	customModelEntry,
 	agentLabel,
+	agentId,
 	onRefresh,
 	refreshing = false,
 	refreshError,
@@ -73,8 +75,6 @@ export function AgentModelCombobox({
 	renderTrigger,
 	recentScope,
 	compact = false,
-	collapseAfter,
-	showFollowAgentAction = true,
 	tuning,
 	disabled = false,
 	"aria-label": ariaLabel,
@@ -84,6 +84,8 @@ export function AgentModelCombobox({
 	allowCustom?: boolean;
 	customModelEntry?: AgentModelCatalog["customModelEntry"];
 	agentLabel?: string;
+	/** Claude Code lists only the newest version of each family until other models are expanded. */
+	agentId?: string;
 	onRefresh?: () => void | Promise<void>;
 	refreshing?: boolean;
 	refreshError?: string;
@@ -92,7 +94,6 @@ export function AgentModelCombobox({
 	onCustom: (value: string) => void;
 	/** Shown when the agent does not report a concrete model. */
 	emptyLabel?: string;
-	showFollowAgentAction?: boolean;
 	triggerLabel?: string;
 	triggerClassName?: string;
 	menuAlign?: "start" | "center" | "end";
@@ -105,10 +106,6 @@ export function AgentModelCombobox({
 	 *  contexts where the menu should read like a simple choice, not a
 	 *  model-management surface. */
 	compact?: boolean;
-	/** Compact mode only: show this many leading models and fold the rest
-	 *  behind a "show more" row. For catalogs ordered newest-first, where the
-	 *  tail is older models most users never pick. */
-	collapseAfter?: number;
 	/** Callers opt into a combined model and reasoning-effort menu. */
 	tuning?: ModelEffortSelection;
 	disabled?: boolean;
@@ -157,7 +154,11 @@ export function AgentModelCombobox({
 	const storedRecentModels = useMemo(() => readRecentModels(recentScope), [recentScope]);
 	const recentModelIDs = recentScope ? (sessionRecentModels[recentKey] ?? storedRecentModels) : [];
 	const normalizedSearch = normalizeSearch(search);
-	const searchIndex = useMemo(() => buildModelSearchIndex(concreteModels), [concreteModels]);
+	const collapseLegacy = agentId === "claude-code";
+	const searchIndex = useMemo(
+		() => buildModelSearchIndex(concreteModels, collapseLegacy ? CLAUDE_FAMILY_ORDER : undefined),
+		[concreteModels, collapseLegacy],
+	);
 	const defaultModel = concreteModels.find((model) => model.isDefault)?.id || "";
 	const effectiveModel = explicitModel || defaultModel;
 	const selected = searchIndex.byID.get(normalizeSearch(effectiveModel));
@@ -172,37 +173,36 @@ export function AgentModelCombobox({
 		[concreteModels],
 	);
 
+	const legacyCount = collapseLegacy ? searchIndex.models.filter((item) => item.legacy).length : 0;
+	const selectedIsLegacy = Boolean(selected?.legacy);
+	const [legacyOpen, setLegacyOpen] = useState(false);
+	const showLegacy = !collapseLegacy || legacyOpen || selectedIsLegacy;
+
 	const rankedModels = useMemo(() => {
 		if (!normalizedSearch) {
+			const current = searchIndex.models.filter((item) => !item.legacy);
+			const base = !collapseLegacy
+				? searchIndex.models
+				: showLegacy
+					? [...current, ...searchIndex.models.filter((item) => item.legacy)]
+					: current;
 			// Compact mode reads as a plain, stable list — picking a model
 			// shouldn't reorder it to the top on the next open.
-			return compact ? searchIndex.models : rankInitialModels(searchIndex.models, effectiveModel, recentModelIDs);
+			return compact ? base : rankInitialModels(base, effectiveModel, recentModelIDs);
 		}
 		return searchModelIndex(searchIndex, normalizedSearch).models;
-	}, [compact, effectiveModel, normalizedSearch, recentModelIDs, searchIndex]);
+	}, [collapseLegacy, compact, effectiveModel, normalizedSearch, recentModelIDs, searchIndex, showLegacy]);
 
 	const visibleModels = rankedModels.slice(0, MAX_VISIBLE_MODELS);
-	const [showOlderModels, setShowOlderModels] = useState(false);
-	// A selected model in the folded tail keeps the list open, so the current
-	// choice is never hidden behind the toggle.
-	const selectedIndex = visibleModels.findIndex((item) => item.id === selected?.id);
-	const collapseAt =
-		compact && collapseAfter && normalizedSearch === "" && visibleModels.length > collapseAfter && selectedIndex < collapseAfter
-			? collapseAfter
-			: 0;
-	const [leadingModels, olderModels] = useMemo(
-		() => (collapseAt ? [visibleModels.slice(0, collapseAt), visibleModels.slice(collapseAt)] : [visibleModels, []]),
-		[collapseAt, visibleModels],
-	);
 	const groups = useMemo(
 		() =>
 			compact
-				? [{ key: "all", label: "", kind: "provider" as const, models: leadingModels }]
+				? [{ key: "all", label: "", kind: "provider" as const, models: visibleModels }]
 				: groupModels(visibleModels, normalizedSearch === "", effectiveModel, recentModelIDs, {
 						pinned: t("settings.models.currentDefaults"),
 						recent: t("settings.models.recent"),
 					}),
-		[compact, effectiveModel, leadingModels, normalizedSearch, recentModelIDs, t, visibleModels],
+		[compact, effectiveModel, normalizedSearch, recentModelIDs, t, visibleModels],
 	);
 	const customSearchValue = search.trim();
 	const showCustomSearchAction = allowDirectCustom && customSearchValue !== "" && rankedModels.length === 0;
@@ -266,6 +266,26 @@ export function AgentModelCombobox({
 		void Promise.resolve(onRefresh()).catch(() => setRefreshFailed(true)).finally(() => setRefreshingLocal(false));
 	};
 
+	const showLegacyToggle = normalizedSearch === "" && legacyCount > 0 && !selectedIsLegacy;
+	const legacyToggle = (
+		<DropdownMenuItem
+			onSelect={(event) => {
+				event.preventDefault();
+				setLegacyOpen((open) => !open);
+			}}
+			className={cn(modelItemClass(false), "[&_svg]:size-icon-sm")}
+			aria-expanded={legacyOpen}
+		>
+			<span className="truncate text-settings-muted">
+				{t(legacyOpen ? "settings.models.hideOther" : "settings.models.showOther")}
+			</span>
+			<ChevronDown
+				className={cn("ml-auto opacity-70 transition-transform", legacyOpen && "rotate-180")}
+				aria-hidden="true"
+			/>
+		</DropdownMenuItem>
+	);
+
 	return (
 		<DropdownMenu
 			open={menuOpen}
@@ -273,7 +293,7 @@ export function AgentModelCombobox({
 				setMenuOpen(open);
 				if (open) {
 					setSearch("");
-					setShowOlderModels(false);
+					setLegacyOpen(false);
 				} else {
 					setRefreshFailed(false);
 					setEffortMenuOpen(false);
@@ -407,11 +427,6 @@ export function AgentModelCombobox({
 						className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
 						onScroll={updateScrollCue}
 					>
-						{normalizedSearch === "" && showFollowAgentAction && explicitModel && !defaultModel && (
-							<DropdownMenuItem onSelect={() => onChange("")} className={modelItemClass(false)}>
-								{t("settings.models.useAgentModel")}
-							</DropdownMenuItem>
-						)}
 						{groups.map((group, groupIndex) => (
 							<div key={group.key}>
 								{!compact && (groupIndex > 0 || normalizedSearch === "") && <DropdownMenuSeparator />}
@@ -441,27 +456,7 @@ export function AgentModelCombobox({
 								)}
 							</div>
 						))}
-						{olderModels.length > 0 && (
-							<>
-								<DropdownMenuItem
-									onSelect={(event) => {
-										event.preventDefault();
-										setShowOlderModels((current) => !current);
-									}}
-									className={cn(modelItemClass(false), "text-xs text-settings-muted")}
-									aria-expanded={showOlderModels}
-								>
-									<ChevronDown
-										className={cn("size-icon-sm shrink-0 transition-transform", showOlderModels && "rotate-180")}
-										aria-hidden="true"
-									/>
-									{showOlderModels
-										? t("settings.models.hideOlderModels")
-										: t("settings.models.showOlderModels", { count: olderModels.length })}
-								</DropdownMenuItem>
-								{showOlderModels && olderModels.map(renderCompactItem)}
-							</>
-						)}
+						{showLegacyToggle && legacyToggle}
 
 						{showCustomSearchAction && (
 							<DropdownMenuItem onSelect={() => onCustom(customSearchValue)} className={modelItemClass(false)}>
@@ -622,8 +617,11 @@ function providerFromModelID(modelID: string): string {
 	return slash > 0 ? modelID.slice(0, slash) : "";
 }
 
-export function buildModelSearchIndex(models: AgentModel[]): ModelSearchIndex {
-	const indexedModels = models.map((model, index) => {
+export function buildModelSearchIndex(models: AgentModel[], familyOrder?: readonly string[]): ModelSearchIndex {
+	// Version ordering and the legacy split are Claude-only; other catalogs keep their reported order.
+	const sortedModels = familyOrder ? sortModelsByFamilyVersion(models, familyOrder) : models;
+	const legacyIDs = familyOrder ? legacyModelIDs(sortedModels) : new Set<string>();
+	const indexedModels = sortedModels.map((model, index) => {
 		const label = modelChoiceLabel(model);
 		const provider = model.provider?.trim() || providerFromModelID(model.id) || "Other";
 		return {
@@ -635,6 +633,7 @@ export function buildModelSearchIndex(models: AgentModel[]): ModelSearchIndex {
 			normalizedLabel: normalizeSearch(label),
 			normalizedProvider: normalizeSearch(provider),
 			index,
+			legacy: legacyIDs.has(model.id),
 		};
 	});
 	const byID = new Map(indexedModels.map((item) => [item.normalizedID, item]));

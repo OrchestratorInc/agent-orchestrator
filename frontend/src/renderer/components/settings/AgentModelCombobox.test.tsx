@@ -131,14 +131,13 @@ describe("AgentModelCombobox", () => {
 		expect(onChange).toHaveBeenCalledWith("");
 	});
 
-	it("can clear an override when the agent does not report its model", async () => {
-		const { onChange } = renderCombobox([
+	it("does not offer a separate use-agent-model row", async () => {
+		renderCombobox([
 			{ id: "default", label: "Default (recommended)", isDefault: true },
 			{ id: "sonnet", label: "Sonnet" },
 		], { value: "sonnet" });
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		await userEvent.click(screen.getByRole("menuitem", { name: "Use agent model" }));
-		expect(onChange).toHaveBeenCalledWith("");
+		expect(screen.queryByRole("menuitem", { name: "Use agent model" })).not.toBeInTheDocument();
 	});
 
 	it("clears an effort override when the reported agent effort is selected", async () => {
@@ -232,35 +231,63 @@ describe("AgentModelCombobox", () => {
 		expect(screen.queryByText(/matching models/)).not.toBeInTheDocument();
 	});
 
-	it("folds older models behind a toggle after the collapse point", async () => {
-		const models = ["Opus 5.5", "Sonnet 5.5", "Fable 5.1", "Fable 5", "Opus 5", "Opus 4.8"].map((label) => ({
-			id: label.toLowerCase().replace(/[ .]/g, "-"),
-			label,
-		}));
-		renderCombobox(models, { compact: true, collapseAfter: 4 });
-
+	it("keeps the reported catalog order for agents other than Claude Code", async () => {
+		const labels = ["Opus 4.5", "Fable 5", "Opus 5.5", "Fable 5.1", "gpt-oss"];
+		renderCombobox(labels.map((label) => ({ id: label.toLowerCase().replace(" ", "-"), label })), { compact: true });
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-
-		expect(screen.getByRole("menuitem", { name: "Fable 5" })).toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: "Opus 5" })).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole("menuitem", { name: "Show 2 older models" }));
-
-		expect(screen.getByRole("menuitem", { name: "Opus 5" })).toBeInTheDocument();
-		expect(screen.getByRole("menuitem", { name: "Opus 4.8" })).toBeInTheDocument();
-		expect(screen.getByRole("menuitem", { name: "Hide older models" })).toBeInTheDocument();
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(labels);
 	});
 
-	it("does not fold away a selected older model", async () => {
-		const models = ["Opus 5.5", "Sonnet 5.5", "Opus 4.8"].map((label) => ({
-			id: label.toLowerCase().replace(/[ .]/g, "-"),
-			label,
-		}));
-		renderCombobox(models, { compact: true, collapseAfter: 2, value: "opus-4-8" });
-
+	it("lists Claude models newest first, including double-digit minor versions", async () => {
+		const ids = ["Opus 4.8", "Opus 4.10", "Opus 4.9", "Opus 5.5", "gpt-oss"];
+		renderCombobox(ids.map((id) => ({ id: id.toLowerCase().replace(" ", "-"), label: id })), { compact: true, agentId: "claude-code", value: "opus-4.8" });
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+			"Opus 5.5", "gpt-oss", "Opus 4.10", "Opus 4.9", "Opus 4.8",
+		]);
+	});
 
-		expect(screen.getByRole("menuitem", { name: "Opus 4.8" })).toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: /older models/ })).not.toBeInTheDocument();
+	describe("other Claude Code models", () => {
+		const claudeModels = ["Opus 4.5", "Opus 5.5", "Opus 4.8", "Haiku 4.5", "Sonnet 4.6", "Sonnet 5", "Fable 5", "Fable 5.1"]
+			.map((label) => ({ id: label.toLowerCase().replace(" ", "-"), label }));
+		const menuLabels = () => screen.getAllByRole("menuitem").map((item) => item.textContent);
+
+		it("shows the newest model per family in Fable, Opus, Sonnet, Haiku order until other models are expanded", async () => {
+			renderCombobox(claudeModels, { compact: true, agentId: "claude-code" });
+			await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+			expect(menuLabels()).toEqual(["Fable 5.1", "Opus 5.5", "Sonnet 5", "Haiku 4.5", "Other models"]);
+			await userEvent.click(screen.getByRole("menuitem", { name: "Other models" }));
+			expect(menuLabels()).toEqual([
+				"Fable 5.1", "Opus 5.5", "Sonnet 5", "Haiku 4.5",
+				"Fable 5", "Opus 4.8", "Opus 4.5", "Sonnet 4.6",
+				"Other models",
+			]);
+		});
+
+		it("reopens collapsed after other models were expanded", async () => {
+			renderCombobox(claudeModels, { compact: true, agentId: "claude-code", value: "opus-5.5" });
+			const trigger = screen.getByRole("button", { name: "Worker model" });
+			await userEvent.click(trigger);
+			expect(menuLabels()).toHaveLength(5);
+			await userEvent.click(screen.getByRole("menuitem", { name: "Other models" }));
+			expect(menuLabels()).toHaveLength(9);
+			await userEvent.keyboard("{Escape}");
+			await userEvent.click(trigger);
+			expect(menuLabels()).toHaveLength(5);
+		});
+
+		it("opens expanded when the selected model is older", async () => {
+			renderCombobox(claudeModels, { compact: true, agentId: "claude-code", value: "opus-4.5" });
+			await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+			expect(screen.getByRole("menuitem", { name: "Opus 4.5" })).toBeInTheDocument();
+			expect(screen.queryByRole("menuitem", { name: "Other models" })).not.toBeInTheDocument();
+		});
+
+		it("leaves other agents untouched", async () => {
+			renderCombobox(claudeModels, { compact: true, agentId: "codex" });
+			await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+			expect(menuLabels()).toHaveLength(8);
+		});
 	});
 
 	it("uses the search field to enter a direct model ID for a compact catalog", async () => {
