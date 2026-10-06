@@ -616,6 +616,12 @@ type ReviewRun struct {
 	TriggerSource    domain.ReviewTriggerSource
 }
 
+type SchemaAppVersion struct {
+	ID        int64
+	Version   int64
+	UpdatedAt time.Time
+}
+
 type Session struct {
 	ID                               domain.SessionID
 	ProjectID                        *domain.ProjectID

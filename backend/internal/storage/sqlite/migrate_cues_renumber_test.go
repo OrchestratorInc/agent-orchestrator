@@ -42,6 +42,12 @@ func TestMigratePreservesPreviewCuesAtOldVersion162(t *testing.T) {
 	assertPreviewCueMigration(t, db)
 }
 
+func TestMigratePreservesPreviewCuesAtOldVersion163(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 162)
+	seedPreviewCues(t, db, 163)
+	assertPreviewCueMigration(t, db)
+}
+
 func seedPreviewCues(t *testing.T, db *sql.DB, version int64) {
 	t.Helper()
 	_, err := db.Exec(`
@@ -97,6 +103,9 @@ func assertPreviewCueMigration(t *testing.T, db *sql.DB) {
 	}
 	if !strings.Contains(sessionsSQL, "'unreal-agent'") {
 		t.Fatal("upstream Unreal Agent migration was not applied")
+	}
+	if !strings.Contains(sessionsSQL, "'fx'") {
+		t.Fatal("upstream FX harness migration was not applied")
 	}
 	for _, version := range []int{149, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168} {
 		var applied int
