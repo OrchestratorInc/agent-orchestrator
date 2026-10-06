@@ -16,7 +16,10 @@ const renderDefaultThemeCSS = `:root{color-scheme:dark;--background:oklch(0.210 
 
 // The frame grows to fit the page, so a scrollbar inside the reply would read
 // as a box within the thread; it stays hidden. The page's own CSS overrides all of this.
-const renderBaseCSS = `html{background:var(--background);color:var(--foreground);font-family:var(--font-sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;scrollbar-width:none}html::-webkit-scrollbar{display:none}body{margin:0}code,kbd,pre,samp{font-family:var(--font-mono)}`
+const renderBaseCSS = `html{background:var(--background);color:var(--foreground);font-family:var(--font-sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;scrollbar-width:none}html::-webkit-scrollbar{display:none}body{margin:0}code,kbd,pre,samp{font-family:var(--font-mono)}` +
+	// Pages written for Codex's visualize skill use these token names; they map onto the AO theme.
+	// This rule follows #ao-theme, so each alias resolves to the live host theme.
+	`:root{--viz-series-1:var(--chart-1);--viz-series-2:var(--chart-2);--viz-series-3:var(--chart-3);--viz-series-4:var(--chart-4);--viz-series-5:var(--chart-5);--viz-series-6:var(--chart-6);--viz-text:var(--foreground);--viz-muted:var(--muted-foreground);--viz-bg:var(--background);--viz-panel:var(--card);--viz-border:var(--border);--viz-accent:var(--accent);--viz-accent-text:var(--accent-foreground);--viz-accent-bg:var(--muted);--viz-warning:var(--warning);--blue:var(--chart-1);--green:var(--success);--orange:var(--warning);--yellow:var(--chart-3);--purple:var(--chart-4);--red:var(--destructive)}`
 
 var (
 	// A BOM, whitespace, and comments may precede the doctype. Anything inserted

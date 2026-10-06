@@ -21,6 +21,8 @@ ao render "$TMPDIR/turns-by-day.html" --title "Turns by day" --height 420
 - `--height` is the first-paint frame height (80-2000). The frame then fits the
   page's real height.
 - Chat sessions only. In a terminal session, open the file with `ao preview`.
+- Do not use a built-in visualize skill, for example the Codex visualize skill, or a
+  `visualize{...}` line. AO does not show them. Only `ao render` shows a page in the thread.
 
 ## Check before you publish
 

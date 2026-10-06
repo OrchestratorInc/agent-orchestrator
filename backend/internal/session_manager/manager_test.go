@@ -5596,6 +5596,7 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		"use `ao preview README.md`, not `../README.md`",
 		"existing confined loopback preview",
 		"use `ao render` when a chart, table, diagram, or mockup is clearer than text",
+		"Use `ao render` instead of a built-in visualize skill.",
 	} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)

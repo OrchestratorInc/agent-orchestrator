@@ -4978,6 +4978,7 @@ func (m *Manager) aoSkillPointer() string {
 		"`ao browser` operates the same live page the user sees in that panel.\n\n" +
 		"## Showing pages in chat\n\n" +
 		"In a chat session, use `ao render` when a chart, table, diagram, or mockup is clearer than text. " +
+		"Use `ao render` instead of a built-in visualize skill. " +
 		"Read `" + renderFile + "` before you use `ao render`."
 }
 

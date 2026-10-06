@@ -32,7 +32,7 @@ func TestInjectRenderBootstrapLandsAfterTheDoctype(t *testing.T) {
 			if !strings.HasSuffix(got, tc.wantSuffix) {
 				t.Fatalf("page body not preserved verbatim: %.160q", got[len(got)-min(len(got), 160):])
 			}
-			for _, want := range []string{`<style id="ao-theme">`, "ui/notifications/size-changed", "ui/open-link", "ao-theme="} {
+			for _, want := range []string{`<style id="ao-theme">`, "ui/notifications/size-changed", "ui/open-link", "ao-theme=", "--viz-series-1:var(--chart-1)", "--blue:var(--chart-1)"} {
 				if !strings.Contains(got, want) {
 					t.Errorf("bootstrap missing %q", want)
 				}
