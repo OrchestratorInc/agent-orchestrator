@@ -1612,6 +1612,38 @@ describe("TaskComposer", () => {
 		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("Recently Used");
 	});
 
+	it.each([
+		{ agent: "claude-code", expected: "Opus 5.5" },
+		{ agent: "codex", expected: "Select model" },
+	])("opens $agent on $expected when nothing is remembered, used, or configured", async ({ agent, expected }) => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return {
+					data: {
+						agent,
+						selectionMode: "text",
+						models: [
+							{ id: "claude-fable-5-1", label: "Claude Fable 5.1" },
+							{ id: "claude-opus-4-8", label: "Claude Opus 4.8" },
+							{ id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+							{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+						],
+						allowCustom: false,
+					},
+				};
+			}
+			return { data: { status: "ok", project: { agent, config: {} } } };
+		});
+
+		render(
+			<Wrap>
+				<TaskComposer projectId="proj-1" onCreated={vi.fn()} />
+			</Wrap>,
+		);
+
+		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent(expected);
+	});
+
 	it("clears a stale model while the newly selected agent catalog resolves", async () => {
 		let resolveClaudeCatalog!: (value: {
 			data: {

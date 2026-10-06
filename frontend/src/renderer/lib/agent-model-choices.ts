@@ -92,3 +92,14 @@ export function legacyModelIDs<T extends { id: string; label: string }>(sorted: 
 	}
 	return legacy;
 }
+
+/** The newest versioned model whose label names the family, e.g. "opus". */
+export function newestModelInFamily<T extends { id: string; label: string }>(models: T[], family: string): T | undefined {
+	let best: { model: T; version: number[] } | undefined;
+	for (const model of models) {
+		const parsed = parseModelVersion(modelChoiceLabel(model));
+		if (!parsed?.family.includes(family)) continue;
+		if (!best || compareVersionsDesc(parsed.version, best.version) < 0) best = { model, version: parsed.version };
+	}
+	return best?.model;
+}

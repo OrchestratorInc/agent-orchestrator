@@ -27,7 +27,7 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
-import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, newestModelInFamily } from "../lib/agent-model-choices";
 import { fallbackEffort } from "../lib/effort";
 import {
 	buildRankedAgentOptions,
@@ -464,6 +464,9 @@ export function TaskComposer({
 	// new task should open on what you work with, not on whatever the provider
 	// calls its default.
 	const lastUsedOption = catalogModels.find((item) => item.lastUsedAt)?.id ?? "";
+	// With nothing remembered, run, or configured, Claude Code opens on the newest Opus.
+	const fallbackOption =
+		selectedAgent === "claude-code" && !catalogUsesModes ? (newestModelInFamily(catalogModels, "opus")?.id ?? "") : "";
 	const rememberedConfigForSelectedAgent = agentDrafts[selectedAgent];
 	const rememberedModel = rememberedConfigForSelectedAgent?.model ?? "";
 	const rememberedMode = rememberedConfigForSelectedAgent?.mode ?? "";
@@ -479,7 +482,8 @@ export function TaskComposer({
 		(rememberedModelIsValid ? rememberedModel : "") ||
 		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
-		(catalogUsesModes ? "" : catalogDefaultOption);
+		(catalogUsesModes ? "" : catalogDefaultOption) ||
+		fallbackOption;
 	const defaultModeForSelectedAgent =
 		(rememberedModeIsValid ? rememberedMode : "") ||
 		(catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
