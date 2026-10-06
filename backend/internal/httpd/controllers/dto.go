@@ -2960,6 +2960,26 @@ type ConversationTurnIDParam struct {
 	TurnID string `path:"turnId" description:"AO conversation turn identifier, from the snapshot's turns array."`
 }
 
+// PublishRenderRequest is a self-contained HTML page an agent shows inline in
+// its chat thread.
+type PublishRenderRequest struct {
+	HTML   string `json:"html" description:"A complete, self-contained HTML document, at most 1 MiB."`
+	Title  string `json:"title" description:"Short name for the page."`
+	Height int    `json:"height,omitempty" description:"First-paint frame height in CSS pixels, clamped to 80-2000; the frame then fits the page."`
+}
+
+// PublishRenderResponse names the stored page and the timeline row showing it.
+type PublishRenderResponse struct {
+	RenderID   string `json:"renderId"`
+	ActivityID string `json:"activityId"`
+	Path       string `json:"path"`
+}
+
+// RenderIDParam names a published render.
+type RenderIDParam struct {
+	RenderID string `path:"renderId" description:"Render identifier returned when the page was published."`
+}
+
 // ConversationBranchIDParam names one durable provider-thread branch.
 type ConversationBranchIDParam struct {
 	BranchID string `path:"branchId" description:"Conversation branch identifier, from a snapshot branch navigation point."`

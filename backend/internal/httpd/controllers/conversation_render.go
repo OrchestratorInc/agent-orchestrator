@@ -1,0 +1,77 @@
+package controllers
+
+import (
+	"context"
+	"errors"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+)
+
+const (
+	publishRenderPath = "/api/v1/sessions/{sessionId}/renders"
+	renderFilePath    = "/api/v1/sessions/{sessionId}/renders/{renderId}"
+	// Scripts run, but the opaque origin keeps the page out of the app's
+	// session and storage, and corsMiddleware refuses Origin: null, so even a
+	// render opened top-level cannot call the daemon. No popups, no modals,
+	// no top navigation.
+	renderContentSecurityPolicy = "sandbox allow-scripts allow-forms"
+)
+
+type renderPublisher interface {
+	PublishRender(context.Context, domain.SessionID, chatsvc.RenderInput) (chatsvc.RenderResult, error)
+}
+
+func (c *ConversationsController) publishRender(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(renderPublisher)
+	if !ok {
+		apispec.NotImplemented(w, r, "POST", publishRenderPath)
+		return
+	}
+	var req PublishRenderRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	result, err := svc.PublishRender(r.Context(), sessionID(r), chatsvc.RenderInput{
+		HTML: req.HTML, Title: req.Title, Height: req.Height,
+	})
+	switch {
+	case err == nil:
+		envelope.WriteJSON(w, http.StatusCreated, PublishRenderResponse{
+			RenderID: result.RenderID, ActivityID: result.ActivityID, Path: result.Path,
+		})
+	case errors.Is(err, chatsvc.ErrRenderInvalid):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "RENDER_INVALID", err.Error(), nil)
+	case errors.Is(err, chatsvc.ErrNoActiveTurn):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "RENDER_NO_ACTIVE_TURN",
+			"a render is shown in the turn the agent is running, and no turn is in flight", nil)
+	default:
+		writeConversationError(w, r, err)
+	}
+}
+
+func (c *ConversationsController) renderFile(w http.ResponseWriter, r *http.Request) {
+	if c.Renders == nil {
+		apispec.NotImplemented(w, r, "GET", renderFilePath)
+		return
+	}
+	file, info, err := c.Renders.OpenRender(r.Context(), sessionID(r), chi.URLParam(r, "renderId"))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "RENDER_NOT_FOUND", "render not found", nil)
+		return
+	}
+	defer func() { _ = file.Close() }()
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Content-Security-Policy", renderContentSecurityPolicy)
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "no-referrer")
+	// A render never changes after publish; its id is its version.
+	h.Set("Cache-Control", "private, max-age=31536000, immutable")
+	http.ServeContent(w, r, "", info.ModTime(), file)
+}

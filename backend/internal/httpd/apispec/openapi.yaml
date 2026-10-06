@@ -7180,6 +7180,103 @@ paths:
         preview
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/renders:
+    post:
+      operationId: publishSessionRender
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishRenderRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishRenderResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Show an agent's self-contained HTML page inline in its chat thread
+      tags:
+      - conversations
+  /api/v1/sessions/{sessionId}/renders/{renderId}:
+    get:
+      operationId: getSessionRender
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Render identifier returned when the page was published.
+        in: path
+        name: renderId
+        required: true
+        schema:
+          description: Render identifier returned when the page was published.
+          type: string
+      responses:
+        "200":
+          content:
+            text/html:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Serve a published render as a sandboxed HTML document
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/restore:
     post:
       operationId: restoreSession
@@ -13337,6 +13434,35 @@ components:
       - sourceTurnId
       - providerTurnId
       - activityId
+      type: object
+    PublishRenderRequest:
+      properties:
+        height:
+          description: First-paint frame height in CSS pixels, clamped to 80-2000;
+            the frame then fits the page.
+          type: integer
+        html:
+          description: A complete, self-contained HTML document, at most 1 MiB.
+          type: string
+        title:
+          description: Short name for the page.
+          type: string
+      required:
+      - html
+      - title
+      type: object
+    PublishRenderResponse:
+      properties:
+        activityId:
+          type: string
+        path:
+          type: string
+        renderId:
+          type: string
+      required:
+      - renderId
+      - activityId
+      - path
       type: object
     PushDeviceEnvelope:
       properties:

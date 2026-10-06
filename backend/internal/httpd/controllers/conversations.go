@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
@@ -77,6 +78,8 @@ type reviewerConversationService interface {
 // even by calling these URLs directly. UI visibility is not the boundary.
 type ConversationsController struct {
 	Svc ConversationService
+	// Renders serves agent HTML renders. Nil answers the render route 501.
+	Renders *attachmentstore.Store
 }
 
 // Register mounts the conversation routes under a session.
@@ -104,6 +107,8 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/branches/{branchId}/activate", c.activateBranch)
 	r.Put("/sessions/{sessionId}/conversation/title", c.setTitle)
 	r.Post("/sessions/{sessionId}/conversation/mcp/reload", c.reloadMCPServers)
+	r.Post("/sessions/{sessionId}/renders", c.publishRender)
+	r.Get("/sessions/{sessionId}/renders/{renderId}", c.renderFile)
 	r.Get("/reviews/{reviewId}/conversation/models", c.reviewModels)
 	r.Patch("/reviews/{reviewId}/conversation/settings", c.reviewSetSettings)
 	r.Get("/reviews/{reviewId}/conversation", c.reviewSnapshot)
