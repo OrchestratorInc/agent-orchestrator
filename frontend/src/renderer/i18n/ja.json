@@ -1,5 +1,5 @@
 {
-	"chat.startup.queuePlaceholder": "{{agent}} を起動しています · メッセージは順番に送信されます",
+	"chat.startup.queuePlaceholder": "{{agent}} を起動しています. メッセージは順番に送信されます",
 	"settings.coder11x.navLabel": "Coder",
 	"settings.coder11x.templatesListLabel": "Templates on your Coder",
 	"settings.coder11x.templatesListHint": "The workspace templates available on your connected Coder deployment.",
@@ -554,7 +554,7 @@
 	"inspector.linkedPRInfo": "参照用のリンクです。AO はこの PR のチェック、レビュー、マージイベント、セッションのライフサイクルを追跡しません。追跡対象の PR ではこれらを扱います。",
 	"inspector.resumeAgent": "エージェントを再開",
 	"inspector.resumeFallbackBody": "AO はネイティブのエージェントセッションを再開できなかったため、保存済みのプロンプトから新しい会話を開始しました。",
-	"inspector.resumingAgent": "エージェントを再開中…",
+	"inspector.resumingAgent": "エージェントを再開中",
 	"inspector.returnToPanel": "パネルに戻る",
 	"inspector.review.approved": "承認済み",
 	"inspector.review.autoInject": "Automatically fix review comments",

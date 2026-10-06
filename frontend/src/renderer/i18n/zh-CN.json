@@ -1,5 +1,5 @@
 {
-	"chat.startup.queuePlaceholder": "{{agent}} 正在启动 · 消息将按顺序发送",
+	"chat.startup.queuePlaceholder": "{{agent}} 正在启动. 消息将按顺序发送",
 	"settings.coder11x.navLabel": "Coder",
 	"settings.coder11x.templatesListLabel": "Templates on your Coder",
 	"settings.coder11x.templatesListHint": "The workspace templates available on your connected Coder deployment.",
@@ -553,7 +553,7 @@
 	"inspector.linkedPRInfo": "仅作为参考链接。AO 不会跟踪此 PR 的检查、评审、合并事件或会话生命周期活动。已跟踪的 PR 才包含这些信号。",
 	"inspector.resumeAgent": "恢复代理",
 	"inspector.resumeFallbackBody": "AO 无法恢复原生代理会话，因此已从已保存的提示重新开始对话。",
-	"inspector.resumingAgent": "正在恢复代理…",
+	"inspector.resumingAgent": "正在恢复代理",
 	"inspector.returnToPanel": "返回面板",
 	"inspector.review.approved": "已批准",
 	"inspector.review.autoInject": "Automatically fix review comments",

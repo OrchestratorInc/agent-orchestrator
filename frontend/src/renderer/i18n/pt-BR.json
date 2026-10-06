@@ -1,5 +1,5 @@
 {
-	"chat.startup.queuePlaceholder": "{{agent}} está iniciando · as mensagens são enviadas em ordem",
+	"chat.startup.queuePlaceholder": "{{agent}} está iniciando. As mensagens são enviadas em ordem",
 	"settings.coder11x.navLabel": "Coder",
 	"settings.coder11x.templatesListLabel": "Templates on your Coder",
 	"settings.coder11x.templatesListHint": "The workspace templates available on your connected Coder deployment.",
@@ -557,7 +557,7 @@
 	"inspector.linkedPRInfo": "Vinculado para referência. O AO não acompanha verificações, revisões, eventos de merge nem a atividade do ciclo de vida da sessão para este PR. PRs acompanhados incluem esses sinais.",
 	"inspector.resumeAgent": "Retomar agente",
 	"inspector.resumeFallbackBody": "O AO não conseguiu retomar a sessão nativa do agente, então iniciou uma nova conversa a partir do prompt salvo.",
-	"inspector.resumingAgent": "Retomando agente…",
+	"inspector.resumingAgent": "Retomando agente",
 	"inspector.returnToPanel": "Voltar ao painel",
 	"inspector.review.approved": "Aprovado",
 	"inspector.review.autoInject": "Automatically fix review comments",

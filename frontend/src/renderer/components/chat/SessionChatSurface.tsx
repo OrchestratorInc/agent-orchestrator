@@ -241,7 +241,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(snapshot.controller?.state === "ready" || snapshot.controller?.state === "busy");
 	// Mode commits before the target controller starts. A cached ready snapshot
 	// can also outlive the source, so wait for the handoff's final snapshot refresh.
-	const controllerCatalogsEnabled = targetChatControllerReady && !controllerTransitioning && !newWorkDisabled;
+	// A background resume keeps the last-known catalogs visible so the model
+	// picker doesn't blank out while the agent spins up.
+	const controllerCatalogsEnabled = (targetChatControllerReady || agentResuming) && !controllerTransitioning && !newWorkDisabled;
 	// Agent-switch presentation for the chat surface progress track and input locks.
 	const switchMutation = useSwitchAgentState(uiSessionId);
 	const agentSwitches = useAgentSwitches(session.id, hostId).data ?? [];

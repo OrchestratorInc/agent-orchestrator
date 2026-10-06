@@ -1569,7 +1569,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("Fix clicking attachments")).toBeInTheDocument();
 		expect(screen.queryByText("Queued · sends when the agent finishes")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("queued-message-dock")).not.toBeInTheDocument();
-		expect(screen.getByText("Codex is starting · messages send in order")).toBeInTheDocument();
+		expect(screen.getByText("Codex is starting. Messages send in order")).toBeInTheDocument();
 		expect(screen.queryByText(/^Working for /)).not.toBeInTheDocument();
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
@@ -1585,7 +1585,7 @@ describe("ChatWorkspace timeline", () => {
 				onResumeAgent={vi.fn()}
 			/>,
 		);
-		expect(screen.getByText("Codex 正在启动 · 消息将按顺序发送")).toBeInTheDocument();
+		expect(screen.getByText("Codex 正在启动. 消息将按顺序发送")).toBeInTheDocument();
 	});
 
 	// The checklist keeps the working slot until the agent is up and its first
@@ -1751,7 +1751,7 @@ describe("ChatWorkspace timeline", () => {
 
 		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
-		expect(screen.getByText("Resuming agent…")).toBeInTheDocument();
+		expect(screen.getByText("Resuming agent")).toBeInTheDocument();
 		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
 	});
 

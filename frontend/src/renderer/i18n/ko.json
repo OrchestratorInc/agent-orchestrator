@@ -1,5 +1,5 @@
 {
-	"chat.startup.queuePlaceholder": "{{agent}} 시작 중 · 메시지는 순서대로 전송됩니다",
+	"chat.startup.queuePlaceholder": "{{agent}} 시작 중. 메시지는 순서대로 전송됩니다",
 	"settings.coder11x.navLabel": "Coder",
 	"settings.coder11x.templatesListLabel": "Templates on your Coder",
 	"settings.coder11x.templatesListHint": "The workspace templates available on your connected Coder deployment.",
@@ -554,7 +554,7 @@
 	"inspector.linkedPRInfo": "참고용으로 연결되었습니다. AO는 이 PR의 검사, 리뷰, 병합 이벤트 또는 세션 수명 주기 활동을 추적하지 않습니다. 추적되는 PR에는 이러한 신호가 포함됩니다.",
 	"inspector.resumeAgent": "에이전트 재개",
 	"inspector.resumeFallbackBody": "AO가 네이티브 에이전트 세션을 재개할 수 없어, 저장된 프롬프트로 새 대화를 시작했습니다.",
-	"inspector.resumingAgent": "에이전트 재개 중…",
+	"inspector.resumingAgent": "에이전트 재개 중",
 	"inspector.returnToPanel": "패널로 돌아가기",
 	"inspector.review.approved": "승인됨",
 	"inspector.review.autoInject": "Automatically fix review comments",

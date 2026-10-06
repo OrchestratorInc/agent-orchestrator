@@ -1,5 +1,5 @@
 {
-	"chat.startup.queuePlaceholder": "{{agent}} startet · Nachrichten werden der Reihe nach gesendet",
+	"chat.startup.queuePlaceholder": "{{agent}} startet. Nachrichten werden der Reihe nach gesendet",
 	"settings.coder11x.navLabel": "Coder",
 	"settings.coder11x.templatesListLabel": "Templates on your Coder",
 	"settings.coder11x.templatesListHint": "The workspace templates available on your connected Coder deployment.",
@@ -554,7 +554,7 @@
 	"inspector.linkedPRInfo": "Zur Referenz verknüpft. AO verfolgt für diesen PR keine Checks, Reviews, Merge-Ereignisse oder Sitzungsaktivitäten. Bei verfolgten PRs sind diese Signale verfügbar.",
 	"inspector.resumeAgent": "Agent fortsetzen",
 	"inspector.resumeFallbackBody": "AO konnte die native Agent-Sitzung nicht fortsetzen und hat daher eine neue Unterhaltung aus dem gespeicherten Prompt gestartet.",
-	"inspector.resumingAgent": "Agent wird fortgesetzt…",
+	"inspector.resumingAgent": "Agent wird fortgesetzt",
 	"inspector.returnToPanel": "Zurück zum Panel",
 	"inspector.review.approved": "Genehmigt",
 	"inspector.review.autoInject": "Automatically fix review comments",

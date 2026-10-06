@@ -481,9 +481,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			]);
 		},
 	});
-	const quietResume = !usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
-		!resumeStatus.statusError && (openedSession.current.key !== uiSessionId || !openedSession.current.checked ||
-			(autoResume.variables === sessionId && autoResume.isPending));
+	// True while a background resume owns the chat surface: hide the stopped
+	// banner and disable sending, but keep history readable. Covers the initial
+	// check (before the mutation fires) and the mutation in flight. Once checked
+	// is set, only the in-flight mutation keeps it true — switching back to an
+	// already-resumed session no longer flashes "Resuming agent…" while the
+	// workspace query catches up with the new activity state.
+	const quietResume = (autoResume.variables === sessionId && autoResume.isPending) ||
+		(!usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
+		!resumeStatus.statusError && openedSession.current.key === uiSessionId && !openedSession.current.checked);
 	const resumeOnOpen = autoResume.mutate;
 	useEffect(() => {
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };

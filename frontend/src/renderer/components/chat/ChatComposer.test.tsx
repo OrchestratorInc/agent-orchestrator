@@ -2071,7 +2071,7 @@ describe("unavailable states", () => {
 		const { field } = renderComposer({ willQueue: true });
 		expect(field).toHaveAttribute(
 			"aria-placeholder",
-			expect.stringContaining("sends when it finishes"),
+			"Next message you send will be queued",
 		);
 	});
 

@@ -1589,8 +1589,8 @@ export const ChatComposer = memo(function ChatComposer({
 						disabledPlaceholder ?? (disabled
 							? "The controller is not connected"
 							: willQueue
-								? (queuePlaceholder ?? "Agent is working — this sends when it finishes")
-								: emptyPlaceholder ?? "Message the agent…")
+								? (queuePlaceholder ?? "Next message you send will be queued")
+								: emptyPlaceholder ?? "Message the agent")
 					}
 					menuOpen={menuOpen}
 					menuId={menuId}

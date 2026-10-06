@@ -1211,9 +1211,12 @@ function ChatWorkspaceContent({
 					autoSelectEffortOnOpen={snapshot.items.length === 0 && !turn}
 					error={configOptionError}
 					// Turn settings require a live controller even while messages can queue.
+				// A background resume keeps the controls visible with their last values.
 					disabled={
-							snapshot.controller.state === "connecting" ||
-							snapshot.controller.state === "stopped" ||
+							(!agentResuming && (
+								snapshot.controller.state === "connecting" ||
+								snapshot.controller.state === "stopped"
+							)) ||
 							session?.provisionState === "provisioning" ||
 							controllerTransitioning || configOptionPending || newWorkDisabled
 						}
@@ -1585,7 +1588,9 @@ function ChatWorkspaceContent({
 										disabledPlaceholder={
 											controllerTransitioning || newWorkDisabled
 												? ""
-												: agentResuming ? t("inspector.resumingAgent") : undefined
+												: agentResuming
+													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
+													: undefined
 										}
 										// Keep the composer useful outside the centered welcome state too. A
 										// task can have non-message activity before its first visible chat
@@ -1604,7 +1609,7 @@ function ChatWorkspaceContent({
 										onSteer={newWorkDisabled ? undefined : steer}
 										showSteerButton={showSteerButton}
 										canSteer={Boolean(onSteer) && turn?.state === "running"}
-										sendPending={sendPending}
+										sendPending={sendPending || agentResuming}
 										steerPending={steerPending}
 										steerRefusal={steerRefusal}
 										onCompact={newWorkDisabled ? undefined : onCompact}
