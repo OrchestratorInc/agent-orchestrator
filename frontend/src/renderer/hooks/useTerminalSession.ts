@@ -21,6 +21,7 @@ import { LOCAL_ECHO_ENABLED, withLineBufferedLocalInput } from "../lib/terminal-
 import { createTerminalMux, muxUrlFromApiBase, type TerminalMux } from "../lib/terminal-mux";
 import { sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 
 /**
  * The slice of xterm's Terminal the attachment needs. Structural, so tests can
@@ -422,6 +423,52 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				: baseMux;
 		r.mux = mux;
 
+		// Live output: one xterm.write in flight at a time. A burst arrives as many
+		// WebSocket messages, and writing each separately costs a parse/render
+		// cycle per message. Output arriving while xterm parses the previous write
+		// is joined and written as one batch when that write completes, so batches
+		// grow with load while an isolated chunk (a keystroke's echo) is written
+		// immediately. The backlog lives here, bounded by the daemon's
+		// back-pressure, rather than in xterm's own write queue.
+		let liveChunks: Uint8Array[] = [];
+		let liveBytes = 0;
+		let liveWriteInFlight = false;
+		const takeLiveBatch = (): Uint8Array | null => {
+			if (liveChunks.length === 0) return null;
+			let batch = liveChunks[0]!;
+			if (liveChunks.length > 1) {
+				batch = new Uint8Array(liveBytes);
+				let offset = 0;
+				for (const chunk of liveChunks) {
+					batch.set(chunk, offset);
+					offset += chunk.length;
+				}
+			}
+			liveChunks = [];
+			liveBytes = 0;
+			return batch;
+		};
+		const writeLiveBatch = () => {
+			const batch = takeLiveBatch();
+			if (!batch) return;
+			liveWriteInFlight = true;
+			terminal.write(batch, () => {
+				liveWriteInFlight = false;
+				if (isCurrentAttachment(generation, handle, mux)) writeLiveBatch();
+			});
+		};
+		const writeLiveOutput = (bytes: Uint8Array) => {
+			liveChunks.push(bytes);
+			liveBytes += bytes.length;
+			if (!liveWriteInFlight) writeLiveBatch();
+		};
+		// Hand any held output to xterm now, in order, ahead of a teardown or a
+		// write that must follow it.
+		const drainLiveOutput = () => {
+			const batch = takeLiveBatch();
+			if (batch) terminal.write(batch);
+		};
+
 		let pendingReplayWrites = 0;
 		let replayRevealDeadlineReached = false;
 		const postReplayWriteQueue: Uint8Array[] = [];
@@ -638,12 +685,14 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 						clearTimeout(r.replayTailQuietTimer);
 						r.replayTailQuietTimer = null;
 					}
+					drainLiveOutput();
 					postReplayWriteQueue.push(bytes);
 					drainPostReplayWrites();
 					return;
 				}
-				terminal.write(bytes);
+				writeLiveOutput(bytes);
 			}),
+			drainLiveOutput,
 			mux.onOpened(handle, () => {
 				if (!isCurrentAttachment(generation, handle, mux)) return;
 				clearOpenTimer(generation);
@@ -763,6 +812,7 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			// end the gate immediately.
 			if (r.replayBuffering) flushReplay();
 			else revealReplayTail();
+			if (session) recordDirectWorkerInteraction(session.id, "terminal", session.kind, session.hostId);
 			mux.sendInput(handle, data);
 			return true;
 		});

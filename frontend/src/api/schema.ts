@@ -1466,6 +1466,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/reviews/{reviewId}/conversation/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the models offered for a Chat reviewer */
+        get: operations["listReviewerConversationModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reviews/{reviewId}/conversation/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Select model and effort for the reviewer's next Chat turn */
+        patch: operations["setReviewerConversationSettings"];
+        trace?: never;
+    };
     "/api/v1/reviews/{reviewSessionID}/activity": {
         parameters: {
             query?: never;
@@ -2424,7 +2458,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Kill a worker's reviewer terminal session */
+        /** Archive a worker's reviewer and hide its surface while retaining history */
         post: operations["killReviewSession"];
         delete?: never;
         options?: never;
@@ -2929,6 +2963,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/memory/pressure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the machine's memory-pressure verdict without sampling any process */
+        get: operations["getMemoryPressure"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/sessions": {
         parameters: {
             query?: never;
@@ -2955,6 +3006,23 @@ export interface paths {
         };
         /** Get detailed token and estimated cost usage for one session */
         get: operations["getSessionUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/usage/sessions/memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List resident memory of each live session's runtime process tree */
+        get: operations["listSessionMemory"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3171,6 +3239,16 @@ export interface components {
             latestVersion?: string;
             source?: string;
             status: string;
+        };
+        AppMemoryResponse: {
+            /** @description False when there was no earlier sample to measure against: cpuPercent is unknown, not zero. */
+            cpuMeasured: boolean;
+            /** Format: double */
+            cpuPercent: number;
+            own?: components["schemas"]["SessionMemoryResponse"];
+            processCount: number;
+            reviewers?: components["schemas"]["ControllersReviewerMemoryResponse"][];
+            rssBytes: number;
         };
         AttachmentInput: {
             data: string;
@@ -3523,6 +3601,13 @@ export interface components {
         };
         ControllersResolveReviewCommentResponse: {
             ok: boolean;
+        };
+        ControllersReviewerMemoryResponse: {
+            harness: string;
+            memory: components["schemas"]["SessionMemoryResponse"];
+            reviewId: string;
+            /** @description The worker session this reviewer reviews, not the reviewer's own identity. */
+            sessionId: string;
         };
         ControllersSecurePairingStatus: {
             active: boolean;
@@ -4242,6 +4327,7 @@ export interface components {
             reports: components["schemas"]["ReportResponse"][];
         };
         ListReviewsResponse: {
+            activeReviewers: components["schemas"]["DomainReviewerSurface"][];
             /** @enum {string} */
             reviewerActivityState?: "active" | "idle" | "waiting_input" | "blocked" | "exited";
             reviewerHandleId: string;
@@ -4249,6 +4335,11 @@ export interface components {
             reviewerSurface?: components["schemas"]["DomainReviewerSurface"];
             reviews: components["schemas"]["PRReviewState"][];
             runs: components["schemas"]["ReviewRun"][];
+        };
+        ListSessionMemoryResponse: {
+            app?: components["schemas"]["AppMemoryResponse"];
+            sessions: components["schemas"]["SessionMemoryResponse"][];
+            system?: components["schemas"]["SystemMemoryResponse"];
         };
         ListSessionPRsResponse: {
             linkedPrs: components["schemas"]["SessionPRReference"][];
@@ -4305,6 +4396,12 @@ export interface components {
              * @enum {string}
              */
             status: "read";
+        };
+        MemoryPressureResponse: {
+            /** Format: double */
+            pressureRaw: number;
+            /** @enum {string} */
+            pressureSource: "psi" | "available_pct" | "memorystatus";
         };
         MergePRRequest: {
             expectedHeadSha: string;
@@ -4485,6 +4582,7 @@ export interface components {
             symlinks?: string[];
             trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
             worker?: components["schemas"]["RoleOverride"];
+            workersRequestReview?: boolean;
         };
         ProjectGetResponse: {
             project: components["schemas"]["ProjectOrDegraded"];
@@ -4653,7 +4751,7 @@ export interface components {
             status: string;
             targetSha: string;
             /** @enum {string} */
-            triggerSource: "manual" | "auto";
+            triggerSource: "manual" | "agent" | "auto";
             verdict: string;
         };
         ReviewRunResponse: {
@@ -4697,6 +4795,10 @@ export interface components {
             ok: boolean;
             sessionId: string;
         };
+        SessionActivityResponse: {
+            current?: components["schemas"]["SessionStepResponse"];
+            recent: components["schemas"]["SessionStepResponse"][];
+        };
         SessionInterfaceTransition: {
             /** Format: date-time */
             completedAt?: null | string;
@@ -4728,6 +4830,32 @@ export interface components {
             /** @enum {string} */
             targetMode: "chat" | "tui";
             transition?: components["schemas"]["SessionInterfaceTransition"];
+        };
+        SessionMemoryProcessResponse: {
+            command: string;
+            /**
+             * Format: double
+             * @description Share of one core used since the previous sample; zero on the first.
+             */
+            cpuPercent: number;
+            pid: number;
+            ppid: number;
+            rssBytes: number;
+        };
+        SessionMemoryResponse: {
+            activity?: components["schemas"]["SessionActivityResponse"];
+            /**
+             * Format: double
+             * @description Share of one core the whole tree used since the previous sample; zero on the first.
+             */
+            cpuPercent: number;
+            processCount: number;
+            processes: components["schemas"]["SessionMemoryProcessResponse"][];
+            /** @description Resident set size summed over the runtime process tree. */
+            rssBytes: number;
+            /** Format: date-time */
+            sampledAt: string;
+            sessionId: string;
         };
         SessionPRCISummary: {
             autoInjectCI: boolean;
@@ -4853,6 +4981,17 @@ export interface components {
         SessionResponse: {
             session: components["schemas"]["ControllersSessionView"];
         };
+        SessionStepResponse: {
+            /**
+             * Format: date-time
+             * @description Absent while the tool is still running.
+             */
+            endedAt?: null | string;
+            failed: boolean;
+            /** Format: date-time */
+            startedAt: string;
+            tool: string;
+        };
         SessionUsageResponse: {
             harnesses: components["schemas"]["UsageHarnessResponse"][];
             incomplete: boolean;
@@ -4884,11 +5023,15 @@ export interface components {
             observedAt?: string;
             /** @description Native main-turn identity reported by the hook, when supported. */
             providerTurnId?: string;
+            /** @description Running Claude subagent ids observed in a parent Stop hook; empty means none, absent means no snapshot. */
+            runningSubagentIds?: null | string[];
             /**
              * @description Agent activity state reported by an agent hook. Optional for metadata-only hooks.
              * @enum {string}
              */
             state?: "active" | "idle" | "waiting_input" | "blocked" | "exited";
+            /** @description Native child agent id for this hook event. */
+            subagentId?: string;
             /** @description AO prompt-hook context correlation UUID, when supported. */
             submissionId?: string;
             /** @description Native tool name, for tool-use hook events. */
@@ -5144,6 +5287,25 @@ export interface components {
              */
             targetHarness: "claude-code" | "codex" | "fx";
         };
+        SystemMemoryResponse: {
+            /** @description What the kernel would hand out without swapping (MemAvailable). */
+            availableBytes: number;
+            cpuCount: number;
+            cpuMeasured: boolean;
+            /** Format: double */
+            cpuPercent: number;
+            /** Format: double */
+            load1: number;
+            /** Format: double */
+            pressureRaw: number;
+            /** @enum {string} */
+            pressureSource: "psi" | "available_pct" | "memorystatus";
+            /** Format: double */
+            swapBytesPerSec: number;
+            swapTotalBytes: number;
+            swapUsedBytes: number;
+            totalBytes: number;
+        };
         SystemRequirement: {
             /** @description Extra context: the resolved path when satisfied, or why it is not. */
             detail?: string;
@@ -5174,10 +5336,27 @@ export interface components {
         };
         TriggerReviewRequest: {
             agentConfig?: components["schemas"]["AgentConfig"];
+            /** @description Turn on the worker session's review auto-inject once a pass has started, so the reviewer's PR review comments reach the worker. */
+            enableAutoInject?: boolean;
             /** @enum {string} */
             harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
+            /** @enum {string} */
+            interfaceMode?: "chat" | "tui";
+            /** @description Restrict the pass to this pull request, attaching it to the session first if AO does not track it yet (never from another active session). Omit to review every eligible PR on the session. */
+            prUrl?: string;
+            /** @description Return 409 instead of reusing when every open PR head is already being reviewed or already has a review. */
+            rejectReviewedHead?: boolean;
+            /** @description Start a fresh pass for already-reviewed current heads; a different reviewer may run alongside one that is still running. A person's rerun reuses an active pass from the same reviewer; an agent's rerun returns 409 REVIEW_ALREADY_RUNNING instead. */
+            rerun?: boolean;
+            /**
+             * @description Who requested the pass: manual (a person, the default) or agent (an AO session through the CLI).
+             * @enum {string}
+             */
+            source?: "manual" | "agent";
         };
         TriggerReviewResponse: {
+            /** @description True when this request turned the worker session's review auto-inject on. */
+            autoInjectEnabled: boolean;
             /** @description True when a new review pass was started; false when an existing run for the same commit was reused. */
             created: boolean;
             reviewerHandleId: string;
@@ -10553,6 +10732,137 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SendConversationMessageResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listReviewerConversationModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Reviewer conversation identifier. */
+                reviewId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationModelsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setReviewerConversationSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Reviewer conversation identifier. */
+                reviewId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationTurnSettingsPayload"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationTurnSettingsPayload"];
                 };
             };
             /** @description Bad Request */
@@ -16650,6 +16960,44 @@ export interface operations {
             };
         };
     };
+    getMemoryPressure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryPressureResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listCompactSessionUsage: {
         parameters: {
             query?: {
@@ -16719,6 +17067,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listSessionMemory: {
+        parameters: {
+            query?: {
+                /** @description Optional project id filter for dashboard cards. */
+                projectId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListSessionMemoryResponse"];
                 };
             };
             /** @description Internal Server Error */

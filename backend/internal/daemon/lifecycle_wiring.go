@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
@@ -343,7 +344,6 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 			reviewcore.WithReviewerChat(reviewerChat)),
 	})
 	reviewOpts := []reviewsvc.Option{
-		reviewsvc.WithLifecycleReducer(lcm),
 		reviewsvc.WithTelemetry(telemetry),
 		reviewsvc.WithNotificationSink(notifications),
 		reviewsvc.WithCodexAccountOperationGate(codexOperationGate),
@@ -354,6 +354,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 			reviewsvc.WithReviewResolver(scmProvider),
 		)
 	}
+	reviewOpts = append(reviewOpts, reviewsvc.WithPRRefresher(reviewPRRefresher{sessions: sessionSvc}))
 	reviewSvc := reviewsvc.New(reviewEngine, store, reviewOpts...)
 	mgr.SetReviewerTerminator(reviewSvc)
 	return sessionSvc, reviewSvc, mgr, nil
@@ -587,22 +588,22 @@ func (c chatLauncher) RestoreReviewChat(ctx context.Context, cfg reviewcore.Revi
 
 func (c chatLauncher) startReviewChat(ctx context.Context, cfg reviewcore.ReviewerChatStart, sendPrompt bool) (string, error) {
 	owner := domain.ReviewConversationOwner(cfg.ReviewID)
-	started, err := c.svc.StartChat(ctx, chatsvc.StartConfig{Owner: owner, SessionID: cfg.WorkerID, ProjectID: cfg.ProjectID, Kind: domain.KindWorker, Harness: cfg.Harness, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Permissions: ports.PermissionModeAuto, SystemPrompt: cfg.SystemPrompt, ProviderConversationID: cfg.ProviderConversationID})
+	started, err := c.svc.StartChat(ctx, chatsvc.StartConfig{Owner: owner, SessionID: cfg.WorkerID, ProjectID: cfg.ProjectID, Kind: domain.KindWorker, Harness: cfg.Harness, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: cfg.Model, Effort: cfg.Effort, Permissions: ports.PermissionModeAuto, SystemPrompt: cfg.SystemPrompt, ProviderConversationID: cfg.ProviderConversationID})
 	if err != nil {
 		return "", err
 	}
-	if !sendPrompt {
+	if !sendPrompt || strings.TrimSpace(cfg.Prompt) == "" {
 		return started.ProviderConversationID, nil
 	}
-	if _, err := c.svc.SendForOwner(ctx, owner, ports.ChatUserMessage{Text: cfg.Prompt, Origin: domain.MessageOriginHuman}); err != nil {
+	if _, err := c.svc.SendForOwner(ctx, owner, ports.ChatUserMessage{Text: cfg.Prompt, Origin: domain.MessageOriginDaemon, ClientMessageID: reviewcore.BatchMessageID(cfg.BatchID)}); err != nil {
 		_ = c.svc.StopForOwner(context.Background(), owner)
 		return "", err
 	}
 	return started.ProviderConversationID, nil
 }
 
-func (c chatLauncher) SendReviewChat(ctx context.Context, reviewID, message string) error {
-	_, err := c.svc.SendForOwner(ctx, domain.ReviewConversationOwner(reviewID), ports.ChatUserMessage{Text: message, Origin: domain.MessageOriginDaemon})
+func (c chatLauncher) SendReviewChat(ctx context.Context, reviewID, message, batchID string) error {
+	_, err := c.svc.SendForOwner(ctx, domain.ReviewConversationOwner(reviewID), ports.ChatUserMessage{Text: message, Origin: domain.MessageOriginDaemon, ClientMessageID: reviewcore.BatchMessageID(batchID)})
 	return err
 }
 
@@ -697,4 +698,35 @@ func (c chatLauncher) AbortChatHandoff(id domain.SessionID) {
 
 func (c chatLauncher) StopChat(ctx context.Context, id domain.SessionID) error {
 	return c.svc.StopChat(ctx, id)
+}
+
+// reviewPRRefresher lets a review trigger fetch a worker's PR fresh from the
+// provider through the session service's claim, which re-reads the PR and
+// records it on the session. Claiming a PR the session already owns only
+// refreshes its facts; another active session's PR is never taken over.
+type reviewPRRefresher struct {
+	sessions interface {
+		ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error)
+	}
+}
+
+func (r reviewPRRefresher) RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string) error {
+	_, err := r.sessions.ClaimPR(ctx, workerID, prURL, sessionsvc.ClaimPROptions{AllowTakeover: false})
+	var owned ports.PRClaimedByActiveSessionError
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &owned):
+		return fmt.Errorf("%w: %s belongs to active session %s", reviewcore.ErrPROwnedElsewhere, prURL, owned.Owner)
+	case errors.Is(err, sessionsvc.ErrPRNotFound):
+		return fmt.Errorf("%w: pull request %s was not found on the provider", reviewcore.ErrNotFound, prURL)
+	case errors.Is(err, sessionsvc.ErrPRNotOpen):
+		return fmt.Errorf("%w: pull request %s is not open", reviewcore.ErrInvalid, prURL)
+	case errors.Is(err, sessionsvc.ErrInvalidPRRef), errors.Is(err, sessionsvc.ErrProjectMismatch):
+		return fmt.Errorf("%w: %s is not a pull request in this project's repository", reviewcore.ErrInvalid, prURL)
+	case errors.Is(err, sessionsvc.ErrSCMUnavailable):
+		return fmt.Errorf("%w: AO could not fetch %s from the provider; try again shortly", reviewcore.ErrInvalid, prURL)
+	default:
+		return err
+	}
 }

@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Play } from "lucide-react";
 import { aoBridge } from "../lib/bridge";
@@ -31,7 +31,9 @@ export function ResumeAgentControl({
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const canResume = useCanResumeAgent(session, hostId);
+	const resuming = useIsMutating({ mutationKey: ["resume-agent", hostId ?? "local", session.id] }) > 0;
 	const resume = useMutation({
+		mutationKey: ["resume-agent", hostId ?? "local", session.id],
 		mutationFn: async () => {
 			if (usePreviewData) return;
 			const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/resume-agent", {
@@ -66,14 +68,14 @@ export function ResumeAgentControl({
 		<>
 			<Button
 				className={cn("shrink-0", className)}
-				disabled={resume.isPending}
+				disabled={resuming}
 				onClick={() => resume.mutate()}
 				size="sm"
 				type="button"
 				variant="outline"
 			>
 				<Play className="size-icon-sm" aria-hidden="true" />
-				{resume.isPending ? t("inspector.resumingAgent") : t("inspector.resumeAgent")}
+				{t("inspector.resumeAgent")}
 			</Button>
 			{error ? (
 				<p className="mt-2 text-2xs leading-normal text-error" role="status">

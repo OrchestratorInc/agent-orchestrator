@@ -14,6 +14,7 @@ import {
 	type QueryClient,
 	infiniteQueryOptions,
 	useInfiniteQuery,
+	useIsMutating,
 	useMutation,
 	useQuery,
 	useQueryClient,
@@ -25,6 +26,7 @@ import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type {
 	ActivityKind,
 	ApprovalMode,
@@ -629,7 +631,9 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		onError: (_error, variables) => refreshSessionInBackground(variables.targetSessionId),
 	});
 
+	const resumingAgent = useIsMutating({ mutationKey: ["resume-agent", hostId ?? "local", sessionId] }) > 0;
 	const resume = useMutation({
+		mutationKey: ["resume-agent", hostId ?? "local", sessionId],
 		mutationFn: async () => {
 			const { data, error, response } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/resume-agent",
@@ -981,6 +985,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			if (!claimConversationDispatch(queryClient, stateSessionId as string, clientMessageId, "send")) {
 				return Promise.reject(new Error("Conversation work is already being sent for this session."));
 			}
+			recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
 			return send.mutateAsync({
 				targetSessionId: sessionId,
 				clientMessageId,
@@ -1000,7 +1005,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		) => resolveInput.mutateAsync({ requestId, action, content }),
 		interrupt: () => interrupt.mutate({ targetSessionId: sessionId as string }),
 		resumeAgent: () => resume.mutateAsync(),
-		resumingAgent: resume.isPending,
+		resumingAgent,
 		resumeError: resume.error ? apiErrorMessage(resume.error) : undefined,
 		compact: () => compact.mutateAsync(),
 		choosingSettings: chooseSettings.isPending && chooseSettings.variables?.targetSessionId === sessionId,
@@ -1082,6 +1087,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		activateBranchError: activateBranch.error ? apiErrorMessage(activateBranch.error) : undefined,
 		steer: async (text: string, attachments?: WireImageContent[], clientMessageId?: string, recoverOnly?: boolean): Promise<ChatSteerOutcome> => {
 			try {
+				if (sessionId) recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
 				await steer.mutateAsync({ text, attachments, clientMessageId, recoverOnly });
 				return { status: "accepted" };
 			} catch (error) {
