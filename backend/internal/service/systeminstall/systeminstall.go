@@ -32,6 +32,8 @@ var (
 	ErrInstallMethod = errors.New("systeminstall: invalid install method")
 	// ErrInstallActive prevents a second operation from being silently discarded.
 	ErrInstallActive = errors.New("systeminstall: harness install operation already active")
+	// ErrInstallOwner refuses to update or remove a binary the selected method did not install.
+	ErrInstallOwner = errors.New("systeminstall: installation owner not confirmed")
 )
 
 // Target is one of the fixed install targets AO knows how to install.
@@ -636,6 +638,13 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		}
 	}
 
+	var baseline *installedBaseline
+	if operation == AgentOperationUpdate || operation == AgentOperationUninstall {
+		if baseline, err = s.confirmInstalledOwner(ctx, target, plan); err != nil {
+			return Job{}, err
+		}
+	}
+
 	s.mu.Lock()
 	if current, ok := s.jobs[target]; ok && activeStatus(current.Status) {
 		s.mu.Unlock()
@@ -685,7 +694,7 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		if workerRelease != nil {
 			defer workerRelease()
 		}
-		s.runAgentOperation(s.backgroundContext, plan, operation, job)
+		s.runAgentOperation(s.backgroundContext, plan, operation, job, baseline)
 	}()
 	return initial, nil
 }
@@ -862,7 +871,7 @@ func (s *Service) Verify(ctx context.Context, target Target) (Job, error) {
 	}
 	go func() { //nolint:gosec // bounded daemon-owned worker intentionally outlives the request.
 		defer s.workers.Done()
-		s.runAgentVerification(s.backgroundContext, job)
+		s.runAgentVerification(s.backgroundContext, job, nil)
 	}()
 	return initial, nil
 }
@@ -964,7 +973,7 @@ func (s *Service) run(parent context.Context, argv []string, job *Job) {
 	}
 }
 
-func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation AgentOperation, job *Job) {
+func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation AgentOperation, job *Job, baseline *installedBaseline) {
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
 	out := &capturedOutput{max: maxOutputBytes}
@@ -1014,6 +1023,13 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 	}
 
 	if operation == AgentOperationUninstall {
+		if baseline != nil {
+			result, verifyErr := s.verifier.Verify(s.backgroundContext, job.Target)
+			if failure := uninstallOutcome(baseline, result, verifyErr); failure != "" {
+				s.finishAgentJob(job, StatusFailed, out.String(), failure, "")
+				return
+			}
+		}
 		s.finishAgentJob(job, StatusSucceeded, out.String(), "", "")
 		return
 	}
@@ -1021,10 +1037,13 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		s.finishAgentJob(job, StatusFailed, "", fmt.Sprintf("persist verifying state: %v", err), "")
 		return
 	}
-	s.runAgentVerification(s.backgroundContext, job)
+	s.runAgentVerification(s.backgroundContext, job, baseline)
 }
 
-func (s *Service) runAgentVerification(ctx context.Context, job *Job) {
+// runAgentVerification re-probes the harness after a job. For an update, the
+// baseline from before the command decides whether the binary sessions run
+// actually changed; a zero exit status alone is not proof.
+func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *installedBaseline) {
 	if s.verifier == nil {
 		s.finishAgentJob(job, StatusFailed, "", "adapter-backed install verifier is not configured", "")
 		return
@@ -1038,7 +1057,16 @@ func (s *Service) runAgentVerification(ctx context.Context, job *Job) {
 		s.finishAgentJob(job, StatusFailed, result.Output, err.Error(), result.ResolvedPath)
 		return
 	}
-	s.finishAgentJob(job, StatusSucceeded, result.Output, "", result.ResolvedPath)
+	output := result.Output
+	failure, note := updateOutcome(baseline, result)
+	if note != "" {
+		output = strings.TrimRight(output, "\n") + "\n" + note
+	}
+	if failure != "" {
+		s.finishAgentJob(job, StatusFailed, output, failure, result.ResolvedPath)
+		return
+	}
+	s.finishAgentJob(job, StatusSucceeded, output, "", result.ResolvedPath)
 }
 
 func (s *Service) transitionAgentJob(job *Job, status Status, output, errorMessage, resolvedPath string) error {

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -162,8 +163,13 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		advisory.Source = source.Method
 		latest, err = s.latestVersion(ctx, source.Method, packageWithoutLatest(source.Package), source.PackageCask)
 	} else {
-		// No package manager owns the binary, so compare against the vendor's
-		// own release channel, which every install method eventually follows.
+		// No package manager provably owns the binary, so compare against the
+		// vendor's own release channel, unless the binary sits in another
+		// tool's layout whose channel may differ from the vendor's.
+		official, ok := officialSourceFor(target, s.goos, runtime.GOARCH)
+		if !ok || !officialChannelFits(official.kind, packageLayout(verified.ResolvedPath)) {
+			return advisory, nil
+		}
 		advisory.Source = officialReleaseSource
 		latest, err = s.officialVersion(ctx, target)
 	}
