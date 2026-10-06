@@ -405,6 +405,7 @@ test("switching sessions during the button's refresh never dispatches into the o
 });
 
 test("session creation saves and closes without running, changing history, or navigating", async () => {
+	// Project-wide automatic setup is covered by Project Settings workspace scripts.
 	setup(<CueRunMenu projectId="project" sessionId="session" />);
 	openMenu();
 	fireEvent.click(await screen.findByRole("menuitem", { name: "New cue" }));
