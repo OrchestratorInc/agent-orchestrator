@@ -5595,12 +5595,13 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		"relative to the session workspace root",
 		"use `ao preview README.md`, not `../README.md`",
 		"existing confined loopback preview",
+		"use `ao render` when a chart, table, diagram, or mockup is clearer than text",
 	} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
 		}
 	}
-	if words := len(strings.Fields(m.aoSkillPointer())); words > 220 {
+	if words := len(strings.Fields(m.aoSkillPointer())); words > 260 {
 		t.Fatalf("always-on AO skill pointer grew to %d words; keep details in routed command guides:\n%s", words, m.aoSkillPointer())
 	}
 	if strings.Contains(agent.lastLaunch.Prompt, "You are the human-facing orchestrator") {
