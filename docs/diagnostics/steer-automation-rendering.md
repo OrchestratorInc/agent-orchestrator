@@ -56,9 +56,11 @@ The project id is required by the current canonical link grammar. `frontend/src/
 Fallback behavior should be explicit:
 
 - If the source session exists and has a non-empty display name, show that name and link it by immutable session id.
-- If it was renamed after the steer, use the current resolved name when the workspace cache has it. The link must remain id-based, never name-based.
+- If it was renamed after the steer, keep the send-time display-name snapshot in the historical steer row. The link remains id-based, never name-based. This preserves what the sender was called when the instruction was issued and avoids rewriting historical conversation content.
 - If the source session is missing, inaccessible, or the source metadata is unavailable, show the raw session id as plain text or a non-link fallback such as `agent-orchestrator-329`. Never fabricate a link or turn untrusted text into an `href`.
 - If the current daemon cannot provide the new structured fields, preserve the stored text exactly for backward compatibility.
+
+The implementation intentionally uses the send-time snapshot for `senderDisplayName`; it does not resolve names again while reading a conversation. A future product decision can add live-name resolution, but that would make historical rows change when sessions are renamed and would require an explicit cache and consistency policy.
 
 This requires a product decision about whether a cross-session steer is visually a human instruction or an automation event. If it stays human-style, add only the structured sender label and link. If it becomes Automation-style, add an explicit presentation discriminator and tests for both modes. In either case, keep the current activity persistence, idempotency, turn attachment, and provider-echo suppression unchanged.
 
