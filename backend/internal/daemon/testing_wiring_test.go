@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/testingdesktop/cua"
+	localtarget "github.com/aoagents/agent-orchestrator/backend/internal/adapters/testingtarget/local"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -101,7 +102,7 @@ func TestTestingProviderComposition(t *testing.T) {
 				}
 			} else {
 				var recipe testingsvc.Recipe
-				if err != nil || json.Unmarshal([]byte(run.RecipeSnapshot), &recipe) != nil || recipe.CheckoutPath != tc.checkout || recipe.DeliveryMode != string(tc.wantMode) {
+				if err != nil || json.Unmarshal([]byte(run.RecipeSnapshot), &recipe) != nil || recipe.CheckoutPath != tc.checkout || recipe.DeliveryMode != string(tc.wantMode) || !recipe.VisualMarker {
 					t.Fatal("configured recipe not retained", run, err)
 				}
 			}
@@ -132,5 +133,21 @@ func TestTestingProviderCompositionRejectsInvalidModeAndFactoryError(t *testing.
 	})
 	if err == nil {
 		t.Fatal("provider construction failure hidden")
+	}
+}
+
+func TestTestingProductionCompositionConstructsAdaptersWithoutLaunching(t *testing.T) {
+	t.Setenv("AO_TESTING_TARGET_CHECKOUT", "/prepared/isolated-checkout")
+	t.Setenv("AO_TESTING_DESKTOP_DELIVERY", "foreground")
+	// Construction neither creates this directory nor launches native processes.
+	providers, err := configuredTestingProviders(config.Config{DataDir: "/tmp/ao-wiring-construction"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := providers.Target.(*localtarget.Adapter); !ok || !providers.Recipes["local-ao"].VisualMarker {
+		t.Fatal("production composition did not select the isolated local target")
+	}
+	if err := providers.Close(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

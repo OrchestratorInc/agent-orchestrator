@@ -122,3 +122,22 @@ func TestRecordingJournalFailurePreventsWorkerLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTargetLaunchReceivesRevisionAndFixtureSnapshot(t *testing.T) {
+	f := newFixture(t, func(deps *Deps) {
+		recipe := deps.Recipes["native"]
+		recipe.VisualMarker = true
+		deps.Recipes["native"] = recipe
+	})
+	spec := f.provider.launchSpecs[0]
+	var fixture struct {
+		VisualMarker bool `json:"visualMarker"`
+	}
+	if err := json.Unmarshal([]byte(spec.RecipeSnapshot), &fixture); err != nil || !fixture.VisualMarker {
+		t.Fatal("fixture flag missing from target snapshot", err)
+	}
+	rec, _, err := f.store.GetTestAttempt(context.Background(), f.start.AttemptID)
+	if err != nil || spec.AttemptID != rec.ID || spec.Generation != rec.LeaseGeneration || spec.CommitSHA != f.run.CommitSHA || spec.RecipeSnapshot != f.run.RecipeSnapshot || spec.CheckoutPath != f.dir || spec.StateRoot != filepath.Join(f.deps.TargetStateRoot, string(rec.ID)) || !spec.Deadline.Equal(rec.Deadline) {
+		t.Fatal("target launch spec did not retain the run and attempt", err)
+	}
+}

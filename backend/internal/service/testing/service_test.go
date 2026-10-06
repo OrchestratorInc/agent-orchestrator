@@ -83,9 +83,13 @@ type fakeProviders struct {
 	screenshotHook               func(context.Context) error
 	inputFrames                  []domain.TestDesktopFrame
 	cleanupEvents                []string
+	launchSpecs                  []ports.TestingTargetSpec
 }
 
 func (p *fakeProviders) Start(_ context.Context, spec ports.TestingTargetSpec) (domain.TestTargetIdentity, error) {
+	p.mu.Lock()
+	p.launchSpecs = append(p.launchSpecs, spec)
+	p.mu.Unlock()
 	return domain.TestTargetIdentity{ID: "target", LaunchID: "launch", Generation: spec.Generation, ElectronPID: 100, ElectronStartedAt: p.clock.Now(), DaemonPID: 101, DaemonStartedAt: p.clock.Now(), DataDir: filepath.Join(spec.StateRoot, "data")}, nil
 }
 func (p *fakeProviders) Probe(ctx context.Context, _ domain.TestTargetIdentity) error {

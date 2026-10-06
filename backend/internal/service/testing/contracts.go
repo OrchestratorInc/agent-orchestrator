@@ -67,6 +67,7 @@ type Recipe struct {
 	CheckoutPath string `json:"checkoutPath"`
 	Snapshot     string `json:"snapshot"`
 	DeliveryMode string `json:"deliveryMode,omitempty"`
+	VisualMarker bool   `json:"visualMarker,omitempty"`
 }
 
 // Deps supplies persistence, providers and target recipes.

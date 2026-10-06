@@ -8,6 +8,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/testingdesktop/cua"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/testingevidence"
+	localtarget "github.com/aoagents/agent-orchestrator/backend/internal/adapters/testingtarget/local"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -62,8 +63,7 @@ func recordingResult(result cua.RecordingResult) ports.TestingRecordingResult {
 }
 
 func configuredTestingProviders(cfg config.Config) (testingProviders, error) {
-	// TODO(testing-target): construct E's local target adapter here when merged.
-	return testingProvidersFromEnv(cfg, os.Getenv, nil, func(cfg cua.Config) (testingDesktopAdapter, error) { return cua.New(cfg) })
+	return testingProvidersFromEnv(cfg, os.Getenv, localtarget.New(), func(cfg cua.Config) (testingDesktopAdapter, error) { return cua.New(cfg) })
 }
 
 func testingProvidersFromEnv(cfg config.Config, getenv func(string) string, target ports.TestingTargetEnvironment, makeDesktop func(cua.Config) (testingDesktopAdapter, error)) (testingProviders, error) {
@@ -83,7 +83,7 @@ func testingProvidersFromEnv(cfg config.Config, getenv func(string) string, targ
 		return testingProviders{}, fmt.Errorf("configure testing desktop: %w", err)
 	}
 	providers := testingProviders{Target: target, Desktop: testingDesktopBridge{desktop}, Close: desktop.Close,
-		Recipes: map[string]testingsvc.Recipe{"local-ao": {ID: "local-ao", CheckoutPath: checkout, Snapshot: "isolated local AO checkout", DeliveryMode: string(mode)}}}
+		Recipes: map[string]testingsvc.Recipe{"local-ao": {ID: "local-ao", CheckoutPath: checkout, Snapshot: "isolated local AO checkout", DeliveryMode: string(mode), VisualMarker: true}}}
 	return providers, nil
 }
 
