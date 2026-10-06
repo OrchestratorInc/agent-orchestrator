@@ -578,6 +578,8 @@ func Run() error {
 		}
 		return fmt.Errorf("wire session service: %w", err)
 	}
+	testingSvc := wireTestingService(cfg, store, wiredSessMgr, testingProviders{})
+	defer testingSvc.Close()
 	sessionSvc.SetChatProviderPreserver(chatSvc.PreservesProviderOnRestart)
 	memoryReader := usagesvc.NewMemoryReader(usagesvc.MemoryReaderDeps{
 		Store: store, Runtime: runtimeAdapter, Reviewers: store, CacheTTL: 2 * time.Second,
@@ -913,8 +915,6 @@ func Run() error {
 		nativeSessions, _ = codewhaleAgent.(ports.AgentNativeSessionResolver)
 	}
 
-	testingSvc := newTestingService(cfg, store, testingProviders{})
-	defer testingSvc.Close()
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
 		Testing:            testingSvc,
 		Projects:           projectSvc,

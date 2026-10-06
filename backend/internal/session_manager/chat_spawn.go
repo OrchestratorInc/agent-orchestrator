@@ -211,6 +211,11 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		controllerCommitted bool
 		completionErr       error
 	)
+	mcpServers, err := m.testingMCPServers(ctx, id, false)
+	if err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
+		return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, err)
+	}
 	_, err = m.chat.StartChat(ctx, ChatStart{
 		SessionID:               id,
 		ProjectID:               in.cfg.ProjectID,
@@ -224,7 +229,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            in.systemPrompt,
 		AdditionalDirectories:   workspaceProjectDirectories(in.workspace.Path, in.workspaceProject),
-		MCPServers:              m.aoMCPServers(in.cfg.Harness, env),
+		MCPServers:              append(m.aoMCPServers(in.cfg.Harness, env), mcpServers...),
 		ExpectedControllerOwner: in.record.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -477,6 +482,10 @@ func (m *Manager) resumeChatController(
 	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var completionErr error
+	mcpServers, err := m.testingMCPServers(ctx, rec.ID, !reconnectOnly)
+	if err != nil {
+		return RestoreResult{}, fmt.Errorf("%s %s: testing profile: %w", operation, rec.ID, err)
+	}
 	_, err = m.chat.StartChat(ctx, ChatStart{
 		ReconnectOnly:           reconnectOnly,
 		SessionID:               rec.ID,
@@ -491,7 +500,7 @@ func (m *Manager) resumeChatController(
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            systemPrompt,
 		AdditionalDirectories:   additionalDirectories,
-		MCPServers:              m.aoMCPServers(rec.Harness, env),
+		MCPServers:              append(m.aoMCPServers(rec.Harness, env), mcpServers...),
 		ExpectedControllerOwner: rec.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -517,6 +526,12 @@ func (m *Manager) resumeChatController(
 		HistoryMode:          historyMode,
 		HistoryPolicy:        historyPolicy,
 		ControllerReady: func(started ChatStarted) (ChatControllerCommit, error) {
+			// A surviving provider has not applied this launch's MCP environment.
+			// Refuse adoption rather than publish a worker whose child holds a
+			// revoked testing capability. Native resume in a new provider is safe.
+			if started.LiveReconnect && len(mcpServers) > 0 {
+				return ChatControllerCommit{}, fmt.Errorf("%w: testing MCP capability requires native resume in a new provider", ports.ErrChatRecoveryInconclusive)
+			}
 			metadata := rec.Metadata
 			metadata.WorkspacePath = ws.Path
 			metadata.WorkspaceRepoPath = ws.RepoPath
