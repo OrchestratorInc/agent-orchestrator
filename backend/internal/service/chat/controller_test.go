@@ -749,6 +749,69 @@ func TestServicePersistsAndPassesInitialModelTuningBeforeProviderStart(t *testin
 	}
 }
 
+type reviewerModelConversation struct{ *fakeConversation }
+
+func (c reviewerModelConversation) ListModels(context.Context) ([]ports.ChatModel, error) {
+	return []ports.ChatModel{{ID: "review-model", DisplayName: "Review model", Efforts: []string{"high"}}}, nil
+}
+
+func TestReviewerModelSettingsStayWithReviewOwner(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	worker, err := st.CreateConversation(ctx, "worker-conversation", domain.ConversationScopeProject, testProject, testSession, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerSettings := domain.ConversationSettings{Model: "worker-model", ApprovalMode: domain.PermissionModeAuto}
+	if err := st.SetConversationSettings(ctx, worker.ID, workerSettings, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertReview(ctx, domain.Review{ID: "review-models", SessionID: testSession, ProjectID: testProject, Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	provider := reviewerModelConversation{newFakeConversation()}
+	var synced bool
+	var ids atomic.Uint64
+	svc := chatsvc.New(chatsvc.Options{Store: st, Sessions: st, Drivers: fakeRegistry{driver: fakeDriver{conv: provider}}, Log: slog.New(slog.DiscardHandler), NewID: func() string { return fmt.Sprintf("review-model-%d", ids.Add(1)) }, OnModelChanged: func(domain.SessionID, string) { synced = true }})
+	owner := domain.ReviewConversationOwner("review-models")
+	t.Cleanup(func() { _ = svc.StopForOwner(context.Background(), owner) })
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{Owner: owner, SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto}); err != nil {
+		t.Fatal(err)
+	}
+	models, settings, err := svc.ModelsForOwner(ctx, owner)
+	if err != nil || len(models) != 1 || models[0].ID != "review-model" {
+		t.Fatalf("models=%+v err=%v", models, err)
+	}
+	settings.Model = "review-model"
+	settings.ReasoningEffort = "high"
+	if _, err := svc.SetTurnSettingsForOwner(ctx, owner, settings); err != nil {
+		t.Fatal(err)
+	}
+	reviewConversation, err := st.ConversationForReview(ctx, owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reviewConversation.Settings.Model != "review-model" || reviewConversation.Settings.ReasoningEffort != "high" {
+		t.Fatalf("review settings=%+v", reviewConversation.Settings)
+	}
+	workerAfter, err := st.LoadConversationSnapshot(ctx, worker.ID)
+	if err != nil || workerAfter.Conversation.Settings != workerSettings || synced {
+		t.Fatalf("worker settings=%+v synced=%v err=%v", workerAfter.Conversation.Settings, synced, err)
+	}
+	if _, err := svc.SendForOwner(ctx, owner, ports.ChatUserMessage{Text: "verify reviewer settings"}); err != nil {
+		t.Fatal(err)
+	}
+	sent := provider.sentMessages()
+	if len(sent) != 1 || sent[0].Settings.Model != "review-model" || sent[0].Settings.Effort != "high" {
+		t.Fatalf("provider turn settings = %+v", sent)
+	}
+	settings.ApprovalMode = domain.PermissionModeBypassPermissions
+	if _, err := svc.SetTurnSettingsForOwner(ctx, owner, settings); !errors.Is(err, chatsvc.ErrReviewerPermissionsFixed) {
+		t.Fatalf("changed fixed reviewer permissions: %v", err)
+	}
+}
+
 func TestReviewerChatUsesItsOwnProviderHost(t *testing.T) {
 	st := openStore(t)
 	now := time.Now().UTC()
@@ -5604,6 +5667,37 @@ func TestRelayedMessageIsAttributedToAutomation(t *testing.T) {
 	}
 	if got := h.conv.sentTexts(); len(got) != 1 || got[0] != "orchestrator: rebase onto main" {
 		t.Fatalf("provider received %v, want the relayed text dispatched", got)
+	}
+	rec, ok, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !ok {
+		t.Fatalf("get session: ok=%v err=%v", ok, err)
+	}
+	if !rec.Metadata.LatestUserPromptAt.IsZero() {
+		t.Fatalf("automation advanced latest user prompt time to %s", rec.Metadata.LatestUserPromptAt)
+	}
+}
+
+func TestUserAuthoredRelayAdvancesUserActivityWithoutChangingOrigin(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	if _, err := h.svc.RelayUserAuthoredChatTurn(ctx, testSession, "move this control closer to the heading"); err != nil {
+		t.Fatalf("RelayUserAuthoredChatTurn: %v", err)
+	}
+
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Messages) >= 1
+	})
+	if got := snapshot.Messages[0].Origin; got != domain.MessageOriginAutomation {
+		t.Fatalf("user-authored relay origin = %q, want %q", got, domain.MessageOriginAutomation)
+	}
+	rec, ok, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !ok {
+		t.Fatalf("get session: ok=%v err=%v", ok, err)
+	}
+	if rec.Metadata.LatestUserPrompt != "move this control closer to the heading" || !rec.Metadata.LatestUserPromptAt.Equal(h.now()) {
+		t.Fatalf("latest user prompt = %q at %s, want annotation at %s",
+			rec.Metadata.LatestUserPrompt, rec.Metadata.LatestUserPromptAt, h.now())
 	}
 }
 

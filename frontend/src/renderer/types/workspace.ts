@@ -44,6 +44,12 @@ export type PullRequestFacts = {
 	ci: string;
 	review: string;
 	mergeability: string;
+	failingChecks?: Array<{
+		name: string;
+		status: "failed" | "cancelled";
+		conclusion: string;
+		url?: string;
+	}>;
 	reviewComments: boolean;
 	updatedAt: string;
 };
@@ -63,6 +69,8 @@ export type AgentSwitchSummary = {
 
 export type WorkspaceSession = {
 	id: string;
+	/** Installation ID of the daemon that owns this session; absent for local and Cloud. */
+	hostId?: string;
 	terminalHandleId?: string;
 	/** Opaque controller generation; changes even when a restarted PTY reuses its handle. */
 	terminalGeneration?: string;
@@ -173,6 +181,8 @@ export type WorkspaceSession = {
 	 */
 	cloud?: {
 		orgId: string;
+		/** Maximum permission mode for Cloud turns in this session. */
+		permissionMode?: "read-only" | "standard" | "trusted";
 		sandboxProvider?: string;
 		desiredState?: string;
 		observedState?: string;
@@ -325,6 +335,12 @@ export function sessionAgentExited(session: WorkspaceSession | undefined): boole
 	return Boolean(session && session.activity?.state === "exited" && sessionIsActive(session));
 }
 
+/** Whether a session can accept a Cue from its topbar. The daemon makes the
+ * final decision, including whether a command Cue's worktree still exists. */
+export function sessionCueTargetAvailable(session: WorkspaceSession | undefined): boolean {
+	return Boolean(session && sessionIsActive(session) && session.activity?.state !== "exited" && session.activity?.state !== "blocked");
+}
+
 export function sessionNeedsAttention(session: WorkspaceSession): boolean {
 	return presentationAttentionZone(session) === "action";
 }
@@ -334,6 +350,8 @@ export type { AttentionZone } from "../lib/session-presentation";
 
 export type WorkspaceSummary = {
 	id: string;
+	/** Installation ID of the daemon that owns this project; absent for local and Cloud. */
+	hostId?: string;
 	name: string;
 	/**
 	 * Discriminator for where the project lives. Local projects carry the

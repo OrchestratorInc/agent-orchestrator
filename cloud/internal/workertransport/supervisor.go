@@ -28,7 +28,9 @@ type Control interface {
 	CompleteTransport(context.Context, string, int, any) error
 	FailTransport(context.Context, string, int, string, string) error
 	PublishTerminalOutput(context.Context, string, int64, []byte) error
-	PublishTerminalExit(context.Context, string, int) error
+	PublishTerminalExit(context.Context, string, int, bool) error
+	AgentSessionID(context.Context) (string, error)
+	EnsureAgentTerminal(context.Context) (worker.AgentTerminalResponse, error)
 }
 
 // workWaitFallback bounds the loop's back-off when WaitForWork is unavailable
@@ -57,28 +59,80 @@ const (
 )
 
 type Supervisor struct {
-	Control         Control
-	Workspace       string
-	CompareBase     string
-	Shell           string
-	AgentCommand    workerexec.Command
-	AgentTerminalID string
-	Started         chan<- error
-	PollInterval    time.Duration
-	Logger          *slog.Logger
+	Control             Control
+	Workspace           string
+	DataDir             string
+	Harness             string
+	SelectedModel       string
+	SelectedEffort      string
+	SelectionAt         time.Time
+	CompareBase         string
+	Shell               string
+	AgentCommand        workerexec.Command
+	AgentCommandFactory AgentCommandFactory
+	AgentTerminalID     string
+	Started             chan<- error
+	PollInterval        time.Duration
+	Logger              *slog.Logger
 	// Streams, when non-nil, holds a persistent duplex terminal stream per
 	// open terminal for low-latency input/output. The polled transport stays
 	// authoritative whenever a stream is absent or unhealthy.
 	Streams StreamDialer
 
+	// ChatRunner is the headless turn-based Chat controller. Nil means the
+	// session cannot switch into the Chat interface.
+	ChatRunner ChatRunner
+	// ChatWorkspaceReady gates a committed Chat controller until checkout and
+	// restore complete. Nil means no additional gate.
+	ChatWorkspaceReady <-chan struct{}
+	// RequestCheckout wakes workspace preparation after a failed checkout when
+	// the user opens the session. A ready workspace treats it as a no-op.
+	RequestCheckout func() error
+	// InitialInterface is the committed launch interface ("tui" or "chat").
+	InitialInterface string
+	// AgentSessionID is the provider-native conversation identity shared by the
+	// TUI and Chat controllers. It is the resume hint used on both sides.
+	AgentSessionID string
+
 	mu                       sync.Mutex
 	terminals                map[string]*terminalProcess
+	iface                    InterfaceTransition
+	notificationStreams      map[*terminalStream]struct{}
 	holdAgentInput           bool
 	workspaceReady           bool
 	agentStarting            bool
 	agentStarted             bool
 	pendingAgentTerminalData [][]byte
 	pendingAgentTerminalSize *worker.TerminalCommand
+	tuiStartedAt             time.Time
+	lastTUIInputAt           time.Time
+	tuiHandoffClosing        bool
+}
+
+// ChatRunner executes the headless Chat controller kind for a session. Run
+// blocks until ctx is canceled, mirroring the terminal supervisor's lifetime.
+type ChatRunner interface {
+	Run(ctx context.Context) error
+}
+
+// AgentCommandFactory rebuilds the native interactive command when a TUI is
+// reopened. The provider conversation ID is learned after worker bootstrap, so
+// reusing the bootstrap command would start a fresh TUI after ChatUI work.
+type AgentCommandFactory func(context.Context, string, string, string) (workerexec.Command, error)
+
+// chatActivity is implemented by the durable headless controller. Keeping it
+// optional preserves the runner boundary for alternate worker implementations
+// while allowing a real Chat turn to drain before a TUI handoff begins.
+type chatActivity interface {
+	Idle() bool
+}
+
+// chatInterrupter cancels the active headless turn without stopping the
+// controller itself. A Chat -> TUI stop-now handoff needs this distinction:
+// the coordinator first ends the running turn, then stops the runner only
+// after its provider process has released the native conversation writer.
+type chatInterrupter interface {
+	Interrupt() bool
 }
 
 // HoldAgentInputUntilWorkspaceReady preserves user input and durable turns
@@ -101,10 +155,12 @@ func (s *Supervisor) MarkWorkspaceReady() {
 }
 
 type terminalProcess struct {
-	cancel  context.CancelFunc
-	pty     *os.File
-	cleanup func()
-	stream  atomic.Pointer[terminalStream]
+	cancel                context.CancelFunc
+	pty                   *os.File
+	cleanup               func()
+	interfaceHandoffClose bool
+	stream                atomic.Pointer[terminalStream]
+	done                  chan struct{}
 	// outputID belongs to the terminal rather than a WebSocket connection. A
 	// stream redial must continue its sequence so direct relay frames and the
 	// durable replay log use the same cursor.
@@ -125,6 +181,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		s.Logger = slog.Default()
 	}
 	s.terminals = make(map[string]*terminalProcess)
+	s.notificationStreams = make(map[*terminalStream]struct{})
 	workspace, err := openWorkspace(s.Workspace)
 	if err != nil {
 		return err
@@ -132,11 +189,29 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	workspace.compareBase = s.CompareBase
 	defer workspace.Close()
 	defer s.closeAllTerminals()
-	if s.AgentTerminalID != "" {
+	switch s.InitialInterface {
+	case InterfaceChat:
+		s.iface.current = InterfaceChat
+	default:
+		s.iface.current = InterfaceTUI
+	}
+	if s.iface.current == InterfaceTUI && s.AgentTerminalID != "" {
 		err := s.openTerminal(ctx, worker.TerminalCommand{
 			TerminalID: s.AgentTerminalID,
 			Kind:       "agent",
 		})
+		if s.Started != nil {
+			s.Started <- err
+		}
+		if err != nil {
+			return err
+		}
+	} else if s.iface.current == InterfaceChat {
+		// A worker may be replaced or restarted after the committed interface
+		// changed to Chat. Starting the transport loop alone is not enough: the
+		// headless controller owns the durable turn queue and must be restarted
+		// too, otherwise ChatUI accepts a message that no worker will execute.
+		err := s.startChat(ctx)
 		if s.Started != nil {
 			s.Started <- err
 		}
@@ -240,7 +315,8 @@ func (s *Supervisor) DiscardConfiguredAgent(terminalID string) {
 // StartAgent adds the coding-agent PTY after the workspace transport is already
 // serving. ConfigureAgent may have reserved its identity while checkout ran;
 // otherwise this method keeps the original one-step setup behavior.
-func (s *Supervisor) StartAgent(ctx context.Context, command workerexec.Command, terminalID string) error {
+func (s *Supervisor) StartAgent(ctx context.Context, command workerexec.Command, terminal worker.AgentTerminalResponse) error {
+	terminalID := terminal.TerminalID
 	if terminalID == "" {
 		return errors.New("agent terminal id is required")
 	}
@@ -254,7 +330,7 @@ func (s *Supervisor) StartAgent(ctx context.Context, command workerexec.Command,
 		return errors.New("interactive agent terminal is already configured")
 	}
 	s.mu.Unlock()
-	if err := s.openTerminal(ctx, worker.TerminalCommand{TerminalID: terminalID, Kind: "agent"}); err != nil {
+	if err := s.openTerminal(ctx, worker.TerminalCommand{TerminalID: terminalID, NextOutputSequence: terminal.NextOutputSequence, Kind: "agent"}); err != nil {
 		s.mu.Lock()
 		s.AgentCommand = workerexec.Command{}
 		s.AgentTerminalID = ""
@@ -273,6 +349,12 @@ func (s *Supervisor) StartAgent(ctx context.Context, command workerexec.Command,
 }
 
 func (s *Supervisor) forwardTurn(ctx context.Context) (bool, error) {
+	// The Chat controller owns the durable turn queue while ChatUI is active.
+	// Do not claim a turn here: doing so races the headless runner and either
+	// drops the turn or fails it before the Chat controller can execute it.
+	if s.iface.Current() == InterfaceChat {
+		return false, nil
+	}
 	// Do not claim a queued user turn until the agent PTY is actually live. The
 	// workspace transport starts first, so claiming here would otherwise mark
 	// the initial task failed while the coding agent is still booting.
@@ -291,10 +373,7 @@ func (s *Supervisor) forwardTurn(ctx context.Context) (bool, error) {
 	if turn.CancelRequested {
 		return true, s.Control.CompleteTurn(ctx, turn.ID, turn.Attempt, true)
 	}
-	if err := s.writeTerminal(worker.TerminalCommand{
-		TerminalID: agentTerminalID,
-		Data:       []byte(turn.Prompt + "\r"),
-	}); err != nil {
+	if err := s.writeAgentPrompt(agentTerminalID, worker.EncodeTerminalInput(turn.Prompt)); err != nil {
 		if failErr := s.Control.FailTurn(
 			ctx, turn.ID, turn.Attempt, err.Error(),
 		); failErr != nil {
@@ -317,6 +396,7 @@ func (s *Supervisor) forwardTurn(ctx context.Context) (bool, error) {
 func isConcurrentlyHandledKind(kind string) bool {
 	switch kind {
 	case "browser.fetch",
+		"chat.models",
 		"workspace.list", "workspace.read", "workspace.diff", "workspace.diff-file",
 		"workspace.review.summary", "workspace.review.tree", "workspace.review.search",
 		"workspace.review.file", "workspace.review.diffs", "workspace.review.revision":
@@ -334,6 +414,13 @@ func (s *Supervisor) handle(
 	var response any
 	var err error
 	switch request.Kind {
+	case "workspace.checkout":
+		if s.RequestCheckout == nil {
+			err = errors.New("workspace checkout is unavailable")
+		} else {
+			err = s.RequestCheckout()
+			response = map[string]bool{"requested": err == nil}
+		}
 	case "workspace.list":
 		var input worker.WorkspaceListRequest
 		err = decodePayload(request.Payload, &input)
@@ -412,6 +499,81 @@ func (s *Supervisor) handle(
 		if err == nil {
 			response, err = fetchBrowser(ctx, input)
 		}
+	case "chat.models":
+		if s.Harness != "codex" && s.Harness != "claude-code" {
+			err = errors.New("model catalog is unavailable for this provider")
+		} else if s.Harness == "claude-code" {
+			nativeID := s.nativeConversationID(ctx, interfacePayload{})
+			s.mu.Lock()
+			command := s.AgentCommand
+			selectedModel, selectedEffort, selectionAt := s.SelectedModel, s.SelectedEffort, s.SelectionAt
+			s.mu.Unlock()
+			if command.Path == "" && s.AgentCommandFactory != nil {
+				command, err = s.AgentCommandFactory(ctx, nativeID, selectedModel, selectedEffort)
+				if err == nil && command.Cleanup != nil {
+					defer command.Cleanup()
+				}
+			}
+			var models []worker.ChatModel
+			var nativeModel, nativeEffort string
+			var catalog worker.ChatModelsResponse
+			if err == nil {
+				catalog, err = workerexec.DiscoverClaudeModels(ctx, command, nativeID, selectedModel)
+				models, nativeModel, nativeEffort = catalog.Models, catalog.Model, catalog.ReasoningEffort
+			}
+			if err == nil {
+				model, effort, settingsErr := workerexec.ClaudeConversationSettingsAfter(s.DataDir, nativeID, selectionAt)
+				if settingsErr != nil {
+					err = settingsErr
+				} else {
+					if claudeCatalogHasModel(models, model) {
+						nativeModel = model
+						if effort != "" {
+							nativeEffort = effort
+						}
+					} else if claudeCatalogHasModel(models, selectedModel) {
+						nativeModel, nativeEffort = selectedModel, selectedEffort
+					}
+					response = worker.ChatModelsResponse{Models: models, Model: nativeModel, ReasoningEffort: nativeEffort, Modes: catalog.Modes}
+				}
+			}
+		} else {
+			var models []worker.ChatModel
+			models, err = workerexec.DiscoverCodexModels(ctx, "codex", s.Workspace)
+			if err == nil {
+				s.mu.Lock()
+				selectedModel, selectedEffort, selectionAt := s.SelectedModel, s.SelectedEffort, s.SelectionAt
+				s.mu.Unlock()
+				model, effort, settingsErr := workerexec.CodexConversationSettingsAfter(s.DataDir, s.nativeConversationID(ctx, interfacePayload{}), selectionAt)
+				if settingsErr != nil {
+					err = settingsErr
+				} else {
+					if model == "" {
+						model, effort = selectedModel, selectedEffort
+					}
+					response = worker.ChatModelsResponse{Models: models, Model: model, ReasoningEffort: effort}
+				}
+			}
+		}
+	case "chat.steer":
+		var input struct {
+			TurnID string `json:"turnId"`
+			Text   string `json:"text"`
+		}
+		err = decodePayload(request.Payload, &input)
+		if err == nil {
+			steerer, ok := s.ChatRunner.(interface {
+				Steer(context.Context, string, string) error
+			})
+			if !ok || s.iface.Current() != InterfaceChat {
+				err = errors.New("chat steering is unavailable")
+			} else {
+				steerCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				err = steerer.Steer(steerCtx, input.TurnID, input.Text)
+				cancel()
+			}
+			response = map[string]bool{"injected": err == nil}
+		}
 	case "terminal.open":
 		var input worker.TerminalCommand
 		err = decodePayload(request.Payload, &input)
@@ -443,6 +605,13 @@ func (s *Supervisor) handle(
 		if err == nil {
 			s.closeTerminal(input.TerminalID)
 			response = map[string]bool{"closed": true}
+		}
+	case "interface.inspect", "interface.interrupt", "interface.stop",
+		"interface.native-id", "interface.start", "interface.ready":
+		var input interfacePayload
+		err = decodePayload(request.Payload, &input)
+		if err == nil {
+			response, err = s.handleInterface(ctx, input, request.Kind)
 		}
 	default:
 		err = errors.New("unsupported worker transport request")
@@ -501,19 +670,37 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 		cancel:  cancel,
 		pty:     terminalPTY,
 		cleanup: cleanup,
+		done:    make(chan struct{}),
+	}
+	if input.NextOutputSequence > 1 {
+		terminal.outputID.Store(input.NextOutputSequence - 1)
 	}
 	s.terminals[input.TerminalID] = terminal
+	if input.Kind == "agent" {
+		s.tuiStartedAt = time.Now()
+		s.lastTUIInputAt = time.Time{}
+		s.tuiHandoffClosing = false
+	}
 	s.mu.Unlock()
 
-	go s.copyTerminalOutput(processCtx, input.TerminalID, terminal)
+	go s.copyTerminalOutput(processCtx, input.TerminalID, terminal, input.Kind == "agent" && input.NextOutputSequence > 1)
 	if s.Streams != nil {
 		go s.runTerminalStream(processCtx, input.TerminalID, terminal)
 	}
 	go func() {
 		_ = command.Wait()
+		// Signal process exit before removing the terminal or publishing its exit.
+		// Interface handoff uses this channel to fence the next controller from
+		// starting while the TUI may still own the provider's thread writer. If
+		// PublishTerminalExit delays this signal, a concurrent stop can observe an
+		// already-removed terminal and incorrectly conclude that shutdown finished.
+		close(terminal.done)
 		s.mu.Lock()
 		current := s.terminals[input.TerminalID]
-		delete(s.terminals, input.TerminalID)
+		if current == terminal {
+			delete(s.terminals, input.TerminalID)
+		}
+		handoff := terminal.interfaceHandoffClose
 		s.mu.Unlock()
 		if current != nil {
 			_ = current.pty.Close()
@@ -526,6 +713,7 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 			exitCtx,
 			input.TerminalID,
 			command.ProcessState.ExitCode(),
+			handoff,
 		); err != nil && exitCtx.Err() == nil {
 			s.Logger.Warn("publish terminal exit", "error", err, "terminal_id", input.TerminalID)
 		}
@@ -538,13 +726,18 @@ func (s *Supervisor) terminalCommand(
 	kind string,
 ) (*exec.Cmd, func(), error) {
 	if kind == "agent" {
-		if s.AgentCommand.Path == "" {
+		// openTerminal holds s.mu while it snapshots the command and creates the
+		// terminal entry. Do not lock s.mu again here: sync.Mutex is not
+		// re-entrant, and doing so leaves the worker stuck before the PTY (and
+		// coding-agent process) is started.
+		agentCommand := s.AgentCommand
+		if agentCommand.Path == "" {
 			return nil, func() {}, errors.New("interactive agent command is unavailable")
 		}
-		command := exec.CommandContext(ctx, s.AgentCommand.Path, s.AgentCommand.Args...)
-		command.Dir = s.AgentCommand.Dir
-		command.Env = terminalEnvironment(s.AgentCommand.Env)
-		cleanup := s.AgentCommand.Cleanup
+		command := exec.CommandContext(ctx, agentCommand.Path, agentCommand.Args...)
+		command.Dir = agentCommand.Dir
+		command.Env = terminalEnvironment(agentCommand.Env)
+		cleanup := agentCommand.Cleanup
 		if cleanup == nil {
 			cleanup = func() {}
 		}
@@ -569,12 +762,21 @@ func (s *Supervisor) copyTerminalOutput(
 	ctx context.Context,
 	terminalID string,
 	terminal *terminalProcess,
+	clearPreviousDisplay bool,
 ) {
 	buffer := make([]byte, 16<<10)
 	for {
 		count, err := terminal.pty.Read(buffer)
 		if count > 0 {
 			data := append([]byte(nil), buffer[:count]...)
+			if clearPreviousDisplay {
+				// A handoff resumes the conversation in a new PTY but reuses its
+				// durable output stream. Clear the old screen and scrollback at
+				// that process boundary, both live and when replayed on reconnect.
+				// Prefix actual output so the reset never reveals an empty screen.
+				data = append([]byte("\x1b[3J\x1b[H\x1b[2J"), data...)
+				clearPreviousDisplay = false
+			}
 			id := terminal.outputID.Add(1)
 			if stream := terminal.stream.Load(); stream != nil && stream.sendOutput(id, data) {
 				// Sent over the persistent stream. The control plane acknowledges it
@@ -620,6 +822,13 @@ func (s *Supervisor) writeTerminal(input worker.TerminalCommand) error {
 		return errors.New("invalid terminal input request")
 	}
 	s.mu.Lock()
+	if input.TerminalID == s.AgentTerminalID {
+		if s.tuiHandoffClosing {
+			s.mu.Unlock()
+			return errors.New("agent terminal is switching interfaces")
+		}
+		s.lastTUIInputAt = time.Now()
+	}
 	if s.agentStarting && input.TerminalID == s.AgentTerminalID {
 		s.pendingAgentTerminalData = append(s.pendingAgentTerminalData, append([]byte(nil), input.Data...))
 		s.mu.Unlock()
@@ -693,15 +902,48 @@ func (s *Supervisor) flushReadyAgentTerminal() {
 }
 
 func (s *Supervisor) closeTerminal(id string) {
-	s.mu.Lock()
-	terminal := s.terminals[id]
-	delete(s.terminals, id)
-	s.mu.Unlock()
+	s.closeTerminalWithReason(id, false)
+}
+
+// closeTerminalForInterfaceHandoff closes the source TUI without reporting the
+// whole Cloud session as exited. The Chat controller takes ownership next.
+func (s *Supervisor) closeTerminalForInterfaceHandoff(ctx context.Context, id string) error {
+	terminal := s.detachTerminal(id, true)
+	if terminal == nil {
+		return nil
+	}
+	_ = terminal.pty.Close()
+	terminal.cancel()
+	terminal.cleanup()
+	// Codex serializes thread writers. Do not acknowledge the source stop until
+	// the interactive process has actually exited; otherwise the Chat runner can
+	// resume the same thread while the TUI still owns its writer.
+	select {
+	case <-terminal.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Supervisor) closeTerminalWithReason(id string, interfaceHandoff bool) {
+	terminal := s.detachTerminal(id, interfaceHandoff)
 	if terminal != nil {
 		_ = terminal.pty.Close()
 		terminal.cancel()
 		terminal.cleanup()
 	}
+}
+
+func (s *Supervisor) detachTerminal(id string, interfaceHandoff bool) *terminalProcess {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	terminal := s.terminals[id]
+	delete(s.terminals, id)
+	if terminal != nil && interfaceHandoff {
+		terminal.interfaceHandoffClose = true
+	}
+	return terminal
 }
 
 func (s *Supervisor) closeAllTerminals() {
@@ -722,6 +964,18 @@ func decodePayload(payload any, target any) error {
 		return err
 	}
 	return json.Unmarshal(raw, target)
+}
+
+func claudeCatalogHasModel(models []worker.ChatModel, id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, model := range models {
+		if model.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func transportError(err error) (string, string) {

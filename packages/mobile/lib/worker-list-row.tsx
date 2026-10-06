@@ -5,23 +5,28 @@ import { Keyboard, Pressable, StyleSheet, Text, TextInput, View } from "react-na
 import type { DashboardSession } from "./api";
 import { AgentLogo } from "./AgentLogo";
 import { haptics } from "./haptics";
+import { sessionHostId } from "./hostedRows";
 import { prLine, workerRowPresentation, workerStatusGlyph } from "./agentsView";
 import { toneColor } from "./prView";
 import { statusVisual, type Theme } from "./theme";
 import { rowDividerWidth } from "./divider";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { openGitHub } from "./openGitHub";
 import { workerContextActions, type WorkerActionId } from "./worker-action-model";
 import { WorkerRowActions } from "./worker-row-actions";
 import { WorkerRowInteraction } from "./worker-row-interaction";
 import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 import { Spinning } from "./ui";
 import { normalizeConversationTitle } from "./chat/conversationMenuModel";
+import { useApp } from "./store";
+import { useOpenPage } from "./pageNavigation";
 import { iconSize, press, space, type } from "./tokens";
+import { userFacingError } from "./connectionError";
+import { reviewRouteForSession } from "./reviewView";
 
 export const WorkerListRow = memo(
 	function WorkerListRow({
 	session,
+	rowKey,
 	projectName,
 	isRenaming,
 	activeSwipeId,
@@ -37,6 +42,7 @@ export const WorkerListRow = memo(
 	onRestore,
 }: {
 	session: DashboardSession;
+	rowKey?: string;
 	projectName?: string;
 	isRenaming: boolean;
 	activeSwipeId?: string;
@@ -61,6 +67,8 @@ export const WorkerListRow = memo(
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const { currentHostId } = useApp();
+	const openPage = useOpenPage();
 	const closeActionRailRef = useRef<() => void>(() => {});
 	const [renameTitle, setRenameTitle] = useState("");
 	const [renameSaving, setRenameSaving] = useState(false);
@@ -100,7 +108,7 @@ export const WorkerListRow = memo(
 			onRenameCancel();
 		} catch (cause) {
 			haptics.error();
-			setRenameError(cause instanceof Error ? cause.message : "Couldn't rename this worker.");
+			setRenameError(userFacingError(cause, "Couldn't rename this worker."));
 			setRenameSaving(false);
 		}
 	}, [onRename, onRenameCancel, renameSaving, renameTitle]);
@@ -125,12 +133,11 @@ export const WorkerListRow = memo(
 		haptics.tap();
 		router.push({
 			pathname: "/session/[id]",
-			params: { id: session.id, projectId: session.projectId },
+			params: { id: session.id, projectId: session.projectId, hostId: sessionHostId(session) ?? currentHostId },
 		});
 	};
 
-	// prLine returns display text, not a link, so the url comes off the session.
-	const prUrl = (session.prs?.length ? session.prs[0] : session.pr)?.url ?? null;
+	const reviewRoute = reviewRouteForSession(session, sessionHostId(session) ?? currentHostId);
 	const terminated = session.isTerminated === true || session.status === "terminated";
 	const contextActions = workerContextActions({
 		pinned: Boolean(session.isPinned),
@@ -138,7 +145,7 @@ export const WorkerListRow = memo(
 		// A live session whose agent has stopped: exited or crashed, but the AO
 		// session around it is still intact, so resuming is the lighter fix.
 		stopped: !terminated && (session.status === "exited" || session.status === "errored"),
-		hasPr: Boolean(prUrl),
+		hasPr: Boolean(reviewRoute),
 	});
 
 	const runAction = useCallback((id: WorkerActionId) => {
@@ -159,17 +166,17 @@ export const WorkerListRow = memo(
 			case "restore":
 				return onRestore();
 			case "openPr":
-				if (prUrl) void openGitHub(prUrl);
+				if (reviewRoute) openPage(reviewRoute);
 				return;
 			default:
 				return onDelete();
 		}
 	// openSession closes over router and session, both stable enough for a row.
-	}, [onDelete, onRenameStart, onResume, onRestore, onSetPinned, prUrl, row.title]);
+	}, [onDelete, onRenameStart, onResume, onRestore, onSetPinned, openPage, reviewRoute, router, row.title]);
 
 	return (
 		<WorkerRowInteraction
-			sessionId={session.id}
+			sessionId={rowKey ?? session.id}
 			enabled={!isRenaming}
 			activeSwipeId={activeSwipeId}
 			rightActions={renderRightActions()}
@@ -228,6 +235,7 @@ export const WorkerListRow = memo(
 	 */
 	(prev, next) =>
 		prev.nowBucket === next.nowBucket &&
+		prev.rowKey === next.rowKey &&
 		prev.projectName === next.projectName &&
 		prev.isRenaming === next.isRenaming &&
 		prev.activeSwipeId === next.activeSwipeId &&

@@ -7,8 +7,9 @@ import { AdditionalRepositoriesPicker, CoderTemplatePicker } from "./CoderTempla
 vi.mock("../hooks/useCoderTemplates", () => ({
 	useCoderTemplates: () => ({
 		templates: [
-			{ id: "template-1", name: "fast", displayName: "Fast workspace", description: "More CPU", parameters: ["size"] },
-			{ id: "template-2", name: "lean", displayName: "Lean workspace", description: "Less CPU", parameters: [] },
+			// The picker curates to the ao-devkit family, so the mock names match.
+			{ id: "template-1", name: "ao-devkit", displayName: "Fast workspace", description: "More CPU", parameters: ["size"] },
+			{ id: "template-2", name: "ao-devkit-large", displayName: "Lean workspace", description: "Less CPU", parameters: [] },
 		],
 		isLoading: false,
 	}),
@@ -16,12 +17,12 @@ vi.mock("../hooks/useCoderTemplates", () => ({
 
 beforeEach(() => useCoderSessionOptionsStore.getState().reset());
 
-it("chooses a template from the searchable dropdown", async () => {
+it("chooses a template from the dropdown", async () => {
 	const user = userEvent.setup();
 	render(<CoderTemplatePicker orgId="org-1" />);
 	await user.click(screen.getByRole("combobox", { name: "Template" }));
-	await user.type(screen.getByPlaceholderText("Search templates"), "Fast");
-	expect(screen.queryByRole("option", { name: "Lean workspace" })).not.toBeInTheDocument();
+	// A short list has no search box.
+	expect(screen.queryByPlaceholderText("Search templates")).not.toBeInTheDocument();
 	await user.click(screen.getByRole("option", { name: "Fast workspace" }));
 	expect(screen.getByRole("combobox", { name: "Template" })).toHaveTextContent("Fast workspace");
 	expect(screen.getByText("Machine size")).toBeInTheDocument();
@@ -33,8 +34,10 @@ it("shows additional repositories as a carousel and moves to a newly added card"
 	const user = userEvent.setup();
 	render(<AdditionalRepositoriesPicker repos={[{ label: "acme/one", url: "https://github.com/acme/one" }]} />);
 	await user.click(screen.getByRole("combobox", { name: "Repository 1" }));
-	expect(screen.getByRole("listbox", { name: "Repository 1" })).toHaveClass("overflow-y-scroll");
+	expect(screen.getByRole("listbox", { name: "Repository 1" })).toHaveClass("max-h-72", "repository-picker-scrollbar");
 	await user.keyboard("{Escape}");
+	// Additional repositories clone their default branch; there is no branch to pick.
+	expect(screen.queryByRole("textbox", { name: "branch" })).not.toBeInTheDocument();
 	act(() => useCoderSessionOptionsStore.getState().setExtraRepos([
 		{ url: "https://github.com/acme/one", branch: "main" },
 		{ url: "", branch: "" },

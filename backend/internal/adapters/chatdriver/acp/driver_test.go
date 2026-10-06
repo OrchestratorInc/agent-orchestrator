@@ -130,7 +130,7 @@ func TestPersistentACPDriverSurvivesRealProcessDetach(t *testing.T) {
 	// These are protocol contract tests, not claims of authenticated E2E for
 	// every vendor. Each runs the real detached host with a fake ACP process.
 	for _, harness := range []domain.AgentHarness{
-		domain.HarnessClaudeCode, domain.HarnessCursor, domain.HarnessOpenCode,
+		domain.HarnessClaudeCode, domain.HarnessCursor, domain.HarnessOpenCode, domain.HarnessOpenCodeV2,
 		domain.HarnessDroid, domain.HarnessKimi, domain.HarnessKimchi,
 		domain.HarnessPi, domain.HarnessOMP,
 	} {
@@ -198,7 +198,7 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness) {
 		return Launch{}, errors.New("new provider installation is unavailable")
 	}
 	secondDriver := New(cfg, log)
-	second, err := secondDriver.Resume(context.Background(), ports.ChatResumeConfig{
+	second, err := secondDriver.Reconnect(context.Background(), ports.ChatResumeConfig{
 		SessionID: "persistent-acp-e2e", DataDir: dataDir, WorkspacePath: workdir,
 		ProviderConversationID: "persistent-provider-session", ProviderScopeID: "scope",
 		PrepareEnv: prepareEnv, Model: "changed-model", Permissions: ports.PermissionModeAuto,
@@ -4064,5 +4064,22 @@ func TestACPCompactionRestoredOnLiveReconnect(t *testing.T) {
 	}
 	if compacting != "durable-compaction-turn" {
 		t.Errorf("compactingTurnID = %q, want durable-compaction-turn", compacting)
+	}
+}
+
+func TestReconnectMissingHostNeverLaunchesProvider(t *testing.T) {
+	driver := New(Config{Harness: domain.HarnessClaudeCode, Launch: func(context.Context, LaunchConfig) (Launch, error) {
+		t.Fatal("health check tried to launch ACP provider")
+		return Launch{}, nil
+	}}, nil)
+	_, err := driver.Reconnect(context.Background(), ports.ChatResumeConfig{
+		SessionID: "stopped", ProviderConversationID: "native", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
+		PrepareEnv: func(context.Context) (map[string]string, error) {
+			t.Fatal("health check rotated launch credentials")
+			return nil, nil
+		},
+	})
+	if !errors.Is(err, ports.ErrChatHostNotRunning) {
+		t.Fatalf("error=%v", err)
 	}
 }

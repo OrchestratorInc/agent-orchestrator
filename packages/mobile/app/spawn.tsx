@@ -17,15 +17,17 @@ import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-cont
 import { agentErrorCopy } from "../lib/agentError";
 import { defaultAgent, rankAgents } from "../lib/agentPicker";
 import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentModelCatalog, type ProjectDetail, type SessionMode } from "../lib/api";
-import { classifyConnectionFailure, describeConnectionFailure } from "../lib/connectionError";
+import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
+import { openingHostId, spawnHostMatches } from "../lib/hostRoute";
 import { resolveSpawnProject } from "../lib/projectFilter";
 import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, readSpawnAttachments, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
+import { spawnNotices } from "../lib/spawnNotices";
 import { SpawnPromptInput } from "../lib/spawn-prompt-input";
-import { useApp } from "../lib/store";
+import { HostScope, useApp } from "../lib/store";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
@@ -36,11 +38,21 @@ import { backOr } from "../lib/backNavigation";
 export { SheetErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
 export default function SpawnModal() {
+	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	return hostId ? <HostScope key={hostId} hostId={hostId}><SpawnModalContent /></HostScope> : <SpawnModalContent />;
+}
+
+function SpawnModalContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
-	const { projectId: routeProjectId } = useLocalSearchParams<{ projectId?: string }>();
-	const { projects, projectsKnown, activeProjectId, config, spawn } = useApp();
+	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
+	const { projects, projectsKnown, activeProjectId, config, currentHostId, connection, unreachable, spawn } = useApp();
+	const [openedHostId, setOpenedHostId] = useState(() => openingHostId(routeHostId, currentHostId ?? undefined));
+	const hostMatches = spawnHostMatches({ openedHostId, currentHostId: currentHostId ?? undefined, routeProjectId, routeHostId });
+	useEffect(() => {
+		if (!openedHostId && currentHostId) setOpenedHostId(currentHostId);
+	}, [openedHostId, currentHostId]);
 
 	const [projectId, setProjectId] = useState<string | null>(null);
 	const [harness, setHarness] = useState("");
@@ -61,11 +73,14 @@ export default function SpawnModal() {
 	const [modelError, setModelError] = useState<string>();
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const requestRef = useRef<{ payload: string; attachments: readonly SpawnAttachment[]; id: string } | undefined>(undefined);
 
 	const [catalog, setCatalog] = useState<AgentCatalog | null>(null);
 	const [catalogError, setCatalogError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [offerTUI, setOfferTUI] = useState(false);
+	// Bumped to re-run the loads below after the desktop comes back.
+	const [reloadKey, setReloadKey] = useState(0);
 	// Spoken text lands in the prompt the way it does in the chat composer:
 	// appended, so dictation can extend what was typed rather than replace it.
 	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setPrompt((old) => old ? `${old} ${spoken}` : spoken), []) });
@@ -82,6 +97,7 @@ export default function SpawnModal() {
 	// `targetProject()`; kept here because the screen needs it as UI state to
 	// drive the picker's value and the button's disabled state.
 	useEffect(() => {
+		if (!hostMatches) return;
 		const nextProjectId = resolveSpawnProject(
 			projectId,
 			routeProjectId,
@@ -90,10 +106,10 @@ export default function SpawnModal() {
 			projectsKnown,
 		);
 		if (nextProjectId !== projectId) changeProject(nextProjectId);
-	}, [activeProjectId, projects, projectsKnown, projectId, routeProjectId]);
+	}, [activeProjectId, hostMatches, projects, projectsKnown, projectId, routeProjectId]);
 
 	useEffect(() => {
-		if (!config) return;
+		if (!config || !hostMatches) return;
 		let cancelled = false;
 		setLoading(true);
 		Promise.all([getAgents(config), getSettings(config)])
@@ -114,7 +130,7 @@ export default function SpawnModal() {
 		return () => {
 			cancelled = true;
 		};
-	}, [config]);
+	}, [config, hostMatches, reloadKey]);
 
 	// Refreshing the catalog moved into the agent sheet route, which owns its own
 	// copy of it — see app/sheets/agent.tsx.
@@ -129,27 +145,37 @@ export default function SpawnModal() {
 	// provider picks, and naming a model here promised one the session never ran.
 	const displayedModelLabel = displayedModel ? modelCatalog?.models.find((item) => item.id === displayedModel)?.label ?? displayedModel : "Automatic";
 	const modelSelection = modelTouched ? model : "__auto__";
+	const notices = spawnNotices({
+		// Only when a reconnect can fix it: a rejected password stops the poll for
+		// good, and its catalog error already says to re-scan the pairing code.
+		offline: unreachable,
+		mode,
+		loading,
+		catalogLoaded: catalog !== null,
+		catalogError,
+		agentCount: agents.length,
+		modelError,
+	});
 	const hasComposerMessage = Boolean(
-		(mode === "chat" && !loading && agents.length === 0)
-		|| catalogError
-		|| modelError
+		notices.length > 0
 		|| attachmentError
 		|| (Platform.OS === "android" && listening)
 		|| voice.error
 		|| error
-		|| offerTUI,
+		|| offerTUI
+		|| (Boolean(openedHostId) && !hostMatches),
 	);
 
 	useEffect(() => {
-		if (!config || !projectId) { setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
+		if (!config || !hostMatches || !projectId) { setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
 		let cancelled = false;
 		setProjectDetailLoadedFor(null);
 		getProject(config, projectId)
 			.then((nextProject) => { if (!cancelled) setProjectDetail(nextProject); })
-			.catch((cause) => { if (!cancelled) setModelError(cause instanceof Error ? cause.message : String(cause)); })
+			.catch((cause) => { if (!cancelled) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled) setProjectDetailLoadedFor(projectId); });
 		return () => { cancelled = true; };
-	}, [config, projectId]);
+	}, [config, hostMatches, projectId, reloadKey]);
 
 	useEffect(() => {
 		if (agentTouched || loading || !catalog) return;
@@ -163,15 +189,26 @@ export default function SpawnModal() {
 	}, [agentTouched, agents, catalog, loading, projectDetail, projectDetailLoadedFor, projectId]);
 
 	useEffect(() => {
-		if (!config || !projectId || !harness) { setModelCatalog(undefined); return; }
+		if (!config || !hostMatches || !projectId || !harness) { setModelCatalog(undefined); return; }
 		let cancelled = false;
 		setModelLoading(true);
 		getAgentModels(config, harness, projectId)
 			.then((nextCatalog) => { if (!cancelled) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
-			.catch((cause) => { if (!cancelled) setModelError(cause instanceof Error ? cause.message : String(cause)); })
+			.catch((cause) => { if (!cancelled) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled) setModelLoading(false); });
 		return () => { cancelled = true; };
-	}, [config, harness, projectId]);
+	}, [config, hostMatches, harness, projectId, reloadKey]);
+
+	// Loads that failed while the desktop was unreachable run again once the
+	// board's poll reconnects. Keyed on the reconnect, not on the errors, so an
+	// endpoint that keeps failing while connected can't loop.
+	const previousConnection = useRef(connection);
+	useEffect(() => {
+		const reconnected = previousConnection.current !== "open" && connection === "open";
+		previousConnection.current = connection;
+		if (reconnected && (catalogError || modelError)) setReloadKey((key) => key + 1);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [connection]);
 
 	const clearModelOverride = () => { setModel(""); setModelTouched(false); };
 	const resetModelSource = () => { clearModelOverride(); setModelCatalog(undefined); setModelError(undefined); };
@@ -244,7 +281,7 @@ export default function SpawnModal() {
 			setAttachments(merged.attachments);
 			setAttachmentError(next.error ?? merged.error);
 		} catch (cause) {
-			setAttachmentError(cause instanceof Error ? cause.message : "Couldn't read that file.");
+			setAttachmentError(userFacingError(cause, "Couldn't read that file."));
 		} finally {
 			pickingAttachments.current = false;
 
@@ -252,6 +289,10 @@ export default function SpawnModal() {
 	};
 
 	const onSpawn = async () => {
+		if (!openedHostId || !spawnHostMatches({ openedHostId, currentHostId: currentHostId ?? undefined, routeProjectId, routeHostId })) {
+			setError("Machine changed. Close and reopen this task composer.");
+			return;
+		}
 		if (pickingAttachments.current) {
 			setAttachmentError("Wait for attachments to finish loading.");
 			return;
@@ -263,14 +304,21 @@ export default function SpawnModal() {
 		setError(null);
 		setOfferTUI(false);
 		try {
-			const session = await spawn({
+			const request = {
+				hostId: openedHostId,
 				projectId: projectId ?? undefined,
 				prompt: prompt.trim() || undefined,
 				harness: harness || undefined,
 				model: modelOverride(displayedModel, modelTouched),
 				mode,
 				attachments: attachmentsRef.current.map(({ mimeType, data }) => ({ mimeType, data })),
-			});
+			};
+			const { attachments: _, ...requestFields } = request;
+			const payload = JSON.stringify(requestFields);
+			if (requestRef.current?.payload !== payload || requestRef.current?.attachments !== attachmentsRef.current) {
+				requestRef.current = { payload, attachments: attachmentsRef.current, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
+			}
+			const session = await spawn({ ...request, clientRequestId: requestRef.current.id });
 			haptics.success();
 			// Dismiss the modal first, then open the freshly spawned session's mode-aware surface
 			// once the dismiss transition has settled. Firing both navigations in the
@@ -283,7 +331,7 @@ export default function SpawnModal() {
 			InteractionManager.runAfterInteractions(() => {
 				router.push({
 					pathname: "/session/[id]",
-					params: { id: session.id, projectId: session.projectId },
+					params: { id: session.id, projectId: session.projectId, hostId: openedHostId },
 				});
 			});
 		} catch (e) {
@@ -329,9 +377,8 @@ export default function SpawnModal() {
 				) : null}
 
 		{hasComposerMessage ? <View style={styles.messages}>
-					{mode === "chat" && !loading && agents.length === 0 ? <Text style={styles.warn}>No installed agent on this AO host currently supports Chat. Choose Terminal UI or install/authenticate a Chat-capable agent.</Text> : null}
-					{catalogError ? <Text style={styles.warn}>{catalogError}</Text> : null}
-					{modelError ? <Text style={styles.warn}>{modelError}</Text> : null}
+					{openedHostId && !hostMatches ? <Text accessibilityRole="alert" style={styles.warn}>Machine changed or disconnected. Close and reopen this task composer.</Text> : null}
+					{notices.map((notice) => <Text key={notice} style={styles.warn}>{notice}</Text>)}
 					{attachmentError ? <Text style={styles.warn}>{attachmentError}</Text> : null}
 					{Platform.OS === "android" ? voiceFeedback : null}
 					{voice.error ? <Text accessibilityRole="alert" style={styles.warn}>{voice.error}</Text> : null}
@@ -371,7 +418,7 @@ export default function SpawnModal() {
 					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut }}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
-					disabled={!projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}
+					disabled={!hostMatches || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}
 				/>
 				</KeyboardStickyView>
 		</View>
@@ -398,21 +445,14 @@ export default function SpawnModal() {
 	return <View style={styles.screen}>{content}</View>;
 }
 
-// Human copy for a failed spawn, matching every other screen. This one used to
-// render `e.message` — the wire string, e.g. "401 - missing or invalid
-// connection password".
+// Human copy for a failed spawn, matching every other screen. Never the wire
+// string ("401 Unauthorized - missing or invalid connection password").
 function spawnErrorCopy(e: unknown): string {
 	if (isChatPreflightError(e)) return chatErrorCopy(e);
 	if (e instanceof ApiError && e.code === "PROMPT_TOO_LONG") {
 		return "Task prompt is too long. Keep it to 16 KiB or fewer (emoji and other non-English characters use more than one byte). Shorten it and try again.";
 	}
-	const status = e instanceof ApiError ? e.status : undefined;
-	const { title, message } = describeConnectionFailure(classifyConnectionFailure(status), {
-		host: "",
-		port: "",
-		platform: Platform.OS,
-	});
-	return `${title} ${message}`;
+	return userFacingError(e, "Couldn't start the worker. Try again.");
 }
 
 // Android's compact field height and the iOS host's minimum layout height.

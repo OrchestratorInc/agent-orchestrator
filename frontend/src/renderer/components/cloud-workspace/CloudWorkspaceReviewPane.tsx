@@ -20,7 +20,7 @@ const statusLabel: Record<CloudCpWorkspaceReviewFileSummary["status"], string> =
 };
 const statusTone: Record<CloudCpWorkspaceReviewFileSummary["status"], string> = {
 	unmodified: "text-passive", modified: "text-warning", added: "text-success", deleted: "text-error",
-	renamed: "text-accent", copied: "text-accent", untracked: "text-success",
+	renamed: "text-logo-accent", copied: "text-logo-accent", untracked: "text-success",
 };
 
 function chunk<T>(items: readonly T[]): T[][] {
@@ -98,11 +98,16 @@ export function CloudWorkspaceReviewPane({
 	useEffect(() => {
 		setViewedRecords(readViewedRecords(storageKey));
 	}, [storageKey]);
+	// Reset collapse/deferred state only when the review target changes (workspace
+	// version, selected commit/scope, session-scoped storage key), computed from the
+	// unfiltered allFiles. Keying on the filtered `files` would reset on every
+	// file-filter keystroke, discarding the user's expand/collapse and loaded diffs.
 	useEffect(() => {
 		const savedViewed = readViewedRecords(storageKey);
-		setCollapsed(new Set(files.filter((file) => deferredByDefault(file) || isViewedRecord(file, savedViewed)).map((file) => file.path)));
+		setCollapsed(new Set(allFiles.filter((file) => deferredByDefault(file) || isViewedRecord(file, savedViewed)).map((file) => file.path)));
 		setLoadedDeferred(new Set());
-	}, [data.workspaceVersion, files, selectionKey, storageKey]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- reset on review-target identity, not on allFiles' reference (changes per poll) or the filtered files (changes per keystroke).
+	}, [data.workspaceVersion, selectionKey, storageKey]);
 	useEffect(() => {
 		if (scope === "committed" && selectedCommit) return;
 		if (scope === "combined") return;

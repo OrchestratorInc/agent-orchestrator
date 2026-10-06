@@ -20,6 +20,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listUserProviderConnections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/providers/{agent}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["putUserAgentConnection"];
+        post?: never;
+        delete: operations["deleteUserAgentConnection"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/github/user": {
         parameters: {
             query?: never;
@@ -269,6 +303,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/wake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Ask the reconciler to resume the user's idle-paused sandboxes. */
+        post: operations["wakePausedSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}": {
         parameters: {
             query?: never;
@@ -283,6 +336,45 @@ export interface paths {
         put?: never;
         post?: never;
         delete: operations["deleteSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get: operations["getSessionInterfaceTransition"];
+        put?: never;
+        post: operations["startSessionInterfaceTransition"];
+        delete: operations["cancelSessionInterfaceTransition"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition/{transitionId}/notice-acknowledgement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                transitionId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["acknowledgeSessionInterfaceTransitionNotice"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -365,6 +457,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Model and reasoning-effort choices available to this session's agent. */
+        get: operations["listChatModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/cancel": {
         parameters: {
             query?: never;
@@ -379,6 +491,46 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["cancelTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["steerTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/approvals/{requestId}/decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["decideChatApproval"];
         delete?: never;
         options?: never;
         head?: never;
@@ -561,7 +713,7 @@ export interface paths {
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
-                provider: "claude-code" | "codex" | "cursor";
+                provider: "claude-code" | "codex" | "cursor" | "opencode";
             };
             cookie?: never;
         };
@@ -957,11 +1109,162 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/worker/notification-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Durably accepts one agent notification event for the authenticated worker epoch. */
+        post: operations["publishWorkerNotificationEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listCloudNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notification-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Returns durable events as JSON, or an SSE replay/live stream when requested with Accept text/event-stream. */
+        get: operations["listCloudNotificationEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notifications/{notificationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["markCloudNotificationRead"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notifications/read-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["markAllCloudNotificationsRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         EmptyObject: Record<string, never>;
+        AgentNotificationEvent: {
+            eventId: string;
+            /** @enum {string} */
+            type: "needs_input" | "agent_failed" | "agent_completed";
+            /** Format: date-time */
+            occurredAt: string;
+            payload: Record<string, never>;
+        };
+        NotificationAcceptance: {
+            /** @constant */
+            accepted: true;
+            eventId: string;
+            duplicate: boolean;
+        };
+        CloudNotification: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            recipientUserId: string;
+            /** Format: uuid */
+            projectId?: string;
+            /** Format: uuid */
+            sessionId?: string;
+            /** @constant */
+            source: "cloud";
+            type: string;
+            title: string;
+            body: string;
+            /** @enum {string} */
+            status: "unread" | "read";
+            eventId?: string;
+            metadata: Record<string, never>;
+            /** Format: date-time */
+            resolvedAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        CloudNotificationEvent: {
+            /** Format: int64 */
+            sequence: number;
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            recipientUserId: string;
+            /** @enum {string} */
+            kind: "notification_created" | "notification_updated" | "notification_resolved";
+            eventId: string;
+            notification: components["schemas"]["CloudNotification"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        NotificationPage: {
+            items: components["schemas"]["CloudNotification"][];
+            page: {
+                hasMore: boolean;
+                nextCursor?: string;
+            };
+            unreadCount: number;
+            /** Format: int64 */
+            latestSequence: number;
+        };
+        NotificationEventPage: {
+            items: components["schemas"]["CloudNotificationEvent"][];
+            hasMore: boolean;
+        };
         /** @enum {string} */
         AuthProvider: "workos" | "local";
         /** @enum {string} */
@@ -1210,6 +1513,9 @@ export interface components {
             prompt: string;
             agentSessionId?: string;
             mode: components["schemas"]["SessionMode"];
+            interfaceMode: components["schemas"]["SessionInterfaceMode"];
+            /** @description Coding-agent model to launch with; empty uses the harness default. */
+            model?: string;
             deniedCommands: string[];
             /** Format: uri */
             repositoryUrl: string;
@@ -1341,6 +1647,29 @@ export interface components {
             deniedCommands?: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
+        };
+        ChatMessageInput: {
+            text: string;
+            model?: string;
+            /** @enum {string} */
+            reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            mode?: components["schemas"]["SessionMode"];
+            /** @enum {string} */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+        };
+        ChatApprovalDecisionInput: {
+            decisionId: string;
+        };
+        ChatModel: {
+            id: string;
+            displayName: string;
+            description?: string;
+            default: boolean;
+            efforts?: string[];
+            defaultEffort?: string;
+        };
+        ChatModelsResponse: {
+            models: components["schemas"]["ChatModel"][];
         };
         SendMessageInput: {
             text: string;
@@ -1542,6 +1871,44 @@ export interface components {
                 desiredState: "deleted";
             };
         };
+        /** @enum {string} */
+        SessionInterfaceMode: "tui" | "chat";
+        /** @enum {string} */
+        SessionInterfaceTransitionPolicy: "drain" | "interrupt";
+        /** @enum {string} */
+        SessionInterfaceTransitionPhase: "requested" | "preflighting" | "draining" | "source_stopping" | "source_stopped" | "target_starting" | "activating" | "completed" | "failed" | "cancelled" | "recovery_required";
+        SessionInterfaceTransition: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            sessionId: string;
+            sourceMode: components["schemas"]["SessionInterfaceMode"];
+            targetMode: components["schemas"]["SessionInterfaceMode"];
+            policy: components["schemas"]["SessionInterfaceTransitionPolicy"];
+            phase: components["schemas"]["SessionInterfaceTransitionPhase"];
+            nativeConversationId?: string;
+            errorCode?: string;
+            errorDetail?: string;
+            /** Format: date-time */
+            noticeAcknowledgedAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: date-time */
+            completedAt?: string;
+        };
+        SessionInterfaceTransitionStatus: {
+            supported: boolean;
+            targetMode: components["schemas"]["SessionInterfaceMode"];
+            reasonCode?: string;
+            reason?: string;
+            transition?: components["schemas"]["SessionInterfaceTransition"];
+        };
+        StartSessionInterfaceTransitionInput: {
+            targetMode: components["schemas"]["SessionInterfaceMode"];
+            policy: components["schemas"]["SessionInterfaceTransitionPolicy"];
+        };
         Session: {
             /** Format: uuid */
             id: string;
@@ -1554,7 +1921,10 @@ export interface components {
             displayName: string;
             branch: string;
             mode: components["schemas"]["SessionMode"];
+            /** @description Coding-agent model the session launched with; empty means the harness default. */
+            model?: string;
             deniedCommands: string[];
+            interfaceMode: components["schemas"]["SessionInterfaceMode"];
             activityState: components["schemas"]["SessionActivityState"];
             status: components["schemas"]["SessionStatus"];
             capabilities?: components["schemas"]["AgentCapability"][];
@@ -1577,6 +1947,8 @@ export interface components {
             prompt: string;
             /** @default trusted */
             mode: components["schemas"]["SessionMode"];
+            /** @description Coding-agent model the session launches with (harness-native id, e.g. "anthropic/claude-opus-4-8"). Optional; empty uses the harness default. */
+            model?: string;
             /** @default [] */
             deniedCommands: string[];
             /** Format: uuid */
@@ -1751,6 +2123,8 @@ export interface components {
             type: "chat.user_message";
             payload: {
                 text: string;
+                /** Format: uuid */
+                turnId?: string;
             };
             /** Format: date-time */
             createdAt: string;
@@ -1837,7 +2211,22 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"];
+        TurnSteeredEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.turn_steered";
+            payload: {
+                /** Format: uuid */
+                turnId: string;
+                text: string;
+                clientMessageId: string;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"];
         ClientEventPage: {
             events: components["schemas"]["ClientEvent"][];
             hasMore: boolean;
@@ -1923,18 +2312,30 @@ export interface components {
             };
         };
         /** @enum {string} */
-        ProviderName: "daytona" | "claude-code" | "codex" | "cursor";
+        ProviderName: "daytona" | "claude-code" | "codex" | "cursor" | "opencode" | "github" | "coder" | "nodeops";
         ProviderPublicConfig: {
             /** Format: uri */
             apiUrl?: string;
             /** @enum {string} */
             target?: "us" | "eu";
             /** @enum {string} */
-            credentialType?: "oauth_token" | "api_key" | "access_token" | "auth_json";
+            credentialType?: "oauth_token" | "api_key" | "access_token" | "auth_json" | "personal_access_token" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
+            /** Format: uri */
+            baseUrl?: string;
+            owner?: string;
+            /** Format: uuid */
+            templateId?: string;
+            agentName?: string;
+            parameters?: {
+                [key: string]: string;
+            };
+            durableRoot?: string;
+            endpointServiceName?: string;
+            region?: string;
         };
         PutAgentProviderConnectionInput: {
             /** @enum {string} */
-            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json";
+            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
             secret: string;
         };
         WorkerCredentialResponse: {
@@ -2078,6 +2479,79 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CurrentAccount"];
                 };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listUserProviderConnections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redacted provider connections owned by the authenticated user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        providerConnections: components["schemas"]["RedactedProviderConnection"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putUserAgentConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutAgentProviderConnectionInput"];
+            };
+        };
+        responses: {
+            /** @description The validated personal coding-agent credential was encrypted and stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        providerConnection: components["schemas"]["RedactedProviderConnection"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteUserAgentConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The personal coding-agent credential was disconnected. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Error"];
         };
@@ -2559,6 +3033,32 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    wakePausedSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The resume requests were accepted for asynchronous processing. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: int64 */
+                        woken: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getSession: {
         parameters: {
             query?: never;
@@ -2604,6 +3104,109 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteSessionResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionInterfaceTransition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Interface-switch readiness and the active transition, if any. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionInterfaceTransitionStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    startSessionInterfaceTransition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartSessionInterfaceTransitionInput"];
+            };
+        };
+        responses: {
+            /** @description Interface switch accepted for asynchronous processing. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        transition: components["schemas"]["SessionInterfaceTransition"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelSessionInterfaceTransition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Interface switch cancelled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    acknowledgeSessionInterfaceTransitionNotice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                transitionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Interface-switch failure or recovery notice acknowledged. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -2701,9 +3304,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    text: string;
-                };
+                "application/json": components["schemas"]["ChatMessageInput"];
             };
         };
         responses: {
@@ -2716,6 +3317,30 @@ export interface operations {
                     "application/json": {
                         event: components["schemas"]["UserMessageEvent"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listChatModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Available Chat models. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatModelsResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -2740,6 +3365,71 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Cancellation was durably requested for the turn. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    steerTurn: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendMessageInput"];
+            };
+        };
+        responses: {
+            /** @description Guidance for the active turn accepted. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["TurnSteeredEvent"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    decideChatApproval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatApprovalDecisionInput"];
+            };
+        };
+        responses: {
+            /** @description Approval decision accepted. */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -3026,7 +3716,7 @@ export interface operations {
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
-                provider: "claude-code" | "codex" | "cursor";
+                provider: "claude-code" | "codex" | "cursor" | "opencode";
             };
             cookie?: never;
         };
@@ -3056,7 +3746,7 @@ export interface operations {
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
-                provider: "claude-code" | "codex" | "cursor";
+                provider: "claude-code" | "codex" | "cursor" | "opencode";
             };
             cookie?: never;
         };
@@ -3678,6 +4368,146 @@ export interface operations {
             401: components["responses"]["WorkerUnauthorized"];
             403: components["responses"]["WorkerScopeRequired"];
             409: components["responses"]["Error"];
+        };
+    };
+    publishWorkerNotificationEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentNotificationEvent"];
+            };
+        };
+        responses: {
+            /** @description The exact event was already durably accepted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationAcceptance"];
+                };
+            };
+            /** @description The event was durably accepted. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationAcceptance"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            409: components["responses"]["Error"];
+        };
+    };
+    listCloudNotifications: {
+        parameters: {
+            query?: {
+                status?: "all" | "unread" | "read";
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recipient-scoped cloud notification inbox. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listCloudNotificationEvents: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered durable cloud notification events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationEventPage"];
+                    "text/event-stream": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    markCloudNotificationRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                notificationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @constant */
+                    status: "read";
+                };
+            };
+        };
+        responses: {
+            /** @description The notification was marked read. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    markAllCloudNotificationsRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every unread notification for the current recipient was marked read. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
         };
     };
 }

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -284,7 +285,7 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 	}
 }
 
-func TestResumeReconnectsInitializedHostWithoutNativeResume(t *testing.T) {
+func TestReconnectAdoptsInitializedHostWithoutNativeResume(t *testing.T) {
 	d, srv := newTestDriver(t)
 	prepareCalls := 0
 	proc, err := d.spawn(context.Background(), "codex", "/tmp/ws", nil)
@@ -292,13 +293,16 @@ func TestResumeReconnectsInitializedHostWithoutNativeResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.persistent = true
-	d.connectHost = func(context.Context, persistenthost.Config) (*persistenthost.Transport, error) {
+	d.connectHost = func(_ context.Context, cfg persistenthost.Config) (*persistenthost.Transport, error) {
+		if !cfg.ReconnectOnly {
+			t.Fatal("startup reconnect allowed a provider launch")
+		}
 		return &persistenthost.Transport{
 			Stdin: proc.stdin, Stdout: proc.stdout, Reconnected: true, NextRequestID: 41,
 		}, nil
 	}
 
-	conv, err := d.Resume(context.Background(), ports.ChatResumeConfig{
+	conv, err := d.Reconnect(context.Background(), ports.ChatResumeConfig{
 		SessionID: "ao-reconnect", ProviderConversationID: "thread-survived",
 		DataDir: t.TempDir(), WorkspacePath: "/tmp/ws",
 		PrepareEnv: func(context.Context) (map[string]string, error) {
@@ -621,6 +625,81 @@ func TestNotificationsBecomeNeutralEvents(t *testing.T) {
 	}
 	if ev := nextEvent(t, conv.Events(), ports.ChatEventTurnCompleted); ev.TurnState != domain.TurnStateCompleted {
 		t.Fatalf("turn state = %q", ev.TurnState)
+	}
+}
+
+func TestReloadMCPServersReturnsCompletePagedInventory(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.respondTo(codexproto.MethodConfigMcpServerReload, `{}`)
+	srv.respondSequence(codexproto.MethodMcpServerStatusList,
+		`{"data":[{"name":"github","authStatus":"notLoggedIn","serverInfo":{"name":"github","version":"1"},"resourceTemplates":[],"resources":[],"tools":{}},{"name":"failed","authStatus":"unknown","resourceTemplates":[],"resources":[],"tools":{}}],"nextCursor":"page-2"}`,
+		`{"data":[{"name":"playwright","authStatus":"notLoggedIn","serverInfo":{"name":"playwright","version":"1"},"resourceTemplates":[],"resources":[],"tools":{}}]}`,
+	)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	result, err := conv.(ports.ChatMCPReloader).ReloadMCPServers(context.Background())
+	if err != nil {
+		t.Fatalf("ReloadMCPServers: %v", err)
+	}
+	if !result.Authoritative {
+		t.Fatal("successful complete inventory was not authoritative")
+	}
+	if len(result.Servers) != 2 || result.Servers[0].Name != "github" || result.Servers[1].Name != "playwright" {
+		t.Fatalf("servers = %+v, want both pages in order", result.Servers)
+	}
+
+	srv.mu.Lock()
+	var requests []frame
+	for _, request := range srv.seen {
+		if request.Method == codexproto.MethodMcpServerStatusList {
+			requests = append(requests, request)
+		}
+	}
+	srv.mu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("inventory requests = %d, want 2", len(requests))
+	}
+	var first, second codexproto.ListMcpServerStatusParams
+	if err := json.Unmarshal(requests[0].Params, &first); err != nil {
+		t.Fatalf("decode first inventory params: %v", err)
+	}
+	if err := json.Unmarshal(requests[1].Params, &second); err != nil {
+		t.Fatalf("decode second inventory params: %v", err)
+	}
+	if first.Detail == nil || *first.Detail != codexproto.McpServerStatusDetailToolsAndAuthOnly {
+		t.Fatalf("detail = %v, want toolsAndAuthOnly", first.Detail)
+	}
+	if first.ThreadID == nil || *first.ThreadID != "thread-1" {
+		t.Fatalf("threadId = %v, want thread-1", first.ThreadID)
+	}
+	if first.Cursor != nil {
+		t.Fatalf("first cursor = %v, want absent", first.Cursor)
+	}
+	if second.Cursor == nil || *second.Cursor != "page-2" {
+		t.Fatalf("second cursor = %v, want page-2", second.Cursor)
+	}
+}
+
+func TestReloadMCPServersMarksFailedInventoryUnavailable(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.respondTo(codexproto.MethodConfigMcpServerReload, `{}`)
+	srv.replyError(codexproto.MethodMcpServerStatusList, -32602, "inventory unavailable")
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	result, err := conv.(ports.ChatMCPReloader).ReloadMCPServers(context.Background())
+	if err != nil {
+		t.Fatalf("ReloadMCPServers: %v", err)
+	}
+	if result.Authoritative || len(result.Servers) != 0 {
+		t.Fatalf("result = %+v, want unavailable inventory", result)
 	}
 }
 
@@ -1500,5 +1579,19 @@ func TestEnvSliceWithNoOverlayStillInheritsTheEnvironment(t *testing.T) {
 	}
 	if !sawHome {
 		t.Error("an empty overlay produced an environment with no HOME")
+	}
+}
+
+func TestReconnectMissingHostNeverLaunchesProvider(t *testing.T) {
+	driver := New(fakePlugin{binErr: errors.New("provider installation is unavailable")}, nil)
+	_, err := driver.Reconnect(context.Background(), ports.ChatResumeConfig{
+		SessionID: "stopped", ProviderConversationID: "thread", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
+		PrepareEnv: func(context.Context) (map[string]string, error) {
+			t.Fatal("health check rotated launch credentials")
+			return nil, nil
+		},
+	})
+	if !errors.Is(err, ports.ErrChatHostNotRunning) {
+		t.Fatalf("error=%v", err)
 	}
 }

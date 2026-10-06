@@ -2,7 +2,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
+import {
+	type WorkspaceSession,
+	type WorkspaceSummary,
+} from "../types/workspace";
 import { toKanbanColumn } from "@aoagents/product-ui";
 import { appI18n } from "../i18n";
 
@@ -16,6 +19,8 @@ vi.mock("motion/react", async (importOriginal) => {
 });
 
 const {
+	appMemoryMock,
+	sessionMemoryMock,
 	navigateMock,
 	notificationShowMock,
 	postMock,
@@ -23,6 +28,8 @@ const {
 	usageQueryMock,
 	boardActionsInPanelMock,
 } = vi.hoisted(() => ({
+	appMemoryMock: vi.fn(),
+	sessionMemoryMock: vi.fn(),
 	navigateMock: vi.fn(),
 	notificationShowMock: vi.fn(),
 	postMock: vi.fn(),
@@ -37,8 +44,11 @@ vi.mock("@tanstack/react-router", () => ({
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
+	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
+	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 	cloudSessionsQueryKey: ["cloud-sessions"],
 	useWorkspaceQuery: workspaceQueryMock,
+	useRemoteProjectQuery: () => ({ data: undefined, isError: false, isSuccess: false }),
 	useWorkspaceScope: (projectId?: string) => {
 		const query = workspaceQueryMock();
 		return {
@@ -52,13 +62,36 @@ vi.mock("../hooks/useSessionUsageSummaries", () => ({
 	useSessionUsageSummaries: usageQueryMock,
 }));
 
+vi.mock("../hooks/useSessionMemory", async (importOriginal) => {
+	const { pressureState } = await import("@aoagents/product-ui");
+	return {
+		...(await importOriginal<typeof import("../hooks/useSessionMemory")>()),
+		useAppMemory: appMemoryMock,
+		useSessionMemory: sessionMemoryMock,
+		// The light's own poll, fed from the same mocked reading.
+		usePressureState: () => {
+			const system = appMemoryMock()?.data?.system;
+			return system ? pressureState(system) : undefined;
+		},
+	};
+});
+
 vi.mock("../lib/api-client", () => ({
 	apiClient: { POST: (...args: unknown[]) => postMock(...args) },
+	apiErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => () => undefined,
 }));
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
+		cloud: {
+			getSession: vi.fn().mockResolvedValue(null),
+			onSessionChanged: vi.fn(() => () => {}),
+			signIn: vi.fn().mockResolvedValue(undefined),
+			signOut: vi.fn().mockResolvedValue(undefined),
+		},
 		clipboard: {
 			writeText: vi.fn(),
 		},
@@ -78,6 +111,7 @@ vi.mock("../lib/platform", async (importOriginal) => {
 });
 
 import { archiveToggleHeightClassName, archiveToggleOffsetClassName } from "@aoagents/product-ui";
+import { useUiStore } from "../stores/ui-store";
 import { SessionsBoard } from "./SessionsBoard";
 import { toBoardSessionPresentation } from "./SessionsBoardAdapters";
 import { TooltipProvider } from "./ui/tooltip";
@@ -100,21 +134,108 @@ function renderBoardWithClient(queryClient: QueryClient, projectId?: string) {
 
 /** Archive cards mount on the next frame via startTransition — wait for the list. */
 async function expandArchive() {
-	await userEvent.click(screen.getByRole("button", { name: /archive/i }));
+	await userEvent.click(screen.getByRole("button", { name: /^Archive, \d+ sessions?$/ }));
 	return screen.findByRole("list", { name: "Archived sessions" });
 }
 
 beforeEach(() => {
+	// The memory light and card chips are Developer mode tools.
+	useUiStore.setState({ developerMode: true });
 	navigateMock.mockReset();
 	notificationShowMock.mockReset().mockResolvedValue(undefined);
 	postMock.mockReset().mockResolvedValue({ data: {} });
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [], isError: false });
 	usageQueryMock.mockReset().mockReturnValue({ data: new Map() });
+	appMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
+	sessionMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	window.localStorage.removeItem("ao.board.archive.layout");
 	boardActionsInPanelMock.mockReset().mockReturnValue(false);
 });
 
 describe("SessionsBoard", () => {
+	it("says a session's status could not be verified, without offering a retry", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "unverified", title: "Unverified task", status: "unknown", displayStatus: "Working", statusReadiness: "unavailable" })])],
+			isSuccess: true, isError: false,
+		});
+		renderBoard("p1");
+		expect(screen.queryByText("Working")).not.toBeInTheDocument();
+		expect(screen.getByText("Unable to verify")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Retry status check" })).not.toBeInTheDocument();
+		expect(postMock).not.toHaveBeenCalled();
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("shows what a session costs the machine on its card", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([
+				boardSession({ id: "running", title: "Running task", status: "idle", activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" } }),
+				boardSession({ id: "quiet", title: "Quiet task", status: "idle", activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" } }),
+			])],
+			isSuccess: true, isError: false,
+		});
+		sessionMemoryMock.mockReturnValue({
+			isError: false,
+			data: new Map([["running", { sessionId: "running", rssBytes: 641_728_512, processCount: 3, cpuPercent: 82.4, sampledAt: "", processes: [] }]]),
+		});
+		renderBoard("p1");
+		// The card says what the session costs the machine right now; an unsampled one shows nothing, never 0 MB.
+		expect(screen.getAllByTestId("session-resource")).toHaveLength(1);
+		expect(screen.getByTestId("session-resource")).toHaveTextContent("612 MB");
+		expect(screen.getByTestId("session-resource")).toHaveAttribute("data-resource-tone", "neutral");
+	});
+
+	it("shows no memory light or card memory outside Developer mode", async () => {
+		useUiStore.setState({ developerMode: false });
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "running", title: "Running task", status: "idle", activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" } })])],
+			isSuccess: true, isError: false,
+		});
+		sessionMemoryMock.mockReturnValue({
+			isError: false,
+			data: new Map([["running", { sessionId: "running", rssBytes: 641_728_512, processCount: 3, cpuPercent: 82.4, sampledAt: "", processes: [] }]]),
+		});
+		appMemoryMock.mockReturnValue({ isError: false, data: { app: { rssBytes: 2 * 1024 ** 3, processCount: 4, cpuPercent: 0 }, liveCount: 1 } });
+		renderBoard("p1");
+		expect(await screen.findByText("Running task")).toBeInTheDocument();
+		expect(screen.queryByTestId("session-resource")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("app-memory-indicator")).not.toBeInTheDocument();
+	});
+
+	it("shows AO memory pressure in the archive bar even with nothing archived", async () => {
+		const GIB = 1024 ** 3;
+		appMemoryMock.mockReturnValue({
+			isError: false,
+			data: {
+				app: { rssBytes: 12 * GIB, processCount: 20, cpuPercent: 40 },
+				system: { totalBytes: 32 * GIB, availableBytes: 2 * GIB, swapTotalBytes: 0, swapUsedBytes: 0, swapBytesPerSec: 0, cpuCount: 8, load1: 1, cpuPercent: 0, pressureRaw: 35, pressureSource: "psi" },
+				liveCount: 1,
+			},
+		});
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "live", title: "Live task", status: "working" })])],
+			isSuccess: true, isError: false,
+		});
+		renderBoard("p1");
+		expect(screen.queryByRole("button", { name: /^Archive, \d+ sessions?$/ })).not.toBeInTheDocument();
+		const indicator = screen.getByTestId("app-memory-indicator");
+		expect(indicator).toHaveTextContent("12.0 GB");
+		expect(indicator).toHaveAttribute("data-memory-state", "tight");
+		expect(indicator).toHaveAttribute("aria-label", "Tight · 2.0 GB free of 32.0 GB · AO holds 12.0 GB · pressure 35.0");
+		await userEvent.click(indicator);
+		expect(await screen.findByTestId("session-memory-stacked")).toBeInTheDocument();
+	});
+
+	it.each(["single_repo", "multi_repo", "cloud", "standalone", undefined] as const)("hides the cue runner for %s projects", (kind) => {
+		boardActionsInPanelMock.mockReturnValue(true);
+		workspaceQueryMock.mockReturnValue({
+			data: [{ ...workspaceWithSessions([]), kind }],
+			isError: false,
+		});
+		renderBoard("p1");
+		expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
+	});
+
 	it("uses the last human message time rather than generic session updatedAt", () => {
 		const presentation = toBoardSessionPresentation(
 			boardSession({
@@ -159,7 +280,7 @@ describe("SessionsBoard", () => {
 
 		try {
 			renderBoard("p1");
-			expect(screen.getByRole("button", { name: "终止 localized worker" })).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "归档 localized worker" })).toBeInTheDocument();
 			expect(screen.getByRole("link", { name: "PR #42 已打开" })).toHaveAttribute(
 				"href",
 				"https://github.com/acme/repo/pull/42",
@@ -183,6 +304,7 @@ describe("SessionsBoard", () => {
 					id: "p1",
 					name: "solkit-ui",
 					path: "/tmp/solkit-ui",
+					kind: "single_repo",
 					sessions: [
 						{
 							id: "s1",
@@ -213,6 +335,7 @@ describe("SessionsBoard", () => {
 		expect(
 			within(screen.getByRole("button", { name: "New task" })).getByText("Task").hasAttribute("data-compact-label"),
 		).toBe(true);
+		expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
 	});
 
 	it.each([
@@ -310,9 +433,9 @@ describe("SessionsBoard", () => {
 			.getByText("brand-font-pipeline")
 			.closest('[data-testid="board-session-card"]') as HTMLElement;
 		expect(within(idleCard).getByText("Idle")).toBeInTheDocument();
-		const terminateButton = within(idleCard).getByRole("button", { name: "Terminate brand-font-pipeline" });
+		const terminateButton = within(idleCard).getByRole("button", { name: "Archive brand-font-pipeline" });
 		expect(terminateButton).toHaveClass("opacity-0", "group-hover:opacity-100", "group-focus-within:opacity-100");
-		expect(terminateButton.querySelector("svg")).toHaveClass("lucide-trash-2");
+		expect(terminateButton.querySelector("svg")).toHaveClass("lucide-archive");
 		expect(within(idleCard).getByText("Idle").parentElement?.parentElement).toHaveClass("flex");
 		expect(within(idleCard).getByText("brand-font-pipeline")).toHaveClass("font-semibold", "line-clamp-2");
 	});
@@ -405,7 +528,7 @@ describe("SessionsBoard", () => {
 		const tokensOnlyCard = screen.getByText("tokens worker").closest('[data-testid="board-session-card"]') as HTMLElement;
 		expect(within(tokensOnlyCard).getByText("800", { selector: "span" })).toHaveAttribute("aria-hidden", "true");
 		expect(within(tokensOnlyCard).getByText("800 tokens")).toHaveClass("sr-only");
-		expect(usageQueryMock).toHaveBeenCalledWith("p1");
+		expect(usageQueryMock).toHaveBeenCalledWith("p1", undefined);
 
 		const archive = await expandArchive();
 		expect(within(archive).getByText("$0.02")).toHaveAttribute("aria-hidden", "true");
@@ -457,7 +580,7 @@ describe("SessionsBoard", () => {
 
 		within(card).getByRole("button", { name: "keyboard worker" }).focus();
 		await userEvent.tab();
-		expect(within(card).getByRole("button", { name: "Terminate keyboard worker" })).toHaveFocus();
+		expect(within(card).getByRole("button", { name: "Archive keyboard worker" })).toHaveFocus();
 
 		await userEvent.hover(usage);
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("$1.24 · 12,400 tokens");
@@ -488,9 +611,16 @@ describe("SessionsBoard", () => {
 			]),
 		});
 
+		sessionMemoryMock.mockReturnValue({
+			isError: false,
+			data: new Map([["s-tokens", { sessionId: "s-tokens", rssBytes: 253_755_392, processCount: 3, cpuPercent: 0, sampledAt: "", processes: [] }]]),
+		});
+
 		renderBoard("p1");
 
 		const card = screen.getByText("tokens worker").closest('[data-testid="board-session-card"]') as HTMLElement;
+		// Memory sits beside token usage, never in place of it.
+		expect(within(card).getByTestId("session-resource")).toHaveTextContent("242 MB");
 		const usage = within(card).getByText("12.4K", { selector: "span" });
 		expect(usage).toHaveAttribute("aria-hidden", "true");
 		expect(within(card).getByText("12,400 tokens")).toHaveClass("sr-only");
@@ -740,12 +870,34 @@ describe("SessionsBoard", () => {
 		);
 		expect(within(noSignalCard).getByText("No signal").parentElement).toHaveAttribute(
 			"data-kanban-column",
-			"needs_review",
+			"building",
 		);
 		expect(within(draftCard).getByText("Draft PR").parentElement).toHaveAttribute(
 			"data-kanban-column",
 			"validating",
 		);
+	});
+
+	it("places a no-signal display status alongside idle even with a review column", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([
+				boardSession({
+					id: "no-signal-review",
+					title: "silent reviewer",
+					status: "review_pending",
+					kanbanColumn: "needs_review",
+					displayStatus: "No signal",
+				}),
+			])],
+			isError: false,
+		});
+
+		renderBoard("p1");
+		const card = screen.getByText("silent reviewer").closest('[data-testid="board-session-card"]') as HTMLElement;
+		expect(within(card).getByText("No signal").parentElement).toHaveAttribute("data-kanban-column", "building");
+		const building = screen.getAllByTestId("board-column").find((column) => column.dataset.column === "building");
+		expect(building).toBeDefined();
+		expect(within(building!).getByText("silent reviewer")).toBeInTheDocument();
 	});
 
 	it("keeps a PR-less exited session in the building lane with an Exited badge", () => {
@@ -896,14 +1048,15 @@ describe("SessionsBoard", () => {
 
 		renderBoard("p1");
 
-		const archiveButton = screen.getByRole("button", { name: /archive/i });
-		expect(archiveButton).toHaveClass(archiveToggleHeightClassName, "w-full", "py-0");
+		const archiveButton = screen.getByRole("button", { name: /^Archive, \d+ sessions?$/ });
+		expect(archiveButton.parentElement).toHaveClass(archiveToggleHeightClassName);
+		expect(archiveButton).toHaveClass("h-full", "flex-1", "py-0");
 		const archiveLabel = within(archiveButton).getByText("Archive");
 		expect(archiveLabel).not.toHaveClass("font-mono", "uppercase");
 		expect(archiveLabel).toHaveClass("text-2xs", "font-medium");
 		// Expanded archive overlays the board instead of shrinking lanes (which would
 		// force a persistent Needs You column scrollbar gutter).
-		expect(archiveButton.parentElement).toHaveClass("absolute", "inset-x-0", "bottom-0", "bg-background");
+		expect(archiveButton.parentElement?.parentElement).toHaveClass("absolute", "inset-x-0", "bottom-0", "bg-background");
 		expect(screen.getByTestId("board")).toHaveClass("relative");
 		expect(screen.getByTestId("board").querySelector(":scope > .min-h-0.flex-1")).toHaveClass(
 			archiveToggleOffsetClassName,
@@ -973,7 +1126,7 @@ describe("SessionsBoard", () => {
 		});
 		renderBoard("p1");
 
-		const archiveButton = screen.getByRole("button", { name: /archive/i });
+		const archiveButton = screen.getByRole("button", { name: /^Archive, \d+ sessions?$/ });
 		const archive = await expandArchive();
 		const card = within(archive).getByText("dead worker");
 
@@ -1246,7 +1399,7 @@ describe("SessionsBoard", () => {
 		const readyLane = screen.getByRole("region", { name: "Ready sessions" });
 		expect(within(readyLane).getByText("Ready")).toHaveClass("text-status-ready");
 		expect(within(readyLane).getByText("merged worker")).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /archive/i })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^Archive, \d+ sessions?$/ })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Restore merged worker" })).not.toBeInTheDocument();
 
 		await userEvent.click(screen.getByText("merged worker"));
@@ -1467,7 +1620,7 @@ describe("SessionsBoard", () => {
 			within(archivedMergedCard!).queryByRole("button", { name: "Open archived merged worker" }),
 		).not.toBeInTheDocument();
 		expect(
-			within(archivedMergedCard!).queryByRole("button", { name: "Terminate archived merged worker" }),
+			within(archivedMergedCard!).queryByRole("button", { name: "Archive archived merged worker" }),
 		).not.toBeInTheDocument();
 		expect(within(archivedMergedCard!).getByText("Merged").parentElement).toHaveAttribute(
 			"data-kanban-column",
@@ -1484,10 +1637,30 @@ describe("SessionsBoard", () => {
 		});
 		renderBoard("p1");
 
-		await userEvent.click(screen.getByRole("button", { name: "Terminate idle worker" }));
+		await userEvent.click(screen.getByRole("button", { name: "Archive idle worker" }));
 
 		expect(navigateMock).not.toHaveBeenCalled();
-		expect(screen.getByRole("dialog", { name: "Terminate idle worker?" })).toBeInTheDocument();
+		expect(screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" })).toBeInTheDocument();
+	});
+
+	it("returns focus to the archive control after backing out of the confirm", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "s-merged", title: "merged worker", status: "merged" })])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		await userEvent.click(screen.getByRole("button", { name: "Archive merged worker" }));
+		await screen.findByRole("dialog");
+		await userEvent.click(screen.getByRole("button", { name: "No" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+		// Radix aims close-time focus at a DialogTrigger; these confirms open
+		// programmatically, so without an explicit restore the keyboard user is
+		// stranded on <body> instead of the control they came from.
+		expect(screen.getByRole("button", { name: "Archive merged worker" })).toHaveFocus();
+		expect(postMock).not.toHaveBeenCalled();
 	});
 
 	it("terminates a live merged session from its card without opening the session", async () => {
@@ -1498,13 +1671,13 @@ describe("SessionsBoard", () => {
 		});
 		renderBoard("p1");
 
-		const terminateButton = screen.getByRole("button", { name: "Terminate merged worker" });
+		const terminateButton = screen.getByRole("button", { name: "Archive merged worker" });
 		expect(terminateButton).toHaveClass("opacity-100");
 		expect(terminateButton).not.toHaveClass("opacity-0");
 		await userEvent.click(terminateButton);
 		expect(navigateMock).not.toHaveBeenCalled();
-		const dialog = screen.getByRole("dialog", { name: "Terminate merged worker?" });
-		await userEvent.click(within(dialog).getByRole("button", { name: "Yes, terminate session" }));
+		const dialog = screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" });
+		await userEvent.click(within(dialog).getByRole("button", { name: "Confirm, archive session" }));
 
 		await waitFor(() =>
 			expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/kill", {
@@ -1534,18 +1707,18 @@ describe("SessionsBoard", () => {
 		});
 		renderBoard("p1");
 
-		await userEvent.click(screen.getByRole("button", { name: "Terminate worker one" }));
+		await userEvent.click(screen.getByRole("button", { name: "Archive worker one" }));
 		await userEvent.click(
-			within(screen.getByRole("dialog")).getByRole("button", { name: "Yes, terminate session" }),
+			within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm, archive session" }),
 		);
 
-		expect(screen.getByRole("button", { name: "Killing worker one" })).toBeDisabled();
-		expect(screen.getByRole("button", { name: "Killing worker one" })).toHaveClass("opacity-100");
-		expect(screen.getByRole("button", { name: "Terminate worker two" })).toBeEnabled();
+		expect(screen.getByRole("button", { name: "Archiving worker one" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Archiving worker one" })).toHaveClass("opacity-100");
+		expect(screen.getByRole("button", { name: "Archive worker two" })).toBeEnabled();
 		expect(postMock).toHaveBeenCalledTimes(1);
 
 		finishKill({ data: { ok: true, sessionId: "s-one" }, error: undefined });
-		await waitFor(() => expect(screen.getByRole("button", { name: "Terminate worker one" })).toBeEnabled());
+		await waitFor(() => expect(screen.getByRole("button", { name: "Archive worker one" })).toBeEnabled());
 	});
 
 	it("keeps the merged-card confirmation dismissed and surfaces termination failures", async () => {
@@ -1557,15 +1730,15 @@ describe("SessionsBoard", () => {
 		});
 		renderBoard("p1");
 
-		await userEvent.click(screen.getByRole("button", { name: "Terminate merged worker" }));
+		await userEvent.click(screen.getByRole("button", { name: "Archive merged worker" }));
 		await userEvent.click(
-			within(screen.getByRole("dialog")).getByRole("button", { name: "Yes, terminate session" }),
+			within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm, archive session" }),
 		);
 
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 		expect(await screen.findByRole("alert")).toHaveTextContent("Failed to terminate session (500)");
-		expect(screen.getByRole("button", { name: "Terminate merged worker" })).toBeEnabled();
+		expect(screen.getByRole("button", { name: "Archive merged worker" })).toBeEnabled();
 	});
 
 	it("shows a folder-missing banner when the project root no longer exists on disk", () => {
@@ -1590,6 +1763,7 @@ function workspaceWithSessions(sessions: WorkspaceSession[]): WorkspaceSummary {
 		id: "p1",
 		name: "radic",
 		path: "/tmp/radic",
+		kind: "single_repo",
 		sessions,
 	};
 }

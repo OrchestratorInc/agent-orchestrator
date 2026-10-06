@@ -44,6 +44,8 @@ var (
 	// must preserve the durable session and worktree rather than treating the
 	// failed attachment as proof that the provider died.
 	ErrChatRecoveryInconclusive = errors.New("chat conversation recovery is inconclusive")
+	// ErrChatHostNotRunning is a definitive observation that no provider host exists.
+	ErrChatHostNotRunning = errors.New("chat provider host is not running")
 	// ErrChatNoActiveTurn means an interrupt found nothing to cancel — either AO
 	// has no turn in flight, or the provider no longer considers the named turn
 	// active. A driver must translate its provider's refusal into this rather than
@@ -323,6 +325,8 @@ type ChatStartConfig struct {
 
 // ChatResumeConfig reattaches to a provider conversation after a restart.
 type ChatResumeConfig struct {
+	// ReconnectOnly forbids launching a replacement provider during a health check.
+	ReconnectOnly bool
 	// See ChatStartConfig.ProviderIDsScoped.
 	ProviderIDsScoped      bool
 	SessionID              domain.SessionID
@@ -397,12 +401,24 @@ type ChatUserMessage struct {
 	// ClientMessageID makes delivery idempotent: a retry with the same key must
 	// not produce a second provider turn.
 	ClientMessageID string
-	// Origin records who is speaking. Automation shares the queue with the user
-	// and can never resolve an approval.
+	// ClientPayloadHash identifies the original request before AO adds reports
+	// or other server-owned context. It is internal, never supplied by a client.
+	ClientPayloadHash string
+	// Origin records the timeline attribution and delivery source. Automation
+	// shares the queue with the user and can never resolve an approval.
 	Origin domain.MessageOrigin
+	// AuthoredByUser distinguishes user-written content carried through AO's
+	// automation delivery path from content authored by automation itself.
+	AuthoredByUser bool
 	// Settings are the per-turn provider choices for this message. Zero means the
 	// conversation's own defaults.
 	Settings ChatTurnSettings
+}
+
+// MessageDeliveryOptions describes facts about the message independent of the
+// mechanism AO uses to deliver it.
+type MessageDeliveryOptions struct {
+	AuthoredByUser bool
 }
 
 // ChatTurnSettings are the per-turn choices a provider accepts alongside the
@@ -589,9 +605,9 @@ type ChatAccount struct {
 	// expected to supply. AO does not hold provider credentials, so this is
 	// reported to the user rather than answered.
 	ReauthRequired bool
-	// ReauthRecovered explicitly clears an earlier credential demand after a
-	// later provider turn succeeds. It is separate from false/zero because most
-	// account updates say nothing about authentication state.
+	// ReauthRecovered reports provider recovery intent. The daemon requires a
+	// correlated authoritative turn completion before clearing a demand; an
+	// uncorrelated account report alone is not authentication evidence.
 	ReauthRecovered bool
 	// ReauthReason is the provider's stated reason, e.g. "unauthorized".
 	ReauthReason string
@@ -616,6 +632,14 @@ type ChatMCPServer struct {
 	Status        string
 	Error         string
 	FailureReason string
+}
+
+// ChatMCPReloadResult distinguishes a complete post-reload inventory from a
+// reload whose inventory could not be read. An authoritative empty inventory is
+// meaningful: it says every previously known server was disabled or removed.
+type ChatMCPReloadResult struct {
+	Servers       []ChatMCPServer
+	Authoritative bool
 }
 
 // ChatSkill is one capability the provider exposes to the agent, which a user can
@@ -686,7 +710,7 @@ type (
 	// whose config changed on disk, leaves the agent short of tools for the rest of
 	// the conversation, and the only alternative is throwing the session away.
 	ChatMCPReloader interface {
-		ReloadMCPServers(ctx context.Context) ([]ChatMCPServer, error)
+		ReloadMCPServers(ctx context.Context) (ChatMCPReloadResult, error)
 	}
 )
 
@@ -930,6 +954,8 @@ func (f *chatProviderFailure) Unwrap() error { return f.cause }
 // Deltas are the high-frequency case, so they carry only what changed. A
 // projector folds a delta into the message identified by ProviderItemID and
 // bumps its revision; it never allocates a new timeline position per token.
+// Assistant message text is portable Markdown. Adapters convert native citation
+// annotations to links before emitting events or returning history.
 type ChatEvent struct {
 	Kind ChatEventKind
 	// NativeUserMessageID is an adapter-proven native user record identity.
@@ -1033,6 +1059,12 @@ type ChatDriver interface {
 	// Resume reattaches to an existing one. It returns ErrChatResumeFailed
 	// rather than silently starting a new conversation.
 	Resume(ctx context.Context, cfg ChatResumeConfig) (ChatConversation, error)
+}
+
+// ChatDriverReconnector attaches only to a surviving provider. Implementations
+// must never create a provider process or fall back to native history resume.
+type ChatDriverReconnector interface {
+	Reconnect(context.Context, ChatResumeConfig) (ChatConversation, error)
 }
 
 // ChatConversation is one live controller. Exactly one exists per Chat session,

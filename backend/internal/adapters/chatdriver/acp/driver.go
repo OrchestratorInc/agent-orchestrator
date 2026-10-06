@@ -37,6 +37,7 @@ type Launch struct {
 // construct its process. It intentionally contains no install mechanism: binary
 // ownership stays with the existing agent plugin.
 type LaunchConfig struct {
+	ReconnectOnly   bool
 	SessionID       domain.SessionID
 	DataDir         string
 	WorkspacePath   string
@@ -84,6 +85,11 @@ type Config struct {
 	// PromptResponseFailure lets a provider binding interpret its own structured
 	// terminal metadata after a nominally successful ACP prompt response.
 	PromptResponseFailure func(acpsdk.PromptResponse) error
+	// EncodeProviderConversationID and DecodeProviderConversationID let a binding
+	// persist ownership metadata around an opaque provider ID while keeping the
+	// raw value on the ACP wire.
+	EncodeProviderConversationID func(string) string
+	DecodeProviderConversationID func(string) (string, error)
 	// OnAuthRejected is called when the provider rejects the credential during
 	// a live turn. It is how a cached "this credential works" verdict is
 	// corrected the moment the provider says otherwise, and it is the only
@@ -264,6 +270,9 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		cfg.Permissions, d.cfg.ValidateTurnSettings, resp.ConfigOptions,
 		conv.legacyWire.modelState(), resp.Modes,
 	)
+	if d.cfg.EncodeProviderConversationID != nil {
+		conv.setReportedProviderConversationID(d.cfg.EncodeProviderConversationID(string(resp.SessionId)))
+	}
 	settingsStarted := time.Now()
 	err = conv.applyTurnSettings(ctx, ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions})
 	d.logStartStage(cfg.SessionID, "initial_settings", settingsStarted, err)
@@ -295,6 +304,12 @@ func (d *Driver) logStartStage(sessionID domain.SessionID, stage string, started
 	)
 }
 
+// Reconnect attaches to a surviving provider without launching a replacement.
+func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	cfg.ReconnectOnly = true
+	return d.Resume(ctx, cfg)
+}
+
 // Resume reconnects to the stored ACP session. When the agent advertises
 // session/load, AO uses it to recover both provider context and the normalized
 // transcript; resume-only agents recover context but explicitly report that no
@@ -302,6 +317,14 @@ func (d *Driver) logStartStage(sessionID domain.SessionID, stage string, started
 func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
 	if cfg.ProviderConversationID == "" {
 		return nil, fmt.Errorf("%w: no stored ACP session id", ports.ErrChatResumeFailed)
+	}
+	reportedProviderConversationID := cfg.ProviderConversationID
+	if d.cfg.DecodeProviderConversationID != nil {
+		providerConversationID, err := d.cfg.DecodeProviderConversationID(cfg.ProviderConversationID)
+		if err != nil {
+			return nil, err
+		}
+		cfg.ProviderConversationID = providerConversationID
 	}
 	if !filepath.IsAbs(cfg.WorkspacePath) {
 		return nil, fmt.Errorf("workspace path must be absolute, got %q", cfg.WorkspacePath)
@@ -318,6 +341,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		Env:   cfg.Env,
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
 		ProviderScopeID: cfg.ProviderScopeID,
+		ReconnectOnly:   cfg.ReconnectOnly,
 	}
 	conv, init, live, err := d.connect(ctx, launchCfg, cfg.PrepareEnv)
 	if err != nil {
@@ -357,6 +381,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 			cfg.Permissions, d.cfg.ValidateTurnSettings, setup.ConfigOptions,
 			setup.Models, setup.Modes,
 		)
+		conv.setReportedProviderConversationID(reportedProviderConversationID)
 		conv.initialPermission = ports.PermissionMode(live.InitialPermissions)
 		return conv, nil
 	}
@@ -424,6 +449,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		cfg.Permissions, d.cfg.ValidateTurnSettings, configOptions,
 		conv.legacyWire.modelState(), modes,
 	)
+	conv.setReportedProviderConversationID(reportedProviderConversationID)
 	if err := conv.applyTurnSettings(ctx, ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions}); err != nil {
 		if !errors.Is(err, ErrACPSetterUnsupported) {
 			conv.discard()
@@ -441,6 +467,9 @@ func (d *Driver) connect(
 	cfg LaunchConfig,
 	prepareEnv func(context.Context) (map[string]string, error),
 ) (*conversation, acpsdk.InitializeResponse, *persistenthost.ACPState, error) {
+	if cfg.ReconnectOnly && (cfg.DataDir == "" || cfg.SessionID == "") {
+		return nil, acpsdk.InitializeResponse{}, nil, ports.ErrChatHostNotRunning
+	}
 	processStarted := time.Now()
 	proc, err := d.openProcess(ctx, cfg, prepareEnv)
 	d.logStartStage(cfg.SessionID, "process_open", processStarted, err)
@@ -549,6 +578,7 @@ func (d *Driver) connectProcess(
 	hostConfig := persistenthost.Config{
 		SessionID: string(cfg.SessionID), DataDir: cfg.DataDir, Workdir: cfg.WorkspacePath,
 		Protocol: persistenthost.ProtocolACP, OwnershipFingerprint: identity,
+		ReconnectOnly: cfg.ReconnectOnly,
 		Prepare: func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {
 			if prepareEnv != nil {
 				env, err := prepareEnv(prepareCtx)
@@ -574,6 +604,9 @@ func (d *Driver) connectProcess(
 	}
 	transport, err := d.connectHost(ctx, hostConfig)
 	if err != nil {
+		if errors.Is(err, persistenthost.ErrNotRunning) {
+			return nil, ports.ErrChatHostNotRunning
+		}
 		if errors.Is(err, persistenthost.ErrOwnershipInconclusive) ||
 			errors.Is(err, persistenthost.ErrAttached) ||
 			errors.Is(err, persistenthost.ErrIncompatible) ||

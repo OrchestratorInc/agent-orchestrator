@@ -13,12 +13,14 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/cifeedback"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/config"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/httpapi"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/idlepause"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/interfacereconcile"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/notification"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/prstatus"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/reconcile"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	coderprovider "github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/coder"
@@ -93,6 +95,7 @@ func provisioningDefaults(cfg config.Config) sandbox.ProvisioningDefaults {
 func newSandboxReconciler(
 	cfg config.Config,
 	store *postgres.Store,
+	providerCipher *secrets.Cipher,
 	logger *slog.Logger,
 ) (*reconcile.Reconciler, error) {
 	// Build every provider this control plane offers, not just the default, so a
@@ -159,7 +162,7 @@ func newSandboxReconciler(
 			coderProvider = provider
 		}
 	}
-	return reconcile.New(store, sandboxresolve.New(nodeOpsProvider, dockerProvider, coderProvider), reconcile.Options{
+	return reconcile.New(store, sandboxresolve.New(nodeOpsProvider, dockerProvider, coderProvider, store, providerCipher), reconcile.Options{
 		PublicURL:              cfg.PublicURL,
 		TerminalStreamEnabled:  cfg.TerminalStreamEnabled,
 		WorkerBinary:           workerBinary,
@@ -168,6 +171,7 @@ func newSandboxReconciler(
 		StartupTimeout:         cfg.SandboxStartupTimeout,
 		HeartbeatTimeout:       cfg.WorkerHeartbeatTimeout,
 		AllowAnonymousCheckout: cfg.AllowAnonymousCheckout,
+		KeepWarm:               cfg.IdlePauseDisabled(),
 		Logger:                 logger,
 	}), nil
 }
@@ -247,6 +251,7 @@ func run(logger *slog.Logger) error {
 			return err
 		}
 	}
+	notificationProcessor := notification.NewService(store, notification.Config{Logger: logger})
 
 	var workosVerifier auth.WorkOSVerifier
 	if cfg.WorkOSIssuer != "" {
@@ -336,26 +341,19 @@ func run(logger *slog.Logger) error {
 			githubapp.NewRESTClient("", nil), store,
 		)
 	}
-	reconciler, err := newSandboxReconciler(cfg, store, logger)
+	reconciler, err := newSandboxReconciler(cfg, store, providerCipher, logger)
 	if err != nil {
 		return err
 	}
-	// The scanner only has anything to do where sandboxes exist to pause.
+	// The scanner only has anything to do where sandboxes exist to pause, and
+	// only when idle-pause is enabled. With AO_CLOUD_IDLE_PAUSE_THRESHOLD=0
+	// (keep-warm) it never runs, so no session is ever paused for idleness.
 	var idlePauseScanner *idlepause.Scanner
-	if reconciler != nil {
+	if reconciler != nil && !cfg.IdlePauseDisabled() {
 		idlePauseScanner = idlepause.New(store, idlepause.Options{
 			Interval:      cfg.IdlePauseInterval,
 			IdleThreshold: cfg.IdlePauseThreshold,
 			Logger:        logger,
-		})
-	}
-	// The scanner only has anything to refresh where GitHub is configured to
-	// resolve an installation for.
-	var prStatusScanner *prstatus.Scanner
-	if githubService != nil {
-		prStatusScanner = prstatus.New(store, githubService, prstatus.Options{
-			Interval: cfg.PRStatusPollInterval,
-			Logger:   logger,
 		})
 	}
 	// Worker tokens are only issued where sandboxes are provisioned. Leaving
@@ -421,6 +419,7 @@ func run(logger *slog.Logger) error {
 		WebhookMaxBody:            cfg.GitHub.WebhookMaxBody,
 		TerminalStreamEnabled:     cfg.TerminalStreamEnabled,
 		TerminalRelayEnabled:      cfg.TerminalRelayEnabled,
+		NotificationWake:          notificationProcessor.Wake,
 	}
 	if cfg.Environment == "development" &&
 		os.Getenv("AO_CLOUD_DEVELOPMENT_SKIP_CREDENTIAL_VALIDATION") == "true" {
@@ -428,6 +427,9 @@ func run(logger *slog.Logger) error {
 		apiOptions.CredentialValidator = developmentCredentialValidator{}
 	}
 	api := httpapi.New(apiOptions)
+	go notificationProcessor.Run(ctx)
+	feedbackDispatcher := cifeedback.New(store, cifeedback.Config{Logger: logger})
+	go feedbackDispatcher.Run(ctx)
 	if cfg.TerminalRelayEnabled {
 		logger.Info("experimental terminal relay enabled",
 			"terminal_stream_enabled", cfg.TerminalStreamEnabled,
@@ -439,6 +441,7 @@ func run(logger *slog.Logger) error {
 	if reconciler != nil {
 		notifyListener := postgres.NewListener(cfg.DatabaseURL, logger)
 		notifyListener.Handle("ao_worker_work", api.HandleWorkerWorkNotify)
+		notifyListener.Handle("ao_notification_event", api.HandleNotificationEventNotify)
 		if cfg.TerminalStreamEnabled {
 			notifyListener.Handle("ao_terminal_output", api.HandleTerminalOutputNotify)
 			notifyListener.Handle("ao_terminal_input", api.HandleTerminalInputNotify)
@@ -485,14 +488,17 @@ func run(logger *slog.Logger) error {
 		}()
 	}
 
-	if prStatusScanner != nil {
-		go func() {
-			logger.Info("pull request status scanner started", "interval", cfg.PRStatusPollInterval)
-			if err := prStatusScanner.Run(ctx); err != nil {
-				logger.Error("pull request status scanner stopped", "error", err)
-			}
-		}()
-	}
+	transitionDriver := interfacereconcile.NewTransportDriver(store, "interface-coordinator", 45*time.Second, logger)
+	transitionCoordinator := interfacereconcile.New(store, transitionDriver, interfacereconcile.Options{
+		Interval: cfg.InterfaceHandoffInterval,
+		Logger:   logger,
+	})
+	go func() {
+		logger.Info("interface-transition coordinator started", "interval", cfg.InterfaceHandoffInterval)
+		if err := transitionCoordinator.Run(ctx); err != nil {
+			logger.Error("interface-transition coordinator stopped", "error", err)
+		}
+	}()
 
 	select {
 	case <-ctx.Done():

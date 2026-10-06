@@ -61,7 +61,7 @@ import { cn } from "../../lib/utils";
 import { caretNotation, stripAnsi } from "../../lib/ansi";
 import { getApiBaseUrl } from "../../lib/api-client";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
-import { ActivityTitle, ChatMarkdown } from "./ChatMarkdown";
+import { ActivityTitle, ChatMarkdown, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -120,7 +120,9 @@ const STREAM_BASE_CHARACTERS_PER_SECOND = 58;
 const STREAM_TARGET_BACKLOG_CHARACTERS = 72;
 const STREAM_MAX_CHARACTERS_PER_SECOND = 720;
 const STREAM_MAX_FRAME_DELTA_MS = 100;
-const STREAM_MAX_DISPLAY_LAG_MS = 200;
+// Snapshot delivery already coalesces provider output. Smooth short gaps without
+// adding another perceptible playback delay on top of the transport cadence.
+const STREAM_MAX_DISPLAY_LAG_MS = 50;
 const STREAM_GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function streamGraphemes(text: string): string[] {
@@ -145,7 +147,10 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 	const [visibleText, setVisibleText] = useState(() => message.text);
 	const visibleRef = useRef(visibleText);
 	const targetRef = useRef(message.text);
-	const targetGraphemes = useMemo(() => streamGraphemes(message.text), [message.text]);
+	const targetGraphemes = useMemo(
+		() => message.streaming ? streamGraphemes(message.text) : [],
+		[message.text, message.streaming],
+	);
 	const visibleGraphemeCountRef = useRef(targetGraphemes.length);
 	const targetGraphemesRef = useRef(targetGraphemes);
 	const messageIdRef = useRef(message.id);
@@ -263,9 +268,9 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 		// different target grapheme. Reconcile that trailing fragment before using
 		// the old grapheme count, otherwise the drain can skip the merged suffix.
 		const reconciled = reconciledStreamPrefix(visibleRef.current, targetGraphemesRef.current);
+		visibleGraphemeCountRef.current = reconciled.count;
 		if (reconciled.text !== visibleRef.current) {
 			visibleRef.current = reconciled.text;
-			visibleGraphemeCountRef.current = reconciled.count;
 			setVisibleText(reconciled.text);
 		}
 		if (visibleGraphemeCountRef.current < targetGraphemesRef.current.length) scheduleDrain();
@@ -403,7 +408,7 @@ function StagedAttachmentItems({
 }: {
 	paths: string[];
 	sessionId: string;
-	apiBaseUrl: string;
+	apiBaseUrl: string | null;
 	ariaLabel: string;
 	className?: string;
 }) {
@@ -412,7 +417,7 @@ function StagedAttachmentItems({
 		<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
 			{paths.map((path) => {
 				const name = attachmentName(path);
-				return IMAGE_ATTACHMENT_PATH.test(path) ? (
+				return IMAGE_ATTACHMENT_PATH.test(path) && apiBaseUrl !== null ? (
 					<li
 						key={path}
 						className="max-w-full overflow-hidden rounded-md border border-border bg-background"
@@ -513,7 +518,7 @@ export function HumanMessage({
 	/** The staged paths are relative to this session's workspace. */
 	sessionId: string;
 	/** The live daemon origin; passed by the timeline so daemon restarts refresh images. */
-	apiBaseUrl?: string;
+	apiBaseUrl?: string | null;
 	/** Typed while the agent was busy, and not sent yet. */
 	queued?: boolean;
 	/** True only for a human message added after the timeline first mounted. */
@@ -574,7 +579,11 @@ export function HumanMessage({
 							: "bg-raised text-foreground",
 					)}
 				>
-					{body ? <p className="break-words whitespace-pre-wrap text-pretty">{body}</p> : null}
+					{body ? (
+						<p className="break-words whitespace-pre-wrap text-pretty">
+							<SessionLinkedText text={body} />
+						</p>
+					) : null}
 					<StagedAttachmentItems
 						paths={attachments}
 						sessionId={sessionId}
@@ -665,8 +674,8 @@ export function OriginMessage({ message }: { message: ConversationMessage }) {
 			{longReport && expanded ? (
 				<ChatMarkdown text={message.text} muted />
 			) : (
-				<p className={cn("text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
-					{preview}
+				<p className={cn("whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
+					<SessionLinkedText text={preview} />
 				</p>
 			)}
 			{longReport ? (
@@ -718,7 +727,8 @@ function BrowserAnnotationOrigin({
 										? `${item.changes.length} visual change${item.changes.length === 1 ? "" : "s"}`
 										: "Comment")}
 							</p>
-							{item.target ? <p className="truncate">{item.target}</p> : null}
+							{item.target ? <p className="truncate text-foreground">{item.target}</p> : null}
+							{item.text ? <p className="truncate">{item.text}</p> : null}
 						</div>
 					</div>
 				))}
@@ -2161,7 +2171,7 @@ export function SteerMessage({
 }: {
 	activity: ConversationActivity;
 	sessionId: string;
-	apiBaseUrl?: string;
+	apiBaseUrl?: string | null;
 }) {
 	const text = activity.detail?.text ?? activity.summary;
 	const { body, attachments } = stagedAttachmentParts(text);
@@ -2537,7 +2547,7 @@ export function TurnChangedFiles({
 	/** Opens the session Files inspector for the full workspace diff. */
 	onReview?: () => void;
 	/** Opens the Files inspector focused on this path. */
-	onOpenFile?: (path: string) => void;
+	onOpenFile?: (path: string, line?: number) => void;
 	/**
 	 * Timeline items from the same turn. Turn diffs often carry repo-relative
 	 * basenames (`random_words.txt`); file_change rows and command cwds often
@@ -2624,7 +2634,7 @@ export function TurnChangedFiles({
 									<TooltipTrigger asChild>
 										<button
 											type="button"
-											onClick={() => onOpenFile(openPath)}
+											onClick={() => onOpenFile(tooltipPath)}
 											aria-label={`Open ${openPath} in Files`}
 											className={rowClass}
 										>

@@ -36,8 +36,9 @@ const MIC_KEY_SIZE = 38;
 // the native Menu fill the host, which centers its popup over the whole sheet.
 const PROJECT_MENU_WIDTH = 224;
 // Reserve the harness slot so a different agent name cannot move the model
-// selector sideways; the model uses the remaining width of the rail.
-const HARNESS_MENU_WIDTH = 96;
+// selector sideways. The model still uses the remaining width of the rail,
+// but common harness names should not truncate while "Automatic" has slack.
+const HARNESS_MENU_WIDTH = 124;
 
 export function SpawnComposerControls({
 	projects,
@@ -227,7 +228,7 @@ const MARK_SIZE = 20;
 const CHIP_INSET = Math.round(MARK_SIZE * 0.16);
 const CHIP_RADIUS = Math.round(MARK_SIZE * 0.28);
 
-function HarnessImage({ uri, harness }: { uri?: string; harness: string }) {
+export function HarnessImage({ uri, harness }: { uri?: string; harness: string }) {
 	if (!uri) return <Image systemName="terminal" size={iconSize.sm} />;
 	const mark = [resizable(), aspectRatio({ contentMode: "fit" }), frame({ width: MARK_SIZE - CHIP_INSET * 2, height: MARK_SIZE - CHIP_INSET * 2 })];
 	const chip = chipColorFor(harness);
@@ -243,7 +244,7 @@ function HarnessImage({ uri, harness }: { uri?: string; harness: string }) {
 		: <Image uiImage={uri} modifiers={[resizable(), aspectRatio({ contentMode: "fit" }), frame({ width: MARK_SIZE, height: MARK_SIZE })]} />;
 }
 
-function useHarnessLogoUris(agents: readonly SpawnComposerOption[]) {
+export function useHarnessLogoUris(agents: readonly SpawnComposerOption[]) {
 	const ids = useMemo(() => agents.map((agent) => agent.id), [agents]);
 	const [uris, setUris] = useState<Record<string, string>>({});
 	useEffect(() => {

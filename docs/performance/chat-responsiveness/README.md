@@ -8,7 +8,7 @@ This change reduces AO's event-delivery and renderer overhead. It does not chang
 | --- | --- | --- |
 | CDC events arriving every 100 ms repeatedly reset the shared 150 ms debounce, delaying refresh until traffic stops. | Keep the first event's 150 ms deadline. Coalesce IDs, let active fetches finish, and queue a catch-up when an event predates their completion. | Targeted routing, full reconnect refresh, account/workspace boundaries, and durable snapshots. |
 | Already-received text drains at 58–720 graphemes/second; long bursts stay buffered. `useRef` initializers also segment complete strings on each render. | Segment once per changed text; append only new graphemes; flush received backlog on the first animation frame at/after 200 ms from scheduling. | Initial snapshots, completed messages, visible-prefix corrections, Unicode reconciliation, copy, reduced motion, and the Markdown parser. |
-| Scrolling scans and measures every loaded human-prompt anchor repeatedly. | Cache content-space positions; invalidate on content mutations, layout synchronization, dimensions, and resize observation. | Every loaded turn stays mounted. Find, selection, prompt spacing, pinning, and minimap navigation remain available. |
+| Scrolling scans and measures every loaded human-prompt anchor repeatedly. | Cache content-space positions; invalidate on content mutations, layout synchronization, dimensions, and resize observation. | In the measured implementation, every loaded turn stayed mounted. The current long-history timeline virtualizes offscreen turns; see [the current limits](#deliberate-limits). |
 | Large syntax blocks run tokenization on the renderer despite an async function signature. | Use a lazy module worker above 20,000 characters with the same grammar engine. | Small warm synchronous highlights, grammar aliases, token output, escaping, source text, and copying. |
 
 The worker has bounded pending work (32 jobs / 1,000,000 source characters) and a 10-second timeout. Worker failure, unsupported workers, or an oversized/saturated request leave readable plain code instead of performing expensive synchronous fallback. Colorization may therefore be omitted in these cases; source text is retained. Mermaid remains available and is untouched.
@@ -20,7 +20,7 @@ The opt-in Playwright fixture imports the actual AO renderer components and even
 - **Delivery:** 20 conversation CDC events, 100 ms apart, an active TanStack Query observer, and a simulated 30 ms query. Let the bridge's initial lifecycle refresh settle before the timed workload. Record actual fetch starts/completions and whether they occur before the stream ends.
 - **Streaming:** deliver a 997 UTF-16-character Unicode burst after the initial snapshot. Record time until rendered text exactly matches the received string, then check completion restores the copy button. This measures received-to-DOM-visible lag; it does not instrument display scanout.
 - **Highlighting:** warm the existing TypeScript grammar, highlight 10,000 lines (537,779 UTF-16 characters), and sample the main event loop every 4 ms. Record elapsed highlighting time separately from the worst callback gap. This isolates the tokenizer API and excludes React's rendering of the returned token tree. Worker startup/transfer is included.
-- **Scrolling:** mount 250 fixture turns, wait for fonts/layout, then perform 120 scroll steps. Count actual anchor `getBoundingClientRect()` calls and record frame gaps. Assert all 250 anchors remain mounted. This measures repeated layout reads, not total app memory.
+- **Scrolling:** the measured implementation mounted 250 fixture turns, waited for fonts/layout, then performed 120 scroll steps. It counted actual anchor `getBoundingClientRect()` calls, asserted all 250 anchors remained mounted, and recorded frame gaps. The current implementation virtualizes offscreen turns; this historical measurement captures the pre-virtualization scroll-cache change and does not characterize current mounted DOM range.
 
 Baseline is commit `a96322315`. The identical fixture files are copied into the baseline checkout. Final measurements run serially with one Playwright worker, three repetitions per workload, without overlapping test/build jobs. Raw records include browser, Node version, OS/architecture, CPU count, viewport, timestamp, and every sampled gap. Three runs support descriptive medians/ranges, not population percentiles or a universal speedup claim. The host is a shared developer machine.
 
@@ -38,7 +38,7 @@ Apple M5, 10 logical CPUs, 24 GiB RAM; macOS arm64; Node 24.20.0; Chromium 148.0
 | Anchor geometry reads | 60,001.0 (60,001.0–60,252.0) | 251.0 (251.0–251.0) |
 | Maximum scroll frame gap per run (ms) | 25.8 (17.7–33.2) | 17.6 (16.7–25.0) |
 
-Continuous traffic now causes ten fetches before the stream ends, rather than waiting for silence. Repeated anchor measurements fall by 99.6% while all 250 turns stay mounted.
+Continuous traffic now causes ten fetches before the stream ends, rather than waiting for silence. In the pre-virtualization scroll-cache measurements, repeated anchor measurements fell by 99.6% while all 250 turns stayed mounted.
 
 **Tradeoff:** initial worker highlighting takes about twice as long overall, including startup/module loading and transfer in the Vite development renderer, while the worst main-thread gap is substantially lower. Plain code remains available while colorization is pending. The scroll frame-gap ranges overlap; this small sample supports reduced layout work, not a general FPS claim.
 
@@ -94,6 +94,8 @@ No layout redesign is included. The before/after images show the same long-chat 
 
 ## Deliberate limits
 
+Long conversations now virtualize turn rows after 20 groups. Offscreen turns unmount, so browser Find, DOM-based text selection/copy, and sequential screen-reader navigation cover only the mounted range. Minimap navigation still targets every loaded turn. Activity disclosure choices are retained when a row leaves and re-enters the mounted range. This trades full-transcript DOM access for lower rendering cost on large histories.
+
 History still refreshes in full. CDC currently identifies the conversation but not which item/range changed; old running tools and rewritten branches can change outside the newest page. Replacing only the newest page can also skip an item at a shifted pagination boundary. Safe incremental history needs an explicit version/change-scope contract, not a frontend shortcut.
 
-Transcript virtualization and incremental Markdown parsing are excluded because they could change find/selection and cross-block Markdown behavior. Persistence timing is unchanged. The 200 ms streaming limit is a scheduling target: a blocked/hidden renderer can only display text when the browser schedules a frame.
+Incremental Markdown parsing remains excluded because it could change cross-block Markdown behavior. Persistence timing is unchanged. The 200 ms streaming limit is a scheduling target: a blocked/hidden renderer can only display text when the browser schedules a frame.

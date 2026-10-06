@@ -22,6 +22,8 @@ type fakeReviewService struct {
 	// triggeredHarness/config record the override the controller forwarded.
 	triggeredHarness  domain.ReviewerHarness
 	triggeredConfig   domain.AgentConfig
+	triggeredMode     domain.ReviewerInterfaceMode
+	triggeredRerun    bool
 	triggerErr        error
 	cancelErr         error
 	trigger           reviewcore.TriggerResult
@@ -64,6 +66,17 @@ func (f *fakeReviewService) Trigger(
 	return reviewcore.TriggerResult{Run: domain.ReviewRun{ID: "run-1"}, Created: true}, nil
 }
 
+func (f *fakeReviewService) TriggerWithMode(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig, mode domain.ReviewerInterfaceMode) (reviewcore.TriggerResult, error) {
+	f.triggeredMode = mode
+	return f.Trigger(ctx, workerID, harness, config)
+}
+
+func (f *fakeReviewService) TriggerWithOptions(ctx context.Context, workerID domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+	f.triggeredRerun = opts.Rerun
+	f.triggeredMode = opts.InterfaceMode
+	return f.Trigger(ctx, workerID, opts.Harness, opts.Config)
+}
+
 func (f *fakeReviewService) RequestRereview(_ context.Context, workerID domain.SessionID, prURL, reviewer string) error {
 	f.rereviewSession = workerID
 	f.rereviewPRURL = prURL
@@ -103,6 +116,11 @@ func (f *fakeReviewService) TerminateReviewer(context.Context, domain.SessionID,
 	f.killed = true
 	f.list.ReviewerHandleID = ""
 	return nil
+}
+
+func (f *fakeReviewService) ArchiveReviewer(ctx context.Context, id domain.SessionID) error {
+	f.list.ReviewerSurface = domain.ReviewerSurface{}
+	return f.TerminateReviewer(ctx, id, "")
 }
 
 func (f *fakeReviewService) TeardownReviewerTerminal(context.Context, domain.SessionID) error {
@@ -164,6 +182,20 @@ func TestReviewsTrigger_MissingReviewerBinaryReturns422WithCause(t *testing.T) {
 	mustJSON(t, body, &got)
 	if !strings.Contains(got.Message, "claude") || !strings.Contains(got.Message, ports.ErrAgentBinaryNotFound.Error()) {
 		t.Fatalf("message = %q, want reviewer binary cause", got.Message)
+	}
+}
+
+func TestReviewsTrigger_UnauthenticatedReviewerReturns409(t *testing.T) {
+	srv := newReviewTestServer(t, &fakeReviewService{triggerErr: fmt.Errorf("reviewer harness %q: %w", "claude-code", ports.ErrChatAuthRequired)})
+
+	body, status, headers := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", "")
+	assertJSON(t, headers)
+	assertErrorCode(t, body, status, http.StatusConflict, "REVIEWER_AUTH_REQUIRED")
+
+	var got errorBody
+	mustJSON(t, body, &got)
+	if got.Message != "The reviewer agent is installed but not authenticated" {
+		t.Fatalf("message = %q", got.Message)
 	}
 }
 
@@ -269,6 +301,18 @@ func TestReviewsTriggerIncludesBatchFields(t *testing.T) {
 	}
 }
 
+func TestReviewsTriggerForwardsRequestedInterfaceMode(t *testing.T) {
+	svc := &fakeReviewService{}
+	srv := newReviewTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", `{"harness":"codex","interfaceMode":"tui"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if svc.triggeredHarness != domain.ReviewerCodex || svc.triggeredMode != domain.ReviewerInterfaceTUI {
+		t.Fatalf("triggered harness=%q mode=%q", svc.triggeredHarness, svc.triggeredMode)
+	}
+}
+
 func TestReviewsResolveCommentForwardsPRAndComment(t *testing.T) {
 	svc := &fakeReviewService{}
 	srv := newReviewTestServer(t, svc)
@@ -331,10 +375,11 @@ func TestReviewsCancelIncludesReviewStates(t *testing.T) {
 	}
 }
 
-func TestReviewsKillClearsReviewerHandle(t *testing.T) {
+func TestReviewsKillArchivesReviewerSurface(t *testing.T) {
 	svc := &fakeReviewService{list: reviewcore.SessionReviews{
 		ReviewerHandleID: "review-mer-1",
 		ReviewerHarness:  domain.ReviewerCodex,
+		ReviewerSurface:  domain.ReviewerSurface{Mode: domain.ReviewerInterfaceChat, ReviewID: "review-1", Harness: domain.ReviewerCodex},
 		Reviews:          []reviewcore.PRReviewState{{PRURL: "https://github.com/o/r/pull/1", PRNumber: 1, TargetSHA: "sha1", Status: reviewcore.ReviewStateNeedsReview}},
 		Runs:             []domain.ReviewRun{{ID: "run-1", SessionID: "mer-1", Harness: domain.ReviewerCodex}},
 	}}
@@ -346,12 +391,17 @@ func TestReviewsKillClearsReviewerHandle(t *testing.T) {
 		t.Fatalf("status = %d body=%s", status, body)
 	}
 	if !svc.killed {
-		t.Fatal("TerminateReviewer was not called")
+		t.Fatal("ArchiveReviewer was not called")
 	}
 	for _, want := range []string{`"reviewerHandleId":""`, `"reviews"`, `"runs"`, `"run-1"`} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("body missing %s: %s", want, body)
 		}
+	}
+
+	refreshed, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/mer-1/reviews", "")
+	if status != http.StatusOK || strings.Contains(string(refreshed), `"reviewerSurface"`) || !strings.Contains(string(refreshed), `"run-1"`) {
+		t.Fatalf("archived refresh: %d %s", status, refreshed)
 	}
 }
 
@@ -417,5 +467,14 @@ func TestReviewsSubmitAcceptsBatchedReviews(t *testing.T) {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("body missing %s: %s", want, body)
 		}
+	}
+}
+
+func TestReviewsTriggerForwardsExplicitRerun(t *testing.T) {
+	svc := &fakeReviewService{}
+	srv := newReviewTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", `{"rerun":true,"harness":"codex","interfaceMode":"chat","agentConfig":{"model":"test-model"}}`)
+	if status != http.StatusCreated || !svc.triggeredRerun || svc.triggeredHarness != domain.ReviewerCodex || svc.triggeredMode != domain.ReviewerInterfaceChat || svc.triggeredConfig.Model != "test-model" {
+		t.Fatalf("forwarding: status=%d service=%+v body=%s", status, svc, body)
 	}
 }

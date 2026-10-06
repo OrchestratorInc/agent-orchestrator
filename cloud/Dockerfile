@@ -31,6 +31,11 @@ ARG TARGETARCH
 ARG CLAUDE_CODE_VERSION=2.1.228
 ARG CODEX_VERSION=0.147.0
 ARG CURSOR_AGENT_VERSION=2026.08.11-e8db854
+# OpenCode v2 ships as a NEW package, @opencode/cli (v1 was opencode-ai, whose
+# `latest` never crosses to v2). Pinned to the v2 major; AO's opencode adapter is
+# ported to v2 and gates a too-old binary loudly. Keep in lockstep with
+# coder/Sandbox.Dockerfile.
+ARG OPENCODE_VERSION=2
 ARG GH_VERSION=2.97.0
 RUN apt-get update && \
     apt-get upgrade --yes && \
@@ -54,9 +59,13 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     npm install --global \
         "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-        "@openai/codex@${CODEX_VERSION}" && \
+        "@agentclientprotocol/claude-agent-acp@0.70.0" \
+        "@openai/codex@${CODEX_VERSION}" \
+        "@opencode/cli@${OPENCODE_VERSION}" && \
     claude --version && \
+    test -x "$(command -v claude-agent-acp)" && \
     codex --version && \
+    opencode --version && \
     gh --version && \
     groupadd --gid 10001 ao-worker && \
     useradd --uid 10001 --gid ao-worker --home-dir /workspace/.ao/home --shell /bin/bash ao-worker && \

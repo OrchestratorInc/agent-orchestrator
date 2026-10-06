@@ -17,8 +17,11 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -29,6 +32,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 )
@@ -37,6 +41,7 @@ type fakeSessionService struct {
 	sessions                   map[domain.SessionID]domain.Session
 	sent                       string
 	sentAttachment             *ports.SpawnAttachment
+	sentDeliveryOptions        ports.MessageDeliveryOptions
 	delegationInput            sessionsvc.DelegateTaskInput
 	delegationErr              error
 	preparedProject            domain.ProjectID
@@ -59,6 +64,9 @@ type fakeSessionService struct {
 	workspaceRevisionVersion   string
 	workspaceExpectedRevision  string
 	workspaceRevisionCommitSHA string
+	prFiles                    sessionsvc.PRFiles
+	prFileCommitSHA            string
+	prRevisionCommitSHA        string
 	workspaceSearch            sessionsvc.WorkspaceFileSearch
 	workspaceSearchQuery       string
 	workspaceSearchCursor      string
@@ -66,12 +74,14 @@ type fakeSessionService struct {
 	workspaceTree              sessionsvc.WorkspaceTree
 	workspaceTreePath          string
 	workspacePaths             []string
+	workspaceReconciles        int
 	spawnErr                   error
 	lastSpawn                  ports.SpawnConfig
 	orchestratorMode           domain.SessionMode
 	orchestratorApproval       domain.PermissionMode
 	claimErr                   error
 	listPRErr                  error
+	linkedPRs                  []domain.ChangeRequestReference
 	workspaceErr               error
 	staged                     []ports.SpawnAttachment
 	stagedPaths                []string
@@ -151,6 +161,15 @@ func (allowSessionCapability) Valid(domain.SessionID, string, string) bool { ret
 type denySessionCapability struct{}
 
 func (denySessionCapability) Valid(domain.SessionID, string, string) bool { return false }
+
+type fixedShellPreviewCapability struct {
+	token   string
+	revoked bool
+}
+
+func (f *fixedShellPreviewCapability) ValidPreviewCapability(_ context.Context, id domain.SessionID, token string) (bool, error) {
+	return !f.revoked && id == "ao-1" && token == f.token, nil
+}
 
 func (f *fakeManagedPreviewServer) Start(
 	_ context.Context,
@@ -483,6 +502,13 @@ func (f *fakeSessionService) Send(_ context.Context, _ domain.SessionID, message
 	return nil
 }
 
+func (f *fakeSessionService) SendWithOptions(_ context.Context, _ domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error {
+	f.sent = message
+	f.sentAttachment = attachment
+	f.sentDeliveryOptions = options
+	return nil
+}
+
 func (f *fakeSessionService) DelegateTask(_ context.Context, in sessionsvc.DelegateTaskInput) (sessionsvc.DelegateTaskOutcome, error) {
 	f.delegationInput = in
 	if f.delegationErr != nil {
@@ -557,6 +583,14 @@ func (f *fakeSessionService) ListPRSummaries(_ context.Context, id domain.Sessio
 	}}, nil
 }
 
+func (f *fakeSessionService) ListPRListing(ctx context.Context, id domain.SessionID) (sessionsvc.PRListing, error) {
+	prs, err := f.ListPRSummaries(ctx, id)
+	if err != nil {
+		return sessionsvc.PRListing{}, err
+	}
+	return sessionsvc.PRListing{Tracked: prs, Linked: f.linkedPRs}, nil
+}
+
 func (f *fakeSessionService) ClaimPR(_ context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error) {
 	if f.claimErr != nil {
 		return sessionsvc.ClaimPRResult{}, f.claimErr
@@ -596,9 +630,58 @@ func (f *fakeSessionService) ListWorkspaceFiles(_ context.Context, id domain.Ses
 	return sessionsvc.WorkspaceFiles{SessionID: id}, nil
 }
 
+func (f *fakeSessionService) GetWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error) {
+	files, err := f.ListWorkspaceFiles(ctx, id)
+	if err != nil {
+		return sessionsvc.WorkspaceManifest{}, err
+	}
+	changed := make([]sessionsvc.WorkspaceFileSummary, 0, len(files.Files))
+	for _, file := range files.Files {
+		if file.Status != sessionsvc.WorkspaceFileUnmodified {
+			changed = append(changed, file)
+		}
+	}
+	return sessionsvc.WorkspaceManifest{
+		SessionID:        files.SessionID,
+		WorkspaceVersion: files.WorkspaceVersion,
+		CompareBaseSHA:   files.CompareBaseSHA,
+		CompareBaseRef:   files.CompareBaseRef,
+		CompareMode:      files.CompareMode,
+		Files:            changed,
+		Sections:         files.Sections,
+		Summary:          files.Summary,
+		Truncated:        files.Truncated,
+		Degraded:         files.Degraded,
+		DegradedCode:     files.DegradedCode,
+	}, nil
+}
+
+func (f *fakeSessionService) RefreshWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error) {
+	return f.GetWorkspaceManifest(ctx, id)
+}
+
+func (f *fakeSessionService) ReconcileWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error) {
+	f.workspaceReconciles++
+	return f.GetWorkspaceManifest(ctx, id)
+}
+
+func (f *fakeSessionService) GetWorkspaceHistory(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceHistory, error) {
+	files, err := f.ListWorkspaceFiles(ctx, id)
+	if err != nil {
+		return sessionsvc.WorkspaceHistory{}, err
+	}
+	return sessionsvc.WorkspaceHistory{
+		SessionID: files.SessionID, Commits: files.Commits, CommitsTruncated: files.CommitsTruncated,
+		Ahead: files.Ahead, Behind: files.Behind,
+	}, nil
+}
+
 func (f *fakeSessionService) ListPRFiles(_ context.Context, id domain.SessionID, _ int, _ string) (sessionsvc.PRFiles, error) {
 	if _, ok := f.sessions[id]; !ok {
 		return sessionsvc.PRFiles{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	if f.prFiles.SessionID != "" {
+		return f.prFiles, nil
 	}
 	return sessionsvc.PRFiles{SessionID: id}, nil
 }
@@ -608,6 +691,11 @@ func (f *fakeSessionService) GetPRFile(_ context.Context, id domain.SessionID, _
 		return sessionsvc.WorkspaceFileDetail{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
 	return sessionsvc.WorkspaceFileDetail{SessionID: id, Path: path}, nil
+}
+
+func (f *fakeSessionService) GetPRFileAtCommit(ctx context.Context, id domain.SessionID, number int, sourceURL, path, commitSHA string) (sessionsvc.WorkspaceFileDetail, error) {
+	f.prFileCommitSHA = commitSHA
+	return f.GetPRFile(ctx, id, number, sourceURL, path, nil)
 }
 
 func (f *fakeSessionService) WorkspaceWatchPaths(_ context.Context, id domain.SessionID) ([]string, error) {
@@ -701,6 +789,11 @@ func (f *fakeSessionService) GetWorkspaceFileRevision(_ context.Context, id doma
 
 func (f *fakeSessionService) GetPRFileRevision(ctx context.Context, id domain.SessionID, number int, _ string, path string, side sessionsvc.WorkspaceFileBlobSide) (sessionsvc.WorkspaceFileRevision, error) {
 	return f.GetWorkspaceFileRevision(ctx, id, path, sessionsvc.WorkspaceDiffCommitted, side, "", "")
+}
+
+func (f *fakeSessionService) GetPRFileRevisionAtCommit(ctx context.Context, id domain.SessionID, number int, sourceURL, path string, side sessionsvc.WorkspaceFileBlobSide, commitSHA string) (sessionsvc.WorkspaceFileRevision, error) {
+	f.prRevisionCommitSHA = commitSHA
+	return f.GetPRFileRevision(ctx, id, number, sourceURL, path, side)
 }
 
 func (f *fakeSessionService) GetWorkspaceFileRevisionAtCommit(ctx context.Context, id domain.SessionID, path string, side sessionsvc.WorkspaceFileBlobSide, workspaceVersion, expectedRevision, commitSHA string) (sessionsvc.WorkspaceFileRevision, error) {
@@ -1518,6 +1611,42 @@ func TestSessionsAPI_SpawnsOMPChat(t *testing.T) {
 	}
 	if svc.lastSpawn.Harness != domain.HarnessOMP || svc.lastSpawn.RequestedMode != domain.SessionModeChat {
 		t.Fatalf("spawn config = %#v, want OMP Chat", svc.lastSpawn)
+	}
+}
+
+func TestSessionsAPI_SpawnsOpenCodeV2(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions",
+		`{"projectId":"ao","harness":"opencode-v2","mode":"tui","prompt":"fix"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("spawn OpenCode 2 = %d, want 201; body=%s", status, body)
+	}
+	if svc.lastSpawn.Harness != domain.HarnessOpenCodeV2 || svc.lastSpawn.RequestedMode != domain.SessionModeTUI {
+		t.Fatalf("spawn config = %#v, want OpenCode 2 TUI", svc.lastSpawn)
+	}
+}
+
+func TestSessionsAPI_SpawnPreservesUnknownHarnessErrorEnvelope(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.spawnErr = apierr.Invalid("UNKNOWN_HARNESS", "Unknown agent harness", nil)
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions",
+		`{"projectId":"ao","harness":"not-a-harness","mode":"tui","prompt":"fix"}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("invalid harness status = %d, want 400; body=%s", status, body)
+	}
+	var got struct {
+		Error     string `json:"error"`
+		Code      string `json:"code"`
+		Message   string `json:"message"`
+		RequestID string `json:"requestId"`
+	}
+	mustJSON(t, body, &got)
+	if got.Error != "bad_request" || got.Code != "UNKNOWN_HARNESS" || got.Message != "Unknown agent harness" || got.RequestID == "" {
+		t.Fatalf("invalid harness envelope = %#v", got)
 	}
 }
 
@@ -2463,6 +2592,137 @@ func TestSessionsAPI_ManagedPreviewStartsExactApplicationAndPersistsTarget(t *te
 	}
 }
 
+func TestSessionsAPI_ManagedPreviewAppProxy(t *testing.T) {
+	type observed struct{ path, host, authorization, origin, cookie, relay string }
+	var seenMu sync.Mutex
+	var seen observed
+	readSeen := func() observed {
+		seenMu.Lock()
+		defer seenMu.Unlock()
+		return seen
+	}
+	var app *httptest.Server
+	app = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenMu.Lock()
+		seen = observed{
+			path: r.URL.RequestURI(), host: r.Host,
+			authorization: r.Header.Get("Authorization"), origin: r.Header.Get("Origin"), cookie: r.Header.Get("Cookie"),
+			relay: r.Header.Get("X-AO-Preview-App-Authorization") + r.Header.Get("X-AO-Preview-App-Origin"),
+		}
+		seenMu.Unlock()
+		if r.URL.Path == "/ws" {
+			conn, err := websocket.Accept(w, r, nil)
+			if err != nil {
+				t.Errorf("accept websocket: %v", err)
+				return
+			}
+			defer func() { _ = conn.CloseNow() }()
+			kind, message, err := conn.Read(r.Context())
+			if err == nil {
+				err = conn.Write(r.Context(), kind, message)
+			}
+			if err != nil {
+				t.Errorf("echo websocket: %v", err)
+			}
+			return
+		}
+		if r.URL.Path == "/redirect" {
+			w.Header().Set("Location", app.URL+"/app/next")
+			w.WriteHeader(http.StatusFound)
+			return
+		}
+		_, _ = io.WriteString(w, "managed app")
+	}))
+	t.Cleanup(app.Close)
+	parsed, err := url.Parse(app.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := newFakeSessionService()
+	session := svc.sessions["ao-1"]
+	session.Metadata.PreviewURL = app.URL + "/app/"
+	svc.sessions["ao-1"] = session
+	managed := &fakeManagedPreviewServer{status: previewserver.Status{State: previewserver.StateReady, TargetKind: previewserver.TargetApp, URL: session.Metadata.PreviewURL, Port: port}}
+	srv := newSessionTestServerWithPreview(t, svc, managed)
+	request, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/sessions/ao-1/preview/app/app/?q=1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer host-password")
+	request.Header.Set("Cookie", "ao_conn=host-password; app_session=ok")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	first := readSeen()
+	if response.StatusCode != http.StatusOK || first.path != "/app/?q=1" || first.host != parsed.Host || first.authorization != "" || first.origin != "" || first.cookie != "app_session=ok" || first.relay != "" {
+		t.Fatalf("app proxy: status=%d observed=%+v", response.StatusCode, first)
+	}
+	request, err = http.NewRequest(http.MethodPost, srv.URL+"/api/v1/sessions/ao-1/preview/app/submit", strings.NewReader("data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer host-password")
+	request.Header.Set("Origin", "http://ao-preview-client.localhost:4321")
+	request.Header.Set("X-AO-Preview-App-Authorization", "Basic app-token")
+	request.Header.Set("X-AO-Preview-App-Origin", "http://ao-preview-client.localhost:4321")
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	posted := readSeen()
+	if response.StatusCode != http.StatusOK || posted.authorization != "Basic app-token" || posted.origin != app.URL || posted.relay != "" {
+		t.Fatalf("app headers: status=%d observed=%+v", response.StatusCode, posted)
+	}
+
+	redirectClient := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	redirect, err := redirectClient.Get(srv.URL + "/api/v1/sessions/ao-1/preview/app/redirect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = redirect.Body.Close()
+	if got := redirect.Header.Get("Location"); got != "/app/next" {
+		t.Fatalf("redirect Location = %q", got)
+	}
+
+	conn, _, err := websocket.Dial(context.Background(), "ws"+strings.TrimPrefix(srv.URL, "http")+"/api/v1/sessions/ao-1/preview/app/ws", &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Authorization":                  []string{"Bearer host-password"},
+			"Origin":                         []string{"http://ao-preview-client.localhost:4321"},
+			"X-Ao-Preview-App-Authorization": []string{"Basic ws-token"},
+			"X-Ao-Preview-App-Origin":        []string{"http://ao-preview-client.localhost:4321"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("websocket dial: %v", err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+	if err := conn.Write(context.Background(), websocket.MessageText, []byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	_, message, err := conn.Read(context.Background())
+	if err != nil || string(message) != "hello" {
+		t.Fatalf("websocket echo = %q, %v", message, err)
+	}
+	upgraded := readSeen()
+	if upgraded.authorization != "Basic ws-token" || upgraded.origin != app.URL || upgraded.relay != "" {
+		t.Fatalf("websocket app headers: %+v", upgraded)
+	}
+
+	managed.status.State = previewserver.StateStopped
+	body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/app/", "")
+	assertErrorCode(t, body, status, http.StatusConflict, "PREVIEW_MANAGED_REQUIRED")
+	if headers.Get("X-AO-Preview-Managed-Required") != "1" {
+		t.Fatal("missing managed-preview guidance marker")
+	}
+}
+
 func TestSessionsAPI_ManagedPreviewRequiresOwningCapability(t *testing.T) {
 	svc := newFakeSessionService()
 	managed := &fakeManagedPreviewServer{}
@@ -2479,6 +2739,77 @@ func TestSessionsAPI_ManagedPreviewRequiresOwningCapability(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusForbidden, "PREVIEW_CAPABILITY_INVALID")
 	if managed.startName != "" {
 		t.Fatal("preview process started without a valid capability")
+	}
+}
+
+func TestSessionsAPI_ShellPreviewCapabilityCannotAutomateBrowser(t *testing.T) {
+	authority := browsersvc.NewAuthority()
+	workerToken, workerVerifier, err := authority.Issue("ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shellToken, _, err := authority.Issue("ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := newFakeSessionService()
+	session := svc.sessions["ao-1"]
+	session.Metadata.BrowserCapabilityVerifier = workerVerifier
+	svc.sessions["ao-1"] = session
+	shell := &fixedShellPreviewCapability{token: shellToken}
+	managed := &fakeManagedPreviewServer{}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
+		Sessions: svc, PreviewServer: managed, SessionCapabilities: authority,
+		ShellPreviewCapabilities: shell,
+		Browser:                  browsersvc.New(svc, nil, authority),
+	}, httpd.ControlDeps{}))
+	t.Cleanup(srv.Close)
+	request := func(method, path, body, header, token string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set(header, token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		responseBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, string(responseBody)
+	}
+	previewPath := "/api/v1/sessions/ao-1/preview/server"
+	for _, tc := range []struct{ method, body string }{
+		{http.MethodGet, ""}, {http.MethodPost, `{}`}, {http.MethodDelete, ""},
+	} {
+		status, body := request(tc.method, previewPath, tc.body, "X-AO-Preview-Capability", shellToken)
+		if status != http.StatusOK {
+			t.Fatalf("shell %s preview = %d: %s", tc.method, status, body)
+		}
+	}
+	status, body := request(http.MethodGet, previewPath, "", "X-AO-Browser-Capability", workerToken)
+	if status != http.StatusOK {
+		t.Fatalf("worker preview = %d: %s", status, body)
+	}
+	for _, tc := range []struct{ method, path, body, header string }{
+		{http.MethodGet, "/api/v1/browser/status?sessionId=ao-1", "", "X-AO-Preview-Capability"},
+		{http.MethodGet, "/api/v1/browser/status?sessionId=ao-1", "", "X-AO-Browser-Capability"},
+		{http.MethodPost, "/api/v1/browser/commands", `{"sessionId":"ao-1","action":"snapshot"}`, "X-AO-Browser-Capability"},
+	} {
+		status, body := request(tc.method, tc.path, tc.body, tc.header, shellToken)
+		if status != http.StatusForbidden || !strings.Contains(body, "BROWSER_CAPABILITY_INVALID") {
+			t.Fatalf("shell token reached browser %s %s = %d: %s", tc.method, tc.path, status, body)
+		}
+	}
+	shell.revoked = true
+	status, body = request(http.MethodGet, previewPath, "", "X-AO-Preview-Capability", shellToken)
+	if status != http.StatusForbidden || !strings.Contains(body, "PREVIEW_CAPABILITY_INVALID") {
+		t.Fatalf("revoked shell preview = %d: %s", status, body)
 	}
 }
 
@@ -2581,6 +2912,7 @@ func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 			{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 2, Deletions: 1, Size: 48, Editable: true},
 			{Path: "notes.txt", PreviousPath: "old-notes.txt", Status: sessionsvc.WorkspaceFileRenamed, Additions: 1, Size: 11},
 		},
+		CommitsTruncated: true,
 	}
 	srv := newSessionTestServer(t, svc)
 
@@ -2603,9 +2935,10 @@ func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 			Size         int64  `json:"size"`
 			Editable     bool   `json:"editable"`
 		} `json:"files"`
+		CommitsTruncated bool `json:"commitsTruncated"`
 	}
 	mustJSON(t, body, &got)
-	if got.SessionID != "ao-1" || len(got.Files) != 2 {
+	if got.SessionID != "ao-1" || len(got.Files) != 2 || !got.CommitsTruncated {
 		t.Fatalf("response = %#v", got)
 	}
 	if got.CompareMode != "base" || got.CompareBaseSHA != "base-sha" || got.CompareBaseRef != "main" {
@@ -2622,8 +2955,53 @@ func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_GetWorkspaceManifestOmitsUnchangedInventory(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.workspaceFiles = sessionsvc.WorkspaceFiles{
+		SessionID:        "ao-1",
+		WorkspaceVersion: "version-1",
+		CompareBaseSHA:   "base-sha",
+		CompareBaseRef:   "main",
+		CompareMode:      sessionsvc.WorkspaceCompareBase,
+		Files: []sessionsvc.WorkspaceFileSummary{
+			{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 2, Deletions: 1},
+			{Path: "src/app.go", Status: sessionsvc.WorkspaceFileUnmodified},
+		},
+		Sections: sessionsvc.WorkspaceFileSections{
+			Unstaged: []sessionsvc.WorkspaceFileSummary{{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 2, Deletions: 1}},
+		},
+		Summary: sessionsvc.WorkspaceSummary{Files: 1, Additions: 2, Deletions: 1},
+	}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/manifest", "")
+	assertJSON(t, headers)
+	if status != http.StatusOK {
+		t.Fatalf("GET workspace manifest = %d, want 200; body=%s", status, body)
+	}
+	var got controllers.WorkspaceManifestResponse
+	mustJSON(t, body, &got)
+	if got.WorkspaceVersion != "version-1" || got.CompareBaseSHA != "base-sha" || got.Summary.Files != 1 {
+		t.Fatalf("manifest metadata = %+v", got)
+	}
+	if len(got.Files) != 1 || got.Files[0].Path != "README.md" {
+		t.Fatalf("manifest files = %+v, want only changed README.md", got.Files)
+	}
+}
+
 func TestSessionsAPI_ListPRFiles(t *testing.T) {
 	svc := newFakeSessionService()
+	svc.prFiles = sessionsvc.PRFiles{
+		SessionID: "ao-1",
+		Files:     []sessionsvc.WorkspaceFileSummary{{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 1}},
+		Commits: []sessionsvc.CommitSummary{{
+			SHA:     "abc123",
+			Subject: "docs: update readme",
+			Author:  "Ada",
+			Files:   []sessionsvc.WorkspaceFileSummary{{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 1}},
+		}},
+		CommitsTruncated: true,
+	}
 	srv := newSessionTestServer(t, svc)
 	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/pr/42/files", "")
 	if status != http.StatusOK {
@@ -2635,6 +3013,35 @@ func TestSessionsAPI_ListPRFiles(t *testing.T) {
 	}
 	if got.SessionID != "ao-1" {
 		t.Fatalf("response = %+v", got)
+	}
+	if len(got.Commits) != 1 || got.Commits[0].SHA != "abc123" || len(got.Commits[0].Files) != 1 || got.Commits[0].Files[0].Path != "README.md" {
+		t.Fatalf("commits = %+v, want abc123 changing README.md", got.Commits)
+	}
+	if !got.CommitsTruncated {
+		t.Fatal("commitsTruncated = false, want the service's truncated commit list flagged")
+	}
+}
+
+func TestSessionsAPI_GetPRFileAtCommit(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/pr/42/file?path=README.md", "")
+	if status != http.StatusOK || svc.prFileCommitSHA != "" {
+		t.Fatalf("GET PR file = %d, commitSha %q; want 200 and the whole-PR read; body=%s", status, svc.prFileCommitSHA, body)
+	}
+	body, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/pr/42/file?path=README.md&commitSha=abc123", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET PR commit file = %d, want 200; body=%s", status, body)
+	}
+	if svc.prFileCommitSHA != "abc123" {
+		t.Fatalf("commitSha = %q, want abc123", svc.prFileCommitSHA)
+	}
+	body, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/pr/42/file/revision?path=README.md&side=before&commitSha=abc123", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET PR commit revision = %d, want 200; body=%s", status, body)
+	}
+	if svc.prRevisionCommitSHA != "abc123" || svc.workspaceRevisionSide != sessionsvc.WorkspaceBlobBefore {
+		t.Fatalf("commit revision args = sha:%q side:%q", svc.prRevisionCommitSHA, svc.workspaceRevisionSide)
 	}
 }
 
@@ -2907,6 +3314,9 @@ func TestSessionsAPI_StreamWorkspaceChanges(t *testing.T) {
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "text/event-stream") {
 		t.Fatalf("Content-Type = %q, want text/event-stream", contentType)
 	}
+	if svc.workspaceReconciles != 1 {
+		t.Fatalf("workspace reconciles before ready = %d, want 1", svc.workspaceReconciles)
+	}
 
 	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("changed\n"), 0o644); err != nil {
 		t.Fatalf("write workspace file: %v", err)
@@ -2915,7 +3325,7 @@ func TestSessionsAPI_StreamWorkspaceChanges(t *testing.T) {
 	go func() {
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
-			if strings.HasPrefix(scanner.Text(), "event:") {
+			if scanner.Text() == "event: workspace_changed" {
 				event <- scanner.Text()
 				return
 			}
@@ -3085,6 +3495,31 @@ func TestSessionsAPI_DelegateTask(t *testing.T) {
 	}
 	if got := svc.delegationInput.Attachments[0]; got.Ext != ".png" || string(got.Data) != "\x01\x02\x03" {
 		t.Fatalf("attachment = %#v, want decoded png", got)
+	}
+}
+
+func TestSessionsAPI_DelegateClientRequestHashIgnoresPreparationButBindsTask(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	var firstHash string
+	for i, payload := range []string{
+		`{"projectId":"ao","brief":"Fix it","taskPreparation":"prep-a","clientRequestId":"draft-1"}`,
+		`{"projectId":"ao","brief":"Fix it","taskPreparation":"prep-b","clientRequestId":"draft-1"}`,
+		`{"projectId":"ao","brief":"Fix something else","taskPreparation":"prep-b","clientRequestId":"draft-1"}`,
+	} {
+		_, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/orchestrators/delegate", payload)
+		if status != http.StatusAccepted {
+			t.Fatalf("request %d status = %d", i, status)
+		}
+		hash := svc.delegationInput.ClientRequestHash
+		if svc.delegationInput.ClientRequestID != "draft-1" || hash == "" {
+			t.Fatalf("request %d id/hash = %q/%q", i, svc.delegationInput.ClientRequestID, hash)
+		}
+		if i == 0 {
+			firstHash = hash
+		} else if (i == 1) != (hash == firstHash) {
+			t.Fatalf("request %d hash = %q, first = %q", i, hash, firstHash)
+		}
 	}
 }
 
@@ -3282,6 +3717,22 @@ func TestSessionsAPI_SendWithAttachment(t *testing.T) {
 	if svc.sentAttachment.Ext != ".png" || string(svc.sentAttachment.Data) != "snapshot" {
 		t.Fatalf("sentAttachment = %+v, want Ext=.png Data=snapshot", svc.sentAttachment)
 	}
+	if svc.sentDeliveryOptions.AuthoredByUser {
+		t.Fatal("ordinary automation send was marked user-authored")
+	}
+}
+
+func TestSessionsAPI_SendCarriesUserAuthorshipSeparatelyFromDelivery(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"Move this control.","userAuthored":true}`)
+	if status != http.StatusOK {
+		t.Fatalf("send = %d, want 200; body=%s", status, body)
+	}
+	if !svc.sentDeliveryOptions.AuthoredByUser {
+		t.Fatal("send dropped user-authored delivery fact")
+	}
 }
 
 func TestSessionsAPI_SendRejectsUnsupportedAttachmentType(t *testing.T) {
@@ -3375,7 +3826,9 @@ type sessionBody struct {
 }
 
 func TestSessionsAPI_PRRoutes(t *testing.T) {
-	srv := newSessionTestServer(t, newFakeSessionService())
+	svc := newFakeSessionService()
+	svc.linkedPRs = []domain.ChangeRequestReference{{URL: "https://gitlab.com/release/notes/-/merge_requests/9", Provider: "gitlab", Host: "gitlab.com", Repository: "release/notes", Number: 9}}
+	srv := newSessionTestServer(t, svc)
 
 	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/pr", "")
 	if status != http.StatusOK {
@@ -3383,7 +3836,11 @@ func TestSessionsAPI_PRRoutes(t *testing.T) {
 	}
 	var listed struct {
 		SessionID string `json:"sessionId"`
-		PRs       []struct {
+		LinkedPRs []struct {
+			URL  string `json:"url"`
+			Repo string `json:"repo"`
+		} `json:"linkedPrs"`
+		PRs []struct {
 			URL            string `json:"url"`
 			Number         int    `json:"number"`
 			Title          string `json:"title"`
@@ -3427,6 +3884,9 @@ func TestSessionsAPI_PRRoutes(t *testing.T) {
 	mustJSON(t, body, &listed)
 	if listed.SessionID != "ao-1" || len(listed.PRs) != 1 || listed.PRs[0].State != "open" || listed.PRs[0].Title == "" {
 		t.Fatalf("GET shape = %#v", listed)
+	}
+	if len(listed.LinkedPRs) != 1 || listed.LinkedPRs[0].Repo != "release/notes" || listed.LinkedPRs[0].URL != svc.linkedPRs[0].URL {
+		t.Fatalf("linked PRs = %#v", listed.LinkedPRs)
 	}
 	if listed.PRs[0].StateChangedAt != "2026-06-04T11:30:00Z" {
 		t.Fatalf("stateChangedAt = %q, want backend-selected PR state time", listed.PRs[0].StateChangedAt)
@@ -3475,6 +3935,25 @@ func TestSessionPRSummaryOmitsUnavailableLifecycleTimes(t *testing.T) {
 	}
 	if _, ok := got["stateChangedAt"]; ok {
 		t.Fatalf("stateChangedAt must be omitted when lifecycle time is unavailable: %s", payload)
+	}
+}
+
+// A mergeable or not-yet-observed PR has no blocking reasons. The contract
+// types reasons as a string array and the desktop reads it with .includes, so
+// "no reasons" must serialize as [] and never as null, which crashed the
+// session inspector for every open mergeable PR.
+func TestSessionPRSummaryReasonsAreNeverNull(t *testing.T) {
+	for _, state := range []domain.Mergeability{domain.MergeMergeable, domain.MergeUnknown} {
+		payload, err := json.Marshal(controllers.NewSessionPRSummary(sessionsvc.PRSummary{
+			State:        domain.PRStateOpen,
+			Mergeability: sessionsvc.PRMergeabilitySummary{State: state},
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(payload), `"reasons":[]`) {
+			t.Fatalf("%s mergeability must serialize reasons as [], got %s", state, payload)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -48,20 +49,6 @@ type workerCredentialAvailabilityStore interface {
 
 type userProviderCredentialStore interface {
 	UserAgentCredentialAvailable(context.Context, string, string) (bool, error)
-}
-
-func agentConnectionAvailable(
-	connections []domain.ProviderConnection,
-	provider string,
-) bool {
-	for _, connection := range connections {
-		if connection.Provider == provider &&
-			connection.Label == defaultAgentConnectionLabel &&
-			connection.ValidationState == "valid" {
-			return true
-		}
-	}
-	return false
 }
 
 type secretEncrypter interface {
@@ -147,7 +134,7 @@ func (s *Server) putAgentConnection(w http.ResponseWriter, r *http.Request) {
 	// Codex owns its refreshable auth document. Preserve its opaque bytes; the
 	// normal token normalization would corrupt JSON string values.
 	secret := normalizeAgentCredentialSecret(request.Secret)
-	if agent == "codex" && request.CredentialType == "auth_json" {
+	if spec, ok := agentCredentialSpecFor(agent); ok && spec.preserveRawSecret(request.CredentialType) {
 		secret = []byte(request.Secret)
 	}
 	defer clear(secret)
@@ -480,7 +467,7 @@ func (s *Server) putUserAgentConnection(w http.ResponseWriter, r *http.Request) 
 	}
 	request.CredentialType = strings.TrimSpace(request.CredentialType)
 	secret := normalizeAgentCredentialSecret(request.Secret)
-	if agent == "codex" && request.CredentialType == "auth_json" {
+	if spec, ok := agentCredentialSpecFor(agent); ok && spec.preserveRawSecret(request.CredentialType) {
 		secret = []byte(request.Secret)
 	}
 	defer clear(secret)
@@ -642,22 +629,15 @@ func (s *Server) promoteAgentConnection(w http.ResponseWriter, r *http.Request) 
 }
 
 func validAgentProvider(agent string) bool {
-	return agent == "claude-code" || agent == "codex" || agent == "cursor"
+	_, ok := agentCredentialSpecFor(agent)
+	return ok
 }
 
 func validAgentCredentialType(agent, credentialType string) bool {
-	switch agent {
-	case "claude-code":
-		return credentialType == "api_key" || credentialType == "oauth_token"
-	case "codex":
-		return credentialType == "api_key" || credentialType == "access_token" || credentialType == "auth_json"
-	case "cursor":
-		return credentialType == "api_key"
-	default:
-		return false
-	}
+	spec, ok := agentCredentialSpecFor(agent)
+	return ok && specAcceptsCredentialType(spec, credentialType)
 }
 
 func providerSecretAssociatedData(orgID, provider string) string {
-	return orgID + "|" + provider + "|" + defaultAgentConnectionLabel
+	return secrets.ProviderConnectionAssociatedData(orgID, provider, defaultAgentConnectionLabel)
 }

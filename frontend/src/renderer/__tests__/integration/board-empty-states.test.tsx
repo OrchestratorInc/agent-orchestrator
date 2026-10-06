@@ -36,6 +36,7 @@ vi.mock("../../lib/platform", async (importOriginal) => ({
 }));
 
 vi.mock("../../lib/spawn-orchestrator", () => ({
+	isChatPreflightCode: (code?: string) => code === "CHAT_DRIVER_UNAVAILABLE",
 	isChatPreflightError: (error: unknown) =>
 		error instanceof Error && (error as Error & { code?: string }).code === "CHAT_DRIVER_UNAVAILABLE",
 	spawnOrchestrator: spawnOrchestratorMock,
@@ -46,6 +47,8 @@ vi.mock("../../lib/api-client", () => ({
 	apiErrorCode: () => undefined,
 	apiErrorMessage: (e: unknown) => (e instanceof Error ? e.message : "error"),
 	hasTrustedApiBaseUrl: () => true,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => () => undefined,
 }));
 
 vi.mock("../../components/TerminalPane", () => ({
@@ -179,6 +182,7 @@ function renderBoard(ui: ReactNode) {
 		cloneProject: cloneProjectMock,
 		createProject: createProjectMock,
 		initializeProjectRepository: initializeProjectRepositoryMock,
+		openRemoteProjectSettings: vi.fn(),
 	};
 	return render(
 		<QueryClientProvider client={lastQueryClient}>
@@ -242,6 +246,7 @@ describe("global board first launch", () => {
 			cloneProject: cloneProjectMock,
 			createProject: createProjectMock,
 			initializeProjectRepository: initializeProjectRepositoryMock,
+			openRemoteProjectSettings: vi.fn(),
 		};
 		render(
 			<QueryClientProvider client={lastQueryClient}>
@@ -442,6 +447,7 @@ describe("global board first launch", () => {
 			cloneProject: cloneProjectMock,
 			createProject: createProjectMock,
 			initializeProjectRepository: initializeProjectRepositoryMock,
+			openRemoteProjectSettings: vi.fn(),
 		};
 		render(
 			<QueryClientProvider client={lastQueryClient}>

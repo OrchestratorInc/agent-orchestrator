@@ -9,6 +9,9 @@ import type {
 	BrowserAgentActivityState,
 	BrowserDevToolsInput,
 	BrowserDevToolsState,
+	BrowserFindInput,
+	BrowserFindState,
+	BrowserFindStopInput,
 	BrowserNavState,
 	BrowserRect,
 	BrowserTabsState,
@@ -22,7 +25,8 @@ import {
 } from "./shared/tray";
 import type { DaemonStatus } from "./shared/daemon-status";
 import type { RemoteHostView } from "./main/remotes-ipc";
-import type { RemoteHealth, RemoteRequestInit, RemoteResponse } from "./main/remote-request";
+import type { ConnectedHostView } from "./main/remote-registry";
+import type { RemoteHealth } from "./main/remote-request";
 import type {
 	EditorHandoffState,
 	OpenSessionTargetInput,
@@ -73,6 +77,7 @@ import type {
 import type {
 	BrowserHistorySuggestion,
 	BrowserImportDiscovery,
+	BrowserImportDiscoveryRequest,
 	BrowserImportProgress,
 	BrowserImportRequest,
 	BrowserImportResult,
@@ -305,6 +310,12 @@ const api = {
 		},
 	},
 	window: {
+		getZoomFactor: () => ipcRenderer.invoke("window:getZoomFactor") as Promise<number>,
+		onZoomFactor: (listener: (zoomFactor: number) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, zoomFactor: number) => listener(zoomFactor);
+			ipcRenderer.on("window:zoom", wrapped);
+			return () => { ipcRenderer.off("window:zoom", wrapped); };
+		},
 		isMaximized: () => ipcRenderer.invoke("window:isMaximized") as Promise<boolean>,
 		onMaximized: (listener: (maximized: boolean) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, maximized: boolean) => listener(maximized);
@@ -405,6 +416,12 @@ const api = {
 		goForward: (viewId: string) => ipcRenderer.invoke("browser:goForward", viewId) as Promise<BrowserNavState>,
 		reload: (viewId: string) => ipcRenderer.invoke("browser:reload", viewId) as Promise<BrowserNavState>,
 		stop: (viewId: string) => ipcRenderer.invoke("browser:stop", viewId) as Promise<BrowserNavState>,
+		getFindState: (viewId: string) =>
+			ipcRenderer.invoke("browser:find:get", viewId) as Promise<BrowserFindState>,
+		findInPage: (input: BrowserFindInput) =>
+			ipcRenderer.invoke("browser:find", input) as Promise<BrowserFindState>,
+		stopFindInPage: (input: BrowserFindStopInput) =>
+			ipcRenderer.invoke("browser:find:stop", input) as Promise<BrowserFindState>,
 		captureScreenshot: (viewId: string) => ipcRenderer.invoke("browser:captureScreenshot", viewId) as Promise<void>,
 		downloads: {
 			list: () => ipcRenderer.invoke("browser:downloads:list") as Promise<BrowserDownloadsState>,
@@ -441,6 +458,13 @@ const api = {
 				ipcRenderer.off("browser:focusLocation", wrapped);
 			};
 		},
+		onFindOpen: (listener: (state: BrowserFindState) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: BrowserFindState) => listener(state);
+			ipcRenderer.on("browser:findOpen", wrapped);
+			return () => {
+				ipcRenderer.off("browser:findOpen", wrapped);
+			};
+		},
 		onReopenClosedTab: (listener: (viewId: string) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, viewId: string) => listener(viewId);
 			ipcRenderer.on("browser:reopenClosedTab", wrapped);
@@ -464,6 +488,13 @@ const api = {
 			ipcRenderer.on("browser:navState", wrapped);
 			return () => {
 				ipcRenderer.off("browser:navState", wrapped);
+			};
+		},
+		onFindState: (listener: (state: BrowserFindState) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: BrowserFindState) => listener(state);
+			ipcRenderer.on("browser:findState", wrapped);
+			return () => {
+				ipcRenderer.off("browser:findState", wrapped);
 			};
 		},
 		onPageFocus: (listener: (viewId: string) => void) => {
@@ -539,8 +570,10 @@ const api = {
 			ipcRenderer.invoke("browserProfiles:rename", input) as Promise<BrowserProfile>,
 		clear: (id: string) => ipcRenderer.invoke("browserProfiles:clear", { id }) as Promise<void>,
 		delete: (id: string) => ipcRenderer.invoke("browserProfiles:delete", { id }) as Promise<void>,
-		discoverImportSources: () =>
-			ipcRenderer.invoke("browserProfiles:import:discover") as Promise<BrowserImportDiscovery>,
+		discoverImportSources: (input?: BrowserImportDiscoveryRequest) =>
+			(input === undefined
+				? ipcRenderer.invoke("browserProfiles:import:discover")
+				: ipcRenderer.invoke("browserProfiles:import:discover", input)) as Promise<BrowserImportDiscovery>,
 		import: (input: BrowserImportRequest) =>
 			ipcRenderer.invoke("browserProfiles:import:start", input) as Promise<BrowserImportResult>,
 		onImportProgress: (listener: (progress: BrowserImportProgress) => void) => {
@@ -637,7 +670,7 @@ const api = {
 	},
 	// Saved AO daemons, shared with the CLI's ~/.ao/remotes.json. Everything the
 	// renderer receives back is password-free (see main/remotes-ipc.ts); the
-	// plaintext password only ever travels renderer -> main, on `add`.
+	// plaintext password only travels renderer -> main on add or credential edit.
 	remotes: {
 		list: () => ipcRenderer.invoke("remotes:list") as Promise<RemoteHostView[]>,
 		add: (input: { label: string; url: string; password: string }) =>
@@ -648,16 +681,19 @@ const api = {
 		update: (url: string, changes: { label?: string; url?: string; password?: string }) =>
 			ipcRenderer.invoke("remotes:update", url, changes) as Promise<RemoteHealth>,
 		remove: (url: string) => ipcRenderer.invoke("remotes:remove", url) as Promise<void>,
-		probe: (url: string) => ipcRenderer.invoke("remotes:probe", url) as Promise<RemoteHealth>,
-		request: (url: string, init: RemoteRequestInit) =>
-			ipcRenderer.invoke("remotes:request", url, init) as Promise<RemoteResponse>,
+		connect: (url: string, hostId?: string) => ipcRenderer.invoke("remotes:connect", url, hostId) as Promise<ConnectedHostView>,
+		disconnect: (url: string) => ipcRenderer.invoke("remotes:disconnect", url) as Promise<void>,
+		previewUrl: (hostId: string, sessionId: string, sourceUrl: string) =>
+			ipcRenderer.invoke("remotes:previewUrl", hostId, sessionId, sourceUrl) as Promise<string>,
+		resolvePreviewUrl: (hostId: string, sessionId: string, viewedUrl: string) =>
+			ipcRenderer.invoke("remotes:resolvePreviewUrl", hostId, sessionId, viewedUrl) as Promise<string>,
 	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,
 		signIn: () => ipcRenderer.invoke("cloud:signIn") as Promise<void>,
 		signOut: () => ipcRenderer.invoke("cloud:signOut") as Promise<void>,
 		cancelProviderAuth: () => ipcRenderer.invoke("cloud:cancelProviderAuth") as Promise<void>,
-		connectProviderAuth: (input: { baseUrl: string; orgId: string; provider: string }) =>
+		connectProviderAuth: (input: { baseUrl: string; provider: string; persistLocalClaudeToken?: boolean }) =>
 			ipcRenderer.invoke("cloud:connectProviderAuth", input) as Promise<
 				| string
 				| { secret: string; refreshToken?: string; expiresIn?: number; refreshTokenExpiresIn?: number }

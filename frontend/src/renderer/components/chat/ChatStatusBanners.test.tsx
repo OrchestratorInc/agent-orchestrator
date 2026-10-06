@@ -31,11 +31,11 @@ describe("ReauthBanner", () => {
 		expect(screen.getByText(/The stored session expired/)).toBeInTheDocument();
 	});
 
-	it("says the worktree is untouched, since nothing else about the session works", () => {
+	it("does not claim that failed work had no side effects", () => {
 		render(
 			<ReauthBanner account={{ reauthRequiredAt: "2026-08-03T00:00:00Z" }} harness="codex" />,
 		);
-		expect(screen.getByText(/worktree is untouched/i)).toBeInTheDocument();
+		expect(screen.queryByText(/worktree is untouched|Nothing will run/i)).not.toBeInTheDocument();
 	});
 
 	it("names Claude Code's non-interactive authentication command", () => {
@@ -59,6 +59,22 @@ describe("ReauthBanner", () => {
 		);
 		expect(container).toBeEmptyDOMElement();
 	});
+	it("dismisses only this failure and displays a new failure", async () => {
+		const account = { authenticationState: "required" as const, authFailureId: "first", reauthRequiredAt: "2026-08-03T00:00:00Z" };
+		const { rerender } = render(<ReauthBanner account={account} harness="codex" />);
+		await userEvent.click(screen.getByRole("button", { name: "Dismiss authentication notice" }));
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		rerender(<ReauthBanner account={{ ...account, planLabel: "Pro" }} harness="codex" />);
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		rerender(<ReauthBanner account={{ ...account, authFailureId: "second" }} harness="codex" />);
+		expect(screen.getByRole("alert")).toBeInTheDocument();
+	});
+
+	it("uses current authentication state even when historical failure evidence exists", () => {
+		render(<ReauthBanner account={{ authenticationState: "authenticated", reauthRequiredAt: "2026-08-03T00:00:00Z", lastAuthFailureReason: "expired" }} harness="codex" />);
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
 });
 
 describe("ThreadStateBanner", () => {
@@ -98,13 +114,13 @@ describe("McpServerBanner", () => {
 	];
 
 	it("says the agent will work around the missing tools silently", () => {
-		render(<McpServerBanner servers={broken} />);
+		render(<McpServerBanner sessionId="ao-1" servers={broken} />);
 		expect(screen.getByText("A tool server did not start")).toBeInTheDocument();
 		expect(screen.getByText(/works around them\s+silently/)).toBeInTheDocument();
 	});
 
 	it("names the server, its classification and the provider's own text", () => {
-		render(<McpServerBanner servers={broken} />);
+		render(<McpServerBanner sessionId="ao-1" servers={broken} />);
 		expect(screen.getByText("playwright")).toBeInTheDocument();
 		expect(screen.getByText(/startup_timeout/)).toBeInTheDocument();
 		expect(screen.getByText(/did not report ready within 30s/)).toBeInTheDocument();
@@ -112,15 +128,24 @@ describe("McpServerBanner", () => {
 
 	it("offers a reload", async () => {
 		const onReload = vi.fn();
-		render(<McpServerBanner servers={broken} onReload={onReload} />);
+		render(<McpServerBanner sessionId="ao-1" servers={broken} onReload={onReload} />);
 		await userEvent.click(screen.getByRole("button", { name: /Reload/ }));
 		expect(onReload).toHaveBeenCalledOnce();
+	});
+
+	it("centers the reload and close controls in one action row", () => {
+		render(<McpServerBanner sessionId="ao-1" servers={broken} onReload={vi.fn()} />);
+		const reload = screen.getByRole("button", { name: /Reload/ });
+		const close = screen.getByRole("button", { name: "Close tool server warning" });
+		expect(reload.parentElement).toBe(close.parentElement);
+		expect(close.parentElement).toHaveClass("h-control-md", "items-center");
+		expect(close).toHaveClass("size-10");
 	});
 
 	// The daemon refuses a reload mid-turn, so the control explains itself rather than
 	// being allowed to fail.
 	it("disables the reload mid-turn and says why", () => {
-		render(<McpServerBanner servers={broken} onReload={vi.fn()} turnInFlight />);
+		render(<McpServerBanner sessionId="ao-1" servers={broken} onReload={vi.fn()} turnInFlight />);
 		const button = screen.getByRole("button", { name: /Reload/ });
 		expect(button).toBeDisabled();
 		expect(button).toHaveAttribute(
@@ -130,19 +155,35 @@ describe("McpServerBanner", () => {
 	});
 
 	it("draws no control at all when the harness cannot reload", () => {
-		render(<McpServerBanner servers={broken} />);
-		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		render(<McpServerBanner sessionId="ao-1" servers={broken} />);
+		expect(screen.queryByRole("button", { name: /Reload/ })).not.toBeInTheDocument();
 	});
 
 	it("surfaces a failed reload", () => {
-		render(<McpServerBanner servers={broken} onReload={vi.fn()} error="controller not ready" />);
+		render(<McpServerBanner sessionId="ao-1" servers={broken} onReload={vi.fn()} error="controller not ready" />);
 		expect(screen.getByText("controller not ready")).toBeInTheDocument();
 	});
 
 	// A healthy server is not news. The caller filters, and an empty list must not
 	// leave a permanent bar above the conversation saying nothing is wrong.
 	it("says nothing when no server is broken", () => {
-		const { container } = render(<McpServerBanner servers={[]} />);
+		const { container } = render(<McpServerBanner sessionId="ao-1" servers={[]} />);
 		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("dismisses only the current session warning until its failed set changes", async () => {
+		const view = render(<McpServerBanner sessionId="ao-1" servers={broken} />);
+		await userEvent.click(screen.getByRole("button", { name: "Close tool server warning" }));
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+		view.rerender(<McpServerBanner sessionId="ao-1" servers={broken} />);
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+		view.rerender(<McpServerBanner sessionId="ao-1" servers={[...broken, { name: "github", status: "failed" }]} />);
+		expect(screen.getByRole("status")).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Close tool server warning" }));
+		view.rerender(<McpServerBanner sessionId="ao-2" servers={broken} />);
+		expect(screen.getByRole("status")).toBeInTheDocument();
 	});
 });

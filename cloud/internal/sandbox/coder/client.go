@@ -27,9 +27,16 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 )
+
+// OrgConnectionLabel is the single bring-your-own Coder connection label an
+// organization stores its credential under. The HTTP edge that seals the token
+// and every service that later unseals it MUST pass the identical label so the
+// AES-GCM associated data lines up.
+const OrgConnectionLabel = "default"
 
 const (
 	defaultTimeout      = 2 * time.Minute
@@ -98,12 +105,20 @@ func New(config Config) (*Client, error) {
 	if strings.TrimSpace(config.Token) == "" {
 		return nil, errors.New("coder: API token is required")
 	}
-	if strings.TrimSpace(config.Owner) == "" {
-		return nil, errors.New("coder: workspace owner is required")
-	}
-	templateID, err := uuid.Parse(strings.TrimSpace(config.TemplateID))
-	if err != nil {
-		return nil, errors.New("coder: template ID must be a UUID")
+	// Owner and template are optional at construction so a client can be built
+	// from only a base URL and token — the shape a bring-your-own-Coder org first
+	// saves, where the owner is derived from the token and the template is chosen
+	// per project. They are required at the point they are used: Create guards both,
+	// and a real session always carries them on its immutable profile (see
+	// ForSandbox). A template that IS supplied must still be a UUID.
+	owner := strings.TrimSpace(config.Owner)
+	templateID := strings.TrimSpace(config.TemplateID)
+	if templateID != "" {
+		parsed, err := uuid.Parse(templateID)
+		if err != nil {
+			return nil, errors.New("coder: template ID must be a UUID")
+		}
+		templateID = parsed.String()
 	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
@@ -120,17 +135,47 @@ func New(config Config) (*Client, error) {
 	return &Client{
 		baseURL:    strings.TrimRight(endpoint.String(), "/"),
 		token:      strings.TrimSpace(config.Token),
-		owner:      strings.TrimSpace(config.Owner),
-		templateID: templateID.String(),
+		owner:      owner,
+		templateID: templateID,
 		agentName:  strings.TrimSpace(config.AgentName),
 		parameters: parameters,
 		http:       httpClient,
 	}, nil
 }
 
-// ForSandbox binds the deployment-scoped connection credential to the
-// non-secret Coder contract stored on one session. The returned client is safe
-// to use only for that session's deterministic workspace identity.
+// NewForOrg decrypts an organization's stored bring-your-own Coder connection
+// token and builds a client bound to the supplied non-secret contract. It is the
+// single place that turns an encrypted per-organization connection into a live
+// client, so the AES-GCM associated-data construction and the token zeroing live
+// in exactly one spot — shared by the sandbox resolver (which provisions a
+// session's workspace) and the HTTP template-list edge (which reads the org's
+// templates). The decrypted token is zeroed before return; New has already copied
+// it into the returned client, so the client remains usable afterwards.
+func NewForOrg(cipher *secrets.Cipher, orgID string, encrypted, nonce []byte, config Config) (*Client, error) {
+	if cipher == nil {
+		return nil, errors.New("coder: secrets cipher is required for a per-organization connection")
+	}
+	token, err := cipher.Decrypt(
+		encrypted, nonce,
+		secrets.ProviderConnectionAssociatedData(orgID, sandbox.ProviderCoder, OrgConnectionLabel),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("coder: decrypt per-organization token: %w", err)
+	}
+	defer clear(token)
+	config.Token = string(token)
+	return New(config)
+}
+
+// ForSandbox binds a connection credential to the non-secret Coder contract
+// stored on one session. The returned client is safe to use only for that
+// session's deterministic workspace identity. It serves both the shared,
+// env-configured deployment client and a fresh per-organization client the
+// resolver builds for a bring-your-own-Coder session — the latter is constructed
+// with the session profile's own BaseURL, so it clears the equality guard below
+// by construction. The guard is retained because it still protects the shared
+// deployment client: its token must never be sent to a deployment other than the
+// one it was configured for.
 func (c *Client) ForSandbox(record domain.Sandbox) (sandbox.Provider, error) {
 	if strings.TrimSpace(record.SessionID) == "" {
 		return nil, errors.New("coder: durable session ID is required")
@@ -160,6 +205,25 @@ func (c *Client) ForSandbox(record domain.Sandbox) (sandbox.Provider, error) {
 	sessionClient.parameters = parameters
 	sessionClient.expectedWorkspaceName = WorkspaceName(record.SessionID)
 	return &sessionClient, nil
+}
+
+// CurrentUser returns the username of the Coder account the client's API token
+// authenticates as (GET /api/v2/users/me). A bring-your-own-Coder organization
+// saves only a base URL and token; the workspace owner is this user, derived once
+// at save time instead of being pasted. The call needs neither an owner nor a
+// template, so a minimal client (base URL + token) can make it.
+func (c *Client) CurrentUser(ctx context.Context) (string, error) {
+	var me struct {
+		Username string `json:"username"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v2/users/me", nil, &me); err != nil {
+		return "", fmt.Errorf("coder: resolve current user: %w", err)
+	}
+	username := strings.TrimSpace(me.Username)
+	if username == "" {
+		return "", errors.New("coder: current user has no username")
+	}
+	return username, nil
 }
 
 // Template is a non-secret summary of a Coder template a client may pick from.
@@ -302,6 +366,15 @@ func (c *Client) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Environ
 			"coder: session workspace name mismatch: got %q, want %q",
 			name, c.expectedWorkspaceName,
 		)
+	}
+	// Owner and template are optional on a freshly-connected client but required to
+	// create a workspace. A real session always supplies both via its immutable
+	// profile (ForSandbox); failing here gives a clear message if one is ever missing.
+	if strings.TrimSpace(c.owner) == "" {
+		return sandbox.Environment{}, errors.New("coder: workspace owner is required")
+	}
+	if strings.TrimSpace(c.templateID) == "" {
+		return sandbox.Environment{}, errors.New("coder: a template must be selected")
 	}
 	parameterNames := make([]string, 0, len(c.parameters))
 	for parameterName := range c.parameters {

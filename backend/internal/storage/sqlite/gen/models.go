@@ -325,6 +325,7 @@ type ConversationMessage struct {
 	UpdatedAt           time.Time
 	DeliveryContentJson string
 	BranchID            string
+	ClientPayloadHash   sql.NullString
 }
 
 type ConversationProviderEvent struct {
@@ -380,6 +381,18 @@ type ConversationTurn struct {
 	HandledByReviewID    sql.NullString
 }
 
+type Cue struct {
+	ID          domain.CueID
+	ProjectID   domain.ProjectID
+	Name        string
+	Description string
+	Type        domain.CueType
+	Command     string
+	Prompt      string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 type ModelUsageEvent struct {
 	ID                    int64
 	BindingID             int64
@@ -415,6 +428,7 @@ type Notification struct {
 	CreatedAt   time.Time
 	ResolvedAt  sql.NullTime
 	DismissedAt sql.NullTime
+	SourceKey   string
 }
 
 type PR struct {
@@ -581,6 +595,7 @@ type Review struct {
 	ProviderConversationID string
 	ControllerGeneration   string
 	ControllerError        string
+	IsArchived             bool
 }
 
 type ReviewRun struct {
@@ -667,6 +682,11 @@ type Session struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	ClientRequestID                  string
+	ClientRequestHash                string
+	ClientRequestCommitted           bool
+	CodexActivityFacts               string
+	ClaudeActivityFacts              string
 }
 
 type SessionCleanupFact struct {
@@ -719,14 +739,15 @@ type SessionWorktree struct {
 }
 
 type ShellTerminal struct {
-	HandleID   string
-	ProjectID  *domain.ProjectID
-	WorkingDir string
-	Title      string
-	AppRunID   string
-	CreatedAt  time.Time
-	SessionID  sql.NullString
-	Transient  bool
+	HandleID                  string
+	ProjectID                 *domain.ProjectID
+	WorkingDir                string
+	Title                     string
+	AppRunID                  string
+	CreatedAt                 time.Time
+	SessionID                 sql.NullString
+	Transient                 bool
+	PreviewCapabilityVerifier string
 }
 
 type TelemetryEvent struct {

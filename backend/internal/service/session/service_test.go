@@ -69,6 +69,7 @@ type fakeStore struct {
 	pr                  map[domain.SessionID]domain.PRFacts
 	prFacts             map[domain.SessionID][]domain.PRFacts
 	prs                 map[domain.SessionID][]domain.PullRequest
+	reportedPRURLs      map[domain.SessionID][]string
 	projects            map[string]domain.ProjectRecord
 	worktrees           map[domain.SessionID][]domain.SessionWorktreeRecord
 	checks              map[string][]domain.PullRequestCheck
@@ -90,6 +91,7 @@ func newFakeStore() *fakeStore {
 		pr:             map[domain.SessionID]domain.PRFacts{},
 		prFacts:        map[domain.SessionID][]domain.PRFacts{},
 		prs:            map[domain.SessionID][]domain.PullRequest{},
+		reportedPRURLs: map[domain.SessionID][]string{},
 		projects:       map[string]domain.ProjectRecord{},
 		worktrees:      map[domain.SessionID][]domain.SessionWorktreeRecord{},
 		checks:         map[string][]domain.PullRequestCheck{},
@@ -169,7 +171,7 @@ func (f *fakeStore) ListActiveAgentSwitches(context.Context) ([]domain.AgentSwit
 	return out, nil
 }
 
-func newWorkspaceRepo(t *testing.T) string {
+func newWorkspaceRepo(t testing.TB) string {
 	t.Helper()
 	dir := t.TempDir()
 	runGit(t, dir, "init")
@@ -183,7 +185,7 @@ func newWorkspaceRepo(t *testing.T) string {
 	return dir
 }
 
-func runGit(t *testing.T, dir string, args ...string) string {
+func runGit(t testing.TB, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	out, err := cmd.CombinedOutput()
@@ -193,7 +195,7 @@ func runGit(t *testing.T, dir string, args ...string) string {
 	return string(out)
 }
 
-func writeWorkspaceFile(t *testing.T, root, rel, content string) {
+func writeWorkspaceFile(t testing.TB, root, rel, content string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -202,6 +204,40 @@ func writeWorkspaceFile(t *testing.T, root, rel, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+// fixtureCommit is one commit for importCommits: its message and the files it
+// writes.
+type fixtureCommit struct {
+	message string
+	files   map[string]string
+}
+
+// importCommits appends commits to branch on top of parent in one git
+// fast-import, far faster than a git commit per commit for the hundreds a
+// capped commit list needs, and returns their SHAs oldest first.
+func importCommits(t *testing.T, repo, branch, parent string, commits []fixtureCommit) []string {
+	t.Helper()
+	var stream strings.Builder
+	for i, commit := range commits {
+		fmt.Fprintf(&stream, "commit refs/heads/%s\ncommitter AO Tests <ao@example.com> %d +0000\ndata %d\n%s\n", branch, 1700000000+i, len(commit.message), commit.message)
+		if i == 0 {
+			fmt.Fprintf(&stream, "from %s\n", parent)
+		}
+		for path, content := range commit.files {
+			fmt.Fprintf(&stream, "M 100644 inline %s\ndata %d\n%s\n", path, len(content), content)
+		}
+	}
+	cmd := exec.Command("git", "-C", repo, "fast-import", "--quiet")
+	cmd.Stdin = strings.NewReader(stream.String())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git fast-import: %v\n%s", err, out)
+	}
+	shas := strings.Fields(runGit(t, repo, "rev-list", "--reverse", parent+".."+branch))
+	if len(shas) != len(commits) {
+		t.Fatalf("imported %d commits, want %d", len(shas), len(commits))
+	}
+	return shas
 }
 
 func linkWorkspaceDir(t *testing.T, target, link string) {
@@ -231,6 +267,15 @@ func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.S
 	}
 	r, ok := f.sessions[id]
 	return r, ok, nil
+}
+
+func (f *fakeStore) GetSessionByClientRequestID(_ context.Context, id string) (domain.SessionRecord, bool, error) {
+	for _, rec := range f.sessions {
+		if id != "" && rec.ClientRequestID == id {
+			return rec, true, nil
+		}
+	}
+	return domain.SessionRecord{}, false, nil
 }
 
 func (f *fakeStore) ListSessions(_ context.Context, p domain.ProjectID) ([]domain.SessionRecord, error) {
@@ -366,6 +411,10 @@ func (f *fakeStore) ListPRsBySession(_ context.Context, id domain.SessionID) ([]
 		return nil, nil
 	}
 	return []domain.PullRequest{{URL: pr.URL, SessionID: id, Number: pr.Number, Draft: pr.Draft, Merged: pr.Merged, Closed: pr.Closed, CI: pr.CI, Review: pr.Review, Mergeability: pr.Mergeability, UpdatedAt: pr.UpdatedAt, TargetBranch: pr.TargetBranch}}, nil
+}
+
+func (f *fakeStore) ListReportedPRURLs(_ context.Context, id domain.SessionID) ([]string, error) {
+	return append([]string(nil), f.reportedPRURLs[id]...), nil
 }
 
 func (f *fakeStore) ListPRFactsForSession(_ context.Context, id domain.SessionID) ([]domain.PRFacts, error) {
@@ -2611,6 +2660,9 @@ func (f *fakeCommander) Send(_ context.Context, id domain.SessionID, message str
 	f.sentMessages = append(f.sentMessages, message)
 	return nil
 }
+func (f *fakeCommander) SendWithOptions(_ context.Context, id domain.SessionID, message string, _ *ports.SpawnAttachment, _ ports.MessageDeliveryOptions) error {
+	return f.Send(context.Background(), id, message, nil)
+}
 func (f *fakeCommander) RunBackgroundTask(ctx context.Context, id domain.SessionID, systemPrompt, prompt string) (string, error) {
 	call := backgroundTaskCall{
 		ctx: ctx, id: id, systemPrompt: systemPrompt, prompt: prompt,
@@ -3527,6 +3579,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"agent exited", fmt.Errorf("send mer-1: %w", sessionmanager.ErrAgentExited), apierr.KindConflict, "AGENT_EXITED"},
 		{"agent not exited", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrAgentNotExited), apierr.KindConflict, "AGENT_NOT_EXITED"},
 		{"resume in progress", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrResumeInProgress), apierr.KindConflict, "AGENT_RESUME_IN_PROGRESS"},
+		{"provider resume failed", fmt.Errorf("resume agent mer-1: %w", ports.ErrChatResumeFailed), apierr.KindConflict, "CHAT_RESUME_FAILED"},
 		{"target agent unauthorized", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrTargetAgentUnauthorized), apierr.KindInvalid, "TARGET_AGENT_UNAUTHORIZED"},
 		{"worker session required", fmt.Errorf("switch agent mer-orchestrator: %w", sessionmanager.ErrUnsupportedSwitchKind), apierr.KindInvalid, "WORKER_SESSION_REQUIRED"},
 		{"unsupported switch harness", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrUnsupportedSwitchHarness), apierr.KindInvalid, "UNSUPPORTED_SWITCH_HARNESS"},
@@ -4588,6 +4641,28 @@ func TestListPRsOrdersActiveBeforeClosedThenUpdatedDesc(t *testing.T) {
 	}
 	if len(got) != 3 || got[0].URL != "open-new" || got[1].URL != "open-old" || got[2].URL != "closed-new" {
 		t.Fatalf("order = %+v", got)
+	}
+}
+
+func TestListPRListingKeepsExternalReportsLinkedAndDedupesTracked(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+	st.prs["mer-1"] = []domain.PullRequest{{
+		URL: "https://github.com/acme/app/pull/7", SessionID: "mer-1", Number: 7,
+		CI: domain.CIUnknown, Review: domain.ReviewNone, Mergeability: domain.MergeUnknown,
+		UpdatedAt: time.Now().UTC(),
+	}}
+	st.reportedPRURLs["mer-1"] = []string{
+		"https://www.github.com/ACME/App/pull/007", // tracked through existing SCM facts
+		"https://gitlab.com/release/notes/-/merge_requests/9",
+		"https://gitlab.com/release/notes/-/merge_requests/9", // report retry
+	}
+	got, err := (&Service{store: st}).ListPRListing(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Tracked) != 1 || len(got.Linked) != 1 || got.Linked[0].URL != "https://gitlab.com/release/notes/-/merge_requests/9" {
+		t.Fatalf("listing = %+v", got)
 	}
 }
 

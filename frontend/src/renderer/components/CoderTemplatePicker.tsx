@@ -32,12 +32,18 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 	const supportsStartup = supportedParams.includes("startup_script");
 	const templateOptions = [
 		{ id: "", name: t("coder.template.default", { defaultValue: "Organization workspace" }), description: t("coder.template.defaultHint", { defaultValue: "The workspace configured for your org." }), parameters: [] as string[] },
-		...templates.map((tpl) => ({
-			id: tpl.id,
-			name: tpl.displayName || tpl.name,
-			description: tpl.description,
-			parameters: tpl.parameters ?? [],
-		})),
+		// Curated list: surface only the AO Dev-kit templates for now. Internal /
+		// plumbing templates (ao-azure-vm*, ao-linux-docker, etc.) are hidden so the
+		// picker stays short; the default is still reachable via "Organization
+		// workspace" above.
+		...templates
+			.filter((tpl) => tpl.name.startsWith("ao-devkit"))
+			.map((tpl) => ({
+				id: tpl.id,
+				name: tpl.displayName || tpl.name,
+				description: tpl.description,
+				parameters: tpl.parameters ?? [],
+			})),
 	];
 
 	return (
@@ -119,6 +125,8 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 }
 
 // These cards are placed directly below the project's primary repository.
+// Not shown in the cloud project form for now; kept so it can
+// be re-enabled without rebuilding it.
 export function AdditionalRepositoriesPicker({ repos = [] }: { repos?: { label: string; url: string; private?: boolean }[] }) {
 	const { t } = useTranslation();
 	const extraRepos = useCoderSessionOptionsStore((s) => s.extraRepos);
@@ -174,13 +182,6 @@ export function AdditionalRepositoriesPicker({ repos = [] }: { repos?: { label: 
 												aria-label={t("coder.repos.url", { defaultValue: "Repository" })}
 											/>
 										)}
-										<Input
-											value={repo.branch ?? ""}
-											onChange={(e) => updateRepo(index, { branch: e.target.value })}
-											placeholder={t("coder.repos.branch", { defaultValue: "branch" })}
-											className="w-32 shrink-0"
-											aria-label={t("coder.repos.branch", { defaultValue: "branch" })}
-										/>
 										<Button
 											type="button"
 											variant="ghost"
