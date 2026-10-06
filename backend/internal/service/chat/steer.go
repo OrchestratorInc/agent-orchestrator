@@ -169,6 +169,12 @@ func (s *Service) SteerOrSend(
 		return SteerOrSendResult{}, err
 	}
 	msg = s.resolveSteerSender(ctx, msg)
+	// A cross-session steer that finds no active turn falls through to the normal
+	// send path. Keep that message attributed as automation so idle and busy
+	// targets render the same way.
+	if msg.SenderSessionID != "" {
+		msg.Origin = domain.MessageOriginAutomation
+	}
 	controller, err := s.Controller(id)
 	if err != nil {
 		return SteerOrSendResult{}, err

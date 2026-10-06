@@ -566,6 +566,33 @@ func TestSteerWithNothingInFlightIsTypedAndNeverReachesTheProvider(t *testing.T)
 	}
 }
 
+func TestSteerOrSendIdleCrossSessionUsesAutomationOrigin(t *testing.T) {
+	provider := newSteerRecorder()
+	h := newHarnessWithConversation(t, provider)
+
+	_, err := h.svc.SteerOrSend(context.Background(), testSession, ports.ChatUserMessage{
+		Text:            "[from worker-1] use the simpler approach",
+		ClientMessageID: "idle-cross-session-steer",
+		Origin:          domain.MessageOriginHuman,
+		SenderSessionID: "worker-1",
+	}, false)
+	if err != nil {
+		t.Fatalf("SteerOrSend: %v", err)
+	}
+
+	snapshot, err := h.st.LoadConversationSnapshot(context.Background(), h.ctrl.ConversationID())
+	if err != nil {
+		t.Fatalf("load snapshot: %v", err)
+	}
+	if len(snapshot.Messages) == 0 {
+		t.Fatal("idle steer did not persist a message")
+	}
+	message := snapshot.Messages[len(snapshot.Messages)-1]
+	if message.Origin != domain.MessageOriginAutomation {
+		t.Fatalf("idle cross-session steer origin = %q, want automation", message.Origin)
+	}
+}
+
 // The provider is the authority on whether its turn is still steerable, and losing
 // that race must read as "nothing to steer", not as a failure.
 func TestSteerRaceLostToTheProviderIsReportedAsNoActiveTurn(t *testing.T) {
