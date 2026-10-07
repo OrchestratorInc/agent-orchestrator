@@ -189,14 +189,16 @@ func TestMCPProtocolErrors(t *testing.T) {
 	replies := runMCP(t,
 		`{"jsonrpc":"2.0","id":1,"method":"resources/list"}`,
 		`{"jsonrpc":"2.0","id":2,"method":`,
-		mcpCall("rm_rf", nil))
-	if len(replies) != 3 {
+		mcpCall("rm_rf", nil),
+		`[1]`,
+		`{"jsonrpc":"2.0","id":3,"method":5}`)
+	if len(replies) != 5 {
 		t.Fatalf("replies = %+v", replies)
 	}
 	for i, want := range []struct {
 		id   string
 		code int
-	}{{"1", -32601}, {"null", -32700}, {"7", -32602}} {
+	}{{"1", -32601}, {"null", -32700}, {"7", -32602}, {"null", -32600}, {"3", -32600}} {
 		if got := replies[i]; string(got.ID) != want.id || got.Error == nil || got.Error.Code != want.code {
 			t.Errorf("reply %d = id %s error %+v, want id %s code %d", i, got.ID, got.Error, want.id, want.code)
 		}

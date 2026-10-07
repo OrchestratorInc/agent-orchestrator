@@ -84,7 +84,15 @@ func (c *commandContext) serveMCP(ctx context.Context, in io.Reader, out io.Writ
 func (c *commandContext) handleMCP(ctx context.Context, line []byte) *mcpResponse {
 	var req mcpRequest
 	if err := json.Unmarshal(line, &req); err != nil {
-		return &mcpResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &mcpError{Code: -32700, Message: "parse error: " + err.Error()}}
+		if !json.Valid(line) {
+			return &mcpResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &mcpError{Code: -32700, Message: "parse error: " + err.Error()}}
+		}
+		// Valid JSON of the wrong shape. Unmarshal still fills a readable id.
+		id := req.ID
+		if id == nil {
+			id = json.RawMessage("null")
+		}
+		return &mcpResponse{JSONRPC: "2.0", ID: id, Error: &mcpError{Code: -32600, Message: "invalid request: " + err.Error()}}
 	}
 	if req.ID == nil {
 		return nil
