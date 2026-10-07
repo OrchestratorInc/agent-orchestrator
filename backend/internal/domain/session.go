@@ -141,6 +141,8 @@ type SessionMetadata struct {
 	// separate durable fact because SessionRecord.UpdatedAt also changes for
 	// lifecycle, SCM, preview, and preference updates.
 	LatestUserPromptAt time.Time `json:"-"`
+	// LatestInteractionAt records deliberate direction independently of human authorship.
+	LatestInteractionAt time.Time `json:"-"`
 	// LatestAssistantUpdate is the latest user-facing assistant update observed
 	// before any internal agent-switch coordination turn.
 	LatestAssistantUpdate   string    `json:"latestAssistantUpdate,omitempty"`

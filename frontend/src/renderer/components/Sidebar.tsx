@@ -2273,7 +2273,7 @@ function SessionRow({
 						autoFocus
 						className={cn(
 							"relative z-[1] h-full min-w-0 flex-1 appearance-none border-0 bg-transparent! p-0 text-sm text-foreground outline-none ring-0 focus:outline-none focus:ring-0",
-							session.lastUserMessageAt && "pr-[36px]",
+							(session.lastInteractionAt ?? session.lastUserMessageAt) && "pr-[36px]",
 						)}
 						data-session-inline-editor=""
 						maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
@@ -2330,7 +2330,7 @@ function SessionRow({
 							aria-label={t("shell.openSession", { title: hostLabel ? `${session.title} · ${hostLabel}` : session.title })}
 							className={cn(
 								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-								session.lastUserMessageAt ? "pr-[36px]" : "pr-2.5",
+								(session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
 								!reorder?.isDragging &&
 									"group-hover/session-row:pr-sidebar-project-actions group-has-[:focus-visible]/session-row:pr-sidebar-project-actions",
 								reorder && "cursor-grab active:cursor-grabbing",
@@ -2420,16 +2420,17 @@ function SessionRow({
 
 const SessionMessageAge = memo(function SessionMessageAge({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
-	if (!session.lastUserMessageAt) return null;
+	const at = session.lastInteractionAt ?? session.lastUserMessageAt;
+	if (!at) return null;
 
 	return (
 		<time
 			className="absolute inset-y-0 right-2 z-[1] flex min-w-0 shrink-0 items-center whitespace-nowrap font-sans text-micro tabular-nums text-passive opacity-100 group-has-[:focus-visible]/session-row:opacity-0"
 			data-session-message-age=""
-			dateTime={session.lastUserMessageAt}
-			title={t("shell.lastMessageAt", { time: formatTimeCompact(session.lastUserMessageAt) })}
+			dateTime={at}
+			title={t("shell.lastMessageAt", { time: formatTimeCompact(at) })}
 		>
-			{formatTimeTerse(session.lastUserMessageAt)}
+			{formatTimeTerse(at)}
 		</time>
 	);
 });

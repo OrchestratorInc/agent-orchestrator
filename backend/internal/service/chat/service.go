@@ -2170,6 +2170,21 @@ func (s *Service) relayChatTurn(
 	return turn.ID, nil
 }
 
+// RelaySessionChatTurn preserves cooperative sender identity and automation origin.
+func (s *Service) RelaySessionChatTurn(ctx context.Context, id domain.SessionID, text, clientMessageID string, options ports.MessageDeliveryOptions) (string, error) {
+	controller, err := s.Controller(id)
+	if err != nil {
+		return "", err
+	}
+	msg := s.resolveSteerSender(ctx, ports.ChatUserMessage{
+		Text: text, ClientMessageID: clientMessageID,
+		SenderSessionID: options.SenderSessionID, InteractionAt: options.InteractionAt,
+		Origin: domain.MessageOriginAutomation, AuthoredByUser: options.AuthoredByUser,
+	})
+	turn, err := controller.Send(ctx, msg)
+	return turn.ID, err
+}
+
 // StopChat releases a session's controller.
 func (s *Service) StopChat(ctx context.Context, id domain.SessionID) error {
 	return s.Stop(ctx, id)

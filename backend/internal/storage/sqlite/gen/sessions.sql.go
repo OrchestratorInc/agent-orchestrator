@@ -171,7 +171,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
-    latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
@@ -222,6 +222,7 @@ type GetSessionRow struct {
 	SessionOutputType                string
 	LatestUserPrompt                 string
 	LatestUserPromptAt               sql.NullTime
+	LatestInteractionAt              sql.NullTime
 	LatestAssistantUpdate            string
 	LatestAssistantUpdateAt          sql.NullTime
 	ConversationCheckpointState      domain.ConversationCheckpointState
@@ -292,6 +293,7 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.SessionOutputType,
 		&i.LatestUserPrompt,
 		&i.LatestUserPromptAt,
+		&i.LatestInteractionAt,
 		&i.LatestAssistantUpdate,
 		&i.LatestAssistantUpdateAt,
 		&i.ConversationCheckpointState,
@@ -329,7 +331,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
-    latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
@@ -380,6 +382,7 @@ type GetSessionByAutomationRunIDRow struct {
 	SessionOutputType                string
 	LatestUserPrompt                 string
 	LatestUserPromptAt               sql.NullTime
+	LatestInteractionAt              sql.NullTime
 	LatestAssistantUpdate            string
 	LatestAssistantUpdateAt          sql.NullTime
 	ConversationCheckpointState      domain.ConversationCheckpointState
@@ -450,6 +453,7 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.SessionOutputType,
 		&i.LatestUserPrompt,
 		&i.LatestUserPromptAt,
+		&i.LatestInteractionAt,
 		&i.LatestAssistantUpdate,
 		&i.LatestAssistantUpdateAt,
 		&i.ConversationCheckpointState,
@@ -647,7 +651,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
-    latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
@@ -698,6 +702,7 @@ type ListAllSessionsRow struct {
 	SessionOutputType                string
 	LatestUserPrompt                 string
 	LatestUserPromptAt               sql.NullTime
+	LatestInteractionAt              sql.NullTime
 	LatestAssistantUpdate            string
 	LatestAssistantUpdateAt          sql.NullTime
 	ConversationCheckpointState      domain.ConversationCheckpointState
@@ -774,6 +779,7 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.SessionOutputType,
 			&i.LatestUserPrompt,
 			&i.LatestUserPromptAt,
+			&i.LatestInteractionAt,
 			&i.LatestAssistantUpdate,
 			&i.LatestAssistantUpdateAt,
 			&i.ConversationCheckpointState,
@@ -821,7 +827,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
-    latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
@@ -872,6 +878,7 @@ type ListSessionsByProjectRow struct {
 	SessionOutputType                string
 	LatestUserPrompt                 string
 	LatestUserPromptAt               sql.NullTime
+	LatestInteractionAt              sql.NullTime
 	LatestAssistantUpdate            string
 	LatestAssistantUpdateAt          sql.NullTime
 	ConversationCheckpointState      domain.ConversationCheckpointState
@@ -948,6 +955,7 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.SessionOutputType,
 			&i.LatestUserPrompt,
 			&i.LatestUserPromptAt,
+			&i.LatestInteractionAt,
 			&i.LatestAssistantUpdate,
 			&i.LatestAssistantUpdateAt,
 			&i.ConversationCheckpointState,

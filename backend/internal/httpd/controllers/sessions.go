@@ -1885,13 +1885,13 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	}
 	message := domain.SanitizeControlChars(in.Message)
 	var err error
-	if in.UserAuthored {
+	if in.UserAuthored || in.SenderSessionID != "" {
 		sender, ok := c.Svc.(sessionMessageOptionsSender)
 		if !ok {
 			apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/send")
 			return
 		}
-		err = sender.SendWithOptions(r.Context(), sessionID(r), message, attachment, ports.MessageDeliveryOptions{AuthoredByUser: true})
+		err = sender.SendWithOptions(r.Context(), sessionID(r), message, attachment, ports.MessageDeliveryOptions{AuthoredByUser: in.UserAuthored, SenderSessionID: in.SenderSessionID})
 	} else {
 		err = c.Svc.Send(r.Context(), sessionID(r), message, attachment)
 	}
@@ -2483,6 +2483,16 @@ func sessionView(r *http.Request, s domain.Session) SessionView {
 				return nil
 			}
 			at := s.Metadata.LatestUserPromptAt
+			return &at
+		}(),
+		LastInteractionAt: func() *time.Time {
+			at := s.Metadata.LatestUserPromptAt
+			if s.Metadata.LatestInteractionAt.After(at) {
+				at = s.Metadata.LatestInteractionAt
+			}
+			if at.IsZero() {
+				return nil
+			}
 			return &at
 		}(),
 		LastEventAt:   s.LastEventAt(),

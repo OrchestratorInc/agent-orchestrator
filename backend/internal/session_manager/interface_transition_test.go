@@ -289,13 +289,17 @@ func (s *transitionStore) AcknowledgeSessionInterfaceTransitionNotice(
 	return rec, true, nil
 }
 
-func (s *transitionStore) EnqueueSessionInterfaceTransitionMessage(_ context.Context, transitionID, clientMessageID, message string, now time.Time) error {
+func (s *transitionStore) EnqueueSessionInterfaceTransitionMessage(_ context.Context, transitionID, clientMessageID, message string, now time.Time, options ...ports.MessageDeliveryOptions) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var opts ports.MessageDeliveryOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
 	s.nextMessage++
 	s.messages[transitionID] = append(s.messages[transitionID], domain.SessionInterfaceTransitionMessage{
 		ID: s.nextMessage, TransitionID: transitionID, ClientMessageID: clientMessageID,
-		Message: message, CreatedAt: now,
+		Message: message, CreatedAt: now, SenderSessionID: opts.SenderSessionID, AuthoredByUser: opts.AuthoredByUser,
 	})
 	return nil
 }
