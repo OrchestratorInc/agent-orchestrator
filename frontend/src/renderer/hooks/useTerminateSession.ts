@@ -1,4 +1,5 @@
-import { type QueryClient, skipToken, useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useSyncExternalStore } from "react";
+import { type QueryClient, useMutation, useMutationState, useQueryClient } from "@tanstack/react-query";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import {
@@ -179,10 +180,16 @@ function workspaceCleanupError(session: WorkspaceSession | undefined, t: ReturnT
 	return null;
 }
 
+function useCachedWorkspaces(hostId?: string) {
+	const queryClient = useQueryClient();
+	const subscribe = useCallback((notify: () => void) => queryClient.getQueryCache().subscribe(notify), [queryClient]);
+	return useSyncExternalStore(subscribe, () => queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId)));
+}
+
 export function useTerminateSessionState(sessionId: string, hostId?: string) {
 	const { t } = useTranslation();
 	// Observe existing board data; this does not start another network request.
-	const { data } = useQuery<WorkspaceSummary[]>({ queryKey: workspaceQueryKeyForHost(hostId), queryFn: skipToken });
+	const data = useCachedWorkspaces(hostId);
 	const session = data?.flatMap((workspace) => workspace.sessions).find((session) => session.id === sessionId);
 	const summary = summarizeBySession(useTerminateSessionMutations()).find(({ session }) =>
 		session.id === sessionId && session.hostId === hostId);
@@ -196,7 +203,7 @@ export function useTerminateSessionState(sessionId: string, hostId?: string) {
 
 export function useProjectTerminateSessionStates(workspaceId: string | undefined, hostId?: string) {
 	const { t } = useTranslation();
-	const { data } = useQuery<WorkspaceSummary[]>({ queryKey: workspaceQueryKeyForHost(hostId), queryFn: skipToken });
+	const data = useCachedWorkspaces(hostId);
 	const sessions = data?.find((workspace) => workspace.id === workspaceId)?.sessions ?? [];
 	const states = summarizeBySession(useTerminateSessionMutations())
 		.filter(({ session }) => session.hostId === hostId && session.workspaceId === workspaceId)

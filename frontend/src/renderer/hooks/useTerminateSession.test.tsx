@@ -260,12 +260,16 @@ describe("useTerminateSession", () => {
 
 describe("durable workspace cleanup feedback", () => {
 	it("shows pending and failed cleanup after Kill succeeds, then clears it after retry", async () => {
-		const queryClient = newQueryClient();
+		const queryClient = new QueryClient();
+		const queryFn = vi.fn().mockResolvedValue(workspaces);
+		queryClient.setQueryDefaults(workspaceQueryKey, { queryFn });
 		const setCleanup = (workspaceCleanup: WorkspaceSession["workspaceCleanup"]) => queryClient.setQueryData(workspaceQueryKey, [{
 			...workspaces[0], sessions: [{ ...session, isTerminated: true, workspaceCleanup }],
 		}]);
 		setCleanup("pending");
 		const { result } = renderHook(() => useTerminateSessionState(session.id), { wrapper: wrapper(queryClient) });
+		expect(queryClient.getQueryCache().find({ queryKey: workspaceQueryKey })?.options.queryFn).toBe(queryFn);
+		expect(queryFn).not.toHaveBeenCalled();
 		expect(result.current.isPending).toBe(true);
 		await act(async () => { setCleanup("failed"); });
 		await waitFor(() => expect(result.current.error).toBe("Workspace cleanup failed. Retry cleanup in project Scripts settings."));
