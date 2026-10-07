@@ -313,6 +313,9 @@ type Deps struct {
 	JobStore ports.AgentInstallJobStore
 	Verifier HarnessVerifier
 	Sessions SessionLister
+	// DisableUpdateChecks stops update advisories from reaching the network
+	// (AO_HARNESS_UPDATE_CHECKS=off).
+	DisableUpdateChecks bool
 }
 
 // Service runs real install commands for the fixed Target allowlist.
@@ -343,12 +346,13 @@ type Service struct {
 	// a real multi-minute wait.
 	installTimeout time.Duration
 	// persistenceTimeout bounds worker-owned transition and terminal writes.
-	persistenceTimeout  time.Duration
-	onSucceeded         func(Target)
-	managedVersion      managedVersionChecker
-	ownsInstallation    func(context.Context, string, string, string, bool) (bool, error)
-	updateAdvisories    map[Target]UpdateAdvisory
-	updateAdvisoryCalls map[Target]*updateAdvisoryCall
+	persistenceTimeout   time.Duration
+	onSucceeded          func(Target)
+	managedVersion       managedVersionChecker
+	ownsInstallation     func(context.Context, string, string, string, bool) (bool, error)
+	updateAdvisories     map[Target]UpdateAdvisory
+	updateChecksDisabled bool
+	updateAdvisoryCalls  map[Target]*updateAdvisoryCall
 	// officialVersion reads a vendor release channel when no package manager
 	// owns the harness binary.
 	officialVersion func(context.Context, Target) (string, error)
@@ -397,26 +401,27 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 	installCapabilities, _ := executables.(ports.InstallCapabilityProbe)
 	backgroundContext, stop := context.WithCancel(context.Background())
 	return &Service{
-		jobs:                make(map[Target]*Job),
-		harnessGates:        make(map[domain.AgentHarness]*sync.RWMutex),
-		executables:         executables,
-		commands:            commands,
-		installCommands:     installCommands,
-		installScripts:      installScripts,
-		installCapabilities: installCapabilities,
-		jobStore:            deps.JobStore,
-		verifier:            deps.Verifier,
-		sessions:            deps.Sessions,
-		goos:                runtime.GOOS,
-		installTimeout:      defaultInstallTimeout,
-		persistenceTimeout:  defaultPersistenceTimeout,
-		stop:                stop,
-		backgroundContext:   backgroundContext,
-		managedVersion:      newManagedVersionChecker(commands, nil),
-		officialVersion:     officialReleaseVersion(runtime.GOOS, runtime.GOARCH),
-		ownsInstallation:    managerOwnsBinary(commands),
-		updateAdvisories:    make(map[Target]UpdateAdvisory),
-		updateAdvisoryCalls: make(map[Target]*updateAdvisoryCall),
+		jobs:                 make(map[Target]*Job),
+		harnessGates:         make(map[domain.AgentHarness]*sync.RWMutex),
+		executables:          executables,
+		commands:             commands,
+		installCommands:      installCommands,
+		installScripts:       installScripts,
+		installCapabilities:  installCapabilities,
+		jobStore:             deps.JobStore,
+		verifier:             deps.Verifier,
+		sessions:             deps.Sessions,
+		updateChecksDisabled: deps.DisableUpdateChecks,
+		goos:                 runtime.GOOS,
+		installTimeout:       defaultInstallTimeout,
+		persistenceTimeout:   defaultPersistenceTimeout,
+		stop:                 stop,
+		backgroundContext:    backgroundContext,
+		managedVersion:       newManagedVersionChecker(commands, nil),
+		officialVersion:      officialReleaseVersion(runtime.GOOS, runtime.GOARCH),
+		ownsInstallation:     managerOwnsBinary(commands),
+		updateAdvisories:     make(map[Target]UpdateAdvisory),
+		updateAdvisoryCalls:  make(map[Target]*updateAdvisoryCall),
 	}
 }
 

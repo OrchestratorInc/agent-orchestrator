@@ -37,6 +37,9 @@ const (
 	UpdateReasonChannelUnconfirmed UpdateUnknownReason = "channel_unconfirmed"
 	// UpdateReasonLookupFailed means the latest-version lookup failed.
 	UpdateReasonLookupFailed UpdateUnknownReason = "lookup_failed"
+	// UpdateReasonDisabled means update checks are turned off
+	// (AO_HARNESS_UPDATE_CHECKS=off).
+	UpdateReasonDisabled UpdateUnknownReason = "disabled"
 	// UpdateReasonBuildUnordered means both releases share a version but
 	// carry different build identifiers that have no defined order.
 	UpdateReasonBuildUnordered UpdateUnknownReason = "build_unordered"
@@ -73,6 +76,9 @@ func (s *Service) UpdateAdvisory(ctx context.Context, target Target, refresh ...
 		return UpdateAdvisory{}, err
 	}
 	now := time.Now().UTC()
+	if s.updateChecksDisabled {
+		return UpdateAdvisory{AgentID: string(target), Status: UpdateStatusUnknown, Reason: UpdateReasonDisabled, CheckedAt: now}, nil
+	}
 	s.mu.Lock()
 	if len(refresh) > 0 && refresh[0] {
 		delete(s.updateAdvisories, target)

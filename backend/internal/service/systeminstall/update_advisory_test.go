@@ -332,3 +332,23 @@ func TestParseHomebrewVersionMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestUpdateAdvisoryDisabledSkipsAllLookups(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.updateChecksDisabled = true
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		t.Fatal("disabled update check probed the harness binary")
+		return VerifyResult{}, nil
+	})
+	s.officialVersion = func(context.Context, Target) (string, error) {
+		t.Fatal("disabled update check reached the network")
+		return "", nil
+	}
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if advisory.Status != UpdateStatusUnknown || advisory.Reason != UpdateReasonDisabled || advisory.AgentID != string(TargetCodex) {
+		t.Fatalf("advisory = %+v", advisory)
+	}
+}

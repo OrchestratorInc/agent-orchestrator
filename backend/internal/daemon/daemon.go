@@ -632,9 +632,10 @@ func Run() error {
 	hostCommands := systemexec.New(cfg.DataDir)
 	systemChecks := systemcheck.NewWithCommandRunner(agentSvc, hostCommands, hostCommands)
 	systemInstall := systeminstall.NewWithDeps(hostCommands, hostCommands, systeminstall.Deps{
-		JobStore: store,
-		Verifier: systeminstall.NewVerifier(agents, hostCommands),
-		Sessions: store,
+		JobStore:            store,
+		Verifier:            systeminstall.NewVerifier(agents, hostCommands),
+		Sessions:            store,
+		DisableUpdateChecks: !cfg.HarnessUpdateChecks,
 	})
 	if err := systemInstall.Recover(ctx); err != nil {
 		stop()
@@ -1004,9 +1005,11 @@ func Run() error {
 		// bounded subprocess probes no longer contend with the synchronous
 		// migration and fencing reconcile that gate the port bind.
 		readinessDone := agentSvc.WarmReadiness()
-		go warmInstalledHarnessUpdates(ctx, readinessDone, agentSvc.CachedReadiness, func(ctx context.Context, target systeminstall.Target) (systeminstall.UpdateAdvisory, error) {
-			return systemInstall.UpdateAdvisory(ctx, target)
-		}, log)
+		if cfg.HarnessUpdateChecks {
+			go warmInstalledHarnessUpdates(ctx, readinessDone, agentSvc.CachedReadiness, func(ctx context.Context, target systeminstall.Target) (systeminstall.UpdateAdvisory, error) {
+				return systemInstall.UpdateAdvisory(ctx, target)
+			}, log)
+		}
 		done := make(chan struct{})
 		startupReconcileDone = done
 		go func() {
