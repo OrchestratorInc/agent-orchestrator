@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -141,7 +142,8 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	}
 	// The foreground response must not wait behind Git, but the background
 	// workspace lifecycle still serializes with spawn, restore and cleanup.
-	releaseWorkspaceGate := m.acquireWorkspaceGate(in.cfg.ProjectID)
+	releaseWorkspaceGate := sync.OnceFunc(m.acquireWorkspaceGate(in.cfg.ProjectID))
+	ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, releaseWorkspaceGate)
 	defer releaseWorkspaceGate()
 	if ws.Path == "" {
 		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, in.project)
@@ -452,7 +454,12 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 func (m *Manager) cleanupAsyncChatWorkspace(ctx context.Context, id domain.SessionID, ws ports.WorkspaceInfo, workspaceProject *ports.WorkspaceProjectInfo) {
 	cleanupCtx, cancel := spawnRollbackContext(ctx)
 	defer cancel()
-	if m.destroySpawnWorkspace(cleanupCtx, ws, workspaceProject) {
+	destroyed := m.destroySpawnWorkspace(cleanupCtx, ws, workspaceProject)
+	// The untimed cleanup script may have outlived the original write budget.
+	cancel()
+	cleanupCtx, cancel = spawnRollbackContext(ctx)
+	defer cancel()
+	if destroyed {
 		m.clearProvisionedWorkspace(cleanupCtx, id, ws.Path)
 	} else {
 		updated, err := m.store.SetSessionProvisionedWorkspace(

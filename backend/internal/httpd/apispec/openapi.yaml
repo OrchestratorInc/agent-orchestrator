@@ -13309,6 +13309,10 @@ components:
           items:
             type: string
           type: array
+        preRemove:
+          items:
+            type: string
+          type: array
         reviewers:
           items:
             $ref: '#/components/schemas/DomainReviewerConfig'

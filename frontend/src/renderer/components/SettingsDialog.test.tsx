@@ -137,12 +137,13 @@ describe("SettingsDialog", () => {
 		expect(screen.getByRole("button", { name: "Cues" })).toHaveAttribute("aria-current", "page");
 	});
 
-	it("does not offer local environment or workspace setup for a remote project", async () => {
+	it("does not offer local environment or workspace scripts for a remote project", async () => {
 		useUiStore.getState().openProjectSettings("proj-1", "box-a");
 		renderSettingsDialog();
 
 		expect(await screen.findByRole("button", { name: "Agents" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Workspace setup" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Workspace cleanup" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Environment" })).not.toBeInTheDocument();
 	});
 

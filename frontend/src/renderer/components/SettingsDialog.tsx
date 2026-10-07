@@ -1,4 +1,4 @@
-import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
+import { Bot, KeyRound, Loader2, MonitorCog, Play, RotateCcw, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useRef, useState } from "react";
@@ -10,6 +10,7 @@ import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { ProjectSetupSettings } from "./ProjectSetupSettings";
+import { ProjectCleanupSettings } from "./ProjectCleanupSettings";
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { CuesSettings } from "./CuesDialog";
 import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
@@ -89,6 +90,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 	if (!remoteHostId) {
 		projectSections.push({ id: "setup", label: t("settings.project.workspaceSetup"), icon: Wrench });
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
+		projectSections.push({ id: "cleanup", label: t("settings.project.workspaceCleanup"), icon: RotateCcw });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
 	}
 
@@ -320,6 +322,8 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 										<CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />
 									) : displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "setup" ? (
 										<ProjectSetupSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />
+									) : displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "cleanup" ? (
+										<ProjectCleanupSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />
 									) : displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "environment" ? (
 										<ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />
 									) : displaySettings?.scope === "project" ? (
