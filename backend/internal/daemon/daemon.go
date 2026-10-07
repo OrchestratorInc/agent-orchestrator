@@ -41,6 +41,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/notify"
 	agentswitchobs "github.com/aoagents/agent-orchestrator/backend/internal/observe/agentswitch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/branchstate"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	usagepipeline "github.com/aoagents/agent-orchestrator/backend/internal/observe/usage"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -774,6 +775,7 @@ func Run() error {
 		lcStack.LCM.SetUsageFinalizer(usageCollector)
 	}
 	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, cfg.GitLab, log)
+	lcStack.branchDone = branchstate.New(store, sessionSvc, branchstate.Config{Logger: log}).Start(ctx)
 	var prActions prsvc.ActionManager
 	prReader := newMultiSCMProvider(cfg.GitLab, log)
 	prMerger := newMultiSCMMerger(cfg.GitLab, log)

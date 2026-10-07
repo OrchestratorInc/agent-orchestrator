@@ -4878,13 +4878,12 @@ describe("SessionInspector branch summary", () => {
   });
   type ChangedFile = ReturnType<typeof changedFile>;
 
-  // `ahead` omitted mirrors the daemon: the branch has no upstream yet.
+  // Uncommitted work comes from the workspace manifest; commit and push facts
+  // come from the daemon on the session itself (branchState).
   function mockGitState({
     uncommitted = [],
     committed = [],
-    commits = 0,
-    ahead,
-  }: { uncommitted?: ChangedFile[]; committed?: ChangedFile[]; commits?: number; ahead?: number }) {
+  }: { uncommitted?: ChangedFile[]; committed?: ChangedFile[] }) {
     const respond = commonGetsResponder();
     getMock.mockImplementation(async (path: string) => {
       if (path === "/api/v1/sessions/{sessionId}/workspace/manifest") {
@@ -4904,25 +4903,10 @@ describe("SessionInspector branch summary", () => {
           error: undefined,
         };
       }
-      if (path === "/api/v1/sessions/{sessionId}/workspace/history") {
-        return {
-          data: {
-            sessionId: "sess-1",
-            commits: Array.from({ length: commits }, (_, index) => ({
-              sha: `c${index}`,
-              subject: `commit ${index}`,
-              author: "ada",
-              timestamp: "2026-06-15T00:00:00Z",
-              files: [],
-            })),
-            ...(ahead === undefined ? {} : { ahead }),
-          },
-          error: undefined,
-        };
-      }
       return respond(path);
     });
   }
+  const pushed = (commits: number) => ({ commits, remoteBranch: "origin/feat/ns", unpushed: 0 });
 
   const sendCalls = () => postCallsFor("/api/v1/sessions/{sessionId}/send");
   const branch = () => within(screen.getByRole("region", { name: "Branch" }));
@@ -4962,8 +4946,8 @@ describe("SessionInspector branch summary", () => {
   });
 
   it("offers push before a PR when commits never left this machine", async () => {
-    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], commits: 2 });
-    renderWithQuery(<SessionInspector session={session([])} />);
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([], { branchState: { commits: 2, unpushed: 2 } })} />);
 
     expect(await screen.findByText("2 commits")).toBeInTheDocument();
     expect(screen.getByText("not pushed")).toBeInTheDocument();
@@ -4979,8 +4963,8 @@ describe("SessionInspector branch summary", () => {
   });
 
   it("offers a plain Create PR once every commit is pushed", async () => {
-    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], commits: 2, ahead: 0 });
-    renderWithQuery(<SessionInspector session={session([])} />);
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([], { branchState: pushed(2) })} />);
 
     expect(await screen.findByText("pushed")).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Create PR" })).toBeInTheDocument();
@@ -4999,8 +4983,8 @@ describe("SessionInspector branch summary", () => {
   });
 
   it("updates the open PR when new work is uncommitted", async () => {
-    mockGitState({ uncommitted: [changedFile("src/c.ts", 4, 0)], committed: [changedFile("src/a.ts", 5, 0)], commits: 3, ahead: 0 });
-    renderWithQuery(<SessionInspector session={session([pr(7, "open")])} />);
+    mockGitState({ uncommitted: [changedFile("src/c.ts", 4, 0)], committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(3) })} />);
 
     expect(await screen.findByText("1 uncommitted file")).toBeInTheDocument();
     expect(branch().getByText("PR #7")).toBeInTheDocument();
@@ -5014,8 +4998,8 @@ describe("SessionInspector branch summary", () => {
   });
 
   it("shows no git action when the PR already has every commit", async () => {
-    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], commits: 3, ahead: 0 });
-    renderWithQuery(<SessionInspector session={session([pr(7, "open")])} />);
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(3) })} />);
 
     expect(await screen.findByText("3 commits")).toBeInTheDocument();
     expect(screen.getByText("pushed")).toBeInTheDocument();
@@ -5040,6 +5024,28 @@ describe("SessionInspector branch summary", () => {
 
     await waitFor(() => expect(screen.queryByRole("button", { name: "Creating PR…" })).not.toBeInTheDocument());
     expect(useSessionGitActionStore.getState().pending).toEqual({});
+  });
+
+  it("finishes Pushing when the daemon reports the branch pushed", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    const { queryClient, rerender } = renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: { commits: 3, remoteBranch: "origin/feat/ns", unpushed: 1 } })} />,
+    );
+
+    expect(await screen.findByText("1 not pushed")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Push to #7" }));
+    expect(await screen.findByRole("button", { name: "Pushing…" })).toBeDisabled();
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <SessionInspector session={session([pr(7, "open")], { branchState: pushed(3) })} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Pushing…" })).not.toBeInTheDocument());
+    expect(screen.getByText("pushed")).toBeInTheDocument();
   });
 
   it("restores the action and shows the error when the request fails", async () => {

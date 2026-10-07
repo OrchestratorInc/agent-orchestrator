@@ -13,23 +13,16 @@ import {
 	Loader2,
 	Pencil,
 } from "lucide-react";
-import {
-	sessionWorkspaceFilesQueryOptions,
-	sessionWorkspaceHistoryQueryOptions,
-	type WorkspaceFileSummary,
-} from "../hooks/useSessionWorkspaceFiles";
+import { sessionWorkspaceFilesQueryOptions, type WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { useSessionGitActionStore, type SessionGitActionKind } from "../stores/session-git-action-store";
-import type { WorkspaceSession } from "../types/workspace";
+import type { SessionBranchState, WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
-// While an action is pending, re-read git state: a push changes no worktree
-// file, so the workspace file watcher never invalidates on it.
-const PENDING_POLL_MS = 3_000;
 const PENDING_MAX_MS = 10 * 60_000;
 // After the session goes idle, how long to wait for the result to show up.
 // A new PR reaches the session through SCM discovery, which lags the push.
@@ -45,10 +38,8 @@ type GitFacts = {
 	loaded: boolean;
 	uncommitted: WorkspaceFileSummary[];
 	committed: WorkspaceFileSummary[];
-	/** Undefined while history is unavailable. */
-	commits?: number;
-	/** Commits not on the upstream; null when the branch has none, undefined while unknown. */
-	ahead?: number | null;
+	/** The daemon's commit and push facts; undefined until it has observed the branch. */
+	branch?: SessionBranchState;
 	base?: string;
 };
 
@@ -77,17 +68,14 @@ export function SessionBranchSummary({
 	// Cloud sessions have no local workspace facts; orchestrators coordinate
 	// workers rather than shipping a branch of their own.
 	const showGit = !session.cloud && session.kind !== "orchestrator";
-	const refetchInterval = pending ? PENDING_POLL_MS : false;
-	const manifest = useQuery({ ...sessionWorkspaceFilesQueryOptions(session.id, undefined, hostId), enabled: showGit, refetchInterval });
-	const history = useQuery({ ...sessionWorkspaceHistoryQueryOptions(session.id, undefined, hostId), enabled: showGit, refetchInterval });
+	const manifest = useQuery({ ...sessionWorkspaceFilesQueryOptions(session.id, undefined, hostId), enabled: showGit });
 
 	const sections = manifest.data?.sections;
 	const facts: GitFacts = {
 		loaded: manifest.data !== undefined,
 		uncommitted: sections ? uniqueByPath([...sections.staged, ...sections.unstaged, ...sections.untracked]) : [],
 		committed: sections?.committed ?? [],
-		commits: history.data?.commits.length,
-		ahead: history.data ? (history.data.ahead ?? null) : undefined,
+		branch: session.branchState,
 		// head_fallback compares against HEAD because the base is unknown.
 		base: manifest.data?.compareMode === "head_fallback" ? undefined : displayBaseRef(manifest.data?.compareBaseRef),
 	};
@@ -306,23 +294,22 @@ function menuIcon(kind: SessionGitActionKind) {
 }
 
 function commitsRowView(facts: GitFacts, t: TFunction): { label: string; note?: string; noteTone?: "warn" | "muted" } | null {
-	if (facts.commits === undefined) {
-		// History unavailable: still say the branch carries committed work.
+	const branch = facts.branch;
+	if (!branch) {
+		// Not observed yet: still say the branch carries committed work.
 		return facts.committed.length > 0 ? { label: t("inspector.git.committedFiles", { count: facts.committed.length }) } : null;
 	}
-	if (facts.commits === 0) return null;
-	const label = t("inspector.git.commits", { count: facts.commits });
-	if (facts.ahead === undefined) return { label };
-	if (facts.ahead === null) return { label, note: t("inspector.git.notPushed"), noteTone: "warn" };
-	if (facts.ahead > 0) return { label, note: t("inspector.git.someNotPushed", { count: facts.ahead }), noteTone: "warn" };
+	if (branch.commits === 0) return null;
+	const label = t("inspector.git.commits", { count: branch.commits });
+	if (!branch.remoteBranch) return { label, note: t("inspector.git.notPushed"), noteTone: "warn" };
+	if (branch.unpushed > 0) return { label, note: t("inspector.git.someNotPushed", { count: branch.unpushed }), noteTone: "warn" };
 	return { label, note: t("inspector.git.pushed"), noteTone: "muted" };
 }
 
 export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined): GitActionPlan | null {
 	if (!facts.loaded) return null;
 	const dirty = facts.uncommitted.length > 0;
-	const commits = facts.commits ?? 0;
-	const unpushed = facts.ahead === null ? commits : facts.ahead ?? 0;
+	const unpushed = facts.branch?.unpushed ?? 0;
 	if (openPRNumber !== undefined) {
 		if (dirty) return { primary: "commitPush", menu: ["commit"] };
 		if (unpushed > 0) return { primary: "push", menu: [] };
@@ -330,7 +317,7 @@ export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined)
 	}
 	if (dirty) return { primary: "createPR", menu: ["commit", "commitPush", "createDraftPR"] };
 	if (unpushed > 0) return { primary: "createPR", menu: ["push", "createDraftPR"] };
-	if (commits > 0 && facts.ahead === 0) return { primary: "createPR", menu: ["createDraftPR"] };
+	if (facts.branch && facts.branch.commits > 0) return { primary: "createPR", menu: ["createDraftPR"] };
 	return null;
 }
 
@@ -342,9 +329,9 @@ export function gitActionDone(kind: SessionGitActionKind, facts: GitFacts, openP
 		case "commit":
 			return facts.loaded && facts.uncommitted.length === 0;
 		case "commitPush":
-			return facts.loaded && facts.uncommitted.length === 0 && facts.ahead === 0;
+			return facts.loaded && facts.uncommitted.length === 0 && isPushed(facts.branch);
 		case "push":
-			return facts.ahead === 0;
+			return isPushed(facts.branch);
 	}
 }
 
@@ -369,8 +356,12 @@ function primaryLabel(kind: SessionGitActionKind, facts: GitFacts, openPRNumber:
 	if (kind === "commitPush") return t("inspector.git.commitAndPushToPR", { number: openPRNumber });
 	if (kind === "push") return t("inspector.git.pushToPR", { number: openPRNumber });
 	if (facts.uncommitted.length > 0) return t("inspector.git.commitAndCreatePR");
-	if (facts.ahead !== 0) return t("inspector.git.pushAndCreatePR");
+	if (!isPushed(facts.branch)) return t("inspector.git.pushAndCreatePR");
 	return t("inspector.git.createPR");
+}
+
+function isPushed(branch: SessionBranchState | undefined): boolean {
+	return Boolean(branch?.remoteBranch) && branch?.unpushed === 0;
 }
 
 function menuLabel(kind: SessionGitActionKind, t: TFunction): string {

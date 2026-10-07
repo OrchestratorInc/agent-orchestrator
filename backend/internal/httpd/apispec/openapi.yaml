@@ -10811,6 +10811,8 @@ components:
           type: boolean
         branch:
           type: string
+        branchState:
+          $ref: '#/components/schemas/SessionBranchState'
         chatProviderPreserved:
           type: boolean
         createdAt:
@@ -14041,6 +14043,18 @@ components:
       - kind
       - size
       - updatedAt
+      type: object
+    SessionBranchState:
+      properties:
+        commits:
+          type: integer
+        remoteBranch:
+          type: string
+        unpushed:
+          type: integer
+      required:
+      - commits
+      - unpushed
       type: object
     SessionInterfaceTransition:
       properties:

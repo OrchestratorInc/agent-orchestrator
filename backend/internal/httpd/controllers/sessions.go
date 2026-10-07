@@ -1083,6 +1083,11 @@ func (c *SessionsController) getWorkspaceFileBlob(w http.ResponseWriter, r *http
 	_, _ = w.Write(blob.Data)
 }
 
+// branchStateReconciler refreshes a session's persisted branch facts.
+type branchStateReconciler interface {
+	ReconcileSessionBranchState(ctx context.Context, id domain.SessionID) error
+}
+
 func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/events")
@@ -1144,6 +1149,12 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 				return
 			}
 			flusher.Flush()
+			// The same watch sees commits and pushes, so refresh the persisted
+			// branch facts too; their change streams to every client as
+			// session_updated.
+			if reconciler, ok := c.Svc.(branchStateReconciler); ok {
+				_ = reconciler.ReconcileSessionBranchState(r.Context(), sessionID(r))
+			}
 			manifest, refreshErr := c.Svc.RefreshWorkspaceManifest(r.Context(), sessionID(r))
 			if refreshErr != nil {
 				continue

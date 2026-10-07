@@ -261,10 +261,22 @@ func discoverGitWorkspace(ctx context.Context, root string) gitWorkspace {
 		}
 	}
 	metadataFiles[filepath.Join(commonDir, "packed-refs")] = struct{}{}
+	// config changes when a push sets the upstream; the remote-tracking ref
+	// changes on every later push.
+	metadataFiles[filepath.Join(commonDir, "config")] = struct{}{}
 	if raw, refErr := aoprocess.CommandContext(ctx, "git", "-C", root, "symbolic-ref", "-q", "HEAD").Output(); refErr == nil {
 		ref := strings.TrimSpace(string(raw))
 		if ref != "" {
 			metadataFiles[filepath.Join(commonDir, filepath.FromSlash(ref))] = struct{}{}
+			if branch, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+				remote := "origin"
+				if out, err := aoprocess.CommandContext(ctx, "git", "-C", root, "config", "--get", "branch."+branch+".remote").Output(); err == nil {
+					if name := strings.TrimSpace(string(out)); name != "" && name != "." {
+						remote = name
+					}
+				}
+				metadataFiles[filepath.Join(commonDir, "refs", "remotes", remote, filepath.FromSlash(branch))] = struct{}{}
+			}
 		}
 	}
 	return gitWorkspace{available: true, files: files, metadataFiles: metadataFiles}
