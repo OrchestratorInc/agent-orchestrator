@@ -36,7 +36,7 @@ var (
 // Version names the bootstrap this build injects. The render route puts it in
 // the ETag, so a page fetched before a daemon upgrade is not reused after it.
 var Version = func() string {
-	sum := sha256.Sum256([]byte(bootstrapJS + defaultThemeCSS + baseCSS))
+	sum := sha256.Sum256([]byte(inject("")))
 	return hex.EncodeToString(sum[:])[:12]
 }()
 

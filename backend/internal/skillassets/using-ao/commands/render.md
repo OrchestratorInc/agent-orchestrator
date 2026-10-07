@@ -70,5 +70,5 @@ light/dark mode live:
 `--font-sans`, `--font-mono`.
 
 The base stylesheet sets the page background, text color, and font from these,
-sets `body` margin to 0, and hides the page scrollbar. Use the variables rather
+sets `body` margin to 0, and hides the page scrollbar in the thread. Use the variables rather
 than hard-coded colors so the page reads correctly in both themes.
