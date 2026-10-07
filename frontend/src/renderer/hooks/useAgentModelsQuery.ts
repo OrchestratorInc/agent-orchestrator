@@ -1,11 +1,11 @@
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 
 export type AgentModelCatalog = components["schemas"]["AgentModelsResponse"];
 
-const MODEL_CATALOG_VALIDATION_INTERVAL_MS = 10 * 60 * 1_000;
+export const MODEL_CATALOG_VALIDATION_INTERVAL_MS = 10 * 60 * 1_000;
 
 export const agentModelsQueryPrefix = (agentId: string) =>
 	["agent-models", agentId] as const;
@@ -42,6 +42,7 @@ export function agentModelsQueryOptions(agentId: string, projectId: string, host
 		queryFn: () => requestAgentModels(agentId, projectId, "cached", hostId),
 		enabled: agentId !== "",
 		staleTime: MODEL_CATALOG_VALIDATION_INTERVAL_MS,
+		gcTime: 24 * 60 * 60 * 1_000,
 	});
 }
 
@@ -51,4 +52,29 @@ export function refreshAgentModels(agentId: string, projectId: string, hostId?: 
 
 export function revalidateAgentModels(agentId: string, projectId: string, hostId?: string) {
 	return requestAgentModels(agentId, projectId, "revalidate", hostId);
+}
+
+export function agentModelsRevalidationQueryOptions(
+	agentId: string,
+	projectId: string,
+	catalog: AgentModelCatalog | undefined,
+	hostId?: string,
+) {
+	return queryOptions({
+		queryKey: ["agent-model-revalidation", hostId ?? "", agentId, projectId, catalog?.validatedAt ?? ""] as const,
+		queryFn: () => revalidateAgentModels(agentId, projectId, hostId),
+		enabled: agentId !== "" && catalog?.refreshRecommended === true,
+		staleTime: Number.POSITIVE_INFINITY,
+		retry: false,
+	});
+}
+
+export async function resetAgentModels(queryClient: QueryClient, agentId: string, hostId?: string) {
+	await Promise.all([
+		queryClient.resetQueries({
+			queryKey: hostId ? ["agent-models", hostId, agentId] : agentModelsQueryPrefix(agentId),
+			predicate: (query) => query.queryKey.length === (hostId ? 4 : 3),
+		}),
+		queryClient.resetQueries({ queryKey: ["agent-model-revalidation", hostId ?? "", agentId] }),
+	]);
 }

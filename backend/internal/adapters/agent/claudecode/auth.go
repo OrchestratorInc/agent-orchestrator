@@ -3,10 +3,15 @@ package claudecode
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -372,22 +377,111 @@ var claudeModelAuthReport = func(ctx context.Context, binary, workingDir string,
 	return (&Plugin{}).claudeCLIAuthReport(ctx, binary, workingDir, env)
 }
 
-// ProviderCatalogFingerprint returns the local identity inputs that scope a
-// Claude provider catalog. It includes the CLI-reported provider and the
-// resolved credential identity without exposing the credential itself.
+// ProviderCatalogFingerprint hashes observable local catalog inputs without
+// running the CLI or reading the keychain. Keychain-only changes are observed
+// separately by the bounded background identity check.
 func ProviderCatalogFingerprint(ctx context.Context, binary, workingDir string, env map[string]string) string {
+	_ = binary
+	settings := agentcreds.ResolveClaudeSettings(ctx, workingDir, env, agentcreds.ResolveOptions{})
+	hash := sha256.New()
+	keys := make([]string, 0, len(settings.Env))
+	for key := range settings.Env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		_, _ = hash.Write([]byte(key + "\x00" + settings.Env[key] + "\x00"))
+	}
+	lookup := func(key string) string {
+		if value, ok := env[key]; ok {
+			return strings.TrimSpace(value)
+		}
+		return strings.TrimSpace(os.Getenv(key))
+	}
+	for _, key := range []string{"ANTHROPIC_CUSTOM_MODEL_OPTION", "CLAUDE_MODEL_CONFIG"} {
+		_, _ = hash.Write([]byte(key + "\x00" + lookup(key) + "\x00"))
+	}
+	homeKey := "HOME"
+	if runtime.GOOS == "windows" {
+		homeKey = "USERPROFILE"
+	}
+	home := lookup(homeKey)
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	configDir := settings.Env["CLAUDE_CONFIG_DIR"]
+	accountPath := filepath.Join(home, ".claude.json")
+	if configDir == "" {
+		configDir = filepath.Join(home, ".claude")
+	} else {
+		accountPath = filepath.Join(configDir, ".claude.json")
+	}
+	_, _ = hash.Write([]byte(configDir + "\x00"))
+	if raw, ok := readCatalogIdentityFile(ctx, filepath.Join(configDir, ".credentials.json")); ok {
+		_, _ = hash.Write(raw)
+	}
+	_, _ = hash.Write([]byte{0})
+	if raw, ok := readCatalogIdentityFile(ctx, accountPath); ok {
+		var account struct {
+			OAuthAccount struct {
+				AccountUUID      string `json:"accountUuid"`
+				OrganizationUUID string `json:"organizationUuid"`
+				EmailAddress     string `json:"emailAddress"`
+			} `json:"oauthAccount"`
+			HasAvailableSubscription bool `json:"hasAvailableSubscription"`
+		}
+		if json.Unmarshal(raw, &account) == nil {
+			identity, _ := json.Marshal(account)
+			_, _ = hash.Write(identity)
+		}
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil)[:8])
+}
+
+func readCatalogIdentityFile(ctx context.Context, path string) ([]byte, bool) {
+	if ctx.Err() != nil {
+		return nil, false
+	}
+	const maxIdentityFileSize = 1 << 20
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxIdentityFileSize {
+		return nil, false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	defer func() { _ = file.Close() }()
+	info, err = file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxIdentityFileSize {
+		return nil, false
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, maxIdentityFileSize+1))
+	return raw, err == nil && len(raw) <= maxIdentityFileSize
+}
+
+// ProviderCatalogIdentityFingerprint observes the effective credential in the
+// background. An inconclusive CLI or credential lookup is not an account change.
+func ProviderCatalogIdentityFingerprint(ctx context.Context, binary, workingDir string, env map[string]string) (string, bool) {
 	probeCtx, cancel := context.WithTimeout(ctx, claudeAuthProbeTimeout)
 	defer cancel()
 	resolved := (&Plugin{}).resolveProviderContext(probeCtx, binary, workingDir, env, claudeModelAuthReport)
-	reported := ""
-	if resolved.cliOK {
-		reported = strings.TrimSpace(resolved.report.APIProvider)
+	return providerCatalogIdentity(probeCtx, ProviderCatalogFingerprint(ctx, binary, workingDir, env), resolved)
+}
+
+func providerCatalogIdentity(ctx context.Context, localFingerprint string, resolved claudeProviderContext) (string, bool) {
+	if ctx.Err() != nil || !resolved.cliOK || !resolved.providerOK || !resolved.found {
+		return "", false
 	}
-	credential := ""
-	if resolved.found {
-		credential = resolved.credential.Fingerprint()
+	credential := resolved.credential.Fingerprint()
+	if credential == "" {
+		return "", false
 	}
-	return string(resolved.provider) + "\x00" + reported + "\x00" + credential
+	identity := strings.Join([]string{
+		localFingerprint, string(resolved.provider), strings.TrimSpace(resolved.report.APIProvider), credential,
+	}, "\x00")
+	digest := sha256.Sum256([]byte(identity))
+	return fmt.Sprintf("%x", digest[:8]), true
 }
 
 // ProviderModels returns the Claude model IDs the configured provider actually
@@ -402,11 +496,19 @@ func ProviderCatalogFingerprint(ctx context.Context, binary, workingDir string, 
 // An error means the provider could not be asked. Callers must fall back to
 // their static list rather than presenting an empty picker.
 func ProviderModels(ctx context.Context, binary, workingDir string, env map[string]string) ([]ports.AgentModelInfo, error) {
+	catalog, err := ProviderCatalog(ctx, binary, workingDir, env)
+	return catalog.Models, err
+}
+
+// ProviderCatalog binds models to the credential used to discover them.
+func ProviderCatalog(ctx context.Context, binary, workingDir string, env map[string]string) (ports.AgentModelCatalog, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, agentcreds.DefaultTimeout)
 	defer cancel()
 	resolved := (&Plugin{}).resolveProviderContext(probeCtx, binary, workingDir, env, claudeModelAuthReport)
+	catalog := ports.AgentModelCatalog{AgentID: "claude-code"}
+	catalog.InputFingerprint, _ = providerCatalogIdentity(probeCtx, ProviderCatalogFingerprint(ctx, binary, workingDir, env), resolved)
 	if !resolved.providerOK {
-		return nil, errors.New("claude-code: model discovery: configured provider is unsupported")
+		return catalog, errors.New("claude-code: model discovery: configured provider is unsupported")
 	}
 	result := agentcreds.Result{}
 	if resolved.found {
@@ -422,10 +524,10 @@ func ProviderModels(ctx context.Context, binary, workingDir string, env map[stri
 		claudeAuthCache.put(result)
 	}
 	if result.State != agentcreds.StateValid && len(result.Models) == 0 {
-		return nil, fmt.Errorf("claude-code: model discovery: %s", result.Detail)
+		return catalog, fmt.Errorf("claude-code: model discovery: %s", result.Detail)
 	}
 	if len(result.Models) == 0 {
-		return nil, errors.New("claude-code: provider reported no Claude models")
+		return catalog, errors.New("claude-code: provider reported no Claude models")
 	}
 
 	models := make([]ports.AgentModelInfo, 0, len(result.Models))
@@ -434,5 +536,6 @@ func ProviderModels(ctx context.Context, binary, workingDir string, env map[stri
 			ID: model.ID, Label: model.DisplayName, Efforts: model.Efforts,
 		})
 	}
-	return models, nil
+	catalog.Models = models
+	return catalog, nil
 }

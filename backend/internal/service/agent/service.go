@@ -19,8 +19,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+const modelCatalogLoadTimeout = 30 * time.Second
+
 var (
-	modelCatalogLoadTimeout = 30 * time.Second
 	// Retained for compatibility with focused tests that construct an obviously
 	// old timestamp; production freshness is calendar-day based below.
 	modelCatalogTrustWindow = 6 * time.Hour
@@ -56,6 +57,7 @@ const (
 	modelLoadCached modelLoadMode = iota
 	modelLoadRevalidate
 	modelLoadRefresh
+	modelLoadCheck
 )
 
 type modelCatalogCall struct {
@@ -63,6 +65,12 @@ type modelCatalogCall struct {
 	catalog    ports.AgentModelCatalog
 	err        error
 	generation int64
+	mode       modelLoadMode
+}
+
+type modelCatalogGeneration struct {
+	latest    int64
+	authFence int64
 }
 
 // Service owns normalized harness readiness and the unchanged model catalog.
@@ -73,12 +81,13 @@ type Service struct {
 	cache             ports.AgentModelCatalogCache
 	discoverer        ports.AgentModelDiscoverer
 	modelDiscoveryDir string
+	modelLoadTimeout  time.Duration
 	projects          ProjectLookup
 	sessions          SessionUsageLookup
 	resolverMu        map[string]*sync.Mutex
 	modelCallMu       sync.Mutex
 	modelCalls        map[string]*modelCatalogCall
-	modelGeneration   map[string]int64
+	modelGeneration   map[string]modelCatalogGeneration
 	discoverySlots    chan struct{}
 	ctx               context.Context
 	now               func() time.Time
@@ -146,6 +155,7 @@ func NewWithDeps(deps Deps) *Service {
 	if svc.codexAccounts != nil {
 		svc.codexAccounts.onAuthenticationChanged = func() {
 			svc.readiness.Invalidate(string(domain.HarnessCodex), readinessInvalidateAuthentication)
+			svc.InvalidateModelCatalogs(string(domain.HarnessCodex))
 		}
 	}
 	if svc.codexAccounts != nil && deps.CodexAccountSwitches != nil && deps.CodexOperationGate != nil {
@@ -177,7 +187,7 @@ func newService(agents []agentregistry.HarnessAgent, cache ports.AgentModelCatal
 	for _, item := range agents {
 		resolverMu[string(item.Harness)] = &sync.Mutex{}
 	}
-	return &Service{agents: agents, readiness: newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents}), cache: cache, discoverer: discoverer, projects: projects, resolverMu: resolverMu, modelCalls: map[string]*modelCatalogCall{}, modelGeneration: map[string]int64{}, discoverySlots: make(chan struct{}, 2), ctx: context.Background(), now: time.Now, logger: slog.Default()}
+	return &Service{agents: agents, readiness: newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents}), cache: cache, discoverer: discoverer, projects: projects, resolverMu: resolverMu, modelCalls: map[string]*modelCatalogCall{}, modelGeneration: map[string]modelCatalogGeneration{}, modelLoadTimeout: modelCatalogLoadTimeout, discoverySlots: make(chan struct{}, 2), ctx: context.Background(), now: time.Now, logger: slog.Default()}
 }
 
 // WarmModelCatalogs starts the bounded cache scheduler. Readiness is never held
@@ -313,6 +323,8 @@ func (s *Service) monitorModelCatalogFreshness(ctx context.Context) {
 			zone, offset := now.Zone()
 			if catalogClockDiscontinuity(last, now, lastZone, lastOffset) {
 				s.prefetchModelCatalogs(ctx, true)
+			} else {
+				s.checkModelCatalogInputs(ctx)
 			}
 			last, lastZone, lastOffset = now, zone, offset
 		}
@@ -340,11 +352,14 @@ func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh
 			return ports.AgentModelCatalog{}, err
 		}
 		if ok {
-			// Claude provider model IDs are credential-scoped. Check its local
-			// discovery inputs before serving a cache hit so switching provider or
-			// credentials cannot briefly expose IDs from the previous provider.
-			// The check is local; provider discovery remains cache-first.
-			if agentID == "claude-code" && s.modelCatalogInputsChanged(ctx, agentID, projectID, cached.BinaryVersion) {
+			if cached.Generation < s.modelAuthenticationFence(agentID, projectID) {
+				return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadRevalidate)
+			}
+			request, err := s.modelDiscoveryRequest(ctx, agentID, projectID, cached.Catalog.Metadata["binary"])
+			if err != nil {
+				return ports.AgentModelCatalog{}, err
+			}
+			if s.discoverer.CatalogFingerprint(ctx, request) != cached.BinaryVersion {
 				return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadCached)
 			}
 			cached.Catalog = applyCustomModelEntryPolicy(cached.Catalog, s.discoverer.Manual(agentID))
@@ -354,12 +369,6 @@ func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh
 			cached.Catalog.RefreshRecommended = !retriesExhausted && (due || needsRecovery || cached.RefreshState == "error" || cached.RefreshState == "queued")
 			if !retriesExhausted && (due || needsRecovery) && (cached.RetryAt.IsZero() || !s.now().Before(cached.RetryAt)) {
 				go func() { _, _ = s.RevalidateModels(s.ctx, agentID, projectID) }()
-			} else if retriesExhausted {
-				go s.revalidateChangedInputs(agentID, projectID, cached.BinaryVersion)
-			} else if !due {
-				time.AfterFunc(10*time.Millisecond, func() {
-					s.revalidateChangedInputs(agentID, projectID, cached.BinaryVersion)
-				})
 			}
 			return cached.Catalog, nil
 		}
@@ -371,36 +380,19 @@ func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh
 	return s.coalesceModelLoad(ctx, agentID, projectID, mode)
 }
 
-func (s *Service) revalidateChangedInputs(agentID, projectID, cachedFingerprint string) {
-	if s.ctx.Err() != nil {
-		return
-	}
-	if s.modelCatalogInputsChanged(s.ctx, agentID, projectID, cachedFingerprint) {
-		_, _ = s.RevalidateModels(s.ctx, agentID, projectID)
-	}
-}
-
-func (s *Service) modelCatalogInputsChanged(ctx context.Context, agentID, projectID, cachedFingerprint string) bool {
-	item, ok := s.agent(agentID)
-	if !ok {
-		return false
-	}
-	var binary string
-	if resolver, ok := item.Agent.(ports.AgentBinaryResolver); ok {
-		lock := s.resolverMu[agentID]
-		lock.Lock()
-		resolved, err := resolver.ResolveBinary(ctx)
-		lock.Unlock()
+func (s *Service) checkModelCatalogInputs(ctx context.Context) {
+	for _, item := range s.agents {
+		records, err := s.cache.ListAgentModelCatalogsByAgent(ctx, string(item.Harness))
 		if err != nil {
-			return false
+			continue
 		}
-		binary = resolved
+		for _, record := range records {
+			if ctx.Err() != nil {
+				return
+			}
+			_, _ = s.coalesceModelLoad(ctx, record.AgentID, record.ProjectID, modelLoadCheck)
+		}
 	}
-	request, err := s.modelDiscoveryRequest(ctx, agentID, projectID, binary)
-	if err != nil {
-		return false
-	}
-	return s.discoverer.CatalogFingerprint(ctx, request) != cachedFingerprint
 }
 
 // credentialScopePrefix marks a model-catalog scope that is not a project but a
@@ -508,16 +500,7 @@ func (s *Service) InvalidateModelCatalogs(agentID string) {
 			if s.ctx.Err() != nil {
 				return
 			}
-			var catalog ports.AgentModelCatalog
-			if json.Unmarshal([]byte(record.CatalogJSON), &catalog) == nil {
-				catalog.RefreshRecommended = true
-				catalog.RefreshState = "queued"
-				catalog.RefreshError = ""
-				catalog.LastSuccessAt = nil
-				catalog.RetryAt = nil
-				_ = s.saveCatalog(s.ctx, record.ProjectID, catalog, time.Now().UTC().UnixNano(), 0)
-			}
-			_, _ = s.RevalidateModels(s.ctx, agentID, record.ProjectID)
+			s.invalidateModelCatalog(record)
 		}
 	}()
 }
@@ -541,19 +524,109 @@ func (s *Service) InvalidateProjectModelCatalogs(projectID string) {
 			if record.ProjectID != projectID || s.ctx.Err() != nil {
 				continue
 			}
-			var catalog ports.AgentModelCatalog
-			if json.Unmarshal([]byte(record.CatalogJSON), &catalog) != nil {
-				continue
-			}
-			catalog.RefreshRecommended = true
-			catalog.RefreshState = "queued"
-			catalog.RefreshError = ""
-			catalog.LastSuccessAt = nil
-			catalog.RetryAt = nil
-			_ = s.saveCatalog(s.ctx, projectID, catalog, time.Now().UTC().UnixNano(), 0)
-			_, _ = s.RevalidateModels(s.ctx, record.AgentID, projectID)
+			s.invalidateModelCatalog(record)
 		}
 	}()
+}
+
+func (s *Service) invalidateAuthenticationModelCatalogs(agentID string) {
+	if s.discoverer == nil {
+		return
+	}
+	scopes := make(map[string]bool)
+	s.modelCallMu.Lock()
+	for key, call := range s.modelCalls {
+		agent, projectID, ok := strings.Cut(key, "\x00")
+		if !ok || agent != agentID {
+			continue
+		}
+		generation := s.nextModelGenerationLocked(key, call.generation)
+		state := s.modelGeneration[key]
+		state.authFence = generation
+		s.modelGeneration[key] = state
+		scopes[projectID] = true
+	}
+	s.modelCallMu.Unlock()
+	if s.cache != nil {
+		records, err := s.cache.ListAgentModelCatalogsByAgent(s.ctx, agentID)
+		if err == nil {
+			for _, record := range records {
+				if s.ctx.Err() != nil {
+					return
+				}
+				s.markModelCatalogInvalidated(record, true)
+				if _, active := scopes[record.ProjectID]; !active {
+					scopes[record.ProjectID] = false
+				}
+			}
+		}
+	}
+	for projectID, active := range scopes {
+		if active {
+			continue
+		}
+		go func(projectID string) {
+			_, _ = s.RevalidateModels(s.ctx, agentID, projectID)
+		}(projectID)
+	}
+}
+
+func (s *Service) markModelCatalogInvalidated(record ports.CachedAgentModelCatalog, authentication bool) bool {
+	var catalog ports.AgentModelCatalog
+	if json.Unmarshal([]byte(record.CatalogJSON), &catalog) != nil {
+		return false
+	}
+	key := record.AgentID + "\x00" + record.ProjectID
+	s.modelCallMu.Lock()
+	clearChoices := authentication || record.Generation < s.modelGeneration[key].authFence
+	generation := s.nextModelGenerationLocked(key, record.Generation)
+	if authentication {
+		state := s.modelGeneration[key]
+		state.authFence = generation
+		s.modelGeneration[key] = state
+	}
+	s.modelCallMu.Unlock()
+	if clearChoices {
+		metadata := catalog.Metadata
+		catalog = s.discoverer.Manual(record.AgentID)
+		catalog.Metadata = metadata
+	}
+	catalog.RefreshRecommended = true
+	catalog.RefreshState = "queued"
+	catalog.RefreshError = ""
+	if clearChoices {
+		catalog.LastSuccessAt = nil
+	} else if !record.LastSuccessAt.IsZero() {
+		catalog.LastSuccessAt = &record.LastSuccessAt
+	}
+	catalog.RetryAt = nil
+	return s.saveCatalog(s.ctx, record.ProjectID, catalog, generation, 0) == nil
+}
+
+func (s *Service) invalidateModelCatalog(record ports.CachedAgentModelCatalog) {
+	if s.markModelCatalogInvalidated(record, false) {
+		_, _ = s.RevalidateModels(s.ctx, record.AgentID, record.ProjectID)
+	}
+}
+
+func (s *Service) nextModelGenerationLocked(key string, minimum int64) int64 {
+	generation := time.Now().UTC().UnixNano()
+	if generation <= minimum {
+		generation = minimum + 1
+	}
+	state := s.modelGeneration[key]
+	if generation <= state.latest {
+		generation = state.latest + 1
+	}
+	state.latest = generation
+	s.modelGeneration[key] = state
+	return generation
+}
+
+func (s *Service) modelAuthenticationFence(agentID, projectID string) int64 {
+	s.modelCallMu.Lock()
+	defer s.modelCallMu.Unlock()
+	return s.modelGeneration[agentID+"\x00"+projectID].authFence
 }
 
 func (s *Service) coalesceModelLoad(
@@ -567,18 +640,15 @@ func (s *Service) coalesceModelLoad(
 		s.modelCallMu.Unlock()
 		select {
 		case <-active.done:
-			return active.catalog, active.err
+			if (active.mode == modelLoadCheck && mode != modelLoadCheck) || (mode == modelLoadRefresh && active.mode != modelLoadRefresh) {
+				return s.coalesceModelLoad(ctx, agentID, projectID, mode)
+			}
+			return s.validatedModelLoadResult(ctx, agentID, projectID, active)
 		case <-ctx.Done():
 			return ports.AgentModelCatalog{}, ctx.Err()
 		}
 	}
-	wallGeneration := time.Now().UTC().UnixNano()
-	if s.modelGeneration[key] < wallGeneration {
-		s.modelGeneration[key] = wallGeneration
-	} else {
-		s.modelGeneration[key]++
-	}
-	call := &modelCatalogCall{done: make(chan struct{}), generation: s.modelGeneration[key]}
+	call := &modelCatalogCall{done: make(chan struct{}), generation: s.nextModelGenerationLocked(key, 0), mode: mode}
 	s.modelCalls[key] = call
 	s.modelCallMu.Unlock()
 
@@ -598,7 +668,7 @@ func (s *Service) coalesceModelLoad(
 			s.modelCallMu.Unlock()
 			return
 		}
-		loadCtx, cancel := context.WithTimeout(baseCtx, modelCatalogLoadTimeout)
+		loadCtx, cancel := context.WithTimeout(baseCtx, s.modelLoadTimeout)
 		defer cancel()
 		call.catalog, call.err = s.loadModels(loadCtx, agentID, projectID, mode, call.generation)
 		s.modelCallMu.Lock()
@@ -609,10 +679,49 @@ func (s *Service) coalesceModelLoad(
 
 	select {
 	case <-call.done:
-		return call.catalog, call.err
+		return s.validatedModelLoadResult(ctx, agentID, projectID, call)
 	case <-ctx.Done():
 		return ports.AgentModelCatalog{}, ctx.Err()
 	}
+}
+
+func (s *Service) validatedModelLoadResult(ctx context.Context, agentID, projectID string, call *modelCatalogCall) (ports.AgentModelCatalog, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.AgentModelCatalog{}, err
+	}
+	if call.generation < s.modelAuthenticationFence(agentID, projectID) {
+		return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadRevalidate)
+	}
+	if call.err != nil {
+		return call.catalog, call.err
+	}
+	catalog := call.catalog
+	cached, exists, err := s.cachedCatalog(ctx, agentID, projectID)
+	if err != nil {
+		return ports.AgentModelCatalog{}, err
+	}
+	if exists && cached.Generation > call.generation {
+		if cached.RefreshState == "queued" {
+			key := agentID + "\x00" + projectID
+			s.modelCallMu.Lock()
+			state := s.modelGeneration[key]
+			if state.latest < cached.Generation {
+				state.latest = cached.Generation
+				s.modelGeneration[key] = state
+			}
+			s.modelCallMu.Unlock()
+			return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadRevalidate)
+		}
+		catalog = cached.Catalog
+	}
+	request, err := s.modelDiscoveryRequest(ctx, agentID, projectID, catalog.Metadata["binary"])
+	if err != nil {
+		return ports.AgentModelCatalog{}, err
+	}
+	if s.discoverer.CatalogFingerprint(ctx, request) != catalog.BinaryVersion {
+		return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadRevalidate)
+	}
+	return catalog, nil
 }
 
 func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mode modelLoadMode, generation int64) (ports.AgentModelCatalog, error) {
@@ -629,6 +738,10 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	cached, hasCached, err := s.cachedCatalog(ctx, agentID, projectID)
 	if err != nil {
 		return ports.AgentModelCatalog{}, err
+	}
+	if hasCached && cached.Generation < s.modelAuthenticationFence(agentID, projectID) {
+		cached = decodedCatalog{}
+		hasCached = false
 	}
 	cached.ProjectID = projectID
 	policy := s.discoverer.Manual(agentID)
@@ -653,8 +766,21 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	// either the executable or the configuration behind it invalidates the cache.
 	version := s.discoverer.CatalogFingerprint(ctx, request)
 	inputsChanged := hasCached && cached.BinaryVersion != version
+	if hasCached && !inputsChanged && binary != "" && cached.Catalog.Metadata["binary"] == "" {
+		cached.Catalog.Metadata = catalogMetadata(request)
+		_ = s.saveCatalog(ctx, projectID, cached.Catalog, generation, cached.RetryCount)
+	}
+	if mode == modelLoadCheck && hasCached && !inputsChanged {
+		if observer, ok := s.discoverer.(ports.AgentModelCatalogIdentityFingerprinter); ok {
+			identity, conclusive := observer.CatalogIdentityFingerprint(ctx, request)
+			inputsChanged = conclusive && identity != cached.Catalog.InputFingerprint
+		}
+		if !inputsChanged {
+			return cached.Catalog, nil
+		}
+	}
 	explicitlyInvalidated := hasCached && (cached.RefreshState == "queued" || cached.RefreshState == "refreshing")
-	if hasCached && mode == modelLoadCached && cached.BinaryVersion == version {
+	if hasCached && mode == modelLoadCached && !inputsChanged {
 		// A command-backed catalog can drift without the binary or its config
 		// changing (a provider adds a model), which no fingerprint can see. Ask
 		// cache-first clients to revalidate in the background once the catalog is
@@ -690,18 +816,24 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	discovered, discoverErr := s.discoverer.Discover(ctx, request)
 	discovered = applyCustomModelEntryPolicy(discovered, policy)
 	discovered.BinaryVersion = version
+	discovered.Metadata = catalogMetadata(request)
+	if discovered.InputFingerprint != "" && cached.Catalog.InputFingerprint != "" && discovered.InputFingerprint != cached.Catalog.InputFingerprint {
+		inputsChanged = hasCached
+	}
 	persistCtx := s.ctx
 	if persistCtx == nil {
 		persistCtx = context.Background()
 	}
 	if errors.Is(discoverErr, ports.ErrAgentModelDiscoverySignInRequired) {
-		return s.keepCatalogUntilSignIn(persistCtx, item.Manifest.Name, cached, hasCached, policy, version, generation), nil
+		policy.InputFingerprint = discovered.InputFingerprint
+		policy.Metadata = catalogMetadata(request)
+		return s.keepCatalogUntilSignIn(persistCtx, item.Manifest.Name, cached, hasCached && !inputsChanged, policy, version, generation), nil
 	}
 	if discoverErr != nil {
 		// Provider model IDs are credential-scoped. Reuse a cached catalog only
 		// when it was produced from the same discovery inputs; otherwise a revoked
 		// key or provider switch could leave invalid IDs in the picker.
-		cacheMatchesInputs := hasCached && cached.BinaryVersion == version
+		cacheMatchesInputs := hasCached && !inputsChanged
 		if cacheMatchesInputs && len(cached.Catalog.Models) > 0 {
 			cached.Catalog.Stale = true
 			cached.Catalog.Warning = discoverErr.Error()
@@ -731,6 +863,8 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		}
 		fallback := policy
 		fallback.BinaryVersion = version
+		fallback.InputFingerprint = discovered.InputFingerprint
+		fallback.Metadata = catalogMetadata(request)
 		fallback.Stale = true
 		fallback.Warning = discoverErr.Error()
 		fallback.RefreshRecommended = true
@@ -744,7 +878,9 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	now := s.now().UTC()
 	discovered.ValidatedAt = now
 	discovered.LastSuccessAt = &now
-	discovered.InputFingerprint = version
+	if discovered.InputFingerprint == "" {
+		discovered.InputFingerprint = version
+	}
 	discovered.Metadata = catalogMetadata(request)
 	discovered.RefreshState = "idle"
 	discovered.RefreshError = ""
@@ -770,7 +906,9 @@ func (s *Service) keepCatalogUntilSignIn(ctx context.Context, agentName string, 
 	if !hasCached {
 		catalog = policy
 		catalog.BinaryVersion = version
-		catalog.InputFingerprint = version
+		if catalog.InputFingerprint == "" {
+			catalog.InputFingerprint = version
+		}
 	}
 	catalog.ValidatedAt = time.Time{}
 	catalog.LastSuccessAt = nil
@@ -835,6 +973,10 @@ func (s *Service) cachedCatalog(ctx context.Context, agentID, projectID string) 
 	if catalog.Models == nil {
 		catalog.Models = []ports.AgentModelInfo{}
 	}
+	catalog.BinaryVersion = record.BinaryVersion
+	if catalog.InputFingerprint == "" {
+		catalog.InputFingerprint = record.InputFingerprint
+	}
 	if catalog.LastSuccessAt == nil || catalog.LastSuccessAt.IsZero() {
 		lastSuccess := record.LastSuccessAt
 		if lastSuccess.IsZero() {
@@ -861,12 +1003,15 @@ func (s *Service) saveCatalog(ctx context.Context, projectID string, catalog por
 	if s.cache == nil {
 		return nil
 	}
+	if generation < s.modelAuthenticationFence(catalog.AgentID, projectID) {
+		return errors.New("model catalog generation predates authentication change")
+	}
 	data, err := json.Marshal(catalog)
 	if err != nil {
 		return fmt.Errorf("encode model catalog for %s: %w", catalog.AgentID, err)
 	}
 	metadata, _ := json.Marshal(catalog.Metadata)
-	return s.cache.UpsertAgentModelCatalog(ctx, ports.CachedAgentModelCatalog{
+	err = s.cache.UpsertAgentModelCatalog(ctx, ports.CachedAgentModelCatalog{
 		AgentID:          catalog.AgentID,
 		ProjectID:        projectID,
 		BinaryVersion:    catalog.BinaryVersion,
@@ -882,6 +1027,10 @@ func (s *Service) saveCatalog(ctx context.Context, projectID string, catalog por
 		RetryAt:          catalogRetryTime(catalog.RetryAt),
 		Generation:       generation,
 	})
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func catalogMetadata(request ports.AgentModelDiscoveryRequest) map[string]string {
@@ -911,7 +1060,9 @@ func (s *Service) saveFailedCatalog(ctx context.Context, previous decodedCatalog
 	catalog.LastSuccessAt = previous.Catalog.LastSuccessAt
 	catalog.RefreshState = "error"
 	catalog.RefreshError = catalog.Warning
-	catalog.InputFingerprint = catalog.BinaryVersion
+	if catalog.InputFingerprint == "" {
+		catalog.InputFingerprint = catalog.BinaryVersion
+	}
 	catalog.Metadata = previous.Catalog.Metadata
 	catalog.RetryAt = nil
 	catalog.RefreshRecommended = retryCount <= int64(modelCatalogMaxRetries)

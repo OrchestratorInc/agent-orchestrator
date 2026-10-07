@@ -85,6 +85,8 @@ function fakeQueryClient() {
 		isFetching: vi.fn().mockReturnValue(0),
 		refetchQueries: vi.fn().mockResolvedValue(undefined),
 		setQueryData: vi.fn(),
+		getQueryData: vi.fn(),
+		resetQueries: vi.fn().mockResolvedValue(undefined),
 	} as unknown as Parameters<typeof createEventTransport>[0];
 }
 
@@ -194,6 +196,45 @@ describe("createEventTransport", () => {
 		disconnect();
 		expect(remoteB.closed).toBe(true);
 		expect(unsubscribeConnectedHostsMock).toHaveBeenCalledOnce();
+	});
+
+	it("targets remote catalog changes and preserves unrelated retained catalogs", async () => {
+		connectedHostsMock.mockReturnValue(["box-a"]);
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/box-a");
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		const remote = EventSourceStub.instances.find((source) => source.url.includes("/box-a/"))!;
+		remote.emit("cursor", "0");
+		await Promise.resolve();
+		vi.mocked(client.invalidateQueries).mockClear();
+		remote.emit("session_updated", JSON.stringify({ payload: { kind: "model_catalog", agentId: "codex", projectId: "proj-1" } }));
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["agent-models", "box-a", "codex", "proj-1"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["agent-models", "box-a"] }, { cancelRefetch: false });
+		await Promise.resolve();
+		vi.mocked(client.invalidateQueries).mockClear();
+		remote.emit("session_updated", JSON.stringify({ sessionId: "session-1" }));
+		expect(vi.mocked(client.invalidateQueries).mock.calls.some(([filters]) => filters?.queryKey?.[0] === "agent-models")).toBe(false);
+		disconnect();
+	});
+
+	it("polls remote models at the validation interval only while SSE is unavailable", async () => {
+		vi.useFakeTimers();
+		try {
+			connectedHostsMock.mockReturnValue(["box-a"]);
+			baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/box-a");
+			const client = fakeQueryClient();
+			const disconnect = createEventTransport(client).connect();
+			await Promise.resolve();
+			vi.mocked(client.invalidateQueries).mockClear();
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["agent-models", "box-a"] }, { cancelRefetch: false });
+			await vi.advanceTimersByTimeAsync(598_000);
+			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["agent-models", "box-a"] }, { cancelRefetch: false });
+			disconnect();
+			vi.mocked(client.invalidateQueries).mockClear();
+			await vi.advanceTimersByTimeAsync(600_000);
+			expect(client.invalidateQueries).not.toHaveBeenCalled();
+		} finally { vi.useRealTimers(); }
 	});
 
 	it("coalesces a burst of remote conversation events into one catch-up fetch", async () => {
@@ -600,6 +641,8 @@ describe("createEventTransport", () => {
 	it("normalizes account stream snapshots without invalidating workspaces", () => {
 		let cached: unknown;
 		const queryClient = {
+			getQueryData: vi.fn(),
+			resetQueries: vi.fn().mockResolvedValue(undefined),
 			invalidateQueries: vi.fn(),
 			setQueryData: vi.fn((_key: readonly string[], update: unknown) => {
 				cached = typeof update === "function" ? update(undefined) : update;

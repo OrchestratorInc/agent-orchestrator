@@ -202,7 +202,9 @@ type Discoverer struct {
 	CodexModels       CodexModelListFunc
 	ACPOptions        map[string]ACPOptionListFunc
 	ClaudeModels      ClaudeModelListFunc
+	ClaudeCatalog     func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error)
 	ClaudeFingerprint ClaudeFingerprintFunc
+	ClaudeIdentity    func(context.Context, ports.AgentModelDiscoveryRequest) (string, bool)
 }
 
 // CodexModelListFunc obtains Codex's account-scoped app-server catalog without
@@ -228,7 +230,18 @@ type ClaudeFingerprintFunc func(context.Context, ports.AgentModelDiscoveryReques
 // Discover uses the agent-owned model surface configured for this adapter.
 func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
 	if request.AgentID == "claude-code" {
-		return discoverClaudeCatalog(ctx, request, d.ClaudeModels)
+		list := d.ClaudeModels
+		identity := ""
+		if d.ClaudeCatalog != nil {
+			list = func(ctx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+				reported, err := d.ClaudeCatalog(ctx, request)
+				identity = reported.InputFingerprint
+				return reported.Models, err
+			}
+		}
+		catalog, err := discoverClaudeCatalog(ctx, request, list)
+		catalog.InputFingerprint = identity
+		return catalog, err
 	}
 	if request.AgentID == "muse" {
 		return Base(request.AgentID), nil
@@ -784,11 +797,15 @@ func BinaryVersion(ctx context.Context, binary string) string {
 // resolved executable plus the configuration and credentials its discovery
 // reads. Only the digest is returned or persisted.
 func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string, env map[string]string) string {
-	binaryVersion := BinaryVersion(ctx, binary)
+	binaryVersion := "catalog-inputs-v1:" + BinaryVersion(ctx, binary)
 	config := discoveryConfigInputs(ctx, agentID, workingDir, env)
+	if agentID != "claude-code" {
+		if launch := catalogEnvironmentFingerprint(env); launch != "" {
+			config += "\x00env=" + launch
+		}
+	}
 	if config == "" {
-		// Keep the executable-only fingerprint byte-identical to what earlier
-		// daemons wrote, so upgrading does not invalidate every cached catalog.
+		// The revision invalidates caches that omitted credential/config inputs.
 		return binaryVersion
 	}
 	hash := sha256.New()
@@ -801,12 +818,25 @@ func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string,
 // discoveryConfigInputs returns the configuration an agent's discovery consults,
 // or "" when the catalog depends on the binary alone.
 func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env map[string]string) string {
+	if agentID == "codex" {
+		return "config=" + codexDiscoveryFingerprint(workingDir, env)
+	}
 	if agentID == "unreal-agent" {
 		provider, selected := unrealConfiguredModel(env)
 		return "provider=" + provider + ";model=" + selected
 	}
 	if agentID == "claude-code" {
 		return "config=" + claudeCodeDiscoveryFingerprint(ctx, workingDir, env)
+	}
+	if agentID == "copilot" || agentID == "droid" || agentID == "kimi" {
+		inputs := "config=" + fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env)) + ";default=" + configuredDefaultModel(agentID, workingDir, env)
+		if agentID == "copilot" {
+			inputs += ";provider-type=" + envValue(env, "COPILOT_PROVIDER_TYPE")
+		}
+		return inputs
+	}
+	if agentID == "gemini" {
+		return "config=" + fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env))
 	}
 	if agentID == "deepseek-harness" {
 		// Not routed through configDiscoveryFingerprint: the profile is what the
@@ -837,6 +867,9 @@ func claudeCodeDiscoveryFingerprint(ctx context.Context, workingDir string, env 
 	sort.Strings(keys)
 	for _, key := range keys {
 		_, _ = hash.Write([]byte(key + "\x00" + settings.Env[key] + "\x00"))
+	}
+	for _, key := range []string{"ANTHROPIC_CUSTOM_MODEL_OPTION", "CLAUDE_MODEL_CONFIG"} {
+		_, _ = hash.Write([]byte(key + "\x00" + envValue(env, key) + "\x00"))
 	}
 	if raw, err := readModelConfig(settings.Env["GOOGLE_APPLICATION_CREDENTIALS"]); err == nil {
 		_, _ = hash.Write(raw)
@@ -1195,4 +1228,41 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 		return strings.ToLower(out[i].Label) < strings.ToLower(out[j].Label)
 	})
 	return out
+}
+
+// CatalogIdentityFingerprint observes credentials that local files cannot track.
+func (d Discoverer) CatalogIdentityFingerprint(ctx context.Context, request ports.AgentModelDiscoveryRequest) (string, bool) {
+	if request.AgentID == "claude-code" && d.ClaudeIdentity != nil {
+		return d.ClaudeIdentity(ctx, request)
+	}
+	return "", false
+}
+
+func catalogEnvironmentFingerprint(env map[string]string) string {
+	inputs := make(map[string]string)
+	for _, entry := range os.Environ() {
+		key, value, _ := strings.Cut(entry, "=")
+		inputs[key] = value
+	}
+	for key, value := range env {
+		inputs[key] = value
+	}
+	keys := make([]string, 0)
+	for key, value := range inputs {
+		if value == "" {
+			continue
+		}
+		if key == "MODEL" || key == "BASE_URL" || strings.HasSuffix(key, "_API_KEY") || strings.HasSuffix(key, "_TOKEN") || strings.HasSuffix(key, "_BASE_URL") || strings.HasSuffix(key, "_MODEL") || strings.HasSuffix(key, "_CONFIG") || strings.HasSuffix(key, "_CONFIG_DIR") || strings.HasSuffix(key, "_CONFIG_FILE") {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	sort.Strings(keys)
+	hash := sha256.New()
+	for _, key := range keys {
+		_, _ = hash.Write([]byte(key + "\x00" + inputs[key] + "\x00"))
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil)[:8])
 }

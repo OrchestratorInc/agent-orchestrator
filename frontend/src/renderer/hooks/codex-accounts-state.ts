@@ -1,3 +1,4 @@
+import { resetAgentModels } from "./useAgentModelsQuery";
 import type { QueryClient } from "@tanstack/react-query";
 import type { CodexAccount, CodexAccountSwitch, CodexAccountsResponse } from "./useCodexAccountsQuery";
 
@@ -35,9 +36,15 @@ export function writeCodexAccounts(
 	queryClient: QueryClient,
 	incoming: CodexAccountsResponse,
 	mode: AccountMergeMode = "replace",
-): void {
-	queryClient.setQueryData<CodexAccountsResponse>(codexAccountsQueryKey, (current) =>
-		mergeCodexAccounts(current, incoming, mode));
+): CodexAccountsResponse {
+	const current = queryClient.getQueryData<CodexAccountsResponse>(codexAccountsQueryKey);
+	const next = mergeCodexAccounts(current, incoming, mode);
+	queryClient.setQueryData(codexAccountsQueryKey, next);
+	if (next !== current && next.deviceReconciliation?.status === "verified" &&
+		next.activeAccountId !== current?.activeAccountId) {
+		void resetAgentModels(queryClient, "codex");
+	}
+	return next;
 }
 
 /**

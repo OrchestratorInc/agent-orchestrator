@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -89,6 +90,64 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 	home, _ := os.UserHomeDir()
 	var paths []string
 	switch agentID {
+	case "gemini":
+		if configuredHome := envValue(env, "HOME"); configuredHome != "" {
+			home = configuredHome
+		}
+		system, defaults := geminiSystemPaths(env)
+		for _, path := range []string{system, defaults} {
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(workingDir, path)
+			}
+			paths = append(paths, path)
+		}
+		if home != "" {
+			for _, name := range []string{"settings.json", "oauth_creds.json", "google_accounts.json"} {
+				paths = append(paths, filepath.Join(home, ".gemini", name))
+			}
+		}
+		if workingDir != "" {
+			paths = append(paths, filepath.Join(workingDir, ".gemini", "settings.json"))
+		}
+	case "kimi":
+		shareDir, codeHome := envValue(env, "KIMI_SHARE_DIR"), envValue(env, "KIMI_CODE_HOME")
+		if shareDir == "" && home != "" {
+			shareDir = filepath.Join(home, ".kimi")
+		}
+		if codeHome == "" && home != "" {
+			codeHome = filepath.Join(home, ".kimi-code")
+		}
+		seen := make(map[string]bool)
+		for _, root := range []string{shareDir, codeHome} {
+			if root == "" || seen[filepath.Clean(root)] {
+				continue
+			}
+			seen[filepath.Clean(root)] = true
+			paths = append(paths, filepath.Join(root, "config.toml"), filepath.Join(root, "config.json"))
+			credentials, _ := filepath.Glob(filepath.Join(root, "credentials", "*.json"))
+			paths = append(paths, credentials...)
+		}
+	case "copilot":
+		root := envValue(env, "COPILOT_HOME")
+		if root == "" && home != "" {
+			root = filepath.Join(home, ".copilot")
+		}
+		if root != "" {
+			paths = append(paths, filepath.Join(root, "settings.json"), filepath.Join(root, "config.json"))
+		}
+		if providerConfig := envValue(env, "COPILOT_PROVIDERS_CONFIG"); providerConfig != "" {
+			paths = append(paths, providerConfig)
+		}
+		if workingDir != "" {
+			paths = append(paths, filepath.Join(workingDir, ".github", "copilot", "settings.json"), filepath.Join(workingDir, ".github", "copilot", "settings.local.json"))
+		}
+	case "droid":
+		if home != "" {
+			paths = append(paths, filepath.Join(home, ".factory", "settings.json"), filepath.Join(home, ".factory", "settings.local.json"), filepath.Join(home, ".factory", "config.json"))
+		}
+		if workingDir != "" {
+			paths = append(paths, filepath.Join(workingDir, ".factory", "settings.json"), filepath.Join(workingDir, ".factory", "settings.local.json"))
+		}
 	case "qwen":
 		if root := qwenConfigHome(home, env); root != "" {
 			paths = append(paths, filepath.Join(root, "settings.json"))
@@ -436,4 +495,23 @@ func configuredModelIDs(value any) []string {
 	walk(value)
 	sort.Strings(ids)
 	return ids
+}
+
+func geminiSystemPaths(env map[string]string) (string, string) {
+	system := envValue(env, "GEMINI_CLI_SYSTEM_SETTINGS_PATH")
+	if system == "" {
+		switch runtime.GOOS {
+		case "darwin":
+			system = "/Library/Application Support/GeminiCli/settings.json"
+		case "windows":
+			system = `C:\ProgramData\gemini-cli\settings.json`
+		default:
+			system = "/etc/gemini-cli/settings.json"
+		}
+	}
+	defaults := envValue(env, "GEMINI_CLI_SYSTEM_DEFAULTS_PATH")
+	if defaults == "" {
+		defaults = filepath.Join(filepath.Dir(system), "system-defaults.json")
+	}
+	return system, defaults
 }
