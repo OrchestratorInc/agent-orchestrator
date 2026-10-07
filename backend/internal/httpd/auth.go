@@ -275,8 +275,20 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				return
 			}
 			tok := connectionToken(r)
-			if mobilebridge.PasswordMatches(state.currentHash(), tok) ||
-				mobilebridge.PasswordMatches(state.accountHash(), tok) {
+			conn, _ := r.Context().Value(lanConnContextKey{}).(*lanConn)
+			if conn != nil {
+				conn.owner.mu.Lock()
+			}
+			// Record auth atomically with rotation's connection close.
+			authenticated := mobilebridge.PasswordMatches(state.currentHash(), tok) ||
+				mobilebridge.PasswordMatches(state.accountHash(), tok)
+			if conn != nil {
+				if authenticated {
+					conn.tokenHash = mobilebridge.HashPassword(tok)
+				}
+				conn.owner.mu.Unlock()
+			}
+			if authenticated {
 				lock.reset(src)
 				connected.report(remoteSrc)
 				maybeSetPreviewAuthCookie(w, r, tok)
