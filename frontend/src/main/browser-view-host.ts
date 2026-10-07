@@ -477,8 +477,10 @@ type BrowserEntry = {
   view: BrowserViewLike;
   ready: Promise<void>;
   state: BrowserNavState;
-  // Target of a renderer navigation still loading, so a profile switch that
-  // stops it can reload the page the user asked for in the new profile.
+  // URL of a renderer navigation that is still loading. A profile switch stops
+  // in-flight loads and reloads each tab in the new profile. Until the server's
+  // first response arrives, getURL() still returns the previous page, so the
+  // switch reloads this URL instead of dropping the page the user asked for.
   pendingNavigationURL?: string;
   findState: BrowserFindState & { requestId?: number };
   annotationEnabled: boolean;
