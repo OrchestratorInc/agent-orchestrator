@@ -144,6 +144,8 @@ type SessionMetadata struct {
 	// separate durable fact because SessionRecord.UpdatedAt also changes for
 	// lifecycle, SCM, preview, and preference updates.
 	LatestUserPromptAt time.Time `json:"-"`
+	// LatestInteractionAt records deliberate direction independently of human authorship.
+	LatestInteractionAt time.Time `json:"-"`
 	// LatestAssistantUpdate is the latest user-facing assistant update observed
 	// before any internal agent-switch coordination turn.
 	LatestAssistantUpdate   string    `json:"latestAssistantUpdate,omitempty"`
@@ -429,4 +431,28 @@ type Session struct {
 	// They feed status derivation and are surfaced on the API read model. Not
 	// serialized here: the HTTP boundary maps them to the curated wire shape.
 	PRs []PRFacts `json:"-"`
+}
+
+// LastEventAt is when something a person would notice last happened to the
+// session: an activity-state transition (started, finished, waiting, exited),
+// a PR lifecycle change, a CI result change, or a review submission. Mobile
+// orders its workers list by it.
+//
+// It is derived at read time from durable fact timestamps and never stored.
+// Deliberately not UpdatedAt: that advances on metadata writes and PR polls,
+// so a busy session would keep floating to the top without anything changing.
+func (s Session) LastEventAt() time.Time {
+	latest := s.CreatedAt
+	consider := func(t time.Time) {
+		if t.After(latest) {
+			latest = t
+		}
+	}
+	consider(s.Activity.LastActivityAt)
+	for _, pr := range s.PRs {
+		consider(pr.StateChangedAt)
+		consider(pr.CIChangedAt)
+		consider(pr.LastReviewAt)
+	}
+	return latest
 }

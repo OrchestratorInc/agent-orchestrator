@@ -304,6 +304,11 @@ export interface ChatWorkspaceProps {
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** Suppress a transient stopped snapshot while a mode handoff installs Chat. */
 	controllerTransitioning?: boolean;
+	/**
+	 * A stopped agent is being resumed after the chat opened. Unlike a mode
+	 * handoff, the history is final, so it stays readable; only sending waits.
+	 */
+	agentResuming?: boolean;
 	/** Freeze agent-owned Chat controls while a durable session mutation owns input. */
 	agentInputDisabled?: boolean;
 	/** Fence new agent work without blocking decisions required by the current turn. */
@@ -553,6 +558,7 @@ function ChatWorkspaceContent({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
+	agentResuming = false,
 	agentInputDisabled = false,
 	newWorkDisabled = false,
 	reviewerTerminal,
@@ -1226,9 +1232,12 @@ function ChatWorkspaceContent({
 					autoSelectEffortOnOpen={snapshot.items.length === 0 && !turn}
 					error={configOptionError}
 					// Turn settings require a live controller even while messages can queue.
+				// A background resume keeps the controls visible with their last values.
 					disabled={
-							snapshot.controller.state === "connecting" ||
-							snapshot.controller.state === "stopped" ||
+							(!agentResuming && (
+								snapshot.controller.state === "connecting" ||
+								snapshot.controller.state === "stopped"
+							)) ||
 							session?.provisionState === "provisioning" ||
 							controllerTransitioning || configOptionPending || newWorkDisabled
 						}
@@ -1499,7 +1508,7 @@ function ChatWorkspaceContent({
 					<ControllerBanner
 						controller={snapshot.controller}
 						provisionState={session?.provisionState}
-						transitioning={controllerTransitioning}
+						transitioning={controllerTransitioning || agentResuming}
 						automaticWakePending={suppressStopped}
 						onResume={newWorkDisabled ? undefined : onResumeAgent}
 						resuming={resumingAgent}
@@ -1599,7 +1608,11 @@ function ChatWorkspaceContent({
 										disabled={((snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
 										// Switch/reconnect status is the topbar spinner beside ⋮ — not composer text.
 										disabledPlaceholder={
-											controllerTransitioning || newWorkDisabled ? "" : undefined
+											controllerTransitioning || newWorkDisabled
+												? ""
+												: agentResuming
+													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
+													: undefined
 										}
 										// Keep the composer useful outside the centered welcome state too. A
 										// task can have non-message activity before its first visible chat
@@ -1618,7 +1631,7 @@ function ChatWorkspaceContent({
 										onSteer={newWorkDisabled ? undefined : steer}
 										showSteerButton={showSteerButton}
 										canSteer={Boolean(onSteer) && turn?.state === "running"}
-										sendPending={sendPending}
+										sendPending={sendPending || agentResuming}
 										steerPending={steerPending}
 										steerRefusal={steerRefusal}
 										onCompact={newWorkDisabled || snapshot.controller.state === "hibernated" ? undefined : onCompact}

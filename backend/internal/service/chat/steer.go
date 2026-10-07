@@ -121,6 +121,9 @@ func (s *Service) Steer(
 		return SteerResult{}, ErrSteerTextRequired
 	}
 	msg = s.resolveSteerSender(ctx, msg)
+	if msg.SenderSessionID != "" {
+		msg.Origin = domain.MessageOriginAutomation
+	}
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return SteerResult{}, err

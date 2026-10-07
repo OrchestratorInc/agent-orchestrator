@@ -4420,3 +4420,52 @@ func TestSessionsAPI_ClaimPRErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionsAPI_SendCarriesCooperativeSenderWithoutHumanAuthorship(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"Do the next step","senderSessionId":"ao-orchestrator"}`)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if svc.sentDeliveryOptions.SenderSessionID != "ao-orchestrator" || svc.sentDeliveryOptions.AuthoredByUser {
+		t.Fatalf("options=%+v", svc.sentDeliveryOptions)
+	}
+}
+
+func TestSessionsAPI_InteractionRecencyKeepsHumanTimestampSeparate(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	human := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	direction := human.Add(time.Hour)
+	rec := svc.sessions["ao-1"]
+	rec.Metadata.LatestUserPromptAt = human
+	rec.Metadata.LatestInteractionAt = direction
+	svc.sessions["ao-1"] = rec
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1", "")
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	var response struct {
+		Session struct {
+			LastUserMessageAt time.Time `json:"lastUserMessageAt"`
+			LastInteractionAt time.Time `json:"lastInteractionAt"`
+		} `json:"session"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.Session.LastUserMessageAt.Equal(human) || !response.Session.LastInteractionAt.Equal(direction) {
+		t.Fatalf("timestamps=%+v", response)
+	}
+	// A later human prompt participates without rewriting the orchestration fact.
+	rec.Metadata.LatestUserPromptAt = direction.Add(time.Hour)
+	svc.sessions["ao-1"] = rec
+	body, _, _ = doRequest(t, srv, "GET", "/api/v1/sessions/ao-1", "")
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.Session.LastInteractionAt.Equal(rec.Metadata.LatestUserPromptAt) {
+		t.Fatalf("new human recency=%v", response.Session.LastInteractionAt)
+	}
+}

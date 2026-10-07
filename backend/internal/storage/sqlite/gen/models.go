@@ -686,6 +686,7 @@ type Session struct {
 	ProvisionSteps                   string
 	ArtifactDir                      string
 	SessionOutputType                string
+	LatestInteractionAt              sql.NullTime
 	HibernatedAt                     sql.NullTime
 }
 
@@ -724,6 +725,8 @@ type SessionInterfaceTransitionMessage struct {
 	CreatedAt       time.Time
 	DeliveredAt     sql.NullTime
 	ClientMessageID string
+	SenderSessionID string
+	AuthoredByUser  bool
 }
 
 type SessionWorktree struct {

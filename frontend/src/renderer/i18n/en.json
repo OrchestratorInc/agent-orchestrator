@@ -1,5 +1,5 @@
 {
-	"chat.startup.queuePlaceholder": "{{agent}} is starting · messages send in order",
+	"chat.startup.queuePlaceholder": "{{agent}} is starting. Messages send in order",
 	"settings.coder11x.navLabel": "Coder",
 	"settings.coder11x.templatesListLabel": "Templates on your Coder",
 	"settings.coder11x.templatesListHint": "The workspace templates available on your connected Coder deployment.",
@@ -550,7 +550,7 @@
 	"inspector.linkedPRInfo": "Linked for reference. AO does not track checks, reviews, merge events, or lifecycle activity for this PR. Tracked PRs include these signals.",
 	"inspector.resumeAgent": "Resume agent",
 	"inspector.resumeFallbackBody": "AO could not resume the native agent session, so it started a new conversation from the saved prompt.",
-	"inspector.resumingAgent": "Resuming agent…",
+	"inspector.resumingAgent": "Resuming agent",
 	"inspector.returnToPanel": "Return to panel",
 	"inspector.review.approved": "Approved",
 	"inspector.review.autoInject": "Automatically fix review comments",
@@ -1189,6 +1189,7 @@
 	"settings.browserImport.warning.cookie-write-failed": "AO could not write {{count}} cookies to the new profile.",
 	"settings.help": "Help",
 	"settings.diagnostics": "Diagnostics",
+	"settings.diagnosticsToggleHint": "Show memory and CPU usage on session cards and the board, and the Diagnostics page.",
 	"settings.harness": "Harness",
 	"settings.harness.thisComputer": "This computer",
 	"settings.harness.remoteBrowserAuthNote": "Browser sign-in may require a browser on the host or callback-port forwarding.",

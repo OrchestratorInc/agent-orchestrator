@@ -810,7 +810,8 @@ func (p nativeHistoryCheckpoint) mismatches(
 
 func nativeHistoryCoordinationMessage(text string) bool {
 	text = strings.TrimSpace(text)
-	return strings.HasPrefix(text, "<ao-handoff-request") ||
+	_, coordination := domain.CoordinationDeliveryID(text)
+	return coordination || strings.HasPrefix(text, "<ao-handoff-request") ||
 		strings.HasPrefix(text, "AO transferred the previous agent's context in hidden system instructions.")
 }
 
@@ -1416,6 +1417,7 @@ func (c *Controller) sendLocked(
 		SenderProjectID:     msg.SenderProjectID,
 		SenderDisplayName:   msg.SenderDisplayName,
 		AuthoredByUser:      msg.AuthoredByUser,
+		InteractionAt:       msg.InteractionAt,
 	}
 
 	var (

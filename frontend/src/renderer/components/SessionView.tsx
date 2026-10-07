@@ -50,7 +50,7 @@ import {
 	useShellTerminals,
 } from "../hooks/useShellTerminals";
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
-import { canResumeAgent } from "../hooks/useCanResumeAgent";
+import { canResumeAgent, resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey } from "../hooks/useConversation";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
@@ -475,12 +475,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const openedSession = useRef({ key: uiSessionId, checked: false });
 	const autoResume = useMutation({
 		mutationKey: ["resume-agent", "local", sessionId],
-		mutationFn: async (id: string) => {
-			const { error, response } = await clientForSessionHost().POST("/api/v1/sessions/{sessionId}/resume-agent", {
-				params: { path: { sessionId: id } },
-			});
-			if (error) throw new Error(apiErrorMessage(error, `Failed to resume agent (${response.status})`));
-		},
+		mutationFn: resumeAgentOnOpen,
 		onSettled: async (_data, _error, id) => {
 			await Promise.all([
 				refreshWorkspaces(),
@@ -488,9 +483,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			]);
 		},
 	});
-	const quietResume = !usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
-		!resumeStatus.statusError && (openedSession.current.key !== uiSessionId || !openedSession.current.checked ||
-			(autoResume.variables === sessionId && autoResume.isPending));
+	// True while a background resume owns the chat surface: hide the stopped
+	// banner and disable sending, but keep history readable. Covers the initial
+	// check (before the mutation fires) and the mutation in flight. Once checked
+	// is set, only the in-flight mutation keeps it true — switching back to an
+	// already-resumed session no longer flashes "Resuming agent…" while the
+	// workspace query catches up with the new activity state.
+	const quietResume = (autoResume.variables === sessionId && autoResume.isPending) ||
+		(!usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
+		!resumeStatus.statusError && openedSession.current.key === uiSessionId && !openedSession.current.checked);
 	const resumeOnOpen = autoResume.mutate;
 	useEffect(() => {
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
@@ -1766,7 +1767,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
 									controllerResumeError={!hostId && autoResume.variables === sessionId && autoResume.isError
 										? apiErrorMessage(autoResume.error) : undefined}
-									controllerTransitioning={interfaceUi.controllerTransitioning || quietResume}
+									controllerTransitioning={interfaceUi.controllerTransitioning}
+									agentResuming={quietResume}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
 

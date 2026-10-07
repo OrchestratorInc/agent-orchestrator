@@ -10828,6 +10828,14 @@ components:
           type: string
         kind:
           type: string
+        lastEventAt:
+          format: date-time
+          type: string
+        lastInteractionAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         lastUserMessageAt:
           format: date-time
           type:
@@ -10966,6 +10974,7 @@ components:
       - status
       - kanbanColumn
       - displayStatus
+      - lastEventAt
       - prs
       type: object
     ControllersSetKeepAwakeRequest:
@@ -13930,6 +13939,8 @@ components:
         message:
           maxLength: 4096
           minLength: 1
+          type: string
+        senderSessionId:
           type: string
         userAuthored:
           type: boolean
