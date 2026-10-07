@@ -1892,6 +1892,16 @@ textarea,
 	to { opacity: 0; transform: scale(0); }
 }
 
+/* Streamed prose: each newly revealed character fades in once, on mount (see
+   lib/rehype-stream-fade.ts). */
+.stream-char {
+	animation: stream-char-in 300ms ease both;
+}
+
+@keyframes stream-char-in {
+	from { opacity: 0; }
+}
+
 @keyframes chat-working-shift {
 	from { transform: translateX(0); }
 	to { transform: translateX(-18px); }

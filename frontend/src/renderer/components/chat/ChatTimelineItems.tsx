@@ -125,14 +125,17 @@ function originReportPreview(text: string): string {
 	return `${preview.trimEnd()}…`;
 }
 
-/** Smooth baseline, with adaptive catch-up when provider chunks outrun playback. */
-const STREAM_BASE_CHARACTERS_PER_SECOND = 58;
-const STREAM_TARGET_BACKLOG_CHARACTERS = 72;
-const STREAM_MAX_CHARACTERS_PER_SECOND = 720;
+/**
+ * Each update reveals the share of the backlog that decays over STREAM_SETTLE_MS, so
+ * bursts of provider text spread across the gap before the next one instead of landing
+ * at once. Updates are capped at ~30 Hz: every one re-parses the message's markdown.
+ */
+const STREAM_SETTLE_MS = 140;
+const STREAM_MIN_FRAME_MS = 32;
 const STREAM_MAX_FRAME_DELTA_MS = 100;
-// Snapshot delivery already coalesces provider output. Smooth short gaps without
-// adding another perceptible playback delay on top of the transport cadence.
-const STREAM_MAX_DISPLAY_LAG_MS = 50;
+// No frame for this long means the tab was occluded or throttled: nobody watched the
+// animation, so show the current text instead of replaying it.
+const STREAM_STALL_MS = 1000;
 const STREAM_GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function streamGraphemes(text: string): string[] {
@@ -166,7 +169,6 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 	const messageIdRef = useRef(message.id);
 	const frameRef = useRef<number | undefined>(undefined);
 	const lastFrameAtRef = useRef<number | undefined>(undefined);
-	const fractionalCharactersRef = useRef(0);
 	const [reducedMotion, setReducedMotion] = useState(
 		() => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
 	);
@@ -184,62 +186,47 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 			frameRef.current = undefined;
 		}
 		lastFrameAtRef.current = undefined;
-		fractionalCharactersRef.current = 0;
 	}, []);
 
 	const scheduleDrain = useCallback(() => {
 		if (frameRef.current !== undefined) return;
-		const drainStartedAt = performance.now();
+		const scheduledAt = performance.now();
 
 		const tick = (now: number) => {
 			frameRef.current = undefined;
-			const previousFrameAt = lastFrameAtRef.current ?? now;
-			lastFrameAtRef.current = now;
-			const backlog = targetGraphemesRef.current.length - visibleGraphemeCountRef.current;
+			const target = targetGraphemesRef.current;
+			const currentCount = visibleGraphemeCountRef.current;
+			const backlog = target.length - currentCount;
 			if (backlog <= 0) {
-				fractionalCharactersRef.current = 0;
+				lastFrameAtRef.current = undefined;
 				return;
 			}
 
-			// New snapshots share this drain's deadline. Use real elapsed time so a
-			// background tab catches up even if it has not received its first frame.
-			if (now - drainStartedAt >= STREAM_MAX_DISPLAY_LAG_MS) {
+			if (document.hidden || now - (lastFrameAtRef.current ?? scheduledAt) > STREAM_STALL_MS) {
 				visibleRef.current = targetRef.current;
-				visibleGraphemeCountRef.current = targetGraphemesRef.current.length;
+				visibleGraphemeCountRef.current = target.length;
 				setVisibleText(targetRef.current);
 				cancelDrain();
 				return;
 			}
 
-			// Keep a small, intentional buffer for smoothness. As it grows, increase
-			// throughput instead of letting a long response fall further behind.
-			const catchup = Math.max(0, backlog - STREAM_TARGET_BACKLOG_CHARACTERS);
-			const charactersPerSecond = Math.min(
-				STREAM_MAX_CHARACTERS_PER_SECOND,
-				STREAM_BASE_CHARACTERS_PER_SECOND + catchup * 2,
-			);
-			const elapsedMs = Math.min(STREAM_MAX_FRAME_DELTA_MS, Math.max(0, now - previousFrameAt));
-			fractionalCharactersRef.current += charactersPerSecond * elapsedMs / 1000;
-			const count = Math.floor(fractionalCharactersRef.current);
-			if (count < 1) {
+			const previousFrameAt = lastFrameAtRef.current;
+			if (previousFrameAt !== undefined && now - previousFrameAt < STREAM_MIN_FRAME_MS) {
 				frameRef.current = window.requestAnimationFrame(tick);
 				return;
 			}
-			fractionalCharactersRef.current -= count;
-			const currentCount = visibleGraphemeCountRef.current;
-			const target = targetGraphemesRef.current;
+			lastFrameAtRef.current = now;
+			const elapsedMs = Math.min(STREAM_MAX_FRAME_DELTA_MS, previousFrameAt === undefined ? STREAM_MIN_FRAME_MS : now - previousFrameAt);
+			const count = Math.ceil(backlog * (1 - Math.exp(-elapsedMs / STREAM_SETTLE_MS)));
 			const nextCount = Math.min(target.length, currentCount + count);
 			const next = visibleRef.current + target.slice(currentCount, nextCount).join("");
 			visibleRef.current = next;
 			visibleGraphemeCountRef.current = nextCount;
 			setVisibleText(next);
-			if (visibleGraphemeCountRef.current < targetGraphemesRef.current.length) {
-				frameRef.current = window.requestAnimationFrame(tick);
-			}
+			if (nextCount < target.length) frameRef.current = window.requestAnimationFrame(tick);
+			else lastFrameAtRef.current = undefined;
 		};
 
-		lastFrameAtRef.current = undefined;
-		fractionalCharactersRef.current = 0;
 		frameRef.current = window.requestAnimationFrame(tick);
 	}, [cancelDrain]);
 
