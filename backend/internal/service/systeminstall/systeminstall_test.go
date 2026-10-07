@@ -1526,3 +1526,25 @@ func TestKimiListsHomebrewFormulaOnMacOS(t *testing.T) {
 		t.Fatalf("Kimi brew update = %v, want %v", update.Command, want)
 	}
 }
+
+func TestOpenCodeVendorUpdatePinsApprovedReleaseOverAdvisory(t *testing.T) {
+	s := newTestService("darwin", "bash")
+	s.updateAdvisories = map[Target]UpdateAdvisory{TargetOpencode: {AgentID: string(TargetOpencode), Status: UpdateStatusBehindLatest, CurrentVersion: "1.18.34", LatestVersion: "1.18.36", CheckedAt: time.Now()}}
+	version := "1.18.34"
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/Users/test/.opencode/bin/opencode", Output: version}, nil
+	})
+	var ran []string
+	s.commands = commandRunnerFunc(func(_ context.Context, argv []string, _, _ io.Writer) error {
+		ran = argv
+		version = "1.18.35"
+		return nil
+	})
+	if _, err := s.StartAgentOperation(context.Background(), TargetOpencode, "official-installer", AgentOperationUpdate, "1.18.35"); err != nil {
+		t.Fatal(err)
+	}
+	s.workers.Wait()
+	if want := []string{"opencode", "upgrade", "1.18.35", "--method", "curl"}; !slices.Equal(ran, want) {
+		t.Fatalf("ran %v, want the approved release %v", ran, want)
+	}
+}

@@ -656,9 +656,6 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		if baseline, err = s.confirmInstalledOwner(ctx, target, plan); err != nil {
 			return Job{}, err
 		}
-		if operation == AgentOperationUpdate && baseline != nil {
-			plan = pinVendorUpdate(plan, baseline.latest)
-		}
 	}
 	if operation == AgentOperationUpdate && expected != "" {
 		if baseline == nil {
@@ -667,6 +664,14 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		// Pin the version the user approved into this job's immutable baseline.
 		// Concurrent advisory refreshes cannot erase this verification floor.
 		baseline.expected = expected
+	}
+	if operation == AgentOperationUpdate && baseline != nil {
+		// Install the release the user approved, else the one the advisory announced.
+		pin := baseline.expected
+		if pin == "" {
+			pin = baseline.latest
+		}
+		plan = pinVendorUpdate(plan, pin)
 	}
 
 	s.mu.Lock()
