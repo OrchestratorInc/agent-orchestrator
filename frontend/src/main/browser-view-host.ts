@@ -477,11 +477,13 @@ type BrowserEntry = {
   view: BrowserViewLike;
   ready: Promise<void>;
   state: BrowserNavState;
-  // URL of a renderer navigation that is still loading. A profile switch stops
+  // The newest renderer navigation that is still loading. A profile switch stops
   // in-flight loads and reloads each tab in the new profile. Until the server's
   // first response arrives, getURL() still returns the previous page, so the
   // switch reloads this URL instead of dropping the page the user asked for.
-  pendingNavigationURL?: string;
+  // Compared by identity: an older, aborted load of the same URL must not clear
+  // a newer one.
+  pendingNavigation?: { url: string };
   findState: BrowserFindState & { requestId?: number };
   annotationEnabled: boolean;
   annotationSessions: Map<
@@ -524,6 +526,10 @@ type BrowserSessionEntry = {
   // Woken when no agent command or renderer operation is in flight.
   idleWaiters: Array<() => void>;
   profileSwitching: boolean;
+  // Set once a switch has drained in-flight work and is replacing the tabs.
+  // Until then, work admitted before the switch (an agent tab-new or tab-close)
+  // may still open and close tabs; profileSwitching refuses only new work.
+  profileReplacing: boolean;
   profileSwitchTargetId: BrowserProfileId | null;
   nativeActiveTabId?: string;
   snapshotDeltaBaseline?: {
@@ -1171,6 +1177,7 @@ export function createBrowserViewHost(
         browserOperations: 0,
         idleWaiters: [],
         profileSwitching: false,
+        profileReplacing: false,
         profileSwitchTargetId: null,
         nativeOperationQueue: Promise.resolve(),
         devtoolsPlacement: DEFAULT_NATIVE_DEVTOOLS_PLACEMENT,
@@ -1445,7 +1452,7 @@ export function createBrowserViewHost(
     // agent was on before the link, not the one it's actually looking at now.
     syncNativeOnActivate = false,
   ): Promise<BrowserEntry> => {
-    assertProfileStable(session);
+    assertTabsNotReplacing(session);
     return withBrowserOperation(session, async () => {
       let normalizedURL: string | undefined;
       if (url) {
@@ -1524,7 +1531,7 @@ export function createBrowserViewHost(
     session: BrowserSessionEntry,
     tabId = session.activeTabId,
   ): BrowserTabsState {
-    assertProfileStable(session);
+    assertTabsNotReplacing(session);
     if (session.tabs.size === 1) {
       throw browserError(
         "CANNOT_CLOSE_LAST_TAB",
@@ -2003,6 +2010,18 @@ export function createBrowserViewHost(
     }
   }
 
+  // openTab/closeTab also run inside work admitted before a switch started
+  // (agent tab-new/tab-close, popups), so they refuse only while tabs are
+  // actually being replaced. Entry points check assertProfileStable.
+  function assertTabsNotReplacing(session: BrowserSessionEntry): void {
+    if (session.profileReplacing) {
+      throw browserError(
+        "BROWSER_PROFILE_SWITCHING",
+        "Browser profile switching is in progress",
+      );
+    }
+  }
+
   const setBounds = (
     { viewId, revision, rect, visible }: BrowserBoundsInput,
     zoomFactor = 1,
@@ -2079,7 +2098,8 @@ export function createBrowserViewHost(
     ) {
       cancelAnnotation(options, entry, "navigation");
     }
-    entry.pendingNavigationURL = normalized.href;
+    const pendingNavigation = { url: normalized.href };
+    entry.pendingNavigation = pendingNavigation;
     try {
       await entry.view.webContents.loadURL(normalized.href);
     } catch (err) {
@@ -2093,8 +2113,8 @@ export function createBrowserViewHost(
       shellWebContents.send("browser:navState", entry.state);
       return entry.state;
     } finally {
-      if (entry.pendingNavigationURL === normalized.href)
-        entry.pendingNavigationURL = undefined;
+      if (entry.pendingNavigation === pendingNavigation)
+        entry.pendingNavigation = undefined;
     }
     const session = entries.get(entry.state.viewId);
     if (session?.activeTabId === entry.tabId)
@@ -2394,8 +2414,8 @@ export function createBrowserViewHost(
       // settles, and reload them in the new profile.
       const pendingURLs = new Map<string, string>();
       for (const entry of session.tabs.values()) {
-        if (entry.pendingNavigationURL)
-          pendingURLs.set(entry.tabId, entry.pendingNavigationURL);
+        if (entry.pendingNavigation)
+          pendingURLs.set(entry.tabId, entry.pendingNavigation.url);
       }
       if (session.browserOperations > 0) {
         for (const entry of session.tabs.values())
@@ -2419,6 +2439,7 @@ export function createBrowserViewHost(
       assertSettled(
         await settlesWithin(session.nativeOperationQueue, deadline - Date.now()),
       );
+      session.profileReplacing = true;
       previousActiveTabId = session.activeTabId;
       previousNextTabNumber = session.nextTabNumber;
       savedTabs = savedTabsForSession(session).map((tab) => {
@@ -2498,6 +2519,7 @@ export function createBrowserViewHost(
       throw error;
     } finally {
       session.profileSwitching = false;
+      session.profileReplacing = false;
       session.profileSwitchTargetId = null;
     }
   };

@@ -2493,6 +2493,35 @@ describe("browser profile partitions and replacement", () => {
 		expect(views[1]!.webContents.loadURL).toHaveBeenCalledWith("https://example.com/");
 	});
 
+	it("keeps the newest pending navigation when an older load of the same URL aborts", async () => {
+		const store = fakeBrowserProfileStore(profile, { "worker-1": profile.id });
+		const { host, invoke, views } = setupTabHost(store);
+		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		await invoke("browser:navigate", { viewId: nav.viewId, url: "https://first.example/" });
+		const aborted = () => Object.assign(new Error("ERR_ABORTED (-3)"), { errorCode: -3 });
+		let abortOlder!: () => void;
+		let abortNewer!: () => void;
+		views[0]!.webContents.loadURL
+			.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => {
+				abortOlder = () => reject(aborted());
+			}))
+			.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => {
+				abortNewer = () => reject(aborted());
+			}));
+		(views[0]!.webContents as unknown as { stop: () => void }).stop = () => abortNewer();
+
+		const older = invoke("browser:navigate", { viewId: nav.viewId, url: "https://second.example/" });
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		const newer = invoke("browser:navigate", { viewId: nav.viewId, url: "https://second.example/" });
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		abortOlder();
+		await older;
+
+		await expect(host.switchProfile(nav.viewId, null)).resolves.toMatchObject({ temporary: true });
+		await newer;
+		expect(views[1]!.webContents.loadURL).toHaveBeenCalledWith("https://second.example/");
+	});
+
 	it("starts an unbound worker in a configured profile until the human picks temporary", async () => {
 		const bindings: Record<string, string> = {};
 		const store = fakeBrowserProfileStore(profile, bindings);
@@ -2662,6 +2691,51 @@ describe("browser profile partitions and replacement", () => {
 		expect(fixture.views).toHaveLength(2);
 		expect(fixture.views[1]!.webContents.close).toHaveBeenCalled();
 		expect(bindings["worker-1"]).toBe(profile.id);
+	});
+
+	it("lets agent tab-new and tab-close admitted before a switch finish during the wait", async () => {
+		const store = fakeBrowserProfileStore(profile, { "worker-1": profile.id });
+		const { host, invoke, runtime } = setupTabHost(store);
+		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		const runAction = vi.mocked(runtime.runAction);
+		const original = runAction.getMockImplementation()!;
+		const holdOnce = (action: string) => {
+			let release!: () => void;
+			const held = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			let holding = true;
+			runAction.mockImplementation(async (...args: Parameters<typeof original>) => {
+				if (holding && args[1] === action) {
+					holding = false;
+					await held;
+				}
+				return original(...args);
+			});
+			return () => release();
+		};
+
+		const releaseNew = holdOnce("tab-new");
+		const opening = host.execute("worker-1", "tab-new");
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		const firstSwitch = host.switchProfile(nav.viewId, null);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		releaseNew();
+		await expect(opening).resolves.toBeDefined();
+		await expect(firstSwitch).resolves.toMatchObject({ temporary: true });
+		expect(await invoke("browser:getTabs", nav.viewId)).toMatchObject({
+			tabs: [expect.anything(), expect.anything()],
+		});
+
+		const releaseClose = holdOnce("tab-close");
+		const closing = host.execute("worker-1", "tab-close", { tabId: "t2" });
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		const secondSwitch = host.switchProfile(nav.viewId, profile.id);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		releaseClose();
+		await expect(closing).resolves.toBeDefined();
+		await expect(secondSwitch).resolves.toMatchObject({ profileId: profile.id });
+		expect(await invoke("browser:getTabs", nav.viewId)).toMatchObject({ tabs: [expect.anything()] });
 	});
 
 	it("gives up on time when an agent-browser command outlasts the switch deadline", async () => {
