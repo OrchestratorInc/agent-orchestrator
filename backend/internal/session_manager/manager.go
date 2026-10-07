@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1529,6 +1531,13 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if validateClaudeModel && selected == nil {
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
 	}
+	if selected != nil && len(selected.Efforts) == 0 && cfg.Harness == domain.HarnessClaudeCode {
+		// A family alias ("opus") carries no capabilities of its own; the CLI
+		// resolves it to the family's newest model, which the picker shows.
+		if concrete := newestClaudeFamilyModel(catalog.Models, modelID); concrete != nil {
+			selected = concrete
+		}
+	}
 	if modelChangedWithoutExplicitEffort {
 		if selected == nil || !containsString(selected.Efforts, base.Effort) {
 			resolved.Effort = ""
@@ -1544,6 +1553,76 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
 	}
 	return resolved, nil
+}
+
+var (
+	claudeFamilyAliases = []string{"fable", "opus", "sonnet", "haiku"}
+	claudeVersionNumber = regexp.MustCompile(`\d+`)
+	claudeVersionNoise  = regexp.MustCompile(`\(.*?\)|\[.*?\]`)
+)
+
+// newestClaudeFamilyModel returns the newest concrete catalog model of the
+// family a bare alias such as "opus" or "opus[1m]" names, or nil when alias is
+// not a family alias or the catalog has no such model.
+func newestClaudeFamilyModel(models []ports.AgentModelInfo, alias string) *ports.AgentModelInfo {
+	family := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(alias), "[1m]"))
+	if !containsString(claudeFamilyAliases, family) {
+		return nil
+	}
+	var best *ports.AgentModelInfo
+	var bestVersion []int
+	for i := range models {
+		if len(models[i].Efforts) == 0 {
+			continue
+		}
+		version := claudeFamilyVersion(models[i], family)
+		if version == nil {
+			continue
+		}
+		if best == nil || compareVersions(version, bestVersion) > 0 {
+			best, bestVersion = &models[i], version
+		}
+	}
+	return best
+}
+
+// claudeFamilyVersion reads major.minor from a model's label or ID, or nil when
+// the model is not in the family. Snapshot dates and "v1:0" suffixes are longer
+// than two digits or beyond the second number, so they are ignored.
+func claudeFamilyVersion(model ports.AgentModelInfo, family string) []int {
+	for _, text := range []string{model.Label, model.ID} {
+		lower := claudeVersionNoise.ReplaceAllString(strings.ToLower(text), "")
+		if !strings.Contains(lower, family) {
+			continue
+		}
+		var version []int
+		for _, part := range claudeVersionNumber.FindAllString(lower, -1) {
+			if len(part) <= 2 && len(version) < 2 {
+				n, _ := strconv.Atoi(part)
+				version = append(version, n)
+			}
+		}
+		if len(version) > 0 {
+			return version
+		}
+	}
+	return nil
+}
+
+func compareVersions(a, b []int) int {
+	for i := 0; i < len(a) || i < len(b); i++ {
+		var x, y int
+		if i < len(a) {
+			x = a[i]
+		}
+		if i < len(b) {
+			y = b[i]
+		}
+		if x != y {
+			return x - y
+		}
+	}
+	return 0
 }
 
 func containsString(values []string, value string) bool {
