@@ -162,12 +162,12 @@ func (g *sessionGate) acquire(ctx context.Context, id domain.SessionID) (release
 // NewService builds the shell terminal service. dataDir is the fallback working
 // directory for a shell opened with no project context. A nil logger falls back
 // to slog.Default.
-func NewService(runtime ShellRuntime, store Store, projects ProjectRootLocator, sessions SessionWorkspaceLocator, dataDir, appRunID string, log *slog.Logger) *Service {
+func NewService(shellRuntime ShellRuntime, store Store, projects ProjectRootLocator, sessions SessionWorkspaceLocator, dataDir, appRunID string, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Service{
-		runtime:             runtime,
+		runtime:             shellRuntime,
 		store:               store,
 		projects:            projects,
 		sessions:            sessions,

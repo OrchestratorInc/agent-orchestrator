@@ -7,11 +7,11 @@ import (
 )
 
 func TestMigratePreservesHibernationPreviewDatabase(t *testing.T) {
-	body, err := migrationsFS.ReadFile("migrations/0181_session_hibernation.sql")
+	body, err := migrationsFS.ReadFile("migrations/0190_session_hibernation.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, version := range []int64{179, 180} {
+	for _, version := range []int64{179, 180, 181} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			db := openMigratedDatabaseCopy(t, version-1)
 			if _, err := db.Exec(strings.Split(string(body), "-- +goose Down")[0]); err != nil {
@@ -26,7 +26,7 @@ func TestMigratePreservesHibernationPreviewDatabase(t *testing.T) {
 				}
 			}
 			for table, columns := range map[string][]string{
-				"sessions":              {"hibernated_at", "provision_steps"},
+				"sessions":              {"hibernated_at", "provision_steps", "artifact_dir", "session_output_type"},
 				"conversation_messages": {"sender_session_id", "sender_project_id", "sender_display_name"},
 			} {
 				for _, column := range columns {

@@ -11,6 +11,7 @@ import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { toReviewerHarnessId } from "../lib/reviewer-harnesses";
 import { captureRendererEvent } from "../lib/telemetry";
 import { agentSwitchVisibility } from "../lib/agent-switch-visibility";
+import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
 import { requestRemoteHostsRefresh } from "./useRemoteHosts";
@@ -20,6 +21,7 @@ import {
 	type AgentSwitchSummary,
 	type PRState,
 	type PullRequestFacts,
+	type SessionArtifact,
 	toAgentProvider,
 	toKanbanColumn,
 	toProjectKind,
@@ -71,6 +73,18 @@ function toPullRequestFacts(pr: components["schemas"]["SessionPRFacts"]): PullRe
 		mergeability: pr.mergeability,
 		reviewComments: pr.reviewComments,
 		updatedAt: pr.updatedAt,
+	};
+}
+
+function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): SessionArtifact {
+	return {
+		kind: artifact.kind,
+		name: artifact.name,
+		path: artifact.path,
+		previewUrl: artifact.previewUrl,
+		rawUrl: artifact.rawUrl,
+		size: artifact.size,
+		updatedAt: artifact.updatedAt,
 	};
 }
 
@@ -137,6 +151,8 @@ function toWorkspaceSession(
 		isPinned: session.isPinned ?? false,
 		pinnedAt: session.pinnedAt ?? undefined,
 		prs: (session.prs ?? []).map(toPullRequestFacts),
+		outputType: session.outputType,
+		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }
 
@@ -226,6 +242,8 @@ function toLocalWorkspaceSession(
 		isPinned: session.isPinned ?? false,
 		pinnedAt: session.pinnedAt ?? undefined,
 		prs: (session.prs ?? []).map(toPullRequestFacts),
+		outputType: session.outputType,
+		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }
 
@@ -306,7 +324,13 @@ async function fetchRemoteSessions(hostId: string) {
 		recheckRemoteHost(hostId, response.status);
 		throw error;
 	}
-	return data?.sessions ?? [];
+	return Promise.all((data?.sessions ?? []).map(async (session) => ({
+		...session,
+		artifactFiles: await Promise.all((session.artifactFiles ?? []).map(async (artifact) => ({
+			...artifact,
+			rawUrl: artifact.rawUrl ? await aoBridge.remotes.previewUrl(hostId, session.id, artifact.rawUrl) : undefined,
+		}))),
+	})));
 }
 
 function toRemoteWorkspaces(

@@ -203,6 +203,13 @@ type SessionIDParam struct {
 	SessionID string `path:"sessionId" description:"Session identifier, e.g. project-1."`
 }
 
+// PreviewFileQuery is the query string accepted by GET
+// /api/v1/sessions/{sessionId}/preview/files/*.
+type PreviewFileQuery struct {
+	Source string `query:"source,omitempty" enum:"workspace,artifact" description:"File root to serve from. Defaults to the session workspace; artifact selects the session artifact directory."`
+	Raw    bool   `query:"raw,omitempty" description:"When true, serve Markdown files as raw source instead of rendering them to HTML for Browser preview."`
+}
+
 // PRNumberParam is the associated pull-request number in Files routes.
 type PRNumberParam struct {
 	PRNumber int `path:"prNumber" description:"Associated pull request number." minimum:"1"`
@@ -357,9 +364,26 @@ type SessionView struct {
 	Model string `json:"model,omitempty"`
 	// LastUserMessageAt is the latest real user-authored task direction time.
 	// Lifecycle and internal automation updates do not advance it.
-	LastUserMessageAt *time.Time       `json:"lastUserMessageAt,omitempty"`
-	PRs               []SessionPRFacts `json:"prs"`
-	ActiveAgentSwitch *AgentSwitchView `json:"activeAgentSwitch,omitempty"`
+	LastUserMessageAt *time.Time            `json:"lastUserMessageAt,omitempty"`
+	PRs               []SessionPRFacts      `json:"prs"`
+	ArtifactFiles     []SessionArtifactView `json:"artifactFiles,omitempty"`
+	ActiveAgentSwitch *AgentSwitchView      `json:"activeAgentSwitch,omitempty"`
+}
+
+// SessionArtifactView is one inferred file artifact for a session.
+type SessionArtifactView struct {
+	Path       string                     `json:"path"`
+	Name       string                     `json:"name"`
+	Kind       domain.SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
+	Size       int64                      `json:"size"`
+	UpdatedAt  time.Time                  `json:"updatedAt"`
+	PreviewURL string                     `json:"previewUrl,omitempty"`
+	// RawURL fetches this artifact's raw bytes on the artifact preview
+	// origin — a distinct host from the workspace preview origin, so a
+	// workspace-relative path can never collide with an artifact-relative
+	// one. Set for every kind, unlike PreviewURL (html only, meant for
+	// Browser navigation rather than a raw fetch).
+	RawURL string `json:"rawUrl,omitempty"`
 }
 
 // ListSessionsResponse is the body of GET /api/v1/sessions.
@@ -2074,24 +2098,22 @@ type CueProjectIDParam struct {
 // CueDefinitionRequest is the complete editable definition accepted when
 // creating or replacing a cue.
 type CueDefinitionRequest struct {
-	Name        string `json:"name" maxLength:"64" description:"Short cue name, unique within the project. Trimmed; must be non-empty and at most 64 bytes."`
-	Description string `json:"description,omitempty" maxLength:"240" description:"Optional human note about the cue, at most 240 bytes."`
-	Type        string `json:"type" description:"Cue kind: command sends to a project- or session-scoped shell terminal; agent sends an authored prompt. Definition body limit: 128 KiB."`
-	Command     string `json:"command,omitempty" maxLength:"4096" description:"Shell command for a command cue. At most 4096 bytes; cleared when saving agent cues."`
-	Prompt      string `json:"prompt,omitempty" maxLength:"16384" description:"Agent instruction for an agent cue. At most 16384 bytes; cleared when saving command cues."`
+	Name    string `json:"name" maxLength:"64" description:"Short cue name, unique within the project. Trimmed; must be non-empty and at most 64 bytes."`
+	Type    string `json:"type" description:"Cue kind: command sends to a project- or session-scoped shell terminal; agent sends an authored prompt. Definition body limit: 128 KiB."`
+	Command string `json:"command,omitempty" maxLength:"4096" description:"Shell command for a command cue. At most 4096 bytes; cleared when saving agent cues."`
+	Prompt  string `json:"prompt,omitempty" maxLength:"16384" description:"Agent instruction for an agent cue. At most 16384 bytes; cleared when saving command cues."`
 }
 
 // CueResponse is one project-scoped reusable quick action.
 type CueResponse struct {
-	ID          string    `json:"id"`
-	ProjectID   string    `json:"projectId"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Type        string    `json:"type"`
-	Command     string    `json:"command,omitempty"`
-	Prompt      string    `json:"prompt,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID        string    `json:"id"`
+	ProjectID string    `json:"projectId"`
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	Command   string    `json:"command,omitempty"`
+	Prompt    string    `json:"prompt,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // ListCuesResponse is the body of GET /api/v1/projects/{projectId}/cues.

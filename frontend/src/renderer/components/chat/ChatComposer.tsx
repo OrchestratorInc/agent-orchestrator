@@ -57,6 +57,7 @@ import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import {
 	ComposerEditor,
 	type ComposerEditorHandle,
+	type ComposerImage,
 	type ComposerEditorSnapshot,
 	type ComposerTrigger,
 } from "./ComposerEditor";
@@ -96,7 +97,7 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentURL, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
+import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages } from "./messageAttachments";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 
 // These responses precede AppendUserMessage. Provider/transport errors can
@@ -146,7 +147,7 @@ function restoredDeliveryNotice(delivery: ChatComposerDelivery | undefined): str
 }
 /** A retained server-owned attachment; image bytes stay in durable storage. */
 export type StoredComposerAttachment = ChatDraftRetainedAttachment & { dataUrl?: string };
-export type ChatComposerHandle = { focus(): void };
+export type ChatComposerHandle = { focus(): void; isEmpty(): boolean };
 
 export const ChatComposer = memo(function ChatComposer({
 	focusRef,
@@ -494,6 +495,15 @@ export const ChatComposer = memo(function ChatComposer({
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
 
 	const staged = fileAttachments.attachments.length > 0 || visibleRetainedAttachments.length > 0;
+	const stripAttachments = [...visibleRetainedAttachments, ...fileAttachments.attachments].map((file) => {
+		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
+		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
+		const preview = file.dataUrl ?? (path && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
+			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
+		return { file, path, preview };
+	});
+	const composerImages: ComposerImage[] = stripAttachments.flatMap(({ file, path, preview }) =>
+		path && IMAGE_ATTACHMENT_PATH.test(path) ? [{ path, name: file.name, src: preview }] : []);
 	const controlsDisabled = Boolean(disabled || submitting);
 	const hasDraft = hasText || staged;
 	const savingQueuedEdit = Boolean(editingQueuedTurnId);
@@ -610,7 +620,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!autoFocus || disabled) return;
 		editor.current?.focus();
 	}, [autoFocus, disabled]);
-	useImperativeHandle(focusRef, () => ({ focus: focusEditor }), [focusEditor]);
+	useImperativeHandle(focusRef, () => ({ focus: focusEditor, isEmpty: () => !hasDraft }), [focusEditor, hasDraft]);
 
 	useEffect(() => {
 		focusEditor();
@@ -1013,8 +1023,8 @@ export const ChatComposer = memo(function ChatComposer({
 	}
 
 	async function performClaimedSubmit(forceSteer?: boolean, mutationToken?: ChatDraftMutationToken) {
-		const currentText = textRef.current;
-		const body = currentText.trim();
+		let currentText = textRef.current;
+		let body = currentText.trim();
 		const recoveringDelivery = durableDelivery;
 		const sendNativeImages = recoveringDelivery?.nativeImages ?? Boolean(nativeImages);
 		setSendError(null);
@@ -1059,6 +1069,16 @@ export const ChatComposer = memo(function ChatComposer({
 		const settledAttachments = fileAttachments.getAttachments();
 		const settledPaths = settledAttachments.flatMap((attachment) =>
 			attachment.stagedPath ? [attachment.stagedPath] : []);
+		const attachedPaths = [
+			...visibleRetainedAttachments.flatMap((attachment) => attachment.path ? [attachment.path] : []),
+			...settledPaths,
+		];
+		// Staging that just settled has filled its inline chips, so read the text the
+		// user sees now. First drop chips whose image is gone (an undo can restore
+		// one); typed paths are the user's text and stay.
+		editor.current?.pruneImages(attachedPaths);
+		currentText = textRef.current;
+		body = proseBesideImages(currentText.trim(), attachedPaths);
 		const hasAttachments = settledAttachments.length > 0 || visibleRetainedAttachments.length > 0;
 		const canSubmitNow =
 			(body.length > 0 || hasAttachments || Boolean(recoveringDelivery)) &&
@@ -1079,10 +1099,7 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 		const shouldSteer = Boolean(forceSteer && !savingQueuedEdit);
-		const message = withAttachmentReferences(body, [
-			...visibleRetainedAttachments.flatMap((attachment) => attachment.path ? [attachment.path] : []),
-			...settledPaths,
-		]);
+		const message = withAttachmentReferences(body, attachedPaths);
 		// Ordinary delivery reserves its exact draft before these staged reads await.
 		// Queue editors use their existing owner/revision CAS before mutation.
 		const attachmentScope = queuedDraftScope ?? draftScope;
@@ -1365,6 +1382,20 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 	}
 
+	// Images also get an inline chip at the caret so the prose can say which image
+	// it means; the chip serializes to the staged path the agent reads.
+	function attachFiles(files: File[]) {
+		// Reserve the spot now: staging can take a while, and the user keeps typing.
+		const reservation = files.some((file) => file.type.startsWith("image/"))
+			? editor.current?.reserveImages()
+			: undefined;
+		void fileAttachments.addFiles(files).then((added) => {
+			if (!reservation) return;
+			editor.current?.fillImages(reservation, added.flatMap((attachment) =>
+				attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+		});
+	}
+
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
 		if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return;
 		const clipboard = event.clipboardData;
@@ -1374,7 +1405,7 @@ export const ChatComposer = memo(function ChatComposer({
 		// carrying both should still paste its text.
 		const hasText = typeof clipboard?.getData === "function" && clipboard.getData("text/plain") !== "";
 		if (!hasText) event.preventDefault();
-		void fileAttachments.addFiles(files);
+		attachFiles(files);
 	}
 
 	function onDrop(event: DragEvent<HTMLFormElement>) {
@@ -1384,7 +1415,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (files.length === 0) return;
 		event.preventDefault();
 		event.stopPropagation();
-		void fileAttachments.addFiles(files);
+		attachFiles(files);
 	}
 
 	// Only modifier transitions re-render: React bails out when the value is unchanged.
@@ -1508,11 +1539,7 @@ export const ChatComposer = memo(function ChatComposer({
 				) : null}
 				{staged ? (
 					<ul className="flex flex-wrap gap-1.5" aria-label="Attached files">
-						{[...visibleRetainedAttachments, ...fileAttachments.attachments].map((file) => {
-							const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
-							const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
-							const preview = file.dataUrl ?? (path && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
-								? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
+						{stripAttachments.map(({ file, path, preview }) => {
 							return (
 							<li
 								key={file.id}
@@ -1535,6 +1562,7 @@ export const ChatComposer = memo(function ChatComposer({
 									type="button"
 									onClick={() => {
 									if (submitInFlight.current) return;
+									if (path) editor.current?.removeImage(path);
 									if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
 										const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
 										setRetainedAttachments(next);
@@ -1555,6 +1583,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 				<ComposerEditor
 					ref={editor}
+					images={composerImages}
 					disabled={controlsDisabled || queuedEditRecovery || draftMutationPending}
 					label="Message the agent"
 					placeholder={
@@ -1619,7 +1648,7 @@ export const ChatComposer = memo(function ChatComposer({
 									disabled={controlsDisabled}
 									onChange={(event) => {
 										if (!disabled && !submitInFlight.current && !draftMutationPending && !fileAttachments.preparing) {
-											void fileAttachments.addFiles(Array.from(event.target.files ?? []));
+											attachFiles(Array.from(event.target.files ?? []));
 										}
 										// Cleared so picking the same file twice still fires a change.
 										event.target.value = "";

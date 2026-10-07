@@ -435,19 +435,14 @@ function SidebarSectionScroller({
 		};
 	}, [updateScrollEdges]);
 
-	const prefersReducedMotion = useReducedMotion();
 	return (
-		<motion.div
-			className={`relative min-h-0 ${wrapperClassName ?? ""}`}
-			layout
-			transition={prefersReducedMotion ? { duration: 0 } : { layout: { type: "spring", stiffness: 520, damping: 42 } }}
-		>
+		<div className={`relative min-h-0 ${wrapperClassName ?? ""}`}>
 			<div ref={scrollerRef} className={className} data-testid={testId} style={style}>
 				{children}
 			</div>
 			{scrollEdges.top ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--top" /> : null}
 			{scrollEdges.bottom ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--bottom" /> : null}
-		</motion.div>
+		</div>
 	);
 }
 
@@ -733,14 +728,6 @@ export function Sidebar({
 		onExpand: () => setOpen(true),
 	});
 
-	// Suppress layout animations for the first 500ms so background session
-	// re-sorts during daemon settle don't cause visible row shuffling.
-	const [layoutSettled, setLayoutSettled] = useState(false);
-	useEffect(() => {
-		const timer = window.setTimeout(() => setLayoutSettled(true), 500);
-		return () => window.clearTimeout(timer);
-	}, []);
-
 	const [projectOrder, setProjectOrder] = useState<string[]>([]);
 	const orderedWorkspaces = useMemo(
 		() => applyOrder(workspaces, (workspace) => workspace.id, projectOrder, "end"),
@@ -995,7 +982,6 @@ export function Sidebar({
 											? selection.activeRemoteHostId === session.hostId && selection.activeRemoteSessionId === session.id
 											: selection.activeSessionId === session.id}
 										hostLabel={session.hostId ? remoteHosts.find((host) => host.hostId === session.hostId)?.label ?? session.hostId : undefined}
-										layoutSettled={layoutSettled}
 										onKilled={handlePinnedSessionKilled}
 										onOpenSession={(target) => {
 											if (session.kind === "worker") recordManualWorkerOpen(target.id, target.hostId);
@@ -1062,7 +1048,6 @@ export function Sidebar({
 													selection={selection}
 													isDragged={draggingProjectId === workspace.id}
 													projectDragInProgress={draggingProjectId !== null}
-													layoutSettled={layoutSettled}
 													consumeDragClick={projectDragClickGuard.consumeClick}
 													onToggle={toggleProjectDisclosure}
 													onRemoveProject={onRemoveProject}
@@ -1097,7 +1082,6 @@ export function Sidebar({
 													isDragged={false}
 													projectDragInProgress={false}
 													consumeDragClick={() => false}
-													layoutSettled={layoutSettled}
 													onToggle={() => setCollapsedRemoteProjects((previous) => {
 														const next = new Set(previous);
 														next.has(projectKey) ? next.delete(projectKey) : next.add(projectKey);
@@ -1141,7 +1125,6 @@ export function Sidebar({
 								workspace={standaloneWorkspace}
 								selection={selection}
 								isCollapsed={isIconRail}
-								layoutSettled={layoutSettled}
 								open={scratchpadOpen}
 								onToggle={() => setScratchpadOpen((open) => !open)}
 							/>
@@ -1166,7 +1149,11 @@ export function Sidebar({
 				)}
 				<div
 					aria-hidden={isCollapsed || undefined}
-					hidden={isCollapsed}
+					// `hidden` (display: none) is for the real icon rail only. Hiding the footer
+					// this way while an offcanvas sidebar slides away drops its content at once
+					// and leaves the footer's top border behind. aria-hidden and tabIndex -1
+					// already keep it out of reach while collapsed.
+					hidden={isIconRail}
 					className="sidebar-expanded-chrome relative flex w-full min-w-46.5 flex-col gap-0.5"
 				>
 					<UpdateStatusRow
@@ -1290,7 +1277,6 @@ type ProjectItemProps = {
 	isDragged: boolean;
 	projectDragInProgress: boolean;
 	consumeDragClick: (id: string) => boolean;
-	layoutSettled: boolean;
 	onToggle: (projectId: string) => void;
 	onRemoveProject: (projectId: string) => Promise<void>;
 	suppressInitialExpandAnimation: boolean;
@@ -1309,7 +1295,6 @@ const ProjectItem = memo(function ProjectItem({
 	isDragged,
 	projectDragInProgress,
 	consumeDragClick,
-	layoutSettled,
 	onToggle,
 	onRemoveProject,
 	suppressInitialExpandAnimation,
@@ -1544,7 +1529,6 @@ const ProjectItem = memo(function ProjectItem({
 					initial={{ opacity: 0, y: -4 }}
 					animate={{ opacity: 1, y: 0 }}
 					exit={{ opacity: 0, y: -4, transition: { duration: prefersReducedMotion ? 0 : 0.12, ease: "easeIn" } }}
-					layout={!layoutSettled || projectDragInProgress ? false : "position"}
 					onDragOver={(event) => onProjectDragOver(event, workspace.id)}
 					onDrop={onProjectDrop}
 					transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 520, damping: 42, mass: 0.55 }}
@@ -1777,7 +1761,6 @@ const ProjectItem = memo(function ProjectItem({
 												sessions={listedSessions}
 												sessionIds={listedSessionIds}
 												activeSessionId={selection.activeSessionId}
-												disableLayout={!layoutSettled}
 												plain={projectDragInProgress}
 												onReorder={commitSessionOrder}
 												onKilled={handleSessionKilled}
@@ -1857,14 +1840,12 @@ function ScratchpadSection({
 	workspace,
 	selection,
 	isCollapsed,
-	layoutSettled,
 	open,
 	onToggle,
 }: {
 	workspace: WorkspaceSummary;
 	selection: Selection;
 	isCollapsed: boolean;
-	layoutSettled: boolean;
 	open: boolean;
 	onToggle: () => void;
 }) {
@@ -1991,7 +1972,6 @@ function ScratchpadSection({
 						sessions={listedSessions}
 						sessionIds={listedSessionIds}
 						activeSessionId={selection.activeSessionId}
-						disableLayout={!layoutSettled}
 						indented={false}
 						onReorder={commitSessionOrder}
 						onKilled={handleSessionKilled}
@@ -2014,19 +1994,17 @@ const PinnedSessionRow = memo(function PinnedSessionRow({
 	session,
 	active,
 	hostLabel,
-	layoutSettled,
 	onKilled,
 	onOpenSession,
 }: {
 	session: WorkspaceSession;
 	active: boolean;
 	hostLabel?: string;
-	layoutSettled: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpenSession: (session: WorkspaceSession) => void;
 }) {
 	const onOpen = useCallback(() => onOpenSession(session), [onOpenSession, session]);
-	return <SessionRow session={session} active={active} hostLabel={hostLabel} disableLayout={!layoutSettled} indented={false} onKilled={onKilled} onOpen={onOpen} />;
+	return <SessionRow session={session} active={active} hostLabel={hostLabel} indented={false} onKilled={onKilled} onOpen={onOpen} />;
 });
 
 // A session row inside its project's drag context. The Pinned section renders
@@ -2035,7 +2013,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	session,
 	active,
 	consumeDragClick,
-	disableLayout = false,
 	indented = true,
 	layoutDependency,
 	listIsDragging,
@@ -2046,9 +2023,8 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	session: WorkspaceSession;
 	active: boolean;
 	consumeDragClick: (id: string) => boolean;
-	disableLayout?: boolean;
 	indented?: boolean;
-	layoutDependency: string;
+	layoutDependency?: string;
 	listIsDragging: boolean;
 	dropTransitionDisabled: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
@@ -2066,7 +2042,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 			onOpen={() => {
 				if (!consumeDragClick(session.id)) onOpen(session.id);
 			}}
-			disableLayout={disableLayout}
 			layoutDependency={layoutDependency}
 			listIsDragging={listIsDragging}
 			reorder={{
@@ -2092,7 +2067,6 @@ function SessionReorderList({
 	sessions,
 	sessionIds,
 	activeSessionId,
-	disableLayout = false,
 	indented = true,
 	plain = false,
 	onReorder,
@@ -2105,7 +2079,6 @@ function SessionReorderList({
 	sessions: WorkspaceSession[];
 	sessionIds: string[];
 	activeSessionId?: string;
-	disableLayout?: boolean;
 	indented?: boolean;
 	/** While a project is being dragged, leave the session lists as plain rows:
 	 *  otherwise every expanded project's DnD context measures its sortable
@@ -2115,7 +2088,15 @@ function SessionReorderList({
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: (sessionId: string) => void;
 }) {
-	const layoutDependency = useMemo(() => sessionIds.join("\u0000"), [sessionIds]);
+	// Suppress the vertical glide for the first 500ms after the list mounts, so the
+	// re-sorts that follow a daemon settle or a project expanding do not shuffle rows.
+	const [layoutSettled, setLayoutSettled] = useState(false);
+	useEffect(() => {
+		const timer = window.setTimeout(() => setLayoutSettled(true), 500);
+		return () => window.clearTimeout(timer);
+	}, []);
+	const orderKey = useMemo(() => sessionIds.join("\u0000"), [sessionIds]);
+	const layoutDependency = layoutSettled ? orderKey : undefined;
 	const sensors = useReorderSensors();
 	const dragClickGuard = usePostDragClickGuard();
 	const [listDragging, setListDragging] = useState(false);
@@ -2159,7 +2140,6 @@ function SessionReorderList({
 						key={session.id}
 						session={session}
 						active={activeSessionId === session.id}
-						disableLayout
 						indented={indented}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
@@ -2181,14 +2161,12 @@ function SessionReorderList({
 		>
 			<SortableContext items={sessionIds} strategy={verticalListSortingStrategy}>
 				<SidebarMenuSub className={className} data-testid={testId}>
-					<AnimatePresence initial={false}>
 					{sessions.map((session) => (
 						<SortableSessionRow
 							key={session.id}
 							session={session}
 							active={activeSessionId === session.id}
 							consumeDragClick={dragClickGuard.consumeClick}
-							disableLayout={disableLayout}
 							indented={indented}
 							layoutDependency={layoutDependency}
 							listIsDragging={listDragging}
@@ -2197,7 +2175,6 @@ function SessionReorderList({
 							onOpen={onOpen}
 						/>
 					))}
-					</AnimatePresence>
 				</SidebarMenuSub>
 			</SortableContext>
 		</DndContext>
@@ -2218,7 +2195,6 @@ function SessionRow({
 	indented = true,
 	layoutDependency,
 	listIsDragging = false,
-	disableLayout = false,
 	onKilled,
 	onOpen,
 	reorder,
@@ -2227,10 +2203,11 @@ function SessionRow({
 	active: boolean;
 	hostLabel?: string;
 	indented?: boolean;
+	/** The list order. Present only for rows in a reorderable list: the row then
+	 *  animates its vertical position (and nothing else) when the order changes. */
 	layoutDependency?: string;
 	listIsDragging?: boolean;
 	/** Project drags pause nested session projection work. */
-	disableLayout?: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: () => void;
 	/** Present only for rows inside a reorderable project list. */
@@ -2315,12 +2292,9 @@ function SessionRow({
 					style={reorder ? sortableRowStyle(reorder) : undefined}
 				>
 			<motion.div
-				initial={{ opacity: 0, y: 4 }}
-				animate={{ opacity: 1, y: 0 }}
-				exit={{ opacity: 0, y: -4, transition: { duration: prefersReducedMotion ? 0 : 0.12, ease: "easeIn" } }}
-				layout={disableLayout || listIsDragging ? false : "position"}
-				layoutDependency={disableLayout ? undefined : layoutDependency}
-				transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 520, damping: 42, mass: 0.55 }}
+				layout={layoutDependency !== undefined && !listIsDragging ? "y" : false}
+				layoutDependency={layoutDependency}
+				transition={prefersReducedMotion ? { duration: 0 } : { layout: { type: "spring", stiffness: 520, damping: 42, mass: 0.55 } }}
 			>
 				<div
 					className={cn(
@@ -3044,7 +3018,6 @@ function ShowMoreRow({
 				initial={{ opacity: 0, y: 4 }}
 				animate={{ opacity: 1, y: 0 }}
 				exit={{ opacity: 0, y: -4 }}
-				layout
 				onClick={onClick}
 				transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }}
 				type="button"

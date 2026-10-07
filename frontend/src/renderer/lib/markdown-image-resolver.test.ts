@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	isAbsoluteMarkdownAssetSrc,
 	resolveMarkdownAssetPath,
+	resolveArtifactImageSrc,
 	resolveMarkdownImageSrc,
 } from "./markdown-image-resolver";
 
@@ -81,5 +82,18 @@ describe("resolveMarkdownImageSrc", () => {
 		expect(before).toContain("v=100");
 		expect(after).toContain("v=200");
 		expect(before).not.toBe(after);
+	});
+});
+
+describe("resolveArtifactImageSrc", () => {
+	const origin = "http://ao-preview-artifact.abc.localhost:3001";
+	it("resolves a relative image against the artifact origin and the markdown file's directory", () => {
+		expect(resolveArtifactImageSrc(origin, "docs/report.md", "./img/a b.png")).toBe(`${origin}/docs/img/a%20b.png`);
+	});
+	it("clamps a parent escape at the artifact root", () => {
+		expect(resolveArtifactImageSrc(origin, "report.md", "../../x.png")).toBe(`${origin}/x.png`);
+	});
+	it("passes absolute sources through unchanged", () => {
+		expect(resolveArtifactImageSrc(origin, "report.md", "https://example.com/a.png")).toBe("https://example.com/a.png");
 	});
 });

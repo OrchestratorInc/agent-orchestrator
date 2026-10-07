@@ -6,6 +6,38 @@ import (
 	"testing"
 )
 
+func TestMigrateRemovesCueDescriptionsAndPreservesDefinitions(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 173)
+	_, err := db.Exec(`
+INSERT INTO projects (id, path, repo_origin_url, display_name, registered_at, config, kind)
+VALUES ('scratch', 'C:\scratch', '', 'Scratch', '2026-09-24T00:00:00Z', '{}', 'single_repo');
+INSERT INTO cues (id, project_id, name, description, type, command, prompt, created_at, updated_at)
+VALUES ('command', 'scratch', 'Check status', 'Old description', 'command', '  git status', '', '2026-09-24T00:00:00Z', '2026-09-25T00:00:00Z'),
+       ('agent', 'scratch', 'Review', 'Another description', 'agent', '', 'Review changes', '2026-09-24T00:00:00Z', '2026-09-25T00:00:00Z');
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := migrate(db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('cues') WHERE name = 'description'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("description column count=%d err=%v", count, err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM cues WHERE project_id = 'scratch'
+AND created_at = '2026-09-24T00:00:00Z' AND updated_at = '2026-09-25T00:00:00Z'
+AND ((id = 'command' AND name = 'Check status' AND type = 'command' AND command = '  git status' AND prompt = '')
+OR (id = 'agent' AND name = 'Review' AND type = 'agent' AND command = '' AND prompt = 'Review changes'))`).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("preserved definition count=%d err=%v", count, err)
+	}
+	if _, err := db.Exec(`INSERT INTO cues SELECT 'duplicate', project_id, name, type, command, prompt, created_at, updated_at FROM cues WHERE id = 'command'`); err == nil {
+		t.Fatal("migration lost project/name uniqueness")
+	}
+}
+
 func TestMigratePreservesPreviewCuesAtOldVersion149(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 148)
 	seedPreviewCues(t, db, 149)
