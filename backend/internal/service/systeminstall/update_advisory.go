@@ -25,11 +25,16 @@ const (
 type UpdateUnknownReason string
 
 const (
+	// UpdateReasonOwnershipUnconfirmed means AO could not prove which installer owns the binary.
 	UpdateReasonOwnershipUnconfirmed UpdateUnknownReason = "ownership_unconfirmed"
-	UpdateReasonUnsupportedSource    UpdateUnknownReason = "unsupported_source"
-	UpdateReasonVersionUnparseable   UpdateUnknownReason = "version_unparseable"
-	UpdateReasonChannelUnconfirmed   UpdateUnknownReason = "channel_unconfirmed"
-	UpdateReasonLookupFailed         UpdateUnknownReason = "lookup_failed"
+	// UpdateReasonUnsupportedSource means the harness has no supported release source.
+	UpdateReasonUnsupportedSource UpdateUnknownReason = "unsupported_source"
+	// UpdateReasonVersionUnparseable means a reported version could not be compared safely.
+	UpdateReasonVersionUnparseable UpdateUnknownReason = "version_unparseable"
+	// UpdateReasonChannelUnconfirmed means AO could not match the installed release channel.
+	UpdateReasonChannelUnconfirmed UpdateUnknownReason = "channel_unconfirmed"
+	// UpdateReasonLookupFailed means the latest-version lookup failed.
+	UpdateReasonLookupFailed UpdateUnknownReason = "lookup_failed"
 )
 
 // UpdateAdvisory is the daemon's non-mutating comparison for one harness.
@@ -206,8 +211,8 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		advisory.Reason = UpdateReasonVersionUnparseable
 		return advisory, nil
 	}
-	comparison, comparable := compareUpdateVersions(current, parsedLatest)
-	if !comparable {
+	comparison, versionsComparable := compareUpdateVersions(current, parsedLatest)
+	if !versionsComparable {
 		advisory.Reason = UpdateReasonChannelUnconfirmed
 		return advisory, nil
 	}

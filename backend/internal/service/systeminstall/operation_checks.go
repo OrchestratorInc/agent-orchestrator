@@ -157,11 +157,11 @@ func updateOutcome(baseline *installedBaseline, result VerifyResult) (failure, n
 	if !afterOK || !beforeOK {
 		return "", note
 	}
-	if comparison, comparable := compareUpdateVersions(after, before); comparable && comparison > 0 {
+	if comparison, versionsComparable := compareUpdateVersions(after, before); versionsComparable && comparison > 0 {
 		return "", strings.TrimSpace(fmt.Sprintf("Updated %s to %s. %s", before.display, after.display, note))
 	}
 	latest, latestOK := parseUpdateVersion(baseline.latest)
-	if comparison, comparable := compareUpdateVersions(after, latest); latestOK && comparable && comparison < 0 {
+	if comparison, versionsComparable := compareUpdateVersions(after, latest); latestOK && versionsComparable && comparison < 0 {
 		return fmt.Sprintf("the update finished, but %s still reports %s (latest is %s); it may have changed a different installation", result.ResolvedPath, after.display, latest.display), note
 	}
 	return "", strings.TrimSpace(fmt.Sprintf("Version unchanged at %s. %s", after.display, note))

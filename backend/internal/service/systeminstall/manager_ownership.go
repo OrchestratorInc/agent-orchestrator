@@ -207,6 +207,9 @@ func nodeShimTargetsPackage(binaryPath, packageRoot string) (bool, error) {
 				continue
 			}
 			owned, err := pathWithin(packageRoot, argument)
+			if os.IsNotExist(err) {
+				continue
+			}
 			if err != nil || !owned {
 				return false, err
 			}
@@ -223,6 +226,9 @@ func nodeShimLaunchLine(line string) bool {
 		return false
 	}
 	command := fields[0]
+	if strings.Contains(command, "=") {
+		return false
+	}
 	if strings.HasPrefix(line, `"`) || strings.HasPrefix(line, "'") {
 		match := quotedShimArgument.FindStringSubmatch(line)
 		if match == nil {
@@ -303,7 +309,7 @@ func wingetPackageContains(binaryPath, pkg string) bool {
 	for i := 0; i+3 < len(parts); i++ {
 		if parts[i] == "winget" && parts[i+1] == "packages" {
 			name := parts[i+2]
-			return name == strings.ToLower(pkg) || strings.HasPrefix(name, strings.ToLower(pkg)+"_")
+			return strings.EqualFold(name, pkg) || strings.HasPrefix(name, strings.ToLower(pkg)+"_")
 		}
 	}
 	return false

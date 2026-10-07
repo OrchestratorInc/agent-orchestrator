@@ -72,9 +72,9 @@ func TestCompareUpdateVersionsRequiresCompatibleChannels(t *testing.T) {
 			if !ok {
 				t.Fatalf("could not parse latest fixture %q", tt.latest)
 			}
-			order, comparable := compareUpdateVersions(installed, latest)
-			if order != tt.wantOrder || comparable != tt.wantComparable {
-				t.Fatalf("compare(%q, %q) = (%d, %t), want (%d, %t)", tt.installed, tt.latest, order, comparable, tt.wantOrder, tt.wantComparable)
+			order, versionsComparable := compareUpdateVersions(installed, latest)
+			if order != tt.wantOrder || versionsComparable != tt.wantComparable {
+				t.Fatalf("compare(%q, %q) = (%d, %t), want (%d, %t)", tt.installed, tt.latest, order, versionsComparable, tt.wantOrder, tt.wantComparable)
 			}
 		})
 	}

@@ -37,10 +37,10 @@ func newManagedVersionChecker(commands ports.CommandRunner, client *http.Client)
 		}
 		switch plan.Method {
 		case "npm", "pnpm", "yarn":
-			if result, ok := checkNodeManager(ctx, commands, plan, current, channel); ok {
+			if result, ok := checkNodeManager(ctx, commands, plan, channel); ok {
 				return result, nil
 			}
-			return npmRegistryVersion(ctx, client, plan.Package, current, channel)
+			return npmRegistryVersion(ctx, client, plan.Package, channel)
 		case "bun":
 			packageSpec := plan.Package
 			if channel != "latest" {
@@ -53,17 +53,17 @@ func newManagedVersionChecker(commands ports.CommandRunner, client *http.Client)
 			if commandErr == nil {
 				commandErr = fmt.Errorf("bun returned no version for %s", plan.Package)
 			}
-			result, registryErr := npmRegistryVersion(ctx, client, plan.Package, current, channel)
+			result, registryErr := npmRegistryVersion(ctx, client, plan.Package, channel)
 			if registryErr == nil {
 				return result, nil
 			}
-			return managedVersionResult{}, fmt.Errorf("bun lookup failed: %v; registry fallback: %w", commandErr, registryErr)
+			return managedVersionResult{}, fmt.Errorf("bun lookup failed: %w; registry fallback: %w", commandErr, registryErr)
 		case "homebrew":
-			return homebrewManagedVersion(ctx, commands, plan, current, channel)
+			return homebrewManagedVersion(ctx, commands, plan, channel)
 		case "winget":
-			return wingetManagedVersion(ctx, commands, plan, current, channel)
+			return wingetManagedVersion(ctx, commands, plan, channel)
 		case "uv", "pipx":
-			return pypiManagedVersion(ctx, client, plan.Package, current, channel)
+			return pypiManagedVersion(ctx, client, plan.Package, channel)
 		default:
 			return managedVersionResult{}, fmt.Errorf("unsupported version source %s", plan.Method)
 		}
@@ -81,7 +81,7 @@ func updateChannel(current updateVersion) (string, error) {
 	return channel, nil
 }
 
-func checkNodeManager(ctx context.Context, commands ports.CommandRunner, plan Plan, current updateVersion, channel string) (managedVersionResult, bool) {
+func checkNodeManager(ctx context.Context, commands ports.CommandRunner, plan Plan, channel string) (managedVersionResult, bool) {
 	if commands == nil {
 		return managedVersionResult{}, false
 	}
@@ -173,7 +173,7 @@ func parseNodeView(method, raw string) string {
 	return strings.Trim(strings.TrimSpace(raw), `"`)
 }
 
-func homebrewManagedVersion(ctx context.Context, commands ports.CommandRunner, plan Plan, current updateVersion, channel string) (managedVersionResult, error) {
+func homebrewManagedVersion(ctx context.Context, commands ports.CommandRunner, plan Plan, channel string) (managedVersionResult, error) {
 	if commands == nil {
 		return managedVersionResult{}, fmt.Errorf("homebrew command runner unavailable")
 	}
@@ -249,7 +249,7 @@ func parseHomebrewVersion(raw, pkg string, cask, outdated bool) string {
 	return ""
 }
 
-func wingetManagedVersion(ctx context.Context, commands ports.CommandRunner, plan Plan, current updateVersion, channel string) (managedVersionResult, error) {
+func wingetManagedVersion(ctx context.Context, commands ports.CommandRunner, plan Plan, channel string) (managedVersionResult, error) {
 	if commands == nil {
 		return managedVersionResult{}, fmt.Errorf("winget command runner unavailable")
 	}
@@ -318,7 +318,7 @@ func latestVersionLine(raw string) string {
 			latest, found = candidate, true
 			continue
 		}
-		if comparison, comparable := compareUpdateVersions(latest, candidate); comparable && comparison < 0 {
+		if comparison, versionsComparable := compareUpdateVersions(latest, candidate); versionsComparable && comparison < 0 {
 			latest = candidate
 		}
 	}
@@ -328,7 +328,7 @@ func latestVersionLine(raw string) string {
 	return latest.display
 }
 
-func npmRegistryVersion(ctx context.Context, client *http.Client, pkg string, current updateVersion, channel string) (managedVersionResult, error) {
+func npmRegistryVersion(ctx context.Context, client *http.Client, pkg, channel string) (managedVersionResult, error) {
 	var metadata struct {
 		DistTags map[string]string `json:"dist-tags"`
 	}
@@ -362,7 +362,7 @@ func npmRegistryVersion(ctx context.Context, client *http.Client, pkg string, cu
 	return managedVersionResult{}, fmt.Errorf("%w: npm %s dist-tag is incompatible with installed version", errUpdateChannelUnconfirmed, channel)
 }
 
-func pypiManagedVersion(ctx context.Context, client *http.Client, pkg string, current updateVersion, channel string) (managedVersionResult, error) {
+func pypiManagedVersion(ctx context.Context, client *http.Client, pkg, channel string) (managedVersionResult, error) {
 	var metadata struct {
 		Info struct {
 			Version string `json:"version"`
