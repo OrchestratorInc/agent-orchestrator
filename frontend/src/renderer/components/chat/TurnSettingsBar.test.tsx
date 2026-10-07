@@ -102,7 +102,7 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s model se
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(count);
 		if (count === 10) {
 			expect(screen.getByRole("searchbox", { name: "Search models" })).toBeInTheDocument();
-			expect(screen.getByText("Showing 10 of 10 matching models", { exact: true })).toBeInTheDocument();
+			expect(screen.queryByText("Showing 10 of 10 matching models", { exact: true })).not.toBeInTheDocument();
 		} else {
 			expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
 		}
@@ -142,10 +142,24 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s model se
 		await user.keyboard("Model 99");
 		expect(search).toHaveValue("Model 99");
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
-		await user.keyboard("{ArrowDown}");
-		expect(screen.getByRole("menuitemradio", { name: "Model 99" })).toHaveFocus();
+		expect(screen.getByRole("menuitemradio", { name: "Model 99" })).toHaveAttribute(
+			"data-search-active",
+			"true",
+		);
 		await user.keyboard("{Enter}");
 		expect(onChange).toHaveBeenCalledOnce();
+	});
+
+	it("does not change models when Enter is pressed before searching", async () => {
+		const { user, onChange, open } = setup();
+		await open();
+		if (path === "ACP standalone") {
+			await user.keyboard("{Escape}{Enter}");
+		}
+		const search = screen.getByRole("searchbox", { name: "Search models" });
+		expect(search).toHaveFocus();
+		await user.keyboard("{Enter}");
+		expect(onChange).not.toHaveBeenCalled();
 	});
 
 	it.each(["ArrowUp", "Shift+Tab"])("returns to the query with %s so it can be refined", async (key) => {
@@ -282,6 +296,42 @@ it.each(["native", "ACP config"] as const)(
 	},
 );
 
+it("keeps the Claude model menu open when expanding Other models, without an agent-model row", async () => {
+	const user = userEvent.setup();
+	const choices = [
+		{ value: "default", name: "Default (recommended)", description: "Sonnet 5.5" },
+		{ value: "claude-fable-5-1", name: "Fable 5.1" },
+		{ value: "claude-opus-5-5", name: "Opus 5.5" },
+		{ value: "claude-sonnet-5-5", name: "Sonnet 5.5" },
+		{ value: "claude-haiku-4-5", name: "Haiku 4.5" },
+		{ value: "claude-opus-4-1", name: "Opus 4.1" },
+		{ value: "claude-sonnet-4", name: "Sonnet 4" },
+		...Array.from({ length: 6 }, (_, index) => ({ value: `claude-opus-4-${index + 2}`, name: `Opus 4.${index + 2}` })),
+	];
+	const composerClick = vi.fn();
+	render(
+		// Stands in for the composer, which focuses its editor on clicks that bubble out of the menu.
+		<div onClick={composerClick}>
+			<TurnSettingsBar
+				harness="claude-code"
+				models={[]}
+				settings={{}}
+				onChangeConfigOption={vi.fn()}
+				configOptions={[{ id: "model", name: "Model", category: "model", type: "select", currentValue: "claude-sonnet-5-5", choices }]}
+			/>
+		</div>,
+	);
+	await user.click(screen.getByRole("button", { name: "Model" }));
+	expect(screen.queryByRole("menuitemradio", { name: /agent model/i })).not.toBeInTheDocument();
+	composerClick.mockClear();
+	await user.click(screen.getByRole("menuitem", { name: /Other models/ }));
+	expect(composerClick).not.toHaveBeenCalled();
+	expect(screen.getByRole("menuitemradio", { name: "Opus 4.1" })).toBeInTheDocument();
+	await user.click(screen.getByRole("menuitem", { name: /Other models/ }));
+	expect(screen.queryByRole("menuitemradio", { name: "Opus 4.1" })).not.toBeInTheDocument();
+	expect(screen.getByRole("menuitem", { name: /Other models/ })).toBeInTheDocument();
+});
+
 describe("ACP session config options", () => {
 	it("hides a mode with only an implicit default choice", () => {
 		const mode: ChatConfigOption = {
@@ -392,22 +442,6 @@ describe("ACP session config options", () => {
 		expect(onChange).toHaveBeenLastCalledWith("model", { value: "default" });
 	});
 
-	it("lets an explicitly pinned recommended model return to agent control", async () => {
-		const onChange = vi.fn();
-		render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[{
-			id: "model", name: "Model", category: "model", type: "select", currentValue: "opus",
-			choices: [
-				{ value: "default", name: "Default (recommended)", description: "Opus" },
-				{ value: "opus", name: "Opus" },
-				{ value: "sonnet", name: "Sonnet" },
-			],
-		}]} />);
-		await userEvent.click(screen.getByRole("button", { name: "Model" }));
-		expect(screen.getByRole("menuitemradio", { name: "Opus", checked: true })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("menuitemradio", { name: "Use agent model (Opus)" }));
-		expect(onChange).toHaveBeenCalledWith("model", { value: "default" });
-	});
-
 	it("searches visible model names without matching hidden choice values", async () => {
 		const user = userEvent.setup();
 		const choices = [
@@ -440,7 +474,7 @@ describe("ACP session config options", () => {
 		expect(screen.getByRole("menuitemradio", { name: "Claude Opus 4.8" })).toBeInTheDocument();
 		expect(screen.getByRole("menuitemradio", { name: "Claude Sonnet 4" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitemradio", { name: "GPT-5.3" })).not.toBeInTheDocument();
-		expect(screen.getByText("Showing 2 of 2 matching models", { exact: true })).toBeInTheDocument();
+		expect(screen.queryByText("Showing 2 of 2 matching models", { exact: true })).not.toBeInTheDocument();
 	});
 
 	it.each(["ao-plan-project-1", "agents/plan-reviewer", "my_plan_agent"])(
@@ -524,6 +558,11 @@ describe("ACP session config options", () => {
 		expect(within(tools).getByRole("button", { name: "Permission mode" })).toHaveTextContent(
 			"Bypass Permissions",
 		);
+		expect(
+			within(tools).getByRole("button", { name: "Model and reasoning effort for the next turn" })
+				.querySelector(".lucide-chevron-down"),
+		).toBeNull();
+		expect(within(tools).getByRole("button", { name: "Permission mode" }).querySelector(".lucide-chevron-down")).toBeNull();
 		expect(within(tools).queryByRole("button", { name: "Fast mode" })).not.toBeInTheDocument();
 		expect(within(tools).queryByRole("button", { name: "Agent" })).not.toBeInTheDocument();
 		expect(screen.queryByText("Default")).not.toBeInTheDocument();

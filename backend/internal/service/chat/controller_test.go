@@ -6256,6 +6256,14 @@ func TestInterruptReconciliationCancelsQueuedTurns(t *testing.T) {
 // claims a turn is running and a queued message is waiting to be sent behind a
 // controller that no longer exists.
 func TestStartSettlesWorkLeftByAKilledController(t *testing.T) {
+	testStartSettlesWorkLeftByAKilledController(t, false)
+}
+
+func TestStartSettlesQueuedWorkLeftByAKilledController(t *testing.T) {
+	testStartSettlesWorkLeftByAKilledController(t, true)
+}
+
+func testStartSettlesWorkLeftByAKilledController(t *testing.T, queuedOnly bool) {
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -6276,6 +6284,11 @@ func TestStartSettlesWorkLeftByAKilledController(t *testing.T) {
 		ActivityStatus: domain.ActivityStatusPending, Summary: "Run something",
 	})
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Activities) == 1 })
+	if queuedOnly {
+		if err := h.st.SettleTurn(ctx, h.ctrl.ConversationID(), "provider-turn-1", domain.TurnStateFailed, "crash", h.now()); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	// A killed daemon leaves the rows mid-flight and takes its service with it, so
 	// the next controller comes up in a NEW service over the SAME store. Building
@@ -6292,8 +6305,10 @@ func TestStartSettlesWorkLeftByAKilledController(t *testing.T) {
 	t.Cleanup(func() { _ = next.Stop(context.Background(), testSession) })
 	// Retry moves an interrupted async start back to provisioning. That state
 	// must not hide the running turn left by its previous controller.
-	if _, err := h.st.SetSessionProvisionState(ctx, testSession, domain.SessionProvisionProvisioning, "", h.now()); err != nil {
-		t.Fatal(err)
+	if !queuedOnly {
+		if _, err := h.st.SetSessionProvisionState(ctx, testSession, domain.SessionProvisionProvisioning, "", h.now()); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if _, err := next.Start(ctx, chatsvc.StartConfig{
@@ -6670,6 +6685,29 @@ func TestCompactReportsWhatIsAboutToBeReclaimed(t *testing.T) {
 	}
 	if conv.compactCalls() != 1 {
 		t.Errorf("provider called %d times, want 1", conv.compactCalls())
+	}
+}
+
+func TestCompactionSettlementWithoutStartDrainsQueue(t *testing.T) {
+	for _, kind := range []ports.ChatEventKind{ports.ChatEventTurnCompleted, ports.ChatEventCompacted} {
+		t.Run(string(kind), func(t *testing.T) {
+			conv := newCompactingConversation()
+			h := newHarnessWithConversation(t, conv)
+			ctx := context.Background()
+			if _, err := h.svc.Compact(ctx, testSession); err != nil {
+				t.Fatal(err)
+			}
+			if turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "after compact"}); err != nil || turn.State != domain.TurnStateQueued {
+				t.Fatalf("Send while compacting = %+v, %v", turn, err)
+			}
+			conv.emit(ports.ChatEvent{Kind: kind, ProviderTurnID: "compact-turn", TurnState: domain.TurnStateCompleted})
+			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+				return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateRunning
+			})
+			if got := conv.sentTexts(); len(got) != 1 || got[0] != "after compact" {
+				t.Fatalf("provider messages = %v", got)
+			}
+		})
 	}
 }
 

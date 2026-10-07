@@ -185,3 +185,21 @@ func TestMaterialize_WritesIntoArbitraryDest(t *testing.T) {
 		t.Fatalf("commands/spawn.md missing: %v", err)
 	}
 }
+
+func TestEmbeddedReportGuidanceDistinguishesDeliverablesFromDiagnostics(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/report.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guidance := strings.Join(strings.Fields(string(body)), " ")
+	for _, want := range []string{
+		"working material, not deliverables",
+		"Do not attach them unless requested or needed to explain an actionable failure",
+		"Summarize validation in the report note",
+		"not external publishing authorization",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("report guidance missing %q", want)
+		}
+	}
+}

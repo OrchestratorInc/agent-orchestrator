@@ -181,6 +181,9 @@ export interface ConversationMessage {
 	delivery?: DeliveryState;
 	/** Set when origin is a worker or automation, for the attribution line. */
 	senderLabel?: string;
+	senderSessionId?: string;
+	senderProjectId?: string;
+	senderDisplayName?: string;
 	createdAt: string;
 }
 
@@ -413,6 +416,10 @@ export interface SystemEventDetail {
 	revision?: number;
 	/** steer: the user's own words, delivered into a turn already running. */
 	origin?: string;
+	/** steer: source session metadata for an AO automation steer. */
+	senderSessionId?: string;
+	senderProjectId?: string;
+	senderDisplayName?: string;
 	clientMessageId?: string;
 	/** steer: complete provider-neutral content copied from a promoted queue item. */
 	content?: Array<{
@@ -624,8 +631,8 @@ export interface ChatSkill {
 	source?: string;
 }
 
-/** Health of the daemon's connection to the provider. */
-export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped";
+/** State of the daemon's connection to the provider. */
+export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped" | "hibernated";
 
 /**
  * How full this conversation is.

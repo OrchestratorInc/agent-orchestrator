@@ -253,6 +253,7 @@ export function GeneralSettingsSection({
 					/>
 				</SettingsRow>
 				{developerMode && <CloudOfferingRow />}
+				{developerMode && <DiagnosticsRow />}
 			</SettingsSection>
 		</>
 	);
@@ -282,6 +283,25 @@ function TelemetryEventsRow() {
 			{t(status ? `settings.telemetryEvents.${status}` : "settings.telemetryEvents.description")}
 		</p>
 	</div>;
+}
+
+/**
+ * Developer Mode-only toggle for memory and CPU monitoring: the card chips,
+ * the board's memory light and window, and the Diagnostics settings page.
+ * Off by default so Developer mode alone does not poll process trees.
+ */
+function DiagnosticsRow() {
+	const { t } = useTranslation();
+	const diagnostics = useUiStore((state) => state.diagnostics);
+	const setDiagnostics = useUiStore((state) => state.setDiagnostics);
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow label={t("settings.diagnostics")}>
+				<Switch aria-label={t("settings.diagnostics")} checked={diagnostics} onCheckedChange={setDiagnostics} />
+			</SettingsRow>
+			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.diagnosticsToggleHint")}</p>
+		</div>
+	);
 }
 
 /**

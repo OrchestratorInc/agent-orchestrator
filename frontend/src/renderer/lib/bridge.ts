@@ -96,6 +96,8 @@ export const aoBridge: AoBridge =
 		},
 		browser: {
 			nativeCompositionEnabled: false,
+			reconnectRuntime: async () => undefined,
+			getRuntimeState: async () => ({ connected: false }),
 			ensure: async (sessionId: string) => ({
 				viewId: `preview:${sessionId}`,
 				url: "",
@@ -217,6 +219,7 @@ export const aoBridge: AoBridge =
 			onPageFocus: () => () => undefined,
 			onTabsState: () => () => undefined,
 			onAgentActivity: () => () => undefined,
+			onRuntimeState: () => () => undefined,
 			onDevToolsState: () => () => undefined,
 			onProfileState: () => () => undefined,
 			onProfileManage: () => () => undefined,

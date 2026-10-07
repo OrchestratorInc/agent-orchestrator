@@ -45,19 +45,21 @@ func TestSeedRecordPreservesAutomationRunIdentity(t *testing.T) {
 }
 
 type fakeStore struct {
-	sessions         map[domain.SessionID]domain.SessionRecord
-	pr               map[domain.SessionID]domain.PRFacts
-	projects         map[string]domain.ProjectRecord
-	conversations    map[domain.SessionID]domain.ConversationRecord
-	workspaceRepo    map[string][]domain.WorkspaceRepoRecord
-	num              int
-	deleteErr        error
-	upsertWTErr      error
-	listAllErr       error
-	getProjectErr    error
-	getSessionErr    error
-	updateSessionErr error
-	deletePrepErr    error
+	sessions                           map[domain.SessionID]domain.SessionRecord
+	pr                                 map[domain.SessionID]domain.PRFacts
+	projects                           map[string]domain.ProjectRecord
+	conversations                      map[domain.SessionID]domain.ConversationRecord
+	workspaceRepo                      map[string][]domain.WorkspaceRepoRecord
+	num                                int
+	deleteErr                          error
+	upsertWTErr                        error
+	listAllErr                         error
+	getProjectErr                      error
+	getSessionErr                      error
+	updateSessionErr                   error
+	hibernationCASConflicts            int
+	updateBrowserCapabilityVerifierErr error
+	deletePrepErr                      error
 
 	createClientRequestErr error
 	promoteTaskErr         error
@@ -140,8 +142,43 @@ func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) e
 	if f.updateSessionErr != nil {
 		return f.updateSessionErr
 	}
+	// Like the real store, a full-row update never writes artifact_dir or
+	// session_output_type; only UpdateSessionArtifactOutput does.
+	if existing, ok := f.sessions[rec.ID]; ok {
+		rec.Metadata.ArtifactDir = existing.Metadata.ArtifactDir
+		rec.OutputType = existing.OutputType
+	}
 	f.sessions[rec.ID] = rec
 	return nil
+}
+func (f *fakeStore) SetSessionHibernated(_ context.Context, id domain.SessionID, revision int64, at *time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok || rec.Revision != revision || rec.IsTerminated {
+		return false, nil
+	}
+	if f.hibernationCASConflicts > 0 {
+		f.hibernationCASConflicts--
+		rec.Revision++
+		f.sessions[id] = rec
+		return false, nil
+	}
+	rec.HibernatedAt = at
+	rec.Revision++
+	f.sessions[id] = rec
+	return true, nil
+}
+func (f *fakeStore) UpdateSessionArtifactOutput(_ context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error) {
+	if f.updateSessionErr != nil {
+		return false, f.updateSessionErr
+	}
+	rec, ok := f.sessions[id]
+	if !ok {
+		return false, nil
+	}
+	rec.Metadata.ArtifactDir = artifactDir
+	rec.OutputType = outputType
+	f.sessions[id] = rec
+	return true, nil
 }
 func (f *fakeStore) UpdateSessionModel(_ context.Context, id domain.SessionID, model string) (bool, error) {
 	if f.updateSessionErr != nil {
@@ -194,6 +231,17 @@ func (f *fakeStore) SetSessionProvisionState(_ context.Context, id domain.Sessio
 	return true, nil
 }
 
+func (f *fakeStore) SetSessionProvisionSteps(_ context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error {
+	rec, ok := f.sessions[id]
+	if !ok {
+		return nil
+	}
+	rec.ProvisionSteps = append([]domain.SessionProvisionStep(nil), steps...)
+	rec.UpdatedAt = now
+	f.sessions[id] = rec
+	return nil
+}
+
 func (f *fakeStore) PromoteTaskPreparation(_ context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error) {
 	if f.promoteTaskErr != nil {
 		err := f.promoteTaskErr
@@ -226,8 +274,8 @@ func (f *fakeStore) DeleteTaskPreparation(_ context.Context, id domain.SessionID
 }
 
 func (f *fakeStore) UpdateBrowserCapabilityVerifier(_ context.Context, id domain.SessionID, expected domain.SessionControllerOwner, verifier string) (bool, error) {
-	if f.updateSessionErr != nil {
-		return false, f.updateSessionErr
+	if f.updateBrowserCapabilityVerifierErr != nil {
+		return false, f.updateBrowserCapabilityVerifierErr
 	}
 	rec, ok := f.sessions[id]
 	if !ok || rec.ControllerOwner() != expected {
@@ -284,6 +332,19 @@ func (f *fakeStore) ListAllSessions(context.Context) ([]domain.SessionRecord, er
 		out = append(out, r)
 	}
 	return out, nil
+}
+func (f *fakeStore) ListChatHibernationCandidates(ctx context.Context) ([]domain.SessionID, error) {
+	records, err := f.ListAllSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var ids []domain.SessionID
+	for _, rec := range records {
+		if rec.EligibleForChatHibernation() {
+			ids = append(ids, rec.ID)
+		}
+	}
+	return ids, nil
 }
 func (f *fakeStore) DeleteSession(_ context.Context, id domain.SessionID) (bool, error) {
 	if f.deleteErr != nil {
@@ -1356,7 +1417,7 @@ func TestSend_WrapsCopilotOrchestratorMessageWithDelegationDirective(t *testing.
 	msg := &fakeMessenger{}
 	m := New(Deps{Store: st, Messenger: msg})
 
-	if err := m.Send(ctx, "mer-1", "make the button red", nil); err != nil {
+	if err := m.SendWithOptions(ctx, "mer-1", "make the button red", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatal(err)
 	}
 	if len(msg.msgs) != 1 {
@@ -1387,7 +1448,7 @@ func TestSend_DoesNotWrapCopilotWorkerMessage(t *testing.T) {
 	msg := &fakeMessenger{}
 	m := New(Deps{Store: st, Messenger: msg})
 
-	if err := m.Send(ctx, "mer-2", "make the button red", nil); err != nil {
+	if err := m.SendWithOptions(ctx, "mer-2", "make the button red", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatal(err)
 	}
 	if got := msg.msgs[0]; got != "make the button red" {
@@ -1406,7 +1467,7 @@ func TestSend_DoesNotWrapNonCopilotOrchestratorMessage(t *testing.T) {
 	msg := &fakeMessenger{}
 	m := New(Deps{Store: st, Messenger: msg})
 
-	if err := m.Send(ctx, "mer-1", "make the button red", nil); err != nil {
+	if err := m.SendWithOptions(ctx, "mer-1", "make the button red", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatal(err)
 	}
 	if got := msg.msgs[0]; got != "make the button red" {
@@ -1429,7 +1490,7 @@ func TestSend_WritesAttachmentAndAppendsReference(t *testing.T) {
 	m := New(Deps{Store: st, Messenger: msg, Workspace: ws, DataDir: t.TempDir()})
 
 	attachment := &ports.SpawnAttachment{Ext: ".png", Data: []byte("snapshot-bytes")}
-	if err := m.Send(ctx, "mer-1", "Make the button blue.", attachment); err != nil {
+	if err := m.SendWithOptions(ctx, "mer-1", "Make the button blue.", attachment, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1475,7 +1536,7 @@ func TestSend_WithoutAttachmentSkipsWorkspaceWrite(t *testing.T) {
 	ws := &fakeWorkspace{}
 	m := New(Deps{Store: st, Messenger: msg, Workspace: ws})
 
-	if err := m.Send(ctx, "mer-1", "make the button red", nil); err != nil {
+	if err := m.SendWithOptions(ctx, "mer-1", "make the button red", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2598,7 +2659,7 @@ func TestSpawnWorkspaceRecordFailurePreservesDirtyWorkspace(t *testing.T) {
 func TestSpawn_ReturnsFinalPromptByteMetrics(t *testing.T) {
 	m, _, _, _ := newManager()
 	cfg := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}
-	wantPrompt, wantSystemPrompt, err := m.buildSpawnTexts(ctx, cfg)
+	wantPrompt, wantSystemPrompt, err := m.buildSpawnTexts(ctx, cfg, "mer-1")
 	if err != nil {
 		t.Fatalf("buildSpawnTexts: %v", err)
 	}
@@ -3145,9 +3206,12 @@ func TestWrapSpawnStagePreservesInnerSentinel(t *testing.T) {
 
 func TestSpawn_RollsBackOnRuntimeFailure(t *testing.T) {
 	m, st, _, ws := newManager()
-	m.runtime = &fakeRuntime{createErr: errors.New("boom")}
-	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer"}); err == nil {
-		t.Fatal("expected failure")
+	project := st.projects["mer"]
+	project.Config.Env = map[string]string{"PROJECT_TOKEN": "runtime-secret"}
+	st.projects["mer"] = project
+	m.runtime = &fakeRuntime{createErr: errors.New("boom with runtime-secret")}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer"}); err == nil || strings.Contains(err.Error(), "runtime-secret") || !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("Spawn error = %v, want redacted runtime failure", err)
 	}
 	if ws.destroyed != 1 {
 		t.Fatal("workspace should roll back")
@@ -5728,7 +5792,7 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 			lookPath := func(string) (string, error) { return "/bin/true", nil }
 			m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
-			sp, err := m.buildSystemPrompt(ctx, tc.kind, "mer")
+			sp, err := m.buildSystemPrompt(ctx, tc.kind, "mer", "mer-1")
 			if err != nil {
 				t.Fatalf("buildSystemPrompt: %v", err)
 			}
@@ -5762,6 +5826,46 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 				t.Fatalf("%s: system prompt missing automatic artifact handoff guidance:\n%s", tc.name, sp)
 			}
 		})
+	}
+}
+
+func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{
+		Runtime:   &fakeRuntime{},
+		Agents:    singleAgent{agent: &recordingAgent{}},
+		Workspace: &fakeWorkspace{},
+		Store:     st,
+		Messenger: &fakeMessenger{},
+		Lifecycle: &fakeLCM{store: st},
+		DataDir:   t.TempDir(),
+		LookPath:  lookPath,
+	})
+
+	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7")
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+	wantDir := filepath.ToSlash(filepath.Join(m.dataDir, "artifacts", "mer-7"))
+	if !strings.Contains(sp, "## Session Artifacts") {
+		t.Fatalf("system prompt missing artifacts section:\n%s", sp)
+	}
+	if !strings.Contains(sp, wantDir) {
+		t.Fatalf("system prompt missing artifact dir %q:\n%s", wantDir, sp)
+	}
+	for _, want := range []string{
+		"Ordinary progress updates, concise final answers, and validation summaries can stay in chat or AO report notes",
+		"working material, not deliverables",
+		"does not authorize external publishing",
+	} {
+		if !strings.Contains(sp, want) {
+			t.Fatalf("system prompt missing artifact boundary %q", want)
+		}
+	}
+	if strings.Contains(sp, "naturally document-shaped") {
+		t.Fatal("system prompt must not require files for ordinary summaries")
 	}
 }
 
@@ -10024,10 +10128,14 @@ func TestSendSemanticTUIRejectsAdapterWithoutAcceptanceSignal(t *testing.T) {
 func TestSend_RecordsDeliveredUserInput(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code"})
-	m := newSendTestManager(t, fakeAgent{}, &fakeMessenger{}, st)
+	messenger := &fakeMessenger{}
+	m := newSendTestManager(t, fakeAgent{}, messenger, st)
 
-	if err := m.Send(context.Background(), "s1", "continue with the migration", nil); err != nil {
+	if err := m.SendWithOptions(context.Background(), "s1", "continue with the migration", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatalf("Send: %v", err)
+	}
+	if len(messenger.msgs) != 1 || messenger.msgs[0] != "continue with the migration" {
+		t.Fatalf("human send was wrapped as coordination: %+v", messenger.msgs)
 	}
 	if got := st.sessions["s1"].Metadata.LatestUserPrompt; got != "continue with the migration" {
 		t.Fatalf("LatestUserPrompt = %q, want delivered user input", got)
@@ -10079,7 +10187,7 @@ func TestSend_PaneFallbackCannotPairLostPromptHookWithPriorTrustedAssistant(t *t
 		Runtime: &fakeRuntime{}, Agents: singleAgent{agent: fakeAgent{}}, Workspace: &fakeWorkspace{},
 		Store: st, Messenger: &fakeMessenger{}, Lifecycle: lcm,
 	})
-	if err := manager.Send(ctx, created.ID, "new prompt whose UserPromptSubmit hook is lost", nil); err != nil {
+	if err := manager.SendWithOptions(ctx, created.ID, "new prompt whose UserPromptSubmit hook is lost", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatalf("send pane prompt: %v", err)
 	}
 	afterFallback, ok, err := st.GetSession(ctx, created.ID)
@@ -10344,7 +10452,7 @@ func TestSend_PaneFallbackWinsAgainstStaleLifecycleProjection(t *testing.T) {
 		t.Fatal("lifecycle projection did not reach the storage barrier")
 	}
 
-	if err := manager.Send(ctx, created.ID, "pane prompt whose hook is lost", nil); err != nil {
+	if err := manager.SendWithOptions(ctx, created.ID, "pane prompt whose hook is lost", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatalf("send pane prompt: %v", err)
 	}
 	afterPane, ok, err := st.GetSession(ctx, created.ID)
@@ -10414,7 +10522,7 @@ func TestSend_ConfirmsAndNudgesUntilActive(t *testing.T) {
 	msg := &flipOnNudgeMessenger{sessionID: "s1", store: st}
 	m := newSendTestManager(t, signalingAgent{}, msg, st)
 
-	if err := m.Send(context.Background(), "s1", "do the thing", nil); err != nil {
+	if err := m.SendWithOptions(context.Background(), "s1", "do the thing", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if len(msg.msgs) != 2 {
@@ -10787,5 +10895,163 @@ func TestKill_TerminatesEvenWhenTeardownBudgetExpires(t *testing.T) {
 	}
 	if !st.sessions["mer-1"].IsTerminated {
 		t.Fatal("session must be marked terminated even though the teardown budget expired")
+	}
+}
+
+func TestSpawn_ArtifactDirWriteFailureRollsBackSeedRowAndDir(t *testing.T) {
+	m, st, _, _ := newManager()
+	dataDir := t.TempDir()
+	m.dataDir = dataDir
+	st.updateSessionErr = errors.New("persist artifact dir failed")
+
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode})
+	if !errors.Is(err, ErrSpawnArtifactDir) {
+		t.Fatalf("spawn = %v, want ErrSpawnArtifactDir", err)
+	}
+	if _, ok := st.sessions["mer-1"]; ok {
+		t.Fatal("seed row survived a failed artifact dir write")
+	}
+	if _, statErr := os.Stat(filepath.Join(dataDir, "artifacts", "mer-1")); !os.IsNotExist(statErr) {
+		t.Fatalf("artifact dir not cleaned up: stat err = %v", statErr)
+	}
+}
+
+func TestSpawn_WorkspaceCreateFailureRemovesReservedArtifactDir(t *testing.T) {
+	m, st, _, ws := newManager()
+	dataDir := t.TempDir()
+	m.dataDir = dataDir
+	ws.createErr = errors.New("create worktree failed")
+
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode})
+	if !errors.Is(err, ErrWorkspaceCreate) {
+		t.Fatalf("spawn = %v, want ErrWorkspaceCreate", err)
+	}
+	if _, ok := st.sessions["mer-1"]; ok {
+		t.Fatal("seed row survived a failed workspace create")
+	}
+	if _, statErr := os.Stat(filepath.Join(dataDir, "artifacts", "mer-1")); !os.IsNotExist(statErr) {
+		t.Fatalf("artifact dir orphaned after workspace create failure: stat err = %v", statErr)
+	}
+}
+
+func TestSpawn_PersistsArtifactDirOnSessionRow(t *testing.T) {
+	m, st, _, _ := newManager()
+	dataDir := t.TempDir()
+	m.dataDir = dataDir
+
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "go"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	want := filepath.Join(dataDir, "artifacts", string(rec.ID))
+	if got := st.sessions[rec.ID].Metadata.ArtifactDir; got != want {
+		t.Fatalf("persisted ArtifactDir = %q, want %q", got, want)
+	}
+}
+
+func TestSpawn_PreparedSessionPersistsArtifactDir(t *testing.T) {
+	m, st, _, _ := newManager()
+	m.runBackground = func(work func()) { work() }
+	dataDir := t.TempDir()
+	m.dataDir = dataDir
+	token, err := m.PrepareTaskWorkspace(ctx, st.projects["mer"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "go", TaskPreparation: token})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	want := filepath.Join(dataDir, "artifacts", string(rec.ID))
+	if got := st.sessions[rec.ID].Metadata.ArtifactDir; got != want {
+		t.Fatalf("persisted ArtifactDir = %q, want %q", got, want)
+	}
+}
+
+func TestSendAutomationDoesNotRecordHumanDirection(t *testing.T) {
+	for _, sender := range []string{"", "orchestrator-1", "worker-1", "unknown"} {
+		t.Run("sender="+sender, func(t *testing.T) {
+			st := newFakeStore()
+			st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code", Metadata: domain.SessionMetadata{LatestUserPrompt: "human task", LatestUserPromptAt: time.Unix(10, 0)}})
+			messenger := &fakeMessenger{}
+			m := newSendTestManager(t, fakeAgent{}, messenger, st)
+			if err := m.SendWithOptions(context.Background(), "s1", "automation direction", nil, ports.MessageDeliveryOptions{SenderSessionID: sender}); err != nil {
+				t.Fatal(err)
+			}
+			got := st.sessions["s1"].Metadata
+			if got.LatestUserPrompt != "human task" || !got.LatestUserPromptAt.Equal(time.Unix(10, 0)) {
+				t.Fatalf("human facts=%+v", got)
+			}
+			if len(messenger.msgs) != 1 {
+				t.Fatalf("messages=%v", messenger.msgs)
+			}
+			if _, ok := domain.CoordinationDeliveryID(messenger.msgs[0]); !ok {
+				t.Fatal("terminal delivery lacks coordination provenance for hooks")
+			}
+		})
+	}
+}
+
+func TestSendEmptyNudgeDoesNotBecomeCoordinationPrompt(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code"})
+	messenger := &fakeMessenger{}
+	m := newSendTestManager(t, fakeAgent{}, messenger, st)
+	if err := m.Send(context.Background(), "s1", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(messenger.msgs) != 1 || messenger.msgs[0] != "" {
+		t.Fatalf("empty nudge=%v", messenger.msgs)
+	}
+	if !st.sessions["s1"].Metadata.LatestUserPromptAt.IsZero() {
+		t.Fatal("nudge counted as human direction")
+	}
+}
+
+type interactionCountingStore struct {
+	*fakeStore
+	calls int
+}
+
+func (s *interactionCountingStore) RecordSessionInteraction(context.Context, domain.SessionID, string, time.Time) error {
+	s.calls++
+	return nil
+}
+
+func TestSendRecordsInteractionOnlyForDirectTerminalSender(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		chat, human, replay bool
+		sender              string
+		want                int
+	}{
+		{name: "terminal orchestrator", sender: "orchestrator-1", want: 1},
+		{name: "terminal human", human: true},
+		{name: "terminal queued replay", sender: "orchestrator-1", replay: true},
+		{name: "chat orchestrator", sender: "orchestrator-1", chat: true},
+		{name: "chat human", human: true, chat: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			rec := pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code"})
+			if tc.chat {
+				rec.Mode = domain.SessionModeChat
+			}
+			st.sessions["s1"] = rec
+			m := newSendTestManager(t, fakeAgent{}, &fakeMessenger{}, st)
+			counter := &interactionCountingStore{fakeStore: st}
+			m.store = counter
+			m.chat = &recordingLauncher{}
+			key := ""
+			if tc.replay {
+				key = "outbox-1"
+			}
+			if err := m.send(context.Background(), "s1", "direction", key, ports.MessageDeliveryOptions{SenderSessionID: tc.sender, AuthoredByUser: tc.human}); err != nil {
+				t.Fatal(err)
+			}
+			if counter.calls != tc.want {
+				t.Fatalf("interaction writes=%d want=%d", counter.calls, tc.want)
+			}
+		})
 	}
 }

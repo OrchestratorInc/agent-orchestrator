@@ -25,12 +25,22 @@ Use reports for meaningful transitions, decisions, blockers, required input,
 outputs, and terminal judgment. Do not narrate routine commands. Outputs do not
 imply completion, and `--done` does not terminate the session.
 
-Report any artifact as soon as it exists, not only at `--done`: attach it with
-`--artifact <reference>` on the report for the milestone that produced it. An
-artifact is anything durable the orchestrator or human should be able to open
-directly — a published Claude Artifact link, a generated document, a rendered
-dashboard, or similar output. `--artifact` takes any opaque reference string;
-it is not validated as a URL.
+Attach a reviewable deliverable as soon as it is ready, not only at `--done`:
+use `--artifact <reference>` on the report for the milestone that produced it.
+Examples include a requested document, a rendered dashboard, or another output
+the orchestrator or human needs to open directly. `--artifact` takes any opaque
+reference string; it is not validated as a URL.
+
+Routine test logs, command output, scratch notes, and intermediate diagnostics
+are working material, not deliverables. Do not attach them unless requested or
+needed to explain an actionable failure. Summarize validation in the report note;
+when a separate deliverable is useful, prefer one consolidated report over
+individual logs. Ordinary progress updates and concise final answers do not
+need separate artifact files.
+
+Saving a local artifact or attaching its reference to an AO report is not
+external publishing authorization. Publish externally only within the
+user-authorized scope.
 
 `--pr-created` and `--pr-reviewed` accept complete GitHub PR or GitLab MR URLs.
 

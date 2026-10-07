@@ -269,7 +269,7 @@ func (s *Service) prefetchModelCatalogs(ctx context.Context, force bool) {
 				if ctx.Err() != nil {
 					return
 				}
-				_, _ = s.RevalidateModels(ctx, record.AgentID, record.ProjectID)
+				_, _ = s.revalidateModels(ctx, record.AgentID, record.ProjectID)
 			}
 		}()
 	}
@@ -295,7 +295,7 @@ func (s *Service) warmModelCatalogs(ctx context.Context) {
 		if !cached.Stale && !catalogNeedsRevalidation(lastSuccess, s.now()) {
 			continue
 		}
-		_, _ = s.RevalidateModels(ctx, agentID, "")
+		_, _ = s.revalidateModels(ctx, agentID, "")
 	}
 }
 
@@ -319,10 +319,21 @@ func (s *Service) monitorModelCatalogFreshness(ctx context.Context) {
 	}
 }
 
-// Models returns one normalized model catalog. Cached values survive daemon
-// restarts; refresh forces a new documented CLI discovery attempt. Discovery
-// failures degrade to the last cached catalog or a custom model input.
+// Models returns one normalized model catalog, stamped with when this user last
+// ran each model. Cached values survive daemon restarts; refresh forces a new
+// documented CLI discovery attempt. Discovery failures degrade to the last
+// cached catalog or a custom model input.
 func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
+	catalog, err := s.modelCatalog(ctx, agentID, projectID, refresh)
+	if err != nil {
+		return catalog, err
+	}
+	// Usage is keyed by the caller's real project, not the credential scope the
+	// catalog lookup may substitute for it.
+	return s.withModelUsage(ctx, agentID, projectID, catalog), nil
+}
+
+func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
 	if s.discoverer == nil {
 		return ports.AgentModelCatalog{}, apierr.Internal("MODEL_DISCOVERY_UNAVAILABLE", "Model discovery is unavailable")
 	}
@@ -353,7 +364,7 @@ func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh
 			retriesExhausted := modelCatalogRetriesExhausted(cached)
 			cached.Catalog.RefreshRecommended = !retriesExhausted && (due || needsRecovery || cached.RefreshState == "error" || cached.RefreshState == "queued")
 			if !retriesExhausted && (due || needsRecovery) && (cached.RetryAt.IsZero() || !s.now().Before(cached.RetryAt)) {
-				go func() { _, _ = s.RevalidateModels(s.ctx, agentID, projectID) }()
+				go func() { _, _ = s.revalidateModels(s.ctx, agentID, projectID) }()
 			} else if retriesExhausted {
 				go s.revalidateChangedInputs(agentID, projectID, cached.BinaryVersion)
 			} else if !due {
@@ -376,7 +387,7 @@ func (s *Service) revalidateChangedInputs(agentID, projectID, cachedFingerprint 
 		return
 	}
 	if s.modelCatalogInputsChanged(s.ctx, agentID, projectID, cachedFingerprint) {
-		_, _ = s.RevalidateModels(s.ctx, agentID, projectID)
+		_, _ = s.revalidateModels(s.ctx, agentID, projectID)
 	}
 }
 
@@ -485,6 +496,16 @@ func (s *Service) globalModelDiscoveryRequest(request ports.AgentModelDiscoveryR
 // RevalidateModels rediscovers a cache-first catalog after the normal read path
 // marks it old enough to refresh in the background.
 func (s *Service) RevalidateModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error) {
+	catalog, err := s.revalidateModels(ctx, agentID, projectID)
+	if err != nil {
+		return catalog, err
+	}
+	return s.withModelUsage(ctx, agentID, projectID, catalog), nil
+}
+
+// revalidateModels is the unstamped variant for background callers that discard
+// the catalog and should not pay for a session-history scan.
+func (s *Service) revalidateModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error) {
 	var err error
 	projectID, err = s.modelCatalogScope(ctx, projectID)
 	if err != nil {
@@ -517,7 +538,7 @@ func (s *Service) InvalidateModelCatalogs(agentID string) {
 				catalog.RetryAt = nil
 				_ = s.saveCatalog(s.ctx, record.ProjectID, catalog, time.Now().UTC().UnixNano(), 0)
 			}
-			_, _ = s.RevalidateModels(s.ctx, agentID, record.ProjectID)
+			_, _ = s.revalidateModels(s.ctx, agentID, record.ProjectID)
 		}
 	}()
 }
@@ -551,7 +572,7 @@ func (s *Service) InvalidateProjectModelCatalogs(projectID string) {
 			catalog.LastSuccessAt = nil
 			catalog.RetryAt = nil
 			_ = s.saveCatalog(s.ctx, projectID, catalog, time.Now().UTC().UnixNano(), 0)
-			_, _ = s.RevalidateModels(s.ctx, record.AgentID, projectID)
+			_, _ = s.revalidateModels(s.ctx, record.AgentID, projectID)
 		}
 	}()
 }
@@ -934,7 +955,7 @@ func (s *Service) saveFailedCatalog(ctx context.Context, previous decodedCatalog
 			if err != nil || !ok || record.Generation != generation || record.RefreshState != "error" || !record.RetryAt.Equal(retryAt) {
 				return
 			}
-			_, _ = s.RevalidateModels(s.ctx, catalog.AgentID, previous.ProjectID)
+			_, _ = s.revalidateModels(s.ctx, catalog.AgentID, previous.ProjectID)
 		})
 	}
 	return nil

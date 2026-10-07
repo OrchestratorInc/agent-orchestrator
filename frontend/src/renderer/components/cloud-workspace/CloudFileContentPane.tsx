@@ -11,6 +11,7 @@ import type { FileAnnotationModel } from "../WorkspaceDiffView";
 import { FileAnnotationComposer, PanelMessage, RetryButton } from "../WorkspaceDiffView";
 import { ReadOnlyFileView } from "../ReadOnlyFileView";
 import { MarkdownFileView } from "../markdown/MarkdownFileView";
+import { MarkdownEditor } from "../MarkdownEditor";
 import { Button } from "../ui/button";
 import { CloudDiffFile } from "./CloudDiffFile";
 
@@ -96,5 +97,9 @@ function CompleteCloudFileView({ annotation, baseUrl, client, commitSha, detail,
 	if (needsRevision && revision.isPending) return <PanelMessage>{t("files.loading")}</PanelMessage>;
 	if (revision.error) return <PanelMessage>{revision.error.message}</PanelMessage>;
 	const resolved = revision.data ? { ...detail, deleted: false, binary: revision.data.binary, content: revision.data.content, contentTruncated: revision.data.truncated, size: revision.data.size } : detail;
-	return <ReadOnlyFileView annotation={annotation} detail={localDetail(resolved)} editing={editing} onEditChange={onEditChange} revealLine={revealLine} scope={scope === "untracked" ? "combined" : scope} sessionId={sessionId} side={side} />;
+	const local = localDetail(resolved);
+	if (editing && !local.deleted && !local.binary && !local.contentTruncated && /\.(md|markdown)$/i.test(local.path)) {
+		return <MarkdownEditor filePath={local.path} onChange={onEditChange} value={local.content} />;
+	}
+	return <ReadOnlyFileView annotation={annotation} detail={local} editing={editing} onEditChange={onEditChange} revealLine={revealLine} scope={scope === "untracked" ? "combined" : scope} sessionId={sessionId} side={side} />;
 }

@@ -5,10 +5,13 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { fetchPRFileRevision, fetchWorkspaceFileRevision, type FilesSource, type WorkspaceDiffScope, type WorkspaceFileDetail } from "../../hooks/useSessionWorkspaceFiles";
 import { parseUnifiedDiff, type DiffRow } from "../../lib/diff-parser";
+import { useAskInChat } from "../../lib/chat-context-bus";
 import { useUiStore } from "../../stores/ui-store";
 import { FileAnnotationComposer, LineFeedbackButtonControl, type FileAnnotationModel } from "../WorkspaceDiffView";
 import { AO_PIERRE_SURFACE_CSS } from "./pierreTheme";
+import { SelectionAskButton } from "./SelectionAskButton";
 import { endsAtLastHunk, hydratedCopy, patchIdentity } from "./trailingContext";
+import { codeReference, useCodeSelection } from "./useCodeSelection";
 import { usePersistentGutterUtility } from "./usePersistentGutterUtility";
 
 const metadataCache = new Map<string, FileDiffMetadata>();
@@ -148,6 +151,11 @@ export function AoDiffFile({
 		});
 	}, [annotation, detail.fileFingerprint, detail.path, detail.previousPath, detail.workspaceVersion, rows, scope]);
 
+	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
+	// session has a Chat composer.
+	const askInChat = useAskInChat(sessionId, hostId);
+	const codeSelection = useCodeSelection(containerRef, (selection) => askInChat?.(codeReference(detail.path, selection, true)), askInChat !== undefined);
+
 	if (!metadata) return <>{fallback}</>;
 
 	return (
@@ -193,6 +201,7 @@ export function AoDiffFile({
 					/>
 				)}
 			/>
+			<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
 			{detail.diffTruncated ? (
 				<div className="border-t border-border bg-warning/10 px-3 py-1.5 text-xs text-warning">
 					{t("files.diffTruncated")}

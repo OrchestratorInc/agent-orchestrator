@@ -1585,6 +1585,32 @@ describe("TaskComposer", () => {
 		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5 Codex");
 	});
 
+	it.each([
+		{ name: "the newest Opus when nothing was run", agent: "claude-code", lastUsed: {}, expected: "Opus 5.5" },
+		{ name: "the most recently run model, ahead of Opus", agent: "claude-code", lastUsed: { "claude-fable-5-1": "2026-10-01T12:00:00Z", "claude-sonnet-5-5": "2026-10-05T12:00:00Z" }, expected: "Sonnet 5.5" },
+		{ name: "the project model, ahead of the last run", agent: "claude-code", lastUsed: { "claude-sonnet-5-5": "2026-10-05T12:00:00Z" }, projectModel: "claude-opus-4-8", expected: "Opus 4.8" },
+		{ name: "no model for another agent", agent: "codex", lastUsed: {}, expected: "Select model" },
+	])("opens $agent on $name", async ({ agent, lastUsed, projectModel, expected }) => {
+		const models = ["fable-5-1", "opus-4-8", "opus-5-5", "sonnet-5-5"].map((slug) => ({
+			id: `claude-${slug}`,
+			label: `Claude ${slug.replace(/^(\w)/, (c) => c.toUpperCase()).replace(/-(\d)-(\d)/, " $1.$2")}`,
+			lastUsedAt: (lastUsed as Record<string, string>)[`claude-${slug}`],
+		}));
+		h.get.mockImplementation(async (path: string) =>
+			path.includes("/models")
+				? { data: { agent, selectionMode: "text", models, allowCustom: false } }
+				: { data: { status: "ok", project: { agent, config: { worker: { agent, agentConfig: projectModel ? { model: projectModel } : {} } } } } },
+		);
+
+		render(
+			<Wrap>
+				<TaskComposer projectId="proj-1" onCreated={vi.fn()} />
+			</Wrap>,
+		);
+
+		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent(expected);
+	});
+
 	it("clears a stale model while the newly selected agent catalog resolves", async () => {
 		let resolveClaudeCatalog!: (value: {
 			data: {
