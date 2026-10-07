@@ -2575,5 +2575,10 @@
 	"device.title": "Geräte",
 	"device.typeText": "Text eingeben",
 	"inspector.device": "Geräte",
-	"settings.virtualDevices": "Virtuelle Geräte"
+	"settings.virtualDevices": "Virtuelle Geräte",
+	"termination.body": "Verschiebt diese Sitzung ins Archiv. Änderungen bleiben erhalten.",
+	"termination.bodyNamed": "Verschiebt {{title}} ins Archiv. Änderungen bleiben erhalten.",
+	"termination.confirmAria": "Ja, Sitzung beenden",
+	"termination.dialog": "Sitzung beenden?",
+	"termination.dialogNamed": "{{title}} beenden?"
 }

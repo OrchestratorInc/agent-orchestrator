@@ -2610,5 +2610,10 @@
 	"device.title": "Dispositivos",
 	"device.typeText": "Digitar texto",
 	"inspector.device": "Dispositivos",
-	"settings.virtualDevices": "Dispositivos virtuais"
+	"settings.virtualDevices": "Dispositivos virtuais",
+	"termination.body": "Move esta sessão para o Arquivo. As alterações são preservadas.",
+	"termination.bodyNamed": "Move {{title}} para o Arquivo. As alterações são preservadas.",
+	"termination.confirmAria": "Sim, encerrar sessão",
+	"termination.dialog": "Encerrar sessão?",
+	"termination.dialogNamed": "Encerrar {{title}}?"
 }

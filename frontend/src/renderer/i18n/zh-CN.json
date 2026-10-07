@@ -2557,5 +2557,10 @@
 	"device.title": "设备",
 	"device.typeText": "输入文本",
 	"inspector.device": "设备",
-	"settings.virtualDevices": "虚拟设备"
+	"settings.virtualDevices": "虚拟设备",
+	"termination.body": "将此会话移至归档。更改会保留。",
+	"termination.bodyNamed": "将 {{title}} 移至归档。更改会保留。",
+	"termination.confirmAria": "是，终止会话",
+	"termination.dialog": "终止会话？",
+	"termination.dialogNamed": "终止 {{title}}？"
 }

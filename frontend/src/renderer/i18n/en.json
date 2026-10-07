@@ -2555,5 +2555,10 @@
 	"device.title": "Devices",
 	"device.typeText": "Type text",
 	"inspector.device": "Devices",
-	"settings.virtualDevices": "Virtual devices"
+	"settings.virtualDevices": "Virtual devices",
+	"termination.body": "Moves this session to Archive. Changes are preserved.",
+	"termination.bodyNamed": "Moves {{title}} to Archive. Changes are preserved.",
+	"termination.confirmAria": "Yes, terminate session",
+	"termination.dialog": "Terminate session?",
+	"termination.dialogNamed": "Terminate {{title}}?"
 }

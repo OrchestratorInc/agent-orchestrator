@@ -2575,5 +2575,10 @@
 	"device.title": "기기",
 	"device.typeText": "텍스트 입력",
 	"inspector.device": "기기",
-	"settings.virtualDevices": "가상 기기"
+	"settings.virtualDevices": "가상 기기",
+	"termination.body": "이 세션을 보관함으로 이동합니다. 변경 내용은 보존됩니다.",
+	"termination.bodyNamed": "{{title}}을(를) 보관함으로 이동합니다. 변경 내용은 보존됩니다.",
+	"termination.confirmAria": "예, 세션 종료",
+	"termination.dialog": "세션을 종료하시겠습니까?",
+	"termination.dialogNamed": "{{title}}을(를) 종료하시겠습니까?"
 }

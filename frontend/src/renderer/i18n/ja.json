@@ -2575,5 +2575,10 @@
 	"device.title": "デバイス",
 	"device.typeText": "テキストを入力",
 	"inspector.device": "デバイス",
-	"settings.virtualDevices": "仮想デバイス"
+	"settings.virtualDevices": "仮想デバイス",
+	"termination.body": "このセッションをアーカイブに移動します。変更内容は保持されます。",
+	"termination.bodyNamed": "{{title}} をアーカイブに移動します。変更内容は保持されます。",
+	"termination.confirmAria": "はい、セッションを終了します",
+	"termination.dialog": "セッションを終了しますか？",
+	"termination.dialogNamed": "{{title}} を終了しますか？"
 }

@@ -2610,5 +2610,10 @@
 	"device.title": "Dispositivos",
 	"device.typeText": "Escribir texto",
 	"inspector.device": "Dispositivos",
-	"settings.virtualDevices": "Dispositivos virtuales"
+	"settings.virtualDevices": "Dispositivos virtuales",
+	"termination.body": "Mueve esta sesión al archivo. Los cambios se conservan.",
+	"termination.bodyNamed": "Mueve {{title}} al archivo. Los cambios se conservan.",
+	"termination.confirmAria": "Sí, terminar sesión",
+	"termination.dialog": "¿Terminar sesión?",
+	"termination.dialogNamed": "¿Terminar {{title}}?"
 }
