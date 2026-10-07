@@ -1,6 +1,7 @@
-import { Code2, Download, ExternalLink, FilePlus, Loader2, Maximize2 } from "lucide-react";
+import { Code2, Download, ExternalLink, FilePlus, Globe2, Loader2, Maximize2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useOpenArtifactPreview } from "../../hooks/useOpenArtifactPreview";
 import { apiClient, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
 import {
 	clampRenderHeight,
@@ -17,11 +18,25 @@ import {
 } from "../../lib/render-frame";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
-import type { RenderRef } from "../../types/conversation";
+import type { ArtifactRef, RenderRef } from "../../types/conversation";
 import { Button, type ButtonProps } from "../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { useChatRemoteHost } from "./chat-image-source";
+import { useChatArtifactPreview, useChatRemoteHost } from "./chat-image-source";
+
+/** What a frame shows: a page the agent rendered, or an HTML artifact it reported. */
+interface FramePage {
+	title: string;
+	/** Daemon-relative route the page is served from. */
+	path: string;
+	height: number;
+	heights?: Array<[number, number]>;
+	/** The file Save writes. */
+	fileName: string;
+}
+
+// An artifact is never measured: its frame opens at this height, then fits the page.
+const ARTIFACT_FRAME_HEIGHT = 400;
 
 /** The app theme as handed to renders; follows data-theme and data-style-theme flips on <html>. */
 function useRenderTheme(): RenderTheme {
@@ -52,11 +67,11 @@ function useRenderTheme(): RenderTheme {
  * top-level block and shows its scrollbar.
  */
 function RenderDocument({
-	render,
+	page,
 	displayMode,
 	className,
 }: {
-	render: RenderRef;
+	page: FramePage;
 	displayMode: RenderDisplayMode;
 	className?: string;
 }) {
@@ -64,12 +79,12 @@ function RenderDocument({
 	const frameRef = useRef<HTMLIFrameElement>(null);
 	const themeRef = useRef(theme);
 	themeRef.current = theme;
-	const [src] = useState(() => `${getApiBaseUrl()}${render.path}${renderThemeFragment(theme, displayMode)}`);
+	const [src] = useState(() => `${getApiBaseUrl()}${page.path}${renderThemeFragment(theme, displayMode)}`);
 	const [contentHeight, setContentHeight] = useState<number>();
 	// The inline frame's width picks its measured first height; read before the
 	// first paint, so the frame opens at that height rather than the agent's.
 	const [width, setWidth] = useState<number>();
-	const { heights } = render;
+	const { heights } = page;
 	useLayoutEffect(() => {
 		const frame = frameRef.current;
 		if (!frame || displayMode !== "inline" || !heights) return;
@@ -107,14 +122,14 @@ function RenderDocument({
 		<iframe
 			ref={frameRef}
 			src={src}
-			title={render.title}
+			title={page.title}
 			sandbox="allow-scripts allow-forms"
 			loading="lazy"
 			onLoad={postTheme}
 			className={cn("block w-full border-0", className)}
 			style={
 				displayMode === "inline"
-					? { height: clampRenderHeight(contentHeight ?? (heights && width ? measuredRenderHeight(heights, width) : render.height)) }
+					? { height: clampRenderHeight(contentHeight ?? (heights && width ? measuredRenderHeight(heights, width) : page.height)) }
 					: undefined
 			}
 		/>
@@ -143,11 +158,11 @@ async function fetchRender(path: string, signal?: AbortSignal): Promise<Response
 }
 
 /** The served page, bootstrap included, so the saved file renders on its own. */
-async function saveRender(render: RenderRef) {
-	const url = URL.createObjectURL(await (await fetchRender(render.path)).blob());
+async function saveRender(page: FramePage) {
+	const url = URL.createObjectURL(await (await fetchRender(page.path)).blob());
 	const link = document.createElement("a");
 	link.href = url;
-	link.download = renderFileName(render.title);
+	link.download = page.fileName;
 	link.click();
 	setTimeout(() => URL.revokeObjectURL(url), 0);
 }
@@ -165,19 +180,19 @@ async function saveRenderAsArtifact(render: RenderRef): Promise<string> {
 }
 
 /** The page's HTML as plain text. No highlighting: a page can run to 25 MiB. */
-function RenderSource({ render }: { render: RenderRef }) {
+function RenderSource({ path }: { path: string }) {
 	const { t } = useTranslation();
 	// undefined while loading, null when the fetch failed.
 	const [source, setSource] = useState<string | null>();
 	useEffect(() => {
 		const controller = new AbortController();
-		fetchRender(`${render.path}?source=1`, controller.signal)
+		fetchRender(`${path}?source=1`, controller.signal)
 			.then((response) => response.text())
 			.then(setSource, () => {
 				if (!controller.signal.aborted) setSource(null);
 			});
 		return () => controller.abort();
-	}, [render.path]);
+	}, [path]);
 	if (source === undefined) {
 		return (
 			<div aria-busy="true" className="flex min-h-0 flex-1 items-center justify-center">
@@ -195,9 +210,33 @@ function RenderSource({ render }: { render: RenderRef }) {
 	return <pre className="min-h-0 w-full flex-1 overflow-auto px-2 font-mono text-xs whitespace-pre select-text">{source}</pre>;
 }
 
-export function RenderFrame({ render }: { render: RenderRef }) {
+/** Opens an artifact in the session's Browser panel, on its own preview origin. */
+function OpenInPanelAction({ sessionId, previewUrl, onOpen }: { sessionId: string; previewUrl: string; onOpen: () => void }) {
+	const { t } = useTranslation();
+	const openArtifactPreview = useOpenArtifactPreview(sessionId);
+	return (
+		<RenderAction
+			label={t("chat.artifact.openInPanel")}
+			onClick={() => {
+				onOpen();
+				openArtifactPreview(previewUrl);
+			}}
+		>
+			<Globe2 className="size-3.5" />
+		</RenderAction>
+	);
+}
+
+/** A render, or an HTML artifact, inline in its turn and expandable to a dialog. */
+export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactRef }) {
 	const { t } = useTranslation();
 	const remoteHost = useChatRemoteHost();
+	const render = "render" in props ? props.render : undefined;
+	const page: FramePage =
+		"render" in props
+			? { title: props.render.title, path: props.render.path, height: props.render.height, heights: props.render.heights, fileName: renderFileName(props.render.title) }
+			: { title: props.artifact.name, path: props.artifact.url, height: ARTIFACT_FRAME_HEIGHT, fileName: props.artifact.name };
+	const panel = useChatArtifactPreview("artifact" in props ? props.artifact.path : undefined);
 	const [expanded, setExpanded] = useState(false);
 	const [showSource, setShowSource] = useState(false);
 	const [saving, setSaving] = useState(false);
@@ -208,22 +247,22 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 	if (remoteHost) {
 		return (
 			<p className="text-xs text-muted-foreground">
-				{render.title} · {t("chat.render.remoteHost")}
+				{page.title} · {t("chat.render.remoteHost")}
 			</p>
 		);
 	}
 	const save = () => {
 		setSaving(true);
-		saveRender(render)
+		saveRender(page)
 			.catch((error: unknown) => {
 				console.error("save render", error);
 				useUiStore.getState().showGlobalToast(t("chat.render.saveError"), undefined, "error");
 			})
 			.finally(() => setSaving(false));
 	};
-	const saveArtifact = () => {
+	const saveArtifact = (target: RenderRef) => {
 		setSavingArtifact(true);
-		saveRenderAsArtifact(render)
+		saveRenderAsArtifact(target)
 			.then((name) => useUiStore.getState().showGlobalToast(t("chat.render.savedAsArtifact", { name })))
 			.catch((error: unknown) => {
 				console.error("save render as artifact", error);
@@ -233,7 +272,7 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 	};
 	return (
 		<div className="group/render relative min-w-0">
-			<RenderDocument render={render} displayMode="inline" />
+			<RenderDocument page={page} displayMode="inline" />
 			<RenderAction
 				label={t("chat.render.expand")}
 				className="absolute end-1 top-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-visible:opacity-100"
@@ -256,7 +295,7 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 				>
 					{/* pe-9 keeps the actions clear of the dialog's own close button. */}
 					<div className="flex h-8 shrink-0 items-center gap-1 ps-2 pe-9">
-						<DialogTitle className="min-w-0 flex-1 truncate text-subtitle">{render.title}</DialogTitle>
+						<DialogTitle className="min-w-0 flex-1 truncate text-subtitle">{page.title}</DialogTitle>
 						<RenderAction
 							label={t("chat.render.viewSource")}
 							aria-pressed={showSource}
@@ -272,14 +311,17 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 						>
 							<Download className="size-3.5" />
 						</RenderAction>
-						<RenderAction label={t("chat.render.saveAsArtifact")} disabled={savingArtifact} onClick={saveArtifact}>
-							<FilePlus className="size-3.5" />
-						</RenderAction>
+						{render ? (
+							<RenderAction label={t("chat.render.saveAsArtifact")} disabled={savingArtifact} onClick={() => saveArtifact(render)}>
+								<FilePlus className="size-3.5" />
+							</RenderAction>
+						) : null}
+						{panel ? <OpenInPanelAction {...panel} onOpen={() => setExpanded(false)} /> : null}
 						<RenderAction
 							label={t("chat.render.openInBrowser")}
 							onClick={() =>
 								window.open(
-									`${getApiBaseUrl()}${render.path}${renderThemeFragment(readRenderTheme(), "fullscreen")}`,
+									`${getApiBaseUrl()}${page.path}${renderThemeFragment(readRenderTheme(), "fullscreen")}`,
 									"_blank",
 									"noopener,noreferrer",
 								)
@@ -289,9 +331,9 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 						</RenderAction>
 					</div>
 					{!expanded ? null : showSource ? (
-						<RenderSource render={render} />
+						<RenderSource path={page.path} />
 					) : (
-						<RenderDocument render={render} displayMode="fullscreen" className="min-h-0 w-full flex-1" />
+						<RenderDocument page={page} displayMode="fullscreen" className="min-h-0 w-full flex-1" />
 					)}
 				</DialogContent>
 			</Dialog>

@@ -2233,6 +2233,7 @@
 	"chat.render.openInBrowser": "Im externen Browser öffnen",
 	"chat.render.sourceError": "Der Quelltext der Seite konnte nicht geladen werden.",
 	"chat.render.remoteHost": "Öffne diese Sitzung auf ihrem Host, um die Seite zu sehen.",
+	"chat.artifact.openInPanel": "Im Browser-Panel öffnen",
 	"chat.image.numbered": "Bild {{index}}",
 	"chat.edit.cancel": "Bearbeitung abbrechen",
 	"chat.edit.send": "Bearbeitete Nachricht senden",

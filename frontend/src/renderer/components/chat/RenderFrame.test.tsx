@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
@@ -5,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
 import type { ConversationActivity } from "../../types/conversation";
+import type { SessionArtifact } from "../../types/workspace";
 import { TooltipProvider } from "../ui/tooltip";
 import { ActivityRow } from "./ChatTimelineItems";
 import { ChatImageSourceProvider } from "./chat-image-source";
@@ -384,6 +386,123 @@ describe("render activity", () => {
 			expect([target, features]).toEqual(["_blank", "noopener,noreferrer"]);
 		} finally {
 			open.mockRestore();
+		}
+	});
+});
+
+describe("artifact activity", () => {
+	const url = "/api/v1/sessions/proj-1/artifact-files/q3/Q3%20%28final%29.html";
+	const artifactActivity: ConversationActivity = {
+		kind: "activity",
+		id: "act-2",
+		sequence: 8,
+		revision: 0,
+		activityKind: "system",
+		status: "completed",
+		summary: "Q3 (final).html",
+		createdAt: "2026-10-08T10:00:00Z",
+		detail: { event: "artifact", artifact: { path: "q3/Q3 (final).html", name: "Q3 (final).html", url } },
+	};
+	const previewUrl = "http://ao-preview-artifact.x.localhost:3001/q3/Q3%20(final).html";
+	const sessionArtifact = (path: string): SessionArtifact => ({ kind: "html", name: "Q3 (final).html", path, previewUrl, size: 9, updatedAt: "2026-10-08T10:00:00Z" });
+
+	function renderArtifact(artifacts?: SessionArtifact[]) {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		return render(
+			<QueryClientProvider client={client}>
+				<ChatImageSourceProvider sessionId="proj-1" artifacts={artifacts}>
+					<ActivityRow activity={artifactActivity} />
+				</ChatImageSourceProvider>
+			</QueryClientProvider>,
+		);
+	}
+
+	async function expandArtifact(artifacts?: SessionArtifact[]) {
+		const user = userEvent.setup();
+		renderArtifact(artifacts);
+		await user.click(screen.getByRole("button", { name: "Expand page" }));
+		return { user, dialog: await screen.findByRole("dialog") };
+	}
+
+	const artifactFrame = () => screen.getByTitle("Q3 (final).html") as HTMLIFrameElement;
+
+	beforeEach(() => setApiBaseUrl("http://127.0.0.1:3001"));
+	afterEach(() => {
+		setApiBaseUrl(null);
+		useUiStore.setState({ inspectorSessions: {} });
+	});
+
+	it("frames the artifact sandboxed, from the artifact route, at 400 until the page reports its height", () => {
+		renderArtifact();
+		expect(artifactFrame().getAttribute("sandbox")).toBe("allow-scripts allow-forms");
+		expect(artifactFrame().getAttribute("src")).toMatch(
+			/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/artifact-files\/q3\/Q3%20%28final%29\.html#ao-theme=/,
+		);
+		expect(artifactFrame().style.height).toBe("400px");
+		post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 720 } }, artifactFrame().contentWindow);
+		expect(artifactFrame().style.height).toBe("720px");
+	});
+
+	it("shows the remote-host note instead of a frame", () => {
+		render(
+			<ChatImageSourceProvider sessionId="proj-1" remoteHost>
+				<ActivityRow activity={artifactActivity} />
+			</ChatImageSourceProvider>,
+		);
+		expect(document.querySelector("iframe")).toBeNull();
+		expect(screen.getByText(/Q3 \(final\)\.html/)).toHaveTextContent("Q3 (final).html · Open this session on its host to see the page.");
+	});
+
+	it("heads the dialog with the artifact's name and has no Save as artifact", async () => {
+		const { dialog } = await expandArtifact([sessionArtifact("other.html")]);
+		expect(within(dialog).getByRole("heading", { name: "Q3 (final).html" })).toBeInTheDocument();
+		for (const name of ["View source", "Save page", "Open in external browser", "Close"]) {
+			expect(within(dialog).getByRole("button", { name })).toBeInTheDocument();
+		}
+		expect(within(dialog).queryByRole("button", { name: "Save as artifact" })).toBeNull();
+		// The session lists no preview for this path.
+		expect(within(dialog).queryByRole("button", { name: "Open in Browser panel" })).toBeNull();
+	});
+
+	it("opens the session's preview of the artifact in the Browser panel and closes the dialog", async () => {
+		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+		try {
+			const { user, dialog } = await expandArtifact([sessionArtifact("q3/Q3 (final).html")]);
+			await user.click(within(dialog).getByRole("button", { name: "Open in Browser panel" }));
+			expect(screen.queryByRole("dialog")).toBeNull();
+			expect(useUiStore.getState().inspectorSessions["proj-1"]).toMatchObject({ isOpen: true, view: "browser" });
+			await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+			const request = new Request(...(fetch.mock.calls[0]! as [RequestInfo | URL, RequestInit?]));
+			expect(request.url).toBe("http://127.0.0.1:3001/api/v1/sessions/proj-1/preview");
+			expect(request.method).toBe("POST");
+			expect(await request.json()).toEqual({ url: previewUrl });
+		} finally {
+			fetch.mockRestore();
+		}
+	});
+
+	it("reads the source and saves the served page under the artifact's name", async () => {
+		const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("<p>report</p>"));
+		const original = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };
+		const revoked = vi.fn();
+		Object.assign(URL, { createObjectURL: () => "blob:artifact", revokeObjectURL: revoked });
+		const clicked: HTMLAnchorElement[] = [];
+		const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+			clicked.push(this);
+		});
+		try {
+			const { user, dialog } = await expandArtifact();
+			await user.click(within(dialog).getByRole("button", { name: "View source" }));
+			expect(await within(dialog).findByText("<p>report</p>")).toBeInTheDocument();
+			expect(fetch).toHaveBeenCalledWith(`http://127.0.0.1:3001${url}?source=1`, expect.anything());
+			await user.click(within(dialog).getByRole("button", { name: "Save page" }));
+			await waitFor(() => expect(revoked).toHaveBeenCalledWith("blob:artifact"));
+			expect(fetch).toHaveBeenCalledWith(`http://127.0.0.1:3001${url}`, expect.anything());
+			expect(clicked.map((link) => link.download)).toEqual(["Q3 (final).html"]);
+		} finally {
+			click.mockRestore();
+			Object.assign(URL, original);
+			fetch.mockRestore();
 		}
 	});
 });

@@ -2265,6 +2265,7 @@
 	"chat.render.openInBrowser": "Ouvrir dans le navigateur externe",
 	"chat.render.sourceError": "Impossible de charger la source de la page.",
 	"chat.render.remoteHost": "Ouvrez cette session sur son hôte pour voir la page.",
+	"chat.artifact.openInPanel": "Ouvrir dans le panneau Navigateur",
 	"chat.image.numbered": "Image {{index}}",
 	"chat.edit.cancel": "Annuler la modification",
 	"chat.edit.send": "Envoyer le message modifié",

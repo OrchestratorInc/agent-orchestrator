@@ -2215,6 +2215,7 @@
 	"chat.render.openInBrowser": "在外部浏览器中打开",
 	"chat.render.sourceError": "无法加载页面源代码。",
 	"chat.render.remoteHost": "请在此会话所在的主机上打开它以查看页面。",
+	"chat.artifact.openInPanel": "在浏览器面板中打开",
 	"chat.image.numbered": "图片 {{index}}",
 	"chat.edit.cancel": "取消编辑",
 	"chat.edit.send": "发送编辑后的消息",

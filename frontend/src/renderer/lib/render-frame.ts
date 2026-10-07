@@ -1,8 +1,9 @@
-import type { ConversationActivity, RenderRef } from "../types/conversation";
+import type { ArtifactRef, ConversationActivity, RenderRef } from "../types/conversation";
 
 export const RENDER_MIN_HEIGHT = 80;
 export const RENDER_MAX_HEIGHT = 2000;
 const RENDER_PATH = /^\/api\/v1\/sessions\/[^/]+\/renders\/[^/]+$/;
+const ARTIFACT_URL = /^\/api\/v1\/sessions\/[^/]+\/artifact-files\/.+/;
 const MAX_MEASURED_WIDTHS = 16;
 
 export function clampRenderHeight(height: number): number {
@@ -27,6 +28,27 @@ export function readRenderRef(detail: ConversationActivity["detail"]): RenderRef
 	// A malformed measurement costs only the measured first height, not the page.
 	if (isMeasuredHeights(render.heights)) ref.heights = render.heights;
 	return ref;
+}
+
+/** The HTML artifact an `artifact` activity points at, or undefined for anything malformed. */
+export function readArtifactRef(detail: ConversationActivity["detail"]): ArtifactRef | undefined {
+	const artifact = detail?.event === "artifact" ? detail.artifact : undefined;
+	if (
+		!artifact ||
+		typeof artifact.path !== "string" ||
+		!isRelativePath(artifact.path) ||
+		typeof artifact.name !== "string" ||
+		typeof artifact.url !== "string" ||
+		!ARTIFACT_URL.test(artifact.url)
+	) {
+		return undefined;
+	}
+	return { path: artifact.path, name: artifact.name, url: artifact.url };
+}
+
+/** Non-empty, not rooted or drive-lettered, and no `..` segment. */
+function isRelativePath(path: string): boolean {
+	return path !== "" && !/^([a-z]:|[\\/])/i.test(path) && !path.split(/[\\/]/).includes("..");
 }
 
 const isPositiveInteger = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value > 0;

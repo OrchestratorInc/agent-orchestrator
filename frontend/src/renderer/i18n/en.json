@@ -2240,6 +2240,7 @@
 	"chat.render.openInBrowser": "Open in external browser",
 	"chat.render.sourceError": "Could not load the page source.",
 	"chat.render.remoteHost": "Open this session on its host to see the page.",
+	"chat.artifact.openInPanel": "Open in Browser panel",
 	"chat.image.numbered": "Image {{index}}",
 	"chat.edit.cancel": "Cancel edit",
 	"chat.edit.send": "Send edited message",

@@ -2233,6 +2233,7 @@
 	"chat.render.openInBrowser": "외부 브라우저에서 열기",
 	"chat.render.sourceError": "페이지 소스를 불러올 수 없습니다.",
 	"chat.render.remoteHost": "페이지를 보려면 이 세션을 호스트에서 여세요.",
+	"chat.artifact.openInPanel": "브라우저 패널에서 열기",
 	"chat.image.numbered": "이미지 {{index}}",
 	"chat.edit.cancel": "편집 취소",
 	"chat.edit.send": "편집한 메시지 보내기",

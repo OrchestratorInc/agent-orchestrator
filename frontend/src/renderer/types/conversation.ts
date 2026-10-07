@@ -401,6 +401,15 @@ export interface RenderRef {
 	heights?: Array<[number, number]>;
 }
 
+/** An HTML session artifact the agent reported with `ao report --artifact`, shown inline in its turn. */
+export interface ArtifactRef {
+	/** Relative to the session's artifact directory, slash-separated. */
+	path: string;
+	name: string;
+	/** Daemon-relative route, `/api/v1/sessions/{id}/artifact-files/{path}`. */
+	url: string;
+}
+
 /**
  * A `system` activity's discriminator and the fields that belong to it.
  *
@@ -418,9 +427,12 @@ export interface SystemEventDetail {
 		| "plan"
 		| "context.reset"
 		| "context.boundary"
-		| "render";
+		| "render"
+		| "artifact";
 	/** render */
 	render?: RenderRef;
+	/** artifact */
+	artifact?: ArtifactRef;
 	/** model.rerouted */
 	fromModel?: string;
 	toModel?: string;
