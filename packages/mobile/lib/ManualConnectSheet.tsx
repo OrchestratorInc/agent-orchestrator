@@ -4,7 +4,7 @@ import { Linking, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, Tex
 import { ApiError, pingServer } from "./api";
 import { DEFAULT_CONFIG, saveConfig, type ServerConfig } from "./config";
 import { saveHost, setActiveHost, renameHost, type Host } from "./hosts";
-import { adoptManualConnection, editedManualHost } from "./manualConnect";
+import { adoptManualConnection, editedManualHost, normalizeManualConfig } from "./manualConnect";
 import { configForEndpoint } from "./connect";
 import { normalizeServerHost } from "./endpoints";
 import { probeEndpoint, probeIdentity } from "./connectRuntime";
@@ -47,7 +47,8 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 	async function connect() {
 		setBusy(true);
 		setFailure(null);
-		const target = { ...cfg, host: normalizeServerHost(cfg.host), httpPort: cfg.httpPort.trim() };
+		const target = normalizeManualConfig({ ...cfg, host: normalizeServerHost(cfg.host), httpPort: cfg.httpPort.trim() });
+		setCfg(target);
 		try {
 			if (editingHost) {
 				const edited = editedManualHost(editingHost, target, machineName, editingEndpointIndex);

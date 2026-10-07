@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
+	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
@@ -55,10 +56,12 @@ type APIDeps struct {
 	Telemetry                ports.EventSink
 	Mobile                   *controllers.MobileController
 	Browser                  controllers.BrowserService
+	MobileBrowser            *browserruntime.MobileHub
 	PreviewServer            controllers.ManagedPreviewServer
 	SessionCapabilities      controllers.SessionCapabilityValidator
 	ShellPreviewCapabilities controllers.ShellPreviewCapabilityValidator
 	SystemChecks             controllers.SystemChecker
+
 	// HostID is this machine's stable, machine-bound identity, served by the
 	// unauthenticated GET /api/v1/identity probe so a phone can confirm which
 	// machine answered before presenting a credential.
