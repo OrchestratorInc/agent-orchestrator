@@ -95,12 +95,17 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	return <aside role="region" aria-label={t("settings.harness.updateNoticeTitle")}
 		className="fixed right-4 top-14 isolate z-[calc(var(--z-overlay)-1)] w-[min(300px,calc(100vw-32px))] text-card-foreground"
 		data-browser-native-overlay="true" data-state="open">
+		{/* The stack toggle sits above the cards so it never reads as part of one notice. */}
+		{updates.length > 1 ? <div className="mb-5 flex justify-end">
+			<Button type="button" variant="ghost" size="sm" className="h-6 rounded-full border border-border bg-card px-2 text-[11px] text-settings-muted shadow-sm hover:bg-muted" aria-expanded={isExpanded} aria-controls={stackId} onClick={() => setExpanded(!isExpanded)}>{t(isExpanded ? "settings.harness.hideUpdateStack" : "settings.harness.showUpdateStack", { count: updates.length })}</Button>
+		</div> : null}
+		<div className="relative">
 		{!isExpanded && updates.length > 1 ? <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0">
 			{updates.length > 2 ? <div className="absolute inset-x-4 -bottom-2 top-4 z-0 rounded-xl border border-border bg-card shadow-sm" /> : null}
 			<div className="absolute inset-x-2 -bottom-1 top-2 z-10 rounded-xl border border-border bg-card shadow-sm" />
 		</div> : null}
 		<div id={stackId} className="relative z-10 -m-4 max-h-[min(272px,calc(100dvh-56px))] space-y-5 overflow-y-auto overscroll-contain p-4">
-			{(isExpanded ? updates : updates.slice(0, 1)).map(({ agentId, advisory, key }, index) => {
+			{(isExpanded ? updates : updates.slice(0, 1)).map(({ agentId, advisory, key }) => {
 				const plan = installers.data?.find((candidate) => candidate.agentId === agentId);
 				const job = jobs.data?.find((candidate) => candidate.target === agentId);
 				const method = plan?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory));
@@ -119,7 +124,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 					<div className="flex items-center gap-2">
 						<AgentAvatar className="size-5 shrink-0" decorative provider={agentId} />
 						<p className="min-w-0 flex-1 break-words text-[13px] font-medium">{agentLabel(agentId)}</p>
-						{index === 0 && updates.length > 1 ? <Button type="button" variant="ghost" size="sm" className="h-7 shrink-0 px-1.5 text-[11px] text-settings-muted" aria-expanded={isExpanded} aria-controls={stackId} onClick={() => setExpanded(!isExpanded)}>{t(isExpanded ? "settings.harness.hideUpdateStack" : "settings.harness.showUpdateStack", { count: updates.length })}</Button> : null}
 					</div>
 					<div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
 						<p className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1 text-[11px]"><span className="break-all font-mono text-settings-label" title={t("settings.harness.installedVersion")}>{versionLabel(advisory.currentVersion!)}</span><ArrowRight className="size-3 shrink-0 text-settings-muted" aria-label={t("settings.harness.availableVersion")} /><span className="break-all font-mono font-medium text-settings-accent">{versionLabel(advisory.latestVersion!)}</span></p>
@@ -130,6 +134,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 					</div>
 				</article>;
 			})}
+		</div>
 		</div>
 	</aside>;
 }

@@ -123,9 +123,11 @@ describe("startup harness update notice", () => {
 		mountNotice();
 		const topCard = await screen.findByRole("article", { name: "Cursor" });
 		expect(screen.queryByText("Harness updates available")).toBeNull();
-		await userEvent.click(within(topCard).getByRole("button", { name: "Show all (3)" }));
+		// The toggle sits above the stack, not inside the top notice.
+		expect(within(topCard).queryByRole("button", { name: "Show all (3)" })).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
 		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Cursor", "Codex", "Claude Code"]);
-		expect(within(topCard).getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Codex update" }));
 		expect(screen.getAllByRole("article")).toHaveLength(2);
 		await userEvent.click(screen.getByRole("button", { name: "Show less" }));
