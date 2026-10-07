@@ -7255,6 +7255,18 @@ paths:
         schema:
           description: Render identifier returned when the page was published.
           type: string
+      - description: 'Set to 1 to read the page as the agent wrote it: the stored
+          bytes as text/plain, without the theme bootstrap.'
+        in: query
+        name: source
+        schema:
+          description: 'Set to 1 to read the page as the agent wrote it: the stored
+            bytes as text/plain, without the theme bootstrap.'
+          enum:
+          - "1"
+          type:
+          - "null"
+          - string
       responses:
         "200":
           content:

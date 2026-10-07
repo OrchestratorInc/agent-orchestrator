@@ -124,6 +124,63 @@ func TestRenderRouteServesTheStoredPageSandboxed(t *testing.T) {
 	}
 }
 
+func TestRenderRouteServesTheStoredSourceAsPlainText(t *testing.T) {
+	dir := t.TempDir()
+	const page = "<p>chart</p><script>x()</script>"
+	if err := attachmentstore.New(dir).PutRender(context.Background(), "proj-1", "r1", []byte(page)); err != nil {
+		t.Fatal(err)
+	}
+	srv := renderRouter(t, dir, &renderStub{fakeConversationService: &fakeConversationService{}})
+	get := func(query string) (*http.Response, string) {
+		t.Helper()
+		resp, err := http.Get(srv.URL + "/api/v1/sessions/proj-1/renders/r1" + query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return resp, string(body)
+	}
+
+	source, body := get("?source=1")
+	// The raw stored bytes, with no bootstrap.
+	if source.StatusCode != http.StatusOK || body != page {
+		t.Fatalf("status=%d body=%q, want the stored page", source.StatusCode, body)
+	}
+	for header, want := range map[string]string{
+		"Content-Type":            "text/plain; charset=utf-8",
+		"Content-Security-Policy": "sandbox allow-scripts allow-forms",
+		"X-Content-Type-Options":  "nosniff",
+		"Referrer-Policy":         "no-referrer",
+		"Cache-Control":           "private, no-cache",
+	} {
+		if got := source.Header.Get(header); got != want {
+			t.Errorf("source %s = %q, want %q", header, got, want)
+		}
+	}
+
+	// Any other value serves the page, under a tag the source's never matches.
+	for _, query := range []string{"", "?source=0", "?source=true"} {
+		doc, docBody := get(query)
+		if doc.Header.Get("Content-Type") != "text/html; charset=utf-8" || !strings.Contains(docBody, `<style id="ao-theme">`) {
+			t.Fatalf("%q: Content-Type=%q body=%.80q, want the served page", query, doc.Header.Get("Content-Type"), docBody)
+		}
+		if want := `"src-` + strings.Trim(doc.Header.Get("ETag"), `"`) + `"`; source.Header.Get("ETag") != want {
+			t.Fatalf("source ETag = %q, want %s", source.Header.Get("ETag"), want)
+		}
+	}
+	revalidate, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/sessions/proj-1/renders/r1", nil)
+	revalidate.Header.Set("If-None-Match", source.Header.Get("ETag"))
+	full, err := http.DefaultClient.Do(revalidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = full.Body.Close()
+	if full.StatusCode != http.StatusOK {
+		t.Fatalf("page with the source's ETag = %d, want 200", full.StatusCode)
+	}
+}
+
 // A terminal session has no chat thread; the agent is pointed at ao preview instead.
 const renderNeedsChatMessage = "ao render works only in chat sessions; in a terminal session, open the file with ao preview <file>"
 

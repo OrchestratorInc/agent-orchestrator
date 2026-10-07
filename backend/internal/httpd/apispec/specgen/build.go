@@ -827,6 +827,10 @@ func browserOperations() []operation {
 	}
 }
 
+type renderSourceQuery struct {
+	Source *string `query:"source,omitempty" enum:"1" description:"Set to 1 to read the page as the agent wrote it: the stored bytes as text/plain, without the theme bootstrap."`
+}
+
 type conversationSnapshotQuery struct {
 	BeforeSequence *int64 `query:"beforeSequence,omitempty" minimum:"1" description:"Read items older than this conversation sequence. Omit for the newest page."`
 	Limit          *int64 `query:"limit,omitempty" minimum:"1" maximum:"500" description:"Maximum combined messages and activities to return. Defaults to 200."`
@@ -1174,7 +1178,7 @@ func shellTerminalOperations() []operation {
 		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/renders/{renderId}", id: "getSessionRender", tag: "conversations",
 			summary:    "Serve a published render as a sandboxed HTML document",
-			pathParams: []any{controllers.SessionIDParam{}, controllers.RenderIDParam{}},
+			pathParams: []any{controllers.SessionIDParam{}, controllers.RenderIDParam{}, renderSourceQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, ""},
 				{http.StatusNotFound, envelope.APIError{}},

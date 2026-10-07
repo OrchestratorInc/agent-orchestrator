@@ -14807,7 +14807,10 @@ export interface operations {
     };
     getSessionRender: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Set to 1 to read the page as the agent wrote it: the stored bytes as text/plain, without the theme bootstrap. */
+                source?: "1" | null;
+            };
             header?: never;
             path: {
                 /** @description Session identifier, e.g. project-1. */
