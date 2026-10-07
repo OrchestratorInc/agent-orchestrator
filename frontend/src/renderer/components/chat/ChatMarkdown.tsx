@@ -43,6 +43,7 @@ import { cn } from "../../lib/utils";
 import { isLoopbackHostname } from "../../lib/loopback";
 import { canonicalLanguage } from "../../lib/code-highlight";
 import { fenceOf } from "../../lib/markdown-fence";
+import { createIncrementalMarkdownPlugin } from "../../lib/markdown-incremental";
 import { findSessionLinks, isSessionLink, remarkSessionLinks } from "../../lib/session-links";
 import {
 	isPotentialWorkspaceFileLink,
@@ -161,6 +162,13 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	className?: string;
 	safeOrigin?: boolean;
 }) {
+	// Keep a per-message parser cache while text arrives. The full document still
+	// passes through GFM and session-link transforms; only parsing a closed prefix
+	// is skipped. Settling a message restores the ordinary parser.
+	const remarkPlugins = useMemo(
+		() => streaming ? [...PLUGINS, createIncrementalMarkdownPlugin()] : PLUGINS,
+		[streaming],
+	);
 	return (
 		<StreamingProse.Provider value={streaming}>
 			<SafeOriginContent.Provider value={safeOrigin}>
@@ -171,7 +179,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 					className,
 				)}
 			>
-				<Markdown remarkPlugins={PLUGINS} components={COMPONENTS} urlTransform={chatUrlTransform}>
+				<Markdown remarkPlugins={remarkPlugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
 					{text}
 				</Markdown>
 			</div>
