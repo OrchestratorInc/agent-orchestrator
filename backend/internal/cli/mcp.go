@@ -277,8 +277,8 @@ var mcpTools = []map[string]any{
 				},
 				"height": map[string]any{
 					"type": "integer", "minimum": 80, "maximum": 2000,
-					"description": "First-paint frame height in CSS pixels, 80-2000; defaults to 400. " +
-						"Use html_preview's contentHeight. The frame then fits the page.",
+					"description": "Frame height in CSS pixels, 80-2000; defaults to 400. AO measures the page when " +
+						"you publish it, so this is used only when the desktop app is not running. The frame then fits the page.",
 				},
 			},
 			"required": []string{"html", "title"},
