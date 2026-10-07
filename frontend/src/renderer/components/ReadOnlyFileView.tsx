@@ -3,12 +3,15 @@ import { useTranslation } from "react-i18next";
 import { type FileContents, type LineAnnotation } from "@pierre/diffs";
 import { File } from "@pierre/diffs/react";
 import { getApiBaseUrl } from "../lib/api-client";
+import { useAskInChat } from "../lib/chat-context-bus";
 import { useHostConnection } from "../hooks/useHostConnection";
 import { sessionUiKey } from "../lib/hosts";
 import type { WorkspaceDiffScope, WorkspaceFileDetail } from "../hooks/useSessionWorkspaceFiles";
 import { useUiStore } from "../stores/ui-store";
 import { FileAnnotationComposer, LineFeedbackButtonControl, PanelMessage, type FileAnnotationModel } from "./WorkspaceDiffView";
 import { AO_PIERRE_SURFACE_CSS } from "./diffs/pierreTheme";
+import { SelectionAskButton } from "./diffs/SelectionAskButton";
+import { codeReference, useCodeSelection } from "./diffs/useCodeSelection";
 import { usePersistentGutterUtility } from "./diffs/usePersistentGutterUtility";
 
 function formatBytes(bytes: number): string {
@@ -84,6 +87,10 @@ export function ReadOnlyFileView({
 		const frame = requestAnimationFrame(revealRequestedLine);
 		return () => cancelAnimationFrame(frame);
 	}, [revealLine?.line, revealLine?.requestKey, revealRequestedLine]);
+	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
+	// session has a Chat composer; in edit mode a selection belongs to the editor.
+	const askInChat = useAskInChat(sessionId, hostId);
+	const codeSelection = useCodeSelection(containerRef, (selection) => askInChat?.(codeReference(detail.path, selection, false)), askInChat !== undefined && !editing);
 	if (detail.binary) {
 		if (detail.imageMediaType) {
 			return (
@@ -172,6 +179,7 @@ export function ReadOnlyFileView({
 					}} />
 				)}
 			/>
+			<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
 		</div>
 	);
 }

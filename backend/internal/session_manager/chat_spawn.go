@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -40,14 +41,9 @@ type ChatLauncher interface {
 	// paste-and-Enter equivalent in chat mode: the provider either accepts the
 	// turn or reports why.
 	StartChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error)
-	// RelayChatTurn delivers a message AO is carrying on someone else's behalf —
-	// `ao send`, an orchestrator writing to a worker, an automation — as a turn
-	// attributed to automation rather than to the human at the keyboard.
-	RelayChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error)
-	// RelayChatTurnWithID is the durable-retry form. Implementations must pass
-	// the key through to ChatUserMessage so retry after an uncertain outbox
-	// acknowledgement cannot create a second provider turn.
-	RelayChatTurnWithID(ctx context.Context, id domain.SessionID, text, clientMessageID string) (string, error)
+	// RelaySessionChatTurn preserves delivery identity, authorship, and acceptance
+	// time. A durable clientMessageID makes queued retries idempotent.
+	RelaySessionChatTurn(ctx context.Context, id domain.SessionID, text, clientMessageID string, options ports.MessageDeliveryOptions) (string, error)
 	// HasLiveChatController reports whether the daemon still owns a controller
 	// for the session. Resume uses this to distinguish a stale durable activity
 	// state left by an older daemon from a genuinely live controller.
@@ -61,10 +57,6 @@ type ChatLauncher interface {
 	// DrainChatQueue dispatches what accumulated while the session had no
 	// controller.
 	DrainChatQueue(ctx context.Context, id domain.SessionID) error
-}
-
-type userAuthoredChatLauncher interface {
-	RelayUserAuthoredChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error)
 }
 
 type chatBackgroundTaskRunner interface {
@@ -255,6 +247,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 				Prompt:            in.prompt,
 				DiffBaseSHA:       diffBaseSHA,
 				DiffBaseRef:       diffBaseRef,
+				ArtifactDir:       in.record.Metadata.ArtifactDir,
 				// No RuntimeHandleID or RuntimeLaunchID: a chat session has no
 				// agent pane. Leaving them empty keeps the reaper from probing for
 				// a terminal that was never created.
@@ -292,12 +285,12 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 			if completionErr != nil {
 				return domain.SessionRecord{}, wrapSpawnStage(id, ErrSpawnCommit, completionErr)
 			}
-			return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, err)
+			return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, agentlaunch.RedactError(err, in.project.Config.Env))
 		}
 		// No controller exists, so nothing provider-side needs closing. The
 		// runtime was never touched, hence runtimeDestroyed=false.
 		m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
-		return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, err)
+		return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, agentlaunch.RedactError(err, in.project.Config.Env))
 	}
 
 	// The initial prompt is a normal turn through the controller. There is no
@@ -308,7 +301,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 			m.stopChatAfterSpawnFailure(ctx, id)
 			m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, in.record, in.workspace, in.workspaceProject, true)
 			m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
-			return domain.SessionRecord{}, wrapSpawnStage(id, ErrSpawnDeliverPrompt, err)
+			return domain.SessionRecord{}, wrapSpawnStage(id, ErrSpawnDeliverPrompt, agentlaunch.RedactError(err, in.project.Config.Env))
 		}
 	}
 
@@ -343,7 +336,7 @@ func (m *Manager) stopChatBestEffort(ctx context.Context, id domain.SessionID) {
 // receive a message, and one whose controller is gone cannot either. Busy is not
 // a refusal — the controller queues a mid-turn message, which is strictly better
 // than the terminal path's habit of dropping a nudge it cannot safely deliver.
-func (m *Manager) sendChat(ctx context.Context, id domain.SessionID, message, clientMessageID string, authoredByUser bool) (bool, error) {
+func (m *Manager) sendChat(ctx context.Context, id domain.SessionID, message, clientMessageID string, options ports.MessageDeliveryOptions) (bool, error) {
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
 		return false, fmt.Errorf("send %s: session: %w", id, err)
@@ -358,18 +351,7 @@ func (m *Manager) sendChat(ctx context.Context, id domain.SessionID, message, cl
 	if rec.IsTerminated {
 		return true, fmt.Errorf("send %s: %w", id, ErrTerminated)
 	}
-	var relayErr error
-	if authoredByUser {
-		relay, ok := m.chat.(userAuthoredChatLauncher)
-		if !ok {
-			return true, fmt.Errorf("send %s: user-authored relay is not available", id)
-		}
-		_, relayErr = relay.RelayUserAuthoredChatTurn(ctx, id, message)
-	} else if clientMessageID != "" {
-		_, relayErr = m.chat.RelayChatTurnWithID(ctx, id, message, clientMessageID)
-	} else {
-		_, relayErr = m.chat.RelayChatTurn(ctx, id, message)
-	}
+	_, relayErr := m.chat.RelaySessionChatTurn(ctx, id, message, clientMessageID, options)
 	if relayErr != nil {
 		return true, fmt.Errorf("send %s: %w", id, relayErr)
 	}
@@ -430,7 +412,7 @@ func (m *Manager) resumeChatController(
 
 	// Recomputed rather than persisted, matching the terminal path: a restored
 	// session keeps its standing instructions across the relaunch.
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
 	}
@@ -535,12 +517,14 @@ func (m *Manager) resumeChatController(
 			m.stopChatBestEffort(ctx, rec.ID)
 			return RestoreResult{}, fmt.Errorf("%s %s: completed: %w", operation, rec.ID, completionErr)
 		}
-		return RestoreResult{}, fmt.Errorf("%s %s: resume chat: %w", operation, rec.ID, err)
+		return RestoreResult{}, fmt.Errorf("%s %s: resume chat: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env))
 	}
 
 	restored, err := m.getRecord(ctx, rec.ID)
 	if err != nil {
-		return RestoreResult{}, err
+		// StartChat has published the new controller. A failed follow-up read
+		// cannot establish that it is safe to put the session back to sleep.
+		return RestoreResult{}, fmt.Errorf("%w: load resumed chat after native start: %w", ports.ErrChatRecoveryInconclusive, err)
 	}
 	// Native continuity: the provider still holds the conversation, so the agent
 	// resumes with its own history rather than a replayed prompt.

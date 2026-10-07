@@ -38,7 +38,9 @@ import {
 	Bug,
 	Camera,
 	Check,
+	ChevronDown,
 	ChevronRight,
+	ChevronUp,
 	Copy,
 	Download,
 	Eye,
@@ -47,6 +49,7 @@ import {
 	Maximize2,
 	Minimize2,
 	RotateCcw,
+	Search,
 	Monitor,
 	MoreVertical,
 	MousePointer2,
@@ -418,6 +421,10 @@ export function BrowserPanelView({
 		goForward,
 		reload,
 		stop,
+		findState = { viewId: "", tabId: "", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true },
+		findOpenRequest = 0,
+		findInPage = async () => undefined,
+		stopFindInPage = async () => undefined,
 		tabs,
 		activeTabId,
 		tabNotice,
@@ -429,6 +436,8 @@ export function BrowserPanelView({
 		reopenClosedTab,
 		agentBrowserActive,
 		agentBrowserActivity,
+		browserRuntimeConnected,
+		reconnectBrowserRuntime = async () => undefined,
 		devtoolsState = { viewId: "", open: false, activeTabId: "" },
 		profileState = { viewId: "", profileId: null, temporary: true },
 		openDevTools = async () => undefined,
@@ -454,6 +463,7 @@ export function BrowserPanelView({
 	const [customDeviceWidth, setCustomDeviceWidth] = useState("390");
 	const [controlsView, setControlsView] = useState<"root" | "devices" | "profiles">("root");
 	const [controlsOpen, setControlsOpen] = useState(false);
+	const [runtimeReconnectPending, setRuntimeReconnectPending] = useState(false);
 	const [browserProfiles, setBrowserProfiles] = useState<BrowserProfile[]>([]);
 	const [profilesLoading, setProfilesLoading] = useState(false);
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
@@ -462,6 +472,14 @@ export function BrowserPanelView({
 			? clampDeviceFrameWidth(Number(customDeviceWidth))
 			: DEVICE_PRESETS.find((preset) => preset.id === devicePreset)?.width;
 	const urlInputRef = useRef<HTMLInputElement>(null);
+	const findInputRef = useRef<HTMLInputElement>(null);
+	const findComposingRef = useRef(false);
+	const findStateRef = useRef(findState);
+	findStateRef.current = findState;
+	const [findOpen, setFindOpen] = useState(false);
+	const findOpenRef = useRef(findOpen);
+	findOpenRef.current = findOpen;
+	const [findQuery, setFindQuery] = useState("");
 	const historyMenuRef = useRef<HTMLDivElement>(null);
 	const historyRequestGenerationRef = useRef(0);
 	const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -578,6 +596,49 @@ export function BrowserPanelView({
 				urlInputRef.current?.select();
 			}),
 		[viewId],
+	);
+	useEffect(() => {
+		if (findOpenRequest <= 0) return;
+		if (findOpenRef.current) {
+			setFindOpen(false);
+			setFindQuery("");
+			void stopFindInPage(true);
+			return;
+		}
+		setFindOpen(true);
+		setFindQuery(findStateRef.current.query);
+		requestAnimationFrame(() => {
+			findInputRef.current?.focus();
+			findInputRef.current?.select();
+		});
+	}, [findOpenRequest, stopFindInPage]);
+	useEffect(() => {
+		if (!findOpen || findState.tabId !== activeTabId) return;
+		setFindQuery(findState.query);
+	}, [activeTabId, findOpen, findState.query, findState.tabId]);
+	const closeFind = useCallback(() => {
+		setFindOpen(false);
+		setFindQuery("");
+		void stopFindInPage(true);
+	}, [stopFindInPage]);
+	const runFind = useCallback(
+		(query: string, forward = true, newSession = true) => {
+			void findInPage(query, forward, newSession);
+		},
+		[findInPage],
+	);
+	const handleFindKeyDown = useCallback(
+		(event: KeyboardEvent<HTMLInputElement>) => {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				closeFind();
+				return;
+			}
+			if (event.key !== "Enter" || findComposingRef.current || !findQuery) return;
+			event.preventDefault();
+			runFind(findQuery, !event.shiftKey, false);
+		},
+		[closeFind, findQuery, runFind],
 	);
 	useEffect(
 		() =>
@@ -871,6 +932,15 @@ export function BrowserPanelView({
 							? error
 							: "";
 	const agentStatusLabel = agentActivityLabel(agentBrowserActivity, agentBrowserActive);
+	const runtimeDisconnected = hasNativeBrowser && browserRuntimeConnected === false;
+	const reconnectRuntime = useCallback(async () => {
+		setRuntimeReconnectPending(true);
+		try {
+			await reconnectBrowserRuntime();
+		} finally {
+			setRuntimeReconnectPending(false);
+		}
+	}, [reconnectBrowserRuntime]);
 	const suggestionsOpen = urlEditing && historySuggestions.length > 0;
 	const currentURLIsWeb = isWebLink(navState.url);
 	const copyURLLabel = t(urlCopied ? "browser.urlCopied" : "browser.copyUrl");
@@ -1205,6 +1275,21 @@ export function BrowserPanelView({
 			>
 				{browserTabBar}
 				<div className="browser-panel__toolbar" data-testid="browser-toolbar">
+							{runtimeDisconnected ? (
+								<div className="flex min-w-0 items-center gap-1.5 text-2xs text-destructive" data-testid="browser-runtime-alert" role="alert">
+									<span className="truncate">{t("browser.runtimeDisconnected")}</span>
+									<Button
+										className="shrink-0"
+										disabled={runtimeReconnectPending}
+										onClick={() => void reconnectRuntime()}
+										size="sm"
+										type="button"
+										variant="outline"
+									>
+										{t("browser.reconnectRuntime")}
+									</Button>
+								</div>
+							) : null}
 							<BrowserControlTooltip label={t("browser.back")}>
 								<span className="browser-panel__navigation-control inline-flex">
 							<Button
@@ -1569,6 +1654,71 @@ export function BrowserPanelView({
 					</motion.div>
 				) : null}
 			</AnimatePresence>
+			{findOpen ? (
+				<div className="browser-panel__find-row" role="search" data-testid="browser-find-row">
+					<Search aria-hidden="true" className="size-3.5 shrink-0 text-passive" />
+					<input
+						ref={findInputRef}
+						className="browser-panel__find-input"
+						value={findQuery}
+						placeholder={t("browser.find.placeholder")}
+						aria-label={t("browser.find.placeholder")}
+						onChange={(event) => {
+							const query = event.currentTarget.value;
+							setFindQuery(query);
+							if (!findComposingRef.current) runFind(query);
+						}}
+						onCompositionStart={() => {
+							findComposingRef.current = true;
+						}}
+						onCompositionEnd={(event) => {
+							findComposingRef.current = false;
+							const query = event.currentTarget.value;
+							setFindQuery(query);
+							runFind(query);
+						}}
+						onKeyDown={handleFindKeyDown}
+					/>
+					<span className="browser-panel__find-status" aria-live="polite" aria-atomic="true">
+						{findQuery
+							? findState.matches > 0
+								? t("browser.find.matchCount", {
+									active: findState.activeMatchOrdinal,
+									total: findState.matches,
+								})
+								: findState.finalUpdate
+									? t("browser.find.noResults")
+									: ""
+							: ""}
+					</span>
+					<button
+						type="button"
+						className="browser-panel__find-button"
+						disabled={!findQuery}
+						aria-label={t("browser.find.previous")}
+						onClick={() => runFind(findQuery, false, false)}
+					>
+						<ChevronUp aria-hidden="true" />
+					</button>
+					<button
+						type="button"
+						className="browser-panel__find-button"
+						disabled={!findQuery}
+						aria-label={t("browser.find.next")}
+						onClick={() => runFind(findQuery, true, false)}
+					>
+						<ChevronDown aria-hidden="true" />
+					</button>
+					<button
+						type="button"
+						className="browser-panel__find-button"
+						aria-label={t("browser.find.close")}
+						onClick={closeFind}
+					>
+						<X aria-hidden="true" />
+					</button>
+				</div>
+			) : null}
 			<div className="browser-panel__body flex min-h-0 flex-1 overflow-hidden">
 				<div
 					className="browser-panel__viewport relative min-h-0 flex-1 overflow-hidden"

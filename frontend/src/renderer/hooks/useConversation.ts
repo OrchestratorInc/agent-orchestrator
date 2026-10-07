@@ -26,6 +26,7 @@ import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type {
 	ActivityKind,
 	ApprovalMode,
@@ -124,6 +125,8 @@ export type ConversationLocalEcho = {
 	clientMessageId: string;
 	text: string;
 	createdAt: string;
+	/** A hibernated send is acknowledged locally while the provider wakes. */
+	backgroundWake?: boolean;
 	/** Filled after the daemon accepts the send, then used for exact reconciliation. */
 	turnId?: string;
 };
@@ -468,10 +471,15 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 
 	const send = useMutation({
 		onMutate: (variables: ConversationSendMutationInput) => {
+			const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(
+				conversationQueryKey(variables.targetSessionId, hostId),
+			);
+			const backgroundWake = current?.pages.some((page) => page.controller.state === "hibernated") ?? false;
 			addConversationLocalEcho(queryClient, stateKey(variables.targetSessionId), {
 				clientMessageId: variables.clientMessageId,
 				text: variables.input.text,
 				createdAt: new Date().toISOString(),
+				backgroundWake,
 			});
 			queryClient.setQueryData<ConversationDispatchTrackingBySession>(
 				conversationDispatchTrackingQueryKey,
@@ -825,28 +833,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 	});
 
-	/**
-	 * Restart the tool servers.
-	 *
-	 * Worth offering because a server that failed to start is not a transient blip the
-	 * agent will retry: it will simply never call those tools, and nothing in the
-	 * timeline says so. Refused mid-turn, which is why the control is disabled rather
-	 * than allowed to fail.
-	 */
-	const reloadMcp = useMutation({
-		mutationFn: async () => {
-			const { data, error } = await clientForSessionHost(hostId).POST(
-				"/api/v1/sessions/{sessionId}/conversation/mcp/reload",
-				{
-					params: { path: { sessionId: sessionId as string } },
-				},
-			);
-			if (error) throw error;
-			return data;
-		},
-		onSuccess: invalidate,
-	});
-
 	const rollback = useMutation({
 		mutationFn: async (turnId: string) => {
 			const { data, error } = await clientForSessionHost(hostId).POST(
@@ -984,6 +970,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			if (!claimConversationDispatch(queryClient, stateSessionId as string, clientMessageId, "send")) {
 				return Promise.reject(new Error("Conversation work is already being sent for this session."));
 			}
+			recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
 			return send.mutateAsync({
 				targetSessionId: sessionId,
 				clientMessageId,
@@ -1085,6 +1072,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		activateBranchError: activateBranch.error ? apiErrorMessage(activateBranch.error) : undefined,
 		steer: async (text: string, attachments?: WireImageContent[], clientMessageId?: string, recoverOnly?: boolean): Promise<ChatSteerOutcome> => {
 			try {
+				if (sessionId) recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
 				await steer.mutateAsync({ text, attachments, clientMessageId, recoverOnly });
 				return { status: "accepted" };
 			} catch (error) {
@@ -1122,13 +1110,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		 * answer is a property of the driver, not of the moment.
 		 */
 		steerUnsupported: apiErrorCode(steer.error) === "CHAT_STEER_UNSUPPORTED",
-		reloadMcpServers: () => reloadMcp.mutateAsync(),
-		reloadingMcpServers: reloadMcp.isPending,
-		mcpReloadUnsupported: apiErrorCode(reloadMcp.error) === "CHAT_MCP_RELOAD_UNSUPPORTED",
-		mcpReloadError:
-			reloadMcp.error && apiErrorCode(reloadMcp.error) !== "CHAT_MCP_RELOAD_UNSUPPORTED"
-				? apiErrorMessage(reloadMcp.error)
-				: undefined,
 		busy:
 			trackedDispatch?.state === "pending" ||
 			(send.isPending && sendTargetsCurrentSession) ||
@@ -1684,6 +1665,9 @@ function toMessage(wire: WireMessage): ConversationMessage {
 		})),
 		editAvailable: wire.editAvailable ?? undefined,
 		streaming: wire.streaming,
+		senderSessionId: wire.senderSessionId,
+		senderProjectId: wire.senderProjectId,
+		senderDisplayName: wire.senderDisplayName,
 		createdAt: wire.createdAt,
 	};
 }

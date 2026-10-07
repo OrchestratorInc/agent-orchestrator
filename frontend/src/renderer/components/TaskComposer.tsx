@@ -27,7 +27,7 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
-import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
 import { fallbackEffort } from "../lib/effort";
 import {
 	buildRankedAgentOptions,
@@ -115,6 +115,7 @@ export type TaskComposerProps = {
 	onDirtyChange?: (dirty: boolean) => void;
 	onSubmittingChange?: (submitting: boolean) => void;
 	autoFocusTitle?: boolean;
+	createLabel?: string;
 };
 
 export function TaskComposer({
@@ -124,6 +125,7 @@ export function TaskComposer({
 	onDirtyChange,
 	onSubmittingChange,
 	autoFocusTitle,
+	createLabel,
 }: TaskComposerProps) {
 	const { t } = useTranslation();
 	const taskPlaceholder = useMemo(() => {
@@ -191,6 +193,7 @@ export function TaskComposer({
 					displayName: input.brief.trim().slice(0, 100) || (input.agent ?? "claude-code"),
 					prompt: input.brief,
 					...(input.model ? { model: input.model } : {}),
+					...(input.effort ? { reasoningEffort: input.effort } : {}),
 					...(provider ? { provider } : {}),
 				});
 				// The control plane provisions the sandbox asynchronously; surface the
@@ -456,6 +459,16 @@ export function TaskComposer({
 	const catalogDefaultOption =
 		catalogModels.find((item) => item.isDefault)?.id ?? "";
 	const catalogUsesModes = modelCatalogQuery.data?.selectionMode === "mode";
+	// The model this user ran most recently.
+	const lastUsedOption =
+		catalogModels
+			.filter((item) => item.lastUsedAt)
+			.sort((a, b) => Date.parse(b.lastUsedAt ?? "") - Date.parse(a.lastUsedAt ?? ""))[0]?.id ?? "";
+	// With nothing remembered, run, or configured, Claude Code opens on the newest Opus.
+	const claudeFallbackOption =
+		selectedAgent === "claude-code" && !catalogUsesModes
+			? (splitClaudeModels(catalogModels).current.find((item) => /opus/i.test(modelChoiceLabel(item)))?.id ?? "")
+			: "";
 	const rememberedConfigForSelectedAgent = agentDrafts[selectedAgent];
 	const rememberedModel = rememberedConfigForSelectedAgent?.model ?? "";
 	const rememberedMode = rememberedConfigForSelectedAgent?.mode ?? "";
@@ -470,10 +483,13 @@ export function TaskComposer({
 	const defaultModelForSelectedAgent =
 		(rememberedModelIsValid ? rememberedModel : "") ||
 		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
-		(catalogUsesModes ? "" : catalogDefaultOption);
+		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
+		(catalogUsesModes ? "" : catalogDefaultOption) ||
+		claudeFallbackOption;
 	const defaultModeForSelectedAgent =
 		(rememberedModeIsValid ? rememberedMode : "") ||
 		(isConcreteModelID(projectModeForSelectedAgent) ? projectModeForSelectedAgent : "") ||
+		(catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? catalogDefaultOption : "");
 	const selectedModel = model || (modelTouched ? (catalogUsesModes ? "" : catalogDefaultOption) : defaultModelForSelectedAgent);
 	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogDefaultOption : "") : defaultModeForSelectedAgent);
@@ -499,6 +515,7 @@ export function TaskComposer({
 		onEffortReset: setEffort,
 	});
 	const effortOptions = effortModel?.efforts?.filter((option) => option && option.toLowerCase() !== "default") ?? [];
+	const cloudDefaultEffort = isCloudProject && effortOptions.includes("medium") ? "medium" : "";
 	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
 	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
 	const selectedAgentLabel = agentCatalog?.agents.find((item) => item.id === selectedAgent)?.label || selectedAgent;
@@ -510,9 +527,11 @@ export function TaskComposer({
 	// selected, and sends it, so the picker matches what the task runs with.
 	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
 	const effectiveEffort = effort && effort !== "default" ? effort : aoDefaultEffort ?? "";
-	const requestedEffort = effortTouched || rememberedEffortIsExplicit
-		? !effectiveEffort || effectiveEffort === implicitEffort ? undefined : effectiveEffort
-		: aoDefaultEffort;
+	const requestedEffort = isCloudProject
+		? effort || cloudDefaultEffort || undefined
+		: effortTouched || rememberedEffortIsExplicit
+			? !effectiveEffort || effectiveEffort === implicitEffort ? undefined : effectiveEffort
+			: aoDefaultEffort;
 	const effortAvailability: EffortAvailability = requiresTuiFallback
 		? "launch-unavailable"
 		: !effortModel || effortModel.efforts === undefined
@@ -544,8 +563,8 @@ export function TaskComposer({
 		}
 	}, [defaultModelForSelectedAgent, defaultModeForSelectedAgent, modelTouched]);
 	useEffect(() => {
-		if (!effortTouched) setEffort(defaultEffortForSelectedAgent);
-	}, [defaultEffortForSelectedAgent, effortTouched]);
+		if (!effortTouched) setEffort(defaultEffortForSelectedAgent || cloudDefaultEffort);
+	}, [cloudDefaultEffort, defaultEffortForSelectedAgent, effortTouched]);
 
 	const isDirty = isPromptDirty || modelTouched || effortTouched || attachments.length > 0;
 	const handlePromptChange = useCallback((value: string) => {
@@ -653,7 +672,7 @@ export function TaskComposer({
 					: t("newTask.createAsTui"),
 				removeFile: (name) => t("newTask.removeFile", { name }),
 				runsWith: t("newTask.runsWith"),
-				start: t("newTask.start"),
+				start: createLabel ?? t("newTask.start"),
 				starting: t("newTask.starting"),
 				task: t("newTask.task"),
 				taskPlaceholder,
@@ -741,7 +760,7 @@ export function TaskComposer({
 				onSubmit: (brief) => void submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined),
 			}}
 			renderAgentControl={(control) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />}
-			renderEffortControl={(control) => <TaskEffortPicker {...control} defaultEffort={inheritedEffort || effortModel?.defaultEffort} availability={effortAvailability} />}
+			renderEffortControl={(control) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={inheritedEffort || effortModel?.defaultEffort} availability={effortAvailability} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
 			showEffort={!requiresTuiFallback && (effortOptions.length > 0 || Boolean(effort && effort !== "default"))}
@@ -893,7 +912,7 @@ function TaskModelPicker({
 			refreshError={catalog?.refreshError}
 			retryAt={catalog?.retryAt}
 			disabled={disabled || agentId === ""}
-			showFollowAgentAction={showFollowAgentAction}
+			agentId={agentId}
 			onChange={selectCatalogModel}
 			onCustom={selectCustomModel}
 			compact

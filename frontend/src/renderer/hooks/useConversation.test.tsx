@@ -1100,40 +1100,6 @@ describe("steering refusals", () => {
 	});
 });
 
-describe("tool server reload refusals", () => {
-	it("withdraws the control when the harness cannot reload", async () => {
-		apiErrorCodeMock.mockReturnValue("CHAT_MCP_RELOAD_UNSUPPORTED");
-		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_MCP_RELOAD_UNSUPPORTED" } });
-
-		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
-		await act(async () => {
-			await result.current.reloadMcpServers().catch(() => {});
-		});
-
-		await waitFor(() => {
-			expect(result.current.mcpReloadUnsupported).toBe(true);
-			// Not also an error message: the control disappearing is the whole answer.
-			expect(result.current.mcpReloadError).toBeUndefined();
-		});
-	});
-
-	it("surfaces a refusal the user can act on", async () => {
-		apiErrorCodeMock.mockReturnValue("CHAT_TURN_RUNNING");
-		apiErrorMessageMock.mockReturnValue("a turn is running");
-		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_TURN_RUNNING" } });
-
-		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
-		await act(async () => {
-			await result.current.reloadMcpServers().catch(() => {});
-		});
-
-		await waitFor(() => {
-			expect(result.current.mcpReloadUnsupported).toBe(false);
-			expect(result.current.mcpReloadError).toBe("a turn is running");
-		});
-	});
-});
-
 describe("controller recovery", () => {
 	it("shares an automatic resume's pending state only with the same session", async () => {
 		const queryClient = new QueryClient();

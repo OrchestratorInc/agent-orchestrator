@@ -65,6 +65,7 @@ import { clientForHost } from "../lib/host-clients";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
+import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 
 export const Route = createFileRoute("/_shell")({
 	// Prefetch the workspace list for the whole shell (parent loaders run before
@@ -204,9 +205,29 @@ function ShellLayout() {
 	const themePreference = useUiStore((state) => state.themePreference);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
+	const developerMode = useUiStore((state) => state.developerMode);
+	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
 	const sidebarHasLayout = useUiStore(sidebarOccupiesLayout);
+	// The drag strip above the sidebar must be exactly as wide as the sidebar.
+	// `--ao-sidebar-w` only reaches the strip if it already exists when the
+	// sidebar first applies its saved width, so measure the sidebar instead.
+	const [sidebarWidthPx, setSidebarWidthPx] = useState<number | null>(null);
+	useEffect(() => {
+		if (!isMac || !sidebarHasLayout) return;
+		let observer: ResizeObserver | undefined;
+		const frame = requestAnimationFrame(() => {
+			const el = document.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
+			if (!el) return;
+			observer = new ResizeObserver(([entry]) => setSidebarWidthPx(entry.target.getBoundingClientRect().width));
+			observer.observe(el);
+		});
+		return () => {
+			cancelAnimationFrame(frame);
+			observer?.disconnect();
+		};
+	}, [sidebarHasLayout]);
 	const syncSystemTheme = useUiStore((state) => state.syncSystemTheme);
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const openProjectSettings = useUiStore((state) => state.openProjectSettings);
@@ -322,14 +343,23 @@ function ShellLayout() {
 		: routeParams.sessionId
 			? workspaces.find((workspace) => workspace.sessions.some((session) => session.id === routeParams.sessionId))?.id
 			: undefined;
-	const scopedSession = !routeParams.hostId && routeParams.sessionId
-		? workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === routeParams.sessionId)
+	const scopedSession = routeParams.sessionId
+		? (routeParams.hostId ? remoteWorkspaces : workspaces)
+			.flatMap((workspace) => workspace.sessions)
+			.find((session) => session.id === routeParams.sessionId)
 		: undefined;
+	useEffect(() => {
+		recordSessionSurface(
+			scopedSession?.kind === "orchestrator" || scopedSession?.kind === "worker"
+				? { kind: scopedSession.kind, sessionId: sessionUiKey(scopedSession.id, routeParams.hostId) }
+				: null,
+		);
+	}, [routeParams.hostId, scopedSession?.id, scopedSession?.kind]);
 	// Warms the New Task composer's model-catalog cache while the user is just
 	// looking at the project, so the picker never shows a loading flash the
 	// first time they actually open the dialog.
 	useEffect(() => {
-		if (!scopedProjectId) return;
+		if (!scopedProjectId || scopedProjectId === STANDALONE_WORKSPACE_ID) return;
 		const projectQueryKey = ["project", scopedProjectId];
 		void queryClient
 			.prefetchQuery({
@@ -406,6 +436,7 @@ function ShellLayout() {
 					: (currentIndex + direction + sessions.length) % sessions.length;
 			const session = sessions[nextIndex];
 			if (!session || session.id === routeParams.sessionId) return;
+			if (session.kind === "worker") recordManualWorkerOpen(sessionUiKey(session.id, hostId));
 			void navigate(sessionNavigateTarget(projectId, session.id, hostId));
 		},
 		[navigate, routeParams.hostId, routeParams.projectId, routeParams.sessionId, scopedProjectId],
@@ -846,6 +877,31 @@ function ShellLayout() {
 		applyDocumentThemeStyle(themeStyle);
 	}, [themeStyle]);
 
+	// The renderer owns Developer Mode; the daemon must know its value before
+	// either the view-close path or the idle sweep can hibernate a provider.
+	useEffect(() => {
+		if (usesPreviewWorkspaceData || daemonStatus.state !== "ready" || !daemonStatus.port) return;
+		let cancelled = false;
+		let retry: ReturnType<typeof setTimeout> | undefined;
+		const sync = () => {
+			// Serialize toggles so an older enable request cannot finish after disable.
+			chatHibernationSyncRef.current = chatHibernationSyncRef.current.then(async () => {
+				if (cancelled) return;
+				const { error } = await apiClient.PATCH("/api/v1/settings/chat-hibernation", {
+					body: { enabled: developerMode },
+				});
+				if (error) throw error;
+			}).catch(() => {
+				if (!cancelled) retry = setTimeout(sync, 5_000);
+			});
+		};
+		sync();
+		return () => {
+			cancelled = true;
+			clearTimeout(retry);
+		};
+	}, [daemonStatus.pid, daemonStatus.port, daemonStatus.state, developerMode]);
+
 	// A daemon port is not enough to render a trustworthy empty state: the
 	// route loader may have cached [] before Electron reported the port. Fetch
 	// against each ready daemon before the board decides between projects and the
@@ -1236,7 +1292,10 @@ function ShellLayout() {
 								isFullScreen ? "pointer-events-none h-0" : "h-traffic-light-clearance",
 							)}
 							ref={sidebarDragStripRef}
-							style={trafficLightDragActive ? ({ WebkitAppRegion: "drag" } as CSSProperties) : undefined}
+							style={{
+								...(sidebarHasLayout && sidebarWidthPx ? { width: sidebarWidthPx } : null),
+								...(trafficLightDragActive ? ({ WebkitAppRegion: "drag" } as CSSProperties) : null),
+							}}
 						/>
 					) : null}
 					{/* Fixed macOS titlebar cluster beside the traffic lights — rendered

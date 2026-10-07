@@ -984,6 +984,22 @@ func TestPoll_IgnoresForkPRWithMatchingBranch(t *testing.T) {
 	}
 }
 
+func TestPoll_DiscoversSameRepoPRAfterRename(t *testing.T) {
+	store := testStoreWithSession()
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
+		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{URL: "https://github.com/neworg/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "NewOrg/r", BaseRepo: "NewOrg/r", TargetBranch: "main", HeadSHA: "sha1"}}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1)},
+	}
+	obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(1, 0).UTC())
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.writes) == 0 || store.writes[0].pr.SessionID != "p-1" {
+		t.Fatalf("renamed-repo PR must be attributed to p-1, got %#v", store.writes)
+	}
+}
+
 func mustGit(t *testing.T, args ...string) {
 	t.Helper()
 	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {

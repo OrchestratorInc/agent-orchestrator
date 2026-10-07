@@ -184,7 +184,7 @@ func (m *Manager) executeChatAgentSwitch(
 		return result, fmt.Errorf("switch Chat agent %s: target config: %w", id, err)
 	}
 
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID)
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: system prompt: %w", id, err)
 	}
@@ -541,8 +541,8 @@ func (m *Manager) executeChatAgentSwitch(
 	}
 	recorder.durable(result)
 	recorder.boundary(domain.AgentSwitchFailureChatContinuationRelay)
-	if _, err := m.chat.RelayChatTurnWithID(
-		ctx, id, aoTargetActivationPrompt, chatSwitchActivationMessageID(result.ID)); err != nil {
+	if _, err := m.chat.RelaySessionChatTurn(
+		ctx, id, aoTargetActivationPrompt, chatSwitchActivationMessageID(result.ID), ports.MessageDeliveryOptions{}); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: deliver continuation: %w", id, err)
 	}
 	acknowledgedAt := m.clock()
@@ -617,7 +617,7 @@ func (m *Manager) rollbackStoppedChatAgentSwitchSource(
 	if !ok {
 		return ErrUnknownHarness
 	}
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID)
 	if err != nil {
 		return err
 	}
@@ -775,8 +775,8 @@ func (m *Manager) recoverActivatedChatAgentSwitch(
 		return false, err
 	}
 	recorder.boundary(domain.AgentSwitchFailureChatContinuationRelay)
-	if _, err := m.chat.RelayChatTurnWithID(
-		ctx, rec.ID, aoTargetActivationPrompt, chatSwitchActivationMessageID(current.ID)); err != nil {
+	if _, err := m.chat.RelaySessionChatTurn(
+		ctx, rec.ID, aoTargetActivationPrompt, chatSwitchActivationMessageID(current.ID), ports.MessageDeliveryOptions{}); err != nil {
 		recorder.userImpact = domain.AgentSwitchUserImpactDeliveryUnknown
 		_, failErr := m.failAgentSwitchWithRecorder(ctx, store, current, domain.AgentSwitchErrorDeliveryUnconfirmed, recorder)
 		return failErr == nil, failErr

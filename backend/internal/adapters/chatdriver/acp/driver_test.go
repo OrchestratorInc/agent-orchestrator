@@ -268,6 +268,105 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness) {
 	}
 }
 
+// A prompt attempted before the controller acknowledges the previous terminal
+// receipt is refused by the host without a receipt of its own. That refusal must
+// not erase the outstanding receipt, or the late ACK is dropped and the host
+// refuses every later prompt.
+func TestPersistentACPLateAckSurvivesHostLocalPromptRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		env           map[string]string
+		originalState domain.TurnState
+	}{
+		{name: "completed original", originalState: domain.TurnStateCompleted},
+		{name: "failed original", env: map[string]string{"AO_TEST_PERSISTENT_ACP_ERROR": "1"},
+			originalState: domain.TurnStateFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			callsPath := filepath.Join(t.TempDir(), "calls.log")
+			env := map[string]string{
+				"AO_TEST_PERSISTENT_ACP_PROVIDER": "1",
+				"AO_TEST_PERSISTENT_ACP_CALLS":    callsPath,
+			}
+			for key, value := range tc.env {
+				env[key] = value
+			}
+			driver := New(Config{
+				Harness: domain.HarnessOMP,
+				Capabilities: ports.ChatCapabilities{
+					ports.ChatCapabilityStreaming: true, ports.ChatCapabilityResume: true,
+				},
+				Launch: func(context.Context, LaunchConfig) (Launch, error) {
+					return Launch{
+						Command: os.Args[0], Args: []string{"-test.run=TestPersistentACPProviderHelper"}, Env: env,
+					}, nil
+				},
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+				SessionID: "persistent-acp-late-ack", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
+				ProviderScopeID: "scope",
+			})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer func() { _ = conv.(ports.ChatProviderTerminator).Terminate() }()
+			ack := conv.(ports.ChatProviderEventAcknowledger)
+			_ = nextEvent(t, conv.Events()) // controller.ready
+
+			original := runPersistentACPTurn(t, conv)
+			if original.TurnState != tc.originalState || original.ProviderEventID == "" {
+				t.Fatalf("original terminal = %#v, want %s with a durable receipt", original, tc.originalState)
+			}
+			replacement := runPersistentACPTurn(t, conv)
+			if replacement.TurnState != domain.TurnStateFailed || replacement.ProviderEventID != "" ||
+				replacement.Err == nil || !strings.Contains(replacement.Err.Error(), "not acknowledged") {
+				t.Fatalf("replacement terminal = %#v, want host-local unacknowledged rejection", replacement)
+			}
+			if err := ack.AcknowledgeProviderEvent(context.Background(), original.ProviderEventID); err != nil {
+				t.Fatalf("acknowledge original: %v", err)
+			}
+			next := runPersistentACPTurn(t, conv)
+			if next.TurnState != domain.TurnStateCompleted || next.ProviderEventID == "" {
+				t.Fatalf("turn after late ACK = %#v, want completed", next)
+			}
+			if err := ack.AcknowledgeProviderEvent(context.Background(), next.ProviderEventID); err != nil {
+				t.Fatalf("acknowledge next: %v", err)
+			}
+			calls, err := os.ReadFile(callsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(string(calls), "session/prompt\n"); got != 2 {
+				t.Fatalf("provider received %d prompts, want original and post-ACK turn only; calls:\n%s", got, calls)
+			}
+		})
+	}
+}
+
+// runPersistentACPTurn starts one turn and returns its terminal event once the
+// conversation reports it can accept the next turn.
+func runPersistentACPTurn(t *testing.T, conv ports.ChatConversation) ports.ChatEvent {
+	t.Helper()
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "turn"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	var terminal ports.ChatEvent
+	for {
+		event := nextEvent(t, conv.Events())
+		if event.Kind == ports.ChatEventTurnCompleted && event.ProviderTurnID == ref.ProviderTurnID {
+			terminal = event
+		}
+		if terminal.Kind != "" && event.Kind == ports.ChatEventControllerState &&
+			event.ControllerState == ports.ChatControllerReady {
+			return terminal
+		}
+	}
+}
+
 func TestPersistentACPDriverReplaysOnePermissionAndOriginalResponder(t *testing.T) {
 	dataDir := t.TempDir()
 	workdir := t.TempDir()
