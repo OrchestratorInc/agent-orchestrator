@@ -16,9 +16,10 @@ func TestChatLauncherForwardsSessionRelay(t *testing.T) {
 	// Exercise the production wrapper through the required launcher interface,
 	// rather than a fake that accidentally supplies extra methods.
 	store := sqlitetest.MustOpen(t)
-	if _, err := store.CreateSession(context.Background(), domain.SessionRecord{
-		ID: "worker-1", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
-	}); err != nil {
+	created, err := store.CreateSession(context.Background(), domain.SessionRecord{
+		Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	var launcher sessionmanager.ChatLauncher = chatLauncher{svc: chatsvc.New(chatsvc.Options{Sessions: store})}
@@ -30,7 +31,7 @@ func TestChatLauncherForwardsSessionRelay(t *testing.T) {
 		{name: "user-authored outbox replay", clientID: "queued-message-1", options: ports.MessageDeliveryOptions{AuthoredByUser: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			id, err := launcher.RelaySessionChatTurn(context.Background(), "worker-1", "direction", tc.clientID, tc.options)
+			id, err := launcher.RelaySessionChatTurn(context.Background(), created.ID, "direction", tc.clientID, tc.options)
 			// No controller was started: reaching this service error proves forwarding
 			// across the real wrapper instead of failing with session relay unavailable.
 			if id != "" || !errors.Is(err, chatsvc.ErrNoController) {
