@@ -2056,33 +2056,35 @@ function ControllerBanner({
 								{resumeError ?? shellError}
 							</span>
 						) : null}
-						<div className="mt-1.5 flex flex-wrap gap-2">
-							{onResume ? (
-								<Button
-									type="button"
-									size="sm"
-									variant="outline"
-									onClick={onResume}
-									disabled={resuming}
-								>
-									{resuming ? "Resuming…" : resumeError || needsResume ? "Retry" : "Resume agent"}
-								</Button>
-							) : null}
-							{onOpenShell && !needsResume ? (
-								<Button
-									type="button"
-									size="sm"
-									variant="ghost"
-									onClick={onOpenShell}
-									disabled={openingShell}
-								>
-									{openingShell ? "Opening shell…" : "Open shell"}
-								</Button>
-							) : null}
-						</div>
 					</>
 				) : null}
 			</div>
+			{controller.state === "stopped" ? (
+				<div className="flex shrink-0 flex-wrap justify-end gap-2 self-center">
+					{onResume ? (
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							onClick={onResume}
+							disabled={resuming}
+						>
+							{resuming ? "Resuming…" : resumeError || needsResume ? "Retry" : "Resume agent"}
+						</Button>
+					) : null}
+					{onOpenShell && !needsResume ? (
+						<Button
+							type="button"
+							size="sm"
+							variant="ghost"
+							onClick={onOpenShell}
+							disabled={openingShell}
+						>
+							{openingShell ? "Opening shell…" : "Open shell"}
+						</Button>
+					) : null}
+				</div>
+			) : null}
 		</div>
 	);
 }
