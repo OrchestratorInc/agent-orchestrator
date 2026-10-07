@@ -43,10 +43,10 @@ func (e *cleanupStepError) Unwrap() []error { return []error{ErrCleanupScript, e
 
 // runPreRemove is called only for permanent AO-owned workspace retirement,
 // after the session's processes have stopped and before worktree removal.
-func (m *Manager) runPreRemove(ctx context.Context, projectID domain.ProjectID, workspacePath string) error {
+func (m *Manager) runPreRemove(_ context.Context, projectID domain.ProjectID, workspacePath string) error {
 	// Cleanup belongs to the daemon, not the request or its teardown deadline.
 	// It has no execution timer, but shutdown must still stop it.
-	ctx = m.backgroundContext
+	ctx := m.backgroundContext
 	if workspacePath == "" {
 		return nil
 	}
