@@ -44,7 +44,6 @@ function renderSheet(
 	render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
-				<div data-orchestrator-page />
 				<CreateProjectAgentSheet
 					hostId={options.hostId}
 					isCreating={options.isCreating ?? false}
@@ -77,7 +76,6 @@ it("unmounts the modal on submit and does not bring it back when creation succee
 		const [busy, setBusy] = useState(false);
 		const [open, setOpen] = useState(true);
 		return <QueryClientProvider client={queryClient}><TooltipProvider>
-			<div data-orchestrator-page />
 			<CreateProjectAgentSheet open={open} isCreating={busy} kind="single_repo" path="/repo/new-project" onOpenChange={setOpen} onSubmit={async () => {
 				setBusy(true);
 				await pending;

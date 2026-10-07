@@ -1845,18 +1845,22 @@ describe("ChatWorkspace timeline", () => {
 		expect(onChooseSettings).not.toHaveBeenCalled();
 	});
 
-	it("shows startup progress for an orchestrator with no messages or turns", () => {
-		render(
+	it("shimmers the centered composer until the orchestrator is ready", () => {
+		const view = render(
 			<ChatWorkspace
 				sessionRole="orchestrator"
 				snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }}
 				session={{ ...chatSession, kind: "orchestrator", provisionState: "provisioning", provisionSteps: startingSteps("running") }}
 			/>,
 		);
-		expect(screen.getByTestId("orchestrator-startup-status")).toBeInTheDocument();
-		expect(screen.getByRole("status")).toHaveTextContent("Start Codex");
+		expect(screen.getByText("Your orchestrator is getting ready")).toHaveClass("chat-working-shimmer");
+		expect(screen.queryByTestId("orchestrator-startup-status")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("session-startup")).not.toBeInTheDocument();
 		expect(screen.getByText("What do you want to work on?")).toBeInTheDocument();
+		const composer = screen.getByLabelText("Message the agent");
+		view.rerender(<ChatWorkspace sessionRole="orchestrator" snapshot={chatFixtureEmpty} session={{ ...chatSession, kind: "orchestrator", provisionState: "ready" }} />);
+		expect(screen.getByLabelText("Message the agent")).toBe(composer);
+		expect(screen.queryByText("Your orchestrator is getting ready")).not.toBeInTheDocument();
 	});
 
 	it("shows startup failure and retry for an orchestrator with no messages or turns", async () => {

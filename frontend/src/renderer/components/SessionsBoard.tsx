@@ -1,4 +1,4 @@
-import { OrchestratorLoadingScreen } from "./OrchestratorLoadingScreen";
+import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
@@ -236,7 +236,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	) : undefined;
 
 	if (projectId && (isProvisioning || projectActions.isSpawning)) {
-		return <div className="relative h-full"><OrchestratorLoadingScreen /></div>;
+		return <OrchestratorStartingChat />;
 	}
 
 	return (

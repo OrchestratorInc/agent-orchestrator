@@ -222,6 +222,20 @@ afterEach(() => {
 });
 
 describe("SessionChatSurface link routing", () => {
+	it("mounts orchestrator chat before the conversation loads and keeps it mounted on hydration", () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		conversationState.snapshot = undefined;
+		conversationState.isLoading = true;
+		const orchestrator = { ...session, kind: "orchestrator" as const, provisionState: "provisioning" as const };
+		const view = render(<Wrapper client={queryClient}><SessionChatSurface session={orchestrator} /></Wrapper>);
+		const mounted = screen.getByText(`Mounted ${session.id}`);
+		expect(screen.queryByText("Loading conversation…")).not.toBeInTheDocument();
+		conversationState.snapshot = snapshotFor(session.id);
+		conversationState.isLoading = false;
+		view.rerender(<Wrapper client={queryClient}><SessionChatSurface session={{ ...orchestrator, provisionState: "ready" }} /></Wrapper>);
+		expect(screen.getByText(`Mounted ${session.id}`)).toBe(mounted);
+	});
+
 	it("keeps project loading through provisioning and conversation loading, then reveals chat", () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const orchestrator = { ...session, kind: "orchestrator" as const, provisionState: "provisioning" as const };

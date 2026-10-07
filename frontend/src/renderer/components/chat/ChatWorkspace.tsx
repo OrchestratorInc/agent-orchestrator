@@ -309,6 +309,8 @@ export interface ChatWorkspaceProps {
 	 * handoff, the history is final, so it stays readable; only sending waits.
 	 */
 	agentResuming?: boolean;
+	/** The optimistic composer waits in place for its conversation and controller. */
+	starting?: boolean;
 	/** Freeze agent-owned Chat controls while a durable session mutation owns input. */
 	agentInputDisabled?: boolean;
 	/** Fence new agent work without blocking decisions required by the current turn. */
@@ -559,6 +561,7 @@ function ChatWorkspaceContent({
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
 	agentResuming = false,
+	starting = false,
 	agentInputDisabled = false,
 	newWorkDisabled = false,
 	reviewerTerminal,
@@ -1360,8 +1363,12 @@ function ChatWorkspaceContent({
 	);
 	// Empty chats center the prompt; once a turn or item exists the composer docks
 	// at the bottom and stays there for the rest of the session.
-	const compactStartup = sessionRole === "orchestrator" && startupState ? startup : undefined;
-	const conversationEmpty = snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || Boolean(compactStartup));
+	const orchestratorStarting = sessionRole === "orchestrator" && startupState !== "failed" && (
+		starting || startupState === "provisioning" || agentResuming ||
+		snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"
+	);
+	const compactStartup = sessionRole === "orchestrator" && startupState === "failed" ? startup : undefined;
+	const conversationEmpty = snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
 	const { t } = useTranslation();
 	const [emptyChatPlaceholder] = useState(
 		() => EMPTY_CHAT_PLACEHOLDERS[Math.floor(Math.random() * EMPTY_CHAT_PLACEHOLDERS.length)],
@@ -1561,7 +1568,7 @@ function ChatWorkspaceContent({
 					) : null}
 					<ControllerBanner
 						controller={snapshot.controller}
-						provisionState={session?.provisionState}
+						provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
 						transitioning={controllerTransitioning || agentResuming}
 						automaticWakePending={suppressStopped}
 						onResume={newWorkDisabled ? undefined : onResumeAgent}
@@ -1667,10 +1674,13 @@ function ChatWorkspaceContent({
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
-										disabled={((snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
+										placeholderShimmer={orchestratorStarting}
+										disabled={(starting || orchestratorStarting || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
 										// Switch/reconnect status is the topbar spinner beside ⋮ — not composer text.
 										disabledPlaceholder={
-											controllerTransitioning || newWorkDisabled
+											orchestratorStarting
+												? "Your orchestrator is getting ready"
+												: controllerTransitioning || newWorkDisabled
 												? ""
 												: agentResuming
 													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")

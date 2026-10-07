@@ -3,6 +3,7 @@ import { CancelledError } from "@tanstack/react-query";
 import { Suspense, type ComponentType, type PropsWithChildren } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KeybindingOverrides } from "../../shared/shortcuts";
+import { TooltipProvider } from "../components/ui/tooltip";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSummary } from "../types/workspace";
 
@@ -133,6 +134,10 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		app: {
+			onCloseShellTerminalShortcut: () => () => {},
+			onPreviousTabShortcut: () => () => {},
+			onNextTabShortcut: () => () => {},
+			setCloseShellTerminalShortcutEnabled: () => {},
 			onNewSessionShortcut: shellMocks.onNewSessionShortcut,
 			onKeyboardShortcutsHelp: shellMocks.onKeyboardShortcutsHelp,
 			onNewShellTerminalShortcut: shellMocks.onNewShellTerminalShortcut,
@@ -349,6 +354,7 @@ async function renderShell() {
 			<Suspense fallback={null}>
 				<ShellRoute />
 			</Suspense>,
+			{ wrapper: TooltipProvider },
 		);
 	});
 	await waitFor(() => expect(shellMocks.onNewSessionShortcut).toHaveBeenCalledTimes(1), { timeout: 30_000 });
@@ -607,26 +613,22 @@ describe("shell workspace startup", () => {
 		});
 	});
 
-	it("keeps one rounded loading pane from submission through project and session navigation", async () => {
+	it("opens optimistic chat during submission without a loading page", async () => {
 		useUiStore.getState().setProjectCreationPending(true);
 		try {
 			const view = await renderShell();
-			const loading = screen.getByTestId("orchestrator-loading-screen");
-			expect(loading.parentElement).toHaveAttribute("data-orchestrator-page");
-			expect(loading).not.toHaveClass("fixed");
-			expect(screen.getByRole("status").closest(".center-panel-surface")).toBeInTheDocument();
+			expect(screen.getByText("Your orchestrator is getting ready")).toHaveClass("chat-working-shimmer");
+			expect(screen.queryByTestId("orchestrator-loading-screen")).not.toBeInTheDocument();
 			shellMocks.state.routeParams = { projectId: "proj-1" };
 			act(() => {
 				useUiStore.getState().setProjectProvisioning("proj-1", true);
 				useUiStore.getState().setProjectCreationPending(false);
 			});
 			view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
-			expect(screen.getByTestId("orchestrator-loading-screen")).toBe(loading);
+			expect(screen.getByText("Your orchestrator is getting ready")).toBeInTheDocument();
 			shellMocks.state.routeParams = { projectId: "proj-1", sessionId: "sess-1" };
 			view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
-			expect(screen.getByTestId("orchestrator-loading-screen")).toBe(loading);
-			act(() => useUiStore.getState().setProjectProvisioning("proj-1", false));
-			expect(screen.queryByTestId("orchestrator-loading-screen")).not.toBeInTheDocument();
+			expect(screen.queryByText("Your orchestrator is getting ready")).not.toBeInTheDocument();
 		} finally {
 			useUiStore.getState().setProjectCreationPending(false);
 			useUiStore.getState().setProjectProvisioning("proj-1", false);

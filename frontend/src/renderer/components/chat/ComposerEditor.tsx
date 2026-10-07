@@ -535,6 +535,7 @@ export const ComposerEditor = forwardRef<
 		concealed?: boolean;
 		label: string;
 		placeholder: string;
+		placeholderShimmer?: boolean;
 		menuOpen: boolean;
 		menuId: string;
 		activeIndex: number;
@@ -552,6 +553,7 @@ export const ComposerEditor = forwardRef<
 		concealed,
 		label,
 		placeholder,
+		placeholderShimmer,
 		menuOpen,
 		menuId,
 		activeIndex,
@@ -583,11 +585,13 @@ export const ComposerEditor = forwardRef<
 
 	const placeholderNode = useCallback(
 		() => (
-			<div className="pointer-events-none absolute inset-x-0 top-0 py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground">
-				{placeholder}
+			<div key={placeholder} className="pointer-events-none absolute inset-x-0 top-0 py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground animate-in fade-in duration-300 motion-reduce:animate-none">
+				<span className={placeholderShimmer ? "chat-working-shimmer" : undefined}>
+					{placeholder}
+				</span>
 			</div>
 		),
-		[placeholder],
+		[placeholder, placeholderShimmer],
 	);
 
 	return (

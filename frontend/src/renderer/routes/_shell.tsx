@@ -1,10 +1,10 @@
-import { OrchestratorLoadingScreen } from "../components/OrchestratorLoadingScreen";
+import { OrchestratorStartingChat } from "../components/chat/OrchestratorStartingChat";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { createFileRoute, Outlet, useMatchRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
-import { memo, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CommandPalette } from "../components/CommandPalette";
@@ -93,12 +93,13 @@ function ShellLayoutWithSettings() {
  * The routed page stays mounted while settings is open (so a session's scroll,
  * drafts, and terminal survive) and is only hidden behind the settings page.
  */
-function ShellOutlet() {
+function ShellOutlet({ startingChat }: { startingChat: ReactNode }) {
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	return (
 		<>
 			<div className={cn("flex min-h-0 flex-1 flex-col", settingsOpen && "hidden")}>
-				<Outlet />
+				<div className={startingChat ? "hidden" : "contents"}><Outlet /></div>
+				{startingChat}
 			</div>
 			<SettingsPane />
 		</>
@@ -157,10 +158,12 @@ const ShellCenter = memo(function ShellCenter({
 	hideShellTopbar,
 	isSessionRoute,
 	selfFramedCenterPanel,
+	startingOrchestrator,
 }: {
 	hideShellTopbar: boolean;
 	isSessionRoute: boolean;
 	selfFramedCenterPanel: boolean;
+	startingOrchestrator: boolean;
 }) {
 	const panelClassName = isSessionRoute ? "center-panel-shell--session" : undefined;
 	// Linux retains an outer drag strip. macOS uses the shared header itself;
@@ -168,12 +171,16 @@ const ShellCenter = memo(function ShellCenter({
 	// Windows already owns a separate WindowTitlebar.
 	const draggableSessionFrame = isSessionRoute && isLinux;
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
+	const startingChat = startingOrchestrator ? <OrchestratorStartingChat /> : null;
+	// Settings is a self-framed route, so its starting chat gets its own panel.
+	const selfFramedOutlet = <>
+		<div className={startingOrchestrator ? "hidden" : "contents"}><Outlet /></div>
+		{startingChat ? <CenterPanelShell>{startingChat}</CenterPanelShell> : null}
+	</>;
 	if (hideShellTopbar) {
-		return selfFramedCenterPanel ? (
-			<Outlet />
-		) : (
+		return selfFramedCenterPanel ? selfFramedOutlet : (
 			<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
-				<ShellOutlet />
+				<ShellOutlet startingChat={startingChat} />
 			</CenterPanelShell>
 		);
 	}
@@ -181,13 +188,13 @@ const ShellCenter = memo(function ShellCenter({
 		return (
 			<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
 				{isSessionRoute || settingsOpen ? null : <ShellTopbar />}
-				<ShellOutlet />
+				<ShellOutlet startingChat={startingChat} />
 			</CenterPanelShell>
 		);
 	}
 	return (
 		<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
-			<ShellOutlet />
+			<ShellOutlet startingChat={startingChat} />
 		</CenterPanelShell>
 	);
 });
@@ -429,9 +436,9 @@ function ShellLayout() {
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
 	const setProjectProvisioning = useUiStore((state) => state.setProjectProvisioning);
 	const openingOrchestrator = useUiStore((state) =>
-		state.projectCreationPending || Boolean(
+		state.projectCreationPending || (!routeParams.sessionId && Boolean(
 			routeParams.projectId && state.provisioningProjectIds.has(sessionUiKey(routeParams.projectId, routeParams.hostId)),
-		),
+		)),
 	);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const replacementErrorProjectId = Object.keys(orchestratorReplacementErrors)[0] ?? null;
@@ -1298,14 +1305,14 @@ function ShellLayout() {
 						remoteFailedHostIds={remoteFailedHostIds}
 					/>
 					<main className={cn("flex min-w-0 flex-1 flex-col overflow-x-hidden", !sidebarHasLayout && "sidebar-hidden")}>
-						<div className="relative min-h-0 flex-1 overflow-x-hidden" data-orchestrator-page>
+						<div className="relative min-h-0 flex-1 overflow-x-hidden">
 							{/* Board/session routes render inside the same inset box the welcome board and settings paint for themselves, so every screen sits within the app's outer boundary. */}
 							<ShellCenter
 								hideShellTopbar={hideShellTopbar}
 								isSessionRoute={Boolean(routeParams.sessionId)}
 								selfFramedCenterPanel={selfFramedCenterPanel}
+								startingOrchestrator={openingOrchestrator}
 							/>
-							{openingOrchestrator ? <OrchestratorLoadingScreen framed /> : null}
 						</div>
 						</main>
 					</div>

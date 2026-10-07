@@ -86,6 +86,12 @@ vi.mock("../lib/api-client", () => ({
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
+		app: {
+			onCloseShellTerminalShortcut: () => () => {},
+			onPreviousTabShortcut: () => () => {},
+			onNextTabShortcut: () => () => {},
+			setCloseShellTerminalShortcutEnabled: () => {},
+		},
 		cloud: {
 			getSession: vi.fn().mockResolvedValue(null),
 			onSessionChanged: vi.fn(() => () => {}),
@@ -158,7 +164,8 @@ describe("SessionsBoard", () => {
 		useUiStore.getState().setProjectProvisioning("p1", true);
 		try {
 			renderBoard("p1");
-			expect(screen.getByRole("status")).toHaveTextContent("Your project is being set up");
+			expect(screen.getByText("Your orchestrator is getting ready")).toHaveClass("chat-working-shimmer");
+			expect(screen.getByLabelText("Message the agent")).toBeInTheDocument();
 			expect(screen.queryByRole("button", { name: /new task/i })).not.toBeInTheDocument();
 		} finally {
 			useUiStore.getState().setProjectProvisioning("p1", false);

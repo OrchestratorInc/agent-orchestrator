@@ -51,6 +51,7 @@ import type { TerminalTarget } from "../../types/terminal";
 import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
 import { AgentSwitchProgressTrack } from "../AgentSwitchProgressTrack";
 import { ChatWorkspace } from "./ChatWorkspace";
+import { startingConversationSnapshot } from "./OrchestratorStartingChat";
 import { hasProviderPermissionMode } from "./TurnSettingsBar";
 
 export interface ConversationWorkState {
@@ -457,13 +458,15 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		switchPresentation?.lockAgentTerminal && !switchPresentation.allowSourceInput,
 	);
 	const renderShellFallback = Boolean(shellTarget && session);
+	const optimisticChat = session.kind === "orchestrator" && isLoading && !renderShellFallback;
 	const renderSnapshot =
 		snapshot ??
+		(optimisticChat ? startingConversationSnapshot(session.id, session.provider) : undefined) ??
 		(renderShellFallback
 			? unavailableConversationSnapshot(session)
 			: undefined);
-	// Project creation keeps one loading screen mounted across route and query
-	// changes. Release it only when this surface can show chat or its error.
+	// Keep the project marked as starting until its controller is ready, so
+	// sidebar actions cannot launch a duplicate orchestrator.
 	useEffect(() => {
 		if (session.kind !== "orchestrator" || session.provisionState === "provisioning") return;
 		if (isLoading && !renderShellFallback) return;
@@ -484,7 +487,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		),
 	});
 
-	if (isLoading && !renderShellFallback) {
+	if (isLoading && !renderShellFallback && !optimisticChat) {
 		return (
 			<Centered>
 				<Loader2 aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />
@@ -532,6 +535,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				assetBaseUrl={assetBaseUrl}
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
+				starting={optimisticChat}
 				agentInputDisabled={switchLocksChat || handoffDialogOpen}
 				newWorkDisabled={newWorkDisabled}
 				onLinkOpen={openLinkInBrowser}
