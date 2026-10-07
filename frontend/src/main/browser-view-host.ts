@@ -633,6 +633,7 @@ const POPUP_TARGET_SYNC_TIMEOUT_MS = 5_000;
 // Annotation submit must never feel laggy: capture is best-effort and bounded
 // so a slow/hung capturePage() can't delay the send past this ceiling.
 const ANNOTATION_SNAPSHOT_TIMEOUT_MS = 200;
+const MAX_SCREENSHOT_BYTES = 5 << 20;
 // A native screenshot may time out while the hidden WebContentsView remains
 // capturable through Electron. Keep this fallback bounded and cancelable.
 const SCREENSHOT_FALLBACK_TIMEOUT_MS = 5_000;
