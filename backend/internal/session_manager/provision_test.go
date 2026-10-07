@@ -498,7 +498,7 @@ func TestRunPostCreate(t *testing.T) {
 	source := t.TempDir()
 	command := `printf '%s|%s|%s' "$PROJECT_TOKEN" "$AO_SOURCE_TREE_PATH" "$AO_WORKTREE_PATH" > out.txt`
 	if runtime.GOOS == "windows" {
-		command = `if not defined AO_SOURCE_TREE_PATH exit 4 & if not defined AO_WORKTREE_PATH exit 5 & echo %PROJECT_TOKEN%> out.txt`
+		command = `echo %PROJECT_TOKEN%^|%AO_SOURCE_TREE_PATH%^|%AO_WORKTREE_PATH%> out.txt`
 	}
 	if err := runPostCreate(context.Background(), workspace, source, []string{command}, map[string]string{"PROJECT_TOKEN": "setup-value"}); err != nil {
 		t.Fatalf("runPostCreate: %v", err)
@@ -507,7 +507,7 @@ func TestRunPostCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post-create command did not run in workspace: %v", err)
 	}
-	if runtime.GOOS == "windows" && !strings.Contains(string(output), "setup-value") || runtime.GOOS != "windows" && !strings.Contains(string(output), "setup-value|"+source+"|"+workspace) {
+	if !strings.Contains(string(output), "setup-value|"+source+"|"+workspace) {
 		t.Fatalf("post-create environment = %q", output)
 	}
 	// A failing command surfaces an error.
