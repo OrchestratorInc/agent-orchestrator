@@ -38,11 +38,11 @@ function detail(): WorkspaceFileDetail {
 
 function annotation(): FileAnnotationModel {
 	return {
-		target: null,
-		draft: "",
+		targets: [],
 		status: "idle",
 		error: "",
 		begin: vi.fn(),
+		draftFor: () => "",
 		setDraft: vi.fn(),
 		cancel: vi.fn(),
 		submit: vi.fn(),

@@ -21,6 +21,7 @@ import { rememberedFileDisplayMode, useUiStore, type FileDisplayMode } from "../
 import { statusLabel, statusTone } from "../lib/workspace-file-status";
 import {
 	canSplitCompare,
+	cancelFileAnnotations,
 	FileAnnotationComposer,
 	PanelMessage,
 	ReviewDiffBody,
@@ -247,7 +248,7 @@ export function FileContentPane({
 	) : <PanelMessage>{t("files.loading")}</PanelMessage>;
 	const beginEditing = () => {
 		setMode("file");
-		annotation.cancel();
+		cancelFileAnnotations(annotation, (target) => target.surface !== "review" && target.path === detail.path);
 		setDraft(detail.content);
 		setSaveError("");
 		setEditing(true);
@@ -264,10 +265,10 @@ export function FileContentPane({
 			data-testid="unsaved-file-indicator"
 		/>
 	) : null;
-	const wholeFileAnnotationActive = annotation.target?.surface !== "review"
-		&& annotation.target?.path === detail.path
-		&& annotation.target.side === "file"
-		&& annotation.target.line == null;
+	const wholeFileAnnotationTarget = annotation.targets.find((target) => target.surface !== "review"
+		&& target.path === detail.path
+		&& target.side === "file"
+		&& target.line == null);
 	const compactModeButton = (mode: FileViewMode, label: string, icon: React.ReactNode) => (
 		<Tooltip key={mode}>
 			<TooltipTrigger asChild>
@@ -358,7 +359,7 @@ export function FileContentPane({
 	const toolbarNode = (
 		<>
 			{compactTabs}
-			{wholeFileAnnotationActive ? <FileAnnotationComposer annotation={annotation} /> : null}
+			{wholeFileAnnotationTarget ? <FileAnnotationComposer annotation={annotation} target={wholeFileAnnotationTarget} /> : null}
 		</>
 	);
 
