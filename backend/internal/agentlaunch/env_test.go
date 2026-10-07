@@ -118,3 +118,46 @@ func TestConfiguredPATHWindowsUsesExactProtectedSpelling(t *testing.T) {
 		t.Fatalf("case-insensitive configured PATH = %q, want project", got)
 	}
 }
+
+func TestProcessEnvForLaunchBinaryAddsNodeForNPMLauncher(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("npm env-node launcher is Unix-specific")
+	}
+	home := t.TempDir()
+	nodeDir := filepath.Join(home, ".nvm", "versions", "node", "v22.11.0", "bin")
+	if err := os.MkdirAll(nodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nodeDir, "node"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(home, "npm-global", "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	daemonPATH := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", daemonPATH)
+	t.Setenv("AO_TEST_KEEP", "kept")
+
+	env := ProcessEnvForLaunchBinary(context.Background(), launcher)
+
+	var paths []string
+	kept := false
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, "PATH="); ok {
+			paths = append(paths, value)
+		}
+		kept = kept || entry == "AO_TEST_KEEP=kept"
+	}
+	want := strings.Join([]string{filepath.Dir(launcher), nodeDir, daemonPATH}, string(os.PathListSeparator))
+	if len(paths) != 1 || paths[0] != want {
+		t.Fatalf("PATH entries = %q, want exactly %q", paths, want)
+	}
+	if !kept {
+		t.Fatal("process environment was not preserved")
+	}
+}
