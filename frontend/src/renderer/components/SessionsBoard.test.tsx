@@ -38,6 +38,8 @@ const {
 	boardActionsInPanelMock: vi.fn(() => false),
 }));
 
+vi.mock("./ShellTopbar", () => ({ ShellTopbar: () => null }));
+
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
 }));
@@ -164,9 +166,9 @@ describe("SessionsBoard", () => {
 		useUiStore.getState().setProjectProvisioning("p1", true);
 		try {
 			renderBoard("p1");
-			expect(screen.getByText("Your orchestrator is getting ready")).toHaveClass("chat-working-shimmer");
+			expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
 			expect(screen.getByLabelText("Message the agent")).toBeInTheDocument();
-			expect(screen.queryByRole("button", { name: /new task/i })).not.toBeInTheDocument();
+			expect(screen.getByTestId("session-workspace-topbar")).toBeInTheDocument();
 		} finally {
 			useUiStore.getState().setProjectProvisioning("p1", false);
 		}

@@ -324,7 +324,7 @@
 	--diffs-dark-bg: var(--color-bg-primary);
 	--diffs-light: var(--color-text-terminal);
 	--diffs-dark: var(--color-text-terminal);
-	--diffs-bg-context-override: color-mix(in srgb, var(--color-bg-primary) 92%, var(--foreground) 8%);
+	--diffs-bg-context-override: color-mix(in srgb, var(--color-bg-primary) 92%, var(--color-text-primary) 12%);
 	--diffs-bg-context-gutter-override: color-mix(in srgb, var(--color-bg-primary) 84%, var(--foreground) 16%);
 	--diffs-bg-separator-override: var(--surface);
 	background: var(--color-bg-primary);
@@ -2753,6 +2753,45 @@ html.sidebar-reordering * {
 	border-radius: var(--radius-chat-composer);
 	background: var(--composer-bg);
 	box-shadow: none;
+}
+
+/* Motion Skeleton Shimmer pattern: a soft gradient sweeps across the surface. */
+.chat-composer-startup-shimmer {
+	position: absolute;
+	inset: 0;
+	z-index: 20;
+	overflow: hidden;
+	border-radius: inherit;
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 300ms ease-out;
+}
+
+.chat-composer-startup-shimmer::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(90deg, color-mix(in srgb, var(--color-text-primary) 2%, transparent) 25%, color-mix(in srgb, var(--color-text-primary) 6%, transparent) 50%, color-mix(in srgb, var(--color-text-primary) 2%, transparent) 75%);
+	background-size: 200% 100%;
+	animation: chat-composer-starting 1.5s ease-in-out infinite paused;
+}
+
+.cursor-chat-composer[data-starting] > .chat-composer-startup-shimmer {
+	opacity: 1;
+}
+
+.cursor-chat-composer[data-starting] > .chat-composer-startup-shimmer::after {
+	animation-play-state: running;
+}
+
+@keyframes chat-composer-starting {
+	from { background-position: -200% 0; }
+	to { background-position: 200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.cursor-chat-composer[data-starting] > .chat-composer-startup-shimmer::after { animation: none; }
+	.chat-composer-startup-shimmer { transition: none; }
 }
 
 .cursor-chat-composer[data-attached-top] {

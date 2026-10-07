@@ -231,6 +231,20 @@ beforeEach(() => {
 	useUiStore.setState({ inspectorSessions: {}, settingsModal: null, newTaskRequest: null });
 });
 
+describe("optimistic orchestrator topbar", () => {
+	it("uses the actual orchestrator actions before a session exists", () => {
+		useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false, isSuccess: true });
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider><ShellTopbar embedded startingOrchestrator /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByRole("button", { name: "New task" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Open Kanban" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
+	});
+});
+
 describe("ShellTopbar route identity", () => {
 	it("identifies the Automations route instead of presenting it as the board", () => {
 		locationMock.pathname = "/automations";

@@ -1,3 +1,5 @@
+import type { SessionProvisionStep } from "../../types/workspace";
+import { ShellTopbar } from "../ShellTopbar";
 import type { ConversationSnapshot } from "../../types/conversation";
 import { ChatWorkspace } from "./ChatWorkspace";
 
@@ -13,6 +15,18 @@ export function startingConversationSnapshot(sessionId: string, harness: Convers
 const pendingSnapshot = startingConversationSnapshot("pending-orchestrator", "claude-code");
 
 /** The normal chat surface, shown before project/session creation returns. */
-export function OrchestratorStartingChat() {
-	return <ChatWorkspace snapshot={pendingSnapshot} sessionRole="orchestrator" starting newWorkDisabled />;
+export function OrchestratorStartingChat({ steps }: { steps?: readonly SessionProvisionStep[] }) {
+	return <ChatWorkspace
+		snapshot={pendingSnapshot}
+		sessionRole="orchestrator"
+		starting
+		startingSteps={steps}
+		newWorkDisabled
+		inlineHeader
+		headerActions={
+			<div className="session-topbar-session-chrome flex shrink-0 items-center" data-compact-session-chrome="false">
+				<ShellTopbar embedded startingOrchestrator />
+			</div>
+		}
+	/>;
 }

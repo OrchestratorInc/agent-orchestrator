@@ -97,8 +97,8 @@ function ShellOutlet({ startingChat }: { startingChat: ReactNode }) {
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	return (
 		<>
-			<div className={cn("flex min-h-0 flex-1 flex-col", settingsOpen && "hidden")}>
-				<div className={startingChat ? "hidden" : "contents"}><Outlet /></div>
+			<div className={cn("relative flex min-h-0 flex-1 flex-col", settingsOpen && "hidden")}>
+				<div className={startingChat ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingChat ? true : undefined}><Outlet /></div>
 				{startingChat}
 			</div>
 			<SettingsPane />
@@ -159,22 +159,24 @@ const ShellCenter = memo(function ShellCenter({
 	isSessionRoute,
 	selfFramedCenterPanel,
 	startingOrchestrator,
+	startingSteps,
 }: {
 	hideShellTopbar: boolean;
 	isSessionRoute: boolean;
 	selfFramedCenterPanel: boolean;
 	startingOrchestrator: boolean;
+	startingSteps?: WorkspaceSession["provisionSteps"];
 }) {
-	const panelClassName = isSessionRoute ? "center-panel-shell--session" : undefined;
+	const panelClassName = isSessionRoute || startingOrchestrator ? "center-panel-shell--session" : undefined;
 	// Linux retains an outer drag strip. macOS uses the shared header itself;
 	// an extra strip there would displace session tabs from the native controls.
 	// Windows already owns a separate WindowTitlebar.
-	const draggableSessionFrame = isSessionRoute && isLinux;
+	const draggableSessionFrame = (isSessionRoute || startingOrchestrator) && isLinux;
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
-	const startingChat = startingOrchestrator ? <OrchestratorStartingChat /> : null;
+	const startingChat = startingOrchestrator ? <OrchestratorStartingChat steps={startingSteps} /> : null;
 	// Settings is a self-framed route, so its starting chat gets its own panel.
 	const selfFramedOutlet = <>
-		<div className={startingOrchestrator ? "hidden" : "contents"}><Outlet /></div>
+		<div className={startingOrchestrator ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingOrchestrator || undefined}><Outlet /></div>
 		{startingChat ? <CenterPanelShell>{startingChat}</CenterPanelShell> : null}
 	</>;
 	if (hideShellTopbar) {
@@ -187,7 +189,7 @@ const ShellCenter = memo(function ShellCenter({
 	if (framedAppTopbar) {
 		return (
 			<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
-				{isSessionRoute || settingsOpen ? null : <ShellTopbar />}
+				{isSessionRoute || startingOrchestrator || settingsOpen ? null : <ShellTopbar />}
 				<ShellOutlet startingChat={startingChat} />
 			</CenterPanelShell>
 		);
@@ -436,10 +438,14 @@ function ShellLayout() {
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
 	const setProjectProvisioning = useUiStore((state) => state.setProjectProvisioning);
 	const openingOrchestrator = useUiStore((state) =>
-		state.projectCreationPending || (!routeParams.sessionId && Boolean(
+		state.projectCreationPending || Boolean(
 			routeParams.projectId && state.provisioningProjectIds.has(sessionUiKey(routeParams.projectId, routeParams.hostId)),
-		)),
+		),
 	);
+	const startingSteps = openingOrchestrator
+		? workspaces.find((workspace) => workspace.id === routeParams.projectId)?.sessions
+			.find((session) => session.kind === "orchestrator")?.provisionSteps
+		: undefined;
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const replacementErrorProjectId = Object.keys(orchestratorReplacementErrors)[0] ?? null;
 	const isStartupLoading =
@@ -1254,7 +1260,7 @@ function ShellLayout() {
             macOS/Linux. */}
 				<WindowTitlebar />
 				{/* App routes render their topbar inside the framed panel, matching the board chrome across platforms while leaving OS titlebars native. */}
-				{!framedAppTopbar && !hideShellTopbar && !routeParams.sessionId && !settingsOpen ? <ShellTopbar /> : null}
+				{!framedAppTopbar && !hideShellTopbar && !routeParams.sessionId && !openingOrchestrator && !settingsOpen ? <ShellTopbar /> : null}
 				{/* Controlled by the ui-store so TitlebarNav / Topbar toggles (which
 			    call the store directly) stay in sync. Direct dragging scopes its
 			    width override to the sidebar's layout consumers. */}
@@ -1312,6 +1318,7 @@ function ShellLayout() {
 								isSessionRoute={Boolean(routeParams.sessionId)}
 								selfFramedCenterPanel={selfFramedCenterPanel}
 								startingOrchestrator={openingOrchestrator}
+								startingSteps={startingSteps}
 							/>
 						</div>
 						</main>

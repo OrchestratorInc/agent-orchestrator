@@ -470,8 +470,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	useEffect(() => {
 		if (session.kind !== "orchestrator" || session.provisionState === "provisioning") return;
 		if (isLoading && !renderShellFallback) return;
+		if (session.provisionState !== "failed" && !targetChatControllerReady && !renderShellFallback && !error && !unavailable) return;
 		useUiStore.getState().setProjectProvisioning(session.workspaceId, false, hostId);
-	}, [hostId, isLoading, renderShellFallback, session.kind, session.provisionState, session.workspaceId]);
+	}, [error, hostId, isLoading, renderShellFallback, session.kind, session.provisionState, session.workspaceId, targetChatControllerReady, unavailable]);
 	const visibilityPresentationKind = agentSwitchVisibilityPresentationKind(shownSwitchPresentation);
 	useAgentSwitchPresentationVisibility({
 		localRouteKey: `session/${uiSessionId}`,
@@ -587,6 +588,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}
+				settingsReady={!optimisticChat && (targetChatControllerReady || agentResuming) && (!can(renderSnapshot, "config_options") || configOptions.loaded)}
 				models={models}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
 				onRememberPermissions={can(renderSnapshot, "config_options") && !configOptions.loaded
