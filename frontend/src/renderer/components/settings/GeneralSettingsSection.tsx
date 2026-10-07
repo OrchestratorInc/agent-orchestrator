@@ -11,7 +11,9 @@ import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
+import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
+import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
 import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface } from "../../hooks/useSettings";
 import type { SessionMode } from "../../types/workspace";
@@ -209,6 +211,7 @@ export function GeneralSettingsSection({
 						{t("settings.language.saveFailed")}
 					</p>
 				) : null}
+				<ZoomRow />
 			</SettingsSection>
 
 			{/* Sessions */}
@@ -256,6 +259,62 @@ export function GeneralSettingsSection({
 				{developerMode && <DiagnosticsRow />}
 			</SettingsSection>
 		</>
+	);
+}
+
+/**
+ * Window zoom persists per profile and is otherwise invisible. At a fractional
+ * zoom (Zoom In steps by 1.2^0.5) on a 1x display every glyph is resampled, so
+ * text everywhere, Settings included, looks soft. Show the current zoom and a
+ * reset so a stuck zoom is visible and recoverable where the softness is seen.
+ */
+function ZoomRow() {
+	const { t } = useTranslation();
+	const [zoomFactor, setZoomFactor] = useState(1);
+	useEffect(() => {
+		let live = true;
+		let version = 0;
+		const off = aoBridge.window.onZoomFactor((value) => {
+			version += 1;
+			setZoomFactor(value);
+		});
+		// Native menu zoom roles do not emit window:zoom, but Chromium resizes
+		// the CSS viewport on every zoom change.
+		const refresh = () => {
+			const requestVersion = ++version;
+			void aoBridge.window.getZoomFactor().then((value) => {
+				if (live && version === requestVersion) setZoomFactor(value);
+			});
+		};
+		refresh();
+		window.addEventListener("resize", refresh);
+		return () => {
+			live = false;
+			off();
+			window.removeEventListener("resize", refresh);
+		};
+	}, []);
+	const percent = Math.round(zoomFactor * 100);
+	const zoomed = percent !== 100;
+	return (
+		<SettingsRow
+			label={t("settings.zoom")}
+			description={zoomed ? t("settings.zoom.softTextHint") : undefined}
+		>
+			<div className="flex shrink-0 items-center gap-2">
+				<span className="text-sm tabular-nums text-settings-muted">{t("settings.zoom.value", { percent })}</span>
+				{zoomed ? (
+					<Button
+						type="button"
+						size="sm"
+						variant="secondary"
+						onClick={() => void aoBridge.window.resetZoom()}
+					>
+						{t("settings.zoom.reset")}
+					</Button>
+				) : null}
+			</div>
+		</SettingsRow>
 	);
 }
 
