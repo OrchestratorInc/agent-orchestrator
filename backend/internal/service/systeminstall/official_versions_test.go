@@ -2,6 +2,8 @@ package systeminstall
 
 import (
 	"context"
+	"net/http"
+	"slices"
 	"sync/atomic"
 	"testing"
 )
@@ -168,6 +170,53 @@ func TestUpdateAdvisoryComparesBuildSuffixedOfficialReleases(t *testing.T) {
 			}
 			if advisory.Status != tt.wantStatus || advisory.Reason != tt.wantReason || advisory.Source != officialReleaseSource {
 				t.Fatalf("advisory = %+v", advisory)
+			}
+		})
+	}
+}
+
+func TestOfficialGitHubVersionReadsReleaseRedirect(t *testing.T) {
+	var requests []string
+	client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests = append(requests, request.Method+" "+request.URL.String())
+		response := managerHTTPResponse(http.StatusFound, "")
+		response.Header.Set("Location", "https://github.com/anomalyco/opencode/releases/tag/v1.18.35")
+		return response, nil
+	})}
+	got, err := officialReleaseVersionWith(client, "darwin", "arm64")(context.Background(), TargetOpencode)
+	if err != nil || got != "1.18.35" {
+		t.Fatalf("version=%q err=%v", got, err)
+	}
+	if want := []string{"HEAD https://github.com/anomalyco/opencode/releases/latest"}; !slices.Equal(requests, want) {
+		t.Fatalf("requests = %v, want %v", requests, want)
+	}
+}
+
+func TestOfficialGitHubVersionFallsBackToAPIWithoutReleaseRedirect(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		redirect func() *http.Response
+	}{
+		{name: "no releases", redirect: func() *http.Response {
+			response := managerHTTPResponse(http.StatusFound, "")
+			response.Header.Set("Location", "https://github.com/aaif-goose/goose/releases")
+			return response
+		}},
+		{name: "blocked", redirect: func() *http.Response { return managerHTTPResponse(http.StatusTooManyRequests, "") }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Host == "github.com" {
+					return tt.redirect(), nil
+				}
+				if request.URL.String() != "https://api.github.com/repos/aaif-goose/goose/releases/latest" {
+					t.Fatalf("URL = %s", request.URL)
+				}
+				return managerHTTPResponse(http.StatusOK, `{"tag_name":"v1.9.0"}`), nil
+			})}
+			got, err := officialReleaseVersionWith(client, "darwin", "arm64")(context.Background(), TargetGoose)
+			if err != nil || got != "1.9.0" {
+				t.Fatalf("version=%q err=%v", got, err)
 			}
 		})
 	}
