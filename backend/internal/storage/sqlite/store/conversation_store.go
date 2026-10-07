@@ -1065,11 +1065,20 @@ func (s *Store) appendUserMessage(
 		}); err != nil {
 			return err
 		}
+		interactionAt := msg.InteractionAt
+		if interactionAt.IsZero() {
+			interactionAt = now
+		}
+		if msg.SenderSessionID != "" {
+			if err := recordSessionInteraction(ctx, q, session, msg.SenderSessionID, interactionAt); err != nil {
+				return err
+			}
+		}
 		if msg.Origin == domain.MessageOriginHuman || msg.AuthoredByUser {
 			if _, err := q.RecordSessionHumanMessage(ctx, gen.RecordSessionHumanMessageParams{
 				ID:                 session,
 				LatestUserPrompt:   msg.Text,
-				LatestUserPromptAt: timeToNullTime(now),
+				LatestUserPromptAt: timeToNullTime(interactionAt),
 			}); err != nil {
 				return fmt.Errorf("record latest human message: %w", err)
 			}
@@ -2509,6 +2518,9 @@ func (s *Store) UpsertActivity(
 		})
 		if seqErr != nil {
 			return fmt.Errorf("allocate sequence: %w", seqErr)
+		}
+		if err := recordSteerInteraction(ctx, q, conversationID, activity, now); err != nil {
+			return err
 		}
 		return q.InsertConversationActivity(ctx, gen.InsertConversationActivityParams{
 			ID:             activity.ID,

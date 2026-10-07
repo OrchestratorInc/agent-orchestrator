@@ -52,7 +52,7 @@ import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { useShellMaybe } from "../lib/shell-context";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { ProjectBoardActions } from "./ProjectBoardActions";
-import { usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
+import { useDiagnosticsEnabled, usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
 import { AppMemoryIndicator, toSessionFacts, useHasAppMemory } from "./SessionMemoryPanel";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import {
@@ -165,15 +165,15 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		? connected && remoteProjectQuery.isSuccess && Boolean(workspace) && liveSessions.length === 0
 		: presentation.showProjectEmpty;
 	// Memory and CPU monitoring is a developer tool: the light, the card chips
-	// and the window behind them only exist in Developer mode.
+	// and the window behind them only exist with Diagnostics on in Developer mode.
 	// They read this machine, so another machine's board shows none of them.
-	const developerMode = useUiStore((state) => state.developerMode);
-	const hasMemory = useHasAppMemory(!hostId) && developerMode && !hostId;
+	const diagnostics = useDiagnosticsEnabled();
+	const hasMemory = useHasAppMemory(!hostId) && diagnostics && !hostId;
 	// Per-session readings feed each card's resource chip. Chips are grey
 	// unless the machine is tight and the card is part of the fix (idle, or
 	// the single largest).
 	const sessionMemory = useSessionMemory(projectId, !hostId).data;
-	const memoryBySession = developerMode ? sessionMemory : undefined;
+	const memoryBySession = diagnostics ? sessionMemory : undefined;
 	const pressure = usePressureState(!hostId);
 	const chipToneOf = useMemo(() => {
 		const now = Date.now();
@@ -373,7 +373,7 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
-	const developerMode = useUiStore((state) => state.developerMode);
+	const diagnostics = useDiagnosticsEnabled();
 	const restoreSessionById = useRestoreSession();
 	const [restoringSessionId, setRestoringSessionId] = useState<string | undefined>();
 	const [restoreErrors, setRestoreErrors] = useState<Record<string, string>>({});
@@ -439,7 +439,7 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 					archiveAria: t("shell.archiveSessionsAria", { count: sessions.length }),
 					archivedSessions: t("shell.archivedSessions"),
 				}}
-				trailing={developerMode && !hostId ? <AppMemoryIndicator /> : undefined}
+				trailing={diagnostics && !hostId ? <AppMemoryIndicator /> : undefined}
 				renderSessionCard={(session) => (
 					<ArchivedSessionCardAdapter
 						isRestoreDisabled={!connected || restoringSessionId !== undefined}

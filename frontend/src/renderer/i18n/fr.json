@@ -2017,6 +2017,7 @@
 	"settings.browserImport.warning.cookie-write-failed": "AO n’a pas pu écrire {{count}} cookies dans le nouveau profil.",
 	"settings.help": "Help",
 	"settings.diagnostics": "Diagnostic",
+	"settings.diagnosticsToggleHint": "Afficher l’utilisation de la mémoire et du processeur sur les cartes de session et le tableau, ainsi que la page Diagnostic.",
 	"settings.harness": "Harness",
 	"settings.harness.thisComputer": "Cet ordinateur",
 	"settings.harness.remoteBrowserAuthNote": "La connexion dans le navigateur peut nécessiter un navigateur sur l’hôte ou la redirection du port de rappel.",

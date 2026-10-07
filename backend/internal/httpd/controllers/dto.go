@@ -365,6 +365,8 @@ type SessionView struct {
 	// LastUserMessageAt is the latest real user-authored task direction time.
 	// Lifecycle and internal automation updates do not advance it.
 	LastUserMessageAt *time.Time `json:"lastUserMessageAt,omitempty"`
+	// LastInteractionAt includes human direction and same-project orchestrator messages.
+	LastInteractionAt *time.Time `json:"lastInteractionAt,omitempty"`
 	// LastEventAt is when something a person would notice last happened: an
 	// activity-state transition, a PR lifecycle or CI change, or a review
 	// submission. Derived at read time; see domain.Session.LastEventAt.
@@ -1021,7 +1023,9 @@ type CleanupSessionsResponse struct {
 
 // SendSessionMessageRequest is the body of POST /api/v1/sessions/{sessionId}/send.
 type SendSessionMessageRequest struct {
-	Message string `json:"message" minLength:"1" maxLength:"4096"`
+	// SenderSessionID is cooperative loopback attribution, not authentication.
+	SenderSessionID string `json:"senderSessionId,omitempty"`
+	Message         string `json:"message" minLength:"1" maxLength:"4096"`
 	// UserAuthored marks content written directly by the user but delivered via
 	// AO's automation relay, such as inline document feedback.
 	UserAuthored bool `json:"userAuthored,omitempty"`

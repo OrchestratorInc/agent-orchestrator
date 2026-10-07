@@ -2127,7 +2127,7 @@ func (s *Service) persistPickedModel(id domain.SessionID, previous, next domain.
 // Delivery follows the same rules as any other send: a message arriving mid-turn
 // queues instead of racing the running turn.
 func (s *Service) RelayChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
-	return s.relayChatTurn(ctx, id, text, "", false)
+	return s.relayChatTurn(ctx, id, text, "", ports.MessageDeliveryOptions{})
 }
 
 // RelayChatTurnWithID is RelayChatTurn with a durable caller-supplied
@@ -2139,35 +2139,40 @@ func (s *Service) RelayChatTurnWithID(
 	id domain.SessionID,
 	text, clientMessageID string,
 ) (string, error) {
-	return s.relayChatTurn(ctx, id, text, clientMessageID, false)
+	return s.relayChatTurn(ctx, id, text, clientMessageID, ports.MessageDeliveryOptions{})
 }
 
 // RelayUserAuthoredChatTurn delivers user-written content through AO's relay
 // path without changing its automation delivery attribution.
 func (s *Service) RelayUserAuthoredChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
-	return s.relayChatTurn(ctx, id, text, "", true)
+	return s.relayChatTurn(ctx, id, text, "", ports.MessageDeliveryOptions{AuthoredByUser: true})
 }
 
 func (s *Service) relayChatTurn(
 	ctx context.Context,
 	id domain.SessionID,
 	text, clientMessageID string,
-	authoredByUser bool,
+	options ports.MessageDeliveryOptions,
 ) (string, error) {
 	controller, err := s.Controller(id)
 	if err != nil {
 		return "", err
 	}
-	turn, err := controller.Send(ctx, ports.ChatUserMessage{
-		Text:            text,
-		ClientMessageID: clientMessageID,
-		Origin:          domain.MessageOriginAutomation,
-		AuthoredByUser:  authoredByUser,
+	msg := s.resolveSteerSender(ctx, ports.ChatUserMessage{
+		Text: text, ClientMessageID: clientMessageID,
+		SenderSessionID: options.SenderSessionID, InteractionAt: options.InteractionAt,
+		Origin: domain.MessageOriginAutomation, AuthoredByUser: options.AuthoredByUser,
 	})
+	turn, err := controller.Send(ctx, msg)
 	if err != nil {
 		return "", err
 	}
 	return turn.ID, nil
+}
+
+// RelaySessionChatTurn preserves cooperative sender identity and automation origin.
+func (s *Service) RelaySessionChatTurn(ctx context.Context, id domain.SessionID, text, clientMessageID string, options ports.MessageDeliveryOptions) (string, error) {
+	return s.relayChatTurn(ctx, id, text, clientMessageID, options)
 }
 
 // StopChat releases a session's controller.

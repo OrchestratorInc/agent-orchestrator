@@ -561,7 +561,6 @@ type chatLauncher struct{ svc *chatsvc.Service }
 var _ sessionmanager.ChatLauncher = chatLauncher{}
 var _ interface {
 	RunBackgroundTask(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
-	RelayUserAuthoredChatTurn(context.Context, domain.SessionID, string) (string, error)
 	ArmChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	PrepareChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	AbortChatHandoff(domain.SessionID)
@@ -644,20 +643,8 @@ func (c chatLauncher) StartChatTurn(ctx context.Context, id domain.SessionID, te
 	return c.svc.StartChatTurn(ctx, id, text)
 }
 
-func (c chatLauncher) RelayChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
-	return c.svc.RelayChatTurn(ctx, id, text)
-}
-
-func (c chatLauncher) RelayUserAuthoredChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
-	return c.svc.RelayUserAuthoredChatTurn(ctx, id, text)
-}
-
-func (c chatLauncher) RelayChatTurnWithID(
-	ctx context.Context,
-	id domain.SessionID,
-	text, clientMessageID string,
-) (string, error) {
-	return c.svc.RelayChatTurnWithID(ctx, id, text, clientMessageID)
+func (c chatLauncher) RelaySessionChatTurn(ctx context.Context, id domain.SessionID, text, clientMessageID string, options ports.MessageDeliveryOptions) (string, error) {
+	return c.svc.RelaySessionChatTurn(ctx, id, text, clientMessageID, options)
 }
 
 func (c chatLauncher) QueueChatPrompt(ctx context.Context, id domain.SessionID, text string) (string, error) {

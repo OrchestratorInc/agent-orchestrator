@@ -2065,7 +2065,7 @@ function MergedReviewsSection({
 		}
 		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/send", {
 			params: { path: { sessionId: session.id } },
-			body: { message },
+			body: { message, userAuthored: true },
 		});
 		if (error) throw new Error(apiErrorMessage(error, fallbackError));
 	};

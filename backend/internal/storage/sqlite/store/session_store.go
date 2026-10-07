@@ -809,6 +809,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 			Prompt:                           row.Prompt,
 			LatestUserPrompt:                 row.LatestUserPrompt,
 			LatestUserPromptAt:               nullTimeToTime(row.LatestUserPromptAt),
+			LatestInteractionAt:              nullTimeToTime(row.LatestInteractionAt),
 			LatestAssistantUpdate:            row.LatestAssistantUpdate,
 			LatestAssistantUpdateAt:          nullTimeToTime(row.LatestAssistantUpdateAt),
 			ConversationCheckpointState:      row.ConversationCheckpointState,

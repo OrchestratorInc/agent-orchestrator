@@ -186,6 +186,8 @@ export type WorkspaceSession = {
 	updatedAt: string;
 	/** ISO timestamp of the latest real user-authored message, when known. */
 	lastUserMessageAt?: string;
+	/** ISO timestamp of human direction or deliberate same-project orchestrator direction. */
+	lastInteractionAt?: string;
 	isPinned?: boolean;
 	pinnedAt?: string;
 	/** Raw agent lifecycle activity from the daemon. */
@@ -347,9 +349,14 @@ function sessionRecentlyMessagedNewer(a: WorkspaceSession, b: WorkspaceSession):
 	return a.id > b.id;
 }
 
-/** The sidebar's message-age label reads lastUserMessageAt, so the sort must too. */
+/** The sidebar's direction-age label and sort share the same timestamp. */
 function sessionLastMessageTimestamp(session: WorkspaceSession): number {
-	return validTimestamp(session.lastUserMessageAt) ?? validTimestamp(session.createdAt) ?? 0;
+	return (
+		validTimestamp(session.lastInteractionAt) ??
+		validTimestamp(session.lastUserMessageAt) ??
+		validTimestamp(session.createdAt) ??
+		0
+	);
 }
 
 function timestamp(value?: string): number {

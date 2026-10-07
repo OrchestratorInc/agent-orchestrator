@@ -1189,6 +1189,7 @@
 	"settings.browserImport.warning.cookie-write-failed": "AO could not write {{count}} cookies to the new profile.",
 	"settings.help": "Help",
 	"settings.diagnostics": "Diagnostics",
+	"settings.diagnosticsToggleHint": "Show memory and CPU usage on session cards and the board, and the Diagnostics page.",
 	"settings.harness": "Harness",
 	"settings.harness.thisComputer": "This computer",
 	"settings.harness.remoteBrowserAuthNote": "Browser sign-in may require a browser on the host or callback-port forwarding.",

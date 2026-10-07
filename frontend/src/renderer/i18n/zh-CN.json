@@ -2054,6 +2054,7 @@
 	"settings.browserImport.warning.cookie-write-failed": "AO 无法将 {{count}} 个 Cookie 写入新配置文件。",
 	"settings.help": "帮助",
 	"settings.diagnostics": "诊断",
+	"settings.diagnosticsToggleHint": "在会话卡片和看板上显示内存和 CPU 使用情况，并显示诊断页面。",
 	"settings.harness": "Harness",
 	"settings.harness.thisComputer": "这台电脑",
 	"settings.harness.remoteBrowserAuthNote": "浏览器登录可能需要在主机上打开浏览器，或转发回调端口。",

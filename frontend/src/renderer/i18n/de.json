@@ -1988,6 +1988,7 @@
 	"settings.browserImport.warning.cookie-write-failed": "AO konnte {{count}} Cookies nicht in das neue Profil schreiben.",
 	"settings.help": "Help",
 	"settings.diagnostics": "Diagnose",
+	"settings.diagnosticsToggleHint": "Speicher- und CPU-Auslastung auf Sitzungskarten und im Board sowie die Diagnoseseite anzeigen.",
 	"settings.harness": "Harness",
 	"settings.harness.thisComputer": "Dieser Computer",
 	"settings.harness.remoteBrowserAuthNote": "Für die Anmeldung im Browser ist möglicherweise ein Browser auf dem Host oder eine Weiterleitung des Callback-Ports erforderlich.",

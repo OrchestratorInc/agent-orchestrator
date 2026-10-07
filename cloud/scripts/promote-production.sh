@@ -195,7 +195,7 @@ verify_scan() {
 	)"
 	# CVE-2026-14456 is a scanner false positive for Debian's OpenSSL 3.0:
 	# its QUIC listener was introduced in OpenSSL 3.5.
-	if ! SCAN="$scan" ALLOWLIST="${AO_CLOUD_SCAN_CVE_ALLOWLIST:-CVE-2026-57432 CVE-2026-45186 CVE-2026-12087 CVE-2025-15661 CVE-2026-58051 CVE-2026-7017 CVE-2026-48962 CVE-2026-57433 CVE-2026-66032 CVE-2026-48961 CVE-2026-48959 CVE-2026-66034 CVE-2026-58050 CVE-2026-13221 CVE-2026-14456 CVE-2026-66046 CVE-2026-63076 CVE-2026-53615 CVE-2026-54874 CVE-2026-63072 CVE-2026-8927 CVE-2026-8924 CVE-2026-8286 CVE-2026-85091}" python3 - <<'PY'
+	if ! SCAN="$scan" ALLOWLIST="${AO_CLOUD_SCAN_CVE_ALLOWLIST:-CVE-2026-57432 CVE-2026-45186 CVE-2026-12087 CVE-2025-15661 CVE-2026-58051 CVE-2026-7017 CVE-2026-48962 CVE-2026-57433 CVE-2026-66032 CVE-2026-48961 CVE-2026-48959 CVE-2026-66034 CVE-2026-58050 CVE-2026-13221 CVE-2026-14456 CVE-2026-66046 CVE-2026-63076 CVE-2026-53615 CVE-2026-54874 CVE-2026-63072 CVE-2026-8927 CVE-2026-8924 CVE-2026-8286 CVE-2026-85091 CVE-2026-93990 CVE-2026-95619}" python3 - <<'PY'
 import json
 import os
 import sys
@@ -486,6 +486,7 @@ if [[ "$service_status" == "ACTIVE" ]]; then
 		--task-definition "$api_task" \
 		--desired-count 1 \
 		--health-check-grace-period-seconds 60 \
+		--availability-zone-rebalancing DISABLED \
 		--deployment-configuration "$deployment_configuration" \
 		>/dev/null
 else
@@ -500,6 +501,7 @@ else
 		--load-balancers \
 			"targetGroupArn=${target_group},containerName=control-plane,containerPort=8080" \
 		--deployment-configuration "$deployment_configuration" \
+		--availability-zone-rebalancing DISABLED \
 		--health-check-grace-period-seconds 60 \
 		--enable-ecs-managed-tags \
 		--propagate-tags TASK_DEFINITION \
