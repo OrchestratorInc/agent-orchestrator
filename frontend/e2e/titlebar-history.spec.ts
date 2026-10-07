@@ -42,6 +42,8 @@ for (const platform of ["MacIntel", "Linux x86_64"]) {
 						await expect(brand).toBeVisible();
 						await expect(back).toBeVisible();
 						await expect(forward).toBeVisible();
+						// History updates the URL before the session tab finishes mounting.
+						await expect(page.getByRole("tab").first()).toBeVisible();
 						await expect.poll(() => nav.evaluate((el) => {
 							const right = el.querySelectorAll("button")[2].getBoundingClientRect().right;
 							const brand = el.querySelector("[data-sidebar-brand]")!.getBoundingClientRect();
