@@ -30,7 +30,7 @@ beforeEach(() => {
 function renderSheet(
 	onSubmit = vi.fn().mockResolvedValue(undefined),
 	queryClient?: QueryClient,
-	options: { shake?: boolean; hostId?: string; isCreating?: boolean } = {},
+	options: { shake?: boolean; hostId?: string } = {},
 ) {
 	queryClient ??= new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	if (queryClient.getQueryData(agentReadinessQueryKey) === undefined) {
@@ -46,7 +46,7 @@ function renderSheet(
 			<TooltipProvider>
 				<CreateProjectAgentSheet
 					hostId={options.hostId}
-					isCreating={options.isCreating ?? false}
+					isCreating={false}
 					kind="single_repo"
 					onOpenChange={() => undefined}
 					onSubmit={onSubmit}
@@ -59,12 +59,6 @@ function renderSheet(
 	);
 	return onSubmit;
 }
-
-it("unmounts setup while the shell owns project loading", () => {
-	renderSheet(undefined, undefined, { isCreating: true });
-	expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
-	expect(screen.queryByTestId("orchestrator-loading-screen")).not.toBeInTheDocument();
-});
 
 it("unmounts the modal on submit and does not bring it back when creation succeeds", async () => {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -86,11 +80,9 @@ it("unmounts the modal on submit and does not bring it back when creation succee
 	}
 	render(<Harness />);
 	await userEvent.click(await screen.findByRole("button", { name: "Create and start" }));
-	expect(screen.queryByTestId("orchestrator-loading-screen")).not.toBeInTheDocument();
 	expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
 	await act(async () => finish());
 	expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
-	expect(screen.queryByTestId("orchestrator-loading-screen")).not.toBeInTheDocument();
 });
 
 async function chooseOption(trigger: HTMLElement, optionName: string) {

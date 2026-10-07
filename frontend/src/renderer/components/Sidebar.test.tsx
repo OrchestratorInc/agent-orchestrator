@@ -1359,28 +1359,16 @@ describe("Sidebar", () => {
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId", params: { projectId: "proj-1" } });
 	});
 
-	it("starts the orchestrator when clicking a project with no sessions", async () => {
-		const user = userEvent.setup();
-		spawnMock.mockResolvedValue("proj-1-orc");
-		renderSidebar({ workspaces: [{ ...workspace, sessions: [] }] });
-		await user.click(screen.getByText("Project One"));
+	it.each([false, true])("opens an empty project's orchestrator (existing: %s)", async (existing) => {
+		const orchestrator: WorkspaceSession = { ...session, id: "proj-1-orc", kind: "orchestrator", title: "Orchestrator" };
+		spawnMock.mockResolvedValue(orchestrator.id);
+		renderSidebar({ workspaces: [{ ...workspace, sessions: existing ? [orchestrator] : [] }] });
+		await userEvent.click(screen.getByText("Project One"));
 		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({
 			to: "/projects/$projectId/sessions/$sessionId",
-			params: { projectId: "proj-1", sessionId: "proj-1-orc" },
+			params: { projectId: "proj-1", sessionId: orchestrator.id },
 		}));
-		expect(spawnMock).toHaveBeenCalledWith("proj-1", "sidebar");
-	});
-
-	it("opens the existing orchestrator when a project has no worker sessions", async () => {
-		const user = userEvent.setup();
-		const orchestrator: WorkspaceSession = { ...session, id: "proj-1-orc", kind: "orchestrator", title: "Orchestrator" };
-		renderSidebar({ workspaces: [{ ...workspace, sessions: [orchestrator] }] });
-		await user.click(screen.getByText("Project One"));
-		expect(navigateMock).toHaveBeenCalledWith({
-			to: "/projects/$projectId/sessions/$sessionId",
-			params: { projectId: "proj-1", sessionId: "proj-1-orc" },
-		});
-		expect(spawnMock).not.toHaveBeenCalled();
+		expect(spawnMock).toHaveBeenCalledTimes(existing ? 0 : 1);
 	});
 
 	it("returns to the project board from an orchestrator session without collapsing", async () => {

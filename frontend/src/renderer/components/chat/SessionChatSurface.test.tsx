@@ -222,32 +222,25 @@ afterEach(() => {
 });
 
 describe("SessionChatSurface link routing", () => {
-	it("mounts orchestrator chat before the conversation loads and keeps it mounted on hydration", () => {
-		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		conversationState.snapshot = undefined;
-		conversationState.isLoading = true;
-		const orchestrator = { ...session, kind: "orchestrator" as const, provisionState: "provisioning" as const };
-		const view = render(<Wrapper client={queryClient}><SessionChatSurface session={orchestrator} /></Wrapper>);
-		const mounted = screen.getByText(`Mounted ${session.id}`);
-		expect(screen.queryByText("Loading conversation…")).not.toBeInTheDocument();
-		conversationState.snapshot = snapshotFor(session.id);
-		conversationState.isLoading = false;
-		view.rerender(<Wrapper client={queryClient}><SessionChatSurface session={{ ...orchestrator, provisionState: "ready" }} /></Wrapper>);
-		expect(screen.getByText(`Mounted ${session.id}`)).toBe(mounted);
-	});
-
-	it("keeps project loading through provisioning and conversation loading, then reveals chat", () => {
+	it("keeps orchestrator chat mounted until its conversation and provisioning are ready", () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const orchestrator = { ...session, kind: "orchestrator" as const, provisionState: "provisioning" as const };
 		useUiStore.getState().setProjectProvisioning(session.workspaceId, true);
-		conversationState.snapshot = snapshotFor(session.id);
-		const view = render(<Wrapper client={queryClient}><SessionChatSurface session={orchestrator} /></Wrapper>);
-		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(true);
+		conversationState.snapshot = undefined;
 		conversationState.isLoading = true;
-		view.rerender(<Wrapper client={queryClient}><SessionChatSurface session={{ ...orchestrator, provisionState: "ready" }} /></Wrapper>);
+		const tree = (provisionState: "provisioning" | "ready" = "provisioning") =>
+			<Wrapper client={queryClient}><SessionChatSurface session={{ ...orchestrator, provisionState }} /></Wrapper>;
+		const view = render(tree());
+		const mounted = screen.getByText(`Mounted ${session.id}`);
+		expect(screen.queryByText("Loading conversation…")).not.toBeInTheDocument();
+		view.rerender(tree("ready"));
 		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(true);
+		conversationState.snapshot = snapshotFor(session.id);
 		conversationState.isLoading = false;
-		view.rerender(<Wrapper client={queryClient}><SessionChatSurface session={{ ...orchestrator, provisionState: "ready" }} /></Wrapper>);
+		view.rerender(tree());
+		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(true);
+		view.rerender(tree("ready"));
+		expect(screen.getByText(`Mounted ${session.id}`)).toBe(mounted);
 		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(false);
 	});
 

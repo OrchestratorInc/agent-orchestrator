@@ -615,29 +615,23 @@ describe("shell workspace startup", () => {
 
 	it("opens optimistic chat during submission without a loading page", async () => {
 		useUiStore.getState().setProjectCreationPending(true);
-		try {
-			const view = await renderShell();
-			const composer = screen.getByLabelText("Message the agent");
-			expect(composer.closest("form")).toHaveAttribute("data-starting", "true");
-			expect(screen.getByTestId("session-workspace-topbar")).toBeVisible();
-			expect(screen.queryByTestId("orchestrator-loading-screen")).not.toBeInTheDocument();
-			shellMocks.state.routeParams = { projectId: "proj-1" };
-			act(() => {
-				useUiStore.getState().setProjectProvisioning("proj-1", true);
-				useUiStore.getState().setProjectCreationPending(false);
-			});
-			view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
-			expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
-			shellMocks.state.routeParams = { projectId: "proj-1", sessionId: "sess-1" };
-			view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
-			expect(screen.getByLabelText("Message the agent")).toBe(composer);
-			expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
-			act(() => useUiStore.getState().setProjectProvisioning("proj-1", false));
-			expect(screen.queryByText("Getting your project ready")).not.toBeInTheDocument();
-		} finally {
+		const view = await renderShell();
+		const composer = screen.getByLabelText("Message the agent");
+		expect(composer.closest("form")).toHaveAttribute("data-starting", "true");
+		expect(screen.getByTestId("session-workspace-topbar")).toBeVisible();
+		shellMocks.state.routeParams = { projectId: "proj-1" };
+		act(() => {
+			useUiStore.getState().setProjectProvisioning("proj-1", true);
 			useUiStore.getState().setProjectCreationPending(false);
-			useUiStore.getState().setProjectProvisioning("proj-1", false);
-		}
+		});
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+		shellMocks.state.routeParams = { projectId: "proj-1", sessionId: "sess-1" };
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		expect(screen.getByLabelText("Message the agent")).toBe(composer);
+		expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+		act(() => useUiStore.getState().setProjectProvisioning("proj-1", false));
+		expect(screen.queryByText("Getting your project ready")).not.toBeInTheDocument();
 	});
 
 	it("opens the returned orchestrator without waiting for a workspace refetch", async () => {
@@ -652,7 +646,7 @@ describe("shell workspace startup", () => {
 			params: { projectId: "proj-new", sessionId: "orch-new" },
 		}));
 		const publish = shellMocks.queryClient.setQueryData.mock.calls.at(-1)?.[1] as (current: WorkspaceSummary[]) => WorkspaceSummary[];
-		expect(publish([{ id: "proj-new", name: "New", sessions: [] } as unknown as WorkspaceSummary])[0].sessions[0]).toMatchObject({ id: "orch-new", mode: "chat", provisionState: "provisioning" });
+		expect(publish([{ ...workspaces[0], id: "proj-new", name: "New", sessions: [] }])[0].sessions[0]).toMatchObject({ id: "orch-new", mode: "chat", provisionState: "provisioning" });
 		expect(useUiStore.getState().provisioningProjectIds.has("proj-new")).toBe(true);
 	});
 

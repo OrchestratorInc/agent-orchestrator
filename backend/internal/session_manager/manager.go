@@ -988,8 +988,6 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// if it is unavailable for this harness or installation, fall back to TUI.
 	modeExplicitlyRequested := cfg.RequestedMode.Valid()
 	mode := m.resolveSessionMode(ctx, cfg.RequestedMode)
-	// New project coordinators prefer Chat; an explicit mode (including a
-	// replacement preserving TUI) still wins, and preflight can fall back.
 	if cfg.Kind == domain.KindOrchestrator && !modeExplicitlyRequested {
 		mode = domain.SessionModeChat
 	}
@@ -1806,8 +1804,7 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 		}
 		ws, err := m.workspace.Create(ctx, workspaceCfg)
 		if errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) && cfg.Kind == domain.KindOrchestrator && cfg.Branch == "" {
-			// Another data directory may own the canonical branch. Leave its
-			// worktree intact and let the adapter select an unused suffix.
+			// Leave the occupied worktree intact; the adapter selects an unused suffix.
 			workspaceCfg.FreshBranch = true
 			ws, err = m.workspace.Create(ctx, workspaceCfg)
 		}

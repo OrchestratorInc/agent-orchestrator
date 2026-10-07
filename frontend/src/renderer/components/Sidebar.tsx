@@ -731,21 +731,19 @@ export function Sidebar({
 		try {
 			const saved: unknown = JSON.parse(window.localStorage.getItem(projectOrderStorageKey) ?? "null");
 			if (Array.isArray(saved)) return [...new Set(saved.filter((id): id is string => typeof id === "string"))];
-		} catch { /* Keep the sidebar usable when storage is unavailable. */ }
+		} catch {}
 		return workspaces.map((workspace) => workspace.id);
 	});
 	useEffect(() => {
 		try {
 			window.localStorage.setItem(projectOrderStorageKey, JSON.stringify(projectOrder));
-		} catch { /* Ordering still works for this app session. */ }
+		} catch {}
 	}, [projectOrder]);
 	const orderedWorkspaces = useMemo(
 		() => applyOrder(workspaces, (workspace) => workspace.id, projectOrder, "start"),
 		[projectOrder, workspaces],
 	);
-	// New projects enter at the top once. Retain that order when a daemon
-	// refresh returns its alphabetical list, while preserving drag ordering.
-	// Preserve saved IDs while the initial workspace query is still empty.
+	// Keep saved IDs through the initial empty query and alphabetical refreshes.
 	const visibleProjectIds = orderedWorkspaces.map((workspace) => workspace.id);
 	const nextProjectOrder = [...visibleProjectIds, ...projectOrder.filter((id) => !visibleProjectIds.includes(id))];
 	if (nextProjectOrder.length !== projectOrder.length || nextProjectOrder.some((id, index) => id !== projectOrder[index])) {

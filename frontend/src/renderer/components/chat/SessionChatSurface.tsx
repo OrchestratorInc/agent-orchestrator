@@ -1,4 +1,3 @@
-import { useUiStore } from "../../stores/ui-store";
 /**
  * The central surface for a chat-mode session.
  *
@@ -50,6 +49,7 @@ import type { ConversationSnapshot } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
 import { AgentSwitchProgressTrack } from "../AgentSwitchProgressTrack";
+import { useUiStore } from "../../stores/ui-store";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { startingConversationSnapshot } from "./OrchestratorStartingChat";
 import { hasProviderPermissionMode } from "./TurnSettingsBar";
@@ -536,7 +536,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				assetBaseUrl={assetBaseUrl}
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
-				starting={optimisticChat}
 				agentInputDisabled={switchLocksChat || handoffDialogOpen}
 				newWorkDisabled={newWorkDisabled}
 				onLinkOpen={openLinkInBrowser}
@@ -736,21 +735,8 @@ function ChatAgentSwitchStatus({
 
 function unavailableConversationSnapshot(session: WorkspaceSession): ConversationSnapshot {
 	return {
-		conversationId: session.id,
-		sessionId: session.id,
-		harness: session.provider,
-		mode: "chat",
+		...startingConversationSnapshot(session.id, session.provider),
 		controller: { state: "stopped", error: "Conversation unavailable" },
-		latestSequence: 0,
-		oldestSequence: 0,
-		hasMoreBefore: false,
-		activeBranchId: "branch-root",
-		branchPoints: [],
-		settings: {},
-		mcpServers: [],
-		capabilities: [],
-		turns: [],
-		items: [],
 	};
 }
 

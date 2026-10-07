@@ -14,12 +14,10 @@ export function startingConversationSnapshot(sessionId: string, harness: Convers
 
 const pendingSnapshot = startingConversationSnapshot("pending-orchestrator", "claude-code");
 
-/** The normal chat surface, shown before project/session creation returns. */
 export function OrchestratorStartingChat({ steps }: { steps?: readonly SessionProvisionStep[] }) {
 	return <ChatWorkspace
 		snapshot={pendingSnapshot}
 		sessionRole="orchestrator"
-		starting
 		startingSteps={steps}
 		newWorkDisabled
 		inlineHeader

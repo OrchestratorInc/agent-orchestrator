@@ -1872,7 +1872,7 @@ describe("ChatWorkspace timeline", () => {
 		["setup", "Running your project setup"],
 		["agent", "Starting your orchestrator"],
 	] as const)("shows the actual %s setup step in the placeholder", (id, message) => {
-		render(<ChatWorkspace snapshot={chatFixtureEmpty} sessionRole="orchestrator" starting startingSteps={[{ id, status: "running" }]} />);
+		render(<ChatWorkspace snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} sessionRole="orchestrator" startingSteps={[{ id, status: "running" }]} />);
 		expect(screen.getByText(message)).toBeInTheDocument();
 	});
 

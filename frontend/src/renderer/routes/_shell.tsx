@@ -538,9 +538,7 @@ function ShellLayout() {
 				source,
 			});
 			const sessionId = spawnData.session.id;
-			// Keep the same loading surface until the conversation or terminal is ready.
-			// The response is already an addressable session. Publish it before
-			// opening Chat; a background list refresh must not gate navigation.
+			// Publish before navigating so Chat does not wait for a list refresh.
 			await queryClient.cancelQueries({ queryKey: workspaceQueryKey });
 			queryClient.setQueryData<WorkspaceSummary[]>(workspaceQueryKey, (current = []) =>
 				current.map((item) => item.id === workspace.id
@@ -588,8 +586,6 @@ function ShellLayout() {
 			updateWorkspaces((current) => [workspace, ...current.filter((item) => item.id !== workspace.id)]);
 			setOrchestratorStartupError(workspace.id, null);
 			setProjectProvisioning(workspace.id, true);
-			// Close setup immediately. A single loading surface covers the board
-			// and session routes until the orchestrator UI is ready.
 			await navigate({ to: "/projects/$projectId", params: { projectId: workspace.id } });
 			void provisionOrchestrator(workspace, input, source);
 		},

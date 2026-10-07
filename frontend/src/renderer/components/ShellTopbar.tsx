@@ -114,7 +114,6 @@ export function ShellTopbar({
 	embedded?: boolean;
 	sessionAction?: ReactNode;
 	compactActions?: boolean;
-	/** Use the real orchestrator controls before its session is addressable. */
 	startingOrchestrator?: boolean;
 } = {}) {
 	const { t } = useTranslation();

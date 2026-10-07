@@ -310,10 +310,7 @@ export interface ChatWorkspaceProps {
 	 * handoff, the history is final, so it stays readable; only sending waits.
 	 */
 	agentResuming?: boolean;
-	/** The optimistic composer waits in place for its conversation and controller. */
-	starting?: boolean;
 	startingSteps?: readonly SessionProvisionStep[];
-	/** Provider catalogs have resolved, so controls can show their actual values. */
 	settingsReady?: boolean;
 	/** Freeze agent-owned Chat controls while a durable session mutation owns input. */
 	agentInputDisabled?: boolean;
@@ -327,7 +324,6 @@ export interface ChatWorkspaceProps {
 	reviewerChatSelected?: boolean;
 	/** The parent surface owns the shared session tab strip. */
 	hideHeader?: boolean;
-	/** Render before the session page has installed its portal host. */
 	inlineHeader?: boolean;
 	/** Older durable history is available but not loaded into the DOM yet. */
 	hasOlder?: boolean;
@@ -567,7 +563,6 @@ function ChatWorkspaceContent({
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
 	agentResuming = false,
-	starting = false,
 	startingSteps,
 	settingsReady = true,
 	agentInputDisabled = false,
@@ -1257,7 +1252,7 @@ function ChatWorkspaceContent({
 	const stablePendingUserInput = useStableValue(pendingUserInput);
 	const composerSettings = useMemo(
 		() =>
-			settingsReady && !starting && (onChooseSettings || onChooseConfigOption) ? (
+			settingsReady && (onChooseSettings || onChooseConfigOption) ? (
 				<TurnSettingsBar
 					models={models ?? []}
 					settings={stableSettings}
@@ -1289,7 +1284,6 @@ function ChatWorkspaceContent({
 			) : null,
 		[
 			settingsReady,
-			starting,
 			configOptionError,
 			configOptionPending,
 			configOptions,
@@ -1375,7 +1369,7 @@ function ChatWorkspaceContent({
 	// Empty chats center the prompt; once a turn or item exists the composer docks
 	// at the bottom and stays there for the rest of the session.
 	const orchestratorStarting = sessionRole === "orchestrator" && startupState !== "failed" && (
-		starting || startupState === "provisioning" || agentResuming ||
+		startupState === "provisioning" || agentResuming ||
 		snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"
 	);
 	const currentSetupStep = provisionSteps?.find((step) => step.status === "running")?.id;
@@ -1696,7 +1690,7 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting}
-										disabled={(starting || orchestratorStarting || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorStarting || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
 										// Switch/reconnect status is the topbar spinner beside ⋮ — not composer text.
 										disabledPlaceholder={
 											orchestratorStarting
@@ -1783,20 +1777,16 @@ function ChatWorkspaceContent({
 	);
 }
 
-function OrchestratorStartupStatus({ failed, steps, error, agentName, onRetry, retrying, retryError }: ComponentProps<typeof SessionStartup>) {
+function OrchestratorStartupStatus({ error, onRetry, retrying, retryError }: ComponentProps<typeof SessionStartup>) {
 	const { t } = useTranslation();
-	const currentStep = steps.find((step) => step.status === "running") ?? steps.find((step) => step.status === "pending");
-	const stepLabel = currentStep?.id === "agent"
-		? t("chat.startup.step.agent", { agent: agentName })
-		: currentStep ? t(`chat.startup.step.${currentStep.id}`) : t("chat.startup.label");
 	return (
 		<div data-testid="orchestrator-startup-status" className="px-2 text-xs text-muted-foreground">
-			<div role={failed ? "alert" : "status"} className="flex items-center gap-2">
-				{failed ? <TriangleAlert aria-hidden="true" className="size-3.5 text-destructive" /> : <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />}
-				<span>{failed ? t("chat.startup.failed") : stepLabel}</span>
-				{failed && onRetry ? <button type="button" className="ml-auto text-foreground underline underline-offset-2" onClick={onRetry} disabled={retrying}>{retrying ? t("chat.startup.retrying") : t("chat.startup.retry")}</button> : null}
+			<div role="alert" className="flex items-center gap-2">
+				<TriangleAlert aria-hidden="true" className="size-3.5 text-destructive" />
+				<span>{t("chat.startup.failed")}</span>
+				{onRetry ? <button type="button" className="ml-auto text-foreground underline underline-offset-2" onClick={onRetry} disabled={retrying}>{retrying ? t("chat.startup.retrying") : t("chat.startup.retry")}</button> : null}
 			</div>
-			{failed && error ? <details className="mt-2"><summary className="cursor-pointer">Error details</summary><p className="mt-1 break-words">{error}</p></details> : null}
+			{error ? <details className="mt-2"><summary className="cursor-pointer">Error details</summary><p className="mt-1 break-words">{error}</p></details> : null}
 			{retryError ? <p role="alert" className="mt-1 text-destructive">{retryError}</p> : null}
 		</div>
 	);

@@ -75,17 +75,26 @@ func (s *blockingWorkspacePublishStore) SetSessionProvisionedWorkspace(
 // before the expensive work starts, and the opening prompt is already in the
 // durable queue rather than waiting on a controller that does not exist.
 func TestSpawnAsyncChat_AnswersBeforeWorkspaceAndController(t *testing.T) {
+	testAsyncChatAnswersBeforeWorkspaceAndController(t, domain.KindWorker)
+}
+
+func testAsyncChatAnswersBeforeWorkspaceAndController(t *testing.T, kind domain.SessionKind) {
 	launcher := &recordingLauncher{}
 	m, st, rt := newChatManager(launcher)
 	m.browserCapabilities = browsersvc.NewAuthority()
 	deferred := deferredBackground(m)
 	ws := m.workspace.(*fakeWorkspace)
 
-	rec, _, _, err := m.Spawn(context.Background(), asyncChatSpawnConfig("do the thing"))
+	cfg := asyncChatSpawnConfig("do the thing")
+	cfg.Kind = kind
+	if kind == domain.KindOrchestrator {
+		cfg.RequestedMode = ""
+	}
+	rec, _, _, err := m.Spawn(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	if rec.ProvisionState != domain.SessionProvisionProvisioning {
+	if rec.Mode != domain.SessionModeChat || rec.ProvisionState != domain.SessionProvisionProvisioning {
 		t.Fatalf("provision state = %q, want provisioning", rec.ProvisionState)
 	}
 	if rec.Metadata.WorkspacePath != "" {
@@ -244,6 +253,10 @@ func TestSpawnAsyncChat_DrainFailureLeavesRetryableSession(t *testing.T) {
 }
 
 func TestResumeFailedAsyncChatSpawnRetriesSameSessionAndQueue(t *testing.T) {
+	testResumeFailedAsyncChatSpawn(t, domain.KindWorker)
+}
+
+func testResumeFailedAsyncChatSpawn(t *testing.T, kind domain.SessionKind) {
 	launcher := &recordingLauncher{}
 	m, st, _ := newChatManager(launcher)
 	m.browserCapabilities = browsersvc.NewAuthority()
@@ -252,12 +265,17 @@ func TestResumeFailedAsyncChatSpawnRetriesSameSessionAndQueue(t *testing.T) {
 	m.SetHarnessUseGate(gate)
 	ws := m.workspace.(*fakeWorkspace)
 	ws.createErr = errors.New("temporary git failure")
-	rec, _, _, err := m.Spawn(context.Background(), asyncChatSpawnConfig("do the thing"))
+	cfg := asyncChatSpawnConfig("do the thing")
+	cfg.Kind = kind
+	if kind == domain.KindOrchestrator {
+		cfg.RequestedMode = ""
+	}
+	rec, _, _, err := m.Spawn(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	(*deferred)[0]()
-	if st.sessions[rec.ID].ProvisionState != domain.SessionProvisionFailed {
+	if st.sessions[rec.ID].ProvisionState != domain.SessionProvisionFailed || st.sessions[rec.ID].IsTerminated {
 		t.Fatal("initial start did not fail")
 	}
 
@@ -1048,33 +1066,7 @@ func TestSpawnAsyncChat_PreparedWorktreeChecklistSkipsFetch(t *testing.T) {
 }
 
 func TestSpawnOrchestratorPrefersAsyncChat(t *testing.T) {
-	launcher := &recordingLauncher{}
-	m, st, rt := newChatManager(launcher)
-	deferred := deferredBackground(m)
-	cfg := asyncChatSpawnConfig("")
-	cfg.Kind = domain.KindOrchestrator
-	cfg.RequestedMode = ""
-	cfg.Async = true
-	rec, _, _, err := m.Spawn(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rec.Mode != domain.SessionModeChat || rec.ProvisionState != domain.SessionProvisionProvisioning {
-		t.Fatalf("session mode/state = %s/%s", rec.Mode, rec.ProvisionState)
-	}
-	if len(launcher.started) != 0 || rt.created != 0 {
-		t.Fatal("agent launched before response")
-	}
-	if len(*deferred) != 1 {
-		t.Fatalf("background starts = %d", len(*deferred))
-	}
-	(*deferred)[0]()
-	if st.sessions[rec.ID].ProvisionState != domain.SessionProvisionReady {
-		t.Fatalf("startup failed: %+v", st.sessions[rec.ID])
-	}
-	if len(launcher.started) != 1 {
-		t.Fatalf("controllers started = %d", len(launcher.started))
-	}
+	testAsyncChatAnswersBeforeWorkspaceAndController(t, domain.KindOrchestrator)
 }
 
 func TestSpawnOrchestratorFallsBackToTerminalWhenChatUnsupported(t *testing.T) {
@@ -1096,27 +1088,5 @@ func TestSpawnOrchestratorFallsBackToTerminalWhenChatUnsupported(t *testing.T) {
 }
 
 func TestSpawnOrchestratorAsyncFailurePreservesSessionForRetry(t *testing.T) {
-	launcher := &recordingLauncher{startErr: errors.New("provider refused the session")}
-	m, st, _ := newChatManager(launcher)
-	deferred := deferredBackground(m)
-	cfg := asyncChatSpawnConfig("")
-	cfg.Kind = domain.KindOrchestrator
-	rec, _, _, err := m.Spawn(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	(*deferred)[0]()
-	failed := st.sessions[rec.ID]
-	if failed.ProvisionState != domain.SessionProvisionFailed || failed.IsTerminated {
-		t.Fatalf("failed session = %+v", failed)
-	}
-	launcher.startErr = nil
-	_, _, err = m.retryFailedChatSpawn(context.Background(), failed, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	(*deferred)[1]()
-	if st.sessions[rec.ID].ProvisionState != domain.SessionProvisionReady {
-		t.Fatalf("retry failed: %+v", st.sessions[rec.ID])
-	}
+	testResumeFailedAsyncChatSpawn(t, domain.KindOrchestrator)
 }
