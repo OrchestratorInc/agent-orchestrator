@@ -1,4 +1,4 @@
-import { act, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { act, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -221,5 +221,93 @@ describe("render activity", () => {
 			expect(sent.get(inline)).toContainEqual(changed("inline"));
 			expect(sent.get(expanded)).toContainEqual(changed("fullscreen"));
 		});
+	});
+	async function expand() {
+		const user = userEvent.setup();
+		render(<ActivityRow activity={renderActivity()} />);
+		await user.click(screen.getByRole("button", { name: "Expand page" }));
+		return { user, dialog: await screen.findByRole("dialog") };
+	}
+
+	it("heads the expanded page with its title and the source, save and browser actions", async () => {
+		const { dialog } = await expand();
+		expect(within(dialog).getByRole("heading", { name: "Turns by day" })).toBeInTheDocument();
+		for (const name of ["View source", "Save page", "Open in external browser", "Close"]) {
+			expect(within(dialog).getByRole("button", { name })).toBeInTheDocument();
+		}
+		expect(within(dialog).getByRole("button", { name: "View source" })).toHaveAttribute("aria-pressed", "false");
+	});
+
+	it("swaps the page for its source, as plain text, and back", async () => {
+		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<p>chart</p>\n<script>draw()</script>"));
+		try {
+			const { user, dialog } = await expand();
+			await user.click(within(dialog).getByRole("button", { name: "View source" }));
+			const source = await within(dialog).findByText(/<p>chart<\/p>/);
+			expect(source.tagName).toBe("PRE");
+			expect(source.textContent).toBe("<p>chart</p>\n<script>draw()</script>");
+			expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/proj-1/renders/r1?source=1", expect.anything());
+			expect(screen.getAllByTitle("Turns by day")).toHaveLength(1);
+			const toggle = within(dialog).getByRole("button", { name: "View page" });
+			expect(toggle).toHaveAttribute("aria-pressed", "true");
+			await user.click(toggle);
+			expect(screen.getAllByTitle("Turns by day")).toHaveLength(2);
+			expect(within(dialog).queryByText(/<p>chart<\/p>/)).toBeNull();
+		} finally {
+			fetch.mockRestore();
+		}
+	});
+
+	it("says so when the source cannot be fetched", async () => {
+		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 404 }));
+		try {
+			const { user, dialog } = await expand();
+			await user.click(within(dialog).getByRole("button", { name: "View source" }));
+			expect(await within(dialog).findByRole("alert")).toHaveTextContent("Could not load the page source.");
+		} finally {
+			fetch.mockRestore();
+		}
+	});
+
+	it("saves the served page under its title", async () => {
+		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<html>page</html>", { headers: { "Content-Type": "text/html" } }));
+		const original = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };
+		const created = vi.fn((_blob: Blob) => "blob:render");
+		const revoked = vi.fn();
+		Object.assign(URL, { createObjectURL: created, revokeObjectURL: revoked });
+		const clicked: HTMLAnchorElement[] = [];
+		const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+			clicked.push(this);
+		});
+		try {
+			const { user, dialog } = await expand();
+			await user.click(within(dialog).getByRole("button", { name: "Save page" }));
+			await waitFor(() => expect(revoked).toHaveBeenCalledWith("blob:render"));
+			// The page as served, bootstrap included; no fragment.
+			expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/proj-1/renders/r1", expect.anything());
+			expect(await created.mock.calls[0]![0].text()).toBe("<html>page</html>");
+			expect(clicked).toHaveLength(1);
+			expect(clicked[0]!.download).toBe("Turns by day.html");
+			expect(clicked[0]!.getAttribute("href")).toBe("blob:render");
+		} finally {
+			click.mockRestore();
+			Object.assign(URL, original);
+			fetch.mockRestore();
+		}
+	});
+
+	it("opens the page in the browser, in fullscreen display mode", async () => {
+		const open = vi.spyOn(window, "open").mockReturnValue(null);
+		try {
+			const { user, dialog } = await expand();
+			await user.click(within(dialog).getByRole("button", { name: "Open in external browser" }));
+			expect(open).toHaveBeenCalledTimes(1);
+			const [url, target, features] = open.mock.calls[0]!;
+			expect(url).toMatch(/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/);
+			expect(JSON.parse(decodeURIComponent(String(url).split("#ao-theme=")[1]!)).displayMode).toBe("fullscreen");
+			expect([target, features]).toEqual(["_blank", "noopener,noreferrer"]);
+		} finally {
+			open.mockRestore();
+		}
 	});
 });
