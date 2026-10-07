@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -41,6 +42,7 @@ func (s *Store) ClaimWorkerTurn(
 		var turnModeCap string
 		var requestedMode string
 		var approvalMode string
+		var sessionInterface domain.SessionInterface
 		var turnDeniedCommands []string
 		err := tx.QueryRow(
 			ctx,
@@ -88,8 +90,8 @@ func (s *Store) ClaimWorkerTurn(
 				RETURNING turn.id, turn.session_id, turn.user_message_sequence,
 					turn.state, turn.attempt_count, turn.worker_epoch
 			)
-			SELECT claimed.id, claimed.session_id, event.payload->>'text',
-				session.mode, session.denied_commands, session.harness,
+				SELECT claimed.id, claimed.session_id, event.payload->>'text',
+					session.mode, session.denied_commands, session.harness, session.interface,
 				claimed.attempt_count, claimed.worker_epoch,
 				claimed.state, session.agent_session_id,
 				claimed.user_message_sequence,
@@ -115,6 +117,7 @@ func (s *Store) ClaimWorkerTurn(
 			&turn.Mode,
 			&turn.DeniedCommands,
 			&turn.Harness,
+			&sessionInterface,
 			&turn.Attempt,
 			&turn.WorkerEpoch,
 			&state,
@@ -141,6 +144,18 @@ func (s *Store) ClaimWorkerTurn(
 		turn.DeniedCommands = effectiveDeniedCommands(turn.DeniedCommands, turnDeniedCommands)
 		turn.CancelRequested = state == "cancel_requested"
 		claimed = true
+		if sessionInterface.Normalized() == domain.SessionInterfaceChat {
+			// A claimed Chat turn is the controller's authoritative work signal.
+			// Its fenced completion below settles this state even when the
+			// provider fails before it can emit any lifecycle hooks.
+			if _, err := tx.Exec(ctx, `UPDATE ao_sessions
+				SET activity_state = 'active', activity_source_request_id = NULL,
+					updated_at = now()
+				WHERE org_id = $1 AND id = $2 AND interface = 'chat'
+				  AND is_terminated = false`, orgID, sessionID); err != nil {
+				return err
+			}
+		}
 		return appendTypedEvent(ctx, tx, orgID, sessionID, "chat.turn_started", map[string]any{
 			"turnId":      turn.ID,
 			"attempt":     turn.Attempt,
@@ -331,7 +346,7 @@ func (s *Store) AppendWorkerTurnOutput(
 	orgID, sessionID, workerID, turnID string,
 	epoch int64,
 	attempt int,
-	stream, text string,
+	stream, text, itemID string,
 ) error {
 	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		if err := requireCurrentWorker(ctx, tx, orgID, sessionID, workerID, epoch); err != nil {
@@ -347,6 +362,7 @@ func (s *Store) AppendWorkerTurnOutput(
 			"attempt": attempt,
 			"stream":  stream,
 			"text":    text,
+			"itemId":  itemID,
 		})
 	})
 }
@@ -361,6 +377,23 @@ func (s *Store) AppendWorkerTurnCapabilities(ctx context.Context, orgID, session
 		}
 		return appendTypedEvent(ctx, tx, orgID, sessionID, "chat.turn_capabilities", map[string]any{
 			"turnId": turnID, "attempt": attempt, "steering": steering,
+		})
+	})
+}
+
+// AppendWorkerTurnActivity records a normalized provider activity under the
+// same worker and turn fencing as assistant output.
+func (s *Store) AppendWorkerTurnActivity(ctx context.Context, orgID, sessionID, workerID, turnID string,
+	epoch int64, attempt int, activity worker.ChatActivity) error {
+	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		if err := requireCurrentWorker(ctx, tx, orgID, sessionID, workerID, epoch); err != nil {
+			return err
+		}
+		if err := requireActiveTurnFence(ctx, tx, orgID, sessionID, turnID, epoch, attempt); err != nil {
+			return err
+		}
+		return appendTypedEvent(ctx, tx, orgID, sessionID, "chat.activity", map[string]any{
+			"turnId": turnID, "attempt": attempt, "activity": activity,
 		})
 	})
 }
@@ -436,13 +469,32 @@ func (s *Store) FinishWorkerTurn(
 		); err != nil {
 			return err
 		}
+		// TUI turn completion only means the prompt reached the terminal; the
+		// interactive agent may still be working. Chat owns its full turn, so a
+		// fenced terminal callback is authoritative even on provider errors.
+		if _, err := tx.Exec(ctx, `UPDATE ao_sessions session
+			SET activity_state = 'idle',
+				activity_source_request_id = NULL,
+				activity_blocked_tool_name = '',
+				activity_blocked_tool_use_id = '',
+				updated_at = now()
+			WHERE session.org_id = $1 AND session.id = $2
+			  AND session.interface = 'chat' AND session.activity_state = 'active'
+			  AND session.is_terminated = false
+			  AND NOT EXISTS (
+				SELECT 1 FROM ao_turns other
+				WHERE other.org_id = session.org_id AND other.session_id = session.id
+				  AND other.id <> $3 AND other.state IN ('provisioning', 'running', 'cancel_requested')
+			  )`, orgID, sessionID, turnID); err != nil {
+			return err
+		}
 		return appendTypedEvent(ctx, tx, orgID, sessionID, eventType, payload)
 	})
 	return alreadyFinished, err
 }
 
-// WorkerAgentCredential returns only the valid default credential selected by
-// the current session's harness. The encrypted bytes stay opaque to the store.
+// WorkerAgentCredential returns the session creator's valid personal credential
+// for the selected harness. The encrypted bytes stay opaque to the store.
 func (s *Store) WorkerAgentCredential(
 	ctx context.Context,
 	orgID, sessionID, workerID string,
@@ -453,42 +505,6 @@ func (s *Store) WorkerAgentCredential(
 		if err := requireCurrentWorker(ctx, tx, orgID, sessionID, workerID, epoch); err != nil {
 			return err
 		}
-		err := tx.QueryRow(
-			ctx,
-			`SELECT connection.provider,
-				COALESCE(connection.config->>'credentialType', ''),
-				connection.encrypted_secret,
-				connection.secret_nonce
-			FROM ao_sessions session
-			JOIN ao_provider_connections connection
-				ON connection.org_id = session.org_id
-				AND connection.provider = session.harness
-				AND connection.label = $3
-				AND connection.validation_state = 'valid'
-			WHERE session.org_id = $1
-				AND session.id = $2
-				AND session.is_terminated = false`,
-			orgID,
-			sessionID,
-			defaultWorkerCredentialLabel,
-		).Scan(
-			&credential.Provider,
-			&credential.CredentialType,
-			&credential.EncryptedSecret,
-			&credential.Nonce,
-		)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return err
-		}
-		// The org has no shared connection for this harness — fall back to
-		// the session creator's own personal connection, if they have one.
-		// This is what lets connecting a credential once make it usable
-		// across every org a person belongs to, not just the one they
-		// connected it in; it never overrides an org-level connection that
-		// exists, only fills in when there isn't one.
 		var harness string
 		var createdByUserID *string
 		if err := tx.QueryRow(
@@ -511,7 +527,7 @@ func (s *Store) WorkerAgentCredential(
 		); err != nil {
 			return err
 		}
-		err = tx.QueryRow(
+		err := tx.QueryRow(
 			ctx,
 			`SELECT connection.provider,
 				COALESCE(connection.config->>'credentialType', ''),

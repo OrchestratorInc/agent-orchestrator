@@ -410,6 +410,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	manageAgents = true,
 	manageView = "local",
 	triggerClassName,
+	managementLabel: managementLabelOverride,
 	labelClassName,
 	contentClassName,
 	value,
@@ -431,6 +432,8 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	/** Which Harness settings view "manage" opens: local logins or cloud connections. */
 	manageView?: "local" | "cloud";
 	triggerClassName?: string;
+	/** Optional shorter action copy for compact selectors. */
+	managementLabel?: string;
 	labelClassName?: string;
 	contentClassName?: string;
 	value: string;
@@ -450,7 +453,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	const visibleOptions = manageAgents && hasReadinessSnapshot ? options.filter(isLaunchableAgent) : options;
 	// Local is Harness settings' default view, so only cloud needs to ask for one.
 	const management = useAgentManagementMenu(needsSetup ? value : undefined, hostId, manageView === "cloud" ? "cloud" : undefined);
-	const manageLabel = manageView === "cloud" ? t("agentSelector.manageCloud") : t("agentSelector.manage");
+	const manageLabel = managementLabelOverride ?? (manageView === "cloud" ? t("agentSelector.manageCloud") : t("agentSelector.manage"));
 	const managementAction = manageAgents ? { label: manageLabel, onSelect: management.requestManagement } : undefined;
 	const setupHint = needsSetup ? <span className="text-xs text-muted-foreground">{t("agentSelector.needsSetup")}</span> : null;
 

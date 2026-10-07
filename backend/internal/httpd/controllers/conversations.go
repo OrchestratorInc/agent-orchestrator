@@ -61,11 +61,17 @@ type pagedConversationService interface {
 }
 
 type reviewerConversationService interface {
+	ModelsForOwner(context.Context, domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error)
+	SetTurnSettingsForOwner(context.Context, domain.ConversationOwner, domain.ConversationSettings) (domain.ConversationSettings, error)
 	SnapshotPageForReview(ctx context.Context, reviewID string, beforeSequence, limit int64) (chatsvc.Snapshot, error)
 	SendForOwner(ctx context.Context, owner domain.ConversationOwner, msg ports.ChatUserMessage) (domain.ConversationTurn, error)
 	ResolveForOwner(ctx context.Context, owner domain.ConversationOwner, requestID string, decision ports.ChatDecision) error
 	ResolveInputForOwner(ctx context.Context, owner domain.ConversationOwner, requestID string, response ports.ChatInputResponse) error
 	InterruptForOwner(ctx context.Context, owner domain.ConversationOwner) error
+}
+
+type chatViewService interface {
+	SetChatView(context.Context, domain.SessionID, string, bool) error
 }
 
 // ConversationsController owns the Chat routes for a session.
@@ -79,6 +85,7 @@ type ConversationsController struct {
 
 // Register mounts the conversation routes under a session.
 func (c *ConversationsController) Register(r chi.Router) {
+	r.Post("/sessions/{sessionId}/chat-view", c.setChatView)
 	r.Get("/sessions/{sessionId}/conversation", c.snapshot)
 	r.Post("/sessions/{sessionId}/conversation/messages", c.send)
 	r.Post("/sessions/{sessionId}/conversation/approvals/{requestId}/resolve", c.resolve)
@@ -102,11 +109,38 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/branches/{branchId}/activate", c.activateBranch)
 	r.Put("/sessions/{sessionId}/conversation/title", c.setTitle)
 	r.Post("/sessions/{sessionId}/conversation/mcp/reload", c.reloadMCPServers)
+	r.Get("/reviews/{reviewId}/conversation/models", c.reviewModels)
+	r.Patch("/reviews/{reviewId}/conversation/settings", c.reviewSetSettings)
 	r.Get("/reviews/{reviewId}/conversation", c.reviewSnapshot)
 	r.Post("/reviews/{reviewId}/conversation/messages", c.reviewSend)
 	r.Post("/reviews/{reviewId}/conversation/approvals/{requestId}/resolve", c.reviewResolve)
 	r.Post("/reviews/{reviewId}/conversation/inputs/{requestId}/resolve", c.reviewResolveInput)
 	r.Post("/reviews/{reviewId}/conversation/interrupt", c.reviewInterrupt)
+}
+
+func (c *ConversationsController) setChatView(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(chatViewService)
+	if !ok {
+		apispec.NotImplemented(w, r, http.MethodPost, "/api/v1/sessions/{sessionId}/chat-view")
+		return
+	}
+	var req SetChatViewRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.ViewID == "" || len(req.ViewID) > 128 || strings.TrimSpace(req.ViewID) != req.ViewID {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_VIEW_ID_INVALID", "viewId must be a nonempty identifier of at most 128 bytes", nil)
+		return
+	}
+	if !req.activePresent {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_VIEW_ACTIVE_INVALID", "active must be true or false", nil)
+		return
+	}
+	if err := svc.SetChatView(r.Context(), sessionID(r), req.ViewID, req.Active); err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (c *ConversationsController) reviewService(w http.ResponseWriter, r *http.Request) (reviewerConversationService, bool) {
@@ -115,6 +149,45 @@ func (c *ConversationsController) reviewService(w http.ResponseWriter, r *http.R
 		apispec.NotImplemented(w, r, r.Method, r.URL.Path)
 	}
 	return svc, ok
+}
+
+func (c *ConversationsController) reviewModels(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.reviewService(w, r)
+	if !ok {
+		return
+	}
+	models, selected, err := svc.ModelsForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")))
+	if err != nil && !errors.Is(err, chatsvc.ErrModelsUnsupported) {
+		writeConversationError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, conversationModelsResponse(models, selected))
+}
+
+func (c *ConversationsController) reviewSetSettings(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.reviewService(w, r)
+	if !ok {
+		return
+	}
+	var req ConversationTurnSettingsPayload
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	approval := domain.PermissionMode(req.ApprovalMode)
+	if req.ApprovalMode != "" && !approval.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_APPROVAL_MODE_INVALID", "unknown approval mode", nil)
+		return
+	}
+	settings, err := svc.SetTurnSettingsForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")), domain.ConversationSettings{Model: req.Model, ReasoningEffort: req.ReasoningEffort, ApprovalMode: approval})
+	if errors.Is(err, chatsvc.ErrReviewerPermissionsFixed) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_REVIEW_PERMISSIONS_FIXED", err.Error(), nil)
+		return
+	}
+	if err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, turnSettingsPayload(settings))
 }
 
 func (c *ConversationsController) reviewSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -1086,16 +1159,19 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 
 	for _, msg := range s.Messages {
 		message := ConversationMessageResponse{
-			Kind:      "message",
-			ID:        msg.ID,
-			TurnID:    msg.TurnID,
-			Sequence:  msg.Sequence,
-			Revision:  msg.Revision,
-			Role:      string(msg.Role),
-			Origin:    string(msg.Origin),
-			Text:      msg.Text,
-			Streaming: msg.Streaming,
-			CreatedAt: msg.CreatedAt.UTC().Format(time.RFC3339),
+			Kind:              "message",
+			ID:                msg.ID,
+			TurnID:            msg.TurnID,
+			Sequence:          msg.Sequence,
+			Revision:          msg.Revision,
+			Role:              string(msg.Role),
+			Origin:            string(msg.Origin),
+			Text:              msg.Text,
+			SenderSessionID:   msg.SenderSessionID,
+			SenderProjectID:   msg.SenderProjectID,
+			SenderDisplayName: msg.SenderDisplayName,
+			Streaming:         msg.Streaming,
+			CreatedAt:         msg.CreatedAt.UTC().Format(time.RFC3339),
 		}
 		message.Content, message.EditAvailable = conversationContentSummary(msg)
 		message.EditAvailable = message.EditAvailable && msg.Sequence > s.EditFloorSequence
@@ -1265,11 +1341,23 @@ func accountPayload(account *domain.ConversationAccount) *ConversationAccountPay
 	if account == nil {
 		return nil
 	}
+	state := account.AuthenticationState
+	if state == "" {
+		state = "unknown"
+		if account.ReauthRequiredAt != nil {
+			state = "required"
+		}
+	}
 	return &ConversationAccountPayload{
-		AuthMode:         account.AuthMode,
-		PlanLabel:        account.PlanLabel,
-		ReauthRequiredAt: optionalTimestamp(account.ReauthRequiredAt),
-		ReauthReason:     account.ReauthReason,
+		AuthenticationState:   state,
+		AuthVerifiedAt:        optionalTimestamp(account.AuthVerifiedAt),
+		LastAuthFailureAt:     optionalTimestamp(account.LastAuthFailureAt),
+		LastAuthFailureReason: account.LastAuthFailureReason,
+		AuthFailureID:         account.AuthFailureID,
+		AuthMode:              account.AuthMode,
+		PlanLabel:             account.PlanLabel,
+		ReauthRequiredAt:      optionalTimestamp(account.ReauthRequiredAt),
+		ReauthReason:          account.ReauthReason,
 	}
 }
 

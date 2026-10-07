@@ -21,7 +21,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/interfacereconcile"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/notification"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/prstatus"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/reconcile"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	coderprovider "github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/coder"
@@ -30,7 +29,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandboxresolve"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
-	"github.com/google/uuid"
 )
 
 // readSSHPubKeys loads the operator SSH keys authorized on every sandbox. They
@@ -257,25 +255,33 @@ func run(logger *slog.Logger) error {
 
 	var workosVerifier auth.WorkOSVerifier
 	if cfg.WorkOSIssuer != "" {
-		profiles, err := auth.NewWorkOSProfileResolver(cfg.WorkOSAPIKey, nil)
-		if err != nil {
-			return err
-		}
-		organizations, err := auth.NewWorkOSOrganizationResolver(cfg.WorkOSAPIKey, nil)
-		if err != nil {
-			return err
-		}
-		workosVerifier, err = auth.NewOIDCVerifier(
+		workosVerifier, err = newWorkOSVerifier(
 			ctx,
 			cfg.WorkOSIssuer,
 			cfg.WorkOSClientID,
+			cfg.WorkOSAPIKey,
 			cfg.WorkOSJWKSURL,
-			profiles,
-			organizations,
 		)
 		if err != nil {
 			return err
 		}
+	}
+	if cfg.WorkOSLegacyIssuer != "" {
+		legacyVerifier, err := newWorkOSVerifier(
+			ctx,
+			cfg.WorkOSLegacyIssuer,
+			cfg.WorkOSLegacyClientID,
+			cfg.WorkOSLegacyAPIKey,
+			cfg.WorkOSLegacyJWKSURL,
+		)
+		if err != nil {
+			return err
+		}
+		workosVerifier, err = auth.NewFallbackWorkOSVerifier(workosVerifier, legacyVerifier)
+		if err != nil {
+			return err
+		}
+		logger.Info("accepting legacy WorkOS tokens", "legacy_client_id", cfg.WorkOSLegacyClientID)
 	}
 	var providerCipher *secrets.Cipher
 	if len(cfg.ProviderSecretKey) > 0 {
@@ -356,17 +362,6 @@ func run(logger *slog.Logger) error {
 			Interval:      cfg.IdlePauseInterval,
 			IdleThreshold: cfg.IdlePauseThreshold,
 			Logger:        logger,
-		})
-	}
-	// The scanner only has anything to refresh where GitHub is configured to
-	// resolve an installation for.
-	var prStatusScanner *prstatus.Scanner
-	if githubService != nil {
-		prStatusScanner = prstatus.New(store, githubService, prstatus.Options{
-			Interval:     cfg.PRStatusPollInterval,
-			WorkerID:     "pr-fallback-" + uuid.NewString(),
-			SilenceGrace: cfg.PRWebhookSilenceGrace,
-			Logger:       logger,
 		})
 	}
 	// Worker tokens are only issued where sandboxes are provisioned. Leaving
@@ -513,18 +508,6 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 
-	if prStatusScanner != nil {
-		go func() {
-			logger.Info("pull request fallback scanner started",
-				"interval", cfg.PRStatusPollInterval,
-				"silence_grace", cfg.PRWebhookSilenceGrace,
-			)
-			if err := prStatusScanner.Run(ctx); err != nil {
-				logger.Error("pull request fallback scanner stopped", "error", err)
-			}
-		}()
-	}
-
 	select {
 	case <-ctx.Done():
 		api.SetDraining(true)
@@ -551,4 +534,22 @@ func (developmentCredentialValidator) Validate(
 	[]byte,
 ) error {
 	return nil
+}
+
+func newWorkOSVerifier(
+	ctx context.Context,
+	issuer string,
+	clientID string,
+	apiKey string,
+	jwksURL string,
+) (auth.WorkOSVerifier, error) {
+	profiles, err := auth.NewWorkOSProfileResolver(apiKey, nil)
+	if err != nil {
+		return nil, err
+	}
+	organizations, err := auth.NewWorkOSOrganizationResolver(apiKey, nil)
+	if err != nil {
+		return nil, err
+	}
+	return auth.NewOIDCVerifier(ctx, issuer, clientID, jwksURL, profiles, organizations)
 }

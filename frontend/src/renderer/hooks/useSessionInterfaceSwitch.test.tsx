@@ -65,12 +65,31 @@ function requestSwitch(menuItem: ReactElement<{ onClick: () => void }> | null) {
 
 describe("useSessionInterfaceSwitch Cloud handoff", () => {
 	beforeEach(() => {
+		localStorage.clear();
 		mocks.getSession.mockReset();
 		mocks.start.mockReset();
 		mocks.start.mockResolvedValue({});
 		mocks.resetStartError.mockReset();
 		mocks.context.mockReset();
 		mocks.status = { supported: true, targetMode: "chat" };
+	});
+
+	it.each(["codex", "claude-code", "cursor"] as const)("preserves %s model and effort when leaving Cloud Chat", async (provider) => {
+		mocks.status = { supported: true, targetMode: "tui" };
+		localStorage.setItem(`cloud-chat-settings:org-1:session-1:${provider}`, JSON.stringify({
+			model: "selected-model", reasoningEffort: "high",
+		}));
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", {
+			...cloudSession, provider, mode: "chat",
+		}, { orgId: "org-1" }));
+		act(() => result.current.onConversationWorkChange({
+			controllerBusy: false, hasRunningTurn: false, queuedTurnCount: 0,
+		}));
+		requestSwitch(result.current.menuItem as ReactElement<{ onClick: () => void }> | null);
+		await waitFor(() => expect(mocks.start).toHaveBeenCalledWith({
+			targetMode: "tui", policy: "drain", historyPolicy: "strict",
+			model: "selected-model", reasoningEffort: "high",
+		}));
 	});
 
 	it("keeps source Chat visible while a Cloud drain waits and scopes transition to its org", () => {

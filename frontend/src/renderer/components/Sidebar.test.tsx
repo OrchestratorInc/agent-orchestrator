@@ -666,6 +666,9 @@ describe("Sidebar", () => {
 		expect(settingsButtons).toHaveLength(2);
 		expect(expandedButton).toHaveAttribute("tabindex", "-1");
 		expect(expandedButton?.closest('[aria-hidden="true"]')).toBeInTheDocument();
+		// Hidden from assistive tech, not removed from layout: display: none would drop
+		// the footer content while the sidebar slides away and leave its border behind.
+		expect(expandedButton?.closest("[hidden]")).toBeNull();
 		expect(collapsedButton).toHaveAttribute("tabindex", "0");
 		expect(collapsedButton?.closest('[aria-hidden="true"]')).toBeNull();
 	});
@@ -956,7 +959,8 @@ describe("Sidebar", () => {
 		});
 
 		for (const label of ["New project", "Open a new agent"]) {
-			expect(screen.getByRole("button", { name: label }).querySelector("svg")).toHaveClass("translate-y-px");
+			// Shared 24px row-action button; the icon is centered by the grid, no optical nudge.
+			expect(screen.getByRole("button", { name: label })).toHaveClass("size-6", "place-items-center");
 		}
 	});
 
@@ -1158,28 +1162,29 @@ describe("Sidebar", () => {
 
 		expect(openSession).toHaveClass("pr-[36px]");
 		expect(openSession).toHaveClass(
-			"group-hover/session-row:pr-[50px]",
-			"group-focus-within/session-row:pr-[50px]",
+			"group-hover/session-row:pr-sidebar-project-actions",
+			"group-has-[:focus-visible]/session-row:pr-sidebar-project-actions",
 		);
 		expect(label).toHaveClass("min-w-0", "flex-1", "truncate");
 		expect(actions).toHaveAttribute("data-session-actions");
 		expect(actionButtons).toHaveClass(
 			"absolute",
-			"right-0.5",
+			"right-1",
+			"gap-0.5",
 			"opacity-0",
 			"scale-[0.8]",
 			"duration-normal",
-			"group-focus-within/session-row:pointer-events-auto",
-			"group-focus-within/session-row:scale-100",
-			"group-focus-within/session-row:opacity-100",
+			"group-has-[:focus-visible]/session-row:pointer-events-auto",
+			"group-has-[:focus-visible]/session-row:scale-100",
+			"group-has-[:focus-visible]/session-row:opacity-100",
 		);
 		expect(actionButtons).toHaveAttribute("data-session-action-buttons", "");
 		expect(time).toHaveAttribute("datetime", lastUserMessageAt);
 		expect(time).toHaveClass(
 			"absolute",
-			"right-1.5",
+			"right-2",
 			"opacity-100",
-			"group-focus-within/session-row:opacity-0",
+			"group-has-[:focus-visible]/session-row:opacity-0",
 		);
 		expect(openSession).toHaveClass("pl-1.5");
 		expect(openSession.closest("li")).toHaveClass("pl-0.5");
@@ -1227,6 +1232,24 @@ describe("Sidebar", () => {
 		expect(screen.queryByText("other task")).not.toBeInTheDocument();
 		expect(screen.getByText("fix login")).toBeInTheDocument();
 		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+
+	it("uses deliberate interaction recency for both worker order and age", () => {
+		const at = "2026-07-05T00:00:00Z";
+		const directed = {
+			...session, id: "directed", title: "orchestrator directed",
+			lastUserMessageAt: "2026-07-01T00:00:00Z", lastInteractionAt: at,
+		};
+		const human = {
+			...session, id: "human", title: "human directed",
+			lastUserMessageAt: "2026-07-03T00:00:00Z",
+		};
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [human, directed] }] });
+		const directedButton = screen.getByLabelText("Open orchestrator directed");
+		const humanButton = screen.getByLabelText("Open human directed");
+		expect(directedButton.compareDocumentPosition(humanButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(document.querySelector(`time[datetime="${at}"]`)).toHaveAttribute("datetime", at);
 	});
 
 	it("lists worker sessions by the user's last message, matching the row's message age", () => {
@@ -2246,7 +2269,7 @@ describe("Sidebar", () => {
 		if (!projectRow) throw new Error("Project row button not found");
 		expect(projectRow).toHaveClass("pr-sidebar-project-actions");
 		expect(actionCluster).toHaveAttribute("data-project-actions");
-		expect(actionCluster).toHaveClass("right-0.5", "gap-px");
+		expect(actionCluster).toHaveClass("right-1", "gap-0.5");
 		expect(within(actionCluster as HTMLElement).getAllByRole("button")).toHaveLength(2);
 		expect(screen.getByLabelText("Project actions for Project One")).not.toHaveClass("opacity-0");
 	});
@@ -2353,6 +2376,41 @@ describe("Sidebar", () => {
 		expect(screen.getByRole("button", { name: "Show fewer agents" })).toBeInTheDocument();
 	});
 
+	it("keeps Scratchpad mounted, bounded and un-clipped by a long Projects list", () => {
+		const manyProjects = Array.from({ length: 14 }, (_, index) => ({
+			...workspace,
+			id: `proj-${index + 1}`,
+			name: `Project ${index + 1}`,
+			path: `/repo/project-${index + 1}`,
+		}));
+		renderSidebar({
+			workspaces: [
+				...manyProjects,
+				{
+					id: STANDALONE_WORKSPACE_ID,
+					name: "Scratchpad",
+					kind: STANDALONE_PROJECT_KIND,
+					path: "",
+					sessions: [{ ...session, id: "adhoc-1", title: "adhoc one", workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad" }],
+				},
+			],
+		});
+
+		const section = document.querySelector<HTMLElement>("[data-scratchpad-section]")!;
+		expect(section).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Scratchpad" })).toBeVisible();
+		expect(section).toContainElement(screen.getByText("adhoc one"));
+		// Scratchpad keeps a bounded, non-shrinking slot; Projects flexes into the rest
+		// and scrolls itself, so neither section can hide the other.
+		expect(section).toHaveClass("shrink-0");
+		expect(section.style.maxHeight).toBe("calc(50cqh - var(--space-2))");
+		const projects = screen.getByTestId("sidebar-projects-scroller");
+		expect(projects).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
+		expect(projects.style.maxHeight).toBe("");
+		expect(section.parentElement).toHaveClass("flex", "flex-col", "min-h-0");
+		expect(section.parentElement?.style.getPropertyValue("--sidebar-scratchpad-reserved-height")).toBe("");
+	});
+
 	it("fits the project list to content up to the full available height", async () => {
 		const user = userEvent.setup();
 		const manyProjects = Array.from({ length: 14 }, (_, index) => ({
@@ -2367,14 +2425,15 @@ describe("Sidebar", () => {
 		expect(scroller).toHaveClass("overflow-y-auto");
 		expect(scroller).toContainElement(screen.getByText("Project 1"));
 		expect(scroller.style.height).toBe("");
-		expect(scroller.style.maxHeight).toContain("100cqh");
-		expect(scroller.style.maxHeight).toContain("--sidebar-scratchpad-reserved-height");
+		// Height comes from flex layout, not a measured CSS variable.
+		expect(scroller.style.maxHeight).toBe("");
+		expect(scroller).toHaveClass("min-h-0", "flex-1");
 
 		// Show more stays directly beneath the project list and reveals the remainder.
 		const showMore = screen.getByRole("button", { name: "Show 4 more projects" });
 		expect(showMore.parentElement).toBe(scroller.parentElement?.parentElement);
 		await user.click(showMore);
-		expect(scroller.style.maxHeight).toContain("100cqh");
+		expect(scroller.style.maxHeight).toBe("");
 		expect(scroller).toHaveClass("overflow-y-auto");
 	});
 
@@ -2394,7 +2453,7 @@ describe("Sidebar", () => {
 		expect(screen.queryByRole("button", { name: /Show (more|fewer) projects/ })).not.toBeInTheDocument();
 	});
 
-	it("shows the full project list in the collapsed icon rail without Show more", () => {
+	it("keeps the project list capped behind Show more while the sidebar is toggled off", () => {
 		const manyProjects = Array.from({ length: 14 }, (_, index) => ({
 			...workspace,
 			id: `proj-${index + 1}`,
@@ -2403,9 +2462,27 @@ describe("Sidebar", () => {
 		}));
 		renderSidebar({ workspaces: manyProjects, initialOpen: false });
 
-		expect(screen.getByText("Project 11")).toBeInTheDocument();
-		expect(screen.getByText("Project 14")).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /more projects/ })).not.toBeInTheDocument();
+		// The sidebar slides away (offcanvas); it has no icon rail, so its lists
+		// must not lift their caps just because it is collapsed.
+		expect(screen.queryByText("Project 11")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /more projects/ })).toBeInTheDocument();
+	});
+
+	it("does not reopen a closed Projects section when the sidebar is toggled off and on", async () => {
+		const user = userEvent.setup();
+		renderSidebar();
+
+		await user.click(screen.getByRole("button", { name: "Projects" }));
+		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
+		await waitFor(() => expect(screen.queryByText(workspace.name)).not.toBeInTheDocument());
+
+		await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+		// While the sidebar is off, the closed section must not be forced open.
+		expect(screen.queryByText(workspace.name)).not.toBeInTheDocument();
+		await user.click(screen.getAllByRole("button", { name: "Expand sidebar" })[0]);
+
+		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByText(workspace.name)).not.toBeInTheDocument();
 	});
 
 	it("clamps width at minimum when dragged past the resize floor (no auto-collapse)", async () => {
@@ -2586,7 +2663,7 @@ describe("Sidebar", () => {
 		expect(idleDraftDot).not.toHaveClass("animate-status-pulse");
 	});
 
-	it("keeps runtime activity on the dot while showing switch progress separately", () => {
+	it("keeps a stopped agent dot neutral while showing switch progress separately", () => {
 		renderSidebar({
 			workspaces: [{
 				...workspace,
@@ -2603,7 +2680,7 @@ describe("Sidebar", () => {
 		expect(row).toHaveAccessibleDescription("Switching to Codex");
 		expect(within(row).getByText("Switching to Codex")).toBeInTheDocument();
 		const dot = row.querySelector<HTMLElement>("[data-session-status]");
-		expect(dot).toHaveClass("bg-status-needs-you");
+		expect(dot).toHaveClass("bg-passive");
 		expect(dot).not.toHaveClass("animate-status-pulse");
 	});
 
@@ -3290,12 +3367,6 @@ describe("Sidebar", () => {
 		} finally {
 			document.documentElement.classList.remove("dark");
 		}
-	});
-
-	it("marks the brand with a dev badge in dev builds so the unpackaged window is distinguishable", () => {
-		renderSidebar();
-
-		expect(screen.getByTestId("sidebar-dev-badge")).toHaveTextContent("dev");
 	});
 });
 

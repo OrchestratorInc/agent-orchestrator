@@ -2,7 +2,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { CloudCpClient } from "../../lib/cloud-cp";
@@ -38,7 +38,10 @@ describe("CloudFileContentPane", () => {
 		const onDirtyChange = vi.fn();
 		renderPane(client, { initialMode: "file", onDirtyChange });
 		await userEvent.click(await screen.findByRole("button", { name: "Edit file" }));
-		fireEvent.change(screen.getByRole("textbox", { name: "editor" }), { target: { value: "# Changed" } });
+		const editor = screen.getByRole("textbox", { name: "Edit README.md" }).querySelector<HTMLElement>(".cm-content");
+		expect(editor).toBeInTheDocument();
+		await userEvent.click(editor!);
+		await userEvent.keyboard("{Control>}a{/Control}# Changed");
 		await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
 		await userEvent.click(screen.getByRole("button", { name: "Save" }));
 		await waitFor(() => expect(updateWorkspaceReviewFile).toHaveBeenCalledWith("org-1", "session-1", { path: "README.md", content: "# Changed", expectedFileFingerprint: "fp-1" }));

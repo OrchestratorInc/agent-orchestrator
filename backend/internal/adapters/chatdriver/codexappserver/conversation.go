@@ -91,6 +91,7 @@ type conversation struct {
 }
 
 var _ ports.ChatConversation = (*conversation)(nil)
+var _ ports.ChatProviderHibernator = (*conversation)(nil)
 
 // Asserted here so a refactor cannot silently drop model listing: the service
 // feature-detects this interface, and a missed method would just mean "no models"
@@ -161,6 +162,7 @@ func (c *conversation) pump() {
 		close(c.events)
 	}()
 	retries := make(map[string]ports.ChatEvent)
+	citations := newCitationFormatter()
 
 	for n := range c.conn.notifs() {
 		// Before normalizing, because a token-usage report is the only place the
@@ -173,6 +175,7 @@ func (c *conversation) pump() {
 			ThreadID string `json:"threadId"`
 		}
 		_ = json.Unmarshal(n.Params, &scope)
+		citations.observeNotification(n, c.threadID)
 
 		// The clock is passed in rather than read inside: a rate-limit reset arrives
 		// as an absolute instant and has to become a remaining duration, and a
@@ -184,6 +187,11 @@ func (c *conversation) pump() {
 			}
 			if threadID == "" {
 				threadID = c.threadID
+			}
+			var visible bool
+			ev, visible = citations.formatEvent(threadID, ev)
+			if !visible {
+				continue
 			}
 			key := threadID + ":" + ev.ProviderTurnID
 			if ev.Kind == ports.ChatEventError {
@@ -354,9 +362,13 @@ func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, r
 		params["sandboxPolicy"] = turnSandboxPolicy(sandbox)
 	}
 	if readOnly {
+		// A reviewer must not write the workspace, but it does need the network:
+		// it reads the PR through gh and reports its verdict to the local daemon
+		// with `ao review submit`. With approvals off it cannot ask for that access
+		// mid-turn, so the read-only policy grants it up front.
 		params["approvalPolicy"] = "never"
 		params["approvalsReviewer"] = "user"
-		params["sandboxPolicy"] = turnSandboxPolicy("read-only")
+		params["sandboxPolicy"] = map[string]any{"type": "readOnly", "networkAccess": true}
 	}
 }
 
@@ -935,6 +947,32 @@ func (c *conversation) Terminate() error {
 	})
 	return c.closeErr
 }
+
+// CanHibernate reads Codex's live exec registry, since a settled turn can leave
+// a terminal running and terminating app-server also terminates those commands.
+func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	// Subset of Codex 0.160.1's experimental background-terminal response.
+	var resp struct {
+		Data       []json.RawMessage `json:"data"`
+		NextCursor *string           `json:"nextCursor"`
+	}
+	if err := c.conn.request(ctx, "thread/backgroundTerminals/list", map[string]any{"threadId": c.threadID, "limit": 1}, &resp); err != nil {
+		var rpcErr *rpcError
+		if errors.As(err, &rpcErr) && rpcErr.Code == -32601 {
+			return false, nil // Older builds cannot prove that background work ended.
+		}
+		return false, err
+	}
+	if resp.Data == nil {
+		return false, errors.New("background-terminal response is missing data")
+	}
+	return len(resp.Data) == 0 && (resp.NextCursor == nil || *resp.NextCursor == ""), nil
+}
+
+// Hibernate stops the app-server but leaves its native thread on disk for Resume.
+func (c *conversation) Hibernate() error { return c.Terminate() }
 
 // approvalPayload is the subset of an approval request AO renders.
 type approvalPayload struct {

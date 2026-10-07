@@ -3,8 +3,10 @@ import type {
 	BrowserAgentActivityState,
 	BrowserDevToolsPlacement,
 	BrowserDevToolsState,
+	BrowserFindState,
 	BrowserNavState,
 	BrowserRect,
+	BrowserRuntimeState,
 	BrowserTabState,
 	BrowserTabsState,
 } from "../../main/browser-view-host";
@@ -86,6 +88,10 @@ export type BrowserViewModel = {
 	goForward: () => Promise<void>;
 	reload: () => Promise<void>;
 	stop: () => Promise<void>;
+	findState: BrowserFindState;
+	findOpenRequest: number;
+	findInPage: (query: string, forward: boolean, newSession: boolean) => Promise<void>;
+	stopFindInPage: (focusPage?: boolean) => Promise<void>;
 	tabs: BrowserTabState[];
 	activeTabId: string;
 	tabNotice: string;
@@ -103,6 +109,8 @@ export type BrowserViewModel = {
 	setDevToolsPlacement: (placement: BrowserDevToolsPlacement) => Promise<void>;
 	agentBrowserActive: boolean;
 	agentBrowserActivity: BrowserAgentActivityState | null;
+	browserRuntimeConnected: boolean | null;
+	reconnectBrowserRuntime: () => Promise<void>;
 	destroy: () => void;
 	annotationMode: boolean;
 	annotationState?: Pick<BrowserAnnotationStatePayload, "count" | "screenshotCount" | "hasDraft">;
@@ -130,6 +138,15 @@ const EMPTY_DEVTOOLS_STATE: BrowserDevToolsState = {
 	open: false,
 	activeTabId: "",
 	placement: "undocked",
+};
+
+const EMPTY_FIND_STATE: BrowserFindState = {
+	viewId: "",
+	tabId: "",
+	query: "",
+	activeMatchOrdinal: 0,
+	matches: 0,
+	finalUpdate: true,
 };
 
 const EMPTY_PROFILE_STATE: BrowserProfileViewState = {
@@ -246,11 +263,14 @@ export function useBrowserView({
 	// authoritative and browser:tabsState pushes on every nav/title event.
 	const [tabOrder, setTabOrder] = useState<string[]>([]);
 	const [devtoolsState, setDevtoolsState] = useState<BrowserDevToolsState>(EMPTY_DEVTOOLS_STATE);
+	const [findState, setFindState] = useState<BrowserFindState>(EMPTY_FIND_STATE);
+	const [findOpenRequest, setFindOpenRequest] = useState(0);
 	const [profileState, setProfileState] = useState<BrowserProfileViewState>(EMPTY_PROFILE_STATE);
 	const [tabNotice, setTabNotice] = useState("");
 	const [closedTabs, setClosedTabs] = useState<ClosedBrowserTab[]>([]);
 	const [agentBrowserActive, setAgentBrowserActive] = useState(false);
 	const [agentBrowserActivity, setAgentBrowserActivity] = useState<BrowserAgentActivityState | null>(null);
+	const [browserRuntimeConnected, setBrowserRuntimeConnected] = useState<boolean | null>(null);
 	const [stateSessionId, setStateSessionId] = useState(sessionId);
 	const slotNodeRef = useRef<HTMLDivElement | null>(null);
 	const viewIdRef = useRef("");
@@ -422,6 +442,8 @@ export function useBrowserView({
 		// previous session could otherwise silently reapply to the new one.
 		setTabOrder([]);
 		setDevtoolsState(EMPTY_DEVTOOLS_STATE);
+		setFindState(EMPTY_FIND_STATE);
+		setFindOpenRequest(0);
 		setProfileState(EMPTY_PROFILE_STATE);
 		setTabNotice("");
 		// Restore this session's own Recently Closed list rather than wiping it —
@@ -476,6 +498,12 @@ export function useBrowserView({
 					if (!disposed && viewIdRef.current === tabs.viewId) setTabsState(tabs);
 				})
 				.catch(() => undefined);
+			void window.ao?.browser
+				.getFindState(state.viewId)
+				.then((find) => {
+					if (!disposed && viewIdRef.current === find.viewId) setFindState(find);
+				})
+				.catch(() => undefined);
 			scheduleSettleMeasure();
 		});
 		return () => {
@@ -504,6 +532,21 @@ export function useBrowserView({
 		return window.ao?.browser.onNavState((state) => {
 			if (state.viewId !== viewIdRef.current) return;
 			setNavState(state);
+		});
+	}, []);
+
+	useEffect(() => {
+		return window.ao?.browser.onFindState((state) => {
+			if (state.viewId !== viewIdRef.current) return;
+			setFindState(state);
+		});
+	}, []);
+
+	useEffect(() => {
+		return window.ao?.browser.onFindOpen((state) => {
+			if (state.viewId !== viewIdRef.current) return;
+			setFindState(state);
+			setFindOpenRequest((current) => current + 1);
 		});
 	}, []);
 
@@ -565,6 +608,23 @@ export function useBrowserView({
 			setAgentBrowserActive(state.active);
 			setAgentBrowserActivity(state);
 		});
+	}, []);
+
+	useEffect(() => {
+		let disposed = false;
+		const applyState = (state: BrowserRuntimeState) => {
+			if (!disposed) setBrowserRuntimeConnected(state.connected);
+		};
+		const unsubscribe = window.ao?.browser.onRuntimeState(applyState);
+		void window.ao?.browser.getRuntimeState().then(applyState);
+		return () => {
+			disposed = true;
+			unsubscribe?.();
+		};
+	}, []);
+
+	const reconnectBrowserRuntime = useCallback(async () => {
+		await window.ao?.browser.reconnectRuntime();
 	}, []);
 
 	useEffect(
@@ -934,6 +994,34 @@ export function useBrowserView({
 		return withView((id) => window.ao!.browser.clear(id));
 	}, [hasNativeBrowser, withView]);
 
+	const findInPage = useCallback(
+		(query: string, forward: boolean, newSession: boolean) => {
+			if (!hasNativeBrowser) {
+				setFindState((current) => ({ ...current, query, activeMatchOrdinal: 0, matches: 0, finalUpdate: true }));
+				return Promise.resolve();
+			}
+			return withView(async (id) => {
+				const state = await window.ao!.browser.findInPage({ viewId: id, query, forward, newSession });
+				if (viewIdRef.current === state.viewId) setFindState(state);
+			});
+		},
+		[hasNativeBrowser, withView],
+	);
+
+	const stopFindInPage = useCallback(
+		(focusPage = false) => {
+			if (!hasNativeBrowser) {
+				setFindState(EMPTY_FIND_STATE);
+				return Promise.resolve();
+			}
+			return withView(async (id) => {
+				const state = await window.ao!.browser.stopFindInPage({ viewId: id, focusPage });
+				if (viewIdRef.current === state.viewId) setFindState(state);
+			});
+		},
+		[hasNativeBrowser, withView],
+	);
+
 	// Clearing or terminating a remote preview must also retire its viewer-only
 	// origin, even when the native browser view has already been destroyed.
 	useEffect(() => {
@@ -990,6 +1078,7 @@ export function useBrowserView({
 		setViewId("");
 		setNavState(EMPTY_NAV_STATE);
 		setTabsState(EMPTY_TABS_STATE);
+		setFindState(EMPTY_FIND_STATE);
 		setClosedTabs([]);
 	}, [sendHiddenBounds]);
 
@@ -1018,6 +1107,10 @@ export function useBrowserView({
 		goForward: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.goForward(id)) : Promise.resolve()),
 		reload: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.reload(id)) : Promise.resolve()),
 		stop: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.stop(id)) : Promise.resolve()),
+		findState: stateBelongsToSession ? findState : EMPTY_FIND_STATE,
+		findOpenRequest: stateBelongsToSession ? findOpenRequest : 0,
+		findInPage,
+		stopFindInPage,
 		tabs: stateBelongsToSession ? tabs : [],
 		activeTabId: stateBelongsToSession ? tabsState.activeTabId : "",
 		tabNotice: stateBelongsToSession ? tabNotice : "",
@@ -1035,6 +1128,8 @@ export function useBrowserView({
 		setDevToolsPlacement: (placement) => runDevtools("setPlacement", placement),
 		agentBrowserActive: stateBelongsToSession && agentBrowserActive,
 		agentBrowserActivity: stateBelongsToSession ? agentBrowserActivity : null,
+		browserRuntimeConnected,
+		reconnectBrowserRuntime,
 		destroy,
 		annotationMode,
 		annotationState,

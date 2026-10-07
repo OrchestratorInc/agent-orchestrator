@@ -261,8 +261,7 @@ vi.mock("@xterm/xterm", () => ({
 vi.mock("@xterm/addon-fit", () => ({
 	FitAddon: class FakeFitAddon {
 		proposeDimensions() {
-			state.fit();
-			return undefined;
+			return state.fit();
 		}
 	},
 }));
@@ -373,6 +372,40 @@ describe("XtermTerminal", () => {
 		window.ao!.terminal.onFontSizeShortcut = () => () => undefined;
 	});
 
+	// FitAddon proposes its 2-column minimum for a host with no layout box (a
+	// tab parked before it was laid out). Adopting it would start the shell at
+	// 2 columns.
+	it("never adopts a fitted grid from a host with no layout box", async () => {
+		state.fit.mockReturnValue({ cols: 2, rows: 5 });
+		let terminal!: AttachableTerminal;
+		render(<XtermTerminal theme="dark" onReady={(ready) => { terminal = ready; }} />);
+
+		act(() => { window.dispatchEvent(new Event("resize")); });
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 60)); });
+
+		expect(state.lastTerminal!.resize).not.toHaveBeenCalledWith(2, 5);
+		expect(terminal.hasMeasuredGrid).toBe(false);
+	});
+
+	it("publishes its first measured grid even when it equals xterm's default", async () => {
+		const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+		const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+		try {
+			let terminal!: AttachableTerminal;
+			const onVisibleSize = vi.fn();
+			render(<XtermTerminal theme="dark" onVisibleSize={onVisibleSize} onReady={(ready) => { terminal = ready; }} />);
+			const { cols, rows } = state.lastTerminal!;
+			state.fit.mockReturnValue({ cols, rows });
+
+			await waitFor(() => expect(onVisibleSize).toHaveBeenCalledWith(cols, rows));
+			expect(terminal.hasMeasuredGrid).toBe(true);
+			expect(state.lastTerminal!.resize).not.toHaveBeenCalled();
+		} finally {
+			width.mockRestore();
+			height.mockRestore();
+		}
+	});
+
 	it("coalesces live terminal resize observer deliveries into the next frame", () => {
 		const callbacks: ResizeObserverCallback[] = [];
 		const frames: FrameRequestCallback[] = [];
@@ -394,6 +427,8 @@ describe("XtermTerminal", () => {
 			writable: true,
 			value: CapturingResizeObserver,
 		});
+		const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+		const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
 		try {
 			render(
 				<div data-terminal-live-resize="true">
@@ -411,6 +446,8 @@ describe("XtermTerminal", () => {
 			act(() => frames.shift()?.(performance.now()));
 			expect(state.fit).toHaveBeenCalledTimes(1);
 		} finally {
+			width.mockRestore();
+			height.mockRestore();
 			requestAnimationFrameSpy.mockRestore();
 			Object.defineProperty(window, "ResizeObserver", {
 				configurable: true,
@@ -848,6 +885,30 @@ describe("XtermTerminal", () => {
 		act(() => state.lastTerminal!.scrollListeners.forEach((listener) => listener()));
 		expect(scrollbar.dataset.active).toBe("true");
 
+		act(() => vi.advanceTimersByTime(699));
+		expect(scrollbar.dataset.active).toBe("true");
+		act(() => vi.advanceTimersByTime(1));
+		expect(scrollbar.dataset.active).toBe("false");
+
+		vi.useRealTimers();
+	});
+
+	// Streaming output scrolls continuously; the scrollbar stays up until the
+	// last scroll goes idle, and per-scroll work stays cheap (one pending timer).
+	it("keeps the macOS scrollbar up through continuous scrolling with one pending timer", () => {
+		setNavigatorPlatform("MacIntel");
+		const { container } = render(<XtermTerminal theme="dark" />);
+		const scrollbar = container.querySelector<HTMLElement>(".terminal-scrollbar")!;
+		scrollbar.dataset.scrollable = "true";
+		vi.useFakeTimers();
+		const scroll = () => act(() => state.lastTerminal!.scrollListeners.forEach((listener) => listener()));
+
+		for (let i = 0; i < 50; i++) scroll();
+		expect(vi.getTimerCount()).toBe(1);
+		act(() => vi.advanceTimersByTime(400));
+		scroll();
+		act(() => vi.advanceTimersByTime(400));
+		scroll();
 		act(() => vi.advanceTimersByTime(699));
 		expect(scrollbar.dataset.active).toBe("true");
 		act(() => vi.advanceTimersByTime(1));

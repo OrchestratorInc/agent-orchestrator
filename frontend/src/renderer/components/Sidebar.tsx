@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useNavigate, useParams, useRouterState } from "@tanstack/react-router";
@@ -56,7 +56,6 @@ import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { UpdateStatus } from "../../main/update-settings";
 import { parseNightlyVersion } from "../lib/build-channel";
-import { IS_DEV } from "../lib/is-dev";
 import {
 	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
@@ -75,7 +74,7 @@ import { deriveSessionAgentSwitchPresentation } from "../lib/agent-switch-presen
 import { aoBridge } from "../lib/bridge";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
-import { useCanResumeAgent } from "../hooks/useCanResumeAgent";
+import { canResumeAgent, resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { conversationQueryKey, conversationQueryOptions } from "../hooks/useConversation";
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
@@ -122,8 +121,8 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { OrchestratorIcon } from "./icons";
 import { Badge } from "./ui/badge";
-import aoLogo from "../../../assets/ao-logo.svg";
 import { cn } from "../lib/utils";
+import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { useUiStore } from "../stores/ui-store";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -131,7 +130,7 @@ import { SessionArchiveDialog } from "./SessionArchiveDialog";
 import { CreateProjectFlow, type CloneProjectInput, type CreateProjectInput } from "./CreateProjectFlow";
 import { ResizeHandle } from "./ResizeHandle";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
-import { isMacPlatform } from "../lib/platform";
+import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { useCloudSession } from "../lib/cloud-session";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
@@ -142,19 +141,21 @@ import { RemoteHostsSection } from "./RemoteHostsSection";
 // sidebar toggle + history arrows above this surface. Windows hangs the sidebar
 // under its custom titlebar.
 const isMac = isMacPlatform();
+const brandInTitlebar = isMac || isLinuxPlatform();
 const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
-// Shared styling for the per-project hover action buttons (orchestrator, kebab):
-// a 20px square icon button that tints on hover, matching the old
-// SidebarMenuAction footprint. Never painted — `.sidebar-icon-action` also
-// opts out of the sidebar focus fill in styles.css.
-const HOVER_ACTION_CLASS =
-	"sidebar-icon-action grid size-5 shrink-0 place-items-center rounded-md !bg-transparent text-passive hover:!bg-transparent focus:!bg-transparent focus-visible:!bg-transparent active:!bg-transparent data-[state=open]:!bg-transparent hover:text-foreground disabled:pointer-events-none disabled:opacity-50 data-[state=open]:text-foreground [&_svg]:size-icon-lg";
-
-// Session actions overlay the row without changing its footprint. The primary
-// label only yields their width while the row is hovered or contains focus.
-const SESSION_ACTION_CLASS =
-	"sidebar-icon-action grid size-5 shrink-0 place-items-center rounded-md !bg-transparent p-1 text-passive hover:!bg-transparent focus:!bg-transparent focus-visible:!bg-transparent active:!bg-transparent data-[state=open]:!bg-transparent hover:text-foreground disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-3!";
+// One row-action layout shared by project rows, session rows, and the section
+// header "+": 24px square buttons, 14px icons, a 6px gap, and a 4px right inset,
+// vertically centered in the row, so every action's right edge lines up. Never
+// painted: `.sidebar-icon-action` also opts out of the sidebar focus fill in
+// styles.css. Hover/reveal stays instant (no transitions here).
+const ROW_ACTIONS_CLASS = "absolute inset-y-0 right-1 flex items-center gap-0.5";
+/** Long enough that sweeping the pointer across the list starts no agents. */
+const AGENT_WARM_UP_HOVER_MS = 300;
+const ROW_ACTION_BUTTON_CLASS =
+	"sidebar-icon-action grid size-6 shrink-0 place-items-center rounded-md !bg-transparent text-passive hover:!bg-interactive-hover focus:!bg-transparent focus-visible:!bg-interactive-hover active:!bg-interactive-hover data-[state=open]:!bg-interactive-hover hover:text-foreground focus-visible:text-foreground disabled:pointer-events-none disabled:opacity-50 data-[state=open]:text-foreground [&_svg]:size-icon-md";
+const HOVER_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
+const SESSION_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
 
 // Shared nav-row chrome (Codex-style): inset pill, 14px type, no accent bar.
 // Plain fill stays for non-interactive status rows; interactive rows use
@@ -175,9 +176,14 @@ const FOOTER_RAIL_BUTTON_CLASS = cn(
 	"grid size-control-board place-items-center rounded-lg text-muted-foreground [&_svg]:size-icon-base",
 );
 
+// Top-of-sidebar rows (Search, Automations) and project rows: one 32px row with
+// a 10px inset, 8px icon gap, and 14px icons so edges match the section headers
+// and session rows.
+const SIDEBAR_ROW_CLASS = "h-8 gap-2 [&_svg]:size-icon-md";
+
 // Search + Pinned/Projects section chrome: same type, icon, and row size.
 const SECTION_ROW_CLASS =
-	"flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2.5 text-sm font-medium text-passive [&_svg]:size-icon-md [&_svg]:shrink-0";
+	"flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2.5 text-sm font-medium text-muted-foreground [&_svg]:size-icon-md [&_svg]:shrink-0";
 
 // Mirrors the daemon's display-name cap (maxDisplayNameLen) and the spawn
 // `--name` flag, so inline edits never round-trip a value the API would reject.
@@ -305,16 +311,42 @@ function useGrabbingCursor(active: boolean) {
 	}, [active]);
 }
 
+/** How the sidebar collapses. Only the "icon" mode shows a rail where every list
+ *  must be fully open; "offcanvas" slides the whole sidebar away, and its lists
+ *  must keep their open/closed and Show more state while it is hidden. */
+const SIDEBAR_COLLAPSIBLE: "offcanvas" | "icon" = "offcanvas";
 export const SIDEBAR_DEFAULT_WIDTH = 240;
 /** Floor/ceiling for sidebar resize — pass the same values to useResizable AND ResizeHandle. */
 export const SIDEBAR_MIN_WIDTH = 200;
 export const SIDEBAR_MAX_WIDTH = 420;
+const SIDEBAR_BRAND_TRAILING_GAP = 12;
+/** Narrowest the sidebar may get: just wide enough to show the whole brand
+ *  label. Measured, because the label's left edge moves with window zoom (the
+ *  traffic-light reserve is divided by the zoom factor). Falls back to
+ *  SIDEBAR_MIN_WIDTH when no brand is rendered (collapsed rail, tests). */
+function sidebarMinWidth(): number {
+	const brand = Array.from(document.querySelectorAll<HTMLElement>("[data-sidebar-brand]")).find(
+		(el) => el.getBoundingClientRect().width > 0,
+	);
+	if (!brand) return SIDEBAR_MIN_WIDTH;
+	// Measure the label's natural width (its scrollWidth), not its painted width:
+	// the titlebar clips the label to the sidebar, so the painted width would
+	// shrink the floor to whatever the sidebar already is. Without a separate
+	// label (the Windows header), the whole brand element is the label.
+	const label = brand.querySelector<HTMLElement>("[data-brand-label]");
+	// +1px of slack: scrollWidth is rounded, and a fractional label width would
+	// otherwise clip the last letter at exactly the floor.
+	const fit = label
+		? Math.ceil(label.getBoundingClientRect().left + label.scrollWidth + SIDEBAR_BRAND_TRAILING_GAP + 1)
+		: Math.ceil(brand.getBoundingClientRect().left + brand.scrollWidth + SIDEBAR_BRAND_TRAILING_GAP);
+	return Math.min(SIDEBAR_MAX_WIDTH, fit);
+}
 /** Initial item count shown in expanded sections; Show more/less toggles the remainder.
  *  Collapsed icon rail always shows the full list so projects stay reachable. */
 const SIDEBAR_INITIAL_SECTION_LIMIT = 10;
 /** Initial agent count listed under each expanded project before its own Show more. */
 const SIDEBAR_PROJECT_SESSION_LIMIT = 6;
-/** Keep the complete Scratchpad section (including its footer gap) under half the available height. */
+/** Section scrollers fill the height their flex parent leaves them and scroll inside it. */
 const SECTION_SCROLLER_CLASS =
 	"scrollbar-none overflow-y-auto overflow-x-hidden overscroll-contain group-data-[collapsible=icon]:overflow-visible";
 
@@ -348,20 +380,12 @@ function useShowMoreCap<T extends { id: string }>(
 	return { listed, hiddenCount: Math.max(0, items.length - limit), showAll, toggleShowAll };
 }
 
-/** Scratchpad's total section cap, or none in the collapsed icon rail. */
+/** Scratchpad's total section cap, or none in the collapsed icon rail. Projects
+ *  take whatever height remains (flex-1 + min-h-0), so the two sections share the
+ *  column by flex layout alone and can never sum past it. */
 function scratchpadSectionStyle(isCollapsed: boolean): CSSProperties | undefined {
 	if (isCollapsed) return undefined;
 	return { maxHeight: "calc(50cqh - var(--space-2))" };
-}
-
-/** Cap the content-sized Projects list to the space left above Scratchpad. */
-function projectsScrollerStyle(isCollapsed: boolean, hasShowMore: boolean): CSSProperties | undefined {
-	if (isCollapsed) return undefined;
-	return {
-		maxHeight: hasShowMore
-			? "max(0px, calc(100cqh - var(--sidebar-scratchpad-reserved-height, 0px) - var(--space-8) - var(--space-1)))"
-			: "max(0px, calc(100cqh - var(--sidebar-scratchpad-reserved-height, 0px)))",
-	};
 }
 
 function SidebarSectionScroller({
@@ -413,19 +437,14 @@ function SidebarSectionScroller({
 		};
 	}, [updateScrollEdges]);
 
-	const prefersReducedMotion = useReducedMotion();
 	return (
-		<motion.div
-			className={`relative min-h-0 ${wrapperClassName ?? ""}`}
-			layout
-			transition={prefersReducedMotion ? { duration: 0 } : { layout: { type: "spring", stiffness: 520, damping: 42 } }}
-		>
+		<div className={`relative min-h-0 ${wrapperClassName ?? ""}`}>
 			<div ref={scrollerRef} className={className} data-testid={testId} style={style}>
 				{children}
 			</div>
 			{scrollEdges.top ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--top" /> : null}
 			{scrollEdges.bottom ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--bottom" /> : null}
-		</motion.div>
+		</div>
 	);
 }
 
@@ -601,6 +620,9 @@ export function Sidebar({
 	const selection = useSelection();
 	const { state, setOpen, toggleSidebar } = useSidebar();
 	const isCollapsed = state === "collapsed";
+	// List behavior (force-open sections, lifted Show more caps) belongs to the
+	// icon rail only; toggling an offcanvas sidebar must not change any list.
+	const isIconRail = isCollapsed && SIDEBAR_COLLAPSIBLE === "icon";
 	const [expandedChromeVisible, setExpandedChromeVisible] = useState(!isCollapsed);
 	// One IPC subscription for both footer variants of the restart-to-update prompt.
 	const updateStatus = useUpdateStatus();
@@ -669,15 +691,6 @@ export function Sidebar({
 	const [pinnedOpen, setPinnedOpen] = useState(true);
 	const [projectsOpen, setProjectsOpen] = useState(true);
 	const [scratchpadOpen, setScratchpadOpen] = useState(true);
-	// Fetch the running app version to derive the build channel. Channel is
-	// identity: derived from the version string, not the update-channel setting
-	// (the setting can be changed mid-session; the binary cannot).
-	const { data: appVersion } = useQuery({
-		queryKey: ["app-version"],
-		queryFn: () => aoBridge.app.getVersion(),
-		staleTime: Infinity,
-	});
-	const isNightly = typeof appVersion === "string" && appVersion.includes("-nightly.");
 
 	// agent-orchestrator's sidebar resize: drag the right edge (200-420px,
 	// persisted), double-click to reset to 240px. Drives --ao-sidebar-w on :root,
@@ -710,20 +723,12 @@ export function Sidebar({
 		getCssTargets: getResizeTargets,
 		storageKey: "ao-sidebar-w",
 		defaultWidth: SIDEBAR_DEFAULT_WIDTH,
-		min: SIDEBAR_MIN_WIDTH,
+		min: sidebarMinWidth,
 		max: SIDEBAR_MAX_WIDTH,
 		edge: "right",
+		reclampOnWindowResize: true,
 		onExpand: () => setOpen(true),
 	});
-
-	// Suppress layout animations for the first 500ms so background session
-	// re-sorts during daemon settle don't cause visible row shuffling.
-	const [layoutSettled, setLayoutSettled] = useState(false);
-	const sidebarSectionsRef = useRef<HTMLDivElement>(null);
-	useEffect(() => {
-		const timer = window.setTimeout(() => setLayoutSettled(true), 500);
-		return () => window.clearTimeout(timer);
-	}, []);
 
 	const [projectOrder, setProjectOrder] = useState<string[]>([]);
 	const orderedWorkspaces = useMemo(
@@ -746,8 +751,8 @@ export function Sidebar({
 		hiddenCount: hiddenProjectCount,
 		showAll: showAllProjects,
 		toggleShowAll: toggleShowAllProjects,
-	} = useShowMoreCap(projectWorkspaces, SIDEBAR_INITIAL_SECTION_LIMIT, selection.activeProjectId, isCollapsed);
-	const projectContentOpen = (projectWorkspaces.length > 0 || remoteHosts.length > 0) && (projectsOpen || isCollapsed);
+	} = useShowMoreCap(projectWorkspaces, SIDEBAR_INITIAL_SECTION_LIMIT, selection.activeProjectId, isIconRail);
+	const projectContentOpen = (projectWorkspaces.length > 0 || remoteHosts.length > 0) && (projectsOpen || isIconRail);
 	const projectIds = useMemo(
 		() => projectWorkspaces.map((workspace) => workspace.id),
 		[projectWorkspaces],
@@ -871,12 +876,16 @@ export function Sidebar({
 	return (
 		// Pinned sidebars start below shell chrome.
 		<SidebarRoot
-			collapsible="offcanvas"
+			collapsible={SIDEBAR_COLLAPSIBLE}
 			resizeScopeRef={resizeScopeRef}
 			data-expanded-chrome={expandedChromeVisible ? "visible" : "hidden"}
 			data-topbar-offset={underTopbar ? topbarOffset : undefined}
 			className={cn(
 				"sidebar-focusless",
+				// The container keeps a 1px right border, so its content box is 1px
+				// narrower on the right. Pad the left by the same 1px so row gutters
+				// match on both sides.
+				"pl-px",
 				hideEdgeBorder ? "border-transparent" : "border-r-0 group-data-[side=left]:border-r-0",
 				// Prefer top/bottom over h-svh/inset-y so titlebar offset (`top-(--sidebar-chrome-offset)`)
 				// clears chrome without fighting a second height constraint.
@@ -898,6 +907,8 @@ export function Sidebar({
 					aria-label={t("shell.goHome")}
 					className={cn(
 						"group/brand flex w-full shrink-0 items-center gap-1.5 rounded-md px-0.5 text-left",
+						// macOS/Linux show the brand in TitlebarNav instead.
+						brandInTitlebar && "hidden",
 						"group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-1 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:pb-2",
 						commandPaletteEnabled ? "pb-2" : "pb-3",
 					)}
@@ -906,31 +917,10 @@ export function Sidebar({
 					type="button"
 				>
 					<span
-						className={cn(
-							"grid h-5.5 w-5.5 shrink-0 place-items-center",
-							"group-data-[collapsible=icon]:size-control-board group-data-[collapsible=icon]:rounded-lg",
-						)}
+						className="sidebar-expanded-chrome min-w-0 flex-1 truncate text-base font-semibold leading-tight tracking-tight-lg text-foreground group-data-[collapsible=icon]:hidden"
 					>
-						<img src={aoLogo} alt="" aria-hidden="true" className="h-5.5 w-5.5 -translate-y-[3px] rounded-md object-cover" />
+						Orchestrator.inc
 					</span>
-					<span
-						className="sidebar-expanded-chrome min-w-0 flex-1 truncate text-sm font-bold leading-tight tracking-tight-lg text-foreground group-data-[collapsible=icon]:hidden"
-					>
-						Agent Orchestrator
-					</span>
-					{isNightly && (
-						<span className="sidebar-expanded-chrome shrink-0 rounded-full bg-purple-subtle px-1.5 py-0.5 text-micro font-semibold leading-none text-purple-accent group-data-[collapsible=icon]:hidden">
-							{t("shell.nightly")}
-						</span>
-					)}
-					{IS_DEV && (
-						<span
-							data-testid="sidebar-dev-badge"
-							className="sidebar-expanded-chrome shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-micro font-semibold leading-none text-amber-600 group-data-[collapsible=icon]:hidden dark:text-amber-400"
-						>
-							{t("shell.dev")}
-						</span>
-					)}
 				</button>
 				<Tooltip>
 					<TooltipTrigger asChild>
@@ -952,7 +942,7 @@ export function Sidebar({
 			{/* Keep Search + section chrome fixed above the scrollable sidebar content. */}
 			<div className="flex shrink-0 flex-col gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5">
 				{commandPaletteEnabled ? (
-					<SidebarGroup className="p-0 pb-4">
+					<SidebarGroup className="p-0 pb-0.5 group-data-[collapsible=icon]:pb-1">
 						<SidebarGroupContent>
 							<SidebarMenu className="gap-0.5 group-data-[collapsible=icon]:gap-1">
 								<SidebarSearchButton onOpen={() => setCommandPaletteOpen(true)} />
@@ -962,16 +952,13 @@ export function Sidebar({
 				) : null}
 				<SidebarMenu className="mb-3 gap-0.5 group-data-[collapsible=icon]:gap-1">
 					<SidebarMenuItem>
-						<SidebarMenuButton
-							aria-label={t("automations.title")}
-							className={NAV_ROW_CLASS}
-							isActive={selection.isAutomations}
+						<SidebarTopNavRow
+							active={selection.isAutomations}
+							icon={<CalendarClock aria-hidden="true" />}
+							label={t("automations.title")}
 							onClick={selection.goAutomations}
 							tooltip={isCollapsed ? t("automations.title") : undefined}
-						>
-							<CalendarClock aria-hidden="true" />
-							<span className="sidebar-expanded-chrome group-data-[collapsible=icon]:hidden">{t("automations.title")}</span>
-						</SidebarMenuButton>
+						/>
 					</SidebarMenuItem>
 				</SidebarMenu>
 
@@ -997,11 +984,12 @@ export function Sidebar({
 											? selection.activeRemoteHostId === session.hostId && selection.activeRemoteSessionId === session.id
 											: selection.activeSessionId === session.id}
 										hostLabel={session.hostId ? remoteHosts.find((host) => host.hostId === session.hostId)?.label ?? session.hostId : undefined}
-										layoutSettled={layoutSettled}
 										onKilled={handlePinnedSessionKilled}
-										onOpenSession={(target) => target.hostId
-											? void remoteNavigate(sessionNavigateTarget(target.workspaceId, target.id, target.hostId))
-											: selection.goSession(target.workspaceId, target.id)}
+										onOpenSession={(target) => {
+											if (session.kind === "worker") recordManualWorkerOpen(target.id, target.hostId);
+											if (target.hostId) void remoteNavigate(sessionNavigateTarget(target.workspaceId, target.id, target.hostId));
+											else selection.goSession(target.workspaceId, target.id);
+										}}
 									/>
 								))}
 							</SidebarMenuSub>
@@ -1037,7 +1025,6 @@ export function Sidebar({
 					{/* Tree (project-sidebar__tree) */}
 					<SidebarGroupContent
 						className="sidebar-sections-container flex min-h-0 flex-1 flex-col"
-						ref={sidebarSectionsRef}
 					>
 						{workspaceError ? (
 							<div className="sidebar-expanded-chrome px-2.5 py-3 group-data-[collapsible=icon]:hidden">
@@ -1046,11 +1033,11 @@ export function Sidebar({
 							</div>
 						) : null}
 						{projectWorkspaces.length > 0 || remoteHosts.length > 0 ? (
-							<AnimatedSectionBody open={projectContentOpen} className="flex-none">
+							<AnimatedSectionBody open={projectContentOpen} className="min-h-0 flex-initial group-data-[collapsible=icon]:flex-none">
 								<SidebarSectionScroller
-									className={SECTION_SCROLLER_CLASS}
+									className={`${SECTION_SCROLLER_CLASS} min-h-0 flex-1`}
 									testId="sidebar-projects-scroller"
-									style={projectsScrollerStyle(isCollapsed, !isCollapsed && hiddenProjectCount > 0)}
+									wrapperClassName="flex flex-col flex-1"
 								>
 									<SidebarMenu className="relative gap-0.5 rounded-lg group-data-[collapsible=icon]:gap-1 group-data-[collapsible=icon]:rounded-none">
 										<AnimatePresence initial={false}>
@@ -1063,7 +1050,6 @@ export function Sidebar({
 													selection={selection}
 													isDragged={draggingProjectId === workspace.id}
 													projectDragInProgress={draggingProjectId !== null}
-													layoutSettled={layoutSettled}
 													consumeDragClick={projectDragClickGuard.consumeClick}
 													onToggle={toggleProjectDisclosure}
 													onRemoveProject={onRemoveProject}
@@ -1098,7 +1084,6 @@ export function Sidebar({
 													isDragged={false}
 													projectDragInProgress={false}
 													consumeDragClick={() => false}
-													layoutSettled={layoutSettled}
 													onToggle={() => setCollapsedRemoteProjects((previous) => {
 														const next = new Set(previous);
 														next.has(projectKey) ? next.delete(projectKey) : next.add(projectKey);
@@ -1115,7 +1100,7 @@ export function Sidebar({
 											}}
 											onRetry={onRetryRemoteHosts}
 										/>
-										{isCollapsed && <CreateProjectListItem />}
+										{isIconRail && <CreateProjectListItem />}
 										<div
 											aria-hidden="true"
 											data-project-drop-line=""
@@ -1124,7 +1109,7 @@ export function Sidebar({
 										/>
 									</SidebarMenu>
 								</SidebarSectionScroller>
-								{!isCollapsed && hiddenProjectCount > 0 ? (
+								{!isIconRail && hiddenProjectCount > 0 ? (
 									<ShowMoreRow
 										expanded={showAllProjects}
 										label={
@@ -1141,9 +1126,7 @@ export function Sidebar({
 							<ScratchpadSection
 								workspace={standaloneWorkspace}
 								selection={selection}
-								sidebarSectionsRef={sidebarSectionsRef}
-								isCollapsed={isCollapsed}
-								layoutSettled={layoutSettled}
+								isCollapsed={isIconRail}
 								open={scratchpadOpen}
 								onToggle={() => setScratchpadOpen((open) => !open)}
 							/>
@@ -1168,7 +1151,11 @@ export function Sidebar({
 				)}
 				<div
 					aria-hidden={isCollapsed || undefined}
-					hidden={isCollapsed}
+					// `hidden` (display: none) is for the real icon rail only. Hiding the footer
+					// this way while an offcanvas sidebar slides away drops its content at once
+					// and leaves the footer's top border behind. aria-hidden and tabIndex -1
+					// already keep it out of reach while collapsed.
+					hidden={isIconRail}
 					className="sidebar-expanded-chrome relative flex w-full min-w-46.5 flex-col gap-0.5"
 				>
 					<UpdateStatusRow
@@ -1292,7 +1279,6 @@ type ProjectItemProps = {
 	isDragged: boolean;
 	projectDragInProgress: boolean;
 	consumeDragClick: (id: string) => boolean;
-	layoutSettled: boolean;
 	onToggle: (projectId: string) => void;
 	onRemoveProject: (projectId: string) => Promise<void>;
 	suppressInitialExpandAnimation: boolean;
@@ -1311,7 +1297,6 @@ const ProjectItem = memo(function ProjectItem({
 	isDragged,
 	projectDragInProgress,
 	consumeDragClick,
-	layoutSettled,
 	onToggle,
 	onRemoveProject,
 	suppressInitialExpandAnimation,
@@ -1382,6 +1367,7 @@ const ProjectItem = memo(function ProjectItem({
 		[sessions],
 	);
 	const openSession = useCallback((sessionId: string) => {
+		recordManualWorkerOpen(sessionId);
 		selection.goSession(workspace.id, sessionId);
 	}, [selection, workspace.id]);
 	const handleSessionKilled = useCallback(
@@ -1545,7 +1531,6 @@ const ProjectItem = memo(function ProjectItem({
 					initial={{ opacity: 0, y: -4 }}
 					animate={{ opacity: 1, y: 0 }}
 					exit={{ opacity: 0, y: -4, transition: { duration: prefersReducedMotion ? 0 : 0.12, ease: "easeIn" } }}
-					layout={!layoutSettled || projectDragInProgress ? false : "position"}
 					onDragOver={(event) => onProjectDragOver(event, workspace.id)}
 					onDrop={onProjectDrop}
 					transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 520, damping: 42, mass: 0.55 }}
@@ -1574,10 +1559,11 @@ const ProjectItem = memo(function ProjectItem({
 									className={cn(
 										NAV_ROW_CLASS,
 										NAV_ROW_HIGHLIGHT_HOST_CLASS,
-										// gap-2 matches SectionDisclosure so project icons/labels share the
-										// Projects header's left edge (NAV_ROW defaults to gap-2.5).
+										// Same 32px row, gap, and icon size as Search/Automations and the
+										// Projects header so icons and labels share one left edge.
+										SIDEBAR_ROW_CLASS,
 										!workspace.hostId && "cursor-grab active:cursor-grabbing",
-										"gap-2 pr-sidebar-project-actions [&_svg]:size-icon-md",
+										"pr-sidebar-project-actions",
 										"transition-none",
 										projectIsDragging && "!cursor-grabbing",
 										projectDragInProgress && "hover:text-muted-foreground active:text-muted-foreground",
@@ -1590,7 +1576,7 @@ const ProjectItem = memo(function ProjectItem({
 		    optically indenting these icons relative to the header. */}
 									<span
 										aria-hidden="true"
-										className="relative z-[1] inline-flex size-icon-md shrink-0 translate-y-px items-center justify-center text-muted-foreground group-data-[collapsible=icon]:hidden"
+										className="relative z-[1] inline-flex size-icon-md shrink-0 translate-y-px items-center justify-center group-data-[collapsible=icon]:hidden"
 										data-expanded={expanded ? "" : undefined}
 										data-project-folder-visual=""
 									>
@@ -1617,7 +1603,7 @@ const ProjectItem = memo(function ProjectItem({
 									{/* Collapsed icon rail: folder icon */}
 									<span
 										aria-hidden="true"
-										className="relative z-[1] hidden size-8 items-center justify-center text-muted-foreground group-data-[collapsible=icon]:inline-flex"
+										className="relative z-[1] hidden size-8 items-center justify-center group-data-[collapsible=icon]:inline-flex"
 									>
 										{expanded ? <FolderOpen className="size-5" strokeWidth={1.75} /> : <Folder className="size-5" strokeWidth={1.75} />}
 									</span>
@@ -1654,7 +1640,8 @@ const ProjectItem = memo(function ProjectItem({
 		navigation surface so their own presses stay independent. */}
 						{!isStandalone && <div
 								className={cn(
-									"sidebar-expanded-chrome absolute top-0 right-0.5 z-chrome flex h-control-form items-center gap-px",
+									"sidebar-expanded-chrome z-chrome",
+									ROW_ACTIONS_CLASS,
 									"group-data-[collapsible=icon]:hidden",
 									projectDragInProgress && "pointer-events-none",
 								)}
@@ -1776,7 +1763,6 @@ const ProjectItem = memo(function ProjectItem({
 												sessions={listedSessions}
 												sessionIds={listedSessionIds}
 												activeSessionId={selection.activeSessionId}
-												disableLayout={!layoutSettled}
 												plain={projectDragInProgress}
 												onReorder={commitSessionOrder}
 												onKilled={handleSessionKilled}
@@ -1855,23 +1841,18 @@ const ProjectItem = memo(function ProjectItem({
 function ScratchpadSection({
 	workspace,
 	selection,
-	sidebarSectionsRef,
 	isCollapsed,
-	layoutSettled,
 	open,
 	onToggle,
 }: {
 	workspace: WorkspaceSummary;
 	selection: Selection;
-	sidebarSectionsRef: RefObject<HTMLDivElement | null>;
 	isCollapsed: boolean;
-	layoutSettled: boolean;
 	open: boolean;
 	onToggle: () => void;
 }) {
 	const { t } = useTranslation();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
-	const sectionRef = useRef<HTMLDivElement>(null);
 	// Mirrors the project tree: only termination removes an agent from the
 	// sidebar, so a completed PR session stays reachable.
 	const visibleSessions = useMemo(
@@ -1890,21 +1871,6 @@ function ScratchpadSection({
 		toggleShowAll,
 	} = useShowMoreCap(sessions, SIDEBAR_INITIAL_SECTION_LIMIT, selection.activeSessionId, isCollapsed);
 	const listedSessionIds = useMemo(() => listedSessions.map((session) => session.id), [listedSessions]);
-	useLayoutEffect(() => {
-		const section = sectionRef.current;
-		const container = sidebarSectionsRef.current;
-		if (!container) return;
-		const updateReservedHeight = () => {
-			const marginBottom = section ? Number.parseFloat(window.getComputedStyle(section).marginBottom) || 0 : 0;
-			const height = section ? section.getBoundingClientRect().height + marginBottom : 0;
-			container.style.setProperty("--sidebar-scratchpad-reserved-height", `${height}px`);
-		};
-		updateReservedHeight();
-		if (!section || typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(updateReservedHeight);
-		observer.observe(section);
-		return () => observer.disconnect();
-	}, [isCollapsed, listedSessions.length, open, showAll, sidebarSectionsRef]);
 	const commitSessionOrder = useCallback(
 		(next: string[] | null) => {
 			if (!next) return;
@@ -1916,7 +1882,10 @@ function ScratchpadSection({
 		[sessions],
 	);
 	const openSession = useCallback(
-		(sessionId: string) => selection.goSession(STANDALONE_WORKSPACE_ID, sessionId),
+		(sessionId: string) => {
+			recordManualWorkerOpen(sessionId);
+			selection.goSession(STANDALONE_WORKSPACE_ID, sessionId);
+		},
 		[selection],
 	);
 	const handleSessionKilled = useCallback(
@@ -1935,7 +1904,6 @@ function ScratchpadSection({
 
 	return (
 		<div
-			ref={sectionRef}
 			className="sidebar-expanded-chrome mb-2 flex min-h-0 shrink-0 flex-col overflow-hidden group-data-[collapsible=icon]:hidden"
 			data-scratchpad-section=""
 			style={scratchpadSectionStyle(isCollapsed)}
@@ -1949,10 +1917,10 @@ function ScratchpadSection({
 					<div className="relative inline-flex items-center">
 						<span
 							className={cn(
-								"pointer-events-none absolute right-full top-0 flex h-full origin-center scale-[0.8] items-center opacity-0",
+								"pointer-events-none absolute right-full top-0 flex h-full origin-center pr-1.5 scale-[0.8] items-center opacity-0",
 								"transition-[scale] duration-normal ease-[var(--ease-out)]",
 								"motion-reduce:transition-none",
-								"group-focus-within/scratchpad:pointer-events-auto group-focus-within/scratchpad:scale-100 group-focus-within/scratchpad:opacity-100",
+								"group-has-[:focus-visible]/scratchpad:pointer-events-auto group-has-[:focus-visible]/scratchpad:scale-100 group-has-[:focus-visible]/scratchpad:opacity-100",
 							)}
 							data-scratchpad-archive-action=""
 						>
@@ -1961,14 +1929,14 @@ function ScratchpadSection({
 									<span className="inline-flex">
 										<button
 											aria-label={t("shell.archivedSessions")}
-											className="sidebar-icon-action grid size-icon-xl shrink-0 place-items-center rounded-sm !bg-transparent text-passive hover:!bg-transparent focus:!bg-transparent focus-visible:!bg-transparent active:!bg-transparent hover:text-foreground"
+											className={ROW_ACTION_BUTTON_CLASS}
 											onClick={(event) => {
 												event.stopPropagation();
 												selection.goStandaloneBoard();
 											}}
 											type="button"
 										>
-											<Archive className="size-icon-sm translate-y-px" aria-hidden="true" />
+											<Archive aria-hidden="true" />
 										</button>
 									</span>
 								</TooltipTrigger>
@@ -1980,11 +1948,11 @@ function ScratchpadSection({
 								<span className="inline-flex">
 									<button
 										aria-label={t("shell.openNewAgent")}
-										className="sidebar-icon-action grid size-icon-xl shrink-0 place-items-center rounded-sm !bg-transparent text-passive hover:!bg-transparent focus:!bg-transparent focus-visible:!bg-transparent active:!bg-transparent hover:text-foreground"
+										className={ROW_ACTION_BUTTON_CLASS}
 										onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 										type="button"
 									>
-										<Plus className="size-icon-sm translate-y-px" aria-hidden="true" />
+										<Plus aria-hidden="true" />
 									</button>
 								</span>
 							</TooltipTrigger>
@@ -1995,9 +1963,9 @@ function ScratchpadSection({
 			/>
 			<AnimatedSectionBody open={open && listedSessions.length > 0} className="min-h-0 flex-1">
 				<SidebarSectionScroller
-					className={`${SECTION_SCROLLER_CLASS} h-full min-h-0 flex-1`}
+					className={`${SECTION_SCROLLER_CLASS} min-h-0 flex-1`}
 					testId="sidebar-scratchpad-scroller"
-					wrapperClassName="flex-1"
+					wrapperClassName="flex flex-col flex-1"
 				>
 					<SessionReorderList
 						dndId={sessionDndId(STANDALONE_WORKSPACE_ID)}
@@ -2006,7 +1974,6 @@ function ScratchpadSection({
 						sessions={listedSessions}
 						sessionIds={listedSessionIds}
 						activeSessionId={selection.activeSessionId}
-						disableLayout={!layoutSettled}
 						indented={false}
 						onReorder={commitSessionOrder}
 						onKilled={handleSessionKilled}
@@ -2029,19 +1996,17 @@ const PinnedSessionRow = memo(function PinnedSessionRow({
 	session,
 	active,
 	hostLabel,
-	layoutSettled,
 	onKilled,
 	onOpenSession,
 }: {
 	session: WorkspaceSession;
 	active: boolean;
 	hostLabel?: string;
-	layoutSettled: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpenSession: (session: WorkspaceSession) => void;
 }) {
 	const onOpen = useCallback(() => onOpenSession(session), [onOpenSession, session]);
-	return <SessionRow session={session} active={active} hostLabel={hostLabel} disableLayout={!layoutSettled} indented={false} onKilled={onKilled} onOpen={onOpen} />;
+	return <SessionRow session={session} active={active} hostLabel={hostLabel} indented={false} onKilled={onKilled} onOpen={onOpen} />;
 });
 
 // A session row inside its project's drag context. The Pinned section renders
@@ -2050,7 +2015,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	session,
 	active,
 	consumeDragClick,
-	disableLayout = false,
 	indented = true,
 	layoutDependency,
 	listIsDragging,
@@ -2061,9 +2025,8 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	session: WorkspaceSession;
 	active: boolean;
 	consumeDragClick: (id: string) => boolean;
-	disableLayout?: boolean;
 	indented?: boolean;
-	layoutDependency: string;
+	layoutDependency?: string;
 	listIsDragging: boolean;
 	dropTransitionDisabled: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
@@ -2081,7 +2044,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 			onOpen={() => {
 				if (!consumeDragClick(session.id)) onOpen(session.id);
 			}}
-			disableLayout={disableLayout}
 			layoutDependency={layoutDependency}
 			listIsDragging={listIsDragging}
 			reorder={{
@@ -2107,7 +2069,6 @@ function SessionReorderList({
 	sessions,
 	sessionIds,
 	activeSessionId,
-	disableLayout = false,
 	indented = true,
 	plain = false,
 	onReorder,
@@ -2120,7 +2081,6 @@ function SessionReorderList({
 	sessions: WorkspaceSession[];
 	sessionIds: string[];
 	activeSessionId?: string;
-	disableLayout?: boolean;
 	indented?: boolean;
 	/** While a project is being dragged, leave the session lists as plain rows:
 	 *  otherwise every expanded project's DnD context measures its sortable
@@ -2130,7 +2090,15 @@ function SessionReorderList({
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: (sessionId: string) => void;
 }) {
-	const layoutDependency = useMemo(() => sessionIds.join("\u0000"), [sessionIds]);
+	// Suppress the vertical glide for the first 500ms after the list mounts, so the
+	// re-sorts that follow a daemon settle or a project expanding do not shuffle rows.
+	const [layoutSettled, setLayoutSettled] = useState(false);
+	useEffect(() => {
+		const timer = window.setTimeout(() => setLayoutSettled(true), 500);
+		return () => window.clearTimeout(timer);
+	}, []);
+	const orderKey = useMemo(() => sessionIds.join("\u0000"), [sessionIds]);
+	const layoutDependency = layoutSettled ? orderKey : undefined;
 	const sensors = useReorderSensors();
 	const dragClickGuard = usePostDragClickGuard();
 	const [listDragging, setListDragging] = useState(false);
@@ -2174,7 +2142,6 @@ function SessionReorderList({
 						key={session.id}
 						session={session}
 						active={activeSessionId === session.id}
-						disableLayout
 						indented={indented}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
@@ -2196,14 +2163,12 @@ function SessionReorderList({
 		>
 			<SortableContext items={sessionIds} strategy={verticalListSortingStrategy}>
 				<SidebarMenuSub className={className} data-testid={testId}>
-					<AnimatePresence initial={false}>
 					{sessions.map((session) => (
 						<SortableSessionRow
 							key={session.id}
 							session={session}
 							active={activeSessionId === session.id}
 							consumeDragClick={dragClickGuard.consumeClick}
-							disableLayout={disableLayout}
 							indented={indented}
 							layoutDependency={layoutDependency}
 							listIsDragging={listDragging}
@@ -2212,7 +2177,6 @@ function SessionReorderList({
 							onOpen={onOpen}
 						/>
 					))}
-					</AnimatePresence>
 				</SidebarMenuSub>
 			</SortableContext>
 		</DndContext>
@@ -2233,7 +2197,6 @@ function SessionRow({
 	indented = true,
 	layoutDependency,
 	listIsDragging = false,
-	disableLayout = false,
 	onKilled,
 	onOpen,
 	reorder,
@@ -2242,10 +2205,11 @@ function SessionRow({
 	active: boolean;
 	hostLabel?: string;
 	indented?: boolean;
+	/** The list order. Present only for rows in a reorderable list: the row then
+	 *  animates its vertical position (and nothing else) when the order changes. */
 	layoutDependency?: string;
 	listIsDragging?: boolean;
 	/** Project drags pause nested session projection work. */
-	disableLayout?: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: () => void;
 	/** Present only for rows inside a reorderable project list. */
@@ -2271,9 +2235,22 @@ function SessionRow({
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 	const canPrefetch = session.mode === "chat" && !session.cloud && !session.hostId && !active && !listIsDragging && !reorder?.isDragging;
 	useEffect(() => () => clearTimeout(hoverTimerRef.current), [canPrefetch]);
+	const resumeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+	useEffect(() => () => clearTimeout(resumeTimerRef.current), [canPrefetch]);
 	const prefetchConversation = () => {
 		if (!canPrefetch || !hasTrustedApiBaseUrl() || queryClient.getQueryData(conversationQueryKey(session.id))) return;
 		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id));
+	};
+	// A stopped agent takes seconds to come back. Start it while the pointer rests
+	// on the row so the chat is ready when it opens; opening joins this request.
+	const warmUpAgent = () => {
+		if (!canPrefetch || !hasTrustedApiBaseUrl() || !canResumeAgent(session)) return;
+		void resumeAgentOnOpen(session.id)
+			.catch(() => {})
+			.finally(() => {
+				void refreshWorkspaces();
+				void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
+			});
 	};
 	const beginRename = useCallback(() => {
 		rename.begin();
@@ -2296,7 +2273,7 @@ function SessionRow({
 						autoFocus
 						className={cn(
 							"relative z-[1] h-full min-w-0 flex-1 appearance-none border-0 bg-transparent! p-0 text-sm text-foreground outline-none ring-0 focus:outline-none focus:ring-0",
-							session.lastUserMessageAt && "pr-[36px]",
+							(session.lastInteractionAt ?? session.lastUserMessageAt) && "pr-[36px]",
 						)}
 						data-session-inline-editor=""
 						maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
@@ -2330,12 +2307,9 @@ function SessionRow({
 					style={reorder ? sortableRowStyle(reorder) : undefined}
 				>
 			<motion.div
-				initial={{ opacity: 0, y: 4 }}
-				animate={{ opacity: 1, y: 0 }}
-				exit={{ opacity: 0, y: -4, transition: { duration: prefersReducedMotion ? 0 : 0.12, ease: "easeIn" } }}
-				layout={disableLayout || listIsDragging ? false : "position"}
-				layoutDependency={disableLayout ? undefined : layoutDependency}
-				transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 520, damping: 42, mass: 0.55 }}
+				layout={layoutDependency !== undefined && !listIsDragging ? "y" : false}
+				layoutDependency={layoutDependency}
+				transition={prefersReducedMotion ? { duration: 0 } : { layout: { type: "spring", stiffness: 520, damping: 42, mass: 0.55 } }}
 			>
 				<div
 					className={cn(
@@ -2356,17 +2330,22 @@ function SessionRow({
 							aria-label={t("shell.openSession", { title: hostLabel ? `${session.title} · ${hostLabel}` : session.title })}
 							className={cn(
 								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-								session.lastUserMessageAt ? "pr-[36px]" : "pr-2.5",
+								(session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
 								!reorder?.isDragging &&
-									"group-hover/session-row:pr-[50px] group-focus-within/session-row:pr-[50px]",
+									"group-hover/session-row:pr-sidebar-project-actions group-has-[:focus-visible]/session-row:pr-sidebar-project-actions",
 								reorder && "cursor-grab active:cursor-grabbing",
 								reorder?.isDragging && "!cursor-grabbing",
 							)}
 							{...(reorder?.listeners ?? {})}
 							onMouseEnter={() => {
-								if (canPrefetch) hoverTimerRef.current = setTimeout(prefetchConversation, 100);
+								if (!canPrefetch) return;
+								hoverTimerRef.current = setTimeout(prefetchConversation, 100);
+								resumeTimerRef.current = setTimeout(warmUpAgent, AGENT_WARM_UP_HOVER_MS);
 							}}
-							onMouseLeave={() => clearTimeout(hoverTimerRef.current)}
+							onMouseLeave={() => {
+								clearTimeout(hoverTimerRef.current);
+								clearTimeout(resumeTimerRef.current);
+							}}
 							onFocus={prefetchConversation}
 							onClick={(event) => {
 								if (event.detail > 1) return;
@@ -2441,16 +2420,17 @@ function SessionRow({
 
 const SessionMessageAge = memo(function SessionMessageAge({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
-	if (!session.lastUserMessageAt) return null;
+	const at = session.lastInteractionAt ?? session.lastUserMessageAt;
+	if (!at) return null;
 
 	return (
 		<time
-			className="absolute inset-y-0 right-1.5 z-[1] flex min-w-0 shrink-0 items-center whitespace-nowrap font-sans text-micro tabular-nums text-passive opacity-100 group-focus-within/session-row:opacity-0"
+			className="absolute inset-y-0 right-2 z-[1] flex min-w-0 shrink-0 items-center whitespace-nowrap font-sans text-micro tabular-nums text-passive opacity-100 group-has-[:focus-visible]/session-row:opacity-0"
 			data-session-message-age=""
-			dateTime={session.lastUserMessageAt}
-			title={t("shell.lastMessageAt", { time: formatTimeCompact(session.lastUserMessageAt) })}
+			dateTime={at}
+			title={t("shell.lastMessageAt", { time: formatTimeCompact(at) })}
 		>
-			{formatTimeTerse(session.lastUserMessageAt)}
+			{formatTimeTerse(at)}
 		</time>
 	);
 });
@@ -2499,11 +2479,12 @@ const SessionActions = memo(function SessionActions({
 			<div
 				className={cn(
 					/* 1.3 — pin/kill: scale 0.8↔1 from center (not origin-right — that reads as a slide) */
-					"absolute inset-y-0 right-0.5 flex origin-center scale-[0.8] items-center gap-px opacity-0",
+					ROW_ACTIONS_CLASS,
+					"origin-center scale-[0.8] opacity-0",
 					"transition-[scale] duration-normal ease-[var(--ease-out)]",
 					"motion-reduce:transition-none",
 					!isDragging &&
-						"group-focus-within/session-row:pointer-events-auto group-focus-within/session-row:scale-100 group-focus-within/session-row:opacity-100",
+						"group-has-[:focus-visible]/session-row:pointer-events-auto group-has-[:focus-visible]/session-row:scale-100 group-has-[:focus-visible]/session-row:opacity-100",
 				)}
 				data-session-action-buttons=""
 			>
@@ -3060,7 +3041,6 @@ function ShowMoreRow({
 				initial={{ opacity: 0, y: 4 }}
 				animate={{ opacity: 1, y: 0 }}
 				exit={{ opacity: 0, y: -4 }}
-				layout
 				onClick={onClick}
 				transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }}
 				type="button"
@@ -3162,6 +3142,51 @@ function SectionDisclosure({
 	);
 }
 
+/** Search + Automations share this one row so their hover/focus/active treatment
+ * (NavRowHighlight pill, foreground text, instant) cannot drift apart. */
+function SidebarTopNavRow({
+	active = false,
+	icon,
+	label,
+	onClick,
+	tooltip,
+	trailing,
+}: {
+	active?: boolean;
+	icon: ReactNode;
+	label: string;
+	onClick: () => void;
+	tooltip?: string;
+	trailing?: string;
+}) {
+	return (
+		<SidebarMenuButton
+			aria-label={label}
+			className={cn(
+				NAV_ROW_CLASS,
+				SIDEBAR_ROW_CLASS,
+				NAV_ROW_HIGHLIGHT_HOST_CLASS,
+				"transition-none",
+				"group-data-[collapsible=icon]:size-control-board! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:rounded-lg group-data-[collapsible=icon]:p-0!",
+			)}
+			isActive={active}
+			onClick={onClick}
+			tooltip={tooltip}
+		>
+			<NavRowHighlight active={active} />
+			<span className="relative z-[1] inline-flex shrink-0 items-center justify-center">{icon}</span>
+			<span className="sidebar-expanded-chrome relative z-[1] min-w-0 flex-1 truncate text-left group-data-[collapsible=icon]:hidden">
+				{label}
+			</span>
+			{trailing ? (
+				<span className="sidebar-expanded-chrome relative z-[1] ml-auto shrink-0 font-sans text-caption text-passive group-data-[collapsible=icon]:hidden">
+					{trailing}
+				</span>
+			) : null}
+		</SidebarMenuButton>
+	);
+}
+
 function SidebarSearchButton({ onOpen }: { onOpen: () => void }) {
 	const { t } = useTranslation();
 	const { state } = useSidebar();
@@ -3173,8 +3198,9 @@ function SidebarSearchButton({ onOpen }: { onOpen: () => void }) {
 		: "Unassigned";
 	return (
 		<SidebarMenuItem className="group-data-[collapsible=icon]:mb-0">
-			<SidebarMenuButton
-				aria-label={t("shell.search")}
+			<SidebarTopNavRow
+				icon={<Search strokeWidth={1.75} aria-hidden="true" />}
+				label={t("shell.search")}
 				onClick={() => {
 					// Open on the microtask after this click rather than inside it: mounting
 					// the palette dialog while this button's tooltip layer is still tearing
@@ -3183,21 +3209,8 @@ function SidebarSearchButton({ onOpen }: { onOpen: () => void }) {
 					queueMicrotask(onOpen);
 				}}
 				tooltip={isCollapsed ? t("shell.search") : undefined}
-				className={cn(
-					// Filled search trigger (Cursor-style): icon + label.
-					"h-8 gap-2 rounded-lg bg-muted px-2.5 text-sm font-normal text-muted-foreground",
-					"hover:bg-interactive-hover! hover:text-foreground active:bg-interactive-hover! [&_svg]:size-icon-sm!",
-					"group-data-[collapsible=icon]:size-control-board! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:rounded-lg group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:hover:bg-interactive-hover!",
-				)}
-			>
-				<Search strokeWidth={1.75} aria-hidden="true" />
-				<span className="sidebar-expanded-chrome min-w-0 flex-1 truncate text-left leading-none group-data-[collapsible=icon]:hidden">
-					{t("shell.search")}
-				</span>
-				<kbd className="sidebar-expanded-chrome ml-auto shrink-0 rounded-sm border border-border-strong/60 bg-surface/50 px-1.5 py-0.5 font-mono text-caption leading-none text-muted-foreground/80 group-data-[collapsible=icon]:hidden">
-					{commandPaletteShortcutLabel}
-				</kbd>
-			</SidebarMenuButton>
+				trailing={commandPaletteShortcutLabel}
+			/>
 		</SidebarMenuItem>
 	);
 }
@@ -3254,12 +3267,12 @@ function CreateProjectButton({
 						<span className="inline-flex">
 							<button
 								aria-label={t("shell.newProject")}
-								className="sidebar-icon-action grid size-icon-xl shrink-0 place-items-center rounded-sm !bg-transparent text-passive hover:!bg-transparent focus:!bg-transparent focus-visible:!bg-transparent active:!bg-transparent hover:text-foreground"
+								className={ROW_ACTION_BUTTON_CLASS}
 								disabled={disabled}
 								onClick={choosePath}
 								type="button"
 							>
-									<Plus className="size-icon-sm translate-y-px" aria-hidden="true" />
+									<Plus aria-hidden="true" />
 							</button>
 						</span>
 					</TooltipTrigger>

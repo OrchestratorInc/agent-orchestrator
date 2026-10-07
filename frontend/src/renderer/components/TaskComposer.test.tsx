@@ -585,13 +585,52 @@ describe("TaskComposer", () => {
 		fireEvent.click(screen.getByLabelText("Agent"));
 		const effort = await screen.findByRole("button", { name: "Effort" });
 		await userEvent.click(effort);
-		await userEvent.click(screen.getByRole("menuitem", { name: "High" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		fireEvent.click(screen.getByText("Start task"));
 
 		await waitFor(() =>
 			expect(h.post).toHaveBeenCalledWith(
 				"/api/v1/sessions",
 				expect.objectContaining({ body: expect.objectContaining({ effort: "high" }) }),
+			),
+		);
+	});
+
+	it("selects and sends a middle effort when the model reports levels but no default", async () => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return {
+					data: {
+						agent: "codex",
+						selectionMode: "text",
+						models: [{ id: "gpt-5", label: "GPT-5", isDefault: true, efforts: ["low", "medium", "high", "xhigh"] }],
+						allowCustom: true,
+						refreshRecommended: false,
+					},
+				};
+			}
+			return { data: { status: "ok", project: { config: {} } } };
+		});
+		h.post.mockResolvedValueOnce({ data: { session: { id: "standalone-1" } } });
+
+		render(
+			<Wrap>
+				<TaskComposer projectId="__standalone__" onCreated={vi.fn()} />
+			</Wrap>,
+		);
+
+		fireEvent.click(screen.getByLabelText("Agent"));
+		const effort = await screen.findByRole("button", { name: "Effort" });
+		expect(effort).toHaveTextContent(/^Medium$/);
+		await userEvent.click(effort);
+		expect(screen.getByRole("menuitemradio", { name: "Medium" })).toHaveAttribute("aria-checked", "true");
+		await userEvent.keyboard("{Escape}");
+		fireEvent.click(screen.getByText("Start task"));
+
+		await waitFor(() =>
+			expect(h.post).toHaveBeenCalledWith(
+				"/api/v1/sessions",
+				expect.objectContaining({ body: expect.objectContaining({ effort: "medium" }) }),
 			),
 		);
 	});
@@ -1054,6 +1093,28 @@ describe("TaskComposer", () => {
 		expect(h.post).not.toHaveBeenCalled();
 	});
 
+	it("defaults cloud effort to medium and sends explicit effort choices", async () => {
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
+		h.get.mockImplementation(async () => ({ data: { agent: "claude-code", selectionMode: "catalog", models: [
+			{ id: "claude-sonnet-test", label: "Sonnet", isDefault: true, efforts: ["low", "medium", "high"] },
+		], allowCustom: true } }));
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
+		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Effort" });
+		await waitFor(() => expect(picker).toHaveTextContent("Medium"));
+		await userEvent.click(picker);
+		expect(screen.queryByRole("menuitem", { name: "Use agent effort" })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		fireEvent.change(task(), { target: { value: "Do the work" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ reasoningEffort: "medium" })));
+		await userEvent.click(picker);
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+		fireEvent.change(task(), { target: { value: "Another task" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ reasoningEffort: "high" })));
+	});
+
 	it("uses the control plane default when a saved sandbox provider is unavailable", async () => {
 		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
 		useSandboxProviderStore.getState().setSelectedProvider("coder");
@@ -1266,7 +1327,7 @@ describe("TaskComposer", () => {
 			</Wrap>,
 		);
 		await userEvent.click(await screen.findByRole("button", { name: "Effort" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: "High" }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
 		fireEvent.change(task(), { target: { value: "Do the thing" } });
 		await waitForTaskReady();
 		fireEvent.click(screen.getByText("Start task"));
@@ -1522,6 +1583,32 @@ describe("TaskComposer", () => {
 		);
 
 		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5 Codex");
+	});
+
+	it.each([
+		{ name: "the newest Opus when nothing was run", agent: "claude-code", lastUsed: {}, expected: "Opus 5.5" },
+		{ name: "the most recently run model, ahead of Opus", agent: "claude-code", lastUsed: { "claude-fable-5-1": "2026-10-01T12:00:00Z", "claude-sonnet-5-5": "2026-10-05T12:00:00Z" }, expected: "Sonnet 5.5" },
+		{ name: "the project model, ahead of the last run", agent: "claude-code", lastUsed: { "claude-sonnet-5-5": "2026-10-05T12:00:00Z" }, projectModel: "claude-opus-4-8", expected: "Opus 4.8" },
+		{ name: "no model for another agent", agent: "codex", lastUsed: {}, expected: "Select model" },
+	])("opens $agent on $name", async ({ agent, lastUsed, projectModel, expected }) => {
+		const models = ["fable-5-1", "opus-4-8", "opus-5-5", "sonnet-5-5"].map((slug) => ({
+			id: `claude-${slug}`,
+			label: `Claude ${slug.replace(/^(\w)/, (c) => c.toUpperCase()).replace(/-(\d)-(\d)/, " $1.$2")}`,
+			lastUsedAt: (lastUsed as Record<string, string>)[`claude-${slug}`],
+		}));
+		h.get.mockImplementation(async (path: string) =>
+			path.includes("/models")
+				? { data: { agent, selectionMode: "text", models, allowCustom: false } }
+				: { data: { status: "ok", project: { agent, config: { worker: { agent, agentConfig: projectModel ? { model: projectModel } : {} } } } } },
+		);
+
+		render(
+			<Wrap>
+				<TaskComposer projectId="proj-1" onCreated={vi.fn()} />
+			</Wrap>,
+		);
+
+		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent(expected);
 	});
 
 	it("clears a stale model while the newly selected agent catalog resolves", async () => {
@@ -1797,14 +1884,14 @@ describe("TaskComposer", () => {
 		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("effort");
 
 		await userEvent.click(effortPicker);
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Low" }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "Low" }));
 		fireEvent.click(screen.getByText("Start task"));
 		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(2));
 		expect(h.post.mock.calls[1][1].body).toEqual(expect.objectContaining({ effort: "low" }));
 
 		await userEvent.click(effortPicker);
 		expect(screen.queryByRole("menuitem", { name: "Default" })).not.toBeInTheDocument();
-		await userEvent.click(await screen.findByRole("menuitem", { name: "High" }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
 		fireEvent.click(screen.getByText("Start task"));
 		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(3));
 		expect(h.post.mock.calls[2][1].body).not.toHaveProperty("effort");
@@ -1821,18 +1908,18 @@ describe("TaskComposer", () => {
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
 		const picker = await screen.findByRole("button", { name: "Effort" });
-		expect(picker).toHaveTextContent("Low");
+		await waitFor(() => expect(picker).toHaveTextContent("Low"));
 		await userEvent.click(picker);
-		await userEvent.click(screen.getByRole("menuitem", { name: "High" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		await userEvent.click(picker);
-		await userEvent.click(screen.getByRole("menuitem", { name: "Low" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
 		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("effort");
 		expect(JSON.parse(window.localStorage.getItem("ao.taskComposer.preferences.v1") ?? "{}")["proj-1"].agents.codex).not.toHaveProperty("effort");
 	});
 
-	it("can clear an effort choice when the agent reports no preferred level", async () => {
+	it("offers only concrete effort choices when the agent reports no preferred level", async () => {
 		h.get.mockImplementation(async (path: string) => path.includes("/models")
 			? { data: { agent: "codex", selectionMode: "catalog", models: [
 				{ id: "gpt-test", label: "GPT Test", isDefault: true, efforts: ["low", "high"] },
@@ -1843,14 +1930,13 @@ describe("TaskComposer", () => {
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
 		const picker = await screen.findByRole("button", { name: "Effort" });
 		await userEvent.click(picker);
-		await userEvent.click(screen.getByRole("menuitem", { name: "High" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		await userEvent.click(picker);
-		await userEvent.click(screen.getByRole("menuitem", { name: "Use agent effort" }));
-		expect(picker).toHaveTextContent("Effort not reported");
+		expect(screen.queryByRole("menuitem", { name: "Use agent effort" })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
-		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("effort");
-		expect(JSON.parse(window.localStorage.getItem("ao.taskComposer.preferences.v1") ?? "{}")["proj-1"].agents.codex).not.toHaveProperty("effort");
+		expect(h.post.mock.calls[0][1].body).toEqual(expect.objectContaining({ effort: "high" }));
 	});
 
 	it("shows a stored implicit model as the catalog choice without pinning it", async () => {

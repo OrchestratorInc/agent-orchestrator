@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
@@ -25,7 +25,7 @@ function renderWithLinkHandler(
 	text: string,
 	onLinkOpen: (url: string) => void,
 	workspacePaths: string[] = [],
-	onFileOpen?: (path: string) => void,
+	onFileOpen?: (path: string, line?: number) => void,
 ) {
 	return render(
 		<ChatLinkProvider onLinkOpen={onLinkOpen} onFileOpen={onFileOpen} workspacePaths={workspacePaths}>
@@ -132,7 +132,7 @@ describe("ChatMarkdown", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Open backend/service.go in Files" }));
 
-		expect(onFileOpen).toHaveBeenCalledWith("backend/service.go");
+		expect(onFileOpen).toHaveBeenCalledWith("backend/service.go", 42);
 		expect(screen.getByText("--resume").closest("button")).toBeNull();
 	});
 
@@ -148,7 +148,7 @@ describe("ChatMarkdown", () => {
 
 		await userEvent.click(screen.getByRole("link", { name: "the component" }));
 
-		expect(onFileOpen).toHaveBeenCalledWith("frontend/src/App.tsx");
+		expect(onFileOpen).toHaveBeenCalledWith("frontend/src/App.tsx", 42);
 		expect(openExternal).not.toHaveBeenCalled();
 		openExternal.mockRestore();
 	});
@@ -176,7 +176,7 @@ describe("ChatMarkdown", () => {
 
 		await userEvent.click(screen.getByRole("link", { name: "the new file" }));
 
-		expect(onFileOpen).toHaveBeenCalledWith("src/generated/new-file.ts");
+		expect(onFileOpen).toHaveBeenCalledWith("src/generated/new-file.ts", 8);
 	});
 
 	it("escapes raw HTML instead of rendering it", () => {
@@ -261,7 +261,7 @@ describe("ChatMarkdown", () => {
 		await userEvent.click(screen.getByRole("link", { name: "source" }));
 		await userEvent.click(screen.getByRole("link", { name: "new" }));
 		expect(onFileOpen).toHaveBeenNthCalledWith(1, "src/App.tsx");
-		expect(onFileOpen).toHaveBeenNthCalledWith(2, "src/new.ts");
+		expect(onFileOpen).toHaveBeenNthCalledWith(2, "src/new.ts", 8);
 		expect(screen.getByText("preview").closest("a")).toBeNull();
 		expect(onLinkOpen).not.toHaveBeenCalled();
 	});
@@ -726,5 +726,73 @@ describe("ActivityTitle", () => {
 		expect(screen.getByRole("button")).toHaveTextContent("Edit file path.ts");
 		expect(container.querySelector("strong")).toHaveTextContent("Edit");
 		expect(container.querySelector("a, img, input, p, h1, pre")).toBeNull();
+	});
+});
+
+describe("ChatMarkdown streaming fade", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+	const fading = (container: HTMLElement) => container.querySelectorAll(".stream-char").length;
+
+	it("never wraps a reply that mounts settled", () => {
+		const { container } = render(<ChatMarkdown text="from history" />);
+		expect(fading(container)).toBe(0);
+	});
+
+	it("fades while streaming and sheds the spans shortly after it settles", () => {
+		vi.useFakeTimers();
+		const { container, rerender } = render(<ChatMarkdown text="live text" streaming />);
+		expect(fading(container)).toBeGreaterThan(0);
+		expect(container.textContent).toBe("live text");
+
+		rerender(<ChatMarkdown text="live text" />);
+		expect(fading(container)).toBeGreaterThan(0);
+		act(() => vi.advanceTimersByTime(500));
+		expect(fading(container)).toBe(0);
+		expect(container.textContent).toBe("live text");
+	});
+
+	it("keeps fading across a retry that restarts the stream inside the grace period", () => {
+		vi.useFakeTimers();
+		const { container, rerender } = render(<ChatMarkdown text="one" streaming />);
+		rerender(<ChatMarkdown text="one" />);
+		act(() => vi.advanceTimersByTime(200));
+		rerender(<ChatMarkdown text="one two" streaming />);
+		act(() => vi.advanceTimersByTime(500));
+		expect(fading(container)).toBeGreaterThan(0);
+	});
+
+	it("renders plain text under reduced motion", () => {
+		vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
+			matches: query === "(prefers-reduced-motion: reduce)",
+			media: query,
+			onchange: null,
+			addEventListener: vi.fn(),
+			removeEventListener: vi.fn(),
+			addListener: vi.fn(),
+			removeListener: vi.fn(),
+			dispatchEvent: vi.fn(() => false),
+		}));
+		const { container } = render(<ChatMarkdown text="no motion" streaming />);
+		expect(fading(container)).toBe(0);
+		expect(screen.getByText("no motion")).toBeInTheDocument();
+	});
+
+	it("still compacts emoji while the fade is on", () => {
+		const { container } = render(<ChatMarkdown text="done ✅ now" streaming />);
+		expect(container.querySelector(".chat-md-emoji")).toHaveTextContent("✅");
+		expect(container.textContent).toBe("done ✅ now");
+	});
+
+	it("keeps links working while their text fades", () => {
+		const onLinkOpen = vi.fn();
+		render(
+			<ChatLinkProvider onLinkOpen={onLinkOpen}>
+				<ChatMarkdown text="see [docs](https://example.com/docs)" streaming />
+			</ChatLinkProvider>,
+		);
+		expect(screen.getByRole("link")).toHaveTextContent("docs");
 	});
 });
