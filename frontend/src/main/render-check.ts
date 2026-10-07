@@ -26,6 +26,15 @@ const MAX_MEASURE_WIDTHS = 16;
 const MEASURE_VIEWPORT_HEIGHT = 80;
 // About one frame: a resize reaches the page this long after setContentSize.
 const MEASURE_POLL_MS = 16;
+// Time for the page's own resize and ResizeObserver handlers to lay it out again.
+const MEASURE_RELAYOUT_MS = 3 * MEASURE_POLL_MS;
+// How long one width may take to reach the page before the measure gives up.
+const MEASURE_RESIZE_LIMIT_MS = 1_000;
+// The measure reads from an isolated world: it sees the page's DOM but not the
+// page's globals, so a page's own `innerWidth` variable, or its changes to Math
+// or Array, cannot change what it reads. The window has no preload, so this
+// world holds nothing else.
+const MEASURE_WORLD_ID = 999;
 // No "persist:" prefix: Electron keeps this partition in memory only, and every
 // check shares it, so checks do not each leave a session behind.
 const PARTITION = "ao-render-check";
@@ -92,18 +101,31 @@ function clampHeight(height: number): number {
 	return Math.min(Math.max(Math.ceil(height) || 1, 1), MAX_HEIGHT);
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * The page's height once its viewport is `width` wide. The resize reaches the
  * page a frame or more after setContentSize, and paints keep arriving at the
  * old size until then, so the page's own viewport is read with its height.
+ * The page's resize handlers run after that, so the height is read again once
+ * they have had time to lay the page out.
  */
 async function heightAt(window: BrowserWindow, width: number): Promise<number> {
 	window.setContentSize(width, MEASURE_VIEWPORT_HEIGHT);
-	for (;;) {
-		const [viewport, height] = await window.webContents.executeJavaScript(`[innerWidth, ${CONTENT_HEIGHT_SCRIPT}]`);
-		if (viewport === width) return Number(height);
-		await new Promise((resolve) => setTimeout(resolve, MEASURE_POLL_MS));
+	// A script that fails in an isolated world resolves undefined instead of rejecting.
+	const read = async (): Promise<unknown[]> =>
+		(await window.webContents.executeJavaScriptInIsolatedWorld(MEASURE_WORLD_ID, [{ code: `[innerWidth, ${CONTENT_HEIGHT_SCRIPT}]` }])) ?? [];
+	const limit = Date.now() + MEASURE_RESIZE_LIMIT_MS;
+	while (Date.now() < limit) {
+		const [viewport] = await read();
+		if (viewport === width) {
+			await sleep(MEASURE_RELAYOUT_MS);
+			const [settled, height] = await read();
+			if (settled === width) return Number(height);
+		}
+		await sleep(MEASURE_POLL_MS);
 	}
+	throw renderCheckError("BROWSER_COMMAND_FAILED", `render measure failed: the viewport did not reach ${width} px`);
 }
 
 /** A loaded page in its hidden window; `stage` names the work in progress for the deadline. */
@@ -138,38 +160,41 @@ async function withRenderWindow<T>(
 			partition: PARTITION,
 		},
 	});
-	const contents = window.webContents;
-	const view: RenderWindow = { window, consoleMessages: [], stage: "loading the page" };
-	contents.session.setPermissionRequestHandler((_contents, _permission, decide) => decide(false));
-	contents.session.setPermissionCheckHandler(() => false);
-	contents.setWindowOpenHandler(() => ({ action: "deny" }));
-	contents.on("will-navigate", (event) => event.preventDefault());
-	// No proxy carries WebRTC's UDP.
-	contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
-	const record = (message: RenderCheckMessage) => {
-		if (view.consoleMessages.length < MAX_MESSAGES) view.consoleMessages.push(message);
-	};
-	contents.on("console-message", (_event, level, message) => {
-		record({ level: LEVELS[level] ?? "log", text: message.slice(0, MAX_MESSAGE_CHARS) });
-	});
-	// The page itself is the one local address the check may load. Each refused
-	// destination is reported once, so the agent knows why a resource is missing.
-	const refused = new Set<string>();
-	const release = allowRenderPage(page.hostname, Number(page.port || 80), (destination) => {
-		if (refused.has(destination)) return;
-		refused.add(destination);
-		record({ level: "warning", text: `AO blocked a request to ${destination}. A render check loads only public addresses.` });
-	});
-	const run = async () => {
-		await proxyPartition(contents.session);
-		await contents.loadURL(page.href);
-		view.stage = "settling";
-		await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
-		return use(view);
-	};
+	let release: (() => void) | undefined;
 	let deadline: ReturnType<typeof setTimeout> | undefined;
 	let onAbort: (() => void) | undefined;
+	// Everything after the window exists is inside the try, so a throw while
+	// setting it up still destroys it.
 	try {
+		const contents = window.webContents;
+		const view: RenderWindow = { window, consoleMessages: [], stage: "loading the page" };
+		contents.session.setPermissionRequestHandler((_contents, _permission, decide) => decide(false));
+		contents.session.setPermissionCheckHandler(() => false);
+		contents.setWindowOpenHandler(() => ({ action: "deny" }));
+		contents.on("will-navigate", (event) => event.preventDefault());
+		// No proxy carries WebRTC's UDP.
+		contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
+		const record = (message: RenderCheckMessage) => {
+			if (view.consoleMessages.length < MAX_MESSAGES) view.consoleMessages.push(message);
+		};
+		contents.on("console-message", (_event, level, message) => {
+			record({ level: LEVELS[level] ?? "log", text: message.slice(0, MAX_MESSAGE_CHARS) });
+		});
+		// The page itself is the one local address the check may load. Each refused
+		// destination is reported once, so the agent knows why a resource is missing.
+		const refused = new Set<string>();
+		release = allowRenderPage(page.hostname, Number(page.port || 80), (destination) => {
+			if (refused.has(destination)) return;
+			refused.add(destination);
+			record({ level: "warning", text: `AO blocked a request to ${destination}. A render check loads only public addresses.` });
+		});
+		const run = async () => {
+			await proxyPartition(contents.session);
+			await contents.loadURL(page.href);
+			view.stage = "settling";
+			await sleep(SETTLE_MS);
+			return use(view);
+		};
 		// Whichever settles first wins; the loser's later rejection stays handled
 		// by the race, and the window is destroyed below either way.
 		return await Promise.race([
@@ -187,7 +212,7 @@ async function withRenderWindow<T>(
 	} finally {
 		clearTimeout(deadline);
 		if (onAbort) signal?.removeEventListener("abort", onAbort);
-		release();
+		release?.();
 		window.destroy();
 	}
 }

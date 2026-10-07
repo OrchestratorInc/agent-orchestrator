@@ -41,6 +41,11 @@ function fakes(
 			listeners.get("console-message")?.({}, 3, "Uncaught ReferenceError: d3 is not defined", 1, url);
 		}),
 		executeJavaScript: vi.fn((_script: string): Promise<unknown> => (options.measureNeverReturns ? new Promise(() => {}) : Promise.resolve(412))),
+		// A script that fails in an isolated world resolves undefined.
+		executeJavaScriptInIsolatedWorld: vi.fn(
+			(_worldId: number, _scripts: Array<{ code: string }>): Promise<unknown> =>
+				options.measureNeverReturns ? new Promise(() => {}) : Promise.resolve(undefined),
+		),
 		// An offscreen page repaints on invalidate(); manualPaint holds that frame back.
 		invalidate: vi.fn(() => {
 			events.push("invalidate");
@@ -267,15 +272,18 @@ describe("measureRender", () => {
 
 	/**
 	 * A page whose viewport reaches each new width one read late, as a real
-	 * resize does, and whose height follows its viewport.
+	 * resize does, and whose height follows its viewport one read later still,
+	 * as a page that lays itself out again in a resize handler does.
 	 */
 	function measuring(f: ReturnType<typeof fakes>, heightAt: (width: number) => number) {
 		let viewport = 0;
-		f.contents.executeJavaScript.mockImplementation(async () => {
-			const read = viewport;
+		let laidOutAt = 0;
+		f.contents.executeJavaScriptInIsolatedWorld.mockImplementation(async () => {
+			const read = [viewport, heightAt(laidOutAt)];
+			laidOutAt = viewport;
 			viewport = f.window.setContentSize.mock.lastCall?.[0] ?? 0;
-			f.events.push(`read ${read}`);
-			return [read, heightAt(read)];
+			f.events.push(`read ${read[0]}`);
+			return read;
 		});
 	}
 
@@ -294,20 +302,39 @@ describe("measureRender", () => {
 		expect(f.BrowserWindow).toHaveBeenCalledWith(expect.objectContaining({ show: false, width: 640, height: 80 }));
 		expect(f.contents.loadURL).toHaveBeenCalledTimes(1);
 		expect(f.contents.loadURL).toHaveBeenCalledWith(published);
-		// A read from before the page reached the width is not used.
+		// A read from before the page reached the width is not used, and the
+		// height is read again once the page's resize handlers have run.
 		expect(f.events).toEqual([
 			"resize 640x80",
 			"read 0",
 			"read 640",
+			"read 640",
 			"resize 320x80",
 			"read 640",
+			"read 320",
 			"read 320",
 			"resize 1144x80",
 			"read 320",
 			"read 1144",
+			"read 1144",
 		]);
-		expect(f.contents.executeJavaScript).toHaveBeenCalledWith(expect.stringContaining(CONTENT_HEIGHT_SCRIPT));
+		// Read where the page's own globals cannot reach.
+		expect(f.contents.executeJavaScriptInIsolatedWorld).toHaveBeenCalledWith(999, [{ code: expect.stringContaining(CONTENT_HEIGHT_SCRIPT) }]);
+		expect(f.contents.executeJavaScript).not.toHaveBeenCalled();
 		expect(f.window.destroy).toHaveBeenCalled();
+	});
+
+	it("takes each height after the page has laid itself out at that width", async () => {
+		const f = fakes();
+		// The height a resize handler sets from innerWidth.
+		measuring(f, (width) => (width < 500 ? 900 : 300));
+		await expect(measureRender(f as never, { url: published, widths: [320, 640, 375] })).resolves.toEqual({
+			heights: [
+				[320, 900],
+				[640, 300],
+				[375, 900],
+			],
+		});
 	});
 
 	it("clamps each height to 1-2000 whole pixels", async () => {
@@ -352,7 +379,16 @@ describe("measureRender", () => {
 		const release = vi.mocked(allowRenderPage).mock.results.at(-1)?.value as ReturnType<typeof vi.fn>;
 		expect(release).toHaveBeenCalledTimes(1);
 		expect(allowed).toBeLessThan(f.contents.loadURL.mock.invocationCallOrder[0]!);
-		expect(release.mock.invocationCallOrder[0]).toBeGreaterThan(f.contents.executeJavaScript.mock.invocationCallOrder.at(-1)!);
+		expect(release.mock.invocationCallOrder[0]).toBeGreaterThan(f.contents.executeJavaScriptInIsolatedWorld.mock.invocationCallOrder.at(-1)!);
+	});
+
+	it("destroys the window when setting it up throws", async () => {
+		const f = fakes();
+		vi.mocked(allowRenderPage).mockImplementationOnce(() => {
+			throw new Error("no proxy");
+		});
+		await expect(measureRender(f as never, { url: published, widths: [320] })).rejects.toThrow(/no proxy/);
+		expect(f.window.destroy).toHaveBeenCalled();
 	});
 
 	it("destroys the window and releases the page when the load fails", async () => {
@@ -360,6 +396,22 @@ describe("measureRender", () => {
 		await expect(measureRender(f as never, { url: published, widths: [320] })).rejects.toThrow(/ERR_CONNECTION_REFUSED/);
 		expect(f.window.destroy).toHaveBeenCalled();
 		expect(vi.mocked(allowRenderPage).mock.results.at(-1)?.value).toHaveBeenCalledTimes(1);
+	});
+
+	it("fails within a second at a width the viewport never reaches, and destroys the window", async () => {
+		vi.useFakeTimers();
+		// A platform that clamps the window, and an isolated-world script that fails.
+		for (const answer of [[1_000, 300], undefined]) {
+			const f = fakes();
+			f.contents.executeJavaScriptInIsolatedWorld.mockResolvedValue(answer);
+			const rejected = expect(measureRender(f as never, { url: published, widths: [1_144] })).rejects.toMatchObject({
+				code: "BROWSER_COMMAND_FAILED",
+				message: expect.stringMatching(/viewport did not reach 1144 px/),
+			});
+			await vi.advanceTimersByTimeAsync(300 + 1_100);
+			await rejected;
+			expect(f.window.destroy).toHaveBeenCalled();
+		}
 	});
 
 	it("gives up at the deadline on a page that stops answering, and destroys the window", async () => {
