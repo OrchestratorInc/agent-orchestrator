@@ -747,6 +747,14 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 		if (!text.trim() || sending || sent) return;
 		void annotation.submit(target, text);
 	};
+	// The button sends this box; the shortcut sends every written comment, so
+	// a review with several boxes open goes out in one keystroke.
+	const writtenCount = annotation.targets.filter((open) => (open === target ? text : annotation.draftFor(open)).trim()).length;
+	const submitAll = () => {
+		if (sending || sent) return;
+		annotation.setDraft(target, text);
+		void annotation.submit();
+	};
 
 	return (
 		<div className="p-2 font-sans">
@@ -780,7 +788,7 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 							annotation.cancel(target);
 						} else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
 							event.preventDefault();
-							submit();
+							submitAll();
 						}
 					}}
 					placeholder={t("files.feedbackPlaceholder")}
@@ -796,7 +804,7 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 				) : null}
 				<div className="mt-1 flex items-center justify-end gap-1">
 					{/* Truncates rather than squeezing the buttons in a narrow split column. */}
-					<span className="mr-auto min-w-0 truncate text-caption text-passive">{t("files.feedbackShortcut")}</span>
+					<span className="mr-auto min-w-0 truncate text-caption text-passive">{writtenCount > 1 ? t("files.feedbackShortcutAll") : t("files.feedbackShortcut")}</span>
 					<Button
 						className="px-2 text-xs text-muted-foreground hover:text-foreground"
 						disabled={sending}
@@ -826,7 +834,7 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 
 // Each box sends its own comment; once several are written, this bar sends
 // or drops them all together. `surface` keeps it to the pane that holds
-// comments; the count and the send cover every pane's.
+// comments; the send covers every pane's.
 export function FileAnnotationSendBar({ annotation, className, surface }: { annotation: FileAnnotationModel; className?: string; surface: "focused" | "review" }) {
 	const { t } = useTranslation();
 	const written = annotation.targets.filter((target) => annotation.draftFor(target).trim());
@@ -837,9 +845,9 @@ export function FileAnnotationSendBar({ annotation, className, surface }: { anno
 	return (
 		<div className={cn("flex min-h-9 shrink-0 items-center gap-1 border-t border-border bg-background px-3 py-1 font-sans", className)} data-testid="file-feedback-bar">
 			<span className="mr-auto min-w-0 truncate text-xs text-muted-foreground" role="status">
-				{annotation.status === "error" ? <span className="text-error">{annotation.error}</span> : sent ? t("files.feedbackSent") : t("files.feedbackReady", { count: written.length })}
+				{annotation.status === "error" ? <span className="text-error">{annotation.error}</span> : sent ? t("files.feedbackSent") : null}
 			</span>
-			<Button className="px-2 text-xs text-muted-foreground hover:text-foreground" disabled={sending || sent} onClick={() => annotation.cancel()} size="sm" type="button" variant="ghost">
+			<Button className="px-2 text-xs text-muted-foreground hover:bg-error/10 hover:text-error focus-visible:text-error active:bg-error/15 dark:hover:bg-error/10" disabled={sending || sent} onClick={() => annotation.cancel()} size="sm" type="button" variant="ghost">
 				{t("files.discardFeedback")}
 			</Button>
 			<Button className="px-2 text-xs" disabled={sending || sent} onClick={() => void annotation.submit()} size="sm" type="button" variant="primary">

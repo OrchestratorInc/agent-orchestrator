@@ -247,10 +247,14 @@ describe("ReviewDiffBody", () => {
 		fireEvent.change(textarea, { target: { value: "Rename this prop" } });
 		expect(model.setDraft).toHaveBeenCalledTimes(1);
 		fireEvent.change(textarea, { target: { value: "Rename this" } });
+		const draftCalls = vi.mocked(model.setDraft).mock.calls.length;
 		fireEvent.keyDown(textarea, { key: "Enter" });
+		expect(model.setDraft).toHaveBeenCalledTimes(draftCalls);
 		expect(model.submit).not.toHaveBeenCalled();
+		// The shortcut hands over this box's text, then sends every written comment.
 		fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
-		expect(model.submit).toHaveBeenCalledWith(model.targets[0], "Rename this");
+		expect(model.setDraft).toHaveBeenLastCalledWith(model.targets[0], "Rename this");
+		expect(model.submit).toHaveBeenCalledWith();
 		fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
 		expect(model.submit).toHaveBeenCalledTimes(2);
 	});
@@ -307,9 +311,13 @@ describe("ReviewDiffBody", () => {
 		// Leaving a box hands its text to the model, so the bar's send includes it.
 		fireEvent.blur(secondBox);
 		expect(model.setDraft).toHaveBeenCalledWith(second, "Keep this guard");
+		// With several comments written, the hint says the shortcut sends them all.
+		expect(screen.getByText("⌘/Ctrl + Enter to send all")).toBeInTheDocument();
 		const [, secondSend] = screen.getAllByRole("button", { name: "Send feedback" });
 		fireEvent.click(secondSend);
 		expect(model.submit).toHaveBeenCalledWith(second, "Keep this guard");
+		fireEvent.keyDown(secondBox, { key: "Enter", metaKey: true });
+		expect(model.submit).toHaveBeenLastCalledWith();
 	});
 
 	it("shows a send's progress only on the box it covers", () => {
@@ -336,7 +344,7 @@ describe("ReviewDiffBody", () => {
 		model.draftFor = (target) => (target === empty ? "" : "Some feedback");
 		const { rerender } = render(<FileAnnotationSendBar annotation={model} surface="review" />);
 
-		expect(screen.getByRole("status")).toHaveTextContent("2 comments ready");
+		expect(screen.getByRole("status")).toBeEmptyDOMElement();
 		fireEvent.click(screen.getByRole("button", { name: "Send all 2" }));
 		expect(model.submit).toHaveBeenCalledWith();
 		fireEvent.click(screen.getByRole("button", { name: "Discard all" }));

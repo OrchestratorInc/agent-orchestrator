@@ -82,7 +82,8 @@ test("@P0 inline comments on several lines and files send one at a time or all t
 	await expect(boxes.nth(2)).toHaveValue("Inline third.");
 	await expect(boxes.nth(2)).toBeFocused();
 	const bar = inspector.getByTestId("file-feedback-bar");
-	await expect(bar).toContainText("3 comments ready");
+	await expect(bar.getByRole("button", { name: "Send all 3" })).toBeVisible();
+	await expect(inspector.getByText("⌘/Ctrl + Enter to send all")).toHaveCount(3);
 
 	// A box's own send delivers just that comment and leaves the rest open.
 	await inspector.getByRole("button", { name: "Send feedback" }).nth(1).click();
@@ -91,9 +92,11 @@ test("@P0 inline comments on several lines and files send one at a time or all t
 	expect(sent[0]).not.toContain("Rename first.");
 	await expect(boxes).toHaveCount(2);
 
-	// The bar under the files sends everything that is left in one message.
-	await expect(bar).toContainText("2 comments ready");
-	await bar.getByRole("button", { name: "Send all 2" }).click();
+	// The bar under the files, or the shortcut from any box, sends everything
+	// that is left in one message.
+	await expect(bar.getByRole("button", { name: "Send all 2" })).toBeVisible();
+	await boxes.nth(0).focus();
+	await page.keyboard.press("ControlOrMeta+Enter");
 	await expect.poll(() => sent.length).toBe(2);
 	expect(sent[1]).toContain("2 inline feedback comments");
 	for (const text of ["Rename first.", "Inline third.", `- Path: ${goFile}`, `- Path: ${tsFile}`]) expect(sent[1]).toContain(text);
