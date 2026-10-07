@@ -233,7 +233,7 @@ describe("render activity", () => {
 	it("heads the expanded page with its title and the source, save and browser actions", async () => {
 		const { dialog } = await expand();
 		expect(within(dialog).getByRole("heading", { name: "Turns by day" })).toBeInTheDocument();
-		for (const name of ["View source", "Save page", "Open in external browser", "Close"]) {
+		for (const name of ["View source", "Save page", "Save as artifact", "Open in external browser", "Close"]) {
 			expect(within(dialog).getByRole("button", { name })).toBeInTheDocument();
 		}
 		expect(within(dialog).getByRole("button", { name: "View source" })).toHaveAttribute("aria-pressed", "false");
@@ -317,6 +317,53 @@ describe("render activity", () => {
 				expect.objectContaining({ title: "Could not save the page.", tone: "error" }),
 			]);
 			expect(logged).toHaveBeenCalledWith("save render", expect.any(Error));
+		} finally {
+			useUiStore.getState().clearGlobalToast();
+			logged.mockRestore();
+			fetch.mockRestore();
+		}
+	});
+
+	it("keeps the page as a session artifact under its title", async () => {
+		let respond!: (response: Response) => void;
+		const fetch = vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise((resolve) => (respond = resolve)));
+		useUiStore.getState().clearGlobalToast();
+		try {
+			const { user, dialog } = await expand();
+			const keep = within(dialog).getByRole("button", { name: "Save as artifact" });
+			await user.click(keep);
+			expect(keep).toBeDisabled();
+			expect(fetch).toHaveBeenCalledTimes(1);
+			const [url, init] = fetch.mock.calls[0]!;
+			expect(url).toBe("http://127.0.0.1:3001/api/v1/sessions/proj-1/renders/r1/artifact");
+			expect(init).toMatchObject({ method: "POST" });
+			expect(JSON.parse(String(init?.body))).toEqual({ title: "Turns by day" });
+			await act(async () =>
+				respond(new Response(JSON.stringify({ path: "Turns by day.html", name: "Turns by day.html" }), { status: 201 })),
+			);
+			await waitFor(() => expect(keep).toBeEnabled());
+			expect(useUiStore.getState().globalToasts).toEqual([
+				expect.objectContaining({ title: "Saved to artifacts: Turns by day.html", tone: "info" }),
+			]);
+		} finally {
+			useUiStore.getState().clearGlobalToast();
+			fetch.mockRestore();
+		}
+	});
+
+	it("says so when the page cannot be kept as an artifact", async () => {
+		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 404 }));
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+		useUiStore.getState().clearGlobalToast();
+		try {
+			const { user, dialog } = await expand();
+			const keep = within(dialog).getByRole("button", { name: "Save as artifact" });
+			await user.click(keep);
+			await waitFor(() => expect(keep).toBeEnabled());
+			expect(useUiStore.getState().globalToasts).toEqual([
+				expect.objectContaining({ title: "Could not save the page to artifacts.", tone: "error" }),
+			]);
+			expect(logged).toHaveBeenCalledWith("save render as artifact", expect.any(Error));
 		} finally {
 			useUiStore.getState().clearGlobalToast();
 			logged.mockRestore();

@@ -1,6 +1,7 @@
-import { Code2, Download, ExternalLink, Loader2, Maximize2 } from "lucide-react";
+import { Code2, Download, ExternalLink, FilePlus, Loader2, Maximize2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { components } from "../../../api/schema";
 import { getApiBaseUrl } from "../../lib/api-client";
 import {
 	clampRenderHeight,
@@ -136,8 +137,8 @@ function RenderAction({ label, children, ...props }: ButtonProps & { label: stri
 }
 
 /** The render as the daemon serves it; `?source=1` is the page as the agent wrote it. */
-async function fetchRender(path: string, signal?: AbortSignal): Promise<Response> {
-	const response = await fetch(`${getApiBaseUrl()}${path}`, { signal });
+async function fetchRender(path: string, init: RequestInit = {}): Promise<Response> {
+	const response = await fetch(`${getApiBaseUrl()}${path}`, init);
 	if (!response.ok) throw new Error(`render ${path}: HTTP ${response.status}`);
 	return response;
 }
@@ -152,6 +153,17 @@ async function saveRender(render: RenderRef) {
 	setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+/** Keeps the page as a session artifact; resolves to the saved file's name. */
+async function saveRenderAsArtifact(render: RenderRef): Promise<string> {
+	const response = await fetchRender(`${render.path}/artifact`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ title: render.title }),
+	});
+	const artifact = (await response.json()) as components["schemas"]["SaveRenderArtifactResponse"];
+	return artifact.name;
+}
+
 /** The page's HTML as plain text. No highlighting: a page can run to 25 MiB. */
 function RenderSource({ render }: { render: RenderRef }) {
 	const { t } = useTranslation();
@@ -159,7 +171,7 @@ function RenderSource({ render }: { render: RenderRef }) {
 	const [source, setSource] = useState<string | null>();
 	useEffect(() => {
 		const controller = new AbortController();
-		fetchRender(`${render.path}?source=1`, controller.signal)
+		fetchRender(`${render.path}?source=1`, { signal: controller.signal })
 			.then((response) => response.text())
 			.then(setSource, () => {
 				if (!controller.signal.aborted) setSource(null);
@@ -189,6 +201,7 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 	const [expanded, setExpanded] = useState(false);
 	const [showSource, setShowSource] = useState(false);
 	const [saving, setSaving] = useState(false);
+	const [savingArtifact, setSavingArtifact] = useState(false);
 	// The local daemon has no copy of a remote host's render, and the remote
 	// proxy URL must not reach the page: its path carries the proxy's capability
 	// token, which the page could read from its own location.
@@ -207,6 +220,16 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 				useUiStore.getState().showGlobalToast(t("chat.render.saveError"), undefined, "error");
 			})
 			.finally(() => setSaving(false));
+	};
+	const saveArtifact = () => {
+		setSavingArtifact(true);
+		saveRenderAsArtifact(render)
+			.then((name) => useUiStore.getState().showGlobalToast(t("chat.render.savedAsArtifact", { name })))
+			.catch((error: unknown) => {
+				console.error("save render as artifact", error);
+				useUiStore.getState().showGlobalToast(t("chat.render.saveArtifactError"), undefined, "error");
+			})
+			.finally(() => setSavingArtifact(false));
 	};
 	return (
 		<div className="group/render relative min-w-0">
@@ -248,6 +271,9 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 							onClick={save}
 						>
 							<Download className="size-3.5" />
+						</RenderAction>
+						<RenderAction label={t("chat.render.saveAsArtifact")} disabled={savingArtifact} onClick={saveArtifact}>
+							<FilePlus className="size-3.5" />
 						</RenderAction>
 						<RenderAction
 							label={t("chat.render.openInBrowser")}
