@@ -289,13 +289,9 @@ func (s *transitionStore) AcknowledgeSessionInterfaceTransitionNotice(
 	return rec, true, nil
 }
 
-func (s *transitionStore) EnqueueSessionInterfaceTransitionMessage(_ context.Context, transitionID, clientMessageID, message string, now time.Time, options ...ports.MessageDeliveryOptions) error {
+func (s *transitionStore) EnqueueSessionInterfaceTransitionMessage(_ context.Context, transitionID, clientMessageID, message string, now time.Time, opts ports.MessageDeliveryOptions) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var opts ports.MessageDeliveryOptions
-	if len(options) > 0 {
-		opts = options[0]
-	}
 	s.nextMessage++
 	s.messages[transitionID] = append(s.messages[transitionID], domain.SessionInterfaceTransitionMessage{
 		ID: s.nextMessage, TransitionID: transitionID, ClientMessageID: clientMessageID,
@@ -3049,7 +3045,7 @@ func TestTransitionMessageRetryUsesStableChatIdempotencyKey(t *testing.T) {
 	}
 	store.transitions[transition.ID] = transition
 	if err := store.EnqueueSessionInterfaceTransitionMessage(
-		context.Background(), transition.ID, "handoff-message-1", "review is ready", now,
+		context.Background(), transition.ID, "handoff-message-1", "review is ready", now, ports.MessageDeliveryOptions{},
 	); err != nil {
 		t.Fatal(err)
 	}

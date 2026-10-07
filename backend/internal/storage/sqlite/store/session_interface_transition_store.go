@@ -336,14 +336,10 @@ func (s *Store) EnqueueSessionInterfaceTransitionMessage(
 	ctx context.Context,
 	transitionID, clientMessageID, message string,
 	now time.Time,
-	options ...ports.MessageDeliveryOptions,
+	opts ports.MessageDeliveryOptions,
 ) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	var opts ports.MessageDeliveryOptions
-	if len(options) > 0 {
-		opts = options[0]
-	}
 	return s.inTx(ctx, "queue interface transition message", func(q *gen.Queries) error {
 		if err := q.EnqueueSessionInterfaceTransitionMessage(ctx, gen.EnqueueSessionInterfaceTransitionMessageParams{
 			SenderSessionID: opts.SenderSessionID, AuthoredByUser: opts.AuthoredByUser,
