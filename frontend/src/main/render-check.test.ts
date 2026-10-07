@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CONTENT_HEIGHT_SCRIPT, checkRender } from "./render-check";
+import { CONTENT_HEIGHT_SCRIPT, checkRender, measureRender } from "./render-check";
 import { allowRenderPage } from "./render-check-proxy";
 
 // The proxy itself is tested over real sockets in render-check-proxy.test.ts.
@@ -40,7 +40,7 @@ function fakes(
 			if (options.loadError) throw options.loadError;
 			listeners.get("console-message")?.({}, 3, "Uncaught ReferenceError: d3 is not defined", 1, url);
 		}),
-		executeJavaScript: vi.fn(() => (options.measureNeverReturns ? new Promise<number>(() => {}) : Promise.resolve(412))),
+		executeJavaScript: vi.fn((_script: string): Promise<unknown> => (options.measureNeverReturns ? new Promise(() => {}) : Promise.resolve(412))),
 		// An offscreen page repaints on invalidate(); manualPaint holds that frame back.
 		invalidate: vi.fn(() => {
 			events.push("invalidate");
@@ -66,10 +66,10 @@ function fakes(
 const png = Buffer.from("png-bytes").toString("base64");
 
 describe("checkRender", () => {
-	it("loads only daemon render-check URLs at a supported width, before creating anything", async () => {
+	it("loads only daemon render URLs at a supported width, before creating anything", async () => {
 		const f = fakes();
-		await expect(checkRender(f as never, { url: "https://example.com/", width: 720 })).rejects.toThrow(/render-check URL/);
-		await expect(checkRender(f as never, { url: url.replace("check-", ""), width: 720 })).rejects.toThrow(/render-check URL/);
+		await expect(checkRender(f as never, { url: "https://example.com/", width: 720 })).rejects.toThrow(/daemon render URL/);
+		await expect(checkRender(f as never, { url: url.replace("/renders/", "/files/"), width: 720 })).rejects.toThrow(/daemon render URL/);
 		// The pattern passes it; parsing does not.
 		await expect(checkRender(f as never, { url: url.replace("3001", "99999"), width: 720 })).rejects.toMatchObject({
 			code: "INVALID_ARGUMENT",
@@ -257,5 +257,121 @@ describe("checkRender deadline and cancellation", () => {
 		await expect(result).resolves.toMatchObject({ contentHeight: 412 });
 		expect(vi.getTimerCount()).toBe(0);
 		expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
+	});
+});
+
+describe("measureRender", () => {
+	afterEach(() => vi.useRealTimers());
+
+	const published = "http://127.0.0.1:3001/api/v1/sessions/p-1/renders/0b7c4f6e-1d2a-4e8b-9c3d-5a6f7e8d9c0b";
+
+	/**
+	 * A page whose viewport reaches each new width one read late, as a real
+	 * resize does, and whose height follows its viewport.
+	 */
+	function measuring(f: ReturnType<typeof fakes>, heightAt: (width: number) => number) {
+		let viewport = 0;
+		f.contents.executeJavaScript.mockImplementation(async () => {
+			const read = viewport;
+			viewport = f.window.setContentSize.mock.lastCall?.[0] ?? 0;
+			f.events.push(`read ${read}`);
+			return [read, heightAt(read)];
+		});
+	}
+
+	it("loads a published page once, then sets each width and reads its height there, in the order given", async () => {
+		const f = fakes();
+		measuring(f, (width) => 100_000 / width);
+		const result = await measureRender(f as never, { url: published, widths: [640, 320, 1144] });
+		expect(result).toEqual({
+			heights: [
+				[640, 157],
+				[320, 313],
+				[1144, 88],
+			],
+		});
+		expect(f.BrowserWindow).toHaveBeenCalledTimes(1);
+		expect(f.BrowserWindow).toHaveBeenCalledWith(expect.objectContaining({ show: false, width: 640, height: 80 }));
+		expect(f.contents.loadURL).toHaveBeenCalledTimes(1);
+		expect(f.contents.loadURL).toHaveBeenCalledWith(published);
+		// A read from before the page reached the width is not used.
+		expect(f.events).toEqual([
+			"resize 640x80",
+			"read 0",
+			"read 640",
+			"resize 320x80",
+			"read 640",
+			"read 320",
+			"resize 1144x80",
+			"read 320",
+			"read 1144",
+		]);
+		expect(f.contents.executeJavaScript).toHaveBeenCalledWith(expect.stringContaining(CONTENT_HEIGHT_SCRIPT));
+		expect(f.window.destroy).toHaveBeenCalled();
+	});
+
+	it("clamps each height to 1-2000 whole pixels", async () => {
+		const f = fakes();
+		const heights = new Map([
+			[320, 5_000],
+			[375, 0],
+			[430, Number.NaN],
+			[520, 412.2],
+		]);
+		measuring(f, (width) => heights.get(width)!);
+		await expect(measureRender(f as never, { url: published, widths: [...heights.keys()] })).resolves.toEqual({
+			heights: [
+				[320, 2_000],
+				[375, 1],
+				[430, 1],
+				[520, 413],
+			],
+		});
+	});
+
+	it("refuses bad widths and URLs before creating anything", async () => {
+		const f = fakes();
+		for (const widths of [undefined, "320", [], Array(17).fill(320), [239], [1_601], [320.5], [320, "375"]]) {
+			await expect(measureRender(f as never, { url: published, widths })).rejects.toMatchObject({
+				code: "INVALID_ARGUMENT",
+				message: expect.stringMatching(/1 to 16 widths/),
+			});
+		}
+		for (const bad of ["https://example.com/", published.replace("/renders/", "/files/"), published.replace("3001", "99999")]) {
+			await expect(measureRender(f as never, { url: bad, widths: [320] })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+		}
+		expect(f.BrowserWindow).not.toHaveBeenCalled();
+	});
+
+	it("allows the page's address only while the page is in use", async () => {
+		const f = fakes();
+		measuring(f, () => 300);
+		await measureRender(f as never, { url: published, widths: [320, 375] });
+		expect(allowRenderPage).toHaveBeenLastCalledWith("127.0.0.1", 3001, expect.any(Function));
+		const allowed = vi.mocked(allowRenderPage).mock.invocationCallOrder.at(-1)!;
+		const release = vi.mocked(allowRenderPage).mock.results.at(-1)?.value as ReturnType<typeof vi.fn>;
+		expect(release).toHaveBeenCalledTimes(1);
+		expect(allowed).toBeLessThan(f.contents.loadURL.mock.invocationCallOrder[0]!);
+		expect(release.mock.invocationCallOrder[0]).toBeGreaterThan(f.contents.executeJavaScript.mock.invocationCallOrder.at(-1)!);
+	});
+
+	it("destroys the window and releases the page when the load fails", async () => {
+		const f = fakes({ loadError: new Error("ERR_CONNECTION_REFUSED") });
+		await expect(measureRender(f as never, { url: published, widths: [320] })).rejects.toThrow(/ERR_CONNECTION_REFUSED/);
+		expect(f.window.destroy).toHaveBeenCalled();
+		expect(vi.mocked(allowRenderPage).mock.results.at(-1)?.value).toHaveBeenCalledTimes(1);
+	});
+
+	it("gives up at the deadline on a page that stops answering, and destroys the window", async () => {
+		vi.useFakeTimers();
+		const f = fakes({ measureNeverReturns: true });
+		const rejected = expect(measureRender(f as never, { url: published, widths: [320, 375] })).rejects.toMatchObject({
+			code: "BROWSER_COMMAND_FAILED",
+			message: expect.stringMatching(/render measure timed out after 20000 ms while measuring the page at 320 px/),
+		});
+		await vi.advanceTimersByTimeAsync(20_000);
+		await rejected;
+		expect(f.window.destroy).toHaveBeenCalled();
+		expect(vi.mocked(allowRenderPage).mock.results.at(-1)?.value).toHaveBeenCalledTimes(1);
 	});
 });

@@ -9,21 +9,28 @@ export type RenderCheckResult = {
 	contentHeight: number;
 	consoleMessages: RenderCheckMessage[];
 };
+export type RenderMeasureResult = { heights: Array<[number, number]> };
 
 type RenderCheckDeps = { BrowserWindow: typeof BrowserWindow };
 
-// Only the daemon's own temporary render-check pages; never an arbitrary URL.
-const RENDER_CHECK_URL = /^http:\/\/(?:127\.0\.0\.1|localhost):\d+\/api\/v1\/sessions\/[^/]+\/renders\/check-[A-Za-z0-9_-]+$/;
+// Only the daemon's own render pages, published or temporary checks; never an arbitrary URL.
+const RENDER_URL = /^http:\/\/(?:127\.0\.0\.1|localhost):\d+\/api\/v1\/sessions\/[^/]+\/renders\/[A-Za-z0-9_-]+$/;
 // Chromium console levels 0-3: verbose (console.debug), info (console.log), warning, error.
 const LEVELS = ["debug", "log", "warning", "error"] as const;
 const MAX_MESSAGES = 20;
 const MAX_MESSAGE_CHARS = 500;
-const MAX_CAPTURE_HEIGHT = 2_000;
+const MAX_HEIGHT = 2_000;
+const MAX_MEASURE_WIDTHS = 16;
+// Shorter than nearly any page, so the measure reads the page's scroll height
+// and never a viewport the page stretched to fill.
+const MEASURE_VIEWPORT_HEIGHT = 80;
+// About one frame: a resize reaches the page this long after setContentSize.
+const MEASURE_POLL_MS = 16;
 // No "persist:" prefix: Electron keeps this partition in memory only, and every
 // check shares it, so checks do not each leave a session behind.
 const PARTITION = "ao-render-check";
-// One deadline for the whole check (load, settle, measure, capture): a page that
-// blocks its main thread after loading must not keep the hidden window alive.
+// One deadline for all the work on a page (load, settle, measure, capture): a
+// page that blocks its main thread after loading must not keep the hidden window alive.
 const CHECK_DEADLINE_MS = 20_000;
 // ponytail: fixed settle for CDN scripts and first animation frames; wait on network idle if pages race it.
 const SETTLE_MS = 300;
@@ -65,39 +72,63 @@ function renderCheckError(code: string, message: string): Error & { code: string
  * The daemon page `url` names, parsed before any window exists: the pattern
  * alone passes a port past 65535, which `new URL` rejects.
  */
-function renderCheckURL(url: unknown): URL {
-	if (typeof url === "string" && RENDER_CHECK_URL.test(url)) {
+function renderURL(url: unknown): URL {
+	if (typeof url === "string" && RENDER_URL.test(url)) {
 		try {
 			return new URL(url);
 		} catch {
 			// Reported below, like any other URL the pattern refuses.
 		}
 	}
-	throw renderCheckError("INVALID_ARGUMENT", "render check needs a daemon render-check URL");
+	throw renderCheckError("INVALID_ARGUMENT", "a render check needs a daemon render URL");
+}
+
+function isRenderWidth(width: unknown): width is number {
+	return typeof width === "number" && Number.isInteger(width) && width >= 240 && width <= 1_600;
+}
+
+/** A page height as a frame can show it: 1-2000 whole pixels. */
+function clampHeight(height: number): number {
+	return Math.min(Math.max(Math.ceil(height) || 1, 1), MAX_HEIGHT);
 }
 
 /**
- * Loads an agent's page in a throwaway hidden window, the way readers will see
- * it, and returns a screenshot, the content height, and console output. The
- * window renders offscreen, so it paints without ever being on screen, and
- * never joins the main window or the Browser panel: in-memory partition,
- * sandboxed, no permissions, no popups, no navigation away, and no address on
- * this computer or its network except the page itself.
+ * The page's height once its viewport is `width` wide. The resize reaches the
+ * page a frame or more after setContentSize, and paints keep arriving at the
+ * old size until then, so the page's own viewport is read with its height.
  */
-export async function checkRender(
-	deps: RenderCheckDeps,
-	args: Record<string, unknown>,
-	signal?: AbortSignal,
-): Promise<RenderCheckResult> {
-	const { url, width } = args;
-	const page = renderCheckURL(url);
-	if (typeof width !== "number" || !Number.isInteger(width) || width < 240 || width > 1_600) {
-		throw renderCheckError("INVALID_ARGUMENT", "render check width must be an integer from 240 to 1600");
+async function heightAt(window: BrowserWindow, width: number): Promise<number> {
+	window.setContentSize(width, MEASURE_VIEWPORT_HEIGHT);
+	for (;;) {
+		const [viewport, height] = await window.webContents.executeJavaScript(`[innerWidth, ${CONTENT_HEIGHT_SCRIPT}]`);
+		if (viewport === width) return Number(height);
+		await new Promise((resolve) => setTimeout(resolve, MEASURE_POLL_MS));
 	}
+}
+
+/** A loaded page in its hidden window; `stage` names the work in progress for the deadline. */
+type RenderWindow = { window: BrowserWindow; consoleMessages: RenderCheckMessage[]; stage: string };
+
+/**
+ * Loads an agent's page in a throwaway hidden window, the way readers will see
+ * it, and runs `use` on it. The window renders offscreen, so it paints without
+ * ever being on screen, and never joins the main window or the Browser panel:
+ * in-memory partition, sandboxed, no permissions, no popups, no navigation
+ * away, and no address on this computer or its network except the page
+ * itself. One deadline covers the load and `use`, and the window and the
+ * page's allowance go when they end, however they end.
+ */
+async function withRenderWindow<T>(
+	deps: RenderCheckDeps,
+	name: string,
+	page: URL,
+	size: { width: number; height: number },
+	signal: AbortSignal | undefined,
+	use: (view: RenderWindow) => Promise<T>,
+): Promise<T> {
 	const window = new deps.BrowserWindow({
 		show: false,
-		width,
-		height: 800,
+		...size,
 		webPreferences: {
 			offscreen: true,
 			sandbox: true,
@@ -108,7 +139,7 @@ export async function checkRender(
 		},
 	});
 	const contents = window.webContents;
-	const consoleMessages: RenderCheckMessage[] = [];
+	const view: RenderWindow = { window, consoleMessages: [], stage: "loading the page" };
 	contents.session.setPermissionRequestHandler((_contents, _permission, decide) => decide(false));
 	contents.session.setPermissionCheckHandler(() => false);
 	contents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -116,7 +147,7 @@ export async function checkRender(
 	// No proxy carries WebRTC's UDP.
 	contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
 	const record = (message: RenderCheckMessage) => {
-		if (consoleMessages.length < MAX_MESSAGES) consoleMessages.push(message);
+		if (view.consoleMessages.length < MAX_MESSAGES) view.consoleMessages.push(message);
 	};
 	contents.on("console-message", (_event, level, message) => {
 		record({ level: LEVELS[level] ?? "log", text: message.slice(0, MAX_MESSAGE_CHARS) });
@@ -129,28 +160,12 @@ export async function checkRender(
 		refused.add(destination);
 		record({ level: "warning", text: `AO blocked a request to ${destination}. A render check loads only public addresses.` });
 	});
-	let stage = "loading the page";
-	const capture = async (): Promise<RenderCheckResult> => {
+	const run = async () => {
 		await proxyPartition(contents.session);
 		await contents.loadURL(page.href);
-		stage = "settling";
+		view.stage = "settling";
 		await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
-		stage = "measuring the page";
-		const contentHeight = Number(await contents.executeJavaScript(CONTENT_HEIGHT_SCRIPT));
-		const height = Math.min(Math.max(contentHeight, 1), MAX_CAPTURE_HEIGHT);
-		stage = "capturing the screenshot";
-		// The resize lands asynchronously; capture the first frame painted after
-		// it, or the image is cropped to the old size. invalidate() guarantees a
-		// frame even when the size did not change.
-		const painted = new Promise<void>((resolve) => contents.once("paint", () => resolve()));
-		window.setContentSize(width, height);
-		contents.invalidate();
-		await painted;
-		const image = await contents.capturePage();
-		if (image.isEmpty()) {
-			throw renderCheckError("BROWSER_COMMAND_FAILED", "render check captured an empty image");
-		}
-		return { data: image.toPNG().toString("base64"), width, height, contentHeight, consoleMessages };
+		return use(view);
 	};
 	let deadline: ReturnType<typeof setTimeout> | undefined;
 	let onAbort: (() => void) | undefined;
@@ -158,13 +173,13 @@ export async function checkRender(
 		// Whichever settles first wins; the loser's later rejection stays handled
 		// by the race, and the window is destroyed below either way.
 		return await Promise.race([
-			capture(),
+			run(),
 			new Promise<never>((_resolve, reject) => {
 				deadline = setTimeout(
-					() => reject(renderCheckError("BROWSER_COMMAND_FAILED", `render check timed out after ${CHECK_DEADLINE_MS} ms while ${stage}`)),
+					() => reject(renderCheckError("BROWSER_COMMAND_FAILED", `${name} timed out after ${CHECK_DEADLINE_MS} ms while ${view.stage}`)),
 					CHECK_DEADLINE_MS,
 				);
-				onAbort = () => reject(renderCheckError("BROWSER_COMMAND_CANCELED", "render check canceled"));
+				onAbort = () => reject(renderCheckError("BROWSER_COMMAND_CANCELED", `${name} canceled`));
 				if (signal?.aborted) onAbort();
 				else signal?.addEventListener("abort", onAbort, { once: true });
 			}),
@@ -175,4 +190,61 @@ export async function checkRender(
 		release();
 		window.destroy();
 	}
+}
+
+/** Loads an agent's page as readers will see it, and returns a screenshot, the content height, and console output. */
+export async function checkRender(
+	deps: RenderCheckDeps,
+	args: Record<string, unknown>,
+	signal?: AbortSignal,
+): Promise<RenderCheckResult> {
+	const page = renderURL(args.url);
+	const { width } = args;
+	if (!isRenderWidth(width)) {
+		throw renderCheckError("INVALID_ARGUMENT", "render check width must be an integer from 240 to 1600");
+	}
+	return withRenderWindow(deps, "render check", page, { width, height: 800 }, signal, async (view) => {
+		const contents = view.window.webContents;
+		view.stage = "measuring the page";
+		const contentHeight = Number(await contents.executeJavaScript(CONTENT_HEIGHT_SCRIPT));
+		const height = clampHeight(contentHeight);
+		view.stage = "capturing the screenshot";
+		// The resize lands asynchronously; capture the first frame painted after
+		// it, or the image is cropped to the old size. invalidate() guarantees a
+		// frame even when the size did not change.
+		const painted = new Promise<void>((resolve) => contents.once("paint", () => resolve()));
+		view.window.setContentSize(width, height);
+		contents.invalidate();
+		await painted;
+		const image = await contents.capturePage();
+		if (image.isEmpty()) {
+			throw renderCheckError("BROWSER_COMMAND_FAILED", "render check captured an empty image");
+		}
+		return { data: image.toPNG().toString("base64"), width, height, contentHeight, consoleMessages: view.consoleMessages };
+	});
+}
+
+/**
+ * Loads a published page once and returns its height at each width, in the
+ * order given, so each reader's frame opens at the height for its own width.
+ */
+export async function measureRender(
+	deps: RenderCheckDeps,
+	args: Record<string, unknown>,
+	signal?: AbortSignal,
+): Promise<RenderMeasureResult> {
+	const page = renderURL(args.url);
+	const { widths } = args;
+	if (!Array.isArray(widths) || widths.length === 0 || widths.length > MAX_MEASURE_WIDTHS || !widths.every(isRenderWidth)) {
+		throw renderCheckError("INVALID_ARGUMENT", "render measure needs 1 to 16 widths, each an integer from 240 to 1600");
+	}
+	const size = { width: widths[0]!, height: MEASURE_VIEWPORT_HEIGHT };
+	return withRenderWindow(deps, "render measure", page, size, signal, async (view) => {
+		const heights: Array<[number, number]> = [];
+		for (const width of widths) {
+			view.stage = `measuring the page at ${width} px`;
+			heights.push([width, clampHeight(await heightAt(view.window, width))]);
+		}
+		return { heights };
+	});
 }
