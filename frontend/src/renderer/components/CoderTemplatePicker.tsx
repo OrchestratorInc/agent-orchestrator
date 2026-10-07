@@ -12,6 +12,19 @@ import { SearchablePicker } from "./SearchablePicker";
 
 const SIZES: CoderSize[] = ["small", "medium", "large"];
 
+// AO's own Coder deployment carries internal plumbing templates that must never
+// be offered as a project template. A bring-your-own-Coder org's templates are
+// all user-selectable (and are not named "ao-*"), so we hide only the known AO
+// internal templates by name and surface everything else — a name allowlist
+// (e.g. "ao-devkit") would wrongly hide every BYO-Coder org's own templates.
+const INTERNAL_CODER_TEMPLATE_PREFIXES = ["ao-azure-vm", "ao-linux-docker"];
+
+export function visibleCoderTemplates<T extends { name: string }>(templates: T[]): T[] {
+	return templates.filter(
+		(tpl) => !INTERNAL_CODER_TEMPLATE_PREFIXES.some((prefix) => tpl.name.startsWith(prefix)),
+	);
+}
+
 // Project-level template and machine settings. Additional repositories render
 // beside the primary repository picker, so they live in a separate component.
 export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
@@ -30,21 +43,17 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 	// Parameter controls appear only when the selected template declares them.
 	const supportsSize = supportedParams.includes("size");
 	const supportsStartup = supportedParams.includes("startup_script");
-	const templateOptions = [
-		{ id: "", name: t("coder.template.default", { defaultValue: "Organization workspace" }), description: t("coder.template.defaultHint", { defaultValue: "The workspace configured for your org." }), parameters: [] as string[] },
-		// Curated list: surface only the AO Dev-kit templates for now. Internal /
-		// plumbing templates (ao-azure-vm*, ao-linux-docker, etc.) are hidden so the
-		// picker stays short; the default is still reachable via "Organization
-		// workspace" above.
-		...templates
-			.filter((tpl) => tpl.name.startsWith("ao-devkit"))
-			.map((tpl) => ({
-				id: tpl.id,
-				name: tpl.displayName || tpl.name,
-				description: tpl.description,
-				parameters: tpl.parameters ?? [],
-			})),
-	];
+	// Every project must choose a concrete template: there is no implicit
+	// "organization default" option, because a bring-your-own-Coder org may have
+	// no deployment-default template, in which case an empty choice fails only
+	// later at session start (HTTP 422 coder_template_required). The picker starts
+	// unselected and lists the org's real templates.
+	const templateOptions = visibleCoderTemplates(templates).map((tpl) => ({
+		id: tpl.id,
+		name: tpl.displayName || tpl.name,
+		description: tpl.description,
+		parameters: tpl.parameters ?? [],
+	}));
 
 	return (
 		<div className="flex flex-col gap-4 text-sm">
@@ -54,7 +63,7 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 						<span className="font-medium text-foreground">{t("coder.template.label", { defaultValue: "Template" })}</span>
 						<SearchablePicker
 							ariaLabel={t("coder.template.label", { defaultValue: "Template" })}
-							placeholder={t("coder.template.default", { defaultValue: "Organization workspace" })}
+							placeholder={t("coder.template.select", { defaultValue: "Select a template" })}
 							searchPlaceholder={t("coder.template.search", { defaultValue: "Search templates" })}
 							value={templateId}
 							onChange={(id) => {
