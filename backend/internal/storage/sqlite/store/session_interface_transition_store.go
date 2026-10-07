@@ -351,18 +351,14 @@ func (s *Store) EnqueueSessionInterfaceTransitionMessage(
 		}); err != nil {
 			return err
 		}
-		if opts.SenderSessionID == "" && !opts.AuthoredByUser {
+		if opts.SenderSessionID == "" {
 			return nil
 		}
 		transition, err := q.GetSessionInterfaceTransition(ctx, transitionID)
 		if err != nil {
 			return err
 		}
-		sender := opts.SenderSessionID
-		if opts.AuthoredByUser {
-			sender = ""
-		}
-		return recordSessionInteraction(ctx, q, transition.SessionID, sender, now)
+		return recordSessionInteraction(ctx, q, transition.SessionID, opts.SenderSessionID, now)
 	})
 }
 

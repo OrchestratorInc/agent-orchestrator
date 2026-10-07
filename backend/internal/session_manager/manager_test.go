@@ -10964,3 +10964,51 @@ func TestSendEmptyNudgeDoesNotBecomeCoordinationPrompt(t *testing.T) {
 		t.Fatal("nudge counted as human direction")
 	}
 }
+
+type interactionCountingStore struct {
+	*fakeStore
+	calls int
+}
+
+func (s *interactionCountingStore) RecordSessionInteraction(context.Context, domain.SessionID, string, time.Time) error {
+	s.calls++
+	return nil
+}
+
+func TestSendRecordsInteractionOnlyForDirectTerminalSender(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		chat, human, replay bool
+		sender              string
+		want                int
+	}{
+		{name: "terminal orchestrator", sender: "orchestrator-1", want: 1},
+		{name: "terminal human", human: true},
+		{name: "terminal queued replay", sender: "orchestrator-1", replay: true},
+		{name: "chat orchestrator", sender: "orchestrator-1", chat: true},
+		{name: "chat human", human: true, chat: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			rec := pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code"})
+			if tc.chat {
+				rec.Mode = domain.SessionModeChat
+			}
+			st.sessions["s1"] = rec
+			m := newSendTestManager(t, fakeAgent{}, &fakeMessenger{}, st)
+			counter := &interactionCountingStore{fakeStore: st}
+			m.store = counter
+			m.chat = &recordingLauncher{}
+			key := ""
+			if tc.replay {
+				key = "outbox-1"
+			}
+			if err := m.send(context.Background(), "s1", "direction", key, ports.MessageDeliveryOptions{SenderSessionID: tc.sender, AuthoredByUser: tc.human}); err != nil {
+				t.Fatal(err)
+			}
+			if counter.calls != tc.want {
+				t.Fatalf("interaction writes=%d want=%d", counter.calls, tc.want)
+			}
+		})
+	}
+}

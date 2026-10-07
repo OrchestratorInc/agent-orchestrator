@@ -4127,23 +4127,8 @@ func (m *Manager) SendWithOptions(ctx context.Context, id domain.SessionID, mess
 		}
 		message = appendAttachmentReferences(message, refs)
 	}
-	at := m.clock()
-	options.InteractionAt = at
-	if err := m.send(ctx, id, message, "", options); err != nil {
-		return err
-	}
-	if options.SenderSessionID != "" || options.AuthoredByUser {
-		if recorder, ok := m.store.(ports.SessionInteractionRecorder); ok {
-			sender := options.SenderSessionID
-			if options.AuthoredByUser {
-				sender = ""
-			}
-			if err := recorder.RecordSessionInteraction(context.WithoutCancel(ctx), id, sender, at); err != nil {
-				return fmt.Errorf("record interaction: %w", err)
-			}
-		}
-	}
-	return nil
+	options.InteractionAt = m.clock()
+	return m.send(ctx, id, message, "", options)
 }
 
 // SendSemantic delivers an internal message and returns only after the target
@@ -4303,6 +4288,15 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 		return fmt.Errorf("send %s: %w", id, ErrStartupPending)
 	case sessionguard.SuppressedInputGated:
 		return fmt.Errorf("send %s: %w", id, ErrSwitchInProgress)
+	}
+	// Chat and transition queues persist interaction in their acceptance transaction.
+	// Only direct terminal sends need this separate fact; outbox replay already has it.
+	if options.SenderSessionID != "" && clientMessageID == "" {
+		if recorder, ok := m.store.(ports.SessionInteractionRecorder); ok {
+			if err := recorder.RecordSessionInteraction(context.WithoutCancel(ctx), id, options.SenderSessionID, options.InteractionAt); err != nil {
+				return fmt.Errorf("record interaction: %w", err)
+			}
+		}
 	}
 	// confirmActive only helps — and is only SAFE — when the harness reports
 	// both a prompt-submit signal (so the loop can observe active) and a
