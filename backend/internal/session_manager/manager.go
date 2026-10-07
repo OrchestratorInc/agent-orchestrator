@@ -1794,7 +1794,7 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 		if projectKind == domain.ProjectKindScratch {
 			baseBranch = ""
 		}
-		ws, err := m.workspace.Create(ctx, ports.WorkspaceConfig{
+		workspaceCfg := ports.WorkspaceConfig{
 			ProjectID:     cfg.ProjectID,
 			SessionID:     id,
 			Kind:          cfg.Kind,
@@ -1803,7 +1803,14 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 			FreshBranch:   cfg.TaskPreparation != "",
 			BaseBranch:    baseBranch,
 			BaseRef:       baseRefs[filepath.Clean(project.Path)],
-		})
+		}
+		ws, err := m.workspace.Create(ctx, workspaceCfg)
+		if errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) && cfg.Kind == domain.KindOrchestrator && cfg.Branch == "" {
+			// Another data directory may own the canonical branch. Leave its
+			// worktree intact and let the adapter select an unused suffix.
+			workspaceCfg.FreshBranch = true
+			ws, err = m.workspace.Create(ctx, workspaceCfg)
+		}
 		return ws, nil, err
 	}
 	workspaceProject, ok := m.workspace.(ports.WorkspaceProject)
