@@ -273,7 +273,7 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 				case "remove": {
 					if (item) throw new Error("Active downloads cannot be removed");
 					try {
-						if (existsSync(download.savePath)) {
+						if (download.status === "completed" && existsSync(download.savePath)) {
 							if (!isInsideDirectory(options.downloadsDirectory, download.savePath)) {
 								throw new Error(DOWNLOAD_DELETE_ERROR);
 							}

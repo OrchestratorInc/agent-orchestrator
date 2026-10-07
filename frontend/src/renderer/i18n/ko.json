@@ -158,6 +158,7 @@
 	"browser.downloads.open": "{{file}} 열기",
 	"browser.downloads.show": "파일 탐색기에서 {{file}} 표시",
 	"browser.downloads.remove": "컴퓨터에서 {{file}} 삭제",
+	"browser.downloads.removeHistory": "기록에서 {{file}} 제거",
 	"browser.downloads.progressLabel": "{{file}} 다운로드 진행률",
 	"browser.downloads.showAll": "모두 표시",
 	"browser.downloads.search": "다운로드 기록 검색",

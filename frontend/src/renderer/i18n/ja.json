@@ -158,6 +158,7 @@
 	"browser.downloads.open": "{{file}} を開く",
 	"browser.downloads.show": "{{file}} をエクスプローラーに表示",
 	"browser.downloads.remove": "{{file}} をコンピューターから削除",
+	"browser.downloads.removeHistory": "{{file}} を履歴から削除",
 	"browser.downloads.progressLabel": "{{file}} のダウンロード進行状況",
 	"browser.downloads.showAll": "すべて表示",
 	"browser.downloads.search": "ダウンロード履歴を検索",

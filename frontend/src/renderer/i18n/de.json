@@ -158,6 +158,7 @@
 	"browser.downloads.open": "{{file}} öffnen",
 	"browser.downloads.show": "{{file}} im Explorer anzeigen",
 	"browser.downloads.remove": "{{file}} vom Computer löschen",
+	"browser.downloads.removeHistory": "{{file}} aus dem Verlauf entfernen",
 	"browser.downloads.progressLabel": "Downloadfortschritt für {{file}}",
 	"browser.downloads.showAll": "Alle anzeigen",
 	"browser.downloads.search": "Downloadverlauf durchsuchen",

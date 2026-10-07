@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -22,13 +22,14 @@ function setup() {
 	const trashItem = vi.fn(async (filePath: string) => {
 		rmSync(filePath);
 	});
+	let nextId = 0;
 	const manager = createBrowserDownloadManager({
 		downloadsDirectory,
 		historyPath,
 		shell: { openPath, showItemInFolder, trashItem },
 		notify,
 		now: () => 42,
-		createId: () => "download-1",
+		createId: () => `download-${++nextId}`,
 	});
 	const session = new EventEmitter();
 	const sessionOn = vi.spyOn(session, "on");
@@ -66,6 +67,63 @@ class FakeDownloadItem extends EventEmitter {
 }
 
 describe("browser download manager", () => {
+	it.each([false, true])("preserves a newer completed download when removing cancelled history (reload: %s)", async (reload) => {
+		const test = setup();
+		const cancelled = new FakeDownloadItem();
+		test.start(cancelled);
+		await test.manager.action({ id: "download-1", action: "cancel" });
+		cancelled.emit("done", {}, "cancelled");
+		const completed = new FakeDownloadItem();
+		test.start(completed);
+		const savePath = path.join(test.downloadsDirectory, "report.txt");
+		expect(cancelled.setSavePath).toHaveBeenCalledWith(savePath);
+		expect(completed.setSavePath).toHaveBeenCalledWith(savePath);
+		writeFileSync(savePath, "new download");
+		completed.emit("done", {}, "completed");
+		let manager = test.manager;
+		if (reload) {
+			manager.dispose();
+			manager = createBrowserDownloadManager({
+				downloadsDirectory: test.downloadsDirectory,
+				historyPath: test.historyPath,
+				shell: { openPath: test.openPath, showItemInFolder: test.showItemInFolder, trashItem: test.trashItem },
+				notify: test.notify,
+			});
+		}
+
+		await manager.action({ id: "download-1", action: "remove" });
+
+		expect(test.trashItem).not.toHaveBeenCalled();
+		expect(readFileSync(savePath, "utf8")).toBe("new download");
+		expect(manager.list().downloads).toMatchObject([{ id: "download-2", status: "completed" }]);
+		expect(JSON.parse(readFileSync(test.historyPath, "utf8"))).toMatchObject([{ id: "download-2" }]);
+		await manager.action({ id: "download-2", action: "open" });
+		expect(test.openPath).toHaveBeenCalledWith(savePath);
+	});
+
+	it.each(["cancelled", "interrupted"])("only removes %s history when its path has been manually reused", async (status) => {
+		for (const replacement of ["file", "directory", "symlink", "missing"] as const) {
+			const test = setup();
+			const item = new FakeDownloadItem();
+			test.start(item);
+			item.emit("done", {}, status);
+			const savePath = path.join(test.downloadsDirectory, "report.txt");
+			if (replacement === "file") writeFileSync(savePath, "replacement");
+			if (replacement === "directory") mkdirSync(savePath);
+			if (replacement === "symlink") symlinkSync("missing-target", savePath);
+			test.trashItem.mockRejectedValue(new Error("Must not trash a reused path"));
+
+			await test.manager.action({ id: "download-1", action: "remove" });
+
+			expect(test.trashItem).not.toHaveBeenCalled();
+			expect(test.manager.list().downloads).toEqual([]);
+			expect(JSON.parse(readFileSync(test.historyPath, "utf8"))).toEqual([]);
+			if (replacement === "file") expect(readFileSync(savePath, "utf8")).toBe("replacement");
+			if (replacement === "directory") expect(lstatSync(savePath).isDirectory()).toBe(true);
+			if (replacement === "symlink") expect(lstatSync(savePath).isSymbolicLink()).toBe(true);
+		}
+	});
+
 	it("contains destination setup failures and reports them without exposing the path", () => {
 		const root = mkdtempSync(path.join(os.tmpdir(), "ao-browser-download-failure-"));
 		temporaryDirectories.push(root);

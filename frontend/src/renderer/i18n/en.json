@@ -120,6 +120,7 @@
 	"browser.downloads.open": "Open {{file}}",
 	"browser.downloads.show": "Show {{file}} in File Explorer",
 	"browser.downloads.remove": "Delete {{file}} from computer",
+	"browser.downloads.removeHistory": "Remove {{file}} from history",
 	"browser.downloads.progressLabel": "Download progress for {{file}}",
 	"browser.downloads.showAll": "Show all",
 	"browser.downloads.search": "Search download history",
