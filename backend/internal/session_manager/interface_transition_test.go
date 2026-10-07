@@ -764,12 +764,7 @@ func (c *transitionChat) StartChat(ctx context.Context, cfg ChatStart) (ChatStar
 func (*transitionChat) StartChatTurn(context.Context, domain.SessionID, string) (string, error) {
 	return "", nil
 }
-func (c *transitionChat) RelayChatTurn(_ context.Context, _ domain.SessionID, text string) (string, error) {
-	c.relayMessages = append(c.relayMessages, text)
-	c.relayIDs = append(c.relayIDs, "")
-	return "", nil
-}
-func (c *transitionChat) RelayChatTurnWithID(_ context.Context, _ domain.SessionID, text, clientMessageID string) (string, error) {
+func (c *transitionChat) RelaySessionChatTurn(_ context.Context, _ domain.SessionID, text, clientMessageID string, _ ports.MessageDeliveryOptions) (string, error) {
 	c.relayMessages = append(c.relayMessages, text)
 	c.relayIDs = append(c.relayIDs, clientMessageID)
 	return "", nil

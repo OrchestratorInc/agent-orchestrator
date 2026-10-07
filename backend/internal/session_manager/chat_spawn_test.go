@@ -78,6 +78,7 @@ type recordingLauncher struct {
 	// relayed is what arrived through Manager.Send rather than as an initial
 	// prompt, kept separate so a test can tell the two apart.
 	relayed             []string
+	relayOptions        []ports.MessageDeliveryOptions
 	relayIDs            []string
 	stopped             []domain.SessionID
 	backgroundHarnesses []domain.AgentHarness
@@ -202,15 +203,10 @@ func (l *recordingLauncher) StartChatTurn(_ context.Context, _ domain.SessionID,
 	return "turn-1", l.turnErr
 }
 
-func (l *recordingLauncher) RelayChatTurn(_ context.Context, _ domain.SessionID, text string) (string, error) {
-	l.relayed = append(l.relayed, text)
-	l.relayIDs = append(l.relayIDs, "")
-	return "turn-relay", l.turnErr
-}
-
-func (l *recordingLauncher) RelayChatTurnWithID(_ context.Context, _ domain.SessionID, text, clientMessageID string) (string, error) {
+func (l *recordingLauncher) RelaySessionChatTurn(_ context.Context, _ domain.SessionID, text, clientMessageID string, options ports.MessageDeliveryOptions) (string, error) {
 	l.relayed = append(l.relayed, text)
 	l.relayIDs = append(l.relayIDs, clientMessageID)
+	l.relayOptions = append(l.relayOptions, options)
 	return "turn-relay", l.turnErr
 }
 
@@ -1536,6 +1532,22 @@ func TestSendRoutesIntoTheChatConversation(t *testing.T) {
 	if runtime.created != 0 {
 		t.Errorf("chat spawn created %d runtimes", runtime.created)
 	}
+	for _, options := range []ports.MessageDeliveryOptions{
+		{AuthoredByUser: true}, {SenderSessionID: "orchestrator-1"}, {},
+	} {
+		options.InteractionAt = time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
+		for _, key := range []string{"", "outbox-message-1"} {
+			handled, err := mgr.sendChat(ctx, rec.ID, "direction", key, options)
+			if err != nil || !handled {
+				t.Fatalf("sendChat: handled=%v err=%v", handled, err)
+			}
+			last := len(launcher.relayed) - 1
+			if launcher.relayIDs[last] != key || launcher.relayOptions[last] != options {
+				t.Fatalf("relay lost delivery key/options: %q %+v", launcher.relayIDs[last], launcher.relayOptions[last])
+			}
+		}
+	}
+
 }
 
 // A terminated chat session cannot receive a message, matching the terminal path.
