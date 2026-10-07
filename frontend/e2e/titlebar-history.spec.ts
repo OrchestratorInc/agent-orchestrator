@@ -7,10 +7,11 @@ for (const platform of ["MacIntel", "Linux x86_64"]) {
 			? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36"
 			: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36" });
 
-		for (const open of [true, false]) {
-			test(`history stays visible and navigates with sidebar open=${open} @T0`, async ({ page }) => {
+		for (const [open, storedWidth] of [[true, 200], [true, 420], [false, 420]] as const) {
+			test(`history stays visible and navigates with sidebar open=${open}, stored width=${storedWidth} @T0`, async ({ page }) => {
 				await page.emulateMedia({ reducedMotion: "reduce" });
 				await installFakeAgent(page, { platform, workers: [{ id: "nav-worker", title: "Navigation worker", mode: "tui" }] });
+				await page.addInitScript((width) => window.localStorage.setItem("ao-sidebar-w", String(width)), storedWidth);
 				await page.goto("/#/");
 				const nav = page.locator('[data-slot="titlebar-nav"]');
 				if (!open) await nav.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
@@ -45,8 +46,12 @@ for (const platform of ["MacIntel", "Linux x86_64"]) {
 							const right = el.querySelectorAll("button")[2].getBoundingClientRect().right;
 							const brand = el.querySelector("[data-sidebar-brand]")!.getBoundingClientRect();
 							const sidebar = document.querySelector('[data-slot="sidebar-container"]')!.getBoundingClientRect();
-							return right <= brand.left && brand.right <= sidebar.right;
+							const tab = document.querySelector('[role="tab"]')!.getBoundingClientRect();
+							return right <= brand.left && brand.right <= sidebar.right && brand.right <= tab.left;
 						})).toBe(true);
+						if (width === 1280) {
+							await expect.poll(() => brand.locator("[data-brand-label]").evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+						}
 					}
 				}
 			});
