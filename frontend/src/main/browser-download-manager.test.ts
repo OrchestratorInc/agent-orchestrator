@@ -167,6 +167,74 @@ describe("browser download manager", () => {
 		expect(test.manager.list().downloads.map((download) => download.status)).toEqual(["blocked", "progressing"]);
 	});
 
+	it("does not let a request that only redirects through an approved URL use the approval", async () => {
+		const test = setup();
+		const item = new FakeDownloadItem();
+		test.session.emit("will-download", { preventDefault: vi.fn() }, item, { isDestroyed: () => false, downloadURL: vi.fn() });
+		await test.manager.action({ id: "download-1", action: "allow" });
+
+		const other = new FakeDownloadItem();
+		other.getURLChain = () => ["https://other.example.test/start", item.url];
+		const event = { preventDefault: vi.fn() };
+		test.session.emit("will-download", event, other);
+
+		expect(event.preventDefault).toHaveBeenCalledOnce();
+		expect(other.setSavePath).not.toHaveBeenCalled();
+
+		// The approval is still there for the request it was given to.
+		test.session.emit("will-download", { preventDefault: vi.fn() }, item);
+		expect(item.setSavePath).toHaveBeenCalledOnce();
+	});
+
+	it("caps blocked requests without evicting real download history", async () => {
+		const root = mkdtempSync(path.join(os.tmpdir(), "ao-browser-downloads-"));
+		temporaryDirectories.push(root);
+		const downloadsDirectory = path.join(root, "Downloads");
+		const historyPath = path.join(root, "data", "browser-downloads.json");
+		mkdirSync(path.dirname(historyPath), { recursive: true });
+		const history = Array.from({ length: 200 }, (_, index) => ({
+			id: `done-${index}`,
+			fileName: `done-${index}.txt`,
+			savePath: path.join(downloadsDirectory, `done-${index}.txt`),
+			receivedBytes: 1,
+			totalBytes: 1,
+			status: "completed",
+			startedAt: 1,
+			updatedAt: 1,
+		}));
+		writeFileSync(historyPath, JSON.stringify(history));
+		let nextId = 0;
+		const manager = createBrowserDownloadManager({
+			downloadsDirectory,
+			historyPath,
+			shell: { openPath: vi.fn(async () => ""), showItemInFolder: vi.fn(), trashItem: vi.fn(async () => undefined) },
+			notify: vi.fn(),
+			createId: () => `new-${nextId++}`,
+		});
+		const session = new EventEmitter();
+		manager.attach(session as never);
+
+		const first = new FakeDownloadItem();
+		for (let index = 0; index < 250; index += 1) {
+			const item = index === 0 ? first : new FakeDownloadItem();
+			item.url = `https://downloads.example.test/files/${index}.zip`;
+			session.emit("will-download", { preventDefault: vi.fn() }, item, { isDestroyed: () => false, downloadURL: vi.fn() });
+		}
+
+		const listed = manager.list().downloads;
+		expect(listed.filter((download) => download.status === "blocked").map((download) => download.id))
+			.toEqual(Array.from({ length: 20 }, (_, index) => `new-${249 - index}`));
+		expect(listed.filter((download) => download.status === "completed")).toHaveLength(200);
+		// The oldest blocked request was dropped, so it can no longer be allowed.
+		await expect(manager.action({ id: "new-0", action: "allow" })).rejects.toThrow("Download not found");
+
+		// Allowing one persists history: every real entry is still there.
+		startApproved(manager, session, new FakeDownloadItem());
+		const persisted = JSON.parse(readFileSync(historyPath, "utf8")) as Array<{ id: string; status: string }>;
+		expect(persisted.filter((download) => download.status === "completed")).toHaveLength(199);
+		expect(persisted.some((download) => download.status === "blocked")).toBe(false);
+	});
+
 	it("matches an approved download that was redirected, and expires stale approvals", async () => {
 		const root = mkdtempSync(path.join(os.tmpdir(), "ao-browser-downloads-"));
 		temporaryDirectories.push(root);

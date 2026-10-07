@@ -56,6 +56,9 @@ type BrowserDownloadManagerOptions = {
 };
 
 const MAX_DOWNLOAD_HISTORY = 200;
+// Blocked requests are capped on their own so a page or agent loop that keeps
+// requesting files can never push real downloads out of the history.
+const MAX_BLOCKED_DOWNLOADS = 20;
 const DOWNLOAD_DESTINATION_ERROR = "Could not prepare the Downloads folder.";
 const DOWNLOAD_DELETE_ERROR = "Could not delete the downloaded file.";
 const DOWNLOAD_UNAVAILABLE_ERROR = "This download is no longer available. Open the link again.";
@@ -95,6 +98,14 @@ function collisionSafePath(directory: string, fileName: string, unavailable: Set
 		suffix += 1;
 	}
 	return candidate;
+}
+
+// Expects newest first, and keeps the newest of each kind.
+function withinLimits(downloads: StoredDownload[]): StoredDownload[] {
+	let blocked = 0;
+	let history = 0;
+	return downloads.filter((download) =>
+		download.status === "blocked" ? ++blocked <= MAX_BLOCKED_DOWNLOADS : ++history <= MAX_DOWNLOAD_HISTORY);
 }
 
 function isInsideDirectory(directory: string, candidate: string): boolean {
@@ -204,11 +215,13 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 
 	const takeApproval = (item: DownloadItemLike): string | undefined => {
 		const now = (options.now ?? Date.now)();
-		const urls = new Set([...item.getURLChain(), item.getURL()]);
+		// Only the URL the request started from counts. A request that merely
+		// redirects through an approved URL must not use up that approval.
+		const url = requestedURL(item);
 		let approvedId: string | undefined;
 		for (const [id, approval] of approvals) {
 			if (approval.expiresAt < now) approvals.delete(id);
-			else if (!approvedId && urls.has(approval.url)) approvedId = id;
+			else if (!approvedId && approval.url === url) approvedId = id;
 		}
 		if (approvedId) approvals.delete(approvedId);
 		return approvedId;
@@ -247,9 +260,12 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 			startedAt: now,
 			updatedAt: now,
 		};
-		downloads = [download, ...downloads].slice(0, MAX_DOWNLOAD_HISTORY);
+		downloads = withinLimits([download, ...downloads]);
 		for (const blockedId of blockedRequests.keys()) {
-			if (!downloads.some((candidate) => candidate.id === blockedId)) blockedRequests.delete(blockedId);
+			if (!downloads.some((candidate) => candidate.id === blockedId)) {
+				blockedRequests.delete(blockedId);
+				approvals.delete(blockedId);
+			}
 		}
 		publish();
 	};
@@ -290,7 +306,7 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 			startedAt: now,
 			updatedAt: now,
 		};
-		downloads = [download, ...downloads].slice(0, MAX_DOWNLOAD_HISTORY);
+		downloads = withinLimits([download, ...downloads]);
 		publish(true);
 		const updated = (_event: unknown, updateState: "progressing" | "interrupted") => {
 			updateItem(id, item, updateState === "interrupted" ? "interrupted" : undefined);
