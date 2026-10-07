@@ -5,12 +5,34 @@ import (
 	"errors"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
+
+func TestCueCommandInput(t *testing.T) {
+	command := "printf '%s\\n' 'left\tright'\n# '\"雪\r\n"
+	for _, shell := range []string{"bash", "zsh", "sh", "fish", "bash.exe", "sh.exe", "pwsh.exe", "powershell.exe"} {
+		t.Run(shell, func(t *testing.T) {
+			input, env := cueCommandInput([]string{filepath.Join("shells", shell)}, command)
+			if env["AO_CUE_COMMAND"] != command {
+				t.Fatalf("payload = %q, want %q", env["AO_CUE_COMMAND"], command)
+			}
+			if strings.ContainsAny(input, "\t\r\n") || strings.Contains(input, "left") || !strings.Contains(input, "AO_CUE_COMMAND") {
+				t.Fatalf("input is not a fixed single-line dispatcher: %q", input)
+			}
+		})
+	}
+	for _, argv := range [][]string{nil, {"cmd.exe"}, {"unknown"}} {
+		input, env := cueCommandInput(argv, command)
+		if input != command || len(env) != 0 {
+			t.Fatalf("legacy shell %v: input = %q, env = %v", argv, input, env)
+		}
+	}
+}
 
 func cueTestShell(t *testing.T) string {
 	t.Helper()
@@ -19,6 +41,21 @@ func cueTestShell(t *testing.T) string {
 	}
 	t.Setenv("SHELL", "/bin/sh")
 	return ""
+}
+
+func assertCueDelivery(t *testing.T, rt *fakeShellRuntime, handleID, command string) {
+	t.Helper()
+	sent := <-rt.sentCh
+	cfg := rt.created[len(rt.created)-1]
+	input, env := cueCommandInput(cfg.Argv, command)
+	if sent.handleID != handleID || sent.input != input {
+		t.Fatalf("sent = %+v, want handle %q and input %q", sent, handleID, input)
+	}
+	for key, value := range env {
+		if cfg.Env[key] != value {
+			t.Fatalf("launch environment %s = %q, want %q", key, cfg.Env[key], value)
+		}
+	}
 }
 
 func TestCueCommandOpensNewNormalProjectShellForEveryInvocation(t *testing.T) {
@@ -36,9 +73,7 @@ func TestCueCommandOpensNewNormalProjectShellForEveryInvocation(t *testing.T) {
 	if first.WorkingDir != root || first.SessionID != "" || len(rt.created) != 1 || st.records[0].Transient {
 		t.Fatalf("first terminal = %+v, creates = %+v, records = %+v", first, rt.created, st.records)
 	}
-	if sent := <-rt.sentCh; sent.handleID != first.HandleID || sent.input != input.Command {
-		t.Fatalf("sent = %+v", sent)
-	}
+	assertCueDelivery(t, rt, first.HandleID, input.Command)
 	input.Command = "npm run build"
 	second, err := svc.RunCueCommand(context.Background(), input)
 	if err != nil {
@@ -47,9 +82,7 @@ func TestCueCommandOpensNewNormalProjectShellForEveryInvocation(t *testing.T) {
 	if second.HandleID == first.HandleID || second.Title == first.Title || len(rt.created) != 2 || len(st.records) != 2 || st.records[1].Transient {
 		t.Fatalf("second = %+v, creates = %+v", second, rt.created)
 	}
-	if sent := <-rt.sentCh; sent.handleID != second.HandleID || sent.input != input.Command {
-		t.Fatalf("sent = %+v", sent)
-	}
+	assertCueDelivery(t, rt, second.HandleID, input.Command)
 }
 
 func TestCueCommandReceivesProjectEnvironment(t *testing.T) {
@@ -58,7 +91,7 @@ func TestCueCommandReceivesProjectEnvironment(t *testing.T) {
 	rt.cueReady = true
 	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{
 		roots: map[domain.ProjectID]string{"portfolio": root},
-		envs:  map[domain.ProjectID]map[string]string{"portfolio": {"PROJECT_TOKEN": "cue-value", "AO_CUE_READY_FILE": "untrusted"}},
+		envs:  map[domain.ProjectID]map[string]string{"portfolio": {"PROJECT_TOKEN": "cue-value", "AO_CUE_READY_FILE": "untrusted", "AO_CUE_COMMAND": "untrusted"}},
 	})
 	svc.dataDir = t.TempDir()
 	_, err := svc.RunCueCommand(context.Background(), RunCueCommandInput{ProjectID: "portfolio", Shell: cueTestShell(t), Command: "pwd"})
@@ -70,6 +103,9 @@ func TestCueCommandReceivesProjectEnvironment(t *testing.T) {
 	}
 	if got := rt.created[0].Env["AO_CUE_READY_FILE"]; got == "untrusted" || got == "" {
 		t.Fatalf("cue readiness marker = %q", got)
+	}
+	if got := rt.created[0].Env["AO_CUE_COMMAND"]; got != "pwd" {
+		t.Fatalf("cue command = %q", got)
 	}
 }
 
@@ -96,25 +132,19 @@ func TestCueCommandDoesNotSendToExistingTerminals(t *testing.T) {
 	if err != nil || term.HandleID == "old" || term.HandleID == "new" || term.WorkingDir != workspace || term.SessionID != "session" {
 		t.Fatalf("new session terminal = %+v, err = %v", term, err)
 	}
-	if sent := <-rt.sentCh; sent.handleID != term.HandleID || sent.input != "pwd" {
-		t.Fatalf("session send = %+v", sent)
-	}
+	assertCueDelivery(t, rt, term.HandleID, "pwd")
 	firstHandle := term.HandleID
 	term, err = svc.RunCueCommand(context.Background(), input)
 	if err != nil || term.HandleID == firstHandle {
 		t.Fatalf("next session terminal = %+v, err = %v", term, err)
 	}
-	if sent := <-rt.sentCh; sent.handleID != term.HandleID || sent.input != "pwd" {
-		t.Fatalf("next session send = %+v", sent)
-	}
+	assertCueDelivery(t, rt, term.HandleID, "pwd")
 	input.SessionID = ""
 	term, err = svc.RunCueCommand(context.Background(), input)
 	if err != nil || term.HandleID == "board" || term.SessionID != "" || term.WorkingDir != root {
 		t.Fatalf("new board terminal = %+v, err = %v", term, err)
 	}
-	if sent := <-rt.sentCh; sent.handleID != term.HandleID || sent.input != "pwd" {
-		t.Fatalf("board send = %+v", sent)
-	}
+	assertCueDelivery(t, rt, term.HandleID, "pwd")
 	if len(rt.created) != 3 {
 		t.Fatalf("creates = %+v, want one per invocation", rt.created)
 	}
@@ -193,9 +223,7 @@ func TestCueCommandWaitsForShellPrompt(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("cue did not dispatch after shell readiness")
 	}
-	if sent := <-rt.sentCh; sent.input != "pwd" {
-		t.Fatalf("sent = %+v", sent)
-	}
+	assertCueDelivery(t, rt, st.records[0].HandleID, "pwd")
 }
 
 func TestCueCommandDoesNotSendWhenShellExitsBeforePrompt(t *testing.T) {

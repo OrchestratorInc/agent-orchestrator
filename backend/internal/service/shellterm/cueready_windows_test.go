@@ -3,6 +3,7 @@
 package shellterm
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,16 @@ func TestCueReadinessFromInteractiveWindowsShell(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer ready.cleanup()
+			command := "printf '%s' 'left\tright' > output"
+			want := "left\tright"
+			if choice == "powershell" || choice == "pwsh" {
+				command = "[IO.File]::WriteAllText((Join-Path (Get-Location) 'output'), 'left\tright\r\n雪')"
+				want = "left\tright\r\n雪"
+			}
+			input, env := cueCommandInput(argv, command)
+			for key, value := range env {
+				ready.env[key] = value
+			}
 			p, err := gopty.New()
 			if err != nil {
 				t.Fatal(err)
@@ -62,7 +73,20 @@ func TestCueReadinessFromInteractiveWindowsShell(t *testing.T) {
 			deadline := time.Now().Add(8 * time.Second)
 			for time.Now().Before(deadline) {
 				if data, err := os.ReadFile(ready.file); err == nil && strings.TrimSpace(string(data)) == "ready" {
-					return
+					if choice == "cmd" {
+						return
+					}
+					if _, err := io.WriteString(cp, input+"\r"); err != nil {
+						t.Fatal(err)
+					}
+					for time.Now().Before(deadline) {
+						if data, err := os.ReadFile(filepath.Join(cmd.Dir, "output")); err == nil && string(data) == want {
+							return
+						}
+						time.Sleep(50 * time.Millisecond)
+					}
+					data, err := os.ReadFile(filepath.Join(cmd.Dir, "output"))
+					t.Fatalf("%s command output = %q, err = %v, want %q", choice, data, err, want)
 				}
 				time.Sleep(50 * time.Millisecond)
 			}

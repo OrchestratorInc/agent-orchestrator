@@ -438,6 +438,10 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 	if err != nil {
 		return ShellTerminal{}, fmt.Errorf("run cue command: resolve project environment: %w", err)
 	}
+	input, commandEnv := cueCommandInput(argv, in.Command)
+	for key, value := range commandEnv {
+		readiness.env[key] = value
+	}
 	env := agentlaunch.MergeEnv(s.pinnedEnv(projectEnv), readiness.env)
 	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectEnv: projectEnv, projectID: projectID,
 		sessionID: in.SessionID, workingDir: workingDir, title: nextShellTerminalTitle(records)})
@@ -450,7 +454,7 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 	if err := s.waitForCueShellReady(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, readiness.file); err != nil {
 		return ShellTerminal{}, err
 	}
-	if err := s.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, in.Command); err != nil {
+	if err := s.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, input); err != nil {
 		return ShellTerminal{}, fmt.Errorf("run cue command: send to terminal %s: %w", terminal.HandleID, err)
 	}
 	return terminal, nil
