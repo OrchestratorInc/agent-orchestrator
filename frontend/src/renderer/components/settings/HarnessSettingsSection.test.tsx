@@ -155,6 +155,15 @@ function ReadinessSelector({ agentId }: { agentId: string }) {
 	);
 }
 
+/** The first render shows bare labels before the rows mount; wait for the row itself. */
+async function findAgentRow(agentId: string): Promise<HTMLElement> {
+	return waitFor(() => {
+		const row = document.querySelector<HTMLElement>(`[data-agent="${agentId}"]`);
+		if (!row) throw new Error(`harness row ${agentId} has not rendered`);
+		return row;
+	});
+}
+
 function renderSection(focusAgentId?: string, selectorAgentId?: string, initialView?: "local" | "cloud", client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
 	const view = render(
 		<QueryClientProvider client={client}>
@@ -272,10 +281,10 @@ describe("HarnessSettingsSection", () => {
 		const pendingRefresh = new Promise((resolve) => { resolveRefresh = resolve; });
 		vi.mocked(apiClient.POST).mockReturnValueOnce(pendingRefresh as never);
 		renderSection();
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/refresh"));
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
-		expect(vi.mocked(apiClient.GET).mock.calls.some(([path]) => path === "/api/v1/agents/{agent}/update-advisory")).toBe(true);
+		expect((vi.mocked(apiClient.GET).mock.calls as unknown[][]).some(([path]) => path === "/api/v1/agents/{agent}/update-advisory")).toBe(true);
 		await act(async () => resolveRefresh({ data: readyCatalog() }));
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
 	});
@@ -291,7 +300,7 @@ describe("HarnessSettingsSection", () => {
 		const original = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation((path, options) => {
 			if (path === "/api/v1/agents/{agent}/update-advisory") return pendingAdvisory as never;
-			return original(path, options);
+			return (original as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		client.setQueryData(["agent-readiness"], readyCatalog());
@@ -299,13 +308,13 @@ describe("HarnessSettingsSection", () => {
 			agentId: "codex", status: "behind_latest", currentVersion: "1.2.3", latestVersion: "1.3.0", maintenanceMethod: "npm",
 		});
 		const view = renderSection(undefined, undefined, undefined, client);
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
 		expect(within(row).getByText("v1.3.0 available")).toBeInTheDocument();
-		expect(vi.mocked(apiClient.GET).mock.calls.some(([path, options]) => path === "/api/v1/agents/{agent}/update-advisory"
+		expect((vi.mocked(apiClient.GET).mock.calls as unknown[][]).some(([path, options]) => path === "/api/v1/agents/{agent}/update-advisory"
 			&& (options as { params?: { path?: { agent?: string } } })?.params?.path?.agent === "codex")).toBe(false);
 		await act(async () => resolveRefresh({ data: readyCatalog() }));
-		await waitFor(() => expect(vi.mocked(apiClient.GET).mock.calls.some(([path, options]) => path === "/api/v1/agents/{agent}/update-advisory"
+		await waitFor(() => expect((vi.mocked(apiClient.GET).mock.calls as unknown[][]).some(([path, options]) => path === "/api/v1/agents/{agent}/update-advisory"
 			&& (options as { params?: { path?: { agent?: string } } })?.params?.path?.agent === "codex")).toBe(true));
 		expect(within(row).getByRole("button", { name: "Update" })).toBeEnabled();
 		if (result === "current") {
@@ -328,11 +337,11 @@ describe("HarnessSettingsSection", () => {
 		readiness.agents[1].authentication.state = "unauthorized";
 		const original = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation((path, options) => path === "/api/v1/agents/readiness"
-			? Promise.resolve({ data: readiness }) as never : original(path, options));
+			? Promise.resolve({ data: readiness }) as never : (original as (path: string, options: unknown) => Promise<never>)(path, options));
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		client.setQueryData(["agent-readiness"], readiness);
 		const view = renderSection(undefined, undefined, undefined, client);
-		const codexRow = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const codexRow = await findAgentRow("codex");
 		const claudeRow = screen.getByText("Claude Code").closest('[data-agent="claude-code"]') as HTMLElement;
 		expect(await within(codexRow).findByRole("button", { name: "Login" })).toBeEnabled();
 		expect(await within(claudeRow).findByRole("button", { name: "Install" })).toBeEnabled();
@@ -344,7 +353,7 @@ describe("HarnessSettingsSection", () => {
 		readiness.agents[1].authentication.state = authentication;
 		mockInstalledOperations("npm", readiness);
 		renderSection();
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
 		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
 		expect(within(row).queryByText("Connected")).toBeNull();
@@ -371,7 +380,7 @@ describe("HarnessSettingsSection", () => {
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
 			if (path === "/api/v1/agents/{agent}/update-advisory" && (options as { params?: { query?: { refresh?: boolean } } })?.params?.query?.refresh) return { data: { agentId: "codex", status: "behind_latest", currentVersion: "1.2.3", latestVersion: "1.3.0", source: "homebrew" } } as never;
-			return get(path, options);
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
 		const { client } = renderSection();
 		const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
@@ -395,7 +404,7 @@ describe("HarnessSettingsSection", () => {
 				agentId: "codex", status: state === "already-current" ? "current" : state === "unknown" ? "unknown" : "behind_latest",
 				currentVersion: state === "already-current" ? "1.3.0" : "1.2.3", latestVersion: state === "different-target" ? "2.0.0" : "1.3.0", maintenanceMethod: state === "different-owner" ? "homebrew" : "npm",
 			} } as never;
-			return get(path, options);
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
 		renderSection();
 		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
@@ -409,7 +418,7 @@ describe("HarnessSettingsSection", () => {
 		useHarnessActionRequest.getState().setRequest({ agentId: "codex", latestVersion: "1.3.0", action: "update" });
 		renderSection("codex");
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "npm", operation: "update", expectedVersion: "1.3.0" } }));
-		expect(vi.mocked(apiClient.POST).mock.calls.filter(([path]) => path === "/api/v1/agents/{agent}/install")).toHaveLength(1);
+		expect((vi.mocked(apiClient.POST).mock.calls as unknown[][]).filter(([path]) => path === "/api/v1/agents/{agent}/install")).toHaveLength(1);
 		expect(useHarnessActionRequest.getState().request).toBeNull();
 	});
 
@@ -418,7 +427,7 @@ describe("HarnessSettingsSection", () => {
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
 			if (path === "/api/v1/agents/{agent}/update-advisory") return { data: { agentId: "codex", status: "behind_latest", currentVersion: "1.2.3", latestVersion: "1.3.0", source: "official-release" } } as never;
-			return get(path, options);
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
 		renderSection();
 		const row = (await screen.findByRole("button", { name: "Expand Codex options" })).closest('[data-agent="codex"]') as HTMLElement;
@@ -449,8 +458,9 @@ describe("HarnessSettingsSection", () => {
 		await userEvent.click(toggle);
 		const row = toggle.closest('[data-agent="codex"]') as HTMLElement;
 		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
 		await userEvent.click(within(row).getByRole("button", { name: "Update manually" }));
-		expect(aoBridge.app.openExternal).toHaveBeenCalledWith("https://github.com/openai/codex");
+		expect(openExternal).toHaveBeenCalledWith("https://github.com/openai/codex");
 		expect(within(row).getByRole("button", { name: "Uninstall" })).toBeDisabled();
 		expect(within(row).getByText("Installation method could not be verified. Manage this CLI using its original installer.")).toBeInTheDocument();
 		expect(screen.queryByRole("dialog")).toBeNull();
@@ -527,7 +537,7 @@ describe("HarnessSettingsSection", () => {
 		const previous = post.getMockImplementation()!;
 		post.mockImplementation(async (path, options) => {
 			if (path === "/api/v1/agents/{agent}/install") return { error: { error: "HARNESS_ACTIVE", code: "HARNESS_ACTIVE", message: "End the active Codex session before updating.", requestId: "test-active-session" } } as never;
-			return previous(path, options);
+			return (previous as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
 		renderSection();
 		const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
@@ -536,7 +546,7 @@ describe("HarnessSettingsSection", () => {
 		expect(await within(row).findByRole("alert")).toHaveTextContent("End the active Codex session before updating.");
 		expect(toggle).toHaveAttribute("aria-expanded", "true");
 		await userEvent.click(within(row).getByRole("button", { name: "Retry update" }));
-		const requests = vi.mocked(apiClient.POST).mock.calls.filter(([path]) => path === "/api/v1/agents/{agent}/install");
+		const requests = (vi.mocked(apiClient.POST).mock.calls as unknown[][]).filter(([path]) => path === "/api/v1/agents/{agent}/install");
 		expect(requests).toHaveLength(2);
 		for (const [, options] of requests) expect(options).toMatchObject({ body: { method: "npm", operation: "update" } });
 	});
@@ -579,7 +589,7 @@ describe("HarnessSettingsSection", () => {
 			if (path === "/api/v1/agents/readiness/ensure" && probed) return { data: {
 				agents: [agentReadiness("codex", "Codex", { authentication: "authorized" })],
 			} } as never;
-			return previous(path, options);
+			return (previous as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
 		vi.spyOn(apiClient, "DELETE").mockImplementation(async () => await closing as never);
 		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
@@ -613,7 +623,7 @@ describe("HarnessSettingsSection", () => {
 		};
 		const get = vi.mocked(apiClient.GET);
 		const previous = get.getMockImplementation()!;
-		get.mockImplementation(async (path, options) => path === "/api/v1/agents/install-jobs" ? { data: { jobs: [completed] } } as never : previous(path, options));
+		get.mockImplementation(async (path, options) => path === "/api/v1/agents/install-jobs" ? { data: { jobs: [completed] } } as never : (previous as (path: string, options: unknown) => Promise<never>)(path, options));
 		act(() => { client.setQueryData(["agent-install-jobs"], [completed]); });
 		await waitFor(() => expect(toggle).toBeEnabled());
 		await userEvent.click(toggle);
@@ -634,7 +644,7 @@ describe("HarnessSettingsSection", () => {
 				agentId: "codex", action: "login", terminal: { handleId: "auth-codex", title: "Codex login", workingDir: "/tmp", createdAt: "2026-10-07T00:00:00Z" },
 			} } as never;
 			if (path === "/api/v1/agents/{agent}/probe") return await probe as never;
-			return previous(path, options);
+			return (previous as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
 		vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
 		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
@@ -689,7 +699,7 @@ describe("HarnessSettingsSection", () => {
 		cloudMocks.org = { id: "org-1" };
 		renderSection();
 
-		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		const claudeRow = await findAgentRow("claude-code");
 		expect(screen.getByRole("tab", { name: "Local" })).toHaveAttribute("aria-selected", "true");
 		expect(within(claudeRow).queryByRole("button", { name: "Login" })).toBeNull();
 		expect(within(claudeRow).queryByText(/Cloud/)).toBeNull();
@@ -739,7 +749,7 @@ describe("HarnessSettingsSection", () => {
 		];
 		renderSection(undefined, undefined, "cloud");
 
-		const codexRow = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const codexRow = await findAgentRow("codex");
 		expect(within(codexRow).getByText("Connected")).toBeInTheDocument();
 		const claudeRow = screen.getByText("Claude Code").closest('[data-agent="claude-code"]') as HTMLElement;
 		expect(within(claudeRow).getByText("Not connected")).toBeInTheDocument();
@@ -770,7 +780,7 @@ describe("HarnessSettingsSection", () => {
 		cloudMocks.connections = [{ provider: "claude-code", label: "default", validationState: "valid" }];
 		renderSection(undefined, undefined, "cloud");
 
-		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		const claudeRow = await findAgentRow("claude-code");
 		expect(screen.queryByRole("tab", { name: "Cloud" })).toBeNull();
 		expect(within(claudeRow).queryByRole("button", { name: "Login" })).toBeNull();
 		expect(screen.getByText("Goose")).toBeInTheDocument();
@@ -788,7 +798,7 @@ describe("HarnessSettingsSection", () => {
 		vi.mocked(apiClient.POST).mockResolvedValue({ data: authorized } as never);
 		renderSection();
 
-		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		const row = await findAgentRow("claude-code");
 		expect(await within(row).findByText("Connected")).toBeInTheDocument();
 		expect(within(row).queryByRole("button", { name: "Refresh login" })).toBeNull();
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/refresh");
@@ -807,7 +817,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		vi.mocked(apiClient.POST).mockResolvedValue({ data: fxCatalog } as never);
 		renderSection();
-		const row = (await screen.findByText("fx")).closest("[data-agent]") as HTMLElement;
+		const row = await findAgentRow("fx");
 		expect(await within(row).findByRole("button", { name: "Login" })).toBeInTheDocument();
 		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
 	});
@@ -822,7 +832,7 @@ describe("HarnessSettingsSection", () => {
 			return { data: undefined } as never;
 		});
 		renderSection();
-		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
+		const row = await findAgentRow("mimo-code");
 		expect(await within(row).findByText("Configured")).toBeInTheDocument();
 		expect(within(row).queryByRole("button", { name: "Configured" })).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
@@ -843,7 +853,7 @@ describe("HarnessSettingsSection", () => {
 			return { data: fxCatalog } as never;
 		});
 		renderSection();
-		const row = (await screen.findByText("fx")).closest("[data-agent]") as HTMLElement;
+		const row = await findAgentRow("fx");
 		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/refresh"));
 		await userEvent.click(await within(row).findByRole("button", { name: "Install" }));
@@ -855,7 +865,7 @@ describe("HarnessSettingsSection", () => {
 		const setTimeoutSpy = vi.spyOn(window, "setTimeout");
 		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
 		const view = renderSection("codex");
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 		const install = await within(row).findByRole("button", { name: "Install" });
 
 		await waitFor(() => expect(document.activeElement).toBe(install));
@@ -890,7 +900,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
 		renderSection("claude-code");
-		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		const row = await findAgentRow("claude-code");
 		const login = await within(row).findByRole("button", { name: "Login" });
 
 		await waitFor(() => expect(document.activeElement).toBe(login));
@@ -899,7 +909,7 @@ describe("HarnessSettingsSection", () => {
 	it("falls back to the targeted row when it has no primary action", async () => {
 		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
 		renderSection("claude-code");
-		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		const row = await findAgentRow("claude-code");
 
 		await waitFor(() => expect(document.activeElement).toBe(row));
 		expect(row).toHaveAttribute("tabindex", "-1");
@@ -936,7 +946,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
 		renderSection();
-		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		const row = await findAgentRow("claude-code");
 		const login = await within(row).findByRole("button", { name: "Login" });
 		await userEvent.click(login);
 		expect(openExternal).toHaveBeenCalledWith("https://example.test/login");
@@ -960,7 +970,7 @@ describe("HarnessSettingsSection", () => {
 		});
 
 		renderSection();
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/refresh"));
 		await within(row).findByRole("button", { name: "Install" });
@@ -1012,7 +1022,7 @@ describe("HarnessSettingsSection", () => {
 		const user = userEvent.setup();
 
 		renderSection();
-		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		const row = await findAgentRow("claude-code");
 		const login = await within(row).findByRole("button", { name: "Login" });
 		await user.click(login);
 		await within(row).findByTestId("inline-terminal-body");
@@ -1062,7 +1072,7 @@ describe("HarnessSettingsSection", () => {
 		const close = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
 		const user = userEvent.setup();
 		renderSection();
-		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		const row = await findAgentRow("claude-code");
 		await user.click(await within(row).findByRole("button", { name: "Login" }));
 		await within(row).findByTestId("inline-terminal-body");
 		return { row, close, probeCalls: () => probeCalls, exit: () => act(() => terminalStateCallback.value?.("exited")) };
@@ -1122,7 +1132,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		const close = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
 		renderSection();
-		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
+		const row = await findAgentRow("mimo-code");
 		await userEvent.click(await within(row).findByRole("button", { name: "Login" }));
 		await userEvent.click(await within(row).findByRole("button", { name: "Complete login terminal" }));
 
@@ -1169,7 +1179,7 @@ describe("HarnessSettingsSection", () => {
 		const user = userEvent.setup();
 
 		renderSection();
-		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		const row = await findAgentRow("claude-code");
 		await user.click(await within(row).findByRole("button", { name: "Login" }));
 		await user.click(await within(row).findByRole("button", { name: "Close settings" }));
 
@@ -1202,7 +1212,7 @@ describe("HarnessSettingsSection", () => {
 		});
 
 		renderSection();
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 
 		await within(row).findByText("Configured");
 	});
@@ -1218,7 +1228,7 @@ describe("HarnessSettingsSection", () => {
 			return { data: undefined } as never;
 		});
 		renderSection();
-		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		const row = await findAgentRow("claude-code");
 		expect(await within(row).findByRole("button", { name: "Login" })).toBeInTheDocument();
 		expect(within(row).queryByRole("button", { name: "Installed" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Refresh harness status" })).not.toBeInTheDocument();
@@ -1238,7 +1248,7 @@ describe("HarnessSettingsSection", () => {
 		});
 
 		renderSection();
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 		expect(await within(row).findByText("Installation status unknown")).toBeInTheDocument();
 		expect(within(row).queryByRole("button", { name: "Install" })).not.toBeInTheDocument();
 	});
@@ -1253,7 +1263,7 @@ describe("HarnessSettingsSection", () => {
 		});
 
 		renderSection();
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 		// The readiness query retries once before surfacing its error.
 		expect(await within(row).findByRole("button", { name: "Install" }, { timeout: 5_000 })).toBeInTheDocument();
 		expect(within(row).queryByText("Installation status unknown")).not.toBeInTheDocument();
@@ -1359,7 +1369,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		const user = userEvent.setup();
 		renderSection();
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 
 		await within(row).findByRole("button", { name: "Install" });
 		expect(within(row).queryByRole("combobox", { name: "Installation method" })).not.toBeInTheDocument();
@@ -1402,7 +1412,7 @@ describe("HarnessSettingsSection", () => {
 		});
 
 		renderSection();
-		const row = (await screen.findByText("OpenCode 2")).closest('[data-agent="opencode-v2"]') as HTMLElement;
+		const row = await findAgentRow("opencode-v2");
 		expect(await within(row).findByText(reason)).toBeInTheDocument();
 		expect(row).not.toHaveTextContent("Installation status unknown");
 		const install = within(row).getByRole("button", { name: "Install" });
@@ -1423,8 +1433,8 @@ describe("HarnessSettingsSection", () => {
 			return { data: undefined } as never;
 		});
 		renderSection();
-		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		const cursorRow = (await screen.findByText("Cursor")).closest('[data-agent="cursor"]') as HTMLElement;
+		const claudeRow = await findAgentRow("claude-code");
+		const cursorRow = await findAgentRow("cursor");
 
 		expect(claudeRow).toHaveTextContent("Installed");
 		expect(within(claudeRow).queryByRole("button", { name: "Reinstall" })).not.toBeInTheDocument();
@@ -1441,7 +1451,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		const user = userEvent.setup();
 		renderSection();
-		const row = (await screen.findByText("Cursor")).closest('[data-agent="cursor"]') as HTMLElement;
+		const row = await findAgentRow("cursor");
 		await within(row).findByRole("button", { name: "Install" });
 		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
 
@@ -1456,7 +1466,7 @@ describe("HarnessSettingsSection", () => {
 
 	it("shows the official Goose installer", async () => {
 		renderSection();
-		const row = (await screen.findByText("Goose")).closest('[data-agent="goose"]') as HTMLElement;
+		const row = await findAgentRow("goose");
 		await within(row).findByRole("button", { name: "Install" });
 		expect(within(row).getByRole("button", { name: "Install" })).toBeInTheDocument();
 	});
@@ -1469,7 +1479,7 @@ describe("HarnessSettingsSection", () => {
 			return { data: undefined } as never;
 		});
 		renderSection();
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 		await within(row).findByRole("button", { name: "Install" });
 		expect(within(row).getByRole("button", { name: "Install" })).toBeEnabled();
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/probe", expect.anything());
@@ -1507,7 +1517,7 @@ describe("HarnessSettingsSection", () => {
 			return { data: undefined } as never;
 		});
 		renderSection();
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/probe", { params: { path: { agent: "codex" } } }), { timeout: 3_000 });
 		await waitFor(() => expect(row).toHaveTextContent("Installed"));
 		await waitFor(() => expect(installerFetches).toBe(2));
@@ -1538,7 +1548,7 @@ describe("HarnessSettingsSection", () => {
 		const { client } = renderSection(undefined, "codex");
 		const selector = screen.getByTestId("originating-selector");
 		await waitFor(() => expect(selector).toHaveTextContent("not_ready"));
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 		await userEvent.click(await within(row).findByRole("button", { name: "Install" }));
 
 		await waitFor(() => expect(row).toHaveTextContent(authentication === "authorized" ? "Connected" : "Installed"));
@@ -1577,7 +1587,7 @@ describe("HarnessSettingsSection", () => {
 		const { client } = renderSection(undefined, "codex");
 		const selector = screen.getByTestId("originating-selector");
 		await waitFor(() => expect(selector).toHaveTextContent("not_ready"));
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 		await userEvent.click(await within(row).findByRole("button", { name: "Login" }));
 		await userEvent.click(await screen.findByRole("button", { name: "Complete login terminal" }));
 
@@ -1600,7 +1610,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		const user = userEvent.setup();
 		renderSection();
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 		const button = await within(row).findByRole("button", { name: "Install" });
 		await user.dblClick(button);
 		expect(installCalls).toBe(1);
@@ -1618,8 +1628,8 @@ describe("HarnessSettingsSection", () => {
 		});
 		const user = userEvent.setup();
 		renderSection();
-		const codexRow = (await screen.findByText("Codex")).closest('[data-agent="codex"]');
-		const aiderRow = (await screen.findByText("Aider")).closest('[data-agent="aider"]');
+		const codexRow = await findAgentRow("codex");
+		const aiderRow = await findAgentRow("aider");
 		expect(codexRow).not.toBeNull();
 		expect(aiderRow).not.toBeNull();
 		await waitFor(() => expect(within(codexRow as HTMLElement).getByRole("button", { name: "Install" })).toBeEnabled());
@@ -1651,7 +1661,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		const user = userEvent.setup();
 		renderSection();
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 		await waitFor(() => expect(row).toHaveTextContent("Interrupted"));
 		await user.click(within(row).getByRole("button", { name: "Verify again" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/verify", { params: { path: { agent: "codex" } } });
@@ -1674,7 +1684,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		const user = userEvent.setup();
 		renderSection();
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 		await user.click(await within(row).findByRole("button", { name: "Show diagnostics" }));
 		expect(row).toHaveTextContent("permission denied");
 		expect(row).toHaveTextContent("/Users/test/.npm/bin/codex");
@@ -1718,7 +1728,7 @@ describe("HarnessSettingsSection", () => {
 					</TooltipProvider>
 				</QueryClientProvider>,
 			);
-			const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+			const row = await findAgentRow("codex");
 			await user.click(await within(row).findByRole("button", { name: "Show diagnostics" }));
 			await user.click(within(row).getByRole("button", { name: "Copy diagnostics" }));
 			await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
@@ -1751,7 +1761,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		const user = userEvent.setup();
 		renderSection();
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 		await user.click(await within(row).findByRole("button", { name: "Show diagnostics" }));
 		await user.click(within(row).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
@@ -1770,7 +1780,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		const user = userEvent.setup();
 		renderSection();
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = await findAgentRow("codex");
 		await user.click(await within(row).findByRole("button", { name: "Show diagnostics" }));
 		await user.click(within(row).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());

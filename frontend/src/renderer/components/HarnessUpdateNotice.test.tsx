@@ -31,7 +31,7 @@ function mockStack() {
 	vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
 		if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
 		if (path === "/api/v1/agents/{agent}/update-advisory") return { data: { status: "behind_latest", currentVersion: "1.0.0", latestVersion: "2.0.0" } } as never;
-		return original(path, options);
+		return (original as (path: string, options: unknown) => Promise<never>)(path, options);
 	});
 	vi.mocked(apiClient.POST).mockResolvedValue({ data: readiness } as never);
 }
@@ -82,7 +82,7 @@ describe("startup harness update notice", () => {
 		mountNotice(true, client);
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalled());
 		expect(screen.queryByRole("region")).toBeNull();
-		expect(vi.mocked(apiClient.GET).mock.calls.some(([path]) => path === "/api/v1/agents/{agent}/update-advisory")).toBe(false);
+		expect((vi.mocked(apiClient.GET).mock.calls as unknown[][]).some(([path]) => path === "/api/v1/agents/{agent}/update-advisory")).toBe(false);
 		await act(async () => pending.resolve({ data: readiness }));
 		expect(await screen.findByRole("article", { name: "Claude Code" })).toBeInTheDocument();
 	});
@@ -92,7 +92,7 @@ describe("startup harness update notice", () => {
 		const { client } = mountNotice();
 		await waitFor(() => expect(client.getQueryData(["agent-readiness"])).toBeDefined());
 		expect(screen.queryByRole("region")).toBeNull();
-		expect(vi.mocked(apiClient.GET).mock.calls.some(([path]) => path === "/api/v1/agents/{agent}/update-advisory")).toBe(false);
+		expect((vi.mocked(apiClient.GET).mock.calls as unknown[][]).some(([path]) => path === "/api/v1/agents/{agent}/update-advisory")).toBe(false);
 	});
 
 	it.each(["unknown", "configured"] as const)("does not mistake %s authentication for a required login", async (authentication) => {
@@ -142,7 +142,7 @@ describe("startup harness update notice", () => {
 		vi.mocked(apiClient.GET).mockImplementation((path, options) => {
 			const agentId = (options as { params?: { path?: { agent?: string } } } | undefined)?.params?.path?.agent;
 			if (path === "/api/v1/agents/{agent}/update-advisory" && agentId === "cursor") return pending.promise;
-			return original(path, options);
+			return (original as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
 		const { client } = mountNotice();
 		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("codex"))).toBeDefined());
@@ -157,7 +157,7 @@ describe("startup harness update notice", () => {
 		vi.mocked(apiClient.GET).mockImplementation((path, options) => {
 			const agentId = (options as { params?: { path?: { agent?: string } } } | undefined)?.params?.path?.agent;
 			if (path === "/api/v1/agents/{agent}/update-advisory" && agentId === "cursor") return Promise.reject(new Error("lookup timed out"));
-			return original(path, options);
+			return (original as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
 		mountNotice();
 		expect(await screen.findByRole("article", { name: "Codex" })).toBeInTheDocument();
