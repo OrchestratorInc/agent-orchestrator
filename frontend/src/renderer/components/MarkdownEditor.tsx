@@ -31,10 +31,13 @@ export function MarkdownEditor({ value, onChange, filePath }: { value: string; o
 	const containerRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView | null>(null);
 	const onChangeRef = useRef(onChange);
+	const userEditedRef = useRef(false);
+	const applyingExternalValueRef = useRef(false);
 	onChangeRef.current = onChange;
 
 	useEffect(() => {
 		if (!containerRef.current) return;
+		userEditedRef.current = false;
 		const state = EditorState.create({
 			doc: value,
 			extensions: [
@@ -49,7 +52,9 @@ export function MarkdownEditor({ value, onChange, filePath }: { value: string; o
 				editorTheme,
 				keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
 				EditorView.updateListener.of((update) => {
-					if (update.docChanged) onChangeRef.current(update.state.doc.toString());
+					if (!update.docChanged || applyingExternalValueRef.current) return;
+					userEditedRef.current = true;
+					onChangeRef.current(update.state.doc.toString());
 				}),
 			],
 		});
@@ -67,8 +72,10 @@ export function MarkdownEditor({ value, onChange, filePath }: { value: string; o
 
 	useEffect(() => {
 		const view = viewRef.current;
-		if (!view || view.state.doc.toString() === value) return;
+		if (!view || userEditedRef.current || view.state.doc.toString() === value) return;
+		applyingExternalValueRef.current = true;
 		view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+		applyingExternalValueRef.current = false;
 	}, [value]);
 
 	const dispatchText = useCallback((insert: string, from: number, to: number, selection?: { anchor: number; head: number }) => {
