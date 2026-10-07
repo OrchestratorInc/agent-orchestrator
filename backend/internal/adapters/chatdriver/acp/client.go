@@ -853,12 +853,6 @@ func acpFilePatch(path string, oldText *string, newText string) string {
 	return strings.Join(lines, "\n")
 }
 
-// toolOutputText translates ACP's provider-defined rawOutput into AO's neutral
-// command-detail contract, where output is always text. ACP deliberately permits
-// any JSON value here; OpenCode, for example, wraps the text as
-// {"output":"...","metadata":{...}}. Persisting that object unchanged makes the
-// typed frontend contract untrue and crashes text-only renderers such as ANSI
-// cleanup.
 // cappedInput keeps a tool's input only while it fits the tool payload cap,
 // as the Codex driver does for MCP arguments.
 func cappedInput(raw any) any {
@@ -915,6 +909,12 @@ func withoutImageData(value any) any {
 	return value
 }
 
+// toolOutputText translates ACP's provider-defined rawOutput into AO's neutral
+// command-detail contract, where output is always text. ACP deliberately permits
+// any JSON value here; OpenCode, for example, wraps the text as
+// {"output":"...","metadata":{...}}. Persisting that object unchanged makes the
+// typed frontend contract untrue and crashes text-only renderers such as ANSI
+// cleanup.
 func toolOutputText(raw any) string {
 	switch value := raw.(type) {
 	case nil:

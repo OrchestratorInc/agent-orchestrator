@@ -2500,7 +2500,7 @@ func TestACPToolDetailCapsInputAndDropsImageData(t *testing.T) {
 	approval := approvalToolDetail(acpsdk.ToolCallUpdate{RawInput: page}, domain.ActivityKindMCPTool)
 
 	for name, raw := range map[string][]byte{"tool": event.Detail, "approval": approval} {
-		if strings.Contains(string(raw), "<p>x</p>") || strings.Contains(string(raw), shot) {
+		if strings.Contains(string(raw), `\u003cp\u003ex\u003c/p\u003e`) || strings.Contains(string(raw), shot) {
 			t.Fatalf("%s detail stored the page or the screenshot: %.300s", name, raw)
 		}
 		var detail struct {
