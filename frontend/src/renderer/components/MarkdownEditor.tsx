@@ -20,6 +20,7 @@ const editorTheme = EditorView.theme({
 	},
 	".cm-scroller": { fontFamily: "var(--font-family-mono)", overflow: "auto" },
 	".cm-content": { caretColor: "var(--color-text-primary)", minHeight: "100%", padding: "1rem 1.5rem" },
+	".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--color-text-primary)" },
 	".cm-line": { padding: "0" },
 	".cm-gutters": { backgroundColor: "var(--color-bg-secondary)", border: "0", color: "var(--color-text-muted)" },
 	".cm-activeLineGutter, .cm-activeLine": { backgroundColor: "var(--color-interactive-hover)" },
