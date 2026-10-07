@@ -56,7 +56,9 @@ func (s *Service) recordReportedArtifact(ctx context.Context, id domain.SessionI
 	if err != nil {
 		return err
 	}
-	return controller.recordArtifact(ctx, rel)
+	// entry.Path is the cleaned path the route serves, so the row and the
+	// served file always name the same page.
+	return controller.recordArtifact(ctx, entry.Path)
 }
 
 // artifactRelPath is reference as a slash-separated path inside dir: an
