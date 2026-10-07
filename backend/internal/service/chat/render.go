@@ -72,8 +72,8 @@ type RenderInput struct {
 }
 
 // RenderResult names the stored page and the timeline row that shows it. With
-// RenderInput.Artifact, ArtifactPath names the kept page, or ArtifactError says
-// why it was not kept.
+// RenderInput.Artifact, ArtifactPath is the kept page's absolute path, or
+// ArtifactError says why it was not kept.
 type RenderResult struct {
 	RenderID      string
 	ActivityID    string
@@ -154,8 +154,9 @@ const (
 	maxRenderArtifactStemBytes = 200
 )
 
-// windowsDeviceName matches the names Windows reserves for devices.
-var windowsDeviceName = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])$`)
+// windowsDeviceName matches the names Windows reserves for devices. Windows
+// ends the device name at the first dot, so "con.v2" is CON too.
+var windowsDeviceName = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)`)
 
 // renderArtifactStem is the render's file name without ".html", cut to fit
 // NAME_MAX on a rune boundary and never a Windows device name.

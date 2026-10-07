@@ -377,6 +377,8 @@ func TestSaveRenderAsArtifactKeepsNamesWritable(t *testing.T) {
 		"LPT9":    "_LPT9.html",
 		"com10":   "com10.html",
 		"console": "console.html",
+		"aux.v2":  "_aux.v2.html",
+		"auxv2":   "auxv2.html",
 	} {
 		got, err := h.svc.SaveRenderAsArtifact(ctx, testSession, "r1", title)
 		if err != nil || got.Path != want {
