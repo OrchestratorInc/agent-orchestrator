@@ -99,7 +99,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		{updates.length > 1 ? <div className="mb-5 flex justify-end">
 			<Button type="button" variant="ghost" size="sm" className="h-6 rounded-full border border-border bg-card px-2 text-[11px] text-settings-muted shadow-sm hover:bg-muted" aria-expanded={isExpanded} aria-controls={stackId} onClick={() => setExpanded(!isExpanded)}>{t(isExpanded ? "settings.harness.hideUpdateStack" : "settings.harness.showUpdateStack", { count: updates.length })}</Button>
 		</div> : null}
-		<div className="relative">
+		{/* flow-root keeps the stack's negative margin inside this box, so the cards behind peek out below only. */}
+		<div className="relative flow-root">
 		{!isExpanded && updates.length > 1 ? <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0">
 			{updates.length > 2 ? <div className="absolute inset-x-4 -bottom-2 top-4 z-0 rounded-xl border border-border bg-card shadow-sm" /> : null}
 			<div className="absolute inset-x-2 -bottom-1 top-2 z-10 rounded-xl border border-border bg-card shadow-sm" />
