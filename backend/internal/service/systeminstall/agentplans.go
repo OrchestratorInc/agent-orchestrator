@@ -402,6 +402,14 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 			plan.Command = []string{"pipx", "uninstall", plan.Package}
 		case "bun":
 			plan.Command = []string{"bun", "remove", "-g", packageWithoutLatest(plan.Package)}
+		case "official-installer":
+			if command, ok := vendorUninstallCommands[plan.Target]; ok {
+				plan.Command = slices.Clone(command)
+			} else {
+				plan.Unsupported = true
+				plan.Command = nil
+				plan.Reason = "This harness's installer provides no uninstall command, and AO does not delete files another installer created. Follow the vendor's uninstall guide."
+			}
 		default:
 			plan.Unsupported = true
 			plan.Command = nil
@@ -418,6 +426,14 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 // OpenCode is told the install method AO already proved. Amp's --porcelain
 // prints a one-line result instead of interactive progress, and Pi updates
 // only itself without trusting project-local files.
+// vendorUninstallCommands are the harnesses' own uninstall commands. Each
+// removes the program but keeps the user's configuration and history, as a
+// package-manager removal does, and skips its confirmation prompt.
+var vendorUninstallCommands = map[Target][]string{
+	TargetOpencode: {"opencode", "uninstall", "--keep-config", "--keep-data", "--force"},
+	TargetDevin:    {"devin", "uninstall", "--force"},
+}
+
 var vendorUpdateCommands = map[Target][]string{
 	TargetClaudeCode: {"claude", "update"},
 	TargetCodex:      {"codex", "update"},
@@ -528,7 +544,7 @@ func pinVendorUpdate(plan Plan, latest string) Plan {
 }
 
 // targetInstalledCopy points an update or removal at the copy sessions run. A
-// vendor self-update runs from that binary rather than whichever copy PATH
+// vendor self-update or uninstall runs from that binary rather than whichever copy PATH
 // finds first, and npm acts on the global prefix that holds the package with
 // that prefix's own Node, which need not be the daemon's npm.
 func targetInstalledCopy(plan Plan, target Target, binaryPath string) Plan {
@@ -537,8 +553,11 @@ func targetInstalledCopy(plan Plan, target Target, binaryPath string) Plan {
 	}
 	switch plan.Method {
 	case "official-installer":
-		if command, ok := vendorUpdateCommands[target]; ok && plan.Command[0] == command[0] {
-			plan.Command = append([]string{binaryPath}, plan.Command[1:]...)
+		for _, commands := range []map[Target][]string{vendorUpdateCommands, vendorUninstallCommands} {
+			if command, ok := commands[target]; ok && plan.Command[0] == command[0] {
+				plan.Command = append([]string{binaryPath}, plan.Command[1:]...)
+				break
+			}
 		}
 	case "npm":
 		prefix, ok := npmPrefixOwningBinary(binaryPath, packageWithoutLatest(plan.Package))
