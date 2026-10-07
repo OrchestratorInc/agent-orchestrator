@@ -2613,6 +2613,26 @@ describe("agent browser screenshot", () => {
 		});
 	});
 
+	it("cancels a hung screenshot fallback without blocking the next command", async () => {
+		const runtime = {
+			runAction: vi.fn(async () => ({ snapshot: "ok", refs: {} })),
+			screenshot: vi.fn(async () => {
+				throw Object.assign(new Error("agent-browser command timed out"), { code: "AGENT_BROWSER_TIMEOUT" });
+			}),
+			closeSession: vi.fn(async () => undefined),
+			dispose: vi.fn(async () => undefined),
+		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
+		const { host, webContents } = setupHost(runtime);
+		webContents.capturePage.mockReturnValueOnce(new Promise(() => undefined));
+		const controller = new AbortController();
+		const screenshot = host.execute("sess-1", "screenshot", undefined, controller.signal);
+
+		await vi.waitFor(() => expect(webContents.capturePage).toHaveBeenCalledOnce());
+		controller.abort();
+		await expect(screenshot).rejects.toMatchObject({ code: "BROWSER_COMMAND_CANCELED" });
+		await expect(host.execute("sess-1", "snapshot")).resolves.toMatchObject({ snapshot: "ok" });
+	});
+
 	it("propagates non-timeout native screenshot errors without falling back", async () => {
 		const runtime = {
 			runAction: vi.fn(async () => ({})),

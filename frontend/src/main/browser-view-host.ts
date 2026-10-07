@@ -494,6 +494,7 @@ const MAX_EXTERNAL_TEXT_BYTES = 1 << 20;
 // Annotation submit must never feel laggy: capture is best-effort and bounded
 // so a slow/hung capturePage() can't delay the send past this ceiling.
 const ANNOTATION_SNAPSHOT_TIMEOUT_MS = 200;
+const SCREENSHOT_FALLBACK_TIMEOUT_MS = 5_000;
 // Caps the longest edge so the encoded image stays small and matches Claude
 // vision's effective resolution — larger just costs more tokens for no gain.
 const ANNOTATION_SNAPSHOT_MAX_DIMENSION = 1568;
@@ -1588,6 +1589,26 @@ export function createBrowserViewHost(options: BrowserViewHostOptions): BrowserV
 		}
 	};
 
+	const captureScreenshotFallback = async (entry: BrowserEntry, signal?: AbortSignal): Promise<NativeImage> => {
+		throwIfAborted(signal);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let onAbort: (() => void) | undefined;
+		try {
+			return await new Promise<NativeImage>((resolve, reject) => {
+				timer = setTimeout(
+					() => reject(browserError("SCREENSHOT_UNAVAILABLE", "The browser page could not be captured in time")),
+					SCREENSHOT_FALLBACK_TIMEOUT_MS,
+				);
+				onAbort = () => reject(browserError("BROWSER_COMMAND_CANCELED", "Browser command was canceled"));
+				signal?.addEventListener("abort", onAbort, { once: true });
+				void entry.view.webContents.capturePage().then(resolve, reject);
+			});
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
+			if (onAbort) signal?.removeEventListener("abort", onAbort);
+		}
+	};
+
 	const destroy = (viewId: string): void => {
 		const session = entries.get(viewId);
 		if (!session) return;
@@ -2462,7 +2483,7 @@ export function createBrowserViewHost(options: BrowserViewHostOptions): BrowserV
 							// Native frame capture can stall against a hidden (not yet
 							// shown) WebContentsView. capturePage works there — it
 							// backs the interactive screenshot path — so fall back to it.
-							const image = await target.view.webContents.capturePage();
+							const image = await captureScreenshotFallback(target, signal);
 							if (image.isEmpty()) {
 								throw browserError("SCREENSHOT_UNAVAILABLE", "The browser page could not be captured");
 							}
