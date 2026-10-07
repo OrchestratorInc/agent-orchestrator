@@ -138,10 +138,11 @@ func (c *commandContext) handleMCP(ctx context.Context, line []byte) *mcpRespons
 }
 
 type mcpToolArgs struct {
-	HTML   string `json:"html"`
-	Title  string `json:"title"`
-	Width  int    `json:"width"`
-	Height int    `json:"height"`
+	HTML     string `json:"html"`
+	Title    string `json:"title"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	Artifact bool   `json:"artifact"`
 }
 
 // readMCPToolArgs decodes a call's arguments and returns the session it acts in.
@@ -204,11 +205,15 @@ func (c *commandContext) callHTMLRender(ctx context.Context, raw json.RawMessage
 	if args.Height == 0 {
 		args.Height = defaultRenderHeight
 	}
-	resp, err := c.postRender(ctx, sessionID, args.HTML, args.Title, args.Height)
+	resp, err := c.postRender(ctx, sessionID, args.HTML, args.Title, args.Height, args.Artifact)
 	if err != nil {
 		return mcpToolError(err)
 	}
-	return map[string]any{"content": []any{mcpText(renderShownText(resp.RenderID))}}
+	text := renderShownText(resp.RenderID)
+	if line := renderArtifactLine(resp); line != "" {
+		text += "\n" + line
+	}
+	return map[string]any{"content": []any{mcpText(text)}}
 }
 
 // The tool text follows T3's html tools, with AO's own rules from
@@ -279,6 +284,11 @@ var mcpTools = []map[string]any{
 					"type": "integer", "minimum": 80, "maximum": 2000,
 					"description": "Frame height in CSS pixels, 80-2000; defaults to 400. AO measures the page when " +
 						"you publish it, so this is used only when the desktop app is not running. The frame then fits the page.",
+				},
+				"artifact": map[string]any{
+					"type": "boolean",
+					"description": "Also keep the page as a session artifact, a deliverable the user keeps. " +
+						"Set it only when the user asks to keep the page.",
 				},
 			},
 			"required": []string{"html", "title"},

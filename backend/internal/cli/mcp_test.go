@@ -99,7 +99,8 @@ func TestMCPListsBothTools(t *testing.T) {
 	if got := tools[0].InputSchema.Required; !slices.Equal(got, []string{"html"}) || tools[0].InputSchema.Properties["width"] == nil {
 		t.Errorf("html_preview schema: required %q, properties %v", got, tools[0].InputSchema.Properties)
 	}
-	if got := tools[1].InputSchema.Required; !slices.Equal(got, []string{"html", "title"}) || tools[1].InputSchema.Properties["height"] == nil {
+	if got := tools[1].InputSchema.Required; !slices.Equal(got, []string{"html", "title"}) || tools[1].InputSchema.Properties["height"] == nil ||
+		tools[1].InputSchema.Properties["artifact"]["type"] != "boolean" {
 		t.Errorf("html_render schema: required %q, properties %v", got, tools[1].InputSchema.Properties)
 	}
 }
@@ -125,6 +126,30 @@ func TestMCPHTMLRenderPublishesThePageWithItsImages(t *testing.T) {
 	}
 	if got := reply.Result; got.IsError || len(got.Content) != 1 || got.Content[0].Text != renderShownText("r1") {
 		t.Fatalf("result = %+v", got)
+	}
+}
+
+func TestMCPHTMLRenderWithArtifactNamesTheFileOrTheError(t *testing.T) {
+	for _, tc := range []struct{ name, resp, want string }{
+		{"kept", `{"renderId":"r1","artifactPath":"Turns.html"}`, renderShownText("r1") + "\nsaved as artifact: Turns.html"},
+		{"not kept", `{"renderId":"r1","artifactError":"save render artifact: disk full"}`,
+			renderShownText("r1") + "\nwarning: not saved as artifact: save render artifact: disk full"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "aa-47")
+			cfg := setConfigEnv(t)
+			srv, capture := renderServer(t, http.StatusCreated, tc.resp)
+			writeRunFileFor(t, cfg, srv)
+
+			got := runMCP(t, mcpCall("html_render", map[string]any{"html": "<p>x</p>", "title": "Turns", "artifact": true}))[0].Result
+			var req renderAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil || !req.Artifact {
+				t.Fatalf("request = %s, want artifact", capture.body)
+			}
+			if got.IsError || len(got.Content) != 1 || got.Content[0].Text != tc.want {
+				t.Fatalf("result = %+v, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -72,8 +72,37 @@ func TestRenderPostsThePageToTheSession(t *testing.T) {
 	if req.HTML != `<!doctype html><img src="data:image/png;base64,iVBORw0KGgo=">` || req.Title != "Turns by day" || req.Height != 420 {
 		t.Fatalf("request = %+v", req)
 	}
-	if !strings.Contains(out, "r1") {
-		t.Fatalf("stdout = %q, want the render id", out)
+	if !strings.Contains(out, "r1") || strings.Contains(capture.body, "artifact") || strings.Contains(out, "artifact") {
+		t.Fatalf("stdout = %q body = %.80q, want the render id and no artifact", out, capture.body)
+	}
+}
+
+func TestRenderArtifactKeepsThePageOrWarns(t *testing.T) {
+	for _, tc := range []struct {
+		name, resp, stdout, stderr string
+	}{
+		{"kept", `{"renderId":"r1","artifactPath":"Turns by day.html"}`, "saved as artifact: Turns by day.html\n", ""},
+		// The page is in the thread either way, so the command still succeeds.
+		{"not kept", `{"renderId":"r1","artifactError":"save render artifact: disk full"}`, "", "warning: not saved as artifact: save render artifact: disk full\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "aa-47")
+			cfg := setConfigEnv(t)
+			srv, capture := renderServer(t, http.StatusCreated, tc.resp)
+			writeRunFileFor(t, cfg, srv)
+
+			out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+				"render", writePage(t, []byte("<p>x</p>")), "--title", "Turns by day", "--artifact")
+			if err != nil {
+				t.Fatalf("render --artifact: %v\nstderr=%s", err, errOut)
+			}
+			if !strings.Contains(capture.body, `"artifact":true`) {
+				t.Fatalf("request = %s, want artifact", capture.body)
+			}
+			if !strings.HasPrefix(out, renderShownText("r1")+"\n") || !strings.HasSuffix(out, tc.stdout) || !strings.HasSuffix(errOut, tc.stderr) {
+				t.Fatalf("stdout = %q, stderr = %q", out, errOut)
+			}
+		})
 	}
 }
 

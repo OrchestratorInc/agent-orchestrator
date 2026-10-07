@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,15 +20,18 @@ const (
 )
 
 type renderAPIRequest struct {
-	HTML   string `json:"html"`
-	Title  string `json:"title"`
-	Height int    `json:"height"`
+	HTML     string `json:"html"`
+	Title    string `json:"title"`
+	Height   int    `json:"height"`
+	Artifact bool   `json:"artifact,omitempty"`
 }
 
 type renderAPIResponse struct {
-	RenderID   string `json:"renderId"`
-	ActivityID string `json:"activityId"`
-	Path       string `json:"path"`
+	RenderID      string `json:"renderId"`
+	ActivityID    string `json:"activityId"`
+	Path          string `json:"path"`
+	ArtifactPath  string `json:"artifactPath"`
+	ArtifactError string `json:"artifactError"`
 }
 
 type renderCheckAPIRequest struct {
@@ -54,6 +56,7 @@ func newRenderCommand(ctx *commandContext) *cobra.Command {
 	var title string
 	var height int
 	var check bool
+	var artifact bool
 	var width int
 	var out string
 	cmd := &cobra.Command{
@@ -88,12 +91,13 @@ func newRenderCommand(ctx *commandContext) *cobra.Command {
 			if strings.TrimSpace(title) == "" {
 				return usageError{errors.New("--title is required unless --check is set")}
 			}
-			return ctx.publishRender(cmd.Context(), cmd.OutOrStdout(), args[0], title, height)
+			return ctx.publishRender(cmd, args[0], title, height, artifact)
 		},
 	}
 	cmd.Flags().StringVar(&title, "title", "", "short name for the page (required unless --check)")
 	cmd.Flags().IntVar(&height, "height", defaultRenderHeight, "first-paint frame height in CSS pixels, 80-2000; the frame then fits the page")
 	cmd.Flags().BoolVar(&check, "check", false, "screenshot the page in the AO desktop app instead of publishing it")
+	cmd.Flags().BoolVar(&artifact, "artifact", false, "also keep the page as a session artifact; only when the user asks to keep it")
 	cmd.Flags().IntVar(&width, "width", defaultRenderWidth, "with --check: viewport width in CSS pixels, 240-1600; use 390 for phones")
 	cmd.Flags().StringVar(&out, "out", "", "with --check: PNG path to write (default: a new file in the temp directory)")
 	return cmd
@@ -122,7 +126,7 @@ func readRenderFile(file string) (string, error) {
 	return string(html), nil
 }
 
-func (c *commandContext) publishRender(ctx context.Context, out io.Writer, file, title string, height int) error {
+func (c *commandContext) publishRender(cmd *cobra.Command, file, title string, height int, artifact bool) error {
 	sessionID, err := renderSessionID()
 	if err != nil {
 		return err
@@ -131,17 +135,28 @@ func (c *commandContext) publishRender(ctx context.Context, out io.Writer, file,
 	if err != nil {
 		return err
 	}
-	resp, err := c.postRender(ctx, sessionID, html, title, height)
+	resp, err := c.postRender(cmd.Context(), sessionID, html, title, height, artifact)
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(out, renderShownText(resp.RenderID))
+	if _, err := fmt.Fprintln(cmd.OutOrStdout(), renderShownText(resp.RenderID)); err != nil {
+		return err
+	}
+	line := renderArtifactLine(resp)
+	if line == "" {
+		return nil
+	}
+	out := cmd.OutOrStdout()
+	if resp.ArtifactError != "" {
+		out = cmd.ErrOrStderr()
+	}
+	_, err = fmt.Fprintln(out, line)
 	return err
 }
 
 // postRender inlines a page's local images and shows it in the session's
 // thread. ao render and the html_render MCP tool both publish through it.
-func (c *commandContext) postRender(ctx context.Context, sessionID, html, title string, height int) (renderAPIResponse, error) {
+func (c *commandContext) postRender(ctx context.Context, sessionID, html, title string, height int, artifact bool) (renderAPIResponse, error) {
 	var resp renderAPIResponse
 	html, missing, err := inlineLocalImages(html)
 	if err != nil {
@@ -151,12 +166,24 @@ func (c *commandContext) postRender(ctx context.Context, sessionID, html, title 
 		return resp, usageError{missingImagesError(missing)}
 	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/renders"
-	err = c.postJSON(ctx, path, renderAPIRequest{HTML: html, Title: title, Height: height}, &resp)
+	err = c.postJSON(ctx, path, renderAPIRequest{HTML: html, Title: title, Height: height, Artifact: artifact}, &resp)
 	return resp, err
 }
 
 func renderShownText(renderID string) string {
 	return fmt.Sprintf("Shown above your reply (render %s). Do not describe the page; add only what it does not say.", renderID)
+}
+
+// renderArtifactLine reports where a publish kept the page as an artifact, or
+// why it did not; it is empty when no artifact was asked for.
+func renderArtifactLine(resp renderAPIResponse) string {
+	switch {
+	case resp.ArtifactPath != "":
+		return "saved as artifact: " + resp.ArtifactPath
+	case resp.ArtifactError != "":
+		return "warning: not saved as artifact: " + resp.ArtifactError
+	}
+	return ""
 }
 
 // postRenderCheck inlines a page's local images and has the desktop app
