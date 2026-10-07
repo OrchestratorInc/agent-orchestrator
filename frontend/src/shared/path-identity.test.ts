@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -23,9 +23,27 @@ describe("path identity", () => {
 		symlinkSync(checkout, alias, process.platform === "win32" ? "junction" : "dir");
 
 		expect(canonicalPathKey(path.join(alias, "missing", "ao"))).toBe(
-			path.join(checkout, "missing", "ao"),
+			path.join(canonicalPathKey(checkout), "missing", "ao"),
 		);
 		expect(canonicalPathInside(path.join(alias, "backend", "ao"), checkout)).toBe(true);
+	});
+
+	it("compares differently cased paths according to the filesystem", () => {
+		const root = mkdtempSync(path.join(os.tmpdir(), "ao-path-identity-case-"));
+		try {
+			const checkout = path.join(root, "Documents", "Checkout", "backend");
+			const alternate = path.join(root, "documents", "checkout", "backend");
+			mkdirSync(checkout, { recursive: true });
+			const caseInsensitive = existsSync(alternate);
+
+			expect(sameCanonicalPath(checkout, alternate)).toBe(caseInsensitive);
+			expect(canonicalPathInside(path.join(alternate, "ao"), checkout)).toBe(caseInsensitive);
+			expect(sameCanonicalPath(path.join(checkout, "missing", "ao"), path.join(alternate, "missing", "ao"))).toBe(
+				caseInsensitive,
+			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("does not treat sibling prefixes as descendants", () => {
