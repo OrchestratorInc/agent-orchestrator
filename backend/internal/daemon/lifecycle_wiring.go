@@ -562,6 +562,7 @@ var _ sessionmanager.ChatLauncher = chatLauncher{}
 var _ interface {
 	RunBackgroundTask(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
 	RelayUserAuthoredChatTurn(context.Context, domain.SessionID, string) (string, error)
+	RelaySessionChatTurn(context.Context, domain.SessionID, string, string, ports.MessageDeliveryOptions) (string, error)
 	ArmChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	PrepareChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	AbortChatHandoff(domain.SessionID)
@@ -650,6 +651,10 @@ func (c chatLauncher) RelayChatTurn(ctx context.Context, id domain.SessionID, te
 
 func (c chatLauncher) RelayUserAuthoredChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
 	return c.svc.RelayUserAuthoredChatTurn(ctx, id, text)
+}
+
+func (c chatLauncher) RelaySessionChatTurn(ctx context.Context, id domain.SessionID, text, clientMessageID string, options ports.MessageDeliveryOptions) (string, error) {
+	return c.svc.RelaySessionChatTurn(ctx, id, text, clientMessageID, options)
 }
 
 func (c chatLauncher) RelayChatTurnWithID(
