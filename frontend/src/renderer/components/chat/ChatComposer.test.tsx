@@ -1444,6 +1444,15 @@ describe("attachments", () => {
 		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
 	});
 
+	it("shows image-only pastes once in the attachment strip", async () => {
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png", ".ao/attachments/attachment-b.png"]);
+		const { field } = renderComposer({ onStageAttachments: stage });
+		fireEvent.paste(field, { clipboardData: clipboardData([png("a.png"), png("b.png")]) });
+		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
+		expect(field.querySelector('[data-composer-token="image"]')).toBeNull();
+		expect(field.textContent).toBe("");
+	});
+
 	it("places a pasted image inline at the caret and drops it with its attachment", async () => {
 		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png"]);
 		const { onSend, field } = renderComposer({ onStageAttachments: stage });
@@ -1534,8 +1543,8 @@ describe("attachments", () => {
 		]);
 		await waitFor(() =>
 			expect(onSend).toHaveBeenCalledWith(
-				// The inline chip pasted at the caret names the same path in the prose.
-				".ao/attachments/attachment-ab12cd34ef.png what is wrong here\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-ab12cd34ef.png",
+				// Pasting into an empty draft names the image only in the attachment block.
+				"what is wrong here\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-ab12cd34ef.png",
 			),
 		);
 		// Consumed, so the next message does not silently resend them.
@@ -1680,7 +1689,7 @@ describe("attachments", () => {
 		await userEvent.keyboard("{Enter}");
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("attachments were kept");
-		expect(field.textContent).toBe("Image 1 inspect this");
+		expect(field.textContent).toBe("inspect this");
 		expect(screen.getAllByRole("listitem")).toHaveLength(1);
 
 		await userEvent.keyboard("{Enter}");

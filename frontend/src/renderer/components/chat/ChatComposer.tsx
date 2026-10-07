@@ -1381,11 +1381,12 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 	}
 
-	// Images also get an inline chip at the caret so the prose can say which image
-	// it means; the chip serializes to the staged path the agent reads.
+	// Images get an inline chip only beside prose that can refer to them.
+	// Image-only drafts already show every image in the attachment strip.
 	function attachFiles(files: File[]) {
 		// Reserve the spot now: staging can take a while, and the user keeps typing.
-		const reservation = files.some((file) => file.type.startsWith("image/"))
+		const reservation = proseBesideImages(textRef.current.trim(), composerImages.map((image) => image.path)) &&
+			files.some((file) => file.type.startsWith("image/"))
 			? editor.current?.reserveImages()
 			: undefined;
 		void fileAttachments.addFiles(files).then((added) => {
