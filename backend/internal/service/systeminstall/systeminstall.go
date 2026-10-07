@@ -656,6 +656,9 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		if baseline, err = s.confirmInstalledOwner(ctx, target, plan); err != nil {
 			return Job{}, err
 		}
+		if baseline != nil && baseline.path != "" {
+			plan = targetInstalledCopy(plan, target, baseline.path)
+		}
 	}
 	if operation == AgentOperationUpdate && expected != "" {
 		if baseline == nil {

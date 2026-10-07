@@ -411,7 +411,8 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 // Each updates the stable channel without a terminal: Kimchi's "self" leaves
 // its extensions alone and --force skips its confirmation prompt, and
 // OpenCode is told the install method AO already proved. Amp's --porcelain
-// prints a one-line result instead of interactive progress.
+// prints a one-line result instead of interactive progress, and Pi updates
+// only itself without trusting project-local files.
 var vendorUpdateCommands = map[Target][]string{
 	TargetClaudeCode: {"claude", "update"},
 	TargetCodex:      {"codex", "update"},
@@ -427,6 +428,7 @@ var vendorUpdateCommands = map[Target][]string{
 	TargetDroid:      {"droid", "update"},
 	TargetQwen:       {"qwen", "update"},
 	TargetFX:         {"fx", "upgrade"},
+	TargetPi:         {"pi", "update", "self", "--no-approve"},
 }
 
 func packageWithoutLatest(pkg string) string {
@@ -516,5 +518,35 @@ func pinVendorUpdate(plan Plan, latest string) Plan {
 		return plan
 	}
 	plan.Command = append([]string{plan.Command[0], plan.Command[1], latest}, plan.Command[2:]...)
+	return plan
+}
+
+// targetInstalledCopy points an update or removal at the copy sessions run. A
+// vendor self-update runs from that binary rather than whichever copy PATH
+// finds first, and npm acts on the global prefix that holds the package with
+// that prefix's own Node, which need not be the daemon's npm.
+func targetInstalledCopy(plan Plan, target Target, binaryPath string) Plan {
+	if len(plan.Command) == 0 {
+		return plan
+	}
+	switch plan.Method {
+	case "official-installer":
+		if command, ok := vendorUpdateCommands[target]; ok && plan.Command[0] == command[0] {
+			plan.Command = append([]string{binaryPath}, plan.Command[1:]...)
+		}
+	case "npm":
+		prefix, ok := npmPrefixOwningBinary(binaryPath, packageWithoutLatest(plan.Package))
+		if !ok || plan.Command[0] != "npm" {
+			return plan
+		}
+		args := slices.Clone(plan.Command[1:])
+		for index := 0; index+1 < len(args); index++ {
+			if args[index] == "--prefix" {
+				args[index+1] = prefix
+			}
+		}
+		plan.PackagePrefix = prefix
+		plan.Command = append(npmCommandForPrefix(prefix), args...)
+	}
 	return plan
 }

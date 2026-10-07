@@ -43,37 +43,36 @@ func TestUpdateAdvisoryComparesKnownNPMInstallationAndCachesResult(t *testing.T)
 	}
 }
 
-func TestOfficialReleaseOnlyExposesMaintenanceForRecognisedNativeInstall(t *testing.T) {
-	for _, tt := range []struct{ path, method string }{
-		{"/Users/me/.local/share/claude/versions/2.1.291", "official-installer"},
-		{"/opt/bin/claude", ""},
-		{"/Users/me/.local/share/claude/versions/2.1.290", ""},
-		{"/opt/homebrew/Cellar/claude/.local/share/claude/versions/2.1.291", ""},
+func TestOfficialReleaseExposesVendorMaintenanceOnlyOutsidePackageTools(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		target Target
+		path   string
+		output string
+		method string
+	}{
+		{"native Claude", TargetClaudeCode, ".local/share/claude/versions/2.1.291", "Claude Code 2.1.291", "official-installer"},
+		{"Claude anywhere outside package tools", TargetClaudeCode, "opt/bin/claude", "Claude Code 2.1.291", "official-installer"},
+		{"Grok download", TargetGrok, ".grok/downloads/grok-1.0.13-macos-aarch64", "grok 1.0.13", "official-installer"},
+		{"Pi managed launcher", TargetPi, ".pi/agent/bin/pi", "0.84.4", "official-installer"},
+		{"inside Homebrew", TargetClaudeCode, "opt/homebrew/Cellar/claude/.local/share/claude/versions/2.1.291", "Claude Code 2.1.291", ""},
+		{"behind a version manager", TargetGrok, ".asdf/shims/grok", "grok 1.0.13", ""},
+		{"no self-update command", TargetMuse, ".local/bin/muse", "Muse Code 1.4.2 (1.4.2-R4900.1)", ""},
 	} {
-		t.Run(tt.path, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), tt.path)
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), filepath.FromSlash(tt.path))
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(path, nil, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if tt.method != "" {
-				link := filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(path))), "bin", "claude")
-				if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(path, link); err != nil {
-					t.Skipf("symlink unavailable: %v", err)
-				}
-				path = link
-			}
-			s := newTestService("darwin", "bash")
+			s := newTestService("darwin", "bash", "sh")
 			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
-				return VerifyResult{ResolvedPath: path, Output: "Claude Code 2.1.291"}, nil
+				return VerifyResult{ResolvedPath: path, Output: tt.output}, nil
 			})
-			s.officialVersion = func(context.Context, Target) (string, error) { return "2.1.292", nil }
-			advisory, err := s.UpdateAdvisory(context.Background(), TargetClaudeCode)
+			s.officialVersion = func(context.Context, Target) (string, error) { return "9.9.9", nil }
+			advisory, err := s.UpdateAdvisory(context.Background(), tt.target)
 			if err != nil || advisory.MaintenanceMethod != tt.method {
 				t.Fatalf("advisory=%+v err=%v, want maintenance %q", advisory, err, tt.method)
 			}

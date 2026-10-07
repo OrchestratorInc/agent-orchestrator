@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 )
 
@@ -192,7 +190,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	advisory.CurrentVersion = current.display
 	if source.Package != "" {
 		advisory.MaintenanceMethod = source.Method
-	} else if nativeMaintenanceMethod(target, verified, current) != "" {
+	} else if vendorMaintainable(target, verified.ResolvedPath) {
 		advisory.MaintenanceMethod = "official-installer"
 	}
 	var latest string
@@ -257,20 +255,13 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	return advisory, nil
 }
 
-// A release lookup is not installation ownership. Only recognise the native
-// Claude install's resolved, versioned payload here; generic PATH binaries and
-// binaries inside package managers must not become maintenance candidates.
-func nativeMaintenanceMethod(target Target, verified VerifyResult, current updateVersion) string {
-	if target != TargetClaudeCode || packageLayout(verified.ResolvedPath) != "" {
-		return ""
-	}
-	resolved, err := filepath.EvalSymlinks(verified.ResolvedPath)
-	if err != nil {
-		return ""
-	}
-	path := strings.ReplaceAll(filepath.ToSlash(resolved), `\`, "/")
-	if strings.HasSuffix(path, "/.local/share/claude/versions/"+current.display) {
-		return "official-installer"
-	}
-	return ""
+// vendorMaintainable reports whether the harness can update the binary
+// sessions run through its own self-update command. A release lookup is not
+// installation ownership: binaries inside a package manager or version manager
+// belong to that tool, and harnesses without a self-update command have no
+// vendor maintenance path. The command runs from the resolved binary itself,
+// so it updates that copy however the user placed it.
+func vendorMaintainable(target Target, resolvedPath string) bool {
+	_, ok := vendorUpdateCommands[target]
+	return ok && resolvedPath != "" && packageLayout(resolvedPath) == ""
 }

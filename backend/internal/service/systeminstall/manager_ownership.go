@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -25,11 +26,18 @@ func managerOwnsBinary(commands ports.CommandRunner) func(context.Context, strin
 		}
 		switch method {
 		case "npm":
-			root, err := managerPath(ctx, commands, []string{"npm", "root", "-g"})
-			if err != nil {
-				return false, err
+			root, rootErr := managerPath(ctx, commands, []string{"npm", "root", "-g"})
+			if rootErr == nil {
+				if owned, err := nodePackageOwnsBinary(binaryPath, root, pkg); err == nil && owned {
+					return true, nil
+				}
 			}
-			return nodePackageOwnsBinary(binaryPath, root, pkg)
+			// The daemon's npm is one Node among many: nvm, fnm, Node tarballs
+			// and vendor installers keep their own global prefix.
+			if _, ok := npmPrefixOwningBinary(binaryPath, pkg); ok {
+				return true, nil
+			}
+			return false, rootErr
 		case "pnpm":
 			root, err := managerPath(ctx, commands, []string{"pnpm", "root", "-g"})
 			if err != nil {
@@ -353,4 +361,69 @@ func advisoryPackageSources(plans []Plan, preferred, layout string) []Plan {
 		}
 	}
 	return sources
+}
+
+// npmPrefixOwningBinary finds the npm global prefix that installed pkg and
+// owns binaryPath, from the binary's own location rather than the daemon's
+// npm. A harness installed with another Node (nvm, fnm, a Node tarball, or an
+// installer's private prefix such as ~/.local) lives under
+// <prefix>/lib/node_modules/<pkg> on Unix and <prefix>\node_modules\<pkg> on
+// Windows, where the prefix also holds the command shim.
+func npmPrefixOwningBinary(binaryPath, pkg string) (string, bool) {
+	if binaryPath == "" || pkg == "" {
+		return "", false
+	}
+	resolved, err := filepath.EvalSymlinks(binaryPath)
+	if err != nil {
+		return "", false
+	}
+	slashed := filepath.ToSlash(resolved)
+	for _, marker := range []string{"/lib/node_modules/" + pkg + "/", "/node_modules/" + pkg + "/"} {
+		index := strings.LastIndex(slashed, marker)
+		if index <= 0 {
+			continue
+		}
+		prefix := filepath.FromSlash(slashed[:index])
+		if npmPackageNamed(filepath.Join(prefix, filepath.FromSlash(strings.TrimPrefix(marker, "/"))), pkg) {
+			return prefix, true
+		}
+	}
+	// Windows npm shims (<prefix>\pi.cmd) are files in the prefix itself.
+	prefix := filepath.Dir(binaryPath)
+	packageRoot := filepath.Join(prefix, "node_modules", filepath.FromSlash(pkg))
+	if owned, err := nodeShimTargetsPackage(binaryPath, packageRoot); err == nil && owned && npmPackageNamed(packageRoot, pkg) {
+		return prefix, true
+	}
+	return "", false
+}
+
+func npmPackageNamed(packageRoot, pkg string) bool {
+	body, err := os.ReadFile(filepath.Join(packageRoot, "package.json"))
+	if err != nil {
+		return false
+	}
+	var manifest struct {
+		Name string `json:"name"`
+	}
+	return json.Unmarshal(body, &manifest) == nil && manifest.Name == pkg
+}
+
+// npmCommandForPrefix runs the npm that belongs to prefix with that prefix's
+// Node when the prefix is a Node installation (nvm, fnm, a tarball), so an
+// update uses the same Node the harness was installed with. Other prefixes,
+// such as ~/.local or %APPDATA%\npm, use npm from PATH.
+func npmCommandForPrefix(prefix string) []string {
+	node, cli := filepath.Join(prefix, "bin", "node"), filepath.Join(prefix, "lib", "node_modules", "npm", "bin", "npm-cli.js")
+	if runtime.GOOS == "windows" {
+		node, cli = filepath.Join(prefix, "node.exe"), filepath.Join(prefix, "node_modules", "npm", "bin", "npm-cli.js")
+	}
+	if regularFile(node) && regularFile(cli) {
+		return []string{node, cli}
+	}
+	return []string{"npm"}
+}
+
+func regularFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }

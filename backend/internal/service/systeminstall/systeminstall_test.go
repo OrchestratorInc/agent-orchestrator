@@ -1483,7 +1483,7 @@ func TestOpenCodeVendorUpdatePinsAdvisoryRelease(t *testing.T) {
 	}
 	s.workers.Wait()
 	waitForStatus(t, s, TargetOpencode, StatusSucceeded)
-	if want := []string{"opencode", "upgrade", "1.18.35", "--method", "curl"}; !slices.Equal(ran, want) {
+	if want := []string{"/Users/test/.opencode/bin/opencode", "upgrade", "1.18.35", "--method", "curl"}; !slices.Equal(ran, want) {
 		t.Fatalf("ran %v, want %v", ran, want)
 	}
 }
@@ -1544,7 +1544,7 @@ func TestOpenCodeVendorUpdatePinsApprovedReleaseOverAdvisory(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.workers.Wait()
-	if want := []string{"opencode", "upgrade", "1.18.35", "--method", "curl"}; !slices.Equal(ran, want) {
+	if want := []string{"/Users/test/.opencode/bin/opencode", "upgrade", "1.18.35", "--method", "curl"}; !slices.Equal(ran, want) {
 		t.Fatalf("ran %v, want the approved release %v", ran, want)
 	}
 }
