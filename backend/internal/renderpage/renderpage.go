@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 //go:embed render_bootstrap.js
@@ -39,7 +40,9 @@ var (
 // characters a file system refuses, whitespace collapsed, capped at 120 runes.
 // A port of renderFileName in frontend/src/renderer/lib/render-frame.ts.
 func FileName(title string) string {
-	name := strings.Join(strings.Fields(unsafeFileNameChars.ReplaceAllString(title, " ")), " ")
+	// JS \s, which the renderer collapses, also matches U+FEFF.
+	isSpace := func(r rune) bool { return unicode.IsSpace(r) || r == '\uFEFF' }
+	name := strings.Join(strings.FieldsFunc(unsafeFileNameChars.ReplaceAllString(title, " "), isSpace), " ")
 	if runes := []rune(name); len(runes) > 120 {
 		name = strings.TrimSpace(string(runes[:120]))
 	}

@@ -406,7 +406,7 @@ func TestPublishRenderRouteReportsTheArtifact(t *testing.T) {
 		result chatsvc.RenderResult
 		want   string
 	}{
-		{"kept", chatsvc.RenderResult{RenderID: "r1", ArtifactPath: "Chart.html"}, `"artifactPath":"Chart.html"`},
+		{"kept", chatsvc.RenderResult{RenderID: "r1", ArtifactPath: "/ao/artifacts/proj-1/Chart.html"}, `"artifactPath":"/ao/artifacts/proj-1/Chart.html"`},
 		// The page is in the thread either way, so a failed save is still a 201.
 		{"not kept", chatsvc.RenderResult{RenderID: "r1", ArtifactError: "save render artifact: disk full"}, `"artifactError":"save render artifact: disk full"`},
 	} {

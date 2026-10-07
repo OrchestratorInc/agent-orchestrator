@@ -81,7 +81,7 @@ func TestRenderArtifactKeepsThePageOrWarns(t *testing.T) {
 	for _, tc := range []struct {
 		name, resp, stdout, stderr string
 	}{
-		{"kept", `{"renderId":"r1","artifactPath":"Turns by day.html"}`, "saved as artifact: Turns by day.html\n", ""},
+		{"kept", `{"renderId":"r1","artifactPath":"/ao/artifacts/aa-47/Turns by day.html"}`, "saved as artifact: /ao/artifacts/aa-47/Turns by day.html\n", ""},
 		// The page is in the thread either way, so the command still succeeds.
 		{"not kept", `{"renderId":"r1","artifactError":"save render artifact: disk full"}`, "", "warning: not saved as artifact: save render artifact: disk full\n"},
 	} {

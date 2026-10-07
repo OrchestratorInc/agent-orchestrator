@@ -318,10 +318,11 @@ func TestSaveRenderAsArtifactWritesTheServedPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveRenderAsArtifact: %v", err)
 	}
-	if got != (chatsvc.RenderArtifact{Path: "Turns by day.html", Name: "Turns by day.html"}) {
+	dir := sessionartifacts.Dir(h.rendersDir, testSession)
+	if got != (chatsvc.RenderArtifact{Path: "Turns by day.html", Name: "Turns by day.html", Dir: dir}) {
 		t.Fatalf("artifact = %+v", got)
 	}
-	file := filepath.Join(sessionartifacts.Dir(h.rendersDir, testSession), got.Path)
+	file := filepath.Join(dir, got.Path)
 	saved, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
@@ -351,9 +352,36 @@ func TestSaveRenderAsArtifactWritesTheServedPage(t *testing.T) {
 	if err != nil || other.Path != "Turns by day (2).html" {
 		t.Fatalf("different page = %+v, %v", other, err)
 	}
+	// Every candidate name is checked for the same bytes, not only the first.
+	if again, err := h.svc.SaveRenderAsArtifact(ctx, testSession, "r2", "Turns: by day"); err != nil || again != other || len(h.reconciled) != 2 {
+		t.Fatalf("re-saving the second page = %+v, %v; reconciled %v", again, err, h.reconciled)
+	}
 	entries, _ := os.ReadDir(filepath.Dir(file))
 	if len(entries) != 2 {
 		t.Fatalf("artifact dir = %v, want two files", entries)
+	}
+}
+
+func TestSaveRenderAsArtifactKeepsNamesWritable(t *testing.T) {
+	h := newHarnessForHarness(t, domain.HarnessCodex)
+	ctx := context.Background()
+	if err := h.renders.PutRender(ctx, testSession, "r1", []byte("<p>x</p>")); err != nil {
+		t.Fatal(err)
+	}
+	// 120 CJK runes are 360 bytes, past the 255-byte NAME_MAX; the stem is cut
+	// to 200 bytes on a rune boundary.
+	long := strings.Repeat("図", 120)
+	for title, want := range map[string]string{
+		long:      strings.Repeat("図", 66) + ".html",
+		"con":     "_con.html",
+		"LPT9":    "_LPT9.html",
+		"com10":   "com10.html",
+		"console": "console.html",
+	} {
+		got, err := h.svc.SaveRenderAsArtifact(ctx, testSession, "r1", title)
+		if err != nil || got.Path != want {
+			t.Errorf("%q: artifact = %+v, %v; want %q", title, got, err, want)
+		}
 	}
 }
 
@@ -377,10 +405,12 @@ func TestPublishRenderWithArtifactKeepsThePage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublishRender: %v", err)
 	}
-	if result.ArtifactPath != "Chart.html" || result.ArtifactError != "" {
-		t.Fatalf("result = %+v", result)
+	// An absolute path, so the agent can pass it to ao report --artifact.
+	want := filepath.Join(sessionartifacts.Dir(h.rendersDir, testSession), "Chart.html")
+	if result.ArtifactPath != want || result.ArtifactError != "" {
+		t.Fatalf("result = %+v, want artifact %s", result, want)
 	}
-	if _, err := os.Stat(filepath.Join(sessionartifacts.Dir(h.rendersDir, testSession), "Chart.html")); err != nil {
+	if _, err := os.Stat(want); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -13761,8 +13761,7 @@ components:
             published.'
           type: string
         artifactPath:
-          description: 'With artifact: the kept page, relative to the session''s artifact
-            directory.'
+          description: 'With artifact: the absolute path of the kept page.'
           type: string
         path:
           type: string

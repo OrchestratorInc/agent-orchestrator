@@ -3034,7 +3034,7 @@ type PublishRenderResponse struct {
 	RenderID      string `json:"renderId"`
 	ActivityID    string `json:"activityId"`
 	Path          string `json:"path"`
-	ArtifactPath  string `json:"artifactPath,omitempty" description:"With artifact: the kept page, relative to the session's artifact directory."`
+	ArtifactPath  string `json:"artifactPath,omitempty" description:"With artifact: the absolute path of the kept page."`
 	ArtifactError string `json:"artifactError,omitempty" description:"With artifact: why the page was not kept. The page is still published."`
 }
 

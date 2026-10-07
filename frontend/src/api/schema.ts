@@ -4705,7 +4705,7 @@ export interface components {
             activityId: string;
             /** @description With artifact: why the page was not kept. The page is still published. */
             artifactError?: string;
-            /** @description With artifact: the kept page, relative to the session's artifact directory. */
+            /** @description With artifact: the absolute path of the kept page. */
             artifactPath?: string;
             path: string;
             renderId: string;

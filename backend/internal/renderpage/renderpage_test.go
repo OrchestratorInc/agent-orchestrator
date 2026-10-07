@@ -133,6 +133,8 @@ func TestFileNameMatchesTheRenderer(t *testing.T) {
 		strings.Repeat("y", 300):                strings.Repeat("y", 120) + ".html",
 		strings.Repeat("é", 130):                strings.Repeat("é", 120) + ".html",
 		"tab\there\u00a0and\u2003wide   spaces": "tab here and wide spaces.html",
+		// JS \s matches U+FEFF; Go's unicode.IsSpace does not.
+		"\ufeffTurns\ufeffby day\ufeff": "Turns by day.html",
 	} {
 		if got := FileName(title); got != want {
 			t.Errorf("FileName(%q) = %q, want %q", title, got, want)

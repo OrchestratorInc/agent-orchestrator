@@ -131,7 +131,7 @@ func TestMCPHTMLRenderPublishesThePageWithItsImages(t *testing.T) {
 
 func TestMCPHTMLRenderWithArtifactNamesTheFileOrTheError(t *testing.T) {
 	for _, tc := range []struct{ name, resp, want string }{
-		{"kept", `{"renderId":"r1","artifactPath":"Turns.html"}`, renderShownText("r1") + "\nsaved as artifact: Turns.html"},
+		{"kept", `{"renderId":"r1","artifactPath":"/ao/artifacts/aa-47/Turns.html"}`, renderShownText("r1") + "\nsaved as artifact: /ao/artifacts/aa-47/Turns.html"},
 		{"not kept", `{"renderId":"r1","artifactError":"save render artifact: disk full"}`,
 			renderShownText("r1") + "\nwarning: not saved as artifact: save render artifact: disk full"},
 	} {

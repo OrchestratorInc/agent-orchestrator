@@ -12,9 +12,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
@@ -128,21 +131,48 @@ func (s *Service) PublishRender(ctx context.Context, id domain.SessionID, in Ren
 		if artifact, err := s.SaveRenderAsArtifact(ctx, id, renderID, title); err != nil {
 			result.ArtifactError = err.Error()
 		} else {
-			result.ArtifactPath = artifact.Path
+			// Absolute, so the agent can pass it to ao report --artifact.
+			result.ArtifactPath = filepath.Join(artifact.Dir, artifact.Path)
 		}
 	}
 	return result, nil
 }
 
 // RenderArtifact is a render kept as a session artifact. Path is relative to
-// the session's artifact directory.
+// Dir, the session's artifact directory.
 type RenderArtifact struct {
 	Path string
 	Name string
+	Dir  string
 }
 
-// maxRenderArtifactNames bounds the "Name (n).html" names a save tries.
-const maxRenderArtifactNames = 100
+const (
+	// maxRenderArtifactNames bounds the "Name (n).html" names a save tries.
+	maxRenderArtifactNames = 100
+	// maxRenderArtifactStemBytes keeps "Name (100).html" under the 255-byte
+	// NAME_MAX of common file systems; 120 CJK runes alone are 360 bytes.
+	maxRenderArtifactStemBytes = 200
+)
+
+// windowsDeviceName matches the names Windows reserves for devices.
+var windowsDeviceName = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])$`)
+
+// renderArtifactStem is the render's file name without ".html", cut to fit
+// NAME_MAX on a rune boundary and never a Windows device name.
+func renderArtifactStem(title string) string {
+	stem := strings.TrimSuffix(renderpage.FileName(title), ".html")
+	if len(stem) > maxRenderArtifactStemBytes {
+		cut := maxRenderArtifactStemBytes
+		for !utf8.RuneStart(stem[cut]) {
+			cut--
+		}
+		stem = strings.TrimSpace(stem[:cut])
+	}
+	if windowsDeviceName.MatchString(stem) {
+		stem = "_" + stem
+	}
+	return stem
+}
 
 // SaveRenderAsArtifact keeps a published render as a session artifact, a
 // deliverable the user keeps. The file is the page as the render route serves
@@ -183,18 +213,23 @@ func (s *Service) SaveRenderAsArtifact(ctx context.Context, id domain.SessionID,
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return RenderArtifact{}, fmt.Errorf("create artifact directory: %w", err)
 	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return RenderArtifact{}, fmt.Errorf("open artifact directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
 	doc := renderpage.Document(stored)
-	base := strings.TrimSuffix(renderpage.FileName(title), ".html")
+	stem := renderArtifactStem(title)
 	for n := 1; n <= maxRenderArtifactNames; n++ {
-		name := base + ".html"
+		name := stem + ".html"
 		if n > 1 {
-			name = fmt.Sprintf("%s (%d).html", base, n)
+			name = fmt.Sprintf("%s (%d).html", stem, n)
 		}
-		path := filepath.Join(dir, name)
-		if sameRenderArtifact(path, doc) {
-			return RenderArtifact{Path: name, Name: name}, nil
+		artifact := RenderArtifact{Path: name, Name: name, Dir: dir}
+		if sameRenderArtifact(root, name, doc) {
+			return artifact, nil
 		}
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if errors.Is(err, fs.ErrExist) {
 			continue
 		}
@@ -206,7 +241,7 @@ func (s *Service) SaveRenderAsArtifact(ctx context.Context, id domain.SessionID,
 			err = closeErr
 		}
 		if err != nil {
-			_ = os.Remove(path)
+			_ = root.Remove(name)
 			return RenderArtifact{}, fmt.Errorf("save render artifact: %w", err)
 		}
 		if s.reconcileOutput != nil {
@@ -214,18 +249,25 @@ func (s *Service) SaveRenderAsArtifact(ctx context.Context, id domain.SessionID,
 				s.log.Warn("render artifact saved; output type not updated", "session", id, "file", name, "error", err)
 			}
 		}
-		return RenderArtifact{Path: name, Name: name}, nil
+		return artifact, nil
 	}
-	return RenderArtifact{}, fmt.Errorf("save render artifact: %s and the next %d names are taken", base+".html", maxRenderArtifactNames-1)
+	return RenderArtifact{}, fmt.Errorf("save render artifact: %s and the next %d names are taken", stem+".html", maxRenderArtifactNames-1)
 }
 
-// sameRenderArtifact reports whether path is a regular file holding doc.
-func sameRenderArtifact(path string, doc []byte) bool {
-	info, err := os.Lstat(path)
+// sameRenderArtifact reports whether name in root is a regular file holding
+// doc. It opens without blocking and checks the open file, so a FIFO or device
+// swapped in cannot hang or flood the read.
+func sameRenderArtifact(root *os.Root, name string, doc []byte) bool {
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() != int64(len(doc)) {
 		return false
 	}
-	existing, err := os.ReadFile(path)
+	existing, err := io.ReadAll(io.LimitReader(f, info.Size()+1))
 	return err == nil && bytes.Equal(existing, doc)
 }
 
