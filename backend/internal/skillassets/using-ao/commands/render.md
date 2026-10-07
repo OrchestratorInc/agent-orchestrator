@@ -4,6 +4,10 @@ Show a self-contained HTML page inline in the current **chat** session's
 thread, above your final reply. Use it when a chart, table, diagram, image
 collage, or mockup says more than prose.
 
+In a chat session, the `html_preview` and `html_render` tools do the same as
+`ao render --check` and `ao render`. They work without shell access to the
+daemon, so use them when you have them. The rules below apply to both.
+
 ```bash
 ao render "$TMPDIR/turns-by-day.html" --title "Turns by day" --height 420
 ```

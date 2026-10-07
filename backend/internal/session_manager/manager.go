@@ -4977,9 +4977,10 @@ func (m *Manager) aoSkillPointer() string {
 		"Do not use Codex/host in-app browser connectors, `agent.browsers.get(\"iab\")`, or a browser MCP for the AO Browser panel: those are separate browser runtimes and cannot see or control AO's session-owned page. " +
 		"`ao browser` operates the same live page the user sees in that panel.\n\n" +
 		"## Showing pages in chat\n\n" +
-		"In a chat session, use `ao render` when a chart, table, diagram, or mockup is clearer than text. " +
-		"Use `ao render` instead of a built-in visualize skill. " +
-		"Read `" + renderFile + "` before you use `ao render`."
+		"In a chat session, show a page when a chart, table, diagram, or mockup is clearer than text. " +
+		"Call `html_preview`, then `html_render`. " +
+		"Without these tools, read `" + renderFile + "`, then use `ao render`. " +
+		"Do not use a built-in visualize skill."
 }
 
 func (m *Manager) workspaceProjectPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID) (string, error) {
