@@ -4292,7 +4292,10 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 	if !ok {
 		return ErrNotFound
 	}
-	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat || !m.harnessSemanticAcceptance(rec.Harness) {
+	if rec.IsTerminated {
+		return ErrTerminated
+	}
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
 		return ErrSemanticAcceptanceUnsupported
 	}
 	interrupter, ok := m.runtime.(runtimeInterrupter)
@@ -4429,6 +4432,8 @@ Your next action for any implementation, fix, UI change, test, PR, or code-revie
 ao spawn --project %s --name "<label, max 100 chars>" --prompt "<clear worker task>"
 
 If a suitable worker already exists, use ao send to redirect that worker instead. After spawning or redirecting, report the worker session id and stop. Do not do the worker's task in this orchestrator session.
+
+If a worker is stuck in an active turn, use ao session interrupt <session-id> to stop that turn without terminating the session; use ao session kill <session-id> only when the session cannot be recovered.
 
 USER MESSAGE:
 %s`, project, project, message)

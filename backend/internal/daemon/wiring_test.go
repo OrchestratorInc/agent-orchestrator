@@ -900,6 +900,8 @@ type fakeSessionLifecycle struct {
 	restoreAllCalled          bool
 	reconcileErr              error
 	restoreErr                error
+	interrupted               domain.SessionID
+	interruptErr              error
 }
 
 type recordingAgentSwitchDaemonFaultStore struct {
@@ -959,6 +961,11 @@ func (f *fakeSessionLifecycle) Send(context.Context, domain.SessionID, string, *
 
 func (f *fakeSessionLifecycle) Kill(_ context.Context, _ domain.SessionID) (bool, error) {
 	return false, nil
+}
+
+func (f *fakeSessionLifecycle) InterruptTUI(_ context.Context, id domain.SessionID) error {
+	f.interrupted = id
+	return f.interruptErr
 }
 
 func (f *fakeSessionLifecycle) Reconcile(_ context.Context) error {

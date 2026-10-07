@@ -1,6 +1,6 @@
 # ao session
 
-Manage agent sessions: list, inspect, rename, kill, restore, exit or resume an
+Manage agent sessions: list, inspect, interrupt, rename, kill, restore, exit or resume an
 agent, switch harnesses, clean up, and claim PRs.
 
 ## In-app session links
@@ -125,6 +125,26 @@ ao session kill <id> [flags]
 # Kill session mer-3
 ao session kill mer-3
 ```
+
+---
+
+### ao session interrupt
+
+Stop an active turn without terminating the session or workspace.
+
+**Syntax:**
+```
+ao session interrupt <id> [flags]
+```
+
+**Flags:**
+
+| Flag | Meaning | Default / Required |
+|---|---|---|
+| `-p, --project string` | Project id to scope the lookup | - |
+
+Use this first when a worker is stuck in a no-progress turn; use `kill` only
+when the session cannot be recovered.
 
 ---
 

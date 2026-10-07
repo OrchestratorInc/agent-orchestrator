@@ -1251,6 +1251,18 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 			void queryClient.invalidateQueries({ queryKey: workspaceKey });
 		},
 	});
+	const interrupt = useMutation({
+		mutationFn: async () => {
+			const { error, response } = await clientForSessionHost(hostId).POST(
+				"/api/v1/sessions/{sessionId}/conversation/interrupt",
+				{ params: { path: { sessionId: session.id } } },
+			);
+			if (error) throw new Error(apiErrorMessage(error, `Unable to stop turn (${response.status})`));
+		},
+		onSettled: () => {
+			void queryClient.invalidateQueries({ queryKey: workspaceKey });
+		},
+	});
 	const policyError = policy.error instanceof Error ? policy.error.message : null;
 	const canTerminateNow = session.status === "merged";
 	const isStandaloneSession = session.workspaceId === STANDALONE_WORKSPACE_ID;
@@ -1308,13 +1320,28 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 			</Tooltip>
 		</div>
 	);
+	const interruptAction = !session.cloud && session.mode !== "chat" && session.activity?.state === "active" ? (
+		<div className="py-1">
+			<div className="flex items-center justify-between gap-3">
+				<span className="text-xs font-medium text-settings-label">{t("inspector.currentTurn")}</span>
+				<Button disabled={interrupt.isPending} onClick={() => interrupt.mutate()} size="sm" type="button" variant="outline">
+					{interrupt.isPending ? t("inspector.stoppingTurn") : t("inspector.stopTurn")}
+				</Button>
+			</div>
+			{interrupt.error ? <p className="mt-1 text-2xs text-error" role="alert">{interrupt.error.message}</p> : null}
+		</div>
+	) : null;
 
 	if (isStandaloneSession) {
-		return <Section title={t("inspector.sessionControls")}>{terminateAction}</Section>;
+		return <Section title={t("inspector.sessionControls")}>
+			{interruptAction}
+			{terminateAction}
+		</Section>;
 	}
 
 	return (
 		<Section title={t("inspector.sessionControls")}>
+			{interruptAction}
 			<AutoInjectCIPolicyControl hostId={hostId} session={session} />
 			<AutoInjectReviewPolicyControl hostId={hostId} session={session} />
 			{session.kind === "orchestrator" ? null : canTerminateNow ? (
