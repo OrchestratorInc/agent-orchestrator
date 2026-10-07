@@ -159,6 +159,7 @@
 	"browser.downloads.open": "Abrir {{file}}",
 	"browser.downloads.show": "Mostrar {{file}} en el Explorador de archivos",
 	"browser.downloads.remove": "Eliminar {{file}} del equipo",
+	"browser.downloads.removeHistory": "Eliminar {{file}} del historial",
 	"browser.downloads.progressLabel": "Progreso de descarga de {{file}}",
 	"browser.downloads.showAll": "Mostrar todo",
 	"browser.downloads.search": "Buscar en el historial de descargas",
