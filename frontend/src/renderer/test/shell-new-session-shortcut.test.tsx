@@ -197,6 +197,10 @@ vi.mock("../hooks/useCloudOrg", () => ({
 	useCloudOrg: () => ({ org: undefined, isLoading: false, error: undefined, ready: false }),
 }));
 
+vi.mock("../hooks/useProviderConnections", () => ({
+	useProviderConnections: () => ({ data: undefined }),
+}));
+
 // The shell layout opens standalone terminals; this suite only covers the
 // shortcut subscriptions, so the mutation is stubbed rather than driven.
 vi.mock("../hooks/useShellTerminals", () => ({
