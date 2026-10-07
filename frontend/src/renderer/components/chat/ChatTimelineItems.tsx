@@ -2434,8 +2434,9 @@ export function SteerMessage({
 }
 
 function stripSteerSenderPrefix(text: string, senderSessionId: string): string {
-	const prefix = `[from ${senderSessionId}]`;
-	return text.startsWith(prefix) ? text.slice(prefix.length).replace(/^\s+/, "") : text;
+	const escaped = senderSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const prefix = new RegExp(`^\\[from (?:worker\\s+)?${escaped}(?:\\s+"[^"]*")?\\]\\s*`);
+	return text.replace(prefix, "");
 }
 
 /* -------------------------------------------------------------------------- */

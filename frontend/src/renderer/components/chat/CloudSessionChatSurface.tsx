@@ -20,6 +20,9 @@ type EventPayload = {
 	text?: unknown;
 	origin?: unknown;
 	senderLabel?: unknown;
+	senderSessionId?: unknown;
+	senderProjectId?: unknown;
+	senderDisplayName?: unknown;
 	displayText?: unknown;
 	turnId?: unknown;
 	activity?: unknown;
@@ -216,11 +219,15 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 		if (event.type === "chat.user_message") {
 			const payload = eventPayload(event);
 			const automation = payload.origin === "automation";
+			const senderSessionId = automation && typeof payload.senderSessionId === "string" ? payload.senderSessionId : undefined;
+			const senderProjectId = automation && typeof payload.senderProjectId === "string" ? payload.senderProjectId : undefined;
+			const senderDisplayName = automation && typeof payload.senderDisplayName === "string" ? payload.senderDisplayName : undefined;
 			items.push({
 				kind: "message", id: `cloud-event-${event.sequence}`, sequence: event.sequence, revision: 1,
 				turnId: turnID, role: "user", origin: automation ? "automation" : "human",
 				text: automation && typeof payload.displayText === "string" ? payload.displayText : text,
 				senderLabel: automation && typeof payload.senderLabel === "string" ? payload.senderLabel : undefined,
+				senderSessionId, senderProjectId, senderDisplayName,
 				streaming: false, delivery: "accepted", createdAt: event.createdAt,
 			});
 			continue;
