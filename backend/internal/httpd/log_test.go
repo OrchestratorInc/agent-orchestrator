@@ -151,6 +151,26 @@ func TestRequestLoggerIncludesBrowserFailureMetadata(t *testing.T) {
 	}
 }
 
+func TestRequestLoggerPreservesObservedDisconnectedStateOnTimeout(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	sink := &captureSink{}
+	handler := requestLogger(log, sink)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		envelope.SetTelemetryField(r, "browser_command", "snapshot")
+		envelope.SetTelemetryField(r, "runtime_link_state", "disconnected")
+		envelope.WriteError(w, r, apierr.Unavailable("BROWSER_COMMAND_TIMEOUT", "timed out"))
+	}))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/browser/commands", nil))
+	if len(sink.events) != 1 {
+		t.Fatalf("telemetry events = %#v, want one event", sink.events)
+	}
+	if got := sink.events[0].Payload["runtime_link_state"]; got != "disconnected" {
+		t.Fatalf("runtime_link_state = %#v, want disconnected", got)
+	}
+}
+
 type captureSink struct {
 	events []ports.TelemetryEvent
 }

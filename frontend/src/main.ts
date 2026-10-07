@@ -2060,6 +2060,11 @@ ipcMain.handle("browser:runtime:reconnect", (event) => {
 		reconnectBrowserRuntimeLink();
 });
 
+ipcMain.handle("browser:runtime:state", (event): BrowserRuntimeState => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted browser runtime request.");
+	return { connected: browserRuntimeLink?.connected ?? false };
+});
+
 ipcMain.on("browser:overlay", (event, open: unknown) => {
 	if (event.sender !== getShellWebContents() || typeof open !== "boolean") return;
 	windowComposition?.setOverlayOpen(open);

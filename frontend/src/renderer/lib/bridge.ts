@@ -97,6 +97,7 @@ export const aoBridge: AoBridge =
 		browser: {
 			nativeCompositionEnabled: false,
 			reconnectRuntime: async () => undefined,
+			getRuntimeState: async () => ({ connected: false }),
 			ensure: async (sessionId: string) => ({
 				viewId: `preview:${sessionId}`,
 				url: "",

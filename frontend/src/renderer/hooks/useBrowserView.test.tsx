@@ -137,6 +137,7 @@ function setupBridge() {
 		showProfileMenu: vi.fn(),
 		selectProfile: vi.fn(),
 		reconnectRuntime: vi.fn(async () => undefined),
+		getRuntimeState: vi.fn(async () => ({ connected: false })),
 		historySuggestions: vi.fn(async () => []),
 		historyFavicon: vi.fn(async () => undefined),
 		captureScreenshot: vi.fn(async () => undefined),
@@ -256,6 +257,17 @@ describe("useBrowserView", () => {
 			),
 		).toBe(true);
 		expect(result.current.viewId).toBe("42:sess-1");
+	});
+
+	it("hydrates the runtime connection state for a late-mounted panel", async () => {
+		const bridge = setupBridge();
+		bridge.getRuntimeState.mockResolvedValueOnce({ connected: false });
+		const slot = createSlot();
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+
+		await waitFor(() => expect(bridge.getRuntimeState).toHaveBeenCalled());
+		await waitFor(() => expect(result.current.browserRuntimeConnected).toBe(false));
+		expect(slot).toBeInTheDocument();
 	});
 
 	it("keeps bounds revisions increasing when the same native view remounts", async () => {

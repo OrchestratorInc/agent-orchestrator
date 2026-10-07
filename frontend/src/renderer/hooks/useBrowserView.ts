@@ -572,9 +572,16 @@ export function useBrowserView({
 	}, []);
 
 	useEffect(() => {
-		return window.ao?.browser.onRuntimeState((state: BrowserRuntimeState) => {
-			setBrowserRuntimeConnected(state.connected);
-		});
+		let disposed = false;
+		const applyState = (state: BrowserRuntimeState) => {
+			if (!disposed) setBrowserRuntimeConnected(state.connected);
+		};
+		const unsubscribe = window.ao?.browser.onRuntimeState(applyState);
+		void window.ao?.browser.getRuntimeState().then(applyState);
+		return () => {
+			disposed = true;
+			unsubscribe?.();
+		};
 	}, []);
 
 	const reconnectBrowserRuntime = useCallback(async () => {
