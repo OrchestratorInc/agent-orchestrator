@@ -14,6 +14,7 @@ import { CuesSettings } from "./CuesDialog";
 import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
 import { type GlobalSettingsSection, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
+import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
@@ -244,7 +245,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 				>
 					<div className="flex h-full min-h-0">
 						<aside className="flex w-48 shrink-0 flex-col border-r border-(--color-border-settings-dialog-header) bg-card">
-							<p className="px-3 pb-1 pt-3 text-2xs font-semibold tracking-wider text-muted-foreground/60">{t("settings.title")}</p>
+							<p className="px-3 pb-1 pt-1.5 text-2xs font-medium tracking-normal text-muted-foreground/60">{t("settings.title")}</p>
 							<nav aria-label={t("settings.navSectionsAria")} className="flex flex-col gap-0.5 p-2 pt-0">
 								{isProjectSettings
 									? projectSections.map(({ id, label, icon }) => (
@@ -340,15 +341,17 @@ function SettingsNavItem({ active, disabled, icon: Icon, label, onClick }: { act
 		<button
 			aria-current={active ? "page" : undefined}
 			className={cn(
-				"flex h-9 w-full items-center gap-2 rounded-md px-2.5 text-left text-sm font-medium transition-[background-color,color,transform] duration-fast ease-out active:scale-press focus:outline-none focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
-				active ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
+				NAV_ROW_HIGHLIGHT_HOST_CLASS,
+				"flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm font-medium text-muted-foreground transition-none focus:outline-none focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50",
 			)}
+			data-active={active}
 			disabled={disabled}
 			onClick={onClick}
 			type="button"
 		>
-			<Icon aria-hidden="true" className="size-4 shrink-0" />
-			{label}
+			<NavRowHighlight active={active} disabled={disabled} />
+			<Icon aria-hidden="true" className="relative z-[1] size-icon-md shrink-0" />
+			<span className="relative z-[1] min-w-0 flex-1 truncate">{label}</span>
 		</button>
 	);
 }
