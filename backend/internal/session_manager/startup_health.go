@@ -16,7 +16,8 @@ var ErrWorkspaceWriterStopUnproven = fmt.Errorf("%w: prior setup writer stop is 
 
 // uncertainWorkspaceLaunch recognizes an early publication, not a completed
 // controller whose native identity should follow normal recovery. Setup=done
-// proves the command returned, not that all of its descendants stopped.
+// proves the command returned, not that all of its descendants stopped. A Chat
+// generation reservation precedes ControllerReady; it is not publication proof.
 // ponytail: No durable setup execution owner exists; add native ownership only
 // when automatic recovery must prove every prior workspace writer stopped.
 func uncertainWorkspaceLaunch(rec domain.SessionRecord) bool {
@@ -30,7 +31,7 @@ func uncertainWorkspaceLaunch(rec domain.SessionRecord) bool {
 	}
 	return (incomplete || restarted) && rec.Metadata.WorkspacePath != "" && (rec.Metadata.Prompt == "" || restarted) &&
 		rec.Metadata.RuntimeHandleID == "" && rec.Metadata.RuntimeLaunchID == "" &&
-		rec.Metadata.ProviderConversationID == "" && rec.Metadata.ControllerGeneration == "" &&
+		rec.Metadata.ProviderConversationID == "" &&
 		rec.Metadata.AgentSessionID == "" && rec.Metadata.AgentSessionIDLaunchID == ""
 }
 

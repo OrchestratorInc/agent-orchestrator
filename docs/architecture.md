@@ -29,7 +29,18 @@ health does not remove its row, path, Git registration, or payload. The same
 incomplete client request remains refused. Resume, restore, and teardown do not
 prove that a prior setup writer stopped and must not silently reclaim or launch
 that workspace. A shell or descendant can survive daemon-only `SIGKILL`, even
-when Git reports the workspace clean.
+when Git reports the workspace clean. A Chat controller generation can be
+reserved before `ControllerReady`; that reservation alone is not a committed
+provider/controller identity and does not permit recovery or teardown.
+
+A synchronous runtime creation failure with no setup stage records the existing
+failed provision state only when the runtime reports no effect or successful
+cleanup. If immediate workspace removal refuses, later cleanup can retry the
+adapter once its refusal cause clears. Dirty-workspace checks and ordinary
+Restore errors still apply. An unknown runtime effect is not completion proof.
+A retained launch that ran setup remains uncertain even when its parent shell
+returned: existing checkpoints do
+not distinguish surviving descendants, so this path keeps the manual ceiling.
 
 Recovery has a manual ceiling: identify and stop every prior setup writer,
 preserve its work, then repair or remove the incomplete launch through an

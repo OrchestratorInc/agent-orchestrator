@@ -1,6 +1,7 @@
 package sessionmanager
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,12 +12,15 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
@@ -790,6 +794,225 @@ func TestInterruptedPostCreateCannotLaunchOnRecovery(t *testing.T) {
 	}
 	if got := st.sessions[rec.ID]; got.Metadata.WorkspacePath != rec.Metadata.WorkspacePath || got.IsTerminated {
 		t.Fatalf("recovery lost cleanup identity: %+v", got)
+	}
+}
+
+// Pause the real Chat service after its durable reservation, before it can
+// invoke ControllerReady. The generation comes from Service, not the fixture.
+type pausedChatGenerationStore struct {
+	*sqlite.Store
+	claimed chan domain.SessionID
+	release chan struct{}
+}
+
+func (s *pausedChatGenerationStore) ClaimChatControllerGeneration(ctx context.Context, id domain.SessionID, generation string) error {
+	if err := s.Store.ClaimChatControllerGeneration(ctx, id, generation); err != nil {
+		return err
+	}
+	s.claimed <- id
+	<-s.release
+	return nil
+}
+
+func TestChatGenerationReservationPreservesUnpublishedWorkspace(t *testing.T) {
+	for _, async := range []bool{false, true} {
+		for _, setup := range []bool{false, true} {
+			t.Run(fmt.Sprintf("async=%v/setup=%v", async, setup), func(t *testing.T) {
+				ctx := context.Background()
+				dataDir, repo := t.TempDir(), newManagerGitRepo(t)
+				st, err := sqlite.Open(dataDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer st.Close()
+				project := domain.ProjectRecord{ID: "mer", Path: repo, Config: testRoleAgents()}
+				project.Config.DefaultBranch = "main"
+				if setup {
+					project.Config.PostCreate = []string{"true"}
+				}
+				if err := st.UpsertProject(ctx, project); err != nil {
+					t.Fatal(err)
+				}
+				ws, err := gitworktree.New(gitworktree.Options{ManagedRoot: t.TempDir(), RepoResolver: gitworktree.StaticRepoResolver{"mer": repo}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				paused := &pausedChatGenerationStore{Store: st, claimed: make(chan domain.SessionID, 1), release: make(chan struct{})}
+				var ids, launches atomic.Int64
+				newChat := func(store chatsvc.Store) *chatsvc.Service {
+					return chatsvc.New(chatsvc.Options{Store: store, Sessions: st,
+						NewID: func() string { return fmt.Sprintf("publication-%d", ids.Add(1)) },
+						Drivers: integrationChatRegistry{domain.HarnessCodex: integrationChatDriver{
+							harness: domain.HarnessCodex,
+							start: func() ports.ChatConversation {
+								launches.Add(1)
+								return newIntegrationChatConversation("publication-provider")
+							},
+						}},
+					})
+				}
+				firstChat, recoveredChat := newChat(paused), newChat(st)
+				defer firstChat.StopAll(ctx)
+				defer recoveredChat.StopAll(ctx)
+				newManager := func(chat *chatsvc.Service) *Manager {
+					m := New(Deps{Runtime: &fakeRuntime{}, Agents: fakeAgents{}, Workspace: ws,
+						Store: st, Lifecycle: lifecycle.New(st, nil), Messenger: &fakeMessenger{},
+						Chat: realQueueDrainLauncher{integrationChatLauncher{service: chat}}, DataDir: dataDir,
+						LookPath: func(string) (string, error) { return "/bin/true", nil }, Logger: slog.New(slog.DiscardHandler)})
+					m.browserCapabilities = fixedBrowserCapability("publication-capability")
+					return m
+				}
+				first, recovered := newManager(firstChat), newManager(recoveredChat)
+				deferred := deferredBackground(first)
+				cfg := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex,
+					RequestedMode: domain.SessionModeChat, Async: async, ClientRequestID: "publication-request", ClientRequestHash: "publication-hash"}
+				if async {
+					cfg.Kind = domain.KindWorker
+				}
+				done := make(chan error, 1)
+				go func() {
+					_, _, _, err := first.Spawn(ctx, cfg)
+					if async && err == nil {
+						(*deferred)[0]()
+					}
+					done <- err
+				}()
+				defer func() {
+					close(paused.release)
+					select {
+					case err := <-done:
+						if err != nil {
+							t.Errorf("owning launch failed after release: %v", err)
+						}
+						published, found, err := st.GetSession(ctx, "mer-1")
+						if err != nil || !found || published.Metadata.ProviderConversationID == "" || uncertainWorkspaceLaunch(published) || first.checkSessionHealth(ctx, published) != nil {
+							t.Errorf("completed publication did not retain normal health: row=%+v found=%v error=%v", published, found, err)
+						}
+					case <-time.After(10 * time.Second):
+						t.Error("owning launch did not finish")
+					}
+				}()
+				var id domain.SessionID
+				select {
+				case id = <-paused.claimed:
+				case <-time.After(10 * time.Second):
+					t.Fatal("real Chat service did not claim generation")
+				}
+				rec, found, err := st.GetSession(ctx, id)
+				if err != nil || !found || rec.Metadata.ControllerGeneration == "" || rec.Metadata.ProviderConversationID != "" || unfinishedWorkspaceSetup(rec) || firstChat.HasLiveChatController(id) {
+					t.Fatalf("not paused before publication with done/no setup: row=%+v found=%v error=%v", rec, found, err)
+				}
+				registration := runManagerGit(t, repo, "worktree", "list", "--porcelain")
+				if !strings.Contains(registration, "worktree "+rec.Metadata.WorkspacePath+"\n") {
+					t.Fatalf("actual workspace is not registered: %s", registration)
+				}
+				payload := filepath.Join(rec.Metadata.WorkspacePath, "retained-payload")
+				if err := os.WriteFile(payload, []byte("preserve reservation\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := recovered.FailInterruptedProvisioning(ctx); err != nil {
+					t.Fatal(err)
+				}
+				rec, _, _ = st.GetSession(ctx, id)
+				if !async {
+					if _, _, _, err := recovered.Spawn(ctx, cfg); !errors.Is(err, ErrClientRequestIncomplete) {
+						t.Fatalf("same request replay accepted reserved generation: %v", err)
+					}
+				}
+				before, _ := json.Marshal(rec)
+				if err := recovered.reconcileLive(ctx, rec); (!async && !errors.Is(err, ErrWorkspaceWriterStopUnproven)) || (async && err != nil) {
+					t.Fatalf("reserved-generation startup reconcile = %v", err)
+				}
+				if err := recovered.checkSessionHealth(ctx, rec); (!async && !errors.Is(err, ErrWorkspaceWriterStopUnproven)) || (async && err != nil) {
+					t.Fatalf("reserved-generation startup health = %v", err)
+				}
+				for _, recover := range []func() error{
+					func() error { _, err := recovered.ResumeAgentWithMode(ctx, id); return err },
+					func() error { _, err := recovered.Kill(ctx, id); return err },
+					func() error { return recovered.RetireForReplacement(ctx, id) },
+					func() error { return recovered.saveAndTeardownOne(ctx, rec) },
+				} {
+					if err := recover(); !errors.Is(err, ErrWorkspaceWriterStopUnproven) {
+						t.Fatalf("unpublished reserved generation was accepted: %v", err)
+					}
+				}
+				got, found, err := st.GetSession(ctx, id)
+				after, _ := json.Marshal(got)
+				contents, readErr := os.ReadFile(payload)
+				if err != nil || !found || !bytes.Equal(before, after) || readErr != nil || string(contents) != "preserve reservation\n" || runManagerGit(t, repo, "worktree", "list", "--porcelain") != registration || launches.Load() != 1 {
+					t.Fatalf("reservation recovery changed row/path/registration/payload or relaunched: row=%+v error=%v read=%v launches=%d", got, err, readErr, launches.Load())
+				}
+			})
+		}
+	}
+}
+
+func TestKnownSynchronousFailureCanRetryWorkspaceCleanup(t *testing.T) {
+	for _, tc := range []struct {
+		refusal error
+		setup   bool
+		effect  ports.RuntimeEffectOutcome
+	}{
+		{errors.New("transient removal failure"), false, ports.RuntimeEffectNone},
+		{ports.ErrWorkspaceDirty, false, ports.RuntimeEffectNone},
+		{ports.ErrWorkspaceDirty, true, ports.RuntimeEffectNone},
+		{ports.ErrWorkspaceDirty, false, ports.RuntimeEffectPossible},
+	} {
+		t.Run(fmt.Sprintf("%v/setup=%v/effect=%s", tc.refusal, tc.setup, tc.effect), func(t *testing.T) {
+			m, seed, rt, ws := newManager()
+			m.dataDir, ws.path = t.TempDir(), t.TempDir()
+			st, err := sqlite.Open(m.dataDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			project := seed.projects["mer"]
+			if tc.setup {
+				project.Config.PostCreate = []string{"true"}
+			}
+			if err := st.UpsertProject(context.Background(), project); err != nil {
+				t.Fatal(err)
+			}
+			m.store, m.lcm = st, lifecycle.New(st, nil)
+			rt.createErr = switchRuntimeEffectError{err: errors.New("runtime create failed before controller"), effect: tc.effect, cleanup: ports.RuntimeCleanupNotAttempted}
+			ws.destroyErr = tc.refusal
+			_, _, _, err = m.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker,
+				Harness: domain.HarnessCodex, RequestedMode: domain.SessionModeTUI, ClientRequestID: "known-failure", ClientRequestHash: "known-failure-hash"})
+			if !errors.Is(err, ErrRuntimeCreate) || ws.destroyed != 1 {
+				t.Fatalf("failed Spawn did not reach first refused removal: error=%v removals=%d", err, ws.destroyed)
+			}
+			rec, found, err := st.GetSession(context.Background(), "mer-1")
+			if err != nil || !found || !rec.IsTerminated || rec.Metadata.WorkspacePath != ws.path {
+				t.Fatalf("failed removal lost identity: %+v", rec)
+			}
+			cleanup, err := m.Cleanup(context.Background(), "mer")
+			if tc.setup || tc.effect != ports.RuntimeEffectNone {
+				if err != nil || len(cleanup.Skipped) != 1 || !strings.Contains(cleanup.Skipped[0].Reason, "writer stop is unproven") || ws.destroyed != 1 || rec.ProvisionState == domain.SessionProvisionFailed || unfinishedWorkspaceSetup(rec) {
+					t.Fatalf("uncertain setup/runtime was mistaken for writer-stop proof: row=%+v cleanup=%+v error=%v", rec, cleanup, err)
+				}
+				ws.destroyErr = nil
+				cleanup, err = m.Cleanup(context.Background(), "mer")
+				if err != nil || len(cleanup.Skipped) != 1 || ws.destroyed != 1 {
+					t.Fatalf("clearing dirt bypassed setup writer evidence: cleanup=%+v error=%v", cleanup, err)
+				}
+				return
+			}
+			if err != nil || len(cleanup.Skipped) != 1 || strings.Contains(cleanup.Skipped[0].Reason, "writer stop is unproven") || ws.destroyed != 2 {
+				t.Fatalf("known failure never retried adapter refusal: cleanup=%+v error=%v removals=%d", cleanup, err, ws.destroyed)
+			}
+			if errors.Is(tc.refusal, ports.ErrWorkspaceDirty) && cleanup.Skipped[0].Reason != "workspace has uncommitted changes" {
+				t.Fatalf("dirty retention reason changed: %+v", cleanup)
+			}
+			// Restore must reach its existing error, not the crash-only boundary.
+			if _, err := m.RestoreWithMode(context.Background(), rec.ID); !errors.Is(err, ErrNotResumable) {
+				t.Fatalf("normal promptless restore error changed: %v", err)
+			}
+			ws.destroyErr = nil
+			cleanup, err = m.Cleanup(context.Background(), "mer")
+			if err != nil || len(cleanup.Skipped) != 0 || len(cleanup.Cleaned) != 1 || ws.destroyed != 3 {
+				t.Fatalf("cleared refusal did not permit cleanup: cleanup=%+v error=%v removals=%d", cleanup, err, ws.destroyed)
+			}
+		})
 	}
 }
 

@@ -1402,6 +1402,16 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		Env:           env,
 	})
 	if err != nil {
+		var effect ports.RuntimeEffectError
+		// ponytail: Setup completion does not prove descendant stop. Only no-setup
+		// failures with runtime-effect evidence permit later ordinary cleanup.
+		if len(plan) == 1 && errors.As(err, &effect) && (effect.EffectOutcome() == ports.RuntimeEffectNone || effect.CleanupOutcome() == ports.RuntimeCleanupSucceeded) {
+			cleanupCtx, cancel := spawnRollbackContext(ctx)
+			if _, writeErr := m.setProvisionState(cleanupCtx, id, domain.SessionProvisionFailed, "Synchronous runtime creation failed before controller publication"); writeErr != nil {
+				m.logger.Warn("spawn: record known runtime failure", "sessionID", id, "error", writeErr)
+			}
+			cancel()
+		}
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrRuntimeCreate, agentlaunch.RedactError(err, project.Config.Env))
 	}
