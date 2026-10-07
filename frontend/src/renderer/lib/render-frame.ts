@@ -3,6 +3,7 @@ import type { ConversationActivity, RenderRef } from "../types/conversation";
 export const RENDER_MIN_HEIGHT = 80;
 export const RENDER_MAX_HEIGHT = 2000;
 const RENDER_PATH = /^\/api\/v1\/sessions\/[^/]+\/renders\/[^/]+$/;
+const MAX_MEASURED_WIDTHS = 16;
 
 export function clampRenderHeight(height: number): number {
 	return Math.min(RENDER_MAX_HEIGHT, Math.max(RENDER_MIN_HEIGHT, Math.round(height)));
@@ -22,7 +23,42 @@ export function readRenderRef(detail: ConversationActivity["detail"]): RenderRef
 	) {
 		return undefined;
 	}
-	return { id: render.id, title: render.title, height: clampRenderHeight(render.height), path: render.path };
+	const ref: RenderRef = { id: render.id, title: render.title, height: clampRenderHeight(render.height), path: render.path };
+	// A malformed measurement costs only the measured first height, not the page.
+	if (isMeasuredHeights(render.heights)) ref.heights = render.heights;
+	return ref;
+}
+
+const isPositiveInteger = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value > 0;
+
+/** 1-16 `[width, height]` pairs of positive integers, in increasing width. */
+function isMeasuredHeights(heights: unknown): heights is Array<[number, number]> {
+	return (
+		Array.isArray(heights) &&
+		heights.length > 0 &&
+		heights.length <= MAX_MEASURED_WIDTHS &&
+		heights.every(
+			(pair, index) =>
+				Array.isArray(pair) &&
+				pair.length === 2 &&
+				isPositiveInteger(pair[0]) &&
+				isPositiveInteger(pair[1]) &&
+				(index === 0 || pair[0] > heights[index - 1][0]),
+		)
+	);
+}
+
+/**
+ * The page's height at a frame width, from its measured heights: the taller of
+ * the heights at the nearest measured widths on each side, since a breakpoint
+ * between them can make the page as tall as either. Ported from T3 Code's
+ * `measuredHeight` (packages/shared/src/htmlRender.ts).
+ */
+export function measuredRenderHeight(heights: Array<[number, number]>, width: number): number {
+	const above = heights.findIndex(([measuredWidth]) => measuredWidth >= width);
+	const high = above === -1 ? heights.length - 1 : above;
+	const low = heights[high]![0] === width ? high : Math.max(0, high - 1);
+	return Math.max(heights[low]![1], heights[high]![1]);
 }
 
 export interface RenderTheme {

@@ -394,6 +394,8 @@ export interface RenderRef {
 	height: number;
 	/** Daemon-relative route, `/api/v1/sessions/{id}/renders/{renderId}`. */
 	path: string;
+	/** `[width, height]` pairs measured when the page was published, sorted by width. */
+	heights?: Array<[number, number]>;
 }
 
 /**

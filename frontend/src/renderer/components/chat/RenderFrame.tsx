@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { getApiBaseUrl } from "../../lib/api-client";
 import {
 	clampRenderHeight,
+	measuredRenderHeight,
 	readRenderContentHeight,
 	readRenderLinkRequest,
 	readRenderTheme,
@@ -63,6 +64,20 @@ function RenderDocument({
 	themeRef.current = theme;
 	const [src] = useState(() => `${getApiBaseUrl()}${render.path}${renderThemeFragment(theme, displayMode)}`);
 	const [contentHeight, setContentHeight] = useState<number>();
+	// The inline frame's width picks its measured first height; read before the
+	// first paint, so the frame opens at that height rather than the agent's.
+	const [width, setWidth] = useState<number>();
+	const { heights } = render;
+	useLayoutEffect(() => {
+		const frame = frameRef.current;
+		if (!frame || displayMode !== "inline" || !heights) return;
+		setWidth(frame.getBoundingClientRect().width);
+		const observer = new ResizeObserver(([entry]) => {
+			if (entry) setWidth(entry.contentRect.width);
+		});
+		observer.observe(frame);
+		return () => observer.disconnect();
+	}, [displayMode, heights]);
 	const postTheme = () => frameRef.current?.contentWindow?.postMessage(renderThemeMessage(themeRef.current, displayMode), "*");
 	useEffect(() => {
 		postTheme();
@@ -95,7 +110,11 @@ function RenderDocument({
 			loading="lazy"
 			onLoad={postTheme}
 			className={cn("block w-full border-0", className)}
-			style={displayMode === "inline" ? { height: clampRenderHeight(contentHeight ?? render.height) } : undefined}
+			style={
+				displayMode === "inline"
+					? { height: clampRenderHeight(contentHeight ?? (heights && width ? measuredRenderHeight(heights, width) : render.height)) }
+					: undefined
+			}
 		/>
 	);
 }

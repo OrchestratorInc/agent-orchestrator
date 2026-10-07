@@ -12,7 +12,7 @@ function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
 }
 
-function renderActivity(height = 300): ConversationActivity {
+function renderActivity(height = 300, heights?: Array<[number, number]>): ConversationActivity {
 	return {
 		kind: "activity",
 		id: "act-1",
@@ -22,7 +22,7 @@ function renderActivity(height = 300): ConversationActivity {
 		status: "completed",
 		summary: "Turns by day",
 		createdAt: "2026-10-06T10:00:00Z",
-		detail: { event: "render", render: { id: "r1", title: "Turns by day", height, path: "/api/v1/sessions/proj-1/renders/r1" } },
+		detail: { event: "render", render: { id: "r1", title: "Turns by day", height, path: "/api/v1/sessions/proj-1/renders/r1", heights } },
 	};
 }
 
@@ -85,6 +85,33 @@ describe("render activity", () => {
 		expect(frame().style.height).toBe("640px");
 		post(size(9000), frame().contentWindow);
 		expect(frame().style.height).toBe("2000px");
+	});
+
+	it("opens at the height measured for the frame's width, follows the width, and fits the page once it reports", () => {
+		const resized: ResizeObserverCallback[] = [];
+		vi.spyOn(window, "ResizeObserver").mockImplementation(function (callback: ResizeObserverCallback) {
+			resized.push(callback);
+			return { observe() {}, unobserve() {}, disconnect() {} };
+		});
+		const rect = vi.spyOn(HTMLIFrameElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 640 } as DOMRect);
+		try {
+			const heights: Array<[number, number]> = [
+				[320, 900],
+				[640, 450],
+				[1144, 300],
+			];
+			render(<ActivityRow activity={renderActivity(300, heights)} />);
+			expect(frame().style.height).toBe("450px");
+			act(() => {
+				for (const callback of resized) callback([{ contentRect: { width: 320 } }] as never, {} as ResizeObserver);
+			});
+			expect(frame().style.height).toBe("900px");
+			post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 512 } }, frame().contentWindow);
+			expect(frame().style.height).toBe("512px");
+		} finally {
+			rect.mockRestore();
+			vi.mocked(window.ResizeObserver).mockRestore();
+		}
 	});
 
 	it("restyles on a theme flip without reloading the page", async () => {
