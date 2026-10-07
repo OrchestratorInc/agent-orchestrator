@@ -1,9 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CONTENT_HEIGHT_SCRIPT, checkRender } from "./render-check";
+import { allowRenderPage } from "./render-check-proxy";
+
+// The proxy itself is tested over real sockets in render-check-proxy.test.ts.
+vi.mock("./render-check-proxy", () => ({
+	startRenderCheckProxy: async () => 1080,
+	allowRenderPage: vi.fn(() => vi.fn()),
+}));
 
 const url = "http://127.0.0.1:3001/api/v1/sessions/p-1/renders/check-id-001";
 
-function fakes(options: { loadError?: Error; measureNeverReturns?: boolean; emptyImage?: boolean; manualPaint?: boolean } = {}) {
+function fakes(
+	options: { loadError?: Error; measureNeverReturns?: boolean; emptyImage?: boolean; manualPaint?: boolean; refused?: string[] } = {},
+) {
 	const events: string[] = [];
 	const listeners = new Map<string, (...args: unknown[]) => void>();
 	const paintListeners: Array<() => void> = [];
@@ -16,13 +25,18 @@ function fakes(options: { loadError?: Error; measureNeverReturns?: boolean; empt
 		session: {
 			setPermissionRequestHandler: (handler: (...args: unknown[]) => void) => permissionRequest.mockImplementation(handler),
 			setPermissionCheckHandler: vi.fn(),
+			setProxy: vi.fn(async () => {}),
 		},
 		setWindowOpenHandler: vi.fn(),
+		setWebRTCIPHandlingPolicy: vi.fn(),
 		on: (event: string, listener: (...args: unknown[]) => void) => listeners.set(event, listener),
 		once: (event: string, listener: () => void) => {
 			if (event === "paint") paintListeners.push(listener);
 		},
 		loadURL: vi.fn(async () => {
+			// The proxy refuses these while the page loads.
+			const onRefused = vi.mocked(allowRenderPage).mock.lastCall?.[2];
+			for (const destination of options.refused ?? []) onRefused?.(destination);
 			if (options.loadError) throw options.loadError;
 			listeners.get("console-message")?.({}, 3, "Uncaught ReferenceError: d3 is not defined", 1, url);
 		}),
@@ -90,6 +104,35 @@ describe("checkRender", () => {
 		expect(decide).toHaveBeenCalledWith(false);
 		expect(f.contents.executeJavaScript).toHaveBeenCalledWith(CONTENT_HEIGHT_SCRIPT);
 		expect(f.window.destroy).toHaveBeenCalled();
+	});
+
+	it("routes the partition through the public-address proxy once, before the first load, with WebRTC UDP off", async () => {
+		const f = fakes();
+		await checkRender(f as never, { url, width: 390 });
+		await checkRender(f as never, { url, width: 390 });
+		// Without <-loopback>, Chromium would reach loopback directly.
+		expect(f.contents.session.setProxy).toHaveBeenCalledTimes(1);
+		expect(f.contents.session.setProxy).toHaveBeenCalledWith({ proxyRules: "socks5://127.0.0.1:1080", proxyBypassRules: "<-loopback>" });
+		expect(f.contents.session.setProxy.mock.invocationCallOrder[0]).toBeLessThan(f.contents.loadURL.mock.invocationCallOrder[0]!);
+		expect(f.contents.setWebRTCIPHandlingPolicy).toHaveBeenCalledWith("disable_non_proxied_udp");
+	});
+
+	it("allows only the page's own address, and reports each refused destination once as a warning", async () => {
+		const f = fakes({ refused: ["192.168.1.1:80", "192.168.1.1:80", "[::1]:22"] });
+		const result = await checkRender(f as never, { url: url.replace("127.0.0.1", "localhost"), width: 390 });
+		expect(allowRenderPage).toHaveBeenLastCalledWith("localhost", 3001, expect.any(Function));
+		expect(result.consoleMessages).toEqual([
+			{ level: "warning", text: "AO blocked a request to 192.168.1.1:80. A render check loads only public addresses." },
+			{ level: "warning", text: "AO blocked a request to [::1]:22. A render check loads only public addresses." },
+			{ level: "error", text: "Uncaught ReferenceError: d3 is not defined" },
+		]);
+	});
+
+	it("releases the page's allowance when the check ends, on success and on error", async () => {
+		await checkRender(fakes() as never, { url, width: 390 });
+		expect(vi.mocked(allowRenderPage).mock.results.at(-1)?.value).toHaveBeenCalledTimes(1);
+		await expect(checkRender(fakes({ loadError: new Error("ERR_CONNECTION_REFUSED") }) as never, { url, width: 390 })).rejects.toThrow();
+		expect(vi.mocked(allowRenderPage).mock.results.at(-1)?.value).toHaveBeenCalledTimes(1);
 	});
 
 	it("captures only once the page has painted at the measured size", async () => {

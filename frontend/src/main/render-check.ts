@@ -1,4 +1,5 @@
-import type { BrowserWindow } from "electron";
+import type { BrowserWindow, Session } from "electron";
+import { allowRenderPage, startRenderCheckProxy } from "./render-check-proxy";
 
 export type RenderCheckMessage = { level: "debug" | "log" | "warning" | "error"; text: string };
 export type RenderCheckResult = {
@@ -34,6 +35,28 @@ export const CONTENT_HEIGHT_SCRIPT = `(() => {
 	return Math.ceil(r.scrollHeight > r.clientHeight ? r.scrollHeight : r.getBoundingClientRect().height);
 })()`;
 
+// Every check shares the partition's session, so it is proxied once.
+const proxiedSessions = new WeakMap<Session, Promise<void>>();
+
+/**
+ * Sends every connection the check window makes through the public-address
+ * proxy. "<-loopback>" matters: without it Chromium connects to loopback
+ * directly and skips the proxy.
+ */
+function proxyPartition(session: Session): Promise<void> {
+	let proxied = proxiedSessions.get(session);
+	if (!proxied) {
+		proxied = startRenderCheckProxy()
+			.then((port) => session.setProxy({ proxyRules: `socks5://127.0.0.1:${port}`, proxyBypassRules: "<-loopback>" }))
+			.catch((error: unknown) => {
+				proxiedSessions.delete(session);
+				throw error;
+			});
+		proxiedSessions.set(session, proxied);
+	}
+	return proxied;
+}
+
 function renderCheckError(code: string, message: string): Error & { code: string } {
 	return Object.assign(new Error(message), { code });
 }
@@ -43,7 +66,8 @@ function renderCheckError(code: string, message: string): Error & { code: string
  * it, and returns a screenshot, the content height, and console output. The
  * window renders offscreen, so it paints without ever being on screen, and
  * never joins the main window or the Browser panel: in-memory partition,
- * sandboxed, no permissions, no popups, no navigation away.
+ * sandboxed, no permissions, no popups, no navigation away, and no address on
+ * this computer or its network except the page itself.
  */
 export async function checkRender(
 	deps: RenderCheckDeps,
@@ -76,12 +100,26 @@ export async function checkRender(
 	contents.session.setPermissionCheckHandler(() => false);
 	contents.setWindowOpenHandler(() => ({ action: "deny" }));
 	contents.on("will-navigate", (event) => event.preventDefault());
+	// No proxy carries WebRTC's UDP.
+	contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
+	const record = (message: RenderCheckMessage) => {
+		if (consoleMessages.length < MAX_MESSAGES) consoleMessages.push(message);
+	};
 	contents.on("console-message", (_event, level, message) => {
-		if (consoleMessages.length >= MAX_MESSAGES) return;
-		consoleMessages.push({ level: LEVELS[level] ?? "log", text: message.slice(0, MAX_MESSAGE_CHARS) });
+		record({ level: LEVELS[level] ?? "log", text: message.slice(0, MAX_MESSAGE_CHARS) });
+	});
+	// The page itself is the one local address the check may load. Each refused
+	// destination is reported once, so the agent knows why a resource is missing.
+	const page = new URL(url);
+	const refused = new Set<string>();
+	const release = allowRenderPage(page.hostname, Number(page.port || 80), (destination) => {
+		if (refused.has(destination)) return;
+		refused.add(destination);
+		record({ level: "warning", text: `AO blocked a request to ${destination}. A render check loads only public addresses.` });
 	});
 	let stage = "loading the page";
 	const capture = async (): Promise<RenderCheckResult> => {
+		await proxyPartition(contents.session);
 		await contents.loadURL(url);
 		stage = "settling";
 		await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
@@ -122,6 +160,7 @@ export async function checkRender(
 	} finally {
 		clearTimeout(deadline);
 		if (onAbort) signal?.removeEventListener("abort", onAbort);
+		release();
 		window.destroy();
 	}
 }

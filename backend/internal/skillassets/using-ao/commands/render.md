@@ -30,7 +30,9 @@ Run `ao render --check <file>` first. It loads the page in the AO desktop app
 the way readers see it and writes a PNG. It prints the page's content height
 and its console messages. Read the PNG. Fix every `console.error` line. Use the
 content height as `--height`. Use `--width 390` to check a phone layout. The
-check needs the desktop app. Without it, publish without a check.
+check loads only public addresses. A request to this computer or to your local
+network fails. The check needs the desktop app. Without it, publish without a
+check.
 
 ## ao render or the Browser panel
 
