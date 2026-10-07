@@ -1,15 +1,8 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
-import {
-	agentModelsQueryKey,
-	agentModelsQueryOptions,
-	refreshAgentModels,
-	revalidateAgentModels,
-	type AgentModelCatalog,
-} from "../hooks/useAgentModelsQuery";
+import { useAgentModels } from "../hooks/useAgentModelsQuery";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 
@@ -39,41 +32,16 @@ export function AgentModelPicker({
 	onWarningChange,
 }: AgentModelPickerProps) {
 	const { t } = useTranslation();
-	const queryClient = useQueryClient();
-	const query = useQuery(agentModelsQueryOptions(agentId, projectId, hostId));
-	const catalog: AgentModelCatalog | undefined = query.data;
-	const revalidationQuery = useQuery({
-		queryKey: hostId
-			? ["agent-model-revalidation", hostId, agentId, projectId, catalog?.validatedAt ?? ""]
-			: ["agent-model-revalidation", agentId, projectId, catalog?.validatedAt ?? ""],
-		queryFn: () => revalidateAgentModels(agentId, projectId, hostId),
-		enabled: agentId !== "" && catalog?.refreshRecommended === true,
-		staleTime: Number.POSITIVE_INFINITY,
-		retry: false,
-	});
-	useEffect(() => {
-		if (revalidationQuery.data) {
-			queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), revalidationQuery.data);
-		}
-	}, [agentId, hostId, projectId, queryClient, revalidationQuery.data]);
-	const warning =
-		(revalidationQuery.isError
-			? revalidationQuery.error instanceof Error
-				? revalidationQuery.error.message
-				: t("settings.models.validateFailed")
-			: undefined) ??
-		catalog?.warning ??
-		(query.isError ? (query.error instanceof Error ? query.error.message : t("settings.models.loadFailed")) : undefined);
+	const query = useAgentModels(agentId, projectId, hostId);
+	const catalog = query.data;
+	const warning = query.warning;
 	useEffect(() => {
 		onWarningChange(warning);
 	}, [onWarningChange, warning]);
 	useEffect(() => () => onWarningChange(undefined), [onWarningChange]);
 
 	const catalogLoading = agentId !== "" && query.isFetching && catalog === undefined;
-	const refreshCatalog = async () => {
-		const refreshed = await refreshAgentModels(agentId, projectId, hostId);
-		queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), refreshed);
-	};
+	const refreshCatalog = query.refresh;
 
 	if (catalogLoading) {
 		return (

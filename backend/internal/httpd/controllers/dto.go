@@ -2529,8 +2529,10 @@ type ActivateConversationBranchResponse struct {
 
 // ConversationModelsResponse is the provider's model catalog plus what is selected.
 type ConversationModelsResponse struct {
-	Models   []ConversationModelResponse     `json:"models"`
-	Selected ConversationTurnSettingsPayload `json:"selected"`
+	ModelCatalog          *ports.AgentModelCatalog        `json:"modelCatalog,omitempty"`
+	ModelCatalogProjectID string                          `json:"modelCatalogProjectId,omitempty"`
+	Models                []ConversationModelResponse     `json:"models"`
+	Selected              ConversationTurnSettingsPayload `json:"selected"`
 }
 
 // ConversationConfigOptionsResponse is the provider's complete live session

@@ -126,12 +126,14 @@ func (c *ConversationsController) reviewModels(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
-	models, selected, err := svc.ModelsForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")))
+	models, selected, catalog, projectID, err := modelsWithCatalog(r.Context(), svc, domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")))
 	if err != nil && !errors.Is(err, chatsvc.ErrModelsUnsupported) {
 		writeConversationError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, conversationModelsResponse(models, selected))
+	response := conversationModelsResponse(models, selected)
+	response.ModelCatalog, response.ModelCatalogProjectID = catalog, projectID
+	envelope.WriteJSON(w, http.StatusOK, response)
 }
 
 func (c *ConversationsController) reviewSetSettings(w http.ResponseWriter, r *http.Request) {
@@ -587,7 +589,7 @@ func (c *ConversationsController) models(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	session := domain.SessionID(chi.URLParam(r, "sessionId"))
-	models, selected, err := c.Svc.Models(r.Context(), session)
+	models, selected, catalog, projectID, err := modelsWithCatalog(r.Context(), c.Svc, domain.SessionConversationOwner(session))
 	if err != nil {
 		if errors.Is(err, chatsvc.ErrModelsUnsupported) {
 			// Not a failure: this agent simply offers no choice. An empty list with
@@ -602,7 +604,9 @@ func (c *ConversationsController) models(w http.ResponseWriter, r *http.Request)
 		writeConversationError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, conversationModelsResponse(models, selected))
+	response := conversationModelsResponse(models, selected)
+	response.ModelCatalog, response.ModelCatalogProjectID = catalog, projectID
+	envelope.WriteJSON(w, http.StatusOK, response)
 }
 
 // setSettings records the provider choices for the next turn.
@@ -637,6 +641,25 @@ func (c *ConversationsController) setSettings(w http.ResponseWriter, r *http.Req
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, turnSettingsPayload(settings))
+}
+
+func modelsWithCatalog(ctx context.Context, service any, owner domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, *ports.AgentModelCatalog, string, error) {
+	if svc, ok := service.(interface {
+		ModelsWithCatalog(context.Context, domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, *ports.AgentModelCatalog, string, error)
+	}); ok {
+		return svc.ModelsWithCatalog(ctx, owner)
+	}
+	if svc, ok := service.(interface {
+		Models(context.Context, domain.SessionID) ([]ports.ChatModel, domain.ConversationSettings, error)
+	}); ok && owner.Kind == domain.ConversationOwnerSession {
+		models, settings, err := svc.Models(ctx, domain.SessionID(owner.ID))
+		return models, settings, nil, "", err
+	}
+	if svc, ok := service.(reviewerConversationService); ok {
+		models, settings, err := svc.ModelsForOwner(ctx, owner)
+		return models, settings, nil, "", err
+	}
+	return nil, domain.ConversationSettings{}, nil, "", chatsvc.ErrModelsUnsupported
 }
 
 func conversationModelsResponse(

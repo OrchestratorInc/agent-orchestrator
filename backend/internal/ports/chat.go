@@ -483,6 +483,16 @@ type ChatModelLister interface {
 	ListModels(ctx context.Context) ([]ChatModel, error)
 }
 
+// ChatModelDefaults overlays owner-local defaults without rediscovering a catalog.
+type ChatModelDefaults interface {
+	ApplyModelDefaults([]ChatModel) []ChatModel
+}
+
+// ChatModelCatalogReader admits only launch contexts equivalent to its catalog scope.
+type ChatModelCatalogReader interface {
+	ModelsForContext(context.Context, string, AgentModelDiscoveryRequest) (AgentModelCatalog, bool, error)
+}
+
 // ChatConfigOptionType is the interaction an advertised provider setting needs.
 // ACP currently standardizes selects and is incubating booleans; keeping both in
 // AO's vocabulary prevents protocol DTOs from leaking out of the adapter.

@@ -3135,6 +3135,7 @@ export interface components {
         };
         AgentModelInfo: {
             defaultEffort?: string;
+            description?: string;
             efforts?: string[];
             id: string;
             isDefault?: boolean;
@@ -3789,6 +3790,8 @@ export interface components {
             id: string;
         };
         ConversationModelsResponse: {
+            modelCatalog?: components["schemas"]["AgentModelsResponse"];
+            modelCatalogProjectId?: string;
             models: components["schemas"]["ConversationModelResponse"][];
             selected: components["schemas"]["ConversationTurnSettingsPayload"];
         };

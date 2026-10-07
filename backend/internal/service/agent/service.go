@@ -241,7 +241,17 @@ func (s *Service) prefetchModelCatalogs(ctx context.Context, force bool) {
 	for _, record := range latest {
 		records = append(records, record)
 	}
+	priority := map[string]int{"claude-code": 0, "codex": 1, "cursor": 2, "opencode": 3, "opencode-v2": 4, "aider": 5}
+	rank := func(id string) int {
+		if value, ok := priority[id]; ok {
+			return value
+		}
+		return len(priority)
+	}
 	sort.SliceStable(records, func(i, j int) bool {
+		if rank(records[i].AgentID) != rank(records[j].AgentID) {
+			return rank(records[i].AgentID) < rank(records[j].AgentID)
+		}
 		if records[i].ProjectID == records[j].ProjectID {
 			return records[i].AgentID < records[j].AgentID
 		}
@@ -319,10 +329,59 @@ func (s *Service) monitorModelCatalogFreshness(ctx context.Context) {
 	}
 }
 
-// Models returns one normalized model catalog, stamped with when this user last
-// ran each model. Cached values survive daemon restarts; refresh forces a new
-// documented CLI discovery attempt. Discovery failures degrade to the last
-// cached catalog or a custom model input.
+// ModelsForContext shares discovery only when project and live launch inputs agree.
+func (s *Service) ModelsForContext(ctx context.Context, projectID string, live ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, bool, error) {
+	agentID := live.AgentID
+	scope, err := s.modelCatalogScope(ctx, projectID)
+	if err != nil {
+		return ports.AgentModelCatalog{}, false, err
+	}
+	if scope != projectID || s.discoverer == nil {
+		return ports.AgentModelCatalog{}, false, nil
+	}
+	binary, err := s.ResolveAgentBinary(ctx, agentID)
+	if err != nil {
+		return ports.AgentModelCatalog{}, false, err
+	}
+	if live.Binary != "" && live.Binary != binary {
+		return ports.AgentModelCatalog{}, false, nil
+	}
+	live.Binary = binary
+	request, err := s.modelDiscoveryRequest(ctx, agentID, projectID, binary)
+	if err != nil {
+		return ports.AgentModelCatalog{}, false, err
+	}
+	// Hook routing, pinned PATH, and terminal appearance are launch plumbing. Every other
+	// override must match; otherwise account or provider config may differ.
+	for key, value := range live.Env {
+		if strings.HasPrefix(key, "AO_") || key == "PATH" || key == "TERM_THEME" || key == "COLORFGBG" {
+			continue
+		}
+		if expected, ok := request.Env[key]; ok {
+			if expected != value {
+				return ports.AgentModelCatalog{}, false, nil
+			}
+		} else if os.Getenv(key) != value {
+			return ports.AgentModelCatalog{}, false, nil
+		}
+	}
+	for key, value := range request.Env {
+		if strings.HasPrefix(key, "AO_") || key == "PATH" || key == "TERM_THEME" || key == "COLORFGBG" {
+			continue
+		}
+		if actual, ok := live.Env[key]; !ok || actual != value {
+			return ports.AgentModelCatalog{}, false, nil
+		}
+	}
+	if s.discoverer.CatalogFingerprint(ctx, request) != s.discoverer.CatalogFingerprint(ctx, live) {
+		return ports.AgentModelCatalog{}, false, nil
+	}
+	catalog, err := s.Models(ctx, agentID, projectID, false)
+	return catalog, true, err
+}
+
+// Models returns one normalized catalog with derived usage. Durable cached
+// values survive daemon restarts; explicit refresh forces CLI discovery.
 func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
 	catalog, err := s.modelCatalog(ctx, agentID, projectID, refresh)
 	if err != nil {

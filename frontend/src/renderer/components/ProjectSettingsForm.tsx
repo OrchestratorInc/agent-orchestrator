@@ -12,7 +12,7 @@ import type { TFunction } from "i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Info, Pencil } from "lucide-react";
 import type { components } from "../../api/schema";
-import { agentModelsQueryKey, agentModelsQueryOptions, refreshAgentModels, revalidateAgentModels, type AgentModelCatalog } from "../hooks/useAgentModelsQuery";
+import { useAgentModels, type AgentModelCatalog } from "../hooks/useAgentModelsQuery";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { useRemoteProjectQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
@@ -847,27 +847,11 @@ function AgentModelField({
 	onValidityChange: (valid: boolean) => void;
 }) {
 	const { t } = useTranslation();
-	const queryClient = useQueryClient();
-	const query = useQuery(agentModelsQueryOptions(agentId, projectId, hostId));
+	const query = useAgentModels(agentId, projectId, hostId);
 	const catalog: AgentModelCatalog | undefined = query.data;
-	const revalidationQuery = useQuery({
-		queryKey: ["agent-model-revalidation", hostId ?? LOCAL_HOST, agentId, projectId, catalog?.validatedAt ?? ""],
-		queryFn: () => revalidateAgentModels(agentId, projectId, hostId),
-		enabled: agentId !== "" && catalog?.refreshRecommended === true,
-		staleTime: Number.POSITIVE_INFINITY,
-		retry: false,
-	});
-	useEffect(() => {
-		if (revalidationQuery.data) {
-			queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), revalidationQuery.data);
-		}
-	}, [agentId, hostId, projectId, queryClient, revalidationQuery.data]);
 	const isMode = catalog?.selectionMode === "mode";
 	const label = t(`settings.models.${role}${isMode ? "Mode" : "Model"}`);
-	const warning =
-		(revalidationQuery.isError ? (revalidationQuery.error instanceof Error ? revalidationQuery.error.message : t("settings.models.validateFailed")) : undefined) ??
-		catalog?.warning ??
-		(query.isError ? (query.error instanceof Error ? query.error.message : t("settings.models.loadFailed")) : undefined);
+	const warning = query.warning;
 
 	if (agentId !== "" && query.isFetching && catalog === undefined) {
 		return (
@@ -911,10 +895,7 @@ function AgentModelField({
 	}
 
 	const customModelEntry = catalog?.customModelEntry ?? (catalog?.allowCustom ? "direct" : "none");
-	const refreshCatalog = async () => {
-		const refreshed = await refreshAgentModels(agentId, projectId, hostId);
-		queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), refreshed);
-	};
+	const refreshCatalog = query.refresh;
 	const selectCatalogModel = (value: string) => {
 		onModelChange(value);
 		onModeChange("");

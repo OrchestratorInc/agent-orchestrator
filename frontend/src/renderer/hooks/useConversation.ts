@@ -21,6 +21,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import type { components } from "../../api/schema";
+import { useAgentModels, agentModelsQueryKey, type AgentModelCatalog } from "./useAgentModelsQuery";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
@@ -1192,37 +1193,67 @@ function editNonAcceptance(error: unknown): ChatEditOutcome | undefined {
 	return { status: "not-accepted", reason: apiErrorMessage(error) };
 }
 
-/**
- * The models the provider offers for this session.
- *
- * Fetched from the live conversation rather than a table in AO, and only while a
- * session is open: the catalog depends on the account's entitlements, which the
- * provider knows and AO does not.
- */
-export function useConversationModels(sessionId: string | undefined, enabled: boolean, hostId?: string) {
+type ConversationModelsResponse = components["schemas"]["ConversationModelsResponse"];
+
+const newerCatalog = (current: AgentModelCatalog | undefined, incoming: AgentModelCatalog) => {
+	const timestamp = (catalog: AgentModelCatalog) => Date.parse(catalog.validatedAt || catalog.fetchedAt || "") || 0;
+	return current && timestamp(current) > timestamp(incoming) ? current : incoming;
+};
+
+// Only the owner endpoint can admit a live controller to a canonical scope.
+export function useConversationModelCatalog(
+	response: ConversationModelsResponse | undefined,
+	enabled: boolean,
+	hostId?: string,
+) {
+	const queryClient = useQueryClient();
+	const admitted = enabled ? response?.modelCatalog : undefined;
+	const projectId = response?.modelCatalogProjectId ?? "";
+	useEffect(() => {
+		if (admitted)
+			queryClient.setQueryData<AgentModelCatalog>(
+				agentModelsQueryKey(admitted.agentId, projectId, hostId),
+				(current) => newerCatalog(current, admitted),
+			);
+	}, [admitted, projectId, hostId, queryClient]);
+	const catalog = useAgentModels(admitted?.agentId ?? "", projectId, hostId);
+	const ownerModels = response?.models ?? [];
+	if (!admitted) return ownerModels as ChatModel[];
+	const defaults = new Map(ownerModels.map((model) => [model.id, model]));
+	return newerCatalog(catalog.data, admitted).models.map((model) => ({
+		id: model.id,
+		displayName: model.label,
+		description: model.description,
+		efforts: model.efforts,
+		default: defaults.get(model.id)?.default ?? false,
+		defaultEffort: defaults.get(model.id)?.defaultEffort ?? model.defaultEffort,
+	}));
+}
+
+export function useConversationModels(
+	sessionId: string | undefined,
+	enabled: boolean,
+	hostId?: string,
+) {
 	const query = useQuery({
 		queryKey: conversationModelsQueryKey(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId) && enabled,
-		// The catalog changes on the scale of provider releases, not turns.
 		staleTime: 5 * 60 * 1000,
 		retry: false,
-		queryFn: async () => {
+		queryFn: async ({ signal }) => {
 			const { data, error } = await clientForSessionHost(hostId).GET(
 				"/api/v1/sessions/{sessionId}/conversation/models",
 				{
+					signal,
 					params: { path: { sessionId: sessionId as string } },
 				},
 			);
 			if (error) throw error;
-			return (data?.models ?? []) as ChatModel[];
+			return data as ConversationModelsResponse;
 		},
 	});
-	return {
-		// An empty list is a real answer: this agent offers no choice, so the picker
-		// hides itself rather than showing an error the user cannot act on.
-		models: query.data ?? [],
-		isLoading: query.isLoading,
-	};
+	const models = useConversationModelCatalog(query.data, enabled, hostId);
+	return { models, isLoading: query.isLoading };
 }
 
 /**

@@ -9449,6 +9449,8 @@ components:
       properties:
         defaultEffort:
           type: string
+        description:
+          type: string
         efforts:
           items:
             type: string
@@ -11260,6 +11262,10 @@ components:
       type: object
     ConversationModelsResponse:
       properties:
+        modelCatalog:
+          $ref: '#/components/schemas/AgentModelsResponse'
+        modelCatalogProjectId:
+          type: string
         models:
           items:
             $ref: '#/components/schemas/ConversationModelResponse'

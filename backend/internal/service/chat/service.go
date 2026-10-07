@@ -36,6 +36,7 @@ type SessionReader interface {
 
 // Service owns the live Chat controllers.
 type Service struct {
+	modelCatalog           ports.ChatModelCatalogReader
 	store                  Store
 	reader                 SnapshotReader
 	pageReader             SnapshotPageReader
@@ -62,6 +63,9 @@ type Service struct {
 	probeMu          sync.Mutex
 	probed           map[domain.AgentHarness]ports.ChatCapabilities
 }
+
+// SetModelCatalog installs the shared cache after daemon composition.
+func (s *Service) SetModelCatalog(reader ports.ChatModelCatalogReader) { s.modelCatalog = reader }
 
 // SetReportCoordinator installs the report piggyback hook after daemon wiring
 // has constructed both services.
@@ -96,11 +100,12 @@ func (g controllerGate) unlock() { <-g }
 // Options configures a Service. The id factory and clock are injected so tests
 // are deterministic.
 type Options struct {
-	Store      Store
-	Reader     SnapshotReader
-	PageReader SnapshotPageReader
-	Sessions   SessionReader
-	Drivers    ports.ChatDriverRegistry
+	ModelCatalog ports.ChatModelCatalogReader
+	Store        Store
+	Reader       SnapshotReader
+	PageReader   SnapshotPageReader
+	Sessions     SessionReader
+	Drivers      ports.ChatDriverRegistry
 	// Activity feeds derived session status from turn events. Nil leaves a chat
 	// session reading as idle while it works, so production always wires it.
 	Activity ActivityRecorder
@@ -133,6 +138,7 @@ func New(opts Options) *Service {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Service{
+		modelCatalog:           opts.ModelCatalog,
 		store:                  opts.Store,
 		reader:                 opts.Reader,
 		pageReader:             opts.PageReader,
@@ -1839,31 +1845,54 @@ var ErrModelsUnsupported = errors.New("chat driver cannot list models")
 var ErrConfigOptionsUnsupported = errors.New("chat driver has no session config options")
 
 // Models reports what the provider offers for this session, plus what is selected.
-//
-// Read from the live conversation rather than a table in AO: models are added,
-// renamed, hidden per account and gated by entitlement the provider knows about.
 func (s *Service) Models(ctx context.Context, id domain.SessionID) ([]ports.ChatModel, domain.ConversationSettings, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return nil, domain.ConversationSettings{}, err
-	}
 	return s.ModelsForOwner(ctx, domain.SessionConversationOwner(id))
 }
 
 // ModelsForOwner reads the catalog from the owner-specific provider.
 func (s *Service) ModelsForOwner(ctx context.Context, owner domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error) {
+	models, settings, _, _, err := s.ModelsWithCatalog(ctx, owner)
+	return models, settings, err
+}
+
+// ModelsWithCatalog carries an admitted canonical catalog separately from thread defaults.
+func (s *Service) ModelsWithCatalog(ctx context.Context, owner domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, *ports.AgentModelCatalog, string, error) {
+	if owner.Kind == domain.ConversationOwnerSession {
+		if _, err := s.requireChatSession(ctx, domain.SessionID(owner.ID)); err != nil {
+			return nil, domain.ConversationSettings{}, nil, "", err
+		}
+	}
 	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
-		return nil, domain.ConversationSettings{}, err
+		return nil, domain.ConversationSettings{}, nil, "", err
 	}
 	lister, ok := controller.conv.(ports.ChatModelLister)
 	if !ok {
-		return nil, controller.Settings(), ErrModelsUnsupported
+		return nil, controller.Settings(), nil, "", ErrModelsUnsupported
+	}
+	if s.modelCatalog != nil {
+		s.mu.RLock()
+		cfg, known := s.startConfigs[owner]
+		s.mu.RUnlock()
+		if known && cfg.Harness == controller.harness {
+			catalog, equivalent, readErr := s.modelCatalog.ModelsForContext(ctx, string(cfg.ProjectID), ports.AgentModelDiscoveryRequest{AgentID: string(controller.harness), WorkingDir: cfg.WorkspacePath, Env: cfg.Env})
+			if readErr == nil && equivalent {
+				models := make([]ports.ChatModel, 0, len(catalog.Models))
+				for _, item := range catalog.Models {
+					models = append(models, ports.ChatModel{ID: item.ID, DisplayName: item.Label, Description: item.Description, Default: item.IsDefault, Efforts: append([]string(nil), item.Efforts...), DefaultEffort: item.DefaultEffort})
+				}
+				if defaults, ok := controller.conv.(ports.ChatModelDefaults); ok {
+					models = defaults.ApplyModelDefaults(models)
+				}
+				return models, controller.Settings(), &catalog, string(cfg.ProjectID), nil
+			}
+		}
 	}
 	models, err := lister.ListModels(ctx)
 	if err != nil {
-		return nil, controller.Settings(), err
+		return nil, controller.Settings(), nil, "", err
 	}
-	return models, controller.Settings(), nil
+	return models, controller.Settings(), nil, "", nil
 }
 
 // ConfigOptions reports the provider's live session controls. Unlike AO's

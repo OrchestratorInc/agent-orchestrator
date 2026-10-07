@@ -548,7 +548,7 @@ func discoverCodexCatalog(ctx context.Context, request ports.AgentModelDiscovery
 			provider = prefix
 		}
 		normalized = append(normalized, ports.AgentModelInfo{
-			ID: id, Label: label, Provider: provider, IsDefault: item.Default,
+			ID: id, Label: label, Provider: provider, IsDefault: item.Default, Description: item.Description,
 			Efforts: append([]string(nil), item.Efforts...), DefaultEffort: item.DefaultEffort,
 		})
 	}
@@ -801,6 +801,9 @@ func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string,
 // discoveryConfigInputs returns the configuration an agent's discovery consults,
 // or "" when the catalog depends on the binary alone.
 func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env map[string]string) string {
+	if agentID == "codex" {
+		return "config=" + fingerprintConfigPaths(codexConfigPaths(workingDir, env))
+	}
 	if agentID == "unreal-agent" {
 		provider, selected := unrealConfiguredModel(env)
 		return "provider=" + provider + ";model=" + selected

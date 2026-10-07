@@ -29,6 +29,10 @@ import { SidebarProvider } from "../components/ui/sidebar";
 import { TitlebarNav } from "../components/TitlebarNav";
 import { WindowTitlebar } from "../components/WindowTitlebar";
 import { TerminalCacheProvider } from "../components/TerminalPane";
+import { useProviderConnections } from "../hooks/useProviderConnections";
+import { connectedCredentialType, credentialModelScope, cloudAgentInfos } from "../lib/cloud-agents";
+import { useAgentReadinessQuery } from "../hooks/useAgentReadinessQuery";
+import { DEFAULT_AGENT_PRIORITY_RANK } from "../lib/agent-select-options";
 import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
 import { useDaemonStatus } from "../hooks/useDaemonStatus";
 import { useOpenShellTerminal } from "../hooks/useShellTerminals";
@@ -353,32 +357,81 @@ function ShellLayout() {
 				: null,
 		);
 	}, [routeParams.hostId, scopedSession?.id, scopedSession?.kind]);
-	// Warms the New Task composer's model-catalog cache while the user is just
-	// looking at the project, so the picker never shows a loading flash the
-	// first time they actually open the dialog.
+	const modelsHostId = routeParams.hostId;
+	const modelsProjectCandidate =
+		routeParams.projectId ??
+		(routeParams.sessionId
+			? (modelsHostId
+					? remoteWorkspaces.filter(
+							(workspace) => workspace.hostId === modelsHostId,
+						)
+					: workspaces
+				).find((workspace) =>
+					workspace.sessions.some(
+						(session) => session.id === routeParams.sessionId,
+					),
+				)?.id
+			: undefined) ??
+		"";
+	const modelsCloudProject =
+		!modelsHostId &&
+		workspaces.find((workspace) => workspace.id === modelsProjectCandidate)
+			?.kind === "cloud";
+	const modelsProjectId = modelsCloudProject ? "" : modelsProjectCandidate;
+	const modelConnections = useProviderConnections();
 	useEffect(() => {
-		if (!scopedProjectId) return;
-		const projectQueryKey = ["project", scopedProjectId];
-		void queryClient
-			.prefetchQuery({
-				queryKey: projectQueryKey,
-				queryFn: async () => {
-					const { data, error: apiError } = await apiClient.GET("/api/v1/projects/{id}", {
-						params: { path: { id: scopedProjectId } },
-					});
-					if (apiError) throw new Error(apiErrorMessage(apiError));
-					if (data?.status !== "ok") throw new Error("Project config unavailable");
-					return data.project as components["schemas"]["Project"];
-				},
-			})
-			.then(() => {
-				const project = queryClient.getQueryData<components["schemas"]["Project"]>(projectQueryKey);
-				const defaultWorkerAgent = project?.config?.worker?.agent || project?.agent || "";
-				if (defaultWorkerAgent) {
-					void queryClient.prefetchQuery(agentModelsQueryOptions(defaultWorkerAgent, scopedProjectId));
-				}
+		for (const agent of cloudAgentInfos(modelConnections.data).filter(
+			(agent) => agent.effectiveReadiness === "ready",
+		)) {
+			const credential =
+				agent.id === "opencode"
+					? connectedCredentialType(modelConnections.data, agent.id)
+					: "";
+			void queryClient.prefetchQuery(
+				agentModelsQueryOptions(
+					agent.id,
+					credential ? credentialModelScope(credential) : "",
+				),
+			);
+		}
+	}, [modelConnections.data, queryClient]);
+	const modelsReadiness = useAgentReadinessQuery(true, modelsHostId);
+	useEffect(() => {
+		const installed =
+			modelsReadiness.data?.agents.filter(
+				(agent) => agent.installation.state === "installed",
+			) ?? [];
+		installed.sort(
+			(a, b) =>
+				(DEFAULT_AGENT_PRIORITY_RANK.get(a.id) ?? 99) -
+				(DEFAULT_AGENT_PRIORITY_RANK.get(b.id) ?? 99),
+		);
+		for (const agent of installed) {
+			void queryClient.prefetchQuery(
+				agentModelsQueryOptions(agent.id, "", modelsHostId),
+			);
+			if (modelsProjectId)
+				void queryClient.prefetchQuery(
+					agentModelsQueryOptions(agent.id, modelsProjectId, modelsHostId),
+				);
+		}
+	}, [modelsReadiness.data, modelsProjectId, modelsHostId, queryClient]);
+	useEffect(() => {
+		if (!modelsProjectId) return;
+		void (async () => {
+			const { data } = await (
+				modelsHostId ? clientForHost(modelsHostId) : apiClient
+			).GET("/api/v1/projects/{id}", {
+				params: { path: { id: modelsProjectId } },
 			});
-	}, [queryClient, scopedProjectId]);
+			const preferred =
+				data?.project?.config?.worker?.agent || data?.project?.agent;
+			if (preferred)
+				await queryClient.prefetchQuery(
+					agentModelsQueryOptions(preferred, modelsProjectId, modelsHostId),
+				);
+		})().catch(() => undefined);
+	}, [modelsProjectId, modelsHostId, queryClient]);
 	// The root route is the intentionally minimal home surface, regardless of
 	// whether projects have already been registered.
 	const isHomeRoute = Boolean(matchRoute({ to: "/" }));

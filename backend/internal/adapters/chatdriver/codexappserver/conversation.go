@@ -394,6 +394,11 @@ func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error
 	if err != nil {
 		return nil, err
 	}
+	return c.ApplyModelDefaults(models), nil
+}
+
+func (c *conversation) ApplyModelDefaults(models []ports.ChatModel) []ports.ChatModel {
+	models = append([]ports.ChatModel(nil), models...)
 	// Thread settings include the user's config; model/list only has generic defaults.
 	for i := range models {
 		// An omitted turn model inherits thread/start (including config.toml),
@@ -406,7 +411,7 @@ func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error
 			models[i].DefaultEffort = c.threadEffort
 		}
 	}
-	return models, nil
+	return models
 }
 
 func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error) {

@@ -37,12 +37,7 @@ import {
 } from "../lib/agent-select-options";
 import { resolveSandboxProviderPreference, useSandboxProviderStore } from "../stores/sandbox-provider-store";
 import { cloudSessionsQueryKey, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
-import {
-	agentModelsQueryKey,
-	agentModelsQueryOptions,
-	refreshAgentModels,
-	revalidateAgentModels,
-} from "../hooks/useAgentModelsQuery";
+import { useAgentModels } from "../hooks/useAgentModelsQuery";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { EffortPicker, type EffortAvailability } from "./settings/EffortPicker";
@@ -409,40 +404,8 @@ export function TaskComposer({
 		? defaultWorkerMode
 		: "";
 	// Shares the picker's query key, so this is the same fetch, not a second one.
-	const modelCatalogQuery = useQuery(agentModelsQueryOptions(selectedAgent, modelsProjectId, hostId));
-	const revalidationQuery = useQuery({
-		queryKey: [
-			"agent-model-revalidation",
-			hostId ?? "",
-			selectedAgent,
-			modelsProjectId,
-			modelCatalogQuery.data?.validatedAt ?? "",
-		],
-		queryFn: () => revalidateAgentModels(selectedAgent, modelsProjectId, hostId),
-		enabled: selectedAgent !== "" && modelCatalogQuery.data?.refreshRecommended === true,
-		staleTime: Number.POSITIVE_INFINITY,
-		retry: false,
-	});
-	useEffect(() => {
-		if (revalidationQuery.data) {
-			queryClient.setQueryData(
-				agentModelsQueryKey(selectedAgent, modelsProjectId, hostId),
-				revalidationQuery.data,
-			);
-		}
-	}, [hostId, modelsProjectId, queryClient, revalidationQuery.data, selectedAgent]);
-	const modelWarning =
-		(revalidationQuery.isError
-			? revalidationQuery.error instanceof Error
-				? revalidationQuery.error.message
-				: t("settings.models.validateFailed")
-			: undefined) ??
-		modelCatalogQuery.data?.warning ??
-		(modelCatalogQuery.isError
-			? modelCatalogQuery.error instanceof Error
-				? modelCatalogQuery.error.message
-				: t("settings.models.loadFailed")
-			: undefined);
+	const modelCatalogQuery = useAgentModels(selectedAgent, modelsProjectId, hostId);
+	const modelWarning = modelCatalogQuery.warning;
 	const modelCatalog: TaskComposerModelCatalog | undefined = modelCatalogQuery.data
 		? {
 				allowCustom: modelCatalogQuery.data.allowCustom,
@@ -549,10 +512,7 @@ export function TaskComposer({
 	const remoteLoadError = !hostId ? undefined : !hostConnected ? t("remote.hostOffline") :
 		[projectQuery.error, agentsQuery.error].find((cause): cause is Error => cause instanceof Error)?.message ?? settingsError ??
 			(agentsQuery.isSuccess && !agentCatalog?.agents.some(isLaunchableAgent) ? t("remote.noReadyAgent") : undefined);
-	const refreshSelectedModels = useCallback(async () => {
-		const refreshed = await refreshAgentModels(selectedAgent, modelsProjectId, hostId);
-		queryClient.setQueryData(agentModelsQueryKey(selectedAgent, modelsProjectId, hostId), refreshed);
-	}, [hostId, modelsProjectId, queryClient, selectedAgent]);
+	const refreshSelectedModels = modelCatalogQuery.refresh;
 	useEffect(() => {
 		if (!agentTouched) setAgent(defaultWorkerAgent);
 	}, [agentTouched, defaultWorkerAgent]);

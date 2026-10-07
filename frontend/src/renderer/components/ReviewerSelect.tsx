@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
-import { agentModelsQueryOptions, type AgentModelCatalog } from "../hooks/useAgentModelsQuery";
+import { agentModelsQueryOptions, useAgentModels, type AgentModelCatalog } from "../hooks/useAgentModelsQuery";
 import { agentLabel } from "../lib/agent-options";
 import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
 import {
@@ -112,7 +112,7 @@ export function ReviewerSelect({
 	const needsSetup = agents !== undefined && Boolean(effectiveHarness && !options.some((agent) => agent.id === effectiveHarness && isSelectable(agent)));
 	const management = useAgentManagementMenu(needsSetup ? effectiveHarness : undefined, hostId);
 	const menuProjectID = projectId ?? "";
-	const triggerCatalog = useQuery(agentModelsQueryOptions(effectiveHarness, menuProjectID, hostId));
+	const triggerCatalog = useAgentModels(effectiveHarness, menuProjectID, hostId);
 
 	useEffect(() => {
 		if (!menuOpen) return;

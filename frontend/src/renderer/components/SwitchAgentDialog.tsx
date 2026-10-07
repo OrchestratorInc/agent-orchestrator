@@ -3,7 +3,7 @@ import { LoaderCircle, Repeat2, TriangleAlert, X } from "lucide-react";
 import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
-import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
+import { useAgentModels } from "../hooks/useAgentModelsQuery";
 import {
 	agentSwitchesQueryKey,
 	agentSwitchNeedsRecovery,
@@ -226,7 +226,7 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 			return data.project as components["schemas"]["Project"];
 		},
 	});
-	const modelCatalog = useQuery(agentModelsQueryOptions(targetHarness, session.workspaceId, hostId)).data;
+	const modelCatalog = useAgentModels(targetHarness, session.workspaceId, hostId).data;
 	const projectKnown = Boolean(projectQuery.data);
 	const role = session.kind === "orchestrator" ? projectQuery.data?.config?.orchestrator : projectQuery.data?.config?.worker;
 	const roleMatches = !role?.agent || role.agent === targetHarness;

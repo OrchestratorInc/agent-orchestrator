@@ -14,6 +14,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 	"gopkg.in/yaml.v3"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -134,6 +135,23 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 	case "autohand":
 		if home != "" {
 			paths = append(paths, filepath.Join(home, ".autohand", "config.json"))
+		}
+	}
+	return paths
+}
+
+// Codex layers project configuration from cwd ancestors over its account home.
+func codexConfigPaths(workingDir string, env map[string]string) []string {
+	var paths []string
+	if home, err := nativeconfig.Resolve(env, "CODEX_HOME", ".codex"); err == nil {
+		paths = append(paths, filepath.Join(home, "config.toml"), filepath.Join(home, "auth.json"))
+	}
+	if workingDir != "" {
+		for dir := filepath.Clean(workingDir); ; dir = filepath.Dir(dir) {
+			paths = append(paths, filepath.Join(dir, ".codex", "config.toml"))
+			if filepath.Dir(dir) == dir {
+				break
+			}
 		}
 	}
 	return paths

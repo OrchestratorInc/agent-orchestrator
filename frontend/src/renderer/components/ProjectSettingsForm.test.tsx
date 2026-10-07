@@ -1162,6 +1162,7 @@ describe("ProjectSettingsForm", () => {
 		expect(await screen.findByRole("button", { name: "Worker model" })).toHaveTextContent("Select model");
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
 		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", {
+			signal: expect.any(AbortSignal),
 			params: {
 				path: { agent: "codex" },
 				query: { projectId: "proj-1", revalidate: true },

@@ -3,12 +3,12 @@ import { useCallback } from "react";
 import type { components } from "../../api/schema";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
-import { mergeConversationPages, toSnapshot, type ConversationSendInput } from "./useConversation";
+import { mergeConversationPages, toSnapshot, useConversationModelCatalog, type ConversationSendInput } from "./useConversation";
 
 import { sessionReviewsQueryKey } from "../lib/session-reviews";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
-import type { ChatModel, TurnSettings } from "../types/conversation";
+import type { TurnSettings } from "../types/conversation";
 
 type WireSnapshot = components["schemas"]["ConversationSnapshotResponse"];
 const PAGE_SIZE = 200;
@@ -52,13 +52,14 @@ export function useReviewerConversationModels(reviewId: string, enabled: boolean
 		enabled,
 		staleTime: 5 * 60 * 1000,
 		retry: false,
-		queryFn: async () => {
-			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/reviews/{reviewId}/conversation/models", { params: { path: { reviewId } } });
+		queryFn: async ({ signal }) => {
+			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/reviews/{reviewId}/conversation/models", { signal, params: { path: { reviewId } } });
 			if (error) throw error;
-			return (data?.models ?? []) as ChatModel[];
+			return data;
 		},
 	});
-	return { models: query.data ?? [], error: query.error ? apiErrorMessage(query.error) : undefined };
+	const models = useConversationModelCatalog(query.data, enabled, hostId);
+	return { models, error: query.error ? apiErrorMessage(query.error) : undefined };
 }
 
 export function useReviewerConversationCommands(reviewId: string | undefined, hostId?: string) {

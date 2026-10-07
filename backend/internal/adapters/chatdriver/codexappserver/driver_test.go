@@ -1595,3 +1595,15 @@ func TestReconnectMissingHostNeverLaunchesProvider(t *testing.T) {
 		t.Fatalf("error=%v", err)
 	}
 }
+
+func TestApplyModelDefaultsProjectsThreadSettingsWithoutMutatingCatalog(t *testing.T) {
+	catalog := []ports.ChatModel{{ID: "generic", Default: true}, {ID: "configured", DefaultEffort: "medium"}}
+	conv := &conversation{threadModel: "configured", threadEffort: "high"}
+	models := conv.ApplyModelDefaults(catalog)
+	if models[0].Default || !models[1].Default || models[1].DefaultEffort != "high" {
+		t.Fatalf("thread defaults = %+v", models)
+	}
+	if !catalog[0].Default || catalog[1].Default || catalog[1].DefaultEffort != "medium" {
+		t.Fatalf("shared catalog was mutated: %+v", catalog)
+	}
+}

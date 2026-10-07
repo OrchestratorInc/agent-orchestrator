@@ -2398,3 +2398,66 @@ func TestWarmModelCatalogsStartsAsynchronously(t *testing.T) {
 		t.Fatal("background warm did not finish")
 	}
 }
+
+type priorityModelDiscoverer struct {
+	*fakeModelDiscoverer
+	started chan string
+}
+
+func (d priorityModelDiscoverer) Discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
+	d.started <- request.AgentID
+	<-ctx.Done()
+	return ports.AgentModelCatalog{}, ctx.Err()
+}
+func TestStartupCatalogQueuePrioritizesPopularProviders(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	discoverer := priorityModelDiscoverer{successfulModelDiscoverer(), make(chan string, 4)}
+	svc := newService([]agentregistry.HarnessAgent{
+		harnessAuthAgent("aider", "Aider", ports.AgentAuthStatusAuthorized, nil),
+		harnessAuthAgent("muse", "Muse", ports.AgentAuthStatusAuthorized, nil),
+		harnessAuthAgent("codex", "Codex", ports.AgentAuthStatusAuthorized, nil),
+		harnessAuthAgent("claude-code", "Claude", ports.AgentAuthStatusAuthorized, nil),
+	}, &fakeModelCache{}, nil, discoverer)
+	done := make(chan struct{})
+	go func() { svc.prefetchModelCatalogs(ctx, false); close(done) }()
+	started := map[string]bool{}
+	for range 2 {
+		select {
+		case id := <-discoverer.started:
+			started[id] = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("warmup did not start")
+		}
+	}
+	if !started["claude-code"] || !started["codex"] {
+		t.Fatalf("first slots = %v", started)
+	}
+	select {
+	case id := <-discoverer.started:
+		t.Fatalf("third discovery escaped slot bound: %s", id)
+	default:
+	}
+	cancel()
+	<-done
+}
+func TestChatCatalogAdmissionPreservesProjectAndCredentialScope(t *testing.T) {
+	discoverer := successfulModelDiscoverer()
+	projects := &fakeProjectLookup{records: map[string]domain.ProjectRecord{"p": {ID: "p", Path: t.TempDir(), Config: domain.ProjectConfig{Env: map[string]string{"OPENAI_API_KEY": "project-secret"}}}}}
+	svc := newService([]agentregistry.HarnessAgent{harnessAuthAgent("codex", "Codex", ports.AgentAuthStatusAuthorized, nil)}, &fakeModelCache{}, projects, discoverer)
+	request := ports.AgentModelDiscoveryRequest{AgentID: "codex", WorkingDir: projects.records["p"].Path, Env: map[string]string{"OPENAI_API_KEY": "project-secret", "AO_SESSION_ID": "one", "PATH": "/ao/hooks"}}
+	if _, admitted, err := svc.ModelsForContext(context.Background(), "p", request); err != nil || !admitted {
+		t.Fatalf("matching launch admitted=%v err=%v", admitted, err)
+	}
+	calls := discoverer.discoverCalls.Load()
+	if _, admitted, err := svc.ModelsForContext(context.Background(), "p", request); err != nil || !admitted || discoverer.discoverCalls.Load() != calls {
+		t.Fatalf("cached chat rediscovered models: admitted=%v err=%v", admitted, err)
+	}
+	request.Env["OPENAI_API_KEY"] = "another-account"
+	if _, admitted, err := svc.ModelsForContext(context.Background(), "p", request); err != nil || admitted {
+		t.Fatalf("wrong account admitted=%v err=%v", admitted, err)
+	}
+	if _, admitted, err := svc.ModelsForContext(context.Background(), "unknown", request); err != nil || admitted {
+		t.Fatalf("unknown project admitted=%v err=%v", admitted, err)
+	}
+}

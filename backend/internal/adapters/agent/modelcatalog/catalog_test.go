@@ -1040,14 +1040,30 @@ func TestClaudeCatalogFingerprintUsesOnlyResolvedSettings(t *testing.T) {
 	}
 }
 
-func TestCatalogFingerprintKeepsTheExecutableOnlyValueForConfiglessAgents(t *testing.T) {
-	dir := t.TempDir()
-	writeClaudeSettings(t, dir, "opus")
-	// codex reads no configuration, so its fingerprint must stay byte-identical
-	// to the executable fingerprint earlier daemons cached under.
-	got := CatalogFingerprint(context.Background(), "codex", "codex", dir, nil)
-	if want := BinaryVersion(context.Background(), "codex"); got != want {
-		t.Fatalf("fingerprint = %q, want the executable fingerprint %q", got, want)
+func TestCodexCatalogFingerprintTracksAccountAndProjectConfiguration(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	env := map[string]string{"CODEX_HOME": home}
+	fingerprint := func() string { return CatalogFingerprint(context.Background(), "codex", "codex", project, env) }
+	initial := fingerprint()
+	writeClaudeSettings(t, project, "opus")
+	if fingerprint() != initial {
+		t.Fatal("another harness configuration changed Codex fingerprint")
+	}
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"token":"private-account"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	account := fingerprint()
+	if account == initial || strings.Contains(account, "private-account") {
+		t.Fatal("account fingerprint did not safely change")
+	}
+	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".codex", "config.toml"), []byte(`model_provider = "another"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if fingerprint() == account {
+		t.Fatal("project configuration did not change fingerprint")
 	}
 }
 

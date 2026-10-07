@@ -36,8 +36,16 @@ vi.mock("../hooks/useAgentModelsQuery", () => ({
 		}),
 		enabled: agentId !== "",
 	}),
-	refreshAgentModels: vi.fn(),
-	revalidateAgentModels: vi.fn(),
+	useAgentModels: () => ({
+		data: {
+			models: [{ id: "gpt-5", label: "GPT-5", isDefault: true }],
+			allowCustom: false,
+			customModelEntry: "none",
+			selectionMode: "catalog",
+		},
+		isFetching: false,
+		refresh: vi.fn(),
+	}),
 }));
 vi.mock("../hooks/useAutomations", () => ({
 	useAutomations: () => ({ data: mocks.automations, isLoading: false, error: null }),

@@ -207,10 +207,11 @@ const (
 
 // AgentModelInfo is one model or mode that an adapter reports as selectable.
 type AgentModelInfo struct {
-	ID        string `json:"id"`
-	Label     string `json:"label"`
-	Provider  string `json:"provider,omitempty"`
-	IsDefault bool   `json:"isDefault,omitempty"`
+	Description string `json:"description,omitempty"`
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Provider    string `json:"provider,omitempty"`
+	IsDefault   bool   `json:"isDefault,omitempty"`
 	// Efforts are the reasoning levels this specific model accepts, in the
 	// provider's own ascending order. Empty means the model takes no effort
 	// setting, which is a real answer rather than a missing one — Sonnet 4.5

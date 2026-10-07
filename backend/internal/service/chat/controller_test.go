@@ -7057,3 +7057,56 @@ func TestReservedBoundaryAdoptsSuccessorHandleWithoutRewritingHistory(t *testing
 		t.Fatalf("ancestor branch = %+v, want the recorded handle untouched", keptSource)
 	}
 }
+
+type cachedModelReader struct {
+	catalog ports.AgentModelCatalog
+	project string
+	request ports.AgentModelDiscoveryRequest
+}
+
+func (r *cachedModelReader) ModelsForContext(_ context.Context, project string, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, bool, error) {
+	r.project, r.request = project, request
+	return r.catalog, true, nil
+}
+
+type cachedModelConversation struct{ *fakeConversation }
+
+func (c cachedModelConversation) ListModels(context.Context) ([]ports.ChatModel, error) {
+	panic("shared catalog must not trigger live discovery")
+}
+func (c cachedModelConversation) ApplyModelDefaults(models []ports.ChatModel) []ports.ChatModel {
+	for i := range models {
+		models[i].Default = models[i].ID == "thread-model"
+		models[i].DefaultEffort = "high"
+	}
+	return models
+}
+func TestOwnerModelsUseSharedCatalogAndKeepThreadDefaultsSeparate(t *testing.T) {
+	st, ctx := openStore(t), context.Background()
+	now := time.Now().UTC()
+	if err := st.UpsertReview(ctx, domain.Review{ID: "cached-review", SessionID: testSession, ProjectID: testProject, Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	reader := &cachedModelReader{catalog: ports.AgentModelCatalog{AgentID: "codex", Models: []ports.AgentModelInfo{{ID: "generic", Label: "Generic", IsDefault: true}, {ID: "thread-model", Label: "Thread", Description: "description", Efforts: []string{"high"}}}}}
+	var ids atomic.Uint64
+	svc := chatsvc.New(chatsvc.Options{Store: st, Sessions: st, Drivers: fakeRegistry{driver: fakeDriver{conv: cachedModelConversation{newFakeConversation()}}}, ModelCatalog: reader, NewID: func() string { return fmt.Sprintf("cached-%d", ids.Add(1)) }})
+	owner := domain.ReviewConversationOwner("cached-review")
+	t.Cleanup(func() { _ = svc.StopForOwner(ctx, owner) })
+	workspace := t.TempDir()
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{Owner: owner, SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex, WorkspacePath: workspace, Permissions: ports.PermissionModeAuto}); err != nil {
+		t.Fatal(err)
+	}
+	models, _, catalog, project, err := svc.ModelsWithCatalog(ctx, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 2 || models[0].Default || !models[1].Default || models[1].DefaultEffort != "high" || models[1].Description != "description" {
+		t.Fatalf("models = %+v", models)
+	}
+	if catalog == nil || !catalog.Models[0].IsDefault || catalog.Models[1].DefaultEffort != "" {
+		t.Fatalf("thread settings contaminated catalog: %+v", catalog)
+	}
+	if project != string(testProject) || reader.project != project || reader.request.AgentID != "codex" || reader.request.WorkingDir != workspace {
+		t.Fatalf("scope = %q reader = %+v", project, reader)
+	}
+}
