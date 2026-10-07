@@ -789,6 +789,18 @@ export function createBrowserViewHost(
             resolve();
           });
         });
+  const settlesWithin = (
+    promise: Promise<unknown>,
+    timeoutMs: number,
+  ): Promise<boolean> =>
+    new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), Math.max(0, timeoutMs));
+      const settle = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      void promise.then(settle, settle);
+    });
   const setAgentBrowserActivity = (
     session: BrowserSessionEntry,
     action: string,
@@ -2385,17 +2397,24 @@ export function createBrowserViewHost(
         for (const entry of session.tabs.values())
           entry.view.webContents.stop();
       }
+      const deadline = Date.now() + PROFILE_SWITCH_SETTLE_MS;
+      const assertSettled = (settled: boolean): void => {
+        assertCurrentSession();
+        if (!settled || !isBrowserIdle(session)) {
+          throw browserError(
+            "BROWSER_PROFILE_ACTIVE",
+            "Wait for browser activity to finish before switching profiles",
+          );
+        }
+      };
       await waitForBrowserIdle(session, PROFILE_SWITCH_SETTLE_MS);
+      assertSettled(true);
       // A renderer tab-selection operation does not increment the agent activity
-      // counter. Let already-queued native work finish before tearing down CDP.
-      await session.nativeOperationQueue;
-      assertCurrentSession();
-      if (session.agentBrowserCommands > 0 || session.browserOperations > 0) {
-        throw browserError(
-          "BROWSER_PROFILE_ACTIVE",
-          "Wait for browser activity to finish before switching profiles",
-        );
-      }
+      // counter. Let already-queued native work finish before tearing down CDP,
+      // within the same deadline; the queue itself is left intact.
+      assertSettled(
+        await settlesWithin(session.nativeOperationQueue, deadline - Date.now()),
+      );
       previousActiveTabId = session.activeTabId;
       previousNextTabNumber = session.nextTabNumber;
       savedTabs = savedTabsForSession(session).map((tab) => {

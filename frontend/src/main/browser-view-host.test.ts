@@ -2664,6 +2664,43 @@ describe("browser profile partitions and replacement", () => {
 		expect(bindings["worker-1"]).toBe(profile.id);
 	});
 
+	it("gives up on time when an agent-browser command outlasts the switch deadline", async () => {
+		const store = fakeBrowserProfileStore(profile, { "worker-1": profile.id });
+		const { host, invoke, runtime } = setupTabHost(store);
+		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		let release!: () => void;
+		const pending = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		vi.mocked(runtime.runAction).mockImplementationOnce(async () => {
+			await pending;
+			return {};
+		});
+		vi.useFakeTimers();
+		try {
+			const command = host.execute("worker-1", "open", { url: "http://localhost:3000/" });
+			await vi.advanceTimersByTimeAsync(0);
+			const switching = host.switchProfile(nav.viewId, null);
+			const outcome = switching.then(
+				() => "switched",
+				(error: { code?: string }) => error.code,
+			);
+			await vi.advanceTimersByTimeAsync(10_000);
+			await expect(outcome).resolves.toBe("BROWSER_PROFILE_ACTIVE");
+			// profileSwitching is cleared, so the still-running command alone
+			// keeps the switch blocked and nothing else is refused as "switching".
+			expect(host.getProfileSwitchInfo(nav.viewId)).toMatchObject({ agentActive: true });
+			release();
+			await command;
+			expect(host.getProfileSwitchInfo(nav.viewId)).toMatchObject({ agentActive: false });
+			const retry = host.switchProfile(nav.viewId, null);
+			await vi.advanceTimersByTimeAsync(0);
+			await expect(retry).resolves.toMatchObject({ profileId: null, temporary: true });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("waits for an in-flight agent-browser command, refuses new ones, then switches", async () => {
 		const store = fakeBrowserProfileStore(profile, { "worker-1": profile.id });
 		const { host, invoke, runtime } = setupTabHost(store);
