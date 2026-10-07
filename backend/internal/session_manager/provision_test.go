@@ -793,32 +793,180 @@ func TestInterruptedPostCreateCannotLaunchOnRecovery(t *testing.T) {
 	}
 }
 
-func TestInterruptedPostCreateClientRequestCleanupRetainsDirtyWorkspace(t *testing.T) {
-	for _, dirty := range []bool{false, true} {
-		t.Run(fmt.Sprint(dirty), func(t *testing.T) {
-			m, st, rt, ws := newManager()
-			rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker,
-				Harness: domain.HarnessCodex, ClientRequestID: "interrupted-request", Mode: domain.SessionModeChat,
-				Metadata:       domain.SessionMetadata{Branch: "returned-branch", WorkspacePath: t.TempDir()},
-				ProvisionSteps: []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepSetup, Status: domain.SessionProvisionStepRunning}}}
-			st.sessions[rec.ID] = rec
-			if dirty {
-				ws.destroyErr = ports.ErrWorkspaceDirty
-			}
-			err := m.checkSessionHealth(context.Background(), rec)
-			got, exists := st.sessions[rec.ID]
-			if dirty {
-				if err == nil || !exists || got.Metadata.WorkspacePath != rec.Metadata.WorkspacePath {
-					t.Fatalf("dirty interrupted workspace was not preserved: session=%+v exists=%v error=%v", got, exists, err)
+func TestEarlyPublishedLaunchPreservesUncertainWorkspace(t *testing.T) {
+	for _, setup := range []domain.SessionProvisionStepStatus{domain.SessionProvisionStepRunning, domain.SessionProvisionStepDone, ""} {
+		for _, mode := range []domain.SessionMode{domain.SessionModeTUI, domain.SessionModeChat} {
+			t.Run(fmt.Sprintf("setup=%s/mode=%s", setup, mode), func(t *testing.T) {
+				m, st, rt, ws := newManager()
+				rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker,
+					Harness: domain.HarnessCodex, ClientRequestID: "interrupted-request", Mode: mode,
+					Metadata: domain.SessionMetadata{Branch: "returned-branch", WorkspacePath: t.TempDir()}}
+				if setup != "" {
+					rec.ProvisionSteps = []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepSetup, Status: setup}}
 				}
-			} else if err != nil || exists {
-				t.Fatalf("removed interrupted seed still blocks client retry: exists=%v error=%v", exists, err)
+				st.sessions[rec.ID] = rec
+				for _, recover := range []func() error{
+					func() error { return m.checkSessionHealth(context.Background(), rec) },
+					func() error { return m.reconcileLive(context.Background(), rec) },
+					func() error { _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); return err },
+					func() error {
+						_, err := m.relaunchRestoredSession(context.Background(), rec, st.projects["mer"], workspaceInfo(rec))
+						return err
+					},
+					func() error { _, err := m.Kill(context.Background(), rec.ID); return err },
+					func() error { return m.saveAndTeardownOne(context.Background(), rec) },
+					func() error { return m.RetireForReplacement(context.Background(), rec.ID) },
+				} {
+					if err := recover(); err == nil || !strings.Contains(err.Error(), "writer stop is unproven") {
+						t.Fatalf("uncertain launch was not refused with missing evidence: %v", err)
+					}
+				}
+				got, exists := st.sessions[rec.ID]
+				if !exists || got.Metadata != rec.Metadata || got.IsTerminated || got.ClientRequestCommitted {
+					t.Fatalf("uncertain launch lost ownership: %+v exists=%v", got, exists)
+				}
+				if _, err := replayClientRequest(got, ""); !errors.Is(err, ErrClientRequestIncomplete) {
+					t.Fatalf("incomplete request replay = %v", err)
+				}
+				// Enter the public restore path with a terminated uncertainty row.
+				rec.IsTerminated = true
+				st.sessions[rec.ID] = rec
+				if _, err := m.RestoreWithMode(context.Background(), rec.ID); err == nil || !strings.Contains(err.Error(), "writer stop is unproven") {
+					t.Fatalf("restore did not refuse before workspace I/O: %v", err)
+				}
+				cleanup, err := m.Cleanup(context.Background(), rec.ProjectID)
+				if err != nil || len(cleanup.Skipped) != 1 || !strings.Contains(cleanup.Skipped[0].Reason, "writer stop is unproven") {
+					t.Fatalf("cleanup did not preserve terminated uncertainty: %+v error=%v", cleanup, err)
+				}
+				if rt.created != 0 || ws.destroyed != 0 || len(ws.restoreConfigs) != 0 {
+					t.Fatalf("uncertain launch performed controller/workspace I/O: controllers=%d destroys=%d restores=%d", rt.created, ws.destroyed, len(ws.restoreConfigs))
+				}
+			})
+		}
+	}
+}
+
+func TestInterruptedAsyncPublishedWorkspaceRefusesRecovery(t *testing.T) {
+	for _, setup := range []domain.SessionProvisionStepStatus{domain.SessionProvisionStepRunning, domain.SessionProvisionStepDone, ""} {
+		t.Run(string(setup), func(t *testing.T) {
+			m, st, rt := newChatManager(&recordingLauncher{})
+			rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+				Mode: domain.SessionModeChat, ProvisionState: domain.SessionProvisionProvisioning,
+				Metadata:       domain.SessionMetadata{WorkspacePath: t.TempDir(), Branch: "returned-branch", Prompt: "durably queued task"},
+				ProvisionSteps: []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepAgent, Status: domain.SessionProvisionStepPending}}}
+			if setup != "" {
+				rec.ProvisionSteps = append(rec.ProvisionSteps, domain.SessionProvisionStep{ID: domain.SessionProvisionStepSetup, Status: setup})
 			}
-			if rt.created != 0 || ws.destroyed != 1 {
-				t.Fatalf("startup created controller or skipped cleanup: controllers=%d destroys=%d", rt.created, ws.destroyed)
+			st.sessions[rec.ID] = rec
+			if err := m.FailInterruptedProvisioning(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); err == nil || !strings.Contains(err.Error(), "writer stop is unproven") {
+				t.Fatalf("restarted setup writer was replayed: %v", err)
+			}
+			if _, err := m.Kill(context.Background(), rec.ID); err == nil || !strings.Contains(err.Error(), "writer stop is unproven") {
+				t.Fatalf("restarted setup writer could be removed: %v", err)
+			}
+			if len(m.chat.(*recordingLauncher).started) != 0 || rt.created != 0 || m.workspace.(*fakeWorkspace).destroyed != 0 {
+				t.Fatal("uncertain asynchronous launch performed controller/workspace I/O")
 			}
 		})
 	}
+}
+
+func TestSpawnIncompleteAgentCheckpointWithoutClientRequest(t *testing.T) {
+	for _, setup := range []bool{false, true} {
+		t.Run(fmt.Sprint(setup), func(t *testing.T) {
+			m, st, rt, ws := newManager()
+			m.dataDir, ws.path = t.TempDir(), t.TempDir()
+			project := st.projects["mer"]
+			if setup {
+				project.Config.PostCreate = []string{"true"}
+				st.projects["mer"] = project
+			}
+			observed := false
+			m.browserCapabilities = &scriptedBrowserCapabilities{
+				issues: []browserCapabilityIssue{{token: "test-token", verifier: "test-verifier"}},
+				onIssue: func(_ int, id domain.SessionID) {
+					observed = true
+					rec := st.sessions[id]
+					if rec.ClientRequestID != "" || !uncertainWorkspaceLaunch(rec) || unfinishedWorkspaceSetup(rec) {
+						t.Fatalf("done/no-setup checkpoint did not identify incomplete launch: %+v", rec)
+					}
+					if err := m.checkSessionHealth(context.Background(), rec); !errors.Is(err, ErrWorkspaceWriterStopUnproven) {
+						t.Fatalf("health accepted pre-controller publication: %v", err)
+					}
+				},
+			}
+			rt.createErr = errors.New("known launch failure after checkpoint probe")
+			_, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, RequestedMode: domain.SessionModeTUI})
+			if !observed || err == nil {
+				t.Fatalf("actual Spawn did not enter incomplete launch boundary: observed=%v error=%v", observed, err)
+			}
+		})
+	}
+}
+
+func TestBackgroundHealthOverlapsRealPostCreate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell hook")
+	}
+	dataDir, workspace, signals := t.TempDir(), t.TempDir(), t.TempDir()
+	st, err := sqlite.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	marker, release := filepath.Join(signals, "running"), filepath.Join(signals, "release")
+	project := domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
+	project.Config.PostCreate = []string{fmt.Sprintf("printf ready > %q; while [ ! -e %q ]; do sleep 0.01; done; exit 1", marker, release)}
+	if err := st.UpsertProject(context.Background(), project); err != nil {
+		t.Fatal(err)
+	}
+	ws, rt := &fakeWorkspace{path: workspace, createRepoPath: project.Path}, &fakeRuntime{}
+	m := New(Deps{Runtime: rt, Agents: fakeAgents{}, Workspace: ws, Store: st,
+		Messenger: &fakeMessenger{}, Lifecycle: lifecycle.New(st, nil), DataDir: dataDir,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), LookPath: func(string) (string, error) { return "/bin/true", nil }})
+	if err := m.ReconcileStartupSafety(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, RequestedMode: domain.SessionModeTUI})
+		done <- err
+	}()
+	defer func() {
+		_ = os.WriteFile(release, nil, 0o600)
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("test-owned hook did not finish")
+		}
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("real hook did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := m.ReconcileBackground(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok, err := st.GetSession(context.Background(), "mer-1")
+	if err != nil || !ok || rec.Metadata.WorkspacePath != workspace || ws.destroyed != 0 || rt.created != 0 {
+		t.Fatalf("background health destroyed or launched the blocked real hook: found=%v row=%+v destroys=%d controllers=%d error=%v", ok, rec, ws.destroyed, rt.created, err)
+	}
+	if _, err := m.Kill(context.Background(), rec.ID); err == nil {
+		t.Fatal("cleanup accepted a still-running setup writer")
+	}
+	if ws.destroyed != 0 {
+		t.Fatal("cleanup did not wait for setup completion")
+	}
+	// The deferred release lets the real command fail; only its owning Spawn
+	// may then perform the existing in-process rollback.
 }
 
 func TestSpawnPermissionPrecedence(t *testing.T) {

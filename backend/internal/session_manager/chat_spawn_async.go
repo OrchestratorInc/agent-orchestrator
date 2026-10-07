@@ -346,6 +346,8 @@ func (m *Manager) logAsyncChatSpawnStage(id domain.SessionID, stage string, star
 	)
 }
 
+const interruptedProvisioningError = "AO restarted before this session finished starting"
+
 // failAsyncChatSpawn preserves the visible row and queue for retry.
 func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, cause error) {
 	m.logger.Error("spawn: asynchronous chat start failed", "sessionID", id, "error", cause)
@@ -483,8 +485,8 @@ func (m *Manager) setProvisionState(
 }
 
 // FailInterruptedProvisioning marks sessions whose background start did not
-// survive a daemon restart. Without this a row left mid-start reads as
-// "starting" forever: nothing is running that could ever finish it.
+// survive a daemon restart. The owning Go operation is gone, but setup shells
+// may survive. Preserve published unfinished setup rather than replaying it.
 func (m *Manager) FailInterruptedProvisioning(ctx context.Context) error {
 	recs, err := m.store.ListAllSessions(ctx)
 	if err != nil {
@@ -502,7 +504,7 @@ func (m *Manager) failInterruptedProvisioningRecords(ctx context.Context, recs [
 			continue
 		}
 		if _, err := m.setProvisionState(ctx, rec.ID, domain.SessionProvisionFailed,
-			"AO restarted before this session finished starting"); err != nil {
+			interruptedProvisioningError); err != nil {
 			failures = append(failures, fmt.Errorf("session %s: %w", rec.ID, err))
 			retries = append(retries, rec)
 		}

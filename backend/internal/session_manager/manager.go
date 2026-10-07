@@ -1231,14 +1231,16 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 	}
-	// Reuse the setup checkpoint so recovery cannot launch an interrupted hook.
-	var setupProgress *provisionProgress
+	// The existing agent checkpoint distinguishes early publication from a
+	// completed promptless launch, including projects without setup commands.
+	plan := []domain.SessionProvisionStepID{domain.SessionProvisionStepAgent}
 	if len(project.Config.PostCreate) > 0 || len(project.Config.Symlinks) > 0 {
-		setupProgress = m.startProvisionProgress(ctx, id, []domain.SessionProvisionStepID{domain.SessionProvisionStepSetup})
-		if setupProgress.err != nil {
-			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
-			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, setupProgress.err)
-		}
+		plan = append([]domain.SessionProvisionStepID{domain.SessionProvisionStepSetup}, plan...)
+	}
+	setupProgress := m.startProvisionProgress(ctx, id, plan)
+	if setupProgress.err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, setupProgress.err)
 	}
 	// Publish actual adapter identity before setup can query its owning session.
 	if err := m.publishSpawnWorkspace(ctx, rec.ID, ws); err != nil {
@@ -1251,12 +1253,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
 	}
-	if setupProgress != nil {
-		setupProgress.complete(ctx, domain.SessionProvisionStepSetup)
-		if setupProgress.err != nil {
-			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
-			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, setupProgress.err)
-		}
+	setupProgress.complete(ctx, domain.SessionProvisionStepSetup)
+	if setupProgress.err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, setupProgress.err)
 	}
 
 	// CLI agents receive the prompt as text and cannot consume inline binary
@@ -1303,6 +1303,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 				return domain.SessionRecord{}, 0, 0, err
 			}
 		}
+		setupProgress.complete(ctx, domain.SessionProvisionStepAgent)
 		if cfg.ClientRequestID != "" {
 			if err := m.store.CommitClientRequestSession(ctx, id); err != nil {
 				return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
@@ -1457,6 +1458,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
 		}
 	}
+	setupProgress.complete(ctx, domain.SessionProvisionStepAgent)
 	if cfg.ClientRequestID != "" {
 		if err := m.store.CommitClientRequestSession(ctx, id); err != nil {
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
@@ -2330,6 +2332,9 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	if !ok {
 		return false, nil // already gone: benign race
 	}
+	if uncertainWorkspaceLaunch(rec) || (rec.ProvisionState.WithDefault() == domain.SessionProvisionReady && unfinishedWorkspaceSetup(rec)) {
+		return false, fmt.Errorf("kill %s: %w", id, ErrWorkspaceWriterStopUnproven)
+	}
 	m.stopPreviewBestEffort(ctx, id)
 	m.destroyBrowserBestEffort(ctx, id)
 	handle := runtimeHandle(rec.Metadata)
@@ -2440,6 +2445,9 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 	}
 	if !ok || rec.IsTerminated {
 		return nil
+	}
+	if uncertainWorkspaceLaunch(rec) || unfinishedWorkspaceSetup(rec) {
+		return fmt.Errorf("retire replacement %s: %w", id, ErrWorkspaceWriterStopUnproven)
 	}
 	m.stopPreviewBestEffort(ctx, id)
 	m.destroyBrowserBestEffort(ctx, id)
@@ -2628,6 +2636,9 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (Res
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
 	}
 	defer releaseHarness()
+	if uncertainWorkspaceLaunch(rec) || unfinishedWorkspaceSetup(rec) {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrWorkspaceWriterStopUnproven)
+	}
 	if !rec.IsTerminated {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrNotRestorable)
 	}
@@ -2806,6 +2817,9 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 	if rec.ProvisionState.IsProvisioning() {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrResumeInProgress)
 	}
+	if uncertainWorkspaceLaunch(rec) || (rec.ProvisionState.WithDefault() == domain.SessionProvisionReady && unfinishedWorkspaceSetup(rec)) {
+		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrWorkspaceWriterStopUnproven)
+	}
 	if rec.ProvisionState == domain.SessionProvisionFailed {
 		result, handedOff, err := m.retryFailedChatSpawn(ctx, rec, releaseHarness)
 		if handedOff {
@@ -2911,8 +2925,8 @@ func (m *Manager) relaunchSessionWithPolicy(
 }
 
 func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy) (RestoreResult, error) {
-	if unfinishedWorkspaceSetup(rec) {
-		return RestoreResult{}, fmt.Errorf("%s %s: workspace setup did not complete; preserve workspace for cleanup", operation, rec.ID)
+	if uncertainWorkspaceLaunch(rec) || unfinishedWorkspaceSetup(rec) {
+		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, ErrWorkspaceWriterStopUnproven)
 	}
 	// Relaunch dispatches from the currently committed persisted mode, never from
 	// a caller hint. The interface-transition coordinator changes that fact only
@@ -3184,6 +3198,9 @@ func (m *Manager) SaveAndTeardownAll(ctx context.Context) error {
 // ForceDestroy; if either capture or the DB write fails, ForceDestroy is
 // not called.
 func (m *Manager) saveAndTeardownOne(ctx context.Context, rec domain.SessionRecord) error {
+	if uncertainWorkspaceLaunch(rec) || unfinishedWorkspaceSetup(rec) {
+		return fmt.Errorf("save %s: %w", rec.ID, ErrWorkspaceWriterStopUnproven)
+	}
 	// Gate shut this session's scoped shell terminals before either branch
 	// below force-removes its worktree. SaveAndTeardownAll only reaches here for
 	// a session with a real workspace, so there is always a worktree to protect.
@@ -3264,8 +3281,8 @@ func (m *Manager) saveAndTeardownOne(ctx context.Context, rec domain.SessionReco
 // worktree, preserving conversation identity when recovery fails. Startup uses
 // checkSessionHealth instead so missing agents stay stopped.
 func (m *Manager) reconcileLive(ctx context.Context, rec domain.SessionRecord) error {
-	if unfinishedWorkspaceSetup(rec) && rec.ProvisionState.WithDefault() == domain.SessionProvisionReady {
-		return fmt.Errorf("reconcile %s: workspace setup did not complete; preserve workspace for cleanup", rec.ID)
+	if (uncertainWorkspaceLaunch(rec) || unfinishedWorkspaceSetup(rec)) && rec.ProvisionState.WithDefault() == domain.SessionProvisionReady {
+		return fmt.Errorf("reconcile %s: %w", rec.ID, ErrWorkspaceWriterStopUnproven)
 	}
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
@@ -3495,9 +3512,9 @@ func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 			}
 		}
 	}
-	// An asynchronous spawn lives in one daemon's memory. Anything still
-	// "starting" after a restart has no one left to finish it, so say so rather
-	// than leaving a session that spins forever.
+	// An asynchronous spawn lives in one daemon's memory. After a restart its
+	// Go operation cannot finish, though setup shells may survive. Record the
+	// interruption without reclaiming or replaying an unfinished setup writer.
 	if err == nil {
 		m.startupProvisioningRetries, err = m.failInterruptedProvisioningRecords(ctx, recs)
 		if err != nil {
@@ -3542,7 +3559,7 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 			continue
 		}
 		if _, err := m.setProvisionState(ctx, id, domain.SessionProvisionFailed,
-			"AO restarted before this session finished starting"); err != nil {
+			interruptedProvisioningError); err != nil {
 			m.logger.Warn("reconcile: interrupted session start retry failed", "sessionID", id, "error", err)
 		}
 	}
@@ -4647,6 +4664,9 @@ func (m *Manager) isWorkspaceInUse(ctx context.Context, projectID domain.Project
 // call) — most commonly because a scoped shell terminal could not be
 // confirmed closed, so reclaiming would pull the ground out from under it.
 func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo) (ports.WorkspaceReclaim, string) {
+	if uncertainWorkspaceLaunch(rec) || unfinishedWorkspaceSetup(rec) {
+		return ports.WorkspaceReclaimRemoved, "prior setup writer stop is unproven; preserve workspace for manual recovery"
+	}
 	release, closeErr := m.beginShellTerminalTeardown(ctx, rec.ID)
 	if closeErr != nil {
 		m.logger.Warn("cleanup: shell terminal still open", "sessionID", rec.ID, "error", closeErr)

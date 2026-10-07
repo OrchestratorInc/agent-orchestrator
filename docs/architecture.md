@@ -18,6 +18,27 @@ Chat, but both controllers are never live at once. The daemon coordinates both
 modes through the same session, lifecycle, workspace, storage, and observation
 boundaries.
 
+Workspace setup publishes the adapter-returned path, branch, and repository
+before `postCreate` executes. Its `AO_*` session context is daemon-owned; project
+and inherited environment values cannot override that identity. Publication
+alone does not make the controller live or prove setup completed.
+
+A controller-free early publication with no committed launch identity is
+preserved after daemon death, including when setup is `done` or absent. Startup
+health does not remove its row, path, Git registration, or payload. The same
+incomplete client request remains refused. Resume, restore, and teardown do not
+prove that a prior setup writer stopped and must not silently reclaim or launch
+that workspace. A shell or descendant can survive daemon-only `SIGKILL`, even
+when Git reports the workspace clean.
+
+Recovery has a manual ceiling: identify and stop every prior setup writer,
+preserve its work, then repair or remove the incomplete launch through an
+explicit operator recovery procedure. These checkpoints do not contain native
+writer-stop evidence, so ordinary Resume is not that procedure. There is no
+automatic clean retry, execution lease, or new supervisor. Known in-process
+failed setup rollback and ordinary completed-controller recovery retain their
+existing behavior.
+
 ## Table of contents
 
 - [Mental model](#mental-model)

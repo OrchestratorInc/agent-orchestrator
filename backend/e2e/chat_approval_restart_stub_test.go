@@ -4,15 +4,21 @@ package e2e
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 // TestFakeApprovalACP is launched by the disposable opencode shim below. It
@@ -151,9 +157,9 @@ func TestPendingACPApprovalSurvivesDaemonSIGKILL(t *testing.T) {
 	restarted.mustCall("POST", "/sessions/"+session+"/kill", http.StatusOK, nil, nil)
 }
 
-// An unacknowledged first task can be retried with the same clientRequestId
-// after a daemon crash during workspace setup, without duplicate workers.
-func TestFirstTaskStartupRetryAfterDaemonSIGKILL(t *testing.T) {
+// A daemon-only crash can leave the real setup shell alive. Preserve its
+// ownership and payload; neither client replay nor manual resume proves it stopped.
+func TestFirstTaskWorkspacePreservedAfterDaemonOnlySIGKILL(t *testing.T) {
 	binDir := t.TempDir()
 	testBinary, err := os.Executable()
 	if err != nil {
@@ -176,7 +182,7 @@ func TestFirstTaskStartupRetryAfterDaemonSIGKILL(t *testing.T) {
 	project := seedProject(t, d, "first-task-kill")
 	marker := filepath.Join(t.TempDir(), "provisioning")
 	release := filepath.Join(t.TempDir(), "release")
-	postCreate := fmt.Sprintf("printf ready > %q; while [ ! -e %q ]; do sleep 0.05; done", marker, release)
+	postCreate := fmt.Sprintf("printf '%%s\\n%%s\\n%%s\\n' \"$$\" \"$AO_WORKSPACE_PATH\" \"$AO_SESSION_ID\" > %q; while [ ! -e %q ]; do sleep 0.05; done; printf 'surviving-hook-wrote' > orphan-payload", marker, release)
 	d.mustCall("PUT", "/projects/"+project+"/config", http.StatusOK, map[string]any{
 		"config": map[string]any{"postCreate": []string{postCreate}},
 	}, nil)
@@ -189,78 +195,158 @@ func TestFirstTaskStartupRetryAfterDaemonSIGKILL(t *testing.T) {
 		_, _ = d.call("POST", "/sessions", req, nil)
 		close(done)
 	}()
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(marker); err == nil {
-			break
+	var owner []string
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
+		body, err := os.ReadFile(marker)
+		if err == nil {
+			owner = strings.Split(strings.TrimSpace(string(body)), "\n")
+			if len(owner) == 3 && owner[2] != "" {
+				break
+			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if _, err := os.Stat(marker); err != nil {
-		t.Fatalf("first task never entered postCreate: %v\n%s", err, d.tailLog())
+	if len(owner) != 3 {
+		t.Fatalf("real setup never reported its PID/path/session: %v\n%s", owner, d.tailLog())
 	}
-	d.kill()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("first task HTTP request did not end after daemon kill")
-	}
-	if err := os.WriteFile(release, nil, 0o600); err != nil {
+	hookPID, err := strconv.Atoi(owner[0])
+	if err != nil {
 		t.Fatal(err)
 	}
-	restarted := startDaemon(t, dataDir)
-	var sessions struct {
-		Sessions []struct {
-			ID string `json:"id"`
-		} `json:"sessions"`
-	}
-	// Workspace identity is now published during setup. Safe cleanup runs in
-	// startup's background pass, so wait for the interrupted seed to be removed.
-	deadline = time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		restarted.mustCall("GET", "/sessions", http.StatusOK, nil, &sessions)
-		if len(sessions.Sessions) == 0 {
-			break
+	pgid := d.pgid
+	defer func() {
+		// Own only this test's daemon group, including the surviving shell.
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		for deadline := time.Now().Add(5 * time.Second); processAlive(hookPID); {
+			if time.Now().After(deadline) {
+				t.Errorf("test-owned hook %d remains alive", hookPID)
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
-		time.Sleep(20 * time.Millisecond)
+	}()
+	st, err := sqlite.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(sessions.Sessions) != 0 {
-		t.Fatalf("interrupted setup was not safely removed: %+v\n%s", sessions.Sessions, restarted.tailLog())
-	}
-	var retry spawned
-	status, err := restarted.call("POST", "/sessions", req, &retry)
-	if err != nil || status != http.StatusCreated || retry.Session.ID == "" {
-		t.Fatalf("first-start retry did not create a session: status=%d err=%v session=%q\n%s", status, err, retry.Session.ID, restarted.tailLog())
-	}
-	restarted.mustCall("GET", "/sessions", http.StatusOK, nil, &sessions)
-	if len(sessions.Sessions) != 1 || sessions.Sessions[0].ID != retry.Session.ID {
-		t.Fatalf("sessions after retry = %+v, want one %q", sessions.Sessions, retry.Session.ID)
-	}
-	finished := restarted.awaitConversation(retry.Session.ID, 30*time.Second, "first task after restart", func(s snapshot) bool {
-		return len(s.Turns) == 1 && terminal(s.Turns[0].State) && contains(s.assistantText(), "approved once")
-	})
-	if finished.Turns[0].State != "completed" || !contains(finished.assistantText(), "approved once") {
-		t.Fatalf("first task not completed after restart:\n%s", describe(finished))
+	defer st.Close()
+	before, ok, err := st.GetSession(context.Background(), domain.SessionID(owner[2]))
+	if err != nil || !ok || before.Metadata.WorkspacePath != owner[1] || before.ClientRequestCommitted {
+		t.Fatalf("real hook ownership not published: %+v found=%v error=%v", before, ok, err)
 	}
 	var projectResponse struct {
 		Project struct {
 			Path string `json:"path"`
 		} `json:"project"`
 	}
-	restarted.mustCall("GET", "/projects/"+project, http.StatusOK, nil, &projectResponse)
-	worktrees, err := exec.Command("git", "-C", projectResponse.Project.Path, "worktree", "list", "--porcelain").Output()
-	if err != nil {
+	d.mustCall("GET", "/projects/"+project, http.StatusOK, nil, &projectResponse)
+	assertPreserved := func(dirty bool) {
+		t.Helper()
+		current, ok, err := st.GetSession(context.Background(), before.ID)
+		if err != nil || !ok || current.Metadata.WorkspacePath != before.Metadata.WorkspacePath ||
+			current.Metadata.Branch != before.Metadata.Branch || current.IsTerminated || current.ClientRequestCommitted ||
+			current.Metadata.ControllerGeneration != "" || current.Metadata.ProviderConversationID != "" {
+			t.Fatalf("uncertain row lost ownership or launched: %+v found=%v error=%v", current, ok, err)
+		}
+		if info, err := os.Stat(owner[1]); err != nil || !info.IsDir() {
+			t.Fatalf("actual workspace disappeared: %v", err)
+		}
+		registrations, err := exec.Command("git", "-C", projectResponse.Project.Path, "worktree", "list", "--porcelain").Output()
+		if err != nil || !strings.Contains(string(registrations), "worktree "+owner[1]+"\n") ||
+			strings.Count("\n"+string(registrations), "\nworktree ") != 2 {
+			t.Fatalf("captured Git registration changed: %v\n%s", err, registrations)
+		}
+		status, err := exec.Command("git", "-C", owner[1], "status", "--porcelain", "--untracked-files=all").Output()
+		if err != nil || (!dirty && len(status) != 0) || (dirty && !strings.Contains(string(status), "orphan-payload")) {
+			t.Fatalf("independent dirty/clean oracle failed: dirty=%v status=%q error=%v", dirty, status, err)
+		}
+		if dirty {
+			body, err := os.ReadFile(filepath.Join(owner[1], "orphan-payload"))
+			if err != nil || string(body) != "surviving-hook-wrote" {
+				t.Fatalf("dirty payload lost: %q %v", body, err)
+			}
+		}
+	}
+	assertPreserved(false)
+	daemonPID := d.cmd.Process.Pid
+	if err := d.cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count("\n"+string(worktrees), "\nworktree "); got != 2 {
-		t.Fatalf("git worktree count = %d, want base repo + one worker:\n%s", got, worktrees)
+	_, _ = d.cmd.Process.Wait()
+	d.cmd = nil
+	d.waitPortFree()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first task request did not end after daemon-only SIGKILL")
+	}
+	if !processAlive(hookPID) {
+		t.Fatal("test did not retain the controlled surviving hook")
+	}
+	restarted := startDaemon(t, dataDir)
+	// Observe completion of the actual background health pass, not a timed
+	// assumption or row-disappearance proxy for physical safety.
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		log, err := os.ReadFile(restarted.logPath)
+		if err == nil && strings.Contains(string(log), "writer stop is unproven") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("background health did not report missing writer-stop evidence:\n%s", restarted.tailLog())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	assertPreserved(false)
+	refuse := func() {
+		t.Helper()
+		var response apiError
+		status, err := restarted.call("POST", "/sessions", req, &response)
+		if err != nil || status != http.StatusConflict || response.Code != "CLIENT_REQUEST_INCOMPLETE" {
+			t.Fatalf("same request replay was not refused: status=%d response=%+v error=%v", status, response, err)
+		}
+		status, err = restarted.call("POST", "/sessions/"+owner[2]+"/resume-agent", nil, &response)
+		if err != nil || status < 400 || !strings.Contains(response.Message, "writer stop is unproven") {
+			t.Fatalf("manual resume did not report missing writer-stop evidence: status=%d response=%+v error=%v", status, response, err)
+		}
+		status, err = restarted.call("POST", "/sessions/"+owner[2]+"/kill", nil, nil)
+		if err != nil || status < 400 {
+			t.Fatalf("cleanup removed a possible setup writer: status=%d error=%v", status, err)
+		}
+	}
+	refuse()
+	assertPreserved(false)
+	if !processAlive(hookPID) {
+		t.Fatal("recovery stopped the controlled hook instead of preserving it")
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if body, _ := os.ReadFile(filepath.Join(owner[1], "orphan-payload")); string(body) == "surviving-hook-wrote" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("surviving hook could not write its captured workspace")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	refuse()
+	assertPreserved(true)
+	var sessions struct {
+		Sessions []struct {
+			ID string `json:"id"`
+		} `json:"sessions"`
+	}
+	restarted.mustCall("GET", "/sessions", http.StatusOK, nil, &sessions)
+	if len(sessions.Sessions) != 1 || sessions.Sessions[0].ID != owner[2] {
+		t.Fatalf("replay duplicated or lost the original session: %+v", sessions.Sessions)
 	}
 	calls, err := os.ReadFile(callsPath)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	if got := strings.Count(string(calls), "session/prompt"); got != 1 {
-		t.Fatalf("provider got %d prompts, want one:\n%s", got, calls)
+	if len(calls) != 0 {
+		t.Fatalf("uncertain launch started a provider: %s", calls)
 	}
-	restarted.mustCall("POST", "/sessions/"+retry.Session.ID+"/kill", http.StatusOK, nil, nil)
+	t.Logf("daemon-only SIGKILL pid=%d; preserved real hook pid=%d, row, path, registration and dirty payload; replay/resume/cleanup refused", daemonPID, hookPID)
 }

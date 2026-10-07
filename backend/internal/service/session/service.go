@@ -1299,6 +1299,9 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrStartupPending):
 		return apierr.Conflict("SESSION_STARTUP_PENDING",
 			"Session agent is still starting; retry after the agent prompt is ready", nil)
+	case errors.Is(err, sessionmanager.ErrWorkspaceWriterStopUnproven):
+		return apierr.Conflict("SESSION_INCOMPLETE_HANDLE",
+			"Prior setup writer stop is unproven; preserve the workspace and resolve prior writers before manual recovery", nil)
 	case errors.Is(err, sessionmanager.ErrIncompleteHandle):
 		return apierr.Conflict("SESSION_INCOMPLETE_HANDLE", "Session is missing runtime or workspace handles", nil)
 	case errors.Is(err, sessionmanager.ErrNotResumable):
