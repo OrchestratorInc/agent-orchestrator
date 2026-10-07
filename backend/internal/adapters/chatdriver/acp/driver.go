@@ -85,6 +85,8 @@ type Config struct {
 	// PromptResponseFailure lets a provider binding interpret its own structured
 	// terminal metadata after a nominally successful ACP prompt response.
 	PromptResponseFailure func(acpsdk.PromptResponse) error
+	// CanHibernate checks provider-owned work that outlives an ACP prompt.
+	CanHibernate func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	// EncodeProviderConversationID and DecodeProviderConversationID let a binding
 	// persist ownership metadata around an opaque provider ID while keeping the
 	// raw value on the ACP wire.
@@ -492,6 +494,7 @@ func (d *Driver) initialize(
 	)
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
+	conv.hibernationCheck = d.cfg.CanHibernate
 	if proc.reconnected {
 		state := proc.acpState
 		if state == nil || len(state.InitializeResult) == 0 || len(state.SessionResult) == 0 || state.SessionID == "" {

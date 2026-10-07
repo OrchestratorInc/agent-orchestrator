@@ -129,6 +129,7 @@ type conversation struct {
 	// credential mid-turn. Nil when the binding does not supply one.
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
+	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 
 	contextTokens     int64
 	contextWindow     int64
@@ -953,8 +954,15 @@ func (c *conversation) Terminate() error {
 	return c.closeProvider(true, true)
 }
 
-// ACP retains its current policy; background-terminal protection is Codex-only.
-func (c *conversation) CanHibernate(context.Context) (bool, error) { return true, nil }
+func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
+	if c.hibernationCheck == nil {
+		return true, nil
+	}
+	c.mu.Lock()
+	id := c.sessionID
+	c.mu.Unlock()
+	return c.hibernationCheck(ctx, c.conn, acpsdk.SessionId(id))
+}
 
 // Hibernate releases the bridge and its provider without closing the native
 // ACP session. session/close can delete the resume state on some agents.
