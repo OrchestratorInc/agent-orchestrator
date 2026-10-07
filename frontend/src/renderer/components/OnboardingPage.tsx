@@ -484,7 +484,7 @@ export function OnboardingPage() {
 				</div>
 
 				<footer className="flex items-center justify-between">
-					{step === "github" && githubSetup.workflow ? (
+					{step === "github" && githubSetup.signInActive ? (
 						<span aria-hidden="true" />
 					) : (
 						<button

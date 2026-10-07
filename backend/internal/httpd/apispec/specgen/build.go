@@ -767,6 +767,34 @@ func systemOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPost, path: "/api/v1/system/github-auth/device", id: "startGitHubDeviceLogin", tag: "system",
+			summary: "Start the GitHub CLI device sign-in and return its one-time code",
+			resps: []respUnit{
+				{http.StatusCreated, controllers.GitHubDeviceLoginResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/system/github-auth/device", id: "getGitHubDeviceLogin", tag: "system",
+			summary: "Report the current GitHub device sign-in attempt",
+			resps: []respUnit{
+				{http.StatusOK, controllers.GitHubDeviceLoginResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/system/github-auth/device", id: "cancelGitHubDeviceLogin", tag: "system",
+			summary: "Cancel the in-flight GitHub device sign-in",
+			resps: []respUnit{
+				{http.StatusOK, controllers.GitHubDeviceLoginResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/system/install/{target}", id: "startSystemInstall", tag: "system",
 			summary:    "Start (or return the already-running) install job for a fixed system target",
 			pathParams: []any{controllers.InstallTargetParam{}},

@@ -27,30 +27,22 @@ vi.mock("../components/AuthTerminalPanel", () => ({
 }));
 vi.mock("../hooks/useGitHubSetup", () => ({
 	useGitHubSetup: () => ({
-		authChecking: mocks.githubWorkflowActive,
 		authSatisfied: !mocks.githubWorkflowActive,
+		cancelSignIn: vi.fn(),
 		cliMissing: false,
-		closeSignIn: vi.fn(),
 		gh: { id: "gh", satisfied: true },
-		handleTerminalState: vi.fn(),
 		install: vi.fn(),
 		installError: null,
 		installing: false,
 		job: undefined,
-		loginEnded: false,
-		loginRunning: mocks.githubWorkflowActive,
+		login: mocks.githubWorkflowActive
+			? { id: "attempt-1", state: "awaiting_approval", userCode: "ABCD-1234", verificationUrl: "https://github.com/login/device" }
+			: { state: "idle" },
 		requirementsQuery: {},
 		signIn: vi.fn(),
+		signInActive: mocks.githubWorkflowActive,
 		signInError: null,
 		signInPending: false,
-		workflow: mocks.githubWorkflowActive ? {
-			agentId: "github",
-			action: "login",
-			terminal: { handleId: "github-login", title: "Connect GitHub", workingDir: "/tmp", createdAt: "2026-10-01T00:00:00Z" },
-			guidance: "",
-			phase: "running",
-			startedAt: Date.now(),
-		} : null,
 	}),
 }));
 vi.mock("../lib/api-client", async (original) => {
@@ -91,15 +83,15 @@ beforeEach(() => {
 });
 
 describe("onboarding route", () => {
-	it("hides Back and asks the user to wait while GitHub sign-in is active", async () => {
+	it("shows the GitHub device code in the page and hides Back while sign-in is active", async () => {
 		mocks.githubWorkflowActive = true;
 		const user = userEvent.setup();
 		await renderOnboarding();
 		await user.click(screen.getByRole("button", { name: "Continue" }));
 
-		expect(await screen.findByTestId("github-auth-terminal")).toBeInTheDocument();
+		expect(await screen.findByTestId("github-device-code")).toHaveTextContent("ABCD-1234");
+		expect(screen.getByRole("button", { name: "Open GitHub" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument();
-		expect(screen.getByText(/keep this window open/i)).toBeInTheDocument();
 	});
 
 	it("finishes directly from agent selection and applies the agent to both project roles", async () => {

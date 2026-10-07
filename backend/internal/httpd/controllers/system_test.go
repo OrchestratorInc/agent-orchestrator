@@ -26,6 +26,19 @@ type fakeSystemChecker struct {
 	terminal      shellterm.ShellTerminal
 	terminalErr   error
 	terminalCalls int
+	device        systemcheck.GitHubDeviceLogin
+}
+
+func (f *fakeSystemChecker) StartGitHubDeviceLogin(context.Context) (systemcheck.GitHubDeviceLogin, error) {
+	return f.device, nil
+}
+
+func (f *fakeSystemChecker) GitHubDeviceLoginStatus(context.Context) (systemcheck.GitHubDeviceLogin, error) {
+	return f.device, nil
+}
+
+func (f *fakeSystemChecker) CancelGitHubDeviceLogin(context.Context) (systemcheck.GitHubDeviceLogin, error) {
+	return f.device, nil
 }
 
 func (f *fakeSystemChecker) OpenGitHubAuthTerminal(context.Context) (shellterm.ShellTerminal, error) {

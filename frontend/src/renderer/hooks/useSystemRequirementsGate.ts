@@ -9,9 +9,12 @@ import { shellTerminalsQueryKey, shellTerminalsQueryOptions, type ShellTerminal 
 export type SystemRequirement = components["schemas"]["SystemRequirement"];
 
 export const systemRequirementsQueryKey = ["system-requirements"] as const;
+export type GitHubDeviceLogin = components["schemas"]["SystemcheckGitHubDeviceLogin"];
+export const githubDeviceLoginQueryKey = ["github-device-login"] as const;
 export const githubAuthTerminalQueryKey = ["github-auth-terminal"] as const;
 export const githubAuthAutoLoginOfferedQueryKey = ["github-auth-auto-login-offered"] as const;
 const GITHUB_AUTH_POLL_INTERVAL_MS = 1_000;
+const GITHUB_DEVICE_POLL_INTERVAL_MS = 1_000;
 
 async function fetchSystemRequirements(): Promise<components["schemas"]["SystemRequirementsResponse"]> {
 	const { data, error } = await apiClient.GET("/api/v1/system/requirements");
@@ -145,4 +148,44 @@ export function useSystemRequirementsGate() {
 	// rather than wedging the user on the checking state forever.
 	const probeFailed = query.isError;
 	return { query, requirements, blocked, requirementsBlocked, checking, ready, probeFailed };
+}
+
+/** The in-app GitHub sign-in. The daemon runs `gh auth login` without a
+ * terminal and reports the one-time code and its state, so the renderer can
+ * present the flow itself. The status query only polls while an attempt is in
+ * flight. */
+export function useGitHubDeviceLogin() {
+	const queryClient = useQueryClient();
+	const query = useQuery<GitHubDeviceLogin>({
+		queryKey: githubDeviceLoginQueryKey,
+		queryFn: async () => {
+			const { data, error } = await apiClient.GET("/api/v1/system/github-auth/device");
+			if (error || !data) throw new Error(apiErrorMessage(error, "Could not check GitHub sign-in."));
+			return data;
+		},
+		initialData: { state: "idle" },
+		staleTime: Number.POSITIVE_INFINITY,
+		refetchOnWindowFocus: false,
+		refetchInterval: (q) => {
+			const state = q.state.data?.state;
+			return state === "starting" || state === "awaiting_approval" ? GITHUB_DEVICE_POLL_INTERVAL_MS : false;
+		},
+	});
+	const start = useMutation({
+		mutationFn: async (): Promise<GitHubDeviceLogin> => {
+			const { data, error } = await apiClient.POST("/api/v1/system/github-auth/device");
+			if (error || !data) throw new Error(apiErrorMessage(error, "Could not start GitHub sign-in."));
+			return data;
+		},
+		onSuccess: (login) => queryClient.setQueryData(githubDeviceLoginQueryKey, login),
+	});
+	const cancel = useMutation({
+		mutationFn: async (): Promise<GitHubDeviceLogin> => {
+			const { data, error } = await apiClient.DELETE("/api/v1/system/github-auth/device");
+			if (error || !data) throw new Error(apiErrorMessage(error, "Could not cancel GitHub sign-in."));
+			return data;
+		},
+		onSuccess: (login) => queryClient.setQueryData(githubDeviceLoginQueryKey, login),
+	});
+	return { login: query.data, start, cancel };
 }
