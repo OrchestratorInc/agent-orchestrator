@@ -89,9 +89,10 @@ describe("render activity", () => {
 
 	it("opens at the height measured for the frame's width, follows the width, and fits the page once it reports", () => {
 		const resized: ResizeObserverCallback[] = [];
+		const disconnect = vi.fn();
 		vi.spyOn(window, "ResizeObserver").mockImplementation(function (callback: ResizeObserverCallback) {
 			resized.push(callback);
-			return { observe() {}, unobserve() {}, disconnect() {} };
+			return { observe() {}, unobserve() {}, disconnect };
 		});
 		const rect = vi.spyOn(HTMLIFrameElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 640 } as DOMRect);
 		try {
@@ -100,7 +101,7 @@ describe("render activity", () => {
 				[640, 450],
 				[1144, 300],
 			];
-			render(<ActivityRow activity={renderActivity(300, heights)} />);
+			const { unmount } = render(<ActivityRow activity={renderActivity(300, heights)} />);
 			expect(frame().style.height).toBe("450px");
 			act(() => {
 				for (const callback of resized) callback([{ contentRect: { width: 320 } }] as never, {} as ResizeObserver);
@@ -108,6 +109,9 @@ describe("render activity", () => {
 			expect(frame().style.height).toBe("900px");
 			post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 512 } }, frame().contentWindow);
 			expect(frame().style.height).toBe("512px");
+			expect(disconnect).not.toHaveBeenCalled();
+			unmount();
+			expect(disconnect).toHaveBeenCalledTimes(1);
 		} finally {
 			rect.mockRestore();
 			vi.mocked(window.ResizeObserver).mockRestore();
