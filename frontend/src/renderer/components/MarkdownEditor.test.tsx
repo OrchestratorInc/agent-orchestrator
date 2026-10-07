@@ -33,4 +33,17 @@ describe("MarkdownEditor", () => {
 		expect(content).toHaveTextContent("!# Hello");
 		expect(content).not.toHaveTextContent("Refreshed from disk");
 	});
+
+	it("preserves CRLF line endings when emitting edits", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		const { container } = render(<MarkdownEditor filePath="README.md" onChange={onChange} value={"# Hello\r\n\r\nWorld"} />);
+		const content = container.querySelector(".cm-content");
+		expect(content).not.toBeNull();
+
+		await user.click(content!);
+		await user.type(content!, "!");
+
+		expect(onChange).toHaveBeenLastCalledWith("!# Hello\r\n\r\nWorld");
+	});
 });

@@ -39,9 +39,11 @@ export function MarkdownEditor({ value, onChange, filePath }: { value: string; o
 	useEffect(() => {
 		if (!containerRef.current) return;
 		userEditedRef.current = false;
+		const lineSeparator = value.includes("\r\n") ? "\r\n" : "\n";
 		const state = EditorState.create({
 			doc: value,
 			extensions: [
+				EditorState.lineSeparator.of(lineSeparator),
 				lineNumbers(),
 				indentUnit.of("  "),
 				markdown(),
@@ -55,7 +57,7 @@ export function MarkdownEditor({ value, onChange, filePath }: { value: string; o
 				EditorView.updateListener.of((update) => {
 					if (!update.docChanged || applyingExternalValueRef.current) return;
 					userEditedRef.current = true;
-					onChangeRef.current(update.state.doc.toString());
+					onChangeRef.current(update.state.sliceDoc());
 				}),
 			],
 		});
@@ -73,7 +75,7 @@ export function MarkdownEditor({ value, onChange, filePath }: { value: string; o
 
 	useEffect(() => {
 		const view = viewRef.current;
-		if (!view || userEditedRef.current || view.state.doc.toString() === value) return;
+		if (!view || userEditedRef.current || view.state.sliceDoc() === value) return;
 		applyingExternalValueRef.current = true;
 		view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
 		applyingExternalValueRef.current = false;
