@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Loader2 } from "lucide-react";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
@@ -28,6 +29,7 @@ export function SessionImportDialog({
 	className?: string;
 	tabIndex?: number;
 }) {
+	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const [project, setProject] = useState("all");
 	const [search, setSearch] = useState("");
@@ -117,7 +119,7 @@ export function SessionImportDialog({
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 		} catch (err) {
 			setError(
-				err instanceof Error ? err.message : "Import failed. Try again.",
+				err instanceof Error ? err.message : t("sessionImport.failed"),
 			);
 		} finally {
 			setImporting(false);
@@ -134,30 +136,28 @@ export function SessionImportDialog({
 			<DialogTrigger asChild>
 				<button type="button" className={className} tabIndex={tabIndex}>
 					<Download aria-hidden="true" className="size-4" />
-					<span>Import sessions</span>
+					<span>{t("sessionImport.trigger")}</span>
 				</button>
 			</DialogTrigger>
 			<DialogContent className="flex max-h-[85vh] flex-col sm:max-w-3xl">
 				<DialogHeader>
-					<DialogTitle>Bring your conversations into AO</DialogTitle>
+					<DialogTitle>{t("sessionImport.title")}</DialogTitle>
 					<DialogDescription>
-						Import readable Claude Code and Codex histories from this computer.
-						Only folders already registered as AO projects and standalone
-						conversations appear.
+						{t("sessionImport.description")}
 					</DialogDescription>
 				</DialogHeader>
 				<div className="flex flex-wrap gap-3">
 					<label className="flex flex-col gap-1 text-xs">
-						Project
+						{t("newTask.project")}
 						<select
-							aria-label="Project"
+							aria-label={t("newTask.project")}
 							value={project}
 							onChange={(e) => setProject(e.target.value)}
 							disabled={importing}
 							className="h-9 rounded-md border border-input bg-background px-2 text-sm"
 						>
-							<option value="all">All projects and Standalone</option>
-							<option value="standalone">Standalone</option>
+							<option value="all">{t("sessionImport.allProjects")}</option>
+							<option value="standalone">{t("remote.standalone")}</option>
 							{projects.map((p) => (
 								<option key={p.id} value={p.id}>
 									{p.name}
@@ -166,23 +166,22 @@ export function SessionImportDialog({
 						</select>
 					</label>
 					<label className="flex min-w-48 flex-1 flex-col gap-1 text-xs">
-						Find a conversation
+						{t("sessionImport.searchLabel")}
 						<Input
 							value={search}
 							onChange={(e) => setSearch(e.target.value)}
-							placeholder="Search titles or providers"
+							placeholder={t("sessionImport.searchPlaceholder")}
 							disabled={importing}
 						/>
 					</label>
 				</div>
 				<p className="text-xs text-muted-foreground">
-					Conversations active in the last 30 days are preselected. You can also
-					select older conversations. Import leaves every session idle.
+					{t("sessionImport.selectionHelp")}
 				</p>
 				{preview.isFetching ? (
 					<p role="status" className="flex items-center gap-2 text-sm">
 						<Loader2 className="size-4 animate-spin" aria-hidden="true" />
-						Reading local histories…
+						{t("sessionImport.reading")}
 					</p>
 				) : null}
 				{preview.error || error ? (
@@ -192,15 +191,14 @@ export function SessionImportDialog({
 				) : null}
 				{preview.data?.truncated ? (
 					<p role="status" className="text-xs text-warning">
-						This scan reached its read limit. Some conversations were not
-						scanned.
+						{t("sessionImport.truncated")}
 					</p>
 				) : null}
 				<div className="min-h-0 overflow-auto rounded-md border border-border">
 					<label className="sticky top-0 flex items-center gap-3 border-b border-border bg-surface px-3 py-2 text-xs">
 						<input
 							type="checkbox"
-							aria-label="Select all shown conversations"
+							aria-label={t("sessionImport.selectAllAria")}
 							checked={
 								eligible.length > 0 && eligible.every((c) => selected.has(c.id))
 							}
@@ -212,7 +210,7 @@ export function SessionImportDialog({
 							}
 							disabled={importing || !eligible.length}
 						/>
-						Select all shown · {visible.length} conversations
+						{t("sessionImport.selectAll", { count: visible.length })}
 					</label>
 					{visible.map((c) => (
 						<ImportRow
@@ -221,7 +219,7 @@ export function SessionImportDialog({
 							projectName={
 								c.projectId
 									? (names.get(c.projectId) ?? c.projectId)
-									: "Standalone"
+									: t("remote.standalone")
 							}
 							selected={selected.has(c.id)}
 							disabled={importing}
@@ -231,14 +229,14 @@ export function SessionImportDialog({
 					))}
 					{!preview.isFetching && !visible.length ? (
 						<p className="p-6 text-sm text-muted-foreground">
-							No readable conversations match this selection.
+							{t("sessionImport.empty")}
 						</p>
 					) : null}
 				</div>
 				{results.length ? (
 					<p role="status" className="text-sm">
-						{successful} {successful === 1 ? "conversation" : "conversations"} imported or already in AO.{" "}
-						{results.length - successful} could not be imported.
+						{t("sessionImport.result", { count: successful })}{" "}
+						{t("sessionImport.resultFailed", { count: results.length - successful })}
 					</p>
 				) : null}
 				<div className="flex items-center justify-between gap-3">
@@ -250,7 +248,7 @@ export function SessionImportDialog({
 						}}
 						disabled={importing || preview.isFetching}
 					>
-						Scan again
+						{t("sessionImport.scanAgain")}
 					</Button>
 					<Button
 						onClick={() => void importSelected()}
@@ -262,13 +260,13 @@ export function SessionImportDialog({
 						}
 					>
 						{importing
-							? "Importing…"
-							: `Import ${selectedVisible.length} ${selectedVisible.length === 1 ? "conversation" : "conversations"}`}
+							? t("sessionImport.importing")
+							: t("sessionImport.import", { count: selectedVisible.length })}
 					</Button>
 				</div>
 				{selectedVisible.length > 500 ? (
 					<p role="alert" className="text-xs text-destructive">
-						Select up to 500 conversations at a time.
+						{t("sessionImport.limit")}
 					</p>
 				) : null}
 			</DialogContent>
@@ -291,6 +289,7 @@ function ImportRow({
 	result?: ImportResult;
 	onSelect: (checked: boolean) => void;
 }) {
+	const { t, i18n } = useTranslation();
 	const imported = Boolean(
 		c.sessionId || (result && result.status !== "failed"),
 	);
@@ -298,7 +297,7 @@ function ImportRow({
 		<label className="flex cursor-pointer items-start gap-3 border-b border-border px-3 py-3 last:border-0">
 			<input
 				type="checkbox"
-				aria-label={`Import ${c.title}`}
+				aria-label={t("sessionImport.selectConversation", { title: c.title })}
 				className="mt-1"
 				checked={selected && !imported}
 				disabled={disabled || imported}
@@ -307,12 +306,12 @@ function ImportRow({
 			<span className="min-w-0 flex-1">
 				<span className="block truncate text-sm font-medium">{c.title}</span>
 				<span className="text-xs text-muted-foreground">
-					{projectName} · {c.harness} · {c.messageCount} messages ·{" "}
-					{new Date(c.lastActivity).toLocaleDateString()}
+					{projectName} · {c.harness} · {t("sessionImport.messages", { count: c.messageCount })} ·{" "}
+					{new Date(c.lastActivity).toLocaleDateString(i18n.resolvedLanguage)}
 				</span>
 				{imported ? (
 					<span className="block text-xs text-muted-foreground">
-						Already in AO
+						{t("sessionImport.alreadyImported")}
 					</span>
 				) : null}
 				{result?.error ? (
