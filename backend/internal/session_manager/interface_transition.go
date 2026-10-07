@@ -28,7 +28,6 @@ const (
 
 var (
 	errDrainQuiescenceUnverified = errors.New("AO could not verify that the terminal was idle after the latest input. The source interface was left untouched; retry after the terminal settles")
-	errDrainDraftPresent         = errors.New("AO found unsent text in the terminal composer. The source interface was left untouched; submit or clear the draft and retry, or choose Discard draft and switch")
 	errDrainDecisionPending      = errors.New("AO found a provider decision waiting in Terminal. The source interface was left untouched; answer it in Terminal and retry, or choose Cancel request and switch")
 )
 
@@ -442,8 +441,6 @@ func (m *Manager) runInterfaceTransition(
 		switch {
 		case errors.Is(err, errDrainQuiescenceUnverified):
 			code = "DRAIN_QUIESCENCE_UNVERIFIED"
-		case errors.Is(err, errDrainDraftPresent):
-			code = "DRAIN_DRAFT_PRESENT"
 		case errors.Is(err, errDrainDecisionPending):
 			code = "DRAIN_DECISION_PENDING"
 		}
@@ -932,11 +929,9 @@ func (m *Manager) prepareSourceHandoff(
 
 	var detector ports.TerminalActivityDetector
 	var surfaceInspector ports.TerminalSurfaceInspector
-	var emptyComposerDetector ports.EmptyComposerDetector
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
 		detector, _ = agent.(ports.TerminalActivityDetector)
 		surfaceInspector, _ = agent.(ports.TerminalSurfaceInspector)
-		emptyComposerDetector, _ = agent.(ports.EmptyComposerDetector)
 	}
 	styledOutput, _ := m.runtime.(ports.StyledTerminalOutputReader)
 	// Surface proof is a joint capability: the adapter must understand its TUI
@@ -948,7 +943,6 @@ func (m *Manager) prepareSourceHandoff(
 	defer ticker.Stop()
 	idleSince := time.Time{}
 	idleSamples := 0
-	draftSamples := 0
 	unverifiedIdleSince := time.Time{}
 	for {
 		current, ok, err := m.store.GetSession(ctx, rec.ID)
@@ -1000,8 +994,6 @@ func (m *Manager) prepareSourceHandoff(
 				unverifiedIdle = current.Activity.State == domain.ActivityIdle && !idleProven
 			} else if outputErr == nil {
 				observation := surfaceInspector.InspectTerminalSurface(output)
-				draftObserved := observation.Composer == ports.TerminalComposerDraft &&
-					current.Activity.State == domain.ActivityIdle
 				switch {
 				case observation.Work == ports.TerminalSurfaceWorkWaitingInput,
 					observation.Work == ports.TerminalSurfaceWorkBlocked:
@@ -1013,31 +1005,11 @@ func (m *Manager) prepareSourceHandoff(
 						cancelProbe()
 					}
 					return errDrainDecisionPending
-				case draftObserved:
-					// A stable positively identified draft is sufficient to
-					// preserve the source. Work markers are provider chrome
-					// heuristics and may also occur in transcript or draft text, so
-					// they cannot hide unsent input when the durable provider state
-					// is idle. Single captures are not enough: providers repaint
-					// non-dim chrome (banner, queue, update rows) through the
-					// composer borders mid-frame, so require the same repeated
-					// evidence as the idle decision before blocking the switch.
-					draftSamples++
-					if draftSamples >= interfaceTransitionSurfaceIdleSamples {
-						if cancelProbe != nil {
-							cancelProbe()
-						}
-						return errDrainDraftPresent
-					}
 				case current.Activity.State == domain.ActivityIdle &&
-					observation.Work == ports.TerminalSurfaceWorkIdle &&
-					observation.Composer == ports.TerminalComposerEmpty:
+					observation.Work == ports.TerminalSurfaceWorkIdle:
 					idleProven = true
 				case observation.Work == ports.TerminalSurfaceWorkActive:
 					surfaceKnownBusy = true
-				}
-				if !draftObserved {
-					draftSamples = 0
 				}
 			}
 		}
@@ -1048,12 +1020,6 @@ func (m *Manager) prepareSourceHandoff(
 				now = time.Now()
 				state, authoritative := detector.DetectTerminalActivity(output)
 				idleProven = authoritative && state == domain.ActivityIdle
-				if idleProven && emptyComposerDetector != nil {
-					// The legacy activity contract cannot carry draft state. At
-					// this destructive boundary, an adapter that can separately
-					// prove composer emptiness must do so before idle is accepted.
-					idleProven = emptyComposerDetector.ComposerIsEmpty(output)
-				}
 			}
 		}
 		if current.Activity.State != domain.ActivityIdle || surfaceKnownBusy {

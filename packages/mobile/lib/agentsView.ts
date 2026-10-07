@@ -27,12 +27,16 @@ export type BoardZone = "needs_you" | "needs_review" | "ready" | "building" | "v
 /**
  * Statuses where the agent itself is waiting on a person.
  *
+ * `exited` is not here: a stopped agent needs no decision from a person, and the
+ * daemon leaves every agent stopped after a restart; the desktop and mobile chat
+ * screens resume it when the session is opened. Counting it would put the whole board under "Needs you".
+ *
  * Deliberately agent-level only. `ci_failed` and `changes_requested` are PR
  * facts, and the daemon already decides whether AO or a person owns their next
  * turn — lifting them here would second-guess that and split one PR's lifecycle
  * across two sections.
  */
-const AGENT_BLOCKED = new Set(["needs_input", "stuck", "errored", "exited"]);
+const AGENT_BLOCKED = new Set(["needs_input", "stuck", "errored"]);
 
 export function agentBlocked(session: Pick<DashboardSession, "status" | "displayStatus">): boolean {
 	return AGENT_BLOCKED.has(session.status ?? "") || session.displayStatus === "Blocked";

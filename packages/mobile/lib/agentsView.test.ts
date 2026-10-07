@@ -53,8 +53,13 @@ describe("boardZoneOf", () => {
 		expect(boardZoneOf(session({ status: "needs_input", kanbanColumn: "building" }))).toBe("needs_you");
 		expect(boardZoneOf(session({ status: "stuck" }))).toBe("needs_you");
 		expect(boardZoneOf(session({ status: "errored" }))).toBe("needs_you");
-		expect(boardZoneOf(session({ status: "exited" }))).toBe("needs_you");
 		expect(boardZoneOf(session({ status: "working", displayStatus: "Blocked" }))).toBe("needs_you");
+	});
+
+	// A stopped agent is not waiting on anyone; opening the session in a client
+	// resumes it, so a restart must not flood "Needs you".
+	it("keeps an exited agent in its delivery column", () => {
+		expect(boardZoneOf(session({ status: "exited", kanbanColumn: "building" }))).toBe("building");
 	});
 
 	// PR facts stay where the daemon put them: it already decided whether AO or a
