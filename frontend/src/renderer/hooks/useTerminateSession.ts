@@ -1,4 +1,4 @@
-import { type QueryClient, useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, skipToken, useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import {
@@ -182,7 +182,7 @@ function workspaceCleanupError(session: WorkspaceSession | undefined, t: ReturnT
 export function useTerminateSessionState(sessionId: string, hostId?: string) {
 	const { t } = useTranslation();
 	// Observe existing board data; this does not start another network request.
-	const { data } = useQuery<WorkspaceSummary[]>({ queryKey: workspaceQueryKeyForHost(hostId), enabled: false });
+	const { data } = useQuery<WorkspaceSummary[]>({ queryKey: workspaceQueryKeyForHost(hostId), queryFn: skipToken });
 	const session = data?.flatMap((workspace) => workspace.sessions).find((session) => session.id === sessionId);
 	const summary = summarizeBySession(useTerminateSessionMutations()).find(({ session }) =>
 		session.id === sessionId && session.hostId === hostId);
@@ -196,7 +196,7 @@ export function useTerminateSessionState(sessionId: string, hostId?: string) {
 
 export function useProjectTerminateSessionStates(workspaceId: string | undefined, hostId?: string) {
 	const { t } = useTranslation();
-	const { data } = useQuery<WorkspaceSummary[]>({ queryKey: workspaceQueryKeyForHost(hostId), enabled: false });
+	const { data } = useQuery<WorkspaceSummary[]>({ queryKey: workspaceQueryKeyForHost(hostId), queryFn: skipToken });
 	const sessions = data?.find((workspace) => workspace.id === workspaceId)?.sessions ?? [];
 	const states = summarizeBySession(useTerminateSessionMutations())
 		.filter(({ session }) => session.hostId === hostId && session.workspaceId === workspaceId)
