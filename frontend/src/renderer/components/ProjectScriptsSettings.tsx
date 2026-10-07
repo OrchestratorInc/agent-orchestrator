@@ -102,8 +102,8 @@ function ScriptsEditor({ project, onSaveState, onSaved }: { project: Project; on
 					</div>
 					{!scratch && <div className="rounded-md border border-border p-3 text-xs text-settings-muted">
 						<p className="font-medium text-settings-label">{t(`settings.project.${kind}Paths`)}</p>
-						<p><code>AO_SOURCE_TREE_PATH</code> — {t(`settings.project.${kind}SourcePath`)}</p>
-						<p><code>AO_WORKTREE_PATH</code> — {t(`settings.project.${kind}WorktreePath`)}</p>
+						<p><code>{"AO_SOURCE_TREE_PATH"}</code> — {t(`settings.project.${kind}SourcePath`)}</p>
+						<p><code>{"AO_WORKTREE_PATH"}</code> — {t(`settings.project.${kind}WorktreePath`)}</p>
 					</div>}
 					<div className="space-y-4">
 						{drafts[kind].map((step, index) => <div key={index}>
