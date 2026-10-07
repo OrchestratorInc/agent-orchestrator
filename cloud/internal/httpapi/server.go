@@ -621,23 +621,20 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 		case "/api/cloud/v1/worker/transport/claim", "/api/cloud/v1/worker/turns/claim":
 			level = slog.LevelDebug
 		}
-		s.logger.Log(
-			r.Context(),
-			level,
-			"HTTP request complete",
-			"method",
-			r.Method,
-			"route",
-			route,
-			"status",
-			status,
-			"duration_ms",
-			time.Since(started).Milliseconds(),
-			"request_id",
-			requestID(r),
-			"release",
-			s.release,
-		)
+		attrs := []any{
+			"method", r.Method,
+			"route", route,
+			"status", status,
+			"duration_ms", time.Since(started).Milliseconds(),
+			"request_id", requestID(r),
+			"release", s.release,
+		}
+		// Stamp the URL-scoped organization so the access log is greppable by
+		// tenant for fast RCA (empty on non-org routes like worker/health).
+		if orgID := chi.URLParam(r, "orgId"); orgID != "" {
+			attrs = append(attrs, "org_id", orgID)
+		}
+		s.logger.Log(r.Context(), level, "HTTP request complete", attrs...)
 	})
 }
 
