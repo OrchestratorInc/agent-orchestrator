@@ -4,6 +4,8 @@ export type MarkdownFileContextValue = {
 	sessionId: string;
 	hostId?: string;
 	filePath: string;
+	/** Origin serving an artifact directory; set only for session artifact markdown. */
+	artifactOrigin?: string;
 	/**
 	 * The file detail's load timestamp. The blob route sets `no-store`, so this is
 	 * what makes a rewritten image reload — see `buildWorkspaceBlobUrl`.

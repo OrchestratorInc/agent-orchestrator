@@ -89,6 +89,7 @@ const PLUGINS = [remarkGfm, remarkSessionLinks];
  */
 const StreamingProse = createContext(false);
 const InsideMarkdownLink = createContext(false);
+const SafeOriginContent = createContext(false);
 const REMOTE_PREVIEW_UNAVAILABLE = "This link points to the remote host. Preview is unavailable on this device.";
 const OpenChatLink = createContext<{
 	open?: (url: string) => void;
@@ -146,6 +147,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	text,
 	streaming = false,
 	muted = false,
+	className,
+	safeOrigin = false,
 }: {
 	text: string;
 	streaming?: boolean;
@@ -155,19 +158,24 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	 * being dimmed with opacity — which would wash out code and links too.
 	 */
 	muted?: boolean;
+	className?: string;
+	safeOrigin?: boolean;
 }) {
 	return (
 		<StreamingProse.Provider value={streaming}>
+			<SafeOriginContent.Provider value={safeOrigin}>
 			<div
 				className={cn(
 					"chat-md leading-[1.58]",
 					muted ? "text-[13px] text-muted-foreground" : "text-sm text-foreground",
+					className,
 				)}
 			>
 				<Markdown remarkPlugins={PLUGINS} components={COMPONENTS} urlTransform={chatUrlTransform}>
 					{text}
 				</Markdown>
 			</div>
+			</SafeOriginContent.Provider>
 		</StreamingProse.Provider>
 	);
 });
@@ -266,11 +274,13 @@ function compactEmoji(children: ReactNode): ReactNode {
 }
 
 function MarkdownLink({ href, children }: { href?: string; children?: ReactNode }) {
+	const safeOriginContent = useContext(SafeOriginContent);
 	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, workspacePaths } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
 		? workspaceFilePath(href, workspacePaths) ?? findWorkspaceFilePath(href, workspacePaths) ?? explicitWorkspaceFilePath(href)
 		: undefined;
 	const sessionLink = Boolean(href && isSessionLink(href));
+	if (safeOriginContent && !sessionLink) return <>{children}</>;
 	const openInFiles = filePath && !/\.html?$/i.test(filePath) ? filePath : undefined;
 	if (remoteHost && href && (isHostLocalWebLink(href) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
 		return <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
@@ -320,12 +330,43 @@ export function SessionLabelLink({ href, children }: { href: string; children: R
 }
 
 function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
+	if (useContext(SafeOriginContent)) return <span className="text-muted-foreground">{alt || (typeof src === "string" ? src : "")}</span>;
 	const { remoteHost } = useContext(OpenChatLink);
 	if (remoteHost && typeof src === "string" && isHostLocalWebLink(src)) {
 		return <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>{alt || src}</span>;
 	}
 	return <ChatImage src={src} alt={alt} />;
 }
+
+const ORIGIN_PREVIEW_ELEMENTS = ["a", "br", "code", "del", "em", "img", "strong"];
+const ORIGIN_PREVIEW_COMPONENTS: Components = {
+	a: ({ href, children }) => href && isSessionLink(href)
+		? <MarkdownLink href={href}>{children}</MarkdownLink>
+		: <>{children}</>,
+	img: ({ alt }) => <span className="text-muted-foreground">{alt}</span>,
+	code: ({ children }) => <code className="font-mono text-[0.95em] text-markdown-code">{children}</code>,
+};
+
+/**
+ * A collapsed cross-boundary report preview. Inline formatting and canonical
+ * session links remain useful, while block UI, external links, and remote image
+ * fetches stay inert until the reader expands the report.
+ */
+export const OriginPreviewMarkdown = memo(function OriginPreviewMarkdown({ text }: { text: string }) {
+	return (
+		<div className="chat-md whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+			<Markdown
+				allowedElements={ORIGIN_PREVIEW_ELEMENTS}
+				unwrapDisallowed
+				remarkPlugins={PLUGINS}
+				components={ORIGIN_PREVIEW_COMPONENTS}
+				urlTransform={chatUrlTransform}
+			>
+				{text}
+			</Markdown>
+		</div>
+	);
+});
 
 /** Linkify canonical session URLs without interpreting any surrounding text as Markdown. */
 export const SessionLinkedText = memo(function SessionLinkedText({ text }: { text: string }) {

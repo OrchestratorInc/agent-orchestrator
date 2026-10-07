@@ -2,9 +2,10 @@
 // so the zoning, archive rule and copy are unit-testable, the same split as
 // prView.ts / orchestratorView.ts.
 //
-// Mirrors the desktop board (frontend/src/renderer/components/SessionsBoard.tsx
-// and lib/session-presentation.ts) so the two speak the same language: same
-// zone names, same archive rule, same "PR #12, #13 open" phrasing.
+// Shares desktop's language (frontend/src/renderer/components/SessionsBoard.tsx
+// and lib/session-presentation.ts): same column derivation, same archive rule,
+// same "PR #12, #13 open" phrasing. The board's order is mobile's own — see
+// groupSessions.
 import type { DashboardPR, DashboardSession, KanbanColumn } from "./api";
 import { relativeTime } from "./notificationView";
 import { prLifecycle, type Tone } from "./prView";
@@ -22,15 +23,6 @@ import { statusVisual, type Theme } from "./theme";
  * wrong for a phone, which is opened to find what is stuck.
  */
 export type BoardZone = "needs_you" | "needs_review" | "ready" | "building" | "validating";
-
-/**
- * Mobile's order: the three sections a person owns, then the two a machine does.
- *
- * Desktop orders its lanes by delivery progress (building → validating →
- * needs_review → ready) because a board is read left to right as a pipeline. A
- * phone is read top down as a queue, so the order is by who is blocked.
- */
-export const BOARD_ZONES: BoardZone[] = ["needs_you", "needs_review", "ready", "building", "validating"];
 
 /**
  * Statuses where the agent itself is waiting on a person.
@@ -87,10 +79,6 @@ export function boardZoneOf(session: DashboardSession): BoardZone {
 }
 
 /**
- * Section labels, taken from desktop's own strings so the two apps name the
- * same thing identically (product-ui session-presentation.ts, `column.*`).
- */
-/**
  * A shape for each status, so state does not rest on colour alone.
  *
  * The row already tints its trailing label by status, which is invisible to a
@@ -136,21 +124,6 @@ export function workerStatusGlyph(status?: string | null): WorkerStatusGlyph | n
 	}
 }
 
-export function zoneMeta(t: Theme, zone: BoardZone): { label: string; color: string } {
-	switch (zone) {
-		case "needs_you":
-			return { label: "Needs you", color: t.amber };
-		case "needs_review":
-			return { label: "In review", color: t.textTertiary };
-		case "ready":
-			return { label: "Ready", color: t.green };
-		case "validating":
-			return { label: "Validating", color: t.textTertiary };
-		default:
-			return { label: "Building", color: t.orange };
-	}
-}
-
 /**
  * Whether a session belongs in the archive rather than on the board.
  *
@@ -163,7 +136,35 @@ export function isArchived(session: DashboardSession): boolean {
 	return session.isTerminated === true || session.status === "terminated";
 }
 
-export type BoardSection = { zone: BoardZone; label: string; color: string; data: DashboardSession[] };
+/**
+ * The board's sections. Not desktop's delivery lanes: those answer "how far
+ * along is each PR", a pipeline question. A phone is opened to answer "what
+ * happened since I last looked", so below Needs you everything is one list,
+ * newest event first, and the row's own status says which lane it is in.
+ */
+export type BoardSectionZone = "needs_you" | "recent";
+
+export type BoardSection = { zone: BoardSectionZone; label: string; color: string; data: DashboardSession[] };
+
+export function sectionMeta(t: Theme, zone: BoardSectionZone): { label: string; color: string } {
+	return zone === "needs_you" ? { label: "Needs you", color: t.amber } : { label: "Recent", color: t.textTertiary };
+}
+
+/**
+ * When something a person would notice last happened to the session: the
+ * daemon's `lastEventAt` (an activity-state change, a PR lifecycle or CI change,
+ * a review). Older daemons don't send it; their activity timestamp only moves
+ * on state changes too, so it is the honest fallback.
+ */
+export function eventAtOf(session: DashboardSession): string {
+	return session.lastEventAt || session.lastActivityAt || session.createdAt || "";
+}
+
+function time(value: string | null | undefined): number {
+	if (!value) return 0;
+	const parsed = Date.parse(value);
+	return Number.isNaN(parsed) ? 0 : parsed;
+}
 
 export type WorkerRowPresentation = {
 	title: string;
@@ -197,7 +198,8 @@ export function workerRowPresentation(
 	const title = sessionTitle(session);
 	const visual = statusVisual(t, session.status);
 	const elapsedStatuses = new Set(["idle", "no_signal", "unknown", "done", "killed", "terminated"]);
-	const elapsed = relativeTime(session.lastActivityAt, now);
+	// The time the board is ordered by, so a row says why it sits where it does.
+	const elapsed = relativeTime(eventAtOf(session), now);
 	const useElapsed = elapsedStatuses.has(session.status ?? "") && Boolean(elapsed);
 
 	return {
@@ -215,58 +217,124 @@ function comparePinned(a: DashboardSession, b: DashboardSession): number {
 	return Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned));
 }
 
-function compareActivity(a: DashboardSession, b: DashboardSession, newestFirst: boolean): number {
-	const left = a.lastActivityAt ?? "";
-	const right = b.lastActivityAt ?? "";
-	return newestFirst ? right.localeCompare(left) : left.localeCompare(right);
-}
-
-function compareInZone(zone: BoardZone, a: DashboardSession, b: DashboardSession): number {
-	// Sections a machine is turning read newest-first, because the interesting
-	// one is whatever just moved. Sections a person owns read oldest-first, so
-	// what has been waiting longest is at the top.
-	return compareActivity(a, b, zone === "building" || zone === "validating");
+// Compared as instants: the daemon emits RFC 3339 with variable fractional
+// digits, which do not sort as strings ("10:00:00.5Z" < "10:00:00Z").
+function compareEvent(a: DashboardSession, b: DashboardSession, newestFirst: boolean): number {
+	const delta = time(eventAtOf(a)) - time(eventAtOf(b));
+	return newestFirst ? -delta : delta;
 }
 
 /**
- * The board, split into its four sections plus the archive.
+ * The board: Pinned, Needs you, Recent, and the archive.
  *
- * Empty zones are dropped rather than rendered as empty headers — on a phone a
- * run of empty section titles is most of the screen.
+ * Needs you reads oldest first, so whoever has been waiting longest is at the
+ * top. Recent reads newest first. A busy agent does not float up for being
+ * busy — see eventAtOf. Empty sections are dropped rather than rendered as
+ * empty headers; on a phone a run of empty titles is most of the screen.
  */
 export function groupSessions(
 	t: Theme,
 	sessions: DashboardSession[],
 ): { pinned: DashboardSession[]; sections: BoardSection[]; archived: DashboardSession[] } {
 	const pinned: DashboardSession[] = [];
-	const live: DashboardSession[] = [];
+	const needsYou: DashboardSession[] = [];
+	const recent: DashboardSession[] = [];
 	const archived: DashboardSession[] = [];
 	for (const s of sessions) {
 		if (isArchived(s)) archived.push(s);
 		else if (s.isPinned) pinned.push(s);
-		else live.push(s);
+		else if (boardZoneOf(s) === "needs_you") needsYou.push(s);
+		else recent.push(s);
 	}
 	// Pinning is a deliberate bookmark, so the most recently pinned worker gets
 	// the first slot. Activity is the fallback for older daemon versions.
 	pinned.sort((a, b) => (b.pinnedAt ?? b.lastActivityAt ?? "").localeCompare(a.pinnedAt ?? a.lastActivityAt ?? ""));
+	needsYou.sort((a, b) => compareEvent(a, b, false));
+	recent.sort((a, b) => compareEvent(a, b, true));
 
-	const byZone = new Map<BoardZone, DashboardSession[]>();
-	for (const s of live) {
-		const zone = boardZoneOf(s);
-		const bucket = byZone.get(zone);
-		if (bucket) bucket.push(s);
-		else byZone.set(zone, [s]);
-	}
-
-	const sections = BOARD_ZONES.filter((z) => byZone.get(z)?.length).map((zone) => {
-		const data = byZone.get(zone) ?? [];
-		data.sort((a, b) => compareInZone(zone, a, b));
-		return { zone, ...zoneMeta(t, zone), data };
-	});
+	const sections = (["needs_you", "recent"] as const)
+		.map((zone) => ({ zone, ...sectionMeta(t, zone), data: zone === "needs_you" ? needsYou : recent }))
+		.filter((section) => section.data.length > 0);
 
 	// Pin history deliberately kept close, then show the newest remaining history.
-	archived.sort((a, b) => comparePinned(a, b) || compareActivity(a, b, true));
+	archived.sort((a, b) => comparePinned(a, b) || compareEvent(a, b, true));
 	return { pinned, sections, archived };
+}
+
+/**
+ * The order the user is looking at, held still while they look.
+ *
+ * Re-sorting on every poll would move a row out from under a thumb. The board
+ * takes a snapshot when it is opened or refreshed and keeps each section in
+ * that order; rows still update in place. Section membership stays live, so a
+ * worker that starts waiting on you still moves to Needs you at once.
+ */
+export type OrderSnapshot = { rank: Record<string, number>; eventAt: Record<string, string>; pinned: Record<string, true> };
+
+export function snapshotOrder(ordered: DashboardSession[], keyOf: (s: DashboardSession) => string): OrderSnapshot {
+	const rank: Record<string, number> = {};
+	const eventAt: Record<string, string> = {};
+	const pinned: Record<string, true> = {};
+	ordered.forEach((s, i) => {
+		rank[keyOf(s)] = i;
+		eventAt[keyOf(s)] = eventAtOf(s);
+		if (s.isPinned) pinned[keyOf(s)] = true;
+	});
+	return { rank, eventAt, pinned };
+}
+
+/**
+ * One section's sessions in a snapshot's order. Sessions the snapshot has not
+ * seen go first, where a new one belongs anyway; Array.sort is stable, so they
+ * keep their fresh order among themselves.
+ */
+export function holdOrder(
+	snapshot: OrderSnapshot,
+	data: DashboardSession[],
+	keyOf: (s: DashboardSession) => string,
+): DashboardSession[] {
+	return [...data].sort((a, b) => (snapshot.rank[keyOf(a)] ?? -1) - (snapshot.rank[keyOf(b)] ?? -1));
+}
+
+/**
+ * How many sessions have news since the snapshot: an event newer than the one
+ * it recorded, or not in it at all. The count on the "N updated" pill.
+ */
+export function updatedSince(
+	snapshot: OrderSnapshot,
+	sessions: DashboardSession[],
+	keyOf: (s: DashboardSession) => string,
+): number {
+	return sessions.filter((s) => {
+		const before = snapshot.eventAt[keyOf(s)];
+		return before === undefined || time(eventAtOf(s)) > time(before);
+	}).length;
+}
+
+/**
+ * Whether the board should take a new snapshot from the fresh order.
+ *
+ * - No snapshot yet, or one taken before anything loaded.
+ * - The user pinned or unpinned a worker. It is their own action, so it applies
+ *   at once, even while the pill is holding other news back.
+ * - The held order differs from the fresh one with no news behind it.
+ * - News arrived without moving anything (the row was already in place). It is
+ *   already in view, so the snapshot absorbs it. Otherwise the pill would count
+ *   it later, and a pin made after it would stay ranked by its old position.
+ *
+ * Only a reorder with news behind it is held, behind the "N updated" pill. A
+ * snapshot taken from `fresh` never asks for another, so this cannot loop.
+ */
+export function shouldResnapshot(
+	snapshot: OrderSnapshot | null,
+	fresh: DashboardSession[],
+	stale: boolean,
+	keyOf: (s: DashboardSession) => string,
+): boolean {
+	if (snapshot === null || Object.keys(snapshot.rank).length === 0) return true;
+	if (fresh.some((s) => !!s.isPinned !== (snapshot.pinned[keyOf(s)] === true))) return true;
+	const news = updatedSince(snapshot, fresh, keyOf) > 0;
+	return stale !== news;
 }
 
 /**

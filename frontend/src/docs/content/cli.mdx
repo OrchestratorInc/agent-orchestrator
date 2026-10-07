@@ -179,10 +179,10 @@ Inside a worker, `ao report "Progress summary"` sends a report to its existing o
 
 Needs-input reports are sent immediately. Stuck reports may interrupt or combine with other reports. Done reports wait five minutes before delivery; ordinary checkpoints can wait up to one hour.
 
-For a structured report, choose one state flag: `--checkpoint`, `--needs-input`, `--stuck`, or `--done`. Include `--note` with it. Attach outputs with `--artifact`, `--pr-created`, or `--pr-reviewed`; pull-request flags require full URLs. Do not combine free-form text with structured state or output flags.
+For a structured report, choose one state flag: `--checkpoint`, `--needs-input`, `--stuck`, or `--done`. Include `--note` with it. Attach reviewable deliverables with `--artifact`, `--pr-created`, or `--pr-reviewed`; pull-request flags require full URLs. Do not combine free-form text with structured state or output flags.
 
 ```bash
-ao report --done --note "Focused tests passed" --artifact ./test-results.txt
+ao report --done --note "Focused tests passed"
 ```
 
 `ao report` must run in a worker environment that provides `AO_SESSION_ID`.

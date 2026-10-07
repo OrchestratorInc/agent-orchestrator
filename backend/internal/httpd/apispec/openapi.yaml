@@ -6928,6 +6928,25 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      - description: File root to serve from. Defaults to the session workspace; artifact
+          selects the session artifact directory.
+        in: query
+        name: source
+        schema:
+          description: File root to serve from. Defaults to the session workspace;
+            artifact selects the session artifact directory.
+          enum:
+          - workspace
+          - artifact
+          type: string
+      - description: When true, serve Markdown files as raw source instead of rendering
+          them to HTML for Browser preview.
+        in: query
+        name: raw
+        schema:
+          description: When true, serve Markdown files as raw source instead of rendering
+            them to HTML for Browser preview.
+          type: boolean
       responses:
         "200":
           content:
@@ -6953,7 +6972,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Serve a static browser preview file from a session workspace
+      summary: Serve a static browser preview file from a session workspace or artifact
+        directory
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/preview/server:
@@ -10649,6 +10669,10 @@ components:
           $ref: '#/components/schemas/AgentSwitch'
         activity:
           $ref: '#/components/schemas/DomainActivity'
+        artifactFiles:
+          items:
+            $ref: '#/components/schemas/SessionArtifact'
+          type: array
         autoInjectCI:
           type: boolean
         autoInjectReview:
@@ -10709,6 +10733,14 @@ components:
           type: string
         kind:
           type: string
+        lastEventAt:
+          format: date-time
+          type: string
+        lastInteractionAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         lastUserMessageAt:
           format: date-time
           type:
@@ -10720,6 +10752,13 @@ components:
           - tui
           type: string
         model:
+          type: string
+        outputType:
+          enum:
+          - none
+          - pr
+          - artifact
+          - pr_artifact
           type: string
         pinnedAt:
           format: date-time
@@ -10741,6 +10780,10 @@ components:
           - ready
           - failed
           type: string
+        provisionSteps:
+          items:
+            $ref: '#/components/schemas/SessionProvisionStep'
+          type: array
         prs:
           items:
             $ref: '#/components/schemas/SessionPRFacts'
@@ -10827,6 +10870,7 @@ components:
       - terminateOnPrMerge
       - autoInjectReview
       - autoInjectCI
+      - outputType
       - createdAt
       - updatedAt
       - isPinned
@@ -10835,6 +10879,7 @@ components:
       - status
       - kanbanColumn
       - displayStatus
+      - lastEventAt
       - prs
       type: object
     ControllersSetKeepAwakeRequest:
@@ -11597,10 +11642,6 @@ components:
             when saving agent cues.
           maxLength: 4096
           type: string
-        description:
-          description: Optional human note about the cue, at most 240 bytes.
-          maxLength: 240
-          type: string
         name:
           description: Short cue name, unique within the project. Trimmed; must be
             non-empty and at most 64 bytes.
@@ -11633,8 +11674,6 @@ components:
         createdAt:
           format: date-time
           type: string
-        description:
-          type: string
         id:
           type: string
         name:
@@ -11652,7 +11691,6 @@ components:
       - id
       - projectId
       - name
-      - description
       - type
       - createdAt
       - updatedAt
@@ -13810,6 +13848,8 @@ components:
           maxLength: 4096
           minLength: 1
           type: string
+        senderSessionId:
+          type: string
         userAuthored:
           type: boolean
       required:
@@ -13838,6 +13878,35 @@ components:
           type: array
       required:
       - recent
+      type: object
+    SessionArtifact:
+      properties:
+        kind:
+          enum:
+          - html
+          - markdown
+          - file
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        previewUrl:
+          type: string
+        rawUrl:
+          type: string
+        size:
+          format: int64
+          type: integer
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - path
+      - name
+      - kind
+      - size
+      - updatedAt
       type: object
     SessionInterfaceTransition:
       properties:
@@ -14324,6 +14393,35 @@ components:
           type: string
       required:
       - sessionId
+      type: object
+    SessionProvisionStep:
+      properties:
+        endedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          enum:
+          - fetch
+          - worktree
+          - setup
+          - agent
+          type: string
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        status:
+          enum:
+          - pending
+          - running
+          - done
+          type: string
+      required:
+      - id
+      - status
       type: object
     SessionResponse:
       properties:

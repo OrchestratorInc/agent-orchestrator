@@ -23,6 +23,7 @@ import {
 	useRef,
 	useState,
 	useSyncExternalStore,
+	type ComponentProps,
 	type CSSProperties,
 	type KeyboardEvent as ReactKeyboardEvent,
 	type MouseEvent as ReactMouseEvent,
@@ -71,6 +72,7 @@ import { purgeFileAttachments, purgeFileAttachmentsForSession } from "../../hook
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { sameContent, useStableList } from "../../lib/stable-list";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
+import { useSidebarChromeClearanceRef } from "../../hooks/useSidebarChromeGeometry";
 import { apiErrorCode, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
@@ -119,6 +121,7 @@ import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
+import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { TurnPlan } from "./TurnPlan";
 import { TurnSettingsBar } from "./TurnSettingsBar";
@@ -236,7 +239,7 @@ type MessageEditDraft = ChatDraftInlineEdit;
  * change while a running turn emits output, so retain the previous list when its
  * contents are equal and avoid redrawing the dock and composer subtree.
  */
-function useQueuedMessages(snapshot: ConversationSnapshot): QueuedMessage[] {
+function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: string): QueuedMessage[] {
 	const previous = useRef<QueuedMessage[]>([]);
 	return useMemo(() => {
 		const messagesByTurn = new Map(
@@ -251,7 +254,7 @@ function useQueuedMessages(snapshot: ConversationSnapshot): QueuedMessage[] {
 				.map((message) => [message.turnId as string, message]),
 		);
 		const next = snapshot.turns.flatMap((queuedTurn) => {
-			if (queuedTurn.state !== "queued") return [];
+			if (queuedTurn.state !== "queued" || queuedTurn.id === excludeTurnId) return [];
 			const message = messagesByTurn.get(queuedTurn.id);
 			return message ? [{ turnId: queuedTurn.id, message }] : [];
 		});
@@ -267,7 +270,7 @@ function useQueuedMessages(snapshot: ConversationSnapshot): QueuedMessage[] {
 		}
 		previous.current = next;
 		return next;
-	}, [snapshot.items, snapshot.turns]);
+	}, [excludeTurnId, snapshot.items, snapshot.turns]);
 }
 
 export interface ChatWorkspaceProps {
@@ -301,6 +304,11 @@ export interface ChatWorkspaceProps {
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** Suppress a transient stopped snapshot while a mode handoff installs Chat. */
 	controllerTransitioning?: boolean;
+	/**
+	 * A stopped agent is being resumed after the chat opened. Unlike a mode
+	 * handoff, the history is final, so it stays readable; only sending waits.
+	 */
+	agentResuming?: boolean;
 	/** Freeze agent-owned Chat controls while a durable session mutation owns input. */
 	agentInputDisabled?: boolean;
 	/** Fence new agent work without blocking decisions required by the current turn. */
@@ -452,10 +460,6 @@ export interface ChatWorkspaceProps {
 	promoteQueuedTurnPendingTurnId?: string;
 	cancelQueuedTurnPendingTurnId?: string;
 	editQueuedTurnPendingTurnId?: string;
-	/** Start the tool servers again. Absent when the harness cannot. */
-	onReloadMcpServers?: () => void;
-	reloadingMcpServers?: boolean;
-	mcpReloadError?: string;
 }
 
 type ChatWorkspaceActivation =
@@ -471,10 +475,10 @@ function OfflineRemoteTerminal() {
  * Do not mount any renderer draft owner until the daemon incarnation has
  * authoritatively claimed its storage scope. The activation transition itself
  * owns cleanup of the predecessor; callbacks from that obsolete surface can
- * then only fail closed against the successor lease.
+ * then only fail closed against the successor lease. If storage alone fails,
+ * Chat still mounts, but with an in-memory composer that owns no saved drafts.
  */
 export function ChatWorkspace(props: ChatWorkspaceProps) {
-	const translateDraft = useChatDraftTranslation();
 	const { snapshot, session, draftOwner, uiSessionId = draftOwner?.sessionId ?? snapshot.sessionId } = props;
 	const draftScope = useMemo<ChatDraftScope>(
 		() => draftOwner ?? ({
@@ -488,6 +492,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 	const scopeKey = chatDraftScopeKey(draftScope);
 	const [activation, setActivation] = useState<ChatWorkspaceActivation>();
 	const [activationAttempt, setActivationAttempt] = useState(0);
+	const retryDraftPersistence = useCallback(() => setActivationAttempt((attempt) => attempt + 1), []);
 
 	useLayoutEffect(() => {
 		// Snapshot-only previews have no daemon session incarnation to arbitrate.
@@ -505,10 +510,8 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 		setActivation({ key: scopeKey, state: "active" });
 	}, [activationAttempt, draftOwner, draftScope, scopeKey, session?.createdAt]);
 
-	if (activation?.key !== scopeKey || activation.state !== "active") {
-		const failure = activation?.key === scopeKey && activation.state === "failed"
-			? activation.reason
-			: undefined;
+	const obsolete = activation?.key === scopeKey && activation.state === "failed" && activation.reason === "obsolete";
+	if (activation?.key !== scopeKey || obsolete) {
 		return (
 			<section
 				aria-label="Chat"
@@ -516,30 +519,27 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 				data-session-mode={snapshot.mode}
 				style={{ "--chat-font-size": `${CHAT_FONT_SIZE_DEFAULT}px` } as CSSProperties}
 			>
-				{failure ? (
+				{obsolete ? (
 					<div className="max-w-lg rounded-lg border border-border bg-card p-4">
 						<p className="text-sm text-foreground" role="alert">
-							{failure === "obsolete"
-								? "This Chat view belongs to an older session incarnation. Reopen the current session to continue."
-								: translateDraft("chat.draft.storageUnavailable")}
+							This Chat view belongs to an older session incarnation. Reopen the current session to continue.
 						</p>
-						{failure === "storage" ? (
-							<Button
-								className="mt-3"
-								onClick={() => setActivationAttempt((attempt) => attempt + 1)}
-								type="button"
-								variant="outline"
-							>
-								Retry draft restore
-							</Button>
-						) : null}
 					</div>
 				) : null}
 			</section>
 		);
 	}
 
-	return <ChatWorkspaceContent key={scopeKey} {...props} draftScope={draftScope} />;
+	const draftPersistenceAvailable = activation.state === "active";
+	return (
+		<ChatWorkspaceContent
+			key={scopeKey}
+			{...props}
+			draftScope={draftScope}
+			draftPersistenceAvailable={draftPersistenceAvailable}
+			onRetryDraftPersistence={draftPersistenceAvailable ? undefined : retryDraftPersistence}
+		/>
+	);
 }
 
 function ChatWorkspaceContent({
@@ -558,6 +558,7 @@ function ChatWorkspaceContent({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
+	agentResuming = false,
 	agentInputDisabled = false,
 	newWorkDisabled = false,
 	reviewerTerminal,
@@ -639,11 +640,14 @@ function ChatWorkspaceContent({
 	promoteQueuedTurnPendingTurnId,
 	cancelQueuedTurnPendingTurnId,
 	editQueuedTurnPendingTurnId,
-	onReloadMcpServers,
-	reloadingMcpServers,
-	mcpReloadError,
 	draftScope,
-}: ChatWorkspaceProps & { draftScope: ChatDraftScope }) {
+	draftPersistenceAvailable,
+	onRetryDraftPersistence,
+}: ChatWorkspaceProps & {
+	draftScope: ChatDraftScope;
+	draftPersistenceAvailable: boolean;
+	onRetryDraftPersistence?: () => void;
+}) {
 	const draftScopeKey = chatDraftScopeKey(draftScope);
 	const uiSessionId = draftScope.sessionId;
 	const activeRemoteHostId = remoteHostId ?? session?.hostId;
@@ -652,6 +656,53 @@ function ChatWorkspaceContent({
 		[assetBaseUrl],
 	);
 	const turn = activeTurn(snapshot);
+	const startupState =
+		session?.provisionState === "provisioning" || session?.provisionState === "failed"
+			? session.provisionState
+			: undefined;
+	// While a session starts, its opening brief reads as sent: the setup checklist
+	// under it explains why nothing has answered yet. Later messages still queue.
+	const provisionSteps = session?.provisionSteps;
+	// Ready can arrive before the first turn does. Keep its setup slot through
+	// that gap; selecting the first turn also never promotes a queued follow-up.
+	const hasStartup = Boolean(
+		startupState || (provisionSteps?.length &&
+			(snapshot.turns[0]?.state === "queued" || snapshot.turns[0]?.state === "running")),
+	);
+	const openingTurnId = hasStartup
+		? snapshot.turns[0]?.id
+		: undefined;
+	const provisionError = session?.provisionError;
+	const sessionBranch = session?.branch;
+	const startup = useMemo(
+		() =>
+			hasStartup
+				? {
+						failed: startupState === "failed",
+						steps: provisionSteps ?? [],
+						error: provisionError,
+						agentName: agentLabel(snapshot.harness),
+						branch: sessionBranch,
+						openingTurnId,
+						onRetry: newWorkDisabled ? undefined : onResumeAgent,
+						retrying: resumingAgent,
+						retryError: resumeError,
+					}
+				: undefined,
+		[
+			hasStartup,
+			newWorkDisabled,
+			onResumeAgent,
+			openingTurnId,
+			provisionError,
+			provisionSteps,
+			resumeError,
+			resumingAgent,
+			sessionBranch,
+			snapshot.harness,
+			startupState,
+		],
+	);
 	const hasPendingInteraction = snapshot.items.some(
 		(item) =>
 			item.kind === "activity" &&
@@ -771,11 +822,11 @@ function ChatWorkspaceContent({
 			return { ...current, [uiSessionId]: next };
 		});
 	}, [auxiliaryTabOrder, availableTabKeys, onAuxiliaryTabOrderChange, uiSessionId]);
-	const queuedMessages = useQueuedMessages(snapshot);
+	const queuedMessages = useQueuedMessages(snapshot, openingTurnId);
 	const stablePromoteQueuedTurn = useStableCallback(onPromoteQueuedTurn);
 	const stableCancelQueuedTurn = useStableCallback(onCancelQueuedTurn);
 	const [queueEdit, setQueueEdit] = useState<ChatDraftQueuedEdit | undefined>(
-		() => readChatSessionDraft(draftScope).queuedEdit,
+		() => (draftPersistenceAvailable ? readChatSessionDraft(draftScope).queuedEdit : undefined),
 	);
 	const queueEditRef = useRef(queueEdit);
 	const [queueDraftError, setQueueDraftError] = useState<string>();
@@ -951,6 +1002,16 @@ function ChatWorkspaceContent({
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
 	const surfaceRef = useRef<HTMLElement | null>(null);
 	const composerFocusRef = useRef<ChatComposerHandle>(null);
+	// Storage failures can be transient, so try again when the user comes back. Only while
+	// the composer is empty: recovering remounts it, which would drop unsaved text.
+	useEffect(() => {
+		if (!onRetryDraftPersistence) return;
+		const retry = () => {
+			if (composerFocusRef.current?.isEmpty() !== false) onRetryDraftPersistence();
+		};
+		window.addEventListener("focus", retry);
+		return () => window.removeEventListener("focus", retry);
+	}, [onRetryDraftPersistence]);
 	const lastWheelZoomAtRef = useRef(0);
 	const wheelZoomRemainderRef = useRef(0);
 	const [terminalFontSize, setTerminalFontSize] = useState(initialTerminalFontSize);
@@ -1150,9 +1211,12 @@ function ChatWorkspaceContent({
 					autoSelectEffortOnOpen={snapshot.items.length === 0 && !turn}
 					error={configOptionError}
 					// Turn settings require a live controller even while messages can queue.
+				// A background resume keeps the controls visible with their last values.
 					disabled={
-							snapshot.controller.state === "connecting" ||
-							snapshot.controller.state === "stopped" ||
+							(!agentResuming && (
+								snapshot.controller.state === "connecting" ||
+								snapshot.controller.state === "stopped"
+							)) ||
 							session?.provisionState === "provisioning" ||
 							controllerTransitioning || configOptionPending || newWorkDisabled
 						}
@@ -1213,7 +1277,7 @@ function ChatWorkspaceContent({
 					canSteer={canSteerQueuedMessage}
 					onPromoteQueuedTurn={newWorkDisabled ? undefined : promoteQueuedTurn}
 					onBeginQueuedEdit={
-						newWorkDisabled || !onEditQueuedTurn ? undefined : beginQueuedEdit
+						newWorkDisabled || !draftPersistenceAvailable || !onEditQueuedTurn ? undefined : beginQueuedEdit
 					}
 					onCancelQueuedTurn={newWorkDisabled ? undefined : handleCancelQueuedTurn}
 					onReorderQueuedTurns={newWorkDisabled ? undefined : onReorderQueuedTurns}
@@ -1225,6 +1289,7 @@ function ChatWorkspaceContent({
 			beginQueuedEdit,
 			canSteerQueuedMessage,
 			cancelQueuedTurnPendingTurnId,
+			draftPersistenceAvailable,
 			handleCancelQueuedTurn,
 			newWorkDisabled,
 			onEditQueuedTurn,
@@ -1413,12 +1478,16 @@ function ChatWorkspaceContent({
 					{snapshot.account ? (
 						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
 					) : null}
+					{!draftPersistenceAvailable ? (
+						<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-2 text-[11px] text-muted-foreground">
+							<TriangleAlert aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
+							{t("chat.draft.storageUnavailable")}
+						</div>
+					) : null}
 					<ControllerBanner
 						controller={snapshot.controller}
-						agentName={agentLabel(snapshot.harness)}
 						provisionState={session?.provisionState}
-						provisionError={session?.provisionError}
-						transitioning={controllerTransitioning}
+						transitioning={controllerTransitioning || agentResuming}
 						onResume={newWorkDisabled ? undefined : onResumeAgent}
 						resuming={resumingAgent}
 						resumeError={resumeError}
@@ -1427,14 +1496,6 @@ function ChatWorkspaceContent({
 						shellError={shellError}
 					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
-					<McpServerBanner
-						sessionId={uiSessionId}
-						servers={brokenServers}
-						onReload={newWorkDisabled ? undefined : onReloadMcpServers}
-						reloading={reloadingMcpServers}
-						turnInFlight={Boolean(turn)}
-						error={mcpReloadError}
-					/>
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
@@ -1447,6 +1508,7 @@ function ChatWorkspaceContent({
 									assetBaseUrl={assetBaseUrl}
 									remoteHost={Boolean(activeRemoteHostId)}
 									draftScope={draftScope}
+									draftPersistenceAvailable={draftPersistenceAvailable}
 									hasOlder={hasOlder}
 									loadingOlder={loadingOlder}
 									onLoadOlder={onLoadOlder}
@@ -1456,7 +1518,7 @@ function ChatWorkspaceContent({
 									onOpenFiles={onOpenFiles}
 									onOpenFile={onOpenFile}
 									retryControl={retryControl}
-									onEditHumanMessage={editHumanMessage}
+									onEditHumanMessage={draftPersistenceAvailable ? editHumanMessage : undefined}
 									editPending={editMessagePending}
 									editBusy={Boolean(turn)}
 									editError={editMessageError}
@@ -1466,6 +1528,7 @@ function ChatWorkspaceContent({
 									newWorkDisabled={newWorkDisabled}
 									rollbackDisabled={Boolean(turn || rollbackPending || newWorkDisabled)}
 									localEchos={localEchos}
+									startup={startup}
 								/>
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
@@ -1482,66 +1545,85 @@ function ChatWorkspaceContent({
 										{t("chat.welcome.heading")}
 									</h1>
 								) : null}
-								<ChatComposer
-									focusRef={composerFocusRef}
-									key={`${draftScopeKey}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
-									queuedDock={composerQueuedDock}
-									approval={composerApproval}
-									elicitation={composerElicitation}
-									onSend={handleComposerSend}
-									draftSeed={composerDraftSeed}
-									editingQueuedTurnId={queueEdit?.turnId}
-									queuedEditRecovery={Boolean(queueEdit?.clientMessageId)}
-									savingQueuedEditPending={Boolean(
-										queueEdit?.turnId &&
-											editQueuedTurnPendingTurnId === queueEdit.turnId,
-									)}
-									onCancelQueuedEdit={cancelQueuedEdit}
-									onQueuedDraftChange={queueEdit ? changeQueuedDraft : undefined}
-									queuedDraftScope={queueEdit ? draftScope : undefined}
-									onQueuedAttachmentsChange={changeQueuedStagedAttachments}
-									onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
-									onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
-									commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
-									settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
-									busy={busy}
-									willQueue={Boolean(turn) || session?.provisionState === "provisioning"}
-									disabled={(snapshot.controller.state === "stopped" || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
-									// Switch/reconnect status is the topbar spinner beside ⋮ — not composer text.
-									disabledPlaceholder={
-										controllerTransitioning || newWorkDisabled ? "" : undefined
-									}
-									// Keep the composer useful outside the centered welcome state too. A
-									// task can have non-message activity before its first visible chat
-									// message, and the generic placeholder makes a still-empty composer
-									// look like a regression.
-									emptyPlaceholder={conversationEmpty ? emptyChatPlaceholder : undefined}
-									skills={skills}
-									filePaths={filePaths}
-									filePathsTruncated={filePathsTruncated}
-									onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
-									nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
-									autoFocus={!reviewerActive}
-									autoFocusKey={draftScope.sessionId}
-									// Steering is only meaningful into a turn that is running. A queued turn
-									// has not reached the provider, so there is nothing to steer.
-									onSteer={newWorkDisabled ? undefined : steer}
-									showSteerButton={showSteerButton}
-									canSteer={Boolean(onSteer) && turn?.state === "running"}
-									sendPending={sendPending}
-									steerPending={steerPending}
-									steerRefusal={steerRefusal}
-									onCompact={newWorkDisabled ? undefined : onCompact}
-									compacting={compacting}
-									compactUnavailable={compactUnavailable}
-									compactBlocked={Boolean(turn)}
-									draftSessionId={queueEdit ? undefined : draftScope.sessionId}
-									draftSessionIncarnation={draftScope.incarnation}
-									assetBaseUrl={assetBaseUrl}
-									assetSessionId={snapshot.sessionId}
-									remoteHost={Boolean(activeRemoteHostId)}
-									acceptedClientMessageIds={acceptedClientMessageIds}
-								/>
+								<div className="relative">
+									<McpServerBanner
+										key={draftScopeKey}
+										sessionId={uiSessionId}
+										incarnation={draftScope.incarnation}
+										servers={brokenServers}
+										placement={conversationEmpty ? "below" : "above"}
+										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
+									/>
+									<ChatComposer
+										focusRef={composerFocusRef}
+										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
+										queuedDock={composerQueuedDock}
+										approval={composerApproval}
+										elicitation={composerElicitation}
+										onSend={handleComposerSend}
+										draftSeed={composerDraftSeed}
+										editingQueuedTurnId={queueEdit?.turnId}
+										queuedEditRecovery={Boolean(queueEdit?.clientMessageId)}
+										savingQueuedEditPending={Boolean(
+											queueEdit?.turnId &&
+												editQueuedTurnPendingTurnId === queueEdit.turnId,
+										)}
+										onCancelQueuedEdit={cancelQueuedEdit}
+										onQueuedDraftChange={queueEdit ? changeQueuedDraft : undefined}
+										queuedDraftScope={queueEdit ? draftScope : undefined}
+										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
+										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
+										onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
+										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
+										settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
+										busy={busy}
+										willQueue={Boolean(turn) || session?.provisionState === "provisioning"}
+										queuePlaceholder={
+											session?.provisionState === "provisioning"
+												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
+												: undefined
+										}
+										disabled={(snapshot.controller.state === "stopped" || controllerTransitioning || agentResuming || newWorkDisabled) && !queueEdit?.clientMessageId}
+										// Switch/reconnect status is the topbar spinner beside ⋮ — not composer text.
+										disabledPlaceholder={
+											controllerTransitioning || newWorkDisabled
+												? ""
+												: agentResuming
+													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
+													: undefined
+										}
+										// Keep the composer useful outside the centered welcome state too. A
+										// task can have non-message activity before its first visible chat
+										// message, and the generic placeholder makes a still-empty composer
+										// look like a regression.
+										emptyPlaceholder={conversationEmpty ? emptyChatPlaceholder : undefined}
+										skills={skills}
+										filePaths={filePaths}
+										filePathsTruncated={filePathsTruncated}
+										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
+										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
+										autoFocus={!reviewerActive}
+										autoFocusKey={draftScope.sessionId}
+										// Steering is only meaningful into a turn that is running. A queued turn
+										// has not reached the provider, so there is nothing to steer.
+										onSteer={newWorkDisabled ? undefined : steer}
+										showSteerButton={showSteerButton}
+										canSteer={Boolean(onSteer) && turn?.state === "running"}
+										sendPending={sendPending || agentResuming}
+										steerPending={steerPending}
+										steerRefusal={steerRefusal}
+										onCompact={newWorkDisabled ? undefined : onCompact}
+										compacting={compacting}
+										compactUnavailable={compactUnavailable}
+										compactBlocked={Boolean(turn)}
+										draftSessionId={draftPersistenceAvailable && !queueEdit ? draftScope.sessionId : undefined}
+										draftSessionIncarnation={draftPersistenceAvailable ? draftScope.incarnation : undefined}
+										assetBaseUrl={assetBaseUrl}
+										assetSessionId={snapshot.sessionId}
+										remoteHost={Boolean(activeRemoteHostId)}
+										acceptedClientMessageIds={acceptedClientMessageIds}
+									/>
+								</div>
 							</div>
 						</div>
 					</div>
@@ -1767,6 +1849,7 @@ function ChatHeader({
 	// cluster sits over the session tab strip. Terminal already reserves that
 	// space; chat must too or the back/forward buttons land on the tab label.
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
+	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
 	const header = (
 		<header className="flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar">
 			<div
@@ -1780,6 +1863,7 @@ function ChatHeader({
 						!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
 					)}
 					data-testid="session-terminal-region"
+					ref={clearanceRef}
 					style={{ width: "100%" }}
 				>
 					<div
@@ -1894,9 +1978,7 @@ function ChatHeader({
  */
 function ControllerBanner({
 	controller,
-	agentName,
 	provisionState,
-	provisionError,
 	transitioning,
 	onResume,
 	resuming,
@@ -1906,9 +1988,7 @@ function ControllerBanner({
 	shellError,
 }: {
 	controller: { state: ControllerState; error?: string };
-	agentName: string;
 	provisionState?: WorkspaceSession["provisionState"];
-	provisionError?: string;
 	transitioning?: boolean;
 	onResume?: () => void;
 	resuming?: boolean;
@@ -1917,15 +1997,14 @@ function ControllerBanner({
 	openingShell?: boolean;
 	shellError?: string;
 }) {
-	const provisioning = provisionState === "provisioning";
-	const failed = provisionState === "failed";
-	const starting = provisioning || failed;
-
+	// A session that is starting, or failed to start, has no controller yet. The
+	// setup checklist in the timeline explains that state and offers Retry.
+	if (provisionState === "provisioning" || provisionState === "failed") return null;
 	// The transition coordinator intentionally stops one controller before it
 	// starts the other. The top-bar handoff state already explains that interval;
 	// presenting its intermediate snapshot as a crash produces a red false alarm.
-	if (!starting && transitioning && controller.state === "stopped") return null;
-	if (!starting && (controller.state === "ready" || controller.state === "busy")) return null;
+	if (transitioning && controller.state === "stopped") return null;
+	if (controller.state === "ready" || controller.state === "busy") return null;
 
 	const copy: Partial<Record<ControllerState, { title: string; tone: string }>> = {
 		connecting: {
@@ -1941,21 +2020,16 @@ function ControllerBanner({
 			tone: "text-destructive",
 		},
 	};
-	const shown = provisioning
-		? { title: `Starting ${agentName}…`, tone: "text-muted-foreground" }
-		: failed
-			? { title: "This session could not be started", tone: "text-destructive" }
-			: copy[controller.state];
+	const shown = copy[controller.state];
 	if (!shown) return null;
-	const loading = provisioning || (!failed && controller.state === "connecting");
 
 	return (
 		<div
-			role={failed || controller.state === "stopped" ? "alert" : "status"}
+			role={controller.state === "stopped" ? "alert" : "status"}
 			aria-atomic="true"
 			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
 		>
-			{loading ? (
+			{controller.state === "connecting" ? (
 				<Loader2
 					aria-hidden="true"
 					className="mt-0.5 size-3.5 shrink-0 animate-spin text-muted-foreground"
@@ -1965,34 +2039,10 @@ function ControllerBanner({
 			)}
 			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<strong className={cn("text-xs font-medium", shown.tone)}>{shown.title}</strong>
-				{provisioning ? (
-					<span className="text-[11px] leading-snug text-muted-foreground">
-						Setting up the worktree and the agent. Keep typing — your messages are
-						queued and sent in order as soon as it is ready.
-					</span>
-				) : failed ? (
-					<>
-						{provisionError ? (
-							<span className="text-[11px] leading-snug text-muted-foreground">
-								{provisionError}
-							</span>
-						) : null}
-						<span className="text-[11px] leading-snug text-muted-foreground">
-							Your messages are saved here and will be sent if you retry.
-						</span>
-						{resumeError ? (
-							<span className="text-[11px] leading-snug text-destructive">{resumeError}</span>
-						) : null}
-						{onResume ? (
-							<Button type="button" size="sm" variant="outline" onClick={onResume} disabled={resuming}>
-								{resuming ? "Retrying…" : "Retry start"}
-							</Button>
-						) : null}
-					</>
-				) : controller.error ? (
+				{controller.error ? (
 					<span className="text-[11px] leading-snug text-muted-foreground">{controller.error}</span>
 				) : null}
-				{!starting && controller.state === "stopped" ? (
+				{controller.state === "stopped" ? (
 					<>
 						<span className="text-[11px] leading-snug text-muted-foreground">
 							History is kept. Resume the agent or open a shell in the same worktree.
@@ -2065,6 +2115,7 @@ function Timeline({
 	assetBaseUrl,
 	remoteHost,
 	draftScope,
+	draftPersistenceAvailable = true,
 	hasOlder,
 	loadingOlder,
 	onLoadOlder,
@@ -2084,11 +2135,14 @@ function Timeline({
 	newWorkDisabled,
 	rollbackDisabled = false,
 	localEchos = [],
+	startup,
 }: {
 	snapshot: ConversationSnapshot;
 	assetBaseUrl?: string;
 	remoteHost?: boolean;
 	draftScope: ChatDraftScope;
+	/** False when drafts can't be saved; persisted inline edits are then ignored. */
+	draftPersistenceAvailable?: boolean;
 	hasOlder?: boolean;
 	loadingOlder?: boolean;
 	onLoadOlder?: () => void;
@@ -2108,6 +2162,8 @@ function Timeline({
 	newWorkDisabled?: boolean;
 	rollbackDisabled?: boolean;
 	localEchos?: ConversationLocalEcho[];
+	/** A session that is starting, or failed to start, and its setup checklist. */
+	startup?: ComponentProps<typeof SessionStartup> & { openingTurnId?: string };
 }) {
 	const translateDraft = useChatDraftTranslation();
 	const uiSessionId = draftScope.sessionId;
@@ -2165,15 +2221,15 @@ function Timeline({
 	const hoveredMarkerRef = useRef<number | null>(null);
 	hoveredMarkerRef.current = hoveredMarker;
 	const [messageEdit, setMessageEdit] = useState<MessageEditDraft | undefined>(
-		() => readChatSessionDraft(draftScope).inlineEdit,
+		() => (draftPersistenceAvailable ? readChatSessionDraft(draftScope).inlineEdit : undefined),
 	);
 	const messageEditRef = useRef(messageEdit);
 	const [durableInlineEditDelivery, setDurableInlineEditDelivery] =
 		useState<ChatInlineEditDelivery | undefined>(
-			() => readChatSessionDraft(draftScope).inlineEditDelivery,
+			() => (draftPersistenceAvailable ? readChatSessionDraft(draftScope).inlineEditDelivery : undefined),
 		);
 	const [inlineEditUncertain, setInlineEditUncertain] = useState(
-		() => readChatSessionDraft(draftScope).inlineEditDelivery?.state === "dispatching",
+		() => draftPersistenceAvailable && readChatSessionDraft(draftScope).inlineEditDelivery?.state === "dispatching",
 	);
 	const automaticInlineRecoveryAttempted = useRef<string | undefined>(undefined);
 	const [draftPersistenceError, setDraftPersistenceError] = useState<string>();
@@ -2247,7 +2303,21 @@ function Timeline({
 	// widens chat; shorter histories (common on non-Codex harnesses) often
 	// stop overflowing and used to lose the minimap exactly then.
 	const minimapEnabled = scrollbar.markers.length > 0;
-	const queued = useMemo(() => queuedTurnIds(snapshot), [snapshot]);
+	const { t } = useTranslation();
+	const openingTurnId = startup?.openingTurnId;
+	// The checklist holds the working slot until the agent is up and its first
+	// turn is live; a clean start then leaves no trace.
+	const showStartup = Boolean(
+		startup &&
+			(startup.failed ||
+				!(turn?.state === "running" && turn.id === openingTurnId &&
+					startup.steps.length > 0 && startup.steps.every((step) => step.status === "done"))),
+	);
+	const queued = useMemo(() => {
+		const ids = queuedTurnIds(snapshot);
+		if (openingTurnId) ids.delete(openingTurnId);
+		return ids;
+	}, [openingTurnId, snapshot]);
 	const decide = useStableCallback(onDecide);
 	const rollback = useStableCallback(onRollback);
 	const openFiles = useStableCallback(onOpenFiles);
@@ -2336,9 +2406,9 @@ function Timeline({
 	// Retry/Abandon controls, so keep it actionable when an ambiguous send activates
 	// and refetches the replacement branch.
 	useEffect(() => {
-		if (readChatSessionDraft(draftScope).inlineEditDelivery) return;
+		if (draftPersistenceAvailable && readChatSessionDraft(draftScope).inlineEditDelivery) return;
 		setMessageEdit(undefined);
-	}, [draftScope, snapshot.activeBranchId, snapshot.sessionId]);
+	}, [draftPersistenceAvailable, draftScope, snapshot.activeBranchId, snapshot.sessionId]);
 	useEffect(() => {
 		const setInspectorOpen = (isOpen: boolean) => {
 			inspectorOpenRef.current = isOpen;
@@ -2386,14 +2456,14 @@ function Timeline({
 	}, [pinned]);
 
 	useEffect(() => {
-		const restored = readChatSessionDraft(draftScope);
-		messageEditRef.current = restored.inlineEdit;
-		setMessageEdit(restored.inlineEdit);
-		setDurableInlineEditDelivery(restored.inlineEditDelivery);
-		setInlineEditUncertain(restored.inlineEditDelivery?.state === "dispatching");
+		const restored = draftPersistenceAvailable ? readChatSessionDraft(draftScope) : undefined;
+		messageEditRef.current = restored?.inlineEdit;
+		setMessageEdit(restored?.inlineEdit);
+		setDurableInlineEditDelivery(restored?.inlineEditDelivery);
+		setInlineEditUncertain(restored?.inlineEditDelivery?.state === "dispatching");
 		setDraftPersistenceError(undefined);
 		setInlineEditRecoveryNotice(
-			restored.inlineEditDelivery
+			restored?.inlineEditDelivery
 				? restored.inlineEditDelivery.state === "accepted"
 					? "chat.draft.acceptedEdit"
 					: "chat.draft.editRestart"
@@ -2402,7 +2472,7 @@ function Timeline({
 		setAppliedEditAcceptanceSequence(0);
 		setInlineEditOutcomeNotice(undefined);
 		automaticInlineRecoveryAttempted.current = undefined;
-	}, [draftScope]);
+	}, [draftPersistenceAvailable, draftScope]);
 
 	const applyAcceptedInlineEditResult = useCallback((result: DraftClearResult) => {
 		setDurableInlineEditDelivery(result.draft.inlineEditDelivery);
@@ -2727,10 +2797,11 @@ function Timeline({
 	}, [localEchos, requestGlideToEnd]);
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
+		if (openingTurnId) hiddenTurns.delete(openingTurnId);
 		return groupByTurn({ ...snapshot, items: timelineItems }).filter(
 			(group) => !group.turnId || !hiddenTurns.has(group.turnId),
 		);
-	}, [snapshot, timelineItems]);
+	}, [openingTurnId, snapshot, timelineItems]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read by syncScrollLayout (a stable callback) so the initial snap only latches
 	// once real conversation content exists (history can load after the chat opens).
@@ -3249,6 +3320,7 @@ function Timeline({
 							>
 								<TurnGroup
 									group={group}
+									startup={showStartup && group.turnId === openingTurnId ? startup : undefined}
 									activityDisclosureOverrides={activityDisclosureOverrides}
 									onActivityDisclosureChange={onActivityDisclosureChange}
 									sessionId={snapshot.sessionId}
@@ -3293,7 +3365,13 @@ function Timeline({
 						);
 					})}
 					</div>
-					{turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
+					{/* Normally drawn inside the opening turn's group; this covers a start
+					    whose brief is not in the timeline. */}
+					{startup && showStartup && !groups.some((group) => group.turnId === openingTurnId) ? (
+						<LiveResponseStatus startupLabel={t(startup.failed ? "chat.startup.failed" : "chat.startup.running")} failed={startup.failed}>
+							<SessionStartup {...startup} />
+						</LiveResponseStatus>
+					) : turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
 						<LiveResponseStatus startedAt={turn.startedAt ?? turn.requestedAt} />
 					) : null}
 					{messageEdit && !editedMessageVisible ? (
@@ -3479,6 +3557,7 @@ const TurnGroup = memo(function TurnGroup({
 	busy,
 	queued,
 	newHumanMessageIds,
+	startup,
 }: {
 	group: TimelineGroup;
 	activityDisclosureOverrides: Readonly<Record<string, boolean>>;
@@ -3516,7 +3595,10 @@ const TurnGroup = memo(function TurnGroup({
 	/** This turn was recorded but not sent, so its message can say so. */
 	queued: boolean;
 	newHumanMessageIds: ReadonlySet<string>;
+	/** The opening turn of a starting session: its setup checklist. */
+	startup?: ComponentProps<typeof SessionStartup>;
 }) {
+	const { t } = useTranslation();
 	const hasTerminalFailure =
 		group.outcome?.state === "failed" && Boolean(group.outcome.error);
 	const runs = useMemo(
@@ -3628,8 +3710,20 @@ const TurnGroup = memo(function TurnGroup({
 	const body: ReactNode[] = humanRuns.map(renderRun);
 	// A live provider failure replaces the Working row with its reconnect card, and a
 	// turn that stops without an outcome (cancelled) has no settled row to hand over to.
-	if (!group.liveProviderFailure && (group.live || (group.outcome && !showSettledStatus))) {
-		body.push(<LiveResponseStatus key="turn-working" startedAt={group.liveStartedAt} settling={!group.live} />);
+	// The setup checklist sits exactly where the Working row will, so the handoff
+	// does not move anything.
+	if (startup || (!group.liveProviderFailure && (group.live || (group.outcome && !showSettledStatus)))) {
+		body.push(
+			<LiveResponseStatus
+				key="turn-working"
+				startedAt={group.liveStartedAt}
+				settling={!startup && !group.live}
+				startupLabel={startup ? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : undefined}
+				failed={startup?.failed}
+			>
+				{startup ? <SessionStartup {...startup} /> : null}
+			</LiveResponseStatus>,
+		);
 	}
 	const outcome = showSettledStatus ? group.outcome : undefined;
 	if (!outcome) {

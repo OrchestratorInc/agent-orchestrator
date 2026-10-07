@@ -8,13 +8,15 @@ import { AppLink } from "../AppLink";
  * re-sorting. Those belong to the daemon.
  */
 
-import { stagedAttachmentParts, attachmentName, attachmentURL, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
+import { stagedAttachmentParts, attachmentName, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
+import { ChatImage } from "./ChatImage";
 import {
 	ACCENT_ACTION_SEGMENT,
 	ACCENT_ACTION_SHELL,
 	QUIET_ACTION_PILL,
 } from "./action-pill";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
@@ -41,6 +43,7 @@ import {
 	SquareTerminal,
 	Undo2,
 	User,
+	X,
 } from "lucide-react";
 
 /** Fixed icon column, matching the prototype's row anatomy. */
@@ -61,7 +64,7 @@ import { cn } from "../../lib/utils";
 import { caretNotation, stripAnsi } from "../../lib/ansi";
 import { getApiBaseUrl } from "../../lib/api-client";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
-import { ActivityTitle, ChatMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
+import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -114,6 +117,13 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
 
 const ORIGIN_REPORT_COLLAPSE_AT = 600;
 const ORIGIN_REPORT_PREVIEW_LENGTH = 240;
+
+function originReportPreview(text: string): string {
+	const cut = text.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH);
+	const lastCompleteLine = cut.lastIndexOf("\n");
+	const preview = lastCompleteLine > 0 ? cut.slice(0, lastCompleteLine) : cut;
+	return `${preview.trimEnd()}…`;
+}
 
 /** Smooth baseline, with adaptive catch-up when provider chunks outrun playback. */
 const STREAM_BASE_CHARACTERS_PER_SECOND = 58;
@@ -399,6 +409,41 @@ function formatTokens(tokens: number): string {
 	return `${(tokens / 1000).toFixed(1)}k`;
 }
 
+/**
+ * Prose whose inline staged image paths (written by the composer's image chips)
+ * render as chips that open the image. "Image N" counts images in attachment
+ * order, the same label the attachment row and the composer use.
+ */
+function ProseWithInlineImages({
+	text,
+	attachments,
+	sessionId,
+	apiBaseUrl,
+	renderText,
+}: {
+	text: string;
+	attachments: string[];
+	sessionId: string;
+	apiBaseUrl: string | null;
+	renderText: (text: string) => ReactNode;
+}) {
+	const { t } = useTranslation();
+	const images = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
+	if (apiBaseUrl === null || images.length === 0) return renderText(text);
+	return splitInlineImagePaths(text, (path) => images.includes(path)).map((segment, index) =>
+		segment.path === undefined ? (
+			<Fragment key={index}>{renderText(segment.text)}</Fragment>
+		) : (
+			<ChatImage
+				key={index}
+				inline
+				src={attachmentURL(apiBaseUrl, sessionId, segment.path)}
+				alt={t("chat.image.numbered", { index: images.indexOf(segment.path) + 1 })}
+			/>
+		),
+	);
+}
+
 function StagedAttachmentItems({
 	paths,
 	sessionId,
@@ -412,21 +457,18 @@ function StagedAttachmentItems({
 	ariaLabel: string;
 	className?: string;
 }) {
+	const { t } = useTranslation();
 	if (paths.length === 0) return null;
+	const images = paths.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
 	return (
 		<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
 			{paths.map((path) => {
 				const name = attachmentName(path);
 				return IMAGE_ATTACHMENT_PATH.test(path) && apiBaseUrl !== null ? (
-					<li
-						key={path}
-						className="max-w-full overflow-hidden rounded-md border border-border bg-background"
-					>
-						<img
+					<li key={path} className="max-w-full">
+						<ChatImage
 							src={attachmentURL(apiBaseUrl, sessionId, path)}
-							alt={name}
-							loading="lazy"
-							className="block h-auto max-h-80 max-w-full object-contain"
+							alt={t("chat.image.numbered", { index: images.indexOf(path) + 1 })}
 						/>
 					</li>
 				) : (
@@ -598,7 +640,13 @@ export function HumanMessage({
 				>
 					{body ? (
 						<p className="break-words whitespace-pre-wrap text-pretty">
-							<SessionLinkedText text={body} />
+							<ProseWithInlineImages
+								text={body}
+								attachments={attachments}
+								sessionId={sessionId}
+								apiBaseUrl={apiBaseUrl}
+								renderText={(text) => <SessionLinkedText text={text} />}
+							/>
 						</p>
 					) : null}
 					<StagedAttachmentItems
@@ -683,7 +731,7 @@ export function OriginMessage({ message }: { message: ConversationMessage }) {
 	const visibleText = senderSessionId ? stripSteerSenderPrefix(message.text, senderSessionId) : message.text;
 	const longReport = visibleText.length > ORIGIN_REPORT_COLLAPSE_AT;
 	const preview = longReport
-		? `${visibleText.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
+		? originReportPreview(visibleText)
 		: visibleText;
 
 	return (
@@ -691,12 +739,12 @@ export function OriginMessage({ message }: { message: ConversationMessage }) {
 			label={senderSessionId ? <>{"[from "}{senderHref ? <SessionLabelLink href={senderHref}>{senderLabel}</SessionLabelLink> : senderLabel}{"]"}</> : message.senderLabel ?? message.origin}
 			createdAt={message.createdAt}
 		>
-			{longReport && expanded ? (
-				<ChatMarkdown text={visibleText} muted />
+			{longReport && !expanded ? (
+				<div className="line-clamp-3">
+					<OriginPreviewMarkdown text={preview} />
+				</div>
 			) : (
-				<p className={cn("whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
-					<SessionLinkedText text={preview} />
-				</p>
+				<ChatMarkdown text={visibleText} muted safeOrigin className="whitespace-pre-wrap text-sm leading-relaxed" />
 			)}
 			{longReport ? <AutomationExpandButton expanded={expanded} onClick={() => setExpanded((current) => !current)} /> : null}
 		</AutomationMessageFrame>
@@ -857,7 +905,14 @@ export function AssistantMessage({
 }
 
 
-export function LiveResponseStatus({ startedAt, settling = false }: { startedAt?: string; settling?: boolean }) {
+export function LiveResponseStatus({ startedAt, settling = false, startupLabel, failed = false, children }: {
+	startedAt?: string;
+	settling?: boolean;
+	startupLabel?: string;
+	failed?: boolean;
+	children?: ReactNode;
+}) {
+	const reducedMotion = useReducedMotion();
 	const started = useMemo(() => {
 		const parsed = startedAt ? Date.parse(startedAt) : Date.now();
 		return Number.isFinite(parsed) ? parsed : Date.now();
@@ -883,22 +938,38 @@ export function LiveResponseStatus({ startedAt, settling = false }: { startedAt?
 	// throughout (only the highlight fades), so the text never changes paint
 	// technique and cannot blink.
 	return (
-		<div className="-mx-1 flex h-7 select-none items-center gap-1.5 border-b border-border px-1 py-0">
-			<span
-				aria-hidden={settling || undefined}
-				data-settling={settling || undefined}
-				className="chat-working-spinner-slot flex shrink-0 origin-center"
-			>
-				<ResponseSpinner />
-			</span>
-			<span
-				role="status"
-				data-testid="live-working-label"
-				data-settling={settling || undefined}
-				className="chat-working-shimmer text-sm font-normal"
-			>
-				{settling ? "Worked for" : "Working for"} {formatDuration(elapsedMs)}
-			</span>
+		<div className="min-w-0">
+			<div className="-mx-1 flex h-7 select-none items-center gap-1.5 border-b border-border px-1 py-0">
+				<span
+					aria-hidden={settling || undefined}
+					data-settling={settling || undefined}
+					className="chat-working-spinner-slot flex shrink-0 origin-center"
+				>
+					{failed ? <X className="size-3 text-destructive" /> : <ResponseSpinner />}
+				</span>
+				<span
+					role={failed ? "alert" : "status"}
+					data-testid="live-working-label"
+					data-settling={settling || undefined}
+					className={cn("text-sm font-normal", failed ? "text-destructive" : "chat-working-shimmer")}
+				>
+					{startupLabel ?? `${settling ? "Worked for" : "Working for"} ${formatDuration(elapsedMs)}`}
+				</span>
+			</div>
+			<AnimatePresence initial={false}>
+				{children ? (
+					<motion.div
+						key="startup-checklist"
+						initial={false}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.2, ease: "easeOut" }}
+						className="overflow-hidden"
+					>
+						{children}
+					</motion.div>
+				) : null}
+			</AnimatePresence>
 		</div>
 	);
 }
@@ -2327,7 +2398,17 @@ export function SteerMessage({
 				</AutomationMessageFrame>
 			) : (
 				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] border border-accent-dim bg-raised px-3 py-2.5 text-foreground">
-					{body ? <p>{body}</p> : null}
+					{body ? (
+						<p>
+							<ProseWithInlineImages
+								text={body}
+								attachments={attachments}
+								sessionId={sessionId}
+								apiBaseUrl={apiBaseUrl}
+								renderText={(text) => text}
+							/>
+						</p>
+					) : null}
 					<StagedAttachmentItems
 						paths={attachments}
 						sessionId={sessionId}

@@ -63,14 +63,18 @@ type ServeConfig struct {
 // and dispatches client messages. On PTY exit it broadcasts a status update
 // but stays alive (keep-alive, mirroring tmux behavior). Returns when shut down.
 func Serve(ctx context.Context, cfg ServeConfig) error {
-	h := &host{
-		cfg:       cfg,
-		clients:   make(map[net.Conn]*clientState),
+	return newHost(cfg).run(ctx)
+}
+
+func newHost(cfg ServeConfig) *host {
+	return &host{
+		cfg:     cfg,
+		clients: make(map[net.Conn]*clientState),
+		surface: newAsyncSurface(initialConPTYColumns, initialConPTYRows,
+			func(cols, rows int) surfaceSink { return newRenderedSurface(cols, rows) }, cfg.Ring.Replay, cfg.LazySurface),
+		modes:     newModeTracker(),
 		shutdownC: make(chan struct{}),
 	}
-	h.surface = newAsyncSurface(initialConPTYColumns, initialConPTYRows,
-		func(cols, rows int) surfaceSink { return newRenderedSurface(cols, rows) }, cfg.Ring.Replay, cfg.LazySurface)
-	return h.run(ctx)
 }
 
 // clientState is the host's per-connection bookkeeping. cols/rows record the
@@ -129,6 +133,11 @@ type host struct {
 	mu      sync.Mutex
 	clients map[net.Conn]*clientState
 	surface *asyncSurface
+	// modes follows the DEC private modes the program negotiated, so a client
+	// attaching after they scrolled out of the ring still receives them (see
+	// modeTracker). record updates it together with the ring under mu, so when
+	// handleConn snapshots the ring, the tracker is up to the same chunk.
+	modes *modeTracker
 
 	// curCols/curRows are the grid the host last applied to the shared PTY (0,0
 	// = none applied yet). Guarded by mu; used to skip redundant resizes.
@@ -251,11 +260,7 @@ func (h *host) pumpPTY() {
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
-			h.cfg.Ring.Append(chunk)
-			h.surface.Write(chunk)
-			if frame, err := EncodeMessage(MsgTerminalData, chunk); err == nil {
-				h.broadcast(frame)
-			}
+			h.record(chunk)
 		}
 		if err != nil {
 			break
@@ -275,16 +280,56 @@ func (h *host) pumpPTY() {
 	// still connect and read scrollback.
 }
 
-// broadcast queues msg to all connected clients. It is called only from the
-// PTY read loop. Socket writes happen only in each client's writer goroutine,
-// never while h.mu is held, so status probes, new attaches and other viewers
-// never wait on a viewer's socket.
+// record appends one PTY chunk to the ring, the mode tracker and the rendered
+// surface and queues it to every client, all in one h.mu hold. handleConn takes
+// its snapshot, restores modes and registers the new client in one h.mu hold as
+// well, so a chunk is either inside a new client's snapshot or queued after it,
+// never both, and Restore never sees a mode set by a chunk recorded after the
+// snapshot.
+// Recorded outside the lock, a chunk that switched to the alternate screen
+// could land in the tracker between an attach's snapshot and its Restore,
+// painting the shell output that preceded the program into the alternate
+// buffer; and a chunk appended just before a snapshot reached the new client
+// twice, in the snapshot and again live.
 //
-// When a client's queue is full, broadcast waits (outside h.mu) for it to
-// drain rather than dropping it: the read loop stops reading, the PTY fills,
-// and the program pauses until the viewer catches up. A client that frees no
-// space for slowClientGrace is dropped and re-attaches with a fresh snapshot.
+// The wait for a slow viewer (see broadcast) therefore happens before the
+// chunk is recorded, not between recording it and queueing it: a client that
+// attaches during the wait gets a snapshot without the chunk and receives it
+// live, once.
+func (h *host) record(chunk []byte) {
+	frame, err := EncodeMessage(MsgTerminalData, chunk)
+	if !h.lockWithRoom() {
+		return
+	}
+	h.cfg.Ring.Append(chunk)
+	_, _ = h.modes.Write(chunk)
+	h.surface.Write(chunk)
+	if err == nil {
+		h.enqueueAllLocked(frame)
+	}
+	h.mu.Unlock()
+}
+
+// broadcast queues msg to all connected clients. Socket writes happen only in
+// each client's writer goroutine, never while h.mu is held, so status probes,
+// new attaches and other viewers never wait on a viewer's socket.
 func (h *host) broadcast(msg []byte) {
+	if !h.lockWithRoom() {
+		return
+	}
+	h.enqueueAllLocked(msg)
+	h.mu.Unlock()
+}
+
+// lockWithRoom takes h.mu once every client's queue has room for a frame and
+// returns with it held, or returns false without it when the host shuts down.
+// It is called only from the PTY read loop.
+//
+// When a client's queue is full, it waits (outside h.mu) for it to drain rather
+// than dropping it: the read loop stops reading, the PTY fills, and the program
+// pauses until the viewer catches up. A client that frees no space for
+// slowClientGrace is dropped and re-attaches with a fresh snapshot.
+func (h *host) lockWithRoom() bool {
 	var waitingOn *clientState
 	var deadline time.Time
 	for {
@@ -298,13 +343,7 @@ func (h *host) broadcast(msg []byte) {
 			}
 		}
 		if full == nil {
-			// Every queue has room, and only writers (which free space) touch the
-			// queues while h.mu is held, so these cannot fail.
-			for _, client := range h.clients {
-				client.enqueue(msg)
-			}
-			h.mu.Unlock()
-			return
+			return true
 		}
 		if full != waitingOn {
 			waitingOn, deadline = full, time.Now().Add(slowClientGrace)
@@ -324,9 +363,18 @@ func (h *host) broadcast(msg []byte) {
 		case <-full.drained:
 		case <-full.done:
 		case <-h.shutdownC:
-			return
+			return false
 		case <-time.After(time.Until(deadline)):
 		}
+	}
+}
+
+// enqueueAllLocked queues msg to every client. The caller holds h.mu and has
+// seen every queue with room (lockWithRoom); only writers, which free space,
+// touch the queues while h.mu is held, so these cannot fail.
+func (h *host) enqueueAllLocked(msg []byte) {
+	for _, client := range h.clients {
+		client.enqueue(msg)
 	}
 }
 
@@ -402,13 +450,32 @@ func (h *host) handleConn(conn net.Conn) {
 	client := newClientState()
 	go h.writeClient(conn, client)
 
-	// Scrollback replay: take the ring snapshot, write it to the conn, and add
-	// the conn's queue, and add the conn to the broadcast set all under a SINGLE
-	// h.mu hold. broadcast() also takes h.mu, so any PTY chunk is either already
-	// in this snapshot or queued strictly after it. The writer goroutine keeps
-	// the socket itself outside this critical section.
+	// Scrollback replay: take the ring snapshot, queue it for the conn's writer,
+	// and add the conn to the broadcast set, all under a SINGLE h.mu hold.
+	// record() appends to the ring and queues to clients in one h.mu hold too,
+	// so any PTY chunk is either already in this snapshot or queued strictly
+	// after it, never both. The writer goroutine keeps the socket itself
+	// outside this critical section.
+	//
+	// The snapshot is prefixed with the modes the program has set that the
+	// snapshot itself no longer carries. The ring is bounded, so the
+	// alternate-screen / mouse / bracketed-paste handshake a full-screen
+	// program prints once at startup is the first thing it forgets; without
+	// the prefix a late attacher renders the replay in its normal buffer with
+	// mouse reporting off and cannot scroll the program (#5039). tmux re-sends
+	// these on every attach, and the mux layer relies on the runtime doing so
+	// (internal/terminal/attachment.go).
+	//
+	// Restore re-scans the snapshot under h.mu, so PTY output waits for it.
+	// The scan is the tracker's byte loop (BenchmarkModeTracker: ~410 MB/s,
+	// no allocation), linear in the replay: about half a millisecond for
+	// 200 KB, on a path that already held this lock while EncodeMessage
+	// copied the same bytes.
 	h.mu.Lock()
 	snap := h.cfg.Ring.Replay()
+	if prefix := h.modes.Restore(snap); len(prefix) > 0 {
+		snap = append(prefix, snap...)
+	}
 	if len(snap) > 0 {
 		snapFrame, err := EncodeMessage(MsgTerminalData, snap)
 		if err != nil || !client.enqueue(snapFrame) {

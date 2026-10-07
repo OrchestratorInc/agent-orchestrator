@@ -74,7 +74,7 @@ import { deriveSessionAgentSwitchPresentation } from "../lib/agent-switch-presen
 import { aoBridge } from "../lib/bridge";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
-import { useCanResumeAgent } from "../hooks/useCanResumeAgent";
+import { canResumeAgent, resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { conversationQueryKey, conversationQueryOptions } from "../hooks/useConversation";
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
@@ -150,6 +150,8 @@ const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperti
 // painted: `.sidebar-icon-action` also opts out of the sidebar focus fill in
 // styles.css. Hover/reveal stays instant (no transitions here).
 const ROW_ACTIONS_CLASS = "absolute inset-y-0 right-1 flex items-center gap-0.5";
+/** Long enough that sweeping the pointer across the list starts no agents. */
+const AGENT_WARM_UP_HOVER_MS = 300;
 const ROW_ACTION_BUTTON_CLASS =
 	"sidebar-icon-action grid size-6 shrink-0 place-items-center rounded-md !bg-transparent text-passive hover:!bg-interactive-hover focus:!bg-transparent focus-visible:!bg-interactive-hover active:!bg-interactive-hover data-[state=open]:!bg-interactive-hover hover:text-foreground focus-visible:text-foreground disabled:pointer-events-none disabled:opacity-50 data-[state=open]:text-foreground [&_svg]:size-icon-md";
 const HOVER_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
@@ -435,19 +437,14 @@ function SidebarSectionScroller({
 		};
 	}, [updateScrollEdges]);
 
-	const prefersReducedMotion = useReducedMotion();
 	return (
-		<motion.div
-			className={`relative min-h-0 ${wrapperClassName ?? ""}`}
-			layout
-			transition={prefersReducedMotion ? { duration: 0 } : { layout: { type: "spring", stiffness: 520, damping: 42 } }}
-		>
+		<div className={`relative min-h-0 ${wrapperClassName ?? ""}`}>
 			<div ref={scrollerRef} className={className} data-testid={testId} style={style}>
 				{children}
 			</div>
 			{scrollEdges.top ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--top" /> : null}
 			{scrollEdges.bottom ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--bottom" /> : null}
-		</motion.div>
+		</div>
 	);
 }
 
@@ -733,14 +730,6 @@ export function Sidebar({
 		onExpand: () => setOpen(true),
 	});
 
-	// Suppress layout animations for the first 500ms so background session
-	// re-sorts during daemon settle don't cause visible row shuffling.
-	const [layoutSettled, setLayoutSettled] = useState(false);
-	useEffect(() => {
-		const timer = window.setTimeout(() => setLayoutSettled(true), 500);
-		return () => window.clearTimeout(timer);
-	}, []);
-
 	const [projectOrder, setProjectOrder] = useState<string[]>([]);
 	const orderedWorkspaces = useMemo(
 		() => applyOrder(workspaces, (workspace) => workspace.id, projectOrder, "end"),
@@ -995,7 +984,6 @@ export function Sidebar({
 											? selection.activeRemoteHostId === session.hostId && selection.activeRemoteSessionId === session.id
 											: selection.activeSessionId === session.id}
 										hostLabel={session.hostId ? remoteHosts.find((host) => host.hostId === session.hostId)?.label ?? session.hostId : undefined}
-										layoutSettled={layoutSettled}
 										onKilled={handlePinnedSessionKilled}
 										onOpenSession={(target) => {
 											if (session.kind === "worker") recordManualWorkerOpen(target.id, target.hostId);
@@ -1062,7 +1050,6 @@ export function Sidebar({
 													selection={selection}
 													isDragged={draggingProjectId === workspace.id}
 													projectDragInProgress={draggingProjectId !== null}
-													layoutSettled={layoutSettled}
 													consumeDragClick={projectDragClickGuard.consumeClick}
 													onToggle={toggleProjectDisclosure}
 													onRemoveProject={onRemoveProject}
@@ -1097,7 +1084,6 @@ export function Sidebar({
 													isDragged={false}
 													projectDragInProgress={false}
 													consumeDragClick={() => false}
-													layoutSettled={layoutSettled}
 													onToggle={() => setCollapsedRemoteProjects((previous) => {
 														const next = new Set(previous);
 														next.has(projectKey) ? next.delete(projectKey) : next.add(projectKey);
@@ -1141,7 +1127,6 @@ export function Sidebar({
 								workspace={standaloneWorkspace}
 								selection={selection}
 								isCollapsed={isIconRail}
-								layoutSettled={layoutSettled}
 								open={scratchpadOpen}
 								onToggle={() => setScratchpadOpen((open) => !open)}
 							/>
@@ -1166,7 +1151,11 @@ export function Sidebar({
 				)}
 				<div
 					aria-hidden={isCollapsed || undefined}
-					hidden={isCollapsed}
+					// `hidden` (display: none) is for the real icon rail only. Hiding the footer
+					// this way while an offcanvas sidebar slides away drops its content at once
+					// and leaves the footer's top border behind. aria-hidden and tabIndex -1
+					// already keep it out of reach while collapsed.
+					hidden={isIconRail}
 					className="sidebar-expanded-chrome relative flex w-full min-w-46.5 flex-col gap-0.5"
 				>
 					<UpdateStatusRow
@@ -1290,7 +1279,6 @@ type ProjectItemProps = {
 	isDragged: boolean;
 	projectDragInProgress: boolean;
 	consumeDragClick: (id: string) => boolean;
-	layoutSettled: boolean;
 	onToggle: (projectId: string) => void;
 	onRemoveProject: (projectId: string) => Promise<void>;
 	suppressInitialExpandAnimation: boolean;
@@ -1309,7 +1297,6 @@ const ProjectItem = memo(function ProjectItem({
 	isDragged,
 	projectDragInProgress,
 	consumeDragClick,
-	layoutSettled,
 	onToggle,
 	onRemoveProject,
 	suppressInitialExpandAnimation,
@@ -1544,7 +1531,6 @@ const ProjectItem = memo(function ProjectItem({
 					initial={{ opacity: 0, y: -4 }}
 					animate={{ opacity: 1, y: 0 }}
 					exit={{ opacity: 0, y: -4, transition: { duration: prefersReducedMotion ? 0 : 0.12, ease: "easeIn" } }}
-					layout={!layoutSettled || projectDragInProgress ? false : "position"}
 					onDragOver={(event) => onProjectDragOver(event, workspace.id)}
 					onDrop={onProjectDrop}
 					transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 520, damping: 42, mass: 0.55 }}
@@ -1777,7 +1763,6 @@ const ProjectItem = memo(function ProjectItem({
 												sessions={listedSessions}
 												sessionIds={listedSessionIds}
 												activeSessionId={selection.activeSessionId}
-												disableLayout={!layoutSettled}
 												plain={projectDragInProgress}
 												onReorder={commitSessionOrder}
 												onKilled={handleSessionKilled}
@@ -1857,14 +1842,12 @@ function ScratchpadSection({
 	workspace,
 	selection,
 	isCollapsed,
-	layoutSettled,
 	open,
 	onToggle,
 }: {
 	workspace: WorkspaceSummary;
 	selection: Selection;
 	isCollapsed: boolean;
-	layoutSettled: boolean;
 	open: boolean;
 	onToggle: () => void;
 }) {
@@ -1991,7 +1974,6 @@ function ScratchpadSection({
 						sessions={listedSessions}
 						sessionIds={listedSessionIds}
 						activeSessionId={selection.activeSessionId}
-						disableLayout={!layoutSettled}
 						indented={false}
 						onReorder={commitSessionOrder}
 						onKilled={handleSessionKilled}
@@ -2014,19 +1996,17 @@ const PinnedSessionRow = memo(function PinnedSessionRow({
 	session,
 	active,
 	hostLabel,
-	layoutSettled,
 	onKilled,
 	onOpenSession,
 }: {
 	session: WorkspaceSession;
 	active: boolean;
 	hostLabel?: string;
-	layoutSettled: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpenSession: (session: WorkspaceSession) => void;
 }) {
 	const onOpen = useCallback(() => onOpenSession(session), [onOpenSession, session]);
-	return <SessionRow session={session} active={active} hostLabel={hostLabel} disableLayout={!layoutSettled} indented={false} onKilled={onKilled} onOpen={onOpen} />;
+	return <SessionRow session={session} active={active} hostLabel={hostLabel} indented={false} onKilled={onKilled} onOpen={onOpen} />;
 });
 
 // A session row inside its project's drag context. The Pinned section renders
@@ -2035,7 +2015,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	session,
 	active,
 	consumeDragClick,
-	disableLayout = false,
 	indented = true,
 	layoutDependency,
 	listIsDragging,
@@ -2046,9 +2025,8 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	session: WorkspaceSession;
 	active: boolean;
 	consumeDragClick: (id: string) => boolean;
-	disableLayout?: boolean;
 	indented?: boolean;
-	layoutDependency: string;
+	layoutDependency?: string;
 	listIsDragging: boolean;
 	dropTransitionDisabled: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
@@ -2066,7 +2044,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 			onOpen={() => {
 				if (!consumeDragClick(session.id)) onOpen(session.id);
 			}}
-			disableLayout={disableLayout}
 			layoutDependency={layoutDependency}
 			listIsDragging={listIsDragging}
 			reorder={{
@@ -2092,7 +2069,6 @@ function SessionReorderList({
 	sessions,
 	sessionIds,
 	activeSessionId,
-	disableLayout = false,
 	indented = true,
 	plain = false,
 	onReorder,
@@ -2105,7 +2081,6 @@ function SessionReorderList({
 	sessions: WorkspaceSession[];
 	sessionIds: string[];
 	activeSessionId?: string;
-	disableLayout?: boolean;
 	indented?: boolean;
 	/** While a project is being dragged, leave the session lists as plain rows:
 	 *  otherwise every expanded project's DnD context measures its sortable
@@ -2115,7 +2090,15 @@ function SessionReorderList({
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: (sessionId: string) => void;
 }) {
-	const layoutDependency = useMemo(() => sessionIds.join("\u0000"), [sessionIds]);
+	// Suppress the vertical glide for the first 500ms after the list mounts, so the
+	// re-sorts that follow a daemon settle or a project expanding do not shuffle rows.
+	const [layoutSettled, setLayoutSettled] = useState(false);
+	useEffect(() => {
+		const timer = window.setTimeout(() => setLayoutSettled(true), 500);
+		return () => window.clearTimeout(timer);
+	}, []);
+	const orderKey = useMemo(() => sessionIds.join("\u0000"), [sessionIds]);
+	const layoutDependency = layoutSettled ? orderKey : undefined;
 	const sensors = useReorderSensors();
 	const dragClickGuard = usePostDragClickGuard();
 	const [listDragging, setListDragging] = useState(false);
@@ -2159,7 +2142,6 @@ function SessionReorderList({
 						key={session.id}
 						session={session}
 						active={activeSessionId === session.id}
-						disableLayout
 						indented={indented}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
@@ -2181,14 +2163,12 @@ function SessionReorderList({
 		>
 			<SortableContext items={sessionIds} strategy={verticalListSortingStrategy}>
 				<SidebarMenuSub className={className} data-testid={testId}>
-					<AnimatePresence initial={false}>
 					{sessions.map((session) => (
 						<SortableSessionRow
 							key={session.id}
 							session={session}
 							active={activeSessionId === session.id}
 							consumeDragClick={dragClickGuard.consumeClick}
-							disableLayout={disableLayout}
 							indented={indented}
 							layoutDependency={layoutDependency}
 							listIsDragging={listDragging}
@@ -2197,7 +2177,6 @@ function SessionReorderList({
 							onOpen={onOpen}
 						/>
 					))}
-					</AnimatePresence>
 				</SidebarMenuSub>
 			</SortableContext>
 		</DndContext>
@@ -2218,7 +2197,6 @@ function SessionRow({
 	indented = true,
 	layoutDependency,
 	listIsDragging = false,
-	disableLayout = false,
 	onKilled,
 	onOpen,
 	reorder,
@@ -2227,10 +2205,11 @@ function SessionRow({
 	active: boolean;
 	hostLabel?: string;
 	indented?: boolean;
+	/** The list order. Present only for rows in a reorderable list: the row then
+	 *  animates its vertical position (and nothing else) when the order changes. */
 	layoutDependency?: string;
 	listIsDragging?: boolean;
 	/** Project drags pause nested session projection work. */
-	disableLayout?: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: () => void;
 	/** Present only for rows inside a reorderable project list. */
@@ -2256,9 +2235,22 @@ function SessionRow({
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 	const canPrefetch = session.mode === "chat" && !session.cloud && !session.hostId && !active && !listIsDragging && !reorder?.isDragging;
 	useEffect(() => () => clearTimeout(hoverTimerRef.current), [canPrefetch]);
+	const resumeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+	useEffect(() => () => clearTimeout(resumeTimerRef.current), [canPrefetch]);
 	const prefetchConversation = () => {
 		if (!canPrefetch || !hasTrustedApiBaseUrl() || queryClient.getQueryData(conversationQueryKey(session.id))) return;
 		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id));
+	};
+	// A stopped agent takes seconds to come back. Start it while the pointer rests
+	// on the row so the chat is ready when it opens; opening joins this request.
+	const warmUpAgent = () => {
+		if (!canPrefetch || !hasTrustedApiBaseUrl() || !canResumeAgent(session)) return;
+		void resumeAgentOnOpen(session.id)
+			.catch(() => {})
+			.finally(() => {
+				void refreshWorkspaces();
+				void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
+			});
 	};
 	const beginRename = useCallback(() => {
 		rename.begin();
@@ -2281,7 +2273,7 @@ function SessionRow({
 						autoFocus
 						className={cn(
 							"relative z-[1] h-full min-w-0 flex-1 appearance-none border-0 bg-transparent! p-0 text-sm text-foreground outline-none ring-0 focus:outline-none focus:ring-0",
-							session.lastUserMessageAt && "pr-[36px]",
+							(session.lastInteractionAt ?? session.lastUserMessageAt) && "pr-[36px]",
 						)}
 						data-session-inline-editor=""
 						maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
@@ -2315,12 +2307,9 @@ function SessionRow({
 					style={reorder ? sortableRowStyle(reorder) : undefined}
 				>
 			<motion.div
-				initial={{ opacity: 0, y: 4 }}
-				animate={{ opacity: 1, y: 0 }}
-				exit={{ opacity: 0, y: -4, transition: { duration: prefersReducedMotion ? 0 : 0.12, ease: "easeIn" } }}
-				layout={disableLayout || listIsDragging ? false : "position"}
-				layoutDependency={disableLayout ? undefined : layoutDependency}
-				transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 520, damping: 42, mass: 0.55 }}
+				layout={layoutDependency !== undefined && !listIsDragging ? "y" : false}
+				layoutDependency={layoutDependency}
+				transition={prefersReducedMotion ? { duration: 0 } : { layout: { type: "spring", stiffness: 520, damping: 42, mass: 0.55 } }}
 			>
 				<div
 					className={cn(
@@ -2341,7 +2330,7 @@ function SessionRow({
 							aria-label={t("shell.openSession", { title: hostLabel ? `${session.title} · ${hostLabel}` : session.title })}
 							className={cn(
 								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-								session.lastUserMessageAt ? "pr-[36px]" : "pr-2.5",
+								(session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
 								!reorder?.isDragging &&
 									"group-hover/session-row:pr-sidebar-project-actions group-has-[:focus-visible]/session-row:pr-sidebar-project-actions",
 								reorder && "cursor-grab active:cursor-grabbing",
@@ -2349,9 +2338,14 @@ function SessionRow({
 							)}
 							{...(reorder?.listeners ?? {})}
 							onMouseEnter={() => {
-								if (canPrefetch) hoverTimerRef.current = setTimeout(prefetchConversation, 100);
+								if (!canPrefetch) return;
+								hoverTimerRef.current = setTimeout(prefetchConversation, 100);
+								resumeTimerRef.current = setTimeout(warmUpAgent, AGENT_WARM_UP_HOVER_MS);
 							}}
-							onMouseLeave={() => clearTimeout(hoverTimerRef.current)}
+							onMouseLeave={() => {
+								clearTimeout(hoverTimerRef.current);
+								clearTimeout(resumeTimerRef.current);
+							}}
 							onFocus={prefetchConversation}
 							onClick={(event) => {
 								if (event.detail > 1) return;
@@ -2426,16 +2420,17 @@ function SessionRow({
 
 const SessionMessageAge = memo(function SessionMessageAge({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
-	if (!session.lastUserMessageAt) return null;
+	const at = session.lastInteractionAt ?? session.lastUserMessageAt;
+	if (!at) return null;
 
 	return (
 		<time
 			className="absolute inset-y-0 right-2 z-[1] flex min-w-0 shrink-0 items-center whitespace-nowrap font-sans text-micro tabular-nums text-passive opacity-100 group-has-[:focus-visible]/session-row:opacity-0"
 			data-session-message-age=""
-			dateTime={session.lastUserMessageAt}
-			title={t("shell.lastMessageAt", { time: formatTimeCompact(session.lastUserMessageAt) })}
+			dateTime={at}
+			title={t("shell.lastMessageAt", { time: formatTimeCompact(at) })}
 		>
-			{formatTimeTerse(session.lastUserMessageAt)}
+			{formatTimeTerse(at)}
 		</time>
 	);
 });
@@ -3044,7 +3039,6 @@ function ShowMoreRow({
 				initial={{ opacity: 0, y: 4 }}
 				animate={{ opacity: 1, y: 0 }}
 				exit={{ opacity: 0, y: -4 }}
-				layout
 				onClick={onClick}
 				transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }}
 				type="button"

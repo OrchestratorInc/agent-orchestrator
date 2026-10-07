@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
@@ -335,18 +336,26 @@ func (s *Store) EnqueueSessionInterfaceTransitionMessage(
 	ctx context.Context,
 	transitionID, clientMessageID, message string,
 	now time.Time,
+	opts ports.MessageDeliveryOptions,
 ) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.qw.EnqueueSessionInterfaceTransitionMessage(ctx, gen.EnqueueSessionInterfaceTransitionMessageParams{
-		TransitionID:    transitionID,
-		ClientMessageID: clientMessageID,
-		Message:         message,
-		CreatedAt:       now,
-	}); err != nil {
-		return fmt.Errorf("queue interface transition message: %w", err)
-	}
-	return nil
+	return s.inTx(ctx, "queue interface transition message", func(q *gen.Queries) error {
+		if err := q.EnqueueSessionInterfaceTransitionMessage(ctx, gen.EnqueueSessionInterfaceTransitionMessageParams{
+			SenderSessionID: opts.SenderSessionID, AuthoredByUser: opts.AuthoredByUser,
+			TransitionID: transitionID, ClientMessageID: clientMessageID, Message: message, CreatedAt: now,
+		}); err != nil {
+			return err
+		}
+		if opts.SenderSessionID == "" {
+			return nil
+		}
+		transition, err := q.GetSessionInterfaceTransition(ctx, transitionID)
+		if err != nil {
+			return err
+		}
+		return recordSessionInteraction(ctx, q, transition.SessionID, opts.SenderSessionID, now)
+	})
 }
 
 // ListPendingSessionInterfaceTransitionMessages lists queued transition messages awaiting delivery.
@@ -362,6 +371,7 @@ func (s *Store) ListPendingSessionInterfaceTransitionMessages(
 	for _, row := range rows {
 		out = append(out, domain.SessionInterfaceTransitionMessage{
 			ID: row.ID, TransitionID: row.TransitionID,
+			SenderSessionID: row.SenderSessionID, AuthoredByUser: row.AuthoredByUser,
 			ClientMessageID: row.ClientMessageID, Message: row.Message,
 			CreatedAt: row.CreatedAt, DeliveredAt: nullTimeToTime(row.DeliveredAt),
 		})

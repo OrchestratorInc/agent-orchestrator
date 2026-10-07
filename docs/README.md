@@ -34,6 +34,8 @@ in [gemini-cli.md](gemini-cli.md).
 | [telemetry.md](telemetry.md)                           | User-facing overview of product telemetry, privacy safeguards, and opt-out controls.                                    |
 | [posthog-cost-controls.md](posthog-cost-controls.md)   | PostHog event-name migration, ingestion drop rules, and dashboard queries for reducing telemetry spend.              |
 
+See [startup-cues.md](startup-cues.md) for command cues that gate a new worktree’s opening turn.
+
 ## Mental model
 
 Persist durable facts, derive display status:

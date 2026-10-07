@@ -24,6 +24,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	activityobserver "github.com/aoagents/agent-orchestrator/backend/internal/observe/activity"
+	artifactsobserver "github.com/aoagents/agent-orchestrator/backend/internal/observe/artifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/reaper"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
@@ -51,6 +52,7 @@ type lifecycleStack struct {
 	runtimeReaper  *reaper.Reaper
 	reaperDone     <-chan struct{}
 	activityDone   <-chan struct{}
+	artifactsDone  <-chan struct{}
 	autoReviewDone <-chan struct{}
 	scmDone        <-chan struct{}
 	trackerDone    <-chan struct{}
@@ -70,6 +72,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		lifecycle.WithActiveSteering(activeTurnSteering(agents)),
 		lifecycle.WithStartupSignalGate(startupSignalGatesInput(agents)),
 		lifecycle.WithUrgentNudgeGate(urgentNudgeWaitingInputSafe(agents)),
+		lifecycle.WithDataDir(dataDir),
 	)
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger})
 	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger})
@@ -79,12 +82,14 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		// must not prevent the daemon or ordinary agent sessions from starting.
 		logger.Warn("fx Herdr listener unavailable", "error", err)
 	}
+	artifactsPoller := artifactsobserver.New(store, lcm, artifactsobserver.Config{Logger: logger})
 	return &lifecycleStack{
 		LCM:           lcm,
 		runtimeReaper: rp,
 		reaperDone:    rp.Start(ctx),
 		activityDone:  activityPoller.Start(ctx),
 		herdr:         herdrServer,
+		artifactsDone: artifactsPoller.Start(ctx),
 	}
 }
 
@@ -161,6 +166,9 @@ func (l *lifecycleStack) Stop() {
 	<-l.reaperDone
 	if l.activityDone != nil {
 		<-l.activityDone
+	}
+	if l.artifactsDone != nil {
+		<-l.artifactsDone
 	}
 	if l.autoReviewDone != nil {
 		<-l.autoReviewDone
@@ -322,7 +330,8 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		GithubIdentity:    githubIdentity,
 		// no_signal only makes sense for harnesses with complete lifecycle signal
 		// coverage; partial callbacks cannot prove that silence is abnormal.
-		SignalCapable: activitydispatch.FullySupportsHarness,
+		SignalCapable:        activitydispatch.FullySupportsHarness,
+		OutputTypeReconciler: lcm,
 	})
 	// Triggering a review spawns a reviewer over the worker's worktree, resolved
 	// from the reviewer registry (distinct from the worker agent set). The
@@ -552,7 +561,6 @@ type chatLauncher struct{ svc *chatsvc.Service }
 var _ sessionmanager.ChatLauncher = chatLauncher{}
 var _ interface {
 	RunBackgroundTask(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
-	RelayUserAuthoredChatTurn(context.Context, domain.SessionID, string) (string, error)
 	ArmChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	PrepareChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	AbortChatHandoff(domain.SessionID)
@@ -635,20 +643,8 @@ func (c chatLauncher) StartChatTurn(ctx context.Context, id domain.SessionID, te
 	return c.svc.StartChatTurn(ctx, id, text)
 }
 
-func (c chatLauncher) RelayChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
-	return c.svc.RelayChatTurn(ctx, id, text)
-}
-
-func (c chatLauncher) RelayUserAuthoredChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
-	return c.svc.RelayUserAuthoredChatTurn(ctx, id, text)
-}
-
-func (c chatLauncher) RelayChatTurnWithID(
-	ctx context.Context,
-	id domain.SessionID,
-	text, clientMessageID string,
-) (string, error) {
-	return c.svc.RelayChatTurnWithID(ctx, id, text, clientMessageID)
+func (c chatLauncher) RelaySessionChatTurn(ctx context.Context, id domain.SessionID, text, clientMessageID string, options ports.MessageDeliveryOptions) (string, error) {
+	return c.svc.RelaySessionChatTurn(ctx, id, text, clientMessageID, options)
 }
 
 func (c chatLauncher) QueueChatPrompt(ctx context.Context, id domain.SessionID, text string) (string, error) {

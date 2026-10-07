@@ -116,13 +116,17 @@ function contentSecurityPolicy(mode: "build" | "serve"): string {
 		// Repository avatars can come from self-hosted SCM instances whose origins
 		// are only known at runtime. Keep the broad exception limited to images;
 		// scripts, connections, frames, and other resource classes remain scoped.
-		"img-src 'self' data: http://127.0.0.1:* https:",
+		"img-src 'self' data: http://127.0.0.1:* http://*.localhost:* https:",
 		"font-src 'self' data:",
 		[
 			"connect-src",
 			"'self'",
 			"http://127.0.0.1:*",
 			"ws://127.0.0.1:*",
+			// Session artifact files are read from the daemon's artifact preview
+			// origin (ao-preview-artifact.<id>.localhost:<port>), a subdomain of
+			// localhost that 'self' and 127.0.0.1 do not cover.
+			"http://*.localhost:*",
 			// Vite serves on localhost, which 'self' does not cover for the ws://
 			// HMR socket.
 			mode === "serve" ? "ws://localhost:*" : "",
