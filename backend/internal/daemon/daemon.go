@@ -590,6 +590,11 @@ func Run() error {
 		},
 	})
 	sessMgr = wiredSessMgr
+	if restorer, ok := sessMgr.(interface {
+		EnsureChatController(context.Context, domain.SessionID) error
+	}); ok {
+		chatSvc.SetControllerRestorer(restorer.EnsureChatController)
+	}
 	if tunable, ok := sessMgr.(interface {
 		SetModelCatalog(interface {
 			Models(context.Context, string, string, bool) (ports.AgentModelCatalog, error)

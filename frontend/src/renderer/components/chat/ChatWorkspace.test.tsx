@@ -1517,6 +1517,17 @@ describe("ChatWorkspace timeline", () => {
 		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
 	});
 
+	it("sends to a cold session without requiring Resume", async () => {
+		const send = vi.fn().mockResolvedValue({ id: "lazy-turn", state: "running" });
+		render(<ChatWorkspace snapshot={{ ...chatFixtureSettled, controller: { state: "cold" } }} onSend={send} />);
+		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		const user = userEvent.setup();
+		await typeInLexicalEditor(screen.getByLabelText("Message the agent"), "Continue after restart");
+		await user.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(send).toHaveBeenCalledOnce());
+	});
+
 	it("offers real recovery actions when the controller stops", async () => {
 		const user = userEvent.setup();
 		const resume = vi.fn();

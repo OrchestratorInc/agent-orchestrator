@@ -3839,7 +3839,7 @@ export interface components {
             capabilities?: string[];
             compactedAt?: null | string;
             /** @enum {string} */
-            controller: "connecting" | "ready" | "busy" | "recovering" | "stopped";
+            controller: "connecting" | "ready" | "busy" | "recovering" | "stopped" | "cold";
             conversationId: string;
             harness?: string;
             hasMoreBefore: boolean;

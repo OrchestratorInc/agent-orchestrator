@@ -49,9 +49,10 @@ type Service struct {
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 	// onModelChanged syncs ChatUI's model override (including clearing it) to
 	// session metadata before the next prompt routes or a later TUI rebuild.
-	onModelChanged   func(domain.SessionID, string)
-	stopProviderHost func(context.Context, domain.SessionID) error
-	reports          *reportsvc.Coordinator
+	onModelChanged    func(domain.SessionID, string)
+	stopProviderHost  func(context.Context, domain.SessionID) error
+	restoreController func(context.Context, domain.SessionID) error
+	reports           *reportsvc.Coordinator
 
 	mu               sync.RWMutex
 	controllers      map[domain.SessionID]*Controller
@@ -59,6 +60,7 @@ type Service struct {
 	startConfigs     map[domain.ConversationOwner]StartConfig
 	gateMu           sync.Mutex
 	gates            map[domain.ConversationOwner]controllerGate
+	inputGates       map[domain.SessionID]controllerGate
 	probeMu          sync.Mutex
 	probed           map[domain.AgentHarness]ports.ChatCapabilities
 }
@@ -67,6 +69,57 @@ type Service struct {
 // has constructed both services.
 func (s *Service) SetReportCoordinator(coordinator *reportsvc.Coordinator) {
 	s.reports = coordinator
+}
+
+// SetControllerRestorer late-binds the session manager after daemon wiring.
+// Reads and catalog requests never call it; only input needs a live provider.
+func (s *Service) SetControllerRestorer(restore func(context.Context, domain.SessionID) error) {
+	s.restoreController = restore
+}
+
+// ChatNeedsController checks durable continuity obligations without restoring
+// a provider or loading the full transcript. Read failures remain conservative.
+func (s *Service) ChatNeedsController(ctx context.Context, id domain.SessionID) (bool, error) {
+	rec, err := s.requireChatSession(ctx, id)
+	if err != nil {
+		return true, err
+	}
+	switch rec.Activity.State {
+	case domain.ActivityIdle, domain.ActivityWaitingInput, domain.ActivityExited:
+	default:
+		return true, nil
+	}
+	if rec.Metadata.ConversationCheckpointUnsettled {
+		return true, nil
+	}
+	conversation, err := s.store.ConversationForSession(ctx, id)
+	if errors.Is(err, domain.ErrNoConversation) {
+		return false, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	work, err := s.store.HasUnsettledConversationTurns(ctx, conversation.ID)
+	if err != nil || work {
+		return true, err
+	}
+	return s.store.HasPendingConversationInteractions(ctx, conversation.ID)
+}
+
+func (s *Service) controllerForInput(ctx context.Context, id domain.SessionID) (*Controller, error) {
+	if !s.HasLiveChatController(id) && s.restoreController != nil {
+		rec, err := s.requireChatSession(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if rec.IsTerminated || rec.Activity.State == domain.ActivityExited || rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
+			return nil, ErrNoController
+		}
+		if err := s.restoreController(ctx, id); err != nil {
+			return nil, err
+		}
+	}
+	return s.Controller(id)
 }
 
 // controllerGate serializes start/stop for one session without making provider
@@ -150,6 +203,7 @@ func New(opts Options) *Service {
 		ownerControllers:       make(map[domain.ConversationOwner]*Controller),
 		startConfigs:           make(map[domain.ConversationOwner]StartConfig),
 		gates:                  make(map[domain.ConversationOwner]controllerGate),
+		inputGates:             make(map[domain.SessionID]controllerGate),
 		probed:                 make(map[domain.AgentHarness]ports.ChatCapabilities),
 	}
 }
@@ -161,6 +215,20 @@ func (s *Service) controllerGate(owner domain.ConversationOwner) controllerGate 
 	if gate == nil {
 		gate = make(controllerGate, 1)
 		s.gates[owner] = gate
+	}
+	return gate
+}
+
+// Input retains its admission order across lazy restoration, before a
+// controller (and its sendMu) exists. It is separate from the start/stop gate:
+// restoration must be able to acquire that gate while this input waits.
+func (s *Service) inputGate(id domain.SessionID) controllerGate {
+	s.gateMu.Lock()
+	defer s.gateMu.Unlock()
+	gate := s.inputGates[id]
+	if gate == nil {
+		gate = make(controllerGate, 1)
+		s.inputGates[id] = gate
 	}
 	return gate
 }
@@ -1094,6 +1162,11 @@ func (s *Service) Send(
 	id domain.SessionID,
 	msg ports.ChatUserMessage,
 ) (domain.ConversationTurn, error) {
+	gate := s.inputGate(id)
+	if err := gate.lock(ctx); err != nil {
+		return domain.ConversationTurn{}, err
+	}
+	defer gate.unlock()
 	record, err := s.requireChatSession(ctx, id)
 	if err != nil {
 		return domain.ConversationTurn{}, err
@@ -1121,14 +1194,16 @@ func (s *Service) Send(
 			// refused a stale queue append; hand the message to its controller.
 			latest, readErr := s.requireChatSession(ctx, id)
 			if readErr == nil && !latest.IsTerminated && latest.ProvisionState.WithDefault() == domain.SessionProvisionReady {
-				if controller, controllerErr := s.Controller(id); controllerErr == nil {
+				if controller, controllerErr := s.controllerForInput(ctx, id); controllerErr == nil {
 					turn, err = controller.Send(ctx, msg)
+				} else {
+					err = controllerErr
 				}
 			}
 		}
 	} else {
 		var controller *Controller
-		controller, err = s.Controller(id)
+		controller, err = s.controllerForInput(ctx, id)
 		if err == nil {
 			turn, err = controller.Send(ctx, msg)
 		}
@@ -1498,6 +1573,16 @@ func idleControllerState(record domain.SessionRecord) ports.ChatControllerState 
 	return ports.ChatControllerStopped
 }
 
+func (s *Service) absentControllerState(record domain.SessionRecord) ports.ChatControllerState {
+	if s.restoreController != nil && !record.IsTerminated &&
+		record.ProvisionState.WithDefault() == domain.SessionProvisionReady &&
+		record.Metadata.ProviderConversationID != "" &&
+		(record.Activity.State == domain.ActivityIdle || record.Activity.State == domain.ActivityWaitingInput) {
+		return ports.ChatControllerCold
+	}
+	return idleControllerState(record)
+}
+
 // Snapshot reads a session's conversation.
 //
 // It does not require a live controller: history must remain readable after the
@@ -1519,7 +1604,7 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 			SessionID:  id,
 			Harness:    record.Harness,
 			Mode:       domain.NormalizeSessionMode(record.Mode),
-			Controller: idleControllerState(record),
+			Controller: s.absentControllerState(record),
 		}, nil
 	}
 	if err != nil {
@@ -1531,7 +1616,7 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 		return Snapshot{}, fmt.Errorf("load conversation %s: %w", conversation.ID, err)
 	}
 
-	state := idleControllerState(record)
+	state := s.absentControllerState(record)
 	var caps ports.ChatCapabilities
 	if controller, err := s.Controller(id); err == nil {
 		state = controller.State()
@@ -1611,7 +1696,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 			SessionID:  id,
 			Harness:    record.Harness,
 			Mode:       domain.NormalizeSessionMode(record.Mode),
-			Controller: idleControllerState(record),
+			Controller: s.absentControllerState(record),
 		}, nil
 	}
 	if err != nil {
@@ -1626,7 +1711,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("load conversation page %s: %w", conversation.ID, err)
 	}
-	state := idleControllerState(record)
+	state := s.absentControllerState(record)
 	var caps ports.ChatCapabilities
 	if controller, err := s.Controller(id); err == nil {
 		state = controller.State()
@@ -2154,7 +2239,12 @@ func (s *Service) relayChatTurn(
 	text, clientMessageID string,
 	options ports.MessageDeliveryOptions,
 ) (string, error) {
-	controller, err := s.Controller(id)
+	gate := s.inputGate(id)
+	if err := gate.lock(ctx); err != nil {
+		return "", err
+	}
+	defer gate.unlock()
+	controller, err := s.controllerForInput(ctx, id)
 	if err != nil {
 		return "", err
 	}

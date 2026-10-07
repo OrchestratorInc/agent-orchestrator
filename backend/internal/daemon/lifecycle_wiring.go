@@ -667,6 +667,10 @@ func (c chatLauncher) HasLiveChatController(id domain.SessionID) bool {
 	return c.svc.HasLiveChatController(id)
 }
 
+func (c chatLauncher) ChatNeedsController(ctx context.Context, id domain.SessionID) (bool, error) {
+	return c.svc.ChatNeedsController(ctx, id)
+}
+
 // ArmChatHandoff closes Chat intake and dispatch synchronously at transition
 // acceptance. PrepareChatHandoff then settles interrupt work or waits for drain
 // work before Session Manager stops the source. These methods intentionally live

@@ -757,6 +757,30 @@ flowchart TD
 
 ### Session state machine
 
+Startup reconnects surviving Chat controllers only for continuity obligations: active or
+blocked activity, an unsettled checkpoint, queued/running turns, or unresolved
+approval/input requests. Safely idle sessions retain their workspace, native
+conversation identity, and transcript without opening a provider. The API derives
+the transient `cold` controller state; it is not a persisted activity or display
+status. Cold sessions become available without waiting for other startup checks.
+Missing hosts for active sessions remain stopped under the startup health policy;
+startup does not launch replacement providers or replay an interrupted turn.
+
+Human input, CLI relay, and durable outbox delivery restore the saved conversation
+on demand before using the ordinary serialized, idempotent Chat dispatch path.
+Concurrent input retains its admission order across restoration; explicit Resume
+shares the same restoration attempt. Restoration takes the session operation and
+provider controller gates, so a successful Kill cannot be followed by a late
+controller recreation. A failed lazy restore preserves native identity and the
+workspace and returns `CHAT_CONTROLLER_RESTORE_FAILED` for retry.
+
+Detached provider hosts remain protected across daemon shutdown. This startup
+policy avoids new idle provider launches and controller reconstruction; it does
+not yet evict previously detached idle hosts or hibernate controllers during a
+long-running daemon. Idle TTL/LRU eviction is a follow-up and must verify provider
+quiescence under the dispatch gate, preserving all active turns and pending
+requests.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Spawning: Spawn()

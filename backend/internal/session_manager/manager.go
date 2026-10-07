@@ -471,6 +471,7 @@ type Manager struct {
 	statusVerificationLimit        time.Duration
 	agentOpMu                      sync.Mutex
 	agentOperations                map[domain.SessionID]agentOperationKind
+	chatRestores                   map[domain.SessionID]*chatRestore
 	interfaceRecoveryMu            sync.Mutex
 	deferredInterfaceRecovery      map[domain.SessionID]string
 	// switchDecisionInput opens a narrow human-only terminal lane while the
@@ -831,6 +832,7 @@ func New(d Deps) *Manager {
 		backgroundContext:              d.BackgroundContext,
 		startupBackgroundReconcileDone: make(chan struct{}),
 		agentOperations:                make(map[domain.SessionID]agentOperationKind),
+		chatRestores:                   make(map[domain.SessionID]*chatRestore),
 		switchDecisionInput:            make(map[domain.SessionID]domain.AgentSwitchID),
 		retainedSwitches:               make(map[domain.SessionID]struct{}),
 		inputLeases:                    make(map[domain.SessionID]int),
@@ -2823,6 +2825,18 @@ func (m *Manager) recordAgentExited(ctx context.Context, rec domain.SessionRecor
 // identity and never changes the durable terminated flag as an intermediate
 // step.
 func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
+	rec, ok, err := m.store.GetSession(ctx, id)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	if ok && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
+		!rec.IsTerminated && rec.ProvisionState.WithDefault() == domain.SessionProvisionReady {
+		return m.ensureChatController(ctx, id, true)
+	}
+	return m.resumeAgentWithMode(ctx, id)
+}
+
+func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
 	if err := m.beginAgentResume(ctx, id); err != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
 	}
@@ -3627,6 +3641,18 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 		if rec.IsTerminated || rec.IsTaskPreparation || rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
 			continue
 		}
+		if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+			hot, err := m.chatNeedsStartupRestore(ctx, rec)
+			if err != nil {
+				m.finishStatusRecovery(ctx, rec, err)
+				m.logger.Warn("reconcile: Chat recovery obligations unavailable", "sessionID", rec.ID, "error", err)
+				continue
+			}
+			if !hot {
+				m.finishStatusRecovery(ctx, rec, nil)
+				continue
+			}
+		}
 		candidates = append(candidates, rec)
 		ids = append(ids, rec.ID)
 	}
@@ -3676,7 +3702,15 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 					defer m.endAgentOperation(rec.ID, agentOperationReconcile)
 					recoveryCtx, cancel := context.WithTimeout(ctx, m.statusVerificationLimit)
 					defer cancel()
-					return m.checkSessionHealth(recoveryCtx, rec)
+					// Input or teardown may have committed since the startup list.
+					current, err := m.getRecord(recoveryCtx, rec.ID)
+					if err != nil || current.IsTerminated {
+						return err
+					}
+					if m.chat != nil && domain.NormalizeSessionMode(current.Mode) == domain.SessionModeChat && m.chat.HasLiveChatController(current.ID) {
+						return nil
+					}
+					return m.checkSessionHealth(recoveryCtx, current)
 				}()
 				m.finishStatusRecovery(ctx, rec, err)
 				if err != nil {

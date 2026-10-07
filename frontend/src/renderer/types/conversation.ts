@@ -632,7 +632,7 @@ export interface ChatSkill {
 }
 
 /** Health of the daemon's connection to the provider. */
-export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped";
+export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped" | "cold";
 
 /**
  * How full this conversation is.

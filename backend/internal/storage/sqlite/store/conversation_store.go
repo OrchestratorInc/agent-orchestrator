@@ -2656,6 +2656,12 @@ func (s *Store) HasPendingConversationInteractions(ctx context.Context, conversa
 	return pending, nil
 }
 
+// HasUnsettledConversationTurns checks recovery obligations without loading history.
+func (s *Store) HasUnsettledConversationTurns(ctx context.Context, conversationID string) (bool, error) {
+	work, err := s.qr.HasUnsettledConversationTurns(ctx, conversationID)
+	return work, err
+}
+
 // FailPendingApprovals closes out anything the user can no longer answer, because
 // the provider call it was blocking is gone.
 func (s *Store) FailPendingApprovals(ctx context.Context, conversationID string, now time.Time) error {
