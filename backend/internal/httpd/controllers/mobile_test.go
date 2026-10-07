@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -340,6 +342,30 @@ type portOverrideLAN struct {
 
 func (f *portOverrideLAN) BoundPort() int         { return f.boundPortStale }
 func (f *portOverrideLAN) Start(int) (int, error) { f.running = true; return f.startPort, nil }
+
+// fakeClock drives the bridge's tailscale read cache.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+func useFakeClock(b *BridgeService) *fakeClock {
+	c := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	b.now = c.Now
+	return c
+}
 
 func newSecureBridge(t *testing.T, info mobilebridge.TailscaleInfo, target func() int) *BridgeService {
 	t.Helper()
@@ -806,6 +832,7 @@ func TestMobileAdvertisesTheSecurePairingProxy(t *testing.T) {
 
 func TestMobileEndpointRefreshChecksTailscaleConcurrently(t *testing.T) {
 	b := newSecureBridge(t, tsUp, func() int { return 3011 })
+	clock := useFakeClock(b)
 	if _, err := b.SetSecurePairing(true); err != nil {
 		t.Fatal(err)
 	}
@@ -814,6 +841,8 @@ func TestMobileEndpointRefreshChecksTailscaleConcurrently(t *testing.T) {
 	}
 	b.PickLANHosts = func() []string { return nil }
 	b.PickTailscaleHosts = func() []string { return nil }
+	// Let the answer Enable read expire, so this refresh runs the CLI.
+	clock.Advance(tailscaleReadTTL)
 
 	started := make(chan string, 2)
 	release := make(chan struct{})
@@ -844,6 +873,195 @@ func TestMobileEndpointRefreshChecksTailscaleConcurrently(t *testing.T) {
 	got := <-result
 	if len(got) != 1 || got[0] != (mobilebridge.Endpoint{Kind: mobilebridge.KindTailscale, Host: tsUp.Name, Port: 443, Secure: true}) {
 		t.Fatalf("endpoints = %+v, want the verified TLS proxy", got)
+	}
+}
+
+// #5485 review: with secure pairing on, every endpoint refresh and every
+// status poll ran `tailscale status` and `tailscale serve status` itself, so
+// phones refreshing together ran the CLI side by side. Callers that arrive
+// while a read is running now wait for it, and one answer serves every caller
+// for tailscaleReadTTL.
+func TestMobileTailscaleReadsAreSharedAcrossCallers(t *testing.T) {
+	b := newSecureBridge(t, tsUp, func() int { return 3011 })
+	clock := useFakeClock(b)
+	if _, err := b.SetSecurePairing(true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	b.PickLANHosts = func() []string { return nil }
+	b.PickTailscaleHosts = func() []string { return nil }
+	clock.Advance(tailscaleReadTTL)
+
+	var statusCalls, serveCalls atomic.Int32
+	release := make(chan struct{})
+	b.QueryTS = func() mobilebridge.TailscaleInfo {
+		statusCalls.Add(1)
+		<-release
+		return tsUp
+	}
+	b.ServeTarget = func() int {
+		serveCalls.Add(1)
+		<-release
+		return 3011
+	}
+
+	const phones = 8
+	results := make(chan []mobilebridge.Endpoint, phones)
+	for range phones {
+		go func() { results <- b.AdvertisedEndpoints() }()
+	}
+	// Hold the first read in the CLI long enough for every other refresh to
+	// reach the CLI too, if it were going to run its own.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) && statusCalls.Load() < phones {
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(release)
+	proxy := mobilebridge.Endpoint{Kind: mobilebridge.KindTailscale, Host: tsUp.Name, Port: 443, Secure: true}
+	for range phones {
+		if got := <-results; len(got) != 1 || got[0] != proxy {
+			t.Fatalf("endpoints = %+v, want the verified TLS proxy", got)
+		}
+	}
+	if s, v := statusCalls.Load(), serveCalls.Load(); s != 1 || v != 1 {
+		t.Fatalf("%d refreshes in flight together ran tailscale status %d times and serve status %d times, want once each", phones, s, v)
+	}
+
+	b.Status()
+	b.AdvertisedEndpoints()
+	if s, v := statusCalls.Load(), serveCalls.Load(); s != 1 || v != 1 {
+		t.Fatalf("calls within tailscaleReadTTL ran the CLI again: status %d, serve status %d", s, v)
+	}
+	clock.Advance(tailscaleReadTTL)
+	b.AdvertisedEndpoints()
+	if s, v := statusCalls.Load(), serveCalls.Load(); s != 2 || v != 2 {
+		t.Fatalf("a refresh after tailscaleReadTTL ran status %d and serve status %d times in total, want 2 each", s, v)
+	}
+}
+
+// An answer read without the proxy target (the bridge was down, or the proxy
+// failed to apply) cannot stand in for one that needs it.
+func TestTailscaleReadWithoutTheTargetIsNotReusedForOne(t *testing.T) {
+	var serveCalls atomic.Int32
+	b := newSecureBridge(t, tsUp, func() int { serveCalls.Add(1); return 3011 })
+	useFakeClock(b)
+	if r := b.readTailscale(false); r.withTarget || serveCalls.Load() != 0 {
+		t.Fatalf("read without the target = %+v after %d serve status calls", r, serveCalls.Load())
+	}
+	if r := b.readTailscale(true); r.target != 3011 || serveCalls.Load() != 1 {
+		t.Fatalf("read with the target = %+v after %d serve status calls, want 3011 after 1", r, serveCalls.Load())
+	}
+	if r := b.readTailscale(false); r.info != tsUp || serveCalls.Load() != 1 {
+		t.Fatalf("read without the target after one with it = %+v after %d serve status calls, want the cached answer", r, serveCalls.Load())
+	}
+}
+
+// Every toggle returns a status, so a proxy change has to show in the very
+// next one. A read that was already running when the proxy changed saw the old
+// proxy, and must neither answer for that status nor be cached when it
+// finishes later.
+func TestMobileProxyChangeIsNotAnsweredByAReadAlreadyRunning(t *testing.T) {
+	var target atomic.Int64
+	b := newSecureBridge(t, tsUp, func() int { return int(target.Load()) })
+	b.ApplyServe = func(port int) error { target.Store(int64(port)); return nil }
+	clock := useFakeClock(b)
+	if _, err := b.SetSecurePairing(true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Enable(); err != nil {
+		t.Fatal(err)
+	}
+
+	// :443 is pointed elsewhere out of band, and the next status read is held
+	// inside the CLI once it has read that target.
+	target.Store(9999)
+	clock.Advance(tailscaleReadTTL)
+	held, targetRead, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var holding, reading atomic.Bool
+	holding.Store(true)
+	reading.Store(true)
+	b.QueryTS = func() mobilebridge.TailscaleInfo {
+		if holding.CompareAndSwap(true, false) {
+			close(held)
+			<-release
+		}
+		return tsUp
+	}
+	b.ServeTarget = func() int {
+		port := int(target.Load())
+		if reading.CompareAndSwap(true, false) {
+			close(targetRead)
+		}
+		return port
+	}
+	early := make(chan SecurePairingStatus, 1)
+	go func() { early <- b.Status().SecurePairing }()
+	for _, step := range []chan struct{}{held, targetRead} {
+		select {
+		case <-step:
+		case <-time.After(2 * time.Second):
+			t.Fatal("status never read tailscale")
+		}
+	}
+
+	// Turning secure pairing on again re-applies the proxy.
+	toggled := make(chan SecurePairingStatus, 1)
+	go func() {
+		res, err := b.SetSecurePairing(true)
+		if err != nil {
+			t.Error(err)
+		}
+		toggled <- res.SecurePairing
+	}()
+	select {
+	case sp := <-toggled:
+		if !sp.Active {
+			t.Errorf("toggle status = %+v, want the re-applied proxy", sp)
+		}
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("the toggle's status waited on a read that started before the proxy changed")
+	}
+	close(release)
+	if sp := <-early; sp.Reason != "port_mismatch" {
+		t.Errorf("held read = %+v, want the proxy it saw (port_mismatch)", sp)
+	}
+	if sp := b.Status().SecurePairing; !sp.Active {
+		t.Errorf("status after the held read finished = %+v, want the re-applied proxy", sp)
+	}
+}
+
+// The same for a read that runs while the proxy is being changed: it can see
+// either side of the change, so it must not answer for the status after it.
+func TestMobileProxyChangeIsNotAnsweredByAReadDuringTheChange(t *testing.T) {
+	var target atomic.Int64
+	b := newSecureBridge(t, tsUp, func() int { return int(target.Load()) })
+	b.ApplyServe = func(port int) error { target.Store(int64(port)); return nil }
+	clock := useFakeClock(b)
+	if _, err := b.SetSecurePairing(true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Enable(); err != nil {
+		t.Fatal(err)
+	}
+
+	target.Store(9999)
+	clock.Advance(tailscaleReadTTL)
+	b.ApplyServe = func(port int) error {
+		if sp := b.Status().SecurePairing; sp.Reason != "port_mismatch" {
+			t.Errorf("status read mid-change = %+v, want the old proxy (port_mismatch)", sp)
+		}
+		target.Store(int64(port))
+		return nil
+	}
+	res, err := b.SetSecurePairing(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.SecurePairing.Active {
+		t.Fatalf("toggle status = %+v, want the re-applied proxy", res.SecurePairing)
 	}
 }
 
