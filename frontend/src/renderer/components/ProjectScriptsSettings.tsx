@@ -89,7 +89,7 @@ function ScriptsEditor({ project, onSaveState, onSaved }: { project: Project; on
 	};
 	return <form id="project-settings-form" className="flex min-h-full shrink-0 flex-col gap-3" onSubmit={(event) => { event.preventDefault(); mutation.mutate(commands); }}>
 		<Tabs className="flex flex-1 flex-col gap-3" value={activeTab} onValueChange={(value) => setActiveTab(value as ScriptKind)}>
-			<TabsList aria-label={t("settings.project.scripts")} className="shrink-0 self-start rounded-md bg-muted/30">
+			<TabsList aria-label={t("settings.project.scripts")} className="shrink-0 self-start">
 				<TabsTrigger value="setup">{t("settings.project.scriptSetup")}</TabsTrigger>
 				<TabsTrigger value="cleanup">{t("settings.project.scriptCleanup")}</TabsTrigger>
 			</TabsList>
