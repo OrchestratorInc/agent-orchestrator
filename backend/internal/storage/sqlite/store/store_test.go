@@ -262,6 +262,60 @@ func TestProvisionedWorkspaceRejectsTerminatedSession(t *testing.T) {
 	}
 }
 
+func TestProvisionedWorkspaceAcceptsOnlyControllerFreeReadySeed(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*domain.SessionRecord)
+		want   bool
+	}{
+		{"ready seed", func(*domain.SessionRecord) {}, true},
+		{"same prepared path", func(r *domain.SessionRecord) { r.Metadata.WorkspacePath = "/early"; r.Metadata.Branch = "returned-2" }, true},
+		{"terminated", func(r *domain.SessionRecord) { r.IsTerminated = true }, false},
+		{"runtime", func(r *domain.SessionRecord) { r.Metadata.RuntimeHandleID = "runtime" }, false},
+		{"launch", func(r *domain.SessionRecord) { r.Metadata.RuntimeLaunchID = "launch" }, false},
+		{"native agent", func(r *domain.SessionRecord) { r.Metadata.AgentSessionID = "agent" }, false},
+		{"native launch", func(r *domain.SessionRecord) { r.Metadata.AgentSessionIDLaunchID = "native-launch" }, false},
+		{"different branch", func(r *domain.SessionRecord) { r.Metadata.Branch = "owned-branch" }, false},
+		{"provider", func(r *domain.SessionRecord) { r.Metadata.ProviderConversationID = "provider" }, false},
+		{"generation", func(r *domain.SessionRecord) { r.Metadata.ControllerGeneration = "generation" }, false},
+		{"different workspace", func(r *domain.SessionRecord) { r.Metadata.WorkspacePath = "/owned" }, false},
+		{"prompt", func(r *domain.SessionRecord) { r.Metadata.Prompt = "live prompt" }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestStore(t)
+			ctx := context.Background()
+			seedProject(t, s, "mer")
+			rec := sampleRecord("mer")
+			rec.Metadata = domain.SessionMetadata{}
+			rec.ProvisionState = domain.SessionProvisionReady
+			rec.Activity.State = domain.ActivityBlocked
+			tc.mutate(&rec)
+			created, err := s.CreateSession(ctx, rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, ok, err := s.GetSession(ctx, created.ID)
+			if err != nil || !ok {
+				t.Fatal(err)
+			}
+			updated, err := s.SetSessionProvisionedWorkspace(ctx, created.ID, "returned-2", "/early", "/repo", created.UpdatedAt)
+			if err != nil || updated != tc.want {
+				t.Fatalf("publication = %v, %v; want %v", updated, err, tc.want)
+			}
+			got, ok, err := s.GetSession(ctx, created.ID)
+			if err != nil || !ok {
+				t.Fatal(err)
+			}
+			if got.Activity != created.Activity || got.IsTerminated != created.IsTerminated || got.ProvisionState != created.ProvisionState {
+				t.Fatalf("publication changed lifecycle facts: %+v", got)
+			}
+			if !tc.want && got.Metadata != before.Metadata {
+				t.Fatalf("refused publication changed metadata: %+v", got.Metadata)
+			}
+		})
+	}
+}
+
 func TestProvisionedWorkspaceRetainsLateFailedWorktree(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

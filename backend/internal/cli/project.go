@@ -56,6 +56,7 @@ type projectSummary struct {
 
 type projectDetails struct {
 	ID             string                 `json:"id"`
+	Revision       *int64                 `json:"revision,omitempty"`
 	Name           string                 `json:"name"`
 	Kind           string                 `json:"kind"`
 	Path           string                 `json:"path"`

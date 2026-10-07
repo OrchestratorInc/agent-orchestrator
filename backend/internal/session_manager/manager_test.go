@@ -178,7 +178,11 @@ func (f *fakeStore) UpdateSessionModel(_ context.Context, id domain.SessionID, m
 func (f *fakeStore) SetSessionProvisionedWorkspace(_ context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
 	rec, ok := f.sessions[id]
 	canPublish := rec.ProvisionState == domain.SessionProvisionProvisioning && !rec.IsTerminated ||
-		rec.ProvisionState == domain.SessionProvisionFailed && (rec.Metadata.WorkspacePath == "" || rec.Metadata.WorkspacePath == workspacePath)
+		rec.ProvisionState == domain.SessionProvisionFailed && (rec.Metadata.WorkspacePath == "" || rec.Metadata.WorkspacePath == workspacePath) ||
+		rec.ProvisionState.WithDefault() == domain.SessionProvisionReady && !rec.IsTerminated &&
+			rec.Metadata.RuntimeHandleID == "" && rec.Metadata.RuntimeLaunchID == "" && rec.Metadata.AgentSessionID == "" && rec.Metadata.AgentSessionIDLaunchID == "" &&
+			(rec.Metadata.Branch == "" || rec.Metadata.Branch == branch) && rec.Metadata.ProviderConversationID == "" && rec.Metadata.ControllerGeneration == "" && rec.Metadata.Prompt == "" &&
+			(rec.Metadata.WorkspacePath == "" || rec.Metadata.WorkspacePath == workspacePath)
 	if !ok || !canPublish {
 		return false, nil
 	}
@@ -1107,6 +1111,7 @@ type fakeWorkspace struct {
 	// trip (production Create resolves this path; the zero default keeps every
 	// other test's behavior unchanged).
 	createRepoPath string
+	createBranch   string
 	// baseRef is the authoritative ref returned with single-repo workspaces.
 	// When empty, an explicit BaseBranch is echoed to match the real adapter.
 	baseRef string
@@ -1197,7 +1202,11 @@ func (w *fakeWorkspace) Create(_ context.Context, cfg ports.WorkspaceConfig) (po
 	if baseRef == "" {
 		baseRef = cfg.BaseBranch
 	}
-	return ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: w.createRepoPath}, nil
+	branch := cfg.Branch
+	if w.createBranch != "" {
+		branch = w.createBranch
+	}
+	return ports.WorkspaceInfo{Path: path, Branch: branch, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: w.createRepoPath}, nil
 }
 func (w *fakeWorkspace) CreateWorkspaceProject(_ context.Context, cfg ports.WorkspaceProjectConfig) (ports.WorkspaceProjectInfo, error) {
 	if w.projectErr != nil {

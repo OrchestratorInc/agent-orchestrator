@@ -1233,11 +1233,32 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 	}
-	// Per-project workspace provisioning: symlink shared files, then run any
-	// post-create commands (e.g. `pnpm install`) before the agent launches.
-	if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+	// The existing agent checkpoint distinguishes early publication from a
+	// completed promptless launch, including projects without setup commands.
+	plan := []domain.SessionProvisionStepID{domain.SessionProvisionStepAgent}
+	if len(project.Config.PostCreate) > 0 || len(project.Config.Symlinks) > 0 {
+		plan = append([]domain.SessionProvisionStepID{domain.SessionProvisionStepSetup}, plan...)
+	}
+	setupProgress := m.startProvisionProgress(ctx, id, plan)
+	if setupProgress.err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, setupProgress.err)
+	}
+	// Publish actual adapter identity before setup can query its owning session.
+	if err := m.publishSpawnWorkspace(ctx, rec.ID, ws); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
+	}
+	// Per-project workspace provisioning: symlink shared files, then run any
+	// post-create commands (e.g. `pnpm install`) before the agent launches.
+	if err := m.provisionWorkspace(ctx, project, rec, ws); err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
+	}
+	setupProgress.complete(ctx, domain.SessionProvisionStepSetup)
+	if setupProgress.err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, setupProgress.err)
 	}
 
 	// CLI agents receive the prompt as text and cannot consume inline binary
@@ -1284,6 +1305,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 				return domain.SessionRecord{}, 0, 0, err
 			}
 		}
+		setupProgress.complete(ctx, domain.SessionProvisionStepAgent)
 		if cfg.ClientRequestID != "" {
 			if err := m.store.CommitClientRequestSession(ctx, id); err != nil {
 				return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
@@ -1382,6 +1404,16 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		Env:           env,
 	})
 	if err != nil {
+		var effect ports.RuntimeEffectError
+		// ponytail: Setup completion does not prove descendant stop. Only no-setup
+		// failures with runtime-effect evidence permit later ordinary cleanup.
+		if len(plan) == 1 && errors.As(err, &effect) && (effect.EffectOutcome() == ports.RuntimeEffectNone || effect.CleanupOutcome() == ports.RuntimeCleanupSucceeded) {
+			cleanupCtx, cancel := spawnRollbackContext(ctx)
+			if _, writeErr := m.setProvisionState(cleanupCtx, id, domain.SessionProvisionFailed, "Synchronous runtime creation failed before controller publication"); writeErr != nil {
+				m.logger.Warn("spawn: record known runtime failure", "sessionID", id, "error", writeErr)
+			}
+			cancel()
+		}
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrRuntimeCreate, agentlaunch.RedactError(err, project.Config.Env))
 	}
@@ -1438,6 +1470,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
 		}
 	}
+	setupProgress.complete(ctx, domain.SessionProvisionStepAgent)
 	if cfg.ClientRequestID != "" {
 		if err := m.store.CommitClientRequestSession(ctx, id); err != nil {
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
@@ -2016,9 +2049,8 @@ func (m *Manager) rollbackSeedSpawnWorkspace(ctx context.Context, rec domain.Ses
 			m.cleanupAgentWorkspace(cleanupCtx, rec, ws.Path)
 			cancel()
 		}
-		if published {
-			m.clearProvisionedWorkspace(ctx, rec.ID, ws.Path)
-		} else {
+		m.clearProvisionedWorkspace(ctx, rec.ID, ws.Path)
+		if !published {
 			m.rollbackSpawnSeedRowAfterFailure(ctx, rec.ID)
 			m.cleanupArtifactDir(rec.ID)
 		}
@@ -2389,6 +2421,9 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	if !ok {
 		return false, nil // already gone: benign race
 	}
+	if uncertainWorkspaceLaunch(rec) || (rec.ProvisionState.WithDefault() == domain.SessionProvisionReady && unfinishedWorkspaceSetup(rec)) {
+		return false, fmt.Errorf("kill %s: %w", id, ErrWorkspaceWriterStopUnproven)
+	}
 	m.stopPreviewBestEffort(ctx, id)
 	m.destroyBrowserBestEffort(ctx, id)
 	handle := runtimeHandle(rec.Metadata)
@@ -2499,6 +2534,9 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 	}
 	if !ok || rec.IsTerminated {
 		return nil
+	}
+	if uncertainWorkspaceLaunch(rec) || unfinishedWorkspaceSetup(rec) {
+		return fmt.Errorf("retire replacement %s: %w", id, ErrWorkspaceWriterStopUnproven)
 	}
 	m.stopPreviewBestEffort(ctx, id)
 	m.destroyBrowserBestEffort(ctx, id)
@@ -2687,6 +2725,9 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (Res
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
 	}
 	defer releaseHarness()
+	if uncertainWorkspaceLaunch(rec) || unfinishedWorkspaceSetup(rec) {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrWorkspaceWriterStopUnproven)
+	}
 	if !rec.IsTerminated {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrNotRestorable)
 	}
@@ -2865,6 +2906,9 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 	if rec.ProvisionState.IsProvisioning() {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrResumeInProgress)
 	}
+	if uncertainWorkspaceLaunch(rec) || (rec.ProvisionState.WithDefault() == domain.SessionProvisionReady && unfinishedWorkspaceSetup(rec)) {
+		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrWorkspaceWriterStopUnproven)
+	}
 	if rec.ProvisionState == domain.SessionProvisionFailed {
 		result, handedOff, err := m.retryFailedChatSpawn(ctx, rec, releaseHarness)
 		if handedOff {
@@ -2970,6 +3014,9 @@ func (m *Manager) relaunchSessionWithPolicy(
 }
 
 func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy) (RestoreResult, error) {
+	if uncertainWorkspaceLaunch(rec) || unfinishedWorkspaceSetup(rec) {
+		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, ErrWorkspaceWriterStopUnproven)
+	}
 	// Relaunch dispatches from the currently committed persisted mode, never from
 	// a caller hint. The interface-transition coordinator changes that fact only
 	// after stopping the old controller, then reuses this ordinary restore path.
@@ -3240,6 +3287,9 @@ func (m *Manager) SaveAndTeardownAll(ctx context.Context) error {
 // ForceDestroy; if either capture or the DB write fails, ForceDestroy is
 // not called.
 func (m *Manager) saveAndTeardownOne(ctx context.Context, rec domain.SessionRecord) error {
+	if uncertainWorkspaceLaunch(rec) || unfinishedWorkspaceSetup(rec) {
+		return fmt.Errorf("save %s: %w", rec.ID, ErrWorkspaceWriterStopUnproven)
+	}
 	// Gate shut this session's scoped shell terminals before either branch
 	// below force-removes its worktree. SaveAndTeardownAll only reaches here for
 	// a session with a real workspace, so there is always a worktree to protect.
@@ -3320,6 +3370,9 @@ func (m *Manager) saveAndTeardownOne(ctx context.Context, rec domain.SessionReco
 // worktree, preserving conversation identity when recovery fails. Startup uses
 // checkSessionHealth instead so missing agents stay stopped.
 func (m *Manager) reconcileLive(ctx context.Context, rec domain.SessionRecord) error {
+	if (uncertainWorkspaceLaunch(rec) || unfinishedWorkspaceSetup(rec)) && rec.ProvisionState.WithDefault() == domain.SessionProvisionReady {
+		return fmt.Errorf("reconcile %s: %w", rec.ID, ErrWorkspaceWriterStopUnproven)
+	}
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
 		return err
@@ -3548,9 +3601,9 @@ func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 			}
 		}
 	}
-	// An asynchronous spawn lives in one daemon's memory. Anything still
-	// "starting" after a restart has no one left to finish it, so say so rather
-	// than leaving a session that spins forever.
+	// An asynchronous spawn lives in one daemon's memory. After a restart its
+	// Go operation cannot finish, though setup shells may survive. Record the
+	// interruption without reclaiming or replaying an unfinished setup writer.
 	if err == nil {
 		m.startupProvisioningRetries, err = m.failInterruptedProvisioningRecords(ctx, recs)
 		if err != nil {
@@ -3595,7 +3648,7 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 			continue
 		}
 		if _, err := m.setProvisionState(ctx, id, domain.SessionProvisionFailed,
-			"AO restarted before this session finished starting"); err != nil {
+			interruptedProvisioningError); err != nil {
 			m.logger.Warn("reconcile: interrupted session start retry failed", "sessionID", id, "error", err)
 		}
 	}
@@ -4720,6 +4773,9 @@ func (m *Manager) isWorkspaceInUse(ctx context.Context, projectID domain.Project
 // call) — most commonly because a scoped shell terminal could not be
 // confirmed closed, so reclaiming would pull the ground out from under it.
 func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo) (ports.WorkspaceReclaim, string) {
+	if uncertainWorkspaceLaunch(rec) || unfinishedWorkspaceSetup(rec) {
+		return ports.WorkspaceReclaimRemoved, "prior setup writer stop is unproven; preserve workspace for manual recovery"
+	}
 	release, closeErr := m.beginShellTerminalTeardown(ctx, rec.ID)
 	if closeErr != nil {
 		m.logger.Warn("cleanup: shell terminal still open", "sessionID", rec.ID, "error", closeErr)
@@ -5511,11 +5567,31 @@ func HookPATH(executable func() (string, error), getenv func(string) string, pro
 // worktree exists: symlink shared files from the project repo, then run any
 // post-create commands. Either failing aborts the spawn so a half-provisioned
 // workspace never launches an agent.
-func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
-	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
+func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, rec domain.SessionRecord, ws ports.WorkspaceInfo) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return runPostCreate(ctx, workspacePath, project.Config.PostCreate, project.Config.Env)
+	if err := applySymlinks(project.Path, ws.Path, project.Config.Symlinks); err != nil {
+		return err
+	}
+	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	setProtectedEnv(env, EnvRunFile, m.runFilePath, envKeysCaseInsensitive)
+	setProtectedEnv(env, "AO_WORKSPACE_PATH", ws.Path, envKeysCaseInsensitive)
+	if err := runPostCreate(ctx, ws.Path, project.Config.PostCreate, project.Config.Env, env); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func (m *Manager) publishSpawnWorkspace(ctx context.Context, id domain.SessionID, ws ports.WorkspaceInfo) error {
+	updated, err := m.store.SetSessionProvisionedWorkspace(ctx, id, ws.Branch, ws.Path, ws.RepoPath, m.clock())
+	if err != nil {
+		return err
+	}
+	if !updated {
+		return errors.New("session no longer accepts workspace publication")
+	}
+	return ctx.Err()
 }
 
 // applySymlinks links each repo-relative path into the workspace. A source that
@@ -5573,7 +5649,7 @@ func safeRelPath(rel string) (string, error) {
 // runPostCreate runs each post-create command in the workspace via the platform
 // shell, so OS-agnostic commands like "pnpm install" work. A non-zero exit
 // aborts the spawn with the command output.
-func runPostCreate(ctx context.Context, workspacePath string, commands []string, projectEnv map[string]string) error {
+func runPostCreate(ctx context.Context, workspacePath string, commands []string, projectEnv, sessionEnv map[string]string) error {
 	for _, command := range commands {
 		command = strings.TrimSpace(command)
 		if command == "" {
@@ -5587,7 +5663,7 @@ func runPostCreate(ctx context.Context, workspacePath string, commands []string,
 		}
 		cmd.Dir = workspacePath
 		cmd.Env = os.Environ()
-		for key, value := range agentlaunch.MergeEnv(projectEnv, nil) {
+		for key, value := range agentlaunch.MergeEnv(projectEnv, sessionEnv) {
 			cmd.Env = append(cmd.Env, key+"="+value)
 		}
 		if out, err := cmd.CombinedOutput(); err != nil {

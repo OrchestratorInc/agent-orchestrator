@@ -1445,7 +1445,13 @@ UPDATE sessions SET
     updated_at = ?4
 WHERE id = ?5
   AND ((provision_state = 'provisioning' AND is_terminated = 0)
-    OR (provision_state = 'failed' AND (workspace_path = '' OR workspace_path = ?2)))
+    OR (provision_state = 'failed' AND (workspace_path = '' OR workspace_path = ?2))
+    OR (provision_state = 'ready' AND is_terminated = 0
+        AND runtime_handle_id = '' AND runtime_launch_id = ''
+        AND agent_session_id = '' AND agent_session_id_launch_id = ''
+        AND provider_conversation_id = '' AND controller_generation = '' AND prompt = ''
+        AND (branch = '' OR branch = ?1)
+        AND (workspace_path = '' OR workspace_path = ?2)))
 `
 
 type SetSessionProvisionedWorkspaceParams struct {
@@ -1464,6 +1470,8 @@ type SetSessionProvisionedWorkspaceParams struct {
 // A failed start may still receive a late partial worktree from a claimed
 // preparation. Retain that path for safe cleanup, but never overwrite a live
 // workspace or publish onto a terminated session still provisioning.
+// Synchronous starts may publish only onto a controller-free, non-terminated
+// ready seed (including a promoted preparation with the same workspace).
 func (q *Queries) SetSessionProvisionedWorkspace(ctx context.Context, arg SetSessionProvisionedWorkspaceParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSessionProvisionedWorkspace,
 		arg.Branch,

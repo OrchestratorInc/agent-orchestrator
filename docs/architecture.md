@@ -18,6 +18,42 @@ Chat, but both controllers are never live at once. The daemon coordinates both
 modes through the same session, lifecycle, workspace, storage, and observation
 boundaries.
 
+Workspace setup publishes the adapter-returned path, branch, and repository
+before `postCreate` executes. Its `AO_*` session context is daemon-owned; project
+and inherited environment values cannot override that identity. Publication
+alone does not make the controller live or prove setup completed.
+
+A controller-free early publication with no committed launch identity is
+preserved after daemon death, including when setup is `done` or absent. Startup
+health does not remove its row, path, Git registration, or payload. The same
+incomplete client request remains refused. Resume, restore, and teardown do not
+prove that a prior setup writer stopped and must not silently reclaim or launch
+that workspace. A shell or descendant can survive daemon-only `SIGKILL`, even
+when Git reports the workspace clean. A Chat controller generation can be
+reserved before `ControllerReady`; that reservation alone is not a committed
+provider/controller identity and does not permit recovery or teardown.
+If startup cannot persist its interrupted-start failure, Kill preserves the
+published provisioning row and refuses with unproven writer-stop evidence.
+Only the current Manager that owns and joins the start may mark it cancelled;
+stale starts with no published workspace retain ordinary cancellation.
+
+A synchronous runtime creation failure with no setup stage records the existing
+failed provision state only when the runtime reports no effect or successful
+cleanup. If immediate workspace removal refuses, later cleanup can retry the
+adapter once its refusal cause clears. Dirty-workspace checks and ordinary
+Restore errors still apply. An unknown runtime effect is not completion proof.
+A retained launch that ran setup remains uncertain even when its parent shell
+returned: existing checkpoints do
+not distinguish surviving descendants, so this path keeps the manual ceiling.
+
+Recovery has a manual ceiling: identify and stop every prior setup writer,
+preserve its work, then repair or remove the incomplete launch through an
+explicit operator recovery procedure. These checkpoints do not contain native
+writer-stop evidence, so ordinary Resume is not that procedure. There is no
+automatic clean retry, execution lease, or new supervisor. Known in-process
+failed setup rollback and ordinary completed-controller recovery retain their
+existing behavior.
+
 ## Table of contents
 
 - [Mental model](#mental-model)

@@ -925,7 +925,7 @@ func TestManager_UpdateSettings(t *testing.T) {
 
 	// Unchanged legacy display name that exceeds maxDisplayNameLen should not block updating config.
 	legacyName := strings.Repeat("l", 110)
-	if _, err := store.UpdateProjectSettings(ctx, "ao", legacyName, cfg); err != nil {
+	if _, _, err := store.UpdateProjectSettings(ctx, "ao", legacyName, cfg); err != nil {
 		t.Fatalf("UpdateProjectSettings: %v", err)
 	}
 	updatedWithLegacy, err := m.UpdateSettings(ctx, "ao", project.UpdateSettingsInput{
@@ -943,7 +943,7 @@ func TestManager_UpdateSettings(t *testing.T) {
 	// exemption: the renderer seeds the settings field from project.name and
 	// sends .trim(), so compare against the trimmed stored value.
 	paddedLegacy := "  " + strings.Repeat("l", 110) + "  "
-	if _, err := store.UpdateProjectSettings(ctx, "ao", paddedLegacy, cfg); err != nil {
+	if _, _, err := store.UpdateProjectSettings(ctx, "ao", paddedLegacy, cfg); err != nil {
 		t.Fatalf("UpdateProjectSettings with padded legacy name: %v", err)
 	}
 	paddedUpdated, err := m.UpdateSettings(ctx, "ao", project.UpdateSettingsInput{

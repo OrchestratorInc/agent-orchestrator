@@ -42,7 +42,7 @@ func (q *Queries) CountProjectsIncludingArchived(ctx context.Context) (int64, er
 }
 
 const findProjectByPath = `-- name: FindProjectByPath :one
-SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind
+SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, revision
 FROM projects WHERE path = ? AND archived_at IS NULL
 `
 
@@ -58,12 +58,13 @@ func (q *Queries) FindProjectByPath(ctx context.Context, path string) (Project, 
 		&i.ArchivedAt,
 		&i.Config,
 		&i.Kind,
+		&i.Revision,
 	)
 	return i, err
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind
+SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, revision
 FROM projects WHERE id = ?
 `
 
@@ -79,12 +80,13 @@ func (q *Queries) GetProject(ctx context.Context, id domain.ProjectID) (Project,
 		&i.ArchivedAt,
 		&i.Config,
 		&i.Kind,
+		&i.Revision,
 	)
 	return i, err
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind
+SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, revision
 FROM projects WHERE archived_at IS NULL ORDER BY id
 `
 
@@ -106,6 +108,7 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 			&i.ArchivedAt,
 			&i.Config,
 			&i.Kind,
+			&i.Revision,
 		); err != nil {
 			return nil, err
 		}
@@ -135,6 +138,25 @@ type PinProjectSessionPermissionsParams struct {
 func (q *Queries) PinProjectSessionPermissions(ctx context.Context, arg PinProjectSessionPermissionsParams) error {
 	_, err := q.db.ExecContext(ctx, pinProjectSessionPermissions, arg.Permissions, arg.ProjectID, arg.Kind)
 	return err
+}
+
+const updateProjectConfig = `-- name: UpdateProjectConfig :execrows
+UPDATE projects SET config = ?
+WHERE id = ? AND archived_at IS NULL AND revision = ?
+`
+
+type UpdateProjectConfigParams struct {
+	Config   sql.NullString
+	ID       domain.ProjectID
+	Revision int64
+}
+
+func (q *Queries) UpdateProjectConfig(ctx context.Context, arg UpdateProjectConfigParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateProjectConfig, arg.Config, arg.ID, arg.Revision)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateProjectSettings = `-- name: UpdateProjectSettings :execrows

@@ -63,8 +63,10 @@ type UpdateSettingsInput struct {
 
 // SetConfigInput is the body shape for PUT /api/v1/projects/{id}/config. Config
 // replaces the project's stored config wholesale; a zero-value config clears it.
+// ExpectedRevision optionally binds the request to a prior project read.
 type SetConfigInput struct {
-	Config domain.ProjectConfig `json:"config"`
+	Config           domain.ProjectConfig `json:"config"`
+	ExpectedRevision *int64               `json:"expectedRevision,omitempty" minimum:"0" format:"int64" nullable:"false"`
 }
 
 // RemoveResult reports what DELETE /api/v1/projects/{id} actually did.

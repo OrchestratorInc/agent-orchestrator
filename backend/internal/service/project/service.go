@@ -305,6 +305,10 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 		if err := m.store.UpsertWorkspaceProject(ctx, row, repos); err != nil {
 			return Project{}, apierr.Internal("PROJECT_ADD_FAILED", "Failed to register workspace project")
 		}
+		row, ok, err := m.store.GetProject(ctx, row.ID)
+		if err != nil || !ok {
+			return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load registered workspace project")
+		}
 		m.modelScopeChanged(row.ID)
 		if in.ClonePreparationID != "" {
 			removeClonePreparationMarker(path)
@@ -353,6 +357,10 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	}
 	if err := m.store.UpsertProject(ctx, row); err != nil {
 		return Project{}, apierr.Internal("PROJECT_ADD_FAILED", "Failed to register project")
+	}
+	row, ok, err := m.store.GetProject(ctx, row.ID)
+	if err != nil || !ok {
+		return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load registered project")
 	}
 	if in.ClonePreparationID != "" {
 		removeClonePreparationMarker(path)
@@ -727,15 +735,13 @@ func (m *Service) UpdateSettings(ctx context.Context, id domain.ProjectID, in Up
 	if err := in.Config.ValidateCanonicalRepository(row.RepoOriginURL); err != nil {
 		return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 	}
-	updated, err := m.store.UpdateProjectSettings(ctx, string(id), inDisplayName, in.Config)
+	row, updated, err := m.store.UpdateProjectSettings(ctx, string(id), inDisplayName, in.Config)
 	if err != nil {
 		return Project{}, apierr.Internal("PROJECT_SETTINGS_UPDATE_FAILED", "Failed to update project settings")
 	}
 	if !updated {
 		return Project{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
 	}
-	row.DisplayName = inDisplayName
-	row.Config = in.Config
 	m.modelScopeChanged(row.ID)
 	return m.projectFromRow(ctx, row), nil
 }
@@ -751,6 +757,9 @@ func (m *Service) modelScopeChanged(projectID string) {
 func (m *Service) SetConfig(ctx context.Context, id domain.ProjectID, in SetConfigInput) (Project, error) {
 	if err := validateProjectID(id); err != nil {
 		return Project{}, err
+	}
+	if in.ExpectedRevision != nil && *in.ExpectedRevision < 0 {
+		return Project{}, apierr.Invalid("INVALID_PROJECT_REVISION", "Expected revision must be nonnegative", nil)
 	}
 	if err := in.Config.Validate(); err != nil {
 		return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
@@ -770,9 +779,15 @@ func (m *Service) SetConfig(ctx context.Context, id domain.ProjectID, in SetConf
 	if err := in.Config.ValidateCanonicalRepository(row.RepoOriginURL); err != nil {
 		return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 	}
-	row.Config = in.Config
-	if err := m.store.UpsertProject(ctx, row); err != nil {
+	if in.ExpectedRevision != nil && *in.ExpectedRevision != row.Revision {
+		return Project{}, apierr.Conflict("PROJECT_REVISION_CONFLICT", "Project changed; reload before updating config", nil)
+	}
+	row, updated, err := m.store.UpdateProjectConfig(ctx, string(id), row.Revision, in.Config)
+	if err != nil {
 		return Project{}, apierr.Internal("PROJECT_CONFIG_UPDATE_FAILED", "Failed to update project config")
+	}
+	if !updated {
+		return Project{}, apierr.Conflict("PROJECT_REVISION_CONFLICT", "Project changed; reload before updating config", nil)
 	}
 	m.modelScopeChanged(row.ID)
 	return m.projectFromRow(ctx, row), nil
@@ -879,6 +894,7 @@ func (m *Service) projectFromRow(ctx context.Context, row domain.ProjectRecord) 
 	}
 	p := Project{
 		ID:            domain.ProjectID(row.ID),
+		Revision:      row.Revision,
 		Name:          projectDisplayName(row),
 		Kind:          kind,
 		Path:          row.Path,

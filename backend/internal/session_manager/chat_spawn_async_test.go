@@ -403,6 +403,7 @@ func TestResumeFailedAsyncChatSpawnReusesPublishedWorkspace(t *testing.T) {
 		ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker,
 		Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
 		ProvisionState: domain.SessionProvisionFailed,
+		ProvisionSteps: []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepSetup, Status: domain.SessionProvisionStepDone}},
 		Metadata:       domain.SessionMetadata{Branch: "ao/mer-1/root", WorkspacePath: workspacePath},
 	}
 	ws := m.workspace.(*fakeWorkspace)
@@ -420,6 +421,43 @@ func TestResumeFailedAsyncChatSpawnReusesPublishedWorkspace(t *testing.T) {
 	}
 	if body, err := os.ReadFile(filepath.Join(workspacePath, "provision-runs")); err != nil || string(body) != "x" {
 		t.Fatalf("post-create ran again on published workspace: %q, %v", body, err)
+	}
+}
+
+func TestResumeFailedAsyncChatSpawnRerunsUnfinishedSetup(t *testing.T) {
+	for _, setupStatus := range []domain.SessionProvisionStepStatus{"", domain.SessionProvisionStepRunning} {
+		t.Run(string(setupStatus), func(t *testing.T) {
+			m, st, _ := newChatManager(&recordingLauncher{})
+			m.dataDir = t.TempDir()
+			deferred := deferredBackground(m)
+			workspace := t.TempDir()
+			project := st.projects[string(chatTestProject)]
+			project.Config.PostCreate = []string{"printf x >> provision-runs"}
+			st.projects[string(chatTestProject)] = project
+			st.sessions["mer-1"] = domain.SessionRecord{
+				ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker,
+				Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+				ProvisionState: domain.SessionProvisionFailed,
+				Metadata:       domain.SessionMetadata{Branch: "returned-branch", WorkspacePath: workspace},
+			}
+			if setupStatus != "" {
+				rec := st.sessions["mer-1"]
+				rec.ProvisionSteps = []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepSetup, Status: setupStatus}}
+				st.sessions["mer-1"] = rec
+			}
+			ws := m.workspace.(*fakeWorkspace)
+			ws.createErr = errors.New("must reuse workspace")
+			if _, err := m.ResumeAgentWithMode(context.Background(), "mer-1"); err != nil {
+				t.Fatal(err)
+			}
+			(*deferred)[0]()
+			if body, err := os.ReadFile(filepath.Join(workspace, "provision-runs")); err != nil || string(body) != "x" {
+				t.Fatalf("unfinished setup skipped on retry: %q, %v", body, err)
+			}
+			if ws.createCount != 0 || st.sessions["mer-1"].ProvisionState != domain.SessionProvisionReady {
+				t.Fatalf("retry did not reuse and finish: creates=%d session=%+v", ws.createCount, st.sessions["mer-1"])
+			}
+		})
 	}
 }
 
@@ -628,6 +666,22 @@ func TestSpawnAsyncChat_FailedCleanupRetainsWorkspacePath(t *testing.T) {
 	stored := st.sessions[rec.ID]
 	if stored.ProvisionState != domain.SessionProvisionFailed || stored.Metadata.WorkspacePath != ws.path {
 		t.Fatalf("failed cleanup lost workspace: %+v", stored)
+	}
+	if !unfinishedWorkspaceSetup(stored) {
+		t.Fatal("failed hook left no incomplete setup checkpoint")
+	}
+	st.updateSessionErr = nil
+	project.Config.PostCreate = []string{"printf x >> retried-setup"}
+	st.projects[string(chatTestProject)] = project
+	if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	(*deferred)[1]()
+	if body, err := os.ReadFile(filepath.Join(ws.path, "retried-setup")); err != nil || string(body) != "x" {
+		t.Fatalf("failed setup was not rerun on retained workspace: %q, %v", body, err)
+	}
+	if ws.createCount != 1 || st.sessions[rec.ID].ProvisionState != domain.SessionProvisionReady {
+		t.Fatalf("retry did not reuse retained workspace: creates=%d record=%+v", ws.createCount, st.sessions[rec.ID])
 	}
 }
 

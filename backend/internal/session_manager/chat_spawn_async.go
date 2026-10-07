@@ -114,7 +114,11 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	var workspaceProject *ports.WorkspaceProjectInfo
 	var err error
 	reusePublishedWorkspace := in.retry && in.record.Metadata.WorkspacePath != ""
-	progress := m.startProvisionProgress(ctx, id, provisionPlan(in, reusePublishedWorkspace))
+	setupCompleted := reusePublishedWorkspace && !unfinishedWorkspaceSetup(in.record) && slices.ContainsFunc(in.record.ProvisionSteps, func(step domain.SessionProvisionStep) bool {
+		return step.ID == domain.SessionProvisionStepSetup && step.Status == domain.SessionProvisionStepDone ||
+			step.ID == domain.SessionProvisionStepAgent && (step.Status == domain.SessionProvisionStepRunning || step.Status == domain.SessionProvisionStepDone)
+	})
+	progress := m.startProvisionProgress(ctx, id, provisionPlan(in, reusePublishedWorkspace, setupCompleted))
 	if reusePublishedWorkspace {
 		ws = workspaceInfo(in.record)
 		if in.projectKind == domain.ProjectKindWorkspace {
@@ -168,8 +172,20 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	m.logAsyncChatSpawnStage(id, "workspace_create", stageStarted)
 	progress.complete(ctx, domain.SessionProvisionStepWorktree)
 	stageStarted = time.Now()
-	if !reusePublishedWorkspace {
-		if err := m.provisionWorkspace(ctx, in.project, ws.Path); err != nil {
+	if err := m.publishSpawnWorkspace(ctx, id, ws); err != nil {
+		m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
+		m.failAsyncChatSpawn(ctx, id, err)
+		return
+	}
+	m.logAsyncChatSpawnStage(id, "workspace_publish", stageStarted)
+	stageStarted = time.Now()
+	if !setupCompleted {
+		if progress.err != nil {
+			m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
+			m.failAsyncChatSpawn(ctx, id, progress.err)
+			return
+		}
+		if err := m.provisionWorkspace(ctx, in.project, in.record, ws); err != nil {
 			m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
 			m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrWorkspaceProvision, err))
 			return
@@ -182,28 +198,10 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	}
 	m.logAsyncChatSpawnStage(id, "workspace_provision", stageStarted)
 	progress.complete(ctx, domain.SessionProvisionStepSetup)
-	// Publish the worktree now rather than at the controller commit. Until the
-	// row carries it, every workspace-scoped read answers
-	// SESSION_WORKSPACE_NOT_FOUND, and the provider start that follows is long
-	// enough for the desktop's bounded readiness poll to give up on a session
-	// that is perfectly fine. It also means an interrupted start leaves a row
-	// that knows which worktree to clean up.
-	stageStarted = time.Now()
-	updated, err := m.store.SetSessionProvisionedWorkspace(
-		ctx, id, ws.Branch, ws.Path, ws.RepoPath, m.clock())
-	if err != nil {
-		m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
-		m.failAsyncChatSpawn(ctx, id, err)
+	if progress.err != nil {
+		m.failAsyncChatSpawn(ctx, id, progress.err)
 		return
 	}
-	if !updated || ctx.Err() != nil {
-		m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
-		if err := ctx.Err(); err != nil {
-			m.failAsyncChatSpawn(ctx, id, err)
-		}
-		return
-	}
-	m.logAsyncChatSpawnStage(id, "workspace_publish", stageStarted)
 	// A concurrent StageAttachments call must either see this workspace path and
 	// write directly into it, or land in canonical storage before this replay.
 	// This also projects opening attachments saved before the early response.
@@ -261,12 +259,14 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 
 // provisionProgress publishes a start's checklist. Finishing one stage and
 // starting the next is a single write, so the checklist never shows a gap
-// between them. Writes are best effort: the checklist is display, and a start
-// must not fail because it could not be drawn.
+// between them. Setup uses this durable checkpoint for retry and recovery;
+// its writes must succeed before setup or controller launch can proceed.
+// Other progress writes remain best effort.
 type provisionProgress struct {
 	m     *Manager
 	id    domain.SessionID
 	steps []domain.SessionProvisionStep
+	err   error
 }
 
 // startProvisionProgress plans the stages this start will run and marks the
@@ -309,26 +309,33 @@ func (p *provisionProgress) startNext() {
 }
 
 func (p *provisionProgress) publish(ctx context.Context) {
-	if err := p.m.store.SetSessionProvisionSteps(ctx, p.id, p.steps, p.m.clock()); err != nil {
-		p.m.logger.Warn("spawn: publish start-up progress", "sessionID", p.id, "error", err)
+	p.err = p.m.store.SetSessionProvisionSteps(ctx, p.id, p.steps, p.m.clock())
+	if p.err != nil {
+		p.m.logger.Warn("spawn: publish start-up progress", "sessionID", p.id, "error", p.err)
 	}
 }
 
 // provisionPlan lists the stages completeAsyncChatSpawn will run, in order.
-func provisionPlan(in asyncChatSpawn, reusePublishedWorkspace bool) []domain.SessionProvisionStepID {
+func provisionPlan(in asyncChatSpawn, reusePublishedWorkspace, setupCompleted bool) []domain.SessionProvisionStepID {
 	var plan []domain.SessionProvisionStepID
 	if !reusePublishedWorkspace {
 		if in.preparation == nil {
 			plan = append(plan, domain.SessionProvisionStepFetch)
 		}
 		plan = append(plan, domain.SessionProvisionStepWorktree)
-		if slices.ContainsFunc(in.project.Config.PostCreate, func(command string) bool {
-			return strings.TrimSpace(command) != ""
-		}) {
-			plan = append(plan, domain.SessionProvisionStepSetup)
-		}
+	}
+	if !setupCompleted && (len(in.project.Config.Symlinks) > 0 || slices.ContainsFunc(in.project.Config.PostCreate, func(command string) bool {
+		return strings.TrimSpace(command) != ""
+	})) {
+		plan = append(plan, domain.SessionProvisionStepSetup)
 	}
 	return append(plan, domain.SessionProvisionStepAgent)
+}
+
+func unfinishedWorkspaceSetup(rec domain.SessionRecord) bool {
+	return slices.ContainsFunc(rec.ProvisionSteps, func(step domain.SessionProvisionStep) bool {
+		return step.ID == domain.SessionProvisionStepSetup && step.Status != domain.SessionProvisionStepDone
+	})
 }
 
 func (m *Manager) logAsyncChatSpawnStage(id domain.SessionID, stage string, started time.Time) {
@@ -338,6 +345,8 @@ func (m *Manager) logAsyncChatSpawnStage(id domain.SessionID, stage string, star
 		"duration", time.Since(started),
 	)
 }
+
+const interruptedProvisioningError = "AO restarted before this session finished starting"
 
 // failAsyncChatSpawn preserves the visible row and queue for retry.
 func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, cause error) {
@@ -476,8 +485,8 @@ func (m *Manager) setProvisionState(
 }
 
 // FailInterruptedProvisioning marks sessions whose background start did not
-// survive a daemon restart. Without this a row left mid-start reads as
-// "starting" forever: nothing is running that could ever finish it.
+// survive a daemon restart. The owning Go operation is gone, but setup shells
+// may survive. Preserve published unfinished setup rather than replaying it.
 func (m *Manager) FailInterruptedProvisioning(ctx context.Context) error {
 	recs, err := m.store.ListAllSessions(ctx)
 	if err != nil {
@@ -495,7 +504,7 @@ func (m *Manager) failInterruptedProvisioningRecords(ctx context.Context, recs [
 			continue
 		}
 		if _, err := m.setProvisionState(ctx, rec.ID, domain.SessionProvisionFailed,
-			"AO restarted before this session finished starting"); err != nil {
+			interruptedProvisioningError); err != nil {
 			failures = append(failures, fmt.Errorf("session %s: %w", rec.ID, err))
 			retries = append(retries, rec)
 		}
@@ -549,6 +558,10 @@ func (m *Manager) cancelAsyncChatSpawn(ctx context.Context, id domain.SessionID)
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil || !ok || !rec.ProvisionState.IsProvisioning() {
 		return err
+	}
+	// Only the owning Manager can join a published start's writer.
+	if run == nil && rec.Metadata.WorkspacePath != "" {
+		return ErrWorkspaceWriterStopUnproven
 	}
 	_, err = m.setProvisionState(ctx, id, domain.SessionProvisionFailed, "Session start was cancelled")
 	return err
