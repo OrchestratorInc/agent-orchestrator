@@ -428,9 +428,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 // threadConfig is the config override sent with thread/start and
 // thread/resume. Codex layers it above config.toml for this thread only.
 //
-// Every AO-supplied tool server is pre-approved. AO answers no
-// mcpServer/elicitation/request, so a prompt could only fail the call.
-// Verified live on codex-cli 0.160.1: a tool without readOnlyHint raised that
+// AO's own "ao" server (html_preview, html_render) is pre-approved. AO answers
+// no mcpServer/elicitation/request, so a prompt could only fail the call.
+// Verified live on codex-cli 0.160.1: a tool not marked read-only raised that
 // request under on-request and was refused under never/read-only, and
 // default_tools_approval_mode "approve" removed both.
 func threadConfig(effort string, servers []ports.ChatMCPServerConfig) map[string]any {
@@ -443,7 +443,10 @@ func threadConfig(effort string, servers []ports.ChatMCPServerConfig) map[string
 	}
 	mcpServers := make(map[string]any, len(servers))
 	for _, server := range servers {
-		entry := map[string]any{"default_tools_approval_mode": "approve"}
+		entry := map[string]any{}
+		if server.Name == "ao" {
+			entry["default_tools_approval_mode"] = "approve"
+		}
 		if server.Type == "http" {
 			entry["url"] = server.URL
 			if len(server.Headers) > 0 {

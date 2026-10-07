@@ -1600,9 +1600,13 @@ func TestStartAndResumePassAOToolServersInThreadConfig(t *testing.T) {
 	servers := []ports.ChatMCPServerConfig{{
 		Name: "ao", Type: "stdio", Command: "/opt/ao/bin/ao", Args: []string{"mcp"},
 		Env: map[string]string{"AO_SESSION_ID": "ao-1"},
+	}, {
+		Name: "docs", Type: "http", URL: "http://127.0.0.1:9/mcp",
 	}}
+	// Only AO's own server is pre-approved.
 	want := `{"mcp_servers":{"ao":{"args":["mcp"],"command":"/opt/ao/bin/ao",` +
-		`"default_tools_approval_mode":"approve","env":{"AO_SESSION_ID":"ao-1"}}},"model_reasoning_effort":"high"}`
+		`"default_tools_approval_mode":"approve","env":{"AO_SESSION_ID":"ao-1"}},` +
+		`"docs":{"url":"http://127.0.0.1:9/mcp"}},"model_reasoning_effort":"high"}`
 	for _, method := range []string{"thread/start", "thread/resume"} {
 		t.Run(method, func(t *testing.T) {
 			d, srv := newTestDriver(t)
