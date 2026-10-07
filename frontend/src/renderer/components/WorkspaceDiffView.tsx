@@ -40,7 +40,10 @@ export type FileAnnotationStatus = "idle" | "sending" | "sent" | "error";
 export type FileAnnotationModel = {
 	/** Every open comment box, oldest first. They can sit on several lines and files at once. */
 	targets: ActiveFileAnnotationTarget[];
+	/** State of the send in progress or just finished, whichever comments it covers. */
 	status: FileAnnotationStatus;
+	/** The same, for one box: idle unless the send covers that comment. */
+	statusFor: (target: ActiveFileAnnotationTarget) => FileAnnotationStatus;
 	error: string;
 	/** Opens a box on `target`, or closes the one already open there. */
 	begin: (target: ActiveFileAnnotationTarget) => void;
@@ -48,7 +51,7 @@ export type FileAnnotationModel = {
 	setDraft: (target: ActiveFileAnnotationTarget, draft: string) => void;
 	/** Closes the box on `target`, or every box when no target is given. */
 	cancel: (target?: ActiveFileAnnotationTarget) => void;
-	/** Sends every open comment that has text. `text` is the sending box's local draft. */
+	/** Sends the comment on `target` (`text` is that box's local draft), or every written comment when no target is given. */
 	submit: (target?: ActiveFileAnnotationTarget, text?: string) => Promise<void>;
 };
 
@@ -737,10 +740,9 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 		target.side === "file"
 			? t("files.fileFeedbackTarget", { file: target.path })
 			: t("files.lineFeedbackTarget", { file: target.path, line: target.line, side });
-	const sending = annotation.status === "sending";
-	const sent = annotation.status === "sent";
-	// One send delivers every open comment, so say how many when it is more than this one.
-	const commentCount = annotation.targets.filter((open) => (open === target ? text : annotation.draftFor(open)).trim()).length;
+	const status = annotation.statusFor(target);
+	const sending = status === "sending";
+	const sent = status === "sent";
 	const submit = () => {
 		if (!text.trim() || sending || sent) return;
 		void annotation.submit(target, text);
@@ -787,14 +789,14 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 					title={targetLabel}
 					value={text}
 				/>
-				{annotation.status === "error" ? (
+				{status === "error" ? (
 					<p className="pt-1 text-xs text-error" role="alert">
 						{annotation.error}
 					</p>
 				) : null}
 				<div className="mt-1 flex items-center justify-end gap-1">
 					{/* Truncates rather than squeezing the buttons in a narrow split column. */}
-					<span className="mr-auto min-w-0 truncate text-caption text-passive">{commentCount > 1 ? t("files.feedbackShortcutAll", { count: commentCount }) : t("files.feedbackShortcut")}</span>
+					<span className="mr-auto min-w-0 truncate text-caption text-passive">{t("files.feedbackShortcut")}</span>
 					<Button
 						className="px-2 text-xs text-muted-foreground hover:text-foreground"
 						disabled={sending}
@@ -806,17 +808,15 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 						{t("files.cancelFeedback")}
 					</Button>
 					<Button
-						aria-label={sent ? t("files.feedbackSent") : commentCount > 1 ? t("files.sendAllFeedback", { count: commentCount }) : t("files.sendFeedback")}
-						className={cn("text-muted-foreground hover:text-foreground disabled:opacity-100", commentCount > 1 && "px-2 text-xs")}
+						aria-label={sent ? t("files.feedbackSent") : t("files.sendFeedback")}
+						className="text-muted-foreground hover:text-foreground disabled:opacity-100"
 						disabled={!text.trim() || sending || sent}
-						size={commentCount > 1 ? "sm" : "icon-sm"}
-						title={sent ? t("files.feedbackSent") : commentCount > 1 ? t("files.sendAllFeedback", { count: commentCount }) : t("files.sendFeedback")}
+						size="icon-sm"
+						title={sent ? t("files.feedbackSent") : t("files.sendFeedback")}
 						type="submit"
 						variant="ghost"
 					>
 						{sending ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : sent ? <Check aria-hidden="true" className="text-success" /> : <SendIcon aria-hidden="true" className={cn(!text.trim() && "opacity-50")} />}
-						{/* With several comments written, say that this sends them all. */}
-						{commentCount > 1 && !sending && !sent ? t("files.sendAllFeedbackShort", { count: commentCount }) : null}
 					</Button>
 				</div>
 			</form>
@@ -824,14 +824,14 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 	);
 }
 
-// One place to send or drop every written comment, so it is plain that the
-// boxes scattered through the files go to the agent together. `surface` keeps
-// it to the pane that holds comments; the count and the send cover them all.
+// Each box sends its own comment; once several are written, this bar sends
+// or drops them all together. `surface` keeps it to the pane that holds
+// comments; the count and the send cover every pane's.
 export function FileAnnotationSendBar({ annotation, className, surface }: { annotation: FileAnnotationModel; className?: string; surface: "focused" | "review" }) {
 	const { t } = useTranslation();
 	const written = annotation.targets.filter((target) => annotation.draftFor(target).trim());
 	const here = written.some((target) => (surface === "review" ? target.surface !== "focused" : target.surface !== "review"));
-	if (!here) return null;
+	if (!here || written.length < 2) return null;
 	const sending = annotation.status === "sending";
 	const sent = annotation.status === "sent";
 	return (
@@ -844,7 +844,7 @@ export function FileAnnotationSendBar({ annotation, className, surface }: { anno
 			</Button>
 			<Button className="px-2 text-xs" disabled={sending || sent} onClick={() => void annotation.submit()} size="sm" type="button" variant="primary">
 				{sending ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : sent ? <Check aria-hidden="true" /> : <SendIcon aria-hidden="true" />}
-				{written.length > 1 ? t("files.sendAllFeedbackShort", { count: written.length }) : t("files.sendFeedbackShort")}
+				{t("files.sendAllFeedback", { count: written.length })}
 			</Button>
 		</div>
 	);

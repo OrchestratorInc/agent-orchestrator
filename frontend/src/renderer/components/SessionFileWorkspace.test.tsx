@@ -12,7 +12,7 @@ const annotation: FileAnnotationModel = {
 	status: "idle",
 	error: "",
 	begin: vi.fn(),
-	draftFor: () => "",
+	draftFor: () => "", statusFor: () => "idle",
 	setDraft: vi.fn(),
 	cancel: vi.fn(),
 	submit: vi.fn(),

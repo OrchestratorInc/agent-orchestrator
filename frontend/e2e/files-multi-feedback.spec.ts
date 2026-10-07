@@ -62,7 +62,7 @@ async function commentOnLine(page: Page, code: string, feedback: string) {
 	await page.keyboard.type(feedback);
 }
 
-test("@P0 inline comments on several lines and files go to the agent in one message", async ({ page }) => {
+test("@P0 inline comments on several lines and files send one at a time or all together", async ({ page }) => {
 	const sent: string[] = [];
 	await stubWorkspace(page, sent);
 	await page.goto(`/#/projects/ao-demo/sessions/${sessionId}`);
@@ -81,16 +81,22 @@ test("@P0 inline comments on several lines and files go to the agent in one mess
 	await expect(boxes.nth(1)).toHaveValue("Drop second.");
 	await expect(boxes.nth(2)).toHaveValue("Inline third.");
 	await expect(boxes.nth(2)).toBeFocused();
-	// Every box says the send covers all three.
-	await expect(inspector.getByText("⌘/Ctrl + Enter to send all 3")).toHaveCount(3);
-
-	// One bar under the files says how many comments are ready and sends them together.
 	const bar = inspector.getByTestId("file-feedback-bar");
 	await expect(bar).toContainText("3 comments ready");
-	await bar.getByRole("button", { name: "Send all 3" }).click();
 
+	// A box's own send delivers just that comment and leaves the rest open.
+	await inspector.getByRole("button", { name: "Send feedback" }).nth(1).click();
 	await expect.poll(() => sent.length).toBe(1);
-	expect(sent[0]).toContain("3 inline feedback comments");
-	for (const text of ["Rename first.", "Drop second.", "Inline third.", `- Path: ${goFile}`, `- Path: ${tsFile}`]) expect(sent[0]).toContain(text);
+	expect(sent[0]).toContain("Drop second.");
+	expect(sent[0]).not.toContain("Rename first.");
+	await expect(boxes).toHaveCount(2);
+
+	// The bar under the files sends everything that is left in one message.
+	await expect(bar).toContainText("2 comments ready");
+	await bar.getByRole("button", { name: "Send all 2" }).click();
+	await expect.poll(() => sent.length).toBe(2);
+	expect(sent[1]).toContain("2 inline feedback comments");
+	for (const text of ["Rename first.", "Inline third.", `- Path: ${goFile}`, `- Path: ${tsFile}`]) expect(sent[1]).toContain(text);
 	await expect(boxes).toHaveCount(0);
+	await expect(bar).toHaveCount(0);
 });

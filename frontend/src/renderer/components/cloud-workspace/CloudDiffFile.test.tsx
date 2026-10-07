@@ -28,7 +28,7 @@ const file: CloudCpWorkspaceReviewFileSummary = {
 };
 
 const annotation: FileAnnotationModel = {
-	targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn(),
+	targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn(),
 };
 
 describe("CloudDiffFile", () => {

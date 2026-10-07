@@ -79,7 +79,8 @@ describe("useFileAnnotation", () => {
 		act(() => result.current.begin(third));
 		expect(result.current.targets.map((target) => target.path)).toEqual(["src/App.tsx", "src/lib/api.ts", "README.md"]);
 
-		await act(async () => result.current.submit(third, "Mention the new flag."));
+		act(() => result.current.setDraft(third, "Mention the new flag."));
+		await act(async () => result.current.submit());
 
 		expect(sendMessage).toHaveBeenCalledOnce();
 		const message = sendMessage.mock.calls[0][0] as string;
@@ -87,6 +88,31 @@ describe("useFileAnnotation", () => {
 		expect(message.indexOf("Rename this prop.")).toBeLessThan(message.indexOf("Keep the old guard."));
 		expect(message.indexOf("Keep the old guard.")).toBeLessThan(message.indexOf("Mention the new flag."));
 		expect(result.current.status).toBe("sent");
+	});
+
+	it("sends only its own comment from a box and keeps the others open", async () => {
+		vi.useFakeTimers();
+		const sendMessage = vi.fn().mockResolvedValue(undefined);
+		const { result } = renderHook(() => useFileAnnotation("sess-1", { sendMessage }));
+		const first = { path: "src/App.tsx", side: "new" as const, line: 12, surface: "review" as const };
+		const second = { path: "src/lib/api.ts", side: "old" as const, line: 4, surface: "review" as const };
+		act(() => result.current.begin(first));
+		act(() => result.current.setDraft(first, "Rename this prop."));
+		act(() => result.current.begin(second));
+
+		await act(async () => result.current.submit(second, "Keep the old guard."));
+
+		expect(sendMessage).toHaveBeenCalledOnce();
+		expect(sendMessage.mock.calls[0][0]).toContain("Keep the old guard.");
+		expect(sendMessage.mock.calls[0][0]).not.toContain("Rename this prop.");
+		expect(result.current.statusFor(second)).toBe("sent");
+		expect(result.current.statusFor(first)).toBe("idle");
+
+		act(() => vi.advanceTimersByTime(1_200));
+		expect(result.current.targets).toEqual([first]);
+		expect(result.current.draftFor(first)).toBe("Rename this prop.");
+		expect(result.current.status).toBe("idle");
+		vi.useRealTimers();
 	});
 
 	it("closes a box left empty when another comment is started", () => {

@@ -53,7 +53,7 @@ function noopAnnotation(): FileAnnotationModel {
 		status: "idle",
 		error: "",
 		begin: vi.fn(),
-		draftFor: () => "",
+		draftFor: () => "", statusFor: () => "idle",
 		setDraft: vi.fn(),
 		cancel: vi.fn(),
 		submit: vi.fn(),
@@ -291,7 +291,7 @@ describe("ReviewDiffBody", () => {
 		expect(model.setDraft).toHaveBeenCalledWith(model.targets[0], "draft");
 	});
 
-	it("keeps a box per open comment and says one send delivers them all", () => {
+	it("keeps a box per open comment, each sending only its own text", () => {
 		const model = noopAnnotation();
 		const first = { path: "src/App.tsx", side: "new" as const, line: 3, surface: "review" as const };
 		const second = { path: "src/lib/api.ts", side: "old" as const, line: 9, surface: "review" as const };
@@ -302,22 +302,32 @@ describe("ReviewDiffBody", () => {
 		const [firstBox, secondBox] = screen.getAllByRole("textbox");
 		expect(firstBox).toHaveValue("Rename this");
 		expect(secondBox).toHaveValue("");
-		// Only one comment has text so far, so the wording is unchanged.
-		expect(screen.getAllByText("⌘/Ctrl + Enter to send")).toHaveLength(2);
 
 		fireEvent.change(secondBox, { target: { value: "Keep this guard" } });
-		expect(screen.getByText("⌘/Ctrl + Enter to send all 2")).toBeInTheDocument();
-		// Leaving a box hands its text to the model, so a send from another box includes it.
+		// Leaving a box hands its text to the model, so the bar's send includes it.
 		fireEvent.blur(secondBox);
 		expect(model.setDraft).toHaveBeenCalledWith(second, "Keep this guard");
-		const sendAll = screen.getByRole("button", { name: "Send all 2 comments" });
-		// The button spells out that it sends every comment, not just this box.
-		expect(sendAll).toHaveTextContent("Send all 2");
-		fireEvent.click(sendAll);
+		const [, secondSend] = screen.getAllByRole("button", { name: "Send feedback" });
+		fireEvent.click(secondSend);
 		expect(model.submit).toHaveBeenCalledWith(second, "Keep this guard");
 	});
 
-	it("offers one bar to send or discard every written comment", () => {
+	it("shows a send's progress only on the box it covers", () => {
+		const model = noopAnnotation();
+		const first = { path: "src/App.tsx", side: "new" as const, line: 3, surface: "review" as const };
+		const second = { path: "src/lib/api.ts", side: "old" as const, line: 9, surface: "review" as const };
+		model.targets = [first, second];
+		model.draftFor = () => "Some feedback";
+		model.status = "sending";
+		model.statusFor = (target) => (target === first ? "sending" : "idle");
+		render(<><FileAnnotationComposer annotation={model} target={first} /><FileAnnotationComposer annotation={model} target={second} /></>);
+
+		const [firstBox, secondBox] = screen.getAllByRole("textbox");
+		expect(firstBox).toBeDisabled();
+		expect(secondBox).toBeEnabled();
+	});
+
+	it("offers one bar to send or discard every written comment once there are several", () => {
 		const model = noopAnnotation();
 		const first = { path: "src/App.tsx", side: "new" as const, line: 3, surface: "review" as const };
 		const second = { path: "src/lib/api.ts", side: "file" as const, surface: "review" as const };
@@ -329,17 +339,17 @@ describe("ReviewDiffBody", () => {
 		expect(screen.getByRole("status")).toHaveTextContent("2 comments ready");
 		fireEvent.click(screen.getByRole("button", { name: "Send all 2" }));
 		expect(model.submit).toHaveBeenCalledWith();
-		fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+		fireEvent.click(screen.getByRole("button", { name: "Discard all" }));
 		expect(model.cancel).toHaveBeenCalledWith();
 
 		// A pane with no written comment of its own stays clear of the bar.
 		rerender(<FileAnnotationSendBar annotation={model} surface="focused" />);
 		expect(screen.queryByTestId("file-feedback-bar")).not.toBeInTheDocument();
 
+		// One comment needs no bar: its own box sends it.
 		model.targets = [first];
 		rerender(<FileAnnotationSendBar annotation={{ ...model }} surface="review" />);
-		expect(screen.getByRole("status")).toHaveTextContent("1 comment ready");
-		expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+		expect(screen.queryByTestId("file-feedback-bar")).not.toBeInTheDocument();
 	});
 
 	describe("large diff virtualization", () => {

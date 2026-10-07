@@ -14,7 +14,7 @@ vi.mock("../ReadOnlyFileView", () => ({ ReadOnlyFileView: ({ detail, editing, on
 vi.mock("./CloudDiffFile", () => ({ CloudDiffFile: () => <div data-testid="cloud-diff" /> }));
 vi.mock("../markdown/MarkdownFileView", () => ({ MarkdownFileView: ({ content }: { content: string }) => <article>{content}</article> }));
 
-const annotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
+const annotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
 const detail = { path: "README.md", status: "modified" as const, additions: 1, deletions: 1, size: 8, binary: false, editable: true, fileFingerprint: "fp-1", deleted: false, content: "# Hello", contentTruncated: false, diff: "diff", diffTruncated: false, workspaceVersion: "v1" };
 
 function renderPane(client: CloudCpClient, props: Partial<React.ComponentProps<typeof CloudFileContentPane>> = {}) {

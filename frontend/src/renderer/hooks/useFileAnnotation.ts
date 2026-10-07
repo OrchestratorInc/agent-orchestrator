@@ -24,6 +24,8 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 	const statusRef = useRef<FileAnnotationStatus>("idle");
 	const [error, setError] = useState("");
 	const generationRef = useRef(0);
+	// The comments the current send (or its result) is about.
+	const activeKeysRef = useRef(new Set<string>());
 	const sentTimerRef = useRef<number | null>(null);
 
 	const commitEntries = (next: AnnotationEntry[]) => {
@@ -42,6 +44,7 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 	const reset = () => {
 		generationRef.current += 1;
 		clearSentTimer();
+		activeKeysRef.current = new Set();
 		commitEntries([]);
 		commitStatus("idle");
 	};
@@ -51,14 +54,24 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 	}, [hostId, sessionId, source]);
 	useEffect(() => clearSentTimer, []);
 
+	// A finished send leaves its boxes up for a moment; anything the user does
+	// next closes them straight away and keeps the other comments.
+	const settleSent = () => {
+		if (statusRef.current !== "sent") return;
+		clearSentTimer();
+		const sentKeys = activeKeysRef.current;
+		activeKeysRef.current = new Set();
+		commitEntries(entriesRef.current.filter((entry) => !sentKeys.has(fileAnnotationKey(entry.target))));
+		commitStatus("idle");
+	};
+
 	const begin = (nextTarget: ActiveFileAnnotationTarget) => {
 		// The comments in flight keep their boxes until the send settles.
 		if (statusRef.current === "sending") return;
+		settleSent();
 		const key = fileAnnotationKey(nextTarget);
-		// A finished send leaves its boxes up for a moment; a new comment replaces them.
-		const current = statusRef.current === "sent" ? [] : entriesRef.current;
-		generationRef.current += 1;
-		clearSentTimer();
+		const current = entriesRef.current;
+		activeKeysRef.current = new Set();
 		commitStatus("idle");
 		if (current.some((entry) => fileAnnotationKey(entry.target) === key)) {
 			commitEntries(current.filter((entry) => fileAnnotationKey(entry.target) !== key));
@@ -79,14 +92,12 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 			return;
 		}
 		if (statusRef.current === "sending") return;
+		settleSent();
 		const key = fileAnnotationKey(target);
 		const next = entriesRef.current.filter((entry) => fileAnnotationKey(entry.target) !== key);
 		if (next.length === entriesRef.current.length) return;
-		if (next.length === 0 || statusRef.current === "sent") {
-			reset();
-			return;
-		}
 		commitEntries(next);
+		activeKeysRef.current = new Set();
 		commitStatus("idle");
 	};
 	const send = async (message: string) => {
@@ -101,12 +112,16 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 		if (responseError) throw new Error(apiErrorMessage(responseError, t("files.feedbackError")));
 	};
 	const submit = async (target?: ActiveFileAnnotationTarget, text?: string) => {
-		if (statusRef.current === "sending" || statusRef.current === "sent") return;
+		if (statusRef.current === "sending") return;
+		settleSent();
 		if (target && text !== undefined) setDraft(target, text);
-		const pending = entriesRef.current.filter((entry) => entry.draft.trim());
+		// A box sends its own comment; without a target, every written comment goes.
+		const targetKey = target ? fileAnnotationKey(target) : null;
+		const pending = entriesRef.current.filter((entry) => entry.draft.trim() && (targetKey === null || fileAnnotationKey(entry.target) === targetKey));
 		if (pending.length === 0) return;
 		generationRef.current += 1;
 		const generation = generationRef.current;
+		activeKeysRef.current = new Set(pending.map((entry) => fileAnnotationKey(entry.target)));
 		commitStatus("sending");
 		const messages = formatFileAnnotationMessages(pending.map((entry) => ({ target: entry.target, feedback: entry.draft })));
 		let delivered = 0;
@@ -119,16 +134,19 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 			commitStatus("sent");
 			sentTimerRef.current = window.setTimeout(() => {
 				sentTimerRef.current = null;
-				reset();
+				settleSent();
 			}, 1_200);
 		} catch (submitError) {
 			if (generation !== generationRef.current) return;
 			// Comments that already reached the agent close; the rest stay to retry.
 			const deliveredKeys = new Set(pending.slice(0, delivered).map((entry) => fileAnnotationKey(entry.target)));
 			if (deliveredKeys.size > 0) commitEntries(entriesRef.current.filter((entry) => !deliveredKeys.has(fileAnnotationKey(entry.target))));
+			activeKeysRef.current = new Set([...activeKeysRef.current].filter((key) => !deliveredKeys.has(key)));
 			commitStatus("error", apiErrorMessage(submitError, t("files.feedbackError")));
 		}
 	};
+	const statusFor = (target: ActiveFileAnnotationTarget): FileAnnotationStatus =>
+		activeKeysRef.current.has(fileAnnotationKey(target)) ? statusRef.current : "idle";
 	const draftFor = (target: ActiveFileAnnotationTarget) => {
 		const key = fileAnnotationKey(target);
 		return entriesRef.current.find((entry) => fileAnnotationKey(entry.target) === key)?.draft ?? "";
@@ -140,5 +158,5 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 		targetsRef.current = entries.map((entry) => entry.target);
 	}
 
-	return { targets: targetsRef.current, status, error, begin, draftFor, setDraft, cancel, submit };
+	return { targets: targetsRef.current, status, statusFor, error, begin, draftFor, setDraft, cancel, submit };
 }
