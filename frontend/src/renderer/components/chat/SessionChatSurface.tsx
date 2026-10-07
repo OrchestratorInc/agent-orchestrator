@@ -8,7 +8,7 @@
  */
 
 import { AlertTriangle, CheckCircle2, Loader2, X } from "lucide-react";
-import { memo, useEffect, useRef, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	findActiveAgentSwitch,
@@ -18,6 +18,8 @@ import {
 } from "../../hooks/useAgentSwitches";
 import { useObservedAgentSwitchLifecycle } from "../../hooks/useObservedAgentSwitchLifecycle";
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../../hooks/useAgentSwitchVisibility";
+import { useQuery } from "@tanstack/react-query";
+import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { useSwitchAgentState } from "../../hooks/useSwitchAgent";
 import {
 	useConversation,
@@ -346,11 +348,24 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	// Only asked for once the conversation is actually readable: the catalog comes
 	// from the live controller, so there is nothing to fetch before then.
-	const { models } = useConversationModels(
+	const { models: controllerModels } = useConversationModels(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot) && !hasProviderModel,
 		hostId,
 	);
+	// Claude's live list is family aliases; the new-task picker's catalog carries the versions.
+	const isClaude = snapshot?.harness === "claude-code";
+	const claudeCatalog = useQuery({ ...agentModelsQueryOptions("claude-code", "", hostId), enabled: isClaude }).data;
+	const models = useMemo(() => {
+		if (!isClaude || !claudeCatalog?.models.length) return controllerModels;
+		return claudeCatalog.models
+			.filter((model) => model.id.toLowerCase() !== "default")
+			.map((model) => ({
+				id: model.id,
+				displayName: model.label || model.id,
+				default: Boolean(model.isDefault),
+			}));
+	}, [isClaude, claudeCatalog, controllerModels]);
 	const { skills } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),
