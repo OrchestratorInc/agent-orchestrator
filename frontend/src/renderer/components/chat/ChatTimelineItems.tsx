@@ -549,6 +549,13 @@ export function humanVisibleText(text: string): string {
 	return text.slice(0, reportStart);
 }
 
+export function workerReportVisibleText(text: string): string | undefined {
+	if (!text.endsWith(WORKER_REPORT_CLOSE)) return undefined;
+	const reportStart = text.lastIndexOf(`\n\n${WORKER_REPORT_OPEN}\n`);
+	if (reportStart < 0) return undefined;
+	return text.slice(reportStart + WORKER_REPORT_OPEN.length + 2, -WORKER_REPORT_CLOSE.length).trim();
+}
+
 export function HumanMessage({
 	message,
 	sessionId,
@@ -601,6 +608,7 @@ export function HumanMessage({
 	activateBranchError?: string;
 }) {
 	const visibleMessageText = humanVisibleText(message.text);
+	const workerReportText = workerReportVisibleText(message.text);
 	const { body, attachments } = stagedAttachmentParts(visibleMessageText);
 	return (
 		<div className="group/message flex flex-col items-end gap-1">
@@ -706,6 +714,11 @@ export function HumanMessage({
 			) : null}
 			{message.delivery && message.delivery !== "accepted" ? (
 				<DeliveryNote state={message.delivery} />
+			) : null}
+			{workerReportText ? (
+				<OriginMessage
+					message={{ ...message, id: `${message.id}-worker-reports`, origin: "automation", senderLabel: "Worker reports", text: workerReportText }}
+				/>
 			) : null}
 		</div>
 	);

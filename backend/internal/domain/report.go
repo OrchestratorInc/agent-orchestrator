@@ -116,6 +116,9 @@ type ReportRecord struct {
 	ID                 string
 	SessionID          SessionID
 	ProjectID          ProjectID
+	// SessionDisplayName is resolved at delivery time for presentation. It is
+	// intentionally not persisted with the durable report row.
+	SessionDisplayName string
 	State              ReportState
 	Note               string
 	Message            string

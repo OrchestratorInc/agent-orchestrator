@@ -311,11 +311,12 @@ describe("HumanMessage attachments", () => {
 
 	it("hides appended worker report context from the human message", async () => {
 		const text =
-			"Please continue\n\n<ao-worker-reports>\nReports since your previous turn:\n\n[done] ao://sessions/project/worker\nFinished\n</ao-worker-reports>";
+			"Please continue\n\n<ao-worker-reports>\nReports since your previous turn:\n\n[done] [worker](ao://sessions/project/worker)\nFinished\n</ao-worker-reports>";
 		render(<HumanMessage message={humanMessage(text)} sessionId="ao-1" />);
 
 		expect(screen.getByText("Please continue")).toBeInTheDocument();
-		expect(screen.queryByText(/Reports since your previous turn/)).not.toBeInTheDocument();
+		expect(screen.getByText(/Reports since your previous turn/)).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "worker" })).toHaveAttribute("href", "ao://sessions/project/worker");
 		await userEvent.click(screen.getByRole("button", { name: "Copy user message" }));
 		expect(writeText).toHaveBeenCalledWith("Please continue");
 	});
