@@ -536,10 +536,6 @@ func (s *Service) SpawnOrchestrator(
 ) (domain.Session, error) {
 	unlock := s.lockOrchestratorProject(projectID)
 	defer unlock()
-	if clean {
-		// Finish replacement even when untimed cleanup outlives the request.
-		ctx = context.WithoutCancel(ctx)
-	}
 
 	project, err := s.requireProject(ctx, projectID)
 	if err != nil {
@@ -559,9 +555,10 @@ func (s *Service) SpawnOrchestrator(
 			// authoritative.
 			mode = newestSession(existing).Mode
 		}
+		retireCtx := context.WithoutCancel(ctx)
 		for _, orch := range existing {
-			_ = s.sendRetireNotice(ctx, orch.ID)
-			if err := s.manager.RetireForReplacement(ctx, orch.ID); err != nil {
+			_ = s.sendRetireNotice(retireCtx, orch.ID)
+			if err := s.manager.RetireForReplacement(retireCtx, orch.ID); err != nil {
 				return domain.Session{}, toAPIError(err)
 			}
 		}
