@@ -113,6 +113,16 @@ type Config struct {
 	NodeOpsWorkerTokenTTL   time.Duration
 	NodeOpsAutoPauseSeconds int
 
+	FreestyleBaseURL         string
+	FreestyleAPIKey          string
+	FreestyleDefaultSnapshot string
+	// FreestyleSnapshotByHarness maps a harness to its prepared snapshot
+	// (AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS, JSON object). Optional; unmapped
+	// harnesses use FreestyleDefaultSnapshot.
+	FreestyleSnapshotByHarness map[string]string
+	FreestyleWorkerTokenTTL    time.Duration
+	FreestyleAutoPauseSeconds  int
+
 	DockerHost           string
 	DockerWorkerImage    string
 	DockerNetwork        string
@@ -175,6 +185,12 @@ func Load() (Config, error) {
 	if raw := strings.TrimSpace(os.Getenv("AO_CLOUD_NODEOPS_ROOTFS_BY_HARNESS")); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &rootFSByHarnessEnv); err != nil {
 			return Config{}, fmt.Errorf("invalid AO_CLOUD_NODEOPS_ROOTFS_BY_HARNESS: %w", err)
+		}
+	}
+	freestyleSnapshotByHarnessEnv := map[string]string{}
+	if raw := strings.TrimSpace(os.Getenv("AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS")); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &freestyleSnapshotByHarnessEnv); err != nil {
+			return Config{}, fmt.Errorf("invalid AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS: %w", err)
 		}
 	}
 	coderParametersEnv := map[string]string{}
@@ -249,6 +265,14 @@ func Load() (Config, error) {
 		NodeOpsWorkerTokenTTL: durationEnv(
 			"AO_CLOUD_NODEOPS_WORKER_TOKEN_TTL", sandbox.DefaultWorkerTokenTTL,
 		),
+		FreestyleBaseURL:           strings.TrimSpace(os.Getenv("AO_CLOUD_FREESTYLE_BASE_URL")),
+		FreestyleAPIKey:            strings.TrimSpace(os.Getenv("AO_CLOUD_FREESTYLE_API_KEY")),
+		FreestyleDefaultSnapshot:   strings.TrimSpace(os.Getenv("AO_CLOUD_FREESTYLE_DEFAULT_SNAPSHOT")),
+		FreestyleSnapshotByHarness: freestyleSnapshotByHarnessEnv,
+		FreestyleWorkerTokenTTL: durationEnv(
+			"AO_CLOUD_FREESTYLE_WORKER_TOKEN_TTL", sandbox.DefaultWorkerTokenTTL,
+		),
+		FreestyleAutoPauseSeconds: intEnvOrDefault("AO_CLOUD_FREESTYLE_AUTO_PAUSE_SECONDS", 0),
 
 		DockerHost:        envOrDefault("AO_CLOUD_DOCKER_HOST", "unix:///var/run/docker.sock"),
 		DockerWorkerImage: envOrDefault("AO_CLOUD_DOCKER_WORKER_IMAGE", "ao-cloud-worker:local"),
@@ -369,9 +393,9 @@ func Load() (Config, error) {
 		return Config{}, errors.New("AO_CLOUD_LOCAL_SESSION_TTL must be positive")
 	}
 	switch cfg.SandboxProvider {
-	case "ecs", "daytona", "docker", "nodeops", "coder":
+	case "ecs", "daytona", "docker", "nodeops", "coder", "freestyle":
 	default:
-		return Config{}, errors.New("AO_CLOUD_SANDBOX_PROVIDER must be coder, daytona, docker, ecs, or nodeops")
+		return Config{}, errors.New("AO_CLOUD_SANDBOX_PROVIDER must be coder, daytona, docker, ecs, freestyle, or nodeops")
 	}
 	if cfg.Hosted() && cfg.SandboxProvider != "nodeops" && cfg.SandboxProvider != "coder" {
 		return Config{}, errors.New("AO_CLOUD_SANDBOX_PROVIDER must be coder or nodeops in staging and production")
@@ -413,6 +437,15 @@ func Load() (Config, error) {
 				SSHKeyPath:       cfg.NodeOpsSSHKeyPath,
 				WorkerTokenTTL:   cfg.NodeOpsWorkerTokenTTL,
 				AutoPauseSeconds: cfg.NodeOpsAutoPauseSeconds,
+			}).Validate()
+		case "freestyle":
+			err = (sandbox.FreestyleConfig{
+				BaseURL:           cfg.FreestyleBaseURL,
+				APIKey:            cfg.FreestyleAPIKey,
+				DefaultSnapshot:   cfg.FreestyleDefaultSnapshot,
+				SnapshotByHarness: cfg.FreestyleSnapshotByHarness,
+				WorkerTokenTTL:    cfg.FreestyleWorkerTokenTTL,
+				AutoPauseSeconds:  cfg.FreestyleAutoPauseSeconds,
 			}).Validate()
 		case "coder":
 			err = (sandbox.CoderConfig{
@@ -480,7 +513,7 @@ func Load() (Config, error) {
 			)
 		}
 	}
-	if cfg.SandboxProvider == "nodeops" || cfg.SandboxProvider == "coder" {
+	if cfg.SandboxProvider == "nodeops" || cfg.SandboxProvider == "coder" || cfg.SandboxProvider == "freestyle" {
 		if cfg.WorkerBinaryPath == "" {
 			return Config{}, fmt.Errorf("AO_CLOUD_WORKER_BINARY_PATH is required when AO_CLOUD_SANDBOX_PROVIDER=%s", cfg.SandboxProvider)
 		}
@@ -618,6 +651,9 @@ func (c Config) WorkerTokenTTL() time.Duration {
 	if c.SandboxProvider == sandbox.ProviderCoder {
 		return c.CoderWorkerTokenTTL
 	}
+	if c.SandboxProvider == sandbox.ProviderFreestyle {
+		return c.FreestyleWorkerTokenTTL
+	}
 	return c.NodeOpsWorkerTokenTTL
 }
 
@@ -683,7 +719,7 @@ func resolveAvailableProviders(defaultProvider string, hosted bool) ([]string, e
 	}
 	for _, provider := range list {
 		switch provider {
-		case "ecs", "daytona", "docker", "nodeops", "coder":
+		case "ecs", "daytona", "docker", "nodeops", "coder", "freestyle":
 		default:
 			return nil, fmt.Errorf("AO_CLOUD_SANDBOX_PROVIDERS contains unknown provider %q", provider)
 		}

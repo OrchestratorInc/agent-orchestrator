@@ -2,13 +2,17 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/projectsnapshot"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/go-chi/chi/v5"
 )
@@ -50,6 +54,7 @@ type stubAutolinkStore struct {
 	orchErr        error
 	captured       domain.CreateSession
 	created        bool
+	projectConfig  json.RawMessage
 }
 
 func (s *stubAutolinkStore) ProjectActiveOrchestrator(
@@ -61,7 +66,7 @@ func (s *stubAutolinkStore) ProjectActiveOrchestrator(
 func (s *stubAutolinkStore) GetProject(
 	_ context.Context, _ domain.Principal, _, projectID string,
 ) (domain.Project, error) {
-	return domain.Project{ID: projectID}, nil
+	return domain.Project{ID: projectID, Config: s.projectConfig}, nil
 }
 
 func (s *stubAutolinkStore) UserAgentCredentialAvailable(
@@ -175,5 +180,118 @@ func TestCreateSessionDoesNotAutoLinkOrchestrator(t *testing.T) {
 	}
 	if store.captured.Provider != sandbox.ProviderNodeOps {
 		t.Fatalf("orchestrator provider = %q, want %q", store.captured.Provider, sandbox.ProviderNodeOps)
+	}
+}
+
+// Creating a session wakes the sandbox reconciler so provisioning starts now
+// instead of at the next reconcile tick.
+func TestCreateSessionWakesTheSandboxReconciler(t *testing.T) {
+	t.Parallel()
+	store := &stubAutolinkStore{}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+	wakes := 0
+	srv.sandboxWake = func() { wakes++ }
+
+	rec := httptest.NewRecorder()
+	srv.createSession(rec, createSessionRequestHTTP(t, "orchestrator", sandbox.ProviderNodeOps))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	if wakes != 1 {
+		t.Fatalf("sandbox wakes = %d, want 1", wakes)
+	}
+}
+
+// A project set up for a sandbox provider runs its sessions there even when
+// the client sends a different saved preference.
+func TestCreateSessionUsesTheProjectSandboxProvider(t *testing.T) {
+	t.Parallel()
+	store := &stubAutolinkStore{projectConfig: json.RawMessage(`{"sandboxProvider":"coder"}`)}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+
+	rec := httptest.NewRecorder()
+	srv.createSession(rec, createSessionRequestHTTP(t, "orchestrator", sandbox.ProviderNodeOps))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.captured.Provider != sandbox.ProviderCoder {
+		t.Fatalf("session provider = %q, want %q (from the project)", store.captured.Provider, sandbox.ProviderCoder)
+	}
+}
+
+type fakeProjectSnapshots struct {
+	snapshotID string
+	ensured    []projectsnapshot.Request
+}
+
+func (f *fakeProjectSnapshots) Lookup(_ context.Context, request projectsnapshot.Request) (string, bool) {
+	if f.snapshotID == "" || request.BaseSnapshotID != "sh-harness" {
+		return "", false
+	}
+	return f.snapshotID, true
+}
+
+func (f *fakeProjectSnapshots) Ensure(request projectsnapshot.Request) {
+	f.ensured = append(f.ensured, request)
+}
+
+func freestyleServer(store Store, snapshots ProjectSnapshotter) *Server {
+	return New(Options{
+		Store:                     store,
+		SandboxProvider:           sandbox.ProviderFreestyle,
+		AvailableSandboxProviders: []string{sandbox.ProviderFreestyle},
+		Provisioning: sandbox.ProvisioningDefaults{
+			Provider: sandbox.ProviderFreestyle,
+			Release:  "test",
+			Freestyle: sandbox.FreestyleConfig{
+				APIKey:          "key",
+				DefaultSnapshot: "sh-harness",
+				WorkerTokenTTL:  15 * time.Minute,
+			},
+		},
+		ProjectSnapshots: snapshots,
+		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+}
+
+// A Freestyle session boots from its project's prepared snapshot when one
+// exists, and every Freestyle session keeps that snapshot fresh.
+func TestCreateSessionBootsFromTheProjectSnapshot(t *testing.T) {
+	t.Parallel()
+	store := &stubAutolinkStore{}
+	snapshots := &fakeProjectSnapshots{snapshotID: "sh-project"}
+	srv := freestyleServer(store, snapshots)
+
+	rec := httptest.NewRecorder()
+	srv.createSession(rec, createSessionRequestHTTP(t, "orchestrator", sandbox.ProviderFreestyle))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	got := sandbox.FreestyleSnapshot(sandbox.Plan{ResourceProfile: store.captured.ResourceProfile})
+	if got != "sh-project" {
+		t.Fatalf("session boots from %q, want the project snapshot", got)
+	}
+	if len(snapshots.ensured) != 1 || snapshots.ensured[0].SessionID == "" || snapshots.ensured[0].BaseSnapshotID != "sh-harness" {
+		t.Fatalf("Ensure calls = %+v; want one, keyed to the new session and the harness snapshot", snapshots.ensured)
+	}
+}
+
+// Without a project snapshot the session boots from the harness snapshot.
+func TestCreateSessionFallsBackToTheHarnessSnapshot(t *testing.T) {
+	t.Parallel()
+	store := &stubAutolinkStore{}
+	srv := freestyleServer(store, &fakeProjectSnapshots{})
+
+	rec := httptest.NewRecorder()
+	srv.createSession(rec, createSessionRequestHTTP(t, "orchestrator", sandbox.ProviderFreestyle))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	if got := sandbox.FreestyleSnapshot(sandbox.Plan{ResourceProfile: store.captured.ResourceProfile}); got != "sh-harness" {
+		t.Fatalf("session boots from %q, want the harness snapshot", got)
 	}
 }

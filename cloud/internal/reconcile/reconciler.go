@@ -176,6 +176,9 @@ type Reconciler struct {
 	// exact build instead of the control plane uploading it on every provision.
 	workerBinarySHA256       string
 	workerHelperBinarySHA256 string
+	// wake asks Run for a pass now instead of at the next tick, so a new
+	// session starts provisioning without waiting out the interval.
+	wake chan struct{}
 }
 
 func sha256HexOf(data []byte) string {
@@ -245,14 +248,43 @@ func New(store Store, providers Resolver, options Options) *Reconciler {
 		log:                      options.Logger,
 		workerBinarySHA256:       sha256HexOf(options.WorkerBinary),
 		workerHelperBinarySHA256: sha256HexOf(options.WorkerHelperBinary),
+		wake:                     make(chan struct{}, 1),
+	}
+}
+
+// Wake requests an immediate reconcile pass. It never blocks: a request made
+// while one is already pending is absorbed by it, and that pass sees every
+// session created before it starts.
+func (r *Reconciler) Wake() {
+	select {
+	case r.wake <- struct{}{}:
+	default:
 	}
 }
 
 // Run reconciles sandboxes until ctx is canceled.
+//
+// Woken passes run in their own loop, beside the ticker's, so a new session
+// does not wait for a pass that is busy refreshing every live sandbox. The two
+// passes cannot collide: a claim leases its rows and skips leased or locked
+// ones, the same guarantee that lets several control planes reconcile at once.
 func (r *Reconciler) Run(ctx context.Context) error {
 	if err := r.ReconcileOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		r.log.Error("initial sandbox reconciliation failed", "err", err)
 	}
+	woken := make(chan struct{})
+	go func() {
+		defer close(woken)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-r.wake:
+				r.reconcilePass(ctx)
+			}
+		}
+	}()
+	defer func() { <-woken }()
 	ticker := time.NewTicker(r.options.Interval)
 	defer ticker.Stop()
 	for {
@@ -260,10 +292,14 @@ func (r *Reconciler) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if err := r.ReconcileOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				r.log.Error("sandbox reconciliation failed", "err", err)
-			}
+			r.reconcilePass(ctx)
 		}
+	}
+}
+
+func (r *Reconciler) reconcilePass(ctx context.Context) {
+	if err := r.ReconcileOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		r.log.Error("sandbox reconciliation failed", "err", err)
 	}
 }
 
@@ -1317,6 +1353,10 @@ type providerProfile struct {
 		Ingress          string `json:"ingress"`
 		AutoPauseSeconds int    `json:"autoPauseSeconds"`
 	} `json:"nodeOps"`
+	Freestyle struct {
+		Snapshot         string `json:"snapshot"`
+		AutoPauseSeconds int    `json:"autoPauseSeconds"`
+	} `json:"freestyle"`
 }
 
 type workerWorkspaceLayout struct {
@@ -1418,15 +1458,21 @@ func (r *Reconciler) workerSpec(ctx context.Context, record domain.Sandbox) (san
 		workerEnvironment["AO_WORKER_HELPER_EXPECTED_SHA256"] = r.workerHelperBinarySHA256
 		workerEnvironment["AO_WORKER_HELPER_PATH"] = r.options.WorkerHelperDestination
 	}
+	// Freestyle boots from the snapshot stamped on the session's plan, which
+	// Spec carries as its root filesystem.
+	rootFS, autoPauseSeconds := profile.NodeOps.DefaultRootFS, profile.NodeOps.AutoPauseSeconds
+	if record.Provider == sandbox.ProviderFreestyle {
+		rootFS, autoPauseSeconds = profile.Freestyle.Snapshot, profile.Freestyle.AutoPauseSeconds
+	}
 	return sandbox.Spec{
 		Name:             "ao-" + record.SessionID,
 		SessionID:        record.SessionID,
 		OrgID:            record.OrgID,
 		ResourceProfile:  domain.ResourceProfile{CPU: 4, Memory: 8, Disk: 10},
 		Shape:            profile.NodeOps.DefaultShape,
-		RootFS:           profile.NodeOps.DefaultRootFS,
+		RootFS:           rootFS,
 		Ingress:          profile.NodeOps.Ingress,
-		AutoPauseSeconds: profile.NodeOps.AutoPauseSeconds,
+		AutoPauseSeconds: autoPauseSeconds,
 		Environment:      workerEnvironment,
 		DurableRoot:      layout.root,
 		Labels: map[string]string{

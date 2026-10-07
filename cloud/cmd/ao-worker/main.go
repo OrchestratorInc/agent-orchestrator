@@ -669,7 +669,7 @@ func (c *client) connect(
 		return worker.BootstrapResponse{}, errors.New(
 			"no valid worker credential and AO_WORKER_BOOTSTRAP_TOKEN is required")
 	}
-	resp, err := c.bootstrap(ctx, bootstrapToken)
+	resp, err := c.bootstrapWithRetry(ctx, logger, bootstrapToken)
 	if err != nil {
 		return worker.BootstrapResponse{}, fmt.Errorf("bootstrap: %w", err)
 	}
@@ -677,6 +677,36 @@ func (c *client) connect(
 		return worker.BootstrapResponse{}, err
 	}
 	return resp, nil
+}
+
+// bootstrapAttempts bounds how often a worker retries its first request when
+// the network drops it (about 3.75s of backoff in all). Without it, one dropped
+// connection at startup strands the session until the control plane's startup
+// deadline replaces the sandbox.
+const bootstrapAttempts = 5
+
+// bootstrapWithRetry retries only transport failures. An HTTP error status is
+// returned at once: the ticket is single-use, so a request the control plane
+// already answered must not be replayed. A transport failure after the ticket
+// was spent is answered on retry with a clean rejection, no worse than failing.
+func (c *client) bootstrapWithRetry(
+	ctx context.Context, logger *slog.Logger, bootstrapToken string,
+) (worker.BootstrapResponse, error) {
+	delay := 250 * time.Millisecond
+	for attempt := 1; ; attempt++ {
+		resp, err := c.bootstrap(ctx, bootstrapToken)
+		var transport *url.Error
+		if err == nil || !errors.As(err, &transport) || attempt == bootstrapAttempts {
+			return resp, err
+		}
+		logger.Warn("worker bootstrap request failed; retrying", "attempt", attempt, "error", err)
+		select {
+		case <-ctx.Done():
+			return resp, err
+		case <-time.After(delay):
+		}
+		delay *= 2
+	}
 }
 
 func (c *client) loadPersistedToken() string {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -595,5 +596,107 @@ func TestReconcilePauseAlreadyStoppedSkipsDisconnect(t *testing.T) {
 	}
 	if store.disconnected != 0 {
 		t.Fatalf("DisconnectSessionWorkers called %d times on an already-stopped env, want 0", store.disconnected)
+	}
+}
+
+// claimSignalStore reports each reconcile pass (every pass starts by claiming).
+type claimSignalStore struct {
+	lifecycleStore
+	claims chan struct{}
+}
+
+func (s *claimSignalStore) ClaimSandboxes(context.Context, string, int, time.Duration) ([]domain.Sandbox, error) {
+	s.claims <- struct{}{}
+	return nil, nil
+}
+
+func TestWakeRunsAPassWithoutWaitingForTheInterval(t *testing.T) {
+	store := &claimSignalStore{claims: make(chan struct{}, 4)}
+	reconciler := New(store, nil, Options{
+		Interval: time.Hour,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = reconciler.Run(ctx) }()
+
+	waitForClaim := func(what string) {
+		t.Helper()
+		select {
+		case <-store.claims:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no reconcile pass %s", what)
+		}
+	}
+	waitForClaim("at startup")
+	reconciler.Wake()
+	waitForClaim("after Wake")
+}
+
+func TestWakeNeverBlocksWhenAPassIsAlreadyPending(t *testing.T) {
+	reconciler := New(&lifecycleStore{}, nil, Options{})
+	done := make(chan struct{})
+	go func() {
+		// Nothing drains the channel because Run is not running.
+		reconciler.Wake()
+		reconciler.Wake()
+		reconciler.Wake()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Wake blocked")
+	}
+}
+
+// blockingClaimStore holds the first ticker pass inside its claim so a test can
+// prove a woken pass does not queue behind it.
+type blockingClaimStore struct {
+	lifecycleStore
+	calls   chan int
+	release chan struct{}
+	n       int
+	mu      sync.Mutex
+}
+
+func (s *blockingClaimStore) ClaimSandboxes(context.Context, string, int, time.Duration) ([]domain.Sandbox, error) {
+	s.mu.Lock()
+	s.n++
+	n := s.n
+	s.mu.Unlock()
+	s.calls <- n
+	if n == 2 { // the first ticker pass
+		<-s.release
+	}
+	return nil, nil
+}
+
+func TestWokenPassDoesNotWaitForABusyTickerPass(t *testing.T) {
+	store := &blockingClaimStore{calls: make(chan int, 8), release: make(chan struct{})}
+	defer close(store.release)
+	reconciler := New(store, nil, Options{
+		Interval: 10 * time.Millisecond,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = reconciler.Run(ctx) }()
+
+	next := func(what string) int {
+		t.Helper()
+		select {
+		case n := <-store.calls:
+			return n
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no claim %s", what)
+			return 0
+		}
+	}
+	next("for the initial pass")
+	next("for the ticker pass, which now blocks")
+	reconciler.Wake()
+	if n := next("for the woken pass while the ticker pass is blocked"); n != 3 {
+		t.Fatalf("claim #%d, want the woken pass (#3)", n)
 	}
 }

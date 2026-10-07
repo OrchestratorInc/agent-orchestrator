@@ -13,11 +13,12 @@ import (
 )
 
 const (
-	ProviderDocker  = "docker"
-	ProviderDaytona = "daytona"
-	ProviderECS     = "ecs"
-	ProviderNodeOps = "nodeops"
-	ProviderCoder   = "coder"
+	ProviderDocker    = "docker"
+	ProviderDaytona   = "daytona"
+	ProviderECS       = "ecs"
+	ProviderNodeOps   = "nodeops"
+	ProviderCoder     = "coder"
+	ProviderFreestyle = "freestyle"
 
 	DefaultProvider       = ProviderDocker
 	DefaultWorkerTokenTTL = 15 * time.Minute
@@ -53,6 +54,47 @@ func (c NodeOpsConfig) rootFSForHarness(harness string) string {
 		return rootFS
 	}
 	return strings.TrimSpace(c.DefaultRootFS)
+}
+
+// FreestyleConfig configures Freestyle VMs. Sessions boot from a prepared
+// snapshot (the NodeOps workspace layout plus one harness and the worker), so
+// SnapshotByHarness plays the role NodeOps' per-harness rootfs plays.
+type FreestyleConfig struct {
+	BaseURL           string
+	APIKey            string
+	DefaultSnapshot   string
+	SnapshotByHarness map[string]string
+	WorkerTokenTTL    time.Duration
+	AutoPauseSeconds  int
+}
+
+// snapshotForHarness resolves the snapshot one session boots from.
+func (c FreestyleConfig) snapshotForHarness(harness string) string {
+	if snapshot := strings.TrimSpace(c.SnapshotByHarness[strings.TrimSpace(harness)]); snapshot != "" {
+		return snapshot
+	}
+	return strings.TrimSpace(c.DefaultSnapshot)
+}
+
+func (c FreestyleConfig) Validate() error {
+	if strings.TrimSpace(c.APIKey) == "" {
+		return errors.New("AO_CLOUD_FREESTYLE_API_KEY is required")
+	}
+	if strings.TrimSpace(c.DefaultSnapshot) == "" {
+		return errors.New("AO_CLOUD_FREESTYLE_DEFAULT_SNAPSHOT is required")
+	}
+	if c.BaseURL != "" {
+		if _, err := url.ParseRequestURI(c.BaseURL); err != nil {
+			return fmt.Errorf("AO_CLOUD_FREESTYLE_BASE_URL must be a valid URL: %w", err)
+		}
+	}
+	if c.WorkerTokenTTL <= 0 {
+		return errors.New("AO_CLOUD_FREESTYLE_WORKER_TOKEN_TTL must be positive")
+	}
+	if c.AutoPauseSeconds < 0 {
+		return errors.New("AO_CLOUD_FREESTYLE_AUTO_PAUSE_SECONDS must not be negative")
+	}
+	return nil
 }
 
 type DockerConfig struct {
@@ -358,11 +400,12 @@ func (c NodeOpsConfig) Validate() error {
 }
 
 type ProvisioningDefaults struct {
-	Provider string
-	Release  string
-	NodeOps  NodeOpsConfig
-	Docker   DockerConfig
-	Coder    CoderConfig
+	Provider  string
+	Release   string
+	NodeOps   NodeOpsConfig
+	Docker    DockerConfig
+	Coder     CoderConfig
+	Freestyle FreestyleConfig
 }
 
 type Plan struct {
@@ -437,6 +480,19 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 			"workerTokenTtlSeconds": int64(d.NodeOps.WorkerTokenTTL / time.Second),
 			"autoPauseSeconds":      d.NodeOps.AutoPauseSeconds,
 		}
+	} else if provider == ProviderFreestyle {
+		if err := d.Freestyle.Validate(); err != nil {
+			return Plan{}, err
+		}
+		// The snapshot is stamped on the session so a later recreate boots the
+		// same build even after the deployment moves to newer snapshots.
+		freestyle := map[string]any{
+			"snapshot":              d.Freestyle.snapshotForHarness(harness),
+			"workerTokenTtlSeconds": int64(d.Freestyle.WorkerTokenTTL / time.Second),
+			"autoPauseSeconds":      d.Freestyle.AutoPauseSeconds,
+		}
+		resourceProfile["freestyle"] = freestyle
+		bootstrapContext["freestyle"] = freestyle
 	} else if provider == ProviderDocker {
 		if err := d.Docker.Validate(); err != nil {
 			return Plan{}, err
@@ -564,4 +620,45 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 
 func normalizeProvider(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+// FreestyleSnapshot returns the snapshot a Freestyle plan boots from, or "" for
+// any other provider's plan.
+func FreestyleSnapshot(plan Plan) string {
+	var profile struct {
+		Freestyle struct {
+			Snapshot string `json:"snapshot"`
+		} `json:"freestyle"`
+	}
+	if err := json.Unmarshal(plan.ResourceProfile, &profile); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(profile.Freestyle.Snapshot)
+}
+
+// WithFreestyleSnapshot returns plan booting from snapshot instead, used when
+// the session's project has a prepared snapshot for its harness.
+func WithFreestyleSnapshot(plan Plan, snapshot string) (Plan, error) {
+	rewrite := func(raw json.RawMessage) (json.RawMessage, error) {
+		var document map[string]any
+		if err := json.Unmarshal(raw, &document); err != nil {
+			return nil, err
+		}
+		freestyle, ok := document["freestyle"].(map[string]any)
+		if !ok {
+			return nil, errors.New("plan has no freestyle section")
+		}
+		freestyle["snapshot"] = snapshot
+		return json.Marshal(document)
+	}
+	resourceProfile, err := rewrite(plan.ResourceProfile)
+	if err != nil {
+		return Plan{}, err
+	}
+	bootstrapContext, err := rewrite(plan.BootstrapContext)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.ResourceProfile, plan.BootstrapContext = resourceProfile, bootstrapContext
+	return plan, nil
 }
