@@ -10,6 +10,7 @@ import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentReadiness } from "../../test/agent-readiness-fixtures";
 import { TooltipProvider } from "../ui/tooltip";
 import { HarnessSettingsSection, updateAdvisoryRefreshInterval } from "./HarnessSettingsSection";
+import { useHarnessActionRequest } from "../../hooks/useHarnessUpdates";
 
 // Cloud sign-in state for the cloud login rows. Signed out by default, which
 // leaves every row on its local-only controls.
@@ -87,6 +88,9 @@ function catalogWithInstalled(...installed: string[]) {
 }
 
 const catalog = catalogWithInstalled("claude-code");
+// Login workflows require a confirmed logged-out observation, not "unknown".
+catalog.agents[0].authentication.state = "unauthorized";
+catalog.agents[0].effectiveReadiness = "not_ready";
 
 const plans = {
 	agents: [
@@ -134,7 +138,7 @@ describe("updateAdvisoryRefreshInterval", () => {
 		["current", 60 * 60_000],
 		["behind_latest", 60 * 60_000],
 	] as const)("uses the expected cadence for %s advisories", (status, expected) => {
-		expect(updateAdvisoryRefreshInterval({ agentId: "codex", status, checkedAt: "2026-10-06T00:00:00Z" })).toBe(expected);
+		expect(updateAdvisoryRefreshInterval({ agentId: "codex", status, currentVersion: "1.2.3", latestVersion: "1.3.0", checkedAt: "2026-10-06T00:00:00Z" })).toBe(expected);
 	});
 
 	it("retries a failed refresh even when an old current result remains cached", () => {
@@ -151,8 +155,7 @@ function ReadinessSelector({ agentId }: { agentId: string }) {
 	);
 }
 
-function renderSection(focusAgentId?: string, selectorAgentId?: string, initialView?: "local" | "cloud") {
-	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderSection(focusAgentId?: string, selectorAgentId?: string, initialView?: "local" | "cloud", client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
 	const view = render(
 		<QueryClientProvider client={client}>
 			<TooltipProvider>
@@ -164,7 +167,13 @@ function renderSection(focusAgentId?: string, selectorAgentId?: string, initialV
 	return { ...view, client };
 }
 
-function mockInstalledOperations(savedMethod?: string, readiness = catalogWithInstalled("claude-code", "codex", "cursor")) {
+function readyCatalog() {
+	const readiness = catalogWithInstalled("claude-code", "codex", "cursor");
+	for (const agent of readiness.agents) agent.authentication.state = "authorized";
+	return readiness;
+}
+
+function mockInstalledOperations(savedMethod?: string, readiness = readyCatalog()) {
 	const managedPlans = { agents: plans.agents.map((plan) => ({
 		...plan,
 		methods: plan.methods.map((method) => ({
@@ -176,10 +185,15 @@ function mockInstalledOperations(savedMethod?: string, readiness = catalogWithIn
 		})),
 	})) };
 	let operationJobs = savedMethod ? [{ target: "codex", method: savedMethod, status: "succeeded", startedAt: "2026-09-24T12:00:00Z" }] : [];
-	vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+	vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
 		if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
 		if (path === "/api/v1/agents/installers") return { data: managedPlans } as never;
 		if (path === "/api/v1/agents/install-jobs") return { data: { jobs: operationJobs } } as never;
+		if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "codex", action: "login", launchMode: "terminal", available: true }] } } as never;
+		if (path === "/api/v1/agents/{agent}/update-advisory") {
+			const agentId = (options as { params: { path: { agent: string } } }).params.path.agent;
+			return { data: { agentId, status: agentId === "codex" ? "behind_latest" : "current", currentVersion: "1.2.3", latestVersion: "1.3.0", maintenanceMethod: savedMethod, checkedAt: "2026-10-06T00:00:00Z" } } as never;
+		}
 		return { data: undefined } as never;
 	});
 	vi.mocked(apiClient.POST).mockImplementation(async (path, options) => {
@@ -202,6 +216,7 @@ describe("HarnessSettingsSection", () => {
 		cloudMocks.cloudEnabled = false;
 		cloudMocks.org = undefined;
 		cloudMocks.connections = [];
+		useHarnessActionRequest.getState().setRequest(null);
 		window.ao!.clipboard.writeText = vi.fn().mockResolvedValue(undefined);
 		vi.spyOn(apiClient, "GET").mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
@@ -224,207 +239,449 @@ describe("HarnessSettingsSection", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("expands the installed harness itself with a chevron and direct actions, without installer controls", async () => {
+	it("puts versions beside the name and expands from the identity without a chevron", async () => {
 		mockInstalledOperations("npm");
 		renderSection();
 		const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
 		const row = toggle.closest('[data-agent="codex"]') as HTMLElement;
+		expect(await within(toggle).findByText("v1.2.3")).toBeInTheDocument();
+		expect(await within(row).findByText("v1.3.0 available")).toBeInTheDocument();
+		expect(within(row).getByText("Connected")).toBeInTheDocument();
+		expect(toggle.querySelector(".lucide-chevron-down")).toBeNull();
 		expect(toggle).toHaveAttribute("aria-expanded", "false");
-		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
-		await userEvent.click(toggle);
+		expect(within(row).getByRole("button", { name: "Update" })).toBeEnabled();
+		expect(within(row).queryByRole("button", { name: "Uninstall" })).toBeNull();
+		toggle.focus();
+		await userEvent.keyboard("{Enter}");
 		expect(toggle).toHaveAttribute("aria-expanded", "true");
 		expect(toggle).toHaveFocus();
-		expect(within(row).getByRole("button", { name: "Update" })).toBeEnabled();
 		expect(within(row).getByRole("button", { name: "Uninstall" })).toBeEnabled();
-		expect(within(row).queryByRole("button", { name: "Installation method" })).toBeNull();
+		expect(within(row).getByText("Installed version")).toBeInTheDocument();
+		expect(within(row).getByText("Last updated")).toBeInTheDocument();
+		// A historical install/check date is not a verified update date.
+		expect(within(row).getByText("Not recorded")).toBeInTheDocument();
 		expect(within(row).queryByRole("combobox")).toBeNull();
-		expect(within(row).queryByRole("button", { name: "Install" })).toBeNull();
+		expect(within(row).queryByRole("button", { name: "Refresh login" })).toBeNull();
 		await userEvent.click(screen.getByRole("button", { name: "Expand Claude Code options" }));
 		expect(toggle).toHaveAttribute("aria-expanded", "false");
 	});
 
-	it("automatically shows a version-backed update advisory without disabling manual updates", async () => {
+	it("checks updates from initial readiness without waiting for the page refresh", async () => {
 		mockInstalledOperations("npm");
-		const get = vi.mocked(apiClient.GET);
-		const previous = get.getMockImplementation()!;
-		get.mockImplementation(async (path, options) => {
-			if (path === "/api/v1/agents/{agent}/update-advisory") {
-				const agentId = (options as { params: { path: { agent: string } } }).params.path.agent;
-				return { data: { agentId, status: agentId === "codex" ? "behind_latest" : "unknown", currentVersion: "1.2.3", latestVersion: "1.3.0", source: "npm", checkedAt: "2026-10-04T00:00:00Z" } } as never;
-			}
-			return (previous as (path: string, options: unknown) => Promise<never>)(path, options);
-		});
+		let resolveRefresh!: (value: unknown) => void;
+		const pendingRefresh = new Promise((resolve) => { resolveRefresh = resolve; });
+		vi.mocked(apiClient.POST).mockReturnValueOnce(pendingRefresh as never);
 		renderSection();
-		const row = (await screen.findByRole("button", { name: "Expand Codex options" })).closest('[data-agent="codex"]') as HTMLElement;
-		expect(await within(row).findByText("Update available")).toBeInTheDocument();
-		await userEvent.click(within(row).getByRole("button", { name: "Expand Codex options" }));
-		expect(within(row).getByText(/1.2.3.*1.3.0/)).toBeInTheDocument();
+		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/refresh"));
+		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
+		expect(vi.mocked(apiClient.GET).mock.calls.some(([path]) => path === "/api/v1/agents/{agent}/update-advisory")).toBe(true);
+		await act(async () => resolveRefresh({ data: readyCatalog() }));
+		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
+	});
+
+	it.each(["current", "failed"])("shows cached Update immediately while revalidating, then handles a %s result", async (result) => {
+		mockInstalledOperations("npm");
+		let resolveRefresh!: (value: unknown) => void;
+		let resolveAdvisory!: (value: unknown) => void;
+		let rejectAdvisory!: (reason: Error) => void;
+		const pendingRefresh = new Promise((resolve) => { resolveRefresh = resolve; });
+		const pendingAdvisory = new Promise((resolve, reject) => { resolveAdvisory = resolve; rejectAdvisory = reject; });
+		vi.mocked(apiClient.POST).mockReturnValueOnce(pendingRefresh as never);
+		const original = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation((path, options) => {
+			if (path === "/api/v1/agents/{agent}/update-advisory") return pendingAdvisory as never;
+			return original(path, options);
+		});
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(["agent-readiness"], readyCatalog());
+		client.setQueryData(["agent-update-advisory", "local", "codex"], {
+			agentId: "codex", status: "behind_latest", currentVersion: "1.2.3", latestVersion: "1.3.0", maintenanceMethod: "npm",
+		});
+		const view = renderSection(undefined, undefined, undefined, client);
+		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
+		expect(within(row).getByText("v1.3.0 available")).toBeInTheDocument();
+		expect(vi.mocked(apiClient.GET).mock.calls.some(([path, options]) => path === "/api/v1/agents/{agent}/update-advisory"
+			&& (options as { params?: { path?: { agent?: string } } })?.params?.path?.agent === "codex")).toBe(false);
+		await act(async () => resolveRefresh({ data: readyCatalog() }));
+		await waitFor(() => expect(vi.mocked(apiClient.GET).mock.calls.some(([path, options]) => path === "/api/v1/agents/{agent}/update-advisory"
+			&& (options as { params?: { path?: { agent?: string } } })?.params?.path?.agent === "codex")).toBe(true));
 		expect(within(row).getByRole("button", { name: "Update" })).toBeEnabled();
+		if (result === "current") {
+			await act(async () => resolveAdvisory({ data: { agentId: "codex", status: "current", currentVersion: "1.3.0", latestVersion: "1.3.0", maintenanceMethod: "npm" } }));
+			await waitFor(() => expect(within(row).queryByRole("button", { name: "Update" })).toBeNull());
+			expect(within(row).queryByText("v1.3.0 available")).toBeNull();
+		} else {
+			await act(async () => rejectAdvisory(new Error("offline")));
+			await waitFor(() => expect(client.getQueryState(["agent-update-advisory", "local", "codex"])?.status).toBe("error"));
+			expect(within(row).getByRole("button", { name: "Update" })).toBeEnabled();
+			expect(within(row).getByText("v1.3.0 available")).toBeInTheDocument();
+		}
+		view.unmount();
 	});
 
-	it.each(["future_status", ""])("shows an unknown result for unexpected advisory status %s", async (status) => {
+	it("keeps cached Login and Install usable while page readiness refreshes", async () => {
 		mockInstalledOperations("npm");
-		const get = vi.mocked(apiClient.GET);
-		const previous = get.getMockImplementation()!;
-		get.mockImplementation(async (path, options) => {
-			if (path === "/api/v1/agents/{agent}/update-advisory") {
-				const agentId = (options as { params: { path: { agent: string } } }).params.path.agent;
-				return { data: { agentId, status, currentVersion: "1.3.0", source: "npm", checkedAt: "2026-10-06T00:00:00Z" } } as never;
-			}
-			return (previous as (path: string, options: unknown) => Promise<never>)(path, options);
-		});
-		renderSection();
-		const row = (await screen.findByRole("button", { name: "Expand Codex options" })).closest('[data-agent="codex"]') as HTMLElement;
-		await userEvent.click(within(row).getByRole("button", { name: "Expand Codex options" }));
-		expect(await within(row).findByText("Update availability could not be verified. You can still update manually.")).toBeInTheDocument();
-		expect(within(row).queryByText(/Up to date/)).toBeNull();
-		expect(within(row).queryByText("Update available")).toBeNull();
+		vi.mocked(apiClient.POST).mockReturnValueOnce(new Promise(() => {}) as never);
+		const readiness = catalogWithInstalled("codex");
+		readiness.agents[1].authentication.state = "unauthorized";
+		const original = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation((path, options) => path === "/api/v1/agents/readiness"
+			? Promise.resolve({ data: readiness }) as never : original(path, options));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(["agent-readiness"], readiness);
+		const view = renderSection(undefined, undefined, undefined, client);
+		const codexRow = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const claudeRow = screen.getByText("Claude Code").closest('[data-agent="claude-code"]') as HTMLElement;
+		expect(await within(codexRow).findByRole("button", { name: "Login" })).toBeEnabled();
+		expect(await within(claudeRow).findByRole("button", { name: "Install" })).toBeEnabled();
+		view.unmount();
 	});
 
-	it("updates through the package manager that owns the binary over a stale saved method", async () => {
-		mockInstalledOperations("npm");
-		const get = vi.mocked(apiClient.GET);
-		const previous = get.getMockImplementation()!;
-		get.mockImplementation(async (path, options) => {
-			if (path === "/api/v1/agents/{agent}/update-advisory") {
-				const agentId = (options as { params: { path: { agent: string } } }).params.path.agent;
-				return { data: { agentId, status: "current", currentVersion: "1.3.0", latestVersion: "1.3.0", source: "homebrew", checkedAt: "2026-10-04T00:00:00Z" } } as never;
-			}
-			return (previous as (path: string, options: unknown) => Promise<never>)(path, options);
-		});
+	it.each(["unknown", "configured"])("does not force Login before an update for %s auth", async (authentication) => {
+		const readiness = readyCatalog();
+		readiness.agents[1].authentication.state = authentication;
+		mockInstalledOperations("npm", readiness);
 		renderSection();
-		const row = (await screen.findByRole("button", { name: "Expand Codex options" })).closest('[data-agent="codex"]') as HTMLElement;
-		await userEvent.click(within(row).getByRole("button", { name: "Expand Codex options" }));
-		expect(await within(row).findByText("Up to date (1.3.0)")).toBeInTheDocument();
+		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
+		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
+		expect(within(row).queryByText("Connected")).toBeNull();
+	});
+
+	it.each(["future_status", ""])("keeps an observed version without claiming an update for status %s", async (status) => {
+		mockInstalledOperations("npm");
+		const { client } = renderSection();
+		const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
+		await within(toggle).findByText("v1.2.3");
+		act(() => { client.setQueryData(["agent-update-advisory", "local", "codex"], {
+			agentId: "codex", status, currentVersion: "2025.09.25", source: "npm", checkedAt: "2026-10-06T00:00:00Z",
+		}); });
+		const row = toggle.closest('[data-agent="codex"]') as HTMLElement;
+		expect(await within(toggle).findByText("2025.09.25")).toBeInTheDocument();
+		expect(within(row).queryByText(/available$/)).toBeNull();
+		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
+		await userEvent.click(toggle);
+		expect(within(row).getByText("Update availability could not be verified.")).toBeInTheDocument();
+	});
+
+	it("uses the detected manager rather than a stale saved method", async () => {
+		mockInstalledOperations("unsupported-old-method");
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/{agent}/update-advisory" && (options as { params?: { query?: { refresh?: boolean } } })?.params?.query?.refresh) return { data: { agentId: "codex", status: "behind_latest", currentVersion: "1.2.3", latestVersion: "1.3.0", source: "homebrew" } } as never;
+			return get(path, options);
+		});
+		const { client } = renderSection();
+		const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
+		await within(toggle).findByText("v1.2.3");
+		act(() => { client.setQueryData(["agent-update-advisory", "local", "codex"], {
+			agentId: "codex", status: "behind_latest", currentVersion: "1.2.3", latestVersion: "1.3.0", source: "homebrew",
+		}); });
+		const row = toggle.closest('[data-agent="codex"]') as HTMLElement;
+		await waitFor(() => expect(within(row).getByRole("button", { name: "Update" })).toBeEnabled());
 		await userEvent.click(within(row).getByRole("button", { name: "Update" }));
-		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "homebrew", operation: "update" } });
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "homebrew", operation: "update", expectedVersion: "1.3.0" } });
+		expect(toggle).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
-	it("updates using the saved method and shows Updating rather than Installing", async () => {
+	it.each(["already-current", "different-owner", "different-target", "unknown"])("does not run an update when the click-time probe reports %s", async (state) => {
+		mockInstalledOperations("npm");
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/{agent}/update-advisory" && (options as { params?: { query?: { refresh?: boolean } } })?.params?.query?.refresh) return { data: {
+				agentId: "codex", status: state === "already-current" ? "current" : state === "unknown" ? "unknown" : "behind_latest",
+				currentVersion: state === "already-current" ? "1.3.0" : "1.2.3", latestVersion: state === "different-target" ? "2.0.0" : "1.3.0", maintenanceMethod: state === "different-owner" ? "homebrew" : "npm",
+			} } as never;
+			return get(path, options);
+		});
+		renderSection();
+		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Updating…" })).toBeNull());
+		expect(apiClient.GET).toHaveBeenCalledWith("/api/v1/agents/{agent}/update-advisory", { params: { path: { agent: "codex" }, query: { refresh: true } } });
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+	});
+
+	it("consumes a popup update once through the existing workflow", async () => {
+		mockInstalledOperations("npm");
+		useHarnessActionRequest.getState().setRequest({ agentId: "codex", latestVersion: "1.3.0", action: "update" });
+		renderSection("codex");
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "npm", operation: "update", expectedVersion: "1.3.0" } }));
+		expect(vi.mocked(apiClient.POST).mock.calls.filter(([path]) => path === "/api/v1/agents/{agent}/install")).toHaveLength(1);
+		expect(useHarnessActionRequest.getState().request).toBeNull();
+	});
+
+	it("does not let saved job history override missing current ownership evidence", async () => {
+		mockInstalledOperations("npm");
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/{agent}/update-advisory") return { data: { agentId: "codex", status: "behind_latest", currentVersion: "1.2.3", latestVersion: "1.3.0", source: "official-release" } } as never;
+			return get(path, options);
+		});
+		renderSection();
+		const row = (await screen.findByRole("button", { name: "Expand Codex options" })).closest('[data-agent="codex"]') as HTMLElement;
+		expect(await within(row).findByRole("button", { name: "Update manually" })).toBeEnabled();
+		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
+	});
+
+	it("collapses options during update and prevents reopening while it runs", async () => {
 		mockInstalledOperations("npm");
 		renderSection();
-		await userEvent.click(await screen.findByRole("button", { name: "Expand Codex options" }));
-		await userEvent.click(screen.getByRole("button", { name: "Update" }));
-		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "npm", operation: "update" } });
-		expect(screen.queryByRole("dialog")).toBeNull();
-		const row = document.querySelector('[data-agent="codex"]') as HTMLElement;
+		const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
+		const row = toggle.closest('[data-agent="codex"]') as HTMLElement;
+		await userEvent.click(toggle);
+		await userEvent.click(within(row).getByRole("button", { name: "Update" }));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "npm", operation: "update", expectedVersion: "1.3.0" } });
+		expect(toggle).toHaveAttribute("aria-expanded", "false");
+		expect(toggle).toBeDisabled();
 		expect(within(row).getByRole("status")).toHaveTextContent("Updating");
-		expect(within(row).getByRole("button", { name: "Update" })).toBeDisabled();
-		expect(within(row).getByRole("button", { name: "Uninstall" })).toBeDisabled();
+		expect(within(row).getByRole("button", { name: "Updating…" })).toBeDisabled();
+		expect(within(row).queryByRole("button", { name: "Uninstall" })).toBeNull();
+		expect(within(row).queryByRole("button", { name: "Show diagnostics" })).toBeNull();
 	});
 
-	it("asks for an unknown method only after Update and discards cancelled choices", async () => {
+	it("does not guess ownership or offer a method picker for a manual installation", async () => {
 		mockInstalledOperations();
 		renderSection();
-		await userEvent.click(await screen.findByRole("button", { name: "Expand Codex options" }));
-		await userEvent.click(screen.getByRole("button", { name: "Update" }));
-		let dialog = screen.getByRole("dialog");
-		expect(within(dialog).getByRole("button", { name: "Update" })).toBeDisabled();
-		await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "Method" }), "npm");
+		const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
+		await userEvent.click(toggle);
+		const row = toggle.closest('[data-agent="codex"]') as HTMLElement;
+		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
+		await userEvent.click(within(row).getByRole("button", { name: "Update manually" }));
+		expect(aoBridge.app.openExternal).toHaveBeenCalledWith("https://github.com/openai/codex");
+		expect(within(row).getByRole("button", { name: "Uninstall" })).toBeDisabled();
+		expect(within(row).getByText("Installation method could not be verified. Manage this CLI using its original installer.")).toBeInTheDocument();
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(within(row).queryByRole("combobox")).toBeNull();
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+	});
+
+	it("uses only a minimal uninstall confirmation and supports cancellation", async () => {
+		mockInstalledOperations("npm");
+		renderSection();
+		const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
+		const row = toggle.closest('[data-agent="codex"]') as HTMLElement;
+		await userEvent.click(toggle);
+		await userEvent.click(within(row).getByRole("button", { name: "Uninstall" }));
+		let dialog = screen.getByRole("dialog", { name: "Uninstall Codex?" });
+		expect(within(dialog).queryByRole("combobox")).toBeNull();
+		expect(within(dialog).queryByRole("checkbox")).toBeNull();
+		expect(within(dialog).queryByText("npm")).toBeNull();
+		expect(within(dialog).getByRole("button", { name: "Uninstall" })).toBeEnabled();
 		await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
-		await userEvent.click(screen.getByRole("button", { name: "Update" }));
+		await userEvent.click(within(row).getByRole("button", { name: "Uninstall" }));
 		dialog = screen.getByRole("dialog");
-		expect(within(dialog).getByRole("combobox")).toHaveValue("");
-		await userEvent.selectOptions(within(dialog).getByRole("combobox"), "homebrew");
-		await userEvent.click(within(dialog).getByRole("button", { name: "Update" }));
-		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "homebrew", operation: "update" } });
-	});
-
-	it.each([undefined, "homebrew"])("does not trust an unsubmitted install choice after readiness refresh (saved method: %s)", async (savedMethod) => {
-		mockInstalledOperations(savedMethod, catalog);
-		const { client } = renderSection();
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
-		await userEvent.click(await within(row).findByRole("button", { name: "Installation method" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: "npm" }));
-		act(() => { client.setQueryData(agentReadinessQueryKey, catalogWithInstalled("claude-code", "codex")); });
-		await userEvent.click(await screen.findByRole("button", { name: "Expand Codex options" }));
-		await userEvent.click(within(row).getByRole("button", { name: "Update" }));
-		if (savedMethod) {
-			expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: savedMethod, operation: "update" } });
-		} else {
-			expect(within(screen.getByRole("dialog")).getByRole("combobox")).toHaveValue("");
-			expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
-		}
-	});
-
-	it("requires method ownership confirmation before uninstalling", async () => {
-		mockInstalledOperations("npm");
-		renderSection();
-		await userEvent.click(await screen.findByRole("button", { name: "Expand Codex options" }));
-		await userEvent.click(screen.getByRole("button", { name: "Uninstall" }));
-		const dialog = screen.getByRole("dialog", { name: "Uninstall Codex?" });
-		expect(within(dialog).getByText("npm")).toBeInTheDocument();
-		expect(within(dialog).queryByRole("combobox")).toBeNull();
-		expect(within(dialog).getByRole("button", { name: "Uninstall" })).toBeDisabled();
-		await userEvent.click(within(dialog).getByRole("checkbox"));
 		await userEvent.click(within(dialog).getByRole("button", { name: "Uninstall" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "npm", operation: "uninstall" } });
-		expect(within(document.querySelector('[data-agent="codex"]') as HTMLElement).getByRole("status")).toHaveTextContent("Uninstalling");
-	});
-
-	it("keeps unsupported installed actions visible with reasons", async () => {
-		mockInstalledOperations();
-		renderSection();
-		await userEvent.click(await screen.findByRole("button", { name: "Expand Cursor options" }));
-		const row = document.querySelector('[data-agent="cursor"]') as HTMLElement;
-		expect(within(row).getByRole("button", { name: "Update" })).toBeDisabled();
-		expect(within(row).getByRole("button", { name: "Uninstall" })).toBeDisabled();
-		expect(within(row).getByText("Vendor removal is not supported.")).toBeInTheDocument();
+		expect(within(row).getByRole("status")).toHaveTextContent("Uninstalling");
 	});
 
 	it("never substitutes an available manager for an unsupported saved method", async () => {
 		mockInstalledOperations("official-installer");
 		renderSection();
-		await userEvent.click(await screen.findByRole("button", { name: "Expand Codex options" }));
-		expect(screen.getByRole("button", { name: "Update" })).toBeDisabled();
-		expect(screen.getByRole("button", { name: "Uninstall" })).toBeDisabled();
+		const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
+		await userEvent.click(toggle);
+		const row = toggle.closest('[data-agent="codex"]') as HTMLElement;
+		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
+		expect(within(row).getByRole("button", { name: "Update manually" })).toBeEnabled();
+		expect(within(row).getByRole("button", { name: "Uninstall" })).toBeDisabled();
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
-	it("requires a fresh ownership confirmation after changing the uninstall method", async () => {
-		mockInstalledOperations();
+	it("does not ask a harness with not-applicable authentication to log in before updating", async () => {
+		const readiness = readyCatalog();
+		readiness.agents[1].authentication.state = "not_applicable";
+		mockInstalledOperations("npm", readiness);
 		renderSection();
-		await userEvent.click(await screen.findByRole("button", { name: "Expand Codex options" }));
-		await userEvent.click(screen.getByRole("button", { name: "Uninstall" }));
-		const dialog = screen.getByRole("dialog");
-		await userEvent.click(within(dialog).getByRole("checkbox"));
-		expect(within(dialog).getByRole("button", { name: "Uninstall" })).toBeDisabled();
-		await userEvent.selectOptions(within(dialog).getByRole("combobox"), "npm");
-		await userEvent.click(within(dialog).getByRole("checkbox"));
-		expect(within(dialog).getByRole("button", { name: "Uninstall" })).toBeEnabled();
-		await userEvent.selectOptions(within(dialog).getByRole("combobox"), "homebrew");
-		expect(within(dialog).getByRole("checkbox")).not.toBeChecked();
-		expect(within(dialog).getByRole("button", { name: "Uninstall" })).toBeDisabled();
+		const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
+		const row = toggle.closest('[data-agent="codex"]') as HTMLElement;
+		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
+		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
 	});
 
-	it("blocks an open confirmation if the harness is no longer installed", async () => {
+	it.each(["removed", "different-owner", "ownership-unknown"] as const)("blocks an open confirmation when fresh state is %s", async (state) => {
 		mockInstalledOperations("npm");
 		const { client } = renderSection();
-		await userEvent.click(await screen.findByRole("button", { name: "Expand Codex options" }));
-		await userEvent.click(screen.getByRole("button", { name: "Uninstall" }));
+		const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
+		await within(toggle).findByText("v1.2.3");
+		await userEvent.click(toggle);
+		await userEvent.click(within(toggle.closest('[data-agent="codex"]') as HTMLElement).getByRole("button", { name: "Uninstall" }));
 		const dialog = screen.getByRole("dialog");
-		await userEvent.click(within(dialog).getByRole("checkbox"));
-		act(() => { client.setQueryData(agentReadinessQueryKey, catalogWithInstalled("claude-code")); });
+		act(() => {
+			if (state === "removed") client.setQueryData(agentReadinessQueryKey, catalogWithInstalled("claude-code"));
+			else client.setQueryData(["agent-update-advisory", "local", "codex"], {
+				agentId: "codex", status: "unknown", source: state === "different-owner" ? "homebrew" : undefined,
+				reason: state === "ownership-unknown" ? "ownership_unconfirmed" : undefined,
+			});
+		});
 		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Uninstall" })).toBeDisabled());
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
-	it("shows the daemon's active-session error and retries the same update", async () => {
+	it("reopens details for a daemon rejection and retries the same update", async () => {
 		mockInstalledOperations("npm");
-		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+		const post = vi.mocked(apiClient.POST);
+		const previous = post.getMockImplementation()!;
+		post.mockImplementation(async (path, options) => {
 			if (path === "/api/v1/agents/{agent}/install") return { error: { error: "HARNESS_ACTIVE", code: "HARNESS_ACTIVE", message: "End the active Codex session before updating.", requestId: "test-active-session" } } as never;
-			if (path === "/api/v1/agents/refresh" || path === "/api/v1/agents/readiness/ensure") return { data: catalogWithInstalled("claude-code", "codex", "cursor") } as never;
-			return { data: undefined } as never;
+			return previous(path, options);
 		});
 		renderSection();
-		await userEvent.click(await screen.findByRole("button", { name: "Expand Codex options" }));
-		await userEvent.click(screen.getByRole("button", { name: "Update" }));
-		expect(await screen.findByRole("alert")).toHaveTextContent("End the active Codex session before updating.");
-		await userEvent.click(screen.getByRole("button", { name: "Retry update" }));
-		const requests = (vi.mocked(apiClient.POST).mock.calls as unknown as Array<[string, unknown]>).filter(([path]) => path === "/api/v1/agents/{agent}/install");
+		const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
+		const row = toggle.closest('[data-agent="codex"]') as HTMLElement;
+		await userEvent.click(await within(row).findByRole("button", { name: "Update" }));
+		expect(await within(row).findByRole("alert")).toHaveTextContent("End the active Codex session before updating.");
+		expect(toggle).toHaveAttribute("aria-expanded", "true");
+		await userEvent.click(within(row).getByRole("button", { name: "Retry update" }));
+		const requests = vi.mocked(apiClient.POST).mock.calls.filter(([path]) => path === "/api/v1/agents/{agent}/install");
 		expect(requests).toHaveLength(2);
 		for (const [, options] of requests) expect(options).toMatchObject({ body: { method: "npm", operation: "update" } });
+	});
+
+	it("does not repeatedly reopen a failed update while unrelated jobs are polled", async () => {
+		mockInstalledOperations("npm");
+		const { client } = renderSection();
+		const codex = await screen.findByRole("button", { name: "Expand Codex options" });
+		const row = codex.closest('[data-agent="codex"]') as HTMLElement;
+		await userEvent.click(await within(row).findByRole("button", { name: "Update" }));
+		const failed = { target: "codex", method: "npm", status: "failed", startedAt: "2026-09-27T12:00:00Z", error: "Update failed" };
+		act(() => { client.setQueryData(["agent-install-jobs"], [failed]); });
+		await waitFor(() => expect(codex).toHaveAttribute("aria-expanded", "true"));
+		const claude = screen.getByRole("button", { name: "Expand Claude Code options" });
+		await userEvent.click(claude);
+		act(() => { client.setQueryData(["agent-install-jobs"], [failed, { target: "goose", status: "installing", output: "Downloading" }]); });
+		const goose = screen.getByText("Goose").closest('[data-agent="goose"]') as HTMLElement;
+		expect(await within(goose).findByRole("status")).toHaveTextContent("Working…");
+		expect(claude).toHaveAttribute("aria-expanded", "true");
+		expect(codex).toHaveAttribute("aria-expanded", "false");
+	});
+
+	it("prioritizes login, hides uninstall through cleanup, and never auto-updates", async () => {
+		const readiness = catalogWithInstalled("codex");
+		readiness.agents[1].authentication.state = "unauthorized";
+		mockInstalledOperations("npm", readiness);
+		let probed = false;
+		let resolveClose!: (value: unknown) => void;
+		const closing = new Promise((resolve) => { resolveClose = resolve; });
+		const post = vi.mocked(apiClient.POST);
+		const previous = post.getMockImplementation()!;
+		post.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/{agent}/auth") return { data: {
+				agentId: "codex", action: "login", terminal: { handleId: "auth-codex", workingDir: "/tmp", title: "Codex login", createdAt: "2026-10-07T00:00:00Z" },
+			} } as never;
+			if (path === "/api/v1/agents/{agent}/probe") {
+				probed = true;
+				return { data: { agent: { id: "codex", authStatus: "authorized" }, installed: true } } as never;
+			}
+			if (path === "/api/v1/agents/readiness/ensure" && probed) return { data: {
+				agents: [agentReadiness("codex", "Codex", { authentication: "authorized" })],
+			} } as never;
+			return previous(path, options);
+		});
+		vi.spyOn(apiClient, "DELETE").mockImplementation(async () => await closing as never);
+		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+		renderSection();
+		const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
+		const row = toggle.closest('[data-agent="codex"]') as HTMLElement;
+		expect(await within(row).findByText("v1.3.0 available")).toBeInTheDocument();
+		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
+		await userEvent.click(within(row).getByRole("button", { name: "Login" }));
+		expect(toggle).toHaveAttribute("aria-expanded", "true");
+		expect(within(row).queryByRole("button", { name: "Uninstall" })).toBeNull();
+		await userEvent.click(await screen.findByRole("button", { name: "Complete login terminal" }));
+		await waitFor(() => expect(apiClient.DELETE).toHaveBeenCalled());
+		expect(within(row).queryByRole("button", { name: "Uninstall" })).toBeNull();
+		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
+		await act(async () => { resolveClose({ data: undefined }); });
+		await waitFor(() => expect(within(row).getByRole("button", { name: "Update" })).toBeEnabled());
+		expect(within(row).getByRole("button", { name: "Uninstall" })).toBeEnabled();
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+	});
+
+	it("records only a successful update observed here, not job or check timestamps", async () => {
+		mockInstalledOperations("npm");
+		const { client } = renderSection();
+		const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
+		const row = toggle.closest('[data-agent="codex"]') as HTMLElement;
+		await userEvent.click(await within(row).findByRole("button", { name: "Update" }));
+		const completed = {
+			target: "codex", method: "npm", status: "succeeded", startedAt: "2026-09-27T12:00:00Z",
+			finishedAt: "2026-10-07T12:00:00Z", updatedAt: "2026-10-08T12:00:00Z", output: "Update completed",
+		};
+		const get = vi.mocked(apiClient.GET);
+		const previous = get.getMockImplementation()!;
+		get.mockImplementation(async (path, options) => path === "/api/v1/agents/install-jobs" ? { data: { jobs: [completed] } } as never : previous(path, options));
+		act(() => { client.setQueryData(["agent-install-jobs"], [completed]); });
+		await waitFor(() => expect(toggle).toBeEnabled());
+		await userEvent.click(toggle);
+		await waitFor(() => expect(row.querySelector("time")).toHaveAttribute("datetime", "2026-10-07T12:00:00Z"));
+		expect(within(row).queryByRole("button", { name: "Show diagnostics" })).toBeNull();
+	});
+
+	it("keeps uninstall hidden until the fresh check after closing login finishes", async () => {
+		const readiness = readyCatalog();
+		readiness.agents[1].authentication.state = "unauthorized";
+		mockInstalledOperations("npm", readiness);
+		let resolveProbe!: (value: unknown) => void;
+		const probe = new Promise((resolve) => { resolveProbe = resolve; });
+		const post = vi.mocked(apiClient.POST);
+		const previous = post.getMockImplementation()!;
+		post.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/{agent}/auth") return { data: {
+				agentId: "codex", action: "login", terminal: { handleId: "auth-codex", title: "Codex login", workingDir: "/tmp", createdAt: "2026-10-07T00:00:00Z" },
+			} } as never;
+			if (path === "/api/v1/agents/{agent}/probe") return await probe as never;
+			return previous(path, options);
+		});
+		vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+		renderSection();
+		const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
+		const row = toggle.closest('[data-agent="codex"]') as HTMLElement;
+		await userEvent.click(await within(row).findByRole("button", { name: "Login" }));
+		await userEvent.click(await within(row).findByRole("button", { name: "Close settings" }));
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/probe", { params: { path: { agent: "codex" } } }));
+		expect(within(row).queryByRole("button", { name: "Uninstall" })).toBeNull();
+		await act(async () => { resolveProbe({ data: { agent: { id: "codex", authStatus: "unauthorized" }, installed: true } }); });
+		await waitFor(() => expect(within(row).getByRole("button", { name: "Uninstall" })).toBeEnabled());
+	});
+
+	it("keeps displayed versions and maintenance requests scoped to the selected host", async () => {
+		mockInstalledOperations("npm");
+		hostMocks.connected = ["remote-1"];
+		const localGET = vi.mocked(apiClient.GET).getMockImplementation()!;
+		hostMocks.remoteGET.mockImplementation(async (path: string, options: unknown) => {
+			if (path === "/api/v1/agents/{agent}/update-advisory") return { data: {
+				agentId: "codex", status: "behind_latest", currentVersion: "9.4.0", latestVersion: "9.5.0", source: "homebrew",
+			} };
+			return (localGET as (path: string, options: unknown) => Promise<unknown>)(path, options);
+		});
+		hostMocks.remotePOST.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents/{agent}/install") return { data: { target: "codex", method: "homebrew", status: "installing", startedAt: "2026-10-07T00:00:00Z" } };
+			return { data: readyCatalog() };
+		});
+		try {
+			renderSection();
+			const localToggle = await screen.findByRole("button", { name: "Expand Codex options" });
+			await within(localToggle).findByText("v1.2.3");
+			await userEvent.click(screen.getByRole("button", { name: "Host" }));
+			await userEvent.click(screen.getByRole("menuitem", { name: "remote-1" }));
+			const toggle = await screen.findByRole("button", { name: "Expand Codex options" });
+			const row = toggle.closest('[data-agent="codex"]') as HTMLElement;
+			expect(await within(toggle).findByText("v9.4.0")).toBeInTheDocument();
+			expect(within(row).queryByText("v1.2.3")).toBeNull();
+			expect(within(row).getByText("v9.5.0 available")).toBeInTheDocument();
+			await userEvent.click(within(row).getByRole("button", { name: "Update" }));
+			expect(hostMocks.remotePOST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "homebrew", operation: "update", expectedVersion: "9.5.0" } });
+			expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+		} finally {
+			hostMocks.connected = [];
+			hostMocks.remoteGET.mockReset();
+			hostMocks.remotePOST.mockReset();
+		}
 	});
 
 	it("keeps the local view free of cloud logins", async () => {
@@ -452,8 +709,9 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.queryByText("Goose")).toBeNull();
 		const claudeRow = screen.getByText("Claude Code").closest('[data-agent="claude-code"]') as HTMLElement;
 		expect(within(claudeRow).getByText("Not connected")).toBeInTheDocument();
-		// One action: the cloud login, not a local one alongside it.
-		expect(within(claudeRow).getAllByRole("button")).toHaveLength(1);
+		// A disclosure and one cloud login action; no local install controls.
+		expect(within(claudeRow).getAllByRole("button")).toHaveLength(2);
+		expect(within(claudeRow).getByText("API version not reported")).toBeInTheDocument();
 		await user.click(within(claudeRow).getByRole("button", { name: "Login" }));
 		expect(within(claudeRow).getByTestId("cloud-harness-login")).toBeInTheDocument();
 		expect(within(claudeRow).queryByRole("button", { name: "Login" })).toBeNull();
@@ -463,6 +721,8 @@ describe("HarnessSettingsSection", () => {
 		const codexRow = screen.getByText("Codex").closest('[data-agent="codex"]') as HTMLElement;
 		expect(within(codexRow).getByText("Connected")).toBeInTheDocument();
 		expect(within(codexRow).queryByRole("button", { name: "Install" })).toBeNull();
+		expect(within(codexRow).queryByRole("button", { name: "Refresh login" })).toBeNull();
+		await user.click(within(codexRow).getByRole("button", { name: "Expand Codex options" }));
 		await user.click(within(codexRow).getByRole("button", { name: "Refresh login" }));
 		expect(within(codexRow).getByRole("button", { name: "Log in with ChatGPT" })).toBeInTheDocument();
 	});
@@ -516,7 +776,7 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.getByText("Goose")).toBeInTheDocument();
 	});
 
-	it("offers to refresh an existing local login", async () => {
+	it("refreshes local readiness in the background without a Refresh login button", async () => {
 		const authorized = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "authorized" })] };
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: authorized } as never;
@@ -529,7 +789,9 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 
 		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		expect(await within(row).findByRole("button", { name: "Refresh login" })).toBeEnabled();
+		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(within(row).queryByRole("button", { name: "Refresh login" })).toBeNull();
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/refresh");
 		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Authorized" })).toBeNull();
 	});
@@ -709,7 +971,8 @@ describe("HarnessSettingsSection", () => {
 			resolveRefresh({ data: refreshed });
 		});
 		await waitFor(() => {
-			expect(within(row).getByRole("button", { name: "Installed" })).toBeDisabled();
+			expect(within(row).getByText("Installed")).toBeInTheDocument();
+			expect(within(row).queryByRole("button", { name: "Install" })).toBeNull();
 		});
 	});
 
@@ -836,7 +1099,7 @@ describe("HarnessSettingsSection", () => {
 	}, 15_000);
 
 	it("completes MiMo Code login when the key is configured locally", async () => {
-		const initial = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "unknown" })] };
+		const initial = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "unauthorized" })] };
 		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
 		let probed = false;
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
@@ -1060,20 +1323,16 @@ describe("HarnessSettingsSection", () => {
 		await screen.findByText("Codex");
 		const codexRow = document.querySelector('[data-agent="codex"]');
 		expect(codexRow).not.toBeNull();
-		await waitFor(() => expect(codexRow).toHaveTextContent("Available via Homebrew"), { timeout: 10_000 });
-		await user.click(within(codexRow as HTMLElement).getByRole("button", { name: "Installation method" }));
-		await user.click(await screen.findByRole("menuitem", { name: "npm" }));
-		await user.click(within(codexRow as HTMLElement).getByRole("button", { name: "Install" }));
+		await user.click(await within(codexRow as HTMLElement).findByRole("button", { name: "Install" }));
+		expect(within(codexRow as HTMLElement).queryByRole("button", { name: "Installation method" })).toBeNull();
 
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
 			params: { path: { agent: "codex" } },
-			body: { method: "npm", operation: "install" },
+			body: { method: "homebrew", operation: "install" },
 		}));
 		await waitFor(() => expect(codexRow).toHaveTextContent("npm failed"));
 		expect(codexRow).toHaveTextContent("Retry");
-		await user.click(within(codexRow as HTMLElement).getByRole("button", { name: "Installation method" }));
-		await user.click(await screen.findByRole("menuitem", { name: "Homebrew" }));
-		await user.click(within(codexRow as HTMLElement).getByRole("button", { name: "Retry" }));
+		await user.click(within(codexRow as HTMLElement).getByRole("button", { name: "Retry install" }));
 		await waitFor(() => expect(apiClient.POST).toHaveBeenLastCalledWith("/api/v1/agents/{agent}/install", {
 			params: { path: { agent: "codex" } },
 			body: { method: "homebrew", operation: "install" },
@@ -1102,7 +1361,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
 
-		await waitFor(() => expect(row).toHaveTextContent("Available via npm"));
+		await within(row).findByRole("button", { name: "Install" });
 		expect(within(row).queryByRole("combobox", { name: "Installation method" })).not.toBeInTheDocument();
 		await user.click(within(row).getByRole("button", { name: "Install" }));
 
@@ -1183,7 +1442,7 @@ describe("HarnessSettingsSection", () => {
 		const user = userEvent.setup();
 		renderSection();
 		const row = (await screen.findByText("Cursor")).closest('[data-agent="cursor"]') as HTMLElement;
-		await waitFor(() => expect(row).toHaveTextContent("Available via Official"));
+		await within(row).findByRole("button", { name: "Install" });
 		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
 
 		await user.click(within(row).getByRole("button", { name: "Install" }));
@@ -1198,7 +1457,7 @@ describe("HarnessSettingsSection", () => {
 	it("shows the official Goose installer", async () => {
 		renderSection();
 		const row = (await screen.findByText("Goose")).closest('[data-agent="goose"]') as HTMLElement;
-		await waitFor(() => expect(row).toHaveTextContent("Available via Official"));
+		await within(row).findByRole("button", { name: "Install" });
 		expect(within(row).getByRole("button", { name: "Install" })).toBeInTheDocument();
 	});
 
@@ -1211,7 +1470,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		renderSection();
 		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
-		await waitFor(() => expect(row).toHaveTextContent("Available via Homebrew & npm"));
+		await within(row).findByRole("button", { name: "Install" });
 		expect(within(row).getByRole("button", { name: "Install" })).toBeEnabled();
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/probe", expect.anything());
 	});

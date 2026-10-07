@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
@@ -79,5 +79,41 @@ describe("agent readiness query", () => {
 		expect(mergeAgentReadiness({ agents: [claude, staleCodex] }, { agents: [freshCodex] })).toEqual({
 			agents: [claude, freshCodex],
 		});
+	});
+
+	it("does not let a previous enabled period complete a newer ensure", async () => {
+		const resolvers: Array<(value: unknown) => void> = [];
+		postMock.mockImplementation(() => new Promise((resolve) => resolvers.push(resolve)));
+		const queryClient = new QueryClient();
+		const { result, rerender, unmount } = renderHook(
+			({ enabled }) => useEnsureAgentReadiness({ enabled }),
+			{ initialProps: { enabled: true }, wrapper: wrapper(queryClient) },
+		);
+		expect(result.current).toBe(false);
+		rerender({ enabled: false });
+		rerender({ enabled: true });
+		const response = { data: { agents: [agentReadiness("codex")] } };
+		await act(async () => resolvers[0](response));
+		expect(result.current).toBe(false);
+		expect(queryClient.getQueryData(agentReadinessQueryKey)).toBeUndefined();
+		await act(async () => resolvers[1](response));
+		expect(result.current).toBe(true);
+		rerender({ enabled: false });
+		expect(result.current).toBe(false);
+		unmount();
+	});
+
+	it("retries failed startup readiness without reporting completion early", async () => {
+		vi.useFakeTimers();
+		try {
+			postMock.mockRejectedValueOnce(new Error("offline"));
+			const { result, unmount } = renderHook(() => useEnsureAgentReadiness({ retryOnError: true }), { wrapper: wrapper(new QueryClient()) });
+			await act(async () => { await Promise.resolve(); });
+			expect(result.current).toBe(false);
+			await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+			expect(postMock).toHaveBeenCalledTimes(2);
+			expect(result.current).toBe(true);
+			unmount();
+		} finally { vi.useRealTimers(); }
 	});
 });

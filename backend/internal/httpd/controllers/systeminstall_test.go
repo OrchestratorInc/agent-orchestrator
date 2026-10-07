@@ -16,20 +16,22 @@ import (
 )
 
 type fakeInstaller struct {
-	startJob      systeminstall.Job
-	startErr      error
-	statusJob     systeminstall.Job
-	statusErr     error
-	plans         []systeminstall.AgentPlan
-	plansErr      error
-	startCalls    int
-	lastTarget    systeminstall.Target
-	lastMethod    string
-	lastOperation systeminstall.AgentOperation
-	agentJobs     []systeminstall.Job
-	verifyJob     systeminstall.Job
-	verifyErr     error
-	advisory      systeminstall.UpdateAdvisory
+	startJob        systeminstall.Job
+	startErr        error
+	statusJob       systeminstall.Job
+	statusErr       error
+	plans           []systeminstall.AgentPlan
+	plansErr        error
+	startCalls      int
+	lastTarget      systeminstall.Target
+	lastMethod      string
+	lastOperation   systeminstall.AgentOperation
+	agentJobs       []systeminstall.Job
+	verifyJob       systeminstall.Job
+	verifyErr       error
+	advisory        systeminstall.UpdateAdvisory
+	refreshAdvisory bool
+	expectedVersion string
 }
 
 func (f *fakeInstaller) Start(_ context.Context, target systeminstall.Target) (systeminstall.Job, error) {
@@ -47,11 +49,14 @@ func (f *fakeInstaller) AgentPlans(context.Context) ([]systeminstall.AgentPlan, 
 	return f.plans, f.plansErr
 }
 
-func (f *fakeInstaller) StartAgentOperation(_ context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation) (systeminstall.Job, error) {
+func (f *fakeInstaller) StartAgentOperation(_ context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation, expectedVersion ...string) (systeminstall.Job, error) {
 	f.startCalls++
 	f.lastTarget = target
 	f.lastMethod = method
 	f.lastOperation = operation
+	if len(expectedVersion) > 0 {
+		f.expectedVersion = expectedVersion[0]
+	}
 	return f.startJob, f.startErr
 }
 
@@ -64,8 +69,9 @@ func (f *fakeInstaller) Verify(_ context.Context, target systeminstall.Target) (
 	return f.verifyJob, f.verifyErr
 }
 
-func (f *fakeInstaller) UpdateAdvisory(_ context.Context, target systeminstall.Target) (systeminstall.UpdateAdvisory, error) {
+func (f *fakeInstaller) UpdateAdvisory(_ context.Context, target systeminstall.Target, refresh ...bool) (systeminstall.UpdateAdvisory, error) {
 	f.lastTarget = target
+	f.refreshAdvisory = len(refresh) > 0 && refresh[0]
 	return f.advisory, nil
 }
 
@@ -94,6 +100,10 @@ func TestAgentInstallRoutes(t *testing.T) {
 	if status != http.StatusOK || !strings.Contains(string(body), `"status":"interrupted"`) {
 		t.Fatalf("GET /agents/install-jobs = %d, body=%s", status, body)
 	}
+	_, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/agents/codex/install", `{"method":"npm","operation":"update","expectedVersion":"1.3.0"}`)
+	if status != http.StatusAccepted || installer.expectedVersion != "1.3.0" {
+		t.Fatalf("expected version not forwarded: status=%d version=%q", status, installer.expectedVersion)
+	}
 	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/agents/codex/verify", "")
 	if status != http.StatusAccepted || !strings.Contains(string(body), `"status":"verifying"`) {
 		t.Fatalf("POST /agents/codex/verify = %d, body=%s", status, body)
@@ -114,6 +124,14 @@ func TestAgentUpdateAdvisoryRoute(t *testing.T) {
 		t.Fatalf("status=%d target=%q body=%s", status, installer.lastTarget, body)
 	}
 	installer.advisory = systeminstall.UpdateAdvisory{AgentID: "codex", Status: systeminstall.UpdateStatusUnknown, Reason: "lookup_failed"}
+	_, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/agents/codex/update-advisory?refresh=true", "")
+	if status != http.StatusOK || !installer.refreshAdvisory {
+		t.Fatalf("refresh not forwarded: status=%d refresh=%v", status, installer.refreshAdvisory)
+	}
+	_, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/agents/codex/update-advisory?refresh=maybe", "")
+	if status != http.StatusBadRequest {
+		t.Fatalf("invalid refresh status=%d", status)
+	}
 	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/agents/codex/update-advisory", "")
 	if status != http.StatusOK || !strings.Contains(string(body), `"reason":"lookup_failed"`) || strings.Contains(string(body), "/Users/") {
 		t.Fatalf("unknown advisory status=%d body=%s", status, body)

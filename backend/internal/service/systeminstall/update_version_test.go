@@ -14,6 +14,8 @@ func TestFindUpdateVersionAcceptsSupportedForms(t *testing.T) {
 	}{
 		{name: "two components", input: "tool v1.2\n", wantDisplay: "1.2", wantCore: [4]uint64{1, 2}, wantParts: 2},
 		{name: "three components", input: "tool 1.2.3", wantDisplay: "1.2.3", wantCore: [4]uint64{1, 2, 3}, wantParts: 3},
+		{name: "copilot sentence", input: "GitHub Copilot CLI 1.0.91.\nRun 'copilot update' to check for updates.", wantDisplay: "1.0.91", wantCore: [4]uint64{1, 0, 91}, wantParts: 3},
+		{name: "sentence at end", input: "CLI 1.2.3.", wantDisplay: "1.2.3", wantCore: [4]uint64{1, 2, 3}, wantParts: 3},
 		{name: "four components", input: "release=1.2.3.4", wantDisplay: "1.2.3.4", wantCore: [4]uint64{1, 2, 3, 4}, wantParts: 4},
 		{name: "prerelease and build", input: "cli 1.2.3-beta.2+build.7", wantDisplay: "1.2.3-beta.2+build.7", wantCore: [4]uint64{1, 2, 3}, wantParts: 3, wantPre: []string{"beta", "2"}, wantBuild: "build.7"},
 	}
@@ -41,6 +43,14 @@ func TestFindUpdateVersionAcceptsSupportedForms(t *testing.T) {
 	for _, input := range []string{"tool development", "1", "1.2.3.4.5", "1.2-beta..2"} {
 		if _, ok := parseUpdateVersion(input); ok {
 			t.Fatalf("parseUpdateVersion(%q) unexpectedly succeeded", input)
+		}
+	}
+}
+
+func TestFindUpdateVersionDoesNotSliceMalformedOrAmbiguousVersions(t *testing.T) {
+	for _, input := range []string{"CLI 1.2.3.4.5", "CLI 1.2.3..", "CLI 1.2.3.foo", "CLI 1.2-beta..2", "CLI 1.2.3.\nRuntime 4.5.6."} {
+		if got, ok := findUpdateVersion(input); ok {
+			t.Errorf("findUpdateVersion(%q) = %q, want unknown", input, got.display)
 		}
 	}
 }

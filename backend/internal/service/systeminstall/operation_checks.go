@@ -92,9 +92,10 @@ func officialChannelFits(kind officialSourceKind, layout string) bool {
 // installedBaseline is the harness binary as it was before an update, used to
 // confirm the update changed the copy sessions actually run.
 type installedBaseline struct {
-	path    string
-	version string
-	latest  string
+	path     string
+	version  string
+	latest   string
+	expected string
 }
 
 // confirmInstalledOwner refuses an update or uninstall through a method that
@@ -110,7 +111,14 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 		// install through this method still identifies it.
 		job, statusErr := s.Status(ctx, target)
 		if statusErr == nil && job.Status == StatusSucceeded && job.Method == plan.Method {
-			return nil, nil
+			version, _ := findUpdateVersion(job.Output)
+			baseline := &installedBaseline{version: version.display}
+			s.mu.Lock()
+			if advisory, ok := s.updateAdvisories[target]; ok && advisory.Status == UpdateStatusBehindLatest {
+				baseline.latest = advisory.LatestVersion
+			}
+			s.mu.Unlock()
+			return baseline, nil
 		}
 		return nil, fmt.Errorf("%w: AO could not confirm which %s installation is in use (%w); update or remove it manually", ErrInstallOwner, target, err)
 	}
@@ -154,15 +162,35 @@ func updateOutcome(baseline *installedBaseline, result VerifyResult) (failure, n
 	}
 	after, afterOK := findUpdateVersion(result.Output)
 	before, beforeOK := parseUpdateVersion(baseline.version)
-	if !afterOK || !beforeOK {
-		return "", note
+	if !afterOK {
+		return "the update finished, but AO could not verify the installed version", note
 	}
-	if comparison, versionsComparable := compareUpdateVersions(after, before); versionsComparable && comparison > 0 {
-		return "", strings.TrimSpace(fmt.Sprintf("Updated %s to %s. %s", before.display, after.display, note))
+	if baseline.expected != "" {
+		expected, ok := parseUpdateVersion(baseline.expected)
+		comparison, comparable := compareUpdateVersions(after, expected)
+		if !ok || !comparable || comparison < 0 {
+			return fmt.Sprintf("the update finished, but the installed version %s did not reach the requested version %s", after.display, baseline.expected), note
+		}
 	}
 	latest, latestOK := parseUpdateVersion(baseline.latest)
+	if baseline.latest != "" && !latestOK {
+		return "the update finished, but AO could not verify the target version", note
+	}
 	if comparison, versionsComparable := compareUpdateVersions(after, latest); latestOK && versionsComparable && comparison < 0 {
 		return fmt.Sprintf("the update finished, but %s still reports %s (latest is %s); it may have changed a different installation", result.ResolvedPath, after.display, latest.display), note
+	}
+	if _, comparable := compareUpdateVersions(after, latest); latestOK && !comparable {
+		return "the update finished, but the installed version does not match the expected release channel", note
+	}
+	if !beforeOK {
+		return "", strings.TrimSpace(fmt.Sprintf("Verified version %s. %s", after.display, note))
+	}
+	comparison, comparable := compareUpdateVersions(after, before)
+	if !comparable || comparison < 0 {
+		return "the update finished, but the installed version regressed or changed release channel", note
+	}
+	if comparison > 0 {
+		return "", strings.TrimSpace(fmt.Sprintf("Updated %s to %s. %s", before.display, after.display, note))
 	}
 	return "", strings.TrimSpace(fmt.Sprintf("Version unchanged at %s. %s", after.display, note))
 }

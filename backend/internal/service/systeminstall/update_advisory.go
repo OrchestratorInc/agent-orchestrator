@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -39,13 +41,14 @@ const (
 
 // UpdateAdvisory is the daemon's non-mutating comparison for one harness.
 type UpdateAdvisory struct {
-	AgentID        string              `json:"agentId"`
-	Status         UpdateStatus        `json:"status"`
-	CurrentVersion string              `json:"currentVersion,omitempty"`
-	LatestVersion  string              `json:"latestVersion,omitempty"`
-	Source         string              `json:"source,omitempty"`
-	Reason         UpdateUnknownReason `json:"reason,omitempty"`
-	CheckedAt      time.Time           `json:"checkedAt"`
+	AgentID           string              `json:"agentId"`
+	Status            UpdateStatus        `json:"status"`
+	CurrentVersion    string              `json:"currentVersion,omitempty"`
+	LatestVersion     string              `json:"latestVersion,omitempty"`
+	Source            string              `json:"source,omitempty"`
+	MaintenanceMethod string              `json:"maintenanceMethod,omitempty"`
+	Reason            UpdateUnknownReason `json:"reason,omitempty"`
+	CheckedAt         time.Time           `json:"checkedAt"`
 }
 
 type updateAdvisoryCall struct {
@@ -59,7 +62,7 @@ type updateAdvisoryCall struct {
 // package manager owns are compared with the vendor's release channel. A
 // harness with neither, and failed probes, remain unknown; they never
 // masquerade as up-to-date.
-func (s *Service) UpdateAdvisory(ctx context.Context, target Target) (UpdateAdvisory, error) {
+func (s *Service) UpdateAdvisory(ctx context.Context, target Target, refresh ...bool) (UpdateAdvisory, error) {
 	if !IsAgentTarget(target) {
 		return UpdateAdvisory{}, fmt.Errorf("systeminstall: unknown harness %q", target)
 	}
@@ -68,6 +71,12 @@ func (s *Service) UpdateAdvisory(ctx context.Context, target Target) (UpdateAdvi
 	}
 	now := time.Now().UTC()
 	s.mu.Lock()
+	if len(refresh) > 0 && refresh[0] {
+		delete(s.updateAdvisories, target)
+		// An explicit click needs evidence gathered after the click. An older
+		// in-flight read may finish for its callers, but may not cache over it.
+		delete(s.updateAdvisoryCalls, target)
+	}
 	cached, found := s.updateAdvisories[target]
 	if found {
 		ttl := time.Hour
@@ -171,6 +180,11 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		return advisory, nil
 	}
 	advisory.CurrentVersion = current.display
+	if source.Package != "" {
+		advisory.MaintenanceMethod = source.Method
+	} else if nativeMaintenanceMethod(target, verified, current) != "" {
+		advisory.MaintenanceMethod = "official-installer"
+	}
 	var latest string
 	if source.Package != "" {
 		advisory.Source = source.Method
@@ -228,4 +242,22 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		advisory.Reason = UpdateReasonChannelUnconfirmed
 	}
 	return advisory, nil
+}
+
+// A release lookup is not installation ownership. Only recognise the native
+// Claude install's resolved, versioned payload here; generic PATH binaries and
+// binaries inside package managers must not become maintenance candidates.
+func nativeMaintenanceMethod(target Target, verified VerifyResult, current updateVersion) string {
+	if target != TargetClaudeCode || packageLayout(verified.ResolvedPath) != "" {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(verified.ResolvedPath)
+	if err != nil {
+		return ""
+	}
+	path := strings.ReplaceAll(filepath.ToSlash(resolved), `\`, "/")
+	if strings.HasSuffix(path, "/.local/share/claude/versions/"+current.display) {
+		return "official-installer"
+	}
+	return ""
 }

@@ -138,7 +138,7 @@ func TestManagedVersionCheckerFallsBackWhenOutdatedResultIsEmpty(t *testing.T) {
 			plan: Plan{Method: "homebrew", Package: "codex", PackageCask: true},
 			responses: []managerCommandResponse{
 				{argv: []string{"brew", "outdated", "--json=v2", "--cask", "codex"}, output: `{"formulae":[],"casks":[]}`},
-				{argv: []string{"brew", "info", "--json=v2", "--cask", "codex"}, output: `{"formulae":[],"casks":[{"token":"codex","version":"1.3.0"}]}`},
+				{argv: []string{"brew", "info", "--json=v2", "--cask", "codex"}, output: `{"formulae":[],"casks":[{"token":"codex","name":["Codex"],"version":"1.3.0","installed":"1.3.0","outdated":false}]}`},
 			},
 		},
 		{
@@ -281,5 +281,12 @@ func managerHTTPResponse(status int, body string) *http.Response {
 		StatusCode: status,
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestHomebrewVersionMatchesCaskTokenNotDisplayName(t *testing.T) {
+	raw := `{"formulae":[],"casks":[{"token":"other","name":["codex"],"version":"9.9.9"},{"token":"codex","name":["Codex"],"version":"0.160.1"}]}`
+	if got := parseHomebrewVersion(raw, "codex", true, false); got != "0.160.1" {
+		t.Fatalf("version = %q", got)
 	}
 }

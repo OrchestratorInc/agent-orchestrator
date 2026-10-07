@@ -16,8 +16,8 @@ async function fetchAgentAuthPlans(hostId?: string): Promise<AgentAuthPlan[]> {
 	return data.plans;
 }
 
-export function useAgentAuthPlans(hostId?: string) {
-	return useQuery({ queryKey: agentAuthPlansQueryKeyForHost(hostId), queryFn: () => fetchAgentAuthPlans(hostId), staleTime: 60_000 });
+export function useAgentAuthPlans(hostId?: string, enabled = true) {
+	return useQuery({ queryKey: agentAuthPlansQueryKeyForHost(hostId), queryFn: () => fetchAgentAuthPlans(hostId), staleTime: 60_000, enabled });
 }
 
 export function useStartAgentAuth(hostId?: string) {

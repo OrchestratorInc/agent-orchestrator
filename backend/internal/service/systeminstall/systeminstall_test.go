@@ -1253,6 +1253,39 @@ func TestHarnessMaintenanceSeesSessionCreatedBeforeLaunchGateRelease(t *testing.
 	}
 }
 
+func TestUpdatePinsRequestedVersionEvenWithoutCachedAdvisory(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
+	s.commands = commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error { return nil })
+	probes := 0
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		probes++
+		version := "1.2.3"
+		if probes > 1 {
+			version = "1.2.4"
+		}
+		return VerifyResult{ResolvedPath: "/verified/codex", Output: "codex " + version}, nil
+	})
+	if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate, "1.3.0"); err != nil {
+		t.Fatal(err)
+	}
+	s.workers.Wait()
+	waitForStatus(t, s, TargetCodex, StatusFailed)
+	job, err := s.Status(context.Background(), TargetCodex)
+	if err != nil || !strings.Contains(job.Error, "requested version 1.3.0") {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+}
+
+func TestUpdateRejectsInvalidRequestedVersion(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	for _, operation := range []AgentOperation{AgentOperationUpdate, AgentOperationInstall} {
+		if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", operation, "not-a-version"); !errors.Is(err, ErrUpdateVersion) {
+			t.Fatalf("operation=%s err=%v", operation, err)
+		}
+	}
+}
+
 func TestHarnessMaintenanceAllowsTerminatedAndOtherHarnessSessions(t *testing.T) {
 	for _, tt := range []struct {
 		name     string

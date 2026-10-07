@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -17,12 +18,12 @@ import (
 // against the fixed systeminstall.Target allowlist.
 type Installer interface {
 	Start(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
-	StartAgentOperation(ctx context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation) (systeminstall.Job, error)
+	StartAgentOperation(ctx context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation, expectedVersion ...string) (systeminstall.Job, error)
 	Status(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
 	AgentPlans(ctx context.Context) ([]systeminstall.AgentPlan, error)
 	AgentJobs(ctx context.Context) ([]systeminstall.Job, error)
 	Verify(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
-	UpdateAdvisory(ctx context.Context, target systeminstall.Target) (systeminstall.UpdateAdvisory, error)
+	UpdateAdvisory(ctx context.Context, target systeminstall.Target, refresh ...bool) (systeminstall.UpdateAdvisory, error)
 }
 
 // SystemInstallController owns the system prerequisite and agent harness install routes.
@@ -51,7 +52,16 @@ func (c *SystemInstallController) updateAdvisory(w http.ResponseWriter, r *http.
 	if !ok {
 		return
 	}
-	advisory, err := c.Installer.UpdateAdvisory(r.Context(), target)
+	refresh := false
+	if raw := r.URL.Query().Get("refresh"); raw != "" {
+		var err error
+		refresh, err = strconv.ParseBool(raw)
+		if err != nil {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_QUERY", "refresh must be true or false", nil)
+			return
+		}
+	}
+	advisory, err := c.Installer.UpdateAdvisory(r.Context(), target, refresh)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -94,7 +104,7 @@ func (c *SystemInstallController) startAgent(w http.ResponseWriter, r *http.Requ
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_INSTALL_OPERATION", "operation must be install, reinstall, update, or uninstall", nil)
 		return
 	}
-	job, err := c.Installer.StartAgentOperation(r.Context(), target, request.Method, operation)
+	job, err := c.Installer.StartAgentOperation(r.Context(), target, request.Method, operation, request.ExpectedVersion)
 	if err != nil {
 		if writeAgentInstallError(w, r, err) {
 			return
@@ -140,6 +150,9 @@ func (c *SystemInstallController) verifyAgent(w http.ResponseWriter, r *http.Req
 
 func writeAgentInstallError(w http.ResponseWriter, r *http.Request, err error) bool {
 	switch {
+	case errors.Is(err, systeminstall.ErrUpdateVersion):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_UPDATE_VERSION", "expectedVersion must be a supported version and may only be used for updates", nil)
+		return true
 	case errors.Is(err, systeminstall.ErrInstallMethod):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INSTALL_METHOD_UNAVAILABLE", "the selected install method is unavailable", nil)
 		return true

@@ -318,6 +318,14 @@ paths:
         schema:
           description: Agent adapter identifier.
           type: string
+      - description: Re-probe the installed binary, ownership and latest release instead
+          of reusing cached advisory evidence.
+        in: query
+        name: refresh
+        schema:
+          description: Re-probe the installed binary, ownership and latest release
+            instead of reusing cached advisory evidence.
+          type: boolean
       responses:
         "200":
           content:
@@ -9712,6 +9720,8 @@ components:
           type: string
         latestVersion:
           type: string
+        maintenanceMethod:
+          type: string
         reason:
           type: string
         source:
@@ -14941,6 +14951,10 @@ components:
       type: object
     StartAgentInstallRequest:
       properties:
+        expectedVersion:
+          description: For updates, the available version explicitly approved by the
+            user. Used only as a verification floor, never as a command argument.
+          type: string
         method:
           description: Server-issued installation method id. Omit to use the recommended
             viable method.

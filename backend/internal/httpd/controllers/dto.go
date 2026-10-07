@@ -1944,11 +1944,17 @@ type ListAutomationRunsResponse struct {
 // AgentInstallResponse is shared by the agent harness start and status routes.
 type AgentInstallResponse = systeminstall.Job
 
+// AgentUpdateAdvisoryQuery allows an explicit user action to bypass cached version evidence.
+type AgentUpdateAdvisoryQuery struct {
+	Refresh bool `query:"refresh,omitempty" description:"Re-probe the installed binary, ownership and latest release instead of reusing cached advisory evidence."`
+}
+
 // StartAgentInstallRequest selects one method returned by the installer
 // catalog. The daemon still owns the argv behind the method id.
 type StartAgentInstallRequest struct {
-	Method    string                       `json:"method,omitempty" description:"Server-issued installation method id. Omit to use the recommended viable method."`
-	Operation systeminstall.AgentOperation `json:"operation,omitempty" enum:"install,reinstall,update,uninstall" description:"Requested operation. Defaults to install for older clients."`
+	Method          string                       `json:"method,omitempty" description:"Server-issued installation method id. Omit to use the recommended viable method."`
+	Operation       systeminstall.AgentOperation `json:"operation,omitempty" enum:"install,reinstall,update,uninstall" description:"Requested operation. Defaults to install for older clients."`
+	ExpectedVersion string                       `json:"expectedVersion,omitempty" description:"For updates, the available version explicitly approved by the user. Used only as a verification floor, never as a command argument."`
 }
 
 // AgentInstallJobsResponse hydrates Settings with the latest durable job for

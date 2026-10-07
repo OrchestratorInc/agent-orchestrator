@@ -112,8 +112,18 @@ func TestConfirmInstalledOwnerTrustsAOInstallWhenBinaryCannotRun(t *testing.T) {
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
 		return VerifyResult{}, errors.New("exec format error")
 	})
-	if _, err := s.confirmInstalledOwner(context.Background(), TargetCodex, Plan{Method: "npm", Package: "@openai/codex"}); err != nil {
+	s.updateAdvisories = map[Target]UpdateAdvisory{TargetCodex: {Status: UpdateStatusBehindLatest, LatestVersion: "1.3.0"}}
+	baseline, err := s.confirmInstalledOwner(context.Background(), TargetCodex, Plan{Method: "npm", Package: "@openai/codex"})
+	if err != nil {
 		t.Fatalf("recorded AO npm install should allow repair, got %v", err)
+	}
+	if baseline == nil || baseline.latest != "1.3.0" {
+		t.Fatalf("recovery baseline = %+v", baseline)
+	}
+	for _, output := range []string{"development", "codex 1.2.3"} {
+		if failure, _ := updateOutcome(baseline, VerifyResult{Output: output}); failure == "" {
+			t.Fatalf("recovery accepted %q", output)
+		}
 	}
 	if _, err := s.confirmInstalledOwner(context.Background(), TargetCodex, Plan{Method: "homebrew", Package: "codex", PackageCask: true}); !errors.Is(err, ErrInstallOwner) {
 		t.Fatalf("other method err = %v, want ErrInstallOwner", err)
@@ -158,5 +168,17 @@ func TestUninstallOutcomeFailsWhenSameBinaryStillRuns(t *testing.T) {
 	}
 	if got := uninstallOutcome(baseline, VerifyResult{ResolvedPath: "/opt/homebrew/bin/codex"}, nil); got != "" {
 		t.Fatalf("other copy = %q", got)
+	}
+}
+
+func TestUpdateOutcomeRejectsUnverifiedOrPartialUpdates(t *testing.T) {
+	for _, output := range []string{"codex 0.155.0", "codex development", "codex 0.149.0"} {
+		failure, _ := updateOutcome(&installedBaseline{version: "0.150.0", latest: "0.160.1"}, VerifyResult{Output: output})
+		if failure == "" {
+			t.Errorf("output %q incorrectly accepted below known target or without a version", output)
+		}
+	}
+	if failure, _ := updateOutcome(&installedBaseline{version: "unparseable", latest: "0.160.1"}, VerifyResult{Output: "codex 0.155.0"}); failure == "" {
+		t.Fatal("unparseable baseline bypassed known latest")
 	}
 }

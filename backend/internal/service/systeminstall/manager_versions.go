@@ -216,10 +216,10 @@ func parseHomebrewVersion(raw, pkg string, cask, outdated bool) string {
 			} `json:"versions"`
 		} `json:"formulae"`
 		Casks []struct {
-			Name           string `json:"name"`
-			Token          string `json:"token"`
-			CurrentVersion string `json:"current_version"`
-			Version        string `json:"version"`
+			Name           json.RawMessage `json:"name"`
+			Token          string          `json:"token"`
+			CurrentVersion string          `json:"current_version"`
+			Version        string          `json:"version"`
 		} `json:"casks"`
 	}
 	if json.Unmarshal([]byte(raw), &info) != nil {
@@ -227,7 +227,13 @@ func parseHomebrewVersion(raw, pkg string, cask, outdated bool) string {
 	}
 	if cask {
 		for _, entry := range info.Casks {
-			if entry.Name != pkg && entry.Token != pkg {
+			// info uses a display-name array; outdated historically uses the
+			// package token as a string in name. Never match a display name.
+			token := entry.Token
+			if token == "" && outdated {
+				_ = json.Unmarshal(entry.Name, &token)
+			}
+			if token != pkg {
 				continue
 			}
 			if outdated {
@@ -425,6 +431,7 @@ func runManagedVersionCommand(ctx context.Context, commands ports.CommandRunner,
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	output := &capturedOutput{max: maxOutputBytes}
-	err := commands.Run(probeCtx, argv, output, output)
+	// Manager warnings are not part of the JSON response.
+	err := commands.Run(probeCtx, argv, output, io.Discard)
 	return output.String(), err
 }

@@ -31,7 +31,7 @@ func TestUpdateAdvisoryComparesKnownNPMInstallationAndCachesResult(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if advisory.Status != UpdateStatusBehindLatest || advisory.CurrentVersion != "1.2.3" || advisory.LatestVersion != "1.3.0" || advisory.Source != "npm" || advisory.Reason != "" {
+		if advisory.Status != UpdateStatusBehindLatest || advisory.CurrentVersion != "1.2.3" || advisory.LatestVersion != "1.3.0" || advisory.Source != "npm" || advisory.MaintenanceMethod != "npm" || advisory.Reason != "" {
 			t.Fatalf("advisory = %+v", advisory)
 		}
 	}
@@ -40,6 +40,61 @@ func TestUpdateAdvisoryComparesKnownNPMInstallationAndCachesResult(t *testing.T)
 	}
 	if gotMethod != "npm" || gotPackage != "@openai/codex" || gotCask {
 		t.Fatalf("lookup = %s %s cask=%t", gotMethod, gotPackage, gotCask)
+	}
+}
+
+func TestOfficialReleaseOnlyExposesMaintenanceForRecognisedNativeInstall(t *testing.T) {
+	for _, tt := range []struct{ path, method string }{
+		{"/Users/me/.local/share/claude/versions/2.1.291", "official-installer"},
+		{"/opt/bin/claude", ""},
+		{"/Users/me/.local/share/claude/versions/2.1.290", ""},
+		{"/opt/homebrew/Cellar/claude/.local/share/claude/versions/2.1.291", ""},
+	} {
+		t.Run(tt.path, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tt.path)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, nil, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if tt.method != "" {
+				link := filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(path))), "bin", "claude")
+				if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(path, link); err != nil {
+					t.Skipf("symlink unavailable: %v", err)
+				}
+				path = link
+			}
+			s := newTestService("darwin", "bash")
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				return VerifyResult{ResolvedPath: path, Output: "Claude Code 2.1.291"}, nil
+			})
+			s.officialVersion = func(context.Context, Target) (string, error) { return "2.1.292", nil }
+			advisory, err := s.UpdateAdvisory(context.Background(), TargetClaudeCode)
+			if err != nil || advisory.MaintenanceMethod != tt.method {
+				t.Fatalf("advisory=%+v err=%v, want maintenance %q", advisory, err, tt.method)
+			}
+		})
+	}
+}
+
+func TestUpdateAdvisoryExplicitRefreshReprobesCurrentBinary(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	version := "1.2.3"
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/opt/bin/codex", Output: version}, nil
+	})
+	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
+	s.managedVersion = fixedManagedVersion("1.3.0", nil)
+	if result, err := s.UpdateAdvisory(context.Background(), TargetCodex); err != nil || result.Status != UpdateStatusBehindLatest {
+		t.Fatalf("initial=%+v err=%v", result, err)
+	}
+	version = "1.3.0"
+	if result, err := s.UpdateAdvisory(context.Background(), TargetCodex, true); err != nil || result.Status != UpdateStatusCurrent || result.CurrentVersion != "1.3.0" {
+		t.Fatalf("fresh=%+v err=%v", result, err)
 	}
 }
 

@@ -34,6 +34,8 @@ var (
 	ErrInstallActive = errors.New("systeminstall: harness install operation already active")
 	// ErrInstallOwner refuses to update or remove a binary the selected method did not install.
 	ErrInstallOwner = errors.New("systeminstall: installation owner not confirmed")
+	// ErrUpdateVersion rejects an invalid caller-supplied verification target.
+	ErrUpdateVersion = errors.New("systeminstall: invalid expected update version")
 )
 
 // Target is one of the fixed install targets AO knows how to install.
@@ -577,12 +579,21 @@ func (s *Service) StartAgent(ctx context.Context, target Target, method string) 
 
 // StartAgentOperation begins a harness operation using one server-owned
 // method ID and operation.
-func (s *Service) StartAgentOperation(ctx context.Context, target Target, method string, operation AgentOperation) (Job, error) {
+func (s *Service) StartAgentOperation(ctx context.Context, target Target, method string, operation AgentOperation, expectedVersion ...string) (Job, error) {
 	if err := ctx.Err(); err != nil {
 		return Job{}, err
 	}
 	if !operation.valid() {
 		return Job{}, fmt.Errorf("%w: unknown install operation %q", ErrInstallMethod, operation)
+	}
+	expected := ""
+	if len(expectedVersion) > 0 {
+		expected = expectedVersion[0]
+	}
+	if expected != "" {
+		if _, ok := parseUpdateVersion(expected); !ok || operation != AgentOperationUpdate {
+			return Job{}, ErrUpdateVersion
+		}
 	}
 	if !IsAgentTarget(target) {
 		return Job{}, fmt.Errorf("systeminstall: unknown harness target %q", target)
@@ -640,6 +651,14 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		if baseline, err = s.confirmInstalledOwner(ctx, target, plan); err != nil {
 			return Job{}, err
 		}
+	}
+	if operation == AgentOperationUpdate && expected != "" {
+		if baseline == nil {
+			baseline = &installedBaseline{}
+		}
+		// Pin the version the user approved into this job's immutable baseline.
+		// Concurrent advisory refreshes cannot erase this verification floor.
+		baseline.expected = expected
 	}
 
 	s.mu.Lock()

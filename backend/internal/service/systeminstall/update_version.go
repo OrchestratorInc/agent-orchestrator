@@ -25,7 +25,11 @@ func findUpdateVersion(text string) (updateVersion, bool) {
 	for _, span := range updateVersionPattern.FindAllStringIndex(text, -1) {
 		// Reject partial matches inside a longer version or identifier. A tag
 		// prefix such as rust-v is allowed, but malformed cores are never sliced.
-		if span[0] > 0 && versionTokenByte(text[span[0]-1], false) || span[1] < len(text) && versionTokenByte(text[span[1]], true) {
+		// Some CLIs print a sentence-ending period (Copilot: "CLI 1.0.91.").
+		// Only allow one period followed by whitespace/end, never .foo or .. .
+		sentenceEnd := span[1] < len(text) && text[span[1]] == '.' &&
+			(span[1]+1 == len(text) || strings.ContainsRune(" \t\r\n", rune(text[span[1]+1])))
+		if span[0] > 0 && versionTokenByte(text[span[0]-1], false) || span[1] < len(text) && versionTokenByte(text[span[1]], true) && !sentenceEnd {
 			continue
 		}
 		candidate, ok := parseUpdateVersion(text[span[0]:span[1]])

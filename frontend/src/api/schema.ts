@@ -3237,6 +3237,7 @@ export interface components {
             checkedAt: string;
             currentVersion?: string;
             latestVersion?: string;
+            maintenanceMethod?: string;
             reason?: string;
             source?: string;
             status: string;
@@ -5198,6 +5199,8 @@ export interface components {
             terminalInput?: string;
         };
         StartAgentInstallRequest: {
+            /** @description For updates, the available version explicitly approved by the user. Used only as a verification floor, never as a command argument. */
+            expectedVersion?: string;
             /** @description Server-issued installation method id. Omit to use the recommended viable method. */
             method?: string;
             /**
@@ -5972,7 +5975,10 @@ export interface operations {
     };
     getAgentUpdateAdvisory: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Re-probe the installed binary, ownership and latest release instead of reusing cached advisory evidence. */
+                refresh?: boolean;
+            };
             header?: never;
             path: {
                 /** @description Agent adapter identifier. */
