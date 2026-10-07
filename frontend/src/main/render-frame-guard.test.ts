@@ -15,6 +15,13 @@ describe("blocksRenderFrameNavigation", () => {
 		expect(blocksRenderFrameNavigation(page, "not a url")).toBe(true);
 	});
 
+	it("holds an artifact frame on its page too", () => {
+		const artifact = "http://127.0.0.1:3001/api/v1/sessions/p-1/artifact-files/report/index.html";
+		expect(blocksRenderFrameNavigation(artifact, `${artifact}#totals`)).toBe(false);
+		expect(blocksRenderFrameNavigation(artifact, "http://127.0.0.1:3001/api/v1/sessions/p-1/artifact-files/report/other.html")).toBe(true);
+		expect(blocksRenderFrameNavigation(artifact, "https://phish.example/login")).toBe(true);
+	});
+
 	it("leaves every other frame alone", () => {
 		expect(blocksRenderFrameNavigation("https://docs.example/", "https://elsewhere.example/")).toBe(false);
 	});
