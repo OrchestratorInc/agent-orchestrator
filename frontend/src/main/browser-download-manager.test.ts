@@ -45,8 +45,28 @@ function setup() {
 		sessionOn,
 		showItemInFolder,
 		trashItem,
-		start: (item: FakeDownloadItem) => session.emit("will-download", {}, item),
+		start: (item: FakeDownloadItem) => startApproved(manager, session, item),
 	};
+}
+
+// Requests a download the way Chromium does, then allows it the way the user
+// does from the Downloads list. Returns the first (blocked) request's event.
+function startApproved(
+	manager: ReturnType<typeof createBrowserDownloadManager>,
+	session: EventEmitter,
+	item: FakeDownloadItem,
+) {
+	const event = { preventDefault: vi.fn() };
+	const webContents = {
+		isDestroyed: () => false,
+		downloadURL: vi.fn(() => {
+			session.emit("will-download", { preventDefault: vi.fn() }, item, webContents);
+		}),
+	};
+	session.emit("will-download", event, item, webContents);
+	const blocked = manager.list().downloads.find((download) => download.status === "blocked");
+	if (blocked) void manager.action({ id: blocked.id, action: "allow" });
+	return { event, webContents };
 }
 
 class FakeDownloadItem extends EventEmitter {
@@ -58,7 +78,10 @@ class FakeDownloadItem extends EventEmitter {
 	pause = vi.fn(() => { this.paused = true; });
 	resume = vi.fn(() => { this.paused = false; });
 	cancel = vi.fn();
+	url = "https://downloads.example.test/files/report.txt";
 	getFilename = () => "report.txt";
+	getURL = () => this.url;
+	getURLChain = () => [this.url];
 	getReceivedBytes = () => this.receivedBytes;
 	getTotalBytes = () => this.totalBytes;
 	isPaused = () => this.paused;
@@ -82,7 +105,7 @@ describe("browser download manager", () => {
 		manager.attach(session as never);
 		const item = new FakeDownloadItem();
 
-		expect(() => session.emit("will-download", {}, item)).not.toThrow();
+		expect(() => startApproved(manager, session, item)).not.toThrow();
 		expect(item.cancel).toHaveBeenCalledOnce();
 		expect(manager.list()).toEqual({
 			downloads: [],
@@ -90,6 +113,93 @@ describe("browser download manager", () => {
 		});
 		expect(notify).toHaveBeenCalledWith(manager.list());
 		expect(JSON.stringify(manager.list())).not.toContain(blockingFile);
+	});
+
+	it("blocks a download nobody approved without saving anything", async () => {
+		const test = setup();
+		const item = new FakeDownloadItem();
+		const event = { preventDefault: vi.fn() };
+
+		test.session.emit("will-download", event, item, { isDestroyed: () => false, downloadURL: vi.fn() });
+
+		expect(event.preventDefault).toHaveBeenCalledOnce();
+		expect(item.setSavePath).not.toHaveBeenCalled();
+		expect(existsSync(test.downloadsDirectory)).toBe(false);
+		expect(existsSync(test.historyPath)).toBe(false);
+		expect(test.manager.list().downloads).toEqual([expect.objectContaining({
+			id: "download-1",
+			fileName: "report.txt",
+			source: "downloads.example.test",
+			status: "blocked",
+			active: false,
+		})]);
+		expect(JSON.stringify(test.manager.list())).not.toContain(item.url);
+
+		// The same link opened again stays one blocked entry.
+		test.session.emit("will-download", event, item, { isDestroyed: () => false, downloadURL: vi.fn() });
+		expect(test.manager.list().downloads).toHaveLength(1);
+
+		await test.manager.action({ id: "download-1", action: "remove" });
+		expect(test.manager.list().downloads).toEqual([]);
+		expect(test.trashItem).not.toHaveBeenCalled();
+		await expect(test.manager.action({ id: "download-1", action: "allow" })).rejects.toThrow("Download not found");
+	});
+
+	it("starts a blocked download only after the user allows it, and only once", () => {
+		const test = setup();
+		const item = new FakeDownloadItem();
+
+		const { event, webContents } = test.start(item);
+
+		expect(event.preventDefault).toHaveBeenCalledOnce();
+		expect(webContents.downloadURL).toHaveBeenCalledWith(item.url);
+		expect(item.setSavePath).toHaveBeenCalledWith(path.join(test.downloadsDirectory, "report.txt"));
+		expect(test.manager.list().downloads).toEqual([expect.objectContaining({
+			id: "download-1",
+			source: "downloads.example.test",
+			status: "progressing",
+		})]);
+
+		// The approval does not carry over to a later request for the same URL.
+		const repeat = { preventDefault: vi.fn() };
+		test.session.emit("will-download", repeat, new FakeDownloadItem(), webContents);
+		expect(repeat.preventDefault).toHaveBeenCalledOnce();
+		expect(test.manager.list().downloads.map((download) => download.status)).toEqual(["blocked", "progressing"]);
+	});
+
+	it("matches an approved download that was redirected, and expires stale approvals", async () => {
+		const root = mkdtempSync(path.join(os.tmpdir(), "ao-browser-downloads-"));
+		temporaryDirectories.push(root);
+		let now = 1_000;
+		const manager = createBrowserDownloadManager({
+			downloadsDirectory: path.join(root, "Downloads"),
+			historyPath: path.join(root, "data", "browser-downloads.json"),
+			shell: { openPath: vi.fn(async () => ""), showItemInFolder: vi.fn(), trashItem: vi.fn(async () => undefined) },
+			notify: vi.fn(),
+			now: () => now,
+			createId: () => "download-1",
+		});
+		const session = Object.assign(new EventEmitter(), { downloadURL: vi.fn() });
+		manager.attach(session as never);
+		const item = new FakeDownloadItem();
+		item.getURLChain = () => [item.url, "https://cdn.example.test/signed"];
+		item.getURL = () => "https://cdn.example.test/signed";
+
+		// The tab that requested it is gone, so the session requests it again.
+		session.emit("will-download", { preventDefault: vi.fn() }, item, { isDestroyed: () => true, downloadURL: vi.fn() });
+		await manager.action({ id: "download-1", action: "allow" });
+		expect(session.downloadURL).toHaveBeenCalledWith(item.url);
+
+		now += 61_000;
+		const late = { preventDefault: vi.fn() };
+		session.emit("will-download", late, item);
+		expect(late.preventDefault).toHaveBeenCalledOnce();
+		expect(item.setSavePath).not.toHaveBeenCalled();
+
+		await manager.action({ id: "download-1", action: "allow" });
+		session.emit("will-download", { preventDefault: vi.fn() }, item);
+		expect(item.setSavePath).toHaveBeenCalledOnce();
+		expect(manager.list().downloads[0]).toMatchObject({ id: "download-1", status: "progressing" });
 	});
 
 	it("tracks progress, supports controls, and reveals a completed system download", async () => {
@@ -189,11 +299,11 @@ describe("browser download manager", () => {
 			createId: () => "download-2",
 		});
 		replacement.attach(first.session as never);
-		first.start(new FakeDownloadItem());
+		startApproved(replacement, first.session, new FakeDownloadItem());
 
 		expect(first.manager.list().downloads).toEqual([]);
-		expect(replacement.list().downloads[0]?.id).toBe("download-2");
-		expect(replacementNotify).toHaveBeenCalledOnce();
+		expect(replacement.list().downloads[0]).toMatchObject({ id: "download-2", status: "progressing" });
+		expect(replacementNotify).toHaveBeenCalled();
 	});
 
 	it("detaches active item listeners when disposed", () => {

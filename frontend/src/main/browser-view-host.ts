@@ -327,6 +327,7 @@ type BrowserWebContents = Pick<
     Session,
     | "on"
     | "removeListener"
+    | "downloadURL"
     | "setPermissionCheckHandler"
     | "setPermissionRequestHandler"
     | "webRequest"
