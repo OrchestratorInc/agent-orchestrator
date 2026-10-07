@@ -18,8 +18,9 @@ ao render "$TMPDIR/turns-by-day.html" --title "Turns by day" --height 420
   Local paths and relative URLs do not resolve; embed images as `data:` URIs.
 - Write the file outside the repository (for example under `$TMPDIR`) so it does
   not appear in the diff. AO stores its own copy.
-- `--height` is the first-paint frame height (80-2000). The frame then fits the
-  page's real height.
+- AO measures the page when you publish it, so the frame opens at the right
+  height. `--height` (80-2000) is used only when the desktop app is not running.
+  The frame then fits the page's real height.
 - Chat sessions only. In a terminal session, open the file with `ao preview`.
 - Do not use a built-in visualize skill, for example the Codex visualize skill, or a
   `visualize{...}` line. AO does not show them. Only `ao render` shows a page in the thread.
