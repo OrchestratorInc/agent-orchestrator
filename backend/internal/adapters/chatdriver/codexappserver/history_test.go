@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -437,13 +438,15 @@ func TestThreadRenamedNotificationReportsAClearedName(t *testing.T) {
 func TestConversationAdvertisesTheHistoryCapabilities(t *testing.T) {
 	caps := capabilities()
 	for _, want := range []ports.ChatCapability{
-		ports.ChatCapabilityRollback,
 		ports.ChatCapabilityFork,
 		ports.ChatCapabilityRename,
 	} {
 		if !caps.Has(want) {
 			t.Errorf("capability %q not advertised", want)
 		}
+	}
+	if caps.Has(ports.ChatCapabilityRollback) != codexproto.Declares("thread/rollback") {
+		t.Error("rollback capability disagrees with the generated provider protocol")
 	}
 }
 
