@@ -1445,6 +1445,12 @@ func TestVendorInstallerUpdateUsesHarnessSelfUpdateCommand(t *testing.T) {
 		TargetOMP:        {"omp", "update"},
 		TargetAutohand:   {"autohand", "update"},
 		TargetCursor:     {"cursor-agent", "update"},
+		TargetAmp:        {"amp", "update", "--porcelain"},
+		TargetGrok:       {"grok", "update"},
+		TargetKimi:       {"kimi", "upgrade"},
+		TargetDroid:      {"droid", "update"},
+		TargetQwen:       {"qwen", "update"},
+		TargetFX:         {"fx", "upgrade"},
 	} {
 		plan, err := planner.resolveAgentMethod(target, "official-installer", AgentOperationUpdate)
 		if err != nil {
@@ -1454,8 +1460,8 @@ func TestVendorInstallerUpdateUsesHarnessSelfUpdateCommand(t *testing.T) {
 			t.Fatalf("%s update = %v script=%v, want %v", target, plan.Command, plan.Script, want)
 		}
 	}
-	if _, err := planner.resolveAgentMethod(TargetGrok, "official-installer", AgentOperationUpdate); !errors.Is(err, ErrInstallMethod) {
-		t.Fatalf("Grok update error = %v, want ErrInstallMethod for a vendor without a self-update command", err)
+	if _, err := planner.resolveAgentMethod(TargetMuse, "official-installer", AgentOperationUpdate); !errors.Is(err, ErrInstallMethod) {
+		t.Fatalf("Muse update error = %v, want ErrInstallMethod for a vendor without a self-update command", err)
 	}
 }
 
@@ -1479,5 +1485,25 @@ func TestOpenCodeVendorUpdatePinsAdvisoryRelease(t *testing.T) {
 	waitForStatus(t, s, TargetOpencode, StatusSucceeded)
 	if want := []string{"opencode", "upgrade", "1.18.35", "--method", "curl"}; !slices.Equal(ran, want) {
 		t.Fatalf("ran %v, want %v", ran, want)
+	}
+}
+
+func TestAiderUpdatesThroughUVThatItsInstallerUses(t *testing.T) {
+	s := newTestService("darwin", "sh", "uv")
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.resolveAgentMethod(TargetAider, "uv", AgentOperationUpdate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"uv", "tool", "upgrade", "aider-chat"}; !slices.Equal(plan.Command, want) {
+		t.Fatalf("Aider update = %v, want %v", plan.Command, want)
+	}
+	// The installer's binary lives in uv's tool layout, which the official
+	// method can never own; uv is the method that can update it.
+	if s.methodOwnsBinary(context.Background(), Plan{Method: "official-installer"}, "/Users/test/.local/share/uv/tools/aider-chat/bin/aider") {
+		t.Fatal("official installer claimed Aider's uv-managed binary")
 	}
 }

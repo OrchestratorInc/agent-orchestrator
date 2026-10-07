@@ -93,8 +93,10 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		}
 	case TargetCursor:
 		plans = []Plan{s.officialByOS(target, "https://cursor.com/install", "bash", "https://cursor.com/install?win32=true", agentDocumentationURLs[target])}
+	// Aider's installer runs `uv tool install aider-chat`, so uv owns the binary
+	// it leaves behind; listing uv lets updates and removals go through it.
 	case TargetAider:
-		plans = []Plan{s.officialByOS(target, "https://aider.chat/install.sh", "sh", "https://aider.chat/install.ps1", agentDocumentationURLs[target])}
+		plans = []Plan{s.officialByOS(target, "https://aider.chat/install.sh", "sh", "https://aider.chat/install.ps1", agentDocumentationURLs[target]), s.planUV(target, "aider-chat")}
 	case TargetGrok:
 		plans = []Plan{s.officialByOS(target, "https://x.ai/cli/install.sh", "bash", "https://x.ai/cli/install.ps1", agentDocumentationURLs[target])}
 	case TargetKimi:
@@ -401,7 +403,8 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 // when the vendor installer, not a package manager, owns the running binary.
 // Each updates the stable channel without a terminal: Kimchi's "self" leaves
 // its extensions alone and --force skips its confirmation prompt, and
-// OpenCode is told the install method AO already proved.
+// OpenCode is told the install method AO already proved. Amp's --porcelain
+// prints a one-line result instead of interactive progress.
 var vendorUpdateCommands = map[Target][]string{
 	TargetClaudeCode: {"claude", "update"},
 	TargetCodex:      {"codex", "update"},
@@ -411,6 +414,12 @@ var vendorUpdateCommands = map[Target][]string{
 	TargetOMP:        {"omp", "update"},
 	TargetAutohand:   {"autohand", "update"},
 	TargetCursor:     {"cursor-agent", "update"},
+	TargetAmp:        {"amp", "update", "--porcelain"},
+	TargetGrok:       {"grok", "update"},
+	TargetKimi:       {"kimi", "upgrade"},
+	TargetDroid:      {"droid", "update"},
+	TargetQwen:       {"qwen", "update"},
+	TargetFX:         {"fx", "upgrade"},
 }
 
 func packageWithoutLatest(pkg string) string {
