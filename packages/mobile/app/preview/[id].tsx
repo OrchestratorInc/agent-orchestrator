@@ -32,6 +32,7 @@ function SessionPreviewContent() {
 	const styles = useThemedStyles(makeStyles);
 	const web = useRef<WebView>(null);
 	const userPickedTab = useRef(false);
+	const defaultDecided = useRef(false);
 	const [active, setActive] = useState<"browser" | "app">("browser");
 	const [loaded, setLoaded] = useState<{ config: NonNullable<typeof config>; id: string; value: Awaited<ReturnType<typeof getPreview>> } | null>(null);
 	const preview = loaded?.id === sessionID ? previewForConfig(loaded, config, routeHostId) : null;
@@ -52,7 +53,10 @@ function SessionPreviewContent() {
 			const value = await getPreview(config, sessionID, previewUrl);
 			if (currentConfig.current === config && currentRoute.current === route) {
 				setLoaded({ config, id: sessionID, value });
-				if (value && !userPickedTab.current) setActive("app");
+				if (!defaultDecided.current) {
+					defaultDecided.current = true;
+					if (value && !userPickedTab.current) setActive("app");
+				}
 				setPreviewError(undefined);
 			}
 		} catch (cause) {
@@ -62,6 +66,7 @@ function SessionPreviewContent() {
 
 	useEffect(() => {
 		userPickedTab.current = false;
+		defaultDecided.current = false;
 		setActive("browser");
 	}, [sessionID]);
 
