@@ -223,3 +223,55 @@ func TestInlineLocalImagesEnforcesSizeLimits(t *testing.T) {
 		})
 	}
 }
+
+// stubOpenRenderImage routes inlineLocalImages' reads through open.
+func stubOpenRenderImage(t *testing.T, open func(string) (*os.File, error)) {
+	t.Helper()
+	original := openRenderImage
+	openRenderImage = open
+	t.Cleanup(func() { openRenderImage = original })
+}
+
+func TestInlineLocalImagesRefusesAnImageThatGrowsAfterTheStat(t *testing.T) {
+	png := writeImage(t, t.TempDir(), "grows.png", pngSignature)
+	stubOpenRenderImage(t, func(name string) (*os.File, error) {
+		if err := os.Truncate(name, 200<<20); err != nil {
+			t.Fatal(err)
+		}
+		return os.Open(name)
+	})
+
+	_, _, err := inlineLocalImages(`<img src="` + png + `">`)
+	if want := png + " is 10.0 MiB; each local image must be at most 10.0 MiB."; err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+}
+
+func TestInlineLocalImagesReportsASymlinkToANonImageAsMissing(t *testing.T) {
+	dir := t.TempDir()
+	secret := writeImage(t, dir, "secret.txt", "API_KEY=abc123")
+	link := filepath.Join(dir, "shot.png")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	opens := 0
+	stubOpenRenderImage(t, func(name string) (*os.File, error) {
+		opens++
+		return os.Open(name)
+	})
+
+	html := `<img src="` + link + `">`
+	got, missing, err := inlineLocalImages(html)
+	if err != nil || got != html || !slices.Equal(missing, []string{link}) || opens != 1 {
+		t.Fatalf("err=%v opens=%d missing=%q page=%s", err, opens, missing, got)
+	}
+}
+
+func TestDataURIPrefixFallsBackToOctetStream(t *testing.T) {
+	if got := dataURIPrefix("/a.PNG"); got != "data:image/png;base64," {
+		t.Fatalf("png = %q", got)
+	}
+	if got := dataURIPrefix("/a.tiff"); got != "data:application/octet-stream;base64," {
+		t.Fatalf("unknown = %q", got)
+	}
+}

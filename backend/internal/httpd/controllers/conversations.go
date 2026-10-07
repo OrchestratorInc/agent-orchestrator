@@ -24,7 +24,10 @@ import (
 
 // Native chat images are sent to the provider and retained in conversation
 // history. Workspace file attachments use separate, larger spawn limits. The
-// body limit also fits a 25 MiB render page as a JSON string.
+// body limit also fits a 25 MiB render page as a JSON string, but only because
+// the page's HTML source is capped at 1 MiB: json.Marshal writes each <, > and
+// & as a 6-byte escape, so the source can grow sixfold. Inlined images are
+// base64 and do not grow.
 const (
 	maxConversationImageBytes  = 10 << 20
 	maxConversationImagesBytes = 25 << 20

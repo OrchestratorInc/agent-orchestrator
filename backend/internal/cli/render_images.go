@@ -105,6 +105,12 @@ type renderImageError string
 
 func (e renderImageError) Error() string { return string(e) }
 
+// missingImagesError refuses a page that names images nobody can read.
+func missingImagesError(missing []string) error {
+	return renderImageError("These local images could not be read: " + strings.Join(missing, ", ") +
+		". Use absolute paths to existing image files, or remove them.")
+}
+
 func imageTooLarge(path string, size int) error {
 	return renderImageError(fmt.Sprintf("%s is %s; each local image must be at most %s.",
 		path, formatMiB(size), formatMiB(maxRenderImageBytes)))
@@ -116,7 +122,11 @@ func pageTooLarge(size int) error {
 }
 
 func dataURIPrefix(path string) string {
-	return "data:" + imageMIMETypes[strings.ToLower(path[strings.LastIndexByte(path, '.')+1:])] + ";base64,"
+	mime, ok := imageMIMETypes[strings.ToLower(path[strings.LastIndexByte(path, '.')+1:])]
+	if !ok {
+		mime = "application/octet-stream"
+	}
+	return "data:" + mime + ";base64,"
 }
 
 // inlineLocalImages replaces every absolute local image reference with a data URI.

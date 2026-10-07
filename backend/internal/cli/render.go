@@ -132,8 +132,7 @@ func (c *commandContext) publishRender(ctx context.Context, out io.Writer, file,
 		return usageError{err}
 	}
 	if len(missing) > 0 {
-		return usageError{renderImageError("These local images could not be read: " + strings.Join(missing, ", ") +
-			". Use absolute paths to existing image files, or remove them.")}
+		return usageError{missingImagesError(missing)}
 	}
 	var resp renderAPIResponse
 	path := "sessions/" + url.PathEscape(sessionID) + "/renders"
