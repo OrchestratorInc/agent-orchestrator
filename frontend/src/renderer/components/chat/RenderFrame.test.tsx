@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiBaseUrl } from "../../lib/api-client";
+import { useUiStore } from "../../stores/ui-store";
 import type { ConversationActivity } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 import { ActivityRow } from "./ChatTimelineItems";
@@ -236,6 +237,9 @@ describe("render activity", () => {
 			expect(within(dialog).getByRole("button", { name })).toBeInTheDocument();
 		}
 		expect(within(dialog).getByRole("button", { name: "View source" })).toHaveAttribute("aria-pressed", "false");
+		// Focus starts on the dialog itself, so no action's tooltip opens with it.
+		expect(document.activeElement).toBe(dialog);
+		expect(screen.queryByRole("tooltip")).toBeNull();
 	});
 
 	it("swaps the page for its source, as plain text, and back", async () => {
@@ -248,7 +252,7 @@ describe("render activity", () => {
 			expect(source.textContent).toBe("<p>chart</p>\n<script>draw()</script>");
 			expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/proj-1/renders/r1?source=1", expect.anything());
 			expect(screen.getAllByTitle("Turns by day")).toHaveLength(1);
-			const toggle = within(dialog).getByRole("button", { name: "View page" });
+			const toggle = within(dialog).getByRole("button", { name: "View source" });
 			expect(toggle).toHaveAttribute("aria-pressed", "true");
 			await user.click(toggle);
 			expect(screen.getAllByTitle("Turns by day")).toHaveLength(2);
@@ -292,6 +296,30 @@ describe("render activity", () => {
 		} finally {
 			click.mockRestore();
 			Object.assign(URL, original);
+			fetch.mockRestore();
+		}
+	});
+
+	it("says so when the page cannot be saved, and takes one save at a time", async () => {
+		let respond!: (response: Response) => void;
+		const fetch = vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise((resolve) => (respond = resolve)));
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+		useUiStore.getState().clearGlobalToast();
+		try {
+			const { user, dialog } = await expand();
+			const save = within(dialog).getByRole("button", { name: "Save page" });
+			await user.click(save);
+			expect(save).toBeDisabled();
+			await act(async () => respond(new Response("{}", { status: 500 })));
+			await waitFor(() => expect(save).toBeEnabled());
+			expect(fetch).toHaveBeenCalledTimes(1);
+			expect(useUiStore.getState().globalToasts).toEqual([
+				expect.objectContaining({ title: "Could not save the page.", tone: "error" }),
+			]);
+			expect(logged).toHaveBeenCalledWith("save render", expect.any(Error));
+		} finally {
+			useUiStore.getState().clearGlobalToast();
+			logged.mockRestore();
 			fetch.mockRestore();
 		}
 	});

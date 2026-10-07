@@ -16,6 +16,7 @@ import {
 	type RenderTheme,
 } from "../../lib/render-frame";
 import { cn } from "../../lib/utils";
+import { useUiStore } from "../../stores/ui-store";
 import type { RenderRef } from "../../types/conversation";
 import { Button, type ButtonProps } from "../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
@@ -187,6 +188,7 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 	const remoteHost = useChatRemoteHost();
 	const [expanded, setExpanded] = useState(false);
 	const [showSource, setShowSource] = useState(false);
+	const [saving, setSaving] = useState(false);
 	// The local daemon has no copy of a remote host's render, and the remote
 	// proxy URL must not reach the page: its path carries the proxy's capability
 	// token, which the page could read from its own location.
@@ -197,7 +199,15 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 			</p>
 		);
 	}
-	const sourceLabel = showSource ? t("chat.render.viewPage") : t("chat.render.viewSource");
+	const save = () => {
+		setSaving(true);
+		saveRender(render)
+			.catch((error: unknown) => {
+				console.error("save render", error);
+				useUiStore.getState().showGlobalToast(t("chat.render.saveError"), undefined, "error");
+			})
+			.finally(() => setSaving(false));
+	};
 	return (
 		<div className="group/render relative min-w-0">
 			<RenderDocument render={render} displayMode="inline" />
@@ -214,13 +224,18 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 			<Dialog open={expanded} onOpenChange={setExpanded}>
 				<DialogContent
 					aria-describedby={undefined}
-					className="z-overlay flex h-[calc(100svh-6rem)] w-[calc(100vw-6rem)] max-w-none flex-col gap-2 p-2"
+					className="z-overlay flex h-[calc(100svh-6rem)] w-[calc(100vw-6rem)] max-w-none flex-col gap-2 p-2 outline-none"
+					// Focus the dialog, not its first action: a focused action opens its tooltip.
+					onOpenAutoFocus={(event) => {
+						event.preventDefault();
+						(event.currentTarget as HTMLElement).focus();
+					}}
 				>
 					{/* pe-9 keeps the actions clear of the dialog's own close button. */}
 					<div className="flex h-8 shrink-0 items-center gap-1 ps-2 pe-9">
 						<DialogTitle className="min-w-0 flex-1 truncate text-subtitle">{render.title}</DialogTitle>
 						<RenderAction
-							label={sourceLabel}
+							label={t("chat.render.viewSource")}
 							aria-pressed={showSource}
 							className="aria-pressed:bg-muted"
 							onClick={() => setShowSource((current) => !current)}
@@ -229,7 +244,8 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 						</RenderAction>
 						<RenderAction
 							label={t("chat.render.save")}
-							onClick={() => void saveRender(render).catch((error: unknown) => console.error("save render", error))}
+							disabled={saving}
+							onClick={save}
 						>
 							<Download className="size-3.5" />
 						</RenderAction>
