@@ -1507,3 +1507,22 @@ func TestAiderUpdatesThroughUVThatItsInstallerUses(t *testing.T) {
 		t.Fatal("official installer claimed Aider's uv-managed binary")
 	}
 }
+
+func TestKimiListsHomebrewFormulaOnMacOS(t *testing.T) {
+	s := newTestService("darwin", "bash", "brew")
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans := planner.agentMethodPlans(TargetKimi, AgentOperationInstall)
+	if len(plans) != 2 || plans[0].Method != "official-installer" || plans[1].Method != "homebrew" || plans[1].Package != "kimi-code" || plans[1].PackageCask {
+		t.Fatalf("Kimi plans = %+v, want official installer then the kimi-code formula", plans)
+	}
+	update, err := planner.resolveAgentMethod(TargetKimi, "homebrew", AgentOperationUpdate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"brew", "upgrade", "kimi-code"}; !slices.Equal(update.Command, want) {
+		t.Fatalf("Kimi brew update = %v, want %v", update.Command, want)
+	}
+}
