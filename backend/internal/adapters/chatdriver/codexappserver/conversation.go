@@ -51,6 +51,7 @@ type conversation struct {
 	threadID        string
 	historyParentID string
 	providerScopeID string
+	readOnly        bool
 	events          chan ports.ChatEvent
 	// Effective defaults returned when Codex opened or resumed this thread.
 	threadModel, threadEffort string
@@ -90,6 +91,7 @@ type conversation struct {
 }
 
 var _ ports.ChatConversation = (*conversation)(nil)
+var _ ports.ChatProviderHibernator = (*conversation)(nil)
 
 // Asserted here so a refactor cannot silently drop model listing: the service
 // feature-detects this interface, and a missed method would just mean "no models"
@@ -160,6 +162,7 @@ func (c *conversation) pump() {
 		close(c.events)
 	}()
 	retries := make(map[string]ports.ChatEvent)
+	citations := newCitationFormatter()
 
 	for n := range c.conn.notifs() {
 		// Before normalizing, because a token-usage report is the only place the
@@ -172,6 +175,7 @@ func (c *conversation) pump() {
 			ThreadID string `json:"threadId"`
 		}
 		_ = json.Unmarshal(n.Params, &scope)
+		citations.observeNotification(n, c.threadID)
 
 		// The clock is passed in rather than read inside: a rate-limit reset arrives
 		// as an absolute instant and has to become a remaining duration, and a
@@ -183,6 +187,11 @@ func (c *conversation) pump() {
 			}
 			if threadID == "" {
 				threadID = c.threadID
+			}
+			var visible bool
+			ev, visible = citations.formatEvent(threadID, ev)
+			if !visible {
+				continue
 			}
 			key := threadID + ":" + ev.ProviderTurnID
 			if ev.Kind == ports.ChatEventError {
@@ -310,7 +319,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		// must not produce a second turn.
 		params["clientUserMessageId"] = msg.ClientMessageID
 	}
-	applyTurnSettings(params, msg.Settings)
+	applyTurnSettings(params, msg.Settings, c.readOnly)
 
 	var resp struct {
 		Turn struct {
@@ -333,7 +342,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 // Only fields the caller actually chose are sent. An omitted field lets the
 // provider fall back to what the thread was started with, which is why a caller
 // that chooses nothing behaves exactly as it did before per-turn settings existed.
-func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings) {
+func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, readOnly bool) {
 	if settings.Model != "" {
 		params["model"] = settings.Model
 	}
@@ -351,6 +360,15 @@ func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings) {
 		params["approvalPolicy"] = policy
 		params["approvalsReviewer"] = approvalReviewer(settings.Approval)
 		params["sandboxPolicy"] = turnSandboxPolicy(sandbox)
+	}
+	if readOnly {
+		// A reviewer must not write the workspace, but it does need the network:
+		// it reads the PR through gh and reports its verdict to the local daemon
+		// with `ao review submit`. With approvals off it cannot ask for that access
+		// mid-turn, so the read-only policy grants it up front.
+		params["approvalPolicy"] = "never"
+		params["approvalsReviewer"] = "user"
+		params["sandboxPolicy"] = map[string]any{"type": "readOnly", "networkAccess": true}
 	}
 }
 
@@ -823,44 +841,66 @@ func (c *conversation) refuseDynamicToolCall(params json.RawMessage) error {
 // provider re-announces every server's startup state as notifications afterwards, so
 // the returned list is a convenience for the caller that asked, not the only path by
 // which AO learns the outcome.
-func (c *conversation) ReloadMCPServers(ctx context.Context) ([]ports.ChatMCPServer, error) {
+func (c *conversation) ReloadMCPServers(ctx context.Context) (ports.ChatMCPReloadResult, error) {
 	// config/mcpServer/reload takes no params, verified against a live app-server.
 	if err := c.conn.request(ctx, codexproto.MethodConfigMcpServerReload, map[string]any{}, nil); err != nil {
-		return nil, fmt.Errorf("%s: %w", codexproto.MethodConfigMcpServerReload, err)
+		return ports.ChatMCPReloadResult{}, fmt.Errorf("%s: %w", codexproto.MethodConfigMcpServerReload, err)
 	}
 
-	var resp struct {
-		Data []struct {
-			Name       string `json:"name"`
-			AuthStatus string `json:"authStatus"`
-		} `json:"data"`
-	}
-	if err := c.conn.request(ctx, codexproto.MethodMcpServerStatusList, map[string]any{
-		// The summary form: the full one returns every tool's JSON Schema, which for a
-		// handful of servers is hundreds of kilobytes AO would immediately discard.
-		"detail":   "summary",
-		"threadId": c.threadID,
-	}, &resp); err != nil {
-		// The reload itself succeeded, and that is the part the caller asked for. The
-		// pushed notifications will report the outcome regardless.
-		c.log.Debug("mcp server list after reload failed", "error", err)
-		return nil, nil
-	}
-
-	servers := make([]ports.ChatMCPServer, 0, len(resp.Data))
-	for _, entry := range resp.Data {
-		if entry.Name == "" {
-			continue
+	// toolsAndAuthOnly avoids the resource schemas from the full response while
+	// using the provider-declared enum value. "summary" was never part of the app
+	// server protocol and made an otherwise successful reload look unenumerated.
+	detail := codexproto.McpServerStatusDetailToolsAndAuthOnly
+	threadID := c.threadID
+	var cursor *string
+	servers := make([]ports.ChatMCPServer, 0)
+	seen := make(map[string]struct{})
+	seenCursors := make(map[string]struct{})
+	for {
+		var resp codexproto.ListMcpServerStatusResponse
+		params := codexproto.ListMcpServerStatusParams{
+			Cursor:   cursor,
+			Detail:   &detail,
+			ThreadID: &threadID,
 		}
-		// A server that answers the inventory call is running. Its startup state is
-		// reported separately by mcpServer/startupStatus/updated, which is the
-		// authoritative source; this list only says who came back.
-		servers = append(servers, ports.ChatMCPServer{
-			Name:   entry.Name,
-			Status: string(codexproto.McpServerStartupStateReady),
-		})
+		if err := c.conn.request(ctx, codexproto.MethodMcpServerStatusList, params, &resp); err != nil {
+			// The reload itself succeeded. Mark the inventory unavailable so the
+			// controller retains known state rather than mistaking failure for an
+			// authoritative empty configuration.
+			c.log.Debug("mcp server list after reload failed", "error", err)
+			return ports.ChatMCPReloadResult{}, nil
+		}
+		for _, entry := range resp.Data {
+			// serverInfo is supplied by the MCP initialize handshake. A configured
+			// server whose startup failed can still have a status-list row, but it
+			// must remain failed via its startup notification rather than being
+			// promoted to ready merely because configuration knows its name.
+			if entry.Name == "" || entry.ServerInfo == nil {
+				continue
+			}
+			if _, duplicate := seen[entry.Name]; duplicate {
+				continue
+			}
+			seen[entry.Name] = struct{}{}
+			// A server that answers the inventory call is running. Failed enabled
+			// servers arrive through startup-status notifications and are reconciled
+			// by the controller with this complete ready-server inventory.
+			servers = append(servers, ports.ChatMCPServer{
+				Name:   entry.Name,
+				Status: string(codexproto.McpServerStartupStateReady),
+			})
+		}
+		if resp.NextCursor == nil || *resp.NextCursor == "" {
+			break
+		}
+		if _, repeated := seenCursors[*resp.NextCursor]; repeated {
+			c.log.Debug("mcp server list after reload repeated its cursor", "cursor", *resp.NextCursor)
+			return ports.ChatMCPReloadResult{}, nil
+		}
+		seenCursors[*resp.NextCursor] = struct{}{}
+		cursor = resp.NextCursor
 	}
-	return servers, nil
+	return ports.ChatMCPReloadResult{Servers: servers, Authoritative: true}, nil
 }
 
 func (c *conversation) discardPending(requestID string) {
@@ -907,6 +947,32 @@ func (c *conversation) Terminate() error {
 	})
 	return c.closeErr
 }
+
+// CanHibernate reads Codex's live exec registry, since a settled turn can leave
+// a terminal running and terminating app-server also terminates those commands.
+func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	// Subset of Codex 0.160.1's experimental background-terminal response.
+	var resp struct {
+		Data       []json.RawMessage `json:"data"`
+		NextCursor *string           `json:"nextCursor"`
+	}
+	if err := c.conn.request(ctx, "thread/backgroundTerminals/list", map[string]any{"threadId": c.threadID, "limit": 1}, &resp); err != nil {
+		var rpcErr *rpcError
+		if errors.As(err, &rpcErr) && rpcErr.Code == -32601 {
+			return false, nil // Older builds cannot prove that background work ended.
+		}
+		return false, err
+	}
+	if resp.Data == nil {
+		return false, errors.New("background-terminal response is missing data")
+	}
+	return len(resp.Data) == 0 && (resp.NextCursor == nil || *resp.NextCursor == ""), nil
+}
+
+// Hibernate stops the app-server but leaves its native thread on disk for Resume.
+func (c *conversation) Hibernate() error { return c.Terminate() }
 
 // approvalPayload is the subset of an approval request AO renders.
 type approvalPayload struct {

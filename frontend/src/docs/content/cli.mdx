@@ -1,0 +1,252 @@
+---
+title: CLI reference
+description: Commands provided by the current Go CLI.
+---
+
+The `ao` CLI is a thin client for the local desktop app's daemon. Commands that operate on projects and sessions require the app and its daemon to be running. `ao start` opens or downloads the app, `ao status` inspects daemon state even when it is stopped, and `ao doctor` checks the local environment without requiring a running daemon. Run `ao <command> --help` to see flags supported by your installed version.
+
+## Command tree
+
+```text
+ao
+├── start                         Open the desktop app (download it when needed)
+├── stop                          Stop the local daemon
+├── status                        Show daemon health
+├── doctor                        Check the local AO environment
+├── agent ls                      List built-in agent adapters and readiness
+├── project                       add, ls, get, set-config, rm
+├── spawn                         Create a worker or orchestrator session
+├── session                       ls, get, kill, restore, rename, cleanup, claim-pr,
+│                                 exit-agent, resume-agent, switch-agent, agent-switch
+├── automation                    create, list, get, update, delete, runs
+├── cue                           create, list
+├── report                        Report worker progress or artifacts
+├── orchestrator ls               List orchestrator sessions
+├── send                           Send a message to a session
+├── pr                             merge, resolve-comments
+├── review                         ls, trigger, cancel, submit
+├── preview                        select/clear a target; start, status, stop a server
+├── browser                        Control the selected session browser
+├── import                         Import projects from legacy AO data
+├── completion                     Generate shell completions
+└── version                        Print build information
+```
+
+This reference omits internal commands such as `daemon`, `hooks`, `launch`, `agent-process`, and `pty-host`. `ao dev` is a developer launcher; see the repository development guide for source builds.
+
+## Desktop and daemon
+
+### `ao start`
+
+Opens the installed desktop app. If the app is missing, the legacy launcher can download the latest release first. The desktop app starts and supervises the daemon.
+
+| Flag | Purpose |
+| --- | --- |
+| `--json` | Print the launch result as JSON. |
+
+For a new installation, download the desktop app from the [installation guide](/installation). The frozen npm package is a legacy launcher, not the current distribution channel.
+
+### `ao stop`
+
+Asks the loopback daemon to shut down after checking that the run file identifies AO.
+
+| Flag | Purpose |
+| --- | --- |
+| `--timeout <duration>` | Maximum time to wait for shutdown. |
+| `--json` | Print the result as JSON. |
+
+### `ao status`
+
+Reports daemon state, process identity, run-file location, health, and readiness. This command does not list sessions.
+
+| Flag | Purpose |
+| --- | --- |
+| `--json` | Print structured daemon status. |
+
+Use `ao session ls` for sessions.
+
+### `ao doctor`
+
+Checks AO configuration, the data directory and database, daemon state, Git, GitHub authentication, and the platform runtime (`tmux` on macOS/Linux; ConPTY is built into Windows).
+
+| Flag | Purpose |
+| --- | --- |
+| `--json` | Print checks as JSON. |
+
+## Projects and agents
+
+### `ao agent ls`
+
+Lists the daemon's built-in agent catalog together with local installation and authentication readiness.
+
+| Flag | Purpose |
+| --- | --- |
+| `--refresh` | Rerun bounded local install/auth probes. |
+| `--json` | Print the raw inventory response. |
+
+Agent adapters are compiled into AO. There is no plugin marketplace or `ao plugin install` command.
+
+### `ao project`
+
+| Command | Purpose |
+| --- | --- |
+| `ao project add` | Register a local Git repository or multi-repository workspace. Scratch is an AO-managed built-in project. |
+| `ao project ls` | List registered projects. |
+| `ao project get <id>` | Show one project and its resolved configuration. |
+| `ao project set-config <id>` | Update typed per-project configuration. |
+| `ao project rm <id>` | Remove a project registration. |
+
+`set-config` replaces the entire project config, even when you use a focused flag. Its JSON decoder ignores unknown keys, and it drops existing `effort` values; `ao project get --json` cannot show effort. See [Projects: update from the CLI](/configuration/projects#update-from-the-cli) for safe alternatives and details. This command does not edit the old `agent-orchestrator.yaml` file.
+
+Use `ao automation create`, `list`, `get`, `update`, `delete`, and `runs` to manage recurring work. To create one, provide a project, name, prompt, and exactly one schedule: `--cron` or `--rrule`. Set `--timezone` to an IANA time-zone name such as `America/New_York`. Pause a definition with `ao automation update <id> --enabled=false`. See [schedule behavior](/configuration/lifecycle-automation#what-ao-handles).
+
+`ao cue create --project <id> --name <name>` requires exactly one `--command` or `--prompt`. `ao cue list --project <id>` lists definitions. Editing, deleting, and invoking Cues is available in the desktop; the CLI does not have a `cue run` command.
+
+## Sessions
+
+### `ao spawn`
+
+Creates a session in a registered project, or a projectless worker with `--standalone`. The command takes no positional arguments and requires a display name.
+
+```bash
+ao spawn --name fix-login --project my-app --agent codex --prompt "Fix the login regression"
+```
+
+Important flags include:
+
+| Flag | Purpose |
+| --- | --- |
+| `--name <name>` | Required sidebar name, at most 100 characters. |
+| `--project <id>` | Project to use. Otherwise AO resolves environment and current directory context. |
+| `--agent`, `--harness <name>` | Override the project's agent. The two names are aliases. |
+| `--kind worker\|orchestrator` | Select the session role. |
+| `--mode chat\|tui` | Select structured Chat or the agent's native terminal UI. |
+| `--branch <name>` | Branch for Git projects. Scratch projects do not support it. |
+| `--prompt <text>` | Initial prompt. |
+| `--standalone` | Projectless worker; requires an explicit agent and excludes project, branch, issue, PR, and orchestrator options. |
+| `--model <model>` | Override the selected provider model for this spawn. |
+| `--tracker-provider github\|gitlab` | Select the issue provider for `--issue`. |
+| `--issue <id>` | Associate a tracker issue. |
+| `--claim-pr <ref>` | Claim an existing pull request after spawning. |
+| `--no-takeover` | Refuse a PR already owned by another active session. |
+| `--skip-agent-check` | Skip only the CLI-side install/auth preflight. |
+
+AO chooses a project in this order: `--project`, `AO_PROJECT_ID`, the project for `AO_SESSION_ID`, then the closest registered project containing the current directory. Before spawning, AO refreshes the selected agent's readiness unless you use `--skip-agent-check`. Readiness is advisory.
+
+### `ao session`
+
+| Command | Purpose |
+| --- | --- |
+| `ao session ls` | List active worker sessions. Use `--all` for orchestrators and `--include-terminated` for history. |
+| `ao session get <id>` | Show one session. |
+| `ao session kill <id>` | Terminate a session. Dirty workspaces are preserved. |
+| `ao session restore <id>` | Relaunch a terminated session when recovery is supported. |
+| `ao session exit-agent <id>` | Stop the controller while retaining the session. |
+| `ao session resume-agent <id>` | Start the controller again in that session. |
+| `ao session rename <id> <name>` | Change its display name. |
+| `ao session cleanup` | Reclaim eligible terminated workspaces; supports `--dry-run`. |
+| `ao session claim-pr [<session-id>] <pr-ref>` | Attach an existing PR; omitting the session uses `AO_SESSION_ID`. |
+| `ao session switch-agent <id> <target-harness>` | Switch a compatible session to another harness. |
+| `ao session agent-switch ls <session-id>` | Inspect agent-switch attempts. |
+
+Most lookup commands accept `--project` to disambiguate a session ID.
+
+Claiming a PR records ownership and starts observation. It does not check out the PR branch, so prepare the right branch or worktree separately. **Archive** ends the session. Exit and resume stop or start only its controller. Closing a view does neither.
+
+### `ao send`
+
+Sends a message through the daemon to a running session.
+
+```bash
+ao send --session ao-123 --message "Please address the failing test"
+```
+
+`--session` and `--message` are required for ordinary sends. When called from a session with `AO_SESSION_ID`, AO prefixes the sender identity.
+
+Use `--steer` to steer an active supported Chat turn or submit a normal turn when idle. `--client-message-id` supplies a stable delivery handle. If delivery is uncertain, recover the recorded result without resending:
+
+```bash
+ao send --session <session-id> --steer --recover-only --client-message-id <handle>
+```
+
+`--recover-only` requires `--steer` and a handle; it does not require a new message or contact the provider. A receipt confirms acceptance state, not that the agent completed the instruction.
+
+### `ao orchestrator ls`
+
+Lists orchestrator sessions. Add `--json` for structured output.
+
+Inside a worker, `ao report "Progress summary"` sends a report to its existing orchestrator. Reporting requires `AO_SESSION_ID`; it does not create an orchestrator or claim a PR.
+
+Needs-input reports are sent immediately. Stuck reports may interrupt or combine with other reports. Done reports wait five minutes before delivery; ordinary checkpoints can wait up to one hour.
+
+For a structured report, choose one state flag: `--checkpoint`, `--needs-input`, `--stuck`, or `--done`. Include `--note` with it. Attach reviewable deliverables with `--artifact`, `--pr-created`, or `--pr-reviewed`; pull-request flags require full URLs. Do not combine free-form text with structured state or output flags.
+
+```bash
+ao report --done --note "Focused tests passed"
+```
+
+`ao report` must run in a worker environment that provides `AO_SESSION_ID`.
+
+## Pull requests and reviews
+
+| Command | Purpose |
+| --- | --- |
+| `ao pr merge <pr-number>` | Request a merge through the owning SCM provider. |
+| `ao pr resolve-comments <pr-number> [comment-id...]` | Resolve selected or eligible review comments. |
+| `ao review ls [worker-session-id]` | List review state for a worker. Defaults to the calling session. |
+| `ao review trigger [worker-session-id]` | Start AO's reviewer on a worker's PR heads; defaults to the calling session. Fetches the PRs fresh from the provider first; `--pr <url>` reviews only that PR, attaching it if needed. Fails on a head that already has a review unless `--rerun`. `--agent`, `--model`, `--effort` pick the reviewer for one pass; `--no-inject` keeps auto-inject unchanged. Aliases: `execute`, `restart`. |
+| `ao review cancel [worker-session-id]` | Cancel every running reviewer. Defaults to the calling session. Alias: `stop`. |
+| `ao review submit [worker-session-id]` | Submit a reviewer verdict and results. |
+
+Use each subcommand's help for required review-run IDs, verdict values, and file/stdin inputs.
+
+## Preview and browser control
+
+### `ao preview [url]`
+
+Selects what the desktop Browser panel displays for the session identified by `AO_SESSION_ID`. With no argument AO looks for a supported static entry point in the session workspace; with a file or `file:`, `http:`, or `https:` target it opens that target.
+
+| Command | Purpose |
+| --- | --- |
+| `ao preview clear` | Clear the selected preview. |
+| `ao preview start [configuration]` | Start exactly one command from `.ao/launch.json`, wait for readiness, and select it. |
+| `ao preview status` | Show the managed preview process and recent bounded logs. |
+| `ao preview stop` | Stop the managed process tree. |
+
+`.ao/launch.json` is optional project configuration. AO does not infer or scaffold development servers, and static files do not require one.
+
+### `ao browser`
+
+Controls the live, session-isolated Electron browser owned by the desktop app. It also resolves its target from `AO_SESSION_ID`; the desktop app must be open.
+
+Browser commands include status and open, page snapshots, click/drag/fill/type, scrolling, tabs and popups, DevTools, screenshots, console and page errors, and optional network metadata capture. Run `ao browser --help` for the full command list.
+
+An element reference becomes stale when navigation or a frame or tab change replaces the page. Take a new snapshot when AO reports `STALE_REFERENCE`.
+
+The first `ao browser snapshot --delta` returns the full page tree. Later calls return only changes; add `--full` to request the full tree again. The `--annotate` option on screenshots labels interactive elements with references.
+
+`click` and `drag` accept `--human` for pages that ignore instant pointer movement. Keep the Browser panel visible when using `--human` or taking screenshots. Hidden or covered windows stop painting, so these commands time out.
+
+Network capture is off by default. When enabled, it records bounded metadata only, excludes request and response bodies and sensitive values, and expires automatically.
+
+## Migration and shell integration
+
+| Command | Purpose |
+| --- | --- |
+| `ao import` | Import legacy projects from `~/.agent-orchestrator`; supports `--dry-run`, `--yes`, and `--json`. Unsupported legacy plugin settings are reported as dropped. |
+| `ao completion bash\|zsh\|fish\|powershell` | Generate a shell completion script. |
+| `ao version` / `ao --version` | Print build metadata. |
+
+## Environment
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AO_PORT` | `3001` | Loopback daemon port. |
+| `AO_RUN_FILE` | `~/.ao/running.json` | Daemon identity and port handshake. |
+| `AO_DATA_DIR` | `~/.ao/data` | Daemon data directory. |
+| `AO_REQUEST_TIMEOUT` | `60s` | REST request timeout. |
+| `AO_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown limit. |
+| `AO_SESSION_ID` | unset | Current session context for preview, browser, and in-session calls. |
+| `AO_PROJECT_ID` | unset | Current project context for spawn resolution. |
+
+All current AO application state stays under `~/.ao` unless `AO_DATA_DIR` or `AO_RUN_FILE` overrides it.

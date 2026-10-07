@@ -209,7 +209,8 @@ describe("send keys", () => {
 
 		await typeInComposer(field, "queue this next");
 		expect(screen.queryByRole("button", { name: "Stop turn" })).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+		expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Queue message" })).toBeEnabled();
 	});
 
 	it("sends on Enter", async () => {
@@ -367,10 +368,14 @@ describe("send keys", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
-	it("unlocks a definitively rejected first send and gives the edited send a new identity", async () => {
-		const sessionId = "composer-first-send-refused";
+	it.each([
+		["CHAT_CONTROLLER_NOT_READY", "Request was rejected"],
+		["validation_error", "Request was rejected"],
+		["CHAT_RESUME_FAILED", "The provider could not reopen the saved conversation"],
+	])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code, message) => {
+		const sessionId = `composer-first-send-refused-${code}`;
 		const onSend = vi.fn()
-			.mockRejectedValueOnce({ code: "CHAT_CONTROLLER_NOT_READY", message: "Controller is not running" })
+			.mockRejectedValueOnce({ code, message })
 			.mockResolvedValue(undefined);
 		const first = render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
 		const field = screen.getByLabelText("Message the agent");
@@ -378,7 +383,7 @@ describe("send keys", () => {
 		fireEvent.keyDown(field, { key: "Enter" });
 		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
-		expect(screen.getByRole("alert")).toHaveTextContent("Controller is not running");
+		expect(screen.getByRole("alert")).toHaveTextContent(message);
 		expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined();
 		first.unmount();
 		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
@@ -392,11 +397,11 @@ describe("send keys", () => {
 		await waitFor(() => expect(restored).toHaveTextContent(""));
 	});
 
-	it("keeps an uncertain earlier send locked when its retry is definitively refused", async () => {
-		const sessionId = "composer-recovery-send-refused";
+	it.each(["CHAT_CONTROLLER_NOT_READY", "validation_error"])("keeps an uncertain earlier send locked when its retry is definitively refused (%s)", async (code) => {
+		const sessionId = `composer-recovery-send-refused-${code}`;
 		const onSend = vi.fn()
 			.mockRejectedValueOnce(new Error("response lost"))
-			.mockRejectedValue({ code: "CHAT_CONTROLLER_NOT_READY", message: "Controller is not running" });
+			.mockRejectedValue({ code, message: "Request was rejected" });
 		const first = render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
 		await typeInComposer(screen.getByLabelText("Message the agent"), "possibly accepted request");
 		fireEvent.keyDown(screen.getByLabelText("Message the agent"), { key: "Enter" });
@@ -799,6 +804,14 @@ describe("steering", () => {
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
+	it("offers an explicit steer action for a running Cloud turn", async () => {
+		const { onSend, onSteer, field } = renderSteerable({ showSteerButton: true });
+		await typeInComposer(field, "change course");
+		await userEvent.click(screen.getByRole("button", { name: "Steer into running turn" }));
+		await waitFor(() => expect(onSteer).toHaveBeenCalledWith("change course"));
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
 	it("steers on Ctrl+Enter, so the chord exists off macOS too", async () => {
 		const { onSend, onSteer, field } = renderSteerable();
 
@@ -839,11 +852,12 @@ describe("steering", () => {
 		const { onSend, onSteer, field } = renderSteerable();
 
 		await typeInComposer(field, "pointer agrees with the chip");
+		expect(screen.getByRole("button", { name: "Queue message" })).toBeEnabled();
 		act(() => {
 			window.dispatchEvent(new KeyboardEvent("keydown", { key: "Meta", metaKey: true }));
 		});
 
-		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await userEvent.click(screen.getByRole("button", { name: "Steer message" }));
 
 		await waitFor(() => expect(onSteer).toHaveBeenCalledWith("pointer agrees with the chip"));
 		expect(onSend).not.toHaveBeenCalled();
@@ -860,7 +874,7 @@ describe("steering", () => {
 			window.dispatchEvent(new KeyboardEvent("keyup", { key: "Meta", metaKey: false }));
 		});
 
-		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await userEvent.click(screen.getByRole("button", { name: "Queue message" }));
 
 		await waitFor(() => expect(onSend).toHaveBeenCalledWith("back to the queue"));
 		expect(onSteer).not.toHaveBeenCalled();
@@ -1434,6 +1448,72 @@ describe("attachments", () => {
 		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
 	});
 
+	it("places a pasted image inline at the caret and drops it with its attachment", async () => {
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png"]);
+		const { onSend, field } = renderComposer({ onStageAttachments: stage });
+		await typeInComposer(field, "compare");
+		fireEvent.paste(field, { clipboardData: clipboardData([png("a.png")]) });
+
+		const chip = await waitFor(() => {
+			const node = field.querySelector('[data-composer-token="image"]');
+			expect(node).not.toBeNull();
+			return node as HTMLElement;
+		});
+		expect(chip).toHaveTextContent("Image 1");
+		expect(chip).toHaveAttribute("title", "a.png");
+		expect(field.textContent).toBe("compare Image 1 ");
+
+		await userEvent.click(screen.getByLabelText("Remove a.png"));
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).toBeNull());
+		expect(field.textContent?.trimEnd()).toBe("compare");
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	// Staging can be slow: the chip holds the paste position while the user types on,
+	// and Enter during staging still sends the chip the user saw.
+	it("keeps a slow image where it was pasted and sends it when Enter beats staging", async () => {
+		let finishStaging!: (paths: string[]) => void;
+		const stage = vi.fn(() => new Promise<string[]>((resolve) => { finishStaging = resolve; }));
+		const { onSend, field } = renderComposer({ onStageAttachments: stage });
+		await typeInComposer(field, "make");
+		fireEvent.paste(field, { clipboardData: clipboardData([png("a.png")]) });
+		expect(field.querySelector('[data-composer-token="image-pending"]')).not.toBeNull();
+		await typeInComposer(field, "shorter");
+		await waitFor(() => expect(stage).toHaveBeenCalledTimes(1));
+
+		await userEvent.keyboard("{Enter}");
+		finishStaging([".ao/attachments/attachment-a.png"]);
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith(
+			"make .ao/attachments/attachment-a.png shorter\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-a.png",
+		));
+	});
+
+	it("sends a staged path the user typed exactly as written", async () => {
+		const { onSend, field } = renderComposer({ onStageAttachments: vi.fn() });
+		await typeInComposer(field, "No, look at .ao/attachments/attachment-old.png again");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("No, look at .ao/attachments/attachment-old.png again"));
+	});
+
+	it("does not send a chip that undo restored after its image was removed", async () => {
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png"]);
+		const { onSend, field } = renderComposer({ onStageAttachments: stage });
+		await typeInComposer(field, "look");
+		fireEvent.paste(field, { clipboardData: clipboardData([png("a.png")]) });
+		await screen.findByLabelText("Remove a.png");
+		await userEvent.click(screen.getByLabelText("Remove a.png"));
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).toBeNull());
+
+		await userEvent.click(field);
+		await userEvent.keyboard("{Control>}z{/Control}");
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).not.toBeNull());
+		await userEvent.keyboard("{Enter}");
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		expect(onSend.mock.calls[0]?.[0]).toBe("look");
+	});
+
 	it("ignores a paste that carries no file", async () => {
 		const { field } = renderComposer({ onStageAttachments: vi.fn() });
 		fireEvent.paste(field, { clipboardData: clipboardData([]) });
@@ -1458,7 +1538,8 @@ describe("attachments", () => {
 		]);
 		await waitFor(() =>
 			expect(onSend).toHaveBeenCalledWith(
-				"what is wrong here\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-ab12cd34ef.png",
+				// The inline chip pasted at the caret names the same path in the prose.
+				".ao/attachments/attachment-ab12cd34ef.png what is wrong here\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-ab12cd34ef.png",
 			),
 		);
 		// Consumed, so the next message does not silently resend them.
@@ -1535,6 +1616,22 @@ describe("attachments", () => {
 		]);
 	});
 
+	it("sends an image above the native limit by workspace path", async () => {
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/large.png"]);
+		const { onSend, field } = renderComposer({ onStageAttachments: stage, nativeImages: true });
+		const largeImage = png("large.png");
+		Object.defineProperty(largeImage, "size", { value: 11 * 1024 * 1024 });
+
+		fireEvent.paste(field, { clipboardData: clipboardData([largeImage]) });
+		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
+		await typeInComposer(field, "inspect this");
+		await userEvent.keyboard("{Enter}");
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		expect(onSend.mock.calls[0]?.[0]).toContain(".ao/attachments/large.png");
+		expect(onSend.mock.calls[0]?.[1]).toBeUndefined();
+	});
+
 	it("stages non-images by path without sending them as native image blocks", async () => {
 		const stage = vi.fn().mockResolvedValue([
 			".ao/attachments/attachment-native.png",
@@ -1587,7 +1684,7 @@ describe("attachments", () => {
 		await userEvent.keyboard("{Enter}");
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("attachments were kept");
-		expect(field.textContent).toBe("inspect this");
+		expect(field.textContent).toBe("Image 1 inspect this");
 		expect(screen.getAllByRole("listitem")).toHaveLength(1);
 
 		await userEvent.keyboard("{Enter}");
@@ -1710,9 +1807,51 @@ describe("attachments", () => {
 			await typeInComposer(field, "unsafe text");
 			await waitFor(() => expect(getChatDraftBoundary(sessionId)).toBe("persistence-failed"));
 
-			fireEvent.paste(field, { clipboardData: clipboardData([png("safe-attachment.png")]) });
-			await screen.findByLabelText("Remove safe-attachment.png");
+			fireEvent.paste(field, { clipboardData: clipboardData([textFile("safe-attachment.txt")]) });
+			await screen.findByLabelText("Remove safe-attachment.txt");
 			expect(getChatDraftBoundary(sessionId)).toBe("persistence-failed");
+		} finally {
+			view.unmount();
+			localStorage.mockRestore();
+		}
+	});
+
+	// Pasting an image writes its chip into the text, so a later successful write
+	// makes the whole text durable again, chip included.
+	it("makes text durable again, with the chip, when an image is pasted after a failed text save", async () => {
+		const sessionId = "composer-image-after-text-failure";
+		const durableStorage = window.localStorage;
+		let failTextWrite = true;
+		const storage = {
+			getItem: durableStorage.getItem.bind(durableStorage),
+			removeItem: durableStorage.removeItem.bind(durableStorage),
+			setItem: (key: string, value: string) => {
+				if (failTextWrite && key.includes(encodeURIComponent(sessionId))) {
+					failTextWrite = false;
+					throw new DOMException("full", "QuotaExceededError");
+				}
+				durableStorage.setItem(key, value);
+			},
+		} as Storage;
+		const localStorage = vi.spyOn(window, "localStorage", "get").mockReturnValue(storage);
+		const view = render(
+			<ChatComposer
+				onSend={vi.fn()}
+				draftSessionId={sessionId}
+				onStageAttachments={vi.fn().mockResolvedValue([".ao/attachments/attachment-after-failure.png"])}
+			/>,
+		);
+		try {
+			const field = screen.getByLabelText("Message the agent");
+			await typeInComposer(field, "unsafe text");
+			await waitFor(() => expect(getChatDraftBoundary(sessionId)).toBe("persistence-failed"));
+
+			fireEvent.paste(field, { clipboardData: clipboardData([png("after.png")]) });
+			await screen.findByLabelText("Remove after.png");
+			await waitFor(() => expect(getChatDraftBoundary(sessionId)).not.toBe("persistence-failed"));
+			expect(readChatSessionDraft(sessionId).composer.text).toBe(
+				"unsafe text .ao/attachments/attachment-after-failure.png ",
+			);
 		} finally {
 			view.unmount();
 			localStorage.mockRestore();
@@ -1752,7 +1891,7 @@ describe("attachments", () => {
 			await typeInComposer(field, "unsafe text");
 			await waitFor(() => expect(getChatDraftBoundary(sessionId)).toBe("persistence-failed"));
 
-			fireEvent.paste(field, { clipboardData: clipboardData([png("pending.png")]) });
+			fireEvent.paste(field, { clipboardData: clipboardData([textFile("pending.txt")]) });
 			await waitFor(() => expect(finishStaging).toBeTypeOf("function"));
 			expect(getChatDraftBoundaries(sessionId)).toEqual([
 				"persistence-failed",
@@ -1793,8 +1932,8 @@ describe("attachments", () => {
 		);
 		try {
 			const field = screen.getByLabelText("Message the agent");
-			fireEvent.paste(field, { clipboardData: clipboardData([png("unsafe-attachment.png")]) });
-			await screen.findByLabelText("Remove unsafe-attachment.png");
+			fireEvent.paste(field, { clipboardData: clipboardData([textFile("unsafe-attachment.txt")]) });
+			await screen.findByLabelText("Remove unsafe-attachment.txt");
 			await waitFor(() => expect(getChatDraftBoundary(sessionId)).toBe("persistence-failed"));
 
 			await typeInComposer(field, "safely persisted text");
@@ -1936,7 +2075,7 @@ describe("unavailable states", () => {
 		const { field } = renderComposer({ willQueue: true });
 		expect(field).toHaveAttribute(
 			"aria-placeholder",
-			expect.stringContaining("sends when it finishes"),
+			"Next message you send will be queued",
 		);
 	});
 
@@ -1957,7 +2096,7 @@ describe("unavailable states", () => {
 		render(<ChatComposer onSend={onSend} willQueue onInterrupt={onInterrupt} />);
 
 		await typeInComposer(screen.getByLabelText("Message the agent"), "follow up");
-		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await userEvent.click(screen.getByRole("button", { name: "Queue message" }));
 
 		expect(onSend).toHaveBeenCalledWith("follow up");
 		expect(onInterrupt).not.toHaveBeenCalled();
@@ -2139,10 +2278,12 @@ it("does not dispatch a restored image after its session incarnation was replace
 });
 
 
-it("restores an image thumbnail from its durable path after the composer remounts", async () => {
-	const sessionId = "composer-restored-thumbnail";
+it.each([
+	{ name: "local", draftSessionId: "composer-restored-thumbnail" },
+	{ name: "remote", draftSessionId: "host-a:composer-restored-thumbnail", assetSessionId: "composer-restored-thumbnail", assetBaseUrl: "http://127.0.0.1:4000/token-a" },
+])("restores a $name image thumbnail from its durable path after the composer remounts", async ({ draftSessionId, assetSessionId, assetBaseUrl }) => {
 	const path = ".ao/attachments/restored-thumbnail.png";
-	const props = { onSend: vi.fn(), draftSessionId: sessionId,
+	const props = { onSend: vi.fn(), draftSessionId, assetSessionId, assetBaseUrl,
 		onStageAttachments: vi.fn().mockResolvedValue([path]) };
 	const view = render(<ChatComposer {...props} />);
 	fireEvent.paste(screen.getByLabelText("Message the agent"), { clipboardData: clipboardData([png()]) });
@@ -2151,9 +2292,9 @@ it("restores an image thumbnail from its durable path after the composer remount
 		.toHaveAttribute("src", expect.stringContaining("data:image/png;base64,"));
 	view.unmount();
 	// A new renderer only has persisted descriptors, never cached image bytes.
-	purgeFileAttachmentsForSession(sessionId);
+	purgeFileAttachmentsForSession(draftSessionId);
 	render(<ChatComposer {...props} />);
 	expect(screen.getByRole("list", { name: "Attached files" }).querySelector("img"))
-		.toHaveAttribute("src", attachmentURL(getApiBaseUrl(), sessionId, path));
+		.toHaveAttribute("src", attachmentURL(assetBaseUrl ?? getApiBaseUrl(), assetSessionId ?? draftSessionId, path));
 	expect(props.onStageAttachments).toHaveBeenCalledOnce();
 });

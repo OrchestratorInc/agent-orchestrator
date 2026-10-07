@@ -435,6 +435,26 @@ func (s *Service) WaitCodexAccountStoreReady(ctx context.Context) error {
 	})
 }
 
+// reconcileCodexDeviceCredentialForRecheck matches the device Codex credential
+// before an explicit authentication recheck, e.g. after a login in the Harness
+// settings terminal, which runs `codex login` outside AO's account login flow.
+// Codex readiness answers from the last device reconciliation, and nothing else
+// re-runs it after such a login, so without this the recheck kept reporting the
+// pre-login state (no device credential, or a previous credential's "sign in
+// again" evidence) until something else reconciled or the app restarted. A
+// changed credential is matched to its account; an unchanged one keeps its
+// evidence. Best-effort: account management is optional for ordinary Codex use,
+// so failures leave the recheck unchanged.
+func (s *Service) reconcileCodexDeviceCredentialForRecheck(ctx context.Context) {
+	if s.codexAccounts == nil {
+		return
+	}
+	if err := s.WaitCodexAccountStoreReady(ctx); err != nil {
+		return
+	}
+	_ = s.codexAccounts.reconcileGlobalWithPolicy(ctx, true)
+}
+
 // EnsureCodexDeviceAccountReconciled conclusively identifies the canonical
 // device account before an operation is allowed to mutate it.
 func (s *Service) EnsureCodexDeviceAccountReconciled(ctx context.Context) error {
@@ -539,7 +559,7 @@ func (s *Service) PrepareCodexAccountForSwitch(ctx context.Context, switchID, ac
 		return notPrepared(apierr.Unavailable("CODEX_ACCOUNT_SWITCH_ACTIVATION_UNCONFIRMED", "The selected Codex credential could not be staged"))
 	}
 
-	globalCredential, globalState, globalErr := readCodexFileState(s.codexAccounts.globalCredentialPath(), true)
+	globalCredential, globalState, globalErr := readCodexDeviceFileState(s.codexAccounts.globalCredentialPath(), true)
 	if globalErr != nil {
 		_ = os.RemoveAll(stagingDir)
 		return notPrepared(apierr.NotImplemented("CODEX_GLOBAL_CREDENTIAL_STORE_UNSUPPORTED", "Device-global Codex account switching requires file-backed credentials"))
@@ -558,7 +578,7 @@ func (s *Service) PrepareCodexAccountForSwitch(ctx context.Context, switchID, ac
 			return notPrepared(apierr.Unavailable("CODEX_ACCOUNT_SWITCH_ACTIVATION_UNCONFIRMED", "The current Codex credential could not be checkpointed"))
 		}
 	}
-	finalGlobal, finalState, finalErr := readCodexFileState(s.codexAccounts.globalCredentialPath(), true)
+	finalGlobal, finalState, finalErr := readCodexDeviceFileState(s.codexAccounts.globalCredentialPath(), true)
 	if finalErr != nil || !sameCodexFileState(globalState, finalState) || !bytes.Equal(globalCredential, finalGlobal) {
 		_ = os.RemoveAll(stagingDir)
 		return notPrepared(ports.ErrCodexGlobalAccountChanged)
@@ -585,11 +605,11 @@ func (s *Service) InspectCodexAccountSwitch(ctx context.Context, switchID string
 		return "", apierr.NotImplemented("CODEX_GLOBAL_CREDENTIAL_STORE_UNSUPPORTED", "Device-global Codex account switching requires file-backed credentials")
 	}
 	globalPath := s.codexAccounts.globalCredentialPath()
-	globalCredential, admitted, credentialErr := readCodexFileState(globalPath, true)
+	globalCredential, admitted, credentialErr := readCodexDeviceFileState(globalPath, true)
 	if credentialErr != nil {
 		return "", credentialErr
 	}
-	latestCredential, latest, latestErr := readCodexFileState(globalPath, true)
+	latestCredential, latest, latestErr := readCodexDeviceFileState(globalPath, true)
 	if latestErr != nil || !sameCodexFileState(admitted, latest) || !bytes.Equal(globalCredential, latestCredential) {
 		return "", errors.Join(ports.ErrCodexGlobalAccountChanged, latestErr)
 	}

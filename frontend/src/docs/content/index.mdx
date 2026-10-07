@@ -1,0 +1,73 @@
+---
+title: Introduction
+description: Learn what Agent Orchestrator does, when to use it, and where to start.
+---
+
+Agent Orchestrator (**AO**) is a desktop app for supervising AI coding agents. It gives each worker an isolated workspace, keeps its conversation or terminal available, and connects Git work to pull requests, CI, reviews, and merge conflicts.
+
+The agents write the code. AO helps you manage projects and sessions, follow work, send instructions, review changes, and open browser previews.
+
+<Callout type="info" title="Fastest path">
+	Download the desktop app, add a repository, and start one small session. See [Installation](/installation), then [Quickstart](/quickstart).
+</Callout>
+
+## What AO helps you do
+
+- Run several coding agents without mixing their files, branches, or pull requests.
+- Choose a native terminal UI or structured Chat for each session.
+- Follow activity, CI, review feedback, and merge readiness from the desktop app.
+- Send follow-up instructions to the right worker.
+- Run reviewer agents and route requested changes back to the worker.
+- Preview a session's local app beside its Chat or terminal.
+- Schedule recurring work with Automations and reuse project instructions or shell commands with Cues.
+- Check and respond from the companion mobile app through Connect Mobile.
+
+AO works best when each worker has a clear, reviewable outcome: a focused bug, feature, refactor, test, documentation update, or review follow-up.
+
+## The basic loop
+
+```text
+add project -> start session -> isolated worktree -> pull request -> CI/review -> merge -> cleanup
+```
+
+Create sessions from the desktop app or the optional CLI. AO starts the selected agent interface and combines saved activity and pull-request data to show a session's status.
+
+## Chat and Terminal UI
+
+Every session has one active agent interface at a time:
+
+| Interface | Best for |
+| --- | --- |
+| **Chat** | Structured messages, activities, approvals, plans, usage, and conversation history. |
+| **Terminal UI** | The agent harness's native interactive terminal experience. |
+
+Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui). Compatible sessions can switch interfaces without changing their session or worktree; the UI shows which transitions are available.
+
+## Where local data lives
+
+<span id="local-by-design" />
+
+The desktop app runs a Go background service on `127.0.0.1` and talks to it through a local API. AO stores app data and worktree metadata under `~/.ao` by default. Most integrations use coding agents and source-control credentials already on your computer; AO does not bundle external agents or their credentials. Unreal Agent is a built-in Chat-only adapter on macOS and Linux.
+
+Connect Mobile is a separate, opt-in listener protected by a connection password. See [Connect Mobile](/configuration/remote-access) for local and secure remote pairing.
+
+This manual is checked against the latest stable release, [v0.13.3](https://github.com/Untrivial-ai/agent-orchestrator/releases/tag/v0.13.3), published 1 October 2026. Newer controls on `main` may differ from that release. Check the [changelog](/changelog) and its release notes before using a new control.
+
+Cloud sessions are a separate service with account access requirements. See the [Cloud guide](/guides/cloud) for setup.
+
+## Supported agents
+
+AO supports coding agents such as Claude Code, Codex, Cursor, Aider, OpenCode, Droid, Kimi Code, and GitHub Copilot. Their support for worker, Chat, and reviewer roles varies. Check the [agent catalog](/plugins/agents) for details. Cloud offers a smaller [provider set](/guides/cloud#before-you-start).
+
+GitHub and GitLab provide source-control observation and issue intake. Intake is opt-in and read-only toward the issue tracker; Linear and legacy Node plugin packages are not supported.
+
+## Where to go next
+
+<Cards>
+	<Card title="Installation" description="Download the desktop app and connect your tools." href="/installation" />
+	<Card title="Quickstart" description="Run one worker session from task to pull request." href="/quickstart" />
+	<Card title="Dashboard" description="Learn the desktop board, session view, Chat, terminal, and inspector." href="/dashboard" />
+	<Card title="Cloud sessions" description="Set up a remote project when Cloud is available for your account." href="/guides/cloud" />
+	<Card title="Architecture" description="Understand the Go daemon, Electron app, storage, and session modes." href="/architecture" />
+	<Card title="Troubleshooting" description="Resolve common desktop, daemon, agent, and session problems." href="/troubleshooting" />
+</Cards>

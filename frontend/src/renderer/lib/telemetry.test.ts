@@ -31,6 +31,30 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 describe("telemetry sanitizers", () => {
+	it("allows only the fixed session management summary schema", async () => {
+		const safe = await sanitizeRendererProperties("ao.renderer.session_management_summary", {
+			measurement_schema_version: 1,
+			window_id: "123e4567-e89b-12d3-a456-426614174000",
+			worker_active_seconds: 42,
+			manual_worker_open_count: 3,
+			flush_reason: "interval",
+			session_id: "must-not-leave",
+		});
+		expect(safe).toEqual({
+			measurement_schema_version: 1,
+			window_id: "123e4567-e89b-12d3-a456-426614174000",
+			worker_active_seconds: 42,
+			manual_worker_open_count: 3,
+			flush_reason: "interval",
+		});
+	});
+
+	it("exports the session management summary under the v2 name", () => {
+		expect(postHogEventName("ao.renderer.session_management_summary")).toBe(
+			"ao.v2.renderer.session_management_summary",
+		);
+	});
+
 	it("isolates anonymous AO installation identity from persisted PostHog person state", () => {
 		const config = buildPostHogConfig("ins_stable-install-id");
 
@@ -100,6 +124,18 @@ describe("telemetry sanitizers", () => {
 		// An unrecognized phase is not passed through as-is.
 		const bogus = await sanitizeRendererProperties("ao.renderer.update_failed", { phase: "sideload" });
 		expect(bogus.phase).toBeUndefined();
+	});
+
+	it("retains bounded update transfer observations and drops untrusted values", async () => {
+		const observation = {
+			differential_eligible: true, transfer_mode: "differential", fallback: true,
+			transferred_bytes: 12345, target_bytes: 99999,
+		};
+		expect(await sanitizeRendererProperties("ao.renderer.update_downloaded", observation)).toEqual(observation);
+		expect(await sanitizeRendererProperties("ao.renderer.update_failed", {
+			differential_eligible: "true", transfer_mode: "https://secret", fallback: 1,
+			transferred_bytes: -1, target_bytes: Infinity, url: "https://secret",
+		})).toEqual({});
 	});
 
 	it("reports a support submission with only the destination and outcome", async () => {

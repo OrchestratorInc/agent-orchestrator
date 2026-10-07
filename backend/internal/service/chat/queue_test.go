@@ -16,6 +16,7 @@ func TestQueuedEditAttachmentChanges(t *testing.T) {
 	zero := int64(0)
 	one := int64(1)
 	tenMiB := ports.ChatContent{Type: "image", MIMEType: "image/png", Data: base64.StdEncoding.EncodeToString(make([]byte, 10<<20))}
+	overTenMiB := ports.ChatContent{Type: "image", MIMEType: "image/png", Data: base64.StdEncoding.EncodeToString(make([]byte, (10<<20)+1))}
 	fiveMiB := ports.ChatContent{Type: "image", MIMEType: "image/png", Data: base64.StdEncoding.EncodeToString(make([]byte, 5<<20))}
 	overFiveMiB := ports.ChatContent{Type: "image", MIMEType: "image/png", Data: base64.StdEncoding.EncodeToString(make([]byte, (5<<20)+1))}
 	atLimit := []ports.ChatContent{tenMiB, tenMiB, fiveMiB}
@@ -47,6 +48,7 @@ func TestQueuedEditAttachmentChanges(t *testing.T) {
 		{name: "preserve at size limit", text: "updated", initial: atLimit, wantData: atLimitData},
 		{name: "append at size limit", text: "updated", initial: atLimit[:2], add: atLimit[2:], wantData: atLimitData},
 		{name: "append over size limit", text: "updated", initial: atLimit[:2], add: []ports.ChatContent{overFiveMiB}, wantErr: chatsvc.ErrQueuedContentInvalid},
+		{name: "append over per-file limit", text: "updated", add: []ports.ChatContent{overTenMiB}, wantErr: chatsvc.ErrQueuedContentInvalid},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, provider := steerHarness(t)
@@ -97,10 +99,11 @@ func TestQueuedEditAttachmentChanges(t *testing.T) {
 func TestQueuedEditRetryAfterCommittedResponseIsLost(t *testing.T) {
 	h, provider := steerHarness(t)
 	ctx := context.Background()
-	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+	originalMessage := ports.ChatUserMessage{
 		Text: "original", ClientMessageID: "queue-original", Origin: domain.MessageOriginHuman,
 		Content: []ports.ChatContent{{Type: "image", MIMEType: "image/png", Data: "b2xk"}},
-	})
+	}
+	turn, err := h.svc.Send(ctx, testSession, originalMessage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +127,14 @@ func TestQueuedEditRetryAfterCommittedResponseIsLost(t *testing.T) {
 	}
 	if committed.Revision != 1 {
 		t.Fatalf("committed revision = %d, want 1", committed.Revision)
+	}
+	if duplicate, err := h.svc.Send(ctx, testSession, originalMessage); err != nil || duplicate.ID != "" {
+		t.Fatalf("retry original send after queue edit = %+v, err = %v", duplicate, err)
+	}
+	changedMessage := originalMessage
+	changedMessage.Text = "another request"
+	if _, err := h.svc.Send(ctx, testSession, changedMessage); !errors.Is(err, domain.ErrClientMessageConflict) {
+		t.Fatalf("changed original send after queue edit = %v, want conflict", err)
 	}
 	// The renderer retries the identical request with its original revision.
 	if err := h.svc.EditQueuedTurn(ctx, testSession, turn.ID, edit); err != nil {

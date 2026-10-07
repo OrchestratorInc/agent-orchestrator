@@ -7,13 +7,16 @@ import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 import { queryClient } from "./lib/query-client";
 import { mergeUnreadNotification, unreadNotificationsQueryKey } from "./lib/notifications";
+import { playNotificationSound } from "./lib/notification-sound-player";
 import { createAppRouter } from "./router";
 import { TelemetryBoundary } from "./components/TelemetryBoundary";
 import { CloudOnboardingGate } from "./components/CloudOnboardingGate";
-import { applyRendererTelemetryPolicy, clearRendererTelemetryQueues, initTelemetry } from "./lib/telemetry";
+import { CloudNotificationRuntime } from "./components/CloudNotificationRuntime";
+import { applyRendererTelemetryPolicy, clearRendererTelemetryQueues, initTelemetry, isDeniedEvent } from "./lib/telemetry";
 import { aoBridge } from "./lib/bridge";
 import { startDaemonFailureTelemetry } from "./lib/daemon-telemetry";
 import { startUpdateTelemetry } from "./lib/update-telemetry";
+import { startSessionManagementTelemetry } from "./lib/session-management-telemetry";
 import { appI18n } from "./i18n";
 import { useLocaleStore } from "./stores/locale-store";
 import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
@@ -24,6 +27,11 @@ const router = createAppRouter(queryClient);
 // Main owns consent and only acknowledges opt-out after every live AO shell
 // confirms that its in-memory renderer queues were actually purged.
 aoBridge.telemetry.onClearQueues(clearRendererTelemetryQueues);
+// Main decides *when* a notification sound plays; the renderer only supplies
+// the speakers, since main has no audio output of its own.
+aoBridge.notifications.onPlaySound(() => {
+	playNotificationSound(() => aoBridge.notifications.reportSoundFailure());
+});
 aoBridge.telemetry.onPolicy((view) => applyRendererTelemetryPolicy(view.eventsEnabled && view.acknowledged && view.state === "applied"));
 
 if (import.meta.env.DEV) {
@@ -67,7 +75,19 @@ if (import.meta.env.DEV) {
 	};
 }
 
-void initTelemetry();
+let sessionManagementTelemetryRetries = 0;
+const bootstrapSessionManagementTelemetry = () => {
+	void initTelemetry().then((enabled) => {
+		if (enabled) {
+			startSessionManagementTelemetry();
+			return;
+		}
+		if (!isDeniedEvent("ao.renderer.session_management_summary") && sessionManagementTelemetryRetries++ < 12) {
+			window.setTimeout(bootstrapSessionManagementTelemetry, 5_000);
+		}
+	});
+};
+bootstrapSessionManagementTelemetry();
 startDaemonFailureTelemetry();
 startUpdateTelemetry();
 
@@ -93,6 +113,7 @@ async function renderApp(): Promise<void> {
 		<I18nextProvider i18n={appI18n}>
 			<TelemetryBoundary>
 				<QueryClientProvider client={queryClient}>
+					<CloudNotificationRuntime />
 					<RouterProvider router={router} />
 					<CloudOnboardingGate />
 				</QueryClientProvider>

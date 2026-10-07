@@ -102,16 +102,12 @@ func (s *Store) OrchestratorAgentCredentialAvailable(
 		}
 		return tx.QueryRow(
 			ctx,
-			`SELECT EXISTS (
-				SELECT 1 FROM ao_provider_connections
-				WHERE org_id = $1 AND provider = $2 AND label = 'default'
-				  AND validation_state = 'valid'
-			) OR ($3::uuid IS NOT NULL AND EXISTS (
+			`SELECT $1::uuid IS NOT NULL AND EXISTS (
 				SELECT 1 FROM ao_user_provider_connections
-				WHERE user_id = $3::uuid AND provider = $2 AND label = 'default'
+				WHERE user_id = $1::uuid AND provider = $2 AND label = 'default'
 				  AND validation_state = 'valid'
-			))`,
-			orgID, provider, createdByUserID,
+			)`,
+			createdByUserID, provider,
 		).Scan(&available)
 	})
 	return available, err
@@ -247,6 +243,36 @@ func (s *Store) DeleteProviderConnection(
 		)
 		return err
 	})
+}
+
+// CoderConnectionForService returns an organization's Coder provider connection
+// (provider='coder', label='default') for a service-context caller that holds no
+// request principal — the sandbox resolver, which needs the encrypted token to
+// build a per-organization Coder client during reconciliation. It scopes through
+// withOrg rather than withService: ao_provider_connections grants no
+// service-context RLS policy (only its tenant policy), so a withService read
+// would return zero rows; withOrg sets ao.org_id so the forced row-level
+// security still confines the read to the one organization without needing to
+// authorize a membership.
+func (s *Store) CoderConnectionForService(
+	ctx context.Context,
+	orgID string,
+) (encrypted, nonce, config []byte, connectionID string, err error) {
+	err = s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		scanErr := tx.QueryRow(
+			ctx,
+			`SELECT id, encrypted_secret, secret_nonce, config
+			FROM ao_provider_connections
+			WHERE org_id = $1 AND provider = 'coder' AND label = 'default'
+			  AND validation_state = 'valid'`,
+			orgID,
+		).Scan(&connectionID, &encrypted, &nonce, &config)
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return scanErr
+	})
+	return encrypted, nonce, config, connectionID, err
 }
 
 func (s *Store) ProviderConnectionSecret(

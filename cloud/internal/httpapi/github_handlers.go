@@ -212,11 +212,26 @@ func (s *Server) githubSetupCallback(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) githubOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	setGitHubCallbackHeaders(w)
-	_, err := s.github.CompleteOAuth(
-		r.Context(),
-		strings.TrimSpace(r.URL.Query().Get("state")),
-		strings.TrimSpace(r.URL.Query().Get("code")),
-	)
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	installationIDValue := strings.TrimSpace(r.URL.Query().Get("installation_id"))
+	var err error
+	if installationIDValue == "" {
+		// Normal two-step completion: the setup callback already minted our PKCE
+		// OAuth state, and GitHub returned only code+state here.
+		_, err = s.github.CompleteOAuth(r.Context(), state, code)
+	} else {
+		// Bundled flow: a GitHub App configured to request user authorization
+		// during installation delivers installation_id + code straight here,
+		// skipping the setup callback. Complete it directly against the install
+		// state (no second authorize redirect, no PKCE verifier).
+		installationID, parseErr := strconv.ParseInt(installationIDValue, 10, 64)
+		if parseErr != nil || installationID <= 0 {
+			s.githubCallbackError(w, r, postgres.ErrInvalid)
+			return
+		}
+		_, err = s.github.CompleteInstallationOAuth(r.Context(), state, code, installationID)
+	}
 	if err != nil {
 		s.githubCallbackError(w, r, err)
 		return
@@ -312,12 +327,22 @@ func (s *Server) disconnectGitHubUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) githubCallbackError(w http.ResponseWriter, r *http.Request, err error) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// A GitHub account already connected by another AO workspace is an expected,
+	// actionable outcome — render a specific page naming the account instead of
+	// the generic failure page, and do not log it as an unexpected error.
+	var ownedErr *postgres.InstallationOwnedByAnotherOrgError
+	if errors.As(err, &ownedErr) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write(s.github.InstallationConflictHTML(ownedErr.AccountLogin))
+		return
+	}
 	if !errors.Is(err, postgres.ErrInvalid) &&
 		!errors.Is(err, postgres.ErrForbidden) &&
-		!errors.Is(err, postgres.ErrNotFound) {
+		!errors.Is(err, postgres.ErrNotFound) &&
+		!errors.Is(err, postgres.ErrConflict) {
 		s.logger.Error("GitHub callback", "error", err, "request_id", requestID(r))
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadRequest)
 	_, _ = w.Write(s.github.CompletionHTML(false))
 }
@@ -474,7 +499,7 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 		},
 	)
 	if err != nil {
-		s.writeStoreError(w, r, err)
+		s.writeProjectStoreError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"project": toProjectResponse(project)})
@@ -627,8 +652,7 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	if event != "installation" && event != "installation_repositories" &&
-		event != "github_app_authorization" {
+	if !supportedGitHubWebhookEvent(event) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
@@ -675,6 +699,7 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 		Action:               envelope.Action,
 		GitHubInstallationID: installationID,
 		GitHubRepositoryID:   repositoryID,
+		PullRequestNumber:    githubWebhookPullRequestNumber(payload),
 		Payload:              payload,
 	})
 	if err != nil {
@@ -686,6 +711,49 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func supportedGitHubWebhookEvent(event string) bool {
+	switch event {
+	case "installation", "installation_repositories", "github_app_authorization",
+		"pull_request", "check_suite", "check_run", "pull_request_review",
+		"pull_request_review_comment", "pull_request_review_thread",
+		"status", "push":
+		return true
+	default:
+		return false
+	}
+}
+
+func githubWebhookPullRequestNumber(payload []byte) int {
+	var envelope struct {
+		PullRequest *struct {
+			Number int `json:"number"`
+		} `json:"pull_request"`
+		CheckRun *struct {
+			PullRequests []struct {
+				Number int `json:"number"`
+			} `json:"pull_requests"`
+		} `json:"check_run"`
+		CheckSuite *struct {
+			PullRequests []struct {
+				Number int `json:"number"`
+			} `json:"pull_requests"`
+		} `json:"check_suite"`
+	}
+	if json.Unmarshal(payload, &envelope) != nil {
+		return 0
+	}
+	if envelope.PullRequest != nil {
+		return envelope.PullRequest.Number
+	}
+	if envelope.CheckRun != nil && len(envelope.CheckRun.PullRequests) > 0 {
+		return envelope.CheckRun.PullRequests[0].Number
+	}
+	if envelope.CheckSuite != nil && len(envelope.CheckSuite.PullRequests) > 0 {
+		return envelope.CheckSuite.PullRequests[0].Number
+	}
+	return 0
 }
 
 func githubInstallationParams(
@@ -748,7 +816,7 @@ func toGitHubRepositoryResponse(
 
 func setGitHubCallbackHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 }

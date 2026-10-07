@@ -24,6 +24,34 @@ import (
 // are authoritative for what AO renders and for delivery state — AO never
 // maintains a second independently writable model transcript.
 
+// ConversationOwnerKind keeps reviewer and worker controller ids in separate
+// namespaces, even when their persisted strings happen to match.
+type ConversationOwnerKind string
+
+const (
+	// ConversationOwnerSession identifies a worker-session conversation.
+	ConversationOwnerSession ConversationOwnerKind = "session"
+	// ConversationOwnerReview identifies a reviewer-owned conversation.
+	ConversationOwnerReview ConversationOwnerKind = "review"
+)
+
+// ConversationOwner is the typed controller identity used by Chat lifecycle
+// and persistence.
+type ConversationOwner struct {
+	Kind ConversationOwnerKind `json:"kind"`
+	ID   string                `json:"id"`
+}
+
+// SessionConversationOwner builds the owner identity for a worker session.
+func SessionConversationOwner(id SessionID) ConversationOwner {
+	return ConversationOwner{Kind: ConversationOwnerSession, ID: string(id)}
+}
+
+// ReviewConversationOwner builds the owner identity for a reviewer chat.
+func ReviewConversationOwner(id string) ConversationOwner {
+	return ConversationOwner{Kind: ConversationOwnerReview, ID: id}
+}
+
 // ConversationScope says whether a conversation belongs to a project (the
 // orchestrator narrative, which outlives any single orchestrator session) or to
 // one session (a worker).
@@ -33,6 +61,7 @@ type ConversationScope string
 const (
 	ConversationScopeSession ConversationScope = "session"
 	ConversationScopeProject ConversationScope = "project"
+	ConversationScopeReview  ConversationScope = "review"
 )
 
 // ConversationContextResetProviderItemID returns the durable identity of the
@@ -154,6 +183,7 @@ type ConversationRecord struct {
 	// on clean replacement while the conversation identity remains stable.
 	ProjectID ProjectID `json:"projectId"`
 	SessionID SessionID `json:"sessionId,omitempty"`
+	ReviewID  string    `json:"reviewId,omitempty"`
 	// ActiveBranchID identifies the one provider-thread lineage the session may
 	// write. Sibling branches remain durable and are selected by moving this head;
 	// display status is still derived independently at read time.
@@ -231,6 +261,7 @@ type ConversationBranch struct {
 	ID                     string    `json:"id"`
 	ConversationID         string    `json:"conversationId"`
 	SessionID              SessionID `json:"sessionId"`
+	ReviewID               string    `json:"reviewId,omitempty"`
 	ProviderConversationID string    `json:"-"`
 	ParentBranchID         string    `json:"parentBranchId,omitempty"`
 	ForkAfterTurnID        string    `json:"forkAfterTurnId,omitempty"`
@@ -364,19 +395,22 @@ type ConversationModelReroute struct {
 }
 
 // ConversationAccount is the provider account a conversation runs under.
-//
-// ReauthRequiredAt is the load-bearing field. A long-lived chat session outlives
-// its credentials, and a provider that cannot refresh them stops answering for a
-// reason that has nothing to do with the request. Recording the moment the
-// provider asked for fresh credentials is what lets a client say "sign in again"
-// instead of showing an unexplained failed turn.
 type ConversationAccount struct {
+	// AuthenticationState is unknown until the provider supplies failure or success evidence.
+	AuthenticationState string     `json:"authenticationState,omitempty"`
+	AuthVerifiedAt      *time.Time `json:"authVerifiedAt,omitempty"`
+	// Failure evidence survives recovery; current credential demand is separate below.
+	LastAuthFailureAt     *time.Time `json:"lastAuthFailureAt,omitempty"`
+	LastAuthFailureReason string     `json:"lastAuthFailureReason,omitempty"`
+	AuthFailureID         string     `json:"authFailureId,omitempty"`
+	// AuthChangedAt fences success from a turn started before an account/auth-mode change.
+	AuthChangedAt *time.Time `json:"authChangedAt,omitempty"`
 	// AuthMode is the provider's name for how it authenticates (chatgpt, apikey...).
 	AuthMode string `json:"authMode,omitempty"`
 	// PlanLabel is the account tier the provider reports.
 	PlanLabel string `json:"planLabel,omitempty"`
 	// ReauthRequiredAt is when the provider last asked for credentials AO does not
-	// hold. Nil means it never has.
+	// hold. Nil means there is no current demand.
 	ReauthRequiredAt *time.Time `json:"reauthRequiredAt,omitempty"`
 	// ReauthReason is the provider's stated reason, e.g. "unauthorized".
 	ReauthReason string `json:"reauthReason,omitempty"`
@@ -487,6 +521,9 @@ type ConversationTurn struct {
 	// project-scoped conversation this changes when the orchestrator is
 	// replaced; the conversation identity does not.
 	HandledBySessionID SessionID `json:"handledBySessionId"`
+	// HandledByReviewID is set when the typed reviewer Chat controller owns the
+	// turn; worker and project conversations leave it empty.
+	HandledByReviewID string `json:"handledByReviewId,omitempty"`
 	// ProviderTurnID correlates back to the provider's own turn. Opaque.
 	ProviderTurnID string `json:"providerTurnId,omitempty"`
 	// RetryOfTurnID is the failed source whose durable prompt created this turn.
@@ -587,26 +624,38 @@ type RetryPrompt struct {
 
 // ConversationMessage is one readable block of text.
 type ConversationMessage struct {
-	ID             string `json:"id"`
-	ConversationID string `json:"conversationId"`
-	TurnID         string `json:"turnId,omitempty"`
-	Sequence       int64  `json:"sequence"`
+	// InteractionAt is an internal write fact, independent of history CreatedAt.
+	InteractionAt  time.Time `json:"-"`
+	ID             string    `json:"id"`
+	ConversationID string    `json:"conversationId"`
+	TurnID         string    `json:"turnId,omitempty"`
+	Sequence       int64     `json:"sequence"`
 	// Revision increases each time streaming rewrites this message's text, so a
 	// client can detect a gap and resync instead of rendering stale text.
 	Revision int64         `json:"revision"`
 	Role     MessageRole   `json:"role"`
 	Origin   MessageOrigin `json:"origin"`
 	Text     string        `json:"text"`
+	// AuthoredByUser is an intake-only fact used to project user activity when
+	// AO delivered the message as automation. It is not part of the persisted
+	// delivery origin or the conversation API representation.
+	AuthoredByUser bool `json:"-"`
 	// Streaming is true while more deltas are expected.
 	Streaming bool `json:"streaming"`
 	// ProviderItemID deduplicates provider observations of the same message.
 	ProviderItemID string `json:"providerItemId,omitempty"`
 	// ClientMessageID is the caller-supplied idempotency key for user messages.
 	// A retry carrying the same key must not create a second provider turn.
-	ClientMessageID     string    `json:"clientMessageId,omitempty"`
-	DeliveryContentJSON string    `json:"-"`
-	CreatedAt           time.Time `json:"createdAt"`
-	UpdatedAt           time.Time `json:"updatedAt"`
+	ClientMessageID     string `json:"clientMessageId,omitempty"`
+	ClientPayloadHash   string `json:"-"`
+	DeliveryContentJSON string `json:"-"`
+	// Sender metadata is presentation data for automation-origin messages. The
+	// display name is intentionally a send-time snapshot; the session id is stable.
+	SenderSessionID   string    `json:"senderSessionId,omitempty"`
+	SenderProjectID   string    `json:"senderProjectId,omitempty"`
+	SenderDisplayName string    `json:"senderDisplayName,omitempty"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
 }
 
 // ConversationActivity is one non-message timeline entry: a command, a diff, a
@@ -668,10 +717,16 @@ var ErrNoConversation = errors.New("session has no conversation")
 // queue is the normal case, not an error.
 var ErrNoQueuedTurn = errors.New("no queued turn")
 
+// ErrSessionNotProvisioning rejects a pre-controller turn after startup ended.
+var ErrSessionNotProvisioning = errors.New("session is not provisioning")
+
 // ErrNoConversationTurn reports a turn id that is not in the conversation it was
 // named against. It lives here rather than in the storage layer so a controller and
 // an HTTP handler can both recognize it without importing SQLite.
 var ErrNoConversationTurn = errors.New("conversation turn not found")
+
+// ErrClientMessageConflict refuses reuse of a delivery ID for different content.
+var ErrClientMessageConflict = errors.New("client message id belongs to a different message")
 
 // ErrNoConversationBranch reports a branch id outside the named conversation.
 var ErrNoConversationBranch = errors.New("conversation branch not found")

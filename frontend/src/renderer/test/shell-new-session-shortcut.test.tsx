@@ -16,10 +16,14 @@ const shellMocks = vi.hoisted(() => {
 		nextSessionListener: undefined as (() => void) | undefined,
 		focusTerminalListener: undefined as (() => void) | undefined,
 		openFolderPathListener: undefined as ((path: string) => void) | undefined,
-		routeParams: {} as { projectId?: string; sessionId?: string },
+		routeParams: {} as { hostId?: string; projectId?: string; sessionId?: string },
 		routeSearch: {} as Record<string, unknown>,
 		matchRouteTarget: null as string | null,
 		workspaces: [] as WorkspaceSummary[],
+		remoteWorkspaces: [] as WorkspaceSummary[],
+		remoteFailedHostIds: [] as string[],
+		removeRemoteProject: undefined as ((hostId: string, projectId: string) => Promise<void>) | undefined,
+		configureRemoteProject: undefined as ((hostId: string, projectId: string) => void) | undefined,
 		workspaceQuery: {
 			data: [] as WorkspaceSummary[],
 			dataUpdatedAt: 0,
@@ -29,6 +33,7 @@ const shellMocks = vi.hoisted(() => {
 		daemonStatus: { state: "stopped" } as {
 			state: "ready" | "starting" | "stopped" | "error";
 			port?: number;
+			pid?: number;
 			code?: "not_ready";
 		},
 		shellValue: undefined as
@@ -100,6 +105,8 @@ const shellMocks = vi.hoisted(() => {
 			prefetchQuery: vi.fn(async () => undefined),
 			setQueryData: vi.fn(),
 		},
+		remoteDelete: vi.fn(),
+		listRemoteHosts: vi.fn(async () => []),
 		state,
 	};
 });
@@ -145,14 +152,23 @@ vi.mock("../lib/bridge", () => ({
 			setAttentionState: () => undefined,
 			onOpenSession: () => () => undefined,
 		},
+		remotes: { list: shellMocks.listRemoteHosts },
 	},
 }));
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => shellMocks.state.workspaceQuery,
+	useRemoteWorkspaces: () => ({ data: shellMocks.state.remoteWorkspaces, failedHostIds: shellMocks.state.remoteFailedHostIds, loadedProjectHostIds: [] }),
 	useWorkspaceTraySessions: () => ({ data: [] }),
 	workspaceQueryKey: ["workspaces"],
+	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
 	workspaceQueryOptions: {},
+}));
+
+vi.mock("../lib/host-clients", () => ({
+	clientForHost: () => ({ DELETE: shellMocks.remoteDelete }),
+	connectedHosts: () => [],
+	subscribeConnectedHosts: () => () => undefined,
 }));
 
 vi.mock("../hooks/useDaemonStatus", () => ({
@@ -161,7 +177,7 @@ vi.mock("../hooks/useDaemonStatus", () => ({
 
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../lib/api-client")>()),
-	apiClient: { POST: vi.fn(), DELETE: vi.fn() },
+	apiClient: { POST: vi.fn(), DELETE: vi.fn(), PATCH: vi.fn() },
 	apiErrorCode: (error: { code?: string } | undefined) => error?.code,
 	apiErrorMessage: (error: { message?: string } | undefined) => error?.message ?? "request failed",
 	hasTrustedApiBaseUrl: () => true,
@@ -176,6 +192,10 @@ vi.mock("../lib/daemon-status", () => ({
 // settings/query path out of the provider-free harness.
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ client: {}, ready: false, baseUrl: "" }),
+}));
+
+vi.mock("../hooks/useCloudOrg", () => ({
+	useCloudOrg: () => ({ org: undefined, isLoading: false, error: undefined, ready: false }),
 }));
 
 // The shell layout opens standalone terminals; this suite only covers the
@@ -265,7 +285,13 @@ vi.mock("../components/Sidebar", async () => {
 	const { useUiStore: useStore } = await vi.importActual<typeof import("../stores/ui-store")>("../stores/ui-store");
 	return {
 		SIDEBAR_DEFAULT_WIDTH: 240,
-		Sidebar: ({ topbarOffset }: { topbarOffset?: string }) => {
+		Sidebar: ({ topbarOffset, onRemoveRemoteProject, onConfigureRemoteProject }: {
+			topbarOffset?: string;
+			onRemoveRemoteProject: (hostId: string, projectId: string) => Promise<void>;
+			onConfigureRemoteProject: (hostId: string, projectId: string) => void;
+		}) => {
+			shellMocks.state.removeRemoteProject = onRemoveRemoteProject;
+			shellMocks.state.configureRemoteProject = onConfigureRemoteProject;
 			const nonce = useStore((state) => state.createProjectNonce);
 			const folderDropRequest = useStore((state) => state.folderDropRequest);
 			return (
@@ -352,6 +378,12 @@ beforeEach(() => {
 	shellMocks.state.routeSearch = {};
 	shellMocks.state.matchRouteTarget = null;
 	shellMocks.state.workspaces = workspaces;
+	shellMocks.state.remoteWorkspaces = [];
+	shellMocks.state.remoteFailedHostIds = [];
+	shellMocks.listRemoteHosts.mockClear();
+	shellMocks.state.removeRemoteProject = undefined;
+	shellMocks.state.configureRemoteProject = undefined;
+	shellMocks.remoteDelete.mockReset().mockResolvedValue({});
 	shellMocks.state.workspaceQuery = {
 		data: workspaces,
 		dataUpdatedAt: 0,
@@ -360,15 +392,18 @@ beforeEach(() => {
 	};
 	shellMocks.state.daemonStatus = { state: "error", code: "not_ready" };
 	shellMocks.state.shellValue = undefined;
+	vi.mocked(apiClient.PATCH).mockReset().mockResolvedValue({ error: undefined });
 	shellMocks.queryClient.fetchQuery.mockReset().mockResolvedValue(workspaces);
 	shellMocks.queryClient.getQueryData.mockReset().mockReturnValue(workspaces);
 	shellMocks.queryClient.getQueryState.mockReset().mockReturnValue({ dataUpdatedAt: 0 });
 	useUiStore.setState({
 		createProjectNonce: 0,
+		developerMode: false,
 		folderDropRequest: null,
 		globalToast: null,
 		isSidebarOpen: true,
 		newTaskRequest: null,
+		remoteHosts: false,
 		newShellTerminalNonce: 0,
 		activeShellTerminalHandleId: null,
 		settingsModal: null,
@@ -376,6 +411,73 @@ beforeEach(() => {
 });
 
 describe("shell workspace startup", () => {
+	it("rechecks a connected host when its session queries fail", async () => {
+		useUiStore.setState({ developerMode: true, remoteHosts: true });
+		const view = await renderShell();
+		await waitFor(() => expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(1));
+
+		shellMocks.state.remoteFailedHostIds = ["box-a"];
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		await waitFor(() => expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(2));
+
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(2);
+	});
+
+	it("opens the shared Project settings dialog for the selected remote host", async () => {
+		shellMocks.state.remoteWorkspaces = [
+			{ hostId: "box-a", id: "shared", name: "Shared", path: "/a", sessions: [] },
+			{ hostId: "box-b", id: "shared", name: "Shared", path: "/b", sessions: [] },
+		] as WorkspaceSummary[];
+		await renderShell();
+
+		act(() => shellMocks.state.configureRemoteProject?.("box-b", "shared"));
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "shared", hostId: "box-b" });
+	});
+
+	it("leaves a remote session only when removing its project on the same host", async () => {
+		useUiStore.setState({ developerMode: true, remoteHosts: true });
+		shellMocks.state.routeParams = { hostId: "box-a", sessionId: "same-session" };
+		shellMocks.state.remoteWorkspaces = [
+			{ hostId: "box-a", id: "project-a", sessions: [{ id: "same-session" }] },
+			{ hostId: "box-b", id: "project-b", sessions: [{ id: "same-session" }] },
+		] as WorkspaceSummary[];
+		await renderShell();
+
+		await shellMocks.state.removeRemoteProject?.("box-b", "project-b");
+		expect(shellMocks.navigate).not.toHaveBeenCalled();
+		await shellMocks.state.removeRemoteProject?.("box-a", "project-a");
+		expect(shellMocks.navigate).toHaveBeenCalledWith({ to: "/" });
+	});
+
+	it("resyncs Developer Mode when an attached daemon restarts on the same port", async () => {
+		useUiStore.setState({ developerMode: true });
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
+		const view = await renderShell();
+		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(1));
+		expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", {
+			body: { enabled: true },
+		});
+
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 202 };
+		view.rerender(
+			<Suspense fallback={null}>
+				<ShellRoute />
+			</Suspense>,
+		);
+
+		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(2));
+	});
+
+	it("keeps chat hibernation disabled when Developer Mode is off", async () => {
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
+		await renderShell();
+
+		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", {
+			body: { enabled: false },
+		}));
+	});
+
 	it("routes duplicate-path project adds to the registered project and shows a toast", async () => {
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
 		vi.mocked(apiClient.POST).mockResolvedValueOnce({
@@ -683,7 +785,6 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 
 		expect(shellMocks.openShellTerminal).toHaveBeenCalledWith(
 			expect.objectContaining({ projectId: "proj-1", sessionId: "sess-1" }),
-			expect.anything(),
 		);
 	});
 
@@ -701,7 +802,6 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 				sessionId: "sess-1",
 				cloud: { orgId: "cloud-org" },
 			}),
-			expect.anything(),
 		);
 		delete session.cloud;
 	});
@@ -716,7 +816,6 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 
 		expect(shellMocks.openShellTerminal).toHaveBeenCalledWith(
 			expect.objectContaining({ projectId: "proj-2", sessionId: "sess-cross" }),
-			expect.anything(),
 		);
 	});
 
@@ -834,6 +933,44 @@ describe("shell application shortcut subscriptions", () => {
 		expect(shellMocks.navigate).toHaveBeenCalledWith({
 			to: "/sessions/$sessionId",
 			params: { sessionId: "standalone-2" },
+		});
+	});
+
+	it("cycles only sessions on the selected remote host when IDs collide", async () => {
+		shellMocks.state.routeParams = { hostId: "box-b", sessionId: "sess-1" };
+		shellMocks.state.remoteWorkspaces = [
+			{ hostId: "box-a", id: "proj-1", sessions: [
+				{ id: "sess-1", status: "working" }, { id: "box-a-next", status: "idle" },
+			] },
+			{ hostId: "box-b", id: "proj-1", sessions: [
+				{ id: "sess-1", status: "working" }, { id: "box-b-next", status: "idle" },
+			] },
+		] as WorkspaceSummary[];
+		await renderShell();
+
+		act(() => shellMocks.state.nextSessionListener?.());
+
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/host/$hostId/project/$projectId/session/$sessionId",
+			params: { hostId: "box-b", projectId: "proj-1", sessionId: "box-b-next" },
+		});
+	});
+
+	it("cycles remote standalone sessions on their host", async () => {
+		shellMocks.state.routeParams = { hostId: "box-b", sessionId: "standalone-1" };
+		shellMocks.state.remoteWorkspaces = [{
+			hostId: "box-b", id: "__standalone__", sessions: [
+				{ id: "standalone-1", status: "working" },
+				{ id: "standalone-2", status: "idle" },
+			],
+		}] as WorkspaceSummary[];
+		await renderShell();
+
+		act(() => shellMocks.state.previousSessionListener?.());
+
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/host/$hostId/session/$sessionId",
+			params: { hostId: "box-b", sessionId: "standalone-2" },
 		});
 	});
 

@@ -150,6 +150,33 @@ func finalizeWorkspaceFiles(files WorkspaceFiles) WorkspaceFiles {
 	}
 	parts := []string{string(files.SessionID), files.CompareBaseSHA, files.CompareBaseRef, string(files.CompareMode), strconv.FormatBool(files.Truncated)}
 	for _, file := range files.Files {
+		if file.Status != WorkspaceFileUnmodified {
+			parts = append(parts, file.FileFingerprint)
+		}
+	}
+	for _, section := range sections {
+		for _, file := range *section {
+			parts = append(parts, file.FileFingerprint)
+		}
+	}
+	files.WorkspaceVersion = hashWorkspaceReviewValue(parts...)
+	return files
+}
+
+func finalizeWorkspaceManifest(manifest WorkspaceManifest) WorkspaceManifest {
+	for i := range manifest.Files {
+		manifest.Files[i].Editable = workspaceFileEditable(manifest.Files[i].Size, manifest.Files[i].Binary, manifest.Files[i].Status == WorkspaceFileDeleted)
+		manifest.Files[i].FileFingerprint = summaryFingerprint(manifest.Files[i])
+	}
+	sections := []*[]WorkspaceFileSummary{&manifest.Sections.Staged, &manifest.Sections.Unstaged, &manifest.Sections.Untracked, &manifest.Sections.Committed}
+	for _, section := range sections {
+		for i := range *section {
+			(*section)[i].Editable = workspaceFileEditable((*section)[i].Size, (*section)[i].Binary, (*section)[i].Status == WorkspaceFileDeleted)
+			(*section)[i].FileFingerprint = summaryFingerprint((*section)[i])
+		}
+	}
+	parts := []string{string(manifest.SessionID), manifest.CompareBaseSHA, manifest.CompareBaseRef, string(manifest.CompareMode), strconv.FormatBool(manifest.Truncated)}
+	for _, file := range manifest.Files {
 		parts = append(parts, file.FileFingerprint)
 	}
 	for _, section := range sections {
@@ -157,14 +184,8 @@ func finalizeWorkspaceFiles(files WorkspaceFiles) WorkspaceFiles {
 			parts = append(parts, file.FileFingerprint)
 		}
 	}
-	for _, commit := range files.Commits {
-		parts = append(parts, commit.SHA)
-		for _, file := range commit.Files {
-			parts = append(parts, file.FileFingerprint)
-		}
-	}
-	files.WorkspaceVersion = hashWorkspaceReviewValue(parts...)
-	return files
+	manifest.WorkspaceVersion = hashWorkspaceReviewValue(parts...)
+	return manifest
 }
 
 func finalizeWorkspaceFileDetail(detail WorkspaceFileDetail) WorkspaceFileDetail {
@@ -210,7 +231,7 @@ func (s *Service) GetWorkspaceDiffs(ctx context.Context, id domain.SessionID, in
 	if input.ContextLines < 0 || input.ContextLines > 20 {
 		return WorkspaceDiffs{}, apierr.Invalid("INVALID_WORKSPACE_DIFF_CONTEXT", "contextLines must be between 0 and 20", nil)
 	}
-	current, err := s.ListWorkspaceFiles(ctx, id)
+	current, err := s.workspaceDiffManifest(ctx, id, input.WorkspaceVersion)
 	if err != nil {
 		return WorkspaceDiffs{}, err
 	}
@@ -222,7 +243,11 @@ func (s *Service) GetWorkspaceDiffs(ctx context.Context, id domain.SessionID, in
 		if scope != WorkspaceDiffCommitted {
 			return WorkspaceDiffs{}, apierr.Invalid("WORKSPACE_COMMIT_SCOPE_REQUIRED", "commitSha requires the committed scope", nil)
 		}
-		commit, err := workspaceCommit(current, commitSHA)
+		history, err := s.ListWorkspaceFiles(ctx, id)
+		if err != nil {
+			return WorkspaceDiffs{}, err
+		}
+		commit, err := workspaceCommit(history, commitSHA)
 		if err != nil {
 			return WorkspaceDiffs{}, err
 		}
@@ -280,25 +305,31 @@ func workspaceDiffGroup(ctx context.Context, targetGroup *workspaceDiffTargetGro
 	if targetGroup.targets[0].scratch || scope == WorkspaceDiffUntracked {
 		var patch strings.Builder
 		for _, target := range targetGroup.targets {
-			file, info, err := confinedWorkspaceFile(target.root, target.rel)
-			if err != nil {
+			if err := appendSyntheticAddedPatch(&group, &patch, target); err != nil {
 				return WorkspaceDiffGroup{}, err
 			}
-			if info.Size() > maxWorkspaceRevisionBytes {
-				group.Deferred = append(group.Deferred, WorkspaceDiffDeferred{Path: joinWorkspaceRelative(target.prefix, target.rel), Reason: "oversized"})
-				continue
-			}
-			content, binary, _, err := readWorkspaceTextFile(file, maxWorkspaceRevisionBytes)
-			if err != nil {
-				return WorkspaceDiffGroup{}, err
-			}
-			if binary {
-				group.Deferred = append(group.Deferred, WorkspaceDiffDeferred{Path: joinWorkspaceRelative(target.prefix, target.rel), Reason: "binary"})
-				continue
-			}
-			patch.WriteString(syntheticAddedFileDiff(target.rel, content))
 		}
 		group.Patch, group.Truncated = truncateUTF8(patch.String(), maxWorkspaceDiffGroupBytes)
+		return group, nil
+	}
+
+	// git diff never reports an untracked file, so the combined (base..worktree)
+	// scope has to synthesize its added-file patch the same way GetWorkspaceFile
+	// already does. Without this the path returns a successful but patchless
+	// group and the review pane has no diff to render for it.
+	var untrackedPatch strings.Builder
+	tracked := make([]workspaceFileTarget, 0, len(targetGroup.targets))
+	for _, target := range targetGroup.targets {
+		if !untrackedCombinedTarget(target, scope) {
+			tracked = append(tracked, target)
+			continue
+		}
+		if err := appendSyntheticAddedPatch(&group, &untrackedPatch, target); err != nil {
+			return WorkspaceDiffGroup{}, err
+		}
+	}
+	if len(tracked) == 0 {
+		group.Patch, group.Truncated = truncateUTF8(untrackedPatch.String(), maxWorkspaceDiffGroupBytes)
 		return group, nil
 	}
 
@@ -321,7 +352,7 @@ func workspaceDiffGroup(ctx context.Context, targetGroup *workspaceDiffTargetGro
 	}
 	args = append(args, "--")
 	paths := map[string]struct{}{}
-	for _, target := range targetGroup.targets {
+	for _, target := range tracked {
 		paths[target.rel] = struct{}{}
 		if previous := target.changes.previous[target.rel]; previous != "" {
 			paths[previous] = struct{}{}
@@ -337,9 +368,47 @@ func workspaceDiffGroup(ctx context.Context, targetGroup *workspaceDiffTargetGro
 	if err != nil {
 		return WorkspaceDiffGroup{}, err
 	}
-	group.Patch, group.Truncated = truncateUTF8(out, maxWorkspaceDiffGroupBytes)
+	// git's own output stays first so the group cap still drops synthesized
+	// untracked content before anything git already reported.
+	group.Patch, group.Truncated = truncateUTF8(out+untrackedPatch.String(), maxWorkspaceDiffGroupBytes)
 	group.Truncated = group.Truncated || truncated
 	return group, nil
+}
+
+// untrackedCombinedTarget reports whether target is a working-tree file git's
+// diff machinery cannot see for this scope. Only the combined scope compares
+// base..worktree, where an untracked file is a genuine addition; the staged,
+// unstaged, and committed scopes have no untracked side by definition.
+func untrackedCombinedTarget(target workspaceFileTarget, scope WorkspaceDiffScope) bool {
+	if scope != WorkspaceDiffCombined {
+		return false
+	}
+	_, ok := target.changes.untracked[target.rel]
+	return ok
+}
+
+// appendSyntheticAddedPatch writes target's working-tree content to patch as an
+// added-file diff, or records on group why it was left out instead.
+func appendSyntheticAddedPatch(group *WorkspaceDiffGroup, patch *strings.Builder, target workspaceFileTarget) error {
+	file, info, err := confinedWorkspaceFile(target.root, target.rel)
+	if err != nil {
+		return err
+	}
+	displayPath := joinWorkspaceRelative(target.prefix, target.rel)
+	if info.Size() > maxWorkspaceRevisionBytes {
+		group.Deferred = append(group.Deferred, WorkspaceDiffDeferred{Path: displayPath, Reason: "oversized"})
+		return nil
+	}
+	content, binary, _, err := readWorkspaceTextFile(file, maxWorkspaceRevisionBytes)
+	if err != nil {
+		return err
+	}
+	if binary {
+		group.Deferred = append(group.Deferred, WorkspaceDiffDeferred{Path: displayPath, Reason: "binary"})
+		return nil
+	}
+	patch.WriteString(syntheticAddedFileDiff(target.rel, content))
+	return nil
 }
 
 // GetWorkspaceFileRevision returns a comparison side for diff expansion and
@@ -368,7 +437,7 @@ func (s *Service) getWorkspaceFileRevision(ctx context.Context, id domain.Sessio
 	if err != nil {
 		return WorkspaceFileRevision{}, err
 	}
-	current, err := s.ListWorkspaceFiles(ctx, id)
+	current, err := s.workspaceDiffManifest(ctx, id, workspaceVersion)
 	if err != nil {
 		return WorkspaceFileRevision{}, err
 	}
@@ -377,7 +446,11 @@ func (s *Service) getWorkspaceFileRevision(ctx context.Context, id domain.Sessio
 	}
 	commitSHA := strings.TrimSpace(rawCommitSHA)
 	if commitSHA != "" {
-		commit, err := workspaceCommit(current, commitSHA)
+		history, err := s.ListWorkspaceFiles(ctx, id)
+		if err != nil {
+			return WorkspaceFileRevision{}, err
+		}
+		commit, err := workspaceCommit(history, commitSHA)
 		if err != nil {
 			return WorkspaceFileRevision{}, err
 		}

@@ -13,6 +13,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	DndContext,
 	DragOverlay,
@@ -37,7 +38,10 @@ import {
 	Bug,
 	Camera,
 	Check,
+	ChevronDown,
 	ChevronRight,
+	ChevronUp,
+	Copy,
 	Download,
 	Eye,
 	ExternalLink,
@@ -45,6 +49,7 @@ import {
 	Maximize2,
 	Minimize2,
 	RotateCcw,
+	Search,
 	Monitor,
 	MoreVertical,
 	MousePointer2,
@@ -57,7 +62,8 @@ import {
 	UserRound,
 	X,
 } from "lucide-react";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiErrorMessage } from "../lib/api-client";
+import { clientForSessionHost } from "../lib/host-clients";
 import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { formatBrowserAnnotationMessage, type BrowserAnnotationSubmitPayload } from "../../shared/browser-annotations";
@@ -83,6 +89,7 @@ import { handleTabListKeyDown } from "../lib/terminal-tabs";
 import { useBrowserDownloads } from "../hooks/useBrowserDownloads";
 import { BrowserDownloadsList } from "./BrowserDownloadsList";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
+import { aoBridge } from "../lib/bridge";
 
 // One-click viewport width presets for responsive testing — height is shown
 // for reference but not enforced (only width drives CSS breakpoints, and
@@ -127,21 +134,21 @@ const MAX_HISTORY_SUGGESTIONS = 4;
 const MIN_DEVICE_FRAME_WIDTH = 240;
 const MAX_DEVICE_FRAME_WIDTH = 2560;
 
-const restrictBrowserTopTabDragToHorizontalAxis: Modifier = ({
+export const restrictBrowserTopTabDragToTabStrip: Modifier = ({
 	activeNodeRect,
+	containerNodeRect,
 	transform,
-	windowRect,
 }) => {
-	if (!activeNodeRect || !windowRect) return { ...transform, y: 0 };
-	const minX = windowRect.left - activeNodeRect.left;
-	const maxX = windowRect.right - activeNodeRect.right;
+	if (!activeNodeRect || !containerNodeRect) return { ...transform, y: 0 };
+	const minX = containerNodeRect.left - activeNodeRect.left;
+	const maxX = containerNodeRect.right - activeNodeRect.right;
 	return {
 		...transform,
 		x: Math.min(maxX, Math.max(minX, transform.x)),
 		y: 0,
 	};
 };
-const browserTopTabDragModifiers = [restrictBrowserTopTabDragToHorizontalAxis];
+const browserTopTabDragModifiers = [restrictBrowserTopTabDragToTabStrip];
 
 function clampDeviceFrameWidth(width: number): number | undefined {
 	if (!Number.isFinite(width)) return undefined;
@@ -171,9 +178,13 @@ export type BrowserAnnotationQueueModel = {
 
 export function useBrowserAnnotationQueue({
 	sessionId,
+	hostId,
+	sourcePreviewUrl,
 	navUrl,
 }: {
 	sessionId?: string;
+	hostId?: string;
+	sourcePreviewUrl?: string;
 	navUrl?: string;
 }): BrowserAnnotationQueueModel {
 	const [state, setState] = useState<{ status: AnnotationStatus; error: string; queuedCount: number }>({
@@ -185,6 +196,8 @@ export function useBrowserAnnotationQueue({
 	const stagedScreenshotPathsRef = useRef(new Map<BrowserAnnotationSubmitPayload, string[]>());
 	const annotationSendingRef = useRef(false);
 	const sessionIdRef = useRef(sessionId ?? "");
+	const hostIdRef = useRef(hostId);
+	const sourcePreviewUrlRef = useRef(sourcePreviewUrl);
 	const generationRef = useRef(0);
 	const sentTimerRef = useRef<number | null>(null);
 
@@ -210,6 +223,7 @@ export function useBrowserAnnotationQueue({
 		annotationSendingRef.current = true;
 		const sendGeneration = generationRef.current;
 		const sendSessionId = sessionIdRef.current;
+		const client = clientForSessionHost(hostIdRef.current);
 		setState({ status: "sending", error: "", queuedCount: annotationQueueRef.current.length });
 
 		void (async () => {
@@ -223,7 +237,7 @@ export function useBrowserAnnotationQueue({
 						...(payload.snapshot ? [payload.snapshot] : []),
 					];
 					if (attachments.length > 0) {
-						const staged = await apiClient.POST("/api/v1/sessions/{sessionId}/attachments", {
+						const staged = await client.POST("/api/v1/sessions/{sessionId}/attachments", {
 							params: { path: { sessionId: sendSessionId } },
 							body: { attachments },
 						});
@@ -237,10 +251,18 @@ export function useBrowserAnnotationQueue({
 						screenshotPaths = [];
 					}
 				}
-				const message = formatBrowserAnnotationMessage(payload, { screenshotPaths });
-				const { error } = await apiClient.POST("/api/v1/sessions/{sessionId}/send", {
+				let sendPayload = payload;
+				if (hostIdRef.current && sourcePreviewUrlRef.current) {
+					let pageUrl = "";
+					try {
+						pageUrl = await aoBridge.remotes.resolvePreviewUrl(hostIdRef.current, sendSessionId, payload.session.page.url);
+					} catch { /* A disconnected host cannot resolve a preview capability. */ }
+					sendPayload = { ...payload, session: { ...payload.session, page: { ...payload.session.page, url: pageUrl } } };
+				}
+				const message = formatBrowserAnnotationMessage(sendPayload, { screenshotPaths });
+				const { error } = await client.POST("/api/v1/sessions/{sessionId}/send", {
 					params: { path: { sessionId: sendSessionId } },
-					body: { message },
+					body: { message, userAuthored: true },
 				});
 				if (error) {
 					failureMessage = apiErrorMessage(error, appI18n.t("browser.unableSendAnnotation"));
@@ -289,8 +311,10 @@ export function useBrowserAnnotationQueue({
 
 	useEffect(() => {
 		sessionIdRef.current = sessionId ?? "";
+		hostIdRef.current = hostId;
+		sourcePreviewUrlRef.current = sourcePreviewUrl;
 		resetQueue();
-	}, [resetQueue, sessionId]);
+	}, [hostId, resetQueue, sessionId, sourcePreviewUrl]);
 
 	useEffect(() => {
 		if (navUrl) return;
@@ -387,6 +411,7 @@ export function BrowserPanelView({
 	topbarHost,
 }: BrowserPanelProps & { annotationQueue: BrowserAnnotationQueueModel; browserView: BrowserViewModel }) {
 	const { t } = useTranslation();
+	const prefersReducedMotion = useReducedMotion();
 	const {
 		viewId,
 		navState,
@@ -396,6 +421,10 @@ export function BrowserPanelView({
 		goForward,
 		reload,
 		stop,
+		findState = { viewId: "", tabId: "", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true },
+		findOpenRequest = 0,
+		findInPage = async () => undefined,
+		stopFindInPage = async () => undefined,
 		tabs,
 		activeTabId,
 		tabNotice,
@@ -407,6 +436,8 @@ export function BrowserPanelView({
 		reopenClosedTab,
 		agentBrowserActive,
 		agentBrowserActivity,
+		browserRuntimeConnected,
+		reconnectBrowserRuntime = async () => undefined,
 		devtoolsState = { viewId: "", open: false, activeTabId: "" },
 		profileState = { viewId: "", profileId: null, temporary: true },
 		openDevTools = async () => undefined,
@@ -417,6 +448,7 @@ export function BrowserPanelView({
 		annotationAction = async () => undefined,
 	} = browserView;
 	const [urlInput, setUrlInput] = useState(navState.url);
+	const [urlCopied, setUrlCopied] = useState(false);
 	const [historySuggestions, setHistorySuggestions] = useState<Array<{ url: string; title?: string }>>([]);
 	const historyMenuId = useId();
 	const [activeHistorySuggestion, setActiveHistorySuggestion] = useState(-1);
@@ -431,6 +463,7 @@ export function BrowserPanelView({
 	const [customDeviceWidth, setCustomDeviceWidth] = useState("390");
 	const [controlsView, setControlsView] = useState<"root" | "devices" | "profiles">("root");
 	const [controlsOpen, setControlsOpen] = useState(false);
+	const [runtimeReconnectPending, setRuntimeReconnectPending] = useState(false);
 	const [browserProfiles, setBrowserProfiles] = useState<BrowserProfile[]>([]);
 	const [profilesLoading, setProfilesLoading] = useState(false);
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
@@ -439,8 +472,17 @@ export function BrowserPanelView({
 			? clampDeviceFrameWidth(Number(customDeviceWidth))
 			: DEVICE_PRESETS.find((preset) => preset.id === devicePreset)?.width;
 	const urlInputRef = useRef<HTMLInputElement>(null);
+	const findInputRef = useRef<HTMLInputElement>(null);
+	const findComposingRef = useRef(false);
+	const findStateRef = useRef(findState);
+	findStateRef.current = findState;
+	const [findOpen, setFindOpen] = useState(false);
+	const findOpenRef = useRef(findOpen);
+	findOpenRef.current = findOpen;
+	const [findQuery, setFindQuery] = useState("");
 	const historyMenuRef = useRef<HTMLDivElement>(null);
 	const historyRequestGenerationRef = useRef(0);
+	const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	const [draggedTopTabId, setDraggedTopTabId] = useState<string | null>(null);
 	const draggedTopTab = tabs.find((tab) => tab.id === draggedTopTabId);
 	const {
@@ -555,6 +597,49 @@ export function BrowserPanelView({
 			}),
 		[viewId],
 	);
+	useEffect(() => {
+		if (findOpenRequest <= 0) return;
+		if (findOpenRef.current) {
+			setFindOpen(false);
+			setFindQuery("");
+			void stopFindInPage(true);
+			return;
+		}
+		setFindOpen(true);
+		setFindQuery(findStateRef.current.query);
+		requestAnimationFrame(() => {
+			findInputRef.current?.focus();
+			findInputRef.current?.select();
+		});
+	}, [findOpenRequest, stopFindInPage]);
+	useEffect(() => {
+		if (!findOpen || findState.tabId !== activeTabId) return;
+		setFindQuery(findState.query);
+	}, [activeTabId, findOpen, findState.query, findState.tabId]);
+	const closeFind = useCallback(() => {
+		setFindOpen(false);
+		setFindQuery("");
+		void stopFindInPage(true);
+	}, [stopFindInPage]);
+	const runFind = useCallback(
+		(query: string, forward = true, newSession = true) => {
+			void findInPage(query, forward, newSession);
+		},
+		[findInPage],
+	);
+	const handleFindKeyDown = useCallback(
+		(event: KeyboardEvent<HTMLInputElement>) => {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				closeFind();
+				return;
+			}
+			if (event.key !== "Enter" || findComposingRef.current || !findQuery) return;
+			event.preventDefault();
+			runFind(findQuery, !event.shiftKey, false);
+		},
+		[closeFind, findQuery, runFind],
+	);
 	useEffect(
 		() =>
 			window.ao?.browser.onReopenClosedTab((targetViewId) => {
@@ -590,14 +675,26 @@ export function BrowserPanelView({
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const browserDownloads = useBrowserDownloads();
 	const [downloadsOpen, setDownloadsOpen] = useState(false);
-	const previousDownloadCount = useRef(0);
+	const knownDownloadIds = useRef<Set<string> | null>(null);
+	const observedInitialDownloads = useRef(false);
 	const hasActiveDownload = browserDownloads.downloads.some(
 		(download) => download.status === "progressing" || download.status === "paused",
 	);
 	useEffect(() => {
-		if (browserDownloads.downloads.length > previousDownloadCount.current) setDownloadsOpen(true);
-		previousDownloadCount.current = browserDownloads.downloads.length;
-	}, [browserDownloads.downloads.length]);
+		if (!browserDownloads.initialized) return;
+		const nextIds = new Set(browserDownloads.downloads.map((download) => download.id));
+		if (!observedInitialDownloads.current) {
+			observedInitialDownloads.current = true;
+			knownDownloadIds.current = nextIds;
+			return;
+		}
+		const previousIds = knownDownloadIds.current;
+		const hasNewDownload = previousIds
+			? browserDownloads.downloads.some((download) => !previousIds.has(download.id))
+			: false;
+		if (active && hasNewDownload) setDownloadsOpen(true);
+		knownDownloadIds.current = nextIds;
+	}, [active, browserDownloads.downloads, browserDownloads.initialized]);
 
 	const takeScreenshot = useCallback(async () => {
 		if (!viewId || !window.ao?.browser) return;
@@ -611,6 +708,8 @@ export function BrowserPanelView({
 
 	useEffect(() => {
 		setUrlInput(navState.url);
+		setUrlCopied(false);
+		clearTimeout(copyFeedbackTimeoutRef.current);
 		setHistorySuggestions([]);
 		setActiveHistorySuggestion(-1);
 		// A prior submit (typed, or pasted, then Enter) leaves the caret at the
@@ -622,7 +721,10 @@ export function BrowserPanelView({
 		const frame = window.requestAnimationFrame(() => {
 			if (urlInputRef.current) urlInputRef.current.scrollLeft = 0;
 		});
-		return () => window.cancelAnimationFrame(frame);
+		return () => {
+			window.cancelAnimationFrame(frame);
+			clearTimeout(copyFeedbackTimeoutRef.current);
+		};
 	}, [navState.url]);
 
 	useEffect(() => {
@@ -759,6 +861,18 @@ export function BrowserPanelView({
 		void openLinkInSystemBrowser(navState.url);
 	};
 
+	const copyCurrentURL = async () => {
+		if (!navState.url) return;
+		try {
+			await aoBridge.clipboard.writeText(navState.url);
+			setUrlCopied(true);
+			clearTimeout(copyFeedbackTimeoutRef.current);
+			copyFeedbackTimeoutRef.current = setTimeout(() => setUrlCopied(false), 1_200);
+		} catch {
+			showGlobalToast(t("browser.urlCopyFailed"), undefined, "top-center");
+		}
+	};
+
 	const toggleAnnotationMode = async () => {
 		if (!canAnnotate || status === "sending") return;
 		if (canRetryAnnotation) {
@@ -818,7 +932,18 @@ export function BrowserPanelView({
 							? error
 							: "";
 	const agentStatusLabel = agentActivityLabel(agentBrowserActivity, agentBrowserActive);
+	const runtimeDisconnected = hasNativeBrowser && browserRuntimeConnected === false;
+	const reconnectRuntime = useCallback(async () => {
+		setRuntimeReconnectPending(true);
+		try {
+			await reconnectBrowserRuntime();
+		} finally {
+			setRuntimeReconnectPending(false);
+		}
+	}, [reconnectBrowserRuntime]);
 	const suggestionsOpen = urlEditing && historySuggestions.length > 0;
+	const currentURLIsWeb = isWebLink(navState.url);
+	const copyURLLabel = t(urlCopied ? "browser.urlCopied" : "browser.copyUrl");
 	const browserAddressBar = (
 		<form
 			className={cn(
@@ -862,7 +987,39 @@ export function BrowserPanelView({
 							ref={urlInputRef}
 							value={urlEditing || poppedOut ? urlInput : getDisplayUrl(navState.url)}
 						/>
-						{isWebLink(navState.url) ? (
+						{navState.url ? (
+							<BrowserControlTooltip label={copyURLLabel}>
+								<Button
+									aria-label={copyURLLabel}
+									className={cn(
+										"browser-panel__url-copy",
+										!currentURLIsWeb && "browser-panel__url-copy--only",
+									)}
+									onClick={() => void copyCurrentURL()}
+									size="icon-sm"
+									type="button"
+									variant="ghost"
+								>
+									<span className="relative size-icon-base">
+										<Copy
+											aria-hidden="true"
+											className={cn(
+												"absolute inset-0 size-icon-base transition-[opacity,transform] duration-150 motion-reduce:transition-none",
+												urlCopied ? "scale-75 opacity-0" : "scale-100 opacity-100",
+											)}
+										/>
+										<Check
+											aria-hidden="true"
+											className={cn(
+												"absolute inset-0 size-icon-base text-success transition-[opacity,transform] duration-150 motion-reduce:transition-none",
+												urlCopied ? "scale-100 opacity-100" : "scale-75 opacity-0",
+											)}
+										/>
+									</span>
+								</Button>
+							</BrowserControlTooltip>
+						) : null}
+						{currentURLIsWeb ? (
 							<BrowserControlTooltip label={t("inspector.openInSystemBrowser")}>
 									<Button
 										aria-label={t("inspector.openInSystemBrowser")}
@@ -977,37 +1134,16 @@ export function BrowserPanelView({
 				</BrowserControlTooltip>
 		</div>
 	);
+	const annotationIdle = annotationState.count === 0 && !annotationState.hasDraft;
 	const annotationToolbar = (
-		<div
-			className="browser-panel__toolbar browser-panel__toolbar--annotation"
-			data-testid="browser-toolbar"
-		>
+		<div className="browser-panel__toolbar browser-panel__toolbar--annotation">
 			<div className="browser-panel__annotation-actions browser-panel__annotation-actions--leading">
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<Button
-							aria-label={t("browser.annotationExitMode")}
-							onClick={() => {
-								cancelPicking();
-								void setAnnotationMode(false);
-							}}
-							size="icon-sm"
-							type="button"
-							variant="ghost"
-						>
-							<X aria-hidden="true" className="size-icon-base" />
-						</Button>
-					</TooltipTrigger>
-					<TooltipContent data-browser-native-overlay="true" side="bottom">
-						{t("browser.annotationExit")}
-					</TooltipContent>
-				</Tooltip>
-				<span aria-hidden="true" className="browser-panel__annotation-separator" />
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button
 							aria-label={t("browser.annotationDiscardAllComments")}
 							className="browser-panel__annotation-discard"
+							disabled={annotationIdle && annotationState.screenshotCount === 0}
 							onClick={() => void annotationAction("discard-all")}
 							size="icon-sm"
 							type="button"
@@ -1022,17 +1158,18 @@ export function BrowserPanelView({
 				</Tooltip>
 			</div>
 			<div className="browser-panel__annotation-context">
-				<span aria-hidden="true" className="browser-panel__annotation-status-dot" />
-				<span className="browser-panel__annotation-label">{t("browser.annotationActive")}</span>
-				<span className="browser-panel__annotation-host">
-					{(() => {
-						try {
-							return new URL(navState.url).hostname;
-						} catch {
-							return navState.title || "page";
-						}
-					})()}
-				</span>
+				{annotationIdle ? (
+					<span className="browser-panel__annotation-hint">{t("browser.annotationEmptyHint")}</span>
+				) : (
+					<>
+						{annotationState.count > 0 ? (
+							<span aria-hidden="true" className="browser-panel__annotation-status-dot" />
+						) : null}
+						<span className="browser-panel__annotation-count">
+							{t("browser.annotationCount", { count: annotationState.count })}
+						</span>
+					</>
+				)}
 			</div>
 			<div className="browser-panel__annotation-actions browser-panel__annotation-actions--trailing">
 				<Tooltip>
@@ -1058,6 +1195,7 @@ export function BrowserPanelView({
 					<TooltipTrigger asChild>
 						<Button
 							aria-label={t("browser.annotationOriginalPage")}
+							disabled={annotationIdle}
 							onBlur={() => void annotationAction("restore-preview")}
 							onPointerCancel={() => void annotationAction("restore-preview")}
 							onPointerDown={() => void annotationAction("preview-original")}
@@ -1077,11 +1215,12 @@ export function BrowserPanelView({
 				<span aria-hidden="true" className="browser-panel__annotation-separator" />
 				<Button
 					aria-label={t("browser.annotationSendAll")}
-					className="browser-panel__annotation-send h-7 gap-1.5 px-2.5 text-xs font-medium"
-					disabled={annotationState.count === 0 && !annotationState.hasDraft}
+					className="browser-panel__annotation-send"
+					disabled={annotationIdle}
 					onClick={() => void annotationAction("submit")}
 					size="sm"
 					type="button"
+					variant={annotationIdle ? "ghost" : "primary"}
 				>
 					{t("browser.annotationSend")}
 					{annotationState.count > 0 ? (
@@ -1131,13 +1270,26 @@ export function BrowserPanelView({
 		>
 			{topbarHost ? createPortal(browserAddressBar, topbarHost) : browserAddressBar}
 			<div
-				className={cn("browser-panel__tab-row", annotationMode && "browser-panel__tab-row--annotation")}
+				className="browser-panel__tab-row"
 				data-testid="browser-tab-row"
 			>
-				{annotationMode ? annotationToolbar : (
-					<>
-						{browserTabBar}
-						<div className="browser-panel__toolbar" data-testid="browser-toolbar">
+				{browserTabBar}
+				<div className="browser-panel__toolbar" data-testid="browser-toolbar">
+							{runtimeDisconnected ? (
+								<div className="flex min-w-0 items-center gap-1.5 text-2xs text-destructive" data-testid="browser-runtime-alert" role="alert">
+									<span className="truncate">{t("browser.runtimeDisconnected")}</span>
+									<Button
+										className="shrink-0"
+										disabled={runtimeReconnectPending}
+										onClick={() => void reconnectRuntime()}
+										size="sm"
+										type="button"
+										variant="outline"
+									>
+										{t("browser.reconnectRuntime")}
+									</Button>
+								</div>
+							) : null}
 							<BrowserControlTooltip label={t("browser.back")}>
 								<span className="browser-panel__navigation-control inline-flex">
 							<Button
@@ -1274,6 +1426,19 @@ export function BrowserPanelView({
 						</DropdownMenuContent>
 					</DropdownMenu>
 				) : null}
+				{poppedOut ? (
+					<BrowserControlTooltip label={t("browser.returnToPanel")}>
+						<Button
+							aria-label={t("browser.returnToPanel")}
+							onClick={() => onTogglePopOut(false)}
+							size="icon-sm"
+							type="button"
+							variant="ghost"
+						>
+							<Minimize2 aria-hidden="true" className="size-icon-base" />
+						</Button>
+					</BrowserControlTooltip>
+				) : null}
 				<DropdownMenu
 					onOpenChange={(open) => {
 						setControlsOpen(open);
@@ -1403,20 +1568,18 @@ export function BrowserPanelView({
 							</>
 						) : (
 							<>
-								<DropdownMenuItem
-									className="gap-2"
-									onSelect={() => onTogglePopOut(!poppedOut)}
-								>
-									{poppedOut ? (
-										<Minimize2 aria-hidden="true" className="size-icon-base shrink-0" />
-									) : (
+								{!poppedOut ? (
+									<>
+										<DropdownMenuItem
+											className="gap-2"
+											onSelect={() => onTogglePopOut(true)}
+										>
 										<Maximize2 aria-hidden="true" className="size-icon-base shrink-0" />
-									)}
-									<span className="flex-1">
-										{poppedOut ? t("browser.returnToPanel") : t("browser.popOut")}
-									</span>
-								</DropdownMenuItem>
-								<div className="my-1 h-px bg-border" role="separator" />
+											<span className="flex-1">{t("browser.popOut")}</span>
+										</DropdownMenuItem>
+										<div className="my-1 h-px bg-border" role="separator" />
+									</>
+								) : null}
 								<DropdownMenuItem
 									className="gap-2"
 									onSelect={(event) => {
@@ -1470,10 +1633,92 @@ export function BrowserPanelView({
 						)}
 					</DropdownMenuContent>
 				</DropdownMenu>
-						</div>
-					</>
-				)}
+				</div>
 			</div>
+			<AnimatePresence initial={false}>
+				{annotationMode ? (
+					<motion.div
+						key="annotation-toolbar"
+						className="browser-panel__annotation-row"
+						data-testid="browser-annotation-toolbar"
+						initial={prefersReducedMotion ? false : { height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={prefersReducedMotion ? undefined : { height: 0, opacity: 0 }}
+						transition={
+							prefersReducedMotion
+								? { duration: 0 }
+								: { duration: 0.18, ease: [0.22, 1, 0.36, 1] }
+						}
+					>
+						{annotationToolbar}
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+			{findOpen ? (
+				<div className="browser-panel__find-row" role="search" data-testid="browser-find-row">
+					<Search aria-hidden="true" className="size-3.5 shrink-0 text-passive" />
+					<input
+						ref={findInputRef}
+						className="browser-panel__find-input"
+						value={findQuery}
+						placeholder={t("browser.find.placeholder")}
+						aria-label={t("browser.find.placeholder")}
+						onChange={(event) => {
+							const query = event.currentTarget.value;
+							setFindQuery(query);
+							if (!findComposingRef.current) runFind(query);
+						}}
+						onCompositionStart={() => {
+							findComposingRef.current = true;
+						}}
+						onCompositionEnd={(event) => {
+							findComposingRef.current = false;
+							const query = event.currentTarget.value;
+							setFindQuery(query);
+							runFind(query);
+						}}
+						onKeyDown={handleFindKeyDown}
+					/>
+					<span className="browser-panel__find-status" aria-live="polite" aria-atomic="true">
+						{findQuery
+							? findState.matches > 0
+								? t("browser.find.matchCount", {
+									active: findState.activeMatchOrdinal,
+									total: findState.matches,
+								})
+								: findState.finalUpdate
+									? t("browser.find.noResults")
+									: ""
+							: ""}
+					</span>
+					<button
+						type="button"
+						className="browser-panel__find-button"
+						disabled={!findQuery}
+						aria-label={t("browser.find.previous")}
+						onClick={() => runFind(findQuery, false, false)}
+					>
+						<ChevronUp aria-hidden="true" />
+					</button>
+					<button
+						type="button"
+						className="browser-panel__find-button"
+						disabled={!findQuery}
+						aria-label={t("browser.find.next")}
+						onClick={() => runFind(findQuery, true, false)}
+					>
+						<ChevronDown aria-hidden="true" />
+					</button>
+					<button
+						type="button"
+						className="browser-panel__find-button"
+						aria-label={t("browser.find.close")}
+						onClick={closeFind}
+					>
+						<X aria-hidden="true" />
+					</button>
+				</div>
+			) : null}
 			<div className="browser-panel__body flex min-h-0 flex-1 overflow-hidden">
 				<div
 					className="browser-panel__viewport relative min-h-0 flex-1 overflow-hidden"

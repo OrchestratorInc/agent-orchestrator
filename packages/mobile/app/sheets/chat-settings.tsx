@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { ChatSettingsSheet } from "../../lib/chat/ChatSettingsModal";
 import { readChatSheet, releaseChatSheet } from "../../lib/chat/chatSheetRegistry";
 import { runSheetMutation } from "../../lib/chat/sheetMutation";
+import { backOr } from "../../lib/backNavigation";
 
 export default function ChatSettingsRoute() {
 	const router = useRouter();
@@ -15,7 +16,7 @@ export default function ChatSettingsRoute() {
 	const [error, setError] = useState(entry?.kind === "turn-settings" ? entry.error : undefined);
 	const [saving, setSaving] = useState(false);
 	const [refreshing, setRefreshing] = useState(false);
-	if (entry?.kind !== "turn-settings" || !snapshot) return <Unavailable onClose={() => router.back()} />;
+	if (entry?.kind !== "turn-settings" || !snapshot) return <Unavailable onClose={() => backOr(router)} />;
 	const changeSettings = async (settings: typeof snapshot.settings) => {
 		if (saving || refreshing) return;
 		setSaving(true);
@@ -44,7 +45,7 @@ export default function ChatSettingsRoute() {
 		}, setError);
 		setRefreshing(false);
 	};
-	return <ChatSettingsSheet snapshot={snapshot} models={models} options={options} disabled={entry.disabled || saving || refreshing} refreshing={refreshing} error={error} onRefresh={() => { void refresh(); }} onSettings={(settings) => { void changeSettings(settings); }} onOption={(id, value) => { void changeOption(id, value); }} />;
+	return <ChatSettingsSheet snapshot={snapshot} models={models} options={options} disabled={entry.disabled || saving || refreshing} refreshing={refreshing} error={error} onRefresh={() => { void refresh(); }} onSettings={changeSettings} onOption={changeOption} />;
 }
 
 function Unavailable({ onClose }: { onClose(): void }) {

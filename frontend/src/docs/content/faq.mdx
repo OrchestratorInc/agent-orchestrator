@@ -1,0 +1,62 @@
+---
+title: FAQ
+description: Common questions about the current Agent Orchestrator desktop product.
+---
+
+<Accordions expandAll>
+	<Accordion title="How is AO different from several agent terminals?">
+		AO adds isolated worktrees, durable session identity, Chat or TUI control, pull-request observation, lifecycle reactions, review runs, notifications, and browser previews around those agents.
+	</Accordion>
+
+	<Accordion title="Do I have to use Claude Code?">
+		No. AO includes adapters for more than twenty harnesses, including Claude Code, Codex, Cursor, Aider, OpenCode, Droid, Kimi Code, and others. Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui). Unreal Agent is Chat-only; most remaining harnesses also have terminal interfaces.
+	</Accordion>
+
+	<Accordion title="Does AO merge pull requests?">
+		AO provides a merge action, but merging is a deliberate user or workflow decision, not an unconditional default. Review code and repository policy before requesting a merge.
+	</Accordion>
+
+	<Accordion title="Which source-control systems are supported?">
+		GitHub and GitLab provide pull-request or merge-request (PR/MR), CI, review, and merge-status data. Issue intake works with either provider when enabled in both daemon and project settings. AO reads issues but does not change them. Linear and old external plugin packages are not supported. See [source-control setup](/plugins/scm).
+	</Accordion>
+
+	<Accordion title="Does AO need webhooks?">
+		The local SCM observation workflow does not require webhooks. GitHub polling uses authentication, ETag guards, and semantic diffing. Live desktop updates come from the daemon's SQLite CDC event stream.
+	</Accordion>
+
+	<Accordion title="Does it work on Windows?">
+		Yes. Windows supports the desktop app, Chat, and native Terminal UI through AO's conpty host. tmux and iTerm2-specific behavior applies only to other platforms.
+	</Accordion>
+
+	<Accordion title="Where does AO store data?">
+		Under `~/.ao` by default. Durable daemon state is SQLite under `~/.ao/data`; the same AO home also contains the run file, managed worktrees and metadata, Electron data, and mobile configuration. Advanced daemon paths can be overridden with `AO_DATA_DIR` and `AO_RUN_FILE`.
+	</Accordion>
+
+	<Accordion title="Can I expose AO on a remote server?">
+		Do not expose the primary daemon listener. It is unauthenticated and fixed to `127.0.0.1`. Connect Mobile creates a separate authenticated path. Its direct LAN listener is plaintext for trusted networks; an advertised managed HTTPS endpoint supports remote pairing. The current Tailscale pairing flow has additional limits, especially on iPhone. See [Connect Mobile](/configuration/remote-access).
+	</Accordion>
+
+	<Accordion title="What does AO cost?">
+		AO is Apache-2.0 licensed. Agent usage is billed according to the provider account or subscription used by each installed harness. Chat records usage data when the provider reports it. Cloud is a separately gated service; check the account offering shown in your app rather than assuming the local license includes remote execution or provider credits.
+	</Accordion>
+
+	<Accordion title="Does AO upload my source code?">
+		Local sessions use worktrees on your computer. Your coding agents and source-control tools follow their own data policies. Cloud sessions run remotely and require sharing the project content needed for that work.
+
+		Production builds also send product telemetry to PostHog. It can include an installation ID, coarse usage and reliability data, GitHub repository-owner names when you add a project, and your GitHub username when a session starts. PostHog can associate events that share the installation ID with that username. It does not include source code or conversation content, and session recording is disabled.
+
+		Desktop and daemon telemetry settings, Event reporting consent, and mobile controls have different scopes. See the [telemetry reference](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/telemetry.md#turn-desktop-and-daemon-telemetry-off).
+	</Accordion>
+
+	<Accordion title="Can I still install AO from npm?">
+		The legacy `@aoagents/ao` package remains available, but `0.10.0` is its final release and it will not receive updates. Prefer the [desktop download](/installation). Existing npm users can run `ao start` to fetch and open the desktop build.
+	</Accordion>
+
+	<Accordion title="Can Chat and Terminal UI run at the same time for one session?">
+		No. A session commits to one controller at a time. Compatible Claude Code and Codex sessions can hand off between interfaces, but AO drains or interrupts the old controller before activating the new one.
+	</Accordion>
+
+	<Accordion title="How do I uninstall AO?">
+		Remove the desktop application using your operating system's normal process. If you also remove `~/.ao`, you permanently delete AO's database, session history, managed state, Electron data, and mobile pairing configuration. Inspect and preserve any work you need first. Legacy CLI users can separately run `npm uninstall -g @aoagents/ao`.
+	</Accordion>
+</Accordions>

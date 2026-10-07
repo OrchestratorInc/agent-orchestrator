@@ -11,6 +11,7 @@ import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
 import { useConversationConfigOptions, useConversationModels, useConversationSkills } from "../../hooks/useConversation";
 
 const LINK = "http://localhost:5173";
+const REPORT_LINK = "reports/new-report.html";
 
 function snapshotFor(sessionId: string): ConversationSnapshot & { capabilities: string[] } {
 	return {
@@ -52,6 +53,7 @@ const {
 	agentSwitchState: { data: [] as AgentSwitchSummary[] },
 	conversationCommandState: {
 		busy: false,
+		chooseSettings: vi.fn(),
 		pendingAcceptedTurnId: undefined as string | undefined,
 		acknowledgeAcceptedTurn: vi.fn(),
 	},
@@ -119,6 +121,8 @@ vi.mock("./ChatWorkspace", async () => {
 			newWorkDisabled,
 			onLinkOpen,
 			onRememberPermissions,
+			onChooseSettings,
+			configOptionError,
 			snapshot,
 			shellTarget,
 		}: {
@@ -128,6 +132,8 @@ vi.mock("./ChatWorkspace", async () => {
 			newWorkDisabled?: boolean;
 			onLinkOpen?: (url: string) => void;
 			onRememberPermissions?: unknown;
+			onChooseSettings?: unknown;
+			configOptionError?: string;
 			snapshot: { sessionId?: string };
 			shellTarget?: { handleId: string };
 		}) => {
@@ -145,10 +151,15 @@ vi.mock("./ChatWorkspace", async () => {
 					{snapshot.sessionId ? <div>Mounted {mountedSessionId}</div> : null}
 					{snapshot.sessionId ? <div>Rendered {snapshot.sessionId}</div> : null}
 					<div data-testid="remember-available">{String(Boolean(onRememberPermissions))}</div>
+					<div data-testid="turn-settings-available">{String(Boolean(onChooseSettings))}</div>
+					<div data-testid="config-option-error">{configOptionError}</div>
 					{headerActions}
 					{sessionTabAction}
 					<button type="button" onClick={() => onLinkOpen?.(LINK)}>
 						Open chat link
+					</button>
+					<button type="button" onClick={() => onLinkOpen?.(REPORT_LINK)}>
+						Open report link
 					</button>
 					{shellTarget ? <div data-testid="shell-target">{shellTarget.handleId}</div> : null}
 				</div>
@@ -211,6 +222,23 @@ afterEach(() => {
 });
 
 describe("SessionChatSurface link routing", () => {
+	it("keeps OpenCode approvals writable when its provider supplies Build/Plan mode", () => {
+		conversationState.snapshot = { capabilities: ["config_options"], harness: "opencode" };
+		configState.options = [{
+			id: "mode",
+			name: "Mode",
+			category: "mode",
+			type: "select",
+			currentValue: "build",
+			choices: [{ value: "build", name: "Build" }, { value: "plan", name: "Plan" }],
+		}];
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, provider: "opencode" }} /></Wrapper>);
+
+		expect(screen.getByTestId("turn-settings-available")).toHaveTextContent("true");
+	});
+
 	it("does not report idle work before the conversation snapshot loads", () => {
 		conversationState.snapshot = undefined;
 		conversationState.isLoading = true;
@@ -414,6 +442,25 @@ describe("SessionChatSurface link routing", () => {
 			body: { url: LINK },
 		});
 		await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: workspaceQueryKey }));
+	});
+
+	it("asks the confined preview resolver to open a report that Files has not indexed yet", async () => {
+		const user = userEvent.setup();
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+
+		render(
+			<Wrapper client={queryClient}>
+				<SessionChatSurface session={session} onOpenLinkInBrowser={vi.fn()} />
+			</Wrapper>,
+		);
+		await user.click(screen.getByRole("button", { name: "Open report link" }));
+
+		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", {
+			params: { path: { sessionId: session.id } },
+			body: { url: REPORT_LINK, requireWorkspaceFile: true },
+		});
 	});
 
 	it("opens a plain Chat link from an active orchestrator in its Browser panel", async () => {
@@ -775,8 +822,8 @@ describe("SessionChatSurface link routing", () => {
 		);
 
 		await waitFor(() => {
-			expect(clearCatalogsMock).toHaveBeenCalledWith(queryClient, session.id);
-			expect(invalidateCatalogsMock).toHaveBeenCalledWith(queryClient, session.id);
+			expect(clearCatalogsMock).toHaveBeenCalledWith(queryClient, session.id, undefined);
+			expect(invalidateCatalogsMock).toHaveBeenCalledWith(queryClient, session.id, undefined);
 		});
 		expect(catalogObserverState.enabled).toContain(false);
 		await waitFor(() => expect(catalogObserverState.enabled.at(-1)).toBe(true));
@@ -1044,18 +1091,25 @@ describe("SessionChatSurface link routing", () => {
 
 
 describe("controller catalogs during an interface handoff", () => {
+	it("hides a stale catalog error while a hibernated controller is offline", () => {
+		configState.error = "the agent controller for this session is not running";
+		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "hibernated" } };
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		expect(screen.getByTestId("config-option-error")).toBeEmptyDOMElement();
+	});
+
 	it.each(["stopped", "connecting", "ready"] as const)("waits through handoff with a %s snapshot, then loads catalogs", (state) => {
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state } };
 		const client = new QueryClient();
 		const { rerender } = render(<Wrapper client={client}><SessionChatSurface session={session} controllerTransitioning /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false);
+			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
 		}
 
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "ready" } };
 		rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, true);
+			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
 		}
 	});
 
@@ -1063,7 +1117,7 @@ describe("controller catalogs during an interface handoff", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "stopped" } };
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false);
+			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
 		}
 	});
 });

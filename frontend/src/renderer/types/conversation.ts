@@ -181,6 +181,9 @@ export interface ConversationMessage {
 	delivery?: DeliveryState;
 	/** Set when origin is a worker or automation, for the attribution line. */
 	senderLabel?: string;
+	senderSessionId?: string;
+	senderProjectId?: string;
+	senderDisplayName?: string;
 	createdAt: string;
 }
 
@@ -413,6 +416,10 @@ export interface SystemEventDetail {
 	revision?: number;
 	/** steer: the user's own words, delivered into a turn already running. */
 	origin?: string;
+	/** steer: source session metadata for an AO automation steer. */
+	senderSessionId?: string;
+	senderProjectId?: string;
+	senderDisplayName?: string;
 	clientMessageId?: string;
 	/** steer: complete provider-neutral content copied from a promoted queue item. */
 	content?: Array<{
@@ -624,8 +631,8 @@ export interface ChatSkill {
 	source?: string;
 }
 
-/** Health of the daemon's connection to the provider. */
-export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped";
+/** State of the daemon's connection to the provider. */
+export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped" | "hibernated";
 
 /**
  * How full this conversation is.
@@ -684,11 +691,16 @@ export interface ModelReroute {
 
 /** The provider account this conversation runs under. */
 export interface ConversationAccount {
+	authenticationState?: "unknown" | "required" | "authenticated";
+	authVerifiedAt?: string;
+	lastAuthFailureAt?: string;
+	lastAuthFailureReason?: string;
+	authFailureId?: string;
 	authMode?: string;
 	planLabel?: string;
 	/**
 	 * When the provider last demanded credentials AO does not hold. Present means the
-	 * session has stopped working for a reason no retry will fix.
+	 * daemon has not yet verified recovery.
 	 */
 	reauthRequiredAt?: string;
 	reauthReason?: string;
@@ -824,7 +836,8 @@ export function brokenMcpServers(snapshot: ConversationSnapshot): McpServer[] {
 
 /** Whether the provider is demanding credentials the daemon does not hold. */
 export function needsReauth(snapshot: ConversationSnapshot): boolean {
-	return Boolean(snapshot.account?.reauthRequiredAt);
+	return snapshot.account?.authenticationState === "required" ||
+		(snapshot.account?.authenticationState === undefined && Boolean(snapshot.account?.reauthRequiredAt));
 }
 
 /**
@@ -841,15 +854,31 @@ export function activeTurn(snapshot: ConversationSnapshot): ConversationTurn | u
 }
 
 /**
- * Turn ids whose human prompt must not appear in the timeline.
+ * Turn ids whose human prompt is represented in the queue dock instead.
  *
- * Queued turns live in the dock until dispatch. Turns cancelled from the dock
- * before dispatch must not reappear in the timeline after the snapshot refreshes.
+ * Human prompts for queued turns live in the dock until dispatch. Automation
+ * messages have no dock row, so their queued feedback stays visible in the
+ * timeline. Human turns cancelled from the dock must not reappear after refresh.
  */
 export function hiddenTimelineTurnIds(snapshot: ConversationSnapshot): Set<string> {
+	const humanPromptTurnIds = new Set<string>();
+	for (const item of snapshot.items) {
+		if (
+			item.kind === "message" &&
+			item.role === "user" &&
+			item.origin === "human" &&
+			item.turnId
+		) {
+			humanPromptTurnIds.add(item.turnId);
+		}
+	}
 	return new Set(
 		snapshot.turns
-			.filter((turn) => turn.state === "queued" || turn.state === "cancelled")
+			.filter(
+				(turn) =>
+					(turn.state === "queued" || turn.state === "cancelled") &&
+					humanPromptTurnIds.has(turn.id),
+			)
 			.map((turn) => turn.id),
 	);
 }

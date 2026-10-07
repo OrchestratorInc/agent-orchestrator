@@ -3,11 +3,14 @@ info:
   title: AO Cloud Public API
   version: 1.0.0
   description: |
-    Client-facing contract for a separate AO Cloud implementation. This
-    repository does not serve these routes. The worker surface documents the
-    exact outbound HTTP protocol used by sandbox workers, including one-time
-    bootstrap, rotating credentials, fenced turn execution, orchestration, and
-    durable workspace and terminal transport.
+    Client-facing contract for AO Cloud. The Cloud server implementation lives
+    under `cloud/` in this repository, while this file is the versioned contract
+    used to generate the runtime-neutral client types. The worker surface
+    documents the exact outbound HTTP protocol used by sandbox workers,
+    including one-time bootstrap, rotating credentials, fenced turn execution,
+    orchestration, and durable workspace and terminal transport.
+    This is the currently documented Cloud API subset; broader route parity is
+    tracked in https://github.com/Untrivial-ai/agent-orchestrator/issues/6220.
 security:
   - bearerAuth: []
 tags:
@@ -38,6 +41,63 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CurrentAccount"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/providers:
+    get:
+      operationId: listUserProviderConnections
+      tags: [Providers]
+      responses:
+        "200":
+          description: Redacted provider connections owned by the authenticated user.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [providerConnections]
+                properties:
+                  providerConnections:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RedactedProviderConnection"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/providers/{agent}:
+    parameters:
+      - name: agent
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [claude-code, codex, cursor, opencode]
+    put:
+      operationId: putUserAgentConnection
+      tags: [Providers]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutAgentProviderConnectionInput"
+      responses:
+        "200":
+          description: The validated personal coding-agent credential was encrypted and stored.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [providerConnection]
+                properties:
+                  providerConnection:
+                    $ref: "#/components/schemas/RedactedProviderConnection"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteUserAgentConnection
+      tags: [Providers]
+      responses:
+        "204":
+          description: The personal coding-agent credential was disconnected.
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/github/user:
@@ -396,6 +456,28 @@ paths:
                     $ref: "#/components/schemas/Session"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/wake:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    post:
+      operationId: wakePausedSessions
+      tags: [Sessions]
+      description: Ask the reconciler to resume the user's idle-paused sandboxes.
+      responses:
+        "202":
+          description: The resume requests were accepted for asynchronous processing.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [woken]
+                properties:
+                  woken:
+                    type: integer
+                    format: int64
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -426,6 +508,78 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DeleteSessionResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: getSessionInterfaceTransition
+      tags: [Sessions]
+      responses:
+        "200":
+          description: Interface-switch readiness and the active transition, if any.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionInterfaceTransitionStatus"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: startSessionInterfaceTransition
+      tags: [Sessions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartSessionInterfaceTransitionInput"
+      responses:
+        "202":
+          description: Interface switch accepted for asynchronous processing.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [transition]
+                properties:
+                  transition:
+                    $ref: "#/components/schemas/SessionInterfaceTransition"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: cancelSessionInterfaceTransition
+      tags: [Sessions]
+      responses:
+        "200":
+          description: Interface switch cancelled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerOKResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition/{transitionId}/notice-acknowledgement:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - name: transitionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      operationId: acknowledgeSessionInterfaceTransitionNotice
+      tags: [Sessions]
+      responses:
+        "200":
+          description: Interface-switch failure or recovery notice acknowledged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerOKResponse"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/children:
@@ -497,13 +651,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [text]
-              properties:
-                text:
-                  type: string
-                  minLength: 1
-                  maxLength: 65536
+              $ref: "#/components/schemas/ChatMessageInput"
       responses:
         "202":
           description: Message accepted and durably appended.
@@ -515,6 +663,23 @@ paths:
                 properties:
                   event:
                     $ref: "#/components/schemas/UserMessageEvent"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-models:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: listChatModels
+      tags: [Sessions]
+      description: Model and reasoning-effort choices available to this session's agent.
+      responses:
+        "200":
+          description: Available Chat models.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatModelsResponse"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/cancel:
@@ -530,6 +695,63 @@ paths:
       responses:
         "202":
           description: Cancellation was durably requested for the turn.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerOKResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/TurnId"
+    post:
+      operationId: steerTurn
+      tags: [Sessions]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMessageInput"
+      responses:
+        "202":
+          description: Guidance for the active turn accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event]
+                properties:
+                  event:
+                    $ref: "#/components/schemas/TurnSteeredEvent"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/approvals/{requestId}/decide:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: decideChatApproval
+      tags: [Sessions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatApprovalDecisionInput"
+      responses:
+        "202":
+          description: Approval decision accepted.
           content:
             application/json:
               schema:
@@ -696,6 +918,32 @@ paths:
                 $ref: "#/components/schemas/WorkspaceFile"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/file/diff:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: readWorkspaceDiffFile
+      tags: [Workspace]
+      description: Read one cloud workspace file with its bounded unified diff.
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Docker workspace file review details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceDiffFileDetail"
+        "501":
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/diff:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -703,6 +951,7 @@ paths:
     get:
       operationId: getWorkspaceDiff
       tags: [Workspace]
+      description: Changed-file summary and line counts relative to the session compare base.
       responses:
         "200":
           description: Workspace changes relative to the session compare base.
@@ -710,6 +959,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WorkspaceDiff"
+        "501":
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/provider-connections:
@@ -741,7 +992,7 @@ paths:
         required: true
         schema:
           type: string
-          enum: [claude-code, codex, cursor]
+          enum: [claude-code, codex, cursor, opencode]
     put:
       operationId: putAgentProviderConnection
       tags: [Providers]
@@ -1431,6 +1682,138 @@ paths:
           $ref: "#/components/responses/WorkerScopeRequired"
         "409":
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/worker/notification-events:
+    post:
+      operationId: publishWorkerNotificationEvent
+      tags: [Worker Execution]
+      security:
+        - workerAuth: []
+      description: Durably accepts one agent notification event for the authenticated worker epoch.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentNotificationEvent"
+      responses:
+        "200":
+          description: The exact event was already durably accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationAcceptance"
+        "202":
+          description: The event was durably accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationAcceptance"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/WorkerUnauthorized"
+        "403":
+          $ref: "#/components/responses/WorkerScopeRequired"
+        "409":
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/notifications:
+    get:
+      operationId: listCloudNotifications
+      tags: [Events]
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [all, unread, read]
+            default: all
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: Recipient-scoped cloud notification inbox.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/notification-events:
+    get:
+      operationId: listCloudNotificationEvents
+      tags: [Events]
+      description: Returns durable events as JSON, or an SSE replay/live stream when requested with Accept text/event-stream.
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - name: after
+          in: query
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            maximum: 9007199254740991
+      responses:
+        "200":
+          description: Ordered durable cloud notification events.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationEventPage"
+            text/event-stream:
+              schema:
+                type: string
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/notifications/{notificationId}:
+    patch:
+      operationId: markCloudNotificationRead
+      tags: [Events]
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - name: notificationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  const: read
+      responses:
+        "200":
+          description: The notification was marked read.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/notifications/read-all:
+    post:
+      operationId: markAllCloudNotificationsRead
+      tags: [Events]
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      responses:
+        "200":
+          description: Every unread notification for the current recipient was marked read.
+        default:
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     bearerAuth:
@@ -1452,7 +1835,8 @@ components:
         `worker:turn:complete` for turn execution,
         `worker:credential:read` for the agent secret, `worker:git` for a
         checkout grant, `worker:orchestrate` for child controls, and
-        `worker:transport` for workspace and terminal transport.
+        `worker:transport` for workspace and terminal transport, and
+        `worker:notification` for durable agent notification intake.
   parameters:
     OrgId:
       name: orgId
@@ -1599,6 +1983,141 @@ components:
     EmptyObject:
       type: object
       additionalProperties: false
+    AgentNotificationEvent:
+      type: object
+      additionalProperties: false
+      required: [eventId, type, occurredAt, payload]
+      properties:
+        eventId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        type:
+          type: string
+          enum: [needs_input, agent_failed, agent_completed]
+        occurredAt:
+          type: string
+          format: date-time
+        payload:
+          type: object
+          maxProperties: 128
+    NotificationAcceptance:
+      type: object
+      additionalProperties: false
+      required: [accepted, eventId, duplicate]
+      properties:
+        accepted:
+          type: boolean
+          const: true
+        eventId:
+          type: string
+        duplicate:
+          type: boolean
+    CloudNotification:
+      type: object
+      additionalProperties: false
+      required: [id, orgId, recipientUserId, source, type, title, body, status, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        orgId:
+          type: string
+          format: uuid
+        recipientUserId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+          format: uuid
+        source:
+          type: string
+          const: cloud
+        type:
+          type: string
+        title:
+          type: string
+        body:
+          type: string
+        status:
+          type: string
+          enum: [unread, read]
+        eventId:
+          type: string
+        metadata:
+          type: object
+        resolvedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CloudNotificationEvent:
+      type: object
+      additionalProperties: false
+      required: [sequence, orgId, recipientUserId, kind, eventId, notification, createdAt]
+      properties:
+        sequence:
+          type: integer
+          format: int64
+        orgId:
+          type: string
+          format: uuid
+        recipientUserId:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [notification_created, notification_updated, notification_resolved]
+        eventId:
+          type: string
+        notification:
+          $ref: "#/components/schemas/CloudNotification"
+        createdAt:
+          type: string
+          format: date-time
+    NotificationPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, unreadCount, latestSequence]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CloudNotification"
+        page:
+          type: object
+          additionalProperties: false
+          required: [hasMore]
+          properties:
+            hasMore:
+              type: boolean
+            nextCursor:
+              type: string
+        unreadCount:
+          type: integer
+          minimum: 0
+        latestSequence:
+          type: integer
+          format: int64
+          minimum: 0
+    NotificationEventPage:
+      type: object
+      additionalProperties: false
+      required: [items, hasMore]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CloudNotificationEvent"
+        hasMore:
+          type: boolean
     AuthProvider:
       type: string
       enum: [workos, local]
@@ -2124,6 +2643,7 @@ components:
         - branch
         - prompt
         - mode
+        - interfaceMode
         - deniedCommands
         - repositoryUrl
         - defaultBranch
@@ -2149,6 +2669,12 @@ components:
           maxLength: 256
         mode:
           $ref: "#/components/schemas/SessionMode"
+        interfaceMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
+        model:
+          type: string
+          maxLength: 200
+          description: Coding-agent model to launch with; empty uses the harness default.
         deniedCommands:
           type: array
           items:
@@ -2441,6 +2967,63 @@ components:
         sandboxProviderConnectionId:
           type: string
           format: uuid
+    ChatMessageInput:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 65536
+        model:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
+        reasoningEffort:
+          type: string
+          enum: [none, minimal, low, medium, high, xhigh, max, ultra]
+        mode:
+          $ref: "#/components/schemas/SessionMode"
+        approvalMode:
+          type: string
+          enum: [default, accept-edits, auto, bypass-permissions]
+    ChatApprovalDecisionInput:
+      type: object
+      additionalProperties: false
+      required: [decisionId]
+      properties:
+        decisionId:
+          type: string
+          minLength: 1
+          maxLength: 256
+    ChatModel:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, default]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        description:
+          type: string
+        default:
+          type: boolean
+        efforts:
+          type: array
+          items:
+            type: string
+        defaultEffort:
+          type: string
+    ChatModelsResponse:
+      type: object
+      additionalProperties: false
+      required: [models]
+      properties:
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatModel"
     SendMessageInput:
       type: object
       additionalProperties: false
@@ -2465,6 +3048,15 @@ components:
           minimum: 1
           maximum: 100
     WorkerWorkspaceReadPayload:
+      type: object
+      additionalProperties: false
+      required: [path]
+      properties:
+        path:
+          type: string
+          minLength: 1
+          maxLength: 4096
+    WorkerWorkspaceDiffFilePayload:
       type: object
       additionalProperties: false
       required: [path]
@@ -2637,6 +3229,22 @@ components:
           const: workspace.diff
         payload:
           $ref: "#/components/schemas/EmptyObject"
+    WorkerWorkspaceDiffFileTransport:
+      type: object
+      additionalProperties: false
+      required: [id, kind, attempt, payload]
+      properties:
+        id:
+          type: string
+          format: uuid
+        attempt:
+          type: integer
+          minimum: 1
+        kind:
+          type: string
+          const: workspace.diff-file
+        payload:
+          $ref: "#/components/schemas/WorkerWorkspaceDiffFilePayload"
     WorkerTerminalOpenTransport:
       type: object
       additionalProperties: false
@@ -2707,6 +3315,7 @@ components:
         - $ref: "#/components/schemas/WorkerWorkspaceReadTransport"
         - $ref: "#/components/schemas/WorkerWorkspaceWriteTransport"
         - $ref: "#/components/schemas/WorkerWorkspaceDiffTransport"
+        - $ref: "#/components/schemas/WorkerWorkspaceDiffFileTransport"
         - $ref: "#/components/schemas/WorkerTerminalOpenTransport"
         - $ref: "#/components/schemas/WorkerTerminalInputTransport"
         - $ref: "#/components/schemas/WorkerTerminalResizeTransport"
@@ -2727,7 +3336,7 @@ components:
       additionalProperties: true
       description: |
         The server accepts any non-null JSON object. Built-in workers return a
-        WorkerWorkspaceEntryPage, WorkspaceFile, WorkspaceDiff,
+        WorkerWorkspaceEntryPage, WorkspaceFile, WorkspaceDiffFileDetail, WorkspaceDiff,
         WorkerTerminalOpenResult, WorkerTerminalInputResult, or
         WorkerTerminalCloseResult appropriate to the claimed command.
     WorkerCompleteTransportInput:
@@ -2807,6 +3416,76 @@ components:
             desiredState:
               type: string
               const: deleted
+    SessionInterfaceMode:
+      type: string
+      enum: [tui, chat]
+    SessionInterfaceTransitionPolicy:
+      type: string
+      enum: [drain, interrupt]
+    SessionInterfaceTransitionPhase:
+      type: string
+      enum: [requested, preflighting, draining, source_stopping, source_stopped, target_starting, activating, completed, failed, cancelled, recovery_required]
+    SessionInterfaceTransition:
+      type: object
+      additionalProperties: false
+      required: [id, sessionId, sourceMode, targetMode, policy, phase, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+          format: uuid
+        sourceMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
+        targetMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
+        policy:
+          $ref: "#/components/schemas/SessionInterfaceTransitionPolicy"
+        phase:
+          $ref: "#/components/schemas/SessionInterfaceTransitionPhase"
+        nativeConversationId:
+          type: string
+        errorCode:
+          type: string
+        errorDetail:
+          type: string
+        noticeAcknowledgedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+    SessionInterfaceTransitionStatus:
+      type: object
+      additionalProperties: false
+      required: [supported, targetMode]
+      properties:
+        supported:
+          type: boolean
+        targetMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
+        reasonCode:
+          type: string
+        reason:
+          type: string
+        transition:
+          $ref: "#/components/schemas/SessionInterfaceTransition"
+    StartSessionInterfaceTransitionInput:
+      type: object
+      additionalProperties: false
+      required: [targetMode, policy]
+      properties:
+        targetMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
+        policy:
+          $ref: "#/components/schemas/SessionInterfaceTransitionPolicy"
     Session:
       type: object
       additionalProperties: false
@@ -2820,6 +3499,7 @@ components:
         - branch
         - mode
         - deniedCommands
+        - interfaceMode
         - activityState
         - status
         - runtimeConnected
@@ -2846,10 +3526,17 @@ components:
           type: string
         mode:
           $ref: "#/components/schemas/SessionMode"
+        model:
+          type: string
+          description: >-
+            Coding-agent model the session launched with; empty means the harness
+            default.
         deniedCommands:
           type: array
           items:
             type: string
+        interfaceMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
         activityState:
           $ref: "#/components/schemas/SessionActivityState"
         status:
@@ -2898,6 +3585,12 @@ components:
         mode:
           $ref: "#/components/schemas/SessionMode"
           default: trusted
+        model:
+          type: string
+          maxLength: 200
+          description: >-
+            Coding-agent model the session launches with (harness-native id, e.g.
+            "anthropic/claude-opus-4-8"). Optional; empty uses the harness default.
         deniedCommands:
           type: array
           items:
@@ -3311,6 +4004,9 @@ components:
           properties:
             text:
               type: string
+            turnId:
+              type: string
+              format: uuid
         createdAt:
           type: string
           format: date-time
@@ -3470,6 +4166,34 @@ components:
         createdAt:
           type: string
           format: date-time
+    TurnSteeredEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.turn_steered
+        payload:
+          type: object
+          additionalProperties: false
+          required: [turnId, text, clientMessageId]
+          properties:
+            turnId:
+              type: string
+              format: uuid
+            text:
+              type: string
+            clientMessageId:
+              type: string
+        createdAt:
+          type: string
+          format: date-time
     ClientEvent:
       oneOf:
         - $ref: "#/components/schemas/UserMessageEvent"
@@ -3479,6 +4203,7 @@ components:
         - $ref: "#/components/schemas/TurnInterruptedEvent"
         - $ref: "#/components/schemas/TurnAbortedEvent"
         - $ref: "#/components/schemas/InterruptRequestedEvent"
+        - $ref: "#/components/schemas/TurnSteeredEvent"
     ClientEventPage:
       type: object
       additionalProperties: false
@@ -3599,6 +4324,37 @@ components:
           minimum: 0
         binary:
           type: boolean
+    WorkspaceDiffFileDetail:
+      type: object
+      additionalProperties: false
+      required: [path, status, additions, deletions, size, binary, deleted, content, contentTruncated, diff, diffTruncated]
+      properties:
+        path:
+          type: string
+        status:
+          $ref: "#/components/schemas/WorkspaceFileStatus"
+        additions:
+          type: integer
+          minimum: 0
+        deletions:
+          type: integer
+          minimum: 0
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        binary:
+          type: boolean
+        deleted:
+          type: boolean
+        content:
+          type: string
+        contentTruncated:
+          type: boolean
+        diff:
+          type: string
+        diffTruncated:
+          type: boolean
     WorkspaceDiff:
       type: object
       additionalProperties: false
@@ -3635,7 +4391,7 @@ components:
               type: boolean
     ProviderName:
       type: string
-      enum: [daytona, claude-code, codex, cursor]
+      enum: [daytona, claude-code, codex, cursor, opencode, github, coder, nodeops]
     ProviderPublicConfig:
       type: object
       additionalProperties: false
@@ -3648,7 +4404,27 @@ components:
           enum: [us, eu]
         credentialType:
           type: string
-          enum: [oauth_token, api_key, access_token]
+          enum: [oauth_token, api_key, access_token, auth_json, personal_access_token, opencode_api_key, anthropic_api_key, openai_api_key, openrouter_api_key]
+        baseUrl:
+          type: string
+          format: uri
+        owner:
+          type: string
+        templateId:
+          type: string
+          format: uuid
+        agentName:
+          type: string
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+        durableRoot:
+          type: string
+        endpointServiceName:
+          type: string
+        region:
+          type: string
     PutAgentProviderConnectionInput:
       type: object
       additionalProperties: false
@@ -3656,7 +4432,7 @@ components:
       properties:
         credentialType:
           type: string
-          enum: [oauth_token, api_key, access_token]
+          enum: [oauth_token, api_key, access_token, auth_json, opencode_api_key, anthropic_api_key, openai_api_key, openrouter_api_key]
         secret:
           type: string
           minLength: 1
@@ -3672,7 +4448,7 @@ components:
           enum: [claude-code, codex, cursor]
         credentialType:
           type: string
-          enum: [oauth_token, api_key, access_token]
+          enum: [oauth_token, api_key, access_token, auth_json]
         secret:
           type: string
           minLength: 1

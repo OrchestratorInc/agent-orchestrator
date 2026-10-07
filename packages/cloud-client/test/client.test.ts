@@ -353,6 +353,35 @@ describe("CloudClient", () => {
     });
   });
 
+	 it("reads a Docker workspace file with its unified diff", async () => {
+		const file = {
+			path: "src/main.ts",
+			status: "modified",
+			additions: 1,
+			deletions: 1,
+			size: 12,
+			binary: false,
+			deleted: false,
+			content: "export {}\n",
+			contentTruncated: false,
+			diff: "@@ -1 +1 @@\n-export {};\n+export {}\n",
+			diffTruncated: false,
+		} as const;
+		const fetchMock = vi.fn(
+			async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(file),
+		);
+		const client = createCloudClient({
+			baseUrl: "https://cloud.example.com",
+			getAccessToken: () => "access-token",
+			fetch: fetchMock as typeof fetch,
+		});
+
+		await expect(client.readWorkspaceDiffFile("tenant one", "session one", file.path)).resolves.toEqual(file);
+		expect(fetchMock.mock.calls[0]?.[0]).toBe(
+			"https://cloud.example.com/api/cloud/v1/orgs/tenant%20one/sessions/session%20one/workspace/file/diff?path=src%2Fmain.ts",
+		);
+	});
+
   it("reads normalized pull requests and AO review state for a session", async () => {
     const pullRequest = {
       url: "github://o/r/pull/7",
@@ -602,6 +631,66 @@ describe("CloudClient", () => {
     });
   });
 
+  it("sends the selected model, effort, mode, and approval mode with a chat message", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse({
+          event: {
+            sessionId: "session",
+            sequence: 1,
+            type: "chat.user_message",
+            payload: { text: "Ship it" },
+            createdAt: "2026-08-09T00:00:00Z",
+          },
+        }),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await client.sendMessage(
+      "tenant",
+      "session",
+      {
+        text: "Ship it", model: "gpt-5.6-codex", reasoningEffort: "high",
+        mode: "standard", approvalMode: "accept-edits",
+      },
+      { idempotencyKey: "message-command-2" },
+    );
+
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({
+        text: "Ship it", model: "gpt-5.6-codex", reasoningEffort: "high",
+        mode: "standard", approvalMode: "accept-edits",
+      }),
+    );
+  });
+
+  it("loads chat model choices for a session", async () => {
+    const catalog = {
+      models: [{
+        id: "gpt-5.6-codex",
+        displayName: "Codex",
+        default: true,
+        efforts: ["high"],
+        defaultEffort: "high",
+      }],
+    };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(catalog));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.listChatModels("tenant", "session")).resolves.toEqual(catalog);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/chat-models",
+    );
+  });
+
   it("streams replayed SSE events from an explicit cursor", async () => {
     const abort = new AbortController();
     const encoder = new TextEncoder();
@@ -782,6 +871,50 @@ describe("CloudClient", () => {
     expect(requestHeaders(fetchMock, 0).get("Idempotency-Key")).toBe(
       "cancel-turn-1",
     );
+  });
+
+  it("steers an active turn through the public client", async () => {
+    const event = {
+      sessionId: "session", sequence: 2, type: "chat.turn_steered",
+      payload: { text: "Use the existing parser" }, createdAt: "2026-08-09T00:00:00Z",
+    };
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => jsonResponse({ event }, 202));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.steerTurn("tenant", "session", "turn one", "Use the existing parser", {
+      idempotencyKey: "steer-one",
+    })).resolves.toEqual({ event });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/turns/turn%20one/steer",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ text: "Use the existing parser" }));
+    expect(requestHeaders(fetchMock, 0).get("Idempotency-Key")).toBe("steer-one");
+  });
+
+  it("submits an approval decision through the public client", async () => {
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => jsonResponse({ ok: true }, 202));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.decideChatApproval("tenant", "session", "request one", "approve"))
+      .resolves.toEqual({ ok: true });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/approvals/request%20one/decide",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ decisionId: "approve" }));
   });
 });
 

@@ -1,27 +1,27 @@
-import { Feather } from "@expo/vector-icons";
+import { Feather } from "../icons";
+import { useHeaderHeight } from "expo-router/build/react-navigation/elements";
 import { useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
 	ActivityIndicator,
 	Alert,
-	InteractionManager,
 	Keyboard,
-	KeyboardAvoidingView,
-	LayoutAnimation,
-	Modal,
 	Platform,
 	Pressable,
-	ScrollView,
 	StyleSheet,
 	Text,
-	TextInput,
 	View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
+import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
+import { machineIdentity } from "../config";
 import { haptics } from "../haptics";
-import { headerActionStyle } from "../headerAction";
-import { deferRouteContent, resetHeaderRightForSwap } from "../headerRightSwap";
+import { resetHeaderRightForSwap } from "../headerRightSwap";
+import { openGitHub } from "../openGitHub";
+import { glassHeaderControl } from "../native-header-items";
+import { NativeHeaderButton } from "../native-header-button";
 import { useApp } from "../store";
 import {
 	mobileInterfaceTransitionIsActive,
@@ -30,60 +30,133 @@ import {
 	mobileInterfaceTransitionRecoveryMessage,
 	useInterfaceTransition,
 } from "../session/useInterfaceTransition";
-import { screenKeyboardAvoidance } from "../session/keyboardInset";
+import { dockRestingInset, keyboardVerticalOffset, screenKeyboardAvoidance } from "../session/keyboardInset";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { getWorkspacePaths, openSessionShell } from "./api";
+import { requestDockModel } from "./requestDockModel";
 import { ChatComposer } from "./ChatComposer";
+import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
-import { chatSheetRoute } from "./chatSheetRegistry";
-import { centeredConversationMenu } from "./chatLayout";
-import { elapsedLabel, mcpServerFailureLabel, quotaWarning, resetLabel } from "./conversationChrome";
+import { ConversationTitle } from "./ConversationTitle";
+import { chatSheetRoute, type ConversationActionsEntry } from "./chatSheetRegistry";
+import { quotaWarning } from "./conversationChrome";
+import { shouldAutoResume } from "./autoResume";
+import { controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { conversationMarkers } from "./timelineModel";
+import { turnSettingsModelLabel } from "./turnSettingsModel";
 import { brokenMcpServers, can } from "./types";
 import { useMobileConversation } from "./useConversation";
+import { useOpenPage } from "../pageNavigation";
+import { usePRSummaries } from "../usePRSummaries";
+import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
+import { iconSize, type, space } from "../tokens";
+import { backOr } from "../backNavigation";
+import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
+
+async function dismissKeyboardBeforeSheet(keyboardVisible: boolean): Promise<void> {
+	Keyboard.dismiss();
+	if (!keyboardVisible) return;
+	await new Promise<void>((resolve) => {
+		let settled = false;
+		let subscription: ReturnType<typeof Keyboard.addListener> | undefined;
+		const finish = () => {
+			if (settled) return;
+			settled = true;
+			subscription?.remove();
+			clearTimeout(timeout);
+			resolve();
+		};
+		const timeout = setTimeout(finish, 320);
+		subscription = Keyboard.addListener("keyboardDidHide", finish);
+	});
+}
 
 export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const navigation = useNavigation();
 	const router = useRouter();
+	const openPage = useOpenPage();
+	const headerHeight = useHeaderHeight();
+	const insets = useSafeAreaInsets();
 	const [headerRightReady, setHeaderRightReady] = useState(false);
-	const [contentReadySessionId, setContentReadySessionId] = useState<string>();
 	useLayoutEffect(
 		() => resetHeaderRightForSwap(
-			() => navigation.setOptions({ headerRight: undefined }),
+			() => navigation.setOptions(glassHeaderControl("right")),
 			() => setHeaderRightReady(true),
 		),
 		[navigation],
 	);
-	useEffect(() => deferRouteContent(
-		() => setContentReadySessionId(session.id),
-		(callback) => {
-			const task = InteractionManager.runAfterInteractions(callback);
-			return () => task.cancel();
-		},
-	), [session.id]);
-	const { config, refresh: refreshBoard, setActiveProject } = useApp();
+	const { config, currentHostId, connection, unreachable, projects, refresh: refreshBoard, setWorkerPinned, renameWorker, kill } = useApp();
 	const conversation = useMobileConversation(config, session.id);
+	// A load that failed while the desktop was unreachable retries as soon as the
+	// board's poll reconnects, which is what the offline state promises.
+	// Keyed on a failed load, not a missing one, so the first mount doesn't send a
+	// second request alongside the hook's own initial load.
+	const loadFailed = !conversation.snapshot && Boolean(conversation.error);
+	const refreshConversation = conversation.refresh;
+	useEffect(() => {
+		if (connection === "open" && loadFailed) void refreshConversation();
+	}, [connection, loadFailed, refreshConversation]);
+	const actionsEntryRef = useRef<ConversationActionsEntry | undefined>(undefined);
+	const actionsListeners = useRef(new Set<(entry: ConversationActionsEntry) => void>());
 	const interfaceSwitch = useInterfaceTransition(config, session.id, refreshBoard);
 	const [menuOpen, setMenuOpen] = useState(false);
+	const [collapsedReviewPRKey, setCollapsedReviewPRKey] = useState<string>();
+	const [loadedReviewPromptStateKey, setLoadedReviewPromptStateKey] = useState<string>();
 	const [jumpToSequence, setJumpToSequence] = useState<number>();
 	const clearJumpToSequence = useCallback(() => setJumpToSequence(undefined), []);
+	// Which request the user pushed aside to type instead. It lives here because
+	// both the composer and the timeline change shape depending on it.
+	const [dismissedRequest, setDismissedRequest] = useState<number>();
+	const restoreRequest = useCallback(() => setDismissedRequest(undefined), []);
 	const [filePaths, setFilePaths] = useState<string[]>([]);
 	const [filePathsTruncated, setFilePathsTruncated] = useState(false);
 	const filePathsRequest = useRef<Promise<{ paths: string[]; truncated: boolean }> | null>(null);
 	const [openingShell, setOpeningShell] = useState(false);
 	const [resuming, setResuming] = useState(false);
-	const [keyboardHeight, setKeyboardHeight] = useState(0);
-	// Android's keyboard event reports its height with the nav bar subtracted; the
-	// root view draws under that nav bar, so screenKeyboardAvoidance adds it back.
-	const insets = useSafeAreaInsets();
+	const [resumeError, setResumeError] = useState<string | undefined>();
+	// Banners closed this visit, by what they report. See conversationBanners.
+	const [dismissedBanners, setDismissedBanners] = useState<ReadonlySet<string>>(() => new Set());
+	const dismissBanner = useCallback((key: string) => setDismissedBanners((current) => new Set(current).add(key)), []);
+	// Listens on keyboardWillShow / keyboardDidHide on both platforms. The effect
+	// this replaces took its event names from screenKeyboardAvoidance, which gave
+	// Android keyboardDidShow — fired only after the IME had finished animating,
+	// which is why the composer needed a hand-rolled LayoutAnimation to cover the
+	// gap it left. Reporting early removes the gap rather than animating over it.
+	const keyboardHeight = useKeyboardState((state) => state.height);
+	const keyboardVisible = useKeyboardState((state) => state.isVisible);
+	const turnOptionsRequestedFor = useRef<string | undefined>(undefined);
 	const terminated = "projectName" in session ? Boolean(session.isTerminal) : Boolean(session.isTerminated);
+	const failedStart = "projectName" in session || session.provisionState !== "failed"
+		? undefined
+		: session.provisionError || "The session did not finish starting.";
 	const interfaceTransitionActive = mobileInterfaceTransitionIsActive(interfaceSwitch.transition);
+	useLayoutEffect(() => {
+		const entry = actionsEntryRef.current;
+		const snapshot = conversation.snapshot;
+		if (!entry || entry.sessionId !== session.id || !snapshot) return;
+		const liveEntry = {
+			...entry,
+			snapshot,
+			modelLabel: turnSettingsModelLabel(snapshot, conversation.models, conversation.configOptions),
+			openingShell,
+			compacting: conversation.pendingActions.includes("compact"),
+			mcpReloading: conversation.pendingActions.includes("mcp"),
+			refreshing: conversation.refreshing,
+			compactSupported: can(snapshot, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact),
+			mcpReloadSupported: can(snapshot, "mcp_reload") && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp),
+			interfaceSupported: Boolean(interfaceSwitch.status?.supported),
+			interfaceReason: interfaceSwitch.status?.reason || interfaceSwitch.error,
+			interfaceSwitching: interfaceTransitionActive || interfaceSwitch.starting,
+		};
+		actionsEntryRef.current = liveEntry;
+		actionsListeners.current.forEach((listener) => listener(liveEntry));
+	}, [conversation.snapshot, conversation.models, conversation.configOptions, conversation.pendingActions, conversation.refreshing, conversation.actionCodes, openingShell, interfaceSwitch.status, interfaceSwitch.error, interfaceSwitch.starting, interfaceTransitionActive, session.id]);
 	const interfaceTransitionNotice =
 		!interfaceTransitionActive &&
 		!interfaceSwitch.transition?.noticeAcknowledgedAt &&
@@ -114,41 +187,121 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	);
 
 	useEffect(() => {
-		if (Platform.OS !== "android") return;
-		const avoidance = screenKeyboardAvoidance("android", 0, 0);
-		const animate = (duration?: number) => LayoutAnimation.configureNext({
-			duration: duration || 250,
-			update: { type: LayoutAnimation.Types.keyboard },
-		});
-		const show = Keyboard.addListener(avoidance.showEvent, (event) => {
-			animate(event.duration);
-			setKeyboardHeight(event.endCoordinates.height);
-		});
-		const hide = Keyboard.addListener(avoidance.hideEvent, (event) => {
-			animate(event?.duration);
-			setKeyboardHeight(0);
-		});
-		return () => {
-			show.remove();
-			hide.remove();
-		};
-	}, []);
+		if (!conversation.snapshot || turnOptionsRequestedFor.current === session.id) return;
+		turnOptionsRequestedFor.current = session.id;
+		void conversation.loadTurnOptions().catch(() => {});
+	}, [conversation.loadTurnOptions, conversation.snapshot, session.id]);
 
-	const title = conversation.snapshot?.title || sessionTitle(session);
-	useLayoutEffect(() => {
-		if (!headerRightReady) {
-			navigation.setOptions({ headerRight: undefined });
-			return;
+	const sessionName = sessionTitle(session);
+	// Desktop derives one name from the session (useWorkspaceQuery: displayName ??
+	// issueId ?? id) and its chat header prefers it over the conversation's own
+	// title (ChatWorkspace: sessionTitle || session.title || snapshot.title). This
+	// had that precedence inverted, so renaming from the board changed the row but
+	// left this header on the agent's auto-generated conversation title.
+	const title = sessionName || conversation.snapshot?.title || session.id;
+	const projectName = "projectName" in session
+		? session.projectName
+		: session.projectId ? projects.find((project) => project.id === session.projectId)?.name : "Standalone";
+	const headerHarness = conversation.snapshot?.harness || session.harness || "Agent";
+	const headerState = conversation.snapshot?.controller.state;
+	const reviewPromptPRCandidate = "projectName" in session ? undefined : sessionPRReadyForReview(session);
+	const reviewPromptKey = reviewPromptPRCandidate ? `${reviewPromptPRCandidate.url}#${reviewPromptPRCandidate.number}` : undefined;
+	const reviewPromptHostKey = config ? machineIdentity(config) : currentHostId;
+	const reviewPromptStateStorageKey = reviewPromptKey && reviewPromptHostKey
+		? `ao.chat.reviewPromptCollapsed:${encodeURIComponent(reviewPromptHostKey)}:${encodeURIComponent(session.id)}:${encodeURIComponent(reviewPromptKey)}`
+		: undefined;
+	useEffect(() => {
+		let cancelled = false;
+		setLoadedReviewPromptStateKey(undefined);
+		setCollapsedReviewPRKey(undefined);
+		if (!reviewPromptKey || !reviewPromptStateStorageKey) {
+			setLoadedReviewPromptStateKey(reviewPromptStateStorageKey);
+			return () => { cancelled = true; };
 		}
+		AsyncStorage.getItem(reviewPromptStateStorageKey).then((value) => {
+			if (cancelled) return;
+			setCollapsedReviewPRKey(value === "1" ? reviewPromptKey : undefined);
+			setLoadedReviewPromptStateKey(reviewPromptStateStorageKey);
+		}).catch(() => {
+			if (cancelled) return;
+			setLoadedReviewPromptStateKey(reviewPromptStateStorageKey);
+		});
+		return () => { cancelled = true; };
+	}, [reviewPromptKey, reviewPromptStateStorageKey]);
+	const reviewPromptStateReady = !reviewPromptStateStorageKey || loadedReviewPromptStateKey === reviewPromptStateStorageKey;
+	const reviewPromptPR = reviewPromptStateReady ? reviewPromptPRCandidate : undefined;
+	const reviewPromptCollapsed = Boolean(reviewPromptStateReady && reviewPromptKey && reviewPromptKey === collapsedReviewPRKey);
+	const collapseReviewPrompt = useCallback(() => {
+		if (!reviewPromptKey || !reviewPromptStateStorageKey) return;
+		setCollapsedReviewPRKey(reviewPromptKey);
+		void AsyncStorage.setItem(reviewPromptStateStorageKey, "1").catch(() => {});
+	}, [reviewPromptKey, reviewPromptStateStorageKey]);
+	const expandReviewPrompt = useCallback(() => {
+		setCollapsedReviewPRKey(undefined);
+		if (reviewPromptStateStorageKey) void AsyncStorage.removeItem(reviewPromptStateStorageKey).catch(() => {});
+	}, [reviewPromptStateStorageKey]);
+	const reviewSummaries = usePRSummaries(config && reviewPromptPR ? [{ config, sessionId: session.id }] : []);
+	const reviewPromptSummary = config && reviewPromptPR ? reviewSummaries.summaryFor(config, session.id, reviewPromptPR.number) : undefined;
+
+	// The blocking request. It takes the composer's place until it is answered.
+	// Computed here rather than at render because the back-swipe below is a hook
+	// and cannot sit after this screen's early returns.
+	const request = requestDockModel(conversation.snapshot, {
+		approval: conversation.pendingActions.includes("approval"),
+		input: conversation.pendingActions.includes("input"),
+	});
+	const requestDismissed = request ? dismissedRequest === request.sequence : false;
+	// The timeline collapses a request the card is answering to a record of what
+	// was asked — one live set of controls, never two.
+	const answeredBelow = request && !requestDismissed && request.canAnswerInline ? request.sequence : undefined;
+	// On iOS a left-to-right swipe is the screen's back gesture, and it beat the
+	// card's own swipe — you got the board instead of the previous question. The
+	// whole horizontal axis goes to the card while it is up; the header's back
+	// button still leaves the session, and the card's ✕ still returns the
+	// composer, so nothing becomes unreachable.
+	const cardShowing = Boolean(request && !requestDismissed);
+	useLayoutEffect(() => {
+		navigation.setOptions({ gestureEnabled: !cardShowing });
+	}, [cardShowing, navigation]);
+	useLayoutEffect(() => {
 		navigation.setOptions({
-			title: title.length > 24 ? `${title.slice(0, 22)}…` : title,
-			headerRight: () => (
-				<Pressable accessibilityRole="button" accessibilityLabel="Conversation actions" hitSlop={11} onPress={() => { haptics.tap(); setMenuOpen(true); }} style={headerActionStyle}>
-					<Feather name="more-horizontal" size={20} color={t.textSecondary} />
-				</Pressable>
+			headerTitle: () => (
+				<ConversationTitle
+					title={title}
+					subtitle={[projectName, headerHarness].filter(Boolean).join(" · ")}
+					harness={headerHarness}
+					state={headerState}
+				/>
 			),
 		});
-	}, [headerRightReady, navigation, title, styles, t]);
+	}, [headerHarness, headerState, navigation, projectName, title, t]);
+
+	// The title is set on the first commit, above. Only the trailing control waits:
+	// native-stack measures the replacement for a frame, and deferring the whole
+	// options object meant the title arrived with it — iOS then animated the
+	// header in from the top, after the screen had already landed.
+	useLayoutEffect(() => {
+		navigation.setOptions(
+			headerRightReady
+				? glassHeaderControl("right", (
+					<View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+						{reviewPromptCollapsed && reviewPromptPR ? (
+							<Pressable
+								testID="header-pullRequest"
+								accessibilityRole="button"
+								accessibilityLabel="Show PR card"
+								onPress={() => { haptics.tap(); expandReviewPrompt(); }}
+								style={({ pressed }) => [styles.reviewHeaderPRButton, { backgroundColor: pressed ? t.accentTint : t.bgElevatedHover }]}
+							>
+								<Feather name="git-pull-request" size={iconSize.lg} color={t.textSecondary} />
+							</Pressable>
+						) : null}
+						<NativeHeaderButton icon="more" label="Conversation actions" onPress={() => { haptics.tap(); setMenuOpen(true); }} />
+					</View>
+				))
+				: glassHeaderControl("right"),
+		);
+	}, [expandReviewPrompt, headerRightReady, navigation, reviewPromptCollapsed, reviewPromptPR, t]);
 
 	const loadWorkspaceFiles = useCallback(async () => {
 		if (!config || !conversation.snapshot) return { paths: filePaths, truncated: filePathsTruncated };
@@ -168,6 +321,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const openTurnSettings = useCallback(async () => {
 		const current = conversation.snapshot;
 		if (!current) return;
+		await dismissKeyboardBeforeSheet(keyboardVisible);
 		let catalog = { models: conversation.models, configOptions: conversation.configOptions };
 		let catalogError = conversation.actionErrors.settings ?? conversation.actionErrors.config;
 		try {
@@ -186,7 +340,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			onOption: conversation.setConfigOption,
 			onRefresh: () => conversation.loadTurnOptions({ refresh: true }),
 		}));
-	}, [conversation, router]);
+	}, [conversation, keyboardVisible, router]);
 
 	const openShell = useCallback(async () => {
 		if (!config || openingShell) return;
@@ -194,25 +348,48 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		try {
 			const shell = await openSessionShell(config, session.id, session.projectId);
 			setMenuOpen(false);
-			router.push({ pathname: "/shell/[handleId]", params: { handleId: shell.handleId, projectId: session.projectId, sessionId: session.id, title: shell.title } });
+			router.push({ pathname: "/shell/[handleId]", params: { handleId: shell.handleId, projectId: session.projectId, sessionId: session.id, title: shell.title, hostId: config.hostId } });
 		} catch (cause) {
-			Alert.alert("Could not open shell", cause instanceof Error ? cause.message : String(cause));
+			Alert.alert("Couldn't open shell", userFacingError(cause));
 		} finally { setOpeningShell(false); }
 	}, [config, openingShell, router, session.id, session.projectId]);
 
-	const resume = useCallback(async () => {
+	// Links open in-app, like the desktop Browser inspector. A localhost link from
+	// the agent's machine is mapped onto the AO host first (the phone's own
+	// localhost is never the dev server the agent named); openGitHub then applies
+	// the package's rule for a web page - GitHub app when it has a screen for it,
+	// the in-app browser otherwise.
+	const openLink = useCallback((url: string) => {
+		void openGitHub(mobileReachablePreviewURL(url, config?.host ?? "")?.href ?? url);
+	}, [config?.host]);
+
+	const resume = useCallback(async (quiet = false) => {
 		if (resuming) return;
 		setResuming(true);
+		setResumeError(undefined);
 		try {
-			if (!config) throw new Error("No AO server configured");
+			if (!config) throw new Error(NOT_PAIRED_ACTION_COPY);
 			if (terminated) await restoreSession(config, session.id);
 			else await resumeSessionAgent(config, session.id);
 			await refreshBoard();
 			await conversation.refresh();
 		} catch (cause) {
-			Alert.alert("Could not resume agent", cause instanceof Error ? cause.message : String(cause));
+			// An automatic attempt has no alert; the stopped banner carries the reason.
+			if (quiet) setResumeError(userFacingError(cause));
+			else Alert.alert("Couldn't resume the agent", userFacingError(cause));
 		} finally { setResuming(false); }
 	}, [config, conversation.refresh, refreshBoard, resuming, session.id, terminated]);
+
+	// The daemon leaves agents stopped after a restart; opening the session here
+	// starts them, as the desktop does. One attempt per opening: a failure or a
+	// later exit stays stopped behind the Resume banner, which shows the reason.
+	const autoResumeTried = useRef<string | undefined>(undefined);
+	useEffect(() => {
+		if (autoResumeTried.current === session.id) return;
+		if (!shouldAutoResume(session, terminated, Boolean(config))) return;
+		autoResumeTried.current = session.id;
+		void resume(true);
+	}, [config, resume, session, terminated]);
 
 	const startInterfaceSwitch = useCallback(
 		async (policy: "drain" | "interrupt") => {
@@ -220,7 +397,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			try {
 				await interfaceSwitch.start("tui", policy);
 			} catch (cause) {
-				Alert.alert("Could not switch interface", cause instanceof Error ? cause.message : String(cause));
+				Alert.alert("Couldn't switch interface", userFacingError(cause));
 			}
 		},
 		[interfaceSwitch],
@@ -248,6 +425,76 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		);
 	}, [interfaceSwitch, startInterfaceSwitch, turnActive, turnWaiting]);
 
+	useEffect(() => {
+		const current = conversation.snapshot;
+		if (!menuOpen || !current) return;
+		setMenuOpen(false);
+		const entry: ConversationActionsEntry = {
+			kind: "conversation-actions",
+			sessionId: session.id,
+			snapshot: current,
+			subscribeEntry: (listener) => {
+				actionsListeners.current.add(listener);
+				listener(actionsEntryRef.current ?? entry);
+				return () => { actionsListeners.current.delete(listener); };
+			},
+			sessionTitle: sessionName,
+			modelLabel: turnSettingsModelLabel(current, conversation.models, conversation.configOptions),
+			openingShell,
+			compacting: conversation.pendingActions.includes("compact"),
+			mcpReloading: conversation.pendingActions.includes("mcp"),
+			refreshing: conversation.refreshing,
+			compactSupported: can(current, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact),
+			mcpReloadSupported: can(current, "mcp_reload") && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp),
+			interfaceSupported: Boolean(interfaceSwitch.status?.supported),
+			interfaceReason: interfaceSwitch.status?.reason || interfaceSwitch.error,
+			interfaceSwitching: interfaceTransitionActive || interfaceSwitch.starting,
+			// Orchestrators are not deleted from here; the board owns their lifecycle.
+			canDelete: !("projectName" in session),
+			canPin: !("projectName" in session),
+			pinned: "projectName" in session ? false : Boolean(session.isPinned),
+			onMap: () => router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(actionsEntryRef.current?.snapshot ?? current), onSelect: setJumpToSequence })),
+			onOpenShell: () => void openShell(),
+			onPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, previewUrl: "previewUrl" in session ? session.previewUrl ?? undefined : undefined, hostId: currentHostId } }),
+			onPullRequests: () => {
+				const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
+					? reviewRouteForSession(session, currentHostId)
+					: undefined;
+				if (route) openPage(route);
+				else router.push({ pathname: "/(tabs)/prs", params: { hostId: currentHostId, projectId: session.projectId } });
+			},
+			onSettings: () => void openTurnSettings(),
+			onSwitchInterface: requestInterfaceSwitch,
+			onCompact: () => void conversation.compact().catch(() => {}),
+			onReload: () => void conversation.reloadMcp().catch(() => {}),
+			onRename: () => router.push(chatSheetRoute({
+				kind: "conversation-rename",
+				initialTitle: sessionName,
+				onRename: (next) => renameWorker(session.id, next),
+			})),
+			onTogglePin: () => {
+				if ("projectName" in session) return;
+				void setWorkerPinned(session.id, !session.isPinned).catch(() => {});
+			},
+			onRefresh: () => void conversation.refresh(),
+			onDelete: () => {
+				haptics.warning();
+				Alert.alert(
+					"Delete session?",
+					`This terminates ${sessionName}. Its conversation and worktree are preserved.`,
+					[
+						{ text: "Cancel", style: "cancel" },
+						// Leave first: the session this screen is showing is about to stop
+						// existing, and the board is where its row disappears from.
+						{ text: "Delete session", style: "destructive", onPress: () => { backOr(router); void kill(session.id).catch(() => {}); } },
+					],
+				);
+			},
+		};
+		actionsEntryRef.current = entry;
+		void dismissKeyboardBeforeSheet(keyboardVisible).then(() => router.push(chatSheetRoute(actionsEntryRef.current ?? entry)));
+	}, [currentHostId, conversation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openPage, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setWorkerPinned, title]);
+
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else
 	// on this screen re-asks the hook, so without it a transition whose poll had
@@ -270,7 +517,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const interfaceTransitionPhaseText = interfaceRecoveryMessage || `Switching to Terminal UI · ${interfacePhaseLabel(interfaceSwitch.transition?.phase)}`;
 	const interfaceTransitionBanner = {
 		text: interfaceSwitch.fetchFailed
-			? `${interfaceTransitionPhaseText}. Could not check on it${interfaceSwitch.error ? `: ${interfaceSwitch.error}` : ""}`
+			? `${interfaceTransitionPhaseText}. Couldn't check on it${interfaceSwitch.error ? `: ${interfaceSwitch.error}` : ""}`
 			: interfaceTransitionPhaseText,
 		// Cancel stays put while a check is failing: the phase the hook holds is
 		// still cancellable and the cancel is its own request, so a user who wants
@@ -282,14 +529,16 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		onSecondary: recheckingTransition ? undefined : () => void retryInterfaceCheck(),
 	};
 
+	if (failedStart && !conversation.snapshot) return <Centered icon="alert-triangle" title="Session failed to start" message={failedStart} action={resuming ? "Retrying…" : "Retry"} onAction={() => void resume()} />;
 	if (conversation.loading && !conversation.snapshot) return <Centered icon="message-square" title="Loading conversation…" spinning />;
 	if (conversation.unavailable) return <Unavailable message={conversation.unavailable.message} onShell={() => void openShell()} openingShell={openingShell} />;
-	if (!conversation.snapshot) return <Centered icon="alert-triangle" title="Could not load conversation" message={conversation.error || "The daemon did not return a conversation."} action="Retry" onAction={() => void conversation.refresh()} />;
-	if (contentReadySessionId !== session.id) return <Centered icon="message-square" title="Preparing conversation…" spinning />;
+	// The board's poll is the app's view of the link: when it is down, say so in
+	// the board's words instead of echoing whatever this request failed with.
+	if (!conversation.snapshot && unreachable) return <Centered icon="wifi-off" title="This machine is offline" message="This conversation loads once the app reconnects." action="Retry" onAction={() => void conversation.refresh()} />;
+	if (!conversation.snapshot) return <Centered icon="alert-triangle" title="Couldn't load the conversation" message={conversation.error || "The machine didn't return this conversation. Try again."} action="Retry" onAction={() => void conversation.refresh()} />;
 
 	const snapshot = conversation.snapshot;
 	const active = snapshot.turns.some((turn) => turn.state === "running" || turn.state === "queued");
-	const activeTurn = snapshot.turns.find((turn) => turn.state === "running") ?? snapshot.turns.find((turn) => turn.state === "queued");
 	const brokenServers = brokenMcpServers(snapshot);
 	const rolledBack = snapshot.turns.filter((turn) => turn.rolledBack).length;
 	const quota = quotaWarning(snapshot.rateLimits);
@@ -298,26 +547,21 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const steerUnsupported = conversationActionUnsupported("steer", conversation.actionCodes.steer);
 
 	return (
+		// keyboard-controller's avoider, not React Native's. Both do the same
+		// arithmetic; this one interpolates the padding with the keyboard's own
+		// animation, so the composer travels with the keys. RN's re-renders once per
+		// keyboard event on the JS thread, which is the single-frame jump up when
+		// the keyboard opens.
 		<KeyboardAvoidingView
-			style={[
-				styles.screen,
-				Platform.OS === "android" && keyboardHeight > 0
-					? { paddingBottom: screenKeyboardAvoidance("android", keyboardHeight, insets.bottom).paddingBottom }
-					: undefined,
-			]}
+			style={[styles.screen, Platform.OS === "android" ? screenKeyboardAvoidance("android", keyboardHeight, insets.bottom).rootStyle : undefined]}
 			behavior={Platform.OS === "ios" ? "padding" : undefined}
-			keyboardVerticalOffset={Platform.OS === "ios" ? 86 : 0}
+			keyboardVerticalOffset={Platform.OS === "ios" ? keyboardVerticalOffset(headerHeight) : 0}
 		>
-			<ChatMetaBar
-				snapshot={snapshot}
-				refreshing={conversation.refreshing}
-				onRefresh={() => void conversation.refresh()}
-			/>
 			{interfaceTransitionActive ? (
 				<InlineBanner
 					tone="warning"
 					icon="repeat"
-					text={interfaceTransitionBanner.text}
+					title={interfaceTransitionBanner.text}
 					action={interfaceTransitionBanner.action}
 					secondary={interfaceTransitionBanner.secondary}
 					onPress={interfaceTransitionBanner.onPress}
@@ -327,9 +571,9 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				<InlineBanner
 					tone={interfaceTransitionRecovered ? "warning" : "danger"}
 					icon={interfaceTransitionRecovered ? "check-circle" : "alert-triangle"}
-					text={`${interfaceTransitionNoticeText}${
+					title={`${interfaceTransitionNoticeText}${
 						interfaceSwitch.acknowledgeNoticeError
-							? ` Could not dismiss: ${interfaceSwitch.acknowledgeNoticeError}`
+							? ` Couldn't dismiss: ${interfaceSwitch.acknowledgeNoticeError}`
 							: ""
 					}`}
 					action={interfaceSwitch.acknowledgingNotice ? "Dismissing…" : "Dismiss"}
@@ -345,8 +589,10 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			) : null}
 			<ConversationBanners
 				snapshot={snapshot}
+				startFailure={failedStart}
 				brokenServers={brokenServers}
 				resuming={resuming}
+				resumeError={resumeError}
 				terminated={terminated}
 				mcpReloading={conversation.pendingActions.includes("mcp")}
 				mcpError={conversation.actionErrors.mcp}
@@ -355,145 +601,119 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				onResume={() => void resume()}
 				onReload={() => void conversation.reloadMcp().catch(() => {})}
 				onOpenShell={() => void openShell()}
+				dismissed={dismissedBanners}
+				onDismiss={dismissBanner}
 			/>
-			{conversation.error ? <InlineBanner tone="danger" icon="wifi-off" text={conversation.error} action="Retry" onPress={() => void conversation.refresh()} /> : null}
-			{quota ? <InlineBanner tone={quota.severity === "critical" ? "danger" : "warning"} icon="alert-triangle" text={`${quota.percent}% of the${quota.planLabel ? ` ${quota.planLabel}` : ""} account quota is used${resetLabel(quota.resetsInSeconds) ? `; resets in ${resetLabel(quota.resetsInSeconds)}` : ""}. ${quota.severity === "critical" ? "Turns may start failing for reasons unrelated to your request." : "Turns will stop when the limit is reached."}`} action="Details" onPress={() => setMenuOpen(true)} /> : null}
-			{conversation.actionError ? <InlineBanner tone="danger" icon="alert-circle" text={conversation.actionError} /> : null}
-			{rolledBack ? <InlineBanner tone="muted" icon="rotate-ccw" text={`${rolledBack} ${rolledBack === 1 ? "turn was" : "turns were"} rolled back. The agent no longer remembers ${rolledBack === 1 ? "it" : "them"}.`} /> : null}
-			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="send" text={`Message not sent: ${pendingSend.error || "Delivery failed"}`} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => conversation.discardSend(pendingSend.id)} /> : null)}
-			<ChatTimeline
-				snapshot={snapshot}
-				loadingOlder={conversation.loadingOlder}
-				onLoadOlder={conversation.loadOlder}
-				approvalPending={conversation.pendingActions.includes("approval")}
-				inputPending={conversation.pendingActions.includes("input")}
-				onDecide={conversation.resolveApproval}
-				onResolveInput={conversation.resolveInput}
-				onRollback={conversation.rollback}
-				jumpToSequence={jumpToSequence}
-				onJumpHandled={clearJumpToSequence}
-			/>
-			{activeTurn ? <LiveTurnBar snapshot={snapshot} startedAt={activeTurn.startedAt ?? activeTurn.requestedAt} stopping={conversation.pendingActions.includes("interrupt")} onInterrupt={() => void conversation.interrupt().catch(() => {})} /> : null}
+			{conversation.error ? <DismissibleBanner copy={errorBanner("load", conversation.error)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="wifi-off" action="Retry" onPress={() => void conversation.refresh()} /> : null}
+			{quota ? <DismissibleBanner copy={quotaBanner(quota)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone={quota.severity === "critical" ? "danger" : "warning"} icon="alert-triangle" action="Details" onPress={() => setMenuOpen(true)} /> : null}
+			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="alert-circle" /> : null}
+			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon="rotate-ccw" /> : null}
+			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="send" title="Message delivery uncertain" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /> : null)}
+			<ChatLinkProvider onLinkOpen={openLink}>
+				<ChatTimeline
+					snapshot={snapshot}
+					loadingOlder={conversation.loadingOlder}
+					onLoadOlder={conversation.loadOlder}
+					approvalPending={conversation.pendingActions.includes("approval")}
+					inputPending={conversation.pendingActions.includes("input")}
+					onDecide={conversation.resolveApproval}
+					onResolveInput={conversation.resolveInput}
+					onRollback={conversation.rollback}
+					jumpToSequence={jumpToSequence}
+					onJumpHandled={clearJumpToSequence}
+					answeredBelow={answeredBelow}
+				/>
+			</ChatLinkProvider>
 			<ChatComposer
+				key={config ? JSON.stringify([machineIdentity(config), session.id]) : session.id}
+				reviewPR={reviewPromptPR}
+				reviewPRSummary={reviewPromptSummary}
+				reviewPRCollapsed={reviewPromptCollapsed}
+				onCollapseReviewPR={collapseReviewPrompt}
+				onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, currentHostId)) : undefined}
 				sessionId={session.id}
+				config={config}
 				snapshot={snapshot}
+				quotaActive={Boolean(quota)}
+				request={request}
+				requestDismissed={requestDismissed}
+				onRequestDecide={conversation.resolveApproval}
+				onRequestResolveInput={conversation.resolveInput}
+				onShowRequest={setJumpToSequence}
+				onDismissRequest={() => setDismissedRequest(request?.sequence)}
+				onRestoreRequest={restoreRequest}
 				skills={conversation.skills}
 				filePaths={filePaths}
 				filePathsTruncated={filePathsTruncated}
 				onLoadSkills={conversation.loadSkills}
 				onLoadFiles={loadWorkspaceFiles}
 				configOptions={conversation.configOptions}
+				models={conversation.models}
 				steerUnavailable={steerUnsupported}
-				disabled={interfaceTransitionActive}
+				disabled={interfaceTransitionActive || Boolean(failedStart)}
 				pending={mobileInterfaceTransitionIsBusy(interfaceSwitch.transition) || conversation.pendingSends.some((item) => item.state === "sending")}
-				error={conversation.actionError}
+				interrupting={conversation.pendingActions.includes("interrupt")}
 				onSend={conversation.send}
+				onAcknowledgeSend={conversation.acknowledgeSend}
+				completedRetry={conversation.completedRetry}
 				onSteer={conversation.steer}
+				onPromoteQueuedTurn={conversation.promoteQueuedTurn}
+				onCancelQueuedTurn={conversation.cancelQueuedTurn}
 				onInterrupt={() => void conversation.interrupt().catch(() => {})}
 				onOpenSettings={() => void openTurnSettings()}
-			/>
-			<ConversationMenu
-				visible={menuOpen}
-				onClose={() => setMenuOpen(false)}
-				snapshot={snapshot}
-				openingShell={openingShell}
-				compacting={conversation.pendingActions.includes("compact")}
-				mcpReloading={conversation.pendingActions.includes("mcp")}
-				compactSupported={compactSupported}
-				mcpReloadSupported={mcpReloadSupported}
-				interfaceSupported={Boolean(interfaceSwitch.status?.supported)}
-				interfaceReason={interfaceSwitch.status?.reason || interfaceSwitch.error}
-				interfaceSwitching={interfaceTransitionActive || interfaceSwitch.starting}
-				onMap={() => { setMenuOpen(false); router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(snapshot), onSelect: setJumpToSequence })); }}
-				onOpenShell={() => void openShell()}
-				onPreview={() => { setMenuOpen(false); router.push({ pathname: "/preview/[id]", params: { id: session.id, title, previewUrl: "previewUrl" in session ? session.previewUrl ?? undefined : undefined } }); }}
-				onPullRequests={() => { setMenuOpen(false); setActiveProject(session.projectId); router.push("/(tabs)/prs"); }}
-				onSettings={() => { setMenuOpen(false); void openTurnSettings(); }}
-				onSwitchInterface={requestInterfaceSwitch}
-				onCompact={() => { setMenuOpen(false); void conversation.compact().catch(() => {}); }}
-				onReload={() => { setMenuOpen(false); void conversation.reloadMcp().catch(() => {}); }}
-				onRename={(next) => { setMenuOpen(false); void conversation.rename(next).catch(() => {}); }}
+				onSettings={conversation.chooseSettings}
+				onConfigOption={conversation.setConfigOption}
+				restingInset={dockRestingInset(insets.bottom)}
 			/>
 		</KeyboardAvoidingView>
 	);
 }
 
-function ChatMetaBar({ snapshot, refreshing, onRefresh }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; refreshing: boolean; onRefresh(): void }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const state = snapshot.controller.state;
-	const stateColor = state === "busy" ? t.orange : state === "ready" ? t.green : state === "stopped" ? t.red : t.amber;
-	return <View style={styles.meta}><View style={[styles.dot, { backgroundColor: stateColor }]} /><Text style={styles.harness}>{snapshot.harness || "agent"}</Text><Text style={styles.mode}>CHAT</Text><View style={{ flex: 1 }} />{/* Context usage and the compact shortcut are intentionally hidden from the mobile header for now. Compaction remains available in the conversation menu. */}<Pressable accessibilityRole="button" accessibilityLabel="Refresh conversation" hitSlop={9} onPress={() => { haptics.tap(); void onRefresh(); }}><Feather name="refresh-cw" size={13} color={t.textTertiary} style={refreshing ? { opacity: 0.4 } : undefined} /></Pressable></View>;
-}
-
-function ConversationBanners({ snapshot, brokenServers, resuming, terminated, mcpReloading, mcpError, mcpReloadSupported, turnInFlight, onResume, onReload, onOpenShell }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; brokenServers: ReturnType<typeof brokenMcpServers>; resuming: boolean; terminated: boolean; mcpReloading: boolean; mcpError?: string; mcpReloadSupported: boolean; turnInFlight: boolean; onResume(): void; onReload(): void; onOpenShell(): void }) {
+function ConversationBanners({ snapshot, startFailure, brokenServers, resuming, resumeError, terminated, mcpReloading, mcpError, mcpReloadSupported, turnInFlight, onResume, onReload, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; startFailure?: string; brokenServers: ReturnType<typeof brokenMcpServers>; resuming: boolean; resumeError?: string; terminated: boolean; mcpReloading: boolean; mcpError?: string; mcpReloadSupported: boolean; turnInFlight: boolean; onResume(): void; onReload(): void; onOpenShell(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {
 	const thread = snapshot.threadState;
-	const signIn = signInCommand(snapshot.harness);
+	const reauthAt = snapshot.account?.reauthRequiredAt;
 	return <>
-		{snapshot.account?.reauthRequiredAt ? <InlineBanner tone="danger" icon="key" text={`${snapshot.account.reauthReason || "The provider rejected this session's credentials."} ${signIn ? `Run “${signIn}” on the AO host, then try again.` : "Sign in with the agent's CLI on the AO host, then try again."} AO holds no credentials of its own. The worktree is untouched.`} action="Open shell" onPress={onOpenShell} /> : null}
-		{snapshot.controller.state === "stopped" ? <InlineBanner tone="danger" icon="power" text={terminated ? "This AO session is terminated. Its conversation and worktree are preserved." : snapshot.controller.error || "The agent controller is stopped."} action={terminated ? (resuming ? "Restoring…" : "Restore session") : (resuming ? "Resuming…" : "Resume agent")} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
-		{snapshot.controller.state === "recovering" || snapshot.controller.state === "connecting" ? <InlineBanner tone="warning" icon="loader" text={snapshot.controller.state === "recovering" ? "Reconnecting to the agent…" : "Starting the agent controller…"} /> : null}
-		{thread?.status === "system_error" ? <InlineBanner tone="danger" icon="alert-triangle" text={`The provider reports an internal fault in this thread; AO's connection may still be healthy. The conversation and worktree are kept.${thread.waitingOn?.length ? ` Waiting on: ${thread.waitingOn.join(", ")}.` : ""}`} /> : thread?.status === "closed" ? <InlineBanner tone="warning" icon="alert-triangle" text={`The provider closed this thread. AO kept its history, but the agent no longer holds it.${thread.waitingOn?.length ? ` Waiting on: ${thread.waitingOn.join(", ")}.` : ""}`} /> : null}
-		{brokenServers.length ? <InlineBanner tone="warning" icon="tool" text={`${brokenServers.map(mcpServerFailureLabel).join(", ")} did not start. The agent has none of their tools and will not say so—it works around them silently.${mcpError ? ` Reload failed: ${mcpError}` : ""}`} action={mcpReloadSupported && !turnInFlight ? (mcpReloading ? "Reloading…" : "Reload") : undefined} onPress={mcpReloading ? undefined : onReload} /> : null}
+		{reauthAt ? <DismissibleBanner copy={reauthBanner(reauthAt, signInCommand(snapshot.harness))} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="key" action="Open shell" onPress={onOpenShell} /> : null}
+		{startFailure ? <DismissibleBanner copy={{ key: `start:${startFailure}`, title: "Session failed to start", body: startFailure }} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="alert-triangle" action={resuming ? "Retrying…" : "Retry"} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : snapshot.controller.state === "stopped" ? <DismissibleBanner copy={controllerStoppedBanner(terminated, resumeError ?? snapshot.controller.error)} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="power" action={terminated ? (resuming ? "Restoring…" : "Restore") : (resuming ? "Resuming…" : "Resume")} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
+		{/* Passing states clear themselves, so there is nothing to close. */}
+		{!startFailure && (snapshot.controller.state === "recovering" || snapshot.controller.state === "connecting") ? <InlineBanner tone="warning" icon="loader" title={snapshot.controller.state === "recovering" ? "Reconnecting to the agent…" : "Starting the agent…"} /> : null}
+		{threadBanner(thread?.status) ? <DismissibleBanner copy={threadBanner(thread?.status)!} dismissed={dismissed} onDismiss={onDismiss} tone={thread?.status === "system_error" ? "danger" : "warning"} icon="alert-triangle" /> : null}
+		{brokenServers.length ? <DismissibleBanner copy={mcpBanner(brokenServers, mcpError)!} dismissed={dismissed} onDismiss={onDismiss} tone="warning" icon="tool" action={mcpReloadSupported && !turnInFlight ? (mcpReloading ? "Reloading…" : "Reload") : undefined} onPress={mcpReloading ? undefined : onReload} /> : null}
 	</>;
 }
 
-function LiveTurnBar({ snapshot, startedAt, stopping, onInterrupt }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; startedAt?: string; stopping: boolean; onInterrupt(): void }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const [now, setNow] = useState(() => Date.now());
-	useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1_000); return () => clearInterval(timer); }, []);
-	const queued = snapshot.turns.filter((turn) => turn.state === "queued").length;
-	const blocked = snapshot.items.some((item) => item.kind === "activity" && (item.activityKind === "approval" || item.activityKind === "user_input") && item.status === "pending");
-	const elapsed = elapsedLabel(startedAt, now);
-	const stopLabel = queued ? "Stop and clear queue" : "Stop turn";
-	return <View style={styles.live}><ActivityIndicator size="small" color={blocked ? t.amber : t.orange} /><Text style={styles.liveText}>{blocked ? "Waiting for your input" : "Agent is working"}{elapsed ? ` · ${elapsed}` : ""}{queued ? ` · ${queued} queued` : ""}</Text><Pressable accessibilityRole="button" accessibilityLabel={stopLabel} accessibilityState={{ busy: stopping }} disabled={stopping} onPress={() => { haptics.tap(); void onInterrupt(); }} style={styles.stopTurn}><Feather name="square" size={11} color={t.textPrimary} /><Text style={styles.stopTurnText}>{stopping ? "Stopping…" : stopLabel}</Text></Pressable></View>;
+type InlineBannerProps = { tone: "warning" | "danger" | "muted"; icon: keyof typeof Feather.glyphMap; title: string; body?: string; action?: string; secondary?: string; onPress?(): void; onSecondary?(): void; onDismiss?(): void };
+
+/** A banner the reader can close; it stays closed until what it reports changes. */
+function DismissibleBanner({ copy, dismissed, onDismiss, ...props }: Omit<InlineBannerProps, "title" | "body" | "onDismiss"> & { copy: BannerCopy | undefined; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {
+	if (!copy || dismissed.has(copy.key)) return null;
+	return <InlineBanner {...props} title={copy.title} body={copy.body} onDismiss={() => onDismiss(copy.key)} />;
 }
 
-// A slot renders from its label and is pressable only when it has a handler.
-// Callers withhold the handler to mean "busy" — "Retrying…", "Resuming…" — and
-// without `disabled` the row still highlighted and still fired a tap haptic, so
-// a label that does nothing felt like a button that had been ignored.
-function InlineBanner({ tone, icon, text, action, secondary, onPress, onSecondary }: { tone: "warning" | "danger" | "muted"; icon: keyof typeof Feather.glyphMap; text: string; action?: string; secondary?: string; onPress?(): void; onSecondary?(): void }) {
+// Headline plus at most two lines of detail, like the desktop's status banners.
+function InlineBanner({ tone, icon, title, body, action, secondary, onPress, onSecondary, onDismiss }: InlineBannerProps) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const color = tone === "danger" ? t.red : tone === "warning" ? t.amber : t.textTertiary;
 	const fill = tone === "danger" ? t.tintRed : tone === "warning" ? t.tintAmber : t.bgSubtle;
-	return <View style={[styles.banner, { backgroundColor: fill }]}><Feather name={icon} size={13} color={color} /><Text style={styles.bannerText}>{text}</Text>{secondary ? <Pressable hitSlop={7} disabled={!onSecondary} onPress={() => { haptics.tap(); onSecondary?.(); }}><Text style={styles.bannerSecondary}>{secondary}</Text></Pressable> : null}{action ? <Pressable hitSlop={7} disabled={!onPress} onPress={() => { haptics.tap(); onPress?.(); }}><Text style={[styles.bannerAction, { color }]}>{action}</Text></Pressable> : null}</View>;
+	return (
+		<View style={[styles.banner, { backgroundColor: fill }]}>
+			<Feather name={icon} size={12} color={color} style={styles.bannerIcon} />
+			<View style={styles.bannerCopy}>
+				<Text style={[styles.bannerTitle, { color: tone === "muted" ? t.textSecondary : color }]} numberOfLines={1}>{title}</Text>
+				{body ? <Text style={styles.bannerText} numberOfLines={2}>{body}</Text> : null}
+			</View>
+			{secondary ? <Pressable hitSlop={7} onPress={() => { haptics.tap(); onSecondary?.(); }}><Text style={styles.bannerSecondary}>{secondary}</Text></Pressable> : null}
+			{action ? <Pressable hitSlop={7} onPress={() => { haptics.tap(); onPress?.(); }}><Text style={[styles.bannerAction, { color }]}>{action}</Text></Pressable> : null}
+			{onDismiss ? <Pressable accessibilityRole="button" accessibilityLabel={`Close: ${title}`} hitSlop={10} onPress={() => { haptics.tap(); onDismiss(); }} style={styles.bannerClose}><Feather name="x" size={15} color={t.textTertiary} /></Pressable> : null}
+		</View>
+	);
 }
-
-function ConversationMenu({ visible, onClose, snapshot, openingShell, compacting, mcpReloading, compactSupported, mcpReloadSupported, interfaceSupported, interfaceReason, interfaceSwitching, onMap, onOpenShell, onPreview, onPullRequests, onSettings, onSwitchInterface, onCompact, onReload, onRename }: { visible: boolean; onClose(): void; snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; openingShell: boolean; compacting: boolean; mcpReloading: boolean; compactSupported: boolean; mcpReloadSupported: boolean; interfaceSupported: boolean; interfaceReason?: string; interfaceSwitching: boolean; onMap(): void; onOpenShell(): void; onPreview(): void; onPullRequests(): void; onSettings(): void; onSwitchInterface(): void; onCompact(): void; onReload(): void; onRename(title: string): void }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const [renaming, setRenaming] = useState(false);
-	const [title, setTitle] = useState(snapshot.title ?? "");
-	const turnInFlight = snapshot.turns.some((turn) => turn.state === "running" || turn.state === "queued");
-	useEffect(() => { if (visible) { setRenaming(false); setTitle(snapshot.title ?? ""); } }, [visible, snapshot.title]);
-	return <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}><Pressable style={styles.menuScrim} onPress={() => { haptics.tap(); onClose(); }} /><View style={styles.menu}>
-		{renaming ? <View style={styles.rename}><Text style={styles.menuHeading}>Rename conversation</Text><TextInput autoFocus value={title} onChangeText={setTitle} placeholder="Conversation title" placeholderTextColor={t.textFaint} style={styles.renameInput} /><View style={styles.menuButtons}><Pressable onPress={() => { haptics.tap(); setRenaming(false); }}><Text style={styles.menuCancel}>Cancel</Text></Pressable><Pressable disabled={!title.trim()} onPress={() => { haptics.tap(); onRename(title.trim()); }}><Text style={styles.menuSave}>Save</Text></Pressable></View></View> : <ScrollView>
-			<Text style={styles.menuHeading}>Conversation</Text>
-			<MenuRow icon="repeat" label={interfaceSwitching ? "Switching interface…" : "Open Terminal UI"} hint={interfaceSupported ? "Resume this native conversation in the agent's terminal" : interfaceReason || "This agent has not declared a compatible handoff"} disabled={!interfaceSupported || interfaceSwitching} onPress={onSwitchInterface} />
-			<MenuRow icon="list" label="Conversation map" hint="Jump to any request and response" onPress={onMap} />
-			<MenuRow icon="terminal" label={openingShell ? "Opening shell…" : "Open worktree shell"} hint="A plain terminal in this session's worktree" disabled={openingShell} onPress={onOpenShell} />
-			<MenuRow icon="globe" label="Open preview" hint="View a page or document generated in this worktree" onPress={onPreview} />
-			<MenuRow icon="git-pull-request" label="Pull requests" hint="Review CI, feedback and merge state" onPress={onPullRequests} />
-			<MenuRow icon="sliders" label="Turn settings" hint="Model, effort, approvals and provider options" onPress={onSettings} />
-			{can(snapshot, "rename") ? <MenuRow icon="edit-2" label="Rename" onPress={() => setRenaming(true)} /> : null}
-			{compactSupported ? <MenuRow icon="archive" label={compacting ? "Compacting history…" : "Compact history"} hint={turnInFlight ? "Available after the current turn finishes" : snapshot.compactedAt ? `Last compacted ${new Date(snapshot.compactedAt).toLocaleString()}` : "Summarize older context without changing files"} disabled={turnInFlight || compacting} onPress={onCompact} /> : null}
-			{mcpReloadSupported ? <MenuRow icon="refresh-cw" label={mcpReloading ? "Reloading MCP servers…" : "Reload MCP servers"} hint={turnInFlight ? "Available after the current turn finishes" : undefined} disabled={turnInFlight || mcpReloading} onPress={onReload} /> : null}
-			{snapshot.usage ? <View style={styles.rateBox}><Text style={styles.rateTitle}>Context and usage</Text><Text style={styles.rateText}>{formatTokens(snapshot.usage.contextUsed)} / {formatTokens(snapshot.usage.contextWindow)} context · {formatTokens(snapshot.usage.inputTokens)} in · {formatTokens(snapshot.usage.outputTokens)} out{snapshot.usage.cachedTokens ? ` · ${formatTokens(snapshot.usage.cachedTokens)} cached` : ""}{snapshot.usage.cost != null ? ` · ${snapshot.usage.currency || "$"}${snapshot.usage.cost.toFixed(4)}` : ""}</Text></View> : null}
-			{snapshot.rateLimits ? <View style={styles.rateBox}><Text style={styles.rateTitle}>{snapshot.rateLimits.planLabel || "Rate limits"}</Text><Text style={styles.rateText}>Primary: {Math.round(snapshot.rateLimits.primaryUsedPercent)}% used{formatReset(snapshot.rateLimits.primaryResetsInSeconds)}{snapshot.rateLimits.secondaryUsedPercent >= 0 ? ` · Secondary: ${Math.round(snapshot.rateLimits.secondaryUsedPercent)}%${formatReset(snapshot.rateLimits.secondaryResetsInSeconds)}` : ""}</Text></View> : null}
-		</ScrollView>}
-	</View></Modal>;
-}
-
-function MenuRow({ icon, label, hint, disabled, onPress }: { icon: keyof typeof Feather.glyphMap; label: string; hint?: string; disabled?: boolean; onPress(): void }) { const t = useTheme(); const styles = useThemedStyles(makeStyles); return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={() => { haptics.tap(); onPress(); }} style={({ pressed }) => [styles.menuRow, pressed && { backgroundColor: t.bgSubtle }, disabled && { opacity: 0.45 }]}><Feather name={icon} size={16} color={t.textTertiary} /><View style={{ flex: 1 }}><Text style={styles.menuLabel}>{label}</Text>{hint ? <Text style={styles.menuHint}>{hint}</Text> : null}</View><Feather name="chevron-right" size={15} color={t.textFaint} /></Pressable>; }
 
 function Unavailable({ message, onShell, openingShell }: { message: string; onShell(): void; openingShell: boolean }) { return <Centered icon="alert-triangle" title="Conversation unavailable" message={`${message}\n\nThe worktree is untouched. You can still open a plain shell in it.`} action={openingShell ? "Opening…" : "Open worktree shell"} onAction={onShell} />; }
-function Centered({ icon, title, message, spinning, action, onAction }: { icon: keyof typeof Feather.glyphMap; title: string; message?: string; spinning?: boolean; action?: string; onAction?(): void }) { const t = useTheme(); const styles = useThemedStyles(makeStyles); return <View style={styles.center}>{spinning ? <ActivityIndicator color={t.blue} /> : <Feather name={icon} size={22} color={t.amber} />}<Text style={styles.centerTitle}>{title}</Text>{message ? <Text style={styles.centerCopy}>{message}</Text> : null}{action ? <Pressable onPress={() => { haptics.tap(); onAction?.(); }} style={styles.centerAction}><Text style={styles.centerActionText}>{action}</Text></Pressable> : null}</View>; }
+function Centered({ icon, title, message, spinning, action, onAction }: { icon: keyof typeof Feather.glyphMap; title: string; message?: string; spinning?: boolean; action?: string; onAction?(): void }) { const t = useTheme(); const styles = useThemedStyles(makeStyles); return <View style={styles.center}>{spinning ? <ActivityIndicator color={t.accent} /> : <Feather name={icon} size={20} color={t.amber} />}<Text style={styles.centerTitle}>{title}</Text>{message ? <Text style={styles.centerCopy}>{message}</Text> : null}{action ? <Pressable onPress={() => { haptics.tap(); onAction?.(); }} style={styles.centerAction}><Text style={styles.centerActionText}>{action}</Text></Pressable> : null}</View>; }
 
 function sessionTitle(session: MobileChatSession): string { return "displayName" in session ? session.displayName || session.issueTitle || session.issueLabel || session.id : session.projectName || session.id; }
-function formatTokens(value: number): string { return value >= 1_000 ? `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k` : String(value); }
 function interfacePhaseLabel(phase?: string): string {
 	switch (phase) {
 		case "draining": return "finishing current work";
@@ -505,42 +725,21 @@ function interfacePhaseLabel(phase?: string): string {
 	}
 }
 function signInCommand(harness: string): string | undefined { return harness === "codex" ? "codex login" : harness === "claude-code" || harness === "claude" ? "claude auth login" : undefined; }
-function formatReset(seconds?: number): string { if (seconds === undefined || seconds < 0) return ""; if (seconds < 60) return ` · resets in ${Math.ceil(seconds)}s`; if (seconds < 3600) return ` · resets in ${Math.ceil(seconds / 60)}m`; return ` · resets in ${Math.ceil(seconds / 3600)}h`; }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
-	meta: { minHeight: 37, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, backgroundColor: t.bgSurface, borderBottomWidth: 1, borderBottomColor: t.borderSubtle },
-	dot: { width: 7, height: 7, borderRadius: 4 },
-	harness: { color: t.textSecondary, fontSize: 11, fontWeight: "600" },
-	mode: { color: t.textFaint, borderWidth: 1, borderColor: t.borderSubtle, borderRadius: 5, paddingHorizontal: 5, paddingVertical: 2, fontSize: 8, letterSpacing: 1 },
-	usage: { width: 54, height: 5, borderRadius: 3, backgroundColor: t.bgSubtle, overflow: "hidden" },
-	usageFill: { height: 5, borderRadius: 3, backgroundColor: t.blue },
-	percent: { color: t.textTertiary, fontSize: 10, fontFamily: t.fontMono },
-	banner: { minHeight: 35, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: t.borderSubtle },
-	bannerText: { flex: 1, color: t.textSecondary, fontSize: 11, lineHeight: 15 },
-	bannerAction: { fontSize: 11, fontWeight: "700" },
-	bannerSecondary: { color: t.textTertiary, fontSize: 11, fontWeight: "600" },
-	live: { minHeight: 35, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 13, backgroundColor: t.bgSurface, borderTopWidth: 1, borderTopColor: t.borderSubtle },
-	liveText: { color: t.textSecondary, fontSize: 11 },
-	stopTurn: { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 7, borderWidth: 1, borderColor: t.borderDefault, paddingHorizontal: 8, paddingVertical: 5 },
-	stopTurnText: { color: t.textPrimary, fontSize: 10, fontWeight: "600" },
-	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, paddingHorizontal: 38, backgroundColor: t.bgBase },
-	centerTitle: { color: t.textPrimary, fontSize: 17, fontWeight: "700", textAlign: "center" },
-	centerCopy: { color: t.textSecondary, fontSize: 13, lineHeight: 19, textAlign: "center" },
-	centerAction: { minHeight: 42, justifyContent: "center", backgroundColor: t.blue, borderRadius: 11, paddingHorizontal: 15, marginTop: 4 },
-	centerActionText: { color: t.onAccent, fontSize: 13, fontWeight: "700" },
-	menuScrim: { ...StyleSheet.absoluteFill, backgroundColor: t.scrim },
-	menu: { ...centeredConversationMenu, top: 76, maxHeight: "75%", backgroundColor: t.bgSurface, borderRadius: 16, borderWidth: 1, borderColor: t.borderDefault, overflow: "hidden" },
-	menuHeading: { color: t.textPrimary, fontSize: 14, fontWeight: "700", paddingHorizontal: 14, paddingTop: 14, paddingBottom: 8 },
-	menuRow: { minHeight: 57, flexDirection: "row", alignItems: "center", gap: 11, paddingHorizontal: 14, paddingVertical: 9, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
-	menuLabel: { color: t.textPrimary, fontSize: 13, fontWeight: "600" },
-	menuHint: { color: t.textTertiary, fontSize: 10, lineHeight: 14, marginTop: 2 },
-	rateBox: { padding: 14, borderTopWidth: 1, borderTopColor: t.borderSubtle, gap: 3 },
-	rateTitle: { color: t.textSecondary, fontSize: 11, fontWeight: "700" },
-	rateText: { color: t.textTertiary, fontSize: 10, lineHeight: 14 },
-	rename: { padding: 14, gap: 10 },
-	renameInput: { minHeight: 42, borderRadius: 10, backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderDefault, color: t.textPrimary, paddingHorizontal: 11 },
-	menuButtons: { flexDirection: "row", justifyContent: "flex-end", gap: 18, paddingTop: 3 },
-	menuCancel: { color: t.textTertiary, fontSize: 12, fontWeight: "600" },
-	menuSave: { color: t.blue, fontSize: 12, fontWeight: "700" },
+	banner: { minHeight: 35, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.sm, paddingVertical: space.xs, borderBottomWidth: 1, borderBottomColor: t.borderSubtle },
+	bannerIcon: { alignSelf: "flex-start", marginTop: space.hair },
+	bannerCopy: { flex: 1, minWidth: 0, gap: space.none },
+	bannerTitle: { fontFamily: "Geist_600SemiBold", fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600" },
+	bannerText: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
+	bannerClose: { width: 26, height: 26, alignItems: "center", justifyContent: "center" },
+	bannerAction: { fontFamily: "Geist_600SemiBold", fontSize: type.caption2.fontSize, fontWeight: "600" },
+	bannerSecondary: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600" },
+	reviewHeaderPRButton: { width: 44, height: 44, borderRadius: 22, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderStrong, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.huge, backgroundColor: t.bgBase },
+	centerTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.body.fontSize, fontWeight: "600", textAlign: "center" },
+	centerCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "center" },
+	centerAction: { minHeight: 42, justifyContent: "center", backgroundColor: t.accent, borderRadius: 12, paddingHorizontal: space.lg, marginTop: space.xxs },
+	centerActionText: { fontFamily: "Geist_600SemiBold", color: t.onAccent, fontSize: type.footnote.fontSize, fontWeight: "600" },
 });

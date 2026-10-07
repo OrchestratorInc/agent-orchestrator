@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -83,6 +84,32 @@ func (s *Store) OrchestratorSandboxProvider(
 	return provider, err
 }
 
+// OrchestratorProjectWorkerAgent returns the worker agent configured on the
+// orchestrator's project (config.worker.agent), so a child spawned without an
+// explicit harness inherits exactly the agent chosen when the project was
+// created rather than a hardcoded default. Returns "" when the project set no
+// worker agent, and ErrForbidden when the session is not an active orchestrator
+// in the organization. config is JSONB with a typeof=object CHECK, so the ->>
+// access is always safe.
+func (s *Store) OrchestratorProjectWorkerAgent(
+	ctx context.Context,
+	orgID, orchestratorSessionID string,
+) (string, error) {
+	var agent string
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		projectID, err := requireActiveOrchestrator(ctx, tx, orgID, orchestratorSessionID)
+		if err != nil {
+			return err
+		}
+		return tx.QueryRow(
+			ctx,
+			`SELECT COALESCE(config->'worker'->>'agent', '') FROM ao_projects WHERE org_id = $1 AND id = $2`,
+			orgID, projectID,
+		).Scan(&agent)
+	})
+	return agent, err
+}
+
 func (s *Store) CreateOrchestratorChild(
 	ctx context.Context,
 	orgID, orchestratorSessionID, idempotencyKey string,
@@ -151,9 +178,12 @@ func (s *Store) SendOrchestratorChildMessage(
 		}
 		event, err = sendMessageTx(
 			ctx, tx, orgID, childSessionID, idempotencyKey, text, "", orchestratorSessionID,
-			"", nil,
+			"", nil, domain.ChatTurnSettings{},
 		)
-		return err
+		if err != nil {
+			return err
+		}
+		return annotateAutomationMessageTx(ctx, tx, orgID, &event, "Orchestrator", text)
 	})
 	return event, err
 }
@@ -186,19 +216,37 @@ func (s *Store) ReportToOrchestrator(
 		if err != nil {
 			return err
 		}
-		// Provenance rides in the text (matching the local `ao send` convention)
-		// so the orchestrator's agent can tell workers apart without any client
-		// change; the audit row still records the child as actor.
+		// Keep provenance in the agent prompt (matching the local `ao send`
+		// convention). The event also carries structural display attribution;
+		// the audit row records the child as actor.
 		prefixed := fmt.Sprintf(
 			"[from worker %s %q] %s", shortSessionID(childSessionID), childName, text,
 		)
 		event, err = sendMessageTx(
 			ctx, tx, orgID, parentID, idempotencyKey, prefixed, "", childSessionID,
-			"", nil,
+			"", nil, domain.ChatTurnSettings{},
 		)
-		return err
+		if err != nil {
+			return err
+		}
+		return annotateAutomationMessageTx(ctx, tx, orgID, &event, "Worker · "+childName, text)
 	})
 	return event, err
+}
+
+// Keep the prompt sent to the agent intact while giving transcript clients
+// durable authorship and readable display text. Idempotent retries update the
+// same event with the same metadata.
+func annotateAutomationMessageTx(ctx context.Context, tx pgx.Tx, orgID string, event *domain.ClientEvent, senderLabel, displayText string) error {
+	metadata, err := json.Marshal(map[string]string{
+		"origin": "automation", "senderLabel": senderLabel, "displayText": displayText,
+	})
+	if err != nil {
+		return err
+	}
+	return tx.QueryRow(ctx, `UPDATE ao_events SET payload = payload || $4::jsonb
+		WHERE org_id = $1 AND session_id = $2 AND sequence = $3 AND type = 'chat.user_message'
+		RETURNING payload`, orgID, event.SessionID, event.Sequence, metadata).Scan(&event.Payload)
 }
 
 func shortSessionID(id string) string {

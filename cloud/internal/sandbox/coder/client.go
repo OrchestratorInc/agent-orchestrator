@@ -27,9 +27,16 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 )
+
+// OrgConnectionLabel is the single bring-your-own Coder connection label an
+// organization stores its credential under. The HTTP edge that seals the token
+// and every service that later unseals it MUST pass the identical label so the
+// AES-GCM associated data lines up.
+const OrgConnectionLabel = "default"
 
 const (
 	defaultTimeout      = 2 * time.Minute
@@ -49,10 +56,14 @@ const (
 	// Leave enough room for clock skew and request transit after AO computes the
 	// deadline but before Coder validates it.
 	coderDeadlineRequestMargin = time.Minute
+	preinstalledMiss           = "__AO_PREINSTALLED_MISS__"
 	bootstrapResultWait        = 2 * time.Minute
 )
 
-var userPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+var (
+	userPattern                       = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+	errPreinstalledWorkerDoesNotMatch = errors.New("coder: preinstalled AO worker does not match")
+)
 
 // Config describes one Coder deployment and the template AO is allowed to use.
 type Config struct {
@@ -94,12 +105,20 @@ func New(config Config) (*Client, error) {
 	if strings.TrimSpace(config.Token) == "" {
 		return nil, errors.New("coder: API token is required")
 	}
-	if strings.TrimSpace(config.Owner) == "" {
-		return nil, errors.New("coder: workspace owner is required")
-	}
-	templateID, err := uuid.Parse(strings.TrimSpace(config.TemplateID))
-	if err != nil {
-		return nil, errors.New("coder: template ID must be a UUID")
+	// Owner and template are optional at construction so a client can be built
+	// from only a base URL and token — the shape a bring-your-own-Coder org first
+	// saves, where the owner is derived from the token and the template is chosen
+	// per project. They are required at the point they are used: Create guards both,
+	// and a real session always carries them on its immutable profile (see
+	// ForSandbox). A template that IS supplied must still be a UUID.
+	owner := strings.TrimSpace(config.Owner)
+	templateID := strings.TrimSpace(config.TemplateID)
+	if templateID != "" {
+		parsed, err := uuid.Parse(templateID)
+		if err != nil {
+			return nil, errors.New("coder: template ID must be a UUID")
+		}
+		templateID = parsed.String()
 	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
@@ -116,17 +135,47 @@ func New(config Config) (*Client, error) {
 	return &Client{
 		baseURL:    strings.TrimRight(endpoint.String(), "/"),
 		token:      strings.TrimSpace(config.Token),
-		owner:      strings.TrimSpace(config.Owner),
-		templateID: templateID.String(),
+		owner:      owner,
+		templateID: templateID,
 		agentName:  strings.TrimSpace(config.AgentName),
 		parameters: parameters,
 		http:       httpClient,
 	}, nil
 }
 
-// ForSandbox binds the deployment-scoped connection credential to the
-// non-secret Coder contract stored on one session. The returned client is safe
-// to use only for that session's deterministic workspace identity.
+// NewForOrg decrypts an organization's stored bring-your-own Coder connection
+// token and builds a client bound to the supplied non-secret contract. It is the
+// single place that turns an encrypted per-organization connection into a live
+// client, so the AES-GCM associated-data construction and the token zeroing live
+// in exactly one spot — shared by the sandbox resolver (which provisions a
+// session's workspace) and the HTTP template-list edge (which reads the org's
+// templates). The decrypted token is zeroed before return; New has already copied
+// it into the returned client, so the client remains usable afterwards.
+func NewForOrg(cipher *secrets.Cipher, orgID string, encrypted, nonce []byte, config Config) (*Client, error) {
+	if cipher == nil {
+		return nil, errors.New("coder: secrets cipher is required for a per-organization connection")
+	}
+	token, err := cipher.Decrypt(
+		encrypted, nonce,
+		secrets.ProviderConnectionAssociatedData(orgID, sandbox.ProviderCoder, OrgConnectionLabel),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("coder: decrypt per-organization token: %w", err)
+	}
+	defer clear(token)
+	config.Token = string(token)
+	return New(config)
+}
+
+// ForSandbox binds a connection credential to the non-secret Coder contract
+// stored on one session. The returned client is safe to use only for that
+// session's deterministic workspace identity. It serves both the shared,
+// env-configured deployment client and a fresh per-organization client the
+// resolver builds for a bring-your-own-Coder session — the latter is constructed
+// with the session profile's own BaseURL, so it clears the equality guard below
+// by construction. The guard is retained because it still protects the shared
+// deployment client: its token must never be sent to a deployment other than the
+// one it was configured for.
 func (c *Client) ForSandbox(record domain.Sandbox) (sandbox.Provider, error) {
 	if strings.TrimSpace(record.SessionID) == "" {
 		return nil, errors.New("coder: durable session ID is required")
@@ -156,6 +205,101 @@ func (c *Client) ForSandbox(record domain.Sandbox) (sandbox.Provider, error) {
 	sessionClient.parameters = parameters
 	sessionClient.expectedWorkspaceName = WorkspaceName(record.SessionID)
 	return &sessionClient, nil
+}
+
+// CurrentUser returns the username of the Coder account the client's API token
+// authenticates as (GET /api/v2/users/me). A bring-your-own-Coder organization
+// saves only a base URL and token; the workspace owner is this user, derived once
+// at save time instead of being pasted. The call needs neither an owner nor a
+// template, so a minimal client (base URL + token) can make it.
+func (c *Client) CurrentUser(ctx context.Context) (string, error) {
+	var me struct {
+		Username string `json:"username"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v2/users/me", nil, &me); err != nil {
+		return "", fmt.Errorf("coder: resolve current user: %w", err)
+	}
+	username := strings.TrimSpace(me.Username)
+	if username == "" {
+		return "", errors.New("coder: current user has no username")
+	}
+	return username, nil
+}
+
+// Template is a non-secret summary of a Coder template a client may pick from.
+type Template struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName"`
+	Description string `json:"description"`
+	Icon        string `json:"icon"`
+	// Parameters is the set of per-workspace coder_parameter names the template's
+	// active version declares (e.g. "size", "startup_script"). The picker uses it
+	// to offer only the controls a template can actually accept: sending a rich
+	// parameter a template does not declare makes Coder reject the build.
+	Parameters []string `json:"parameters"`
+}
+
+// ListTemplates returns the templates the configured Coder user can see, for a
+// client-facing template picker. It is read-only and does not affect the
+// deployment's default template (which still governs any session that does not
+// explicitly choose one). Each template is annotated with the parameter names
+// its active version declares; a template whose parameters cannot be read is
+// still returned, with an empty parameter set, so a transient read does not hide
+// it from the picker.
+func (c *Client) ListTemplates(ctx context.Context) ([]Template, error) {
+	var raw []struct {
+		ID              string `json:"id"`
+		Name            string `json:"name"`
+		DisplayName     string `json:"display_name"`
+		Description     string `json:"description"`
+		Icon            string `json:"icon"`
+		ActiveVersionID string `json:"active_version_id"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v2/templates", nil, &raw); err != nil {
+		return nil, fmt.Errorf("coder: list templates: %w", err)
+	}
+	templates := make([]Template, 0, len(raw))
+	for _, t := range raw {
+		params, err := c.templateVersionParameterNames(ctx, t.ActiveVersionID)
+		if err != nil {
+			// Best-effort: keep the template selectable even if its parameter
+			// list is momentarily unreadable. The picker degrades to hiding the
+			// size/startup controls for it, which is the safe default.
+			params = nil
+		}
+		templates = append(templates, Template{
+			ID:          t.ID,
+			Name:        t.Name,
+			DisplayName: t.DisplayName,
+			Description: t.Description,
+			Icon:        t.Icon,
+			Parameters:  params,
+		})
+	}
+	return templates, nil
+}
+
+// templateVersionParameterNames returns the coder_parameter names declared by a
+// template version. It is used to gate the client picker so it only offers
+// controls the chosen template can accept.
+func (c *Client) templateVersionParameterNames(ctx context.Context, versionID string) ([]string, error) {
+	if versionID == "" {
+		return nil, nil
+	}
+	var raw []struct {
+		Name string `json:"name"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v2/templateversions/"+url.PathEscape(versionID)+"/rich-parameters", nil, &raw); err != nil {
+		return nil, fmt.Errorf("coder: template version parameters: %w", err)
+	}
+	names := make([]string, 0, len(raw))
+	for _, p := range raw {
+		if p.Name != "" {
+			names = append(names, p.Name)
+		}
+	}
+	return names, nil
 }
 
 type workspace struct {
@@ -222,6 +366,15 @@ func (c *Client) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Environ
 			"coder: session workspace name mismatch: got %q, want %q",
 			name, c.expectedWorkspaceName,
 		)
+	}
+	// Owner and template are optional on a freshly-connected client but required to
+	// create a workspace. A real session always supplies both via its immutable
+	// profile (ForSandbox); failing here gives a clear message if one is ever missing.
+	if strings.TrimSpace(c.owner) == "" {
+		return sandbox.Environment{}, errors.New("coder: workspace owner is required")
+	}
+	if strings.TrimSpace(c.templateID) == "" {
+		return sandbox.Environment{}, errors.New("coder: a template must be selected")
 	}
 	parameterNames := make([]string, 0, len(c.parameters))
 	for parameterName := range c.parameters {
@@ -430,31 +583,61 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 	if !ok || agent.ID == "" || agent.Status != "connected" || !agent.Health.Healthy {
 		return errors.New("coder: workspace agent is not connected and healthy")
 	}
-	payload, err := bootstrapArchive(bootstrap)
+	// Fast path: an approved template can bake the exact worker and helper from
+	// the control-plane image. Verify both hashes inside the workspace, then send
+	// only the small launch environment through the PTY. A stale or unmodified
+	// customer template explicitly falls through to the full binary upload.
+	launchPayload, err := bootstrapLaunchArchive(bootstrap)
 	if err != nil {
 		return err
 	}
-	encoded := base64.StdEncoding.EncodeToString(payload)
-	command := bootstrapCommand(bootstrap, len(encoded))
 	ptyURL, err := url.Parse(c.baseURL + "/api/v2/workspaceagents/" + url.PathEscape(agent.ID) + "/pty")
 	if err != nil {
 		return fmt.Errorf("coder: build PTY URL: %w", err)
 	}
-	query := ptyURL.Query()
+	if err := c.bootstrapWorkerThroughPTY(ctx, ptyURL, bootstrap, launchPayload, true); err == nil {
+		return nil
+	} else if !errors.Is(err, errPreinstalledWorkerDoesNotMatch) {
+		return fmt.Errorf("coder: launch preinstalled worker: %w", err)
+	}
+
+	payload, err := bootstrapArchive(bootstrap)
+	if err != nil {
+		return err
+	}
+	if err := c.bootstrapWorkerThroughPTY(ctx, ptyURL, bootstrap, payload, false); err != nil {
+		return fmt.Errorf("coder: bootstrap worker after PTY retries: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) bootstrapWorkerThroughPTY(
+	ctx context.Context,
+	ptyURL *url.URL,
+	bootstrap sandbox.WorkerBootstrap,
+	payload []byte,
+	preinstalled bool,
+) error {
+	encoded := base64.StdEncoding.EncodeToString(payload)
+	attemptURL := *ptyURL
+	query := attemptURL.Query()
 	query.Set("width", "120")
 	query.Set("height", "40")
-	query.Set("command", command)
+	query.Set("command", bootstrapCommandForArchive(bootstrap, len(encoded), preinstalled))
 	// Bootstrap is a short-lived, non-interactive command. The buffered backend
 	// preserves the final result after the upload while AO keeps the PTY open.
 	query.Set("backend_type", "buffered")
-	ptyURL.RawQuery = query.Encode()
+	attemptURL.RawQuery = query.Encode()
 	const bootstrapAttempts = 5
 	var lastErr error
 	for attempt := 0; attempt < bootstrapAttempts; attempt++ {
-		if err := c.bootstrapThroughPTY(ctx, ptyURL, encoded); err == nil {
+		if err := c.bootstrapThroughPTY(ctx, &attemptURL, encoded); err == nil {
 			return nil
 		} else {
 			lastErr = err
+		}
+		if errors.Is(lastErr, errPreinstalledWorkerDoesNotMatch) {
+			return lastErr
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -469,7 +652,7 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 			}
 		}
 	}
-	return fmt.Errorf("coder: bootstrap worker after PTY retries: %w", lastErr)
+	return lastErr
 }
 
 func (c *Client) bootstrapThroughPTY(ctx context.Context, ptyURL *url.URL, encoded string) error {
@@ -558,6 +741,9 @@ func waitForBootstrapReady(ctx context.Context, output <-chan ptyOutput) error {
 			}
 			if strings.Contains(response.data, bootstrapReady) {
 				return nil
+			}
+			if strings.Contains(response.data, preinstalledMiss) {
+				return errPreinstalledWorkerDoesNotMatch
 			}
 			if strings.Contains(response.data, bootstrapFailed) {
 				return fmt.Errorf("coder: worker bootstrap failed before upload: %s", sanitizePTYOutput(response.data))
@@ -665,6 +851,14 @@ func safeAbsolutePath(value string) bool {
 }
 
 func bootstrapArchive(bootstrap sandbox.WorkerBootstrap) ([]byte, error) {
+	return buildBootstrapArchive(bootstrap, true)
+}
+
+func bootstrapLaunchArchive(bootstrap sandbox.WorkerBootstrap) ([]byte, error) {
+	return buildBootstrapArchive(bootstrap, false)
+}
+
+func buildBootstrapArchive(bootstrap sandbox.WorkerBootstrap, includeBinaries bool) ([]byte, error) {
 	var compressed bytes.Buffer
 	gzipWriter := gzip.NewWriter(&compressed)
 	tarWriter := tar.NewWriter(gzipWriter)
@@ -673,11 +867,17 @@ func bootstrapArchive(bootstrap sandbox.WorkerBootstrap) ([]byte, error) {
 		mode int64
 		data []byte
 	}{
-		{name: "ao-worker", mode: 0o700, data: bootstrap.Binary},
 		{name: "worker.env", mode: 0o600, data: []byte(environmentFile(bootstrap.Environment))},
 		{name: "launch.sh", mode: 0o700, data: []byte("#!/bin/sh\nset -eu\nprintf '%s\\n' \"$$\" >\"$3\"\nset -a\n. \"$1\"\nset +a\nrm -f \"$1\"\nexec \"$2\"\n")},
 	}
-	if len(bootstrap.HelperBinary) > 0 {
+	if includeBinaries {
+		files = append(files, struct {
+			name string
+			mode int64
+			data []byte
+		}{name: "ao-worker", mode: 0o700, data: bootstrap.Binary})
+	}
+	if includeBinaries && len(bootstrap.HelperBinary) > 0 {
 		files = append(files, struct {
 			name string
 			mode int64
@@ -718,6 +918,14 @@ func environmentFile(environment map[string]string) string {
 }
 
 func bootstrapCommand(bootstrap sandbox.WorkerBootstrap, encodedLength int) string {
+	return bootstrapCommandForArchive(bootstrap, encodedLength, false)
+}
+
+func bootstrapCommandForArchive(
+	bootstrap sandbox.WorkerBootstrap,
+	encodedLength int,
+	preinstalled bool,
+) string {
 	workerUser := strings.TrimSpace(bootstrap.User)
 	workerDestination := strings.TrimSpace(bootstrap.Destination)
 	layout, _ := sandbox.NewCoderWorkspaceLayout(bootstrap.DurableRoot)
@@ -725,15 +933,20 @@ func bootstrapCommand(bootstrap sandbox.WorkerBootstrap, encodedLength int) stri
 	if bootstrap.RequireDurableIdentity {
 		requireIdentity = "1"
 	}
-	helperInstall := ""
+	binaryPreparation := "sudo -n install -m 0755 \"$stage/ao-worker\" " + shellQuote(workerDestination) + "\n"
 	if len(bootstrap.HelperBinary) > 0 {
-		helperInstall = "sudo -n install -m 0755 \"$stage/ao\" " + shellQuote(bootstrap.HelperDestination) + "\n"
+		binaryPreparation += "sudo -n install -m 0755 \"$stage/ao\" " + shellQuote(bootstrap.HelperDestination) + "\n"
+	}
+	preinstalledCheck := ""
+	if preinstalled {
+		binaryPreparation = ""
+		preinstalledCheck = preinstalledHealScript(bootstrap, workerDestination)
 	}
 	workerEnvironment := path.Join(layout.WorkerData, "worker.env")
 	workerLauncher := path.Join(layout.WorkerData, "launch.sh")
 	workerLog := path.Join(layout.WorkerData, "worker.log")
 	workerPID := path.Join(layout.WorkerData, "worker.pid")
-	script := "set -eu\n" +
+	script := "set -eu\n" + preinstalledCheck +
 		"stage=$(mktemp -d)\nencoded=\"$stage/payload.b64\"\n" +
 		"trap 'code=$?; stty echo icanon 2>/dev/null || true; echo " + bootstrapFailed + ":$code' EXIT\n" +
 		"target=" + strconv.Itoa(encodedLength) + "\nexpected=0\nreceived=0\n: >\"$encoded\"\nstty -echo icanon 2>/dev/null || true\necho " + bootstrapReady + "\n" +
@@ -761,7 +974,23 @@ func bootstrapCommand(bootstrap sandbox.WorkerBootstrap, encodedLength int) stri
 		"else\n" +
 		"  printf '%s\\n' " + shellQuote(strings.TrimSpace(bootstrap.DurableIdentity)) + " | sudo -n tee \"$identity_file\" >/dev/null\nfi\n" +
 		"sudo -n chown -R " + shellQuote(workerUser+":"+workerUser) + " " + shellQuote(layout.Repository) + " " + shellQuote(path.Dir(layout.WorkerData)) + "\n" +
-		"sudo -n install -m 0755 \"$stage/ao-worker\" " + shellQuote(workerDestination) + "\n" + helperInstall +
+		// The dev-kit clones each extra repository as a sibling of the primary
+		// checkout (…/repository -> …/<name>), so the worker user must be able to
+		// create new entries directly in the durable root. Coder owns the root as
+		// the coder user and leaves it group-unwritable, which is why extra-repo
+		// clones failed with "could not create work tree dir: Permission denied".
+		// Grant the worker's group only write+traverse (g+wx, deliberately not
+		// read): a clone must create and enter <root>/<name>, never list the root.
+		// Applied to the root entry itself, non-recursively so Coder's own home
+		// entries keep their existing modes, and without transferring ownership so
+		// Coder (the owner) keeps full access. This widens the root from
+		// traversal-only to group-writable for the worker; see
+		// cloud/docs/coder-sandbox-provider.md. Note directory write inherently
+		// permits unlink/rename of the root's top-level entries (no sticky bit);
+		// isolating the worker to a dedicated sub-root would need a larger change.
+		"sudo -n chgrp " + shellQuote(workerUser) + " \"$durable_root\"\n" +
+		"sudo -n chmod g+wx \"$durable_root\"\n" +
+		binaryPreparation +
 		"sudo -n install -o " + shellQuote(workerUser) + " -g " + shellQuote(workerUser) + " -m 0600 \"$stage/worker.env\" " + shellQuote(workerEnvironment) + "\n" +
 		"sudo -n install -o " + shellQuote(workerUser) + " -g " + shellQuote(workerUser) + " -m 0700 \"$stage/launch.sh\" " + shellQuote(workerLauncher) + "\n" +
 		"sudo -n pkill -u " + shellQuote(workerUser) + " -f " + shellQuote(workerDestination) + " 2>/dev/null || true\n" +
@@ -776,6 +1005,56 @@ func bootstrapCommand(bootstrap sandbox.WorkerBootstrap, encodedLength int) stri
 		"sleep 1\nsudo -n -u " + shellQuote(workerUser) + " kill -0 \"$worker_pid\" 2>/dev/null || { echo 'AO worker exited during startup' >&2; exit 1; }\n" +
 		"rm -rf \"$stage\"\ntrap - EXIT\necho " + bootstrapOK + "\n"
 	return "sh -lc " + shellQuote(script)
+}
+
+// preinstalledHealScript emits the shell that runs before a launch-only bootstrap
+// upload. For each baked binary it checks whether the copy at its destination
+// already matches the exact hash the control plane runs. A stale or missing copy
+// first tries a fast HTTP pull of the correct build from the control plane
+// (content-addressed and unauthenticated, like /worker/bootstrap), verifies the
+// sha256, and installs it in place. Only if that self-heal fails does the
+// workspace emit preinstalledMiss and exit 0, so the caller falls back to the
+// slow PTY binary upload. AO_CLOUD_PUBLIC_URL is not yet sourced from worker.env
+// at this point, so the origin is embedded here as a shell literal.
+func preinstalledHealScript(bootstrap sandbox.WorkerBootstrap, workerDestination string) string {
+	publicURL := strings.TrimRight(strings.TrimSpace(bootstrap.Environment["AO_CLOUD_PUBLIC_URL"]), "/")
+	workerHash := sha256.Sum256(bootstrap.Binary)
+	var script strings.Builder
+	script.WriteString("ao_public_url=" + shellQuote(publicURL) + "\n")
+	// ao_http_heal <dest> <sha256>: pull the content-addressed binary from the
+	// control plane, verify its hash, and install it. Any failure returns non-zero
+	// so the caller signals a miss and the PTY upload takes over.
+	script.WriteString("ao_http_heal() {\n")
+	script.WriteString("  ao_dest=$1; ao_want=$2\n")
+	script.WriteString("  [ -n \"$ao_public_url\" ] || return 1\n")
+	script.WriteString("  ao_tmp=$(mktemp) || return 1\n")
+	script.WriteString("  ao_url=\"$ao_public_url/api/cloud/v1/worker/binary/$ao_want\"\n")
+	script.WriteString("  if command -v curl >/dev/null 2>&1; then\n")
+	script.WriteString("    curl -fsSL \"$ao_url\" -o \"$ao_tmp\" || { rm -f \"$ao_tmp\"; return 1; }\n")
+	script.WriteString("  elif command -v wget >/dev/null 2>&1; then\n")
+	script.WriteString("    wget -qO \"$ao_tmp\" \"$ao_url\" || { rm -f \"$ao_tmp\"; return 1; }\n")
+	script.WriteString("  else\n    rm -f \"$ao_tmp\"; return 1\n  fi\n")
+	script.WriteString("  [ \"$(sha256sum \"$ao_tmp\" | cut -d' ' -f1)\" = \"$ao_want\" ] || { rm -f \"$ao_tmp\"; return 1; }\n")
+	script.WriteString("  sudo -n install -m 0755 \"$ao_tmp\" \"$ao_dest\" || { rm -f \"$ao_tmp\"; return 1; }\n")
+	script.WriteString("  rm -f \"$ao_tmp\"\n")
+	script.WriteString("}\n")
+	script.WriteString(preinstalledHealBlock(workerDestination, hex.EncodeToString(workerHash[:])))
+	if len(bootstrap.HelperBinary) > 0 {
+		helperHash := sha256.Sum256(bootstrap.HelperBinary)
+		script.WriteString(preinstalledHealBlock(bootstrap.HelperDestination, hex.EncodeToString(helperHash[:])))
+	}
+	return script.String()
+}
+
+// preinstalledHealBlock guards one baked binary: if the copy at dest is missing
+// or does not match the expected sha256, attempt the HTTP self-heal, and only on
+// its failure emit the miss marker so the caller falls back to the PTY upload.
+func preinstalledHealBlock(dest, expectedHex string) string {
+	quotedDest := shellQuote(dest)
+	return "if ! { [ -x " + quotedDest + " ] && [ \"$(sha256sum " + quotedDest + " | cut -d' ' -f1)\" = " +
+		shellQuote(expectedHex) + " ]; }; then\n" +
+		"  ao_http_heal " + quotedDest + " " + shellQuote(expectedHex) +
+		" || { echo " + preinstalledMiss + "; exit 0; }\nfi\n"
 }
 
 func shellQuote(value string) string {
@@ -829,6 +1108,9 @@ func readBootstrapResult(ctx context.Context, output <-chan ptyOutput, timeout t
 			return result.String(), errors.New("coder: workspace PTY did not report the worker bootstrap result")
 		case value, ok := <-output:
 			if !ok {
+				if err := ctx.Err(); err != nil {
+					return result.String(), err
+				}
 				return result.String(), io.EOF
 			}
 			result.WriteString(value.data)
@@ -837,6 +1119,9 @@ func readBootstrapResult(ctx context.Context, output <-chan ptyOutput, timeout t
 				return text, nil
 			}
 			if value.err != nil {
+				if err := ctx.Err(); err != nil {
+					return text, err
+				}
 				return text, fmt.Errorf("coder: read workspace PTY: %w", value.err)
 			}
 		}

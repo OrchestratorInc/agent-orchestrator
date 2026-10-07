@@ -1,9 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
+import { setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
 import { ActivityTitle, ChatLinkProvider, ChatMarkdown } from "./ChatMarkdown";
+import { ChatImageSourceProvider } from "./chat-image-source";
 
 // Mermaid needs real SVG layout APIs jsdom lacks; pin the routing boundary and
 // let MermaidBlock.test.tsx own the block's states.
@@ -19,12 +21,21 @@ beforeEach(() => {
 // The point of these is that the SYNTAX stops being visible. Every case here is a
 // shape agents actually emit, and the assertion is that structure replaced markup.
 
-function renderWithLinkHandler(text: string, onLinkOpen: (url: string) => void, workspacePaths: string[] = []) {
+function renderWithLinkHandler(
+	text: string,
+	onLinkOpen: (url: string) => void,
+	workspacePaths: string[] = [],
+	onFileOpen?: (path: string, line?: number) => void,
+) {
 	return render(
-		<ChatLinkProvider onLinkOpen={onLinkOpen} workspacePaths={workspacePaths}>
+		<ChatLinkProvider onLinkOpen={onLinkOpen} onFileOpen={onFileOpen} workspacePaths={workspacePaths}>
 			<ChatMarkdown text={text} />
 		</ChatLinkProvider>,
 	);
+}
+
+function renderWithSessionLinkHandler(text: string, onSessionLinkOpen: (url: string) => void) {
+	return render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen}><ChatMarkdown text={text} /></ChatLinkProvider>);
 }
 
 describe("ChatMarkdown", () => {
@@ -110,6 +121,64 @@ describe("ChatMarkdown", () => {
 		expect(screen.getByText("backend/service.go:42")).toHaveClass("text-markdown-code");
 	});
 
+	it("opens a known inline-code file path in Files", async () => {
+		const onFileOpen = vi.fn();
+		renderWithLinkHandler(
+			"Open `backend/service.go:42` but keep `--resume` as code.",
+			vi.fn(),
+			["backend/service.go"],
+			onFileOpen,
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: "Open backend/service.go in Files" }));
+
+		expect(onFileOpen).toHaveBeenCalledWith("backend/service.go", 42);
+		expect(screen.getByText("--resume").closest("button")).toBeNull();
+	});
+
+	it("opens an absolute markdown file link in Files instead of externally", async () => {
+		const onFileOpen = vi.fn();
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		renderWithLinkHandler(
+			"See [the component](/Users/me/project/frontend/src/App.tsx:42).",
+			vi.fn(),
+			["frontend/src/App.tsx"],
+			onFileOpen,
+		);
+
+		await userEvent.click(screen.getByRole("link", { name: "the component" }));
+
+		expect(onFileOpen).toHaveBeenCalledWith("frontend/src/App.tsx", 42);
+		expect(openExternal).not.toHaveBeenCalled();
+		openExternal.mockRestore();
+	});
+
+	it("does not nest a file-path button inside a markdown file link", () => {
+		renderWithLinkHandler(
+			"See [`frontend/src/App.tsx`](frontend/src/App.tsx).",
+			vi.fn(),
+			["frontend/src/App.tsx"],
+			vi.fn(),
+		);
+
+		const link = screen.getByRole("link", { name: "frontend/src/App.tsx" });
+		expect(link.querySelector("button")).toBeNull();
+	});
+
+	it("opens an explicit relative file link before the workspace catalog catches up", async () => {
+		const onFileOpen = vi.fn();
+		renderWithLinkHandler(
+			"See [the new file](src/generated/new-file.ts#L8).",
+			vi.fn(),
+			[],
+			onFileOpen,
+		);
+
+		await userEvent.click(screen.getByRole("link", { name: "the new file" }));
+
+		expect(onFileOpen).toHaveBeenCalledWith("src/generated/new-file.ts", 8);
+	});
+
 	it("escapes raw HTML instead of rendering it", () => {
 		// Agent output is only as trustworthy as the files it just read, so an
 		// <img onerror> in a README must never become a live element.
@@ -141,6 +210,86 @@ describe("ChatMarkdown", () => {
 		openExternal.mockRestore();
 	});
 
+	it.each([
+		"http://localhost:5173",
+		"http://127.0.0.1:5173",
+		"http://[::1]:5173",
+		"http://0.0.0.0:5173",
+		"http://127.0.0.2:5173",
+	])("does not open a remote host-local preview on the client: %s", (href) => {
+		const onLinkOpen = vi.fn();
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		render(<ChatLinkProvider onLinkOpen={onLinkOpen} remoteHost><ChatMarkdown text={`[preview](${href})`} /></ChatLinkProvider>);
+
+		const preview = screen.getByText("preview");
+		expect(preview.closest("a")).toBeNull();
+		expect(preview.closest("[title]")).toHaveAttribute("title", expect.stringContaining("remote host"));
+		fireEvent.click(preview);
+		fireEvent.click(preview, { altKey: true });
+		fireEvent.contextMenu(preview);
+		expect(onLinkOpen).not.toHaveBeenCalled();
+		expect(openExternal).not.toHaveBeenCalled();
+		openExternal.mockRestore();
+	});
+
+	it("renders remote workspace paths as text while keeping external links working", async () => {
+		const onLinkOpen = vi.fn();
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		render(<ChatLinkProvider onLinkOpen={onLinkOpen} remoteHost>
+			<ChatMarkdown text="[report](reports/new-report.html) and [issue](https://example.com/i/1)" />
+		</ChatLinkProvider>);
+
+		const report = screen.getByText("report");
+		expect(report.closest("a")).toBeNull();
+		expect(report.closest("[title]")).toHaveAttribute("title", expect.stringContaining("remote host"));
+		fireEvent.click(report);
+		fireEvent.click(report, { metaKey: true });
+		fireEvent.contextMenu(report);
+		await userEvent.click(screen.getByRole("link", { name: "issue" }));
+		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("https://example.com/i/1");
+		expect(openExternal).not.toHaveBeenCalled();
+		openExternal.mockRestore();
+	});
+
+	it("opens remote source links in Files without opening the client browser", async () => {
+		const onFileOpen = vi.fn();
+		const onLinkOpen = vi.fn();
+		render(<ChatLinkProvider onFileOpen={onFileOpen} onLinkOpen={onLinkOpen} remoteHost workspacePaths={["src/App.tsx", "reports/index.html"]}>
+			<ChatMarkdown text="[source](src/App.tsx) and [new](src/new.ts#L8) and [preview](reports/index.html)" />
+		</ChatLinkProvider>);
+
+		await userEvent.click(screen.getByRole("link", { name: "source" }));
+		await userEvent.click(screen.getByRole("link", { name: "new" }));
+		expect(onFileOpen).toHaveBeenNthCalledWith(1, "src/App.tsx");
+		expect(onFileOpen).toHaveBeenNthCalledWith(2, "src/new.ts", 8);
+		expect(screen.getByText("preview").closest("a")).toBeNull();
+		expect(onLinkOpen).not.toHaveBeenCalled();
+	});
+
+	it("blocks remote host-local links inside Mermaid diagrams", async () => {
+		vi.mocked(renderMermaidDiagram).mockResolvedValueOnce('<svg xmlns="http://www.w3.org/2000/svg"><a href="http://localhost:5173"><text>preview</text></a></svg>');
+		const onLinkOpen = vi.fn();
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		render(<ChatLinkProvider onLinkOpen={onLinkOpen} remoteHost>
+			<ChatMarkdown text={'```mermaid\ngraph LR\n  A-->B\n```'} />
+		</ChatLinkProvider>);
+
+		const preview = await screen.findByText("preview");
+		fireEvent.click(preview);
+		fireEvent.click(preview, { altKey: true });
+		fireEvent(preview, new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
+		fireEvent.contextMenu(preview);
+		expect(onLinkOpen).not.toHaveBeenCalled();
+		expect(openExternal).not.toHaveBeenCalled();
+		openExternal.mockRestore();
+	});
+
+	it("does not load a remote host-local markdown image from the client", () => {
+		render(<ChatLinkProvider remoteHost><ChatMarkdown text="![remote screenshot](http://localhost:5173/screenshot.png)" /></ChatLinkProvider>);
+		expect(screen.queryByRole("img", { name: "remote screenshot" })).not.toBeInTheDocument();
+		expect(screen.getByText("remote screenshot")).toHaveAttribute("title", expect.stringContaining("remote host"));
+	});
+
 	it("routes workspace file clicks to the AO Browser handler", async () => {
 		const user = userEvent.setup();
 		const onLinkOpen = vi.fn();
@@ -152,6 +301,61 @@ describe("ChatMarkdown", () => {
 		expect(onLinkOpen).toHaveBeenCalledWith("test-ui-2.html");
 		expect(openExternal).not.toHaveBeenCalled();
 		openExternal.mockRestore();
+	});
+
+	it("routes a newly reported local file through AO even before Files has indexed it", async () => {
+		const user = userEvent.setup();
+		const onLinkOpen = vi.fn();
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		renderWithLinkHandler("see [new report](reports/new-report.html)", onLinkOpen);
+
+		await user.click(screen.getByRole("link", { name: "new report" }));
+
+		expect(onLinkOpen).toHaveBeenCalledWith("reports/new-report.html");
+		expect(openExternal).not.toHaveBeenCalled();
+	});
+
+	it("preserves Windows workspace paths and offers the verified file in Files", async () => {
+		const user = userEvent.setup();
+		const onLinkOpen = vi.fn();
+		const onFileOpen = vi.fn();
+		renderWithLinkHandler(
+			"see [final report](C:\\worktree\\reports\\final.html)",
+			onLinkOpen,
+			["reports/final.html"],
+			onFileOpen,
+		);
+		const link = screen.getByRole("link", { name: "final report" });
+
+		fireEvent.contextMenu(link);
+		await user.click(await screen.findByRole("menuitem", { name: "Open in Files" }));
+
+		expect(onFileOpen).toHaveBeenCalledWith("reports/final.html");
+		expect(onLinkOpen).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		"ao://sessions/project/session",
+		"[Open session](ao://sessions/project/session)",
+	])("renders and activates a canonical session link: %s", async (text) => {
+		const onSessionLinkOpen = vi.fn();
+		renderWithSessionLinkHandler(text, onSessionLinkOpen);
+		const link = screen.getByRole("link");
+		expect(link).toHaveAttribute("href", "ao://sessions/project/session");
+		await userEvent.setup().click(link);
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
+	});
+
+	it("does not auto-activate a session link while streaming", () => {
+		const onSessionLinkOpen = vi.fn();
+		render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen}><ChatMarkdown streaming text="ao://sessions/project/session" /></ChatLinkProvider>);
+		expect(screen.getByRole("link")).toBeInTheDocument();
+		expect(onSessionLinkOpen).not.toHaveBeenCalled();
+	});
+
+	it("leaves malformed session-like text inert", () => {
+		renderWithSessionLinkHandler("ao://sessions/project/session/kill", vi.fn());
+		expect(screen.queryByRole("link")).not.toBeInTheDocument();
 	});
 
 	it("opens a web link in the system browser on Option/Alt-click", () => {
@@ -283,6 +487,164 @@ describe("ChatMarkdown", () => {
 		const code = screen.getByText(/aoagents/);
 		expect(code.closest("pre")).not.toBeNull();
 		expect(screen.getByRole("button", { name: /copy code/i })).toBeInTheDocument();
+	});
+});
+
+/* -------------------------------------------------------------------------- */
+
+describe("ChatMarkdown images", () => {
+	it("caps a single image's height instead of letting it fill the column", () => {
+		render(<ChatMarkdown text={"![diagram](https://example.com/a.png)"} />);
+		const image = screen.getByRole("img", { name: "diagram" });
+		expect(image).toHaveClass("max-h-80", "max-w-full", "object-contain");
+		expect(screen.queryByRole("group", { name: "Images" })).not.toBeInTheDocument();
+	});
+
+	it("lays out a paragraph of only images as a gallery of equal-height thumbnails", () => {
+		render(
+			<ChatMarkdown
+				text={"![before](https://example.com/a.png) ![after](https://example.com/b.png)\n![diff](https://example.com/c.png)"}
+			/>,
+		);
+		const gallery = screen.getByRole("group", { name: "Images" });
+		expect(gallery).toHaveClass("flex-wrap");
+		// A gallery is block content; nesting it in a <p> is invalid markup.
+		expect(gallery.closest("p")).toBeNull();
+		const thumbnails = screen.getAllByRole("img");
+		expect(thumbnails).toHaveLength(3);
+		for (const thumbnail of thumbnails) {
+			expect(gallery).toContainElement(thumbnail);
+			// A wide screenshot in a narrow column is clamped by max-w-full; cropping
+			// it would cut the edges off the before/after pair this is for.
+			expect(thumbnail).toHaveClass("h-40", "object-contain");
+			expect(thumbnail).not.toHaveClass("object-cover");
+			// A lazy image has no width until it decodes, so without a floor the row
+			// wraps against zero-width boxes and reflows as each one lands.
+			expect(thumbnail).toHaveClass("min-w-24");
+		}
+	});
+
+	it("keeps images inline with prose when the paragraph also has text", () => {
+		render(
+			<ChatMarkdown text={"Before ![a](https://example.com/a.png) and after ![b](https://example.com/b.png)"} />,
+		);
+		expect(screen.queryByRole("group", { name: "Images" })).not.toBeInTheDocument();
+		expect(screen.getByRole("img", { name: "a" }).closest("p")).not.toBeNull();
+	});
+
+	it("opens a clicked image at full size in a dialog that Escape dismisses", async () => {
+		const user = userEvent.setup();
+		render(<ChatMarkdown text={"![diagram](https://example.com/a.png)"} />);
+
+		await user.click(screen.getByRole("button", { name: "Open image: diagram" }));
+
+		const dialog = await screen.findByRole("dialog", { name: "diagram" });
+		expect(dialog.querySelector("img")).toHaveAttribute("src", "https://example.com/a.png");
+		expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	});
+
+	it("falls back to the alt text when an image fails to load", () => {
+		render(<ChatMarkdown text={"![build graph](https://example.com/missing.png)"} />);
+
+		fireEvent.error(screen.getByRole("img", { name: "build graph" }));
+
+		expect(screen.queryByRole("img")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /open image/i })).not.toBeInTheDocument();
+		expect(screen.getByText("build graph")).toBeInTheDocument();
+	});
+
+	it("keeps a failed thumbnail in the gallery and names an image with no alt text", () => {
+		render(
+			<ChatMarkdown
+				text={"![first](https://example.com/missing.png) ![](https://example.com/other.png)"}
+			/>,
+		);
+
+		fireEvent.error(screen.getByRole("img", { name: "first" }));
+
+		const gallery = screen.getByRole("group", { name: "Images" });
+		expect(gallery.querySelector("span")).toHaveClass("h-40");
+		expect(screen.getByText("first")).toBeInTheDocument();
+
+		fireEvent.error(document.querySelector('img[alt=""]')!);
+		expect(screen.getByText("https://example.com/other.png")).toBeInTheDocument();
+	});
+
+	it("leaves a linked image to its link rather than nesting a button inside it", () => {
+		render(<ChatMarkdown text={"[![badge](https://example.com/badge.svg)](https://example.com/ci)"} />);
+		const link = screen.getByRole("link", { name: "badge" });
+		expect(link.querySelector("button")).toBeNull();
+		expect(link).toContainElement(screen.getByRole("img", { name: "badge" }));
+	});
+});
+
+/* -------------------------------------------------------------------------- */
+
+describe("ChatMarkdown image sources", () => {
+	function renderInSession(text: string) {
+		return render(
+			<ChatImageSourceProvider sessionId="session-1">
+				<ChatMarkdown text={text} />
+			</ChatImageSourceProvider>,
+		);
+	}
+
+	it("resolves relative image paths against the session workspace", () => {
+		renderInSession("![screenshot](docs/screen%20shot.png)");
+		const src = screen.getByRole("img", { name: "screenshot" }).getAttribute("src") ?? "";
+		const url = new URL(src, "http://127.0.0.1");
+		expect(url.pathname).toBe("/api/v1/sessions/session-1/workspace/file/blob");
+		expect(url.searchParams.get("path")).toBe("docs/screen shot.png");
+		expect(url.searchParams.get("side")).toBe("after");
+	});
+
+	it("loads a remote conversation image through that host's proxy", () => {
+		render(
+			<ChatImageSourceProvider sessionId="session-1" assetBaseUrl="http://127.0.0.1:4000/token-a">
+				<ChatMarkdown text="![remote](docs/shot.png)" />
+			</ChatImageSourceProvider>,
+		);
+		expect(screen.getByRole("img", { name: "remote" }).getAttribute("src")).toMatch(
+			/^http:\/\/127\.0\.0\.1:4000\/token-a\/api\/v1\/sessions\/session-1\/workspace\/file\/blob\?/,
+		);
+	});
+
+	it("does not resolve an offline remote image against the laptop daemon", () => {
+		render(
+			<ChatImageSourceProvider sessionId="session-1" remoteHost>
+				<ChatMarkdown text="![remote](docs/shot.png)" />
+			</ChatImageSourceProvider>,
+		);
+		expect(screen.queryByRole("img", { name: "remote" })).not.toBeInTheDocument();
+	});
+
+	it("keeps absolute image sources unchanged", () => {
+		renderInSession("![remote](https://example.com/a.png)");
+		expect(screen.getByRole("img", { name: "remote" })).toHaveAttribute("src", "https://example.com/a.png");
+	});
+
+	it("rebuilds relative image URLs when the daemon base URL changes", () => {
+		renderInSession("![screenshot](docs/shot.png)");
+		expect(screen.getByRole("img", { name: "screenshot" }).getAttribute("src")).toMatch(
+			/^\/api\/v1\/sessions\/session-1\/workspace\/file\/blob/,
+		);
+
+		try {
+			act(() => setApiBaseUrl("http://127.0.0.1:3111"));
+			expect(screen.getByRole("img", { name: "screenshot" }).getAttribute("src")).toMatch(
+				/^http:\/\/127\.0\.0\.1:3111\/api\/v1\/sessions\/session-1\/workspace\/file\/blob/,
+			);
+		} finally {
+			act(() => setApiBaseUrl(null));
+		}
+	});
+
+	it("leaves relative image sources unchanged without a session provider", () => {
+		render(<ChatMarkdown text={"![screenshot](docs/shot.png)"} />);
+		expect(screen.getByRole("img", { name: "screenshot" })).toHaveAttribute("src", "docs/shot.png");
 	});
 });
 

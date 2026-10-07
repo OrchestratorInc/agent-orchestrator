@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -535,6 +536,10 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 	if errors.Is(err, ports.ErrAgentBinaryNotFound) {
 		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonNotInstalled, item.Manifest.Name+" is not installed."), false
 	}
+	var incompatibleVersion *opencode.IncompatibleVersionError
+	if errors.As(err, &incompatibleVersion) {
+		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonInstallIncompatibleVersion, err.Error()), false
+	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return failedInstallation(attempted, domain.AgentReadinessReasonInstallCheckTimeout, "Installation check timed out."), true
 	}
@@ -570,6 +575,12 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 		return successfulAuthentication(attempted, domain.AgentAuthenticationAuthorized, domain.AgentReadinessReasonAuthorized, item.Manifest.Name+" appears signed in."), false
 	case ports.AgentAuthStatusUnauthorized:
 		return successfulAuthentication(attempted, domain.AgentAuthenticationUnauthorized, domain.AgentReadinessReasonUnauthorized, item.Manifest.Name+" needs authentication."), false
+	case ports.AgentAuthStatusConfigured:
+		// A definite observation — a credential exists — but not a verified
+		// one. It is recorded as a success so the coordinator does not retry
+		// it as a failure, and it derives to unknown readiness, not ready.
+		return successfulAuthentication(attempted, domain.AgentAuthenticationConfigured, domain.AgentReadinessReasonAuthConfigured,
+			item.Manifest.Name+" has credentials configured, but AO could not verify them."), false
 	default:
 		return failedAuthentication(attempted, domain.AgentReadinessReasonAuthCheckInconclusive, "Authentication check was inconclusive."), true
 	}

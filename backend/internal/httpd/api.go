@@ -3,6 +3,7 @@ package httpd
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -26,41 +27,53 @@ type APIDeps struct {
 	CodexAccounts      controllers.CodexAccountService
 	Projects           projectsvc.Manager
 	Sessions           controllers.SessionService
+	Automations        controllers.AutomationService
 	DesktopWorkspaces  controllers.DesktopWorkspaceService
 	Activity           controllers.ActivityRecorder
 	UsageHooks         controllers.UsageHookRecorder
 	UsageSummary       controllers.UsageSummaryService
+	SessionMemory      controllers.SessionMemoryService
+	SessionSteps       controllers.SessionStepsReader
 	PRs                prsvc.ActionManager
 	Reviews            reviewsvc.Manager
 	Notifications      controllers.NotificationService
+	Reports            controllers.ReportService
 	NotificationStream controllers.NotificationStream
 	Push               controllers.PushRegistry
 	Import             controllers.ImportService
+	Directories        controllers.DirectoryBrowserService
 	ShellTerminals     controllers.ShellTerminalService
+	Cues               controllers.CueService
 	// Conversations is nil until a Chat driver is wired; the controller then
 	// answers 501 rather than panicking, matching the other optional surfaces.
 	Conversations controllers.ConversationService
 	// Settings is the daemon-owned preference surface.
-	Settings            controllers.SettingsService
-	DevImport           controllers.DevImportService
-	CDC                 cdc.Source
-	Events              cdcSubscriber
-	Telemetry           ports.EventSink
-	Mobile              *controllers.MobileController
-	Browser             controllers.BrowserService
-	PreviewServer       controllers.ManagedPreviewServer
-	SessionCapabilities controllers.SessionCapabilityValidator
-	SystemChecks        controllers.SystemChecker
+	Settings                 controllers.SettingsService
+	DevImport                controllers.DevImportService
+	CDC                      cdc.Source
+	Events                   cdcSubscriber
+	Telemetry                ports.EventSink
+	Mobile                   *controllers.MobileController
+	Browser                  controllers.BrowserService
+	PreviewServer            controllers.ManagedPreviewServer
+	SessionCapabilities      controllers.SessionCapabilityValidator
+	ShellPreviewCapabilities controllers.ShellPreviewCapabilityValidator
+	SystemChecks             controllers.SystemChecker
 	// HostID is this machine's stable, machine-bound identity, served by the
 	// unauthenticated GET /api/v1/identity probe so a phone can confirm which
 	// machine answered before presenting a credential.
 	HostID string
 	// Endpoints reports how this daemon can currently be reached, for the
 	// phone's endpoint-refresh route.
-	Endpoints         controllers.EndpointSource
-	Installer         controllers.Installer
-	AgentAuth         controllers.AgentAuthService
+	Endpoints controllers.EndpointSource
+	Installer controllers.Installer
+	AgentAuth controllers.AgentAuthService
+	// GitHub is the local GitHub PAT + repos surface.
+	GitHub            controllers.GitHubPATService
 	AgentSwitchPolicy AgentSwitchPolicyControl
+	// LinkPreview unfurls external URLs for the renderer's hover cards; nil
+	// leaves the route answering 501.
+	LinkPreview controllers.LinkPreviewService
 
 	// Presence tracks which mobile devices are currently running the app.
 	// Nil disables presence tracking (the roster then reports every device offline).
@@ -107,14 +120,18 @@ type API struct {
 	codexAccounts *controllers.CodexAccountsController
 	projects      *controllers.ProjectsController
 	sessions      *controllers.SessionsController
+	automations   *controllers.AutomationsController
 	desktop       *controllers.DesktopWorkspaceController
 	usage         *controllers.UsageController
 	prs           *controllers.PRsController
 	reviews       *controllers.ReviewsController
 	notifications *controllers.NotificationsController
+	reports       *controllers.ReportsController
 	push          *controllers.PushController
 	imports       *controllers.ImportController
+	fs            *controllers.FSController
 	shellTerms    *controllers.ShellTerminalsController
+	cues          *controllers.CuesController
 	conversations *controllers.ConversationsController
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
@@ -124,6 +141,8 @@ type API struct {
 	endpoints     *controllers.EndpointsController
 	systemInstall *controllers.SystemInstallController
 	agentAuth     *controllers.AgentAuthController
+	linkPreview   *controllers.LinkPreviewController
+	github        *controllers.GitHubController
 	events        *EventsController
 }
 
@@ -131,6 +150,12 @@ type API struct {
 // per-request timeout so the REST group can apply it without re-reading the
 // environment.
 func NewAPI(cfg config.Config, deps APIDeps) *API {
+	return newAPIWithLogger(cfg, deps, loggerOrDefault(nil))
+}
+
+// newAPIWithLogger carries the daemon logger to controllers that emit service
+// errors, so their logs use the same configured handler as the rest of HTTP.
+func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 	return &API{
 		cfg:  cfg,
 		deps: deps,
@@ -142,21 +167,27 @@ func NewAPI(cfg config.Config, deps APIDeps) *API {
 			Mgr: deps.Projects,
 		},
 		sessions: &controllers.SessionsController{
-			Svc:           deps.Sessions,
-			Activity:      deps.Activity,
-			Usage:         deps.UsageHooks,
-			Attachments:   attachmentstore.New(cfg.DataDir),
-			PreviewServer: deps.PreviewServer,
-			Capabilities:  deps.SessionCapabilities,
+			Svc:                      deps.Sessions,
+			Projects:                 deps.Projects,
+			Activity:                 deps.Activity,
+			Usage:                    deps.UsageHooks,
+			Attachments:              attachmentstore.New(cfg.DataDir),
+			PreviewServer:            deps.PreviewServer,
+			Capabilities:             deps.SessionCapabilities,
+			ShellPreviewCapabilities: deps.ShellPreviewCapabilities,
 		},
+		automations:   &controllers.AutomationsController{Svc: deps.Automations},
 		desktop:       &controllers.DesktopWorkspaceController{Svc: deps.DesktopWorkspaces},
-		usage:         &controllers.UsageController{Svc: deps.UsageSummary},
+		usage:         &controllers.UsageController{Svc: deps.UsageSummary, Log: loggerOrDefault(log), Memory: deps.SessionMemory, Steps: deps.SessionSteps, Pressure: memoryPressure(deps.SessionMemory)},
 		prs:           &controllers.PRsController{Svc: deps.PRs},
 		reviews:       &controllers.ReviewsController{Svc: deps.Reviews},
 		notifications: &controllers.NotificationsController{Svc: deps.Notifications, Stream: deps.NotificationStream},
+		reports:       &controllers.ReportsController{Svc: deps.Reports},
 		push:          &controllers.PushController{Registry: deps.Push},
 		imports:       &controllers.ImportController{Svc: deps.Import},
+		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
+		cues:          &controllers.CuesController{Svc: deps.Cues},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
@@ -166,9 +197,13 @@ func NewAPI(cfg config.Config, deps APIDeps) *API {
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
+		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
+		github:        &controllers.GitHubController{Svc: deps.GitHub},
 		events:        &EventsController{Source: deps.CDC, Live: deps.Events},
 	}
 }
+
+const attachmentUploadHeader = "X-AO-Attachment-Upload"
 
 // Register mounts the bounded /api/v1 REST surface. Long-lived surfaces such
 // as muxed terminal streams stay outside this timeout group.
@@ -182,20 +217,37 @@ func (a *API) Register(root chi.Router) {
 		r.Get("/openapi.yaml", apispec.ServeYAML)
 
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.Timeout(timeout))
+			// Large base64 bodies can spend longer than the ordinary REST budget
+			// uploading over a phone connection. Only attachment-bearing requests
+			// opt in; ordinary calls to the same routes keep the configured timeout.
+			r.Use(func(next http.Handler) http.Handler {
+				ordinary := middleware.Timeout(timeout)(next)
+				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
+				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					if attachmentUploadRoute(req) {
+						upload.ServeHTTP(w, req)
+						return
+					}
+					ordinary.ServeHTTP(w, req)
+				})
+			})
 			r.Use(presenceMiddleware(a.deps.Presence))
 			a.agents.Register(r)
 			a.codexAccounts.Register(r)
 			a.projects.Register(r)
 			a.sessions.Register(r)
+			a.automations.Register(r)
 			a.desktop.Register(r)
 			a.usage.Register(r)
 			a.prs.Register(r)
 			a.reviews.Register(r)
 			a.notifications.Register(r)
+			a.reports.Register(r)
 			a.push.Register(r)
 			a.imports.Register(r)
+			a.fs.Register(r)
 			a.shellTerms.Register(r)
+			a.cues.Register(r)
 			a.conversations.Register(r)
 			a.settings.Register(r)
 			a.dev.Register(r)
@@ -205,6 +257,8 @@ func (a *API) Register(root chi.Router) {
 			a.endpoints.Register(r)
 			a.systemInstall.Register(r)
 			a.agentAuth.Register(r)
+			a.linkPreview.Register(r)
+			a.github.Register(r)
 			// Sibling REST controllers plug in here.
 		})
 		// Long-lived streams intentionally bypass the REST timeout middleware.
@@ -213,6 +267,33 @@ func (a *API) Register(root chi.Router) {
 		a.sessions.RegisterStreams(r)
 		a.events.Register(r)
 	})
+}
+
+func attachmentUploadRoute(req *http.Request) bool {
+	if req.Method != http.MethodPost {
+		return false
+	}
+	route := chi.RouteContext(req.Context()).RoutePattern()
+	// This route only accepts attachments, including from older clients.
+	if route == "/api/v1/sessions/{sessionId}/attachments" {
+		return true
+	}
+	if req.Header.Get(attachmentUploadHeader) != "1" {
+		return false
+	}
+	switch route {
+	case "/api/v1/sessions",
+		"/api/v1/orchestrators/delegate",
+		"/api/v1/sessions/{sessionId}/send",
+		"/api/v1/sessions/{sessionId}/conversation/messages",
+		"/api/v1/sessions/{sessionId}/conversation/steer",
+		"/api/v1/sessions/{sessionId}/conversation/steer-or-send",
+		"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/queue/edit",
+		"/api/v1/reviews/{reviewId}/conversation/messages":
+		return true
+	default:
+		return false
+	}
 }
 
 // notFoundJSON returns the locked envelope for unmatched routes. Chi's default
@@ -229,4 +310,13 @@ func notFoundJSON(w http.ResponseWriter, r *http.Request) {
 func methodNotAllowedJSON(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteAPIError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "METHOD_NOT_ALLOWED",
 		r.Method+" not allowed on "+r.URL.Path, nil)
+}
+
+// memoryPressure is the memory service's cheap pressure read when it offers
+// one; nil leaves the route at 501.
+func memoryPressure(svc controllers.SessionMemoryService) controllers.MemoryPressureReader {
+	if p, ok := svc.(controllers.MemoryPressureReader); ok {
+		return p
+	}
+	return nil
 }
