@@ -129,6 +129,7 @@ func newAutomationListCommand(ctx *commandContext) *cobra.Command {
 	var enabled, jsonOutput bool
 	cmd := &cobra.Command{Use: "list", Short: "List automations", Args: usageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
 		query := url.Values{}
+		query.Set("limit", "100")
 		if project != "" {
 			query.Set("projectId", project)
 		}

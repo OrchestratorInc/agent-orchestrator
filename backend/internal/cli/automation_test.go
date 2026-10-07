@@ -25,25 +25,25 @@ func TestAutomationListFollowsAllPages(t *testing.T) {
 					}
 					requests++
 					query := r.URL.Query()
-					if r.Method != http.MethodGet || r.URL.Path != "/api/v1/automations" || query.Get("projectId") != "project & one" || query.Get("enabled") != enabled || query.Has("enabled") != (enabled != "") {
+					if r.Method != http.MethodGet || r.URL.Path != "/api/v1/automations" || query.Get("limit") != "100" || query.Get("projectId") != "project & one" || query.Get("enabled") != enabled || query.Has("enabled") != (enabled != "") {
 						t.Errorf("unexpected request: %s %s", r.Method, r.URL)
 					}
-					start := (requests - 1) * 50
+					start := (requests - 1) * 100
 					wantCursor := ""
 					if start > 0 {
 						wantCursor = fmt.Sprintf("opaque+/%d=", start)
 					}
-					if query.Get("cursor") != wantCursor || requests > 3 {
+					if query.Get("cursor") != wantCursor || requests > 2 {
 						t.Errorf("unexpected cursor: %q on request %d", query.Get("cursor"), requests)
 						w.WriteHeader(http.StatusBadRequest)
 						return
 					}
 					page := automationListDTO{Automations: []automationDTO{}}
-					for i := start; i < min(start+50, 101); i++ {
+					for i := start; i < min(start+100, 101); i++ {
 						page.Automations = append(page.Automations, automationDTO{ID: fmt.Sprintf("automation-%03d", i), ProjectID: "project & one", DisplayName: "Morning"})
 					}
-					if start+50 < 101 {
-						page.NextCursor = fmt.Sprintf("opaque+/%d=", start+50)
+					if start+100 < 101 {
+						page.NextCursor = fmt.Sprintf("opaque+/%d=", start+100)
 					}
 					_ = json.NewEncoder(w).Encode(page)
 				}))
@@ -57,7 +57,7 @@ func TestAutomationListFollowsAllPages(t *testing.T) {
 					args = append(args, "--json")
 				}
 				out, stderr, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, args...)
-				if err != nil || requests != 3 {
+				if err != nil || requests != 2 {
 					t.Fatalf("requests=%d err=%v stderr=%s", requests, err, stderr)
 				}
 				var ids []string
