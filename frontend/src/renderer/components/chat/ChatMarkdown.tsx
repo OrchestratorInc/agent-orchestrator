@@ -167,7 +167,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 			<div
 				className={cn(
 					"chat-md leading-[1.58]",
-					muted ? "text-[13px] text-muted-foreground" : "text-sm text-foreground",
+					muted ? "text-sm text-muted-foreground" : "text-sm text-foreground",
 					className,
 				)}
 			>
@@ -210,7 +210,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 			data-wrap={wrap ? "true" : "false"}
 		>
 			<div className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
-				<span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+				<span className="text-caption text-muted-foreground">
 					{language || "text"}
 				</span>
 				{/* Hover-revealed, and focus-revealed so the keyboard can reach it. The
@@ -237,7 +237,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 				</div>
 			</div>
 			<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
-				<code className="font-mono text-[12px] leading-[1.6] text-foreground">
+				<code className="font-mono text-xs leading-[1.6] text-foreground">
 					<HighlightedCode code={code} language={grammar} streaming={streaming} />
 				</code>
 			</pre>
@@ -415,7 +415,7 @@ function InlineCode({ children }: { children?: ReactNode }) {
 	const text = typeof children === "string" ? children : undefined;
 	const filePath = text && onFileOpen ? findWorkspaceFilePath(text, workspacePaths) : undefined;
 	const code = (
-		<code className="rounded bg-surface px-[5px] py-[2px] font-mono text-[11.5px] text-markdown-code">
+		<code className="rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code">
 			{children}
 		</code>
 	);
@@ -440,22 +440,22 @@ const COMPONENTS: Components = {
 	// Headings step down in size but stay in the conversation's voice — an agent's
 	// "## Findings" is a paragraph label, not a page title.
 	h1: ({ children }) => (
-		<h3 className="mb-1.5 mt-4 text-[15px] font-semibold leading-snug text-foreground first:mt-0">
+		<h3 className="mb-1.5 mt-4 text-subtitle font-semibold leading-snug text-foreground first:mt-0">
 			{children}
 		</h3>
 	),
 	h2: ({ children }) => (
-		<h4 className="mb-1.5 mt-3.5 text-[14px] font-semibold leading-snug text-foreground first:mt-0">
+		<h4 className="mb-1.5 mt-3.5 text-sm font-semibold leading-snug text-foreground first:mt-0">
 			{children}
 		</h4>
 	),
 	h3: ({ children }) => (
-		<h5 className="mb-1 mt-3 text-[13.5px] font-semibold leading-snug text-foreground first:mt-0">
+		<h5 className="mb-1 mt-3 text-sm font-semibold leading-snug text-foreground first:mt-0">
 			{children}
 		</h5>
 	),
 	h4: ({ children }) => (
-		<h6 className="mb-1 mt-3 text-[13px] font-semibold uppercase tracking-wide text-muted-foreground first:mt-0">
+		<h6 className="mb-1 mt-3 text-xs font-semibold text-muted-foreground first:mt-0">
 			{children}
 		</h6>
 	),
@@ -510,7 +510,7 @@ const COMPONENTS: Components = {
 	// never scrolls sideways.
 	table: ({ children }) => (
 		<div className="my-2.5 overflow-x-auto rounded-lg border border-border">
-			<table className="w-full border-collapse text-[12.5px]">{children}</table>
+			<table className="w-full border-collapse text-xs">{children}</table>
 		</div>
 	),
 	thead: ({ children }) => <thead className="bg-raised/40">{children}</thead>,

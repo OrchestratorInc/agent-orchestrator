@@ -1475,7 +1475,7 @@ export const ChatComposer = memo(function ChatComposer({
 			>
 				{approval}
 				{commandError ? (
-					<p role="alert" className="px-1.5 text-[11px] leading-snug text-destructive">
+					<p role="alert" className="px-1.5 text-xs leading-snug text-destructive">
 						{commandError}
 					</p>
 				) : null}
@@ -1542,7 +1542,7 @@ export const ChatComposer = memo(function ChatComposer({
 							return (
 							<li
 								key={file.id}
-								className="flex items-center gap-1.5 rounded border border-border bg-background py-0.5 pl-0.5 pr-1"
+								className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
 							>
 								{preview ? (
 									<img src={preview} alt="" className="size-6 rounded-sm object-cover" />
@@ -1552,7 +1552,7 @@ export const ChatComposer = memo(function ChatComposer({
 									</div>
 								)}
 								<span
-									className="max-w-[120px] truncate text-[11px] text-muted-foreground"
+									className="max-w-[120px] truncate text-xs text-muted-foreground"
 									title={file.name}
 								>
 									{file.name}
@@ -1604,7 +1604,7 @@ export const ChatComposer = memo(function ChatComposer({
 				/>
 
 				{attachmentError ? (
-					<p role="alert" className="px-1.5 text-[11px] leading-snug text-destructive">
+					<p role="alert" className="px-1.5 text-xs leading-snug text-destructive">
 						{translateDraft(attachmentError)}
 					</p>
 				) : null}
@@ -1621,7 +1621,7 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 				) : null}
 				{fileAttachments.preparing ? (
-					<p role="status" className="px-1.5 text-[11px] leading-snug text-muted-foreground">
+					<p role="status" className="px-1.5 text-xs leading-snug text-muted-foreground">
 						Saving attachments… Wait before leaving this chat.
 					</p>
 				) : null}
@@ -1630,7 +1630,7 @@ export const ChatComposer = memo(function ChatComposer({
 			    in the box and the message says which of "send it instead" and "try again
 			    in a moment" applies. */}
 				{steerRefusal ?? steerOutcomeNotice ? (
-					<p role="status" className="px-1.5 text-[11px] leading-snug text-warning">
+					<p role="status" className="px-1.5 text-xs leading-snug text-warning">
 						{translateDraft(steerRefusal ?? steerOutcomeNotice)}
 					</p>
 				) : null}

@@ -78,8 +78,8 @@ const CODEX_APPROVAL_ORDER: ApprovalMode[] = [
 ];
 
 const TRIGGER_CLASS =
-	"h-7 gap-1 bg-transparent rounded-lg px-3 text-[12px]! leading-none text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground";
-const CHAT_MENU_CLASS = "chat-settings-menu text-[12px]!";
+	"h-7 gap-1 bg-transparent rounded-lg px-3 text-xs! leading-none text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground";
+const CHAT_MENU_CLASS = "chat-settings-menu text-xs!";
 
 export function TurnSettingsBar({
 	models,
@@ -336,15 +336,15 @@ export function TurnSettingsBar({
 				) : null}
 			</div>
 			{rememberPermissionsPending || (rememberedPermissionMode !== undefined && rememberedPermissionMode === rememberMode && !planning && !configPending) ? (
-				<p role="status" className="px-1 text-[11px] text-muted-foreground">
+				<p role="status" className="px-1 text-xs text-muted-foreground">
 					{rememberPermissionsPending ? "Saving project permissions…" : "Permission mode saved for new sessions in this project."}
 				</p>
 			) : null}
 			{rememberPermissionsError ? (
-				<p role="alert" className="px-1 text-[11px] text-destructive">{rememberPermissionsError}</p>
+				<p role="alert" className="px-1 text-xs text-destructive">{rememberPermissionsError}</p>
 			) : null}
 			{error ? (
-				<p role="alert" className="px-1 text-[11px] leading-snug text-destructive">
+				<p role="alert" className="px-1 text-xs leading-snug text-destructive">
 					{error}
 				</p>
 			) : null}
@@ -456,6 +456,7 @@ function ModelEffortPicker({
 								choices={effortChoices}
 								availability={availability}
 								defaultEffort={defaultEffort}
+								compact
 								onChange={(value) => onChange({ ...settings, reasoningEffort: value || undefined })}
 							/>
 						</OptionMenuSubContent>
@@ -609,7 +610,7 @@ function EffortOptionSubmenu({
 		<OptionMenuSub>
 			<OptionMenuSubTrigger label={followLabel} value={effortDisplayLabel({ ...acpEffortProps(option), followLabel, t })} />
 			<OptionMenuSubContent className={CHAT_MENU_CLASS}>
-				<EffortMenuItems {...acpEffortMenuProps(option)} onChange={(value) => onChange(option.id, { value })} />
+				<EffortMenuItems {...acpEffortMenuProps(option)} compact onChange={(value) => onChange(option.id, { value })} />
 			</OptionMenuSubContent>
 		</OptionMenuSub>
 	);
@@ -879,7 +880,7 @@ function ConfigOptionChoices({
 				return (
 					<Fragment key={choice.value}>
 						{choice.group && choice.group !== previousGroup ? (
-							<OptionMenuLabel className="px-3 pb-1 pt-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+							<OptionMenuLabel className="px-3 pb-1 pt-2 text-micro text-muted-foreground">
 								{choice.groupName || choice.group}
 							</OptionMenuLabel>
 						) : null}

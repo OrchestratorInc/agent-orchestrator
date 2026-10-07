@@ -521,7 +521,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 			>
 				{obsolete ? (
 					<div className="max-w-lg rounded-lg border border-border bg-card p-4">
-						<p className="text-sm text-foreground" role="alert">
+						<p className="text-xs text-foreground" role="alert">
 							This Chat view belongs to an older session incarnation. Reopen the current session to continue.
 						</p>
 					</div>
@@ -1479,7 +1479,7 @@ function ChatWorkspaceContent({
 						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
 					) : null}
 					{!draftPersistenceAvailable ? (
-						<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-2 text-[11px] text-muted-foreground">
+						<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-2 text-xs text-muted-foreground">
 							<TriangleAlert aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
 							{t("chat.draft.storageUnavailable")}
 						</div>
@@ -1642,7 +1642,7 @@ function ChatWorkspaceContent({
 				title="Roll back to this point?"
 				description={
 					<>
-						<p className="text-sm font-medium text-foreground">
+						<p className="text-xs font-medium text-foreground">
 							The agent will forget this exchange and everything after it.
 						</p>
 						<p className="mt-1 text-xs text-muted-foreground">
@@ -1678,7 +1678,7 @@ function ChatWorkspaceContent({
  */
 function RolledBackNotice({ count }: { count: number }) {
 	return (
-		<p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+		<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
 			<Undo2 aria-hidden="true" className="size-3 shrink-0" />
 			{count === 1
 				? "1 turn was rolled back. The agent no longer remembers it."
@@ -2040,15 +2040,15 @@ function ControllerBanner({
 			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<strong className={cn("text-xs font-medium", shown.tone)}>{shown.title}</strong>
 				{controller.error ? (
-					<span className="text-[11px] leading-snug text-muted-foreground">{controller.error}</span>
+					<span className="text-xs leading-snug text-muted-foreground">{controller.error}</span>
 				) : null}
 				{controller.state === "stopped" ? (
 					<>
-						<span className="text-[11px] leading-snug text-muted-foreground">
+						<span className="text-xs leading-snug text-muted-foreground">
 							History is kept. Resume the agent or open a shell in the same worktree.
 						</span>
 						{resumeError || shellError ? (
-							<span className="text-[11px] leading-snug text-destructive">
+							<span className="text-xs leading-snug text-destructive">
 								{resumeError ?? shellError}
 							</span>
 						) : null}
@@ -3852,7 +3852,7 @@ function TurnLiveStatus({
 						{providerFailure.summary}
 					</strong>
 					{providerFailure.detail?.text ? (
-						<span className="text-[11px] leading-snug text-muted-foreground">
+						<span className="text-xs leading-snug text-muted-foreground">
 							{providerFailure.detail.text}
 						</span>
 					) : null}

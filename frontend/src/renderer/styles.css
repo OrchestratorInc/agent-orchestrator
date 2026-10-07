@@ -2653,7 +2653,7 @@ html.sidebar-reordering * {
 
 .cursor-chat-timeline {
 	--chat-readable-font-size: var(--chat-font-size, var(--font-size-md));
-	--chat-readable-code-font-size: max(10px, calc(var(--chat-readable-font-size) - 1.5px));
+	--chat-readable-code-font-size: max(10px, calc(var(--chat-readable-font-size) - 2px));
 	background: transparent;
 }
 
@@ -2675,10 +2675,13 @@ html.sidebar-reordering * {
 	font-size: var(--chat-readable-font-size);
 }
 
-.cursor-chat-timeline .chat-md h5,
+.cursor-chat-timeline .chat-md h5 {
+	font-size: var(--chat-readable-font-size);
+}
+
 .cursor-chat-timeline .chat-md h6,
 .cursor-chat-timeline .chat-md table {
-	font-size: max(10px, calc(var(--chat-readable-font-size) - 0.5px));
+	font-size: max(10px, calc(var(--chat-readable-font-size) - 2px));
 }
 
 .cursor-chat-timeline .chat-md code,

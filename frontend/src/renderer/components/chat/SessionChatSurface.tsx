@@ -474,7 +474,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		return (
 			<Centered>
 				<AlertTriangle aria-hidden="true" className="size-4 text-warning" />
-				<strong className="text-sm text-foreground">Conversation unavailable</strong>
+				<strong className="text-xs text-foreground">Conversation unavailable</strong>
 				<p className="max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
 					{unavailable.message}
 				</p>
@@ -498,7 +498,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 
 	return (
 		<div className="relative h-full min-h-0">
-			{refreshError ? <p role="alert" className="px-4 py-2 text-sm text-destructive">{refreshError}</p> : null}
+			{refreshError ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
 			<ChatWorkspace
 				key={uiSessionId}
 				uiSessionId={uiSessionId}
