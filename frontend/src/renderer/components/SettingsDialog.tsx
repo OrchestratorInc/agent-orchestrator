@@ -1,4 +1,4 @@
-import { Bot, KeyRound, Loader2, MonitorCog, Play, RotateCcw, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
+import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useRef, useState } from "react";
@@ -9,8 +9,7 @@ import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
 import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
-import { ProjectSetupSettings } from "./ProjectSetupSettings";
-import { ProjectCleanupSettings } from "./ProjectCleanupSettings";
+import { ProjectScriptsSettings } from "./ProjectScriptsSettings";
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { CuesSettings } from "./CuesDialog";
 import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
@@ -88,9 +87,8 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
 	];
 	if (!remoteHostId) {
-		projectSections.push({ id: "setup", label: t("settings.project.workspaceSetup"), icon: Wrench });
+		projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
-		projectSections.push({ id: "cleanup", label: t("settings.project.workspaceCleanup"), icon: RotateCcw });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
 	}
 
@@ -287,7 +285,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 										</div>
 									) : (
 										<p className="flex items-center gap-2 text-settings-muted">
-											{projectSaveState.phase === "pending" && activeProjectSection === "environment" ? t("settings.project.unsavedChanges") : <><Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />{t("settings.project.saving")}</>}
+											{projectSaveState.phase === "pending" && (activeProjectSection === "environment" || activeProjectSection === "scripts") ? t("settings.project.unsavedChanges") : <><Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />{t("settings.project.saving")}</>}
 										</p>
 									)}
 								</div>
@@ -320,10 +318,8 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 								{isBodyReady ? (
 									displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "cues" ? (
 										<CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />
-									) : displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "setup" ? (
-										<ProjectSetupSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />
-									) : displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "cleanup" ? (
-										<ProjectCleanupSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />
+									) : displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "scripts" ? (
+										<ProjectScriptsSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />
 									) : displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "environment" ? (
 										<ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />
 									) : displaySettings?.scope === "project" ? (

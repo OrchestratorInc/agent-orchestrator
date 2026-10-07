@@ -68,6 +68,10 @@ vi.mock("./CuesDialog", () => ({
 	CuesSettings: ({ projectId }: { projectId: string }) => <div data-testid="project-cues-settings">{projectId}</div>,
 }));
 
+vi.mock("./ProjectScriptsSettings", () => ({
+	ProjectScriptsSettings: ({ projectId }: { projectId: string }) => <div data-testid="project-scripts-settings">{projectId}</div>,
+}));
+
 // The dialog reads the cloud gate to decide whether the Cloud nav page exists;
 // mocked so these tests need no QueryClientProvider (same pattern as Sidebar).
 vi.mock("../hooks/useCloudGate", () => ({
@@ -92,6 +96,15 @@ describe("SettingsDialog", () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		return render(<QueryClientProvider client={queryClient}><SettingsDialog /></QueryClientProvider>);
 	}
+
+	it("offers setup and cleanup through one local Scripts page", async () => {
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+		await userEvent.click(await screen.findByRole("button", { name: "Scripts" }));
+		expect(screen.getByTestId("project-scripts-settings")).toHaveTextContent("proj-1");
+		expect(screen.queryByRole("button", { name: "Workspace setup" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Workspace cleanup" })).not.toBeInTheDocument();
+	});
 
 	it("does not dismiss project settings while a save is pending", async () => {
 		useUiStore.getState().openProjectSettings("proj-1");
@@ -142,8 +155,7 @@ describe("SettingsDialog", () => {
 		renderSettingsDialog();
 
 		expect(await screen.findByRole("button", { name: "Agents" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Workspace setup" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Workspace cleanup" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Scripts" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Environment" })).not.toBeInTheDocument();
 	});
 

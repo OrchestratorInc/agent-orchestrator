@@ -47,6 +47,7 @@ ao project rm <project-id>
 | `env` | Extra environment variables passed to agent runtimes. |
 | `symlinks` | Repository-relative paths linked into each session workspace. |
 | `postCreate` | Shell commands AO runs after creating a workspace. |
+| `preRemove` | Shell commands AO runs before permanently removing a managed Git worktree. |
 | `agentConfig` | Default model, permission, and effort settings. Set effort through Project Settings or the daemon API; CLI replacement drops it. |
 | `worker` | Worker harness and agent-config overrides. |
 | `orchestrator` | Orchestrator harness and agent-config overrides. |
@@ -105,9 +106,13 @@ If you explicitly request Chat from an unsupported harness, spawning fails. An i
 
 Use `env`, `symlinks`, and `postCreate` for repeatable workspace setup. A failing `postCreate` command prevents the agent from starting, so keep setup commands deterministic. Symlink restrictions are described in [Configuration fields](#configuration-fields).
 
+Open **Project Settings → Scripts** to edit the **Setup** and **Cleanup** steps. Switching tabs keeps your edits. **Save changes** saves both lists. The scripts run automatically at their workspace lifecycle events.
+
 Setup steps run in order in separate shells. Each step has its own 10-minute limit. There is no separate total setup timeout. Existing session-start and request deadlines can stop setup sooner. New Chat sessions have a 10-minute total start budget, including workspace creation, setup, and agent start. A failed or cancelled step stops launch. Cancellation stops the shell and its child processes before workspace rollback.
 
 The same command list runs on every platform. Use `sh` syntax on macOS/Linux and `cmd` syntax on Windows. Quoting, variables, and command chaining differ. For a project used on multiple platforms, call a script that supports each platform, such as `node scripts/setup.mjs`.
+
+Cleanup steps use `preRemove`. They run in order after processes stop and before permanent worktree removal. They have no execution time limit. Daemon shutdown cancels them. A failed step preserves the worktree. Save a fix, then use **Retry cleanup** for terminated sessions. Dirty worktrees remain intact. Cleanup does not run on ordinary agent exit or app quit, and it excludes scratch workspaces.
 
 Use `agentRules` or `agentRulesFile` for worker instructions and `orchestratorRules` for supervision instructions. If both worker fields are set, AO combines the inline rules and file contents.
 

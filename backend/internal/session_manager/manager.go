@@ -3,7 +3,6 @@
 package sessionmanager
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
