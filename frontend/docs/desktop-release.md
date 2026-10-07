@@ -33,6 +33,14 @@ is never bypassed by publishing directly from this repository.
 
 ## Public unsigned build boundary
 
+Desktop PR checks and unsigned artifact builds use the same exact Node and npm
+versions from `.node-version` and `.npm-version`. The shared
+`.github/actions/setup-desktop-node` action installs both and fails if the
+resolved versions differ. Change those pins together with a clean `npm ci` and
+the complete frontend checks, then verify all four unsigned build targets.
+Do not repair an incompatible lockfile only under a different npm version:
+the release toolchain must be able to install it from scratch.
+
 `.github/workflows/build-artifacts.yml` remains intentionally dispatchable. It
 accepts an explicit public ref/SHA and version, builds the four supported
 desktop targets, and uploads unsigned workflow artifacts plus their SHA-256
