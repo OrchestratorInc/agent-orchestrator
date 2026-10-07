@@ -348,9 +348,8 @@ const workspaces = [
 ] as unknown as WorkspaceSummary[];
 
 async function renderShell() {
-	let view: ReturnType<typeof render> | undefined;
-	await act(async () => {
-		view = render(
+	const view = await act(async () => {
+		return render(
 			<Suspense fallback={null}>
 				<ShellRoute />
 			</Suspense>,
@@ -364,7 +363,7 @@ async function renderShell() {
 	await waitFor(() => expect(shellMocks.onPreviousSessionShortcut).toHaveBeenCalledTimes(1));
 	await waitFor(() => expect(shellMocks.onNextSessionShortcut).toHaveBeenCalledTimes(1));
 	await waitFor(() => expect(shellMocks.onFocusTerminalShortcut).toHaveBeenCalledTimes(1));
-	return view!;
+	return view;
 }
 
 function emitShortcut() {
