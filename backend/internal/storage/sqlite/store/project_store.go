@@ -202,22 +202,54 @@ func (s *Store) ListProjects(ctx context.Context) ([]domain.ProjectRecord, error
 // UpdateProjectSettings atomically updates the user-facing display name and
 // config for an active project. It returns ok=false when the project is missing
 // or archived.
-func (s *Store) UpdateProjectSettings(ctx context.Context, id, displayName string, config domain.ProjectConfig) (bool, error) {
+func (s *Store) UpdateProjectSettings(ctx context.Context, id, displayName string, config domain.ProjectConfig) (domain.ProjectRecord, bool, error) {
 	encodedConfig, err := marshalProjectConfig(config)
 	if err != nil {
-		return false, err
+		return domain.ProjectRecord{}, false, err
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.UpdateProjectSettings(ctx, gen.UpdateProjectSettingsParams{
-		ID:          domain.ProjectID(id),
-		DisplayName: displayName,
-		Config:      encodedConfig,
+	var row domain.ProjectRecord
+	var updated bool
+	err = s.inTx(ctx, "update project settings", func(q *gen.Queries) error {
+		rows, err := q.UpdateProjectSettings(ctx, gen.UpdateProjectSettingsParams{
+			ID:          domain.ProjectID(id),
+			DisplayName: displayName,
+			Config:      encodedConfig,
+		})
+		if err != nil || rows == 0 {
+			return err
+		}
+		stored, err := q.GetProject(ctx, domain.ProjectID(id))
+		row, updated = projectRowFromGen(stored), err == nil
+		return err
 	})
+	return row, updated, err
+}
+
+// UpdateProjectConfig compares the validated snapshot and changes config only.
+// The transaction-bound SELECT observes the AFTER-trigger revision.
+func (s *Store) UpdateProjectConfig(ctx context.Context, id string, revision int64, config domain.ProjectConfig) (domain.ProjectRecord, bool, error) {
+	encodedConfig, err := marshalProjectConfig(config)
 	if err != nil {
-		return false, fmt.Errorf("update project settings %s: %w", id, err)
+		return domain.ProjectRecord{}, false, err
 	}
-	return rows > 0, nil
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var row domain.ProjectRecord
+	var updated bool
+	err = s.inTx(ctx, "update project config", func(q *gen.Queries) error {
+		rows, err := q.UpdateProjectConfig(ctx, gen.UpdateProjectConfigParams{
+			ID: domain.ProjectID(id), Revision: revision, Config: encodedConfig,
+		})
+		if err != nil || rows == 0 {
+			return err
+		}
+		stored, err := q.GetProject(ctx, domain.ProjectID(id))
+		row, updated = projectRowFromGen(stored), err == nil
+		return err
+	})
+	return row, updated, err
 }
 
 // CountProjectsIncludingArchived returns all registry rows, including projects
@@ -252,6 +284,7 @@ func projectRowFromGen(p gen.Project) domain.ProjectRecord {
 		RepoOriginURL: p.RepoOriginURL,
 		DisplayName:   p.DisplayName,
 		RegisteredAt:  p.RegisteredAt,
+		Revision:      p.Revision,
 		Kind:          domain.ProjectKind(p.Kind).WithDefault(),
 		Config:        unmarshalProjectConfig(p.Config),
 	}
@@ -344,7 +377,11 @@ func (s *Store) SetProjectPermissions(ctx context.Context, id string, permission
 			return err
 		}
 		rows, err := q.UpdateProjectSettings(ctx, gen.UpdateProjectSettingsParams{ID: domain.ProjectID(id), DisplayName: row.DisplayName, Config: config})
-		updated = rows > 0
+		if err != nil || rows == 0 {
+			return err
+		}
+		stored, err = q.GetProject(ctx, domain.ProjectID(id))
+		row, updated = projectRowFromGen(stored), err == nil
 		return err
 	})
 	return row, updated, err

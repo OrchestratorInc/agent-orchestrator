@@ -17,6 +17,7 @@ type Summary struct {
 // Project is the full read-model returned by GET /api/v1/projects/{id}.
 type Project struct {
 	ID             domain.ProjectID      `json:"id"`
+	Revision       int64                 `json:"revision" minimum:"0" format:"int64"`
 	Name           string                `json:"name"`
 	Kind           domain.ProjectKind    `json:"kind" enum:"single_repo,workspace,scratch"`
 	Path           string                `json:"path"`

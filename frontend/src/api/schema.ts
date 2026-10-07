@@ -4533,6 +4533,8 @@ export interface components {
             name: string;
             path: string;
             repo: string;
+            /** Format: int64 */
+            revision: number;
             workspaceRepos?: components["schemas"]["WorkspaceRepo"][];
         };
         ProjectClonePreparationCleanupInput: {
@@ -5059,6 +5061,8 @@ export interface components {
         };
         SetProjectConfigInput: {
             config: components["schemas"]["ProjectConfig"];
+            /** Format: int64 */
+            expectedRevision?: number;
         };
         SetProjectPermissionsInput: {
             /** @enum {string} */
@@ -9576,6 +9580,15 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

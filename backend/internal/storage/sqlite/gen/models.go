@@ -546,6 +546,7 @@ type Project struct {
 	ArchivedAt    sql.NullTime
 	Config        sql.NullString
 	Kind          string
+	Revision      int64
 }
 
 type Report struct {

@@ -31,6 +31,7 @@ type ProjectRecord struct {
 	RepoOriginURL string
 	DisplayName   string
 	RegisteredAt  time.Time
+	Revision      int64
 	ArchivedAt    time.Time
 	Kind          ProjectKind
 	// Config holds the typed per-project configuration AO resolves at spawn. An

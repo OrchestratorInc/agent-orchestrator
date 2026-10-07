@@ -6,6 +6,8 @@ package controllers
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -182,10 +184,22 @@ func (c *ProjectsController) setConfig(w http.ResponseWriter, r *http.Request) {
 		apispec.NotImplemented(w, r, "PUT", "/api/v1/projects/{id}/config")
 		return
 	}
-	var in projectsvc.SetConfigInput
-	if err := decodeJSONStrict(r, &in); err != nil {
+	// RawMessage distinguishes omission from explicit null without changing the
+	// service/API type. Strict decoding still checks nested config fields.
+	var body struct {
+		Config           domain.ProjectConfig `json:"config"`
+		ExpectedRevision json.RawMessage      `json:"expectedRevision"`
+	}
+	if err := decodeJSONStrict(r, &body); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
+	}
+	in := projectsvc.SetConfigInput{Config: body.Config}
+	if body.ExpectedRevision != nil {
+		if err := json.Unmarshal(body.ExpectedRevision, &in.ExpectedRevision); err != nil || in.ExpectedRevision == nil || *in.ExpectedRevision < 0 {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+			return
+		}
 	}
 	p, err := c.Mgr.SetConfig(r.Context(), projectID(r), in)
 	if err != nil {
@@ -222,7 +236,13 @@ func decodeJSON(r *http.Request, out any) error {
 func decodeJSONStrict(r *http.Request, out any) error {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	return dec.Decode(out)
+	if err := dec.Decode(out); err != nil {
+		return err
+	}
+	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return errors.New("unexpected trailing JSON")
+	}
+	return nil
 }
 
 func (c *ProjectsController) setPermissions(w http.ResponseWriter, r *http.Request) {

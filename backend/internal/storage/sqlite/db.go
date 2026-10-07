@@ -2047,6 +2047,19 @@ func reconcileSchema(db *sql.DB) error {
 	if revisionColumn > 0 && revisionTrigger != 1 {
 		return errors.New("schema verification: sessions_revision_update trigger is missing; restore the session revision trigger before starting AO")
 	}
+	var revisionGuard int
+	if err := db.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'revision'),
+		(SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'projects' AND name = 'projects_revision_update'),
+		(SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'projects' AND name = 'projects_revision_guard')`).Scan(&revisionColumn, &revisionTrigger, &revisionGuard); err != nil {
+		return fmt.Errorf("schema verification: inspect project revision fence: %w", err)
+	}
+	if revisionColumn > 0 && revisionTrigger != 1 {
+		return errors.New("schema verification: projects_revision_update trigger is missing; restore the project revision trigger before starting AO")
+	}
+	if revisionColumn > 0 && revisionGuard != 1 {
+		return errors.New("schema verification: projects_revision_guard trigger is missing; restore the project revision guard before starting AO")
+	}
 	return nil
 }
 
