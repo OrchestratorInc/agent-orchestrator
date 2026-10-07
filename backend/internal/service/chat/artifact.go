@@ -7,12 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
@@ -43,12 +43,20 @@ func (s *Service) recordReportedArtifact(ctx context.Context, id domain.SessionI
 	if ext := strings.ToLower(path.Ext(rel)); ext != ".html" && ext != ".htm" {
 		return errors.New("not an HTML page")
 	}
-	// The same confinement the artifact file route serves with.
-	file, _, _, err := previewutil.OpenWorkspaceFile(dir, rel)
+	// os.Root refuses a symlink that leaves the directory, as the artifact
+	// file route does. Stat, not open: a FIFO must not hang the report.
+	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return fmt.Errorf("open %s: %w", rel, err)
+		return err
 	}
-	_ = file.Close()
+	info, err := root.Stat(filepath.FromSlash(rel))
+	_ = root.Close()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("not a regular file")
+	}
 	controller, err := s.Controller(id)
 	if err != nil {
 		return err
