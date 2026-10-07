@@ -37,6 +37,9 @@ const (
 	UpdateReasonChannelUnconfirmed UpdateUnknownReason = "channel_unconfirmed"
 	// UpdateReasonLookupFailed means the latest-version lookup failed.
 	UpdateReasonLookupFailed UpdateUnknownReason = "lookup_failed"
+	// UpdateReasonBuildUnordered means both releases share a version but
+	// carry different build identifiers that have no defined order.
+	UpdateReasonBuildUnordered UpdateUnknownReason = "build_unordered"
 )
 
 // UpdateAdvisory is the daemon's non-mutating comparison for one harness.
@@ -174,7 +177,8 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		}
 		return advisory, nil
 	}
-	current, ok := findUpdateVersion(verified.Output)
+	scheme := versionSchemeFor(target)
+	current, ok := scheme.find(verified.Output)
 	if !ok {
 		advisory.Reason = UpdateReasonVersionUnparseable
 		return advisory, nil
@@ -220,14 +224,17 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		}
 		return advisory, nil //nolint:nilerr // A failed latest-version lookup is not an update verdict.
 	}
-	parsedLatest, ok := parseUpdateVersion(latest)
+	parsedLatest, ok := scheme.parse(latest)
 	if !ok {
 		advisory.Reason = UpdateReasonVersionUnparseable
 		return advisory, nil
 	}
-	comparison, versionsComparable := compareUpdateVersions(current, parsedLatest)
+	comparison, versionsComparable := scheme.compare(current, parsedLatest)
 	if !versionsComparable {
 		advisory.Reason = UpdateReasonChannelUnconfirmed
+		if unorderedBuilds(current, parsedLatest) {
+			advisory.Reason = UpdateReasonBuildUnordered
+		}
 		return advisory, nil
 	}
 	advisory.LatestVersion = parsedLatest.display

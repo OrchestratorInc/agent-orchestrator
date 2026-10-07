@@ -140,3 +140,35 @@ func TestUpdateAdvisoryDoesNotMoveOfficialPrereleaseToStableChannel(t *testing.T
 		t.Fatalf("advisory = %+v", advisory)
 	}
 }
+
+func TestUpdateAdvisoryComparesBuildSuffixedOfficialReleases(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		target     Target
+		path       string
+		output     string
+		latest     string
+		wantStatus UpdateStatus
+		wantReason UpdateUnknownReason
+	}{
+		{name: "amp behind", target: TargetAmp, path: "/Users/test/.amp/bin/amp", output: "0.0.1791033893-g28ae98 (released 2026-10-03T13:24:53.000Z, 4d ago)\n", latest: "0.0.1791388870-g4d32fb", wantStatus: UpdateStatusBehindLatest},
+		{name: "cursor current", target: TargetCursor, path: "/Users/test/.local/share/cursor-agent/versions/2026.10.01-e373342/cursor-agent", output: "2026.10.01-e373342\n", latest: "2026.10.01-e373342", wantStatus: UpdateStatusCurrent},
+		{name: "cursor same-day rebuild", target: TargetCursor, path: "/Users/test/.local/share/cursor-agent/versions/2026.10.01-e373342/cursor-agent", output: "2026.10.01-e373342\n", latest: "2026.10.01-a1b2c3d", wantStatus: UpdateStatusUnknown, wantReason: UpdateReasonBuildUnordered},
+		{name: "muse current", target: TargetMuse, path: "/Users/test/.local/bin/muse", output: "Muse Code 1.4.3 (1.4.3-R5018.1)\n", latest: "1.4.3-R5018.1", wantStatus: UpdateStatusCurrent},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestService("darwin")
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				return VerifyResult{ResolvedPath: tt.path, Output: tt.output}, nil
+			})
+			s.officialVersion = func(context.Context, Target) (string, error) { return tt.latest, nil }
+			advisory, err := s.UpdateAdvisory(context.Background(), tt.target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if advisory.Status != tt.wantStatus || advisory.Reason != tt.wantReason || advisory.Source != officialReleaseSource {
+				t.Fatalf("advisory = %+v", advisory)
+			}
+		})
+	}
+}

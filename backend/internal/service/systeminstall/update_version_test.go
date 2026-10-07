@@ -89,3 +89,72 @@ func TestCompareUpdateVersionsRequiresCompatibleChannels(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildSuffixSchemeReadsVendorBuildsAsBuilds(t *testing.T) {
+	for _, tt := range []struct {
+		target    Target
+		output    string
+		wantCore  [4]uint64
+		wantBuild string
+	}{
+		{target: TargetCursor, output: "2026.10.01-e373342\n", wantCore: [4]uint64{2026, 10, 1}, wantBuild: "e373342"},
+		{target: TargetAmp, output: "0.0.1791033893-g28ae98 (released 2026-10-03T13:24:53.000Z, 4d ago)\n", wantCore: [4]uint64{0, 0, 1791033893}, wantBuild: "g28ae98"},
+		{target: TargetMuse, output: "Muse Code 1.4.3 (1.4.3-R5018.1)\n", wantCore: [4]uint64{1, 4, 3}, wantBuild: "R5018.1"},
+	} {
+		t.Run(string(tt.target), func(t *testing.T) {
+			scheme := versionSchemeFor(tt.target)
+			got, ok := scheme.find(tt.output)
+			if !ok {
+				t.Fatalf("find(%q) did not find a version", tt.output)
+			}
+			if got.core != tt.wantCore || got.build != tt.wantBuild || len(got.prerelease) != 0 {
+				t.Fatalf("version = %+v, want core=%v build=%q and no prerelease", got, tt.wantCore, tt.wantBuild)
+			}
+		})
+	}
+	if _, ok := findUpdateVersion("Muse Code 1.4.3 (1.4.3-R5018.1)"); ok {
+		t.Fatal("semver scheme accepted a release and a different prerelease as one version")
+	}
+	if _, ok := versionBuildSuffix.find("tool 1.4.3-R1 (1.4.3-R2)"); ok {
+		t.Fatal("build-suffix scheme accepted two different builds as one version")
+	}
+}
+
+func TestBuildSuffixSchemeOrdersByCoreOnly(t *testing.T) {
+	for _, tt := range []struct {
+		name, installed, latest string
+		want                    int
+		comparable              bool
+	}{
+		{name: "newer amp timestamp", installed: "0.0.1791033893-g28ae98", latest: "0.0.1791388870-g4d32fb", want: -1, comparable: true},
+		{name: "newer cursor date", installed: "2026.09.26-dd393fe", latest: "2026.10.01-e373342", want: -1, comparable: true},
+		{name: "same build", installed: "2026.10.01-e373342", latest: "2026.10.01-e373342", want: 0, comparable: true},
+		{name: "same-day rebuild", installed: "2026.10.01-e373342", latest: "2026.10.01-a1b2c3d", comparable: false},
+		{name: "new muse build number", installed: "1.4.3-R5018.1", latest: "1.4.3-R5019.0", comparable: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			installed, ok := versionBuildSuffix.parse(tt.installed)
+			if !ok {
+				t.Fatalf("parse(%q) failed", tt.installed)
+			}
+			latest, ok := versionBuildSuffix.parse(tt.latest)
+			if !ok {
+				t.Fatalf("parse(%q) failed", tt.latest)
+			}
+			got, comparable := versionBuildSuffix.compare(installed, latest)
+			if comparable != tt.comparable || comparable && got != tt.want {
+				t.Fatalf("compare = %d, %t; want %d, %t", got, comparable, tt.want, tt.comparable)
+			}
+		})
+	}
+}
+
+func TestBuildSuffixSchemeAcceptsHashedRegistryRelease(t *testing.T) {
+	if _, ok := managedResult("0.0.1791388870-g4d32fb", "latest", versionSemver); ok {
+		t.Fatal("semver scheme accepted a hashed release on the stable channel")
+	}
+	result, ok := managedResult("0.0.1791388870-g4d32fb", "latest", versionSchemeFor(TargetAmp))
+	if !ok || result.Latest != "0.0.1791388870-g4d32fb" {
+		t.Fatalf("result = %+v, %t", result, ok)
+	}
+}

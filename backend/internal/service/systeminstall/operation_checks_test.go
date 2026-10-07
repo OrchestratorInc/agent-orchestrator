@@ -182,3 +182,15 @@ func TestUpdateOutcomeRejectsUnverifiedOrPartialUpdates(t *testing.T) {
 		t.Fatal("unparseable baseline bypassed known latest")
 	}
 }
+
+func TestUpdateOutcomeReadsBuildSuffixedVersions(t *testing.T) {
+	baseline := &installedBaseline{path: "/Users/test/.amp/bin/amp", version: "0.0.1791033893-g28ae98", latest: "0.0.1791388870-g4d32fb", scheme: versionSchemeFor(TargetAmp)}
+	failure, note := updateOutcome(baseline, VerifyResult{ResolvedPath: baseline.path, Output: "0.0.1791388870-g4d32fb (released 2026-10-07T10:00:00.000Z, 0d ago)"})
+	if failure != "" || !strings.Contains(note, "Updated 0.0.1791033893-g28ae98 to 0.0.1791388870-g4d32fb") {
+		t.Fatalf("failure=%q note=%q", failure, note)
+	}
+	failure, _ = updateOutcome(baseline, VerifyResult{ResolvedPath: baseline.path, Output: "0.0.1791033893-g28ae98"})
+	if failure == "" {
+		t.Fatal("an Amp update that left the old build running did not fail")
+	}
+}

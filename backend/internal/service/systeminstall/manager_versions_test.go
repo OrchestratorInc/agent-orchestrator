@@ -107,7 +107,7 @@ func TestManagedVersionCheckerUsesNativeOutdatedCommands(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			current, _ := parseUpdateVersion("1.2.0")
-			checker := newManagedVersionChecker(managerCommandRunner(t, tt.response), &http.Client{})
+			checker := newManagedVersionChecker(managerCommandRunner(t, tt.response), offlineManagerClient())
 			got, err := checker(context.Background(), tt.plan, current)
 			if err != nil {
 				t.Fatal(err)
@@ -170,7 +170,7 @@ func TestManagedVersionCheckerFallsBackWhenOutdatedResultIsEmpty(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			current, _ := parseUpdateVersion("1.3.0")
-			checker := newManagedVersionChecker(managerCommandRunner(t, tt.responses...), &http.Client{})
+			checker := newManagedVersionChecker(managerCommandRunner(t, tt.responses...), offlineManagerClient())
 			got, err := checker(context.Background(), tt.plan, current)
 			if err != nil || got.Latest != "1.3.0" {
 				t.Fatalf("result=%+v err=%v", got, err)
@@ -288,5 +288,55 @@ func TestHomebrewVersionMatchesCaskTokenNotDisplayName(t *testing.T) {
 	raw := `{"formulae":[],"casks":[{"token":"other","name":["codex"],"version":"9.9.9"},{"token":"codex","name":["Codex"],"version":"0.160.1"}]}`
 	if got := parseHomebrewVersion(raw, "codex", true, false); got != "0.160.1" {
 		t.Fatalf("version = %q", got)
+	}
+}
+
+// offlineManagerClient fails every request, so tests exercise the package
+// manager's local commands without reaching a live registry.
+func offlineManagerClient() *http.Client {
+	return &http.Client{Transport: managerRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("offline")
+	})}
+}
+
+func TestHomebrewCoreVersionReadsLiveAPIBeforeLocalMetadata(t *testing.T) {
+	for _, tt := range []struct {
+		name, wantURL, body string
+		plan                Plan
+	}{
+		{name: "cask", plan: Plan{Method: "homebrew", Package: "claude-code", PackageCask: true}, wantURL: "https://formulae.brew.sh/api/cask/claude-code.json", body: `{"token":"claude-code","version":"2.1.285"}`},
+		{name: "cask with download token", plan: Plan{Method: "homebrew", Package: "claude-code", PackageCask: true}, wantURL: "https://formulae.brew.sh/api/cask/claude-code.json", body: `{"token":"claude-code","version":"2.1.285,8f3a2c"}`},
+		{name: "formula", plan: Plan{Method: "homebrew", Package: "qwen-code"}, wantURL: "https://formulae.brew.sh/api/formula/qwen-code.json", body: `{"name":"qwen-code","versions":{"stable":"2.1.285"}}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.String() != tt.wantURL {
+					t.Fatalf("URL = %s, want %s", request.URL, tt.wantURL)
+				}
+				return managerHTTPResponse(http.StatusOK, tt.body), nil
+			})}
+			// Local brew metadata would still report the stale release; it must not be consulted.
+			current, _ := parseUpdateVersion("2.1.200")
+			got, err := newManagedVersionChecker(managerCommandRunner(t), client)(context.Background(), tt.plan, current)
+			if err != nil || got.Latest != "2.1.285" {
+				t.Fatalf("result=%+v err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestHomebrewTapVersionUsesLocalMetadataOnly(t *testing.T) {
+	client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		t.Fatalf("tap package queried the Homebrew API: %s", request.URL)
+		return nil, nil
+	})}
+	commands := managerCommandRunner(t, managerCommandResponse{
+		argv:   []string{"brew", "outdated", "--json=v2", "--formula", "anomalyco/tap/opencode"},
+		output: `{"formulae":[{"name":"anomalyco/tap/opencode","installed_versions":["1.18.34"],"current_version":"1.18.35"}],"casks":[]}`,
+	})
+	current, _ := parseUpdateVersion("1.18.34")
+	got, err := newManagedVersionChecker(commands, client)(context.Background(), Plan{Method: "homebrew", Package: "anomalyco/tap/opencode"}, current)
+	if err != nil || got.Latest != "1.18.35" {
+		t.Fatalf("result=%+v err=%v", got, err)
 	}
 }

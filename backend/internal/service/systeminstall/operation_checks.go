@@ -96,6 +96,7 @@ type installedBaseline struct {
 	version  string
 	latest   string
 	expected string
+	scheme   versionScheme
 }
 
 // confirmInstalledOwner refuses an update or uninstall through a method that
@@ -111,8 +112,9 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 		// install through this method still identifies it.
 		job, statusErr := s.Status(ctx, target)
 		if statusErr == nil && job.Status == StatusSucceeded && job.Method == plan.Method {
-			version, _ := findUpdateVersion(job.Output)
-			baseline := &installedBaseline{version: version.display}
+			scheme := versionSchemeFor(target)
+			version, _ := scheme.find(job.Output)
+			baseline := &installedBaseline{version: version.display, scheme: scheme}
 			s.mu.Lock()
 			if advisory, ok := s.updateAdvisories[target]; ok && advisory.Status == UpdateStatusBehindLatest {
 				baseline.latest = advisory.LatestVersion
@@ -125,8 +127,9 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 	if !s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
 		return nil, fmt.Errorf("%w: the %s that AO runs (%s) was not installed with %s; update or remove it manually with the tool that installed it", ErrInstallOwner, target, verified.ResolvedPath, installMethodLabel(plan.Method))
 	}
-	version, _ := findUpdateVersion(verified.Output)
-	baseline := &installedBaseline{path: verified.ResolvedPath, version: version.display}
+	scheme := versionSchemeFor(target)
+	version, _ := scheme.find(verified.Output)
+	baseline := &installedBaseline{path: verified.ResolvedPath, version: version.display, scheme: scheme}
 	s.mu.Lock()
 	if advisory, ok := s.updateAdvisories[target]; ok && advisory.Status == UpdateStatusBehindLatest {
 		baseline.latest = advisory.LatestVersion
@@ -160,32 +163,37 @@ func updateOutcome(baseline *installedBaseline, result VerifyResult) (failure, n
 	if baseline.path != "" && result.ResolvedPath != "" && baseline.path != result.ResolvedPath {
 		note = fmt.Sprintf("AO now runs %s (was %s).", result.ResolvedPath, baseline.path)
 	}
-	after, afterOK := findUpdateVersion(result.Output)
-	before, beforeOK := parseUpdateVersion(baseline.version)
+	after, afterOK := baseline.scheme.find(result.Output)
+	before, beforeOK := baseline.scheme.parse(baseline.version)
 	if !afterOK {
 		return "the update finished, but AO could not verify the installed version", note
 	}
 	if baseline.expected != "" {
-		expected, ok := parseUpdateVersion(baseline.expected)
-		comparison, comparable := compareUpdateVersions(after, expected)
+		expected, ok := baseline.scheme.parse(baseline.expected)
+		comparison, comparable := baseline.scheme.compare(after, expected)
 		if !ok || !comparable || comparison < 0 {
 			return fmt.Sprintf("the update finished, but the installed version %s did not reach the requested version %s", after.display, baseline.expected), note
 		}
 	}
-	latest, latestOK := parseUpdateVersion(baseline.latest)
+	latest, latestOK := baseline.scheme.parse(baseline.latest)
 	if baseline.latest != "" && !latestOK {
 		return "the update finished, but AO could not verify the target version", note
 	}
-	if comparison, versionsComparable := compareUpdateVersions(after, latest); latestOK && versionsComparable && comparison < 0 {
+	if comparison, versionsComparable := baseline.scheme.compare(after, latest); latestOK && versionsComparable && comparison < 0 {
 		return fmt.Sprintf("the update finished, but %s still reports %s (latest is %s); it may have changed a different installation", result.ResolvedPath, after.display, latest.display), note
 	}
-	if _, comparable := compareUpdateVersions(after, latest); latestOK && !comparable {
+	if _, comparable := baseline.scheme.compare(after, latest); latestOK && !comparable {
 		return "the update finished, but the installed version does not match the expected release channel", note
 	}
 	if !beforeOK {
 		return "", strings.TrimSpace(fmt.Sprintf("Verified version %s. %s", after.display, note))
 	}
-	comparison, comparable := compareUpdateVersions(after, before)
+	comparison, comparable := baseline.scheme.compare(after, before)
+	if !comparable && latestOK && after.display == latest.display {
+		// A same-version rebuild (e.g. Cursor's same-day build) has no order
+		// against the old build, but reaching the announced build is an update.
+		return "", strings.TrimSpace(fmt.Sprintf("Updated %s to %s. %s", before.display, after.display, note))
+	}
 	if !comparable || comparison < 0 {
 		return "the update finished, but the installed version regressed or changed release channel", note
 	}

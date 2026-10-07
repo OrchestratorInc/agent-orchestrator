@@ -654,7 +654,7 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 	}
 	if operation == AgentOperationUpdate && expected != "" {
 		if baseline == nil {
-			baseline = &installedBaseline{}
+			baseline = &installedBaseline{scheme: versionSchemeFor(target)}
 		}
 		// Pin the version the user approved into this job's immutable baseline.
 		// Concurrent advisory refreshes cannot erase this verification floor.

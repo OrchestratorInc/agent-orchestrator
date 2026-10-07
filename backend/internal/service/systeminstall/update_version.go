@@ -2,6 +2,7 @@ package systeminstall
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -19,7 +20,33 @@ type updateVersion struct {
 	build      string
 }
 
+// versionScheme says how a harness formats the suffix after its numeric core.
+type versionScheme int
+
+const (
+	// versionSemver reads a hyphen suffix as a semver prerelease.
+	versionSemver versionScheme = iota
+	// versionBuildSuffix reads a hyphen suffix as a build identifier, such as
+	// Cursor's 2026.10.01-e373342, Amp's 0.0.1791388870-g4d32fb, or Muse's
+	// 1.4.3-R5018.1. These vendors publish no prereleases on the channel AO
+	// checks and order releases by the numeric core alone.
+	versionBuildSuffix
+)
+
+func versionSchemeFor(target Target) versionScheme {
+	switch target {
+	case TargetAmp, TargetCursor, TargetMuse:
+		return versionBuildSuffix
+	default:
+		return versionSemver
+	}
+}
+
 func findUpdateVersion(text string) (updateVersion, bool) {
+	return versionSemver.find(text)
+}
+
+func (scheme versionScheme) find(text string) (updateVersion, bool) {
 	var version updateVersion
 	found := false
 	for _, span := range updateVersionPattern.FindAllStringIndex(text, -1) {
@@ -32,18 +59,57 @@ func findUpdateVersion(text string) (updateVersion, bool) {
 		if span[0] > 0 && versionTokenByte(text[span[0]-1], false) || span[1] < len(text) && versionTokenByte(text[span[1]], true) && !sentenceEnd {
 			continue
 		}
-		candidate, ok := parseUpdateVersion(text[span[0]:span[1]])
+		candidate, ok := scheme.parse(text[span[0]:span[1]])
 		if !ok {
 			return updateVersion{}, false
 		}
 		if found && candidate.display != version.display {
 			// Runtime warnings may precede the CLI version on either stream.
 			// Without an unambiguous version, the advisory must remain unknown.
-			return updateVersion{}, false
+			// One release printed with and without its build, as in Muse's
+			// "1.4.3 (1.4.3-R5018.1)", keeps the form that names the build.
+			if !sameRelease(version, candidate) || version.build != "" && candidate.build != "" {
+				return updateVersion{}, false
+			}
+			if candidate.build == "" {
+				continue
+			}
 		}
 		version, found = candidate, true
 	}
 	return version, found
+}
+
+func (scheme versionScheme) parse(text string) (updateVersion, bool) {
+	version, ok := parseUpdateVersion(text)
+	if !ok || scheme != versionBuildSuffix || len(version.prerelease) == 0 {
+		return version, ok
+	}
+	build := strings.Join(version.prerelease, ".")
+	if version.build != "" {
+		build += "." + version.build
+	}
+	version.build, version.prerelease = build, nil
+	return version, true
+}
+
+// compare orders two releases. Under versionBuildSuffix, equal cores with
+// different builds have no order: a same-day Cursor rebuild or a new Muse
+// build number is neither provably newer nor provably current.
+func (scheme versionScheme) compare(installed, latest updateVersion) (int, bool) {
+	comparison, comparable := compareUpdateVersions(installed, latest)
+	if comparable && comparison == 0 && scheme == versionBuildSuffix && unorderedBuilds(installed, latest) {
+		return 0, false
+	}
+	return comparison, comparable
+}
+
+func unorderedBuilds(installed, latest updateVersion) bool {
+	return installed.build != "" && latest.build != "" && installed.build != latest.build
+}
+
+func sameRelease(a, b updateVersion) bool {
+	return a.core == b.core && slices.Equal(a.prerelease, b.prerelease)
 }
 
 func versionTokenByte(char byte, includeHyphen bool) bool {
