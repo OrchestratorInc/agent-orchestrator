@@ -88,9 +88,14 @@ func TestPublishRenderLandsOnTheRunningTurn(t *testing.T) {
 
 func TestPublishRenderWithoutARunningTurnLeavesNoFile(t *testing.T) {
 	h := newHarnessForHarness(t, domain.HarnessCodex)
+	// The page has no turn to show in, so publishing does not wait on a measure.
+	h.svc.SetRenderMeasure(func(context.Context, domain.SessionID, map[string]any) (any, error) {
+		t.Error("measured a page that has no turn to show in")
+		return nil, nil
+	})
 
 	_, err := h.svc.PublishRender(context.Background(), testSession, chatsvc.RenderInput{
-		HTML: "<p>x</p>", Title: "x", Height: 200,
+		HTML: "<p>x</p>", Title: "x", Height: 200, BaseURL: "http://127.0.0.1:3001",
 	})
 	if !errors.Is(err, chatsvc.ErrNoActiveTurn) {
 		t.Fatalf("err = %v, want ErrNoActiveTurn", err)

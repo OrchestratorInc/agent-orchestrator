@@ -91,7 +91,11 @@ func (s *Service) PublishRender(ctx context.Context, id domain.SessionID, in Ren
 	}
 	path := "/api/v1/sessions/" + url.PathEscape(string(id)) + "/renders/" + url.PathEscape(renderID)
 	height := min(max(in.Height, minRenderHeight), maxRenderHeight)
-	heights := s.measureRender(ctx, id, strings.TrimRight(in.BaseURL, "/")+path)
+	// Without a turn in flight the page is never recorded, so it is not measured.
+	var heights [][2]int
+	if controller.busy() {
+		heights = s.measureRender(ctx, id, strings.TrimRight(in.BaseURL, "/")+path)
+	}
 	activityID, err := controller.recordRender(ctx, renderID, title, height, heights, path)
 	if err != nil {
 		// Only the timeline row lets anything find the page, so an unrecorded page goes.
