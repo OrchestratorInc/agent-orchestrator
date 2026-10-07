@@ -89,6 +89,36 @@ describe("TurnOutcome", () => {
 });
 
 describe("AssistantMessage streaming", () => {
+	it("shows completed messages without a duplicate animation segmentation pass", () => {
+		const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+		const text = "Completed 👨‍👩‍👧‍👦 é answer";
+		render(<AssistantMessage message={message({ text, streaming: false })} />);
+		expect(document.querySelector("p")?.textContent).toBe(text);
+		// Markdown may segment for emoji typography; settled text needs no
+		// additional pass for the streaming animation.
+		expect(segment.mock.calls.filter(([input]) => input === text).length).toBeLessThanOrEqual(1);
+	});
+
+	it("resumes a completed message without repeating its visible prefix", () => {
+		const prefix = "Hello 👨‍👩‍👧‍👦 é";
+		const text = prefix + " continued".repeat(20);
+		const view = render(<AssistantMessage message={message({ text: prefix, streaming: false })} />);
+		view.rerender(<AssistantMessage message={message({ text, streaming: true, revision: 2 })} />);
+
+		runFrame(0);
+		runFrame(100);
+		const visible = document.querySelector("p")?.textContent ?? "";
+		expect(visible.startsWith(prefix)).toBe(true);
+		expect(text.startsWith(visible)).toBe(true);
+
+		// The drain may already have completed by this point, in which case there
+		// is no animation frame left to run. Assert the deadline's visible result
+		// rather than requiring an implementation-specific extra frame.
+		if (frames.size > 0) runFrame(250);
+		expect(document.querySelector("p")?.textContent).toBe(text);
+		expect(frames.size).toBe(0);
+	});
+
 	it("shows the first durable snapshot and a replacement message immediately", () => {
 		const text = "A first snapshot 👨‍👩‍👧‍👦";
 		const view = render(<AssistantMessage message={message({ text })} />);
@@ -152,13 +182,13 @@ describe("AssistantMessage streaming", () => {
 		expect(frames.size).toBe(0);
 	});
 
-	it("shows a large received burst within 250ms", () => {
+	it("shows a large received burst within 80ms", () => {
 		const view = render(<AssistantMessage message={message()} />);
 		const text = "a".padEnd(10_000, "x");
 		view.rerender(<AssistantMessage message={message({ text })} />);
 
 		runFrame(0);
-		for (let now = 16; now <= 240 && frames.size; now += 16) runFrame(now);
+		for (let now = 16; now <= 80 && frames.size; now += 16) runFrame(now);
 
 		expect(document.querySelector("p")?.textContent).toBe(text);
 		expect(frames.size).toBe(0);
@@ -169,7 +199,7 @@ describe("AssistantMessage streaming", () => {
 		let text = "a".padEnd(2000, "x");
 		view.rerender(<AssistantMessage message={message({ text })} />);
 		runFrame(0);
-		for (let now = 40; now <= 200; now += 40) {
+		for (let now = 10; now <= 50; now += 10) {
 			text += "x".repeat(2000);
 			view.rerender(<AssistantMessage message={message({ text })} />);
 			runFrame(now);
@@ -185,8 +215,8 @@ describe("AssistantMessage streaming", () => {
 		const text = "a".padEnd(2000, "x");
 		view.rerender(<AssistantMessage message={message({ text })} />);
 		runFrame(0);
-		runFrame(50);
-		runFrame(100);
+		runFrame(16);
+		runFrame(32);
 
 		expect(segment.mock.calls.filter(([input]) => input === text)).toHaveLength(1);
 	});
@@ -300,9 +330,11 @@ describe("AssistantMessage streaming", () => {
 			</StrictMode>,
 		);
 		runFrame(0);
-		runFrame(100);
+		runFrame(40);
 
-		expect(document.querySelector("p")?.textContent).toBe("abcdef");
+		expect(document.querySelector("p")?.textContent).toBe("abc");
+		runFrame(60);
+		expect(document.querySelector("p")?.textContent).toBe("abcdefghij");
 	});
 });
 

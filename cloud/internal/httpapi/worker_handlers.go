@@ -83,6 +83,11 @@ var workerEventTypes = map[string]struct{}{
 	"worker.ready":                   {},
 	"chat.assistant_delta":           {},
 	"session.branch_backup_degraded": {},
+	"agent.activity":       {},
+	"agent.ready":          {},
+	"worker.ready":         {},
+	"chat.assistant_delta": {},
+	"chat.activity":        {},
 }
 
 const (
@@ -286,6 +291,25 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 		DefaultBranch:    launch.DefaultBranch,
 		ExtraRepos:       extraRepos,
 		SystemPrompt:     systemPrompt,
+		SessionID:       launch.SessionID,
+		ProjectID:       launch.ProjectID,
+		Kind:            launch.Kind,
+		Harness:         launch.Harness,
+		DisplayName:     launch.DisplayName,
+		Branch:          launch.Branch,
+		Prompt:          launch.Prompt,
+		AgentSessionID:  launch.AgentSessionID,
+		Interface:       string(launch.Interface),
+		ParentSessionID: launch.ParentSessionID,
+		Mode:            launch.Mode,
+		Model:           launch.Model,
+		ReasoningEffort: launch.ReasoningEffort,
+		SelectionAt:     launch.SelectionAt,
+		DeniedCommands:  launch.DeniedCommands,
+		RepositoryURL:   launch.RepositoryURL,
+		DefaultBranch:   launch.DefaultBranch,
+		ExtraRepos:      extraRepos,
+		SystemPrompt:    systemPrompt,
 	}, nil
 }
 
@@ -750,6 +774,66 @@ func (s *Server) workerClaimPullRequest(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+func (s *Server) workerReportGitRefs(w http.ResponseWriter, r *http.Request) {
+	claims := workerFrom(r)
+	if !worker.HasScope(claims, "worker:git") {
+		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:git scope is required.")
+		return
+	}
+	var input worker.ReportGitRefsRequest
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if len(input.Refs) > 128 {
+		writeError(w, r, http.StatusBadRequest, "INVALID_GIT_REFS", "Too many branch heads.")
+		return
+	}
+	refs := make([]domain.WorkerGitRef, 0, len(input.Refs))
+	seen := make(map[string]struct{}, len(input.Refs))
+	for _, ref := range input.Refs {
+		branch := strings.TrimSpace(ref.Branch)
+		if branch == "" || len(branch) > 255 || len(ref.SHA) != 40 || strings.ContainsAny(branch, "\x00\r\n") {
+			writeError(w, r, http.StatusBadRequest, "INVALID_GIT_REFS", "Invalid branch head.")
+			return
+		}
+		if _, err := hex.DecodeString(ref.SHA); err != nil {
+			writeError(w, r, http.StatusBadRequest, "INVALID_GIT_REFS", "Invalid branch head.")
+			return
+		}
+		if _, exists := seen[branch]; exists {
+			writeError(w, r, http.StatusBadRequest, "INVALID_GIT_REFS", "Duplicate branch head.")
+			return
+		}
+		seen[branch] = struct{}{}
+		refs = append(refs, domain.WorkerGitRef{Branch: branch, SHA: ref.SHA})
+	}
+	store, ok := s.store.(interface {
+		WorkerGitHubCheckoutContext(context.Context, string, string) (domain.GitHubCheckoutContext, error)
+		ReplaceWorkerGitRefs(context.Context, string, string, int64, []domain.WorkerGitRef) error
+	})
+	if !ok || s.github == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "SCM_UNAVAILABLE", "Pull request tracking is not available.")
+		return
+	}
+	checkout, err := store.WorkerGitHubCheckoutContext(r.Context(), claims.OrgID, claims.SessionID)
+	if err != nil || checkout.GitHubRepositoryID <= 0 {
+		writeError(w, r, http.StatusForbidden, "REPOSITORY_NOT_AUTHORIZED", "This session has no active repository grant.")
+		return
+	}
+	if err := store.ReplaceWorkerGitRefs(r.Context(), claims.OrgID, claims.SessionID, checkout.GitHubRepositoryID, refs); err != nil {
+		s.logger.Error("record worker branch heads", "error", err)
+		writeError(w, r, http.StatusInternalServerError, "GIT_REFS_FAILED", "Branch heads could not be recorded.")
+		return
+	}
+	if err := s.github.ReconcileWorkerGitRefs(r.Context(), claims.OrgID, checkout.GitHubRepositoryID, refs); err != nil {
+		s.logger.Error("reconcile worker branch heads with webhooks", "error", err)
+		writeError(w, r, http.StatusBadGateway, "PR_RECONCILE_FAILED", "Pull request webhooks could not be reconciled.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // The GitHub App webhook can be delivered to a different environment from the
 // worker that opened the PR. Record the bell notification at the worker write
 // boundary so it does not depend on webhook routing.
@@ -911,6 +995,20 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			s.writeWorkerStoreError(w, r, err)
 			return
 		}
+	case "chat.activity":
+		var output worker.OutputEvent
+		if err := json.Unmarshal(input.Payload, &output); err != nil ||
+			requireUUID(output.TurnID, "turnId") != nil || output.Attempt <= 0 ||
+			output.Activity == nil || output.Activity.ID == "" || len(output.Activity.ID) > 256 ||
+			len(input.Payload) > maxWorkerOutput+maxWorkerControlBody {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The chat activity payload is invalid.")
+			return
+		}
+		if err := s.store.AppendWorkerTurnActivity(r.Context(), claims.OrgID, claims.SessionID,
+			claims.WorkerID, output.TurnID, claims.Epoch, output.Attempt, *output.Activity); err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
 	case "chat.assistant_delta":
 		var output worker.OutputEvent
 		if err := json.Unmarshal(input.Payload, &output); err != nil ||
@@ -932,6 +1030,7 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			output.Attempt,
 			output.Stream,
 			output.Text,
+			output.ItemID,
 		); err != nil {
 			s.writeWorkerStoreError(w, r, err)
 			return

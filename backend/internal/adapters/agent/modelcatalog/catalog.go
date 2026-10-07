@@ -119,7 +119,6 @@ var commandSpecs = map[string]commandSpec{
 	"prime-agent": {args: []string{"model", "list"}, parser: parsePiModels},
 	"kimi":        {args: []string{"provider", "list", "--json"}, parser: parseJSONModels},
 	"auggie":      {args: []string{"models", "list", "--json"}, parser: parseJSONModels},
-	"devin":       {args: []string{"models", "list", "--format", "json"}, parser: parseJSONModels},
 	"kiro":        {args: []string{"chat", "--list-models", "--format", "json"}, parser: parseJSONModels, signIn: kiroSignIn},
 	"omp":         {args: []string{"models", "--json"}, parser: parseJSONModels},
 	"copilot":     {args: []string{"help", "config"}, parser: parseCopilotConfigModels},
@@ -189,7 +188,7 @@ func Manual(agentID string) ports.AgentModelCatalog {
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
-		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "mimo-code", "deepseek-harness":
+		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "mimo-code", "deepseek-harness", "devin":
 		return ports.CustomModelEntryDirect
 	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
@@ -674,8 +673,8 @@ func hasDiscoverySource(agentID string) bool {
 	switch agentID {
 	// Harnesses whose catalog comes from a daemon-injected surface rather than a
 	// command spec: Codex's app-server, Claude's provider probe, and the ACP
-	// configuration catalog for Cline and DeepSeek Harness.
-	case "claude-code", "codex", "deepseek-harness":
+	// configuration catalog for Cline, DeepSeek Harness, and Devin.
+	case "claude-code", "codex", "deepseek-harness", "devin":
 		return true
 	}
 	if hasConfigDiscoverySource(agentID) {

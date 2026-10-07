@@ -32,6 +32,7 @@ import {
 	useCallback,
 	useEffect,
 	useId,
+	useImperativeHandle,
 	useLayoutEffect,
 	useMemo,
 	useRef,
@@ -45,8 +46,9 @@ import {
 	type KeyboardEvent,
 	type ReactElement,
 	type ReactNode,
+	type Ref,
 } from "react";
-import { ArrowUp, Loader2, Plus, Square, X } from "lucide-react";
+import { ArrowUp, CornerUpRight, ListPlus, Loader2, Plus, Square, X } from "lucide-react";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "../../lib/utils";
@@ -55,6 +57,7 @@ import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import {
 	ComposerEditor,
 	type ComposerEditorHandle,
+	type ComposerImage,
 	type ComposerEditorSnapshot,
 	type ComposerTrigger,
 } from "./ComposerEditor";
@@ -94,12 +97,14 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentURL, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
+import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages } from "./messageAttachments";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 
 // These responses precede AppendUserMessage. Provider/transport errors can
 // follow durable acceptance and must keep the original delivery ID for recovery.
 const DEFINITIVE_SEND_REJECTIONS = new Set([
+	// Cloud validation failures reject the request before durable acceptance.
+	"validation_error",
 	"INVALID_BODY",
 	"CHAT_MESSAGE_EMPTY",
 	"INVALID_RESOURCE",
@@ -141,11 +146,14 @@ function restoredDeliveryNotice(delivery: ChatComposerDelivery | undefined): str
 }
 /** A retained server-owned attachment; image bytes stay in durable storage. */
 export type StoredComposerAttachment = ChatDraftRetainedAttachment & { dataUrl?: string };
+export type ChatComposerHandle = { focus(): void; isEmpty(): boolean };
 
 export const ChatComposer = memo(function ChatComposer({
+	focusRef,
 	onSend,
 	busy,
 	willQueue,
+	queuePlaceholder,
 	disabled,
 	disabledPlaceholder,
 	settings,
@@ -183,8 +191,13 @@ export const ChatComposer = memo(function ChatComposer({
 	autoFocus = true,
 	draftSessionId,
 	draftSessionIncarnation,
+	assetBaseUrl,
+	remoteHost = false,
+	assetSessionId,
 	acceptedClientMessageIds,
+	emptyPlaceholder,
 }: {
+	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (
 		text: string,
 		attachments?: FileAttachmentPayload[],
@@ -200,9 +213,13 @@ export const ChatComposer = memo(function ChatComposer({
 	busy?: boolean;
 	/** The agent is mid-turn, so this message is held until the turn ends. */
 	willQueue?: boolean;
+	/** Replaces the default queueing hint, e.g. while the agent is still starting. */
+	queuePlaceholder?: string;
 	disabled?: boolean;
 	/** Explains why message entry is temporarily blocked. */
 	disabledPlaceholder?: string;
+	/** A contextual prompt shown before an otherwise empty conversation begins. */
+	emptyPlaceholder?: string;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
@@ -268,6 +285,12 @@ export const ChatComposer = memo(function ChatComposer({
 	draftSessionId?: string;
 	/** Immutable daemon identity for this exact incarnation of the session id. */
 	draftSessionIncarnation?: string;
+	/** Host-specific proxy origin for staged attachment reads. */
+	assetBaseUrl?: string;
+	/** The session belongs to a remote host, even if its proxy is disconnected. */
+	remoteHost?: boolean;
+	/** Daemon wire session ID when draft storage uses a host-scoped identity. */
+	assetSessionId?: string;
 	/** Client ids already present in daemon-authoritative conversation history. */
 	acceptedClientMessageIds?: ReadonlySet<string>;
 }) {
@@ -321,6 +344,8 @@ export const ChatComposer = memo(function ChatComposer({
 			: undefined,
 	);
 	const [steerNextRequest, setSteerNextRequest] = useState(0);
+	// Cmd/Ctrl held anywhere in the window turns a send-button click into a steer.
+	const [modifierHeld, setModifierHeld] = useState(false);
 	// The DOM event is the source of truth while React catches up with the draft
 	// transition. This keeps Enter-after-fast-typing from observing stale state.
 	const textRef = useRef("");
@@ -469,6 +494,15 @@ export const ChatComposer = memo(function ChatComposer({
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
 
 	const staged = fileAttachments.attachments.length > 0 || visibleRetainedAttachments.length > 0;
+	const stripAttachments = [...visibleRetainedAttachments, ...fileAttachments.attachments].map((file) => {
+		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
+		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
+		const preview = file.dataUrl ?? (path && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
+			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
+		return { file, path, preview };
+	});
+	const composerImages: ComposerImage[] = stripAttachments.flatMap(({ file, path, preview }) =>
+		path && IMAGE_ATTACHMENT_PATH.test(path) ? [{ path, name: file.name, src: preview }] : []);
 	const controlsDisabled = Boolean(disabled || submitting);
 	const hasDraft = hasText || staged;
 	const savingQueuedEdit = Boolean(editingQueuedTurnId);
@@ -506,17 +540,24 @@ export const ChatComposer = memo(function ChatComposer({
 			!durableDelivery &&
 			!fileAttachments.preparing;
 	const sendActionEnabled = canSend || canRecoverDelivery;
+	// A plain send while a turn runs is queued, so the button says so instead of
+	// looking identical to an immediate send.
+	const queuesDraft = Boolean(willQueue && !savingQueuedEdit && !queuedEditRecovery);
+	// Cmd/Ctrl+Enter or Cmd/Ctrl+click steers the current draft into the running
+	// turn; the send button only shows it while the modifier is held.
+	const canSteerDraft = Boolean(canSteer && onSteer) && !savingQueuedEdit;
+	const steersDraft = modifierHeld && canSteerDraft;
+	const showsSteer = steersDraft && !durableDelivery && !queuedEditRecovery;
 	const sendActionLabel = translateDraft(durableDelivery
 		? durableDelivery.state === "accepted"
 			? "chat.draft.clearMessage"
 			: "chat.draft.retryMessage"
-		: queuedEditRecovery ? "chat.draft.retryEdit" : "Send message");
+		: queuedEditRecovery
+			? "chat.draft.retryEdit"
+			: showsSteer ? "Steer message" : queuesDraft ? "Queue message" : "Send message");
 	const canStopTurn = Boolean(
 		willQueue && onInterrupt && !controlsDisabled && !hasDraft && !savingQueuedEdit,
 	);
-	// Cmd/Ctrl+Enter remains an intentionally quiet power-user path for steering
-	// the current draft into the running turn. The visible hint stays queue-only.
-	const canSteerDraft = Boolean(canSteer && onSteer) && !savingQueuedEdit;
 	const canSteerNext =
 		Boolean(canSteer && onSteer) &&
 		!controlsDisabled &&
@@ -527,9 +568,11 @@ export const ChatComposer = memo(function ChatComposer({
 		? "Enter to insert"
 		: savingQueuedEdit
 			? "⏎ save edit"
-			: willQueue
-				? "⏎ queue"
-				: "Enter to send";
+			: showsSteer
+				? "Steer into running turn"
+				: willQueue
+					? "⏎ queue"
+					: "Enter to send";
 	const persistedText = persistedDraft?.composer.text;
 	const draftSeedId = draftSeed?.id ?? (draftScopeKey ? `session:${draftScopeKey}` : undefined);
 	const draftSeedText = draftSeed?.text ?? persistedText;
@@ -576,6 +619,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!autoFocus || disabled) return;
 		editor.current?.focus();
 	}, [autoFocus, disabled]);
+	useImperativeHandle(focusRef, () => ({ focus: focusEditor, isEmpty: () => !hasDraft }), [focusEditor, hasDraft]);
 
 	useEffect(() => {
 		focusEditor();
@@ -978,8 +1022,8 @@ export const ChatComposer = memo(function ChatComposer({
 	}
 
 	async function performClaimedSubmit(forceSteer?: boolean, mutationToken?: ChatDraftMutationToken) {
-		const currentText = textRef.current;
-		const body = currentText.trim();
+		let currentText = textRef.current;
+		let body = currentText.trim();
 		const recoveringDelivery = durableDelivery;
 		const sendNativeImages = recoveringDelivery?.nativeImages ?? Boolean(nativeImages);
 		setSendError(null);
@@ -1024,6 +1068,16 @@ export const ChatComposer = memo(function ChatComposer({
 		const settledAttachments = fileAttachments.getAttachments();
 		const settledPaths = settledAttachments.flatMap((attachment) =>
 			attachment.stagedPath ? [attachment.stagedPath] : []);
+		const attachedPaths = [
+			...visibleRetainedAttachments.flatMap((attachment) => attachment.path ? [attachment.path] : []),
+			...settledPaths,
+		];
+		// Staging that just settled has filled its inline chips, so read the text the
+		// user sees now. First drop chips whose image is gone (an undo can restore
+		// one); typed paths are the user's text and stay.
+		editor.current?.pruneImages(attachedPaths);
+		currentText = textRef.current;
+		body = proseBesideImages(currentText.trim(), attachedPaths);
 		const hasAttachments = settledAttachments.length > 0 || visibleRetainedAttachments.length > 0;
 		const canSubmitNow =
 			(body.length > 0 || hasAttachments || Boolean(recoveringDelivery)) &&
@@ -1044,10 +1098,7 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 		const shouldSteer = Boolean(forceSteer && !savingQueuedEdit);
-		const message = withAttachmentReferences(body, [
-			...visibleRetainedAttachments.flatMap((attachment) => attachment.path ? [attachment.path] : []),
-			...settledPaths,
-		]);
+		const message = withAttachmentReferences(body, attachedPaths);
 		// Ordinary delivery reserves its exact draft before these staged reads await.
 		// Queue editors use their existing owner/revision CAS before mutation.
 		const attachmentScope = queuedDraftScope ?? draftScope;
@@ -1074,7 +1125,9 @@ export const ChatComposer = memo(function ChatComposer({
 						continue;
 					}
 					if (!attachment.stagedPath) throw new Error("Missing staged attachment");
-					const response = await fetch(attachmentURL(getApiBaseUrl(), attachmentScope.sessionId, attachment.stagedPath));
+					const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
+					if (assetOrigin === undefined) throw new Error("Remote host disconnected");
+					const response = await fetch(attachmentURL(assetOrigin, assetSessionId ?? attachmentScope.sessionId, attachment.stagedPath));
 					if (!response.ok) throw new Error("Could not read staged attachment");
 					const blob = await response.blob();
 					const data = await new Promise<string>((resolve, reject) => {
@@ -1328,6 +1381,20 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 	}
 
+	// Images also get an inline chip at the caret so the prose can say which image
+	// it means; the chip serializes to the staged path the agent reads.
+	function attachFiles(files: File[]) {
+		// Reserve the spot now: staging can take a while, and the user keeps typing.
+		const reservation = files.some((file) => file.type.startsWith("image/"))
+			? editor.current?.reserveImages()
+			: undefined;
+		void fileAttachments.addFiles(files).then((added) => {
+			if (!reservation) return;
+			editor.current?.fillImages(reservation, added.flatMap((attachment) =>
+				attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+		});
+	}
+
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
 		if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return;
 		const clipboard = event.clipboardData;
@@ -1337,7 +1404,7 @@ export const ChatComposer = memo(function ChatComposer({
 		// carrying both should still paste its text.
 		const hasText = typeof clipboard?.getData === "function" && clipboard.getData("text/plain") !== "";
 		if (!hasText) event.preventDefault();
-		void fileAttachments.addFiles(files);
+		attachFiles(files);
 	}
 
 	function onDrop(event: DragEvent<HTMLFormElement>) {
@@ -1347,18 +1414,16 @@ export const ChatComposer = memo(function ChatComposer({
 		if (files.length === 0) return;
 		event.preventDefault();
 		event.stopPropagation();
-		void fileAttachments.addFiles(files);
+		attachFiles(files);
 	}
 
-	// Keep the hidden Cmd/Ctrl steering shortcut available for the send-button path
-	// without rerendering the composer for every modifier key event.
-	const modifierHeldRef = useRef(false);
+	// Only modifier transitions re-render: React bails out when the value is unchanged.
 	useEffect(() => {
 		const onKey = (event: globalThis.KeyboardEvent) => {
-			modifierHeldRef.current = event.metaKey || event.ctrlKey;
+			setModifierHeld(event.metaKey || event.ctrlKey);
 		};
 		const onBlur = () => {
-			modifierHeldRef.current = false;
+			setModifierHeld(false);
 		};
 		window.addEventListener("keydown", onKey);
 		window.addEventListener("keyup", onKey);
@@ -1406,11 +1471,11 @@ export const ChatComposer = memo(function ChatComposer({
 			<form
 				onSubmit={(event) => event.preventDefault()}
 				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
-				className="cursor-chat-composer relative flex flex-col gap-1.5 border px-3 py-3"
+				className="cursor-chat-composer relative flex flex-col gap-1.5 px-3 py-3"
 			>
 				{approval}
 				{commandError ? (
-					<p role="alert" className="px-1.5 text-[11px] leading-snug text-destructive">
+					<p role="alert" className="px-1.5 text-xs leading-snug text-destructive">
 						{commandError}
 					</p>
 				) : null}
@@ -1421,7 +1486,7 @@ export const ChatComposer = memo(function ChatComposer({
 	return withQueueStack(
 		<form
 			// Cmd/Ctrl steering remains available as a quiet power-user action.
-			onSubmit={(event) => void submit(event, modifierHeldRef.current && canSteerDraft)}
+			onSubmit={(event) => void submit(event, steersDraft)}
 				onDragOver={(event) => {
 					if (!canAttach || submitInFlight.current) return;
 					event.preventDefault();
@@ -1434,8 +1499,9 @@ export const ChatComposer = memo(function ChatComposer({
 				// here and half there.
 				data-dragging={dragging || undefined}
 				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
-				onClick={(e) => {
+			onClick={(e) => {
 					if (controlsDisabled) return;
+					if ((e.target as HTMLElement).closest('[contenteditable="true"]')) return;
 					// The focusable context tooltip must keep its focus on click.
 					if (
 						e.target === e.currentTarget ||
@@ -1444,7 +1510,7 @@ export const ChatComposer = memo(function ChatComposer({
 						editor.current?.focus();
 					}
 				}}
-				className="cursor-chat-composer relative flex cursor-text flex-col gap-1.5 border px-3 pt-3 pb-3"
+				className="cursor-chat-composer relative flex cursor-text flex-col gap-1.5 px-3 pt-3 pb-3"
 			>
 				{menuOpen && trigger ? (
 					<ComposerSuggestMenu
@@ -1472,14 +1538,11 @@ export const ChatComposer = memo(function ChatComposer({
 				) : null}
 				{staged ? (
 					<ul className="flex flex-wrap gap-1.5" aria-label="Attached files">
-						{[...visibleRetainedAttachments, ...fileAttachments.attachments].map((file) => {
-							const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
-							const preview = file.dataUrl ?? (path && IMAGE_ATTACHMENT_PATH.test(path)
-								? attachmentURL(getApiBaseUrl(), boundarySessionId ?? "", path) : undefined);
+						{stripAttachments.map(({ file, path, preview }) => {
 							return (
 							<li
 								key={file.id}
-								className="flex items-center gap-1.5 rounded border border-border bg-background py-0.5 pl-0.5 pr-1"
+								className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
 							>
 								{preview ? (
 									<img src={preview} alt="" className="size-6 rounded-sm object-cover" />
@@ -1489,7 +1552,7 @@ export const ChatComposer = memo(function ChatComposer({
 									</div>
 								)}
 								<span
-									className="max-w-[120px] truncate text-[11px] text-muted-foreground"
+									className="max-w-[120px] truncate text-xs text-muted-foreground"
 									title={file.name}
 								>
 									{file.name}
@@ -1498,6 +1561,7 @@ export const ChatComposer = memo(function ChatComposer({
 									type="button"
 									onClick={() => {
 									if (submitInFlight.current) return;
+									if (path) editor.current?.removeImage(path);
 									if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
 										const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
 										setRetainedAttachments(next);
@@ -1518,14 +1582,15 @@ export const ChatComposer = memo(function ChatComposer({
 
 				<ComposerEditor
 					ref={editor}
+					images={composerImages}
 					disabled={controlsDisabled || queuedEditRecovery || draftMutationPending}
 					label="Message the agent"
 					placeholder={
 						disabledPlaceholder ?? (disabled
 							? "The controller is not connected"
 							: willQueue
-								? "Agent is working — this sends when it finishes"
-								: "Message the agent…")
+								? (queuePlaceholder ?? "Next message you send will be queued")
+								: emptyPlaceholder ?? "Message the agent")
 					}
 					menuOpen={menuOpen}
 					menuId={menuId}
@@ -1539,7 +1604,7 @@ export const ChatComposer = memo(function ChatComposer({
 				/>
 
 				{attachmentError ? (
-					<p role="alert" className="px-1.5 text-[11px] leading-snug text-destructive">
+					<p role="alert" className="px-1.5 text-xs leading-snug text-destructive">
 						{translateDraft(attachmentError)}
 					</p>
 				) : null}
@@ -1556,7 +1621,7 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 				) : null}
 				{fileAttachments.preparing ? (
-					<p role="status" className="px-1.5 text-[11px] leading-snug text-muted-foreground">
+					<p role="status" className="px-1.5 text-xs leading-snug text-muted-foreground">
 						Saving attachments… Wait before leaving this chat.
 					</p>
 				) : null}
@@ -1565,7 +1630,7 @@ export const ChatComposer = memo(function ChatComposer({
 			    in the box and the message says which of "send it instead" and "try again
 			    in a moment" applies. */}
 				{steerRefusal ?? steerOutcomeNotice ? (
-					<p role="status" className="px-1.5 text-[11px] leading-snug text-warning">
+					<p role="status" className="px-1.5 text-xs leading-snug text-warning">
 						{translateDraft(steerRefusal ?? steerOutcomeNotice)}
 					</p>
 				) : null}
@@ -1582,7 +1647,7 @@ export const ChatComposer = memo(function ChatComposer({
 									disabled={controlsDisabled}
 									onChange={(event) => {
 										if (!disabled && !submitInFlight.current && !draftMutationPending && !fileAttachments.preparing) {
-											void fileAttachments.addFiles(Array.from(event.target.files ?? []));
+											attachFiles(Array.from(event.target.files ?? []));
 										}
 										// Cleared so picking the same file twice still fires a change.
 										event.target.value = "";
@@ -1598,7 +1663,7 @@ export const ChatComposer = memo(function ChatComposer({
 												disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
 												onClick={() => filePicker.current?.click()}
 												aria-label="Attach a file"
-												className="size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-white/5! hover:text-foreground"
+												className="size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
 											>
 												<Plus aria-hidden="true" className="size-3.5 text-muted-foreground" />
 											</Button>
@@ -1638,6 +1703,10 @@ export const ChatComposer = memo(function ChatComposer({
 											<Square aria-hidden="true" className="size-2.5 fill-current" />
 										) : submitting || steerPending || savingQueuedEditPending || sendPending ? (
 											<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+										) : showsSteer ? (
+											<CornerUpRight aria-hidden="true" className="size-3.5" />
+										) : queuesDraft && !durableDelivery ? (
+											<ListPlus aria-hidden="true" className="size-3.5" />
 										) : (
 											<ArrowUp aria-hidden="true" className="size-3.5" />
 										)}

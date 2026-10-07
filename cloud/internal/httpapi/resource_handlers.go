@@ -85,6 +85,7 @@ type createSessionRequest struct {
 	// id, e.g. "anthropic/claude-opus-4-8" for opencode). Optional: empty uses
 	// the harness default.
 	Model                       string   `json:"model,omitempty"`
+	ReasoningEffort             string   `json:"reasoningEffort,omitempty"`
 	DeniedCommands              []string `json:"deniedCommands,omitempty"`
 	SandboxProviderConnectionID string   `json:"sandboxProviderConnectionId,omitempty"`
 	// Provider selects which configured sandbox provider runs this session. It
@@ -448,34 +449,25 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-	if store, ok := s.store.(providerConnectionStore); ok {
-		connections, err := store.ListProviderConnections(
-			r.Context(), principalFrom(r), orgID,
+	userStore, ok := s.store.(userProviderCredentialStore)
+	if !ok {
+		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Personal coding-agent credentials are unavailable.")
+		return
+	}
+	available, err := userStore.UserAgentCredentialAvailable(
+		r.Context(), principalFrom(r).UserID, request.Harness,
+	)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	if !available {
+		writeError(
+			w, r, http.StatusUnprocessableEntity,
+			"agent_provider_required",
+			"Connect and validate your personal coding-agent credential before creating a session.",
 		)
-		if err != nil {
-			s.writeStoreError(w, r, err)
-			return
-		}
-		available := agentConnectionAvailable(connections, request.Harness)
-		if !available {
-			if userStore, ok := s.store.(userProviderCredentialStore); ok {
-				available, err = userStore.UserAgentCredentialAvailable(
-					r.Context(), principalFrom(r).UserID, request.Harness,
-				)
-				if err != nil {
-					s.writeStoreError(w, r, err)
-					return
-				}
-			}
-		}
-		if !available {
-			writeError(
-				w, r, http.StatusUnprocessableEntity,
-				"agent_provider_required",
-				"Connect and validate the selected coding-agent provider before creating a session.",
-			)
-			return
-		}
+		return
 	}
 	// A top-level worker created for a project that already has an active
 	// orchestrator is auto-linked to it: the orchestrator then sees, drives, and
@@ -534,6 +526,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		effectiveProvider = s.sandboxProvider
 	}
 	var coderOpts *sandbox.CoderSessionOptions
+	var coderOverride *sandbox.CoderDeploymentOverride
 	if effectiveProvider == sandbox.ProviderCoder {
 		project, projectErr := s.store.GetProject(r.Context(), principalFrom(r), orgID, request.ProjectID)
 		if projectErr != nil {
@@ -547,12 +540,58 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 				StartupScript: cfg.StartupScript,
 			}
 		}
+		// A bring-your-own-Coder organization points its coder sessions at its own
+		// Coder deployment. When one is configured, bind the session to that
+		// connection (so the row carries provider_connection_id and the resolver
+		// decrypts the org's token) and stamp the org's non-secret coder fields
+		// into the plan in place of the deployment default. With no org connection
+		// the deployment default is kept — existing deployment-level coder is
+		// untouched.
+		if pcStore, ok := s.store.(providerConnectionStore); ok {
+			connections, connErr := pcStore.ListProviderConnections(r.Context(), principalFrom(r), orgID)
+			if connErr != nil {
+				s.writeStoreError(w, r, connErr)
+				return
+			}
+			for _, connection := range connections {
+				if connection.Provider != sandbox.ProviderCoder ||
+					connection.Label != defaultAgentConnectionLabel {
+					continue
+				}
+				cfg, decodeErr := domain.DecodeOrgCoderConfig(connection.Config)
+				if decodeErr != nil {
+					s.logger.Error("decode organization coder config", "error", decodeErr, "request_id", requestID(r))
+					writeError(w, r, http.StatusInternalServerError, "internal_error", "The organization's Coder configuration is invalid.")
+					return
+				}
+				request.SandboxProviderConnectionID = connection.ID
+				coderOverride = &sandbox.CoderDeploymentOverride{
+					BaseURL:     cfg.BaseURL,
+					Owner:       cfg.Owner,
+					TemplateID:  cfg.TemplateID,
+					AgentName:   cfg.AgentName,
+					Parameters:  cfg.Parameters,
+					DurableRoot: cfg.DurableRoot,
+				}
+				break
+			}
+		}
 	}
 	// The plan is resolved once, here, and stamped onto the sandbox row. The
 	// reconciler reads it back from the row rather than from configuration, so
 	// a later config change cannot disturb a session already in flight.
-	plan, err := s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts)
+	plan, err := s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts, coderOverride)
 	if err != nil {
+		// A bring-your-own-Coder org with no org-default template must pick one per
+		// project; that is user-fixable, so surface it as a clear 422 rather than a
+		// deployment-misconfiguration 500.
+		if errors.Is(err, sandbox.ErrCoderTemplateRequired) {
+			writeError(
+				w, r, http.StatusUnprocessableEntity, "coder_template_required",
+				"Choose a Coder template for this project before starting a session.",
+			)
+			return
+		}
 		s.logger.Error("resolve sandbox provisioning plan", "error", err, "request_id", requestID(r))
 		writeError(
 			w, r, http.StatusInternalServerError, "internal_error",
@@ -574,6 +613,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			Prompt:              request.Prompt,
 			Mode:                request.Mode,
 			Model:               request.Model,
+			ReasoningEffort:     request.ReasoningEffort,
 			DeniedCommands:      request.DeniedCommands,
 			Provider:            plan.Provider,
 			SandboxConnectionID: request.SandboxProviderConnectionID,
@@ -1059,6 +1099,9 @@ func validProjectUpdate(request updateProjectRequest) bool {
 }
 
 func validSessionInput(request createSessionRequest) bool {
+	if validateChatTurnSettings("", request.ReasoningEffort, "", "") != nil {
+		return false
+	}
 	if requireUUID(request.ProjectID, "projectId") != nil ||
 		(request.Kind != "worker" && request.Kind != "orchestrator") ||
 		(request.Mode != "read-only" && request.Mode != "standard" && request.Mode != "trusted") ||

@@ -87,9 +87,11 @@ export function getSessionStatusDotView(
 	const className =
 		closedWithoutMerge
 			? getSessionStatusView("exited", t).dotClassName
-			: toneStatus === "idle" || toneStatus === "merged"
-				? getSessionStatusView(toneStatus, t).dotClassName
-				: getAttentionZoneView(toneStatus, t).dotClassName;
+			: toneStatus === "exited"
+				? "bg-passive"
+				: toneStatus === "idle" || toneStatus === "merged"
+					? getSessionStatusView(toneStatus, t).dotClassName
+					: getAttentionZoneView(toneStatus, t).dotClassName;
 
 	return {
 		className,

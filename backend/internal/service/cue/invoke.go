@@ -25,7 +25,7 @@ type CommandTerminals interface {
 }
 
 // Invoke runs one cue. Agent cues are delivered to the selected session, or
-// spawn a worker when invoked from the project board. Command cues open a
+// spawn a worker when no session is requested. Command cues open a
 // normal terminal in the selected session worktree or project root and
 // never create or message an agent.
 func (s *Service) Invoke(ctx context.Context, cueID domain.CueID, input InvokeInput) (InvokeResult, error) {

@@ -30,6 +30,8 @@ import type {
 	CloudCpNotificationEventsResponse,
 	CloudCpNotificationListQuery,
 	CloudCpNotificationListResponse,
+	CloudCpOrgCoderConfigResponse,
+	CloudCpPutOrgCoderConfigRequest,
 	CloudCpProjectDeletedResponse,
 	CloudCpProjectListResponse,
 	CloudCpProjectResponse,
@@ -193,6 +195,16 @@ export interface CloudCpClient {
 	setSessionMergePolicy(orgId: string, sessionId: string, terminateOnPrMerge: boolean, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
 	/** Lists the Coder templates the picker offers (empty when coder is unavailable/unentitled). */
 	listCoderTemplates(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpCoderTemplatesResponse>;
+	/** Reads the org's bring-your-own-Coder connection (non-secret fields only; the API token is never returned). */
+	getOrgCoderConfig(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpOrgCoderConfigResponse>;
+	/** Saves the org's bring-your-own-Coder connection. Omit the token to keep the stored one. */
+	putOrgCoderConfig(
+		orgId: string,
+		body: CloudCpPutOrgCoderConfigRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpOrgCoderConfigResponse>;
+	/** Removes the org's bring-your-own-Coder connection. */
+	deleteOrgCoderConfig(orgId: string, options?: CloudCpRequestOptions): Promise<void>;
 	/** Lists the sessions an orchestrator spawned, with each child's pull requests. */
 	listSessionChildren(
 		orgId: string,
@@ -216,6 +228,7 @@ export interface CloudCpClient {
 		sessionId: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpResumeSessionResponse>;
+	requestWorkspaceCheckout(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<{ requested: boolean }>;
 	/** Docker-only changed-file summary for a cloud session. */
 	getWorkspaceDiff(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceDiff>;
 	/** Docker-only selected-file review details for a cloud session. */
@@ -574,6 +587,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/merge-policy`, { body: { terminateOnPrMerge }, signal: o?.signal }),
 		listCoderTemplates: (orgId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sandbox/coder/templates`, { signal: o?.signal }),
+		getOrgCoderConfig: (orgId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/coder-config`, { signal: o?.signal }),
+		putOrgCoderConfig: (orgId, body, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/coder-config`, { body, signal: o?.signal }),
+		deleteOrgCoderConfig: (orgId, o) =>
+			requestVoid("DELETE", `/orgs/${seg(orgId)}/coder-config`, { signal: o?.signal }),
 		listSessionChildren: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/children`, {
 				query: { limit: query?.limit, cursor: query?.cursor },
@@ -591,6 +610,10 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, { signal: o?.signal }),
 		resumeSession: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/resume`, {
+				signal: o?.signal,
+			}),
+		requestWorkspaceCheckout: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/checkout`, {
 				signal: o?.signal,
 			}),
 		getWorkspaceDiff: (orgId, sessionId, o) =>

@@ -32,6 +32,7 @@ import { useAgentSwitchProviderCatalogs } from "../../hooks/useAgentSwitchProvid
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
+import { sessionUiKey } from "../../lib/hosts";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import {
 	deriveAgentSwitchPresentation,
@@ -88,6 +89,8 @@ function firstBrowserLink(text: string, workspacePaths: string[]): string | unde
 
 export const SessionChatSurface = memo(function SessionChatSurface({
 	session,
+	hostId,
+	assetBaseUrl,
 	reviewerTerminal,
 	onOpenReviewerTerminal,
 	reviewerChat,
@@ -121,10 +124,15 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
+	agentResuming,
+	controllerResumeError,
 	newWorkDisabled,
 	onConversationWorkChange,
 }: {
 	session: WorkspaceSession;
+	/** Owning daemon for a remote session; omitted for the local daemon. */
+	hostId?: string;
+	assetBaseUrl?: string;
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
 	reviewerChat?: { reviewId: string; harness: string };
@@ -148,7 +156,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** Opens the Files inspector from a turn's changed-files Review control. */
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
-	onOpenFile?: (path: string) => void;
+	onOpenFile?: (path: string, line?: number) => void;
 	/** Opens a chat link in the active blank tab or a new tab in this session's AO Browser. */
 	onOpenLinkInBrowser?: (uri: string) => Promise<void>;
 	headerActions?: ReactNode;
@@ -166,26 +174,31 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** The target controller is being installed by an interface handoff. */
 	controllerTransitioning?: boolean;
+	/** A stopped agent is being resumed in the background after the chat opened. */
+	agentResuming?: boolean;
+	controllerResumeError?: string;
 	/** An interface handoff fences new agent work while current-turn decisions remain available. */
 	newWorkDisabled?: boolean;
 	/** Reports accepted Chat work that must inform an interface-switch policy choice. */
 	onConversationWorkChange?: (state: ConversationWorkState) => void;
 }) {
+	const uiSessionId = sessionUiKey(session.id, hostId);
 	const {
 		snapshot: queriedSnapshot,
 		isLoading,
 		unavailable,
 		error,
+		refreshError,
 		hasOlder,
 		isLoadingOlder,
 		loadOlder,
-	} = useConversation(session.id);
+	} = useConversation(session.id, hostId);
 	// Route props can move to the destination before the old query observer drops
 	// its data. Treat that snapshot as unknown everywhere, especially at the work
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
-	const commands = useConversationCommands(session.id);
-	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness);
+	const commands = useConversationCommands(session.id, hostId);
+	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness, hostId);
 	const {
 		acknowledgeAcceptedTurn,
 		acknowledgeLocalEcho,
@@ -228,10 +241,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(snapshot.controller?.state === "ready" || snapshot.controller?.state === "busy");
 	// Mode commits before the target controller starts. A cached ready snapshot
 	// can also outlive the source, so wait for the handoff's final snapshot refresh.
-	const controllerCatalogsEnabled = targetChatControllerReady && !controllerTransitioning && !newWorkDisabled;
+	// A background resume keeps the last-known catalogs visible so the model
+	// picker doesn't blank out while the agent spins up.
+	const controllerCatalogsEnabled = (targetChatControllerReady || agentResuming) && !controllerTransitioning && !newWorkDisabled;
 	// Agent-switch presentation for the chat surface progress track and input locks.
-	const switchMutation = useSwitchAgentState(session.id);
-	const agentSwitches = useAgentSwitches(session.id).data ?? [];
+	const switchMutation = useSwitchAgentState(uiSessionId);
+	const agentSwitches = useAgentSwitches(session.id, hostId).data ?? [];
 	const activeHistorySwitch = findActiveAgentSwitch(agentSwitches);
 	const selectedDurableAgentSwitch = selectDurableAgentSwitch(
 		session.activeAgentSwitch,
@@ -257,7 +272,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		transientSuccessNotice,
 		transientSuccessSwitchId,
 	} = useObservedAgentSwitchLifecycle({
-		sessionId: session.id,
+		sessionId: uiSessionId,
 		agentSwitches,
 		nonterminalCandidates: [
 			session.activeAgentSwitch,
@@ -271,7 +286,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			? selectedDurableAgentSwitch
 			: undefined;
 	const agentSwitch = durableAgentSwitch ?? admissionAgentSwitch ?? observedTerminalSwitch;
-	useAgentSwitchRouteVisibility(`session/${session.id}`, agentSwitch && agentSwitch.state !== "completed" && agentSwitch.state !== "failed" ? "active" : "history", undefined, false);
+	useAgentSwitchRouteVisibility(`session/${uiSessionId}`, agentSwitch && agentSwitch.state !== "completed" && agentSwitch.state !== "failed" ? "active" : "history", undefined, false);
 	const switchPresentation = agentSwitch
 		? deriveAgentSwitchPresentation({
 				agentSwitch,
@@ -312,12 +327,14 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		observedSettledSwitchId ?? controllerOwnedTerminalSwitch?.id;
 	const catalogsEnabled = useAgentSwitchProviderCatalogs({
 		sessionId: session.id,
+		hostId,
 		agentSwitching,
 		settledSwitchId: providerCatalogSettledSwitchId,
 	});
 	const configOptions = useConversationConfigOptions(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot && can(snapshot, "config_options")),
+		hostId,
 	);
 	// A provider config catalog may cover only model, only mode, or both.
 	// Suppress native controls only for dimensions the provider catalog replaces;
@@ -332,19 +349,21 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const { models } = useConversationModels(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot) && !hasProviderModel,
+		hostId,
 	);
 	const { skills } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),
+		hostId,
 	);
-	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot));
-	const stageAttachments = useStageAttachments(session.id);
+	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
+	const stageAttachments = useStageAttachments(session.id, hostId);
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths);
-	const openSessionLink = useSessionLinkNavigation();
+	const openSessionLink = useSessionLinkNavigation(hostId);
 	const conversationLinkBaselines = useRef(new Map<string, ConversationLinkBaseline>());
 	useEffect(() => {
 		if (!snapshot || isLoading) return;
-		const previous = conversationLinkBaselines.current.get(session.id);
+		const previous = conversationLinkBaselines.current.get(uiSessionId);
 		const isInitialSnapshot = !previous;
 		const latestUserMessage = snapshot.items
 			.filter((item) => item.kind === "message" && item.role === "user")
@@ -375,8 +394,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			if (newlyCompleted) pendingCompleted.set(item.id, item.revision);
 			else if (pendingCompleted.get(item.id) !== item.revision) pendingCompleted.delete(item.id);
 		}
-		conversationLinkBaselines.current.set(session.id, { latestSequence, messages, pendingCompleted });
-		if (autoOpenedLinkSessions.has(session.id)) return;
+		conversationLinkBaselines.current.set(uiSessionId, { latestSequence, messages, pendingCompleted });
+		if (autoOpenedLinkSessions.has(uiSessionId)) return;
 		// Do not surprise users by opening links from history when a session is first
 		// mounted. The exception is the current turn: a fast agent can finish before
 		// the first conversation request resolves, so its response is already present
@@ -390,13 +409,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			) continue;
 			const url = firstBrowserLink(item.text, paths);
 			if (url) {
-				autoOpenedLinkSessions.add(session.id);
+				autoOpenedLinkSessions.add(uiSessionId);
 				pendingCompleted.delete(item.id);
 				openLinkInBrowser(url);
 				break;
 			}
 		}
-	}, [isLoading, openLinkInBrowser, paths, snapshot]);
+	}, [isLoading, openLinkInBrowser, paths, snapshot, uiSessionId]);
 	const observedSuccessfulSwitch = Boolean(
 		agentSwitch &&
 			observedSettledSwitchId === agentSwitch.id &&
@@ -425,7 +444,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			: undefined);
 	const visibilityPresentationKind = agentSwitchVisibilityPresentationKind(shownSwitchPresentation);
 	useAgentSwitchPresentationVisibility({
-		localRouteKey: `session/${session.id}`,
+		localRouteKey: `session/${uiSessionId}`,
 		agentSwitch,
 		presentationKind: visibilityPresentationKind,
 		visible: Boolean(
@@ -455,7 +474,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		return (
 			<Centered>
 				<AlertTriangle aria-hidden="true" className="size-4 text-warning" />
-				<strong className="text-sm text-foreground">Conversation unavailable</strong>
+				<strong className="text-xs text-foreground">Conversation unavailable</strong>
 				<p className="max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
 					{unavailable.message}
 				</p>
@@ -479,8 +498,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 
 	return (
 		<div className="relative h-full min-h-0">
+			{refreshError ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
 			<ChatWorkspace
-				key={session.id}
+				key={uiSessionId}
+				uiSessionId={uiSessionId}
+				assetBaseUrl={assetBaseUrl}
+				remoteHostId={hostId}
 				snapshot={renderSnapshot}
 				agentInputDisabled={switchLocksChat || handoffDialogOpen}
 				newWorkDisabled={newWorkDisabled}
@@ -514,6 +537,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				auxiliaryTabOrder={auxiliaryTabOrder}
 				onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange}
 				controllerTransitioning={controllerTransitioning}
+				agentResuming={agentResuming}
 				hasOlder={hasOlder}
 				loadingOlder={isLoadingOlder}
 				onLoadOlder={loadOlder}
@@ -528,7 +552,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					void commands.resumeAgent().catch(() => {});
 				}}
 				resumingAgent={commands.resumingAgent}
-				resumeError={commands.resumeError}
+				resumeError={commands.resumeError ?? controllerResumeError}
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}
@@ -583,17 +607,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				promoteQueuedTurnPendingTurnId={commands.promoteQueuedTurnPendingTurnId}
 				cancelQueuedTurnPendingTurnId={commands.cancelQueuedTurnPendingTurnId}
 				editQueuedTurnPendingTurnId={commands.editQueuedTurnPendingTurnId}
-				onReloadMcpServers={
-					!can(renderSnapshot, "mcp_reload") || commands.mcpReloadUnsupported
-						? undefined
-						: () => {
-								// The rejection is already held by the mutation and rendered from
-								// `mcpReloadError`; rethrowing it would only add a console error.
-								void commands.reloadMcpServers().catch(() => {});
-							}
-				}
-				reloadingMcpServers={commands.reloadingMcpServers}
-				mcpReloadError={commands.mcpReloadError}
 			/>
 			{shownSwitchPresentation ? (
 				<ChatAgentSwitchStatus

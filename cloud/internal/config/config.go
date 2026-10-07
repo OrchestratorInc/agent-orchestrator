@@ -33,6 +33,14 @@ type Config struct {
 	WorkOSClientID       string
 	WorkOSAPIKey         string
 	WorkOSJWKSURL        string
+	// WorkOSLegacy* describe the WorkOS environment AO signed users in with
+	// before the current one. While set, the control plane also accepts that
+	// environment's tokens, so older desktop builds keep working while users
+	// move to the current environment.
+	WorkOSLegacyIssuer   string
+	WorkOSLegacyClientID string
+	WorkOSLegacyAPIKey   string
+	WorkOSLegacyJWKSURL  string
 	LocalAuthEnabled     bool
 	LocalSessionTTL      time.Duration
 	SandboxProvider      string
@@ -79,12 +87,6 @@ type Config struct {
 	// IdlePauseThreshold is how long a session must be quiet, with no turn in
 	// flight, before the control plane pauses its sandbox.
 	IdlePauseThreshold time.Duration
-	// PRStatusPollInterval is how often the control plane looks for targeted
-	// pull-request recovery work.
-	PRStatusPollInterval time.Duration
-	// PRWebhookSilenceGrace is how long a tracked PR may go without an
-	// authoritative observation before recovery polling is eligible.
-	PRWebhookSilenceGrace time.Duration
 	// TerminalStreamEnabled turns on the low-latency terminal path: workers
 	// hold a persistent stream to the control plane and Postgres NOTIFY
 	// replaces the input/output polling loops. Off means the polled
@@ -161,10 +163,6 @@ const defaultIdlePauseThreshold = time.Hour
 
 const defaultIdlePauseInterval = 30 * time.Second
 
-const defaultPRStatusPollInterval = 30 * time.Second
-
-const defaultPRWebhookSilenceGrace = 2 * time.Minute
-
 func Load() (Config, error) {
 	environment := strings.ToLower(strings.TrimSpace(os.Getenv("AO_CLOUD_ENV")))
 	githubLocalTest := boolEnv("AO_CLOUD_GITHUB_LOCAL_TEST", false)
@@ -197,6 +195,10 @@ func Load() (Config, error) {
 		WorkOSClientID:         strings.TrimSpace(os.Getenv("AO_CLOUD_WORKOS_CLIENT_ID")),
 		WorkOSAPIKey:           strings.TrimSpace(os.Getenv("AO_CLOUD_WORKOS_API_KEY")),
 		WorkOSJWKSURL:          strings.TrimSpace(os.Getenv("AO_CLOUD_WORKOS_JWKS_URL")),
+		WorkOSLegacyIssuer:     strings.TrimSpace(os.Getenv("AO_CLOUD_WORKOS_LEGACY_ISSUER")),
+		WorkOSLegacyClientID:   strings.TrimSpace(os.Getenv("AO_CLOUD_WORKOS_LEGACY_CLIENT_ID")),
+		WorkOSLegacyAPIKey:     strings.TrimSpace(os.Getenv("AO_CLOUD_WORKOS_LEGACY_API_KEY")),
+		WorkOSLegacyJWKSURL:    strings.TrimSpace(os.Getenv("AO_CLOUD_WORKOS_LEGACY_JWKS_URL")),
 		LocalAuthEnabled:       boolEnv("AO_CLOUD_LOCAL_AUTH", false),
 		LocalSessionTTL:        durationEnv("AO_CLOUD_LOCAL_SESSION_TTL", 24*time.Hour),
 		AllowAnonymousCheckout: boolEnv("AO_CLOUD_ALLOW_ANONYMOUS_GITHUB_CHECKOUT", false),
@@ -232,8 +234,6 @@ func Load() (Config, error) {
 		WorkerHeartbeatTimeout:   durationEnv("AO_CLOUD_WORKER_HEARTBEAT_TIMEOUT", time.Minute),
 		IdlePauseInterval:        durationEnv("AO_CLOUD_IDLE_PAUSE_INTERVAL", defaultIdlePauseInterval),
 		IdlePauseThreshold:       durationEnv("AO_CLOUD_IDLE_PAUSE_THRESHOLD", defaultIdlePauseThreshold),
-		PRStatusPollInterval:     durationEnv("AO_CLOUD_PR_STATUS_POLL_INTERVAL", defaultPRStatusPollInterval),
-		PRWebhookSilenceGrace:    durationEnv("AO_CLOUD_PR_WEBHOOK_SILENCE_GRACE", defaultPRWebhookSilenceGrace),
 		InterfaceHandoffInterval: durationEnv("AO_CLOUD_INTERFACE_HANDOFF_INTERVAL", 500*time.Millisecond),
 
 		NodeOpsBaseURL:         strings.TrimSpace(os.Getenv("AO_CLOUD_NODEOPS_BASE_URL")),
@@ -324,32 +324,32 @@ func Load() (Config, error) {
 	if githubLocalTest && cfg.Environment != "development" {
 		return Config{}, errors.New("AO_CLOUD_GITHUB_LOCAL_TEST may only be enabled in development")
 	}
-	workosValues := []string{cfg.WorkOSIssuer, cfg.WorkOSClientID, cfg.WorkOSAPIKey}
-	configuredWorkOSValues := 0
-	for _, value := range workosValues {
-		if value != "" {
-			configuredWorkOSValues++
-		}
+	var err error
+	cfg.WorkOSIssuer, cfg.WorkOSJWKSURL, err = resolveWorkOS(
+		"AO_CLOUD_WORKOS",
+		cfg.WorkOSIssuer,
+		cfg.WorkOSClientID,
+		cfg.WorkOSAPIKey,
+		cfg.WorkOSJWKSURL,
+	)
+	if err != nil {
+		return Config{}, err
 	}
-	if configuredWorkOSValues != 0 && configuredWorkOSValues != len(workosValues) {
-		return Config{}, errors.New("AO_CLOUD_WORKOS_ISSUER, AO_CLOUD_WORKOS_CLIENT_ID, and AO_CLOUD_WORKOS_API_KEY must be set together")
+	cfg.WorkOSLegacyIssuer, cfg.WorkOSLegacyJWKSURL, err = resolveWorkOS(
+		"AO_CLOUD_WORKOS_LEGACY",
+		cfg.WorkOSLegacyIssuer,
+		cfg.WorkOSLegacyClientID,
+		cfg.WorkOSLegacyAPIKey,
+		cfg.WorkOSLegacyJWKSURL,
+	)
+	if err != nil {
+		return Config{}, err
 	}
-	if strings.TrimRight(cfg.WorkOSIssuer, "/") == workOSAPIBaseURL {
-		cfg.WorkOSIssuer = workOSAPIBaseURL + "/user_management/" + cfg.WorkOSClientID
+	if cfg.WorkOSLegacyIssuer != "" && cfg.WorkOSIssuer == "" {
+		return Config{}, errors.New("AO_CLOUD_WORKOS_LEGACY_* requires AO_CLOUD_WORKOS_* to be configured")
 	}
-	if cfg.WorkOSIssuer != "" {
-		workOSIssuer := workOSAPIBaseURL + "/user_management/" + cfg.WorkOSClientID
-		if strings.HasPrefix(cfg.WorkOSIssuer, workOSAPIBaseURL+"/user_management/") &&
-			cfg.WorkOSIssuer != workOSIssuer {
-			return Config{}, errors.New("AO_CLOUD_WORKOS_ISSUER must match AO_CLOUD_WORKOS_CLIENT_ID")
-		}
-		if cfg.WorkOSJWKSURL == "" {
-			if cfg.WorkOSIssuer == workOSIssuer {
-				cfg.WorkOSJWKSURL = workOSAPIBaseURL + "/sso/jwks/" + cfg.WorkOSClientID
-			} else {
-				cfg.WorkOSJWKSURL = strings.TrimRight(cfg.WorkOSIssuer, "/") + "/oauth2/jwks"
-			}
-		}
+	if cfg.WorkOSLegacyIssuer != "" && cfg.WorkOSLegacyClientID == cfg.WorkOSClientID {
+		return Config{}, errors.New("AO_CLOUD_WORKOS_LEGACY_CLIENT_ID must differ from AO_CLOUD_WORKOS_CLIENT_ID")
 	}
 	if cfg.WorkOSIssuer == "" && !cfg.LocalAuthEnabled {
 		return Config{}, errors.New("configure WorkOS or enable AO_CLOUD_LOCAL_AUTH")
@@ -509,14 +509,8 @@ func Load() (Config, error) {
 	if cfg.IdlePauseThreshold != 0 && cfg.IdlePauseThreshold < time.Minute {
 		return Config{}, errors.New("AO_CLOUD_IDLE_PAUSE_THRESHOLD must be 0 (disabled) or at least 1m")
 	}
-	if cfg.PRStatusPollInterval <= 0 {
-		return Config{}, errors.New("AO_CLOUD_PR_STATUS_POLL_INTERVAL must be positive")
-	}
 	if cfg.InterfaceHandoffInterval <= 0 {
 		return Config{}, errors.New("AO_CLOUD_INTERFACE_HANDOFF_INTERVAL must be positive")
-	}
-	if cfg.PRWebhookSilenceGrace <= 0 {
-		return Config{}, errors.New("AO_CLOUD_PR_WEBHOOK_SILENCE_GRACE must be positive")
 	}
 	if cfg.MaxSandboxesPerOrg < 1 {
 		return Config{}, errors.New("AO_CLOUD_MAX_ACTIVE_SANDBOXES_PER_ORG must be at least 1")
@@ -766,4 +760,37 @@ func (c Config) String() string {
 		authMode = "local"
 	}
 	return fmt.Sprintf("environment=%s address=%s auth=%s release=%s", c.Environment, c.HTTPAddress, authMode, c.Release)
+}
+
+// resolveWorkOS validates one WorkOS environment's settings and derives its
+// issuer and JWKS URL. The issuer may be the WorkOS API base URL (expanded to
+// the client-specific AuthKit issuer) or a custom AuthKit domain.
+func resolveWorkOS(prefix, issuer, clientID, apiKey, jwksURL string) (string, string, error) {
+	configured := 0
+	for _, value := range []string{issuer, clientID, apiKey} {
+		if value != "" {
+			configured++
+		}
+	}
+	if configured == 0 {
+		return "", jwksURL, nil
+	}
+	if configured != 3 {
+		return "", "", fmt.Errorf("%[1]s_ISSUER, %[1]s_CLIENT_ID, and %[1]s_API_KEY must be set together", prefix)
+	}
+	clientIssuer := workOSAPIBaseURL + "/user_management/" + clientID
+	if strings.TrimRight(issuer, "/") == workOSAPIBaseURL {
+		issuer = clientIssuer
+	}
+	if strings.HasPrefix(issuer, workOSAPIBaseURL+"/user_management/") && issuer != clientIssuer {
+		return "", "", fmt.Errorf("%[1]s_ISSUER must match %[1]s_CLIENT_ID", prefix)
+	}
+	if jwksURL == "" {
+		if issuer == clientIssuer {
+			jwksURL = workOSAPIBaseURL + "/sso/jwks/" + clientID
+		} else {
+			jwksURL = strings.TrimRight(issuer, "/") + "/oauth2/jwks"
+		}
+	}
+	return issuer, jwksURL, nil
 }

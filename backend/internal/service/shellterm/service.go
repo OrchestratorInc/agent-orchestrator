@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 )
 
 // ShellRuntime is the slice of the runtime adapter a shell terminal needs:
@@ -37,6 +38,7 @@ type ShellRuntime interface {
 // start in. The daemon wiring adapts the project service to it.
 type ProjectRootLocator interface {
 	ProjectRoot(ctx context.Context, id domain.ProjectID) (string, error)
+	ProjectEnv(ctx context.Context, id domain.ProjectID) (map[string]string, error)
 }
 
 // SessionWorkspaceLocator resolves a session id to the workspace it is
@@ -53,13 +55,16 @@ type SessionWorkspaceLocator interface {
 // User shells survive desktop and daemon restarts. appRunID scopes trusted
 // auth terminals, whose owning authentication flow ends with the app launch.
 type Service struct {
-	runtime  ShellRuntime
-	store    Store
-	projects ProjectRootLocator
-	sessions SessionWorkspaceLocator
-	dataDir  string
-	appRunID string
-	log      *slog.Logger
+	runtime             ShellRuntime
+	store               Store
+	projects            ProjectRootLocator
+	sessions            SessionWorkspaceLocator
+	dataDir             string
+	appRunID            string
+	log                 *slog.Logger
+	previewCapabilities *browser.Authority
+	pendingPreviewMu    sync.Mutex
+	pendingPreview      map[domain.SessionID]string
 
 	// now and newHandleID are injectable so tests can assert on exact ids and
 	// timestamps without a clock or entropy dependency.
@@ -157,32 +162,62 @@ func (g *sessionGate) acquire(ctx context.Context, id domain.SessionID) (release
 // NewService builds the shell terminal service. dataDir is the fallback working
 // directory for a shell opened with no project context. A nil logger falls back
 // to slog.Default.
-func NewService(runtime ShellRuntime, store Store, projects ProjectRootLocator, sessions SessionWorkspaceLocator, dataDir, appRunID string, log *slog.Logger) *Service {
+func NewService(shellRuntime ShellRuntime, store Store, projects ProjectRootLocator, sessions SessionWorkspaceLocator, dataDir, appRunID string, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Service{
-		runtime:     runtime,
-		store:       store,
-		projects:    projects,
-		sessions:    sessions,
-		dataDir:     dataDir,
-		appRunID:    appRunID,
-		log:         log,
-		now:         time.Now,
-		newHandleID: newShellTerminalHandleID,
-		executable:  os.Executable,
-		gates:       map[domain.SessionID]*sessionGate{},
+		runtime:             shellRuntime,
+		store:               store,
+		projects:            projects,
+		sessions:            sessions,
+		dataDir:             dataDir,
+		appRunID:            appRunID,
+		log:                 log,
+		previewCapabilities: browser.NewAuthority(),
+		pendingPreview:      make(map[domain.SessionID]string),
+		now:                 time.Now,
+		newHandleID:         newShellTerminalHandleID,
+		executable:          os.Executable,
+		gates:               map[domain.SessionID]*sessionGate{},
 	}
 }
 
-func (s *Service) pinnedEnv() map[string]string {
-	path, err := agentlaunch.PinnedPATH(s.executable, os.Getenv, nil, s.dataDir)
+func (s *Service) pinnedEnv(projectEnv map[string]string) map[string]string {
+	path, err := agentlaunch.PinnedPATH(s.executable, os.Getenv, projectEnv, s.dataDir)
 	if err != nil {
 		s.log.Warn("shell terminal PATH not pinned to the daemon binary; a bare `ao` may resolve to a different install", "err", err)
-		return nil
+		return agentlaunch.MergeEnv(projectEnv, nil)
 	}
-	return map[string]string{"PATH": path}
+	return agentlaunch.MergeEnv(projectEnv, map[string]string{"PATH": path})
+}
+
+// ValidPreviewCapability accepts a shell's preview-only bearer while its
+// launch is in flight or its durable row still belongs to the target session.
+func (s *Service) ValidPreviewCapability(ctx context.Context, sessionID domain.SessionID, token string) (bool, error) {
+	if sessionID == "" || token == "" {
+		return false, nil
+	}
+	s.pendingPreviewMu.Lock()
+	pending := s.pendingPreview[sessionID]
+	s.pendingPreviewMu.Unlock()
+	if s.previewCapabilities.Valid(sessionID, token, pending) {
+		return true, nil
+	}
+	recs, err := s.store.SelectShellTerminalsBySessionID(ctx, sessionID)
+	if err != nil {
+		return false, fmt.Errorf("validate shell preview capability: %w", err)
+	}
+	for _, rec := range recs {
+		if s.previewCapabilities.Valid(sessionID, token, rec.PreviewCapabilityVerifier) {
+			alive, err := s.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: rec.HandleID})
+			if err != nil {
+				return false, fmt.Errorf("probe shell preview owner %s: %w", rec.HandleID, err)
+			}
+			return alive, nil
+		}
+	}
+	return false, nil
 }
 
 // sessionGateFor returns the gate for id, creating it on first use.
@@ -220,6 +255,11 @@ func (s *Service) acquireSessionGate(ctx context.Context, id domain.SessionID) (
 // teardown (and the gate) releases — at which point resolveShellTerminalWorkingDir's
 // existence check sees the worktree is gone and falls back to the project root.
 func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInput) (ShellTerminal, error) {
+	title := strings.TrimSpace(in.Title)
+	if utf8.RuneCountInString(title) > maxShellTerminalTitleLen {
+		return ShellTerminal{}, apierr.Invalid("SHELL_TERMINAL_TITLE_TOO_LONG",
+			fmt.Sprintf("A shell terminal title must be at most %d characters", maxShellTerminalTitleLen), nil)
+	}
 	if in.SessionID != "" {
 		if s.sessions == nil {
 			return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SESSION_LOOKUP", "Session lookup is unavailable")
@@ -244,9 +284,19 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	if err != nil {
 		return ShellTerminal{}, err
 	}
-	openTerminals, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
-	if err != nil {
-		return ShellTerminal{}, fmt.Errorf("open shell terminal: list existing terminals: %w", err)
+	var projectEnv map[string]string
+	if projectID != "" {
+		projectEnv, err = s.projects.ProjectEnv(ctx, projectID)
+		if err != nil {
+			return ShellTerminal{}, fmt.Errorf("open shell terminal: resolve project environment: %w", err)
+		}
+	}
+	if title == "" {
+		openTerminals, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
+		if err != nil {
+			return ShellTerminal{}, fmt.Errorf("open shell terminal: list existing terminals: %w", err)
+		}
+		title = nextShellTerminalTitle(openTerminals)
 	}
 	argv, usedFallback := resolveUserLoginShell(in.Shell)
 	if usedFallback {
@@ -257,13 +307,39 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SHELL",
 			"Could not determine a shell to launch. Set SHELL (macOS/Linux) or ComSpec (Windows).")
 	}
+	env := s.pinnedEnv(projectEnv)
+	if env == nil {
+		env = make(map[string]string, 3)
+	}
+	// A user shell must never inherit the worker-only browser automation bearer
+	// from an unusual daemon launch environment.
+	env["AO_BROWSER_CAPABILITY"] = ""
+	env["AO_PREVIEW_CAPABILITY"] = ""
+	var verifier string
+	if in.SessionID != "" {
+		env["AO_SESSION_ID"] = string(in.SessionID)
+		var token string
+		token, verifier, err = s.previewCapabilities.Issue(in.SessionID)
+		if err != nil {
+			return ShellTerminal{}, fmt.Errorf("open shell terminal: preview capability: %w", err)
+		}
+		env["AO_PREVIEW_CAPABILITY"] = token
+		// The shell can issue its first CLI request before runtime.Create returns
+		// and its durable row is inserted. Admit it only during this launch gap.
+		s.pendingPreviewMu.Lock()
+		s.pendingPreview[in.SessionID] = verifier
+		s.pendingPreviewMu.Unlock()
+		defer func() {
+			s.pendingPreviewMu.Lock()
+			delete(s.pendingPreview, in.SessionID)
+			s.pendingPreviewMu.Unlock()
+		}()
+	}
 	return s.openTerminal(ctx, openTerminalConfig{
-		argv:       argv,
-		env:        s.pinnedEnv(),
-		projectID:  projectID,
-		sessionID:  in.SessionID,
-		workingDir: workingDir,
-		title:      nextShellTerminalTitle(openTerminals),
+		argv: argv, env: env, projectEnv: projectEnv, projectID: projectID, sessionID: in.SessionID,
+		workingDir: workingDir, title: title,
+		previewVerifier: verifier,
+		startOnAttach:   in.StartOnAttach,
 	})
 }
 
@@ -358,14 +434,12 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 		return ShellTerminal{}, err
 	}
 	defer readiness.cleanup()
-	env := s.pinnedEnv()
-	if env == nil {
-		env = map[string]string{}
+	projectEnv, err := s.projects.ProjectEnv(ctx, projectID)
+	if err != nil {
+		return ShellTerminal{}, fmt.Errorf("run cue command: resolve project environment: %w", err)
 	}
-	for key, value := range readiness.env {
-		env[key] = value
-	}
-	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectID: projectID,
+	env := agentlaunch.MergeEnv(s.pinnedEnv(projectEnv), readiness.env)
+	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectEnv: projectEnv, projectID: projectID,
 		sessionID: in.SessionID, workingDir: workingDir, title: nextShellTerminalTitle(records)})
 	if err != nil {
 		return ShellTerminal{}, err
@@ -470,12 +544,15 @@ type openTerminalConfig struct {
 	handleID                 string
 	argv                     []string
 	env                      map[string]string
+	projectEnv               map[string]string
 	projectID                domain.ProjectID
 	sessionID                domain.SessionID
 	workingDir               string
 	title                    string
 	transient                bool
 	cleanupWorkingDirOnError bool
+	previewVerifier          string
+	startOnAttach            bool
 }
 
 // openTerminal creates and persists a terminal, rolling the runtime back on
@@ -490,6 +567,10 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		}
 	}
 
+	// Stamped before the runtime spawns: concurrent opens finish spawning in
+	// any order, and the list is ordered by creation, so tabs opened in quick
+	// succession must keep the order they were opened in.
+	createdAt := s.now().UTC()
 	// SessionID is the runtime adapters' name for "what to call this PTY"; it
 	// is not a session row and no sessions record is ever created. The
 	// shellterm- prefix keeps the two namespaces disjoint.
@@ -501,12 +582,15 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		// A user shell's exit is final, just like a trusted command's exit.
 		// Durability across app launches is a separate persistence policy.
 		ExitOnCommandCompletion: true,
+		StartOnAttach:           cfg.startOnAttach,
+		// Only agent terminals are probed for their rendered screen.
+		LazyStyledOutput: true,
 	})
 	if err != nil {
 		if cfg.cleanupWorkingDirOnError {
 			s.cleanupAuthWorkspace(cfg.workingDir, handleID)
 		}
-		return ShellTerminal{}, fmt.Errorf("open shell terminal %s: runtime: %w", handleID, err)
+		return ShellTerminal{}, fmt.Errorf("open shell terminal %s: runtime: %w", handleID, agentlaunch.RedactError(err, cfg.projectEnv))
 	}
 
 	rec := ShellTerminalRecord{
@@ -514,17 +598,19 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		// The resolved project, not the requested one: a session-scoped open
 		// that named no project still belongs to the session's project, and
 		// persisting "" there would leave the row unattributable on the board.
-		ProjectID:  cfg.projectID,
-		SessionID:  cfg.sessionID,
-		WorkingDir: cfg.workingDir,
-		Title:      cfg.title,
-		AppRunID:   s.appRunID,
-		Transient:  cfg.transient,
-		CreatedAt:  s.now().UTC(),
+		ProjectID:                 cfg.projectID,
+		SessionID:                 cfg.sessionID,
+		WorkingDir:                cfg.workingDir,
+		Title:                     cfg.title,
+		AppRunID:                  s.appRunID,
+		Transient:                 cfg.transient,
+		CreatedAt:                 createdAt,
+		PreviewCapabilityVerifier: cfg.previewVerifier,
 	}
 	if err := s.store.InsertShellTerminal(ctx, rec); err != nil {
 		stillAlive, destroyErr := s.destroyRuntimeConfirmed(context.WithoutCancel(ctx), handle)
 		if stillAlive {
+			destroyErr = agentlaunch.RedactError(destroyErr, cfg.projectEnv)
 			s.log.Warn("shell terminal rollback failed; retaining workspace for live runtime",
 				"handleId", handle.ID, "workingDir", cfg.workingDir, "error", destroyErr)
 		} else if cfg.cleanupWorkingDirOnError {

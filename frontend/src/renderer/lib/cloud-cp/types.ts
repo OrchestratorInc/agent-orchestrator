@@ -240,6 +240,7 @@ export interface CloudCpCreateSessionRequest {
 	 * omitted uses the harness default.
 	 */
 	model?: string;
+	reasoningEffort?: string;
 	deniedCommands?: string[];
 	sandboxProviderConnectionId?: string;
 	/**
@@ -270,6 +271,63 @@ export interface CloudCpCoderTemplate {
 
 export interface CloudCpCoderTemplatesResponse {
 	templates: CloudCpCoderTemplate[];
+}
+
+/**
+ * GET /orgs/{orgId}/coder-config — an org's bring-your-own-Coder connection.
+ * Non-secret fields only: the stored API token is never echoed back, surfaced
+ * here solely as `tokenSet`.
+ */
+export interface CloudCpOrgCoderConfig {
+	/** Coder deployment base URL or IP (http or https). */
+	baseUrl: string;
+	/**
+	 * Coder owner/username new workspaces are created under. The control plane
+	 * derives it from the API token on save, so it is always present once stored.
+	 */
+	owner?: string;
+	/**
+	 * Default Coder template id (a UUID) new workspaces use. Optional: a
+	 * bring-your-own org leaves it empty and picks the template per project.
+	 */
+	defaultTemplateId?: string;
+	/** Optional agent name the sandbox connects through. */
+	agentName?: string;
+	/**
+	 * Optional PrivateLink VPC endpoint service name (the
+	 * `coder_endpoint_service_name` Terraform output), set only when the Coder lives
+	 * in a private VPC. AO ops provisions the VPC endpoint from it.
+	 */
+	endpointServiceName?: string;
+	/** Optional AWS region for the PrivateLink endpoint (e.g. eu-north-1). */
+	region?: string;
+	/** True when an API token is stored. The token itself is never returned. */
+	tokenSet: boolean;
+}
+
+export interface CloudCpOrgCoderConfigResponse {
+	/** The stored config, or null when the org has none configured yet. */
+	coderConfig: CloudCpOrgCoderConfig | null;
+}
+
+/**
+ * PUT /orgs/{orgId}/coder-config. The slimmed form sends only `baseUrl` and
+ * `token`; the control plane derives the workspace owner from the token and the
+ * template is chosen per project, so `owner` and `defaultTemplateId` are optional.
+ */
+export interface CloudCpPutOrgCoderConfigRequest {
+	baseUrl: string;
+	/** Raw Coder API token; stored encrypted and never echoed back. Omit to keep the existing token. */
+	token?: string;
+	/** Optional: derived from the token when omitted. */
+	owner?: string;
+	/** Optional: the template is chosen per project, not at the org level. */
+	defaultTemplateId?: string;
+	agentName?: string;
+	/** Optional PrivateLink VPC endpoint service name; omit for a directly reachable Coder. */
+	endpointServiceName?: string;
+	/** Optional AWS region for the PrivateLink endpoint. */
+	region?: string;
 }
 
 export interface CloudCpSession {
@@ -347,6 +405,8 @@ export interface CloudCpInterfaceTransitionStatusResponse {
 export interface CloudCpStartInterfaceTransitionRequest {
 	targetMode: CloudCpInterfaceMode;
 	policy: "drain" | "interrupt";
+	model?: string;
+	reasoningEffort?: string;
 }
 
 export interface CloudCpStartInterfaceTransitionResponse {
@@ -711,6 +771,9 @@ export interface CloudCpSendMessageRequest {
 }
 
 export interface CloudCpChatModelsResponse {
+	modes?: string[];
+	model?: string;
+	reasoningEffort?: string;
 	models: Array<{
 		id: string;
 		displayName: string;
