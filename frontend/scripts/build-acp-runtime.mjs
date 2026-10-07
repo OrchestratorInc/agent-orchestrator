@@ -20,6 +20,9 @@ import {
 	patchClaudeHibernationCheck,
 	patchClaudeRetryDetails,
 	patchClaudeStaleIdleDebt,
+	patchClaudeSteerIdleGuard,
+	patchClaudeSteerDebt,
+	patchClaudeSteerSettlement,
 	pruneNodeDistribution,
 	runtimeSourceFiles,
 } from "./build-acp-runtime-helpers.mjs";
@@ -90,6 +93,9 @@ patchClaudeContextUsage(claudeAdapter);
 patchClaudeHibernationCheck(claudeAdapter);
 patchClaudeFoldedPromptSettlement(claudeAdapter);
 patchClaudeStaleIdleDebt(claudeAdapter);
+patchClaudeSteerSettlement(claudeAdapter);
+patchClaudeSteerIdleGuard(claudeAdapter);
+patchClaudeSteerDebt(claudeAdapter);
 
 // The Claude Agent SDK declares platform-native Claude executables as optional
 // dependencies. --omit=optional excludes them; this removal is defense-in-depth.
