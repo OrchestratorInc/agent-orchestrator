@@ -41,17 +41,23 @@ function failedSnapshot(): ConversationSnapshot {
 }
 
 describe("ChatWorkspace retry", () => {
-	it("asks the other owner to close before retrying", () => {
+	it("asks the other owner to close beside the composer before retrying", async () => {
+		const retry = vi.fn();
 		render(
 			<ChatWorkspace
 				snapshot={{ ...chatFixture, controller: { state: "stopped" } }}
-				onResumeAgent={vi.fn()}
+				onResumeAgent={retry}
 				resumeError="this is open elsewhere; close it there to continue here"
 			/>,
 		);
 		expect(screen.getByText("This is open elsewhere")).toBeVisible();
 		expect(screen.getByText("Close it there to continue here.")).toBeVisible();
-		expect(screen.getByRole("button", { name: /^Retry$/ })).toBeEnabled();
+		const button = screen.getByRole("button", { name: /^Retry$/ });
+		expect(button).toBeEnabled();
+		expect(button.closest(".cursor-chat-composer-dock")).not.toBeNull();
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		await userEvent.click(button);
+		expect(retry).toHaveBeenCalledTimes(1);
 	});
 
 	it("offers a retry on the failed turn and reports the clicked turn", async () => {

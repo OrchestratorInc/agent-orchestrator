@@ -487,15 +487,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// is set, only the in-flight mutation keeps it true — switching back to an
 	// already-resumed session no longer flashes "Resuming agent…" while the
 	// workspace query catches up with the new activity state.
-	const quietResume = !session?.needsResume && ((autoResume.variables === sessionId && autoResume.isPending) ||
+	const quietResume = (autoResume.variables === sessionId && autoResume.isPending) ||
 		(!usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
-		!resumeStatus.statusError && openedSession.current.key === uiSessionId && !openedSession.current.checked));
+		!resumeStatus.statusError && (openedSession.current.key !== uiSessionId || !openedSession.current.checked));
 	const resumeOnOpen = autoResume.mutate;
 	useEffect(() => {
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
 		if (usesPreviewWorkspaceData || hostId || session?.cloud || !session || daemonStatus.state !== "ready" ||
 			(session.statusReadiness && session.statusReadiness !== "ready") || openedSession.current.checked) return;
-		if (!sessionAgentExited(session)) {
+		if (!session.needsResume && !sessionAgentExited(session)) {
 			openedSession.current.checked = true;
 			return;
 		}

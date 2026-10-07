@@ -1484,18 +1484,6 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					<ControllerBanner
-						controller={snapshot.controller}
-						provisionState={session?.provisionState}
-						needsResume={session?.needsResume}
-						transitioning={controllerTransitioning || agentResuming}
-						onResume={newWorkDisabled ? undefined : onResumeAgent}
-						resuming={resumingAgent}
-						resumeError={resumeError}
-						onOpenShell={onOpenShell}
-						openingShell={openingShell}
-						shellError={shellError}
-					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center")}
@@ -1546,6 +1534,18 @@ function ChatWorkspaceContent({
 										{t("chat.welcome.heading")}
 									</h1>
 								) : null}
+								<ControllerBanner
+									controller={snapshot.controller}
+									provisionState={session?.provisionState}
+									needsResume={session?.needsResume}
+									transitioning={controllerTransitioning || agentResuming}
+									onResume={newWorkDisabled ? undefined : onResumeAgent}
+									resuming={resumingAgent}
+									resumeError={resumeError}
+									onOpenShell={onOpenShell}
+									openingShell={openingShell}
+									shellError={shellError}
+								/>
 								<div className="relative">
 									<McpServerBanner
 										key={draftScopeKey}
@@ -2020,7 +2020,7 @@ function ControllerBanner({
 			tone: "text-warning",
 		},
 		stopped: {
-			title: openElsewhere ? "This is open elsewhere" : needsResume ? "Ready to continue in AO" : "The agent controller stopped",
+			title: openElsewhere ? "This is open elsewhere" : needsResume ? "Could not connect to the agent" : "The agent controller stopped",
 			tone: needsResume ? "text-muted-foreground" : "text-destructive",
 		},
 	};
@@ -2031,7 +2031,7 @@ function ControllerBanner({
 		<div
 			role={controller.state === "stopped" ? "alert" : "status"}
 			aria-atomic="true"
-			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
+			className="flex shrink-0 items-start gap-2.5 rounded-lg border border-border bg-surface px-4 py-2.5"
 		>
 			{controller.state === "connecting" ? (
 				<Loader2
@@ -2049,7 +2049,7 @@ function ControllerBanner({
 				{controller.state === "stopped" ? (
 					<>
 						<span className="text-[11px] leading-snug text-muted-foreground">
-							{openElsewhere ? "Close it there to continue here." : needsResume ? "Your imported history is saved. Resume when you want to start working." : "History is kept. Resume the agent or open a shell in the same worktree."}
+							{openElsewhere ? "Close it there to continue here." : needsResume ? "Retry to continue this conversation." : "History is kept. Resume the agent or open a shell in the same worktree."}
 						</span>
 						{!openElsewhere && (resumeError || shellError) ? (
 							<span className="text-[11px] leading-snug text-destructive">
@@ -2065,7 +2065,7 @@ function ControllerBanner({
 									onClick={onResume}
 									disabled={resuming}
 								>
-									{resuming ? "Resuming…" : resumeError ? "Retry" : "Resume agent"}
+									{resuming ? "Resuming…" : resumeError || needsResume ? "Retry" : "Resume agent"}
 								</Button>
 							) : null}
 							{onOpenShell && !needsResume ? (
