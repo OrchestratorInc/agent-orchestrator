@@ -1562,12 +1562,6 @@ func idleControllerState(record domain.SessionRecord) ports.ChatControllerState 
 	return ports.ChatControllerStopped
 }
 
-// Snapshot reads a session's conversation.
-//
-// It does not require a live controller: history must remain readable after the
-// agent process is gone, which is the whole point of persisting it. The
-// controller state is reported separately so the client can distinguish "no
-// history" from "agent not running".
 // withDispatchingTurnRunning reports the turn being dispatched as running. Its row
 // stays queued until the provider binds it, but a client reads queued as "waiting
 // behind other work", which is false for a message sent to an idle agent.
@@ -1588,6 +1582,12 @@ func withDispatchingTurnRunning(turns []domain.ConversationTurn, dispatching ...
 	return out
 }
 
+// Snapshot reads a session's conversation.
+//
+// It does not require a live controller: history must remain readable after the
+// agent process is gone, which is the whole point of persisting it. The
+// controller state is reported separately so the client can distinguish "no
+// history" from "agent not running".
 func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, error) {
 	record, err := s.requireChatSession(ctx, id)
 	if err != nil {
