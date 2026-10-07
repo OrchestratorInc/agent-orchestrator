@@ -255,25 +255,33 @@ func run(logger *slog.Logger) error {
 
 	var workosVerifier auth.WorkOSVerifier
 	if cfg.WorkOSIssuer != "" {
-		profiles, err := auth.NewWorkOSProfileResolver(cfg.WorkOSAPIKey, nil)
-		if err != nil {
-			return err
-		}
-		organizations, err := auth.NewWorkOSOrganizationResolver(cfg.WorkOSAPIKey, nil)
-		if err != nil {
-			return err
-		}
-		workosVerifier, err = auth.NewOIDCVerifier(
+		workosVerifier, err = newWorkOSVerifier(
 			ctx,
 			cfg.WorkOSIssuer,
 			cfg.WorkOSClientID,
+			cfg.WorkOSAPIKey,
 			cfg.WorkOSJWKSURL,
-			profiles,
-			organizations,
 		)
 		if err != nil {
 			return err
 		}
+	}
+	if cfg.WorkOSLegacyIssuer != "" {
+		legacyVerifier, err := newWorkOSVerifier(
+			ctx,
+			cfg.WorkOSLegacyIssuer,
+			cfg.WorkOSLegacyClientID,
+			cfg.WorkOSLegacyAPIKey,
+			cfg.WorkOSLegacyJWKSURL,
+		)
+		if err != nil {
+			return err
+		}
+		workosVerifier, err = auth.NewFallbackWorkOSVerifier(workosVerifier, legacyVerifier)
+		if err != nil {
+			return err
+		}
+		logger.Info("accepting legacy WorkOS tokens", "legacy_client_id", cfg.WorkOSLegacyClientID)
 	}
 	var providerCipher *secrets.Cipher
 	if len(cfg.ProviderSecretKey) > 0 {
@@ -526,4 +534,22 @@ func (developmentCredentialValidator) Validate(
 	[]byte,
 ) error {
 	return nil
+}
+
+func newWorkOSVerifier(
+	ctx context.Context,
+	issuer string,
+	clientID string,
+	apiKey string,
+	jwksURL string,
+) (auth.WorkOSVerifier, error) {
+	profiles, err := auth.NewWorkOSProfileResolver(apiKey, nil)
+	if err != nil {
+		return nil, err
+	}
+	organizations, err := auth.NewWorkOSOrganizationResolver(apiKey, nil)
+	if err != nil {
+		return nil, err
+	}
+	return auth.NewOIDCVerifier(ctx, issuer, clientID, jwksURL, profiles, organizations)
 }

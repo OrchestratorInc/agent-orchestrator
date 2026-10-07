@@ -255,10 +255,15 @@ The production provider and `worker` documents use the same schemas as staging.
 Promotion refuses to change providers during promotion, reads and validates
 production values, and never copies secret values or ARNs from staging.
 
-Staging and production intentionally use the same WorkOS environment. This
-shares users and provider configuration across both AO environments; split them
-into separate WorkOS environments later only if stronger environment isolation
-becomes necessary.
+Production signs users in through the WorkOS Production environment, with
+AuthKit on `auth.orchestrator.inc` and Google sign-in on
+`login.orchestrator.inc`. Staging keeps the WorkOS Staging environment.
+Production accounts created before the move keep their WorkOS Staging IDs:
+`scripts/workos-copy-environment.py` copied each user and organization with its
+Staging ID as `external_id`, which the control plane uses at sign-in. Re-run the
+copy (it is idempotent) for users who sign up through WorkOS Staging while the
+`legacy_*` keys in `ao-cloud/production/workos` keep that environment's tokens
+accepted.
 
 ### Promotion and rollback limits
 
