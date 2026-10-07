@@ -23,6 +23,7 @@ func IsRoutineInternalCLICommand(commandPath string) bool {
 var routineInternalCLICommands = []string{
 	"ao status",
 	"ao session ls",
+	"ao session top",
 	"ao session get",
 	"ao session agent-switch ls",
 	"ao session handoff",
@@ -153,6 +154,10 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao project add":            {},
 	"ao project rm":             {},
 	"ao project set-config":     {},
+	"ao remote-host":            {},
+	"ao remote-host status":     {},
+	"ao remote-host enable":     {},
+	"ao remote-host disable":    {},
 	"ao review":                 {},
 	"ao review cancel":          {},
 	"ao review ls":              {},

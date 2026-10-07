@@ -285,7 +285,7 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 	}
 }
 
-func TestResumeReconnectsInitializedHostWithoutNativeResume(t *testing.T) {
+func TestReconnectAdoptsInitializedHostWithoutNativeResume(t *testing.T) {
 	d, srv := newTestDriver(t)
 	prepareCalls := 0
 	proc, err := d.spawn(context.Background(), "codex", "/tmp/ws", nil)
@@ -293,13 +293,16 @@ func TestResumeReconnectsInitializedHostWithoutNativeResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.persistent = true
-	d.connectHost = func(context.Context, persistenthost.Config) (*persistenthost.Transport, error) {
+	d.connectHost = func(_ context.Context, cfg persistenthost.Config) (*persistenthost.Transport, error) {
+		if !cfg.ReconnectOnly {
+			t.Fatal("startup reconnect allowed a provider launch")
+		}
 		return &persistenthost.Transport{
 			Stdin: proc.stdin, Stdout: proc.stdout, Reconnected: true, NextRequestID: 41,
 		}, nil
 	}
 
-	conv, err := d.Resume(context.Background(), ports.ChatResumeConfig{
+	conv, err := d.Reconnect(context.Background(), ports.ChatResumeConfig{
 		SessionID: "ao-reconnect", ProviderConversationID: "thread-survived",
 		DataDir: t.TempDir(), WorkspacePath: "/tmp/ws",
 		PrepareEnv: func(context.Context) (map[string]string, error) {
@@ -1095,7 +1098,7 @@ func TestReadOnlyTurnCannotOverrideSandbox(t *testing.T) {
 	params := map[string]any{}
 	applyTurnSettings(params, ports.ChatTurnSettings{Approval: ports.PermissionModeAuto}, true)
 	if params["approvalPolicy"] != "never" || params["approvalsReviewer"] != "user" ||
-		!reflect.DeepEqual(params["sandboxPolicy"], map[string]any{"type": "readOnly"}) {
+		!reflect.DeepEqual(params["sandboxPolicy"], map[string]any{"type": "readOnly", "networkAccess": true}) {
 		t.Fatalf("read-only turn settings = %#v", params)
 	}
 }
@@ -1576,5 +1579,19 @@ func TestEnvSliceWithNoOverlayStillInheritsTheEnvironment(t *testing.T) {
 	}
 	if !sawHome {
 		t.Error("an empty overlay produced an environment with no HOME")
+	}
+}
+
+func TestReconnectMissingHostNeverLaunchesProvider(t *testing.T) {
+	driver := New(fakePlugin{binErr: errors.New("provider installation is unavailable")}, nil)
+	_, err := driver.Reconnect(context.Background(), ports.ChatResumeConfig{
+		SessionID: "stopped", ProviderConversationID: "thread", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
+		PrepareEnv: func(context.Context) (map[string]string, error) {
+			t.Fatal("health check rotated launch credentials")
+			return nil, nil
+		},
+	})
+	if !errors.Is(err, ports.ErrChatHostNotRunning) {
+		t.Fatalf("error=%v", err)
 	}
 }

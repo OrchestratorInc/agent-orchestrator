@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
@@ -23,6 +24,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	activityobserver "github.com/aoagents/agent-orchestrator/backend/internal/observe/activity"
+	artifactsobserver "github.com/aoagents/agent-orchestrator/backend/internal/observe/artifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/reaper"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
@@ -50,6 +52,7 @@ type lifecycleStack struct {
 	runtimeReaper  *reaper.Reaper
 	reaperDone     <-chan struct{}
 	activityDone   <-chan struct{}
+	artifactsDone  <-chan struct{}
 	autoReviewDone <-chan struct{}
 	scmDone        <-chan struct{}
 	trackerDone    <-chan struct{}
@@ -69,6 +72,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		lifecycle.WithActiveSteering(activeTurnSteering(agents)),
 		lifecycle.WithStartupSignalGate(startupSignalGatesInput(agents)),
 		lifecycle.WithUrgentNudgeGate(urgentNudgeWaitingInputSafe(agents)),
+		lifecycle.WithDataDir(dataDir),
 	)
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger})
 	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger})
@@ -78,12 +82,14 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		// must not prevent the daemon or ordinary agent sessions from starting.
 		logger.Warn("fx Herdr listener unavailable", "error", err)
 	}
+	artifactsPoller := artifactsobserver.New(store, lcm, artifactsobserver.Config{Logger: logger})
 	return &lifecycleStack{
 		LCM:           lcm,
 		runtimeReaper: rp,
 		reaperDone:    rp.Start(ctx),
 		activityDone:  activityPoller.Start(ctx),
 		herdr:         herdrServer,
+		artifactsDone: artifactsPoller.Start(ctx),
 	}
 }
 
@@ -160,6 +166,9 @@ func (l *lifecycleStack) Stop() {
 	<-l.reaperDone
 	if l.activityDone != nil {
 		<-l.activityDone
+	}
+	if l.artifactsDone != nil {
+		<-l.artifactsDone
 	}
 	if l.autoReviewDone != nil {
 		<-l.autoReviewDone
@@ -321,7 +330,8 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		GithubIdentity:    githubIdentity,
 		// no_signal only makes sense for harnesses with complete lifecycle signal
 		// coverage; partial callbacks cannot prove that silence is abnormal.
-		SignalCapable: activitydispatch.FullySupportsHarness,
+		SignalCapable:        activitydispatch.FullySupportsHarness,
+		OutputTypeReconciler: lcm,
 	})
 	// Triggering a review spawns a reviewer over the worker's worktree, resolved
 	// from the reviewer registry (distinct from the worker agent set). The
@@ -343,7 +353,6 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 			reviewcore.WithReviewerChat(reviewerChat)),
 	})
 	reviewOpts := []reviewsvc.Option{
-		reviewsvc.WithLifecycleReducer(lcm),
 		reviewsvc.WithTelemetry(telemetry),
 		reviewsvc.WithNotificationSink(notifications),
 		reviewsvc.WithCodexAccountOperationGate(codexOperationGate),
@@ -354,6 +363,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 			reviewsvc.WithReviewResolver(scmProvider),
 		)
 	}
+	reviewOpts = append(reviewOpts, reviewsvc.WithPRRefresher(reviewPRRefresher{sessions: sessionSvc}))
 	reviewSvc := reviewsvc.New(reviewEngine, store, reviewOpts...)
 	mgr.SetReviewerTerminator(reviewSvc)
 	return sessionSvc, reviewSvc, mgr, nil
@@ -551,7 +561,6 @@ type chatLauncher struct{ svc *chatsvc.Service }
 var _ sessionmanager.ChatLauncher = chatLauncher{}
 var _ interface {
 	RunBackgroundTask(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
-	RelayUserAuthoredChatTurn(context.Context, domain.SessionID, string) (string, error)
 	ArmChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	PrepareChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	AbortChatHandoff(domain.SessionID)
@@ -587,22 +596,22 @@ func (c chatLauncher) RestoreReviewChat(ctx context.Context, cfg reviewcore.Revi
 
 func (c chatLauncher) startReviewChat(ctx context.Context, cfg reviewcore.ReviewerChatStart, sendPrompt bool) (string, error) {
 	owner := domain.ReviewConversationOwner(cfg.ReviewID)
-	started, err := c.svc.StartChat(ctx, chatsvc.StartConfig{Owner: owner, SessionID: cfg.WorkerID, ProjectID: cfg.ProjectID, Kind: domain.KindWorker, Harness: cfg.Harness, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Permissions: ports.PermissionModeAuto, SystemPrompt: cfg.SystemPrompt, ProviderConversationID: cfg.ProviderConversationID})
+	started, err := c.svc.StartChat(ctx, chatsvc.StartConfig{Owner: owner, SessionID: cfg.WorkerID, ProjectID: cfg.ProjectID, Kind: domain.KindWorker, Harness: cfg.Harness, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: cfg.Model, Effort: cfg.Effort, Permissions: ports.PermissionModeAuto, SystemPrompt: cfg.SystemPrompt, ProviderConversationID: cfg.ProviderConversationID})
 	if err != nil {
 		return "", err
 	}
-	if !sendPrompt {
+	if !sendPrompt || strings.TrimSpace(cfg.Prompt) == "" {
 		return started.ProviderConversationID, nil
 	}
-	if _, err := c.svc.SendForOwner(ctx, owner, ports.ChatUserMessage{Text: cfg.Prompt, Origin: domain.MessageOriginHuman}); err != nil {
+	if _, err := c.svc.SendForOwner(ctx, owner, ports.ChatUserMessage{Text: cfg.Prompt, Origin: domain.MessageOriginDaemon, ClientMessageID: reviewcore.BatchMessageID(cfg.BatchID)}); err != nil {
 		_ = c.svc.StopForOwner(context.Background(), owner)
 		return "", err
 	}
 	return started.ProviderConversationID, nil
 }
 
-func (c chatLauncher) SendReviewChat(ctx context.Context, reviewID, message string) error {
-	_, err := c.svc.SendForOwner(ctx, domain.ReviewConversationOwner(reviewID), ports.ChatUserMessage{Text: message, Origin: domain.MessageOriginDaemon})
+func (c chatLauncher) SendReviewChat(ctx context.Context, reviewID, message, batchID string) error {
+	_, err := c.svc.SendForOwner(ctx, domain.ReviewConversationOwner(reviewID), ports.ChatUserMessage{Text: message, Origin: domain.MessageOriginDaemon, ClientMessageID: reviewcore.BatchMessageID(batchID)})
 	return err
 }
 
@@ -634,20 +643,8 @@ func (c chatLauncher) StartChatTurn(ctx context.Context, id domain.SessionID, te
 	return c.svc.StartChatTurn(ctx, id, text)
 }
 
-func (c chatLauncher) RelayChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
-	return c.svc.RelayChatTurn(ctx, id, text)
-}
-
-func (c chatLauncher) RelayUserAuthoredChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
-	return c.svc.RelayUserAuthoredChatTurn(ctx, id, text)
-}
-
-func (c chatLauncher) RelayChatTurnWithID(
-	ctx context.Context,
-	id domain.SessionID,
-	text, clientMessageID string,
-) (string, error) {
-	return c.svc.RelayChatTurnWithID(ctx, id, text, clientMessageID)
+func (c chatLauncher) RelaySessionChatTurn(ctx context.Context, id domain.SessionID, text, clientMessageID string, options ports.MessageDeliveryOptions) (string, error) {
+	return c.svc.RelaySessionChatTurn(ctx, id, text, clientMessageID, options)
 }
 
 func (c chatLauncher) QueueChatPrompt(ctx context.Context, id domain.SessionID, text string) (string, error) {
@@ -697,4 +694,35 @@ func (c chatLauncher) AbortChatHandoff(id domain.SessionID) {
 
 func (c chatLauncher) StopChat(ctx context.Context, id domain.SessionID) error {
 	return c.svc.StopChat(ctx, id)
+}
+
+// reviewPRRefresher lets a review trigger fetch a worker's PR fresh from the
+// provider through the session service's claim, which re-reads the PR and
+// records it on the session. Claiming a PR the session already owns only
+// refreshes its facts; another active session's PR is never taken over.
+type reviewPRRefresher struct {
+	sessions interface {
+		ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error)
+	}
+}
+
+func (r reviewPRRefresher) RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string) error {
+	_, err := r.sessions.ClaimPR(ctx, workerID, prURL, sessionsvc.ClaimPROptions{AllowTakeover: false})
+	var owned ports.PRClaimedByActiveSessionError
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &owned):
+		return fmt.Errorf("%w: %s belongs to active session %s", reviewcore.ErrPROwnedElsewhere, prURL, owned.Owner)
+	case errors.Is(err, sessionsvc.ErrPRNotFound):
+		return fmt.Errorf("%w: pull request %s was not found on the provider", reviewcore.ErrNotFound, prURL)
+	case errors.Is(err, sessionsvc.ErrPRNotOpen):
+		return fmt.Errorf("%w: pull request %s is not open", reviewcore.ErrInvalid, prURL)
+	case errors.Is(err, sessionsvc.ErrInvalidPRRef), errors.Is(err, sessionsvc.ErrProjectMismatch):
+		return fmt.Errorf("%w: %s is not a pull request in this project's repository", reviewcore.ErrInvalid, prURL)
+	case errors.Is(err, sessionsvc.ErrSCMUnavailable):
+		return fmt.Errorf("%w: AO could not fetch %s from the provider; try again shortly", reviewcore.ErrInvalid, prURL)
+	default:
+		return err
+	}
 }

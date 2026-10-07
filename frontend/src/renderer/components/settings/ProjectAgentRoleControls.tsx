@@ -5,7 +5,8 @@ import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryKey, agentModelsQueryOptions, refreshAgentModels, revalidateAgentModels, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
-import { isConcreteModelID, modelChoiceLabel } from "../../lib/agent-model-choices";
+import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../../lib/agent-model-choices";
+import { LOCAL_HOST } from "../../lib/hosts";
 import { AgentModelCombobox } from "./AgentModelCombobox";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 
@@ -13,6 +14,7 @@ export function AgentModelField({
 	role,
 	agentId,
 	projectId,
+	hostId,
 	model,
 	mode,
 	effort,
@@ -29,6 +31,7 @@ export function AgentModelField({
 	role: "worker" | "orchestrator" | "reviewer";
 	agentId: string;
 	projectId: string;
+	hostId?: string;
 	model: string;
 	mode: string;
 	effort: string;
@@ -47,20 +50,20 @@ export function AgentModelField({
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const query = useQuery(agentModelsQueryOptions(agentId, projectId));
+	const query = useQuery(agentModelsQueryOptions(agentId, projectId, hostId));
 	const catalog: AgentModelCatalog | undefined = query.data;
 	const revalidationQuery = useQuery({
-		queryKey: ["agent-model-revalidation", agentId, projectId, catalog?.validatedAt ?? ""],
-		queryFn: () => revalidateAgentModels(agentId, projectId),
+		queryKey: ["agent-model-revalidation", hostId ?? LOCAL_HOST, agentId, projectId, catalog?.validatedAt ?? ""],
+		queryFn: () => revalidateAgentModels(agentId, projectId, hostId),
 		enabled: agentId !== "" && catalog?.refreshRecommended === true,
 		staleTime: Number.POSITIVE_INFINITY,
 		retry: false,
 	});
 	useEffect(() => {
 		if (revalidationQuery.data) {
-			queryClient.setQueryData(agentModelsQueryKey(agentId, projectId), revalidationQuery.data);
+			queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), revalidationQuery.data);
 		}
-	}, [agentId, projectId, queryClient, revalidationQuery.data]);
+	}, [agentId, hostId, projectId, queryClient, revalidationQuery.data]);
 	const isMode = !independentMode && catalog?.selectionMode === "mode";
 	const label = t(`settings.models.${role}${isMode ? "Mode" : "Model"}`);
 	const warning =
@@ -83,7 +86,7 @@ export function AgentModelField({
 		const selectedMode = isConcreteModelID(mode) ? mode : "";
 		const options = (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
 			value: item.id,
-			label: modelChoiceLabel(item),
+			label: agentModelDisplayLabel(agentId, modelChoiceLabel(item)),
 		}));
 		return (
 			<>
@@ -109,20 +112,19 @@ export function AgentModelField({
 		);
 	}
 
-	const models = supportedEfforts || !followCatalogDefaults
-		? (catalog?.models ?? []).map((item) => ({
-			...item,
-			...(supportedEfforts ? { efforts: item.efforts ? item.efforts.filter((value) => supportedEfforts.includes(value)) : [...supportedEfforts] } : {}),
-			...(!followCatalogDefaults ? { isDefault: false, defaultEffort: undefined } : {}),
-		}))
-		: catalog?.models ?? [];
+	const models = (catalog?.models ?? []).map((item) => ({
+		...item,
+		label: agentModelDisplayLabel(agentId, item.label),
+		...(supportedEfforts ? { efforts: item.efforts ? item.efforts.filter((value) => supportedEfforts.includes(value)) : [...supportedEfforts] } : {}),
+		...(!followCatalogDefaults ? { isDefault: false, defaultEffort: undefined } : {}),
+	}));
 	if (supportedEfforts && isConcreteModelID(model) && !models.some((item) => item.id === model)) {
 		models.push({ id: model, label: model, efforts: [...supportedEfforts] });
 	}
 	const customModelEntry = catalog?.customModelEntry ?? (catalog?.allowCustom || allowCustomFallback ? "direct" : "none");
 	const refreshCatalog = async () => {
-		const refreshed = await refreshAgentModels(agentId, projectId);
-		queryClient.setQueryData(agentModelsQueryKey(agentId, projectId), refreshed);
+		const refreshed = await refreshAgentModels(agentId, projectId, hostId);
+		queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), refreshed);
 	};
 	const selectCatalogModel = (value: string) => {
 		onModelChange(value);
@@ -191,30 +193,39 @@ export function ProjectAgentRoleHeader() {
 
 export function ProjectAutoReviewToggle({ checked, onCheckedChange, description }: { checked: boolean; onCheckedChange: (checked: boolean) => void; description?: string }) {
 	const { t } = useTranslation();
+	return <ProjectToggleRow id="project-auto-review" label={t("settings.project.autoReviewToggle")} description={description ?? t("settings.project.autoReviewDescription")} checked={checked} onCheckedChange={onCheckedChange} />;
+}
+
+export function ProjectWorkersRequestReviewToggle({ checked, onCheckedChange }: { checked: boolean; onCheckedChange: (checked: boolean) => void }) {
+	const { t } = useTranslation();
+	return <ProjectToggleRow id="project-workers-request-review" label={t("settings.project.workersRequestReviewToggle")} description={t("settings.project.workersRequestReviewDescription")} checked={checked} onCheckedChange={onCheckedChange} />;
+}
+
+function ProjectToggleRow({ id, label, description, checked, onCheckedChange }: { id: string; label: string; description: string; checked: boolean; onCheckedChange: (checked: boolean) => void }) {
 	return (
 		<div className="settings-row-bar">
 			<div className="flex shrink-0 items-center gap-1.5">
-				<span className="whitespace-nowrap text-sm leading-5 text-settings-label">{t("settings.project.autoReviewToggle")}</span>
+				<span className="whitespace-nowrap text-sm leading-5 text-settings-label">{label}</span>
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<button
 							type="button"
 							className="inline-flex size-5 items-center justify-center rounded-md text-settings-muted transition-colors hover:bg-settings-menu-selected hover:text-settings-label focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-							aria-label={description ?? t("settings.project.autoReviewDescription")}
+							aria-label={description}
 						>
 							<Info className="size-icon-sm" aria-hidden="true" />
 						</button>
 					</TooltipTrigger>
 					<TooltipContent className="max-w-72 leading-normal" side="top">
-						{description ?? t("settings.project.autoReviewDescription")}
+						{description}
 					</TooltipContent>
 				</Tooltip>
 			</div>
 			<div className="flex min-w-0 flex-1 items-center justify-end">
 				<Switch
-					aria-label={t("settings.project.autoReviewToggle")}
+					aria-label={label}
 					checked={checked}
-					id="project-auto-review"
+					id={id}
 					onCheckedChange={onCheckedChange}
 				/>
 			</div>

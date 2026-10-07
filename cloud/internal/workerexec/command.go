@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,11 +22,12 @@ import (
 var ErrUnsupportedPolicy = errors.New("coding-agent policy cannot be enforced safely")
 
 type Command struct {
-	Path    string
-	Args    []string
-	Dir     string
-	Env     map[string]string
-	Cleanup func()
+	Path         string
+	Args         []string
+	Dir          string
+	Env          map[string]string
+	SystemPrompt string
+	Cleanup      func()
 }
 
 type CommandBuilder interface {
@@ -39,6 +41,8 @@ type HarnessBuilder struct {
 	DataDir  string
 	// ConfigRoot isolates reviewer credentials and conversations from the worker.
 	ConfigRoot string
+	Launch     worker.LaunchContext
+	Env        map[string]string
 	CodexLogin func(binary, home, credentialType, secret string) error
 }
 
@@ -82,6 +86,15 @@ func (b HarnessBuilder) BuildInteractive(
 	credential worker.CredentialResponse,
 	workspace string,
 ) (Command, error) {
+	// Chat uses "default" to reset an explicit selection. Native commands
+	// express the provider default by omitting the effort argument.
+	if launch.ReasoningEffort == "default" {
+		launch.ReasoningEffort = ""
+	}
+	// A per-session Chat selection wins; otherwise apply the project's role default.
+	if launch.ReasoningEffort == "" {
+		launch.ReasoningEffort = launch.AgentConfig.Effort
+	}
 	if credential.Provider != launch.Harness ||
 		strings.TrimSpace(credential.Secret) == "" {
 		return Command{}, errors.New("credential does not match the selected harness")
@@ -104,29 +117,13 @@ func (b HarnessBuilder) BuildInteractive(
 			ErrUnsupportedPolicy,
 		)
 	}
-	binary := b.binary(launch.Harness)
-	skillDir := skillassets.Dir(b.DataDir)
-	systemPrompt := workerSystemPrompt(skillDir, launch.ParentSessionID != "")
-	if launch.Kind == "reviewer" {
-		systemPrompt = "You are an independent pull request reviewer. Inspect the diff and report concrete correctness issues. Submit your verdict using AO_REVIEW_HELP."
-	}
-	if launch.Kind == "orchestrator" {
-		systemPrompt = orchestratorSystemPrompt(skillDir)
-	}
-	if projectPrompt := strings.TrimSpace(launch.SystemPrompt); projectPrompt != "" {
-		systemPrompt += "\n\n" + projectPrompt
-	}
-	// Multi-repo dev kit: tell a worker about the additional repositories checked
-	// out beside its primary repo, and where to find them, so it can edit them
-	// directly. This concrete sibling-path note is worker-only: an orchestrator
-	// codes nothing itself, so it gets multi-repo awareness from the shared
-	// project context (roleprompt) instead — enough to coordinate work across the
-	// repos without being pointed at sibling directories to edit.
-	if launch.Kind != "orchestrator" && launch.Kind != "reviewer" {
-		if note := extraReposPromptNote(workspace, launch.ExtraRepos); note != "" {
-			systemPrompt += "\n\n" + note
+	if launch.Harness == "cursor" {
+		if err := removeCursorACPStandingRule(workspace, launch.SessionID); err != nil {
+			return Command{}, err
 		}
 	}
+	binary := b.binary(launch.Harness)
+	systemPrompt := b.systemPrompt(launch, workspace)
 	systemPromptFile, err := b.writeSystemPromptFile(launch.SessionID, systemPrompt)
 	if err != nil {
 		return Command{}, err
@@ -139,15 +136,12 @@ func (b HarnessBuilder) BuildInteractive(
 			// CLAUDE_CONFIG_DIR alone does not exclude project/local settings.
 			providerArgs = []string{"--setting-sources", "user"}
 		}
-		if launch.AgentConfig.Effort != "" {
-			providerArgs = append(providerArgs, "--effort", launch.AgentConfig.Effort)
-		}
 	case "codex":
 		if launch.Kind != "reviewer" {
 			providerArgs = codexActivityHookArgs(hookHelperPath(b.DataDir))
 		}
-		if launch.AgentConfig.Effort != "" {
-			providerArgs = append(providerArgs, "-c", "model_reasoning_effort="+strconv.Quote(launch.AgentConfig.Effort))
+		if launch.ReasoningEffort != "" {
+			providerArgs = append(providerArgs, "-c", "model_reasoning_effort="+strconv.Quote(launch.ReasoningEffort))
 		}
 	case "cursor":
 		pluginDir, err := b.writeCursorPromptPlugin(launch.SessionID, systemPrompt)
@@ -175,6 +169,7 @@ func (b HarnessBuilder) BuildInteractive(
 			Binary:           binary,
 			SessionID:        launch.SessionID,
 			Model:            launch.Model,
+			Effort:           launch.ReasoningEffort,
 			Metadata:         map[string]string{agentruntime.MetadataKeyAgentSessionID: identity},
 			WorkspacePath:    workspace,
 			SystemPrompt:     systemPrompt,
@@ -191,6 +186,7 @@ func (b HarnessBuilder) BuildInteractive(
 			Binary:           binary,
 			SessionID:        launch.SessionID,
 			Model:            launch.Model,
+			Effort:           launch.ReasoningEffort,
 			WorkspacePath:    workspace,
 			Prompt:           launch.Prompt,
 			SystemPrompt:     systemPrompt,
@@ -213,6 +209,7 @@ func (b HarnessBuilder) BuildInteractive(
 		Dir:  workspace,
 		Env:  map[string]string{"AO_CLOUD_SOURCE_INTERFACE": "tui"},
 	}
+	maps.Copy(command.Env, b.Env)
 	if err := b.configureCredential(&command, launch.Harness, credential); err != nil {
 		if command.Cleanup != nil {
 			command.Cleanup()
@@ -266,6 +263,32 @@ func (b HarnessBuilder) BuildInteractive(
 		seedOpenCodeModelsCache(command.Env)
 	}
 	return command, nil
+}
+
+func (b HarnessBuilder) systemPrompt(launch worker.LaunchContext, workspace string) string {
+	skillDir := skillassets.Dir(b.DataDir)
+	systemPrompt := workerSystemPrompt(skillDir, launch.ParentSessionID != "")
+	if launch.Kind == "reviewer" {
+		systemPrompt = "You are an independent pull request reviewer. Inspect the diff and report concrete correctness issues. Submit your verdict using AO_REVIEW_HELP."
+	}
+	if launch.Kind == "orchestrator" {
+		systemPrompt = orchestratorSystemPrompt(skillDir)
+	}
+	if projectPrompt := strings.TrimSpace(launch.SystemPrompt); projectPrompt != "" {
+		systemPrompt += "\n\n" + projectPrompt
+	}
+	// Multi-repo dev kit: tell a worker about the additional repositories checked
+	// out beside its primary repo, and where to find them, so it can edit them
+	// directly. This concrete sibling-path note is worker-only: an orchestrator
+	// codes nothing itself, so it gets multi-repo awareness from the shared
+	// project context (roleprompt) instead — enough to coordinate work across the
+	// repos without being pointed at sibling directories to edit.
+	if launch.Kind != "orchestrator" && launch.Kind != "reviewer" {
+		if note := extraReposPromptNote(workspace, launch.ExtraRepos); note != "" {
+			systemPrompt += "\n\n" + note
+		}
+	}
+	return systemPrompt
 }
 
 func (b HarnessBuilder) interactiveRestoreIdentity(
@@ -329,11 +352,20 @@ func (b HarnessBuilder) Build(
 	if err := validateApprovalMode(turn); err != nil {
 		return Command{}, err
 	}
-	command := Command{
-		Path: b.binary(turn.Harness),
-		Dir:  workspace,
-		Env:  map[string]string{},
+	if strings.TrimSpace(b.Launch.SessionID) == "" ||
+		(b.Launch.Kind != "worker" && b.Launch.Kind != "orchestrator") {
+		return Command{}, errors.New("cloud Chat requires session role context")
 	}
+	if b.Launch.Harness != turn.Harness {
+		return Command{}, errors.New("turn harness does not match session role context")
+	}
+	command := Command{
+		SystemPrompt: b.systemPrompt(b.Launch, workspace),
+		Path:         b.binary(turn.Harness),
+		Dir:          workspace,
+		Env:          map[string]string{},
+	}
+	maps.Copy(command.Env, b.Env)
 	var err error
 	switch turn.Harness {
 	case "claude-code":
@@ -355,7 +387,34 @@ func (b HarnessBuilder) Build(
 		err = fmt.Errorf("unsupported coding-agent harness %q", turn.Harness)
 	}
 	if err == nil {
+		// Native protocol runners consume SystemPrompt or the Cursor ancestor rule.
+		// Keep headless CLI delivery intact for supervisors using OSRunner.
+		if turn.Harness != "cursor" {
+			var promptFile string
+			promptFile, err = b.writeSystemPromptFile(b.Launch.SessionID, command.SystemPrompt)
+			if err == nil {
+				if turn.Harness == "claude-code" {
+					command.Args = append([]string{"--append-system-prompt-file", promptFile}, command.Args...)
+				} else {
+					command.Args = append([]string{command.Args[0], "-c", "model_instructions_file=" + promptFile}, command.Args[1:]...)
+				}
+			}
+		}
+	}
+	if err == nil {
 		err = b.configureCredential(&command, turn.Harness, credential)
+	}
+	if err == nil && turn.Harness == "cursor" {
+		err = writeCursorACPStandingRule(workspace, b.Launch.SessionID, command.SystemPrompt)
+		if err == nil {
+			credentialCleanup := command.Cleanup
+			command.Cleanup = func() {
+				_ = removeCursorACPStandingRule(workspace, b.Launch.SessionID)
+				if credentialCleanup != nil {
+					credentialCleanup()
+				}
+			}
+		}
 	}
 	if err != nil {
 		if command.Cleanup != nil {

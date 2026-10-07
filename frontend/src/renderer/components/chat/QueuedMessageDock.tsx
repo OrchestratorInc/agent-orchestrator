@@ -15,6 +15,8 @@ import { CSS } from "@dnd-kit/utilities";
 import { ChevronDown, Circle, CornerDownLeft, GripVertical, Pencil, Trash2 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { ConversationMessage } from "../../types/conversation";
+import { useTranslation } from "react-i18next";
+import { labelInlineImages } from "./messageAttachments";
 
 export type QueuedMessage = { turnId: string; message: ConversationMessage };
 
@@ -97,6 +99,8 @@ function QueuedMessageRowContent({
 	dragHandleRef?: (element: HTMLButtonElement | null) => void;
 	dragHandleProps?: Record<string, unknown>;
 }) {
+	const { t } = useTranslation();
+	const text = labelInlineImages(message.text, (index) => t("chat.image.numbered", { index }));
 	const showHoverSteerButton =
 		showHoverSteer ||
 		Boolean(onPromoteQueuedTurn && canSteer && !showPersistentSteer && !suppressHoverSteer);
@@ -111,9 +115,9 @@ function QueuedMessageRowContent({
 			<div className="min-w-0 flex-1 overflow-hidden">
 				<p
 					className="queue-dock-row-text truncate text-xs leading-relaxed text-foreground"
-					title={message.text}
+					title={text}
 				>
-					{message.text}
+					{text}
 				</p>
 			</div>
 			<div className="queue-dock-actions flex shrink-0 items-center gap-0.5 whitespace-nowrap">

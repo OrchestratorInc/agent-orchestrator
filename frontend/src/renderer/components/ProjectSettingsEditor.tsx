@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSection } from "./ProjectSettingsForm";
 import { deriveRepoHost, deriveRepoPath, IntakeFields, intakeNeedsRule } from "./IntakeFields";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { AgentModelField, ProjectAgentRoleHeader, ProjectAgentRoleRow, ProjectAutoReviewToggle } from "./settings/ProjectAgentRoleControls";
+import { AgentModelField, ProjectAgentRoleHeader, ProjectAgentRoleRow, ProjectAutoReviewToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Button } from "./ui/button";
 
@@ -30,6 +30,8 @@ export type ProjectSettingsDraft = {
 	orchestratorPermissions: string;
 	reviewerPermissions: string;
 	autoReview: boolean;
+	/** Local-only: workers may ask AO to review their own PRs. */
+	workersRequestReview?: boolean;
 	intakeEnabled: boolean;
 	intakeRepo: string;
 	intakeAssignee: string;
@@ -50,6 +52,7 @@ type Capabilities = {
 	intake: boolean;
 	reviewer: boolean;
 	requiredAgents: boolean;
+	workersRequestReview?: boolean;
 	nameLimit?: number;
 	requiredBranch?: boolean;
 	/** Cloud defaults and tuning belong to its runtime, rather than the local catalog. */
@@ -70,7 +73,7 @@ const roleFields: Record<ProjectSettingsRole, RoleFields> = {
 
 // Both persistence adapters render this page. Drafts, validation, autosave and
 // common controls live here so a UI change applies to local and Cloud projects.
-export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, reviewerWarning, autoReviewDescription, save, onSaveState, saveUnchanged = false }: {
+export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, reviewerWarning, autoReviewDescription, save, onSaveState, saveUnchanged = false, disabled = false }: {
 	initialValues: ProjectSettingsDraft;
 	section: SettingsSection;
 	capabilities: Capabilities;
@@ -80,11 +83,15 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	renderAgent: (props: ProjectAgentPickerProps) => ReactNode;
 	defaultReviewer?: (draft: ProjectSettingsDraft) => string;
 	modelScope: (agent: string) => string;
+	/** Self-hosted daemon whose model catalog the role pickers read. */
+	modelHostId?: string;
 	reviewerWarning?: (agent: string) => string | null;
 	autoReviewDescription?: string;
 	save: (values: ProjectSettingsDraft) => Promise<{ values?: ProjectSettingsDraft; replacementError?: string | null }>;
 	onSaveState?: (state: ProjectSettingsSaveState) => void;
 	saveUnchanged?: boolean;
+	/** Pauses autosave and submit, e.g. while the owning host is offline. */
+	disabled?: boolean;
 }) {
 	const { t } = useTranslation();
 	const [draft, setDraft] = useState(initialValues);
@@ -124,7 +131,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		return undefined;
 	};
 	const submit = () => {
-		if (mutation.isPending || intakeIncomplete || (!dirty && !saveUnchanged)) return;
+		if (disabled || mutation.isPending || intakeIncomplete || (!dirty && !saveUnchanged)) return;
 		const problem = validate();
 		setError(problem);
 		if (problem) return;
@@ -133,10 +140,10 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		mutation.mutate(draft);
 	};
 	useEffect(() => {
-		if (!dirty || mutation.isPending || JSON.stringify(draft) === failedKey.current) return;
+		if (disabled || !dirty || mutation.isPending || JSON.stringify(draft) === failedKey.current) return;
 		const timeout = window.setTimeout(submit, 650);
 		return () => window.clearTimeout(timeout);
-	}, [draft, dirty, mutation.isPending, validity]);
+	}, [disabled, draft, dirty, mutation.isPending, validity]);
 	useEffect(() => {
 		if (!mutation.isPending) { setShowSaving(false); return; }
 		const timeout = window.setTimeout(() => setShowSaving(true), 200);
@@ -153,7 +160,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	const patch = (values: Partial<ProjectSettingsDraft>) => setDraft((current) => ({ ...current, ...values }));
 	const warning = reviewerWarning?.(draft.reviewerHarness);
 	return <ProjectSettingsFormView id="project-settings-form" className="project-settings-form gap-5" onSubmit={submit}>
-		<fieldset disabled={mutation.isPending} className="flex min-w-0 flex-col gap-5">
+		<fieldset disabled={disabled || mutation.isPending} className="flex min-w-0 flex-col gap-5">
 			{section === "general" ? <>
 				<ProjectSettingsSection title={t("settings.project.details")} grouped>
 					<ProjectSettingsInputRow id="projectName" label={t("settings.project.name")} editLabel={t("settings.field.edit", { label: t("settings.project.name") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.displayName} onChange={(displayName) => patch({ displayName })} />
@@ -168,7 +175,10 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 						{capabilities.sessionPrefix && <ProjectSettingsInputRow id="sessionPrefix" label={t("settings.project.sessionPrefix")} editLabel={t("settings.field.edit", { label: t("settings.project.sessionPrefix") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.sessionPrefix} placeholder="ao" onChange={(sessionPrefix) => patch({ sessionPrefix })} />}
 					</ProjectSettingsSection>
 					{capabilities.intake && <ProjectSettingsSection title={t("settings.project.issues")} grouped><IntakeFields variant="settings" form={intake} onChange={(values) => patch({ intakeEnabled: values.enabled ?? draft.intakeEnabled, intakeRepo: values.repo ?? draft.intakeRepo, intakeAssignee: values.assignee ?? draft.intakeAssignee })} repoPreview={{ value: draft.intakeRepo.trim() || deriveRepoPath(repository ?? ""), host: deriveRepoHost(repository ?? "") }} /></ProjectSettingsSection>}
-					<ProjectSettingsSection title={t("settings.project.pullRequests")} grouped><ProjectAutoReviewToggle description={autoReviewDescription} checked={draft.autoReview} onCheckedChange={(autoReview) => patch({ autoReview })} /></ProjectSettingsSection>
+					<ProjectSettingsSection title={t("settings.project.pullRequests")} grouped>
+						<ProjectAutoReviewToggle description={autoReviewDescription} checked={draft.autoReview} onCheckedChange={(autoReview) => patch({ autoReview })} />
+						{capabilities.workersRequestReview && <ProjectWorkersRequestReviewToggle checked={draft.workersRequestReview ?? false} onCheckedChange={(workersRequestReview) => patch({ workersRequestReview })} />}
+					</ProjectSettingsSection>
 				</>}
 			</> : <ProjectSettingsSection title={t("settings.project.agents")} titleHidden grouped>
 				<ProjectAgentRoleHeader />
@@ -176,10 +186,20 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 					const fields = roleFields[role];
 					const selectedAgent = draft[fields.agent];
 					const agent = selectedAgent || (role === "reviewer" ? defaultReviewer(draft) : "");
-					const updateConfig = (key: RoleFields["model"] | RoleFields["mode"] | RoleFields["effort"] | RoleFields["permissions"], value: string) => patch({ [key]: value, ...(role === "reviewer" && !selectedAgent && agent ? { reviewerHarness: agent } : {}) });
+					// With no reviewer configured, review runs with the worker agent's own
+					// model and effort when that agent is also the reviewer. Show that, and
+					// keep it when the user pins the reviewer by editing one field.
+					const inheritsWorker = role === "reviewer" && !selectedAgent && agent !== "" && agent === draft.workerAgent;
+					const updateConfig = (key: RoleFields["model"] | RoleFields["mode"] | RoleFields["effort"] | RoleFields["permissions"], value: string) => setDraft((current) => ({
+						...current,
+						...(role === "reviewer" && !current.reviewerHarness && agent
+							? { reviewerHarness: agent, ...(agent === current.workerAgent ? { reviewerModel: current.workerModel, reviewerEffort: current.workerEffort } : {}) }
+							: {}),
+						[key]: value,
+					}));
 					return <ProjectAgentRoleRow key={role} label={t(`settings.models.${role}Role`)}
 						agent={renderAgent({ role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}
-						model={<div className="space-y-1.5"><AgentModelField role={role} agentId={agent} projectId={modelScope(agent)} model={draft[fields.model]} mode={draft[fields.mode]} effort={draft[fields.effort]}
+						model={<div className="space-y-1.5"><AgentModelField role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
 							allowCustomFallback={capabilities.runtimeDefaults} followCatalogDefaults={!capabilities.runtimeDefaults}
 							supportedEfforts={capabilities.runtimeDefaults ? agent === "codex" ? ["low", "medium", "high", "xhigh", "max"] : agent === "claude-code" ? ["low", "medium", "high", "max"] : undefined : undefined}
 							emptyLabel={capabilities.runtimeDefaults ? t(agent === "" ? "settings.cloudProject.sessionModel" : "settings.cloudProject.agentDefault") : undefined}
@@ -192,7 +212,13 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 					{visibleRoles.map((role) => {
 						const fields = roleFields[role];
 						const agent = draft[fields.agent] || (role === "reviewer" ? defaultReviewer(draft) : "");
-						return <ProjectRolePermissions key={role} role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={(value) => patch({ [fields.permissions]: value, ...(role === "reviewer" && !draft.reviewerHarness && agent ? { reviewerHarness: agent } : {}) })} />;
+						return <ProjectRolePermissions key={role} role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={(value) => setDraft((current) => ({
+							...current,
+							...(role === "reviewer" && !current.reviewerHarness && agent
+								? { reviewerHarness: agent, ...(agent === current.workerAgent ? { reviewerModel: current.workerModel, reviewerEffort: current.workerEffort } : {}) }
+								: {}),
+							[fields.permissions]: value,
+						}))} />;
 					})}
 				</div>
 				{capabilities.requiredAgents && (!draft.workerAgent || !draft.orchestratorAgent) && <p className="px-3 pb-2 text-xs text-error" role="alert">{t("settings.project.agentsRequired")}</p>}

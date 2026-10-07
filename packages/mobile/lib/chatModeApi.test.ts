@@ -37,6 +37,17 @@ describe("mobile Chat API boundaries", () => {
 		expect(init?.headers).not.toHaveProperty("X-AO-Attachment-Upload");
 	});
 
+	it("creates a standalone worker without a project and keeps its model override", async () => {
+		vi.mocked(fetch).mockResolvedValue(response({ session: { id: "standalone-1", mode: "chat" } }, 201));
+		const session = await spawnSession(cfg, { harness: "codex", model: "gpt-5", prompt: "Review this", clientRequestId: "request-1" });
+		const [url, init] = vi.mocked(fetch).mock.calls[0];
+		expect(url).toBe("http://ao.test:3011/api/v1/sessions");
+		expect(JSON.parse(String(init?.body))).toEqual({
+			prompt: "Review this", harness: "codex", model: "gpt-5", mode: "chat", kind: "worker", clientRequestId: "request-1",
+		});
+		expect(session).toMatchObject({ id: "standalone-1", projectId: "", mode: "chat" });
+	});
+
 	it("loads a project-scoped model catalog for the selected agent", async () => {
 		vi.mocked(fetch).mockResolvedValue(response({
 			agentId: "codex", selectionMode: "catalog", allowCustom: true,
@@ -46,6 +57,12 @@ describe("mobile Chat API boundaries", () => {
 		const catalog = await getAgentModels(cfg, "codex", "project one");
 		expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://ao.test:3011/api/v1/agents/codex/models?projectId=project%20one");
 		expect(catalog.models[0]).toMatchObject({ id: "gpt-5", isDefault: true });
+	});
+
+	it("loads the model catalog without a project scope for standalone", async () => {
+		vi.mocked(fetch).mockResolvedValue(response({ agentId: "codex", models: [] }));
+		await getAgentModels(cfg, "codex");
+		expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://ao.test:3011/api/v1/agents/codex/models");
 	});
 
 	it("preserves daemon pin facts used by the Agents ordering", async () => {
@@ -165,10 +182,11 @@ describe("mobile Chat API boundaries", () => {
 		vi.mocked(fetch)
 			.mockResolvedValueOnce(response({ ok: true, workerId: "w-2" }, 202))
 			.mockResolvedValueOnce(response({ session: { id: "w-2", projectId: "p-1", harness: "codex", mode: "chat", provisionState: "failed", provisionError: "workspace setup failed" } }));
-		const session = await delegateTask(cfg, { projectId: "p-1", brief: "", agent: "codex", model: "gpt-5", mode: "chat" });
+		const session = await delegateTask({ ...cfg, hostId: "h_A" }, { projectId: "p-1", brief: "", agent: "codex", model: "gpt-5", mode: "chat" });
 		const [url, init] = vi.mocked(fetch).mock.calls[0];
 		expect(url).toBe("http://ao.test:3011/api/v1/orchestrators/delegate");
 		expect(JSON.parse(String(init?.body))).toEqual({ projectId: "p-1", brief: "", agent: "codex", model: "gpt-5", mode: "chat" });
+		expect(init?.headers).toMatchObject({ Authorization: "Bearer secret12", "X-AO-Expected-Host-ID": "h_A" });
 		expect(session).toMatchObject({ id: "w-2", projectId: "p-1", mode: "chat", provisionState: "failed", provisionError: "workspace setup failed" });
 	});
 
@@ -365,6 +383,14 @@ describe("mobile Chat API boundaries", () => {
 			"http://ao.test:3011/api/v1/sessions/w-1/conversation?limit=50",
 			"http://ao.test:3011/api/v1/sessions/w-1/conversation?limit=200&beforeSequence=100",
 		]);
+	});
+
+	it("checks an uncertain attachment send by ID without reposting its image", async () => {
+		vi.mocked(fetch).mockResolvedValue(response({ outcome: "sent", duplicate: true }, 202));
+		await chatApi.recoverSentConversationMessage(cfg, "w-1", "mobile-1");
+		const [url, init] = vi.mocked(fetch).mock.calls[0];
+		expect(url).toBe("http://ao.test:3011/api/v1/sessions/w-1/conversation/steer-or-send");
+		expect(JSON.parse(String(init?.body))).toEqual({ clientMessageId: "mobile-1", recoverOnly: true });
 	});
 
 	it("uses reviewer-owned conversation routes for mobile review chat", async () => {

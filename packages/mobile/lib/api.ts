@@ -83,6 +83,12 @@ export type DashboardSession = {
 	summary: string | null;
 	createdAt: string;
 	lastActivityAt: string;
+	/**
+	 * When something a person would notice last happened (activity-state change,
+	 * PR lifecycle or CI change, review). Absent from daemons that predate it;
+	 * read it through `eventAtOf`, which falls back.
+	 */
+	lastEventAt?: string;
 	pr?: DashboardPR | null;
 	prs?: DashboardPR[];
 	metadata?: Record<string, string>;
@@ -201,6 +207,7 @@ type WireSession = {
 	branch?: string;
 	createdAt?: string;
 	updatedAt?: string;
+	lastEventAt?: string;
 	previewUrl?: string;
 	isPinned?: boolean;
 	pinnedAt?: string | null;
@@ -290,6 +297,7 @@ function mapSession(s: WireSession): DashboardSession {
 		summary: null,
 		createdAt: s.createdAt ?? "",
 		lastActivityAt: activityLastAt(s.activity) ?? s.updatedAt ?? s.createdAt ?? "",
+		lastEventAt: s.lastEventAt || undefined,
 		pr: prs[0] ?? null,
 		prs,
 		previewUrl: s.previewUrl ?? null,
@@ -613,7 +621,7 @@ export async function refreshAgentModels(cfg: ServerConfig, agent: string, proje
 // its dispatcher can deliver OS push notifications. Keyed daemon-side by install ID.
 export async function registerPushDevice(
 	cfg: ServerConfig,
-	device: { token: string; platform?: string; deviceName?: string },
+	device: { token: string; platform?: string; deviceName?: string; hostName?: string },
 ): Promise<void> {
 	const installId = await getInstallId();
 	await req(cfg, `${API}/push/devices`, {
@@ -663,6 +671,15 @@ export async function markNotificationRead(cfg: ServerConfig, id: string): Promi
 		method: "PATCH",
 		body: JSON.stringify({ status: "read" }),
 	});
+}
+
+export async function clearNotification(cfg: ServerConfig, id: string): Promise<void> {
+	try {
+		await req(cfg, `${API}/notifications/${encodeURIComponent(id)}`, { method: "DELETE" });
+	} catch (cause) {
+		// Another client may have cleared the same row already.
+		if (!(cause instanceof ApiError) || cause.status !== 404 || cause.code !== "NOTIFICATION_NOT_FOUND") throw cause;
+	}
 }
 
 // ---- Notification history ---------------------------------------------------
@@ -1011,7 +1028,7 @@ export async function sendMessage(cfg: ServerConfig, id: string, message: string
 
 export async function spawnSession(
 	cfg: ServerConfig,
-	opts: { projectId: string; prompt?: string; issueId?: string; harness?: string; mode?: SessionMode; attachments?: SpawnAttachmentInput[] },
+	opts: { projectId?: string; prompt?: string; issueId?: string; harness?: string; model?: string; mode?: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/sessions`, {
 		method: "POST",
@@ -1023,12 +1040,14 @@ export async function spawnSession(
 			// The daemon needs an agent harness unless the project configures a
 			// default worker.agent; the spawn screen lets the user pick one.
 			harness: opts.harness || undefined,
+			model: opts.model || undefined,
 			// Mobile is Chat-first. Callers may deliberately request TUI for a harness
 			// that cannot expose a structured controller, but omission must never make
 			// the phone depend on a desktop preference it cannot see.
 			mode: opts.mode ?? "chat",
 			kind: "worker",
 			attachments: opts.attachments?.length ? opts.attachments : undefined,
+			clientRequestId: opts.clientRequestId,
 		}),
 	}, opts.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
 	const data = await res.json();
@@ -1048,7 +1067,7 @@ export async function getSession(cfg: ServerConfig, id: string): Promise<Dashboa
 
 export async function delegateTask(
 	cfg: ServerConfig,
-	opts: { projectId: string; brief: string; agent?: string; model?: string; mode: SessionMode; attachments?: SpawnAttachmentInput[] },
+	opts: { projectId: string; brief: string; agent?: string; model?: string; mode: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/orchestrators/delegate`, {
 		method: "POST",
@@ -1060,10 +1079,11 @@ export async function delegateTask(
 			model: opts.model || undefined,
 			mode: opts.mode,
 			attachments: opts.attachments?.length ? opts.attachments : undefined,
+			clientRequestId: opts.clientRequestId,
 		}),
 	}, opts.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
 	const data = await res.json();
-	if (!data?.workerId) throw new Error("Your desktop didn't return the new worker. Refresh the board to check whether it started.");
+	if (!data?.workerId) throw new Error("Your machine didn't return the new worker. Refresh the board to check whether it started.");
 	return getSession(cfg, data.workerId);
 }
 

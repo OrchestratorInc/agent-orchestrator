@@ -4,6 +4,9 @@ import { isArchived } from "./agentsView";
 /** The board filter that means "every project". */
 export const ALL_PROJECTS = "all";
 
+/** Picker-only value; the daemon represents standalone sessions with no project id. */
+export const STANDALONE_PROJECT = "__standalone__";
+
 /**
  * What the app knows about one machine's projects.
  *
@@ -22,6 +25,11 @@ export type KnownProjects = {
 };
 
 export const NO_PROJECTS_KNOWN: KnownProjects = { machine: "", projects: [], known: false };
+
+/** A row from one daemon is never evidence about another, even if IDs match. */
+export function sessionRowsForMachine<T>(rows: T[], rowMachine: string, activeMachine: string): T[] {
+	return rowMachine === activeMachine ? rows : [];
+}
 
 /**
  * Fold one tick's answer into what is known.
@@ -123,6 +131,7 @@ export function resolveSpawnProject(
 	projects: readonly { id: string }[],
 	projectsKnown: boolean,
 ): string | null {
+	if (currentProjectId === STANDALONE_PROJECT) return STANDALONE_PROJECT;
 	if (
 		currentProjectId
 		&& resolveActiveProject(currentProjectId, projects, projectsKnown) === currentProjectId

@@ -48,7 +48,7 @@ type interfaceTransitionStore interface {
 	ListDeliverableSessionInterfaceTransitions(context.Context) ([]domain.SessionInterfaceTransition, error)
 	AdvanceSessionInterfaceTransition(context.Context, string, domain.SessionInterfaceTransitionPhase, domain.SessionInterfaceTransitionPhase, string, string, string, time.Time) (bool, error)
 	AcknowledgeSessionInterfaceTransitionNotice(context.Context, domain.SessionID, string, time.Time) (domain.SessionInterfaceTransition, bool, error)
-	EnqueueSessionInterfaceTransitionMessage(context.Context, string, string, string, time.Time) error
+	EnqueueSessionInterfaceTransitionMessage(context.Context, string, string, string, time.Time, ports.MessageDeliveryOptions) error
 	ListPendingSessionInterfaceTransitionMessages(context.Context, string) ([]domain.SessionInterfaceTransitionMessage, error)
 	MarkSessionInterfaceTransitionMessageDelivered(context.Context, int64, time.Time) error
 }
@@ -84,11 +84,10 @@ type InterfaceTransitionStatus struct {
 	Transition *domain.SessionInterfaceTransition
 }
 
-// InterfaceTransitionStatus reports static adapter support plus the latest
-// durable attempt. It runs the same native-conversation readiness check as
-// StartInterfaceTransition so the two never disagree: that check may stat the
-// provider transcript and read the current terminal screen, but never launches
-// a provider process. Target binary/auth checks still happen only on POST.
+// InterfaceTransitionStatus reports target availability plus the latest durable
+// attempt. It checks native-conversation readiness and preflights a Chat target
+// without launching a Chat session, so a missing driver runtime does not leave
+// the switch enabled. Launch-time auth and races can still fail after status.
 func (m *Manager) InterfaceTransitionStatus(
 	ctx context.Context,
 	id domain.SessionID,
@@ -108,20 +107,28 @@ func (m *Manager) InterfaceTransitionStatus(
 	} else if target == domain.SessionModeChat && (m.chat == nil || !m.chat.SupportsChat(rec.Harness)) {
 		status.ReasonCode = "CHAT_UNSUPPORTED"
 		status.Reason = fmt.Sprintf("%s does not support Chat UI.", rec.Harness)
-	} else if _, err := m.handoffNativeConversationID(ctx, rec); err != nil {
-		if errors.Is(err, ErrInterfaceHandoffUnsupported) {
-			status.ReasonCode = "INTERFACE_HANDOFF_UNSUPPORTED"
-		} else if errors.Is(err, ErrNativeConversationMissing) {
-			status.ReasonCode = "NATIVE_SESSION_MISSING"
-		} else {
-			// Config-load or transcript-inspection blips must not hard-error
-			// the polled status: report unverified so the client keeps
-			// polling with the control disabled. Start still fails hard.
-			status.ReasonCode = "NATIVE_SESSION_UNVERIFIED"
+	} else if target == domain.SessionModeChat {
+		if err := m.preflightInterfaceTarget(ctx, rec, domain.SessionInterfaceTransition{TargetMode: target}); err != nil {
+			status.ReasonCode = interfaceTransitionErrorCode(err)
+			status.Reason = err.Error()
 		}
-		status.Reason = err.Error()
-	} else {
-		status.Supported = true
+	}
+	if status.ReasonCode == "" {
+		if _, err := m.handoffNativeConversationID(ctx, rec); err != nil {
+			if errors.Is(err, ErrInterfaceHandoffUnsupported) {
+				status.ReasonCode = "INTERFACE_HANDOFF_UNSUPPORTED"
+			} else if errors.Is(err, ErrNativeConversationMissing) {
+				status.ReasonCode = "NATIVE_SESSION_MISSING"
+			} else {
+				// Config-load or transcript-inspection blips must not hard-error
+				// the polled status: report unverified so the client keeps
+				// polling with the control disabled. Start still fails hard.
+				status.ReasonCode = "NATIVE_SESSION_UNVERIFIED"
+			}
+			status.Reason = err.Error()
+		} else {
+			status.Supported = true
+		}
 	}
 	if store, ok := m.store.(interfaceTransitionStore); ok {
 		latest, found, err := store.GetLatestSessionInterfaceTransition(ctx, id)
@@ -811,7 +818,7 @@ func (m *Manager) preflightInterfaceTarget(
 	if err != nil {
 		return err
 	}
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID)
 	if err != nil {
 		return err
 	}
@@ -1365,7 +1372,7 @@ func (m *Manager) deliverTransitionMessages(
 		}
 	}
 	for _, message := range messages {
-		if err := m.send(ctx, transition.SessionID, message.Message, message.ClientMessageID, false); err != nil {
+		if err := m.send(ctx, transition.SessionID, message.Message, message.ClientMessageID, ports.MessageDeliveryOptions{AuthoredByUser: message.AuthoredByUser, SenderSessionID: message.SenderSessionID, InteractionAt: message.CreatedAt}); err != nil {
 			return fmt.Errorf("deliver transition %s message %d: %w", transition.ID, message.ID, err)
 		}
 		if err := store.MarkSessionInterfaceTransitionMessageDelivered(ctx, message.ID, m.clock()); err != nil {
@@ -1422,6 +1429,7 @@ func (m *Manager) queueDuringInterfaceTransition(
 	ctx context.Context,
 	id domain.SessionID,
 	message, clientMessageID string,
+	options ports.MessageDeliveryOptions,
 ) (bool, error) {
 	store, ok := m.store.(interfaceTransitionStore)
 	if !ok {
@@ -1434,8 +1442,12 @@ func (m *Manager) queueDuringInterfaceTransition(
 	if strings.TrimSpace(clientMessageID) == "" {
 		clientMessageID = "interface-transition:" + m.newLaunchID()
 	}
+	at := options.InteractionAt
+	if at.IsZero() {
+		at = m.clock()
+	}
 	if err := store.EnqueueSessionInterfaceTransitionMessage(
-		ctx, transition.ID, clientMessageID, message, m.clock(),
+		ctx, transition.ID, clientMessageID, message, at, options,
 	); err != nil {
 		return true, err
 	}
@@ -1561,7 +1573,7 @@ func (m *Manager) hasActiveInterfaceTransition(ctx context.Context, id domain.Se
 // recoverInterruptedInterfaceTransitions closes every durable handoff left
 // active by a daemon exit. A TUI -> Chat transition whose mode commit landed is
 // rolled back first: ordinary Chat restore is context-only and cannot satisfy
-// the handoff's mandatory replay barrier. Reconcile can then restore the source
+// the handoff's mandatory replay barrier. Explicit Resume can restore the source
 // TUI, and a later retry performs native replay again idempotently. A failed
 // target shutdown retains the same rollback obligation in either direction.
 func (m *Manager) recoverInterruptedInterfaceTransitions(

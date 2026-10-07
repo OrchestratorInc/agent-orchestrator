@@ -679,9 +679,15 @@ func (c *conversation) finishPrompt(
 			c.mu.Unlock()
 		}
 	}
-	c.mu.Lock()
-	c.terminalEventID = eventID
-	c.mu.Unlock()
+	// Only a durable host receipt replaces the outstanding one. A host-local
+	// rejection carries no event ID; erasing the receipt here would make the
+	// controller's later ACK of that receipt a no-op and leave the host refusing
+	// every prompt until restart.
+	if eventID != "" {
+		c.mu.Lock()
+		c.terminalEventID = eventID
+		c.mu.Unlock()
+	}
 	c.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderEventID: eventID,
 		ProviderTurnID: turnID, TurnState: state, Err: turnErr,

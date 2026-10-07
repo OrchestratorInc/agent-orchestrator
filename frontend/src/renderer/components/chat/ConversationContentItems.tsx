@@ -1,5 +1,6 @@
 import { FileText, Image as ImageIcon, Tag } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { ChatImage } from "./ChatImage";
 import type { ConversationContentSummary } from "../../types/conversation";
 
 interface ConversationContentItem extends ConversationContentSummary {
@@ -36,11 +37,10 @@ export function ConversationContentItems({
 				if (previewableImage) {
 					imagePosition += 1;
 					return (
-						<li key={key} className="max-w-full overflow-hidden rounded-md border border-border bg-background">
-							<img
+						<li key={key} className="max-w-full">
+							<ChatImage
 								src={`data:${item.mimeType};base64,${item.data}`}
 								alt={imageAlt?.(imagePosition) ?? `${imageLabel} ${imagePosition}`}
-								className="block h-auto max-h-80 max-w-full object-contain"
 							/>
 						</li>
 					);

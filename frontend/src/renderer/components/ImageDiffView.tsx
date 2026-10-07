@@ -1,11 +1,17 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getApiBaseUrl } from "../lib/api-client";
+import { useHostConnection } from "../hooks/useHostConnection";
 import { cn } from "../lib/utils";
 import type { WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
 
 type WorkspaceFileStatus = WorkspaceFileSummary["status"];
 type ImageDiffSide = "before" | "after";
+
+/** Matches the image extensions supported by the daemon's blob endpoint. */
+export function isWorkspaceImagePath(path: string): boolean {
+	return /\.(apng|avif|bmp|gif|ico|jpe?g|png|webp)$/i.test(path);
+}
 
 // A light checkerboard so transparent pixels read as transparent instead of
 // borrowing the panel background.
@@ -16,9 +22,11 @@ const CHECKERBOARD =
 // route sets no-store, so `version` — the file detail's load timestamp — is what
 // makes an edited image reload: without a changing URL the element never
 // refetches at all.
-function workspaceImageUrl(sessionId: string, path: string, side: ImageDiffSide, version: number): string {
+function workspaceImageUrl(sessionId: string, path: string, side: ImageDiffSide, version: number | string, hostId?: string, remoteBaseUrl?: string): string | undefined {
+	const base = hostId ? remoteBaseUrl : getApiBaseUrl();
+	if (base === undefined) return undefined;
 	const query = new URLSearchParams({ path, side, v: String(version) });
-	return `${getApiBaseUrl()}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/file/blob?${query}`;
+	return `${base}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/file/blob?${query}`;
 }
 
 /**
@@ -34,15 +42,17 @@ function workspaceImageUrl(sessionId: string, path: string, side: ImageDiffSide,
 export function ImageDiffView({
 	path,
 	sessionId,
+	hostId,
 	split,
 	status,
 	version,
 }: {
 	path: string;
 	sessionId: string;
+	hostId?: string;
 	split: boolean;
 	status: WorkspaceFileStatus;
-	version: number;
+	version: number | string;
 }) {
 	const { t } = useTranslation();
 	// A file with no change on this side has nothing to compare against: an added
@@ -60,6 +70,7 @@ export function ImageDiffView({
 					path={path}
 					side="before"
 					sessionId={sessionId}
+					hostId={hostId}
 					version={version}
 				/>
 			) : null}
@@ -70,6 +81,7 @@ export function ImageDiffView({
 					path={path}
 					side="after"
 					sessionId={sessionId}
+					hostId={hostId}
 					version={version}
 				/>
 			) : null}
@@ -82,15 +94,18 @@ function ImageDiffPane({
 	path,
 	side,
 	sessionId,
+	hostId,
 	version,
 }: {
 	label: string;
 	path: string;
 	side: ImageDiffSide;
 	sessionId: string;
-	version: number;
+	hostId?: string;
+	version: number | string;
 }) {
 	const { t } = useTranslation();
+	const { baseUrl: remoteBaseUrl } = useHostConnection(hostId);
 	const [size, setSize] = useState<{ width: number; height: number } | null>(null);
 	const [failed, setFailed] = useState(false);
 	return (
@@ -116,7 +131,7 @@ function ImageDiffPane({
 						onLoad={(event) =>
 							setSize({ height: event.currentTarget.naturalHeight, width: event.currentTarget.naturalWidth })
 						}
-						src={workspaceImageUrl(sessionId, path, side, version)}
+						src={workspaceImageUrl(sessionId, path, side, version, hostId, remoteBaseUrl)}
 					/>
 				)}
 			</div>

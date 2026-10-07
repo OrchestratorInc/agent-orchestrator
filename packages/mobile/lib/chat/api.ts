@@ -1,6 +1,7 @@
 import { fetch as expoFetch } from "expo/fetch";
 import { ApiError, ATTACHMENT_REQUEST_TIMEOUT_MS, apiRequest } from "../api";
 import { authHeaders, httpBase, type ServerConfig } from "../config";
+import { resolveDefaultChoices } from "./turnSettingsModel";
 import type {
 	ActivityDetail,
 	ActivityKind,
@@ -177,6 +178,16 @@ export async function sendReviewerConversationMessage(
 	return (await res.json()) as SendMessageResult;
 }
 
+/** Check an uncertain attachment send without re-sending a partial payload. */
+export async function recoverSentConversationMessage(cfg: ServerConfig, sessionId: string, clientMessageId: string): Promise<void> {
+	const res = await apiRequest(cfg, conversationPath(sessionId, "/steer-or-send"), {
+		method: "POST",
+		body: JSON.stringify({ clientMessageId, recoverOnly: true }),
+	});
+	const result = (await res.json()) as { outcome: "sent" | "steered" };
+	if (result.outcome !== "sent") throw new Error("Could not confirm this message was delivered. Check history, then discard and reattach the files before sending again.");
+}
+
 export async function steerConversation(cfg: ServerConfig, sessionId: string, text: string, clientMessageId: string) {
 	const res = await apiRequest(cfg, conversationPath(sessionId, "/steer"), {
 		method: "POST",
@@ -280,7 +291,7 @@ export async function setConversationSettings(cfg: ServerConfig, sessionId: stri
 export async function getConversationConfigOptions(cfg: ServerConfig, sessionId: string): Promise<ChatConfigOption[]> {
 	const res = await apiRequest(cfg, conversationPath(sessionId, "/config-options"));
 	const body = (await res.json()) as { options?: ChatConfigOption[] };
-	return body.options ?? [];
+	return resolveDefaultChoices(body.options ?? []);
 }
 
 export async function setConversationConfigOption(
@@ -294,7 +305,7 @@ export async function setConversationConfigOption(
 		body: JSON.stringify(value),
 	});
 	const body = (await res.json()) as { options?: ChatConfigOption[] };
-	return body.options ?? [];
+	return resolveDefaultChoices(body.options ?? []);
 }
 
 export async function getConversationSkills(cfg: ServerConfig, sessionId: string): Promise<ChatSkill[]> {
@@ -400,7 +411,7 @@ export async function streamGlobalConversationEvents(
 		signal,
 	});
 	if (!res.ok) throw await streamError(res);
-	if (!res.body) throw new Error("Couldn't open live updates from your desktop.");
+	if (!res.body) throw new Error("Couldn't open live updates from your machine.");
 	const advertisedAfterHeader = res.headers.get("X-AO-Event-After");
 	const advertisedAfter = advertisedAfterHeader === null ? Number.NaN : Number(advertisedAfterHeader);
 	const effectiveAfter = Number.isSafeInteger(advertisedAfter) && advertisedAfter >= 0

@@ -161,6 +161,7 @@ func (c *conversation) pump() {
 		close(c.events)
 	}()
 	retries := make(map[string]ports.ChatEvent)
+	citations := newCitationFormatter()
 
 	for n := range c.conn.notifs() {
 		// Before normalizing, because a token-usage report is the only place the
@@ -173,6 +174,7 @@ func (c *conversation) pump() {
 			ThreadID string `json:"threadId"`
 		}
 		_ = json.Unmarshal(n.Params, &scope)
+		citations.observeNotification(n, c.threadID)
 
 		// The clock is passed in rather than read inside: a rate-limit reset arrives
 		// as an absolute instant and has to become a remaining duration, and a
@@ -184,6 +186,11 @@ func (c *conversation) pump() {
 			}
 			if threadID == "" {
 				threadID = c.threadID
+			}
+			var visible bool
+			ev, visible = citations.formatEvent(threadID, ev)
+			if !visible {
+				continue
 			}
 			key := threadID + ":" + ev.ProviderTurnID
 			if ev.Kind == ports.ChatEventError {
@@ -354,9 +361,13 @@ func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, r
 		params["sandboxPolicy"] = turnSandboxPolicy(sandbox)
 	}
 	if readOnly {
+		// A reviewer must not write the workspace, but it does need the network:
+		// it reads the PR through gh and reports its verdict to the local daemon
+		// with `ao review submit`. With approvals off it cannot ask for that access
+		// mid-turn, so the read-only policy grants it up front.
 		params["approvalPolicy"] = "never"
 		params["approvalsReviewer"] = "user"
-		params["sandboxPolicy"] = turnSandboxPolicy("read-only")
+		params["sandboxPolicy"] = map[string]any{"type": "readOnly", "networkAccess": true}
 	}
 }
 

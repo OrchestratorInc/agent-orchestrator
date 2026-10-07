@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsDialog } from "./SettingsDialog";
+import { globalSettingsItemsFor, visibleGlobalSettings } from "./settings/settingsCatalog";
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
 
@@ -58,8 +59,8 @@ vi.mock("./ProjectSettingsForm", () => ({
 }));
 
 vi.mock("./GlobalSettingsForm", () => ({
-	GlobalSettingsForm: ({ focusAgentId, section }: { focusAgentId?: string; section: string }) => (
-		<div data-focus-agent={focusAgentId} data-testid="global-settings-section">{section}</div>
+	GlobalSettingsForm: ({ focusAgentId, hostId, section }: { focusAgentId?: string; hostId?: string; section: string }) => (
+		<div data-focus-agent={focusAgentId} data-host={hostId} data-testid="global-settings-section">{section}</div>
 	),
 }));
 
@@ -84,7 +85,7 @@ describe("SettingsDialog", () => {
 		postMock.mockReset().mockImplementation((path: string) => path === "/api/v1/agents/codex/accounts/ensure"
 			? Promise.resolve({ data: accountsResponse })
 			: Promise.resolve({ data: { operationId: "login-1", status: "cancelled" } }));
-		useUiStore.setState({ settingsModal: null });
+		useUiStore.setState({ developerMode: false, settingsModal: null });
 	});
 
 	function renderSettingsDialog() {
@@ -136,6 +137,14 @@ describe("SettingsDialog", () => {
 		expect(screen.getByRole("button", { name: "Cues" })).toHaveAttribute("aria-current", "page");
 	});
 
+	it("does not offer local environment settings for a remote project", async () => {
+		useUiStore.getState().openProjectSettings("proj-1", "box-a");
+		renderSettingsDialog();
+
+		expect(await screen.findByRole("button", { name: "Agents" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Environment" })).not.toBeInTheDocument();
+	});
+
 	it("opens the requested global settings page", async () => {
 		useUiStore.getState().openGlobalSettings("mobile");
 		renderSettingsDialog();
@@ -146,6 +155,24 @@ describe("SettingsDialog", () => {
 			"/api/v1/agents/codex/accounts/ensure",
 			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
 		));
+	});
+
+	it("shows Remote hosts with Developer mode on even while the connection switch is off", async () => {
+		useUiStore.setState({ developerMode: true, remoteHosts: false });
+		useUiStore.getState().openGlobalSettings("remoteHosts");
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("remoteHosts");
+		expect(screen.getByRole("button", { name: "Remote hosts" })).toHaveAttribute("aria-current", "page");
+	});
+
+	it("hides Remote hosts and redirects its settings page when Developer mode is off", async () => {
+		useUiStore.setState({ developerMode: false, remoteHosts: true });
+		useUiStore.getState().openGlobalSettings("remoteHosts");
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
+		expect(screen.queryByRole("button", { name: "Remote hosts" })).not.toBeInTheDocument();
 	});
 
 	it("keeps the settings surface above its blurred backdrop", async () => {
@@ -183,6 +210,14 @@ describe("SettingsDialog", () => {
 		expect(screen.getByRole("button", { name: "Subscriptions" })).not.toHaveAttribute("aria-current", "page");
 	});
 
+	it("forwards the remote host from a Manage agents action to Harness", async () => {
+		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "codex", hostId: "box-a" });
+		renderSettingsDialog();
+		const form = await screen.findByTestId("global-settings-section");
+		expect(form).toHaveAttribute("data-focus-agent", "codex");
+		expect(form).toHaveAttribute("data-host", "box-a");
+	});
+
 	it("does not replay the Harness focus target after navigating away during the same modal opening", async () => {
 		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code" });
 		renderSettingsDialog();
@@ -218,6 +253,37 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("browserProfiles");
 		expect(screen.queryByRole("button", { name: "Downloads" })).not.toBeInTheDocument();
+	});
+
+	it("opens Diagnostics as its own page, and leaves it out of the whole-settings view", async () => {
+		useUiStore.setState({ developerMode: true, diagnostics: true });
+		useUiStore.getState().openGlobalSettings("diagnostics");
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("diagnostics");
+		expect(screen.getByRole("button", { name: "Diagnostics" })).toBeInTheDocument();
+		// The live monitor is a page of its own: the aggregate view never mounts it.
+		expect(globalSettingsItemsFor("all", { cloudEnabled: true, developerMode: true, diagnostics: true, is11x: false }).map((item) => item.id)).not.toContain("diagnostics");
+		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: true, is11x: false }).map((item) => item.id)).toContain("diagnostics");
+	});
+
+	it("hides Diagnostics until its toggle is on in Developer mode, falling back to General if asked for", async () => {
+		useUiStore.setState({ developerMode: true, diagnostics: false });
+		useUiStore.getState().openGlobalSettings("diagnostics");
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
+		expect(screen.queryByRole("button", { name: "Diagnostics" })).not.toBeInTheDocument();
+		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: false, is11x: false }).map((item) => item.id)).not.toContain("diagnostics");
+	});
+
+	it("hides Diagnostics outside Developer mode even with its toggle left on", async () => {
+		useUiStore.setState({ developerMode: false, diagnostics: true });
+		useUiStore.getState().openGlobalSettings("diagnostics");
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
+		expect(screen.queryByRole("button", { name: "Diagnostics" })).not.toBeInTheDocument();
 	});
 
 	it("falls back to General when the Coder page is unavailable", async () => {

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
+import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
 import type { FilesSource } from "../hooks/useSessionWorkspaceFiles";
@@ -25,21 +26,24 @@ export type GlobalSettingsSection =
 	| "general"
 	| "harness"
 	| "agents"
+	| "remoteHosts"
 	| "coder11x"
 	| "mobile"
 	| "shortcuts"
 	| "browserProfiles"
+	| "diagnostics"
 	| "updates"
 	| "help";
 
 /** Project settings pages: the project form sections plus the cues manager. */
-export type ProjectSettingsSection = ProjectFormSection | "cues";
+export type ProjectSettingsSection = ProjectFormSection | "environment" | "cues";
 
 export type SettingsModal =
 	| {
 			scope: "global";
 			section?: GlobalSettingsSection;
 			focusAgentId?: string;
+			hostId?: string;
 			/** Which Harness page view (local or cloud logins) to open. */
 			harnessView?: "local" | "cloud";
 			/** Preserve the project form while global recovery settings is above it. */
@@ -48,6 +52,7 @@ export type SettingsModal =
 	| {
 			scope: "project";
 			projectId: string;
+			hostId?: string;
 			/** Page to open on, so callers can deep-link a project setting. */
 			section?: ProjectSettingsSection;
 			cloudOrgId?: string;
@@ -68,9 +73,15 @@ export type InspectorSessionState = {
 	filesChangedOnly?: boolean;
 	/** Files tab: source shared by the docked and maximized explorers. */
 	filesSource?: FilesSource;
+	/** Files: display mode picked per path in a centre tab, restored for the same open request after a remount. */
+	fileDisplayModes?: Record<string, RememberedFileDisplayMode>;
 	/** The session-entry defaulting (Summary tab, baseline browser reveal) has already run once for this session's lifetime. */
 	initialized?: boolean;
 };
+
+export type FileDisplayMode = "diff" | "file" | "rendered";
+
+export type RememberedFileDisplayMode = { mode: FileDisplayMode; requestKey: number };
 
 export type GlobalToast = {
 	title: string;
@@ -84,6 +95,13 @@ export type GlobalToast = {
 };
 
 export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey">;
+
+export type WorkspaceFileOpenRequest = {
+	sessionId: string;
+	hostId?: string;
+	path: string;
+	nonce: number;
+};
 
 // Selection (which project/session is open) now lives in the URL — the router
 // is the single source of truth, read via route params. This store holds only
@@ -105,6 +123,8 @@ export type UiState = {
 	developerMode: boolean;
 	/** Experimental: connect to AO daemons on other machines. Default off. */
 	remoteHosts: boolean;
+	/** Memory and CPU monitoring (card chips, memory light, Diagnostics page). Only takes effect in Developer mode. Default off. */
+	diagnostics: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
 	terminalCopyOnSelect: boolean;
 	restartingProjectIds: ReadonlySet<string>;
@@ -121,7 +141,9 @@ export type UiState = {
 	// bumps on every request so a repeat press (even for the same project) still
 	// re-fires; the always-mounted GlobalNewTaskDialog consumes it. Selection
 	// still lives in the URL — this is a one-shot action, not persisted state.
-	newTaskRequest: { projectId: string; nonce: number } | null;
+	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
+	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
+	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
 	// Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
 	// when no project is in scope).
 	createProjectNonce: number;
@@ -152,13 +174,15 @@ export type UiState = {
 	setThemeStyle: (style: ThemeStyle) => void;
 	setDeveloperMode: (enabled: boolean) => void;
 	setRemoteHosts: (enabled: boolean) => void;
+	setDiagnostics: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; harnessView?: "local" | "cloud"; preserveProject?: boolean }) => void;
-	openProjectSettings: (projectId: string, options?: { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; preserveProject?: boolean }) => void;
+	/** `options` as a string is the owning daemon's host ID (remote projects). */
+	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
 	syncSystemTheme: () => void;
@@ -178,15 +202,18 @@ export type UiState = {
 	setBrowserUnseen: (sessionId: string, unseen: boolean) => void;
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
 	setFilesSource: (sessionId: string, source: FilesSource) => void;
+	setFileDisplayMode: (sessionId: string, path: string, mode: FileDisplayMode, requestKey: number) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
-	setProjectRestarting: (projectId: string, restarting: boolean) => void;
-	setProjectProvisioning: (projectId: string, provisioning: boolean) => void;
+	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
+	setProjectProvisioning: (projectId: string, provisioning: boolean, hostId?: string) => void;
 	setOrchestratorReplacementError: (projectId: string, failure: OrchestratorReplacementFailure | null) => void;
-	setOrchestratorStartupError: (projectId: string, message: string | null) => void;
+	setOrchestratorStartupError: (projectId: string, message: string | null, hostId?: string) => void;
 	showGlobalToast: (title: string, body?: string, style?: GlobalToast["tone"] | GlobalToast["placement"] | GlobalToastOptions) => void;
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
-	requestNewTask: (projectId: string) => void;
+	requestNewTask: (projectId: string, hostId?: string) => void;
+	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string) => void;
+	clearWorkspaceFileOpenRequest: (nonce: number) => void;
 	requestCreateProject: () => void;
 	requestCreateProjectFromPath: (path: string) => void;
 	requestNewShellTerminal: () => void;
@@ -205,6 +232,7 @@ export type OrchestratorReplacementFailure = {
 const sidebarStorageKey = "ao.sidebar.open";
 const developerModeStorageKey = "ao.developerMode";
 const remoteHostsStorageKey = "ao.remoteHosts";
+const diagnosticsStorageKey = "ao.diagnostics";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
@@ -221,6 +249,10 @@ function initialDeveloperMode() {
 
 function initialRemoteHosts() {
 	return getLocalStorage()?.getItem(remoteHostsStorageKey) === "true";
+}
+
+function initialDiagnostics() {
+	return getLocalStorage()?.getItem(diagnosticsStorageKey) === "true";
 }
 
 function initialTerminalCopyOnSelect() {
@@ -240,6 +272,21 @@ function inspectorState(sessions: Record<string, InspectorSessionState>, session
  *  reveal) opens it; read every open check through here so that default can't drift. */
 export function inspectorIsOpen(sessions: Record<string, InspectorSessionState>, sessionId: string): boolean {
 	return sessions[sessionId]?.isOpen ?? false;
+}
+
+/**
+ * The display mode the user picked for this file in this open request, if any.
+ * A newer open request (a different key) chooses its own mode instead.
+ */
+export function rememberedFileDisplayMode(
+	state: Pick<UiState, "inspectorSessions">,
+	sessionId: string,
+	path: string | null,
+	requestKey: number,
+): FileDisplayMode | undefined {
+	if (!path) return undefined;
+	const remembered = state.inspectorSessions[sessionId]?.fileDisplayModes?.[path];
+	return remembered?.requestKey === requestKey ? remembered.mode : undefined;
 }
 
 export function sidebarIsVisible(state: Pick<UiState, "isSidebarOpen">): boolean {
@@ -266,6 +313,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	themeStyle: initialThemeStyle,
 	developerMode: initialDeveloperModeValue,
 	remoteHosts: initialRemoteHosts(),
+	diagnostics: initialDiagnostics(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
@@ -275,6 +323,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToast: null,
 	globalToastSequence: 0,
 	newTaskRequest: null,
+	workspaceFileOpenRequest: null,
 	createProjectNonce: 0,
 	folderDropRequest: null,
 	newShellTerminalNonce: 0,
@@ -307,6 +356,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(remoteHostsStorageKey, String(remoteHosts));
 		set({ remoteHosts });
 	},
+	setDiagnostics: (diagnostics) => {
+		getLocalStorage()?.setItem(diagnosticsStorageKey, String(diagnostics));
+		set({ diagnostics });
+	},
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
 		set({ terminalCopyOnSelect });
@@ -319,6 +372,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			scope: "global",
 			section,
 			...(options?.focusAgentId ? { focusAgentId: options.focusAgentId } : {}),
+			...(options?.hostId && options.hostId !== "local" ? { hostId: options.hostId } : {}),
 			...(options?.harnessView ? { harnessView: options.harnessView } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"
 				? { returnTo: state.settingsModal }
@@ -331,8 +385,9 @@ export const useUiStore = create<UiState>((set, get) => ({
 		settingsModal: {
 			scope: "project",
 			projectId,
-			...(options?.section ? { section: options.section } : {}),
-			...(options?.cloudOrgId === undefined ? {} : { cloudOrgId: options.cloudOrgId }),
+			...(typeof options === "string" && options !== "local" ? { hostId: options } : {}),
+			...(typeof options === "object" && options?.section ? { section: options.section } : {}),
+			...(typeof options === "object" && options?.cloudOrgId !== undefined ? { cloudOrgId: options.cloudOrgId } : {}),
 		},
 	}),
 	closeSettings: () => set((state) => ({
@@ -452,24 +507,38 @@ export const useUiStore = create<UiState>((set, get) => ({
 				},
 			};
 		}),
+	setFileDisplayMode: (sessionId, path, mode, requestKey) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			const previous = current.fileDisplayModes?.[path];
+			if (previous?.mode === mode && previous.requestKey === requestKey) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, fileDisplayModes: { ...current.fileDisplayModes, [path]: { mode, requestKey } } },
+				},
+			};
+		}),
 	setCommandPaletteOpen: (isCommandPaletteOpen) => set({ isCommandPaletteOpen }),
-	setProjectRestarting: (projectId, restarting) =>
+	setProjectRestarting: (projectId, restarting, hostId) =>
 		set((state) => {
 			const restartingProjectIds = new Set(state.restartingProjectIds);
+			const key = sessionUiKey(projectId, hostId);
 			if (restarting) {
-				restartingProjectIds.add(projectId);
+				restartingProjectIds.add(key);
 			} else {
-				restartingProjectIds.delete(projectId);
+				restartingProjectIds.delete(key);
 			}
 			return { restartingProjectIds };
 		}),
-	setProjectProvisioning: (projectId, provisioning) =>
+	setProjectProvisioning: (projectId, provisioning, hostId) =>
 		set((state) => {
 			const provisioningProjectIds = new Set(state.provisioningProjectIds);
+			const key = sessionUiKey(projectId, hostId);
 			if (provisioning) {
-				provisioningProjectIds.add(projectId);
+				provisioningProjectIds.add(key);
 			} else {
-				provisioningProjectIds.delete(projectId);
+				provisioningProjectIds.delete(key);
 			}
 			return { provisioningProjectIds };
 		}),
@@ -483,13 +552,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 			}
 			return { orchestratorReplacementErrors };
 		}),
-	setOrchestratorStartupError: (projectId, message) =>
+	setOrchestratorStartupError: (projectId, message, hostId) =>
 		set((state) => {
 			const orchestratorStartupErrors = { ...state.orchestratorStartupErrors };
+			const key = sessionUiKey(projectId, hostId);
 			if (message) {
-				orchestratorStartupErrors[projectId] = message;
+				orchestratorStartupErrors[key] = message;
 			} else {
-				delete orchestratorStartupErrors[projectId];
+				delete orchestratorStartupErrors[key];
 			}
 			return { orchestratorStartupErrors };
 		}),
@@ -511,11 +581,11 @@ export const useUiStore = create<UiState>((set, get) => ({
 			globalToast: state.globalToast?.nonce === nonce ? null : state.globalToast,
 		})),
 	clearGlobalToast: () => set({ globalToast: null, globalToasts: [], globalToastSequence: 0 }),
-	requestNewTask: (projectId) => {
+	requestNewTask: (projectId, hostId) => {
 		// Central gate: every New Task entry point (buttons, sidebar menus,
 		// shortcuts) funnels through here, so a project whose orchestrator is
 		// still provisioning cannot start tasks before it exists.
-		if (get().provisioningProjectIds.has(projectId)) {
+		if (get().provisioningProjectIds.has(sessionUiKey(projectId, hostId))) {
 			get().showGlobalToast(
 				"Project is still being set up",
 				"The orchestrator is starting. Try again in a moment.",
@@ -523,8 +593,21 @@ export const useUiStore = create<UiState>((set, get) => ({
 			);
 			return;
 		}
-		set((state) => ({ newTaskRequest: { projectId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
+		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
+	requestWorkspaceFileOpen: (sessionId, path, hostId) =>
+		set((state) => ({
+			workspaceFileOpenRequest: {
+				sessionId,
+				path,
+				...(hostId ? { hostId } : {}),
+				nonce: (state.workspaceFileOpenRequest?.nonce ?? 0) + 1,
+			},
+		})),
+	clearWorkspaceFileOpenRequest: (nonce) =>
+		set((state) => state.workspaceFileOpenRequest?.nonce === nonce
+			? { workspaceFileOpenRequest: null }
+			: state),
 	requestCreateProject: () => set((state) => ({ createProjectNonce: state.createProjectNonce + 1 })),
 	requestCreateProjectFromPath: (path) =>
 		set((state) => ({ folderDropRequest: { path, nonce: (state.folderDropRequest?.nonce ?? 0) + 1 } })),
