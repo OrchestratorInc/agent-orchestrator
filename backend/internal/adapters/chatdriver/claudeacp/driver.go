@@ -119,6 +119,10 @@ func claudeCanHibernate(ctx context.Context, conn *acpsdk.ClientSideConnection, 
 	defer cancel()
 	raw, err := conn.CallExtension(ctx, "_ao/session/can_hibernate", map[string]any{"sessionId": id})
 	if err != nil {
+		var requestErr *acpsdk.RequestError
+		if errors.As(err, &requestErr) && requestErr.Code == -32601 {
+			return false, nil // An unpatched bridge cannot prove background work ended.
+		}
 		return false, err
 	}
 	var result struct {
