@@ -10,11 +10,10 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { captureRendererEvent } from "../lib/telemetry";
 import { createRendererCloudCpClient } from "./useCloudCp";
 import { settingsQueryKey, type Settings } from "./useSettings";
-import { useUiStore } from "../stores/ui-store";
-import { appI18n } from "../i18n";
 import type { CloudCpSession } from "../lib/cloud-cp";
 import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
+import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 
 type TerminateSessionOptions = {
 	/** Fires synchronously as the kill starts — before the cache drops the row. */
@@ -107,9 +106,8 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 	return useMutation({
 		mutationKey: terminateSessionMutationKey,
 		mutationFn: async (session: WorkspaceSession) => {
+			recordDirectWorkerInteraction(session.id, "lifecycle", session.kind, session.hostId);
 			void captureRendererEvent("ao.renderer.session_kill_requested", { project_id: session.workspaceId });
-			const toastTitle = appI18n.t("shell.archivingNamed", { title: session.branch || session.workspaceName || "Session" });
-			useUiStore.getState().showGlobalToast(toastTitle, undefined, "info");
 
 			await terminateSession(queryClient, session);
 		},

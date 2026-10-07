@@ -177,6 +177,21 @@ var shippedMigrations = map[int64]string{
 	171: "0171_shell_preview_capability.sql",
 	172: "0172_client_task_requests.sql",
 	173: "0173_chat_client_payload_hash.sql",
+	174: "0174_conversation_account_cdc.sql",
+	175: "0175_codex_subagent_activity.sql",
+	176: "0176_claude_subagent_activity.sql",
+	177: "0177_review_run_rerun_same_head.sql",
+	178: "0178_archive_reviewers.sql",
+	179: "0179_conversation_message_sender.sql",
+	180: "0180_session_provision_steps.sql",
+	181: "0181_session_artifacts.sql",
+	185: "0185_worktree_startup_cues.sql",
+	186: "0186_remove_cue_description.sql",
+	187: "0187_remove_cue_startup_options.sql",
+	// 188 removes the obsolete cue worktree-startup schema; project setup now
+	// owns automatic workspace initialization.
+	188: "0188_remove_worktree_startup_cues.sql",
+	189: "0189_session_interaction.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

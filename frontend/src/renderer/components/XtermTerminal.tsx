@@ -127,7 +127,7 @@ const COPY_TOAST_MS = 1400;
 const LINK_PREVIEW_OPEN_MS = 300;
 /** Grace period to move the pointer from the link into the preview card. */
 const LINK_PREVIEW_CLOSE_MS = 300;
-const AUTOFOCUS_RETRY_FRAMES = 2;
+const AUTOFOCUS_RETRY_FRAMES = 6;
 const COLOR_SCHEME_UPDATE_MODE = 2031;
 const COLOR_SCHEME_QUERY = 996;
 
@@ -297,8 +297,13 @@ function canAutoFocusTerminal(host: HTMLElement): boolean {
 	return (
 		activeElement.matches("button[aria-current='page']") ||
 		activeElement.matches("button[data-terminal-focus-handoff='true']") ||
-		(activeElement.matches("button[role='tab'][aria-current]") &&
-			activeElement.closest('[data-testid="session-workspace-topbar"]') !== null)
+		(activeElement.matches("button[role='tab']") &&
+			activeElement.closest('[data-testid="session-workspace-topbar"]') !== null) ||
+		// Shell-tab close/rename affordances carry the marker on the button
+		// itself (ShellTerminalTab). Match the button directly — not via
+		// closest() — because the session tab's ⋮ trigger sits inside a
+		// wrapper div[data-terminal-tab-action] that must stay excluded.
+		activeElement.matches("button[data-terminal-tab-action='true']")
 	);
 }
 
@@ -473,6 +478,8 @@ export function XtermTerminal(props: XtermTerminalProps) {
 	const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
 	const scrollbarThumbRef = useRef<HTMLDivElement | null>(null);
 	const termRef = useRef<Terminal | null>(null);
+	// Whether the live terminal's grid has been measured from its laid-out slot.
+	const gridMeasuredRef = useRef(false);
 	const notifyCursorSchemeRef = useRef<(scheme: Theme, force?: boolean, retry?: boolean) => void>(() => {});
 	const announcedCursorSchemeRef = useRef<Theme | null>(null);
 	const searchAddonRef = useRef<SearchAddon | null>(null);
@@ -762,6 +769,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		term.loadAddon(searchAddon);
 
 		term.open(host);
+		gridMeasuredRef.current = false;
 		let visibleContentReported = false;
 		const reportVisibleContent = () => {
 			if (visibleContentReported || !callbacksRef.current.onVisibleContent) return;
@@ -796,16 +804,26 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		let scrollbarFrame: number | null = null;
 		let scrollbarHideTimer: number | null = null;
 		let scrollbarDrag: { pointerId: number; startLine: number; startY: number } | null = null;
+		let scrollbarLastActive = 0;
+		const hideScrollbarWhenIdle = () => {
+			scrollbarHideTimer = null;
+			if (!scrollbarTrack || scrollbarDrag) return;
+			const idleFor = Date.now() - scrollbarLastActive;
+			if (idleFor < MAC_TERMINAL_SCROLLBAR_IDLE_MS) {
+				scrollbarHideTimer = window.setTimeout(hideScrollbarWhenIdle, MAC_TERMINAL_SCROLLBAR_IDLE_MS - idleFor);
+				return;
+			}
+			scrollbarTrack.dataset.active = "false";
+		};
+		// Called on every scroll, which streaming output fires continuously: keep
+		// it to a timestamp. The single hide timer re-arms itself while activity
+		// continues instead of being cleared and re-created per scroll.
 		const revealScrollbar = () => {
 			if (!scrollbarTrack || scrollbarTrack.dataset.scrollable !== "true") return;
-			scrollbarTrack.dataset.active = "true";
-			if (scrollbarHideTimer !== null) window.clearTimeout(scrollbarHideTimer);
-			scrollbarHideTimer = null;
-			if (scrollbarDrag) return;
-			scrollbarHideTimer = window.setTimeout(() => {
-				scrollbarTrack.dataset.active = "false";
-				scrollbarHideTimer = null;
-			}, MAC_TERMINAL_SCROLLBAR_IDLE_MS);
+			scrollbarLastActive = Date.now();
+			if (scrollbarTrack.dataset.active !== "true") scrollbarTrack.dataset.active = "true";
+			if (scrollbarDrag || scrollbarHideTimer !== null) return;
+			scrollbarHideTimer = window.setTimeout(hideScrollbarWhenIdle, MAC_TERMINAL_SCROLLBAR_IDLE_MS);
 		};
 		const updateScrollbar = () => {
 			scrollbarFrame = null;
@@ -1152,6 +1170,10 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		document.addEventListener("pointercancel", disarmPointerSelection);
 		window.addEventListener("blur", disarmPointerSelection);
 
+		// FitAddon falls back to its 2-column minimum for a host with no layout
+		// box (a parked tab, or one not laid out yet). That grid would reach the
+		// PTY as real, so a fit only proposes from a laid-out host.
+		const proposeGrid = () => (host.clientWidth > 0 && host.clientHeight > 0 ? fit.proposeDimensions() : undefined);
 		let pendingReplayWrites = 0;
 		let usesSynchronizedOutput = false;
 		let resizeGeneration = 0;
@@ -1163,7 +1185,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			// output, but must not refit or emit PTY resizes while hidden.
 			if (callbacksRef.current.isVisible === false) return;
 			try {
-				const grid = fit.proposeDimensions();
+				const grid = proposeGrid();
 				if (grid) resizeGrid(grid.cols, grid.rows);
 			} catch {
 				// Container momentarily has no size (hidden/unmounting) — a later
@@ -1191,7 +1213,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			}
 			if (fitAllowsHidden || callbacksRef.current.isVisible !== false) {
 				try {
-					const grid = fit.proposeDimensions();
+					const grid = proposeGrid();
 					if (grid) resizeGrid(grid.cols, grid.rows, fitAllowsHidden);
 				} catch {
 					// The next observer/window event retries if the host is transiently
@@ -1296,6 +1318,8 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		// Commit before paint; onResize immediately forwards the grid to the PTY.
 		const resizeGrid = (cols: number, rows: number, allowHidden = false) => {
 			if (disposed || (!allowHidden && callbacksRef.current.isVisible === false)) return;
+			const firstMeasurement = !gridMeasuredRef.current;
+			gridMeasuredRef.current = true;
 			if (cols !== term.cols || rows !== term.rows) {
 				const buffer = term.buffer.active;
 				const wasAtBottom = buffer.type === "normal" && buffer.viewportY === buffer.baseY;
@@ -1308,6 +1332,12 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				}
 				term.resize(cols, rows);
 				if (wasAtBottom) term.scrollToBottom();
+			}
+			// A terminal attached before it could measure claimed no size. Publish
+			// its first measured grid even when it equals xterm's default, which
+			// fires no onResize.
+			if (firstMeasurement && callbacksRef.current.isVisible !== false) {
+				callbacksRef.current.onVisibleSize?.(term.cols, term.rows);
 			}
 		};
 		const synchronizedFrames = term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
@@ -1336,7 +1366,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			const dragging = document.body.classList.contains("is-resizing-x");
 			if (wasDragging && !dragging && callbacksRef.current.isVisible !== false) {
 				// Pointerup can precede the final ResizeObserver delivery.
-				const grid = fit.proposeDimensions();
+				const grid = proposeGrid();
 				if (grid) resizeGrid(grid.cols, grid.rows);
 				term.refresh(0, term.rows - 1);
 			}
@@ -1402,7 +1432,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		let refits = 0;
 		let pending: { cols: number; rows: number } | null = null;
 		const stabilizer = term.onRender(() => {
-			const proposed = fit.proposeDimensions();
+			const proposed = proposeGrid();
 			if (!proposed || !proposed.cols || !proposed.rows) return;
 			if (proposed.cols !== term.cols || proposed.rows !== term.rows) {
 				stableFrames = 0;
@@ -1625,6 +1655,9 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			get rows() {
 				return term.rows;
 			},
+			get hasMeasuredGrid() {
+				return gridMeasuredRef.current;
+			},
 			// Forward xterm's write callback: it fires once THIS chunk has been
 			// parsed into the buffer, which is what lets the attachment reveal the
 			// pane at the replay's settled scroll position (issue #3160).
@@ -1674,6 +1707,23 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			},
 			showLatestOutput,
 			prepareForActivation,
+			requestActivationFocus: () => {
+				// Parked terminals were deliberately blurred on switch-away and the
+				// autofocus effect's guarded attempt can be cancelled or refused by
+				// the momentary focus holder (issue #6140). The cache asks again on
+				// every re-activation; the guard below keeps this from stealing
+				// focus from dialogs or other legitimately focused controls.
+				window.setTimeout(() => {
+					const host = hostRef.current;
+					if (
+						!host ||
+						callbacksRef.current.isVisible === false ||
+						callbacksRef.current.focusRequested === false ||
+						!canAutoFocusTerminal(host)
+					) return;
+					focusTerminal();
+				}, 0);
+			},
 			notifyCursorColorScheme: () => {
 				if (callbacksRef.current.supportsCursorColorScheme) {
 					notifyCursorScheme(callbacksRef.current.theme, false, true);
@@ -1836,8 +1886,10 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		if (!becameVisible) return;
 		// Activation preparation already fitted the terminal after the slot became
 		// stable. Publish that grid without fitting a second time after reveal.
+		// A terminal that has never measured its slot has no grid to publish; its
+		// first measurement publishes it.
 		const term = termRef.current;
-		if (term) callbacksRef.current.onVisibleSize?.(term.cols, term.rows);
+		if (term && gridMeasuredRef.current) callbacksRef.current.onVisibleSize?.(term.cols, term.rows);
 	}, [props.isVisible]);
 
 	const fullscreenElement = document.fullscreenElement;

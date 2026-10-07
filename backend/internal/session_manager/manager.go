@@ -23,6 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 	"github.com/aoagents/agent-orchestrator/backend/internal/termtheme"
@@ -162,6 +163,7 @@ var (
 	ErrSpawnPrompt             = errors.New("prompt")
 	ErrSpawnCreate             = errors.New("create")
 	ErrSpawnSystemPrompt       = errors.New("system prompt file")
+	ErrSpawnArtifactDir        = errors.New("artifact dir")
 	ErrWorkspaceCreate         = errors.New("workspace")
 	ErrWorkspaceProvision      = errors.New("provision")
 	ErrSpawnAttachments        = errors.New("attachments")
@@ -343,6 +345,10 @@ type Store interface {
 	CommitClientRequestSession(ctx context.Context, id domain.SessionID) error
 	UpdateSession(ctx context.Context, rec domain.SessionRecord) error
 	UpdateSessionModel(ctx context.Context, id domain.SessionID, model string) (bool, error)
+	// UpdateSessionArtifactOutput is the only write that changes artifact_dir
+	// and session_output_type on an existing row; UpdateSession leaves them
+	// untouched so a stale full-row write cannot revert a reconcile.
+	UpdateSessionArtifactOutput(ctx context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error)
 	UpdateBrowserCapabilityVerifier(ctx context.Context, id domain.SessionID, expected domain.SessionControllerOwner, verifier string) (bool, error)
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
@@ -367,6 +373,7 @@ type Store interface {
 	// resurrecting sessions the user intentionally terminated.
 	DeleteSessionWorktrees(ctx context.Context, id domain.SessionID) error
 	SetSessionProvisionState(ctx context.Context, id domain.SessionID, state domain.SessionProvisionState, message string, now time.Time) (bool, error)
+	SetSessionProvisionSteps(ctx context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error
 	SetSessionProvisionedWorkspace(ctx context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
 	SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error)
 	PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error)
@@ -1023,12 +1030,6 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 
-	prompt, systemPrompt, err := m.buildSpawnTexts(ctx, cfg)
-	if err != nil {
-		return domain.SessionRecord{}, 0, 0, wrapSpawnStageEarly(ErrSpawnPrompt, err)
-	}
-	promptBytes := len(prompt)
-	systemPromptBytes := len(systemPrompt)
 	asyncChat := cfg.Async && mode == domain.SessionModeChat && cfg.Kind == domain.KindWorker && m.chat != nil
 
 	var prep *taskPreparation
@@ -1049,14 +1050,18 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			rec, fresh, err = m.store.CreateClientRequestSession(ctx, seed)
 			if err == nil && !fresh {
 				replay, replayErr := replayClientRequest(rec, cfg.ClientRequestHash)
-				return replay, promptBytes, systemPromptBytes, replayErr
+				return replay, 0, 0, replayErr
 			}
 		} else if cfg.AutomationRunID != nil {
 			var fresh bool
 			rec, fresh, err = m.store.CreateAutomationSession(ctx, seed)
 			if err == nil && !fresh {
 				if rec.AutomationLaunchCompleted {
-					return rec, promptBytes, systemPromptBytes, nil
+					// The prior launch already built and delivered a prompt;
+					// this call built none, since prompt construction happens
+					// further down (it needs the session id for the artifact
+					// directory path) and this branch returns before reaching it.
+					return rec, 0, 0, nil
 				}
 				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: automation session %s has an incomplete prior launch", rec.ID)
 			}
@@ -1068,8 +1073,36 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 	id := rec.ID
+	// The system prompt embeds the artifact directory path, so the directory
+	// must exist and be known before buildSpawnTexts runs. For a prep-derived
+	// session the value is threaded through the later promoteTaskPreparation
+	// seed instead of written here, since that call replaces the whole row.
+	artifactDir := m.reserveArtifactDir(id)
+	if prep == nil {
+		rec.Metadata.ArtifactDir = artifactDir
+		if _, err := m.store.UpdateSessionArtifactOutput(ctx, id, artifactDir, rec.OutputType); err != nil {
+			m.cleanupArtifactDir(id)
+			m.rollbackSpawnSeedRow(ctx, id)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnArtifactDir, err)
+		}
+	}
+	prompt, systemPrompt, err := m.buildSpawnTexts(ctx, cfg, id)
+	if err != nil {
+		m.cleanupArtifactDir(id)
+		if prep != nil {
+			cleanupCtx, cancel := spawnRollbackContext(ctx)
+			m.discardClaimedTaskPreparation(cleanupCtx, prep)
+			cancel()
+		} else {
+			m.rollbackSpawnSeedRow(ctx, id)
+		}
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrompt, err)
+	}
+	promptBytes := len(prompt)
+	systemPromptBytes := len(systemPrompt)
 	systemPromptFile, err := m.prepareSystemPromptFile(id, cfg.Harness, systemPrompt)
 	if err != nil {
+		m.cleanupArtifactDir(id)
 		if prep != nil {
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
 			m.discardClaimedTaskPreparation(cleanupCtx, prep)
@@ -1088,11 +1121,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 				cleanupCtx, cancel := spawnRollbackContext(ctx)
 				m.discardClaimedTaskPreparation(cleanupCtx, prep)
 				cancel()
+				m.cleanupArtifactDir(id)
 				return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 			}
 		}
 		seed := seedRecord(cfg, project.Config, m.clock())
 		seed.ID = id
+		seed.Metadata.ArtifactDir = artifactDir
 		if mode == domain.SessionModeChat {
 			seed.Metadata.Model = cfg.AgentConfig.Model
 			seed.Metadata.Effort = cfg.AgentConfig.Effort
@@ -1105,14 +1140,22 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
 			m.discardClaimedTaskPreparation(cleanupCtx, prep)
 			cancel()
+			m.cleanupArtifactDir(id)
 			if cfg.ClientRequestID != "" {
 				existing, found, lookupErr := m.store.GetSessionByClientRequestID(ctx, cfg.ClientRequestID)
 				if lookupErr == nil && found {
 					replay, replayErr := replayClientRequest(existing, cfg.ClientRequestHash)
-					return replay, promptBytes, systemPromptBytes, replayErr
+					return replay, 0, 0, replayErr
 				}
 			}
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStageEarly(ErrSpawnCreate, err)
+		}
+		// PromoteTaskPreparation does not write the artifact columns and the
+		// full-row UpdateSession leaves them alone, so persist the directory
+		// through the dedicated write.
+		rec.Metadata.ArtifactDir = artifactDir
+		if _, err := m.store.UpdateSessionArtifactOutput(ctx, id, artifactDir, rec.OutputType); err != nil {
+			m.logger.Warn("persist artifact dir for prepared session", "session", id, "err", err)
 		}
 	}
 	// A speculative worktree may still be being created under this gate. Wait
@@ -1170,6 +1213,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
 			m.discardClaimedTaskPreparation(cleanupCtx, prep)
 			cancel()
+			m.cleanupArtifactDir(id)
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 		}
 	}
@@ -1183,6 +1227,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		} else {
 			// No worktree exists, so the seed row can be discarded.
 			m.rollbackSpawnSeedRowAfterFailure(ctx, id)
+			m.cleanupArtifactDir(id)
 		}
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 	}
@@ -1262,7 +1307,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		status, authErr := validator.ValidateLaunchAuth(ctx, ws.Path, env)
 		if authErr != nil {
 			m.logger.Debug("spawn: launch authentication probe inconclusive; continuing",
-				"sessionID", id, "harness", cfg.Harness, "error", authErr)
+				"sessionID", id, "harness", cfg.Harness, "error", agentlaunch.RedactValues(authErr.Error(), project.Config.Env))
 		} else if status == ports.AgentAuthStatusUnauthorized {
 			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, ports.ErrAgentAuthRequired)
@@ -1336,7 +1381,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	})
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrRuntimeCreate, err)
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrRuntimeCreate, agentlaunch.RedactError(err, project.Config.Env))
 	}
 
 	metadata := domain.SessionMetadata{
@@ -1349,6 +1394,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		Prompt:                    prompt,
 		LatestUserPrompt:          prompt,
 		BrowserCapabilityVerifier: rec.Metadata.BrowserCapabilityVerifier,
+		ArtifactDir:               rec.Metadata.ArtifactDir,
 		// The user-visible resolved selection is Model for regular harnesses and
 		// Mode for adapters whose catalog is a mode list (e.g. Amp). If an explicit
 		// Model override exists it wins; otherwise fall back to the resolved Mode.
@@ -1895,6 +1941,7 @@ func (m *Manager) rollbackSeedSpawnWorkspace(ctx context.Context, rec domain.Ses
 			m.clearProvisionedWorkspace(ctx, rec.ID, ws.Path)
 		} else {
 			m.rollbackSpawnSeedRowAfterFailure(ctx, rec.ID)
+			m.cleanupArtifactDir(rec.ID)
 		}
 		return
 	}
@@ -2799,10 +2846,8 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
 	}
 	meta := rec.Metadata
-	mode := domain.NormalizeSessionMode(rec.Mode)
 	if meta.WorkspacePath == "" ||
-		(meta.Branch == "" && projectKindForSession(project, rec.ProjectID) != domain.ProjectKindScratch) ||
-		(mode != domain.SessionModeChat && meta.RuntimeHandleID == "") {
+		(meta.Branch == "" && projectKindForSession(project, rec.ProjectID) != domain.ProjectKindScratch) {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, ErrIncompleteHandle)
 	}
 	ws := ports.WorkspaceInfo{
@@ -2811,7 +2856,7 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		SessionID: rec.ID,
 		ProjectID: rec.ProjectID,
 	}
-	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat || meta.RuntimeHandleID == "" {
 		return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, nil, forceFresh, requireNativeHistory, reservedGeneration, domain.SessionInterfaceTransitionHistoryStrict)
 	}
 	handle := ports.RuntimeHandle{ID: meta.RuntimeHandleID}
@@ -2856,7 +2901,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, ErrIncompleteHandle)
 		}
 		return m.resumeChatController(
-			ctx, operation, rec, project, ws, requireNativeHistory, reservedGeneration, historyPolicy,
+			ctx, operation, rec, project, ws, requireNativeHistory, false, reservedGeneration, historyPolicy,
 		)
 	}
 
@@ -2866,7 +2911,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	// Recompute standing instructions, then reapply the durable finalized inbound
 	// handoff for this exact native conversation when one exists.
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
 	}
@@ -2987,7 +3032,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: runtime: %w", operation, rec.ID, err)
+		return RestoreResult{}, fmt.Errorf("%s %s: runtime: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env))
 	}
 	metadata := domain.SessionMetadata{
 		Permissions:               rec.Metadata.Permissions,
@@ -3191,16 +3236,10 @@ func (m *Manager) saveAndTeardownOne(ctx context.Context, rec domain.SessionReco
 	return nil
 }
 
-// reconcileLive handles a single non-terminated session on boot. If its runtime
-// session is still alive (tmux is the persistence layer, so it survives a daemon
-// crash) we adopt it: a no-op, the agent keeps running. If the runtime is gone,
-// reattach the existing worktree and relaunch the controller in place. An
-// ordinary daemon restart must not turn every live session into a serial
-// stash/remove/recreate cycle before the HTTP listener can bind.
-//
-// If in-place recovery fails, preserve the live record, worktree, and native
-// conversation identity. A restart-time dependency failure is not user intent
-// to terminate the session; the controller can be retried through Resume Agent.
+// reconcileLive performs explicit recovery of a non-terminated session. It
+// adopts a surviving runtime or relaunches the controller in its existing
+// worktree, preserving conversation identity when recovery fails. Startup uses
+// checkSessionHealth instead so missing agents stay stopped.
 func (m *Manager) reconcileLive(ctx context.Context, rec domain.SessionRecord) error {
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
@@ -3391,28 +3430,10 @@ func (m *Manager) reconcileReap(ctx context.Context, rec domain.SessionRecord) e
 	return nil
 }
 
-// Reconcile is the full boot-time consistency pass. It remains the synchronous
-// entry point for callers that need reconciliation to have completed before
-// proceeding. The daemon uses ReconcileStartupSafety before it starts serving,
-// then runs ReconcileBackground after its listener is live so durable project
-// metadata is available without waiting on worktree and runtime restoration.
-//
-// It replaces the bare RestoreAll
-// call so that however the previous daemon died (clean shutdown, SIGKILL, or
-// crash), live reality matches the DB:
-//
-//  1. Live pass: for each non-terminated session, adopt it if its runtime
-//     survived, else relaunch in place while preserving failed attempts as
-//     recoverable exited sessions (reconcileLive).
-//  2. Reap pass: for each terminated session whose runtime leaked, kill it
-//     (reconcileReap). Runs before restore so a restored session does not
-//     collide with a leaked tmux of the same name.
-//  3. Restore pass: relaunch shutdown-saved sessions (existing RestoreAll).
-//
-// Ordinary per-session liveness failures remain best-effort. Durable
-// agent-switch discovery/recovery is different: an error there aborts this
-// pass so the daemon cannot serve with an unknown switch and an open input
-// fence.
+// Reconcile settles interrupted operations, checks surviving controllers, and
+// reaps leaked runtimes. Missing agents remain stopped; only explicit Resume or
+// Restore may launch them. The daemon runs the health checks after binding its
+// listener so a slow probe cannot delay access to durable session metadata.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	if err := m.ReconcileStartupSafety(ctx); err != nil {
 		return err
@@ -3460,10 +3481,8 @@ func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 	return nil
 }
 
-// ReconcileBackground performs the potentially slow runtime, worktree, and
-// saved-session restoration passes. It is deliberately separate from the
-// startup safety pass so the daemon can serve durable SQLite-backed project
-// and session metadata while this best-effort work continues.
+// ReconcileBackground checks existing controllers and performs startup cleanup.
+// It never launches missing agents or restores shutdown-saved workspaces.
 func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 	defer func() {
 		m.statusRecoveryMu.Lock()
@@ -3514,9 +3533,6 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 		if err := m.reconcileReap(ctx, rec); err != nil {
 			m.logger.Error("reconcile: reap pass failed, skipping", "sessionID", rec.ID, "error", err)
 		}
-	}
-	if err := m.RestoreAll(ctx); err != nil {
-		return err
 	}
 	if err := m.deliverAllTransitionMessages(ctx); err != nil {
 		m.logger.Error("reconcile: transition-message delivery deferred for retry", "error", err)
@@ -3581,7 +3597,7 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 					defer m.endAgentOperation(rec.ID, agentOperationReconcile)
 					recoveryCtx, cancel := context.WithTimeout(ctx, m.statusVerificationLimit)
 					defer cancel()
-					return m.reconcileLive(recoveryCtx, rec)
+					return m.checkSessionHealth(recoveryCtx, rec)
 				}()
 				m.finishStatusRecovery(ctx, rec, err)
 				if err != nil {
@@ -4160,7 +4176,8 @@ func (m *Manager) SendWithOptions(ctx context.Context, id domain.SessionID, mess
 		}
 		message = appendAttachmentReferences(message, refs)
 	}
-	return m.send(ctx, id, message, "", options.AuthoredByUser)
+	options.InteractionAt = m.clock()
+	return m.send(ctx, id, message, "", options)
 }
 
 // SendSemantic delivers an internal message and returns only after the target
@@ -4176,7 +4193,7 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 		return ErrNotFound
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
-		handled, sendErr := m.sendChat(ctx, id, message, clientMessageID, false)
+		handled, sendErr := m.sendChat(ctx, id, message, clientMessageID, ports.MessageDeliveryOptions{})
 		if !handled {
 			return ErrSemanticAcceptanceUnsupported
 		}
@@ -4189,7 +4206,7 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 		return nil
 	}
 	wrapped := domain.WrapReportDelivery(clientMessageID, message)
-	if err := m.send(ctx, id, wrapped, clientMessageID, false); err != nil {
+	if err := m.send(ctx, id, wrapped, clientMessageID, ports.MessageDeliveryOptions{}); err != nil {
 		return err
 	}
 	deadline := time.NewTimer(10 * time.Second)
@@ -4258,12 +4275,12 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 // send carries an optional idempotency key used by durable transition-message
 // retries. Ordinary callers leave it empty; the outbox preserves the key across
 // restart, rollback, and even a second overlapping handoff.
-func (m *Manager) send(ctx context.Context, id domain.SessionID, message, clientMessageID string, authoredByUser bool) error {
+func (m *Manager) send(ctx context.Context, id domain.SessionID, message, clientMessageID string, options ports.MessageDeliveryOptions) error {
 	// A controller transition deliberately has a short interval with no writer.
 	// Queue internal/lifecycle sends durably instead of racing either controller
 	// or dropping coordination work; the transition worker drains this outbox
 	// only after the target controller is active.
-	if queued, err := m.queueDuringInterfaceTransition(ctx, id, message, clientMessageID); err != nil {
+	if queued, err := m.queueDuringInterfaceTransition(ctx, id, message, clientMessageID, options); err != nil {
 		return fmt.Errorf("send %s: interface transition: %w", id, err)
 	} else if queued {
 		return nil
@@ -4273,20 +4290,30 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 	// refused as "missing runtime handles" — true of the handles, wrong about the
 	// session, and it left `ao send` and orchestrator-to-worker relay unable to
 	// reach a chat worker.
-	if handled, err := m.sendChat(ctx, id, message, clientMessageID, authoredByUser); handled {
+	if handled, err := m.sendChat(ctx, id, message, clientMessageID, options); handled {
 		return err
 	}
 
+	if _, coordination := domain.CoordinationDeliveryID(message); !coordination && !options.AuthoredByUser && strings.TrimSpace(message) != "" {
+		deliveryID := clientMessageID
+		if deliveryID == "" {
+			deliveryID = "session-send:" + m.newLaunchID()
+		}
+		message = domain.WrapSessionDelivery(deliveryID, message)
+	}
 	message, err := m.prepareOutboundMessage(ctx, id, message)
 	if err != nil {
 		return err
 	}
+	if options.InteractionAt.IsZero() {
+		options.InteractionAt = m.clock()
+	}
 	var afterWrite func(context.Context) error
-	_, internalReportDelivery := domain.ReportDeliveryID(message)
-	if strings.TrimSpace(message) != "" && !internalReportDelivery {
+	_, internalReportDelivery := domain.CoordinationDeliveryID(message)
+	if strings.TrimSpace(message) != "" && !internalReportDelivery && options.AuthoredByUser {
 		if recorder, ok := m.store.(latestUserPromptRecorder); ok {
 			afterWrite = func(writeCtx context.Context) error {
-				if _, recordErr := recorder.RecordSessionLatestUserPrompt(writeCtx, id, boundedConversationFact(message), m.clock()); recordErr != nil {
+				if _, recordErr := recorder.RecordSessionLatestUserPrompt(writeCtx, id, boundedConversationFact(message), options.InteractionAt); recordErr != nil {
 					m.logger.Warn("send: delivered message but failed to persist latest user prompt", "sessionID", id, "error", recordErr)
 				}
 				return nil
@@ -4310,6 +4337,15 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 		return fmt.Errorf("send %s: %w", id, ErrStartupPending)
 	case sessionguard.SuppressedInputGated:
 		return fmt.Errorf("send %s: %w", id, ErrSwitchInProgress)
+	}
+	// Chat and transition queues persist interaction in their acceptance transaction.
+	// Only direct terminal sends need this separate fact; outbox replay already has it.
+	if options.SenderSessionID != "" && clientMessageID == "" {
+		if recorder, ok := m.store.(ports.SessionInteractionRecorder); ok {
+			if err := recorder.RecordSessionInteraction(context.WithoutCancel(ctx), id, options.SenderSessionID, options.InteractionAt); err != nil {
+				return fmt.Errorf("record interaction: %w", err)
+			}
+		}
 	}
 	// confirmActive only helps — and is only SAFE — when the harness reports
 	// both a prompt-submit signal (so the loop can observe active) and a
@@ -4770,6 +4806,7 @@ func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now t
 		// statement that can change it afterwards.
 		Mode:              domain.NormalizeSessionMode(cfg.RequestedMode),
 		Metadata:          domain.SessionMetadata{Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions},
+		OutputType:        domain.SessionOutputNone,
 		AutoReviewEnabled: projectConfig.AutoReview,
 		AutoInjectReview:  true,
 		AutoInjectCI:      true,
@@ -4876,6 +4913,8 @@ func promptProjectContext(projectID domain.ProjectID, project domain.ProjectReco
 		Repo:          project.RepoOriginURL,
 		DefaultBranch: cfg.DefaultBranch,
 		Path:          project.Path,
+
+		WorkersRequestReview: cfg.WorkersRequestReview,
 	}
 }
 
@@ -4971,9 +5010,9 @@ func appendAttachmentReferences(prompt string, refs []string) string {
 // standing instructions rather than part of the human's task request. A
 // promptless spawn delivers no user prompt at all: the agent simply lands at an
 // empty input box rather than receiving an auto-generated kickoff turn.
-func (m *Manager) buildSpawnTexts(ctx context.Context, cfg ports.SpawnConfig) (prompt, systemPrompt string, err error) {
+func (m *Manager) buildSpawnTexts(ctx context.Context, cfg ports.SpawnConfig, sessionID domain.SessionID) (prompt, systemPrompt string, err error) {
 	prompt = buildPrompt(cfg)
-	systemPrompt, err = m.buildSystemPrompt(ctx, cfg.Kind, cfg.ProjectID)
+	systemPrompt, err = m.buildSystemPrompt(ctx, cfg.Kind, cfg.ProjectID, sessionID)
 	if err != nil {
 		return "", "", err
 	}
@@ -4984,7 +5023,7 @@ func (m *Manager) buildSpawnTexts(ctx context.Context, cfg ports.SpawnConfig) (p
 // given kind from current store state. Restore recomputes them through here
 // rather than persisting them, so a restored worker points at the orchestrator
 // that is active now, not the one from its original spawn.
-func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID) (string, error) {
+func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID) (string, error) {
 	project, err := m.loadProject(ctx, projectID)
 	if err != nil {
 		return "", err
@@ -5032,6 +5071,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	}
 	if pointer := strings.TrimSpace(m.aoSkillPointer()); pointer != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)
+	}
+	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID)); artifactPrompt != "" {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactPrompt)
 	}
 	return buildSystemPromptText(cfg), nil
 }
@@ -5140,6 +5182,45 @@ func (m *Manager) systemPromptDir(id domain.SessionID) string {
 	return filepath.Join(m.dataDir, "prompts", string(id))
 }
 
+func (m *Manager) artifactDir(id domain.SessionID) string {
+	return sessionartifacts.Dir(m.dataDir, id)
+}
+
+func (m *Manager) reserveArtifactDir(id domain.SessionID) string {
+	dir := m.artifactDir(id)
+	if dir == "" {
+		return ""
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		m.logger.Warn("artifact dir unavailable; reserving path only", "session", id, "path", dir, "err", err)
+	}
+	return dir
+}
+
+func (m *Manager) cleanupArtifactDir(id domain.SessionID) {
+	dir := m.artifactDir(id)
+	if dir == "" {
+		return
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		m.logger.Warn("artifact dir cleanup failed", "session", id, "path", dir, "err", err)
+	}
+}
+
+func (m *Manager) artifactPrompt(id domain.SessionID) string {
+	dir := filepath.ToSlash(m.artifactDir(id))
+	if dir == "" {
+		return ""
+	}
+	return "## Session Artifacts\n\n" +
+		"Any deliverable that is not part of a pull request — a one-pager, analysis, plan, design doc, report, or other generated file — must be written to `" + dir + "`, never into the git workspace, even temporarily. " +
+		"This applies even when a workspace-relative path like `docs/`, `docs/plans/`, or `notes/` would otherwise feel like the natural place for it: if it is not shipping in a PR, it does not belong in the workspace at all. " +
+		"Keep the workspace limited to code changes that will ship in a PR. Preserve any relative asset links between files you place in the artifact directory. " +
+		"Create a separate document when the user requests a durable document or when the task needs a reviewable deliverable. Ordinary progress updates, concise final answers, and validation summaries can stay in chat or AO report notes; do not create files solely because a response is a summary, plan, analysis, or report. " +
+		"Routine test logs, command output, scratch notes, and intermediate diagnostics are working material, not deliverables. Keep them out of report attachments unless requested or needed to explain an actionable failure. Prefer one consolidated deliverable over many diagnostic files. " +
+		"This directory is local storage. Saving a file here or attaching its reference to an AO report does not authorize external publishing; follow the user's publishing scope."
+}
+
 func (m *Manager) cleanupSystemPromptDir(id domain.SessionID) {
 	dir := m.systemPromptDir(id)
 	if dir == "" {
@@ -5191,10 +5272,7 @@ func spawnEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueI
 }
 
 func spawnEnvForOS(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, dataDir string, projectEnv map[string]string, caseInsensitive bool) map[string]string {
-	env := make(map[string]string, len(projectEnv)+4)
-	for k, v := range projectEnv {
-		env[k] = v
-	}
+	env := agentlaunch.MergeEnv(projectEnv, nil)
 	setProtected := func(key, value string) {
 		if caseInsensitive {
 			for existing := range env {
@@ -5480,7 +5558,7 @@ func runPostCreate(ctx context.Context, workspacePath, sourcePath string, comman
 		}
 		cmd.Dir = workspacePath
 		cmd.Env = os.Environ()
-		for key, value := range projectEnv {
+		for key, value := range agentlaunch.MergeEnv(projectEnv, nil) {
 			cmd.Env = append(cmd.Env, key+"="+value)
 		}
 		cmd.Env = append(cmd.Env, "AO_SOURCE_TREE_PATH="+sourcePath, "AO_WORKTREE_PATH="+workspacePath)
@@ -5490,11 +5568,7 @@ func runPostCreate(ctx context.Context, workspacePath, sourcePath string, comman
 		cancel()
 		if err != nil {
 			message := strings.TrimSpace(out.String())
-			for _, value := range projectEnv {
-				if value != "" {
-					message = strings.ReplaceAll(message, value, "[REDACTED]")
-				}
-			}
+			message = agentlaunch.RedactValues(message, projectEnv)
 			return fmt.Errorf("setup step %d failed: %w: %s", index+1, err, message)
 		}
 	}

@@ -119,16 +119,17 @@ func (s Session) Status(now time.Time, prs []contract.PRFacts) contract.SessionS
 }
 
 type CreateSession struct {
-	ProjectID      string
-	Kind           string
-	Harness        string
-	DisplayName    string
-	Prompt         string
-	Mode           string
-	Model          string
-	DeniedCommands []string
-	Interface      SessionInterface
-	Provider       string
+	ProjectID       string
+	Kind            string
+	Harness         string
+	DisplayName     string
+	Prompt          string
+	Mode            string
+	Model           string
+	ReasoningEffort string
+	DeniedCommands  []string
+	Interface       SessionInterface
+	Provider        string
 	// SandboxConnectionID names a bring-your-own provider credential. It is
 	// empty for sandboxes that run on the platform's own account.
 	SandboxConnectionID string

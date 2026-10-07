@@ -18,12 +18,19 @@ INSERT INTO sessions (
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path,
     preview_url, preview_revision, terminate_on_pr_merge, cleanup_generation, browser_capability_verifier,
+    artifact_dir, session_output_type,
     session_mode, provider_conversation_id, controller_generation, model, effort, session_permissions,
     created_at, updated_at, is_pinned, pinned_at, auto_inject_review, auto_inject_ci,
     provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
     client_request_id, client_request_hash
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ?, ?
 );
 
 -- name: GetClientRequestSession :one
@@ -52,6 +59,18 @@ WHERE id = ?;
 -- name: UpdateSessionModel :execrows
 UPDATE sessions
 SET model = sqlc.arg(model)
+WHERE id = sqlc.arg(id);
+
+-- name: UpdateSessionArtifactOutput :execrows
+-- Narrow write for lifecycle.Manager.ReconcileSessionOutputType: touches only
+-- the two output-derivation columns. A full read-then-UpdateSession write here
+-- would replay a stale SessionRecord over is_terminated, activity, runtime
+-- identity, and preview state committed by another writer between the read
+-- and this write (e.g. a session that terminated mid-reconcile could be
+-- resurrected). This statement cannot clobber those fields because it never
+-- names them.
+UPDATE sessions
+SET artifact_dir = sqlc.arg(artifact_dir), session_output_type = sqlc.arg(session_output_type)
 WHERE id = sqlc.arg(id);
 
 -- name: UpdateBrowserCapabilityVerifier :execrows
@@ -184,11 +203,13 @@ SELECT id, project_id, num, issue_id, kind, harness,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
+    artifact_dir, session_output_type,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
+    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
+    claude_activity_facts, codex_activity_facts
 FROM sessions WHERE id = ?;
 
 -- name: GetSessionByAutomationRunID :one
@@ -200,11 +221,13 @@ SELECT id, project_id, num, issue_id, kind, harness,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
+    artifact_dir, session_output_type,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
+    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
+    claude_activity_facts, codex_activity_facts
 FROM sessions WHERE automation_run_id = ?;
 
 -- name: ListSessionsByProject :many
@@ -216,11 +239,13 @@ SELECT id, project_id, num, issue_id, kind, harness,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
+    artifact_dir, session_output_type,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
+    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
+    claude_activity_facts, codex_activity_facts
 FROM sessions WHERE project_id IS ? ORDER BY num;
 
 -- name: ListAllSessions :many
@@ -232,11 +257,13 @@ SELECT id, project_id, num, issue_id, kind, harness,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
+    artifact_dir, session_output_type,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
+    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
+    claude_activity_facts, codex_activity_facts
 FROM sessions ORDER BY project_id, num;
 
 -- name: PromoteTaskPreparation :execrows
@@ -337,6 +364,15 @@ WHERE id = sqlc.arg(id)
 UPDATE sessions SET
     provision_state = sqlc.arg(provision_state),
     provision_error = sqlc.arg(provision_error),
+    updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id);
+
+-- name: SetSessionProvisionSteps :execrows
+-- Publish an asynchronous Chat start's checklist. As narrow as
+-- SetSessionProvisionState, for the same reason: the controller commit writes
+-- the rest of the row from its own goroutine.
+UPDATE sessions SET
+    provision_steps = sqlc.arg(provision_steps),
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id);
 

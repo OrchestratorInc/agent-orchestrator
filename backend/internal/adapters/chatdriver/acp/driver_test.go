@@ -198,7 +198,7 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness) {
 		return Launch{}, errors.New("new provider installation is unavailable")
 	}
 	secondDriver := New(cfg, log)
-	second, err := secondDriver.Resume(context.Background(), ports.ChatResumeConfig{
+	second, err := secondDriver.Reconnect(context.Background(), ports.ChatResumeConfig{
 		SessionID: "persistent-acp-e2e", DataDir: dataDir, WorkspacePath: workdir,
 		ProviderConversationID: "persistent-provider-session", ProviderScopeID: "scope",
 		PrepareEnv: prepareEnv, Model: "changed-model", Permissions: ports.PermissionModeAuto,
@@ -264,6 +264,105 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness) {
 	for _, method := range []string{"initialize", "session/new", "session/prompt"} {
 		if got := strings.Count(string(calls), method+"\n"); got != 1 {
 			t.Fatalf("provider method %s called %d times; calls:\n%s", method, got, calls)
+		}
+	}
+}
+
+// A prompt attempted before the controller acknowledges the previous terminal
+// receipt is refused by the host without a receipt of its own. That refusal must
+// not erase the outstanding receipt, or the late ACK is dropped and the host
+// refuses every later prompt.
+func TestPersistentACPLateAckSurvivesHostLocalPromptRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		env           map[string]string
+		originalState domain.TurnState
+	}{
+		{name: "completed original", originalState: domain.TurnStateCompleted},
+		{name: "failed original", env: map[string]string{"AO_TEST_PERSISTENT_ACP_ERROR": "1"},
+			originalState: domain.TurnStateFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			callsPath := filepath.Join(t.TempDir(), "calls.log")
+			env := map[string]string{
+				"AO_TEST_PERSISTENT_ACP_PROVIDER": "1",
+				"AO_TEST_PERSISTENT_ACP_CALLS":    callsPath,
+			}
+			for key, value := range tc.env {
+				env[key] = value
+			}
+			driver := New(Config{
+				Harness: domain.HarnessOMP,
+				Capabilities: ports.ChatCapabilities{
+					ports.ChatCapabilityStreaming: true, ports.ChatCapabilityResume: true,
+				},
+				Launch: func(context.Context, LaunchConfig) (Launch, error) {
+					return Launch{
+						Command: os.Args[0], Args: []string{"-test.run=TestPersistentACPProviderHelper"}, Env: env,
+					}, nil
+				},
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+				SessionID: "persistent-acp-late-ack", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
+				ProviderScopeID: "scope",
+			})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer func() { _ = conv.(ports.ChatProviderTerminator).Terminate() }()
+			ack := conv.(ports.ChatProviderEventAcknowledger)
+			_ = nextEvent(t, conv.Events()) // controller.ready
+
+			original := runPersistentACPTurn(t, conv)
+			if original.TurnState != tc.originalState || original.ProviderEventID == "" {
+				t.Fatalf("original terminal = %#v, want %s with a durable receipt", original, tc.originalState)
+			}
+			replacement := runPersistentACPTurn(t, conv)
+			if replacement.TurnState != domain.TurnStateFailed || replacement.ProviderEventID != "" ||
+				replacement.Err == nil || !strings.Contains(replacement.Err.Error(), "not acknowledged") {
+				t.Fatalf("replacement terminal = %#v, want host-local unacknowledged rejection", replacement)
+			}
+			if err := ack.AcknowledgeProviderEvent(context.Background(), original.ProviderEventID); err != nil {
+				t.Fatalf("acknowledge original: %v", err)
+			}
+			next := runPersistentACPTurn(t, conv)
+			if next.TurnState != domain.TurnStateCompleted || next.ProviderEventID == "" {
+				t.Fatalf("turn after late ACK = %#v, want completed", next)
+			}
+			if err := ack.AcknowledgeProviderEvent(context.Background(), next.ProviderEventID); err != nil {
+				t.Fatalf("acknowledge next: %v", err)
+			}
+			calls, err := os.ReadFile(callsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(string(calls), "session/prompt\n"); got != 2 {
+				t.Fatalf("provider received %d prompts, want original and post-ACK turn only; calls:\n%s", got, calls)
+			}
+		})
+	}
+}
+
+// runPersistentACPTurn starts one turn and returns its terminal event once the
+// conversation reports it can accept the next turn.
+func runPersistentACPTurn(t *testing.T, conv ports.ChatConversation) ports.ChatEvent {
+	t.Helper()
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "turn"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	var terminal ports.ChatEvent
+	for {
+		event := nextEvent(t, conv.Events())
+		if event.Kind == ports.ChatEventTurnCompleted && event.ProviderTurnID == ref.ProviderTurnID {
+			terminal = event
+		}
+		if terminal.Kind != "" && event.Kind == ports.ChatEventControllerState &&
+			event.ControllerState == ports.ChatControllerReady {
+			return terminal
 		}
 	}
 }
@@ -4064,5 +4163,22 @@ func TestACPCompactionRestoredOnLiveReconnect(t *testing.T) {
 	}
 	if compacting != "durable-compaction-turn" {
 		t.Errorf("compactingTurnID = %q, want durable-compaction-turn", compacting)
+	}
+}
+
+func TestReconnectMissingHostNeverLaunchesProvider(t *testing.T) {
+	driver := New(Config{Harness: domain.HarnessClaudeCode, Launch: func(context.Context, LaunchConfig) (Launch, error) {
+		t.Fatal("health check tried to launch ACP provider")
+		return Launch{}, nil
+	}}, nil)
+	_, err := driver.Reconnect(context.Background(), ports.ChatResumeConfig{
+		SessionID: "stopped", ProviderConversationID: "native", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
+		PrepareEnv: func(context.Context) (map[string]string, error) {
+			t.Fatal("health check rotated launch credentials")
+			return nil, nil
+		},
+	})
+	if !errors.Is(err, ports.ErrChatHostNotRunning) {
+		t.Fatalf("error=%v", err)
 	}
 }

@@ -335,6 +335,10 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 
 	const workspaceUnavailable = (error: unknown) =>
 		error instanceof Error && error.message.trim() ? error.message : "Session workspace is not available.";
+	const workspaceUnavailableCode = (error: unknown) => {
+		const code = error instanceof Error ? (error as { code?: unknown }).code : undefined;
+		return typeof code === "string" && code ? code : undefined;
+	};
 
 	return {
 		async getState(sessionId) {
@@ -349,6 +353,7 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 					preferredEditorId,
 					workspaceAvailable: false,
 					unavailableReason: workspaceUnavailable(error),
+					unavailableCode: workspaceUnavailableCode(error),
 				};
 			}
 		},

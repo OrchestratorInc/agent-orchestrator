@@ -28,6 +28,7 @@ import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } f
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useHostConnection } from "../hooks/useHostConnection";
+import { useSidebarChromeClearanceRef } from "../hooks/useSidebarChromeGeometry";
 import { MAX_SESSION_DISPLAY_NAME_LEN, useSessionRename } from "../hooks/useSessionRename";
 import { useSwitchAgentState } from "../hooks/useSwitchAgent";
 import { useTruncatedText } from "../hooks/useTruncatedText";
@@ -625,6 +626,7 @@ export function CenterPane({
 		[updateFontSize],
 	);
 
+	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(!isFullscreen && isMac);
 	const terminalTopbar = (
 		<div className="flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar">
 
@@ -632,10 +634,11 @@ export function CenterPane({
 				<div
 					className={cn(
 						"flex min-w-0 shrink items-stretch",
-						!isFullscreen && !isSidebarOpen && isMac && "session-topbar-titlebar-clearance-mac",
+						!isFullscreen && isMac && "session-topbar-titlebar-clearance-mac",
 						!isFullscreen && !isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
 					)}
 					data-testid="session-terminal-region"
+					ref={clearanceRef}
 					style={{
 						width: terminalBounds.width > 0 ? terminalBounds.width : "100%",
 					}}

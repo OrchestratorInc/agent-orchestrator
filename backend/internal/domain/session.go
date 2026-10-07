@@ -67,6 +67,51 @@ func (o ConversationCheckpointOrigin) Valid() bool {
 		o == ConversationCheckpointOriginCoordination
 }
 
+// SessionOutputType is the durable summary of what kind of output a session
+// currently owns.
+type SessionOutputType string
+
+// Session output types. PRAndArtifact is a distinct value rather than two
+// independent flags: the output-kind set is small and expected to stay that
+// way, so an explicit enumerated combination is simpler to persist, validate,
+// and read than a bitmask or a join table.
+const (
+	SessionOutputNone          SessionOutputType = "none"
+	SessionOutputPR            SessionOutputType = "pr"
+	SessionOutputArtifact      SessionOutputType = "artifact"
+	SessionOutputPRAndArtifact SessionOutputType = "pr_artifact"
+)
+
+// HasPR reports whether a session's output includes a claimed/observed PR.
+func (t SessionOutputType) HasPR() bool {
+	return t == SessionOutputPR || t == SessionOutputPRAndArtifact
+}
+
+// HasArtifact reports whether a session's output includes at least one
+// artifact file.
+func (t SessionOutputType) HasArtifact() bool {
+	return t == SessionOutputArtifact || t == SessionOutputPRAndArtifact
+}
+
+// SessionArtifactKind is the UI-facing kind of one file artifact.
+type SessionArtifactKind string
+
+// Session artifact kinds.
+const (
+	SessionArtifactHTML     SessionArtifactKind = "html"
+	SessionArtifactMarkdown SessionArtifactKind = "markdown"
+	SessionArtifactGeneric  SessionArtifactKind = "file"
+)
+
+// SessionArtifactFile is one session-owned file discovered inside artifact_dir.
+type SessionArtifactFile struct {
+	Path      string              `json:"path"`
+	Name      string              `json:"name"`
+	Kind      SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
+	Size      int64               `json:"size"`
+	UpdatedAt time.Time           `json:"updatedAt"`
+}
+
 // SessionMetadata is the typed, off-status metadata for a session: operational
 // handles and seed inputs used by Session Manager and reaper.
 type SessionMetadata struct {
@@ -96,6 +141,8 @@ type SessionMetadata struct {
 	// separate durable fact because SessionRecord.UpdatedAt also changes for
 	// lifecycle, SCM, preview, and preference updates.
 	LatestUserPromptAt time.Time `json:"-"`
+	// LatestInteractionAt records deliberate direction independently of human authorship.
+	LatestInteractionAt time.Time `json:"-"`
 	// LatestAssistantUpdate is the latest user-facing assistant update observed
 	// before any internal agent-switch coordination turn.
 	LatestAssistantUpdate   string    `json:"latestAssistantUpdate,omitempty"`
@@ -117,6 +164,12 @@ type SessionMetadata struct {
 	// active native agent session when its provider exposes one. Retained
 	// provider-specific paths also live on AgentNativeSession records.
 	NativeTranscriptPath string `json:"nativeTranscriptPath,omitempty"`
+	// ClaudeActivityFacts records parent-turn and subagent hook facts for the
+	// current runtime launch. It is internal native evidence, not display status.
+	ClaudeActivityFacts string `json:"-"`
+	// CodexActivityFacts records parent-turn and native child hook facts for the
+	// current runtime launch. It is internal evidence, not display status.
+	CodexActivityFacts string `json:"-"`
 	// ProviderConversationID is the opaque handle a Chat driver needs to resume
 	// this session's provider conversation after a restart (a Codex thread id
 	// today). Normally empty for TUI sessions. It remains a distinct field from
@@ -144,6 +197,9 @@ type SessionMetadata struct {
 	// means the provider default, including an explicit task-level reset. The
 	// resolved value is pinned so project-default changes cannot alter resume.
 	Effort string `json:"effort,omitempty"`
+	// ArtifactDir is the session-owned artifact directory under AO's data dir.
+	// It is outside the git workspace and is never exposed directly on the API.
+	ArtifactDir string `json:"-"`
 	// BrowserCapabilityVerifier is a one-way verifier for the random browser
 	// capability held by this session's worker process. The bearer token itself
 	// is never persisted, so reading the database cannot grant access to another
@@ -195,10 +251,11 @@ type SessionRecord struct {
 	IsTerminated  bool      `json:"isTerminated"`
 	// TerminateOnPRMerge is a user-controlled lifecycle policy. When enabled,
 	// completing the session's PR set through a merge tears down the session.
-	TerminateOnPRMerge bool            `json:"terminateOnPrMerge"`
-	AutoInjectReview   bool            `json:"autoInjectReview"`
-	AutoInjectCI       bool            `json:"autoInjectCI"`
-	Metadata           SessionMetadata `json:"-"`
+	TerminateOnPRMerge bool              `json:"terminateOnPrMerge"`
+	AutoInjectReview   bool              `json:"autoInjectReview"`
+	AutoInjectCI       bool              `json:"autoInjectCI"`
+	OutputType         SessionOutputType `json:"outputType" enum:"none,pr,artifact,pr_artifact"`
+	Metadata           SessionMetadata   `json:"-"`
 	// CleanupGeneration is a monotonic counter bumped each time the session is
 	// un-terminated (spawn/restore). The terminal-resource reconciler stamps its
 	// durable cleanup facts with the generation they were written for so a
@@ -225,6 +282,42 @@ type SessionRecord struct {
 	// the row rather than discarded with it, because the user is already looking
 	// at the session by the time the start can fail.
 	ProvisionError string `json:"provisionError,omitempty"`
+	// ProvisionSteps is the checklist an asynchronous Chat start works through,
+	// in order. It is written only by that background start, at each stage
+	// boundary, and kept after the start settles. A step still running when the
+	// session reads ProvisionState failed is the step that failed.
+	ProvisionSteps []SessionProvisionStep `json:"provisionSteps,omitempty"`
+}
+
+// SessionProvisionStepID names one stage of an asynchronous Chat start.
+type SessionProvisionStepID string
+
+// Start-up stages, in the order a start runs them. A start includes only the
+// stages it will actually run: a prepared worktree skips the fetch, and setup
+// appears only when the project has post-create commands.
+const (
+	SessionProvisionStepFetch    SessionProvisionStepID = "fetch"
+	SessionProvisionStepWorktree SessionProvisionStepID = "worktree"
+	SessionProvisionStepSetup    SessionProvisionStepID = "setup"
+	SessionProvisionStepAgent    SessionProvisionStepID = "agent"
+)
+
+// SessionProvisionStepStatus is how far one start-up stage has got.
+type SessionProvisionStepStatus string
+
+// Start-up stage statuses.
+const (
+	SessionProvisionStepPending SessionProvisionStepStatus = "pending"
+	SessionProvisionStepRunning SessionProvisionStepStatus = "running"
+	SessionProvisionStepDone    SessionProvisionStepStatus = "done"
+)
+
+// SessionProvisionStep is one row of a start's checklist.
+type SessionProvisionStep struct {
+	ID        SessionProvisionStepID     `json:"id" enum:"fetch,worktree,setup,agent"`
+	Status    SessionProvisionStepStatus `json:"status" enum:"pending,running,done"`
+	StartedAt *time.Time                 `json:"startedAt,omitempty"`
+	EndedAt   *time.Time                 `json:"endedAt,omitempty"`
 }
 
 // SessionProvisionState is a session's start-up progress.
@@ -314,11 +407,36 @@ type Session struct {
 	// important current fact about the session at the stage it sits in. It is
 	// derived after the column, from the facts that column reads, and ships in
 	// renderable form so clients print it without a mapping table of their own.
-	DisplayStatus     DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
-	TerminalHandleID  string        `json:"terminalHandleId,omitempty"`
-	ActiveAgentSwitch *AgentSwitch  `json:"-"`
+	DisplayStatus     DisplayStatus         `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
+	TerminalHandleID  string                `json:"terminalHandleId,omitempty"`
+	ArtifactFiles     []SessionArtifactFile `json:"-"`
+	ActiveAgentSwitch *AgentSwitch          `json:"-"`
 	// PRs are the session's attributed pull requests (one session can own many).
 	// They feed status derivation and are surfaced on the API read model. Not
 	// serialized here: the HTTP boundary maps them to the curated wire shape.
 	PRs []PRFacts `json:"-"`
+}
+
+// LastEventAt is when something a person would notice last happened to the
+// session: an activity-state transition (started, finished, waiting, exited),
+// a PR lifecycle change, a CI result change, or a review submission. Mobile
+// orders its workers list by it.
+//
+// It is derived at read time from durable fact timestamps and never stored.
+// Deliberately not UpdatedAt: that advances on metadata writes and PR polls,
+// so a busy session would keep floating to the top without anything changing.
+func (s Session) LastEventAt() time.Time {
+	latest := s.CreatedAt
+	consider := func(t time.Time) {
+		if t.After(latest) {
+			latest = t
+		}
+	}
+	consider(s.Activity.LastActivityAt)
+	for _, pr := range s.PRs {
+		consider(pr.StateChangedAt)
+		consider(pr.CIChangedAt)
+		consider(pr.LastReviewAt)
+	}
+	return latest
 }

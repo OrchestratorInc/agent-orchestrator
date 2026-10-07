@@ -515,6 +515,18 @@ func TestRunPostCreate(t *testing.T) {
 	}
 }
 
+func TestRunPostCreateReceivesAndRedactsProjectEnv(t *testing.T) {
+	command := `echo "$PROJECT_TOKEN" && exit 3`
+	if runtime.GOOS == "windows" {
+		command = `echo %PROJECT_TOKEN% && exit /b 3`
+	}
+	secret := "project-secret-123"
+	err := runPostCreate(context.Background(), t.TempDir(), []string{command}, map[string]string{"PROJECT_TOKEN": secret})
+	if err == nil || !strings.Contains(err.Error(), "[REDACTED]") || strings.Contains(err.Error(), secret) {
+		t.Fatalf("postCreate error did not redact project value: %v", err)
+	}
+}
+
 func TestSpawnPermissionPrecedence(t *testing.T) {
 	for _, kind := range []domain.SessionKind{domain.KindWorker, domain.KindOrchestrator} {
 		for _, tc := range []struct {

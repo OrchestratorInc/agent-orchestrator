@@ -59,6 +59,7 @@ type Store interface {
 	ConversationEditAnchor(ctx context.Context, conversationID, replacedTurnID string) (domain.ConversationEditAnchor, error)
 	RepairIncompleteConversationEdit(ctx context.Context, sessionID domain.SessionID, conversationID string, now time.Time) (domain.ConversationBranch, bool, error)
 	CreateAndActivateConversationBranch(ctx context.Context, sessionID domain.SessionID, branch domain.ConversationBranch, generation string, now time.Time) error
+	CreateAndActivateReviewConversationBranch(ctx context.Context, reviewID string, branch domain.ConversationBranch, generation string, now time.Time) error
 	ActivateConversationBranch(ctx context.Context, sessionID domain.SessionID, conversationID, branchID, providerConversationID, generation string, now time.Time) error
 	UpdateConversationBranchReplacement(ctx context.Context, branchID, replacementTurnID string) error
 
@@ -78,6 +79,7 @@ type Store interface {
 	SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error
 	SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error
 	CleanupOwnedControllerWork(ctx context.Context, session domain.SessionID, conversationID, generation string, now time.Time) (bool, error)
+	CleanupOwnedReviewControllerWork(ctx context.Context, reviewID, conversationID, generation string, now time.Time) (bool, error)
 	ListVisibleRunningTurnProviderIDs(ctx context.Context, conversationID string) ([]string, error)
 
 	SetConversationSettings(ctx context.Context, conversationID string, settings domain.ConversationSettings, now time.Time) error
@@ -136,7 +138,9 @@ type Store interface {
 	// Latest-wins provider state that belongs to the conversation rather than to a
 	// turn. Each write replaces the last.
 	RecordModelReroute(ctx context.Context, conversationID string, reroute domain.ConversationModelReroute) error
+	ConversationAccount(ctx context.Context, conversationID string) (*domain.ConversationAccount, error)
 	RecordAccount(ctx context.Context, conversationID string, account domain.ConversationAccount, now time.Time) error
+	ReconcileConversationAuthentication(ctx context.Context, conversationID, generation, providerTurnID string, now time.Time) (*domain.ConversationAccount, error)
 	RecordThreadState(ctx context.Context, conversationID string, state domain.ConversationThreadState) error
 	RecordMCPServers(ctx context.Context, conversationID string, servers []domain.ConversationMCPServer) error
 
@@ -148,6 +152,7 @@ type Store interface {
 	FailPendingInputs(ctx context.Context, conversationID string, now time.Time) error
 
 	ProjectProviderEvent(ctx context.Context, conversationID string, session domain.SessionID, generation, providerEventID, method, payloadJSON string, now time.Time, project func(context.Context) error) (bool, error)
+	ProjectReviewProviderEvent(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation, providerEventID, method, payloadJSON string, now time.Time, project func(context.Context) error) (bool, error)
 }
 
 // ActivityRecorder feeds derived session status.
@@ -251,7 +256,6 @@ type Controller struct {
 	// auth mode and plan but never a credential demand, a thread-status report says
 	// nothing about archiving, and MCP servers are announced one at a time. Writing
 	// each report straight through would make every field blank the one before it.
-	account     domain.ConversationAccount
 	threadState domain.ConversationThreadState
 	// usage is merged in memory because providers may split context occupancy and
 	// cumulative accounting across separate events. Writing either half as a full
@@ -344,12 +348,6 @@ func newController(
 		mcpServers:             map[string]domain.ConversationMCPServer{},
 		mcpServerSeenRevision:  map[string]uint64{},
 		stopped:                make(chan struct{}),
-	}
-	// Seeded from the durable row so a reconnect merges onto what is already known
-	// rather than starting from blank and reporting a conversation as having no
-	// account until the provider next mentions one.
-	if conversation.Account != nil {
-		c.account = *conversation.Account
 	}
 	if conversation.ThreadState != nil {
 		c.threadState = *conversation.ThreadState
@@ -806,7 +804,8 @@ func (p nativeHistoryCheckpoint) mismatches(
 
 func nativeHistoryCoordinationMessage(text string) bool {
 	text = strings.TrimSpace(text)
-	return strings.HasPrefix(text, "<ao-handoff-request") ||
+	_, coordination := domain.CoordinationDeliveryID(text)
+	return coordination || strings.HasPrefix(text, "<ao-handoff-request") ||
 		strings.HasPrefix(text, "AO transferred the previous agent's context in hidden system instructions.")
 }
 
@@ -1408,7 +1407,11 @@ func (c *Controller) sendLocked(
 		ClientMessageID:     msg.ClientMessageID,
 		ClientPayloadHash:   msg.ClientPayloadHash,
 		DeliveryContentJSON: deliveryContent,
+		SenderSessionID:     msg.SenderSessionID,
+		SenderProjectID:     msg.SenderProjectID,
+		SenderDisplayName:   msg.SenderDisplayName,
 		AuthoredByUser:      msg.AuthoredByUser,
+		InteractionAt:       msg.InteractionAt,
 	}
 
 	var (
@@ -2612,11 +2615,18 @@ func (c *Controller) project() {
 	if !suppressStoppedActivity {
 		c.reportActivity(ctx, domain.ActivityExited, "chat.controller.stopped", now)
 	}
-	if _, err := c.store.CleanupOwnedControllerWork(
-		ctx, c.sessionID, c.conversation.ID, c.generation, now,
-	); err != nil {
+	if err := c.cleanupOwnedControllerWork(ctx, now); err != nil {
 		c.log.Error("failed to clean up stopped controller work", "session", c.sessionID, "error", err)
 	}
+}
+
+func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Time) error {
+	if c.reviewID != "" {
+		_, err := c.store.CleanupOwnedReviewControllerWork(ctx, c.reviewID, c.conversation.ID, c.generation, now)
+		return err
+	}
+	_, err := c.store.CleanupOwnedControllerWork(ctx, c.sessionID, c.conversation.ID, c.generation, now)
+	return err
 }
 
 // projectEvent archives one normalized provider event and applies its durable
@@ -2672,9 +2682,15 @@ func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (b
 	if err != nil {
 		return false, false, fmt.Errorf("encode provider event archive: %w", err)
 	}
-	projected, err := c.store.ProjectProviderEvent(ctx, c.conversation.ID, c.sessionID,
-		c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(),
-		func(txCtx context.Context) error { return c.apply(txCtx, event) })
+	project := func(txCtx context.Context) error { return c.apply(txCtx, event) }
+	var projected bool
+	if c.reviewID != "" {
+		projected, err = c.store.ProjectReviewProviderEvent(ctx, c.conversation.ID, c.sessionID,
+			c.reviewID, c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
+	} else {
+		projected, err = c.store.ProjectProviderEvent(ctx, c.conversation.ID, c.sessionID,
+			c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
+	}
 	if err != nil || !projected {
 		return projected, false, err
 	}
@@ -2786,6 +2802,10 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			}, now); err != nil {
 				return err
 			}
+		} else if state == domain.TurnStateCompleted && event.Err == nil && event.ProviderTurnID != "" &&
+			(event.ProviderConversationID == "" || event.ProviderConversationID == c.conv.ProviderConversationID()) {
+			_, err := c.store.ReconcileConversationAuthentication(ctx, c.conversation.ID, c.generation, event.ProviderTurnID, now)
+			return err
 		}
 		return nil
 
@@ -3091,9 +3111,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 
 	case ports.ChatEventControllerState:
 		if event.ControllerState == ports.ChatControllerStopped {
-			_, err := c.store.CleanupOwnedControllerWork(
-				ctx, c.sessionID, c.conversation.ID, c.generation, now)
-			return err
+			return c.cleanupOwnedControllerWork(ctx, now)
 		}
 		return nil
 
@@ -3276,13 +3294,10 @@ func (c *Controller) applyAccount(
 	update ports.ChatAccount,
 	now time.Time,
 ) error {
-	if update.ReauthRecovered {
-		c.mu.Lock()
-		reauthPending := c.account.ReauthRequiredAt != nil
-		c.mu.Unlock()
-		if !reauthPending {
-			return nil
-		}
+	// Uncorrelated account reports cannot establish recovery. Successful turn
+	// completion is projected separately with its provider identity and fence.
+	if update.ReauthRecovered && !update.ReauthRequired && update.AuthMode == "" && update.PlanLabel == "" {
+		return nil
 	}
 	if err := c.recordAccount(ctx, update, now); err != nil {
 		return err
@@ -3316,24 +3331,38 @@ func (c *Controller) recordAccount(
 	update ports.ChatAccount,
 	now time.Time,
 ) error {
-	c.mu.Lock()
-	if update.AuthMode != "" {
-		c.account.AuthMode = update.AuthMode
+	// Read the durable projection in the event transaction. Snapshot reconciliation
+	// may have recovered it since this controller's last account report.
+	previous, err := c.store.ConversationAccount(ctx, c.conversation.ID)
+	if err != nil {
+		return err
+	}
+	account := domain.ConversationAccount{AuthenticationState: "unknown"}
+	if previous != nil {
+		account = *previous
+	}
+	if update.AuthMode != "" && account.AuthMode != update.AuthMode {
+		account.AuthChangedAt = &now
+		if account.AuthMode != "" && account.AuthMode != update.AuthMode {
+			account.AuthVerifiedAt = nil
+			if account.ReauthRequiredAt == nil {
+				account.AuthenticationState = "unknown"
+			}
+		}
+		account.AuthMode = update.AuthMode
 	}
 	if update.PlanLabel != "" {
-		c.account.PlanLabel = update.PlanLabel
+		account.PlanLabel = update.PlanLabel
 	}
 	if update.ReauthRequired {
-		at := now
-		c.account.ReauthRequiredAt = &at
-		c.account.ReauthReason = update.ReauthReason
-	} else if update.ReauthRecovered {
-		c.account.ReauthRequiredAt = nil
-		c.account.ReauthReason = ""
+		account.AuthenticationState = "required"
+		account.ReauthRequiredAt = &now
+		account.ReauthReason = update.ReauthReason
+		account.LastAuthFailureAt = &now
+		account.LastAuthFailureReason = update.ReauthReason
+		account.AuthFailureID = c.newID()
+		account.AuthVerifiedAt = nil
 	}
-	account := c.account
-	c.mu.Unlock()
-
 	return c.store.RecordAccount(ctx, c.conversation.ID, account, now)
 }
 

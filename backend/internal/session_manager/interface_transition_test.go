@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -288,13 +289,13 @@ func (s *transitionStore) AcknowledgeSessionInterfaceTransitionNotice(
 	return rec, true, nil
 }
 
-func (s *transitionStore) EnqueueSessionInterfaceTransitionMessage(_ context.Context, transitionID, clientMessageID, message string, now time.Time) error {
+func (s *transitionStore) EnqueueSessionInterfaceTransitionMessage(_ context.Context, transitionID, clientMessageID, message string, now time.Time, opts ports.MessageDeliveryOptions) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nextMessage++
 	s.messages[transitionID] = append(s.messages[transitionID], domain.SessionInterfaceTransitionMessage{
 		ID: s.nextMessage, TransitionID: transitionID, ClientMessageID: clientMessageID,
-		Message: message, CreatedAt: now,
+		Message: message, CreatedAt: now, SenderSessionID: opts.SenderSessionID, AuthoredByUser: opts.AuthoredByUser,
 	})
 	return nil
 }
@@ -759,12 +760,7 @@ func (c *transitionChat) StartChat(ctx context.Context, cfg ChatStart) (ChatStar
 func (*transitionChat) StartChatTurn(context.Context, domain.SessionID, string) (string, error) {
 	return "", nil
 }
-func (c *transitionChat) RelayChatTurn(_ context.Context, _ domain.SessionID, text string) (string, error) {
-	c.relayMessages = append(c.relayMessages, text)
-	c.relayIDs = append(c.relayIDs, "")
-	return "", nil
-}
-func (c *transitionChat) RelayChatTurnWithID(_ context.Context, _ domain.SessionID, text, clientMessageID string) (string, error) {
+func (c *transitionChat) RelaySessionChatTurn(_ context.Context, _ domain.SessionID, text, clientMessageID string, _ ports.MessageDeliveryOptions) (string, error) {
 	c.relayMessages = append(c.relayMessages, text)
 	c.relayIDs = append(c.relayIDs, clientMessageID)
 	return "", nil
@@ -1206,7 +1202,7 @@ func TestInterfaceTransitionRollbackRejectsOwnerlessTUIHooksBeforeRelaunch(t *te
 	}); err != nil {
 		t.Fatalf("apply delayed ownerless hook: %v", err)
 	}
-	if after := store.sessions["session-1"]; after != before {
+	if after := store.sessions["session-1"]; !reflect.DeepEqual(after, before) {
 		t.Fatalf("ownerless rollback hook mutated session: got %+v, want %+v", after, before)
 	}
 
@@ -3049,7 +3045,7 @@ func TestTransitionMessageRetryUsesStableChatIdempotencyKey(t *testing.T) {
 	}
 	store.transitions[transition.ID] = transition
 	if err := store.EnqueueSessionInterfaceTransitionMessage(
-		context.Background(), transition.ID, "handoff-message-1", "review is ready", now,
+		context.Background(), transition.ID, "handoff-message-1", "review is ready", now, ports.MessageDeliveryOptions{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -3382,6 +3378,13 @@ func TestRecoverInterruptedClaudeTUIToChatPreservesPoisonedCheckpointThroughResu
 	}
 	if err := manager.ReconcileBackground(reconcileCtx); err != nil {
 		t.Fatalf("reconcile background: %v", err)
+	}
+	stopped, ok, err := st.GetSession(ctx, created.ID)
+	if err != nil || !ok || stopped.Activity.State != domain.ActivityExited || stopped.Metadata.RuntimeLaunchID != "" {
+		t.Fatalf("startup must leave the interrupted source stopped: session=%+v err=%v", stopped, err)
+	}
+	if _, err := manager.ResumeAgentWithMode(ctx, created.ID); err != nil {
+		t.Fatalf("explicitly resume source: %v", err)
 	}
 	relaunched, ok, err := st.GetSession(ctx, created.ID)
 	if err != nil || !ok {

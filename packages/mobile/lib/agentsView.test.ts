@@ -1,17 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardPR, DashboardSession } from "./api";
 import {
-	BOARD_ZONES,
 	boardZoneOf,
+	eventAtOf,
 	groupSessions,
+	holdOrder,
 	kanbanColumnOf,
+	sectionMeta,
+	shouldResnapshot,
+	snapshotOrder,
+	updatedSince,
 	workerStatusGlyph,
 	isArchived,
 	prLine,
 	showBranch,
 	trackerIssueId,
 	workerRowPresentation,
-	zoneMeta,
 } from "./agentsView";
 import { darkTheme, lightTheme } from "./theme";
 
@@ -42,10 +46,6 @@ describe("kanbanColumnOf", () => {
 });
 
 describe("boardZoneOf", () => {
-	it("puts the sections a person owns ahead of the ones a machine owns", () => {
-		expect(BOARD_ZONES).toEqual(["needs_you", "needs_review", "ready", "building", "validating"]);
-	});
-
 	// The one deliberate deviation from desktop. A worker blocked on a reply has
 	// no PR, so desktop files it under Building with every other running agent.
 	// That is right for a pipeline and wrong for a phone.
@@ -108,19 +108,28 @@ describe("workerStatusGlyph", () => {
 	});
 });
 
-describe("zoneMeta", () => {
-	it("uses mobile's order with desktop's column labels", () => {
-		expect(BOARD_ZONES.map((z) => zoneMeta(darkTheme, z).label)).toEqual([
-			"Needs you",
-			"In review",
-			"Ready",
-			"Building",
-			"Validating",
-		]);
+describe("sectionMeta", () => {
+	it("names the two live sections", () => {
+		expect(sectionMeta(darkTheme, "needs_you").label).toBe("Needs you");
+		expect(sectionMeta(darkTheme, "recent").label).toBe("Recent");
 	});
 
 	it("takes its colours from the passed theme", () => {
-		expect(zoneMeta(lightTheme, "ready").color).not.toBe(zoneMeta(darkTheme, "ready").color);
+		expect(sectionMeta(lightTheme, "needs_you").color).not.toBe(sectionMeta(darkTheme, "needs_you").color);
+	});
+});
+
+describe("eventAtOf", () => {
+	it("prefers the daemon's event time", () => {
+		expect(eventAtOf(session({ lastEventAt: "2026-08-09T10:00:00Z", lastActivityAt: "2026-01-01T00:00:00Z" }))).toBe(
+			"2026-08-09T10:00:00Z",
+		);
+	});
+
+	// Daemons that predate lastEventAt still order sensibly.
+	it("falls back to activity, then creation", () => {
+		expect(eventAtOf(session({ lastActivityAt: "2026-01-01T00:00:00Z" }))).toBe("2026-01-01T00:00:00Z");
+		expect(eventAtOf(session({ createdAt: "2025-12-01T00:00:00Z" }))).toBe("2025-12-01T00:00:00Z");
 	});
 });
 
@@ -161,7 +170,7 @@ describe("groupSessions", () => {
 			session({ id: "b", status: "needs_input" }),
 			session({ id: "z", isTerminated: true }),
 		]);
-		expect(sections.map((s) => s.zone)).toEqual(["needs_you", "building"]);
+		expect(sections.map((s) => s.zone)).toEqual(["needs_you", "recent"]);
 		expect(archived.map((s) => s.id)).toEqual(["z"]);
 	});
 
@@ -169,18 +178,37 @@ describe("groupSessions", () => {
 	it("drops empty zones rather than rendering empty headers", () => {
 		const { sections } = groupSessions(darkTheme, [session({ status: "idle" })]);
 		expect(sections).toHaveLength(1);
-		// Desktop folds idle and working into one lane; the distinction survives on
-		// the row's own status text rather than as a section of its own.
-		expect(sections[0].label).toBe("Building");
+		expect(sections[0].label).toBe("Recent");
 	});
 
-	it("keeps sections in board order regardless of input order", () => {
+	// Not desktop's lanes: a mergeable PR, an open PR and a working agent share
+	// one section, newest event first, and the row's status says which lane.
+	it("orders every delivery lane together by latest event", () => {
 		const { sections } = groupSessions(darkTheme, [
-			session({ id: "m", status: "mergeable" }),
-			session({ id: "w", status: "working" }),
-			session({ id: "p", status: "pr_open" }),
+			session({ id: "m", status: "mergeable", kanbanColumn: "ready", lastEventAt: "2026-08-09T09:00:00Z" }),
+			session({ id: "w", status: "working", kanbanColumn: "building", lastEventAt: "2026-08-09T11:00:00Z" }),
+			session({ id: "p", status: "pr_open", kanbanColumn: "validating", lastEventAt: "2026-08-09T10:00:00Z" }),
 		]);
-		expect(sections.map((s) => s.zone)).toEqual(["ready", "building", "validating"]);
+		expect(sections.map((s) => s.zone)).toEqual(["recent"]);
+		expect(sections[0].data.map((s) => s.id)).toEqual(["w", "p", "m"]);
+	});
+
+	it("keeps Needs you above Recent regardless of input order", () => {
+		const { sections } = groupSessions(darkTheme, [
+			session({ id: "w", status: "working", lastEventAt: "2026-08-09T12:00:00Z" }),
+			session({ id: "b", status: "needs_input", lastEventAt: "2026-08-09T08:00:00Z" }),
+		]);
+		expect(sections.map((s) => s.zone)).toEqual(["needs_you", "recent"]);
+	});
+
+	// The daemon emits RFC 3339 with variable fractional digits, which do not
+	// sort correctly as strings ("10:00:00.5Z" < "10:00:00Z").
+	it("compares event times as instants, not strings", () => {
+		const { sections } = groupSessions(darkTheme, [
+			session({ id: "whole", status: "working", lastEventAt: "2026-08-09T10:00:00Z" }),
+			session({ id: "later", status: "working", lastEventAt: "2026-08-09T10:00:00.5Z" }),
+		]);
+		expect(sections[0].data.map((s) => s.id)).toEqual(["later", "whole"]);
 	});
 
 	it("separates pinned sessions from their normal section", () => {
@@ -192,16 +220,15 @@ describe("groupSessions", () => {
 		expect(sections[0].data.map((s) => s.id)).toEqual(["recent"]);
 	});
 
-	// Sections a person owns read oldest-first, so whatever has waited longest is
-	// at the top. Sections a machine is turning read newest-first, because there
-	// the interesting one is whatever just moved.
+	// Needs you reads oldest-first, so whoever has waited longest is at the top.
+	// Recent reads newest-first: the interesting one is whatever just moved.
 	it.each([
 		["Needs you", "needs_input", ["old", "new"]],
-		["Ready", "mergeable", ["old", "new"]],
-		["Building", "working", ["new", "old"]],
-		["Validating", "pr_open", ["new", "old"]],
-		["Building (idle)", "idle", ["new", "old"]],
-	] as const)("orders %s sessions by the useful activity direction", (_label, status, expected) => {
+		["Recent (ready)", "mergeable", ["new", "old"]],
+		["Recent (working)", "working", ["new", "old"]],
+		["Recent (open PR)", "pr_open", ["new", "old"]],
+		["Recent (idle)", "idle", ["new", "old"]],
+	] as const)("orders %s sessions by the useful event direction", (_label, status, expected) => {
 		const { sections } = groupSessions(darkTheme, [
 			session({ id: "new", status, lastActivityAt: "2026-08-09T10:00:00Z" }),
 			session({ id: "old", status, lastActivityAt: "2026-01-01T00:00:00Z" }),
@@ -235,6 +262,63 @@ describe("groupSessions", () => {
 
 	it("returns nothing for an empty board", () => {
 		expect(groupSessions(darkTheme, [])).toEqual({ pinned: [], sections: [], archived: [] });
+	});
+});
+
+describe("held order", () => {
+	const key = (s: DashboardSession) => s.id;
+	const a = session({ id: "a", lastEventAt: "2026-08-09T10:00:00Z" });
+	const b = session({ id: "b", lastEventAt: "2026-08-09T09:00:00Z" });
+	const c = session({ id: "c", lastEventAt: "2026-08-09T08:00:00Z" });
+
+	// The point of the snapshot: news does not move rows under a thumb.
+	it("keeps the shown order when a session has news, and counts it", () => {
+		const snapshot = snapshotOrder([a, b, c], key);
+		const cNews = { ...c, lastEventAt: "2026-08-09T11:00:00Z" };
+		const held = holdOrder(snapshot, [cNews, a, b], key);
+		expect(held.map((s) => s.id)).toEqual(["a", "b", "c"]);
+		// The row itself still shows the fresh data.
+		expect(held[2]).toBe(cNews);
+		expect(updatedSince(snapshot, [cNews, a, b], key)).toBe(1);
+	});
+
+	it("puts sessions the snapshot never saw on top and counts them", () => {
+		const snapshot = snapshotOrder([a, b], key);
+		const d = session({ id: "d", lastEventAt: "2026-08-09T12:00:00Z" });
+		expect(holdOrder(snapshot, [a, d, b], key).map((s) => s.id)).toEqual(["d", "a", "b"]);
+		expect(updatedSince(snapshot, [a, d, b], key)).toBe(1);
+	});
+
+	it("counts nothing when nothing changed", () => {
+		expect(updatedSince(snapshotOrder([a, b, c], key), [a, b, c], key)).toBe(0);
+	});
+
+	it("absorbs news that did not move a row, so a later pin ranks most recent first", () => {
+		const snapshot = snapshotOrder([a, b, c], key);
+		// a was already first: news, but the shown order equals the fresh one.
+		const aNews = { ...a, lastEventAt: "2026-08-09T11:00:00Z" };
+		expect(shouldResnapshot(snapshot, [aNews, b, c], false, key)).toBe(true);
+
+		const absorbed = snapshotOrder([aNews, b, c], key);
+		expect(shouldResnapshot(absorbed, [aNews, b, c], false, key)).toBe(false);
+		// Pinning c now moves it with no news pending, and applies at once.
+		const cPinned = { ...c, isPinned: true };
+		expect(shouldResnapshot(absorbed, [cPinned, aNews, b], true, key)).toBe(true);
+	});
+
+	it("applies a pin at once even while news is held behind the pill", () => {
+		const snapshot = snapshotOrder([a, b, c], key);
+		const cNews = { ...c, lastEventAt: "2026-08-09T11:00:00Z" };
+		// Held: c has news that would move it to the top.
+		expect(shouldResnapshot(snapshot, [cNews, a, b], true, key)).toBe(false);
+		const bPinned = { ...b, isPinned: true };
+		expect(shouldResnapshot(snapshot, [bPinned, cNews, a], true, key)).toBe(true);
+	});
+
+	it("never asks again for a snapshot taken from the fresh order", () => {
+		const pinnedA = { ...a, isPinned: true };
+		expect(shouldResnapshot(snapshotOrder([pinnedA, b, c], key), [pinnedA, b, c], false, key)).toBe(false);
+		expect(shouldResnapshot(null, [a], false, key)).toBe(true);
 	});
 });
 
