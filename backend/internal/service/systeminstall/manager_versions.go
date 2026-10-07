@@ -37,28 +37,18 @@ func newManagedVersionChecker(commands ports.CommandRunner, client *http.Client)
 			return managedVersionResult{}, err
 		}
 		switch plan.Method {
-		case "npm", "pnpm", "yarn":
-			if result, ok := checkNodeManager(ctx, commands, plan, channel, scheme); ok {
-				return result, nil
-			}
-			return npmRegistryVersion(ctx, client, plan.Package, channel, scheme)
-		case "bun":
-			packageSpec := plan.Package
-			if channel != "latest" {
-				packageSpec += "@" + channel
-			}
-			output, commandErr := runManagedVersionCommand(ctx, commands, []string{"bun", "pm", "view", packageSpec, "version"})
-			if result, ok := managedResult(output, channel, scheme); ok {
-				return result, nil
-			}
-			if commandErr == nil {
-				commandErr = fmt.Errorf("bun returned no version for %s", plan.Package)
-			}
+		case "npm", "pnpm", "yarn", "bun":
+			// The public registry answers without starting a package manager. Ask
+			// the manager, which honours the user's configured registry, only when
+			// that registry is unreachable, e.g. behind a corporate mirror.
 			result, registryErr := npmRegistryVersion(ctx, client, plan.Package, channel, scheme)
-			if registryErr == nil {
+			if registryErr == nil || errors.Is(registryErr, errUpdateChannelUnconfirmed) {
+				return result, registryErr
+			}
+			if result, ok := nodeManagerVersion(ctx, commands, plan, channel, scheme); ok {
 				return result, nil
 			}
-			return managedVersionResult{}, fmt.Errorf("bun lookup failed: %w; registry fallback: %w", commandErr, registryErr)
+			return managedVersionResult{}, fmt.Errorf("%s registry lookup failed: %w", plan.Method, registryErr)
 		case "homebrew":
 			return homebrewManagedVersion(ctx, commands, client, plan, channel, scheme)
 		case "winget":
@@ -80,6 +70,18 @@ func updateChannel(current updateVersion) (string, error) {
 		return "", fmt.Errorf("%w: installed prerelease has no named channel", errUpdateChannelUnconfirmed)
 	}
 	return channel, nil
+}
+
+func nodeManagerVersion(ctx context.Context, commands ports.CommandRunner, plan Plan, channel string, scheme versionScheme) (managedVersionResult, bool) {
+	if plan.Method != "bun" {
+		return checkNodeManager(ctx, commands, plan, channel, scheme)
+	}
+	packageSpec := plan.Package
+	if channel != "latest" {
+		packageSpec += "@" + channel
+	}
+	output, _ := runManagedVersionCommand(ctx, commands, []string{"bun", "pm", "view", packageSpec, "version"})
+	return managedResult(output, channel, scheme)
 }
 
 func checkNodeManager(ctx context.Context, commands ports.CommandRunner, plan Plan, channel string, scheme versionScheme) (managedVersionResult, bool) {

@@ -44,7 +44,7 @@ func managerCommandRunner(t *testing.T, responses ...managerCommandResponse) com
 	}
 }
 
-func TestManagedVersionCheckerUsesNativeOutdatedCommands(t *testing.T) {
+func TestManagedVersionCheckerUsesNativeCommandsWhenRegistryIsUnreachable(t *testing.T) {
 	exitOne := errors.New("exit status 1")
 	tests := []struct {
 		name     string
@@ -179,7 +179,7 @@ func TestManagedVersionCheckerFallsBackWhenOutdatedResultIsEmpty(t *testing.T) {
 	}
 }
 
-func TestManagedVersionCheckerUsesRegistryFallbackAndInstalledPrereleaseChannel(t *testing.T) {
+func TestManagedVersionCheckerReadsRegistryFirstForInstalledPrereleaseChannel(t *testing.T) {
 	requests := 0
 	client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		requests++
@@ -188,10 +188,7 @@ func TestManagedVersionCheckerUsesRegistryFallbackAndInstalledPrereleaseChannel(
 		}
 		return managerHTTPResponse(http.StatusOK, `{"dist-tags":{"latest":"1.3.0","beta":"2.0.0-beta.3"}}`), nil
 	})}
-	commands := managerCommandRunner(t,
-		managerCommandResponse{argv: []string{"npm", "outdated", "-g", "--json", "@openai/codex"}, err: errors.New("npm unavailable")},
-		managerCommandResponse{argv: []string{"npm", "view", "@openai/codex@beta", "version", "--json"}, err: errors.New("npm unavailable")},
-	)
+	commands := managerCommandRunner(t)
 	current, _ := parseUpdateVersion("2.0.0-beta.1")
 	got, err := newManagedVersionChecker(commands, client)(context.Background(), Plan{Method: "npm", Package: "@openai/codex"}, current)
 	if err != nil {
@@ -206,10 +203,8 @@ func TestManagedVersionCheckerRejectsMissingPrereleaseChannel(t *testing.T) {
 	client := &http.Client{Transport: managerRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return managerHTTPResponse(http.StatusOK, `{"dist-tags":{"latest":"1.3.0","next":"2.0.0-next.2"}}`), nil
 	})}
-	commands := managerCommandRunner(t,
-		managerCommandResponse{argv: []string{"npm", "outdated", "-g", "--json", "@openai/codex"}, err: errors.New("npm unavailable")},
-		managerCommandResponse{argv: []string{"npm", "view", "@openai/codex@beta", "version", "--json"}, err: errors.New("npm unavailable")},
-	)
+	// A definitive registry answer is final; the package manager is not asked again.
+	commands := managerCommandRunner(t)
 	current, _ := parseUpdateVersion("2.0.0-beta.1")
 	if _, err := newManagedVersionChecker(commands, client)(context.Background(), Plan{Method: "npm", Package: "@openai/codex"}, current); err == nil {
 		t.Fatal("missing beta dist-tag unexpectedly produced an advisory")
@@ -338,5 +333,23 @@ func TestHomebrewTapVersionUsesLocalMetadataOnly(t *testing.T) {
 	got, err := newManagedVersionChecker(commands, client)(context.Background(), Plan{Method: "homebrew", Package: "anomalyco/tap/opencode"}, current)
 	if err != nil || got.Latest != "1.18.35" {
 		t.Fatalf("result=%+v err=%v", got, err)
+	}
+}
+
+func TestNodeManagersReadRegistryWithoutStartingManager(t *testing.T) {
+	for _, method := range []string{"npm", "pnpm", "yarn", "bun"} {
+		t.Run(method, func(t *testing.T) {
+			client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.String() != "https://registry.npmjs.org/@openai%2Fcodex" {
+					t.Fatalf("URL = %s", request.URL)
+				}
+				return managerHTTPResponse(http.StatusOK, `{"dist-tags":{"latest":"1.3.0"}}`), nil
+			})}
+			current, _ := parseUpdateVersion("1.2.0")
+			got, err := newManagedVersionChecker(managerCommandRunner(t), client)(context.Background(), Plan{Method: method, Package: "@openai/codex"}, current)
+			if err != nil || got.Latest != "1.3.0" {
+				t.Fatalf("result=%+v err=%v", got, err)
+			}
+		})
 	}
 }
