@@ -25,20 +25,18 @@ Use reports for meaningful transitions, decisions, blockers, required input,
 outputs, and terminal judgment. Do not narrate routine commands. Outputs do not
 imply completion, and `--done` does not terminate the session.
 
-Attach a reviewable deliverable as soon as it is ready, not only at `--done`:
-use `--artifact <reference>` on the report for the milestone that produced it.
-Examples include a requested document, a rendered dashboard, or another output
-the orchestrator or human needs to open directly. `--artifact` takes any opaque
-reference string; it is not validated as a URL.
+When you produce a deliverable the user asked for that is not a PR (a requested
+document or similar file), attach it as soon as it is ready, not only at
+`--done`: use `--artifact <reference>` on the report for the milestone that
+produced it. `--artifact` takes any opaque reference string; it is not validated
+as a URL.
 In a chat session, an HTML file from the artifact directory that you attach
 with `--artifact` also shows in the thread.
 
-Routine test logs, command output, scratch notes, and intermediate diagnostics
-are working material, not deliverables. Do not attach them unless requested or
-needed to explain an actionable failure. Summarize validation in the report note;
-when a separate deliverable is useful, prefer one consolidated report over
-individual logs. Ordinary progress updates and concise final answers do not
-need separate artifact files.
+Most tasks have no artifact. Findings, investigation results, verification, and
+progress belong in the report note. Never attach screenshots, test logs, command
+output, scratch notes, or intermediate diagnostics unless the user requested
+them. One deliverable is one file.
 
 Saving a local artifact or attaching its reference to an AO report is not
 external publishing authorization. Publish externally only within the

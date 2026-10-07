@@ -5992,20 +5992,28 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	if !strings.Contains(sp, wantDir) {
 		t.Fatalf("system prompt missing artifact dir %q:\n%s", wantDir, sp)
 	}
+	// Every file in the artifact dir is shown to the user, so the prompt must
+	// default to none and keep scratch/diagnostic files out of it.
 	for _, want := range []string{
-		"Ordinary progress updates, concise final answers, and validation summaries can stay in chat or AO report notes",
-		"working material, not deliverables",
+		"including files in subdirectories, appears to the user as an artifact",
+		"The default is no artifact.",
+		"Investigations, triage, root-cause findings, verification results, progress updates, and final answers belong in chat",
+		"Write one file per deliverable.",
+		"in a temporary directory outside both the git workspace and the artifact directory",
 		"does not authorize external publishing",
 	} {
 		if !strings.Contains(sp, want) {
 			t.Fatalf("system prompt missing artifact boundary %q", want)
 		}
 	}
+	if strings.Contains(sp, "Preserve any relative asset links") {
+		t.Fatal("system prompt must not invite supporting asset files next to an artifact")
+	}
 	if strings.Contains(sp, "naturally document-shaped") {
 		t.Fatal("system prompt must not require files for ordinary summaries")
 	}
 	// Only a chat session has a thread to show a page in.
-	const inThread = "it does not belong in the workspace at all. In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory."
+	const inThread = "the issue, or the pull request, not in artifact files. In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory."
 	if strings.Contains(sp, "html_render") {
 		t.Fatalf("terminal session prompt names html_render:\n%s", sp)
 	}
