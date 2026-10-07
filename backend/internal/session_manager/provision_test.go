@@ -2,7 +2,9 @@ package sessionmanager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -10,9 +12,12 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 type fixedBrowserCapability string
@@ -494,14 +499,14 @@ func TestApplySymlinksRejectsParentTraversal(t *testing.T) {
 
 func TestRunPostCreate(t *testing.T) {
 	workspace := t.TempDir()
-	if err := runPostCreate(context.Background(), workspace, []string{"echo hi > out.txt"}, nil); err != nil {
+	if err := runPostCreate(context.Background(), workspace, []string{"echo hi > out.txt"}, nil, nil); err != nil {
 		t.Fatalf("runPostCreate: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "out.txt")); err != nil {
 		t.Fatalf("post-create command did not run in workspace: %v", err)
 	}
 	// A failing command surfaces an error.
-	if err := runPostCreate(context.Background(), workspace, []string{"exit 3"}, nil); err == nil {
+	if err := runPostCreate(context.Background(), workspace, []string{"exit 3"}, nil, nil); err == nil {
 		t.Fatal("expected error from failing post-create command")
 	}
 }
@@ -512,9 +517,307 @@ func TestRunPostCreateReceivesAndRedactsProjectEnv(t *testing.T) {
 		command = `echo %PROJECT_TOKEN% && exit /b 3`
 	}
 	secret := "project-secret-123"
-	err := runPostCreate(context.Background(), t.TempDir(), []string{command}, map[string]string{"PROJECT_TOKEN": secret})
+	err := runPostCreate(context.Background(), t.TempDir(), []string{command}, map[string]string{"PROJECT_TOKEN": secret}, nil)
 	if err == nil || !strings.Contains(err.Error(), "[REDACTED]") || strings.Contains(err.Error(), secret) {
 		t.Fatalf("postCreate error did not redact project value: %v", err)
+	}
+}
+
+// The actual postCreate shell invokes this test binary to read the live store.
+// No expected session identity or prebuilt receipt is passed to the child.
+func TestPostCreateStoreProbe(t *testing.T) {
+	if os.Getenv("POSTCREATE_STORE_PROBE") != "1" {
+		return
+	}
+	dataDir := os.Getenv(EnvDataDir)
+	if !filepath.IsAbs(dataDir) {
+		t.Fatalf("postCreate received non-absolute daemon data dir: %q", dataDir)
+	}
+	st, err := sqlite.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	rec, ok, err := st.GetSession(context.Background(), domain.SessionID(os.Getenv(EnvSessionID)))
+	if err != nil || !ok {
+		t.Fatalf("owning session lookup: found=%v error=%v", ok, err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	actualWorkspace, resolveErr := filepath.EvalSymlinks(rec.Metadata.WorkspacePath)
+	if resolveErr != nil {
+		t.Fatal(resolveErr)
+	}
+	if rec.ProjectID != domain.ProjectID(os.Getenv(EnvProjectID)) || rec.IssueID != domain.IssueID(os.Getenv(EnvIssueID)) ||
+		rec.Metadata.WorkspacePath != os.Getenv("AO_WORKSPACE_PATH") || actualWorkspace != cwd {
+		t.Fatalf("postCreate identity disagrees with live store: %+v cwd=%q", rec, cwd)
+	}
+	if rec.IsTerminated || rec.Metadata.RuntimeHandleID != "" || rec.Metadata.RuntimeLaunchID != "" ||
+		rec.Metadata.ProviderConversationID != "" || rec.Metadata.ControllerGeneration != "" || rec.Metadata.AgentSessionID != "" ||
+		rec.Activity.State != domain.ActivityIdle {
+		t.Fatalf("postCreate observed a live or altered controller: %+v", rec)
+	}
+	for _, step := range rec.ProvisionSteps {
+		if step.ID == domain.SessionProvisionStepSetup && step.Status == domain.SessionProvisionStepDone {
+			t.Fatal("setup was marked done while postCreate was still running")
+		}
+	}
+	body, err := json.Marshal(struct {
+		Branch  string
+		Repo    string
+		RunFile string
+		Token   string
+	}{rec.Metadata.Branch, rec.Metadata.WorkspaceRepoPath, os.Getenv(EnvRunFile), os.Getenv("PROJECT_TOKEN")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("postcreate-context.json", body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSpawnPostCreateSessionContext(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell probe")
+	}
+	for _, tc := range []struct {
+		name      string
+		mode      domain.SessionMode
+		kind      domain.SessionKind
+		async     bool
+		prepared  bool
+		noRunFile bool
+		project   domain.ProjectKind
+	}{
+		{name: "tui", mode: domain.SessionModeTUI, kind: domain.KindWorker},
+		{name: "no manager runfile", mode: domain.SessionModeTUI, kind: domain.KindWorker, noRunFile: true},
+		{name: "chat orchestrator", mode: domain.SessionModeChat, kind: domain.KindOrchestrator},
+		{name: "async chat", mode: domain.SessionModeChat, kind: domain.KindWorker, async: true},
+		{name: "prepared suffix", mode: domain.SessionModeTUI, kind: domain.KindWorker, prepared: true},
+		{name: "async prepared suffix", mode: domain.SessionModeChat, kind: domain.KindWorker, async: true, prepared: true},
+		{name: "workspace project", mode: domain.SessionModeTUI, kind: domain.KindWorker, project: domain.ProjectKindWorkspace},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir, workspace := t.TempDir(), t.TempDir()
+			st, err := sqlite.Open(dataDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			runFile := filepath.Join(dataDir, "daemon.json")
+			if tc.noRunFile {
+				runFile = ""
+			}
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
+			project := domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Kind: tc.project, Config: testRoleAgents()}
+			project.Config.Env = map[string]string{"PROJECT_TOKEN": "kept"}
+			for _, key := range []string{EnvSessionID, EnvProjectID, EnvIssueID, EnvDataDir, EnvRunFile, "AO_WORKSPACE_PATH"} {
+				t.Setenv(key, "inherited-spoof")
+				project.Config.Env[key] = "project-spoof"
+			}
+			project.Config.PostCreate = []string{"POSTCREATE_STORE_PROBE=1 " + quote(executable) + " -test.run '^TestPostCreateStoreProbe$'"}
+			if err := st.UpsertProject(context.Background(), project); err != nil {
+				t.Fatal(err)
+			}
+			ws := &fakeWorkspace{path: workspace, createRepoPath: project.Path, createBranch: "actual-returned-branch-2"}
+			if tc.project == domain.ProjectKindWorkspace {
+				ws.projectCreateInfo = ports.WorkspaceProjectInfo{
+					Root:      ports.WorkspaceInfo{Path: workspace, RepoPath: project.Path, Branch: ws.createBranch, SessionID: "mer-1", ProjectID: "mer"},
+					Worktrees: []ports.WorkspaceRepoInfo{{RepoName: domain.RootWorkspaceRepoName, Path: workspace, RepoPath: project.Path, Branch: ws.createBranch, SessionID: "mer-1", ProjectID: "mer"}},
+				}
+			}
+			m := New(Deps{Runtime: &fakeRuntime{}, Agents: fakeAgents{}, Workspace: ws, Store: st,
+				Messenger: &fakeMessenger{}, Lifecycle: lifecycle.New(st, nil), Chat: &recordingLauncher{}, DataDir: dataDir,
+				RunFilePath: runFile, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+				LookPath: func(string) (string, error) { return "/bin/true", nil }})
+			deferred := deferredBackground(m)
+			cfg := ports.SpawnConfig{ProjectID: "mer", IssueID: "issue-9", Harness: domain.HarnessCodex,
+				Kind: tc.kind, RequestedMode: tc.mode, Async: tc.async}
+			if tc.prepared {
+				token, err := m.PrepareTaskWorkspace(context.Background(), project)
+				if err != nil {
+					t.Fatal(err)
+				}
+				(*deferred)[0]()
+				cfg.TaskPreparation = token
+			}
+			// Launching a controller is outside this test. Stop there only after
+			// the real shell has proved its persisted ownership and environment.
+			m.runtime.(*fakeRuntime).createErr = errors.New("probe ends before controller")
+			m.chat.(*recordingLauncher).startErr = errors.New("probe ends before controller")
+			_, _, _, spawnErr := m.Spawn(context.Background(), cfg)
+			if tc.async && spawnErr == nil {
+				(*deferred)[len(*deferred)-1]()
+			}
+			body, err := os.ReadFile(filepath.Join(workspace, "postcreate-context.json"))
+			if err != nil {
+				t.Fatalf("actual postCreate did not prove ownership: %v (spawn: %v)", err, spawnErr)
+			}
+			var got struct {
+				Branch  string
+				Repo    string
+				RunFile string
+				Token   string
+			}
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Branch != ws.createBranch || got.Repo != project.Path ||
+				got.RunFile != runFile || got.Token != "kept" {
+				t.Fatalf("postCreate context = %+v", got)
+			}
+		})
+	}
+}
+
+type refusedPostCreatePublishStore struct {
+	*fakeStore
+	err    error
+	cancel context.CancelFunc
+}
+
+func (s *refusedPostCreatePublishStore) SetSessionProvisionedWorkspace(ctx context.Context, id domain.SessionID, branch, path, repo string, now time.Time) (bool, error) {
+	if s.cancel != nil {
+		updated, err := s.fakeStore.SetSessionProvisionedWorkspace(ctx, id, branch, path, repo, now)
+		s.cancel()
+		return updated, err
+	}
+	return false, s.err
+}
+
+func TestSpawnPostCreatePublicationFailurePreventsShell(t *testing.T) {
+	for _, async := range []bool{false, true} {
+		for _, failure := range []string{"refused", "error", "cancelled"} {
+			t.Run(fmt.Sprintf("async=%v/%s", async, failure), func(t *testing.T) {
+				launcher := &recordingLauncher{}
+				m, st, rt := newChatManager(launcher)
+				m.dataDir = t.TempDir()
+				workspace := t.TempDir()
+				m.workspace.(*fakeWorkspace).path = workspace
+				project := st.projects["mer"]
+				project.Config.PostCreate = []string{"echo ran > shell-ran"}
+				st.projects["mer"] = project
+				refusal := &refusedPostCreatePublishStore{fakeStore: st}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if failure == "error" {
+					refusal.err = errors.New("publication failed")
+				}
+				if failure == "cancelled" {
+					refusal.cancel = cancel
+					m.backgroundContext = ctx
+				}
+				m.store = refusal
+				deferred := deferredBackground(m)
+				mode := domain.SessionModeTUI
+				if async {
+					mode = domain.SessionModeChat
+				}
+				_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, RequestedMode: mode, Async: async})
+				if async && err == nil {
+					(*deferred)[0]()
+				} else if err == nil {
+					t.Fatal("spawn accepted failed publication")
+				}
+				if _, err := os.Stat(filepath.Join(workspace, "shell-ran")); !os.IsNotExist(err) {
+					t.Fatalf("postCreate ran after failed publication: %v", err)
+				}
+				if rt.created != 0 || len(launcher.started) != 0 {
+					t.Fatal("controller started after failed publication")
+				}
+			})
+		}
+	}
+}
+
+type failedSetupCheckpointStore struct{ *fakeStore }
+
+func (s *failedSetupCheckpointStore) SetSessionProvisionSteps(context.Context, domain.SessionID, []domain.SessionProvisionStep, time.Time) error {
+	return errors.New("setup checkpoint unavailable")
+}
+
+func TestSpawnPostCreateRequiresDurableSetupCheckpoint(t *testing.T) {
+	for _, async := range []bool{false, true} {
+		t.Run(fmt.Sprint(async), func(t *testing.T) {
+			m, st, _ := newChatManager(&recordingLauncher{})
+			m.dataDir = t.TempDir()
+			m.store = &failedSetupCheckpointStore{st}
+			deferred := deferredBackground(m)
+			workspace := t.TempDir()
+			m.workspace.(*fakeWorkspace).path = workspace
+			project := st.projects["mer"]
+			project.Config.PostCreate = []string{"echo ran > shell-ran"}
+			st.projects["mer"] = project
+			mode := domain.SessionModeTUI
+			if async {
+				mode = domain.SessionModeChat
+			}
+			_, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, RequestedMode: mode, Async: async})
+			if async && err == nil {
+				(*deferred)[0]()
+			}
+			if _, err := os.Stat(filepath.Join(workspace, "shell-ran")); !os.IsNotExist(err) {
+				t.Fatalf("hook ran without durable in-progress setup checkpoint: %v", err)
+			}
+		})
+	}
+}
+
+func TestInterruptedPostCreateCannotLaunchOnRecovery(t *testing.T) {
+	m, st, rt, ws := newManager()
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+		Metadata:       domain.SessionMetadata{Branch: "returned-branch", WorkspacePath: t.TempDir()},
+		ProvisionSteps: []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepSetup, Status: domain.SessionProvisionStepRunning}}}
+	st.sessions[rec.ID] = rec
+	ws.destroyErr = ports.ErrWorkspaceDirty
+	if err := m.reconcileLive(context.Background(), rec); err == nil {
+		t.Fatal("recovery accepted unfinished setup")
+	}
+	if err := m.checkSessionHealth(context.Background(), rec); err == nil {
+		t.Fatal("startup accepted unfinished setup")
+	}
+	if _, err := m.relaunchRestoredSession(context.Background(), rec, st.projects["mer"], workspaceInfo(rec)); err == nil {
+		t.Fatal("restore accepted unfinished setup")
+	}
+	if rt.created != 0 || len(ws.restoreConfigs) != 0 {
+		t.Fatal("recovery launched or restored unfinished setup")
+	}
+	if got := st.sessions[rec.ID]; got.Metadata.WorkspacePath != rec.Metadata.WorkspacePath || got.IsTerminated {
+		t.Fatalf("recovery lost cleanup identity: %+v", got)
+	}
+}
+
+func TestInterruptedPostCreateClientRequestCleanupRetainsDirtyWorkspace(t *testing.T) {
+	for _, dirty := range []bool{false, true} {
+		t.Run(fmt.Sprint(dirty), func(t *testing.T) {
+			m, st, rt, ws := newManager()
+			rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker,
+				Harness: domain.HarnessCodex, ClientRequestID: "interrupted-request", Mode: domain.SessionModeChat,
+				Metadata:       domain.SessionMetadata{Branch: "returned-branch", WorkspacePath: t.TempDir()},
+				ProvisionSteps: []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepSetup, Status: domain.SessionProvisionStepRunning}}}
+			st.sessions[rec.ID] = rec
+			if dirty {
+				ws.destroyErr = ports.ErrWorkspaceDirty
+			}
+			err := m.checkSessionHealth(context.Background(), rec)
+			got, exists := st.sessions[rec.ID]
+			if dirty {
+				if err == nil || !exists || got.Metadata.WorkspacePath != rec.Metadata.WorkspacePath {
+					t.Fatalf("dirty interrupted workspace was not preserved: session=%+v exists=%v error=%v", got, exists, err)
+				}
+			} else if err != nil || exists {
+				t.Fatalf("removed interrupted seed still blocks client retry: exists=%v error=%v", exists, err)
+			}
+			if rt.created != 0 || ws.destroyed != 1 {
+				t.Fatalf("startup created controller or skipped cleanup: controllers=%d destroys=%d", rt.created, ws.destroyed)
+			}
+		})
 	}
 }
 

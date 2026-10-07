@@ -214,6 +214,19 @@ func TestFirstTaskStartupRetryAfterDaemonSIGKILL(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"sessions"`
 	}
+	// Workspace identity is now published during setup. Safe cleanup runs in
+	// startup's background pass, so wait for the interrupted seed to be removed.
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		restarted.mustCall("GET", "/sessions", http.StatusOK, nil, &sessions)
+		if len(sessions.Sessions) == 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(sessions.Sessions) != 0 {
+		t.Fatalf("interrupted setup was not safely removed: %+v\n%s", sessions.Sessions, restarted.tailLog())
+	}
 	var retry spawned
 	status, err := restarted.call("POST", "/sessions", req, &retry)
 	if err != nil || status != http.StatusCreated || retry.Session.ID == "" {

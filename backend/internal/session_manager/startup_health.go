@@ -15,6 +15,28 @@ func (m *Manager) checkSessionHealth(ctx context.Context, rec domain.SessionReco
 	if rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
 		return nil
 	}
+	if unfinishedWorkspaceSetup(rec) {
+		// A synchronous request interrupted before controller commit can retry
+		// only after safe removal. Dirty workspaces keep their ownership row.
+		if !rec.IsTerminated && rec.Metadata.Prompt == "" &&
+			rec.Metadata.RuntimeHandleID == "" && rec.Metadata.RuntimeLaunchID == "" &&
+			rec.Metadata.ProviderConversationID == "" && rec.Metadata.ControllerGeneration == "" &&
+			rec.Metadata.AgentSessionID == "" && rec.Metadata.AgentSessionIDLaunchID == "" {
+			ws := workspaceInfo(rec)
+			var workspaceProject *ports.WorkspaceProjectInfo
+			if rows, ok, err := m.workspaceProjectRows(ctx, rec); err != nil {
+				return err
+			} else if ok {
+				workspaceProject = &ports.WorkspaceProjectInfo{Root: ws, Worktrees: rows}
+			}
+			if m.destroySpawnWorkspace(ctx, ws, workspaceProject) {
+				m.clearProvisionedWorkspace(ctx, rec.ID, ws.Path)
+				m.rollbackSpawnSeedRow(ctx, rec.ID)
+				return nil
+			}
+		}
+		return fmt.Errorf("check session %s: workspace setup did not complete; preserve workspace for cleanup", rec.ID)
+	}
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
 		return err

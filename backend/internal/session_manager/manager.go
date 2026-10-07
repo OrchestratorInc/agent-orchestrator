@@ -1231,11 +1231,32 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 	}
-	// Per-project workspace provisioning: symlink shared files, then run any
-	// post-create commands (e.g. `pnpm install`) before the agent launches.
-	if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+	// Reuse the setup checkpoint so recovery cannot launch an interrupted hook.
+	var setupProgress *provisionProgress
+	if len(project.Config.PostCreate) > 0 || len(project.Config.Symlinks) > 0 {
+		setupProgress = m.startProvisionProgress(ctx, id, []domain.SessionProvisionStepID{domain.SessionProvisionStepSetup})
+		if setupProgress.err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, setupProgress.err)
+		}
+	}
+	// Publish actual adapter identity before setup can query its owning session.
+	if err := m.publishSpawnWorkspace(ctx, rec.ID, ws); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
+	}
+	// Per-project workspace provisioning: symlink shared files, then run any
+	// post-create commands (e.g. `pnpm install`) before the agent launches.
+	if err := m.provisionWorkspace(ctx, project, rec, ws); err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
+	}
+	if setupProgress != nil {
+		setupProgress.complete(ctx, domain.SessionProvisionStepSetup)
+		if setupProgress.err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, setupProgress.err)
+		}
 	}
 
 	// CLI agents receive the prompt as text and cannot consume inline binary
@@ -1937,9 +1958,8 @@ func (m *Manager) rollbackSeedSpawnWorkspace(ctx context.Context, rec domain.Ses
 			m.cleanupAgentWorkspace(cleanupCtx, rec, ws.Path)
 			cancel()
 		}
-		if published {
-			m.clearProvisionedWorkspace(ctx, rec.ID, ws.Path)
-		} else {
+		m.clearProvisionedWorkspace(ctx, rec.ID, ws.Path)
+		if !published {
 			m.rollbackSpawnSeedRowAfterFailure(ctx, rec.ID)
 			m.cleanupArtifactDir(rec.ID)
 		}
@@ -2891,6 +2911,9 @@ func (m *Manager) relaunchSessionWithPolicy(
 }
 
 func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy) (RestoreResult, error) {
+	if unfinishedWorkspaceSetup(rec) {
+		return RestoreResult{}, fmt.Errorf("%s %s: workspace setup did not complete; preserve workspace for cleanup", operation, rec.ID)
+	}
 	// Relaunch dispatches from the currently committed persisted mode, never from
 	// a caller hint. The interface-transition coordinator changes that fact only
 	// after stopping the old controller, then reuses this ordinary restore path.
@@ -3241,6 +3264,9 @@ func (m *Manager) saveAndTeardownOne(ctx context.Context, rec domain.SessionReco
 // worktree, preserving conversation identity when recovery fails. Startup uses
 // checkSessionHealth instead so missing agents stay stopped.
 func (m *Manager) reconcileLive(ctx context.Context, rec domain.SessionRecord) error {
+	if unfinishedWorkspaceSetup(rec) && rec.ProvisionState.WithDefault() == domain.SessionProvisionReady {
+		return fmt.Errorf("reconcile %s: workspace setup did not complete; preserve workspace for cleanup", rec.ID)
+	}
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
 		return err
@@ -5410,11 +5436,31 @@ func HookPATH(executable func() (string, error), getenv func(string) string, pro
 // worktree exists: symlink shared files from the project repo, then run any
 // post-create commands. Either failing aborts the spawn so a half-provisioned
 // workspace never launches an agent.
-func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
-	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
+func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, rec domain.SessionRecord, ws ports.WorkspaceInfo) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return runPostCreate(ctx, workspacePath, project.Config.PostCreate, project.Config.Env)
+	if err := applySymlinks(project.Path, ws.Path, project.Config.Symlinks); err != nil {
+		return err
+	}
+	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	setProtectedEnv(env, EnvRunFile, m.runFilePath, envKeysCaseInsensitive)
+	setProtectedEnv(env, "AO_WORKSPACE_PATH", ws.Path, envKeysCaseInsensitive)
+	if err := runPostCreate(ctx, ws.Path, project.Config.PostCreate, project.Config.Env, env); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func (m *Manager) publishSpawnWorkspace(ctx context.Context, id domain.SessionID, ws ports.WorkspaceInfo) error {
+	updated, err := m.store.SetSessionProvisionedWorkspace(ctx, id, ws.Branch, ws.Path, ws.RepoPath, m.clock())
+	if err != nil {
+		return err
+	}
+	if !updated {
+		return errors.New("session no longer accepts workspace publication")
+	}
+	return ctx.Err()
 }
 
 // applySymlinks links each repo-relative path into the workspace. A source that
@@ -5472,7 +5518,7 @@ func safeRelPath(rel string) (string, error) {
 // runPostCreate runs each post-create command in the workspace via the platform
 // shell, so OS-agnostic commands like "pnpm install" work. A non-zero exit
 // aborts the spawn with the command output.
-func runPostCreate(ctx context.Context, workspacePath string, commands []string, projectEnv map[string]string) error {
+func runPostCreate(ctx context.Context, workspacePath string, commands []string, projectEnv, sessionEnv map[string]string) error {
 	for _, command := range commands {
 		command = strings.TrimSpace(command)
 		if command == "" {
@@ -5486,7 +5532,7 @@ func runPostCreate(ctx context.Context, workspacePath string, commands []string,
 		}
 		cmd.Dir = workspacePath
 		cmd.Env = os.Environ()
-		for key, value := range agentlaunch.MergeEnv(projectEnv, nil) {
+		for key, value := range agentlaunch.MergeEnv(projectEnv, sessionEnv) {
 			cmd.Env = append(cmd.Env, key+"="+value)
 		}
 		if out, err := cmd.CombinedOutput(); err != nil {

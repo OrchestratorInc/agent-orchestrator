@@ -336,6 +336,8 @@ UPDATE sessions SET auto_review_enabled = ?, updated_at = ? WHERE id = ?;
 -- A failed start may still receive a late partial worktree from a claimed
 -- preparation. Retain that path for safe cleanup, but never overwrite a live
 -- workspace or publish onto a terminated session still provisioning.
+-- Synchronous starts may publish only onto a controller-free, non-terminated
+-- ready seed (including a promoted preparation with the same workspace).
 UPDATE sessions SET
     branch = sqlc.arg(branch),
     workspace_path = sqlc.arg(workspace_path),
@@ -343,7 +345,13 @@ UPDATE sessions SET
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id)
   AND ((provision_state = 'provisioning' AND is_terminated = 0)
-    OR (provision_state = 'failed' AND (workspace_path = '' OR workspace_path = sqlc.arg(workspace_path))));
+    OR (provision_state = 'failed' AND (workspace_path = '' OR workspace_path = sqlc.arg(workspace_path)))
+    OR (provision_state = 'ready' AND is_terminated = 0
+        AND runtime_handle_id = '' AND runtime_launch_id = ''
+        AND agent_session_id = '' AND agent_session_id_launch_id = ''
+        AND provider_conversation_id = '' AND controller_generation = '' AND prompt = ''
+        AND (branch = '' OR branch = sqlc.arg(branch))
+        AND (workspace_path = '' OR workspace_path = sqlc.arg(workspace_path))));
 
 -- name: SetTaskPreparationBase :execrows
 -- Only the still-hidden reservation may receive its immutable branch base.
