@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -304,7 +305,7 @@ func (b PreparedBatch) Render() string {
 		if state == "" {
 			state = "information"
 		}
-		fmt.Fprintf(&out, "\n\n[%s] [%s](ao://sessions/%s/%s)", state, reportDisplayNameOrID(report), report.ProjectID, report.SessionID)
+		fmt.Fprintf(&out, "\n\n[%s] %s", state, reportSessionLink(report))
 		if report.RepeatCount > 1 {
 			fmt.Fprintf(&out, " (repeated %d times)", report.RepeatCount)
 		}
@@ -328,6 +329,14 @@ func reportDisplayNameOrID(r domain.ReportRecord) string {
 		return name
 	}
 	return string(r.SessionID)
+}
+
+// reportSessionLink is the markdown attribution a standalone report shows.
+// Piggybacked copies stay inside the hidden user-message envelope.
+func reportSessionLink(r domain.ReportRecord) string {
+	label := strings.NewReplacer("\\", "\\\\", "[", "\\[", "]", "\\]", "\n", " ").Replace(reportDisplayNameOrID(r))
+	href := "ao://sessions/" + url.PathEscape(string(r.ProjectID)) + "/" + url.PathEscape(string(r.SessionID))
+	return "[" + label + "](" + href + ")"
 }
 
 func (b PreparedBatch) hasState(state domain.ReportState) bool {

@@ -315,8 +315,8 @@ describe("HumanMessage attachments", () => {
 		render(<HumanMessage message={humanMessage(text)} sessionId="ao-1" />);
 
 		expect(screen.getByText("Please continue")).toBeInTheDocument();
-		expect(screen.getByText(/Reports since your previous turn/)).toBeInTheDocument();
-		expect(screen.getByRole("link", { name: "worker" })).toHaveAttribute("href", "ao://sessions/project/worker");
+		expect(screen.queryByText(/Reports since your previous turn/)).not.toBeInTheDocument();
+		expect(screen.queryByRole("link", { name: "worker" })).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Copy user message" }));
 		expect(writeText).toHaveBeenCalledWith("Please continue");
 	});
