@@ -20,7 +20,7 @@ func TestCanHibernateRequiresAnEmptyBackgroundTerminalInventory(t *testing.T) {
 		{"missing_data", `{}`, false, true},
 		{"null_data", `{"data":null}`, false, true},
 		{"malformed", `{"data":{}}`, false, true},
-		{"unsupported", "", false, true},
+		{"unsupported", "", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d, srv := newTestDriver(t)

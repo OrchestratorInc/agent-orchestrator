@@ -118,7 +118,12 @@ func (s *Service) setViewLease(id domain.SessionID, viewID string, active bool) 
 func (s *Service) hasChatView(id domain.SessionID) bool {
 	s.viewMu.Lock()
 	defer s.viewMu.Unlock()
-	return len(s.liveViewLeasesLocked(id)) != 0 || s.viewClosedAt[id].Add(chatHibernateGrace).After(s.now())
+	views := s.liveViewLeasesLocked(id)
+	if s.viewClosedAt[id].Add(chatHibernateGrace).After(s.now()) {
+		return true
+	}
+	delete(s.viewClosedAt, id)
+	return len(views) != 0
 }
 
 // Callers hold viewMu. Expired leases cannot keep a provider alive after a
@@ -165,23 +170,45 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 	if !gate.tryLock() {
 		return false, nil
 	}
-	defer gate.unlock()
-
 	rec, err := s.requireChatSession(ctx, id)
 	if err != nil {
+		gate.unlock()
 		return false, err
 	}
 	if !rec.EligibleForChatHibernation() || s.hasChatView(id) ||
 		rec.Activity.LastActivityAt.Add(chatHibernateGrace).After(s.now()) {
+		gate.unlock()
 		return false, nil
 	}
 	controller, err := s.Controller(id)
 	if err != nil || controller.State() != ports.ChatControllerReady ||
 		!controller.Capabilities().Has(ports.ChatCapabilityResume) {
+		gate.unlock()
 		return false, nil
 	}
 	hibernator, ok := controller.conv.(ports.ChatProviderHibernator)
 	if !ok {
+		gate.unlock()
+		return false, nil
+	}
+	// Inventory is provider I/O. Keep hibernation out with an operation count,
+	// while allowing new views, sends and explicit Kill to proceed.
+	release := controller.beginOperation()
+	gate.unlock()
+	ready, err := hibernator.CanHibernate(ctx)
+	release()
+	if err != nil || !ready {
+		if err != nil {
+			return false, fmt.Errorf("check chat provider background work: %w", err)
+		}
+		return false, nil
+	}
+	if !gate.tryLock() {
+		return false, nil
+	}
+	defer gate.unlock()
+	current, err := s.Controller(id)
+	if err != nil || current != controller || s.hasChatView(id) {
 		return false, nil
 	}
 	// Send and provider lifecycle projection use the same dispatch lock. Fence
@@ -229,13 +256,6 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 		controller.sendMu.Unlock()
 		return false, nil
 	}
-	if ready, err := hibernator.CanHibernate(ctx); err != nil || !ready {
-		controller.sendMu.Unlock()
-		if err != nil {
-			return false, fmt.Errorf("check chat provider background work: %w", err)
-		}
-		return false, nil
-	}
 	// Activity from outside Chat can change while eligibility is read. Recheck
 	// before recording the shutdown intent with a revision-checked write.
 	fresh, err := s.requireChatSession(ctx, id)
@@ -265,22 +285,36 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 	controller.mu.Unlock()
 	controller.sendMu.Unlock()
 
-	if err := hibernator.Hibernate(); err != nil {
-		// Shutdown may have started even when its acknowledgement fails. Retain
-		// the intent so a delayed process exit remains automatically resumable.
-		return false, fmt.Errorf("hibernate chat provider: %w", err)
-	}
+	stopErr := hibernator.Hibernate()
 	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	select {
-	case <-controller.stopped:
-		s.log.Info("chat session hibernated", "session", id, "harness", fresh.Harness)
-		return true, nil
-	case <-finishCtx.Done():
-		// Keep the durable intent and fence while shutdown is unconfirmed.
-		// Waking waits for the old provider to exit before creating a replacement.
-		return false, fmt.Errorf("wait for hibernated chat controller: %w", finishCtx.Err())
+	if stopErr == nil {
+		select {
+		case <-controller.stopped:
+		case <-finishCtx.Done():
+			stopErr = finishCtx.Err()
+		}
 	}
+	if stopErr != nil {
+		// The adapter may have consumed its close-once guard or already sent
+		// shutdown. Complete the same owner's shutdown, preserving queued work
+		// and resume intent instead of reopening intake on a dying provider.
+		if s.stopProviderHost == nil {
+			return false, fmt.Errorf("hibernate chat provider: %w", stopErr)
+		}
+		recoveryCtx, recoveryCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer recoveryCancel()
+		if err := s.stopProviderHost(recoveryCtx, id); err != nil {
+			return false, fmt.Errorf("confirm hibernated chat shutdown: %w", errors.Join(stopErr, err))
+		}
+		select {
+		case <-controller.stopped:
+		case <-recoveryCtx.Done():
+			return false, fmt.Errorf("wait for hibernated chat controller: %w", recoveryCtx.Err())
+		}
+	}
+	s.log.Info("chat session hibernated", "session", id, "harness", fresh.Harness)
+	return true, nil
 }
 
 // Explicit controller teardown (kill or interface switch) consumes the cold
@@ -403,6 +437,24 @@ func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error
 		if hibernating {
 			waitCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
+			gate := s.controllerGate(domain.SessionConversationOwner(id))
+			if err := gate.lock(waitCtx); err != nil {
+				return err
+			}
+			select {
+			case <-controller.stopped:
+			default:
+				current, _ := s.Controller(id)
+				if current == controller && s.stopProviderHost != nil {
+					// New user intent can complete a previously failed shutdown.
+					// Never send to the fenced source or terminate a replacement.
+					if err := s.stopProviderHost(waitCtx, id); err != nil {
+						gate.unlock()
+						return fmt.Errorf("finish hibernated chat shutdown: %w", err)
+					}
+				}
+			}
+			gate.unlock()
 			select {
 			case <-controller.stopped:
 			case <-waitCtx.Done():

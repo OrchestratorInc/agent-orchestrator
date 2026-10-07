@@ -27,9 +27,11 @@ type hibernationConversation struct {
 	markerErr         error
 	rejectMarker      bool
 	shutdownErr       error
+	hostShutdownErr   error
 	backgroundRunning bool
 	backgroundErr     error
 	backgroundChecks  atomic.Int32
+	onBackgroundCheck func(context.Context)
 }
 
 type hibernationSessionStore struct {
@@ -57,8 +59,11 @@ func (s *hibernationSessionStore) LatestVisibleUserTurnSettled(ctx context.Conte
 	return settled, err
 }
 
-func (c *hibernationConversation) CanHibernate(context.Context) (bool, error) {
+func (c *hibernationConversation) CanHibernate(ctx context.Context) (bool, error) {
 	c.backgroundChecks.Add(1)
+	if c.onBackgroundCheck != nil {
+		c.onBackgroundCheck(ctx)
+	}
 	return !c.backgroundRunning, c.backgroundErr
 }
 
@@ -103,6 +108,9 @@ func settledHibernationHarness(t *testing.T, state domain.TurnState, gate ...fun
 		HibernationEnabled: enabled,
 		StopProviderHost: func(context.Context, domain.SessionID) error {
 			conv.hostStops.Add(1)
+			if conv.hostShutdownErr != nil {
+				return conv.hostShutdownErr
+			}
 			return conv.Close()
 		},
 	})
@@ -652,15 +660,22 @@ func TestRelayChatTurnWithIDWakesHibernatedSession(t *testing.T) {
 }
 
 func TestSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t *testing.T) {
-	testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t, false)
+	testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t, false, false)
 }
 
 func TestSendSurvivesCancelledViewWake(t *testing.T) {
-	testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t, true)
+	testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t, true, false)
 }
 
-func testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t *testing.T, cancelView bool) {
+func TestSendAfterRecoveredHibernationDrainsQueueOnce(t *testing.T) {
+	testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t, false, true)
+}
+
+func testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t *testing.T, cancelView, failedShutdown bool) {
 	h, old := settledHibernationHarness(t, domain.TurnStateCompleted)
+	if failedShutdown {
+		old.shutdownErr = errors.New("shutdown acknowledgement lost")
+	}
 	ctx := context.Background()
 	if hibernated, err := h.svc.HibernateChat(ctx, testSession); err != nil || !hibernated {
 		t.Fatalf("hibernate = %v, %v", hibernated, err)
@@ -791,17 +806,22 @@ func TestFailedBackgroundWakeSettlesAllQueuedMessagesOnce(t *testing.T) {
 	t.Fatalf("queued turns were not settled after wake failure; wake attempts=%d", wakeCalls.Load())
 }
 
-func TestSendAfterTimedOutHibernationWaitsForProviderStop(t *testing.T) {
+func TestSendAfterFailedHibernationCompletesShutdownBeforeWake(t *testing.T) {
 	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
 	conv.keepOpen = true
+	conv.hostShutdownErr = errors.New("host still unreachable")
 	if hibernated, err := h.svc.HibernateChat(context.Background(), testSession); hibernated || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("timed-out hibernation = %v, %v", hibernated, err)
 	}
 	wakeReached := make(chan struct{}, 1)
 	h.svc.SetWakeCallback(func(context.Context, domain.SessionID) error {
+		if h.svc.HasLiveChatController(testSession) {
+			return errors.New("wake started before the old provider stopped")
+		}
 		wakeReached <- struct{}{}
 		return errors.New("wake failed")
 	})
+	conv.hostShutdownErr = nil
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "wake", ClientMessageID: "wake-after-timeout"})
@@ -810,24 +830,18 @@ func TestSendAfterTimedOutHibernationWaitsForProviderStop(t *testing.T) {
 	}
 	select {
 	case <-wakeReached:
-		t.Fatal("wake started before the old provider stopped")
-	case <-time.After(30 * time.Millisecond):
-	}
-	if err := conv.Close(); err != nil {
-		t.Fatal(err)
-	}
-	// The durable intent survives a delayed shutdown, so the eventual stop
-	// still wakes automatically instead of becoming an unmarked dead chat.
-	select {
-	case <-wakeReached:
+		if conv.hostStops.Load() != 2 {
+			t.Fatalf("host shutdown attempts = %d, want recovery on new input", conv.hostStops.Load())
+		}
 	case <-ctx.Done():
-		t.Fatal("wake did not start after delayed provider stop")
+		t.Fatal("new input did not recover the failed shutdown")
 	}
 }
 
 func TestFailedHibernateCanBeKilledThroughHostShutdown(t *testing.T) {
 	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
 	conv.shutdownErr = errors.New("shutdown acknowledgement lost")
+	conv.hostShutdownErr = errors.New("host still unreachable")
 	ctx := context.Background()
 	if slept, err := h.svc.HibernateChat(ctx, testSession); slept || !errors.Is(err, conv.shutdownErr) {
 		t.Fatalf("hibernate = %v, %v", slept, err)
@@ -839,6 +853,7 @@ func TestFailedHibernateCanBeKilledThroughHostShutdown(t *testing.T) {
 	if turn, err := h.svc.QueueUserMessage(ctx, testSession, ports.ChatUserMessage{Text: "pending during shutdown"}); err != nil || turn.State != domain.TurnStateQueued {
 		t.Fatalf("queue during failed shutdown = %+v, %v", turn, err)
 	}
+	conv.hostShutdownErr = nil
 	if err := h.svc.Stop(ctx, testSession); err != nil {
 		t.Fatal(err)
 	}
@@ -846,8 +861,67 @@ func TestFailedHibernateCanBeKilledThroughHostShutdown(t *testing.T) {
 		t.Fatalf("explicit Kill left a queued message: %v", err)
 	}
 	rec, _, err = h.st.GetSession(ctx, testSession)
-	if err != nil || rec.HibernatedAt != nil || h.svc.HasLiveChatController(testSession) || conv.hostStops.Load() != 1 {
+	if err != nil || rec.HibernatedAt != nil || h.svc.HasLiveChatController(testSession) || conv.hostStops.Load() != 2 {
 		t.Fatalf("explicit Kill did not retire failed hibernation: %+v, %v", rec.HibernatedAt, err)
+	}
+}
+
+func TestFailedHibernateConfirmsHostShutdownBeforeReturning(t *testing.T) {
+	for _, timeout := range []bool{false, true} {
+		t.Run(fmt.Sprintf("timeout=%v", timeout), func(t *testing.T) {
+			h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
+			if timeout {
+				conv.keepOpen = true
+			} else {
+				conv.shutdownErr = errors.New("shutdown acknowledgement lost")
+			}
+			slept, err := h.svc.HibernateChat(context.Background(), testSession)
+			if err != nil || !slept || conv.hostStops.Load() != 1 || h.svc.HasLiveChatController(testSession) {
+				t.Fatalf("failed shutdown did not recover: slept=%v err=%v hostStops=%d live=%v", slept, err, conv.hostStops.Load(), h.svc.HasLiveChatController(testSession))
+			}
+			rec, _, err := h.st.GetSession(context.Background(), testSession)
+			if err != nil || rec.HibernatedAt == nil {
+				t.Fatalf("confirmed shutdown lost native resume intent: %+v, %v", rec.HibernatedAt, err)
+			}
+		})
+	}
+}
+
+func TestBackgroundInventoryDoesNotBlockChatOperations(t *testing.T) {
+	for _, operation := range []string{"open", "send", "kill"} {
+		t.Run(operation, func(t *testing.T) {
+			h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
+			started := make(chan struct{})
+			release := make(chan struct{})
+			conv.onBackgroundCheck = func(context.Context) {
+				close(started)
+				<-release
+			}
+			done := make(chan error, 1)
+			go func() {
+				_, err := h.svc.HibernateChat(context.Background(), testSession)
+				done <- err
+			}()
+			<-started
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			var err error
+			switch operation {
+			case "open":
+				err = h.svc.SetChatView(ctx, testSession, "opened-during-inventory", true)
+			case "send":
+				_, err = h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "new work", ClientMessageID: "during-inventory"})
+			case "kill":
+				err = h.svc.Stop(ctx, testSession)
+			}
+			close(release)
+			if shutdownErr := <-done; shutdownErr != nil {
+				t.Fatal(shutdownErr)
+			}
+			if err != nil || conv.calls.Load() != 0 {
+				t.Fatalf("operation blocked or invalidated check slept: operation=%s error=%v shutdowns=%d", operation, err, conv.calls.Load())
+			}
+		})
 	}
 }
 

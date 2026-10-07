@@ -959,6 +959,10 @@ func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
 		NextCursor *string           `json:"nextCursor"`
 	}
 	if err := c.conn.request(ctx, "thread/backgroundTerminals/list", map[string]any{"threadId": c.threadID, "limit": 1}, &resp); err != nil {
+		var rpcErr *rpcError
+		if errors.As(err, &rpcErr) && rpcErr.Code == -32601 {
+			return false, nil // Older builds cannot prove that background work ended.
+		}
 		return false, err
 	}
 	if resp.Data == nil {

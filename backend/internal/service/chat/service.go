@@ -126,7 +126,7 @@ type Options struct {
 	// OnModelChanged syncs ChatUI's model override to session metadata before
 	// the next prompt routes. Nil leaves session metadata unchanged.
 	OnModelChanged func(domain.SessionID, string)
-	// StopProviderHost destroys current session ownership on explicit teardown,
+	// StopProviderHost destroys current ownership on explicit teardown or failed hibernation,
 	// even if its daemon attachment already failed. Never used by StopAll.
 	StopProviderHost func(context.Context, domain.SessionID) error
 	// HibernationEnabled reads the daemon-owned feature gate. Nil is disabled.
@@ -1323,6 +1323,10 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 		return err
 	}
 	defer gate.unlock()
+	s.viewMu.Lock()
+	delete(s.viewClosedAt, id)
+	delete(s.viewLeases, id)
+	s.viewMu.Unlock()
 
 	s.mu.RLock()
 	controller, ok := s.controllers[id]
