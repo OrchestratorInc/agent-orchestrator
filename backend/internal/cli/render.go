@@ -14,7 +14,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const maxRenderFileBytes = 1 << 20
+const (
+	maxRenderFileBytes  = 1 << 20
+	defaultRenderHeight = 400
+	defaultRenderWidth  = 720
+)
 
 type renderAPIRequest struct {
 	HTML   string `json:"html"`
@@ -88,9 +92,9 @@ func newRenderCommand(ctx *commandContext) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&title, "title", "", "short name for the page (required unless --check)")
-	cmd.Flags().IntVar(&height, "height", 400, "first-paint frame height in CSS pixels, 80-2000; the frame then fits the page")
+	cmd.Flags().IntVar(&height, "height", defaultRenderHeight, "first-paint frame height in CSS pixels, 80-2000; the frame then fits the page")
 	cmd.Flags().BoolVar(&check, "check", false, "screenshot the page in the AO desktop app instead of publishing it")
-	cmd.Flags().IntVar(&width, "width", 720, "with --check: viewport width in CSS pixels, 240-1600; use 390 for phones")
+	cmd.Flags().IntVar(&width, "width", defaultRenderWidth, "with --check: viewport width in CSS pixels, 240-1600; use 390 for phones")
 	cmd.Flags().StringVar(&out, "out", "", "with --check: PNG path to write (default: a new file in the temp directory)")
 	return cmd
 }
@@ -127,20 +131,45 @@ func (c *commandContext) publishRender(ctx context.Context, out io.Writer, file,
 	if err != nil {
 		return err
 	}
-	html, missing, err := inlineLocalImages(html)
+	resp, err := c.postRender(ctx, sessionID, html, title, height)
 	if err != nil {
-		return usageError{err}
-	}
-	if len(missing) > 0 {
-		return usageError{missingImagesError(missing)}
-	}
-	var resp renderAPIResponse
-	path := "sessions/" + url.PathEscape(sessionID) + "/renders"
-	if err := c.postJSON(ctx, path, renderAPIRequest{HTML: html, Title: title, Height: height}, &resp); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(out, "Shown above your reply (render %s). Do not describe the page; add only what it does not say.\n", resp.RenderID)
+	_, err = fmt.Fprintln(out, renderShownText(resp.RenderID))
 	return err
+}
+
+// postRender inlines a page's local images and shows it in the session's
+// thread. ao render and the html_render MCP tool both publish through it.
+func (c *commandContext) postRender(ctx context.Context, sessionID, html, title string, height int) (renderAPIResponse, error) {
+	var resp renderAPIResponse
+	html, missing, err := inlineLocalImages(html)
+	if err != nil {
+		return resp, usageError{err}
+	}
+	if len(missing) > 0 {
+		return resp, usageError{missingImagesError(missing)}
+	}
+	path := "sessions/" + url.PathEscape(sessionID) + "/renders"
+	err = c.postJSON(ctx, path, renderAPIRequest{HTML: html, Title: title, Height: height}, &resp)
+	return resp, err
+}
+
+func renderShownText(renderID string) string {
+	return fmt.Sprintf("Shown above your reply (render %s). Do not describe the page; add only what it does not say.", renderID)
+}
+
+// postRenderCheck inlines a page's local images and has the desktop app
+// screenshot it. A check shows what an unreadable image does to the page
+// instead of refusing it, so missing lists those images.
+func (c *commandContext) postRenderCheck(ctx context.Context, sessionID, html string, width int) (resp renderCheckAPIResponse, missing []string, err error) {
+	html, missing, err = inlineLocalImages(html)
+	if err != nil {
+		return resp, nil, usageError{err}
+	}
+	path := "sessions/" + url.PathEscape(sessionID) + "/renders/check"
+	err = c.postJSON(ctx, path, renderCheckAPIRequest{HTML: html, Width: width}, &resp)
+	return resp, missing, err
 }
 
 func (c *commandContext) checkRender(cmd *cobra.Command, file string, width int, out string) error {
@@ -152,14 +181,8 @@ func (c *commandContext) checkRender(cmd *cobra.Command, file string, width int,
 	if err != nil {
 		return err
 	}
-	// A check shows what an unreadable image does to the page instead of refusing it.
-	html, missing, err := inlineLocalImages(html)
+	resp, missing, err := c.postRenderCheck(cmd.Context(), sessionID, html, width)
 	if err != nil {
-		return usageError{err}
-	}
-	var resp renderCheckAPIResponse
-	path := "sessions/" + url.PathEscape(sessionID) + "/renders/check"
-	if err := c.postJSON(cmd.Context(), path, renderCheckAPIRequest{HTML: html, Width: width}, &resp); err != nil {
 		return err
 	}
 	if out == "" {
