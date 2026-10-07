@@ -114,10 +114,10 @@ func (s *Service) RecheckAgent(agentID string) {
 func (s *Service) WarmReadiness() { s.readiness.Warm() }
 
 func (s *Service) withReadinessUsage(ctx context.Context, snapshots []domain.AgentReadinessSnapshot) (Readiness, error) {
-	if s.sessions == nil {
+	if s.readinessSessions == nil {
 		return Readiness{Agents: snapshots}, nil
 	}
-	records, err := s.sessions.ListAllSessions(ctx)
+	records, err := s.readinessSessions.ListAllSessions(ctx)
 	if err != nil {
 		return Readiness{}, fmt.Errorf("list sessions for agent usage: %w", err)
 	}

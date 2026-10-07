@@ -2,9 +2,18 @@ package ports
 
 import (
 	"errors"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+// SessionModelUsage contains the durable session facts used to rank models.
+type SessionModelUsage struct {
+	ProjectID      domain.ProjectID
+	Model          string
+	LastActivityAt time.Time
+	CreatedAt      time.Time
+}
 
 // ErrSessionNotFound reports an observation for an unknown session id.
 var ErrSessionNotFound = errors.New("session not found")

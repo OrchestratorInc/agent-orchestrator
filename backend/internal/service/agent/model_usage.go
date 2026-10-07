@@ -60,7 +60,7 @@ func (s *Service) modelUsage(ctx context.Context, agentID, projectID string) map
 	if s.sessions == nil || agentID == "" {
 		return nil
 	}
-	records, err := s.sessions.ListAllSessions(ctx)
+	records, err := s.sessions.ListSessionModelUsage(ctx, domain.AgentHarness(agentID))
 	if err != nil {
 		// A picker without its recency hint is still a working picker, and this
 		// runs on every catalog read. Degrade to the catalog order.
@@ -72,10 +72,7 @@ func (s *Service) modelUsage(ctx context.Context, agentID, projectID string) map
 	scoped := make(map[string]time.Time)
 	global := make(map[string]time.Time)
 	for _, record := range records {
-		model := record.Metadata.Model
-		if model == "" || string(record.Harness) != agentID {
-			continue
-		}
+		model := record.Model
 		at := sessionModelUsedAt(record)
 		recordUsage(global, model, at)
 		if projectID != "" && string(record.ProjectID) == projectID {
@@ -97,9 +94,9 @@ func recordUsage(usage map[string]time.Time, model string, at time.Time) {
 
 // sessionModelUsedAt uses the durable activity fact rather than UpdatedAt,
 // which also advances for renames, pinning and other preference mutations.
-func sessionModelUsedAt(record domain.SessionRecord) time.Time {
-	if record.Activity.LastActivityAt.After(record.CreatedAt) {
-		return record.Activity.LastActivityAt
+func sessionModelUsedAt(record ports.SessionModelUsage) time.Time {
+	if record.LastActivityAt.After(record.CreatedAt) {
+		return record.LastActivityAt
 	}
 	return record.CreatedAt
 }

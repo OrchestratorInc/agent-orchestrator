@@ -850,6 +850,50 @@ func TestSessionCreateAssignsPerProjectID(t *testing.T) {
 	}
 }
 
+func TestListSessionModelUsageFiltersByHarnessAndNonEmptyModel(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "p1")
+	seedProject(t, s, "p2")
+
+	createdAt := time.Date(2026, time.October, 7, 9, 0, 0, 0, time.UTC)
+	lastActivityAt := createdAt.Add(15 * time.Minute)
+	matching := sampleRecord("p1")
+	matching.Metadata.Model = "claude-sonnet-4-5"
+	matching.CreatedAt = createdAt
+	matching.UpdatedAt = lastActivityAt
+	matching.Activity.LastActivityAt = lastActivityAt
+	if _, err := s.CreateSession(ctx, matching); err != nil {
+		t.Fatalf("create matching session: %v", err)
+	}
+
+	otherHarness := sampleRecord("p2")
+	otherHarness.Harness = domain.HarnessCodex
+	otherHarness.Metadata.Model = "gpt-5"
+	if _, err := s.CreateSession(ctx, otherHarness); err != nil {
+		t.Fatalf("create other-harness session: %v", err)
+	}
+
+	emptyModel := sampleRecord("p2")
+	if _, err := s.CreateSession(ctx, emptyModel); err != nil {
+		t.Fatalf("create empty-model session: %v", err)
+	}
+
+	got, err := s.ListSessionModelUsage(ctx, domain.HarnessClaudeCode)
+	if err != nil {
+		t.Fatalf("list session model usage: %v", err)
+	}
+	want := []ports.SessionModelUsage{{
+		ProjectID:      "p1",
+		Model:          "claude-sonnet-4-5",
+		LastActivityAt: lastActivityAt,
+		CreatedAt:      createdAt,
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("usage = %+v, want %+v", got, want)
+	}
+}
+
 func TestSessionCreateAssignsStandaloneIDsWithoutProject(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

@@ -120,12 +120,21 @@ func (f *fakeProjectLookup) ListProjects(context.Context) ([]domain.ProjectRecor
 }
 
 type fakeSessionUsageLookup struct {
-	records []domain.SessionRecord
-	err     error
+	records          []domain.SessionRecord
+	modelUsage       []ports.SessionModelUsage
+	err              error
+	requestedHarness *domain.AgentHarness
 }
 
 func (f fakeSessionUsageLookup) ListAllSessions(context.Context) ([]domain.SessionRecord, error) {
 	return f.records, f.err
+}
+
+func (f fakeSessionUsageLookup) ListSessionModelUsage(_ context.Context, harness domain.AgentHarness) ([]ports.SessionModelUsage, error) {
+	if f.requestedHarness != nil {
+		*f.requestedHarness = harness
+	}
+	return f.modelUsage, f.err
 }
 
 type fakeModelDiscoverer struct {
@@ -1167,7 +1176,7 @@ func TestListRanksAgentsByRetainedSessionUsage(t *testing.T) {
 		harnessAgent("codex", "Codex", nil),
 		harnessAgent("goose", "Goose", nil),
 	})
-	svc.sessions = fakeSessionUsageLookup{records: []domain.SessionRecord{
+	svc.readinessSessions = fakeSessionUsageLookup{records: []domain.SessionRecord{
 		{Harness: domain.AgentHarness("claude-code"), CreatedAt: newer},
 		{Harness: domain.AgentHarness("codex"), CreatedAt: older},
 		{Harness: domain.AgentHarness("codex"), CreatedAt: newer},
@@ -1190,7 +1199,7 @@ func TestListRanksAgentsByRetainedSessionUsage(t *testing.T) {
 
 func TestListReturnsSessionUsageReadFailure(t *testing.T) {
 	svc := NewWithAgents([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)})
-	svc.sessions = fakeSessionUsageLookup{err: errors.New("database unavailable")}
+	svc.readinessSessions = fakeSessionUsageLookup{err: errors.New("database unavailable")}
 
 	_, err := svc.List(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "list sessions for agent usage") {

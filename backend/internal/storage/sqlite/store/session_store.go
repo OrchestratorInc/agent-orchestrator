@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
@@ -705,6 +706,24 @@ func (s *Store) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, er
 		return nil, fmt.Errorf("list all sessions: %w", err)
 	}
 	return mapListAllSessionsRows(rows), nil
+}
+
+// ListSessionModelUsage returns the model recency facts for one harness.
+func (s *Store) ListSessionModelUsage(ctx context.Context, harness domain.AgentHarness) ([]ports.SessionModelUsage, error) {
+	rows, err := s.qr.ListSessionModelUsage(ctx, harness)
+	if err != nil {
+		return nil, fmt.Errorf("list session model usage for %s: %w", harness, err)
+	}
+	out := make([]ports.SessionModelUsage, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, ports.SessionModelUsage{
+			ProjectID:      projectIDValue(row.ProjectID),
+			Model:          row.Model,
+			LastActivityAt: row.ActivityLastAt,
+			CreatedAt:      row.CreatedAt,
+		})
+	}
+	return out, nil
 }
 
 func mapListSessionsByProjectRows(rows []gen.ListSessionsByProjectRow) []domain.SessionRecord {

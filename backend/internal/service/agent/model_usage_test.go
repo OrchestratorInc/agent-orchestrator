@@ -10,14 +10,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func usageSession(project, harness, model string, at time.Time) domain.SessionRecord {
-	return domain.SessionRecord{
-		ProjectID: domain.ProjectID(project),
-		Harness:   domain.AgentHarness(harness),
-		Metadata:  domain.SessionMetadata{Model: model},
-		Activity:  domain.Activity{LastActivityAt: at},
-		CreatedAt: at,
-		UpdatedAt: at,
+func usageSession(project, model string, at time.Time) ports.SessionModelUsage {
+	return ports.SessionModelUsage{
+		ProjectID:      domain.ProjectID(project),
+		Model:          model,
+		LastActivityAt: at,
+		CreatedAt:      at,
 	}
 }
 
@@ -55,9 +53,9 @@ func assertIDs(t *testing.T, catalog ports.AgentModelCatalog, want ...string) {
 func TestModelUsageFloatsRecentModelsToTheTop(t *testing.T) {
 	now := time.Now().UTC()
 	svc := newService(nil, nil, nil, nil)
-	svc.sessions = fakeSessionUsageLookup{records: []domain.SessionRecord{
-		usageSession("p1", "claude-code", "fable", now.Add(-2*time.Hour)),
-		usageSession("p1", "claude-code", "sonnet", now.Add(-10*time.Minute)),
+	svc.sessions = fakeSessionUsageLookup{modelUsage: []ports.SessionModelUsage{
+		usageSession("p1", "fable", now.Add(-2*time.Hour)),
+		usageSession("p1", "sonnet", now.Add(-10*time.Minute)),
 	}}
 
 	got := svc.withModelUsage(context.Background(), "claude-code", "p1", claudeCatalog("fable", "opus", "sonnet", "haiku"))
@@ -68,17 +66,17 @@ func TestModelUsageFloatsRecentModelsToTheTop(t *testing.T) {
 	}
 }
 
-// Another agent's sessions say nothing about this agent's picker.
-func TestModelUsageIgnoresOtherAgents(t *testing.T) {
-	now := time.Now().UTC()
+func TestModelUsageQueriesOnlySelectedHarness(t *testing.T) {
+	var requested domain.AgentHarness
 	svc := newService(nil, nil, nil, nil)
-	svc.sessions = fakeSessionUsageLookup{records: []domain.SessionRecord{
-		usageSession("p1", "codex", "sonnet", now),
-	}}
+	svc.sessions = fakeSessionUsageLookup{requestedHarness: &requested}
 
 	got := svc.withModelUsage(context.Background(), "claude-code", "p1", claudeCatalog("fable", "sonnet"))
 
 	assertIDs(t, got, "fable", "sonnet")
+	if requested != domain.HarnessClaudeCode {
+		t.Fatalf("requested harness = %q, want %q", requested, domain.HarnessClaudeCode)
+	}
 }
 
 // The model someone uses in one repository says little about another, so a
@@ -86,9 +84,9 @@ func TestModelUsageIgnoresOtherAgents(t *testing.T) {
 func TestModelUsagePrefersProjectHistory(t *testing.T) {
 	now := time.Now().UTC()
 	svc := newService(nil, nil, nil, nil)
-	svc.sessions = fakeSessionUsageLookup{records: []domain.SessionRecord{
-		usageSession("other", "claude-code", "sonnet", now),
-		usageSession("p1", "claude-code", "opus", now.Add(-time.Hour)),
+	svc.sessions = fakeSessionUsageLookup{modelUsage: []ports.SessionModelUsage{
+		usageSession("other", "sonnet", now),
+		usageSession("p1", "opus", now.Add(-time.Hour)),
 	}}
 
 	got := svc.withModelUsage(context.Background(), "claude-code", "p1", claudeCatalog("fable", "sonnet", "opus"))
@@ -101,8 +99,8 @@ func TestModelUsagePrefersProjectHistory(t *testing.T) {
 func TestModelUsageFallsBackToAgentWideHistory(t *testing.T) {
 	now := time.Now().UTC()
 	svc := newService(nil, nil, nil, nil)
-	svc.sessions = fakeSessionUsageLookup{records: []domain.SessionRecord{
-		usageSession("other", "claude-code", "sonnet", now),
+	svc.sessions = fakeSessionUsageLookup{modelUsage: []ports.SessionModelUsage{
+		usageSession("other", "sonnet", now),
 	}}
 
 	got := svc.withModelUsage(context.Background(), "claude-code", "fresh", claudeCatalog("fable", "sonnet"))
@@ -110,21 +108,21 @@ func TestModelUsageFallsBackToAgentWideHistory(t *testing.T) {
 	assertIDs(t, got, "sonnet", "fable")
 }
 
-// Row metadata updates such as a rename must not make an old model look newly
-// used. Activity is the durable fact that represents actual session use.
-func TestModelUsageUsesActivityInsteadOfRowUpdateTime(t *testing.T) {
+func TestModelUsageUsesLaterOfActivityAndCreation(t *testing.T) {
 	now := time.Now().UTC()
-	old := usageSession("p1", "claude-code", "opus", now.Add(-48*time.Hour))
-	old.UpdatedAt = now
+	createdLater := usageSession("p1", "opus", now.Add(-48*time.Hour))
+	createdLater.CreatedAt = now
+	activeLater := usageSession("p1", "sonnet", now.Add(-24*time.Hour))
+	activeLater.LastActivityAt = now.Add(-time.Hour)
 	svc := newService(nil, nil, nil, nil)
-	svc.sessions = fakeSessionUsageLookup{records: []domain.SessionRecord{
-		old,
-		usageSession("p1", "claude-code", "sonnet", now.Add(-time.Hour)),
+	svc.sessions = fakeSessionUsageLookup{modelUsage: []ports.SessionModelUsage{
+		createdLater,
+		activeLater,
 	}}
 
 	got := svc.withModelUsage(context.Background(), "claude-code", "p1", claudeCatalog("sonnet", "opus"))
 
-	assertIDs(t, got, "sonnet", "opus")
+	assertIDs(t, got, "opus", "sonnet")
 }
 
 // Losing the recency hint must not empty or reorder the picker.
@@ -162,8 +160,8 @@ func TestCatalogReadPathsApplyModelUsage(t *testing.T) {
 				[]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)},
 				&fakeModelCache{}, nil, discoverer,
 			)
-			svc.sessions = fakeSessionUsageLookup{records: []domain.SessionRecord{
-				usageSession("p1", "claude-code", "sonnet", now),
+			svc.sessions = fakeSessionUsageLookup{modelUsage: []ports.SessionModelUsage{
+				usageSession("p1", "sonnet", now),
 			}}
 
 			got, err := tc.load(svc)

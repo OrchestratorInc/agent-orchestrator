@@ -75,6 +75,7 @@ type Service struct {
 	modelDiscoveryDir string
 	projects          ProjectLookup
 	sessions          SessionUsageLookup
+	readinessSessions ReadinessSessionUsageLookup
 	resolverMu        map[string]*sync.Mutex
 	modelCallMu       sync.Mutex
 	modelCalls        map[string]*modelCatalogCall
@@ -93,7 +94,7 @@ type Deps struct {
 	Discoverer             ports.AgentModelDiscoverer
 	ModelDiscoveryDir      string
 	Projects               ProjectLookup
-	Sessions               SessionUsageLookup
+	Sessions               SessionLookups
 	Context                context.Context
 	Logger                 *slog.Logger
 	CodexAccountRoot       string
@@ -116,7 +117,19 @@ type ProjectLookup interface {
 // SessionUsageLookup provides durable session facts used to rank agent choices.
 // The SQLite store satisfies this narrow read boundary.
 type SessionUsageLookup interface {
+	ListSessionModelUsage(ctx context.Context, harness domain.AgentHarness) ([]ports.SessionModelUsage, error)
+}
+
+// ReadinessSessionUsageLookup provides full records for the existing
+// agent-level usage projection.
+type ReadinessSessionUsageLookup interface {
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
+}
+
+// SessionLookups is the durable dependency supplied by the daemon store.
+type SessionLookups interface {
+	SessionUsageLookup
+	ReadinessSessionUsageLookup
 }
 
 // New returns an agent service backed by the daemon's shipped adapter registry.
@@ -155,6 +168,7 @@ func NewWithDeps(deps Deps) *Service {
 		)
 	}
 	svc.sessions = deps.Sessions
+	svc.readinessSessions = deps.Sessions
 	if deps.Context != nil {
 		svc.ctx = deps.Context
 	}

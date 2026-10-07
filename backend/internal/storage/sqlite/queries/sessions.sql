@@ -243,6 +243,12 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts
 FROM sessions ORDER BY project_id, num;
 
+-- name: ListSessionModelUsage :many
+-- Model-picker recency: only the facts modelUsage reads, for one harness.
+SELECT project_id, model, activity_last_at, created_at
+FROM sessions
+WHERE harness = ? AND model <> '';
+
 -- name: PromoteTaskPreparation :execrows
 -- Claim the hidden row without touching branch/workspace facts that may be
 -- published concurrently by speculative worktree creation.

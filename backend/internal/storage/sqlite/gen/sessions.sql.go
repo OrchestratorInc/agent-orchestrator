@@ -779,6 +779,48 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 	return items, nil
 }
 
+const listSessionModelUsage = `-- name: ListSessionModelUsage :many
+SELECT project_id, model, activity_last_at, created_at
+FROM sessions
+WHERE harness = ? AND model <> ''
+`
+
+type ListSessionModelUsageRow struct {
+	ProjectID      *domain.ProjectID
+	Model          string
+	ActivityLastAt time.Time
+	CreatedAt      time.Time
+}
+
+// Model-picker recency: only the facts modelUsage reads, for one harness.
+func (q *Queries) ListSessionModelUsage(ctx context.Context, harness domain.AgentHarness) ([]ListSessionModelUsageRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionModelUsage, harness)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSessionModelUsageRow{}
+	for rows.Next() {
+		var i ListSessionModelUsageRow
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.Model,
+			&i.ActivityLastAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSessionsByProject = `-- name: ListSessionsByProject :many
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
