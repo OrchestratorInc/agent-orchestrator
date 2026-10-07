@@ -3020,13 +3020,14 @@ describe("SessionInspector summary reviews", () => {
       expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/send", {
         params: { path: { sessionId: "sess-1" } },
         body: {
+          userAuthored: true,
           message: expect.stringContaining("Review summary:\nPlease tighten validation and add a regression test."),
         },
       }),
     );
     expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/send", {
       params: { path: { sessionId: "sess-1" } },
-      body: { message: expect.stringContaining(`Review URL: ${reviewUrl}`) },
+      body: { message: expect.stringContaining(`Review URL: ${reviewUrl}`), userAuthored: true },
     });
     expect(onWorkerMessageSent).toHaveBeenCalledOnce();
   });
@@ -3106,6 +3107,7 @@ describe("SessionInspector summary reviews", () => {
     await userEvent.click(screen.getByRole("button", { name: "Send to worker agent" }));
     expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/send", expect.objectContaining({
       params: { path: { sessionId: "sess-1" } },
+      body: { message: expect.stringContaining("Current-pass comment."), userAuthored: true },
     }));
     await userEvent.click(screen.getAllByRole("button", { name: "Comment actions" })[0]!);
     await userEvent.click(screen.getByRole("button", { name: "View in file" }));
@@ -3560,6 +3562,7 @@ describe("SessionInspector summary reviews", () => {
         {
           params: { path: { sessionId: "sess-1" } },
           body: {
+            userAuthored: true,
             message: expect.stringContaining("Location: a.ts:9"),
           },
         },
@@ -3568,6 +3571,7 @@ describe("SessionInspector summary reviews", () => {
     expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/send", {
       params: { path: { sessionId: "sess-1" } },
       body: {
+        userAuthored: true,
         message: expect.stringContaining(
           "commit the fix, and push the branch to GitHub",
         ),
@@ -3576,6 +3580,7 @@ describe("SessionInspector summary reviews", () => {
     expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/send", {
       params: { path: { sessionId: "sess-1" } },
       body: {
+        userAuthored: true,
         message: expect.stringContaining("Reviewer: @maya"),
       },
     });

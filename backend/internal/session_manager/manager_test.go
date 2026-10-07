@@ -10085,10 +10085,14 @@ func TestSendSemanticTUIRejectsAdapterWithoutAcceptanceSignal(t *testing.T) {
 func TestSend_RecordsDeliveredUserInput(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code"})
-	m := newSendTestManager(t, fakeAgent{}, &fakeMessenger{}, st)
+	messenger := &fakeMessenger{}
+	m := newSendTestManager(t, fakeAgent{}, messenger, st)
 
 	if err := m.SendWithOptions(context.Background(), "s1", "continue with the migration", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatalf("Send: %v", err)
+	}
+	if len(messenger.msgs) != 1 || messenger.msgs[0] != "continue with the migration" {
+		t.Fatalf("human send was wrapped as coordination: %+v", messenger.msgs)
 	}
 	if got := st.sessions["s1"].Metadata.LatestUserPrompt; got != "continue with the migration" {
 		t.Fatalf("LatestUserPrompt = %q, want delivered user input", got)
