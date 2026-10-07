@@ -231,7 +231,7 @@ function serve(client: Socket): void {
 			});
 			upstream.on("close", () => client.destroy());
 			client.on("close", () => upstream.destroy());
-		});
+		}).catch(() => client.destroy());
 	};
 	client.on("data", onData);
 }

@@ -70,6 +70,10 @@ describe("checkRender", () => {
 		const f = fakes();
 		await expect(checkRender(f as never, { url: "https://example.com/", width: 720 })).rejects.toThrow(/render-check URL/);
 		await expect(checkRender(f as never, { url: url.replace("check-", ""), width: 720 })).rejects.toThrow(/render-check URL/);
+		// The pattern passes it; parsing does not.
+		await expect(checkRender(f as never, { url: url.replace("3001", "99999"), width: 720 })).rejects.toMatchObject({
+			code: "INVALID_ARGUMENT",
+		});
 		await expect(checkRender(f as never, { url, width: 100 })).rejects.toThrow(/width/);
 		expect(f.BrowserWindow).not.toHaveBeenCalled();
 	});

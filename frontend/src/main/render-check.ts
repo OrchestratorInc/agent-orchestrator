@@ -62,6 +62,21 @@ function renderCheckError(code: string, message: string): Error & { code: string
 }
 
 /**
+ * The daemon page `url` names, parsed before any window exists: the pattern
+ * alone passes a port past 65535, which `new URL` rejects.
+ */
+function renderCheckURL(url: unknown): URL {
+	if (typeof url === "string" && RENDER_CHECK_URL.test(url)) {
+		try {
+			return new URL(url);
+		} catch {
+			// Reported below, like any other URL the pattern refuses.
+		}
+	}
+	throw renderCheckError("INVALID_ARGUMENT", "render check needs a daemon render-check URL");
+}
+
+/**
  * Loads an agent's page in a throwaway hidden window, the way readers will see
  * it, and returns a screenshot, the content height, and console output. The
  * window renders offscreen, so it paints without ever being on screen, and
@@ -75,9 +90,7 @@ export async function checkRender(
 	signal?: AbortSignal,
 ): Promise<RenderCheckResult> {
 	const { url, width } = args;
-	if (typeof url !== "string" || !RENDER_CHECK_URL.test(url)) {
-		throw renderCheckError("INVALID_ARGUMENT", "render check needs a daemon render-check URL");
-	}
+	const page = renderCheckURL(url);
 	if (typeof width !== "number" || !Number.isInteger(width) || width < 240 || width > 1_600) {
 		throw renderCheckError("INVALID_ARGUMENT", "render check width must be an integer from 240 to 1600");
 	}
@@ -110,7 +123,6 @@ export async function checkRender(
 	});
 	// The page itself is the one local address the check may load. Each refused
 	// destination is reported once, so the agent knows why a resource is missing.
-	const page = new URL(url);
 	const refused = new Set<string>();
 	const release = allowRenderPage(page.hostname, Number(page.port || 80), (destination) => {
 		if (refused.has(destination)) return;
@@ -120,7 +132,7 @@ export async function checkRender(
 	let stage = "loading the page";
 	const capture = async (): Promise<RenderCheckResult> => {
 		await proxyPartition(contents.session);
-		await contents.loadURL(url);
+		await contents.loadURL(page.href);
 		stage = "settling";
 		await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
 		stage = "measuring the page";

@@ -1,8 +1,15 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { lookup } from "node:dns/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import { allowRenderPage, startRenderCheckProxy } from "./render-check-proxy";
+
+// The real resolver, which a test can override for one lookup.
+vi.mock("node:dns/promises", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:dns/promises")>();
+	return { ...actual, lookup: vi.fn(actual.lookup) };
+});
 
 // A public IPv4 address this machine holds, which no private range covers.
 const OWN_PUBLIC_IPV4 = "198.51.100.7";
@@ -33,12 +40,20 @@ afterEach(async () => {
 	await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))));
 });
 
-/** Sends a SOCKS5 greeting and CONNECT, and resolves with the reply code and the open socket. */
-function connectThrough(proxyPort: number, target: Buffer, version = 5): Promise<{ code: number; socket: net.Socket }> {
+/**
+ * Sends a SOCKS5 greeting and CONNECT, and resolves with the reply code and
+ * the open socket. `bytewise` sends them one byte at a time.
+ */
+function connectThrough(proxyPort: number, target: Buffer, version = 5, bytewise = false): Promise<{ code: number; socket: net.Socket }> {
 	return new Promise((resolve) => {
-		const socket = net.connect(proxyPort, "127.0.0.1", () => {
-			socket.write(Buffer.from([5, 1, 0]));
-			socket.write(Buffer.concat([Buffer.from([version, 1, 0]), target]));
+		const socket = net.connect(proxyPort, "127.0.0.1", async () => {
+			const request = Buffer.concat([Buffer.from([5, 1, 0, version, 1, 0]), target]);
+			if (!bytewise) return void socket.write(request);
+			socket.setNoDelay(true);
+			for (const byte of request) {
+				socket.write(Buffer.from([byte]));
+				await new Promise((wait) => setTimeout(wait, 2));
+			}
 		});
 		sockets.push(socket);
 		// The proxy may reset a refused connection.
@@ -188,6 +203,30 @@ describe("render-check proxy render-page allowance", () => {
 		expect(await replyCode(port, ipv4Target("127.0.0.1", pagePort))).toBe(0);
 		releaseSecond();
 		expect(await replyCode(port, ipv4Target("127.0.0.1", pagePort))).toBe(2);
+	});
+
+	it("accepts a greeting and request that arrive one byte at a time", async () => {
+		const port = await startRenderCheckProxy();
+		const pagePort = await echoServer();
+		const release = allowRenderPage("127.0.0.1", pagePort, () => {});
+		expect((await connectThrough(port, ipv4Target("127.0.0.1", pagePort), 5, true)).code).toBe(0);
+		release();
+	});
+
+	it("reaches a page allowed by name, at only the addresses it checked", async () => {
+		const port = await startRenderCheckProxy();
+		const pagePort = await echoServer();
+		const release = allowRenderPage("localhost", pagePort, () => {});
+		const { code, socket } = await connectThrough(port, domainTarget("localhost", pagePort));
+		expect(code).toBe(0);
+		const echoed = new Promise<string>((resolve) => socket.once("data", (chunk) => resolve(chunk.toString())));
+		socket.write("ping");
+		expect(await echoed).toBe("ping");
+		// The page listens on 127.0.0.1 only. Had the proxy resolved the name
+		// again when it connected, it would have found 127.0.0.1 and reached it.
+		vi.mocked(lookup).mockResolvedValueOnce([{ address: "::1", family: 6 }] as never);
+		expect(await replyCode(port, domainTarget("localhost", pagePort))).toBe(-1);
+		release();
 	});
 });
 
