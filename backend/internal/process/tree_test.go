@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-
 	"testing"
 	"time"
 
@@ -30,9 +29,12 @@ func TestCommandTreeCancellation(t *testing.T) {
 	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(dir, "release"), nil, 0o600) })
 	ready := filepath.Join(dir, "ready")
 	deadline := time.Now().Add(10 * time.Second)
+	var pid int
 	for {
-		if _, err := os.Stat(ready); err == nil {
-			break
+		if data, err := os.ReadFile(ready); err == nil {
+			if pid, err = strconv.Atoi(string(data)); err == nil && pid > 0 {
+				break
+			}
 		}
 		select {
 		case err := <-done:
@@ -53,16 +55,13 @@ func TestCommandTreeCancellation(t *testing.T) {
 	case <-time.After(8 * time.Second):
 		t.Fatal("cancellation did not return")
 	}
-	pidText, err := os.ReadFile(ready)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pid, err := strconv.Atoi(string(pidText))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if processalive.Alive(pid) {
-		t.Fatalf("child %d survived cancellation: %s", pid, output.String())
+	// Child exit notification can follow the parent's Wait returning.
+	deadline = time.Now().Add(5 * time.Second)
+	for processalive.Alive(pid) {
+		if time.Now().After(deadline) {
+			t.Fatalf("child %d survived cancellation: %s", pid, output.String())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
