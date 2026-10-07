@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 )
 
@@ -125,12 +126,20 @@ func TestArtifactFileRouteServesOnlyRegularFilesInsideTheDirectory(t *testing.T)
 	if err := os.Symlink(outside, filepath.Join(dir, "escape.html")); err != nil {
 		t.Fatal(err)
 	}
+	// One byte past the cap; sparse, so cheap.
+	if err := os.WriteFile(filepath.Join(dir, "huge.html"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(filepath.Join(dir, "huge.html"), attachmentstore.MaxFileBytes+1); err != nil {
+		t.Fatal(err)
+	}
 
 	for name, rawPath := range map[string]string{
 		"dot-dot":          "report/../../secret.html",
 		"escaped dot-dot":  "..%2Fsecret.html",
 		"escaping symlink": "escape.html",
 		"directory":        "report",
+		"over the cap":     "huge.html",
 		"missing":          "report/gone.html",
 	} {
 		resp, body := getArtifactFile(t, srv, rawPath, "")

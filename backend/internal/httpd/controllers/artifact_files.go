@@ -45,11 +45,17 @@ func (c *SessionsController) artifactFile(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
-	file, _, clean, err := previewutil.OpenWorkspaceFile(sess.Metadata.ArtifactDir, asset)
+	file, info, clean, err := previewutil.OpenWorkspaceFile(sess.Metadata.ArtifactDir, asset)
 	if err != nil {
 		writeArtifactFileNotFound(w, r)
 		return
 	}
+	if info.Size() > attachmentstore.MaxFileBytes {
+		_ = file.Close()
+		writeArtifactFileNotFound(w, r)
+		return
+	}
+	// Capped again in the read: the file can grow after the stat.
 	data, err := io.ReadAll(io.LimitReader(file, attachmentstore.MaxFileBytes+1))
 	_ = file.Close()
 	if err != nil {
