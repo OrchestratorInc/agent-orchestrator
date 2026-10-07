@@ -8,6 +8,7 @@ import type { ServerConfig } from "../config";
 import { lookUpSession } from "./sessionLookup";
 import {
 	currentSessionLookup,
+	isRuntimeGone,
 	sessionLookupDue,
 	sessionLookupKey,
 	sessionLookupSettled,
@@ -268,5 +269,24 @@ describe("lookUpSession, the request the route sends", () => {
 		const lookup = await lookUpSession(cfg, "scratch-1");
 		expect(lookup).toEqual(failed(undefined));
 		expect(view({ lookup })).toEqual({ kind: "failed" });
+	});
+});
+
+describe("isRuntimeGone", () => {
+	it("keeps the terminal for a merged or errored worker whose runtime is still live", () => {
+		expect(isRuntimeGone(worker({ status: "merged" }))).toBe(false);
+		expect(isRuntimeGone(worker({ status: "errored" }))).toBe(false);
+		expect(isRuntimeGone(worker({ status: "working" }))).toBe(false);
+	});
+
+	it("treats a terminated worker as gone", () => {
+		expect(isRuntimeGone(worker({ isTerminated: true, status: "merged" }))).toBe(true);
+		expect(isRuntimeGone(worker({ status: "terminated" }))).toBe(true);
+	});
+
+	it("reads an orchestrator's runtime flags, never a missing field", () => {
+		expect(isRuntimeGone(orchestrator({ status: "merged" }))).toBe(false);
+		expect(isRuntimeGone(orchestrator({ isTerminal: true }))).toBe(true);
+		expect(isRuntimeGone(orchestrator({ hasRuntime: false }))).toBe(true);
 	});
 });
