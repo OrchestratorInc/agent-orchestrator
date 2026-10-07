@@ -155,7 +155,7 @@ func TestPrereleaseRegistryAliasesMustBeUnambiguous(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &http.Client{Transport: managerRoundTripFunc(func(*http.Request) (*http.Response, error) {
-				return managerHTTPResponse(http.StatusOK, `{"dist-tags":`+tt.tags+`}`), nil
+				return managerHTTPResponse(http.StatusOK, tt.tags), nil
 			})}
 			result, err := npmRegistryVersion(context.Background(), client, "@openai/codex", "beta", versionSemver)
 			if (err == nil) != tt.wantOK || tt.wantOK && result.Latest != "2.0.0-beta.3" {

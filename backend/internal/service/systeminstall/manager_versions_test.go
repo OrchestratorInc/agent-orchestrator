@@ -183,10 +183,10 @@ func TestManagedVersionCheckerReadsRegistryFirstForInstalledPrereleaseChannel(t 
 	requests := 0
 	client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		requests++
-		if request.URL.String() != "https://registry.npmjs.org/@openai%2Fcodex" {
+		if request.URL.String() != "https://registry.npmjs.org/-/package/@openai%2Fcodex/dist-tags" {
 			t.Fatalf("URL = %s", request.URL.String())
 		}
-		return managerHTTPResponse(http.StatusOK, `{"dist-tags":{"latest":"1.3.0","beta":"2.0.0-beta.3"}}`), nil
+		return managerHTTPResponse(http.StatusOK, `{"latest":"1.3.0","beta":"2.0.0-beta.3"}`), nil
 	})}
 	commands := managerCommandRunner(t)
 	current, _ := parseUpdateVersion("2.0.0-beta.1")
@@ -201,7 +201,7 @@ func TestManagedVersionCheckerReadsRegistryFirstForInstalledPrereleaseChannel(t 
 
 func TestManagedVersionCheckerRejectsMissingPrereleaseChannel(t *testing.T) {
 	client := &http.Client{Transport: managerRoundTripFunc(func(*http.Request) (*http.Response, error) {
-		return managerHTTPResponse(http.StatusOK, `{"dist-tags":{"latest":"1.3.0","next":"2.0.0-next.2"}}`), nil
+		return managerHTTPResponse(http.StatusOK, `{"latest":"1.3.0","next":"2.0.0-next.2"}`), nil
 	})}
 	// A definitive registry answer is final; the package manager is not asked again.
 	commands := managerCommandRunner(t)
@@ -340,10 +340,10 @@ func TestNodeManagersReadRegistryWithoutStartingManager(t *testing.T) {
 	for _, method := range []string{"npm", "pnpm", "yarn", "bun"} {
 		t.Run(method, func(t *testing.T) {
 			client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
-				if request.URL.String() != "https://registry.npmjs.org/@openai%2Fcodex" {
+				if request.URL.String() != "https://registry.npmjs.org/-/package/@openai%2Fcodex/dist-tags" {
 					t.Fatalf("URL = %s", request.URL)
 				}
-				return managerHTTPResponse(http.StatusOK, `{"dist-tags":{"latest":"1.3.0"}}`), nil
+				return managerHTTPResponse(http.StatusOK, `{"latest":"1.3.0"}`), nil
 			})}
 			current, _ := parseUpdateVersion("1.2.0")
 			got, err := newManagedVersionChecker(managerCommandRunner(t), client)(context.Background(), Plan{Method: method, Package: "@openai/codex"}, current)

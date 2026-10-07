@@ -350,17 +350,18 @@ func latestVersionLine(raw string) string {
 }
 
 func npmRegistryVersion(ctx context.Context, client *http.Client, pkg, channel string, scheme versionScheme) (managedVersionResult, error) {
-	var metadata struct {
-		DistTags map[string]string `json:"dist-tags"`
-	}
-	if err := fetchRegistryJSON(ctx, client, "https://registry.npmjs.org/"+url.PathEscape(pkg), &metadata); err != nil {
+	// The dist-tags endpoint returns only the tag map. The full package
+	// document lists every published version and exceeds the metadata limit
+	// for popular harnesses such as Claude Code (1.5 MB).
+	var distTags map[string]string
+	if err := fetchRegistryJSON(ctx, client, "https://registry.npmjs.org/-/package/"+url.PathEscape(pkg)+"/dist-tags", &distTags); err != nil {
 		return managedVersionResult{}, err
 	}
-	latest := metadata.DistTags[channel]
+	latest := distTags[channel]
 	if latest == "" && channel != "latest" {
 		// The prerelease identifier need not be the dist-tag: e.g. next may
 		// publish beta versions. Only accept an unambiguous matching family.
-		for tag, version := range metadata.DistTags {
+		for tag, version := range distTags {
 			if tag == "latest" {
 				continue
 			}
