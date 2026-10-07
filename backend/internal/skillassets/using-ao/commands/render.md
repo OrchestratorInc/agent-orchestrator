@@ -52,6 +52,17 @@ The Browser panel shows the live page, and the next preview replaces it.
 
 If the user must still read the page after the dev server stops, use `ao render`.
 
+## ao render or a session artifact
+
+Use `ao render` (or `html_render`) when the page answers a question in the thread.
+Write a session artifact when the user asks for something to keep, for example a
+report, a dashboard, or a document. Write it to the artifact directory that your
+prompt names, and attach it with `ao report --artifact <path>`.
+
+To keep a rendered page as an artifact as well, add `--artifact` to `ao render`
+(or set `artifact: true` in `html_render`). Do this only when the user asks to keep
+the page.
+
 ## Layout
 
 - The frame is borderless on the thread background, as wide as the reply column,

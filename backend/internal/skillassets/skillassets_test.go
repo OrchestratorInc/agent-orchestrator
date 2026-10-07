@@ -203,3 +203,21 @@ func TestEmbeddedReportGuidanceDistinguishesDeliverablesFromDiagnostics(t *testi
 		}
 	}
 }
+
+func TestEmbeddedRenderGuidanceSeparatesRendersFromArtifacts(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/render.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guidance := strings.Join(strings.Fields(string(body)), " ")
+	for _, want := range []string{
+		"## ao render or a session artifact",
+		"when the page answers a question in the thread",
+		"attach it with `ao report --artifact <path>`",
+		"add `--artifact` to `ao render` (or set `artifact: true` in `html_render`). Do this only when the user asks to keep the page.",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("render guidance missing %q", want)
+		}
+	}
+}

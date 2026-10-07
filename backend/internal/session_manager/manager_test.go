@@ -5861,6 +5861,7 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 		"Ordinary progress updates, concise final answers, and validation summaries can stay in chat or AO report notes",
 		"working material, not deliverables",
 		"does not authorize external publishing",
+		"it does not belong in the workspace at all. In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory.",
 	} {
 		if !strings.Contains(sp, want) {
 			t.Fatalf("system prompt missing artifact boundary %q", want)
