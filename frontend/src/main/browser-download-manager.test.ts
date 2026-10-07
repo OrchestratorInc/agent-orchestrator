@@ -295,7 +295,18 @@ describe("browser download manager", () => {
 		expect(intruderEvent.preventDefault).toHaveBeenCalledOnce();
 		expect(intruder.setSavePath).not.toHaveBeenCalled();
 
-		session.emit("will-download", { preventDefault: vi.fn() }, item);
+		// A live sibling tab in the same session asks for the same URL before
+		// the session replay arrives. It must not be saved in its place.
+		const sibling = new FakeDownloadItem();
+		const siblingEvent = { preventDefault: vi.fn() };
+		session.emit("will-download", siblingEvent, sibling, { isDestroyed: () => false, downloadURL: vi.fn() });
+		expect(siblingEvent.preventDefault).toHaveBeenCalledOnce();
+		expect(sibling.setSavePath).not.toHaveBeenCalled();
+
+		// Electron delivers the session replay with a null WebContents.
+		const replayEvent = { preventDefault: vi.fn() };
+		session.emit("will-download", replayEvent, item, null);
+		expect(replayEvent.preventDefault).not.toHaveBeenCalled();
 		expect(item.setSavePath).toHaveBeenCalledOnce();
 	});
 

@@ -133,7 +133,7 @@ export type BrowserDownloadManager = ReturnType<typeof createBrowserDownloadMana
 export function createBrowserDownloadManager(options: BrowserDownloadManagerOptions) {
 	const attachedSessions = new Map<
 		DownloadSessionLike,
-		(event: DownloadEventLike, item: DownloadItem, webContents?: DownloadWebContentsLike) => void
+		(event: DownloadEventLike, item: DownloadItem, webContents?: DownloadWebContentsLike | null) => void
 	>();
 	const blockedRequests = new Map<string, BlockedRequest>();
 	// An approval belongs to the browser context that will request the file
@@ -236,7 +236,9 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 				!approvedId &&
 				approval.url === url &&
 				approval.session === session &&
-				(!approval.webContents || approval.webContents === webContents)
+				// Strict: an approval replayed through the session has no tab, and
+				// must not be used by a live tab asking for the same URL.
+				approval.webContents === webContents
 			) approvedId = id;
 		}
 		if (approvedId) approvals.delete(approvedId);
@@ -351,10 +353,12 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 	return {
 		attach(session: DownloadSessionLike | undefined): void {
 			if (!session || disposed || attachedSessions.has(session)) return;
-			const listener = (event: DownloadEventLike, item: DownloadItem, webContents?: DownloadWebContentsLike) => {
-				const approvedId = takeApproval(item, session, webContents);
+			const listener = (event: DownloadEventLike, item: DownloadItem, webContents?: DownloadWebContentsLike | null) => {
+				// Electron reports a session-level request with a null WebContents.
+				const tab = webContents ?? undefined;
+				const approvedId = takeApproval(item, session, tab);
 				if (approvedId) begin(item, approvedId);
-				else block(event, item, session, webContents);
+				else block(event, item, session, tab);
 			};
 			attachedSessions.set(session, listener);
 			session.on("will-download", listener);
