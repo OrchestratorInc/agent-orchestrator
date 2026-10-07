@@ -2992,13 +2992,11 @@ html.sidebar-reordering * {
 @keyframes chat-human-message-in {
 	from {
 		opacity: 0;
-		transform: scale(0.9);
-		transform-origin: 100% 100%;
+		transform: translateY(-16px);
 	}
 	to {
 		opacity: 1;
-		transform: scale(1);
-		transform-origin: 100% 100%;
+		transform: translateY(0);
 	}
 }
 

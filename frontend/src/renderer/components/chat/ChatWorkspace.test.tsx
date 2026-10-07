@@ -610,6 +610,84 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getAllByText("Already durable")).toHaveLength(1);
 	});
 
+	it("keeps the same message node when the durable row replaces its echo", () => {
+		const snapshot = idleSnapshot(chatFixtureEmpty);
+		const localEchos = [
+			{
+				clientMessageId: "keyed-send",
+				text: "Swapped without a remount",
+				createdAt: "2026-09-09T00:00:05Z",
+			},
+		];
+		const view = render(<ChatWorkspace snapshot={snapshot} localEchos={localEchos} />);
+		const echoNode = screen.getByText("Swapped without a remount");
+
+		// The daemon clock is behind the renderer's, and no turn id has reached the echo yet.
+		const durable = structuredClone(snapshot);
+		durable.turns.push({ id: "turn-keyed-send", state: "running", requestedAt: "2026-09-09T00:00:01Z" });
+		durable.items.push({
+			kind: "message",
+			id: "durable-keyed-send",
+			turnId: "turn-keyed-send",
+			sequence: 1,
+			revision: 0,
+			role: "user",
+			origin: "human",
+			text: "Swapped without a remount",
+			clientMessageId: "keyed-send",
+			streaming: false,
+			createdAt: "2026-09-09T00:00:01Z",
+		});
+		view.rerender(<ChatWorkspace snapshot={durable} localEchos={localEchos} />);
+
+		const durableNode = screen.getAllByText("Swapped without a remount");
+		expect(durableNode).toHaveLength(1);
+		expect(durableNode[0]).toBe(echoNode);
+	});
+
+	it("shows a send made behind a running turn in the queue dock, not as a chat bubble", () => {
+		const snapshot = idleSnapshot(chatFixtureEmpty);
+		snapshot.turns.push({ id: "turn-running", state: "running", requestedAt: "2026-09-09T00:00:00Z" });
+		const localEchos = [
+			{
+				clientMessageId: "queued-send",
+				text: "Do this next",
+				createdAt: "2026-09-09T00:00:05Z",
+				queued: true,
+			},
+		];
+
+		const view = render(<ChatWorkspace snapshot={snapshot} localEchos={localEchos} />);
+
+		const dock = screen.getByTestId("queued-message-dock");
+		expect(within(dock).getByText("Do this next")).toBeInTheDocument();
+		expect(within(screen.getByRole("log")).queryByText("Do this next")).not.toBeInTheDocument();
+		// Nothing to steer, edit or cancel until the daemon has given it a turn.
+		expect(within(dock).queryByLabelText("Delete queued message")).not.toBeInTheDocument();
+		expect(within(dock).queryByLabelText("Edit queued message")).not.toBeInTheDocument();
+
+		const durable = structuredClone(snapshot);
+		durable.turns.push({ id: "turn-queued", state: "queued", requestedAt: "2026-09-09T00:00:05Z" });
+		durable.items.push({
+			kind: "message",
+			id: "durable-queued",
+			turnId: "turn-queued",
+			sequence: 1,
+			revision: 0,
+			role: "user",
+			origin: "human",
+			text: "Do this next",
+			clientMessageId: "queued-send",
+			streaming: false,
+			createdAt: "2026-09-09T00:00:05Z",
+		});
+		view.rerender(<ChatWorkspace snapshot={durable} localEchos={localEchos} />);
+
+		// The daemon's row replaces the pending one: still one row, now with its actions.
+		expect(screen.getAllByText("Do this next")).toHaveLength(1);
+		expect(within(screen.getByTestId("queued-message-dock")).getByLabelText("Delete queued message")).toBeInTheDocument();
+	});
+
 	it("keeps a hibernated send looking normal while its queued turn wakes", () => {
 		const snapshot = { ...idleSnapshot(chatFixtureEmpty), controller: { state: "hibernated" as const } };
 		const localEchos = [

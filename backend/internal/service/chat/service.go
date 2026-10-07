@@ -1568,6 +1568,26 @@ func idleControllerState(record domain.SessionRecord) ports.ChatControllerState 
 // agent process is gone, which is the whole point of persisting it. The
 // controller state is reported separately so the client can distinguish "no
 // history" from "agent not running".
+// withDispatchingTurnRunning reports the turn being dispatched as running. Its row
+// stays queued until the provider binds it, but a client reads queued as "waiting
+// behind other work", which is false for a message sent to an idle agent.
+func withDispatchingTurnRunning(turns []domain.ConversationTurn, dispatching ...string) []domain.ConversationTurn {
+	var out []domain.ConversationTurn
+	for i := range turns {
+		if turns[i].State != domain.TurnStateQueued || !slices.Contains(dispatching, turns[i].ID) {
+			continue
+		}
+		if out == nil {
+			out = append([]domain.ConversationTurn(nil), turns...)
+		}
+		out[i].State = domain.TurnStateRunning
+	}
+	if out == nil {
+		return turns
+	}
+	return out
+}
+
 func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, error) {
 	record, err := s.requireChatSession(ctx, id)
 	if err != nil {
@@ -1601,7 +1621,9 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 		state = ports.ChatControllerHibernated
 	}
 	var caps ports.ChatCapabilities
+	var dispatching []string
 	if controller, err := s.Controller(id); err == nil {
+		dispatching = controller.DispatchingTurnIDs()
 		if live := controller.State(); (record.HibernatedAt == nil && !waking) || live != ports.ChatControllerStopped {
 			state = live
 			caps = controller.Capabilities()
@@ -1617,7 +1639,7 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 		Harness:                          record.Harness,
 		Mode:                             domain.NormalizeSessionMode(record.Mode),
 		Controller:                       state,
-		Turns:                            rows.Turns,
+		Turns:                            withDispatchingTurnRunning(rows.Turns, dispatching...),
 		Messages:                         rows.Messages,
 		Activities:                       rows.Activities,
 		BranchPoints:                     rows.BranchPoints,
@@ -1662,10 +1684,12 @@ func (s *Service) SnapshotForReview(ctx context.Context, reviewID string) (Snaps
 func (s *Service) snapshotForReviewRows(review domain.Review, rows ConversationRows) Snapshot {
 	state := ports.ChatControllerStopped
 	var caps ports.ChatCapabilities
+	var dispatching []string
 	if controller, err := s.ControllerForOwner(domain.ReviewConversationOwner(review.ID)); err == nil {
 		state, caps = controller.State(), controller.Capabilities()
+		dispatching = controller.DispatchingTurnIDs()
 	}
-	return Snapshot{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, EditFloorSequence: rows.EditFloorSequence, NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence, SessionID: review.SessionID, Harness: domain.AgentHarness(review.Harness), Mode: domain.SessionModeChat, Controller: state, Turns: rows.Turns, Messages: rows.Messages, Activities: rows.Activities, BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage, OldestSequence: rows.OldestSequence, HasMoreBefore: rows.HasMoreBefore, Capabilities: caps, Usage: rows.Conversation.Usage, RateLimits: rows.Conversation.RateLimits}
+	return Snapshot{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, EditFloorSequence: rows.EditFloorSequence, NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence, SessionID: review.SessionID, Harness: domain.AgentHarness(review.Harness), Mode: domain.SessionModeChat, Controller: state, Turns: withDispatchingTurnRunning(rows.Turns, dispatching...), Messages: rows.Messages, Activities: rows.Activities, BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage, OldestSequence: rows.OldestSequence, HasMoreBefore: rows.HasMoreBefore, Capabilities: caps, Usage: rows.Conversation.Usage, RateLimits: rows.Conversation.RateLimits}
 }
 
 // SnapshotPage reads one bounded timeline page. The live conversation metadata
@@ -1702,7 +1726,9 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		state = ports.ChatControllerHibernated
 	}
 	var caps ports.ChatCapabilities
+	var dispatching []string
 	if controller, err := s.Controller(id); err == nil {
+		dispatching = controller.DispatchingTurnIDs()
 		if live := controller.State(); (record.HibernatedAt == nil && !waking) || live != ports.ChatControllerStopped {
 			state = live
 			caps = controller.Capabilities()
@@ -1717,7 +1743,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		Harness:                          record.Harness,
 		Mode:                             domain.NormalizeSessionMode(record.Mode),
 		Controller:                       state,
-		Turns:                            rows.Turns,
+		Turns:                            withDispatchingTurnRunning(rows.Turns, dispatching...),
 		Messages:                         rows.Messages,
 		Activities:                       rows.Activities,
 		BranchPoints:                     rows.BranchPoints,

@@ -2763,7 +2763,10 @@ type ConversationMessageResponse struct {
 	SenderSessionID   string                               `json:"senderSessionId,omitempty"`
 	SenderProjectID   string                               `json:"senderProjectId,omitempty"`
 	SenderDisplayName string                               `json:"senderDisplayName,omitempty"`
-	EditAvailable     bool                                 `json:"editAvailable"`
+	// ClientMessageID echoes the sender's idempotency key so a client can match its
+	// local echo to this row without comparing text or clocks.
+	ClientMessageID string `json:"clientMessageId,omitempty"`
+	EditAvailable   bool   `json:"editAvailable"`
 	// Streaming is true while more deltas are expected for this message.
 	Streaming bool   `json:"streaming"`
 	CreatedAt string `json:"createdAt"`

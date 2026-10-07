@@ -840,7 +840,39 @@ function ChatWorkspaceContent({
 		),
 		[localEchos, snapshot.turns],
 	);
-	const visibleQueuedMessages = queuedMessages.filter((message) => !backgroundWakeQueuedTurnIds.has(message.turnId));
+	// A send made while a turn was active is shown in the dock the moment it is sent,
+	// not as a chat bubble that jumps to the dock when the daemon answers. It stays
+	// until the daemon's own row for it arrives.
+	const pendingQueuedMessages = useMemo((): QueuedMessage[] =>
+		(localEchos ?? [])
+			.filter((echo) => echo.queued && !snapshot.items.some((item) => echoMatchesItem(echo, item, backgroundWakeQueuedTurnIds)))
+			.map((echo) => ({
+				turnId: echo.turnId ?? `local:${echo.clientMessageId}`,
+				pending: true,
+				message: {
+					kind: "message",
+					id: `local:${echo.clientMessageId}`,
+					turnId: echo.turnId ?? `local:${echo.clientMessageId}`,
+					sequence: snapshot.latestSequence + 0.01,
+					revision: 0,
+					role: "user",
+					origin: "human",
+					text: echo.text,
+					streaming: false,
+					delivery: "queued",
+					clientMessageId: echo.clientMessageId,
+					createdAt: echo.createdAt,
+				},
+			})),
+		[backgroundWakeQueuedTurnIds, localEchos, snapshot.items, snapshot.latestSequence],
+	);
+	const visibleQueuedMessages = useMemo(
+		() => [
+			...queuedMessages.filter((message) => !backgroundWakeQueuedTurnIds.has(message.turnId)),
+			...pendingQueuedMessages,
+		],
+		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages],
+	);
 	const stablePromoteQueuedTurn = useStableCallback(onPromoteQueuedTurn);
 	const stableCancelQueuedTurn = useStableCallback(onCancelQueuedTurn);
 	const [queueEdit, setQueueEdit] = useState<ChatDraftQueuedEdit | undefined>(
@@ -1750,7 +1782,7 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
 						key: `run-${item.sequence}`,
 						items: [item],
 					}
-				: { kind: "single", key: item.id, items: [item] },
+				: { kind: "single", key: itemKey(item), items: [item] },
 		);
 	}
 	return runs;
@@ -2204,6 +2236,7 @@ function Timeline({
 	const [virtualScrollMargin, setVirtualScrollMargin] = useState(20);
 	const measuredVirtualGroups = useRef(new WeakSet<TimelineGroup>());
 	const pendingVirtualLayout = useRef(false);
+	const renderedVirtualHeight = useRef(0);
 	const promptSpacer = useRef<HTMLDivElement>(null);
 	const scrollTrack = useRef<HTMLDivElement>(null);
 	const drag = useRef<{
@@ -2765,30 +2798,6 @@ function Timeline({
 				item.kind === "message" && item.role === "user" && item.turnId === messageEdit.turnId,
 		),
 	);
-	useEffect(() => {
-		const humanMessages = items.filter(
-			(item): item is ConversationMessage =>
-				item.kind === "message" && item.role === "user" && item.origin === "human",
-		);
-		const humanMessageIds = new Set(humanMessages.map((item) => item.id));
-		if (!seenHumanMessageIds.current) {
-			seenHumanMessageIds.current = humanMessageIds;
-			lastSeenLatestSequence.current = snapshot.latestSequence;
-			return;
-		}
-		const added = new Set(
-			humanMessages
-				.filter(
-					(item) =>
-						!seenHumanMessageIds.current?.has(item.id) &&
-						item.sequence > (lastSeenLatestSequence.current ?? -Infinity),
-				)
-				.map((item) => item.id),
-		);
-		seenHumanMessageIds.current = humanMessageIds;
-		lastSeenLatestSequence.current = snapshot.latestSequence;
-		if (added.size > 0) setNewHumanMessageIds(added);
-	}, [items, snapshot.latestSequence]);
 	const localItems = useMemo(() => {
 		const backgroundQueuedTurnIds = new Set(
 			localEchos
@@ -2799,19 +2808,21 @@ function Timeline({
 		return localEchos
 			.filter(
 				(echo) =>
+					// A send made behind a running turn lives in the queue dock, not the chat.
+					!echo.queued &&
 					!items.some(
 						(item) =>
 							item.kind === "message" &&
 							item.role === "user" &&
 							item.origin === "human" &&
-							((echo.turnId && item.turnId === echo.turnId && !backgroundQueuedTurnIds.has(echo.turnId)) ||
-								(!echo.turnId && item.text === echo.text && item.createdAt >= echo.createdAt)),
+							echoMatchesItem(echo, item, backgroundQueuedTurnIds),
 					),
 			)
 			.map((echo, index): ConversationMessage => ({
 				kind: "message",
 				id: `local:${echo.clientMessageId}`,
 				turnId: `local:${echo.clientMessageId}`,
+				clientMessageId: echo.clientMessageId,
 				sequence: snapshot.latestSequence + index + 0.01,
 				revision: 0,
 				role: "user",
@@ -2841,6 +2852,34 @@ function Timeline({
 		itemKey,
 		sameContent,
 	);
+	// Keyed by identity, not row id: the local echo already played the entrance, so the
+	// durable row that replaces it must not announce itself a second time. A layout
+	// effect, so the flag lands before the bubble's first paint: set after it, the
+	// entrance would restart from opacity 0 and the bubble would blink.
+	useLayoutEffect(() => {
+		const humanMessages = timelineItems.filter(
+			(item): item is ConversationMessage =>
+				item.kind === "message" && item.role === "user" && item.origin === "human",
+		);
+		const humanMessageKeys = new Set(humanMessages.map(itemKey));
+		if (!seenHumanMessageIds.current) {
+			seenHumanMessageIds.current = humanMessageKeys;
+			lastSeenLatestSequence.current = snapshot.latestSequence;
+			return;
+		}
+		const added = new Set(
+			humanMessages
+				.filter(
+					(item) =>
+						!seenHumanMessageIds.current?.has(itemKey(item)) &&
+						item.sequence > (lastSeenLatestSequence.current ?? -Infinity),
+				)
+				.map(itemKey),
+		);
+		seenHumanMessageIds.current = humanMessageKeys;
+		lastSeenLatestSequence.current = snapshot.latestSequence;
+		if (added.size > 0) setNewHumanMessageIds(added);
+	}, [timelineItems, snapshot.latestSequence]);
 	const previousEchoIds = useRef<ReadonlySet<string>>(new Set(localEchos.map((echo) => echo.clientMessageId)));
 	useLayoutEffect(() => {
 		const ids = new Set(localEchos.map((echo) => echo.clientMessageId));
@@ -2928,6 +2967,7 @@ function Timeline({
 	virtualizer.shouldAdjustScrollPositionOnItemSizeChange = virtualized ? undefined : () => false;
 	const virtualRows = virtualizer.getVirtualItems();
 	const virtualHeight = virtualizer.getTotalSize();
+	renderedVirtualHeight.current = virtualHeight;
 	const renderedGroups = virtualized
 		? virtualRows.map((row) => ({ group: groups[row.index]!, row, index: row.index }))
 		: groups.map((group, index) => ({ group, row: undefined, index }));
@@ -3031,6 +3071,12 @@ function Timeline({
 		const anchor = anchors && anchors.length > 0 ? anchors[anchors.length - 1] : null;
 		const lastPromptIndex = groups.findLastIndex(groupHasHumanPrompt);
 		const virtualAnchor = virtualized && lastPromptIndex >= 0 ? virtualizer.measurementsCache[lastPromptIndex] : undefined;
+		// A just-appended turn is measured in steps: the virtualizer learns its real height
+		// before the DOM does, so for a moment the rendered content still carries the
+		// 600px estimate. Sized from that, the spacer collapses to zero, the browser clamps
+		// scrollTop to the shorter content, and the view jumps up and never comes back.
+		// Wait for the DOM to catch up; the resize that follows re-runs this.
+		if (virtualized && renderedVirtualHeight.current !== virtualizer.getTotalSize()) return;
 		const nextHeight = (virtualAnchor || anchor)
 			? promptSpacerHeight({
 					viewportHeight: node.clientHeight,
@@ -4012,7 +4058,7 @@ function TimelineItem({
 					sessionId={sessionId}
 					apiBaseUrl={apiBaseUrl}
 					queued={queued}
-					animateIn={newHumanMessageIds.has(item.id)}
+					animateIn={newHumanMessageIds.has(itemKey(item))}
 					onEdit={editAvailable ? (_turnID, text) => onSubmitMessageEdit(text) : undefined}
 					editing={editing}
 					editText={editing ? messageEdit?.text : undefined}
@@ -4066,7 +4112,30 @@ function TimelineItem({
 /* identity                                                                    */
 /* -------------------------------------------------------------------------- */
 
-const itemKey = (item: ConversationItem): string => item.id;
+/**
+ * A human message keeps one key from the moment it is sent. The local echo carries the
+ * sender's `clientMessageId` and the daemon row echoes it back, so swapping one for the
+ * other keeps the same React node instead of unmounting and replaying the entrance.
+ */
+const itemKey = (item: ConversationItem): string =>
+	item.kind === "message" && item.role === "user" && item.clientMessageId
+		? `client:${item.clientMessageId}`
+		: item.id;
+
+/** Whether a durable row is the one a local echo stands in for. */
+function echoMatchesItem(
+	echo: ConversationLocalEcho,
+	item: ConversationItem,
+	backgroundQueuedTurnIds: ReadonlySet<string>,
+): boolean {
+	if (item.kind !== "message" || item.role !== "user" || item.origin !== "human") return false;
+	// A background wake keeps its echo in the timeline while the durable turn sits queued.
+	if (echo.turnId && backgroundQueuedTurnIds.has(echo.turnId) && item.turnId === echo.turnId) return false;
+	if (item.clientMessageId) return item.clientMessageId === echo.clientMessageId;
+	// Rows from a sender that supplied no key fall back to the turn id, then to text and time.
+	if (echo.turnId) return item.turnId === echo.turnId;
+	return item.text === echo.text && item.createdAt >= echo.createdAt;
+}
 const groupKey = (group: TimelineGroup): string => group.key;
 
 /**
@@ -4287,7 +4356,8 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 			continue;
 		}
 		const group: TimelineGroup = {
-			key: `${item.turnId}-${item.sequence}`,
+			// A turn opened by a keyed human message keeps the key its echo had.
+			key: itemKey(item) === item.id ? `${item.turnId}-${item.sequence}` : itemKey(item),
 			turnId: item.turnId,
 			anchor: item.sequence,
 			items: [item],

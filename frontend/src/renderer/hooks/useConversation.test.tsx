@@ -26,6 +26,7 @@ import {
 	useConversationCommands,
 	useConversationConfigOptions,
 	useConversationSkills,
+	toSnapshot,
 } from "./useConversation";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
 import { ChatWorkspace } from "../components/chat/ChatWorkspace";
@@ -1228,5 +1229,40 @@ describe("useConversationSkills polling", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+
+describe("toSnapshot", () => {
+	it("keeps the sender's clientMessageId on a user message so its echo can be matched", () => {
+		const snapshot = toSnapshot({
+			conversationId: "c1",
+			sessionId: "s1",
+			harness: "claude-code",
+			mode: "chat",
+			controller: "ready",
+			latestSequence: 1,
+			turns: [],
+			messages: [
+				{
+					kind: "message",
+					id: "m1",
+					turnId: "t1",
+					sequence: 1,
+					revision: 0,
+					role: "user",
+					origin: "human",
+					text: "hi",
+					clientMessageId: "client-1",
+					editAvailable: true,
+					streaming: false,
+					createdAt: "2026-10-08T00:00:00Z",
+				},
+			],
+			activities: [],
+		} as unknown as Parameters<typeof toSnapshot>[0]);
+
+		const message = snapshot.items.find((item) => item.kind === "message");
+		expect(message).toMatchObject({ id: "m1", clientMessageId: "client-1" });
 	});
 });

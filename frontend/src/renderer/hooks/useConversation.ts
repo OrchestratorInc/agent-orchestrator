@@ -127,6 +127,8 @@ export type ConversationLocalEcho = {
 	createdAt: string;
 	/** A hibernated send is acknowledged locally while the provider wakes. */
 	backgroundWake?: boolean;
+	/** A turn was already active when this was sent, so it belongs in the queue dock, not the chat. */
+	queued?: boolean;
 	/** Filled after the daemon accepts the send, then used for exact reconciliation. */
 	turnId?: string;
 };
@@ -475,11 +477,15 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				conversationQueryKey(variables.targetSessionId, hostId),
 			);
 			const backgroundWake = current?.pages.some((page) => page.controller.state === "hibernated") ?? false;
+			const turnActive = current?.pages.some((page) =>
+				page.turns.some((turn) => turn.state === "running" || turn.state === "queued"),
+			) ?? false;
 			addConversationLocalEcho(queryClient, stateKey(variables.targetSessionId), {
 				clientMessageId: variables.clientMessageId,
 				text: variables.input.text,
 				createdAt: new Date().toISOString(),
 				backgroundWake,
+				queued: turnActive && !backgroundWake,
 			});
 			queryClient.setQueryData<ConversationDispatchTrackingBySession>(
 				conversationDispatchTrackingQueryKey,
@@ -1668,6 +1674,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 		senderSessionId: wire.senderSessionId,
 		senderProjectId: wire.senderProjectId,
 		senderDisplayName: wire.senderDisplayName,
+		clientMessageId: wire.clientMessageId,
 		createdAt: wire.createdAt,
 	};
 }

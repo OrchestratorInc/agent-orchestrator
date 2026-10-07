@@ -228,6 +228,12 @@ type Controller struct {
 	// Eager providers can emit turn/started before SendTurn returns with the
 	// provider id; that event must bind this row instead of adopting a duplicate.
 	dispatchingTurnID string
+	// sendingTurnID is the last turn Send decided to dispatch rather than queue. Its
+	// row is written queued before dispatch moves it on, so a snapshot read in that
+	// gap would show an idle agent's message as waiting in the queue. It is kept after
+	// the send returns: a snapshot can load the row while it is still queued and read
+	// this marker afterward, and only a queued row is ever overlaid.
+	sendingTurnID string
 	// A compact request can be accepted before its provider turn starts.
 	compactionPending bool
 	// Provider calls keep automatic hibernation out without blocking explicit Kill.
@@ -1408,6 +1414,20 @@ func (c *Controller) sendLocked(
 
 	now := c.now()
 	turnID := c.newID()
+	markedSending := false
+	if !queueWhenBusy || !c.busy() {
+		c.setSendingTurn(turnID)
+		markedSending = true
+	}
+	dispatched := false
+	// The marker outlives a send that dispatched, but not one that did not. A failed
+	// insert, a duplicate, a queued row or a dispatch error leaves no running turn,
+	// and a stale marker would report a still-queued row as running.
+	defer func() {
+		if markedSending && !dispatched {
+			c.clearSendingTurn(turnID)
+		}
+	}()
 	deliveryContent := ""
 	if len(msg.Content) > 0 {
 		encoded, err := json.Marshal(msg.Content)
@@ -1453,6 +1473,11 @@ func (c *Controller) sendLocked(
 	if queueWhenBusy && c.busy() {
 		// AppendUserMessage wrote it as queued, which is exactly where it belongs
 		// until the running turn ends. drain picks it up from there.
+		c.mu.Lock()
+		c.log.Info("chat send queued behind busy controller",
+			"session", c.sessionID, "clientMessageId", msg.ClientMessageID, "turn", turnID,
+			"pendingTurn", c.pendingTurnID, "compactionPending", c.compactionPending, "state", c.state)
+		c.mu.Unlock()
 		return domain.ConversationTurn{
 			ID:                 turnID,
 			ConversationID:     c.conversation.ID,
@@ -1463,7 +1488,9 @@ func (c *Controller) sendLocked(
 		}, nil
 	}
 
-	return c.dispatch(ctx, turnID, msg, now)
+	turn, err := c.dispatch(ctx, turnID, msg, now)
+	dispatched = err == nil
+	return turn, err
 }
 
 // RetryTurn re-dispatches a failed turn's durable prompt as a new turn.
@@ -1681,6 +1708,29 @@ func (c *Controller) mergeUsage(update ports.ChatUsage) domain.ConversationUsage
 		c.usage.Currency = update.Currency
 	}
 	return c.usage
+}
+
+func (c *Controller) setSendingTurn(turnID string) {
+	c.mu.Lock()
+	c.sendingTurnID = turnID
+	c.mu.Unlock()
+}
+
+func (c *Controller) clearSendingTurn(turnID string) {
+	c.mu.Lock()
+	if c.sendingTurnID == turnID {
+		c.sendingTurnID = ""
+	}
+	c.mu.Unlock()
+}
+
+// DispatchingTurnIDs are the turns AO is handing, or has just handed, to the
+// provider, whether still being recorded or already crossing the provider boundary.
+// A client must not present one as queued: nothing is ahead of it.
+func (c *Controller) DispatchingTurnIDs() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return []string{c.sendingTurnID, c.dispatchingTurnID}
 }
 
 // busy reports whether a provider turn is in flight.
@@ -2750,6 +2800,11 @@ func (c *Controller) applyCommittedTurnLifecycle(event ports.ChatEvent) bool {
 		return true
 	case ports.ChatEventTurnCompleted:
 		if c.pendingTurnID != event.ProviderTurnID && (!c.compactionPending || c.pendingTurnID != "") {
+			// A completion that names a different turn leaves the controller busy. If
+			// the pending turn never completes, every later send queues behind it.
+			c.log.Info("chat turn completion ignored: provider turn does not match pending turn",
+				"session", c.sessionID, "completedTurn", event.ProviderTurnID,
+				"pendingTurn", c.pendingTurnID, "compactionPending", c.compactionPending)
 			return false
 		}
 		c.compactionPending = false

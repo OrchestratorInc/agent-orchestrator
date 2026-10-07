@@ -184,6 +184,8 @@ export interface ConversationMessage {
 	senderSessionId?: string;
 	senderProjectId?: string;
 	senderDisplayName?: string;
+	/** The sender's idempotency key. Lets the local echo and this row share one identity. */
+	clientMessageId?: string;
 	createdAt: string;
 }
 

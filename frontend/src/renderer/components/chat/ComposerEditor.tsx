@@ -531,6 +531,8 @@ export const ComposerEditor = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		/** Hides the text while a send is in flight; the draft is still held for recovery. */
+		concealed?: boolean;
 		label: string;
 		placeholder: string;
 		menuOpen: boolean;
@@ -547,6 +549,7 @@ export const ComposerEditor = forwardRef<
 >(function ComposerEditor(
 	{
 		disabled,
+		concealed,
 		label,
 		placeholder,
 		menuOpen,
@@ -616,12 +619,13 @@ export const ComposerEditor = forwardRef<
 							}}
 							className={cn(
 								"chat-composer-scrollbar max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 pl-[7px] pr-0 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-background",
-								disabled && "opacity-50",
+								concealed ? "invisible" : disabled && "opacity-50",
 							)}
 						/>
 					}
 					ErrorBoundary={LexicalErrorBoundary}
 				/>
+				{concealed ? <div aria-hidden="true">{placeholderNode()}</div> : null}
 				<HistoryPlugin />
 				<EditorBridge
 					ref={ref}

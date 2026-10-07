@@ -251,6 +251,26 @@ func conversationSnapshotBody(t *testing.T, snapshot chatsvc.Snapshot) map[strin
 	return decoded
 }
 
+func TestConversationSnapshotCarriesTheSendersClientMessageID(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		Conversation: domain.ConversationRecord{ID: "conversation-1"},
+		SessionID:    domain.SessionID("p1-1"),
+		Messages: []domain.ConversationMessage{
+			{ID: "sent", TurnID: "t1", Sequence: 1, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "hi", ClientMessageID: "client-key-1", CreatedAt: now},
+			{ID: "reply", TurnID: "t1", Sequence: 2, Role: domain.MessageRoleAssistant, Origin: domain.MessageOriginProvider, Text: "hello", CreatedAt: now},
+		},
+	})
+
+	messages := body["messages"].([]any)
+	if got := messages[0].(map[string]any)["clientMessageId"]; got != "client-key-1" {
+		t.Fatalf("user message clientMessageId = %#v, want client-key-1: the renderer matches its optimistic echo on it", got)
+	}
+	if _, exists := messages[1].(map[string]any)["clientMessageId"]; exists {
+		t.Fatalf("a message with no sender key must omit clientMessageId, got %#v", messages[1])
+	}
+}
+
 func TestConversationSnapshotExposesSafeEditContentAndBranchMetadata(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	body := conversationSnapshotBody(t, chatsvc.Snapshot{

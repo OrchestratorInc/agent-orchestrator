@@ -345,6 +345,49 @@ describe("send keys", () => {
 		pending.resolve();
 	});
 
+	it("hides a persisted draft while its send is in flight and shows it again if the send fails", async () => {
+		let fail!: (error: Error) => void;
+		const pending = new Promise<void>((_resolve, reject) => { fail = reject; });
+		const onSend = vi.fn().mockReturnValue(pending);
+		render(<ChatComposer draftSessionId="composer-conceal-in-flight" onSend={onSend} />);
+		const field = screen.getByLabelText("Message the agent") as HTMLElement;
+
+		await typeInComposer(field, "sent but not yet accepted");
+		await userEvent.keyboard("{Enter}");
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(field).toHaveClass("invisible");
+
+		await act(async () => {
+			fail(new Error("daemon unreachable"));
+			await pending.catch(() => undefined);
+		});
+		await waitFor(() => expect(field).not.toHaveClass("invisible"));
+		expect(field.textContent).toBe("sent but not yet accepted");
+	});
+
+	it("brings a hidden draft back if the send never answers", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			const onSend = vi.fn().mockReturnValue(new Promise<void>(() => {}));
+			render(<ChatComposer draftSessionId="composer-conceal-hung" onSend={onSend} />);
+			const field = screen.getByLabelText("Message the agent") as HTMLElement;
+
+			await typeInComposer(field, "never answered");
+			await userEvent.keyboard("{Enter}");
+			await waitFor(() => expect(field).toHaveClass("invisible"));
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(3100);
+			});
+
+			expect(field).not.toHaveClass("invisible");
+			expect(field.textContent).toBe("never answered");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("takes an Ask-in-chat code reference as a chip and sends its code with the question", async () => {
 		const sessionId = "composer-ask-in-chat-reference";
 		const onSend = vi.fn().mockResolvedValue(undefined);

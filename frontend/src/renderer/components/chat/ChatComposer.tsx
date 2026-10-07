@@ -123,6 +123,8 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 
 // Native image blocks are persisted with the chat turn and sent to the provider.
 // Larger attachments still reach the agent through their staged workspace paths.
+/** How long a sent draft stays hidden before it reappears if the daemon has not answered. */
+const SEND_CONCEAL_MS = 3000;
 const MAX_NATIVE_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
 
@@ -542,6 +544,28 @@ export const ChatComposer = memo(function ChatComposer({
 			draftScope &&
 			!submitting,
 	);
+	// A plain send already shows its echo in the timeline. Its text stays held in the
+	// editor until the daemon accepts, so a rejection or lost response can restore it,
+	// but it is not drawn meanwhile: the composer reads as sent, not stranded.
+	const sendInFlight = Boolean(
+		submitting &&
+			!staged &&
+			!deliveryUncertain &&
+			durableDelivery?.kind === "send" &&
+			durableDelivery.state === "dispatching",
+	);
+	// The request has no timeout. If the daemon stalls, bring the text back so a stuck
+	// send never reads as a vanished draft.
+	const [concealExpired, setConcealExpired] = useState(false);
+	useEffect(() => {
+		if (!sendInFlight) {
+			setConcealExpired(false);
+			return;
+		}
+		const timer = window.setTimeout(() => setConcealExpired(true), SEND_CONCEAL_MS);
+		return () => window.clearTimeout(timer);
+	}, [sendInFlight]);
+	const sendConcealed = sendInFlight && !concealExpired;
 	const canSend =
 		(hasText || staged) &&
 		(savingQueuedEdit || !busy) &&
@@ -1598,6 +1622,7 @@ export const ChatComposer = memo(function ChatComposer({
 					ref={editor}
 					images={composerImages}
 					disabled={controlsDisabled || queuedEditRecovery || draftMutationPending}
+					concealed={sendConcealed}
 					label="Message the agent"
 					placeholder={
 						disabledPlaceholder ?? (disabled

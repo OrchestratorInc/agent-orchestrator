@@ -1170,6 +1170,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			SenderSessionID:   msg.SenderSessionID,
 			SenderProjectID:   msg.SenderProjectID,
 			SenderDisplayName: msg.SenderDisplayName,
+			ClientMessageID:   msg.ClientMessageID,
 			Streaming:         msg.Streaming,
 			CreatedAt:         msg.CreatedAt.UTC().Format(time.RFC3339),
 		}
