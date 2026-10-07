@@ -13,7 +13,7 @@ func TestMigrateRepairsSideChatMigrationAtOldVersion(t *testing.T) {
 	for _, oldVersion := range []int{156, 163, 169, 171} {
 		t.Run(fmt.Sprintf("version-%d", oldVersion), func(t *testing.T) {
 			db := openMigratedDatabaseCopy(t, int64(oldVersion-1))
-			contents, err := migrationsFS.ReadFile("migrations/0174_conversation_side_chats.sql")
+			contents, err := migrationsFS.ReadFile("migrations/0190_conversation_side_chats.sql")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -77,3 +77,4 @@ func TestMigrateRepairsSideChatMigrationAtOldVersion(t *testing.T) {
 		})
 	}
 }
+
