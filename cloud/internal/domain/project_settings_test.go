@@ -27,7 +27,7 @@ func TestProjectSettingsLegacyAndPartialMerge(t *testing.T) {
 func TestProjectSettingsValidation(t *testing.T) {
 	for _, raw := range []string{
 		`null`, `{"displayName":null}`, `{"displayName":" "}`, `{"defaultBranch":""}`,
-		`{"workerAgent":"codex"}`, `{"config":null}`, `{"config":{"sessionPrefix":"unused"}}`,
+		`{"workerAgent":"codex"}`, `{"config":null}`, `{"config":{"unknownField":"unused"}}`,
 		`{"config":{"autoInjectReview":false}}`, `{"config":{"autoReview":"false"}}`,
 		`{"config":{"reviewers":null}}`, `{"config":{"autoReview":null}}`,
 		`{"config":{"worker":{"agent":null}}}`, `{"config":{"worker":{"agentConfig":null}}}`,
@@ -109,5 +109,30 @@ func TestEffectiveReviewerAndSessionDefaults(t *testing.T) {
 	fallback := EffectiveReviewer(ProjectSettingsConfig{}, "codex", "worker", "trusted", config)
 	if fallback.Harness != "codex" || fallback.AgentConfig.Model != "worker" || fallback.AgentConfig.Effort != "max" || fallback.AgentConfig.Permissions != "bypass-permissions" {
 		t.Fatalf("fallback = %+v", fallback)
+	}
+}
+
+func TestProjectSessionPrefix(t *testing.T) {
+	for _, tc := range []struct{ config, want string }{
+		{`{}`, "ao"}, {`{"sessionPrefix":""}`, "ao"}, {`{"sessionPrefix":"team_1-dev"}`, "team_1-dev"},
+	} {
+		got, err := ProjectSessionPrefix(json.RawMessage(tc.config))
+		if err != nil || got != tc.want {
+			t.Fatalf("prefix(%s) = %q, %v", tc.config, got, err)
+		}
+	}
+	for _, prefix := range []string{"-bad", "../bad", "a/b", "a b", "-bad.lock", strings.Repeat("x", 41), "bad\n"} {
+		raw, _ := json.Marshal(map[string]string{"sessionPrefix": prefix})
+		if _, err := MergeProjectSettingsConfig(json.RawMessage(`{}`), raw); err == nil {
+			t.Fatalf("accepted invalid prefix %q", prefix)
+		}
+	}
+	merged, err := MergeProjectSettingsConfig(json.RawMessage(`{"sessionPrefix":"old","autoReview":false}`), json.RawMessage(`{"sessionPrefix":"new"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := DecodeProjectSettings(merged)
+	if err != nil || settings.SessionPrefix != "new" || settings.AutoReview == nil || *settings.AutoReview {
+		t.Fatalf("merged settings = %+v, %v", settings, err)
 	}
 }

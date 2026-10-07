@@ -2,7 +2,12 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
+	"github.com/jackc/pgx/v5"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,15 +70,16 @@ func TestTerminalTicketPurposeBindsReviewerTerminal(t *testing.T) {
 }
 
 func TestReviewTerminalOpenCommandCarriesInitialPrompt(t *testing.T) {
-	command := reviewTerminalOpenCommand("reviewer-terminal-id", "review this pull request", "codex")
+	reviewer := domain.ProjectReviewer{Harness: "codex", AgentConfig: domain.ProjectAgentConfig{Model: "review-model", Effort: "high"}}
+	command := reviewTerminalOpenCommand("reviewer-terminal-id", "review-run-id", "review this pull request", reviewer)
 	if command.TerminalID != "reviewer-terminal-id" {
 		t.Fatalf("TerminalID = %q", command.TerminalID)
 	}
-	if command.Kind != "agent" || !command.Review {
-		t.Fatalf("review open command = %#v, want review agent", command)
+	if command.Kind != "reviewer" || command.Review || command.ReviewRunID != "review-run-id" {
+		t.Fatalf("review open command = %#v, want isolated reviewer", command)
 	}
-	if command.Harness != "codex" {
-		t.Fatalf("Harness = %q, want codex", command.Harness)
+	if command.Reviewer == nil || *command.Reviewer != reviewer {
+		t.Fatalf("reviewer settings = %+v, want %+v", command.Reviewer, reviewer)
 	}
 	if got, want := string(command.Data), "review this pull request"; got != want {
 		t.Fatalf("initial review prompt = %q, want %q", got, want)
@@ -184,3 +190,224 @@ func TestReviewPublicationClaimIsDurableAndRejectsChangedVerdict(t *testing.T) {
 }
 
 func ptr(value string) *string { return &value }
+
+func TestReviewCompletionNotifiesAndDeliversFindings(t *testing.T) {
+	for _, inject := range []bool{false, true} {
+		t.Run(fmt.Sprint(inject), func(t *testing.T) {
+			store, _, fixture := openNotificationTestStore(t)
+			ctx := context.Background()
+			if _, err := store.UpdateSessionPreferences(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID, fixture.sessionID, SessionPreferencesUpdate{AutoInjectReview: &inject}); err != nil {
+				t.Fatal(err)
+			}
+			pr, err := store.CreatePullRequestRecord(ctx, fixture.orgID, fixture.sessionID, "github", "owner/repo", "author", 22, "https://github.test/owner/repo/pull/22", "feature", "main", "review-head", "Review", 0, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, _, err := store.CreateReviewRun(ctx, fixture.orgID, pr.ID, fixture.sessionID, pr.HeadSHA, "codex", "manual")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = store.CompleteAndDeliverReviewRun(ctx, fixture.orgID, run.ID, fixture.sessionID, domain.SubmitReviewResult{Verdict: contract.AOReviewVerdictChangesRequested, Body: "Missing validation in handler.go"}, "123")
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = store.withOrg(ctx, fixture.orgID, func(tx pgx.Tx) error {
+				var title string
+				if err := tx.QueryRow(ctx, `SELECT title FROM ao_notifications WHERE org_id=$1 AND pull_request_id=$2 AND type='review_completed'`, fixture.orgID, pr.ID).Scan(&title); err != nil {
+					return err
+				}
+				if title != "PR review completed" {
+					t.Errorf("notification title = %q", title)
+				}
+				var payloads [][]byte
+				rows, err := tx.Query(ctx, `SELECT payload FROM ao_commands WHERE org_id=$1 AND session_id=$2 AND kind='message.send'`, fixture.orgID, fixture.sessionID)
+				if err != nil {
+					return err
+				}
+				defer rows.Close()
+				for rows.Next() {
+					var payload []byte
+					if err := rows.Scan(&payload); err != nil {
+						return err
+					}
+					payloads = append(payloads, payload)
+				}
+				if inject {
+					if len(payloads) != 1 || !strings.Contains(string(payloads[0]), "Missing validation in handler.go") {
+						t.Errorf("feedback payloads = %s", payloads)
+					}
+				} else if len(payloads) != 0 {
+					t.Errorf("auto inject disabled but queued %d messages", len(payloads))
+				}
+				return rows.Err()
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestReviewOpenUsesSnapshotForManualAndAuto(t *testing.T) {
+	for _, source := range []string{"manual", "auto"} {
+		t.Run(source, func(t *testing.T) {
+			store, _, fixture := openNotificationTestStore(t)
+			ctx := context.Background()
+			pr, err := store.CreatePullRequestRecord(ctx, fixture.orgID, fixture.sessionID, "github", "owner/repo", "author", 23, "https://github.test/owner/repo/pull/23", "feature", "main", "sha", "Review", 0, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, _, err := store.CreateReviewRun(ctx, fixture.orgID, pr.ID, fixture.sessionID, pr.HeadSHA, "codex", source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			terminalID, err := store.OpenReviewTerminal(ctx, fixture.orgID, fixture.sessionID, run.ID, "Review only this PR", "codex")
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = store.withOrg(ctx, fixture.orgID, func(tx pgx.Tx) error {
+				var payload []byte
+				if err := tx.QueryRow(ctx, `SELECT payload FROM ao_worker_requests WHERE org_id=$1 AND session_id=$2 AND kind='terminal.open' AND payload->>'terminalId'=$3`, fixture.orgID, fixture.sessionID, terminalID).Scan(&payload); err != nil {
+					return err
+				}
+				var command worker.TerminalCommand
+				if err := json.Unmarshal(payload, &command); err != nil {
+					return err
+				}
+				if command.Kind != "reviewer" || command.ReviewRunID != run.ID || command.Review || command.Reviewer == nil || string(command.Data) != "Review only this PR" {
+					t.Errorf("command=%+v", command)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAutomaticReviewCandidatesWaitForIdleAndSkipReviewedHeads(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	pr, err := store.CreatePullRequestRecord(ctx, fixture.orgID, fixture.sessionID, "github", "owner/repo", "author", 24, "https://github.test/owner/repo/pull/24", "feature", "main", "auto-sha", "Review", 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(want bool) {
+		t.Helper()
+		prs, err := store.AutomaticReviewCandidates(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, candidate := range prs {
+			if candidate.ID == pr.ID {
+				found = true
+			}
+		}
+		if found != want {
+			t.Fatalf("candidate present=%v, want %v", found, want)
+		}
+	}
+	check(false)
+	err = store.withOrg(ctx, fixture.orgID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE ao_sessions SET auto_review_enabled=true,activity_state='active' WHERE org_id=$1 AND id=$2`, fixture.orgID, fixture.sessionID)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+	err = store.withOrg(ctx, fixture.orgID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE ao_sessions SET activity_state='idle' WHERE org_id=$1 AND id=$2`, fixture.orgID, fixture.sessionID)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(true)
+	run, _, err := store.CreateReviewRun(ctx, fixture.orgID, pr.ID, fixture.sessionID, pr.HeadSHA, "codex", "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+	if _, err = store.CompleteAndDeliverReviewRun(ctx, fixture.orgID, run.ID, fixture.sessionID, domain.SubmitReviewResult{Verdict: contract.AOReviewVerdictApproved, Body: "Looks good"}, "456"); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+	prior, created, err := store.CreateReviewRun(ctx, fixture.orgID, pr.ID, fixture.sessionID, pr.HeadSHA, "codex", "auto")
+	if err != nil || created || prior.ID != run.ID {
+		t.Fatalf("automatic retry of reviewed head: run=%s created=%v err=%v", prior.ID, created, err)
+	}
+	err = store.withOrg(ctx, fixture.orgID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE ao_pull_requests SET head_sha='new-head' WHERE org_id=$1 AND id=$2`, fixture.orgID, pr.ID)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(true)
+}
+
+func TestReviewerTerminalCannotReceiveWorkerFeedback(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	agent, err := store.EnsureWorkerAgentTerminal(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, err := store.CreatePullRequestRecord(ctx, fixture.orgID, fixture.sessionID, "github", "owner/repo", "author", 24, "https://github.test/owner/repo/pull/24", "feature", "main", "sha", "Review", 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, _, err := store.CreateReviewRun(ctx, fixture.orgID, pr.ID, fixture.sessionID, pr.HeadSHA, "codex", "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewerID, err := store.OpenReviewTerminal(ctx, fixture.orgID, fixture.sessionID, run.ID, "Review", "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.withOrg(ctx, fixture.orgID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE ao_terminal_sessions SET state='open' WHERE org_id=$1 AND id=$2`, fixture.orgID, reviewerID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	found, err := store.EnsureWorkerAgentTerminal(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch, time.Hour)
+	if err != nil || found.ID != agent.ID {
+		t.Fatalf("worker lookup selected reviewer: %+v, %v", found, err)
+	}
+	ticket, _, err := store.IssueTerminalTicket(ctx, principal, fixture.orgID, fixture.sessionID, "agent", "", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attached, err := store.OpenTerminal(ctx, ticket, "agent", "", time.Hour)
+	if err != nil || attached.ID != agent.ID {
+		t.Fatalf("worker browser attached to reviewer: %+v, %v", attached, err)
+	}
+	if _, err := store.SendMessage(ctx, principal, fixture.orgID, fixture.sessionID, "review-feedback-target", "Address the review feedback", domain.ChatTurnSettings{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.withOrg(ctx, fixture.orgID, func(tx pgx.Tx) error {
+		var target string
+		err := tx.QueryRow(ctx, `SELECT payload->>'terminalId' FROM ao_worker_requests WHERE org_id=$1 AND session_id=$2 AND kind='terminal.input' ORDER BY created_at DESC LIMIT 1`, fixture.orgID, fixture.sessionID).Scan(&target)
+		if err == nil && target != agent.ID {
+			t.Errorf("feedback target=%s, worker=%s, reviewer=%s", target, agent.ID, reviewerID)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// An explicit reviewer attachment is still allowed; only implicit worker
+	// lookups must exclude the review process.
+	ticket, _, err = store.IssueTerminalTicket(ctx, principal, fixture.orgID, fixture.sessionID, "agent", reviewerID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attached, err = store.OpenTerminal(ctx, ticket, "agent", reviewerID, time.Hour)
+	if err != nil || attached.ID != reviewerID {
+		t.Fatalf("review panel attachment broke: %+v, %v", attached, err)
+	}
+}

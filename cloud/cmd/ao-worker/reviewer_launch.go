@@ -20,6 +20,7 @@ func reviewerLaunch(base worker.LaunchContext, input worker.TerminalCommand) (wo
 	base.Harness = input.Reviewer.Harness
 	base.AgentConfig = input.Reviewer.AgentConfig
 	base.Model = input.Reviewer.AgentConfig.Model
+	base.ReasoningEffort = input.Reviewer.AgentConfig.Effort
 	base.AgentSessionID = ""
 	base.ParentSessionID = ""
 	base.Prompt = string(input.Data)

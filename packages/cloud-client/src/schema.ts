@@ -1495,6 +1495,8 @@ export interface components {
         };
         /** @description Canonical nested role settings. Legacy workerAgent and orchestratorAgent are normalized on reads and removed on the next settings write. Nested agents take precedence. */
         ProjectConfig: {
+            /** @description Prefix for new session branches. Empty uses ao; existing sessions are unchanged. */
+            sessionPrefix?: string;
             worker?: components["schemas"]["ProjectRoleConfig"];
             orchestrator?: components["schemas"]["ProjectRoleConfig"];
             /** @description Empty or absent uses the session agent for reviews. */
@@ -1505,6 +1507,8 @@ export interface components {
             [key: string]: unknown;
         };
         ProjectSettingsConfigPatch: {
+            /** @description Prefix for new session branches. Empty uses ao; existing sessions are unchanged. */
+            sessionPrefix?: string;
             /** @description Null removes the worker override and uses the session agent selection. */
             worker?: components["schemas"]["ProjectRoleConfigPatch"] | null;
             /** @description Null removes the orchestrator override and uses the session agent selection. */

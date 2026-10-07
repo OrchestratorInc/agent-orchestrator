@@ -28,10 +28,11 @@ type ProjectReviewer struct {
 }
 
 type ProjectSettingsConfig struct {
-	Worker       *ProjectRoleConfig `json:"worker,omitempty"`
-	Orchestrator *ProjectRoleConfig `json:"orchestrator,omitempty"`
-	Reviewers    []ProjectReviewer  `json:"reviewers,omitempty"`
-	AutoReview   *bool              `json:"autoReview,omitempty"`
+	SessionPrefix string             `json:"sessionPrefix,omitempty"`
+	Worker        *ProjectRoleConfig `json:"worker,omitempty"`
+	Orchestrator  *ProjectRoleConfig `json:"orchestrator,omitempty"`
+	Reviewers     []ProjectReviewer  `json:"reviewers,omitempty"`
+	AutoReview    *bool              `json:"autoReview,omitempty"`
 }
 
 // Config contains a partial object. Arrays replace; nested role objects merge.
@@ -85,6 +86,9 @@ func DecodeProjectSettings(raw json.RawMessage) (ProjectSettingsConfig, error) {
 	var settings ProjectSettingsConfig
 	if err := json.Unmarshal(normalized, &settings); err != nil {
 		return settings, fmt.Errorf("invalid project settings: %w", err)
+	}
+	if err := validateSessionPrefix(settings.SessionPrefix); err != nil {
+		return settings, err
 	}
 	for _, role := range []*ProjectRoleConfig{settings.Worker, settings.Orchestrator} {
 		if role != nil {
@@ -217,7 +221,7 @@ func validateSettingsPatchObject(raw json.RawMessage, kind string) error {
 		return fmt.Errorf("%s must be an object", kind)
 	}
 	allowed := map[string][]string{
-		"config":      {"worker", "orchestrator", "reviewers", "autoReview"},
+		"config":      {"worker", "orchestrator", "reviewers", "autoReview", "sessionPrefix"},
 		"role":        {"agent", "agentConfig"},
 		"reviewer":    {"harness", "agentConfig"},
 		"agentConfig": {"model", "mode", "effort", "permissions"},
@@ -250,6 +254,14 @@ func validateSettingsPatchObject(raw json.RawMessage, kind string) error {
 				if err := validateSettingsPatchObject(reviewer, "reviewer"); err != nil {
 					return err
 				}
+			}
+		case "sessionPrefix":
+			var prefix string
+			if json.Unmarshal(value, &prefix) != nil {
+				return fmt.Errorf("sessionPrefix must be a string")
+			}
+			if err := validateSessionPrefix(prefix); err != nil {
+				return err
 			}
 		case "autoReview":
 			var enabled bool
@@ -301,4 +313,31 @@ func mergeSettingsObjects(existing, patch json.RawMessage) json.RawMessage {
 	}
 	raw, _ := json.Marshal(result)
 	return raw
+}
+
+// Cloud branches use <prefix>/<session-id>. Empty keeps the existing ao prefix.
+func validateSessionPrefix(prefix string) error {
+	if strings.HasPrefix(prefix, "-") {
+		return fmt.Errorf("sessionPrefix cannot start with a hyphen")
+	}
+	if len(prefix) > 40 {
+		return fmt.Errorf("sessionPrefix must contain at most 40 ASCII letters, digits, hyphens or underscores")
+	}
+	for _, ch := range prefix {
+		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_') {
+			return fmt.Errorf("sessionPrefix must contain only ASCII letters, digits, hyphens or underscores")
+		}
+	}
+	return nil
+}
+
+func ProjectSessionPrefix(raw json.RawMessage) (string, error) {
+	settings, err := DecodeProjectSettings(raw)
+	if err != nil {
+		return "", err
+	}
+	if settings.SessionPrefix == "" {
+		return "ao", nil
+	}
+	return settings.SessionPrefix, nil
 }

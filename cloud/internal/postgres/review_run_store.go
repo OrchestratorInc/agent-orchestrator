@@ -27,27 +27,47 @@ func (s *Store) CreateReviewRun(
 ) (run domain.ReviewRun, created bool, err error) {
 	err = s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		var projectConfig, agentConfigJSON json.RawMessage
-		var sessionHarness, model, mode string
+		var sessionHarness, model, mode, selectedReviewer, activity string
 		if err := tx.QueryRow(ctx,
-			`SELECT project.config, session.harness, session.model, session.mode, session.agent_config
+			`SELECT project.config, session.harness, session.model, session.mode, session.agent_config,
+				session.reviewer_harness, session.activity_state
 			FROM ao_sessions session JOIN ao_projects project ON project.id = session.project_id AND project.org_id = session.org_id
-			WHERE session.org_id = $1 AND session.id = $2 AND session.is_terminated = false AND project.archived_at IS NULL`,
-			orgID, reviewSessionID).Scan(&projectConfig, &sessionHarness, &model, &mode, &agentConfigJSON); err != nil {
+			WHERE session.org_id = $1 AND session.id = $2 AND session.is_terminated = false AND project.archived_at IS NULL
+			FOR UPDATE OF session`,
+			orgID, reviewSessionID).Scan(&projectConfig, &sessionHarness, &model, &mode, &agentConfigJSON, &selectedReviewer, &activity); err != nil {
 			return err
 		}
 		settings, err := domain.DecodeProjectSettings(projectConfig)
 		if err != nil {
 			return err
 		}
-		if triggerSource == "auto" && settings.AutoReview != nil && !*settings.AutoReview {
+		if triggerSource == "auto" && (activity != "idle" || (settings.AutoReview != nil && !*settings.AutoReview)) {
 			return nil
+		}
+		if triggerSource == "auto" {
+			// The session lock serializes this check with manual triggers. A
+			// completed/failed manual pass also counts as an automatic attempt
+			// for this head; explicit manual retries remain available.
+			prior, scanErr := scanReviewRun(tx.QueryRow(ctx, `SELECT `+reviewRunColumns+`
+				FROM ao_review_runs WHERE org_id=$1 AND pull_request_id=$2 AND target_sha=$3
+				ORDER BY (status='running') DESC, created_at DESC LIMIT 1`, orgID, pullRequestID, targetSHA))
+			if scanErr == nil {
+				run = prior
+				return nil
+			}
+			if !errors.Is(scanErr, ErrNotFound) {
+				return scanErr
+			}
 		}
 		var agentConfig domain.ProjectAgentConfig
 		if err := json.Unmarshal(agentConfigJSON, &agentConfig); err != nil {
 			return err
 		}
 		reviewer := domain.EffectiveReviewer(settings, sessionHarness, model, mode, agentConfig)
-		if triggerSource == "manual" && harness != "" && harness != reviewer.Harness {
+		if harness == "" {
+			harness = selectedReviewer
+		}
+		if harness != "" && harness != reviewer.Harness {
 			reviewer.Harness = harness
 			reviewer.AgentConfig.Model = ""
 			reviewer.AgentConfig.Effort = ""
@@ -120,10 +140,9 @@ func (s *Store) OpenReviewTerminal(
 	terminalID := uuid.NewString()
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		var configJSON json.RawMessage
-		var triggerSource string
 		if err := tx.QueryRow(ctx,
-			`SELECT reviewer_config, trigger_source FROM ao_review_runs WHERE org_id = $1 AND id = $2 AND review_session_id = $3 AND status = 'running' FOR UPDATE`,
-			orgID, reviewRunID, sessionID).Scan(&configJSON, &triggerSource); err != nil {
+			`SELECT reviewer_config FROM ao_review_runs WHERE org_id = $1 AND id = $2 AND review_session_id = $3 AND status = 'running' FOR UPDATE`,
+			orgID, reviewRunID, sessionID).Scan(&configJSON); err != nil {
 			return err
 		}
 		var reviewer domain.ProjectReviewer
@@ -162,13 +181,7 @@ func (s *Store) OpenReviewTerminal(
 		); err != nil {
 			return err
 		}
-		openCommand := reviewTerminalOpenCommand(terminalID, prompt, harness)
-		if triggerSource == "auto" {
-			openCommand = worker.TerminalCommand{
-				TerminalID: terminalID, Kind: "reviewer", ReviewRunID: reviewRunID,
-				Reviewer: &reviewer, Data: []byte(prompt),
-			}
-		}
+		openCommand := reviewTerminalOpenCommand(terminalID, reviewRunID, prompt, reviewer)
 		openPayload, err := json.Marshal(openCommand)
 		if err != nil {
 			return err
@@ -212,16 +225,15 @@ func (s *Store) OpenReviewTerminal(
 	return terminalID, nil
 }
 
-func reviewTerminalOpenCommand(terminalID, prompt, harness string) worker.TerminalCommand {
-	// Start Codex with the prompt instead of sending terminal input after
-	// launch. Its interactive UI can take longer than a fixed delay to
-	// initialize, causing an early terminal write to be discarded.
+func reviewTerminalOpenCommand(terminalID, reviewRunID, prompt string, reviewer domain.ProjectReviewer) worker.TerminalCommand {
+	// Manual and automatic runs use the same isolated launch and credential
+	// snapshot. The factory includes the prompt exactly once at startup.
 	return worker.TerminalCommand{
-		TerminalID: terminalID,
-		Kind:       "agent",
-		Review:     true,
-		Harness:    harness,
-		Data:       []byte(prompt),
+		TerminalID:  terminalID,
+		Kind:        "reviewer",
+		ReviewRunID: reviewRunID,
+		Reviewer:    &reviewer,
+		Data:        []byte(prompt),
 	}
 }
 
@@ -471,6 +483,25 @@ func (s *Store) CompleteAndDeliverReviewRun(
 			WHERE org_id = $1 AND id = $2 AND head_sha = $4`,
 			orgID, run.PullRequestID, aoReviewState, run.TargetSHA,
 		)
+		if err != nil {
+			return err
+		}
+		pr, err := scanPullRequest(tx.QueryRow(ctx, `SELECT `+pullRequestColumns+`
+			FROM ao_pull_requests WHERE org_id=$1 AND id=$2`, orgID, run.PullRequestID))
+		if err != nil {
+			return err
+		}
+		if err := createPullRequestNotificationTx(ctx, tx, pr, "review_completed"); err != nil {
+			return err
+		}
+		var autoInject bool
+		if err := tx.QueryRow(ctx, `SELECT auto_inject_review AND NOT is_terminated FROM ao_sessions WHERE org_id=$1 AND id=$2`, orgID, reviewSessionID).Scan(&autoInject); err != nil {
+			return err
+		}
+		if autoInject && pr.HeadSHA == run.TargetSHA && pr.State == contract.PRStateOpen && result.Verdict == contract.AOReviewVerdictChangesRequested {
+			text := fmt.Sprintf("AO review requested changes on %s#%d (%s), commit %s:\n\n%s\n\nAddress these findings, run the relevant tests, commit, and push the correction.", pr.Repository, pr.Number, pr.URL, run.TargetSHA, result.Body)
+			_, err = sendMessageTx(ctx, tx, orgID, reviewSessionID, "ao-review:"+run.ID, text, "", reviewSessionID, "", nil, domain.ChatTurnSettings{})
+		}
 		return err
 	})
 	if err != nil {

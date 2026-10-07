@@ -713,6 +713,10 @@ func createSessionTx(
 		return domain.Session{}, err
 	}
 
+	prefix, err := domain.ProjectSessionPrefix(projectConfig)
+	if err != nil {
+		return domain.Session{}, ErrInvalid
+	}
 	err = scanSession(tx.QueryRow(
 		ctx,
 		`WITH generated AS (SELECT gen_random_uuid() AS id)
@@ -720,7 +724,7 @@ func createSessionTx(
 			id, org_id, project_id, kind, harness, display_name, branch,
 			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort, agent_config
 		)
-		SELECT id, $1, $2, $3, $4, $5, 'ao/' || left(id::text, 8),
+		SELECT id, $1, $2, $3, $4, $5, $15 || '/' || left(id::text, 8),
 			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14
 		FROM generated
 		RETURNING `+sessionInsertReturning,
@@ -738,6 +742,7 @@ func createSessionTx(
 		actorUserID,
 		input.ReasoningEffort,
 		agentConfigJSON,
+		prefix,
 	), &session)
 	if err != nil {
 		return domain.Session{}, normalizeConstraintError(err)
@@ -1071,7 +1076,11 @@ const sessionSelect = `
 			FROM ao_terminal_sessions terminal
 			WHERE terminal.org_id = session.org_id
 				AND terminal.session_id = session.id
-				AND terminal.kind = 'agent'
+				AND terminal.kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = terminal.org_id
+				  AND review_terminal_run.review_terminal_id = terminal.id
+			)
 		), 0),
 		session.created_at, session.updated_at
 	FROM ao_sessions session

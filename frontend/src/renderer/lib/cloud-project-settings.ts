@@ -9,6 +9,7 @@ export type CloudProjectRoleDraft = {
 export type CloudProjectSettingsDraft = {
 	displayName: string;
 	defaultBranch: string;
+	sessionPrefix: string;
 	worker: CloudProjectRoleDraft;
 	orchestrator: CloudProjectRoleDraft;
 	reviewer: CloudProjectRoleDraft;
@@ -32,6 +33,7 @@ export function cloudProjectSettingsDraft(project: CloudCpProject): CloudProject
 	return {
 		displayName: project.displayName,
 		defaultBranch: project.defaultBranch,
+		sessionPrefix: typeof config.sessionPrefix === "string" ? config.sessionPrefix : "",
 		worker: role("worker"),
 		orchestrator: role("orchestrator"),
 		reviewer: {
@@ -48,6 +50,7 @@ export function cloudProjectSettingsPatch(before: CloudProjectSettingsDraft, aft
 	if (before.displayName !== after.displayName) patch.displayName = after.displayName.trim();
 	if (before.defaultBranch !== after.defaultBranch) patch.defaultBranch = after.defaultBranch.trim();
 	const config: NonNullable<CloudCpProjectSettingsRequest["config"]> = {};
+	if (before.sessionPrefix !== after.sessionPrefix) config.sessionPrefix = after.sessionPrefix.trim();
 	for (const role of ["worker", "orchestrator"] as const) {
 		if (JSON.stringify(before[role]) !== JSON.stringify(after[role])) {
 			config[role] = after[role].agent === "" ? null : { agent: after[role].agent, agentConfig: after[role].agentConfig };

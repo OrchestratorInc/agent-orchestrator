@@ -434,13 +434,21 @@ func agentTerminalExitVerdict(ctx context.Context, tx pgx.Tx, orgID, sessionID s
 			SELECT 1 FROM ao_terminal_sessions terminal
 			WHERE terminal.org_id = session.org_id
 			  AND terminal.session_id = session.id
-			  AND terminal.kind = 'agent'
+			  AND terminal.kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = terminal.org_id
+				  AND review_terminal_run.review_terminal_id = terminal.id
+			)
 			  AND terminal.state IN ('closed', 'failed')
 			  AND NOT EXISTS (
 				SELECT 1 FROM ao_terminal_sessions live
 				WHERE live.org_id = terminal.org_id
 				  AND live.session_id = terminal.session_id
-				  AND live.kind = 'agent'
+				  AND live.kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = live.org_id
+				  AND review_terminal_run.review_terminal_id = live.id
+			)
 				  AND live.state IN ('opening', 'open')
 				  AND live.worker_epoch = terminal.worker_epoch
 			  )
@@ -448,7 +456,11 @@ func agentTerminalExitVerdict(ctx context.Context, tx pgx.Tx, orgID, sessionID s
 				SELECT MAX(latest.worker_epoch) FROM ao_terminal_sessions latest
 				WHERE latest.org_id = session.org_id
 				  AND latest.session_id = session.id
-				  AND latest.kind = 'agent'
+				  AND latest.kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = latest.org_id
+				  AND review_terminal_run.review_terminal_id = latest.id
+			)
 			  )
 		), EXISTS (
 			SELECT 1 FROM ao_interface_transitions transition
@@ -633,7 +645,11 @@ func (s *Store) IssueTerminalTicket(
 					`SELECT EXISTS (
 						SELECT 1 FROM ao_terminal_sessions
 						WHERE org_id = $1 AND session_id = $2 AND worker_epoch = $3
-						  AND kind = 'agent' AND state IN ('opening', 'open')
+						  AND kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = ao_terminal_sessions.org_id
+				  AND review_terminal_run.review_terminal_id = ao_terminal_sessions.id
+			) AND state IN ('opening', 'open')
 						  AND expires_at > now()
 					)`,
 					orgID, sessionID, epoch,
@@ -751,7 +767,11 @@ func (s *Store) EnsureWorkerAgentTerminal(
 			WHERE id = (
 				SELECT id FROM ao_terminal_sessions
 				WHERE org_id = $2 AND session_id = $3 AND worker_epoch = $4
-				  AND kind = 'agent' AND state IN ('opening', 'open')
+				  AND kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = ao_terminal_sessions.org_id
+				  AND review_terminal_run.review_terminal_id = ao_terminal_sessions.id
+			) AND state IN ('opening', 'open')
 				  AND expires_at > now()
 				ORDER BY created_at DESC
 				LIMIT 1
@@ -777,7 +797,11 @@ func (s *Store) EnsureWorkerAgentTerminal(
 			WHERE id = (
 				SELECT id FROM ao_terminal_sessions
 				WHERE org_id = $3 AND session_id = $4
-				  AND kind = 'agent' AND state = 'closed'
+				  AND kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = ao_terminal_sessions.org_id
+				  AND review_terminal_run.review_terminal_id = ao_terminal_sessions.id
+			) AND state = 'closed'
 				ORDER BY created_at DESC
 				LIMIT 1
 			)
@@ -875,7 +899,11 @@ func (s *Store) OpenTerminal(
 				WHERE id = (
 					SELECT id FROM ao_terminal_sessions
 					WHERE org_id = $2 AND session_id = $3
-					  AND worker_epoch = $4 AND kind = 'agent'
+					  AND worker_epoch = $4 AND kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = ao_terminal_sessions.org_id
+				  AND review_terminal_run.review_terminal_id = ao_terminal_sessions.id
+			)
 					  AND state IN ('opening', 'open') AND expires_at > now()
 					ORDER BY created_at DESC
 					LIMIT 1
@@ -898,6 +926,11 @@ func (s *Store) OpenTerminal(
 					SET state = 'closed', closed_at = now(), updated_at = now()
 					WHERE org_id = $1 AND session_id = $2 AND worker_epoch = $3
 					  AND kind = $4 AND state IN ('opening', 'open')
+					  AND NOT EXISTS (
+						SELECT 1 FROM ao_review_runs review_terminal_run
+						WHERE review_terminal_run.org_id = ao_terminal_sessions.org_id
+						  AND review_terminal_run.review_terminal_id = ao_terminal_sessions.id
+					  )
 					RETURNING id
 				)
 				SELECT COALESCE(array_agg(id::text), ARRAY[]::text[]) FROM retired`,

@@ -317,6 +317,7 @@ func run(logger *slog.Logger) error {
 			return err
 		}
 		go githubService.Run(ctx)
+		go githubService.RunAutomaticReviews(ctx, store)
 	}
 	var checkoutBroker httpapi.CheckoutBroker
 	if githubService != nil {

@@ -366,3 +366,28 @@ func TestSavedProjectSettingsReachWorkerOrchestratorAndReviewerProcesses(t *test
 	}
 	checkLaunch("reviewer", "claude-code", "sonnet", "high", worker.LaunchContext{SessionID: run.ID, Kind: "reviewer", Harness: terminal.Reviewer.Harness, Mode: "standard", Model: terminal.Reviewer.AgentConfig.Model, AgentConfig: terminal.Reviewer.AgentConfig})
 }
+
+func TestProjectSessionPrefixAppliesOnlyToNewSessions(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	before, err := store.GetSession(ctx, principal, fixture.orgID, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.UpdateProjectSettings(ctx, principal, fixture.orgID, fixture.projectID, domain.ProjectSettingsPatch{Config: json.RawMessage(`{"sessionPrefix":"team"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 10, domain.CreateSession{ProjectID: fixture.projectID, Kind: "worker", Harness: "codex", DisplayName: "New task", Mode: "trusted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Branch != "team/"+created.ID[:8] {
+		t.Fatalf("new session branch = %q", created.Branch)
+	}
+	after, err := store.GetSession(ctx, principal, fixture.orgID, fixture.sessionID)
+	if err != nil || after.Branch != before.Branch || after.DisplayName != before.DisplayName {
+		t.Fatalf("existing session changed: %+v, %v", after, err)
+	}
+}

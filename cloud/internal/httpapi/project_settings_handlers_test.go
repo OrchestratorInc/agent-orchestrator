@@ -36,7 +36,7 @@ func TestProjectSettingsHandlerPartialPatchAndErrors(t *testing.T) {
 		{"partial", `{"config":{"autoReview":false}}`, nil, http.StatusOK, 1},
 		{"clear worker", `{"config":{"worker":null}}`, nil, http.StatusOK, 1},
 		{"clear orchestrator", `{"config":{"orchestrator":null}}`, nil, http.StatusOK, 1},
-		{"unknown", `{"config":{"sessionPrefix":"unused"}}`, nil, http.StatusUnprocessableEntity, 0},
+		{"unknown", `{"config":{"unknownField":"unused"}}`, nil, http.StatusUnprocessableEntity, 0},
 		{"invalid", `{"displayName":null}`, nil, http.StatusUnprocessableEntity, 0},
 		{"store validation", `{}`, postgres.ErrInvalid, http.StatusUnprocessableEntity, 1},
 		{"not found", `{}`, postgres.ErrNotFound, http.StatusNotFound, 1},

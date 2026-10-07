@@ -2464,6 +2464,11 @@ components:
       additionalProperties: true
       description: Canonical nested role settings. Legacy workerAgent and orchestratorAgent are normalized on reads and removed on the next settings write. Nested agents take precedence.
       properties:
+        sessionPrefix:
+          type: string
+          maxLength: 40
+          pattern: '^([A-Za-z0-9_][A-Za-z0-9_-]*)?$'
+          description: Prefix for new session branches. Empty uses ao; existing sessions are unchanged.
         worker:
           $ref: "#/components/schemas/ProjectRoleConfig"
         orchestrator:
@@ -2481,6 +2486,11 @@ components:
       type: object
       additionalProperties: false
       properties:
+        sessionPrefix:
+          type: string
+          maxLength: 40
+          pattern: '^([A-Za-z0-9_][A-Za-z0-9_-]*)?$'
+          description: Prefix for new session branches. Empty uses ao; existing sessions are unchanged.
         worker:
           description: Null removes the worker override and uses the session agent selection.
           oneOf:

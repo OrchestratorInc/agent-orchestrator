@@ -726,7 +726,11 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 	}
 	s.mu.Unlock()
 
-	go s.copyTerminalOutput(processCtx, input.TerminalID, terminal, input.Kind == "agent" && input.NextOutputSequence > 1)
+	outputDone := make(chan struct{})
+	go func() {
+		defer close(outputDone)
+		s.copyTerminalOutput(processCtx, input.TerminalID, terminal, input.Kind == "agent" && input.NextOutputSequence > 1)
+	}()
 	if s.Streams != nil {
 		go s.runTerminalStream(processCtx, input.TerminalID, terminal)
 	}
@@ -738,6 +742,16 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 		// PublishTerminalExit delays this signal, a concurrent stop can observe an
 		// already-removed terminal and incorrectly conclude that shutdown finished.
 		close(terminal.done)
+		if input.Kind == "reviewer" {
+			// A reviewer can reject its launch arguments immediately. Preserve
+			// that diagnostic before canceling the output upload or closing the
+			// PTY; otherwise the UI only receives "reviewer terminal finished".
+			select {
+			case <-outputDone:
+			case <-processCtx.Done():
+			case <-time.After(3 * time.Second):
+			}
+		}
 		s.mu.Lock()
 		current := s.terminals[input.TerminalID]
 		if current == terminal {

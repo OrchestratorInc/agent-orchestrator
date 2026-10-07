@@ -53,17 +53,17 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 		return { values: toEditorDraft(saved.current) };
 	};
 	return <ProjectSettingsEditor initialValues={toEditorDraft(cloudProjectSettingsDraft(project))} section={section}
-		capabilities={{ workflow: true, sessionPrefix: false, intake: false, reviewer: true, requiredAgents: false, nameLimit: 120, requiredBranch: true, runtimeDefaults: true }}
+		capabilities={{ workflow: true, sessionPrefix: true, intake: false, reviewer: true, requiredAgents: false, nameLimit: 120, requiredBranch: true, runtimeDefaults: true, effortOnly: true }}
 		details={[{ label: t("settings.project.id"), value: project.id }, { label: t("settings.project.repo"), value: project.repositoryUrl, href: project.repositoryUrl }]}
 		modelScope={(agent) => agent === "opencode" && opencodeCredential ? credentialModelScope(opencodeCredential) : ""}
 		autoReviewDescription={t("settings.cloudProject.autoReviewDescription")} renderAgent={(props) => <CloudAgentPicker {...props} />}
 		save={save} onSaveState={onSaveState} />;
 }
 
-function CloudAgentPicker({ role, value, onChange }: ProjectAgentPickerProps) {
+function CloudAgentPicker({ role, value, disabled, onChange }: ProjectAgentPickerProps) {
 	const { t } = useTranslation();
 	return <SettingsOptionMenu aria-label={`${t(`settings.models.${role}Role`)} ${t("settings.project.agent").toLocaleLowerCase()}`}
-		value={value} placeholder={t("settings.cloudProject.sessionSelection")}
+		disabled={disabled} value={value} placeholder={t("settings.cloudProject.sessionSelection")}
 		options={[{ value: "", label: t(role === "reviewer" ? "settings.cloudProject.sessionAgent" : "settings.cloudProject.sessionSelection") }, ...CLOUD_AGENT_PROVIDERS.map((agent) => ({ value: agent, label: agentLabel(agent), icon: <AgentAvatar provider={agent} className="size-icon-lg" decorative /> }))]}
 		triggerClassName="w-full justify-between" menuClassName="settings-agent-menu-surface" menuItemClassName="settings-agent-menu-item"
 		renderMenuItem={(option, selected) => <AgentSelectMenuItem agentId={option.value || undefined} label={option.label} selected={selected} />}
@@ -73,7 +73,7 @@ function CloudAgentPicker({ role, value, onChange }: ProjectAgentPickerProps) {
 function toEditorDraft(values: CloudProjectSettingsDraft): ProjectSettingsDraft {
 	return {
 		displayName: values.displayName, defaultBranch: values.defaultBranch, autoReview: values.autoReview,
-		sessionPrefix: "", intakeEnabled: false, intakeRepo: "", intakeAssignee: "",
+		sessionPrefix: values.sessionPrefix, intakeEnabled: false, intakeRepo: "", intakeAssignee: "",
 		workerAgent: values.worker.agent, orchestratorAgent: values.orchestrator.agent, reviewerHarness: values.reviewer.agent,
 		workerModel: values.worker.agentConfig.model, orchestratorModel: values.orchestrator.agentConfig.model, reviewerModel: values.reviewer.agentConfig.model,
 		workerMode: values.worker.agentConfig.mode, orchestratorMode: values.orchestrator.agentConfig.mode, reviewerMode: values.reviewer.agentConfig.mode,
@@ -96,5 +96,5 @@ function toCloudDraft(values: ProjectSettingsDraft): CloudProjectSettingsDraft {
 		if (permissions !== "" && permissions !== "default" && permissions !== "auto" && permissions !== "accept-edits" && permissions !== "bypass-permissions") throw new Error("Unsupported Cloud permissions");
 		return { agent: provider, agentConfig: { model, mode, effort, permissions } };
 	};
-	return { displayName: values.displayName, defaultBranch: values.defaultBranch, autoReview: values.autoReview, worker: role("worker"), orchestrator: role("orchestrator"), reviewer: role("reviewer") };
+	return { displayName: values.displayName, defaultBranch: values.defaultBranch, sessionPrefix: values.sessionPrefix, autoReview: values.autoReview, worker: role("worker"), orchestrator: role("orchestrator"), reviewer: role("reviewer") };
 }

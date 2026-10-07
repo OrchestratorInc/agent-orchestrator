@@ -280,6 +280,7 @@ func run(logger *slog.Logger) error {
 		command.Env["AO_REVIEW_SOCKET"] = reviewSocketPath
 		command.Env["AO_REVIEW_HELP"] = reviewHelp()
 		command.Env["AO_SESSION_ID"] = bootstrap.SessionID
+		command.Env[worker.ReviewTerminalEnv] = "1"
 		return command, nil
 	}
 	// Real-time terminal streaming (duplex predictive echo) rides the same
