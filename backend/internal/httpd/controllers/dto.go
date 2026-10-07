@@ -203,6 +203,7 @@ type SessionIDParam struct {
 	SessionID string `path:"sessionId" description:"Session identifier, e.g. project-1."`
 }
 
+// DeviceStreamParam identifies an authorized virtual-device media or control stream.
 type DeviceStreamParam struct {
 	Ticket  string `path:"ticket" description:"Opaque device stream capability."`
 	Channel string `path:"channel" enum:"mjpeg,avcc,config,health,input" description:"Allowlisted media or input channel."`
@@ -222,23 +223,27 @@ type DeviceCredentialsHeaders struct {
 	Desktop string `header:"X-AO-Desktop-Device-Capability" description:"Opaque desktop capability for local device inspection."`
 }
 
+// DeviceStatusResponse reports local virtual-device capabilities and attachment state.
 type DeviceStatusResponse struct {
 	SessionID    domain.SessionID                  `json:"sessionId"`
 	Capabilities []domain.DevicePlatformCapability `json:"capabilities"`
 	Attachment   *domain.DeviceAttachment          `json:"attachment,omitempty"`
 }
 
+// DeviceListResponse lists the local virtual devices available to a session.
 type DeviceListResponse struct {
 	SessionID domain.SessionID                  `json:"sessionId"`
 	Devices   []domain.Device                   `json:"devices"`
 	Errors    []domain.DevicePlatformCapability `json:"errors,omitempty"`
 }
 
+// DeviceSetupResponse reports durable managed setup jobs for virtual devices.
 type DeviceSetupResponse struct {
 	SessionID domain.SessionID     `json:"sessionId"`
 	Setups    []domain.DeviceSetup `json:"setups"`
 }
 
+// DeviceSetupCommandRequest starts, retries, or cancels managed device setup.
 type DeviceSetupCommandRequest struct {
 	SessionID       domain.SessionID      `json:"sessionId"`
 	Platform        domain.DevicePlatform `json:"platform" enum:"ios,android"`
@@ -246,11 +251,13 @@ type DeviceSetupCommandRequest struct {
 	LicenseAccepted bool                  `json:"licenseAccepted,omitempty"`
 }
 
+// DeviceSetupCommandResponse reports the setup job after a requested transition.
 type DeviceSetupCommandResponse struct {
 	SessionID domain.SessionID   `json:"sessionId"`
 	Setup     domain.DeviceSetup `json:"setup"`
 }
 
+// DeviceCommandRequest describes an allowlisted action on a local virtual device.
 type DeviceCommandRequest struct {
 	SessionID       domain.SessionID      `json:"sessionId"`
 	Action          string                `json:"action" enum:"open,close,shutdown,screenshot,ui-tree,tap,swipe,fill,type,key,back,home"`
@@ -269,6 +276,7 @@ type DeviceCommandRequest struct {
 	Confirmed       bool                  `json:"confirmed,omitempty"`
 }
 
+// DeviceCommandResponse reports the result of a virtual-device command.
 type DeviceCommandResponse struct {
 	SessionID  domain.SessionID         `json:"sessionId"`
 	Action     string                   `json:"action"`
