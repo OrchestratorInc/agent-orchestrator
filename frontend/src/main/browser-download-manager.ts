@@ -136,7 +136,14 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 		(event: DownloadEventLike, item: DownloadItem, webContents?: DownloadWebContentsLike) => void
 	>();
 	const blockedRequests = new Map<string, BlockedRequest>();
-	const approvals = new Map<string, { url: string; expiresAt: number }>();
+	// An approval belongs to the browser context that will request the file
+	// again: the session, and the tab when the request is replayed through one.
+	const approvals = new Map<string, {
+		url: string;
+		session: DownloadSessionLike;
+		webContents?: DownloadWebContentsLike;
+		expiresAt: number;
+	}>();
 	const activeItems = new Map<string, DownloadItemLike>();
 	const activeItemListeners = new Map<string, {
 		item: DownloadItemLike;
@@ -213,7 +220,11 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 		);
 	};
 
-	const takeApproval = (item: DownloadItemLike): string | undefined => {
+	const takeApproval = (
+		item: DownloadItemLike,
+		session: DownloadSessionLike,
+		webContents?: DownloadWebContentsLike,
+	): string | undefined => {
 		const now = (options.now ?? Date.now)();
 		// Only the URL the request started from counts. A request that merely
 		// redirects through an approved URL must not use up that approval.
@@ -221,7 +232,12 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 		let approvedId: string | undefined;
 		for (const [id, approval] of approvals) {
 			if (approval.expiresAt < now) approvals.delete(id);
-			else if (!approvedId && approval.url === url) approvedId = id;
+			else if (
+				!approvedId &&
+				approval.url === url &&
+				approval.session === session &&
+				(!approval.webContents || approval.webContents === webContents)
+			) approvedId = id;
 		}
 		if (approvedId) approvals.delete(approvedId);
 		return approvedId;
@@ -328,7 +344,7 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 		attach(session: DownloadSessionLike | undefined): void {
 			if (!session || disposed || attachedSessions.has(session)) return;
 			const listener = (event: DownloadEventLike, item: DownloadItem, webContents?: DownloadWebContentsLike) => {
-				const approvedId = takeApproval(item);
+				const approvedId = takeApproval(item, session, webContents);
 				if (approvedId) begin(item, approvedId);
 				else block(event, item, session, webContents);
 			};
@@ -362,12 +378,16 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 				case "allow": {
 					const request = blockedRequests.get(input.id);
 					if (download.status !== "blocked" || !request) throw new Error(DOWNLOAD_UNAVAILABLE_ERROR);
+					// The tab that asked may be gone; the session then requests the file.
+					const tab = request.webContents && !request.webContents.isDestroyed() ? request.webContents : undefined;
 					approvals.set(input.id, {
 						url: request.url,
+						session: request.session,
+						webContents: tab,
 						expiresAt: (options.now ?? Date.now)() + DOWNLOAD_APPROVAL_TTL_MS,
 					});
 					try {
-						if (request.webContents && !request.webContents.isDestroyed()) request.webContents.downloadURL(request.url);
+						if (tab) tab.downloadURL(request.url);
 						else request.session.downloadURL(request.url);
 					} catch {
 						approvals.delete(input.id);

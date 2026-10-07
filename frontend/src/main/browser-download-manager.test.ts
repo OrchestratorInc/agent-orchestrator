@@ -170,19 +170,71 @@ describe("browser download manager", () => {
 	it("does not let a request that only redirects through an approved URL use the approval", async () => {
 		const test = setup();
 		const item = new FakeDownloadItem();
-		test.session.emit("will-download", { preventDefault: vi.fn() }, item, { isDestroyed: () => false, downloadURL: vi.fn() });
+		const tab = { isDestroyed: () => false, downloadURL: vi.fn() };
+		test.session.emit("will-download", { preventDefault: vi.fn() }, item, tab);
 		await test.manager.action({ id: "download-1", action: "allow" });
 
 		const other = new FakeDownloadItem();
 		other.getURLChain = () => ["https://other.example.test/start", item.url];
 		const event = { preventDefault: vi.fn() };
-		test.session.emit("will-download", event, other);
+		test.session.emit("will-download", event, other, tab);
 
 		expect(event.preventDefault).toHaveBeenCalledOnce();
 		expect(other.setSavePath).not.toHaveBeenCalled();
 
 		// The approval is still there for the request it was given to.
-		test.session.emit("will-download", { preventDefault: vi.fn() }, item);
+		test.session.emit("will-download", { preventDefault: vi.fn() }, item, tab);
+		expect(item.setSavePath).toHaveBeenCalledOnce();
+	});
+
+	it("keeps an approval for the session and tab that asked for it", async () => {
+		const test = setup();
+		const otherSession = Object.assign(new EventEmitter(), { downloadURL: vi.fn() });
+		test.manager.attach(otherSession as never);
+		const tab = { isDestroyed: () => false, downloadURL: vi.fn() };
+		const item = new FakeDownloadItem();
+		test.session.emit("will-download", { preventDefault: vi.fn() }, item, tab);
+		await test.manager.action({ id: "download-1", action: "allow" });
+		expect(tab.downloadURL).toHaveBeenCalledWith(item.url);
+
+		// Another profile asks for the same URL while the approved request is
+		// still on its way. It must not be saved in its place.
+		const intruder = new FakeDownloadItem();
+		const intruderEvent = { preventDefault: vi.fn() };
+		otherSession.emit("will-download", intruderEvent, intruder, { isDestroyed: () => false, downloadURL: vi.fn() });
+		expect(intruderEvent.preventDefault).toHaveBeenCalledOnce();
+		expect(intruder.setSavePath).not.toHaveBeenCalled();
+
+		// Neither must another tab of the same profile.
+		const sibling = new FakeDownloadItem();
+		const siblingEvent = { preventDefault: vi.fn() };
+		test.session.emit("will-download", siblingEvent, sibling, { isDestroyed: () => false, downloadURL: vi.fn() });
+		expect(siblingEvent.preventDefault).toHaveBeenCalledOnce();
+		expect(sibling.setSavePath).not.toHaveBeenCalled();
+
+		const approvedEvent = { preventDefault: vi.fn() };
+		test.session.emit("will-download", approvedEvent, item, tab);
+		expect(approvedEvent.preventDefault).not.toHaveBeenCalled();
+		expect(item.setSavePath).toHaveBeenCalledOnce();
+	});
+
+	it("keeps a session-fallback approval inside the session that asked for it", async () => {
+		const test = setup();
+		const session = Object.assign(test.session, { downloadURL: vi.fn() });
+		const otherSession = Object.assign(new EventEmitter(), { downloadURL: vi.fn() });
+		test.manager.attach(otherSession as never);
+		const item = new FakeDownloadItem();
+		session.emit("will-download", { preventDefault: vi.fn() }, item, { isDestroyed: () => true, downloadURL: vi.fn() });
+		await test.manager.action({ id: "download-1", action: "allow" });
+		expect(session.downloadURL).toHaveBeenCalledWith(item.url);
+
+		const intruder = new FakeDownloadItem();
+		const intruderEvent = { preventDefault: vi.fn() };
+		otherSession.emit("will-download", intruderEvent, intruder);
+		expect(intruderEvent.preventDefault).toHaveBeenCalledOnce();
+		expect(intruder.setSavePath).not.toHaveBeenCalled();
+
+		session.emit("will-download", { preventDefault: vi.fn() }, item);
 		expect(item.setSavePath).toHaveBeenCalledOnce();
 	});
 
