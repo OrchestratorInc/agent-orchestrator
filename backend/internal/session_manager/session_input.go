@@ -351,22 +351,17 @@ func (m *Manager) releaseRetainedAgentSwitch(id domain.SessionID) {
 func (m *Manager) beginAgentResume(ctx context.Context, id domain.SessionID) error {
 	waitCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	for {
-		err := m.beginAgentOperation(waitCtx, id, agentOperationResume)
-		if err == nil {
-			return nil
+	err := m.beginAgentOperation(waitCtx, id, agentOperationResume)
+	if errors.Is(err, errAgentOperationInProgress) {
+		m.agentOpMu.Lock()
+		activeOperation := m.agentOperations[id]
+		m.agentOpMu.Unlock()
+		if activeOperation == agentOperationSwitch {
+			return ErrSwitchInProgress
 		}
-		if errors.Is(err, errAgentOperationInProgress) {
-			m.agentOpMu.Lock()
-			activeOperation := m.agentOperations[id]
-			m.agentOpMu.Unlock()
-			if activeOperation == agentOperationSwitch {
-				return ErrSwitchInProgress
-			}
-			return ErrResumeInProgress
-		}
-		return err
+		return ErrResumeInProgress
 	}
+	return err
 }
 
 func (m *Manager) endAgentResume(id domain.SessionID) {

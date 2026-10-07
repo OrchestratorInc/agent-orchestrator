@@ -336,7 +336,7 @@ func TestConcurrentFailedWakeSharesAttemptWithoutReadingStaleMarker(t *testing.T
 			return err
 		}
 		if applied, err := h.st.SetSessionHibernated(ctx, id, rec.Revision, nil); err != nil || !applied {
-			return fmt.Errorf("clear failed wake marker: applied=%v err=%v", applied, err)
+			return fmt.Errorf("clear failed wake marker: applied=%v: %w", applied, err)
 		}
 		return wakeErr
 	})
@@ -800,8 +800,14 @@ func TestFailedHibernateCanBeKilledThroughHostShutdown(t *testing.T) {
 	if err != nil || rec.HibernatedAt == nil {
 		t.Fatalf("shutdown intent lost = %+v, %v", rec.HibernatedAt, err)
 	}
+	if turn, err := h.svc.QueueUserMessage(ctx, testSession, ports.ChatUserMessage{Text: "pending during shutdown"}); err != nil || turn.State != domain.TurnStateQueued {
+		t.Fatalf("queue during failed shutdown = %+v, %v", turn, err)
+	}
 	if err := h.svc.Stop(ctx, testSession); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID()); !errors.Is(err, domain.ErrNoQueuedTurn) {
+		t.Fatalf("explicit Kill left a queued message: %v", err)
 	}
 	rec, _, err = h.st.GetSession(ctx, testSession)
 	if err != nil || rec.HibernatedAt != nil || h.svc.HasLiveChatController(testSession) || conv.hostStops.Load() != 1 {
@@ -950,9 +956,9 @@ func TestHibernateChatSettledTurn(t *testing.T) {
 }
 
 func TestSendDuringHibernationAcceptsThenWakesNativeConversation(t *testing.T) {
+	st := openStore(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	st := openStore(t)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	first := &hibernationConversation{fakeConversation: newFakeConversation(), started: started, release: release}
@@ -1044,6 +1050,7 @@ func TestSendDuringHibernationAcceptsThenWakesNativeConversation(t *testing.T) {
 	if got := first.sentTexts(); len(got) != 1 || len(resumed.sentTexts()) != 0 {
 		t.Fatalf("message dispatched before shutdown: old=%v new=%v", got, resumed.sentTexts())
 	}
+	first.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped})
 	close(release)
 	if err := <-result; err != nil {
 		t.Fatalf("hibernate = %v", err)

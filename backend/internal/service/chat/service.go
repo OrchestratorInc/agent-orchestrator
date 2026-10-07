@@ -1361,6 +1361,10 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 	// generation so a concurrent replacement can never be deleted accidentally.
 	select {
 	case <-controller.stopped:
+		if hibernating {
+			// Explicit Kill consumes the queue that idle shutdown preserved.
+			err = errors.Join(err, controller.cleanupOwnedControllerWork(ctx, s.now()))
+		}
 		s.mu.Lock()
 		if current, found := s.controllers[id]; found && current == controller {
 			delete(s.controllers, id)

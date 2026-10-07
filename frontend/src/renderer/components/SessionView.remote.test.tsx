@@ -692,6 +692,7 @@ it("opens the returned reviewer Chat when a remote review is triggered", async (
 });
 
 it("opens a TUI reviewer terminal through Box B's mux handle", async () => {
+	HTMLElement.prototype.scrollTo = vi.fn();
 	remoteConnect.mockResolvedValue({ hostId: "box-b", label: "Box B", url: "http://box-b:3001", base: "http://127.0.0.1:4001" });
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const request = input instanceof Request ? input : new Request(input);

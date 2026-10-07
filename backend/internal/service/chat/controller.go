@@ -2560,9 +2560,9 @@ func (c *Controller) project() {
 
 	for event := range c.conv.Events() {
 		c.mu.Lock()
-		preserveProvider := c.preserveProviderOnStop
+		preserveWork := c.preserveProviderOnStop || c.handoff == controllerHandoffHibernate
 		c.mu.Unlock()
-		if preserveProvider && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped {
+		if preserveWork && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped {
 			continue
 		}
 		// A lifecycle event and a concurrent Send must agree on whether the root
@@ -2614,8 +2614,11 @@ func (c *Controller) project() {
 	c.state = ports.ChatControllerStopped
 	suppressStoppedActivity := c.suppressStoppedActivity
 	preserveProvider := c.preserveProviderOnStop
+	hibernating := c.handoff == controllerHandoffHibernate
 	c.mu.Unlock()
-	if preserveProvider {
+	// Hibernate admitted no running work, but Send can append an optimistic
+	// message during shutdown. Keep that queue for the replacement controller.
+	if preserveProvider || hibernating {
 		return
 	}
 

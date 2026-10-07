@@ -1280,7 +1280,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					body: { viewId, active },
 				});
 				if (error) throw error;
-				if (active && !left && !refreshed) {
+				// Remote conversations already refresh every two seconds.
+				if (active && !left && !refreshed && !hostId) {
 					refreshed = true;
 					void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
 					void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
@@ -1292,12 +1293,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		};
 		const renewView = () => {
 			pending = pending.catch(() => {}).then(() => {
-				if (!left) return setViewActive(true);
+				return left ? undefined : setViewActive(true);
 			});
 			return pending;
 		};
 		const refreshAfterWakeError = () => {
-			if (left) return;
+			if (left || hostId) return;
 			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
 		};
 		void renewView().catch(refreshAfterWakeError);

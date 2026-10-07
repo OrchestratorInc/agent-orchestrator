@@ -58,7 +58,7 @@ func (s *Service) SetChatView(ctx context.Context, id domain.SessionID, viewID s
 		gate.unlock()
 		return nil
 	}
-	_, newView := s.setViewLease(id, viewID, true)
+	newView := s.setViewLease(id, viewID, true)
 	gate.unlock()
 	// Renewing a lease keeps the view open; only a newly opened view wakes a
 	// sleeping provider. A failed resume must not spawn another process on
@@ -83,7 +83,7 @@ func (s *Service) SetChatView(ctx context.Context, id domain.SessionID, viewID s
 	return err
 }
 
-func (s *Service) setViewLease(id domain.SessionID, viewID string, active bool) (remaining, newView bool) {
+func (s *Service) setViewLease(id domain.SessionID, viewID string, active bool) (newView bool) {
 	s.viewMu.Lock()
 	defer s.viewMu.Unlock()
 	views := s.liveViewLeasesLocked(id)
@@ -110,9 +110,9 @@ func (s *Service) setViewLease(id domain.SessionID, viewID string, active bool) 
 	}
 	if len(views) == 0 {
 		delete(s.viewLeases, id)
-		return false, false
+		return false
 	}
-	return true, newView
+	return newView
 }
 
 func (s *Service) hasChatView(id domain.SessionID) bool {
