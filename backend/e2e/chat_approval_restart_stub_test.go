@@ -72,7 +72,7 @@ func TestPendingACPApprovalSurvivesDaemonSIGKILL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shim := "#!/bin/sh\ncase \"$1\" in\n  acp) exec \"$AO_E2E_TEST_BINARY\" -test.run='^TestFakeApprovalACP$' ;;\n  auth) printf '0 credentials\\n' ;;\n  --version) printf '1.0.0\\n' ;;\n  *) exit 2 ;;\nesac\n"
+	shim := "#!/bin/sh\ncase \"$1\" in\n  acp) exec \"$AO_E2E_TEST_BINARY\" -test.run='^TestFakeApprovalACP$' ;;\n  auth) printf '1 credential\\n' ;;\n  --version) printf '1.0.0\\n' ;;\n  *) exit 2 ;;\nesac\n"
 	if err := os.WriteFile(filepath.Join(binDir, "opencode"), []byte(shim), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestFirstTaskStartupRetryAfterDaemonSIGKILL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shim := "#!/bin/sh\ncase \"$1\" in\n  acp) exec \"$AO_E2E_TEST_BINARY\" -test.run='^TestFakeApprovalACP$' ;;\n  auth) printf '0 credentials\\n' ;;\n  --version) printf '1.0.0\\n' ;;\n  *) exit 2 ;;\nesac\n"
+	shim := "#!/bin/sh\ncase \"$1\" in\n  acp) exec \"$AO_E2E_TEST_BINARY\" -test.run='^TestFakeApprovalACP$' ;;\n  auth) printf '1 credential\\n' ;;\n  --version) printf '1.0.0\\n' ;;\n  *) exit 2 ;;\nesac\n"
 	if err := os.WriteFile(filepath.Join(binDir, "opencode"), []byte(shim), 0o700); err != nil {
 		t.Fatal(err)
 	}
