@@ -445,6 +445,10 @@ func protectCodexPrivateFile(path string, file *os.File) error {
 		return err
 	}
 	defer windows.CloseHandle(handle)
+	// This protects a file the process just created. Elevated sessions and CI
+	// runners stamp new files with Administrators/SYSTEM as owner, so any trusted
+	// principal is accepted and ownership is then normalized to the current user.
+	// The stable-identity check still rejects a file swapped in after creation.
 	if !ownerTrusted || !aclSafe || !codexWindowsSameStableIdentity(
 		codexWindowsMetadata(original, true, true),
 		codexWindowsMetadata(opened, true, true),

@@ -24,10 +24,14 @@ let lastAgentRefreshAt = 0;
 export async function refreshAgentsIfStale(): Promise<AgentCatalog | undefined> {
 	const now = Date.now();
 	if (now - lastAgentRefreshAt < AGENT_REFRESH_THROTTLE_MS) return undefined;
+	// Claim the slot up front so concurrent callers share one probe, but give it
+	// back on failure: a daemon that is still booting must not block re-probing.
+	const previous = lastAgentRefreshAt;
 	lastAgentRefreshAt = now;
 	try {
 		return await refreshAgents();
 	} catch {
+		lastAgentRefreshAt = previous;
 		return undefined;
 	}
 }
