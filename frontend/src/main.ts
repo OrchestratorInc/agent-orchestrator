@@ -2017,15 +2017,6 @@ ipcMain.handle("window:getZoomFactor", () => {
 	if (process.platform === "darwin" && mainWindow && shell) syncMacWindowButtons(mainWindow, shell);
 	return shell?.getZoomFactor() ?? 1;
 });
-// Settings resets the shell's own zoom. `menu:action` view.zoomReset targets
-// the last-focused browser panel when the shell has focus.
-ipcMain.handle("window:resetZoom", () => {
-	const shell = getShellWebContents();
-	if (!shell) return;
-	shell.setZoomLevel(0);
-	if (process.platform === "darwin" && mainWindow) syncMacWindowButtons(mainWindow, shell);
-	shell.send("window:zoom", shell.getZoomFactor());
-});
 ipcMain.handle("window:isFullScreen", () => mainWindow?.isFullScreen() ?? false);
 ipcMain.handle("window:isMaximized", () => mainWindow?.isMaximized() ?? false);
 

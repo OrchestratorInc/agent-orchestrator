@@ -3,16 +3,15 @@ import { installFakeBridge } from "./support/fake-bridge";
 
 // REGRESSION: "Settings is blurry" (#5873, #6016, #6373).
 //
-// Two earlier fixes changed z-order and only had z-order tests. Measured in the
-// real Electron app for #6373, the soft text came from a persisted 189% window
-// zoom on a 1x display: the dialog's pixels were identical with the backdrop
+// Two earlier fixes changed z-order and only had z-order tests. For #6373 the
+// real Electron app showed the soft text came from the window zoom on a 1x
+// display, not from the dialog: its pixels were identical with the backdrop
 // blur removed and with the dialog snapped to whole device pixels.
 //
-// This spec checks both sides. (1) The settled dialog must not be rendered
-// through anything that resamples its text: no transform, scale, filter or
-// backdrop-filter on the dialog or its ancestors, no will-change hint pinning a
-// stale raster scale, and no running open animation. (2) A non-100% zoom must
-// be visible in Settings with a way back to 100%.
+// This spec pins the paths that would resample the dialog's text for real:
+// once settled, the dialog and its ancestors must have no transform, scale,
+// filter, or backdrop-filter, no will-change hint pinning a stale raster
+// scale, and no running open animation. The backdrop stays below the dialog.
 
 const port = Number(process.env.AO_E2E_PORT ?? 5173);
 
@@ -58,27 +57,3 @@ test("settings: settled dialog has no resampling styles and the backdrop stays b
 	expect(settled.overlayZ).toBeLessThan(settled.dialogZ);
 });
 
-test("settings: a non-100% window zoom is shown with a reset", async ({ page }) => {
-	await installFakeBridge(page, { daemonPort: port });
-	await page.addInitScript(() => {
-		const bridge = (window as unknown as { ao: { window: Record<string, unknown> } }).ao.window;
-		let factor = 1.2 ** 3.5;
-		let listener: ((value: number) => void) | null = null;
-		bridge.getZoomFactor = async () => factor;
-		bridge.onZoomFactor = (next: (value: number) => void) => {
-			listener = next;
-			return () => undefined;
-		};
-		bridge.resetZoom = async () => {
-			factor = 1;
-			listener?.(factor);
-		};
-	});
-	await page.goto("/#/settings");
-	await expect(page.getByTestId("settings-page")).toBeVisible();
-
-	await expect(page.getByText("189%")).toBeVisible();
-	await page.getByRole("button", { name: "Reset to 100%" }).click();
-	await expect(page.getByText("100%", { exact: true })).toBeVisible();
-	await expect(page.getByRole("button", { name: "Reset to 100%" })).toHaveCount(0);
-});

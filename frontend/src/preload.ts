@@ -311,7 +311,6 @@ const api = {
 	},
 	window: {
 		getZoomFactor: () => ipcRenderer.invoke("window:getZoomFactor") as Promise<number>,
-		resetZoom: () => ipcRenderer.invoke("window:resetZoom") as Promise<void>,
 		onZoomFactor: (listener: (zoomFactor: number) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, zoomFactor: number) => listener(zoomFactor);
 			ipcRenderer.on("window:zoom", wrapped);

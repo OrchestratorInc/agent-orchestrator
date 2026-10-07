@@ -132,7 +132,6 @@ if (typeof window !== "undefined") {
 		},
 		window: {
 			getZoomFactor: async () => 1,
-			resetZoom: async () => undefined,
 			onZoomFactor: () => () => undefined,
 			isMaximized: async () => false,
 			onMaximized: () => () => undefined,
