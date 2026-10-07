@@ -17,6 +17,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 )
 
 // ErrSessionOpenElsewhere requires the other writer to close; AO never takes it over.
@@ -93,7 +94,22 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 	defer release()
 	ws := ports.WorkspaceInfo{Path: rec.Metadata.WorkspacePath, RepoPath: rec.Metadata.WorkspaceRepoPath, Branch: rec.Metadata.Branch}
 	next := *source
-	if ws.Path == "" {
+	// A marker travels with the directory swap, so a failed DB write cannot
+	// make a successful copy run again over edits in the AO workspace.
+	copied := source.Transferred || source.Prepared
+	if !copied && ws.Path != "" {
+		marker, err := os.ReadFile(importCopyMarker(ws.Path, rec.ID))
+		if err == nil {
+			if string(marker) != string(rec.ID) {
+				return rec, errors.New("invalid workspace transfer marker")
+			}
+			copied = true
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return rec, err
+		}
+	}
+	if !copied {
+		created := ws.Path == ""
 		copyFrom := source.CWD
 		overrides := map[string]string{}
 		branch := "ao/" + string(rec.ID) + "/import"
@@ -110,9 +126,11 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 			if err != nil {
 				return rec, err
 			}
-			ws, err = m.workspace.Create(ctx, ports.WorkspaceConfig{ProjectID: rec.ProjectID, SessionID: rec.ID, Kind: rec.Kind, SessionPrefix: sessionPrefix(project), Branch: branch, FreshBranch: true, BaseRef: strings.TrimSpace(string(head)), RepoPath: copyFrom})
-			if err != nil {
-				return rec, err
+			if created {
+				ws, err = m.workspace.Create(ctx, ports.WorkspaceConfig{ProjectID: rec.ProjectID, SessionID: rec.ID, Kind: rec.Kind, SessionPrefix: sessionPrefix(project), Branch: branch, FreshBranch: true, BaseRef: strings.TrimSpace(string(head)), RepoPath: copyFrom})
+				if err != nil {
+					return rec, err
+				}
 			}
 		case domain.ProjectKindWorkspace:
 			copyFrom = project.Path
@@ -125,17 +143,17 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 				return rec, err
 			}
 			nativeRoot := strings.TrimSpace(string(top))
-			nativeCommon, _ := importGit(ctx, nativeRoot, "rev-parse", "--path-format=absolute", "--git-common-dir")
-			rootCommon, _ := importGit(ctx, project.Path, "rev-parse", "--path-format=absolute", "--git-common-dir")
-			if bytes.Equal(nativeCommon, rootCommon) {
+			if sessionimport.SameRepository(ctx, nativeRoot, project.Path) {
 				copyFrom = nativeRoot
 			} else {
 				for _, repo := range repos {
 					repoPath := filepath.Join(project.Path, filepath.FromSlash(repo.RelativePath))
-					common, _ := importGit(ctx, repoPath, "rev-parse", "--path-format=absolute", "--git-common-dir")
-					if bytes.Equal(nativeCommon, common) {
+					if sessionimport.SameRepository(ctx, nativeRoot, repoPath) {
 						overrides[filepath.FromSlash(repo.RelativePath)] = nativeRoot
 					}
+				}
+				if len(overrides) > 1 {
+					return rec, errors.New("the original repository matches multiple workspace children")
 				}
 				if len(overrides) == 0 && !pathWithin(copyFrom, source.CWD) {
 					return rec, errors.New("the original workspace no longer matches this AO project")
@@ -158,29 +176,31 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 				if err != nil {
 					return rec, err
 				}
-				baseRefs[repoPath] = strings.TrimSpace(string(head))
+				sha := strings.TrimSpace(string(head))
+				// Import unpublished commits into the registered repository so every
+				// later restore/kill still uses the ordinary workspace lifecycle.
+				if _, err := importGit(ctx, repoPath, "cat-file", "-e", sha+"^{commit}"); err != nil {
+					if _, err := importGit(ctx, repoPath, "fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--", nativePath, sha); err != nil {
+						return rec, err
+					}
+				}
+				baseRefs[repoPath] = sha
 			}
-			ws, workspaceProject, err = m.createSessionWorkspace(ctx, project, ports.SpawnConfig{ProjectID: rec.ProjectID, Kind: rec.Kind}, rec.ID, branch, baseRefs)
-			if err != nil {
-				return rec, err
+			if created {
+				ws, workspaceProject, err = m.createSessionWorkspace(ctx, project, ports.SpawnConfig{ProjectID: rec.ProjectID, Kind: rec.Kind}, rec.ID, branch, baseRefs)
+				if err != nil {
+					return rec, err
+				}
 			}
 		default:
-			ws, _, err = m.createSessionWorkspace(ctx, project, ports.SpawnConfig{ProjectID: rec.ProjectID, Kind: rec.Kind}, rec.ID, branch, nil)
-			if err != nil {
-				return rec, err
+			if created {
+				ws, _, err = m.createSessionWorkspace(ctx, project, ports.SpawnConfig{ProjectID: rec.ProjectID, Kind: rec.Kind}, rec.ID, branch, nil)
+				if err != nil {
+					return rec, err
+				}
 			}
 		}
 		if copyFrom != "" {
-			if err = copyImportedWorkspace(ctx, copyFrom, ws.Path, overrides); err != nil {
-				// Source-read failures leave the newly created worktrees clean; never force-delete dirty work.
-				var cleanupErr error
-				if workspaceAdapter, ok := m.workspace.(ports.WorkspaceProject); ok && workspaceProject != nil {
-					cleanupErr = workspaceAdapter.DestroyWorkspaceProject(context.WithoutCancel(ctx), *workspaceProject)
-				} else {
-					cleanupErr = m.workspace.Destroy(context.WithoutCancel(ctx), ws)
-				}
-				return rec, errors.Join(fmt.Errorf("copy original files: %w", err), cleanupErr)
-			}
 			cwd := source.CWD
 			if physical, err := filepath.EvalSymlinks(cwd); err == nil {
 				cwd = physical
@@ -199,6 +219,36 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 				}
 			}
 		}
+		if created {
+			// Publish the clean workspace before moving any source edits into it.
+			updated, err := m.store.SetSessionImportWorkspace(ctx, rec.ID, source, &next, ws.Branch, ws.Path, ws.RepoPath, m.clock())
+			if err != nil || !updated {
+				cleanupCtx, cancel := spawnRollbackContext(ctx)
+				defer cancel()
+				var cleanupErr error
+				if adapter, ok := m.workspace.(ports.WorkspaceProject); ok && workspaceProject != nil {
+					cleanupErr = adapter.DestroyWorkspaceProject(cleanupCtx, *workspaceProject)
+				} else {
+					cleanupErr = m.workspace.Destroy(cleanupCtx, ws)
+				}
+				if err == nil {
+					err = errors.New("session changed during workspace creation; retry")
+				}
+				return rec, errors.Join(err, cleanupErr)
+			}
+			stored := next
+			rec.Metadata.ImportSource = &stored
+			rec.Metadata.WorkspacePath, rec.Metadata.WorkspaceRepoPath, rec.Metadata.Branch = ws.Path, ws.RepoPath, ws.Branch
+			source = rec.Metadata.ImportSource
+		}
+		if copyFrom != "" {
+			if err := copyImportedWorkspace(ctx, copyFrom, ws.Path, overrides, importCopyMarker(ws.Path, rec.ID)); err != nil {
+				return rec, fmt.Errorf("copy original files: %w", err)
+			}
+		}
+	}
+	if !source.Transferred {
+		next.Transferred = true
 		updated, err := m.store.SetSessionImportWorkspace(ctx, rec.ID, source, &next, ws.Branch, ws.Path, ws.RepoPath, m.clock())
 		if err != nil {
 			return rec, err
@@ -207,7 +257,9 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 			return rec, errors.New("session changed during workspace transfer; retry")
 		}
 		rec.Metadata.ImportSource = &next
-		rec.Metadata.WorkspacePath, rec.Metadata.WorkspaceRepoPath, rec.Metadata.Branch = ws.Path, ws.RepoPath, ws.Branch
+	}
+	if err := os.Remove(importCopyMarker(ws.Path, rec.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return rec, err
 	}
 	// Retry setup after a failed post-create command, without copying over AO edits.
 	if !rec.Metadata.ImportSource.Prepared {
@@ -232,6 +284,10 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 		return rec, errors.New("session was terminated during workspace setup")
 	}
 	return current, nil
+}
+
+func importCopyMarker(workspace string, id domain.SessionID) string {
+	return filepath.Join(workspace, ".ao-import-complete-"+string(id))
 }
 
 func pathWithin(root, path string) bool {
@@ -303,7 +359,7 @@ func importGitPaths(root string) ([]string, error) {
 
 // Stage all files first. Preserve every AO Git pointer, HEAD and index separately,
 // so nested repositories never acquire the source's administrative metadata.
-func copyImportedWorkspace(ctx context.Context, source, destination string, overrides map[string]string) error {
+func copyImportedWorkspace(ctx context.Context, source, destination string, overrides map[string]string, completionMarker string) error {
 	source, err := filepath.EvalSymlinks(source)
 	if err != nil {
 		return err
@@ -372,6 +428,14 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		facts map[string]importFileFact
 	}
 	var snapshots []snapshot
+	linkRoots := map[string]string{source: ""}
+	for rel, original := range overrides {
+		resolved, err := filepath.EvalSymlinks(original)
+		if err != nil {
+			return err
+		}
+		linkRoots[resolved] = rel
+	}
 	copyTree := func(native, target string) error {
 		src, err := os.OpenRoot(native)
 		if err != nil {
@@ -418,6 +482,27 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 				link, err := src.Readlink(path)
 				if err != nil {
 					return err
+				}
+				if filepath.IsAbs(link) {
+					// Rebase links into any copied tree, including a separately cloned child.
+					physical := link
+					if parent, err := filepath.EvalSymlinks(filepath.Dir(link)); err == nil {
+						physical = filepath.Join(parent, filepath.Base(link))
+					}
+					best := ""
+					for original := range linkRoots {
+						if pathWithin(original, physical) && len(original) > len(best) {
+							best = original
+						}
+					}
+					if best != "" {
+						rel, _ := filepath.Rel(best, physical)
+						targetRel, _ := filepath.Rel(temp, target)
+						link, err = filepath.Rel(filepath.Dir(filepath.Join(destination, targetRel, path)), filepath.Join(destination, linkRoots[best], rel))
+						if err != nil {
+							return err
+						}
+					}
 				}
 				return dst.Symlink(link, path)
 			}
@@ -494,6 +579,16 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		cmd.Stdin = bytes.NewReader(state.staged)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("preserve staged edits: %w: %s", err, out)
+		}
+	}
+	if completionMarker != "" {
+		name := filepath.Base(completionMarker)
+		if _, err := os.Lstat(filepath.Join(temp, name)); !errors.Is(err, os.ErrNotExist) {
+			return errors.New("source contains a reserved workspace transfer marker")
+		}
+		id := strings.TrimPrefix(name, ".ao-import-complete-")
+		if err := os.WriteFile(filepath.Join(temp, name), []byte(id), 0o600); err != nil {
+			return err
 		}
 	}
 	var moved []string

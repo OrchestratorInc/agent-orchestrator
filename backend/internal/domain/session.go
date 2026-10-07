@@ -119,6 +119,7 @@ type SessionImportSource struct {
 	ConfigDir     string `json:"configDir"`
 	CWD           string `json:"cwd"`
 	Adopted       bool   `json:"adopted"`
+	Transferred   bool   `json:"transferred"`
 	Prepared      bool   `json:"prepared"`
 	WorkingSubdir string `json:"workingSubdir,omitempty"`
 }

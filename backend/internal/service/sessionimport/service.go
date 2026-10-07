@@ -117,6 +117,15 @@ func remoteIdentity(ctx context.Context, path string) string {
 	return remote
 }
 
+// SameRepository recognizes linked worktrees and separate clones of the same origin.
+func SameRepository(ctx context.Context, source, destination string) bool {
+	if common := repoIdentity(ctx, source); common != "" && repoIdentity(ctx, destination) == common {
+		return true
+	}
+	remote := remoteIdentity(ctx, source)
+	return remote != "" && remoteIdentity(ctx, destination) == remote
+}
+
 func projectFor(ctx context.Context, cwd string, projects []domain.ProjectRecord) (domain.ProjectID, bool) {
 	if cwd == "" {
 		return "", true

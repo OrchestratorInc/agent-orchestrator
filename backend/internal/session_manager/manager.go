@@ -2617,6 +2617,23 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (Res
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
 	}
+	if rec.NeedsImportResume() {
+		// Restore pending imports to idle; opening the chat performs native adoption.
+		if meta.WorkspacePath != "" {
+			release := m.acquireWorkspaceGate(rec.ProjectID)
+			defer release()
+			ws, err := m.restoreSessionWorkspace(ctx, project, rec)
+			if err != nil {
+				return RestoreResult{}, fmt.Errorf("restore %s: workspace: %w", id, err)
+			}
+			meta.WorkspacePath, meta.WorkspaceRepoPath, meta.Branch = ws.Path, ws.RepoPath, ws.Branch
+		}
+		if err := m.lcm.MarkSpawned(ctx, id, meta); err != nil {
+			return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
+		}
+		current, err := m.getRecord(ctx, id)
+		return RestoreResult{Session: current, Mode: RestoreModeNative}, err
+	}
 	// Mirror Kill's incomplete-handle guard: a session whose spawn failed before
 	// the workspace landed has neither WorkspacePath nor Branch, and there is
 	// nothing meaningful to restore from. Surface this as a typed 409 instead of

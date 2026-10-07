@@ -149,3 +149,47 @@ func TestCodexCanonicalMessagesAndValidation(t *testing.T) {
 func (s *importStore) ListWorkspaceRepos(context.Context, string) ([]domain.WorkspaceRepoRecord, error) {
 	return nil, nil
 }
+
+func TestClaudeImportFollowsActiveAncestry(t *testing.T) {
+	root := t.TempDir()
+	id := "11111111-1111-4111-8111-111111111111"
+	path := writeClaude(t, root, id, "", "placeholder", time.Now())
+	body := `{"type":"user","uuid":"u1","parentUuid":null,"message":{"content":"original"}}
+{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":"first answer"}}
+{"type":"user","uuid":"old-u2","parentUuid":"a1","message":{"content":"discarded prompt"}}
+{"type":"assistant","uuid":"old-a2","parentUuid":"old-u2","message":{"content":"discarded answer"}}
+{"type":"user","uuid":"u2","parentUuid":"a1","message":{"content":"edited prompt"}}
+{"type":"user","uuid":"context","parentUuid":"u2","isMeta":true,"turnCompanion":true,"message":{"content":"hidden context"}}
+{"type":"assistant","uuid":"a2","parentUuid":"context","message":{"content":"current answer"}}
+{"type":"assistant","uuid":"side","parentUuid":"a2","isSidechain":true,"message":{"content":"subagent"}}
+`
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	history, err := readTranscript(context.Background(), domain.HarnessClaudeCode, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"original", "first answer", "edited prompt", "current answer"}
+	if len(history.messages) != len(want) {
+		t.Fatalf("history = %#v", history.messages)
+	}
+	for i, message := range history.messages {
+		if message.Text != want[i] {
+			t.Fatalf("message %d = %q, want %q", i, message.Text, want[i])
+		}
+	}
+	for name, tail := range map[string]string{
+		"broken parent": `{"type":"user","uuid":"broken","parentUuid":"missing","message":{"content":"broken"}}`,
+		"cycle":         `{"type":"user","uuid":"cycle","parentUuid":"cycle","message":{"content":"cycle"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(body+tail+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readTranscript(context.Background(), domain.HarnessClaudeCode, root, path); err == nil {
+				t.Fatal("invalid ancestry accepted")
+			}
+		})
+	}
+}

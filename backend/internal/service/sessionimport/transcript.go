@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,13 +40,16 @@ type transcript struct {
 }
 
 type record struct {
-	Type      string    `json:"type"`
-	UUID      string    `json:"uuid"`
-	SessionID string    `json:"sessionId"`
-	CWD       string    `json:"cwd"`
-	Timestamp time.Time `json:"timestamp"`
-	Sidechain bool      `json:"isSidechain"`
-	Message   struct {
+	Type          string    `json:"type"`
+	UUID          string    `json:"uuid"`
+	ParentUUID    string    `json:"parentUuid"`
+	SessionID     string    `json:"sessionId"`
+	CWD           string    `json:"cwd"`
+	Timestamp     time.Time `json:"timestamp"`
+	Sidechain     bool      `json:"isSidechain"`
+	Meta          bool      `json:"isMeta"`
+	TurnCompanion bool      `json:"turnCompanion"`
+	Message       struct {
 		ID      string          `json:"id"`
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
@@ -116,6 +120,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root, path
 	bytes := 0
 	seen := make(map[string]int)
 	var fallback []Message
+	var claudeRecords []record
+	claudeIndices := map[string]int{}
+	claudeLeaf := ""
 	if harness == domain.HarnessClaudeCode {
 		t.nativeID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	}
@@ -159,23 +166,14 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root, path
 			if r.SessionID != "" && r.SessionID != t.nativeID {
 				return t, errors.New("native identity mismatch")
 			}
-			if r.CWD != "" {
-				t.cwd = r.CWD
+			if r.UUID != "" {
+				if _, duplicate := claudeIndices[r.UUID]; duplicate {
+					return t, errors.New("ambiguous native UUID")
+				}
+				claudeIndices[r.UUID] = len(claudeRecords)
+				claudeLeaf = r.UUID
 			}
-			if r.Type != "user" && r.Type != "assistant" {
-				continue
-			}
-			role := r.Message.Role
-			if role == "" {
-				role = r.Type
-			}
-			id := r.UUID
-			if r.Message.ID != "" {
-				id = r.Message.ID
-			}
-			if err := add(id, role, visibleText(r.Message.Content), r.Timestamp, &t.messages); err != nil {
-				return t, err
-			}
+			claudeRecords = append(claudeRecords, r)
 		} else {
 			switch r.Type {
 			case "session_meta":
@@ -206,6 +204,41 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root, path
 	}
 	if err := scan.Err(); err != nil {
 		return t, err
+	}
+	if claudeLeaf != "" {
+		var chain []record
+		visited := map[string]bool{}
+		for claudeLeaf != "" {
+			index, found := claudeIndices[claudeLeaf]
+			if !found || visited[claudeLeaf] {
+				return t, errors.New("incomplete native ancestry")
+			}
+			visited[claudeLeaf] = true
+			r := claudeRecords[index]
+			chain = append(chain, r)
+			claudeLeaf = r.ParentUUID
+		}
+		slices.Reverse(chain)
+		claudeRecords = chain
+	}
+	for _, r := range claudeRecords {
+		if r.CWD != "" {
+			t.cwd = r.CWD
+		}
+		if (r.Type != "user" && r.Type != "assistant") || (r.Meta && r.TurnCompanion) {
+			continue
+		}
+		role := r.Message.Role
+		if role == "" {
+			role = r.Type
+		}
+		id := r.UUID
+		if r.Message.ID != "" {
+			id = r.Message.ID
+		}
+		if err := add(id, role, visibleText(r.Message.Content), r.Timestamp, &t.messages); err != nil {
+			return t, err
+		}
 	}
 	if len(t.messages) == 0 {
 		t.messages = fallback
