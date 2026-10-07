@@ -14,7 +14,7 @@ import { TooltipProvider } from "./ui/tooltip";
 const { harnessSettingsSectionMock } = vi.hoisted(() => ({ harnessSettingsSectionMock: vi.fn() }));
 
 vi.mock("./settings/HarnessSettingsSection", () => ({
-	HarnessSettingsSection: (props: { focusAgentId?: string; titleHidden?: boolean }) => {
+	HarnessSettingsSection: (props: { focusAgentId?: string; hostId?: string; titleHidden?: boolean }) => {
 		harnessSettingsSectionMock(props);
 		return <div data-testid="harness-settings-section" />;
 	},
@@ -95,6 +95,7 @@ vi.mock("../lib/bridge", () => ({
 		app: { getVersion, openExternal },
 		clipboard: { writeText },
 		daemon: { getStatus: getDaemonStatus },
+		remotes: { list: vi.fn(async () => []) },
 		updateSettings: {
 			get: getUpdate,
 			set: setUpdate,
@@ -119,12 +120,12 @@ vi.mock("../lib/bridge", () => ({
 	},
 }));
 
-function renderForm(section: GlobalSettingsSection = "all", focusAgentId?: string) {
+function renderForm(section: GlobalSettingsSection = "all", focusAgentId?: string, hostId?: string) {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
 		<QueryClientProvider client={qc}>
 			<TooltipProvider>
-				<GlobalSettingsForm focusAgentId={focusAgentId} section={section} />
+				<GlobalSettingsForm focusAgentId={focusAgentId} hostId={hostId} section={section} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -201,7 +202,7 @@ beforeEach(async () => {
 		saving: false,
 		saveError: false,
 	});
-	useUiStore.setState({ developerMode: false });
+	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false });
 	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	document.documentElement.lang = "en";
 });
@@ -218,6 +219,7 @@ describe("GlobalSettingsForm", () => {
 		renderForm("general");
 		expect(await screen.findByLabelText("Settings")).toBeInTheDocument();
 		expect(document.querySelector('[data-section="browserProfiles"]')).not.toBeInTheDocument();
+		expect(document.querySelector('[data-section="remoteHosts"]')).not.toBeInTheDocument();
 	});
 
 	it("keeps download history inside the Browser settings page", async () => {
@@ -232,7 +234,8 @@ describe("GlobalSettingsForm", () => {
 		expect(await screen.findByLabelText("Settings")).toBeInTheDocument();
 		expect(screen.getByText("Appearance")).toBeInTheDocument();
 		expect(screen.getByText("Language")).toBeInTheDocument();
-		expect(await screen.findByText("Updates")).toBeInTheDocument();
+		// UpdatesSection is lazy-loaded and can take longer than the default async query timeout.
+		expect(await screen.findByText("Updates", {}, { timeout: 5_000 })).toBeInTheDocument();
 		expect(screen.getByText("Advanced")).toBeInTheDocument();
 		expect(screen.getByText("Report a problem")).toBeInTheDocument();
 		// Report form is inline — no dialog, fields directly present.
@@ -248,8 +251,36 @@ describe("GlobalSettingsForm", () => {
 		await user.click(toggle);
 		expect(window.localStorage.getItem("ao.developerMode")).toBe("true");
 		expect(setMacDifferentialUpdates).toHaveBeenCalledWith(true);
-		await user.click(screen.getByLabelText("Updates channel"));
+		await user.click(await screen.findByLabelText("Updates channel", {}, { timeout: 5_000 }));
 		expect(await screen.findByRole("menuitem", { name: "Feature Releases" })).toBeInTheDocument();
+	});
+
+	it("reveals the Diagnostics toggle only in Developer mode and persists it", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		await screen.findByRole("switch", { name: "Developer mode" });
+		expect(screen.queryByRole("switch", { name: "Diagnostics" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("switch", { name: "Developer mode" }));
+		const toggle = await screen.findByRole("switch", { name: "Diagnostics" });
+		expect(toggle).toHaveAttribute("aria-checked", "false");
+
+		await user.click(toggle);
+		expect(window.localStorage.getItem("ao.diagnostics")).toBe("true");
+		expect(useUiStore.getState().diagnostics).toBe(true);
+	});
+
+	it("keeps Remote hosts in its own page and persists the enable switch", async () => {
+		const user = userEvent.setup();
+		useUiStore.getState().setDeveloperMode(true);
+		renderForm("remoteHosts");
+		const remoteHosts = await screen.findByRole("switch", { name: "Connect to remote hosts" });
+		expect(remoteHosts).toHaveAttribute("aria-checked", "false");
+		expect(screen.queryByRole("switch", { name: "Developer mode" })).not.toBeInTheDocument();
+
+		await user.click(remoteHosts);
+		expect(window.localStorage.getItem("ao.remoteHosts")).toBe("true");
+		expect(useUiStore.getState().remoteHosts).toBe(true);
 	});
 
 	it("shows the available feature builds after choosing Feature Releases", async () => {
@@ -258,7 +289,7 @@ describe("GlobalSettingsForm", () => {
 		useUiStore.getState().setDeveloperMode(true);
 		renderForm();
 
-		await user.click(await screen.findByLabelText("Updates channel"));
+		await user.click(await screen.findByLabelText("Updates channel", {}, { timeout: 5_000 }));
 		await user.click(await screen.findByRole("menuitem", { name: "Feature Releases" }));
 		expect(await screen.findByText("No live feature releases.")).toBeInTheDocument();
 		expect(featListBuilds).toHaveBeenCalled();
@@ -324,7 +355,7 @@ describe("GlobalSettingsForm", () => {
 	it("selects Git Bash as the default Windows terminal", async () => {
 		const user = userEvent.setup();
 		renderForm();
-		const selector = await screen.findByLabelText("Default terminal");
+		const selector = await screen.findByLabelText("Terminal shell");
 
 		await user.click(selector);
 		await user.click(await screen.findByRole("menuitem", { name: "Git Bash" }));
@@ -336,7 +367,7 @@ describe("GlobalSettingsForm", () => {
 		const user = userEvent.setup();
 		renderForm();
 
-		await user.click(await screen.findByLabelText("Default terminal"));
+		await user.click(await screen.findByLabelText("Terminal shell"));
 		await user.click(await screen.findByRole("menuitem", { name: "Custom path" }));
 		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "custom" } }));
 
@@ -811,7 +842,7 @@ describe("GlobalSettingsForm", () => {
 		});
 		renderForm();
 
-		const returnBtn = await screen.findByRole("button", { name: "Return to Stable" });
+		const returnBtn = await screen.findByRole("button", { name: "Return to Stable" }, { timeout: 5_000 });
 		await userEvent.click(returnBtn);
 
 		await waitFor(() => expect(updReturnHome).toHaveBeenCalledWith(expect.any(String)));

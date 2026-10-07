@@ -1,7 +1,32 @@
-import * as WebBrowser from "expo-web-browser";
 import { Linking } from "react-native";
 import { githubAppUrl } from "./githubLink";
 import { haptics } from "./haptics";
+
+/**
+ * The in-app browser, when the build actually has it.
+ *
+ * `expo-web-browser` is a native module, and its package throws while it is
+ * being imported if the runtime has no `ExpoWebBrowser` to bind to. That is not
+ * hypothetical: the dependency arrived in a branch whose `Podfile.lock` was
+ * never regenerated, so the module was in `node_modules` and absent from the
+ * app, and every GitHub tap took the whole screen down with a red box.
+ *
+ * Requiring it here, inside the guard, means a build without the pod falls back
+ * to the system browser instead — which is what this function did before the
+ * in-app browser existed.
+ */
+type WebBrowserModule = { openBrowserAsync(url: string, options?: { createTask?: boolean }): Promise<unknown> };
+
+let webBrowser: Promise<WebBrowserModule | null> | undefined;
+
+function inAppBrowser(): Promise<WebBrowserModule | null> {
+	if (!webBrowser) {
+		webBrowser = import("expo-web-browser")
+			.then((module) => module as unknown as WebBrowserModule)
+			.catch(() => null);
+	}
+	return webBrowser;
+}
 
 // Opens a github.com URL in the GitHub app when it's installed, and in the
 // in-app browser otherwise (SFSafariViewController / Chrome Custom Tab, so the
@@ -19,7 +44,15 @@ import { haptics } from "./haptics";
 // A URL that is not a web page can only be opened by the system: the iOS bug
 // report arrives as `x-safari-https://` (see bugReportOpenUrl), which the
 // in-app browser rejects.
-export async function openGitHub(url: string): Promise<void> {
+//
+// `fromSheet` skips the in-app browser. SFSafariViewController is presented on
+// whatever is frontmost, and on top of a native formSheet that goes wrong both
+// ways: dismissed later, it leaves the sheet full-height with no grabber; opened
+// while the sheet is still dismissing, iOS drops the presentation silently and
+// expo-web-browser answers every later call with "locked" until the app
+// restarts. Leaving the app keeps the sheet untouched, exactly as it already is
+// on a device with the GitHub app installed.
+export async function openGitHub(url: string, options: { fromSheet?: boolean } = {}): Promise<void> {
 	const appUrl = githubAppUrl(url);
 	if (appUrl) {
 		try {
@@ -35,12 +68,21 @@ export async function openGitHub(url: string): Promise<void> {
 		await Linking.openURL(url).catch(() => haptics.error());
 		return;
 	}
+	if (options.fromSheet) {
+		await Linking.openURL(url).catch(() => haptics.error());
+		return;
+	}
+	const browser = await inAppBrowser();
+	if (!browser) {
+		await Linking.openURL(url).catch(() => haptics.error());
+		return;
+	}
 	try {
 		// Same task as AO, as androidx's Custom Tabs default: expo's own default
 		// launches through a proxy in a second task, which in 57.0.3 outlives the tab
 		// as a dead AO card in Recents. The trade: relaunching AO (singleTask) while
 		// the tab is up tears the tab down instead of returning to it.
-		await WebBrowser.openBrowserAsync(url, { createTask: false });
+		await browser.openBrowserAsync(url, { createTask: false });
 	} catch {
 		await Linking.openURL(url).catch(() => haptics.error());
 	}

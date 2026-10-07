@@ -95,6 +95,51 @@ export interface CloudCpPageInfo {
 	nextCursor?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Cloud notifications (`notification_handlers.go`)
+// ---------------------------------------------------------------------------
+
+export interface CloudCpNotification {
+	id: string;
+	source: "cloud";
+	eventId?: string;
+	orgId: string;
+	projectId?: string;
+	sessionId?: string;
+	type: string;
+	title: string;
+	body: string;
+	status: "unread" | "read";
+	resolvedAt?: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface CloudCpNotificationEvent {
+	sequence: number;
+	orgId: string;
+	recipientUserId: string;
+	kind: "notification_created" | "notification_updated" | "notification_resolved";
+	notification: CloudCpNotification;
+	createdAt: string;
+}
+
+export interface CloudCpNotificationListQuery extends CloudCpListQuery {
+	status?: "unread" | "read" | "all";
+}
+
+export interface CloudCpNotificationListResponse {
+	items: CloudCpNotification[];
+	page: CloudCpPageInfo;
+	unreadCount: number;
+	latestSequence: number;
+}
+
+export interface CloudCpNotificationEventsResponse {
+	items: CloudCpNotificationEvent[];
+	hasMore: boolean;
+}
+
 export interface CloudCpListQuery {
 	/** Page size, 1-100 (control-plane default: 50). */
 	limit?: number;
@@ -127,6 +172,23 @@ export interface CloudCpCreateProjectRequest {
 	/** 1-255 characters. */
 	defaultBranch: string;
 	config?: Record<string, unknown>;
+	/**
+	 * Optional coder dev-kit config chosen at project setup (template picker +
+	 * size/startup + extra repos). Stored on the project; every coder session of
+	 * the project inherits it. Absent = default template, single repo.
+	 */
+	coder?: CloudCpProjectCoderConfig;
+}
+
+export interface CloudCpProjectCoderConfig {
+	/** Coder template UUID from GET /orgs/{orgId}/sandbox/coder/templates. Omit for the default template. */
+	templateId?: string;
+	/** t-shirt size the template maps to a VM SKU. Only with a non-default template. */
+	size?: "small" | "medium" | "large";
+	/** Optional shell snippet the template runs after checkout. Only with a non-default template. */
+	startupScript?: string;
+	/** Additional repositories every session of the project clones alongside the primary repo. */
+	extraRepos?: CloudCpSessionRepo[];
 }
 
 /** PATCH /orgs/{orgId}/projects/{projectId} */
@@ -159,6 +221,7 @@ export interface CloudCpProjectDeletedResponse {
 export type CloudCpSessionKind = "worker" | "orchestrator";
 
 export type CloudCpSessionMode = "read-only" | "standard" | "trusted";
+export type CloudCpInterfaceMode = "tui" | "chat";
 
 /** POST /orgs/{orgId}/sessions (requires an Idempotency-Key header). */
 export interface CloudCpCreateSessionRequest {
@@ -172,6 +235,12 @@ export interface CloudCpCreateSessionRequest {
 	prompt: string;
 	/** Defaults to "trusted" on the control plane when omitted. */
 	mode?: CloudCpSessionMode;
+	/**
+	 * Coding-agent model the session launches with (harness-native id). Optional:
+	 * omitted uses the harness default.
+	 */
+	model?: string;
+	reasoningEffort?: string;
 	deniedCommands?: string[];
 	sandboxProviderConnectionId?: string;
 	/**
@@ -180,6 +249,85 @@ export interface CloudCpCreateSessionRequest {
 	 * from `/me`.
 	 */
 	provider?: string;
+}
+
+export interface CloudCpSessionRepo {
+	url: string;
+	branch?: string;
+}
+
+/** GET /orgs/{orgId}/sandbox/coder/templates */
+export interface CloudCpCoderTemplate {
+	id: string;
+	name: string;
+	displayName: string;
+	description: string;
+	icon: string;
+	// The per-workspace coder_parameter names this template declares (e.g.
+	// "size", "startup_script"). The picker only offers a control when its
+	// parameter is present, so a template that declares none shows no form.
+	parameters: string[];
+}
+
+export interface CloudCpCoderTemplatesResponse {
+	templates: CloudCpCoderTemplate[];
+}
+
+/**
+ * GET /orgs/{orgId}/coder-config — an org's bring-your-own-Coder connection.
+ * Non-secret fields only: the stored API token is never echoed back, surfaced
+ * here solely as `tokenSet`.
+ */
+export interface CloudCpOrgCoderConfig {
+	/** Coder deployment base URL or IP (http or https). */
+	baseUrl: string;
+	/**
+	 * Coder owner/username new workspaces are created under. The control plane
+	 * derives it from the API token on save, so it is always present once stored.
+	 */
+	owner?: string;
+	/**
+	 * Default Coder template id (a UUID) new workspaces use. Optional: a
+	 * bring-your-own org leaves it empty and picks the template per project.
+	 */
+	defaultTemplateId?: string;
+	/** Optional agent name the sandbox connects through. */
+	agentName?: string;
+	/**
+	 * Optional PrivateLink VPC endpoint service name (the
+	 * `coder_endpoint_service_name` Terraform output), set only when the Coder lives
+	 * in a private VPC. AO ops provisions the VPC endpoint from it.
+	 */
+	endpointServiceName?: string;
+	/** Optional AWS region for the PrivateLink endpoint (e.g. eu-north-1). */
+	region?: string;
+	/** True when an API token is stored. The token itself is never returned. */
+	tokenSet: boolean;
+}
+
+export interface CloudCpOrgCoderConfigResponse {
+	/** The stored config, or null when the org has none configured yet. */
+	coderConfig: CloudCpOrgCoderConfig | null;
+}
+
+/**
+ * PUT /orgs/{orgId}/coder-config. The slimmed form sends only `baseUrl` and
+ * `token`; the control plane derives the workspace owner from the token and the
+ * template is chosen per project, so `owner` and `defaultTemplateId` are optional.
+ */
+export interface CloudCpPutOrgCoderConfigRequest {
+	baseUrl: string;
+	/** Raw Coder API token; stored encrypted and never echoed back. Omit to keep the existing token. */
+	token?: string;
+	/** Optional: derived from the token when omitted. */
+	owner?: string;
+	/** Optional: the template is chosen per project, not at the org level. */
+	defaultTemplateId?: string;
+	agentName?: string;
+	/** Optional PrivateLink VPC endpoint service name; omit for a directly reachable Coder. */
+	endpointServiceName?: string;
+	/** Optional AWS region for the PrivateLink endpoint. */
+	region?: string;
 }
 
 export interface CloudCpSession {
@@ -191,6 +339,7 @@ export interface CloudCpSession {
 	displayName: string;
 	branch: string;
 	mode: string;
+	interfaceMode: CloudCpInterfaceMode;
 	deniedCommands: string[];
 	activityState: string;
 	status: string;
@@ -201,6 +350,10 @@ export interface CloudCpSession {
 	runtimeState?: string;
 	runtimeError?: string;
 	isTerminated: boolean;
+	autoInjectCI?: boolean;
+	autoInjectReview?: boolean;
+	terminateOnPrMerge?: boolean;
+	prs: CloudCpSessionPullRequest[];
 	/**
 	 * Highest worker epoch the session has minted for its agent terminal. It
 	 * advances on every fresh worker connection (resume from idle-pause,
@@ -213,6 +366,63 @@ export interface CloudCpSession {
 	updatedAt: string;
 }
 
+export interface CloudCpInterfaceTransition {
+	id: string;
+	/** Mirrors the durable Cloud coordinator state machine. */
+	phase:
+		| "requested"
+		| "preflighting"
+		| "draining"
+		| "source_stopping"
+		| "source_stopped"
+		| "target_starting"
+		| "activating"
+		| "completed"
+		| "failed"
+		| "cancelled"
+		| "recovery_required";
+	policy: "drain" | "interrupt";
+	sessionId: string;
+	sourceMode: CloudCpInterfaceMode;
+	targetMode: CloudCpInterfaceMode;
+	nativeConversationId?: string;
+	errorCode?: string;
+	errorDetail?: string;
+	noticeAcknowledgedAt?: string;
+	createdAt: string;
+	updatedAt: string;
+	completedAt?: string;
+}
+
+export interface CloudCpInterfaceTransitionStatusResponse {
+	supported: boolean;
+	targetMode: CloudCpInterfaceMode;
+	reasonCode?: string;
+	reason?: string;
+	transition?: CloudCpInterfaceTransition;
+}
+
+export interface CloudCpStartInterfaceTransitionRequest {
+	targetMode: CloudCpInterfaceMode;
+	policy: "drain" | "interrupt";
+	model?: string;
+	reasoningEffort?: string;
+}
+
+export interface CloudCpStartInterfaceTransitionResponse {
+	transition: CloudCpInterfaceTransition;
+}
+
+/** DELETE /orgs/{orgId}/sessions/{sessionId}/interface-transition */
+export interface CloudCpCancelInterfaceTransitionResponse {
+	ok: boolean;
+}
+
+/** PUT /orgs/{orgId}/sessions/{sessionId}/interface-transition/{transitionId}/notice-acknowledgement */
+export interface CloudCpAcknowledgeInterfaceTransitionNoticeResponse {
+	ok: boolean;
+}
+
 export interface CloudCpSessionResponse {
 	session: CloudCpSession;
 }
@@ -220,6 +430,191 @@ export interface CloudCpSessionResponse {
 export interface CloudCpSessionListResponse {
 	items: CloudCpSession[];
 	page: CloudCpPageInfo;
+}
+
+// ---------------------------------------------------------------------------
+// Docker workspace review (`workspace_handlers.go`)
+// ---------------------------------------------------------------------------
+
+/** One changed file in a cloud workspace. */
+export interface CloudCpWorkspaceDiffFile {
+	path: string;
+	status: "unmodified" | "modified" | "added" | "deleted" | "renamed" | "untracked" | "copied" | "changed";
+	additions: number;
+	deletions: number;
+	binary: boolean;
+}
+
+/** Changed-file summary, compared with the session's HEAD. */
+export interface CloudCpWorkspaceDiff {
+	files: CloudCpWorkspaceDiffFile[];
+	diffBaseRef: string;
+	diffBaseSha?: string;
+	truncated: { combined: boolean; stats: boolean };
+}
+
+/** Selected-file review details. */
+export interface CloudCpWorkspaceDiffFileDetail extends CloudCpWorkspaceDiffFile {
+	size: number;
+	deleted: boolean;
+	content: string;
+	contentTruncated: boolean;
+	diff: string;
+	diffTruncated: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Provider-neutral workspace review (`workspace_review_handlers.go`)
+// ---------------------------------------------------------------------------
+
+export type CloudCpWorkspaceReviewScope = "combined" | "committed" | "staged" | "unstaged" | "untracked";
+export type CloudCpWorkspaceReviewStatus = "unmodified" | "modified" | "added" | "deleted" | "renamed" | "copied" | "untracked";
+export type CloudCpWorkspaceReviewSide = "before" | "after";
+
+export interface CloudCpWorkspaceReviewFileSummary {
+	path: string;
+	previousPath?: string;
+	status: CloudCpWorkspaceReviewStatus;
+	additions: number;
+	deletions: number;
+	size: number;
+	binary: boolean;
+	editable: boolean;
+	fileFingerprint: string;
+}
+
+export interface CloudCpWorkspaceReviewSections {
+	staged: CloudCpWorkspaceReviewFileSummary[];
+	unstaged: CloudCpWorkspaceReviewFileSummary[];
+	untracked: CloudCpWorkspaceReviewFileSummary[];
+	committed: CloudCpWorkspaceReviewFileSummary[];
+}
+
+export interface CloudCpWorkspaceReviewCommit {
+	sha: string;
+	subject: string;
+	author: string;
+	timestamp: string;
+	files: CloudCpWorkspaceReviewFileSummary[];
+}
+
+export interface CloudCpWorkspaceReviewResponse {
+	workspaceVersion: string;
+	compareBaseSha?: string;
+	compareBaseRef?: string;
+	compareMode?: "base" | "head_fallback";
+	files: CloudCpWorkspaceReviewFileSummary[];
+	truncated: boolean;
+	sections: CloudCpWorkspaceReviewSections;
+	commits: CloudCpWorkspaceReviewCommit[];
+	summary: { files: number; additions: number; deletions: number };
+	ahead?: number;
+	behind?: number;
+}
+
+export interface CloudCpWorkspaceReviewFileQuery {
+	path: string;
+	scope?: CloudCpWorkspaceReviewScope;
+	commitSha?: string;
+}
+
+export interface CloudCpWorkspaceReviewFileResponse extends CloudCpWorkspaceReviewFileSummary {
+	deleted: boolean;
+	imageMediaType?: string;
+	content: string;
+	contentTruncated: boolean;
+	diff: string;
+	diffTruncated: boolean;
+	compareBaseSha?: string;
+	compareBaseRef?: string;
+	compareMode?: "base" | "head_fallback";
+	workspaceVersion: string;
+	historical?: boolean;
+}
+
+export interface CloudCpWorkspaceReviewDiffsRequest {
+	scope: CloudCpWorkspaceReviewScope;
+	paths: string[];
+	contextLines: number;
+	ignoreWhitespace: boolean;
+	workspaceVersion?: string;
+	commitSha?: string;
+}
+
+export interface CloudCpWorkspaceReviewDiffsResponse {
+	workspaceVersion: string;
+	groups: Array<{
+		repository?: string;
+		patch: string;
+		truncated: boolean;
+		includedPaths: string[];
+		deferred: Array<{ path: string; reason: "binary" | "oversized" | "generated" | "long_line" | "budget_exceeded" }>;
+		errors: Array<{ code: string; message: string }>;
+	}>;
+}
+
+export interface CloudCpWorkspaceReviewRevisionQuery {
+	path: string;
+	scope?: CloudCpWorkspaceReviewScope;
+	side?: CloudCpWorkspaceReviewSide;
+	workspaceVersion?: string;
+	expectedRevision?: string;
+	commitSha?: string;
+}
+
+export interface CloudCpWorkspaceReviewRevisionResponse {
+	path: string;
+	side: CloudCpWorkspaceReviewSide;
+	revision?: string;
+	workspaceVersion: string;
+	mediaType?: string;
+	encoding?: string;
+	size: number;
+	exists: boolean;
+	binary: boolean;
+	truncated: boolean;
+	content: string;
+}
+
+export interface CloudCpWorkspaceReviewTreeResponse {
+	path: string;
+	entries: Array<{
+		name: string;
+		path: string;
+		type: "file" | "dir";
+		status?: CloudCpWorkspaceReviewStatus;
+		hasChanges?: boolean;
+		size?: number;
+		binary?: boolean;
+	}>;
+	truncated: boolean;
+}
+
+export interface CloudCpWorkspaceReviewSearchQuery {
+	query: string;
+	cursor?: string;
+	limit?: number;
+}
+
+export interface CloudCpWorkspaceReviewSearchResponse {
+	query: string;
+	results: Array<Pick<CloudCpWorkspaceReviewFileSummary, "path" | "status" | "size" | "binary" | "fileFingerprint">>;
+	nextCursor?: string;
+	truncated: boolean;
+}
+
+export interface CloudCpWorkspaceReviewWriteRequest {
+	path: string;
+	content: string;
+	expectedFileFingerprint: string;
+}
+
+export interface CloudCpWorkspaceReviewWriteResponse {
+	path: string;
+	content: string;
+	size: number;
+	fileFingerprint: string;
+	workspaceVersion: string;
 }
 
 /** One pull request on a children listing (GET .../sessions/{id}/children). */
@@ -230,6 +625,12 @@ export interface CloudCpSessionPullRequest {
 	ci: string;
 	review: string;
 	mergeability: string;
+	failingChecks?: Array<{
+		name: string;
+		status: "failed" | "cancelled";
+		conclusion: string;
+		url?: string;
+	}>;
 	/** Always false today: the control plane does not track unresolved comments yet. */
 	reviewComments: boolean;
 	sourceBranch?: string;
@@ -245,6 +646,78 @@ export interface CloudCpSessionChild extends CloudCpSession {
 export interface CloudCpSessionChildrenResponse {
 	items: CloudCpSessionChild[];
 	page: CloudCpPageInfo;
+}
+
+/** Detailed PR data used by the shared local/cloud inspector UI. */
+export interface CloudCpPullRequestSummary {
+	url: string;
+	htmlUrl?: string;
+	number: number;
+	title: string;
+	state: "draft" | "open" | "merged" | "closed";
+	provider: string;
+	repository: string;
+	author: string;
+	authorAvatarUrl?: string;
+	sourceBranch: string;
+	targetBranch: string;
+	headSha: string;
+	additions: number;
+	deletions: number;
+	changedFiles: number;
+	ci: {
+		state: "unknown" | "pending" | "passing" | "failing";
+		failingChecks: Array<{
+			name: string;
+			status: "failed" | "cancelled";
+			conclusion: string;
+			url?: string;
+		}>;
+	};
+	review: {
+		decision: "none" | "approved" | "changes_requested" | "review_required";
+		hasUnresolvedHumanComments: boolean;
+		unresolvedBy: Array<{
+			reviewerId: string;
+			count: number;
+			links: Array<{ url?: string; reviewId?: string; file?: string; line?: number; body?: string; autoInjectReview: boolean }>;
+			reviewUrl?: string;
+			isBot?: boolean;
+		}>;
+		resolvedBy: Array<{
+			reviewerId: string;
+			count: number;
+			links: Array<{ url?: string; reviewId?: string; file?: string; line?: number; body?: string; autoInjectReview: boolean }>;
+			reviewUrl?: string;
+			isBot?: boolean;
+		}>;
+		reviews: Array<{
+			reviewerId: string;
+			verdict: "none" | "approved" | "changes_requested" | "review_required";
+			body?: string;
+			reviewUrl?: string;
+			submittedAt: string;
+			isBot?: boolean;
+			autoInjectReview: boolean;
+		}>;
+	};
+	mergeability: {
+		state: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
+		reasons: string[];
+		pullRequestUrl: string;
+		conflictFiles: Array<{ path: string; url?: string }>;
+	};
+	stateChangedAt?: string;
+	createdAt?: string;
+	updatedAt: string;
+	observedAt: string;
+	ciObservedAt: string;
+	reviewObservedAt: string;
+}
+
+export interface CloudCpSessionPullRequestsResponse {
+	sessionId: string;
+	pullRequests: CloudCpPullRequestSummary[];
 }
 
 export interface CloudCpListSessionsQuery extends CloudCpListQuery {
@@ -290,6 +763,25 @@ export interface CloudCpRestoreSessionResponse {
 export interface CloudCpSendMessageRequest {
 	/** 1-65536 bytes. */
 	text: string;
+	model?: string;
+	reasoningEffort?: string;
+	/** Per-turn permission mode, capped by the session and share grant. */
+	mode?: "read-only" | "standard" | "trusted";
+	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+}
+
+export interface CloudCpChatModelsResponse {
+	modes?: string[];
+	model?: string;
+	reasoningEffort?: string;
+	models: Array<{
+		id: string;
+		displayName: string;
+		description?: string;
+		default: boolean;
+		efforts?: string[];
+		defaultEffort?: string;
+	}>;
 }
 
 export interface CloudCpClientEvent {
@@ -308,6 +800,11 @@ export interface CloudCpSendMessageResponse {
 /** POST /orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/cancel responds 202. */
 export interface CloudCpCancelTurnResponse {
 	ok: boolean;
+}
+
+/** POST steering response; guidance for the active turn was accepted. */
+export interface CloudCpSteerTurnResponse {
+	event: CloudCpClientEvent;
 }
 
 export interface CloudCpChatEventsQuery {
@@ -348,13 +845,14 @@ export interface CloudCpTerminalTicketResponse {
 // ---------------------------------------------------------------------------
 
 /** Coding-agent providers the control plane accepts (`validAgentProvider`). */
-export type CloudCpAgentProvider = "claude-code" | "codex" | "cursor";
+export type CloudCpAgentProvider = "claude-code" | "codex" | "cursor" | "opencode";
 
 /**
  * Credential types by provider (`validAgentCredentialType`):
  * claude-code accepts "api_key" | "oauth_token"; codex accepts
  * "api_key" | "access_token" | "auth_json" (the opaque result of a
- * ChatGPT subscription login); cursor accepts "api_key".
+ * ChatGPT subscription login); cursor accepts "api_key"; opencode accepts
+ * "auth_json" (its multi-provider auth document; no single api-key env var).
  */
 export interface CloudCpPutAgentConnectionRequest {
 	credentialType: string;
@@ -362,7 +860,7 @@ export interface CloudCpPutAgentConnectionRequest {
 	secret: string;
 }
 
-/** PUT /orgs/{orgId}/provider-connections/github-pat */
+/** PUT /me/github-pat */
 export interface CloudCpPutGitHubPATRequest {
 	/** Raw GitHub personal access token; stored encrypted and never echoed. */
 	secret: string;
@@ -388,12 +886,114 @@ export interface CloudCpProviderConnection {
 	updatedAt: string;
 }
 
-/** GET /orgs/{orgId}/provider-connections */
+/** GET /me/providers */
 export interface CloudCpProviderConnectionsResponse {
 	providerConnections: CloudCpProviderConnection[];
 }
 
-/** PUT /orgs/{orgId}/provider-connections/agents/{agent} */
+/** PUT /me/providers/{agent}, PUT /me/github-pat */
 export interface CloudCpProviderConnectionResponse {
 	providerConnection: CloudCpProviderConnection;
+}
+
+/** GET /me/github/repos */
+export interface CloudCpGitHubRepo {
+	name: string;
+	fullName: string;
+	private: boolean;
+	defaultBranch: string;
+	cloneUrl: string;
+}
+
+export interface CloudCpGitHubReposResponse {
+	repos: CloudCpGitHubRepo[];
+}
+
+// ---------------------------------------------------------------------------
+// GitHub App connect flow (github_handlers.go)
+//
+// The secure, hosted GitHub connection: the control plane owns the GitHub App
+// client id and secret, builds the install/authorize URL, catches the redirect
+// on its own callback, and stores the installation. The desktop only opens the
+// URL and polls for completion, then lists the App's repositories and creates a
+// project from one. No GitHub secret ever reaches the desktop.
+// ---------------------------------------------------------------------------
+
+/** POST /orgs/{orgId}/github/installations/start */
+export interface CloudCpStartGitHubInstallationResponse {
+	installationUrl: string;
+	expiresAt: string;
+}
+
+export interface CloudCpGitHubInstallation {
+	id: string;
+	githubInstallationId: string;
+	accountLogin: string;
+	accountType: string;
+	status: string;
+	repositorySelection: string;
+	syncStatus: string;
+	lastSyncedAt?: string;
+	lastError?: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+/** GET /orgs/{orgId}/github/installations */
+export interface CloudCpGitHubInstallationsResponse {
+	installations: CloudCpGitHubInstallation[];
+}
+
+/** POST /orgs/{orgId}/github/installations/{installationId}/sync */
+export interface CloudCpSyncGitHubInstallationResponse {
+	installation: CloudCpGitHubInstallation;
+}
+
+export interface CloudCpGitHubUserInstallation {
+	githubInstallationId: string;
+	accountLogin: string;
+	accountType: string;
+	repositorySelection: string;
+	canCreateRepository: boolean;
+	unavailableReason?: string;
+}
+
+/** GET /github/user */
+export interface CloudCpGitHubUserConnection {
+	connected: boolean;
+	login?: string;
+	avatarUrl?: string;
+	installations: CloudCpGitHubUserInstallation[];
+	lastSyncedAt?: string;
+}
+
+/** One repository an installation grants access to (GET /orgs/{orgId}/github/repositories). */
+export interface CloudCpGitHubAppRepository {
+	githubRepositoryId: string;
+	name: string;
+	fullName: string;
+	htmlUrl: string;
+	defaultBranch: string;
+	visibility: string;
+	isPrivate: boolean;
+	isArchived: boolean;
+	access: string;
+	grantedAt: string;
+	revokedAt?: string;
+}
+
+export interface CloudCpGitHubRepositoriesPage {
+	items: CloudCpGitHubAppRepository[];
+	page: CloudCpPageInfo;
+}
+
+/**
+ * POST /orgs/{orgId}/github/projects. `config` is stored verbatim on the
+ * project; nest the coder dev-kit config under a `coder` key to attach a
+ * template/size/startup/extra repos (the control plane reads `config.coder`).
+ */
+export interface CloudCpCreateGitHubProjectRequest {
+	githubRepositoryId: string;
+	displayName?: string;
+	config?: Record<string, unknown>;
 }

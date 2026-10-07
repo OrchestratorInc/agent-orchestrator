@@ -7,6 +7,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	shelltermsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
@@ -70,6 +71,20 @@ func (l *projectRootLocator) ProjectRoot(ctx context.Context, id domain.ProjectI
 	}
 }
 
+func (l *projectRootLocator) ProjectEnv(ctx context.Context, id domain.ProjectID) (map[string]string, error) {
+	if l.projects == nil {
+		return nil, nil
+	}
+	res, err := l.projects.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if res.Project == nil || res.Project.Config == nil {
+		return nil, nil
+	}
+	return res.Project.Config.Env, nil
+}
+
 // sessionGetter is the narrow slice of the session service the workspace
 // locator needs. *sessionsvc.Service satisfies it; tests substitute a fake so
 // this adapter's validation logic doesn't need a real session stack.
@@ -111,4 +126,23 @@ func (l *sessionWorkspaceLocator) SessionWorkspace(ctx context.Context, id domai
 		}
 	}
 	return path, sess.ProjectID, nil
+}
+
+// CueCommandSessionTarget preserves the exact recorded worktree and lifecycle
+// facts so command Cues can fail closed instead of falling back to a project
+// root or using a session that can no longer accept work.
+func (l *sessionWorkspaceLocator) CueCommandSessionTarget(ctx context.Context, id domain.SessionID) (shelltermsvc.CueCommandSessionTarget, error) {
+	if l.sessions == nil {
+		return shelltermsvc.CueCommandSessionTarget{}, apierr.Internal("SHELL_TERMINAL_NO_SESSION_LOOKUP", "Session lookup is unavailable")
+	}
+	sess, err := l.sessions.Get(ctx, id)
+	if err != nil {
+		return shelltermsvc.CueCommandSessionTarget{}, err
+	}
+	return shelltermsvc.CueCommandSessionTarget{
+		ProjectID:     sess.ProjectID,
+		WorkspacePath: sess.Metadata.WorkspacePath,
+		Activity:      sess.Activity.State,
+		IsTerminated:  sess.IsTerminated,
+	}, nil
 }

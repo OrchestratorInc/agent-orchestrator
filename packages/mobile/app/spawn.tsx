@@ -1,9 +1,9 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Feather } from "@expo/vector-icons";
+import { Feather } from "../lib/icons";
 import BottomSheet, { BottomSheetView } from "@expo/ui/community/bottom-sheet";
 import * as DocumentPicker from "expo-document-picker";
 import { File } from "expo-file-system";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	InteractionManager,
 	Platform,
@@ -13,31 +13,46 @@ import {
 	Text,
 	View,
 } from "react-native";
-import { KeyboardStickyView } from "react-native-keyboard-controller";
+import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-controller";
 import { agentErrorCopy } from "../lib/agentError";
 import { defaultAgent, rankAgents } from "../lib/agentPicker";
 import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentModelCatalog, type ProjectDetail, type SessionMode } from "../lib/api";
-import { classifyConnectionFailure, describeConnectionFailure } from "../lib/connectionError";
+import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
-import { resolveSpawnProject } from "../lib/projectFilter";
+import { openingHostId, spawnHostMatches } from "../lib/hostRoute";
+import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
-import { appendSpawnAttachments, type SpawnAttachment } from "../lib/spawn-attachments";
+import { appendSpawnAttachments, readSpawnAttachments, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
+import { spawnNotices } from "../lib/spawnNotices";
 import { SpawnPromptInput } from "../lib/spawn-prompt-input";
-import { useApp } from "../lib/store";
+import { HostScope, useApp } from "../lib/store";
+import { useVoiceInput } from "../lib/voice/useVoiceInput";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { Button } from "../lib/ui";
+import { iconSize, space, type } from "../lib/tokens";
+import { backOr } from "../lib/backNavigation";
 
 export { SheetErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
 export default function SpawnModal() {
+	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	return hostId ? <HostScope key={hostId} hostId={hostId}><SpawnModalContent /></HostScope> : <SpawnModalContent />;
+}
+
+function SpawnModalContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
-	const { projectId: routeProjectId } = useLocalSearchParams<{ projectId?: string }>();
-	const { projects, projectsKnown, activeProjectId, config, spawn } = useApp();
+	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
+	const { projects, projectsKnown, activeProjectId, config, currentHostId, connection, unreachable, setActiveProject, spawn } = useApp();
+	const [openedHostId, setOpenedHostId] = useState(() => openingHostId(routeHostId, currentHostId ?? undefined));
+	const hostMatches = spawnHostMatches({ openedHostId, currentHostId: currentHostId ?? undefined, routeProjectId, routeHostId });
+	useEffect(() => {
+		if (!openedHostId && currentHostId) setOpenedHostId(currentHostId);
+	}, [openedHostId, currentHostId]);
 
 	const [projectId, setProjectId] = useState<string | null>(null);
 	const [harness, setHarness] = useState("");
@@ -46,6 +61,8 @@ export default function SpawnModal() {
 	const [chatHarnesses, setChatHarnesses] = useState<string[]>([]);
 	const [prompt, setPrompt] = useState("");
 	const [attachments, setAttachments] = useState<SpawnAttachment[]>([]);
+	const attachmentsRef = useRef<SpawnAttachment[]>([]);
+	const pickingAttachments = useRef(false);
 	const [attachmentError, setAttachmentError] = useState<string>();
 	const [model, setModel] = useState("");
 	const [modelTouched, setModelTouched] = useState(false);
@@ -56,11 +73,23 @@ export default function SpawnModal() {
 	const [modelError, setModelError] = useState<string>();
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const requestRef = useRef<{ payload: string; attachments: readonly SpawnAttachment[]; id: string } | undefined>(undefined);
 
 	const [catalog, setCatalog] = useState<AgentCatalog | null>(null);
 	const [catalogError, setCatalogError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [offerTUI, setOfferTUI] = useState(false);
+	// Bumped to re-run the loads below after the desktop comes back.
+	const [reloadKey, setReloadKey] = useState(0);
+	// Spoken text lands in the prompt the way it does in the chat composer:
+	// appended, so dictation can extend what was typed rather than replace it.
+	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setPrompt((old) => old ? `${old} ${spoken}` : spoken), []) });
+	const listening = voice.state === "starting" || voice.state === "recording";
+	// iOS: the prompt fills the room above the controls. The controls translate
+	// with the keyboard, which does not reflow their siblings; a spacer below
+	// the attachments and messages makes that entire region reflow instead.
+	const [promptRoom, setPromptRoom] = useState<number>();
+	const keyboardHeight = useKeyboardState((state) => state.height);
 
 
 
@@ -68,6 +97,7 @@ export default function SpawnModal() {
 	// `targetProject()`; kept here because the screen needs it as UI state to
 	// drive the picker's value and the button's disabled state.
 	useEffect(() => {
+		if (!hostMatches) return;
 		const nextProjectId = resolveSpawnProject(
 			projectId,
 			routeProjectId,
@@ -76,10 +106,10 @@ export default function SpawnModal() {
 			projectsKnown,
 		);
 		if (nextProjectId !== projectId) changeProject(nextProjectId);
-	}, [activeProjectId, projects, projectsKnown, projectId, routeProjectId]);
+	}, [activeProjectId, hostMatches, projects, projectsKnown, projectId, routeProjectId]);
 
 	useEffect(() => {
-		if (!config) return;
+		if (!config || !hostMatches) return;
 		let cancelled = false;
 		setLoading(true);
 		Promise.all([getAgents(config), getSettings(config)])
@@ -100,43 +130,55 @@ export default function SpawnModal() {
 		return () => {
 			cancelled = true;
 		};
-	}, [config]);
+	}, [config, hostMatches, reloadKey]);
 
 	// Refreshing the catalog moved into the agent sheet route, which owns its own
 	// copy of it — see app/sheets/agent.tsx.
 	const allAgents = useMemo(() => rankAgents(catalog), [catalog]);
 	const agents = useMemo(() => mode === "chat" ? allAgents.filter((agent) => chatHarnesses.includes(agent.id)) : allAgents, [allAgents, chatHarnesses, mode]);
-	const project = projects.find((item) => item.id === projectId);
 	const projectWorkerAgent = projectDetail?.config?.worker?.agent ?? projectDetail?.agent ?? "";
 	const projectWorkerModel = projectDetail?.config?.worker?.agentConfig?.model ?? projectDetail?.config?.agentConfig?.model ?? "";
-	const catalogDefault = modelCatalog?.models.find((item) => item.isDefault)?.id ?? "";
-	const resolvedModel = resolveSpawnModel({ selectedAgent: harness, projectWorkerAgent, projectWorkerModel, catalogDefault });
+	const resolvedModel = resolveSpawnModel({ selectedAgent: harness, projectWorkerAgent, projectWorkerModel });
 	const displayedModel = modelTouched ? model : resolvedModel;
-	const displayedModelLabel = displayedModel ? modelCatalog?.models.find((item) => item.id === displayedModel)?.label ?? displayedModel : "Auto";
+	// "Automatic" when the project pins nothing, because that is the truth: the
+	// provider picks, and naming a model here promised one the session never ran.
+	const displayedModelLabel = displayedModel ? modelCatalog?.models.find((item) => item.id === displayedModel)?.label ?? displayedModel : "Automatic";
 	const modelSelection = modelTouched ? model : "__auto__";
+	const notices = spawnNotices({
+		// Only when a reconnect can fix it: a rejected password stops the poll for
+		// good, and its catalog error already says to re-scan the pairing code.
+		offline: unreachable,
+		mode,
+		loading,
+		catalogLoaded: catalog !== null,
+		catalogError,
+		agentCount: agents.length,
+		modelError,
+	});
 	const hasComposerMessage = Boolean(
-		(mode === "chat" && !loading && agents.length === 0)
-		|| catalogError
-		|| modelError
+		notices.length > 0
 		|| attachmentError
+		|| (Platform.OS === "android" && listening)
+		|| voice.error
 		|| error
-		|| offerTUI,
+		|| offerTUI
+		|| (Boolean(openedHostId) && !hostMatches),
 	);
 
 	useEffect(() => {
-		if (!config || !projectId) { setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
+		if (!config || !hostMatches || !projectId || projectId === STANDALONE_PROJECT) { setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
 		let cancelled = false;
 		setProjectDetailLoadedFor(null);
 		getProject(config, projectId)
 			.then((nextProject) => { if (!cancelled) setProjectDetail(nextProject); })
-			.catch((cause) => { if (!cancelled) setModelError(cause instanceof Error ? cause.message : String(cause)); })
+			.catch((cause) => { if (!cancelled) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled) setProjectDetailLoadedFor(projectId); });
 		return () => { cancelled = true; };
-	}, [config, projectId]);
+	}, [config, hostMatches, projectId, reloadKey]);
 
 	useEffect(() => {
 		if (agentTouched || loading || !catalog) return;
-		if (projectId && projectDetailLoadedFor !== projectId) return;
+		if (projectId && projectId !== STANDALONE_PROJECT && projectDetailLoadedFor !== projectId) return;
 		const nextHarness = resolveSpawnAgent({
 			projectWorkerAgent: projectDetail?.config?.worker?.agent,
 			projectAgent: projectDetail?.agent,
@@ -146,15 +188,26 @@ export default function SpawnModal() {
 	}, [agentTouched, agents, catalog, loading, projectDetail, projectDetailLoadedFor, projectId]);
 
 	useEffect(() => {
-		if (!config || !projectId || !harness) { setModelCatalog(undefined); return; }
+		if (!config || !hostMatches || !projectId || !harness) { setModelCatalog(undefined); return; }
 		let cancelled = false;
 		setModelLoading(true);
-		getAgentModels(config, harness, projectId)
+		getAgentModels(config, harness, projectId === STANDALONE_PROJECT ? undefined : projectId)
 			.then((nextCatalog) => { if (!cancelled) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
-			.catch((cause) => { if (!cancelled) setModelError(cause instanceof Error ? cause.message : String(cause)); })
+			.catch((cause) => { if (!cancelled) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled) setModelLoading(false); });
 		return () => { cancelled = true; };
-	}, [config, harness, projectId]);
+	}, [config, hostMatches, harness, projectId, reloadKey]);
+
+	// Loads that failed while the desktop was unreachable run again once the
+	// board's poll reconnects. Keyed on the reconnect, not on the errors, so an
+	// endpoint that keeps failing while connected can't loop.
+	const previousConnection = useRef(connection);
+	useEffect(() => {
+		const reconnected = previousConnection.current !== "open" && connection === "open";
+		previousConnection.current = connection;
+		if (reconnected && (catalogError || modelError)) setReloadKey((key) => key + 1);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [connection]);
 
 	const clearModelOverride = () => { setModel(""); setModelTouched(false); };
 	const resetModelSource = () => { clearModelOverride(); setModelCatalog(undefined); setModelError(undefined); };
@@ -192,7 +245,17 @@ export default function SpawnModal() {
 		setModel(nextModel);
 		setModelTouched(true);
 	};
+	const voiceFeedback = listening ? (
+		<View style={styles.voice}>
+			<Feather name="mic" size={iconSize.xs} color={t.red} />
+			<Text numberOfLines={2} style={styles.voiceText}>
+				{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}
+			</Text>
+		</View>
+	) : null;
 	const pickAttachments = async () => {
+		if (pickingAttachments.current) return;
+		pickingAttachments.current = true;
 		setAttachmentError(undefined);
 		try {
 			const result = await DocumentPicker.getDocumentAsync({
@@ -201,31 +264,38 @@ export default function SpawnModal() {
 				type: "*/*",
 			});
 			if (result.canceled) return;
-			const picked: SpawnAttachment[] = [];
-			for (const asset of result.assets) {
+			const picked = result.assets.map((asset) => {
 				const file = new File(asset.uri);
-				const bytes = asset.size ?? file.size ?? 0;
-				// Avoid reading an oversized file into JS memory merely to reject it.
-				if (bytes > 10 * 1024 * 1024) {
-					picked.push({ name: asset.name, mimeType: asset.mimeType || "application/octet-stream", data: "", bytes });
-					continue;
-				}
-				picked.push({
+				return {
 					name: asset.name,
 					mimeType: asset.mimeType || "application/octet-stream",
-					data: await file.base64(),
-					bytes,
-				});
-			}
-			const next = appendSpawnAttachments(attachments, picked);
-			setAttachments(next.attachments);
-			setAttachmentError(next.error);
+					bytes: asset.size ?? file.size,
+					readData: () => file.base64(),
+				};
+			});
+			const before = attachmentsRef.current;
+			const next = await readSpawnAttachments(before, picked);
+			const merged = appendSpawnAttachments(attachmentsRef.current, next.attachments.slice(before.length));
+			attachmentsRef.current = merged.attachments;
+			setAttachments(merged.attachments);
+			setAttachmentError(next.error ?? merged.error);
 		} catch (cause) {
-			setAttachmentError(cause instanceof Error ? cause.message : "Could not read the selected file.");
+			setAttachmentError(userFacingError(cause, "Couldn't read that file."));
+		} finally {
+			pickingAttachments.current = false;
+
 		}
 	};
 
 	const onSpawn = async () => {
+		if (!openedHostId || !spawnHostMatches({ openedHostId, currentHostId: currentHostId ?? undefined, routeProjectId, routeHostId })) {
+			setError("Machine changed. Close and reopen this task composer.");
+			return;
+		}
+		if (pickingAttachments.current) {
+			setAttachmentError("Wait for attachments to finish loading.");
+			return;
+		}
 		// Validated on submit rather than by disabling the button — desktop's
 		// choice, and the better one: a disabled button with no explanation is
 		// worse than a message naming what is missing.
@@ -233,14 +303,22 @@ export default function SpawnModal() {
 		setError(null);
 		setOfferTUI(false);
 		try {
-			const session = await spawn({
+			const request = {
+				hostId: openedHostId,
 				projectId: projectId ?? undefined,
 				prompt: prompt.trim() || undefined,
 				harness: harness || undefined,
-				model: modelOverride(displayedModel, resolvedModel, modelTouched),
+				model: modelOverride(displayedModel, modelTouched),
 				mode,
-				attachments: attachments.map(({ mimeType, data }) => ({ mimeType, data })),
-			});
+				attachments: attachmentsRef.current.map(({ mimeType, data }) => ({ mimeType, data })),
+			};
+			const { attachments: _, ...requestFields } = request;
+			const payload = JSON.stringify(requestFields);
+			if (requestRef.current?.payload !== payload || requestRef.current?.attachments !== attachmentsRef.current) {
+				requestRef.current = { payload, attachments: attachmentsRef.current, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
+			}
+			const session = await spawn({ ...request, clientRequestId: requestRef.current.id });
+			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
 			haptics.success();
 			// Dismiss the modal first, then open the freshly spawned session's mode-aware surface
 			// once the dismiss transition has settled. Firing both navigations in the
@@ -249,11 +327,11 @@ export default function SpawnModal() {
 			// transition to finish so the two happen back-to-back, not on top of each
 			// other. The session screen shows its own "connecting" state while the
 			// terminal attaches, so landing on it before the PTY is ready is expected.
-			router.back();
+			backOr(router);
 			InteractionManager.runAfterInteractions(() => {
 				router.push({
 					pathname: "/session/[id]",
-					params: { id: session.id, projectId: session.projectId },
+					params: { id: session.id, projectId: session.projectId, hostId: openedHostId },
 				});
 			});
 		} catch (e) {
@@ -265,39 +343,55 @@ export default function SpawnModal() {
 	};
 
 	const content = (
-		<View style={[styles.content, Platform.OS === "android" && styles.androidContent]}>
-				<View style={styles.promptHost}>
-					<SpawnPromptInput value={prompt} onChangeText={setPrompt} />
+		<View style={[
+			styles.content,
+			Platform.OS === "ios" && styles.iosContent,
+			Platform.OS === "android" && styles.androidContent,
+		]}>
+				<View
+					style={[styles.promptHost, Platform.OS === "ios" && styles.promptHostFill]}
+					onLayout={Platform.OS === "ios" ? (event) => setPromptRoom(Math.floor(event.nativeEvent.layout.height)) : undefined}
+				>
+					<SpawnPromptInput value={prompt} onChangeText={setPrompt} height={Platform.OS === "ios" ? promptRoom : undefined} />
 				</View>
 
 				{attachments.length ? (
 					<ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>
 						{attachments.map((item, index) => (
 							<View key={`${item.name}-${index}`} style={styles.attachment}>
-								<Feather name="file-text" size={14} color={t.blue} />
+								<Feather name="file-text" size={iconSize.sm} color={t.accent} />
 								<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text>
 								<Pressable
 									hitSlop={8}
 									accessibilityLabel={`Remove ${item.name}`}
-									onPress={() => setAttachments((current) => current.filter((candidate) => candidate !== item))}
+									onPress={() => {
+										attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
+										setAttachments(attachmentsRef.current);
+									}}
 								>
-									<Feather name="x" size={13} color={t.textTertiary} />
+									<Feather name="x" size={iconSize.xs} color={t.textTertiary} />
 								</Pressable>
 							</View>
 						))}
 					</ScrollView>
 				) : null}
 
-		{Platform.OS === "ios" ? <View style={styles.flexSpacer} /> : null}
-
 		{hasComposerMessage ? <View style={styles.messages}>
-					{mode === "chat" && !loading && agents.length === 0 ? <Text style={styles.warn}>No installed agent on this AO host currently supports Chat. Choose Terminal UI or install/authenticate a Chat-capable agent.</Text> : null}
-					{catalogError ? <Text style={styles.warn}>{catalogError}</Text> : null}
-					{modelError ? <Text style={styles.warn}>{modelError}</Text> : null}
+					{openedHostId && !hostMatches ? <Text accessibilityRole="alert" style={styles.warn}>Machine changed or disconnected. Close and reopen this task composer.</Text> : null}
+					{notices.map((notice) => <Text key={notice} style={styles.warn}>{notice}</Text>)}
 					{attachmentError ? <Text style={styles.warn}>{attachmentError}</Text> : null}
+					{Platform.OS === "android" ? voiceFeedback : null}
+					{voice.error ? <Text accessibilityRole="alert" style={styles.warn}>{voice.error}</Text> : null}
 					{error ? <Text style={styles.error}>{error}</Text> : null}
 					{offerTUI ? <Button title="Create as Terminal UI instead" variant="ghost" icon="terminal" onPress={() => { selectMode("tui"); setOfferTUI(false); setError(null); }} /> : null}
 				</View> : null}
+
+				{/* The sticky controls move visually but keep their original layout
+				    position. Reserve that movement before them so chips and messages
+				    remain visible above the keyboard, not behind the controls. */}
+				{Platform.OS === "ios" && keyboardHeight > 0 ? (
+					<View pointerEvents="none" style={{ height: keyboardHeight, marginTop: -space.sm }} />
+				) : null}
 
 				{/* The controls ride the keyboard on the UI thread.
 				    iOS does not lift this form sheet for the IME, and every
@@ -308,9 +402,10 @@ export default function SpawnModal() {
 				    the keyboard. A sticky view translates by the live offset, so
 				    the selectors and the button sit directly above it. */}
 				<KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
+				{Platform.OS === "ios" ? voiceFeedback : null}
 				<SpawnComposerControls
-					projects={projects.map((item) => ({ id: item.id, label: item.name }))}
-					projectId={project?.id ?? null}
+					projects={[...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
+					projectId={projectId}
 					onSelectProject={changeProject}
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
 					harness={harness}
@@ -320,9 +415,10 @@ export default function SpawnModal() {
 					modelLabel={displayedModelLabel}
 					onSelectModel={selectModel}
 					onAttach={() => { void pickAttachments(); }}
+					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut }}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
-					disabled={!projectId || !harness || busy || modelLoading || loading}
+					disabled={!hostMatches || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}
 				/>
 				</KeyboardStickyView>
 		</View>
@@ -336,7 +432,7 @@ export default function SpawnModal() {
 					enablePanDownToClose
 					enableDynamicSizing
 					backgroundStyle={{ backgroundColor: t.bgBase }}
-					onClose={() => router.back()}
+					onClose={() => backOr(router)}
 				>
 					<BottomSheetView style={styles.androidSheet}>
 						{content}
@@ -349,37 +445,39 @@ export default function SpawnModal() {
 	return <View style={styles.screen}>{content}</View>;
 }
 
-// Human copy for a failed spawn, matching every other screen. This one used to
-// render `e.message` — the wire string, e.g. "401 - missing or invalid
-// connection password".
+// Human copy for a failed spawn, matching every other screen. Never the wire
+// string ("401 Unauthorized - missing or invalid connection password").
 function spawnErrorCopy(e: unknown): string {
 	if (isChatPreflightError(e)) return chatErrorCopy(e);
-	const status = e instanceof ApiError ? e.status : undefined;
-	const { title, message } = describeConnectionFailure(classifyConnectionFailure(status), {
-		host: "",
-		port: "",
-		platform: Platform.OS,
-	});
-	return `${title} ${message}`;
+	if (e instanceof ApiError && e.code === "PROMPT_TOO_LONG") {
+		return "Task prompt is too long. Keep it to 16 KiB or fewer (emoji and other non-English characters use more than one byte). Shorten it and try again.";
+	}
+	return userFacingError(e, "Couldn't start the worker. Try again.");
 }
+
+// Android's compact field height and the iOS host's minimum layout height.
+const PROMPT_MIN_HEIGHT = 112;
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
-		content: { flex: 1, paddingHorizontal: 18, paddingTop: 18, paddingBottom: 8, gap: 10 },
+		content: { flex: 1, paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.sm, gap: space.sm },
+		iosContent: { paddingTop: space.xxxl },
 		androidModalRoot: { flex: 1, backgroundColor: "transparent" },
 		androidSheet: {
-			paddingTop: 6,
-			paddingBottom: 12,
+			paddingTop: space.xs,
+			paddingBottom: space.md,
 			backgroundColor: t.bgBase,
 		},
-		androidContent: { flex: 0, paddingTop: 12, paddingBottom: 0 },
-		flexSpacer: { flex: 1 },
-		messages: { gap: 6 },
-		promptHost: { width: "100%", height: 112 },
-		attachments: { gap: 8 },
-		attachment: { maxWidth: 190, height: 36, flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, borderRadius: 12, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
-		attachmentName: { flexShrink: 1, color: t.textSecondary, fontSize: 12 },
-		warn: { color: t.amber, fontSize: 13, lineHeight: 18 },
-		error: { color: t.red, fontSize: 13, lineHeight: 18 },
+		androidContent: { flex: 0, paddingTop: space.md, paddingBottom: space.none },
+		messages: { gap: space.xs },
+		voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: 8, paddingHorizontal: space.sm, paddingVertical: space.xs },
+		voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
+		promptHost: { width: "100%", height: PROMPT_MIN_HEIGHT },
+		promptHostFill: { height: undefined, flex: 1, minHeight: 0 },
+		attachments: { gap: space.sm },
+		attachment: { maxWidth: 190, height: 36, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm, borderRadius: 12, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
+		attachmentName: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.caption1.fontSize },
+		warn: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	});

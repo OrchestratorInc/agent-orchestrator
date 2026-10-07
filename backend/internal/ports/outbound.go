@@ -221,6 +221,19 @@ type RuntimeConfig struct {
 	// not determine whether a terminal survives an app launch. Agent runtimes
 	// leave it disabled to retain scrollback and manual recovery.
 	ExitOnCommandCompletion bool
+	// StartOnAttach defers starting Argv until a viewer first attaches with its
+	// grid, so the process starts at the size that viewer shows. A shell started
+	// at a guessed grid lays its first prompt out for the wrong width (zsh's
+	// partial-line marker then leaks as a stray "%"). Only for terminals a user
+	// opened to look at: agents and scripted command terminals must start
+	// whether or not anyone is viewing. Runtimes that cannot defer ignore it.
+	StartOnAttach bool
+	// LazyStyledOutput lets the runtime skip maintaining a rendered screen until
+	// GetStyledOutput is first called for this terminal. Rendering every byte
+	// costs CPU on heavy output; terminals nothing probes for styled output
+	// (user and command shells, not agents) need not pay it continuously.
+	// Runtimes that always render ignore it.
+	LazyStyledOutput bool
 }
 
 // RuntimeHandle identifies a live runtime instance. Its ID is opaque outside
@@ -246,6 +259,14 @@ type SupervisedProcessInspector interface {
 	IsSupervisedProcessAlive(ctx context.Context, handle RuntimeHandle, ref SupervisedProcessRef) (bool, error)
 }
 
+// RuntimeProcessRootInspector exposes the operating-system pids at the root of
+// a runtime's process tree (a tmux pane leader, a PTY host). Memory accounting
+// walks their descendants. It is an optional capability: a runtime without it
+// simply reports no memory reading rather than zero.
+type RuntimeProcessRootInspector interface {
+	ProcessRootPIDs(ctx context.Context, handle RuntimeHandle) ([]int, error)
+}
+
 // ExactSupervisedProcessInspector is the strict launch-generation probe used
 // at agent-switch ownership boundaries. Unlike SupervisedProcessInspector it
 // must never treat an arbitrary child of a preserved shell as the requested
@@ -253,6 +274,14 @@ type SupervisedProcessInspector interface {
 // supervisor's managed agent child are both alive.
 type ExactSupervisedProcessInspector interface {
 	IsExactSupervisedProcessAlive(ctx context.Context, handle RuntimeHandle, ref SupervisedProcessRef) (bool, error)
+}
+
+// SupervisedProcessRecordInspector reports whether a runtime handle contains
+// any AO supervisor. Review liveness uses this to keep pre-supervisor reviewer
+// launches working while still requiring an exact launch match for supervised
+// processes.
+type SupervisedProcessRecordInspector interface {
+	HasSupervisedProcessRecord(ctx context.Context, handle RuntimeHandle) (bool, error)
 }
 
 // ContainerReaper removes Docker containers a worker session owns, identified
@@ -310,6 +339,13 @@ const (
 // WorkspaceReclaimRemoved, which is the pre-existing behaviour.
 type WorkspaceReclaimer interface {
 	DestroyReclaim(ctx context.Context, info WorkspaceInfo) (WorkspaceReclaim, error)
+}
+
+// WorkspacePreparationBranchCleaner removes a discarded speculative branch
+// only when it has no commits beyond its recorded base. Ordinary session
+// teardown must keep its branch for later restoration.
+type WorkspacePreparationBranchCleaner interface {
+	DeletePreparedBranch(ctx context.Context, info WorkspaceInfo) error
 }
 
 // Workspace is the isolated checkout an agent works in (a git worktree or clone).
@@ -494,6 +530,9 @@ type WorkspaceConfig struct {
 	// orchestrator worktree. Defaults to a truncation of ProjectID when empty.
 	SessionPrefix string
 	Branch        string
+	// FreshBranch never checks out a leftover local branch for a new
+	// speculative task; a collision gets a new suffixed branch instead.
+	FreshBranch bool
 	// BaseBranch is the explicitly configured branch new session branches are
 	// created from. Empty asks the workspace adapter to resolve an authoritative
 	// repository default; it must never infer from the checked-out branch.
@@ -511,6 +550,9 @@ type WorkspaceConfig struct {
 type WorkspaceInfo struct {
 	Path   string
 	Branch string
+	// BaseSHA pins the branch tip when this worktree was created. Speculative
+	// cleanup uses it to avoid deleting any later user commit.
+	BaseSHA string
 	// BaseRef is the repository-default ref selected for session comparisons.
 	// It can differ from the remote session ref used to seed the worktree.
 	BaseRef   string
@@ -530,6 +572,7 @@ type WorkspaceProjectConfig struct {
 	Kind          domain.SessionKind
 	SessionPrefix string
 	Branch        string
+	FreshBranch   bool
 	RootRepoPath  string
 	// BaseBranch applies only to RootRepoPath. Empty asks the workspace adapter
 	// to resolve that repository's default independently from every child.
@@ -573,6 +616,9 @@ type WorkspaceRepoInfo struct {
 	Path     string
 	Branch   string
 	BaseSHA  string
+	// CreationSHA pins a speculative branch's initial tip for safe cleanup.
+	// BaseSHA stays the comparison base and may be a different commit.
+	CreationSHA string
 	// BaseRef is the repository-default ref persisted with BaseSHA so comparisons
 	// can recompute a merge base after that default advances or the session is
 	// rebased. It can differ from the remote session ref used to seed the worktree.

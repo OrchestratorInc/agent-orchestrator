@@ -13,6 +13,7 @@ func TestEffectiveAgentReadiness(t *testing.T) {
 		{"missing", AgentInstallationNotInstalled, AgentAuthenticationUnknown, AgentReadinessNotReady},
 		{"installation unknown", AgentInstallationUnknown, AgentAuthenticationAuthorized, AgentReadinessUnknown},
 		{"authorized", AgentInstallationInstalled, AgentAuthenticationAuthorized, AgentReadinessReady},
+		{"configured", AgentInstallationInstalled, AgentAuthenticationConfigured, AgentReadinessUnknown},
 		{"auth not applicable", AgentInstallationInstalled, AgentAuthenticationNotApplicable, AgentReadinessReady},
 		{"unauthorized", AgentInstallationInstalled, AgentAuthenticationUnauthorized, AgentReadinessNotReady},
 		{"auth unknown", AgentInstallationInstalled, AgentAuthenticationUnknown, AgentReadinessUnknown},
@@ -29,7 +30,7 @@ func TestEffectiveAgentReadiness(t *testing.T) {
 
 func TestAgentReadinessPurposeValidation(t *testing.T) {
 	t.Parallel()
-	if !AgentReadinessPurposeDisplay.Valid() || !AgentReadinessPurposeSettings.Valid() || !AgentReadinessPurposeLaunch.Valid() {
+	if !AgentReadinessPurposeDisplay.Valid() || !AgentReadinessPurposeLaunch.Valid() {
 		t.Fatal("documented readiness purposes must be valid")
 	}
 	if AgentReadinessPurpose("force").Valid() {

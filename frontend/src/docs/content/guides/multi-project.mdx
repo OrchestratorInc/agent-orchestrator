@@ -1,0 +1,71 @@
+---
+title: Multi-project
+description: Manage repositories, multi-repository workspaces, and Scratch sessions from one desktop.
+---
+
+The desktop sidebar shows every registered project and its sessions. Add a repository as a separate project, or group a root and its child repositories in a workspace.
+
+## Add projects
+
+Use **Add project** in the desktop app, or register an existing local repository:
+
+```bash
+ao project add --path /absolute/path/to/web --id web
+ao project add --path /absolute/path/to/api --id api
+ao project ls
+```
+
+`ao project add` requires a local path. It does not clone remote URLs. `ao start` only resolves and opens the desktop app; it does not register the current directory.
+
+## Workspace and Scratch projects
+
+Register a parent directory containing direct child repositories as one workspace project:
+
+```bash
+ao project add --path /absolute/path/to/product --as-workspace
+```
+
+Scratch projects use plain directories managed by AO. For work without a project, run `ao spawn --standalone --agent codex --name notes`. Standalone sessions need an explicit agent and cannot use project, branch, issue, PR, or orchestrator options. Scratch projects do not support Git branches or PRs either.
+
+## Give each project its own roles
+
+Open each project's settings and choose its worker, orchestrator, model, rules, setup, reviewers, and automatic review default. Select the global default session interface in **Settings → General**; override it per task. Project configuration is typed and independent; changing one project does not set global YAML defaults for the others.
+
+## Spawn in the right project
+
+```bash
+ao spawn --project api --name api-issue --issue 42 --mode chat
+ao spawn --project web --name web-fix --prompt "Fix the header" --mode tui
+```
+
+When `--project` is omitted, AO resolves `AO_PROJECT_ID`, the project of `AO_SESSION_ID`, then the closest registered project containing the current directory. It does not fall back to a sole Scratch project. Supplying the project explicitly is clearest in scripts.
+
+## Inspect across projects
+
+The desktop sidebar and sessions board are the live multi-project view. From the CLI:
+
+```bash
+ao project ls
+ao session ls
+ao session ls --project api
+ao session ls --project api --json
+```
+
+To check daemon health, use [`ao status`](/cli#ao-status). It does not list sessions.
+
+## Stop and clean up
+
+Kill one session with `ao session kill <session-id>`. Use `ao session cleanup --dry-run` before reclaiming eligible terminated-session workspaces. Dirty worktrees are preserved.
+
+`ao stop` stops the daemon and takes no project argument. Closing a view does not end a session. Use `exit-agent` and `resume-agent` to stop or restart its controller. Use `kill` and `restore` to end or relaunch the session.
+
+Some detached terminal and Chat processes can survive a daemon restart. Reconnecting depends on the provider. See [Dashboard](/dashboard) for session controls.
+
+## Use mobile across projects
+
+Connect Mobile exposes the same registered projects and session modes through the authenticated mobile listener. Mobile prefers Chat for new workers and orchestrators when a compatible harness is installed, while Terminal UI remains selectable.
+
+<Cards>
+	<Card title="Projects" href="/configuration/projects" description="Current typed project settings." />
+	<Card title="Connect Mobile" href="/configuration/remote-access" description="Pair the native mobile app." />
+</Cards>

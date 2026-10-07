@@ -11,10 +11,12 @@ import { playNotificationSound } from "./lib/notification-sound-player";
 import { createAppRouter } from "./router";
 import { TelemetryBoundary } from "./components/TelemetryBoundary";
 import { CloudOnboardingGate } from "./components/CloudOnboardingGate";
-import { applyRendererTelemetryPolicy, clearRendererTelemetryQueues, initTelemetry } from "./lib/telemetry";
+import { CloudNotificationRuntime } from "./components/CloudNotificationRuntime";
+import { applyRendererTelemetryPolicy, clearRendererTelemetryQueues, initTelemetry, isDeniedEvent } from "./lib/telemetry";
 import { aoBridge } from "./lib/bridge";
 import { startDaemonFailureTelemetry } from "./lib/daemon-telemetry";
 import { startUpdateTelemetry } from "./lib/update-telemetry";
+import { startSessionManagementTelemetry } from "./lib/session-management-telemetry";
 import { appI18n } from "./i18n";
 import { useLocaleStore } from "./stores/locale-store";
 import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
@@ -73,7 +75,19 @@ if (import.meta.env.DEV) {
 	};
 }
 
-void initTelemetry();
+let sessionManagementTelemetryRetries = 0;
+const bootstrapSessionManagementTelemetry = () => {
+	void initTelemetry().then((enabled) => {
+		if (enabled) {
+			startSessionManagementTelemetry();
+			return;
+		}
+		if (!isDeniedEvent("ao.renderer.session_management_summary") && sessionManagementTelemetryRetries++ < 12) {
+			window.setTimeout(bootstrapSessionManagementTelemetry, 5_000);
+		}
+	});
+};
+bootstrapSessionManagementTelemetry();
 startDaemonFailureTelemetry();
 startUpdateTelemetry();
 
@@ -99,6 +113,7 @@ async function renderApp(): Promise<void> {
 		<I18nextProvider i18n={appI18n}>
 			<TelemetryBoundary>
 				<QueryClientProvider client={queryClient}>
+					<CloudNotificationRuntime />
 					<RouterProvider router={router} />
 					<CloudOnboardingGate />
 				</QueryClientProvider>

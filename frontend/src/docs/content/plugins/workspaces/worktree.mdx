@@ -1,0 +1,37 @@
+---
+title: Git worktrees
+description: Isolated branches and files for sessions in Git projects.
+---
+
+Each Git-backed session gets its own worktree and branch, based on the repository's default branch rather than the branch currently checked out in your source repository. Multi-repository workspaces resolve the root and each child repository independently.
+
+```bash
+ao project add --path /path/to/repo --worker-agent codex
+ao spawn --project my-repo --name fix-auth
+```
+
+Worktrees keep checked-out files separate while sharing the repository's Git object database.
+
+## How AO chooses the base branch
+
+AO asks the selected remote for its default branch. If it cannot reach the remote, AO uses that remote's cached `HEAD`. If the remote has no default branch, a fetched branch named in the spawn request can seed the explicitly requested session branch.
+
+AO records the base ref for each repository. Workspace and review diffs use it to recalculate the merge base after a rebase or when the repository default advances, so upstream-only changes do not appear as agent edits.
+
+## Typed project settings
+
+The daemon stores project configuration as validated JSON in SQLite. Relevant fields include:
+
+| Field | Purpose |
+| --- | --- |
+| `defaultBranch` | Base branch for new session worktrees; `auto` resolves each repository's Git default. |
+| `env` | Extra environment variables passed to agent runtimes. |
+| `symlinks` | Repository-relative paths linked into each workspace. |
+| `postCreate` | Commands run after workspace creation. |
+| `agentRules`, `agentRulesFile` | Standing worker instructions. |
+
+Use `ao project set-config <id> --help` for flags. To pass the complete object with `--config-json`, first read the [full-config warning](/configuration/projects#update-from-the-cli).
+
+## Cleanup safety
+
+`ao session kill` terminates the runtime, but preserves a worktree when cleanup cannot safely remove it. `ao session cleanup` reclaims eligible terminated workspaces and skips dirty ones; run with `--dry-run` first when you want to inspect the candidates.

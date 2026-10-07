@@ -1,5 +1,4 @@
 import { Button, Column, Host, Icon, RNHostView, Row, Spacer, Text } from "@expo/ui";
-import { rotationEffect } from "@expo/ui/swift-ui/modifiers";
 import { usePathname, useRouter } from "expo-router";
 import {
 	createContext,
@@ -26,6 +25,7 @@ import { AgentLogo } from "./AgentLogo";
 import { MascotLamp } from "./ui";
 import type { DashboardSession } from "./api";
 import { haptics } from "./haptics";
+import { hostedProjectKey, hostedSessionKey, sessionHostId } from "./hostedRows";
 import { sessionTitle } from "./sessionStatus";
 import { SidebarDestinationIcon } from "./sidebar-destination-icon";
 import { sidebarDestinationHitModifiers } from "./sidebar-destination-hit-modifiers";
@@ -47,46 +47,33 @@ import { SidebarSpawnButton } from "./sidebar-spawn-button";
 import { useApp } from "./store";
 import { statusVisual, type Theme } from "./theme";
 import { useTheme, useThemedStyles, useThemeState } from "./ThemeProvider";
+import { SidebarNavigationContext, type SidebarScrollRequest } from "./sidebar-navigation-context";
+import { type, space } from "./tokens";
 
-type ScrollRequest = {
-	destination: SidebarDestinationId;
-	sequence: number;
-};
-
-type SidebarNavigationContextValue = {
-	openSidebar: () => void;
-	scrollRequest: ScrollRequest | null;
-};
-
-const SidebarNavigationContext = createContext<SidebarNavigationContextValue | null>(null);
-
-export function useSidebarNavigation() {
-	const context = useContext(SidebarNavigationContext);
-	if (!context) throw new Error("useSidebarNavigation must be used within <SidebarNavigationShell>");
-	return context;
-}
-
-export function useOptionalSidebarNavigation() {
-	return useContext(SidebarNavigationContext);
-}
 
 export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { scheme } = useThemeState();
-	const { sessions, projects, connection } = useApp();
+	const { allSessions, allProjects, hostStates, connection, config } = useApp();
 	// The store keeps the last good sessions when a poll fails — that is what lets
 	// the board show rows with a stale banner rather than blanking. The drawer had
 	// no such tell, so a disconnected phone still listed workers as if they were
 	// live. Same data, so say the same thing about it.
-	const sessionsStale = connection !== "open";
+	const sessionsStale = hostStates.length > 1
+		? hostStates.every((host) => host.connection === "closed")
+		: connection !== "open";
+	const fleetConnection = hostStates.length > 1
+		? hostStates.some((host) => host.connection === "open") ? "open"
+			: hostStates.some((host) => host.connection === "connecting") ? "connecting" : "closed"
+		: connection;
 	const router = useRouter();
 	const pathname = usePathname();
 	const insets = useSafeAreaInsets();
 	const { width } = useWindowDimensions();
 	const [open, setOpen] = useState(false);
 	const reduceMotion = useReducedMotion();
-	const [scrollRequest, setScrollRequest] = useState<ScrollRequest | null>(null);
+	const [scrollRequest, setScrollRequest] = useState<SidebarScrollRequest | null>(null);
 	const progress = useRef(new Animated.Value(0)).current;
 	const gestureStartedOpen = useRef(false);
 	const activeDestination = activeSidebarDestination(pathname);
@@ -97,11 +84,18 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	);
 	lastPrimaryDestination.current = selectedPrimaryDestination;
 	const drawerWidth = Math.min(width * 0.76, 320);
-	const liveSessions = useMemo(() => sidebarSessions(sessions), [sessions]);
+	const liveSessions = useMemo(() => sidebarSessions(allSessions), [allSessions]);
 	const projectNames = useMemo(
-		() => new Map(projects.map((project) => [project.id, project.name])),
-		[projects],
+		() => new Map(allProjects.map((project) => [hostedProjectKey(project), project.name])),
+		[allProjects],
 	);
+	const projectLabel = (session: DashboardSession) => {
+		const hostId = sessionHostId(session);
+		const name = projectNames.get(hostedProjectKey({ id: session.projectId, hostId })) ?? session.projectId;
+		const hostName = "hostName" in session && typeof session.hostName === "string" ? session.hostName : undefined;
+		const offline = hostStates.find((host) => host.hostId === hostId)?.connection === "closed";
+		return hostStates.length > 1 && hostName ? `${name ? `${name} · ` : ""}${hostName}${offline ? " (offline)" : ""}` : name;
+	};
 
 	const animateSidebar = useCallback((nextOpen: boolean) => {
 		setOpen(nextOpen);
@@ -172,9 +166,9 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 		(session: DashboardSession) => {
 			haptics.select();
 			closeSidebar();
-			router.push({ pathname: "/session/[id]", params: { id: session.id, projectId: session.projectId } });
+			router.push({ pathname: "/session/[id]", params: { id: session.id, projectId: session.projectId, hostId: sessionHostId(session) ?? config?.hostId } });
 		},
-		[closeSidebar, router],
+		[closeSidebar, config?.hostId, router],
 	);
 	const spawnWorker = useCallback(() => {
 		haptics.tap();
@@ -222,7 +216,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 					importantForAccessibility={open ? "yes" : "no-hide-descendants"}
 				>
 					<View style={styles.sidebarTop}>
-						<Host style={{ width: drawerWidth - 32, height: 232 }} colorScheme={scheme} seedColor={t.blue}>
+						<Host style={{ width: drawerWidth - 32, height: 232 }} colorScheme={scheme} seedColor={t.accent}>
 							<Column
 								alignment="start"
 								spacing={0}
@@ -230,7 +224,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 							>
 								<RNHostView matchContents>
 									<View style={styles.brandMascotSlot}>
-										<MascotLamp status={connection} size={55} />
+										<MascotLamp status={fleetConnection} size={55} />
 									</View>
 								</RNHostView>
 								<Spacer size={14} />
@@ -240,7 +234,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 											key={destination.id}
 											destination={destination}
 											active={destination.id === selectedPrimaryDestination}
-											badge={sidebarDestinationBadge(destination.id, sessions)}
+											badge={sidebarDestinationBadge(destination.id, allSessions)}
 											onPress={() => selectDestination(destination)}
 											drawerWidth={drawerWidth}
 										/>
@@ -256,7 +250,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 					</RNText>
 					<FlatList
 						data={liveSessions}
-						keyExtractor={(session) => `${session.projectId}:${session.id}`}
+						keyExtractor={hostedSessionKey}
 						style={[styles.sessionList, sessionsStale && styles.sessionListStale]}
 						contentContainerStyle={[
 							liveSessions.length === 0 ? styles.emptySessionList : styles.sessionListContent,
@@ -266,7 +260,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 						renderItem={({ item }) => (
 							<SessionRow
 								session={item}
-								projectName={projectNames.get(item.projectId) ?? item.projectId}
+								projectName={projectLabel(item)}
 								onPress={() => selectSession(item)}
 							/>
 						)}
@@ -334,7 +328,9 @@ function SessionRow({
 			</View>
 			{session.isPinned ? (
 				<Host matchContents>
-					<Icon name="pin.fill" size={13} color={t.textTertiary} modifiers={[rotationEffect(28)]} />
+					{/* Upright, like the desktop's own row — see the Android shell for the
+					    measurement behind dropping the tilt. */}
+					<Icon name="pin.fill" size={13} color={t.textTertiary} />
 				</Host>
 			) : null}
 		</Pressable>
@@ -368,13 +364,13 @@ function DestinationRow({
 				style={{
 					width: drawerWidth - 32,
 					height: 52,
-					paddingHorizontal: 14,
-					borderRadius: 13,
-					backgroundColor: active ? t.tintBlue : "transparent",
+					paddingHorizontal: space.md,
+					borderRadius: 12,
+					backgroundColor: active ? t.accentTint : "transparent",
 				}}
 			>
-				<SidebarDestinationIcon destination={destination} active={active} color={active ? t.blue : t.textSecondary} />
-				<Text textStyle={{ color: active ? t.blue : t.textPrimary, fontSize: 17, fontWeight: active ? "700" : "600" }}>
+				<SidebarDestinationIcon destination={destination} active={active} color={active ? t.accent : t.textSecondary} />
+				<Text textStyle={{ fontFamily: "Geist_400Regular", color: active ? t.accent : t.textPrimary, fontSize: type.body.fontSize, fontWeight: active ? "700" : "600" }}>
 					{destination.label}
 				</Text>
 				<Spacer flexible />
@@ -382,7 +378,7 @@ function DestinationRow({
 				    destination you are on. The slot carries a count instead — workers
 				    waiting on a person, in amber because it is attention owed and must
 				    read the same on the row you are standing on. */}
-				{badge ? <Text textStyle={{ color: t.amber, fontSize: 15, fontWeight: "700" }}>{String(badge)}</Text> : null}
+				{badge ? <Text textStyle={{ fontFamily: "Geist_600SemiBold", color: t.amber, fontSize: type.subheadline.fontSize, fontWeight: "600" }}>{String(badge)}</Text> : null}
 			</Row>
 		</Button>
 	);
@@ -396,41 +392,41 @@ const makeStyles = (t: Theme) =>
 			left: 0,
 			top: 0,
 			bottom: 0,
-			paddingHorizontal: 16,
+			paddingHorizontal: space.lg,
 		},
 		sidebarTop: { height: 232 },
-		brandMascotSlot: { width: 72, height: 48, paddingLeft: 14 },
+		brandMascotSlot: { width: 72, height: 48, paddingLeft: space.md },
 		brandMascot: { width: 58, height: 48 },
-		sectionLabel: {
-			marginTop: 8,
-			marginBottom: 8,
-			paddingHorizontal: 12,
+		sectionLabel: { fontFamily: "Geist_600SemiBold",
+			marginTop: space.sm,
+			marginBottom: space.sm,
+			paddingHorizontal: space.md,
 			color: t.textTertiary,
-			fontSize: 12,
-			fontWeight: "700",
+			fontSize: type.caption1.fontSize,
+			fontWeight: "600",
 			letterSpacing: 0.7,
 		},
 		sectionLabelStale: { color: t.amber },
 		sessionListStale: { opacity: 0.55 },
 		sessionList: { flex: 1 },
-		sessionListContent: { paddingBottom: 8 },
+		sessionListContent: { paddingBottom: space.sm },
 		emptySessionList: { flexGrow: 1 },
-		emptySessions: { paddingHorizontal: 12, paddingTop: 8, color: t.textTertiary, fontSize: 14 },
+		emptySessions: { fontFamily: "Geist_400Regular", paddingHorizontal: space.md, paddingTop: space.sm, color: t.textTertiary, fontSize: type.subheadline.fontSize },
 		sessionRow: {
 			minHeight: 58,
-			paddingHorizontal: 12,
-			paddingVertical: 9,
+			paddingHorizontal: space.md,
+			paddingVertical: space.sm,
 			borderRadius: 12,
 			flexDirection: "row",
 			alignItems: "center",
-			gap: 11,
+			gap: space.md,
 		},
 		sessionRowPressed: { backgroundColor: t.bgSubtle },
 		sessionText: { flex: 1, minWidth: 0 },
-		sessionTitle: { color: t.textPrimary, fontSize: 15, fontWeight: "600" },
-		sessionMetaRow: { marginTop: 4, flexDirection: "row", alignItems: "center", gap: 6 },
-		statusDot: { width: 6, height: 6, borderRadius: 3 },
-		sessionMeta: { flex: 1, color: t.textTertiary, fontSize: 12 },
+		sessionTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, fontWeight: "600" },
+		sessionMetaRow: { marginTop: space.xxs, flexDirection: "row", alignItems: "center", gap: space.xs },
+		statusDot: { width: 6, height: 6, borderRadius: 4 },
+		sessionMeta: { fontFamily: "Geist_400Regular", flex: 1, color: t.textTertiary, fontSize: type.caption1.fontSize },
 		sidebarActions: {
 			position: "absolute",
 			left: 28,

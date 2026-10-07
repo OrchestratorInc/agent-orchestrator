@@ -1,0 +1,30 @@
+---
+title: Codex
+description: Built-in Terminal UI and native app-server Chat support for the user's Codex installation.
+---
+
+AO uses the locally installed `codex` executable and Codex-owned authentication.
+
+```bash
+ao agent ls
+ao spawn --project my-app --name codex-task --agent codex --mode chat
+```
+
+## Interfaces
+
+- **Terminal UI:** runs the native Codex CLI in the session worktree.
+- **Chat:** connects to Codex's native app-server protocol and persists the provider conversation identity with the AO session.
+
+Codex supports the same capability-gated Chat/Terminal UI handoff as Claude Code. The AO session and worktree remain stable across a compatible handoff.
+
+AO performs bounded installation and authentication probes before spawn. Use `--skip-agent-check` only to bypass that advisory CLI preflight; daemon validation remains authoritative.
+
+## Accounts
+
+Open **Settings → Subscriptions** to view the current Codex account, add another account through Codex's login terminal, or switch to a verified account. AO uses the verified account name as the card label. Supported Codex builds also show plan and usage details.
+
+Exactly one account is active for AO Codex launches on this device. Switching updates and verifies the device's Codex credential; new AO launches wait for the switch to finish.
+
+Running AO Codex sessions and reviewers are not switched. Existing turns continue best-effort, while newly launched controllers use the selected account. Resume or restart a session to relaunch its controller under that account.
+
+AO does not control how other Codex clients on this device use authentication, or how switching an account affects them. AO never parses or exposes `auth.json`, and it does not scrape billing information. Sign out an account; you can delete it once it is inactive. Per-session account selection, rename, reorder, and in-place replacement are not available.

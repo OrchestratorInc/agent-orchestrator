@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5/middleware"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
@@ -417,6 +419,89 @@ func TestManager_PrepareCloneCancellationLeavesNoCheckout(t *testing.T) {
 	}
 }
 
+func TestManager_PrepareCloneResumesAfterRestartOnlyForMatchingCheckout(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	store, err := sqlitetest.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := project.New(store)
+	source := gitRepo(t)
+	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	parent := t.TempDir()
+	in := project.CloneInput{RemoteURL: remoteURL, DestinationParent: parent}
+	prepared, err := m.PrepareClone(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userFile := filepath.Join(prepared.Path, "keep.txt")
+	if err := os.WriteFile(userFile, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = sqlite.OpenPreMigrated(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	m = project.New(store)
+
+	resumed, err := m.PrepareClone(ctx, in)
+	if err != nil {
+		t.Fatalf("resume prepared clone: %v", err)
+	}
+	if resumed != prepared {
+		t.Fatalf("resumed = %+v, want %+v", resumed, prepared)
+	}
+	if got, err := os.ReadFile(userFile); err != nil || string(got) != "keep" {
+		t.Fatalf("user file after resume = %q, %v", got, err)
+	}
+	if listed, err := m.List(ctx); err != nil || len(listed) != 0 {
+		t.Fatalf("projects before registration = %+v, %v", listed, err)
+	}
+	if _, err := m.Add(ctx, project.AddInput{Path: resumed.Path, ClonePreparationID: resumed.PreparationID}); err != nil {
+		t.Fatalf("register resumed clone: %v", err)
+	}
+	if listed, err := m.List(ctx); err != nil || len(listed) != 1 {
+		t.Fatalf("projects after registration = %+v, %v", listed, err)
+	}
+	if got, err := os.ReadFile(userFile); err != nil || string(got) != "keep" {
+		t.Fatalf("user file after registration = %q, %v", got, err)
+	}
+
+	otherParent := t.TempDir()
+	in.DestinationParent = otherParent
+	prepared, err = m.PrepareClone(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(prepared.Path, ".git", ".ao-clone-prepared")
+	if out, err := exec.Command("git", "-C", prepared.Path, "remote", "set-url", "origin", "file:///different/repo").CombinedOutput(); err != nil {
+		t.Fatalf("set mismatched origin: %v (%s)", err, out)
+	}
+	_, err = m.PrepareClone(ctx, in)
+	wantCode(t, err, "CLONE_DESTINATION_EXISTS")
+	if out, err := exec.Command("git", "-C", prepared.Path, "remote", "set-url", "origin", remoteURL).CombinedOutput(); err != nil {
+		t.Fatalf("restore origin: %v (%s)", err, out)
+	}
+	if err := os.WriteFile(marker, []byte("arbitrary-marker"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.PrepareClone(ctx, in)
+	wantCode(t, err, "CLONE_DESTINATION_EXISTS")
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.PrepareClone(ctx, in)
+	wantCode(t, err, "CLONE_DESTINATION_EXISTS")
+	if _, err := os.Stat(prepared.Path); err != nil {
+		t.Fatalf("refused checkout was modified or removed: %v", err)
+	}
+}
+
 func TestManager_CloneRejectsUnsafeURLsAndExistingDestination(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)
@@ -767,7 +852,13 @@ func TestManager_AddPrefersOriginHeadNonMain(t *testing.T) {
 
 func TestManager_UpdateSettings(t *testing.T) {
 	ctx := context.Background()
-	m := newManager(t)
+	t.Setenv("GIT_CEILING_DIRECTORIES", os.TempDir())
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	m := project.New(store)
 	repo := gitRepo(t)
 
 	if _, err := m.Add(ctx, project.AddInput{Path: repo, ProjectID: ptr("ao")}); err != nil {
@@ -824,13 +915,101 @@ func TestManager_UpdateSettings(t *testing.T) {
 	wantCode(t, err, "DISPLAY_NAME_REQUIRED")
 
 	_, err = m.UpdateSettings(ctx, "ao", project.UpdateSettingsInput{
-		DisplayName: strings.Repeat("x", 21),
+		DisplayName: strings.Repeat("x", 101),
 		Config:      cfg,
 	})
 	wantCode(t, err, "DISPLAY_NAME_TOO_LONG")
 
 	_, err = m.UpdateSettings(ctx, "missing", project.UpdateSettingsInput{DisplayName: "Missing", Config: cfg})
 	wantCode(t, err, "PROJECT_NOT_FOUND")
+
+	// Unchanged legacy display name that exceeds maxDisplayNameLen should not block updating config.
+	legacyName := strings.Repeat("l", 110)
+	if _, err := store.UpdateProjectSettings(ctx, "ao", legacyName, cfg); err != nil {
+		t.Fatalf("UpdateProjectSettings: %v", err)
+	}
+	updatedWithLegacy, err := m.UpdateSettings(ctx, "ao", project.UpdateSettingsInput{
+		DisplayName: legacyName,
+		Config:      domain.ProjectConfig{DefaultBranch: "main"},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSettings with unchanged legacy name: %v", err)
+	}
+	if updatedWithLegacy.Name != legacyName || updatedWithLegacy.DefaultBranch != "main" {
+		t.Fatalf("UpdateSettings result = %#v, want unchanged legacy name with new branch", updatedWithLegacy)
+	}
+
+	// A legacy name stored with surrounding whitespace must also hit the
+	// exemption: the renderer seeds the settings field from project.name and
+	// sends .trim(), so compare against the trimmed stored value.
+	paddedLegacy := "  " + strings.Repeat("l", 110) + "  "
+	if _, err := store.UpdateProjectSettings(ctx, "ao", paddedLegacy, cfg); err != nil {
+		t.Fatalf("UpdateProjectSettings with padded legacy name: %v", err)
+	}
+	paddedUpdated, err := m.UpdateSettings(ctx, "ao", project.UpdateSettingsInput{
+		DisplayName: strings.Repeat("l", 110),
+		Config:      domain.ProjectConfig{DefaultBranch: "main"},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSettings with trimmed whitespace-padded legacy name: %v", err)
+	}
+	if paddedUpdated.Name != strings.Repeat("l", 110) || paddedUpdated.DefaultBranch != "main" {
+		t.Fatalf("UpdateSettings result = %#v, want trimmed legacy name with new branch", paddedUpdated)
+	}
+}
+
+func TestManager_Add_DisplayNameValidationAndTruncation(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t)
+	repo := gitRepo(t)
+
+	tooLong := strings.Repeat("a", 101)
+	_, err := m.Add(ctx, project.AddInput{
+		Path: repo,
+		Name: &tooLong,
+	})
+	wantCode(t, err, "DISPLAY_NAME_TOO_LONG")
+
+	valid24 := "yandex-direct-mcp-plugin"
+	p24, err := m.Add(ctx, project.AddInput{
+		Path: repo,
+		Name: &valid24,
+	})
+	if err != nil {
+		t.Fatalf("Add with 24-char name: %v", err)
+	}
+	if p24.Name != valid24 {
+		t.Fatalf("Add name = %q, want %q", p24.Name, valid24)
+	}
+
+	base := t.TempDir()
+	longName := strings.Repeat("r", 101)
+	longPath := filepath.Join(base, longName)
+	if err := os.Mkdir(longPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", "-b", "main", longPath).CombinedOutput(); err != nil {
+		t.Fatalf("git unavailable: %v (%s)", err, out)
+	}
+	if out, err := exec.Command("git", "-C", longPath, "config", "user.email", "test@example.com").CombinedOutput(); err != nil {
+		t.Fatalf("git config: %v (%s)", err, out)
+	}
+	if out, err := exec.Command("git", "-C", longPath, "config", "user.name", "test").CombinedOutput(); err != nil {
+		t.Fatalf("git config: %v (%s)", err, out)
+	}
+	if out, err := exec.Command("git", "-C", longPath, "commit", "--allow-empty", "-m", "init").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v (%s)", err, out)
+	}
+	ptrunc, err := m.Add(ctx, project.AddInput{Path: longPath})
+	if err != nil {
+		t.Fatalf("Add with no explicit name and long basename: %v", err)
+	}
+	if got, want := utf8.RuneCountInString(ptrunc.Name), 100; got != want {
+		t.Fatalf("truncated name runes = %d, want %d (name=%q)", got, want, ptrunc.Name)
+	}
+	if want := string([]rune(longName)[:100]); ptrunc.Name != want {
+		t.Fatalf("truncated name = %q, want %q", ptrunc.Name, want)
+	}
 }
 
 func TestManager_ListIncludesOnlySummarySafeProjectConfig(t *testing.T) {
@@ -1303,6 +1482,32 @@ func TestManager_AddAllocatesUniqueIDForCollidingDerivedIDs(t *testing.T) {
 	})
 }
 
+func TestManager_InvalidatesModelScopeAfterProjectAndConfigWrites(t *testing.T) {
+	configureCommitter(t)
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	var changed []string
+	m := project.NewWithDeps(project.Deps{
+		Store: store,
+		OnModelScopeChanged: func(projectID string) {
+			changed = append(changed, projectID)
+		},
+	})
+	created, err := m.Add(context.Background(), project.AddInput{Path: gitRepo(t), ProjectID: ptr("catalog-scope")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.SetConfig(context.Background(), created.ID, project.SetConfigInput{Config: domain.ProjectConfig{Env: map[string]string{"MODEL_PROFILE": "new"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"catalog-scope", "catalog-scope"}; !reflect.DeepEqual(changed, want) {
+		t.Fatalf("changed scopes = %v, want %v", changed, want)
+	}
+}
+
 // gitRepoWithOrigin creates a real git repo with an `origin` remote pointing
 // at `originURL`. Used to assert project.Add captures the origin at add time.
 func gitRepoWithOrigin(t *testing.T, originURL string) string {
@@ -1649,6 +1854,7 @@ func TestManager_AddWorkspaceAcceptsChildWithoutOriginAsNeedsInit(t *testing.T) 
 	}
 	if needsInitRepo == nil {
 		t.Fatalf("expected a needs_init child")
+		return
 	}
 	if needsInitRepo.Repo != "" {
 		t.Fatalf("Repo = %q, want empty", needsInitRepo.Repo)

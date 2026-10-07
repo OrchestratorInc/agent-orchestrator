@@ -2,16 +2,24 @@ import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, withi
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { BrowserPanel, BrowserPanelView, BrowserTopTabDragOverlay, useBrowserAnnotationQueue } from "./BrowserPanel";
+import {
+	BrowserPanel,
+	BrowserPanelView,
+	BrowserTopTabDragOverlay,
+	restrictBrowserTopTabDragToTabStrip,
+	useBrowserAnnotationQueue,
+} from "./BrowserPanel";
 import { reorderBrowserTabs } from "../lib/browser-tab-order";
 import { useBrowserView, type BrowserNavState } from "../hooks/useBrowserView";
 import { useUiStore } from "../stores/ui-store";
+import { aoBridge } from "../lib/bridge";
 import type { WorkspaceSession } from "../types/workspace";
 import { TooltipProvider } from "./ui/tooltip";
 import type {
 	BrowserAnnotationCancelPayload,
 	BrowserAnnotationSubmitPayload,
 } from "../../shared/browser-annotations";
+import type { BrowserDownloadsState } from "../../shared/browser-downloads";
 
 function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
@@ -27,12 +35,18 @@ vi.mock("../lib/api-client", () => ({
 			: fallback,
 }));
 
+vi.mock("../lib/host-clients", () => ({ clientForSessionHost: () => ({ POST: postMock }) }));
+
 const hookState = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	goBack: vi.fn(),
 	goForward: vi.fn(),
 	reload: vi.fn(),
 	stop: vi.fn(),
+	findInPage: vi.fn(),
+	stopFindInPage: vi.fn(),
+	findOpenRequest: 0,
+	findState: { viewId: "42:sess-1", tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true },
 	selectTab: vi.fn(),
 	closeTab: vi.fn(),
 	openTab: vi.fn(),
@@ -75,6 +89,10 @@ vi.mock("../hooks/useBrowserView", () => ({
 			goForward: hookState.goForward,
 			reload: hookState.reload,
 			stop: hookState.stop,
+			findInPage: hookState.findInPage,
+			stopFindInPage: hookState.stopFindInPage,
+			findOpenRequest: hookState.findOpenRequest,
+			findState: hookState.findState,
 			tabs: hookState.tabs,
 			activeTabId: hookState.activeTabId,
 			tabNotice: hookState.tabNotice,
@@ -114,6 +132,22 @@ const session: WorkspaceSession = {
 it("reorders browser tabs around the drop target", () => {
 	expect(reorderBrowserTabs(["t1", "t2", "t3"], "t1", "t3")).toEqual(["t2", "t3", "t1"]);
 	expect(reorderBrowserTabs(["t1", "t2", "t3"], "t2", "missing")).toBeNull();
+});
+
+it("keeps a dragged browser tab inside the current tab strip bounds", () => {
+	const activeNodeRect = { left: 650, right: 850 };
+	const constrain = (left: number, right: number, x: number) =>
+		restrictBrowserTopTabDragToTabStrip({
+			activeNodeRect,
+			containerNodeRect: { left, right },
+			transform: { x, y: 24, scaleX: 1, scaleY: 1 },
+		} as Parameters<typeof restrictBrowserTopTabDragToTabStrip>[0]);
+
+	expect(constrain(600, 900, -300)).toMatchObject({ x: -50, y: 0 });
+	expect(constrain(600, 900, 300)).toMatchObject({ x: 50, y: 0 });
+	// A dock/resize transition can move the inspector while a drag is active.
+	// Use the newly measured strip rather than the window, so the chip follows it.
+	expect(constrain(760, 1060, -300)).toMatchObject({ x: 110, y: 0 });
 });
 
 function annotationPayload(
@@ -198,6 +232,7 @@ describe("BrowserPanel", () => {
 	let focusLocationListener: ((viewId: string) => void) | undefined;
 	let reopenClosedTabListener: ((viewId: string) => void) | undefined;
 	const pageFocusListeners = new Set<(viewId: string) => void>();
+	const downloadListeners = new Set<(state: BrowserDownloadsState) => void>();
 
 	async function openBrowserControls() {
 		await userEvent.click(screen.getByRole("button", { name: "Browser controls" }));
@@ -215,6 +250,12 @@ describe("BrowserPanel", () => {
 		hookState.goForward.mockReset();
 		hookState.reload.mockReset();
 		hookState.stop.mockReset();
+		hookState.findInPage.mockReset();
+		hookState.stopFindInPage.mockReset();
+		hookState.findOpenRequest = 0;
+		hookState.findState = {
+			viewId: "42:sess-1", tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true,
+		};
 		hookState.selectTab.mockReset();
 		hookState.closeTab.mockReset();
 		hookState.reopenClosedTab.mockReset();
@@ -241,6 +282,7 @@ describe("BrowserPanel", () => {
 		annotationSubmitListeners.clear();
 		annotationCancelListeners.clear();
 		pageFocusListeners.clear();
+		downloadListeners.clear();
 		window.ao!.browser.onPageFocus = vi.fn((listener: (viewId: string) => void) => {
 			pageFocusListeners.add(listener);
 			return () => pageFocusListeners.delete(listener);
@@ -261,6 +303,10 @@ describe("BrowserPanel", () => {
 		window.ao!.browser.historyFavicon = vi.fn(async () => undefined);
 		window.ao!.browser.captureScreenshot = vi.fn(async () => undefined);
 		window.ao!.browser.downloads.list = vi.fn(async () => ({ downloads: [] }));
+		window.ao!.browser.downloads.onChanged = vi.fn((listener) => {
+			downloadListeners.add(listener);
+			return () => downloadListeners.delete(listener);
+		});
 		window.ao!.browser.selectProfile = vi.fn(async () => undefined);
 		window.ao!.browserProfiles.list = vi.fn(async () => ({ profiles: [] }));
 		window.ao!.browser.notifyPanelUsed = vi.fn();
@@ -301,6 +347,55 @@ describe("BrowserPanel", () => {
 
 		expect(hookState.navigate).toHaveBeenCalledWith("localhost:5173");
 		expect(input).not.toHaveFocus();
+	});
+
+	it("toggles find-in-page, searches as text changes, and supports keyboard navigation", async () => {
+		let focusFrame: FrameRequestCallback | undefined;
+		vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			focusFrame = callback;
+			return 1;
+		});
+		const view = render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		expect(screen.queryByRole("search")).not.toBeInTheDocument();
+
+		hookState.findOpenRequest = 1;
+		view.rerender(
+			<TooltipProvider>
+				<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />
+			</TooltipProvider>,
+		);
+		const input = await screen.findByRole("textbox", { name: "Find in page" });
+		act(() => focusFrame?.(0));
+		expect(input).toHaveFocus();
+
+		await userEvent.type(input, "alpha");
+		expect(hookState.findInPage).toHaveBeenLastCalledWith("alpha", true, true);
+
+		await userEvent.keyboard("{Enter}");
+		expect(hookState.findInPage).toHaveBeenLastCalledWith("alpha", true, false);
+		await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+		expect(hookState.findInPage).toHaveBeenLastCalledWith("alpha", false, false);
+
+		hookState.findOpenRequest = 2;
+		view.rerender(
+			<TooltipProvider>
+				<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />
+			</TooltipProvider>,
+		);
+		expect(screen.queryByRole("search")).not.toBeInTheDocument();
+		expect(hookState.stopFindInPage).toHaveBeenCalledWith(true);
+
+		hookState.findOpenRequest = 3;
+		view.rerender(
+			<TooltipProvider>
+				<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />
+			</TooltipProvider>,
+		);
+		expect(await screen.findByRole("textbox", { name: "Find in page" })).toBeInTheDocument();
+		act(() => focusFrame?.(0));
+		await userEvent.keyboard("{Escape}");
+		expect(screen.queryByRole("search")).not.toBeInTheDocument();
+		expect(hookState.stopFindInPage).toHaveBeenCalledTimes(2);
 	});
 
 	it("supports consecutive address-bar navigations after refocusing", async () => {
@@ -697,18 +792,64 @@ describe("BrowserPanel", () => {
 		}));
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
-		// A newly observed download opens the menu automatically. Close that first,
-		// then exercise the user's explicit open/close flow.
-		expect(await screen.findByText("report.pdf")).toBeInTheDocument();
-		await userEvent.keyboard("{Escape}");
-		await waitFor(() => expect(screen.queryByText("report.pdf")).not.toBeInTheDocument());
-		const trigger = screen.getByRole("button", { name: "Downloads" });
+		// Previously retained downloads hydrate the browser controls without
+		// opening the menu; only genuinely new downloads should interrupt.
+		await waitFor(() => expect(window.ao!.browser.downloads.list).toHaveBeenCalled());
+		const trigger = await screen.findByRole("button", { name: "Downloads" });
+		expect(screen.queryByText("report.pdf")).not.toBeInTheDocument();
 		await userEvent.click(trigger);
 		expect(screen.getByText("report.pdf")).toBeInTheDocument();
 		await userEvent.keyboard("{Escape}");
 		await waitFor(() => expect(screen.queryByText("report.pdf")).not.toBeInTheDocument());
 		expect(trigger).toHaveFocus();
 		expect(document.querySelector('[data-slot="tooltip-content"]')).toHaveTextContent("Downloads");
+	});
+
+	it("opens the downloads menu for a new download while the browser panel is active", async () => {
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await waitFor(() => expect(window.ao!.browser.downloads.list).toHaveBeenCalled());
+
+		act(() => {
+			downloadListeners.forEach((listener) =>
+				listener({
+					downloads: [{
+						id: "download-1",
+						fileName: "report.pdf",
+						receivedBytes: 25,
+						totalBytes: 100,
+						status: "progressing",
+						startedAt: 1,
+						updatedAt: 2,
+					}],
+				}),
+			);
+		});
+
+		expect(await screen.findByText("report.pdf")).toBeInTheDocument();
+	});
+
+	it("does not open the downloads menu for new downloads while the browser panel is hidden", async () => {
+		render(<BrowserPanel active={false} onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await waitFor(() => expect(window.ao!.browser.downloads.list).toHaveBeenCalled());
+
+		act(() => {
+			downloadListeners.forEach((listener) =>
+				listener({
+					downloads: [{
+						id: "download-1",
+						fileName: "report.pdf",
+						receivedBytes: 25,
+						totalBytes: 100,
+						status: "progressing",
+						startedAt: 1,
+						updatedAt: 2,
+					}],
+				}),
+			);
+		});
+
+		await waitFor(() => expect(screen.getByRole("button", { name: "Downloads" })).toBeInTheDocument());
+		expect(screen.queryByText("report.pdf")).not.toBeInTheDocument();
 	});
 
 	it("keeps browser profiles inside the AO controls menu", async () => {
@@ -1182,6 +1323,25 @@ describe("BrowserPanel", () => {
 		expect(onTogglePopOut).toHaveBeenCalledWith(true);
 	});
 
+	it("shows a one-click return button while popped out", async () => {
+		const onTogglePopOut = vi.fn();
+		render(<BrowserPanel active onTogglePopOut={onTogglePopOut} poppedOut session={session} />);
+
+		const returnButton = screen.getByRole("button", { name: "Return to panel" });
+		await openBrowserControls();
+		expect(screen.queryByRole("menuitem", { name: "Return to panel" })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		await userEvent.click(returnButton);
+
+		expect(onTogglePopOut).toHaveBeenCalledWith(false);
+	});
+
+	it("keeps the one-click return action out of the docked toolbar", () => {
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		expect(screen.queryByRole("button", { name: "Return to panel" })).not.toBeInTheDocument();
+	});
+
 	it("keeps workspace sizing controls out of the browser toolbar", async () => {
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
@@ -1288,6 +1448,7 @@ describe("BrowserPanel", () => {
 			params: { path: { sessionId: "sess-1" } },
 			body: {
 				message: expect.stringContaining("Make this button blue."),
+				userAuthored: true,
 			},
 		});
 		const body = postMock.mock.calls[0][1].body as { message: string };
@@ -1510,6 +1671,32 @@ describe("BrowserPanel", () => {
 
 		expect(await screen.findByText("Sent")).toBeInTheDocument();
 		expect(postMock).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		{ viewedHost: `ao-preview-${"a".repeat(32)}.localhost`, expectedUrl: "http://localhost:5173/design?x=1" },
+		{ viewedHost: `ao-preview-${"b".repeat(32)}.localhost`, expectedUrl: "(unknown)" },
+	])("maps only this session's preview URL in annotation chat ($viewedHost)", async ({ viewedHost, expectedUrl }) => {
+		const ownPreview = `http://ao-preview-${"a".repeat(32)}.localhost:4321/`;
+		const resolvePreviewUrl = vi.spyOn(aoBridge.remotes, "resolvePreviewUrl").mockResolvedValue(expectedUrl === "(unknown)" ? "" : expectedUrl);
+		const previewUrl = vi.spyOn(aoBridge.remotes, "previewUrl");
+		try {
+			const { result } = renderHook(() => useBrowserAnnotationQueue({
+				sessionId: "sess-1", hostId: "host-1", sourcePreviewUrl: "http://localhost:5173/", navUrl: ownPreview,
+			}));
+			const payload = annotationPayload("Fix this.");
+			payload.session.page.url = `http://${viewedHost}:4321/design?x=1`;
+			act(() => result.current.enqueue(payload));
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+			const message = (postMock.mock.calls[0][1].body as { message: string }).message;
+			expect(message).toContain(`URL: ${expectedUrl}`);
+			expect(message).not.toContain(viewedHost);
+			expect(resolvePreviewUrl).toHaveBeenCalledWith("host-1", "sess-1", payload.session.page.url);
+			expect(previewUrl).not.toHaveBeenCalled();
+		} finally {
+			resolvePreviewUrl.mockRestore();
+			previewUrl.mockRestore();
+		}
 	});
 
 	it("clears the annotation delivery confirmation after two seconds", async () => {

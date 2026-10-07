@@ -1,3 +1,4 @@
+import type { FeatherIconName } from "./icons";
 /**
  * What the worker row's long-press menu offers, given one session's facts.
  *
@@ -46,7 +47,7 @@ export function workerContextActions(state: WorkerActionState): WorkerAction[] {
 	actions.push(state.pinned ? { id: "unpin", title: "Unpin" } : { id: "pin", title: "Pin" });
 	actions.push({ id: "rename", title: "Rename" });
 
-	if (state.hasPr) actions.push({ id: "openPr", title: "Open pull request" });
+	if (state.hasPr) actions.push({ id: "openPr", title: "Review pull request" });
 
 	// Last and marked destructive: the native menus render it apart from the rest,
 	// and the screen still raises its own confirmation before calling kill.
@@ -108,14 +109,14 @@ export const WORKER_ACTION_DRAWABLES: readonly WorkerActionId[] = ["pin", "unpin
  * this module stays free of React Native.
  */
 export type WorkerActionGlyph =
-	| { family: "feather"; name: "message-square" | "edit-2" | "play" | "rotate-ccw" | "git-pull-request" | "trash-2" }
-	| { family: "material"; name: "pin" | "pin-outline" };
+	| { family: "feather"; name: FeatherIconName }
+
 
 export function workerActionGlyph(id: WorkerActionId): WorkerActionGlyph {
 	switch (id) {
 		case "open": return { family: "feather", name: "message-square" };
-		case "pin": return { family: "material", name: "pin" };
-		case "unpin": return { family: "material", name: "pin-outline" };
+		case "pin": return { family: "feather", name: "pin" };
+		case "unpin": return { family: "feather", name: "pin-off" };
 		case "rename": return { family: "feather", name: "edit-2" };
 		case "resume": return { family: "feather", name: "play" };
 		case "restore": return { family: "feather", name: "rotate-ccw" };

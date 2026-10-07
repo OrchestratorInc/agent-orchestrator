@@ -20,6 +20,10 @@ export type NotificationSection<T> = {
 	data: T[];
 };
 
+export function notificationRowsForHost<T>(items: readonly T[], itemsHostId: string | undefined, activeHostId: string | undefined): readonly T[] {
+	return activeHostId && itemsHostId === activeHostId ? items : [];
+}
+
 /**
  * Keeps actionable unread history ahead of settled items without disturbing
  * the daemon's newest-first order inside either group.
@@ -41,13 +45,17 @@ export function notificationVisual(t: Theme, type: string): NotificationVisual {
 		case "ready_to_merge":
 			return { icon: "git-pull-request-arrow", color: t.green, label: "Ready to merge" };
 		case "pr_merged":
-			// Purple, as this theme's own palette says: "purple = merged (terminal,
-			// not actionable)". It was rendering blue with a generic tick, which
-			// read as an action still open and matched neither desktop nor the
-			// palette's own rule.
+			// Not an action colour: merged is settled and not actionable. It went from
+			// blue (an action still open) to the grey shared with "done" and "killed",
+			// which undersold the one thing that did happen. Purple is merged's own
+			// hue now, here and on the row and the card, so the word means one colour.
 			return { icon: "git-merge", color: t.purple, label: "Merged" };
 		case "pr_closed_unmerged":
 			return { icon: "git-pull-request-closed", color: t.red, label: "Closed" };
+		case "review_completed":
+			return { icon: "git-pull-request-arrow", color: t.green, label: "Review completed" };
+		case "review_changes_requested":
+			return { icon: "message-square-dot", color: t.amber, label: "Review changes requested" };
 		default:
 			return { icon: "bell", color: t.textTertiary, label: type || "Notification" };
 	}
@@ -59,8 +67,17 @@ export function notificationVisual(t: Theme, type: string): NotificationVisual {
  * opening it from the tray agree — the rule lives here rather than being written
  * twice.
  */
-export function notificationTarget(n: { type: string; sessionId?: string }): string {
-	return n.type === "needs_input" && n.sessionId ? `/session/${n.sessionId}` : "/prs";
+export function notificationTarget(n: { type: string; sessionId?: string; hostId?: string; prUrl?: string }, knownHosts: string | ReadonlySet<string> | undefined): string {
+	// An older push has no machine identity. It cannot safely open (or mark read)
+	// a same-ID session on whichever machine is currently selected. History passes
+	// its current host; push taps can name any paired host.
+	if (!n.hostId || !(typeof knownHosts === "string" ? n.hostId === knownHosts : knownHosts?.has(n.hostId))) return "/";
+	const sessionId = n.sessionId?.trim();
+	const hostId = encodeURIComponent(n.hostId);
+	if ((n.type === "review_completed" || n.type === "review_changes_requested") && sessionId && n.prUrl) {
+		return `/review/${encodeURIComponent(sessionId)}?prUrl=${encodeURIComponent(n.prUrl)}&hostId=${hostId}`;
+	}
+	return n.type === "needs_input" && sessionId ? `/session/${encodeURIComponent(sessionId)}?hostId=${hostId}` : `/prs?hostId=${hostId}`;
 }
 
 /** Compact "3m" / "4h" / "2d" stamp. Returns "" for an unparseable timestamp. */
@@ -85,7 +102,9 @@ export function relativeTime(iso: string, now: number = Date.now()): string {
  *   offerRestore    = terminated && type === "needs_input"
  *   canOpenSession  = sessionId && sessionsReady && (!terminated || !offerRestore)
  *
- * The distinction it draws is worth keeping: a terminated session behind
+ * Review outcomes are the exception: their payload identifies the exact PR,
+ * so they can open review detail without waiting for the session board.
+ * The distinction the remaining notifications draw is worth keeping: a terminated session behind
  * "needs input" has a paused agent and nothing to show, so restore is the only
  * sensible action. A terminated session behind a PR outcome describes work that
  * already finished — there is nothing to resume, so it stays readable rather
@@ -93,15 +112,21 @@ export function relativeTime(iso: string, now: number = Date.now()): string {
  */
 export type NotificationAction =
 	| { kind: "open"; sessionId: string }
+	| { kind: "review"; sessionId: string; prUrl: string }
 	| { kind: "restore"; sessionId: string }
 	| { kind: "prs" }
 	| { kind: "none" };
 
 export function notificationAction(
-	n: { type: string; sessionId?: string },
+	n: { type: string; sessionId?: string; prUrl?: string },
 	state: { terminated: boolean; sessionsReady: boolean },
 ): NotificationAction {
 	const sessionId = n.sessionId?.trim();
+	if (n.type === "review_completed" || n.type === "review_changes_requested") {
+		return sessionId && n.prUrl
+			? { kind: "review", sessionId, prUrl: n.prUrl }
+			: { kind: "prs" };
+	}
 	// No session to open: a PR outcome still has somewhere useful to go.
 	if (!sessionId) return n.type === "needs_input" ? { kind: "none" } : { kind: "prs" };
 	// The board has not loaded yet, so whether it is terminated is unknown.

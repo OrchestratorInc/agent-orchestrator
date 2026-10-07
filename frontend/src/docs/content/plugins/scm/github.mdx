@@ -1,0 +1,37 @@
+---
+title: GitHub SCM
+description: Pull request observation, lifecycle feedback, and explicit PR actions.
+---
+
+This page describes the GitHub pull-request lane; see [SCM support](/plugins/scm) for GitLab. Authentication is lazy and non-blocking at daemon startup; use `ao doctor` to inspect local GitHub readiness.
+
+## Associate a pull request
+
+Claim a PR while spawning or attach it later:
+
+```bash
+ao spawn --project my-app --name review-fix --claim-pr 42
+ao session claim-pr 42
+# From outside the worker, target it explicitly:
+ao session claim-pr ao-123 42
+```
+
+Inside a worker, the one-argument form reads the target session from `AO_SESSION_ID`.
+
+PR ownership prevents multiple active workers from silently driving the same pull request. Add `--no-takeover` when a conflicting owner must be treated as an error.
+
+A claim attaches ownership metadata and observation. It does not check out the pull request branch; prepare the correct branch/worktree separately before asking the agent to change it.
+
+## Observation and feedback
+
+AO checks active PRs for new CI failures, review feedback, and merge conflicts, then can notify the owning agent. The desktop shows concise summaries, not raw CI logs or full review comment bodies.
+
+## Explicit actions
+
+```bash
+ao pr merge 42
+ao pr resolve-comments 42
+ao review trigger <worker-session-id>
+```
+
+Reviewer agents are configured separately from worker agents. See the [capability catalog](/plugins/agents) for the reviewer set and its limits.

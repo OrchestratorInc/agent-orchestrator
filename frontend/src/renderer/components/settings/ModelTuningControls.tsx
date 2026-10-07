@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
-import { SettingsOptionMenu } from "./SettingsOptionMenu";
+import { isConcreteModelID } from "../../lib/agent-model-choices";
+import { EffortPicker } from "./EffortPicker";
 import { SettingsRow } from "./SettingsRow";
 
 type Model = components["schemas"]["AgentModelInfo"];
@@ -29,10 +30,14 @@ export function useModelTuning(props: Omit<ModelTuningControlsProps, "variant" |
 	} = props;
 	const previousModel = useRef(model);
 	const previousValidity = useRef<boolean | undefined>(undefined);
+	const concreteModel = isConcreteModelID(model) ? model : "";
 	const selected =
-		models?.find((item) => item.id === model) ??
-		(model === "" ? models?.find((item) => item.isDefault) : undefined);
-	const capabilitiesKnown = models !== undefined;
+		(concreteModel ? models?.find((item) => item.id === concreteModel) : undefined) ??
+		(concreteModel === "" ? models?.find((item) => item.isDefault && isConcreteModelID(item.id)) : undefined);
+	// A model the catalog does not list is still validated against its (empty)
+	// capabilities. Only a listed model whose provider never reports efforts is
+	// treated as unknown, so a saved effort is kept rather than flagged.
+	const capabilitiesKnown = models !== undefined && (!selected || selected.efforts !== undefined);
 	const invalidEffort = Boolean(effort && capabilitiesKnown && !selected?.efforts?.includes(effort));
 
 	useEffect(() => {
@@ -59,25 +64,17 @@ export function ModelTuningControls(props: ModelTuningControlsProps) {
 	const warning = invalidEffort
 		? t("settings.models.unsupportedTuning", { role: roleLabel ? `${roleLabel} ` : "" })
 		: null;
-	if (!selected) {
-		return warning && variant === "settings" ? (
-			<p role="alert" className="px-1 text-xs leading-row text-warning">{warning}</p>
-		) : null;
-	}
-	const effortControl = selected.efforts?.length ? (
-		<SettingsOptionMenu
-			aria-label={`${prefix}${t("settings.models.effort")}`}
-			value={effort || "__default__"}
-			disabled={disabled}
-			options={[
-				{ value: "__default__", label: t("settings.models.providerDefault") },
-				...selected.efforts.map((value) => ({ value, label: value })),
-			]}
-			onChange={(value) => onEffortChange(value === "__default__" ? "" : value)}
-			triggerClassName={variant === "composer" ? "composer-chip composer-toolbar-option" : "justify-end"}
-		/>
-	) : null;
-	if (!effortControl) return null;
+	const effortOptions = selected?.efforts?.filter((value) => value && value.toLowerCase() !== "default") ?? [];
+	const effortControl = <EffortPicker
+		label={`${prefix}${t("settings.models.effort")}`}
+		value={effort.toLowerCase() === "default" ? "" : effort}
+		choices={effortOptions.map((value) => ({ value }))}
+		defaultEffort={selected?.defaultEffort}
+		availability={!selected || selected.efforts === undefined ? "unknown" : effortOptions.length ? "supported" : "unsupported"}
+		disabled={disabled}
+		onChange={onEffortChange}
+		triggerClassName={variant === "composer" ? "composer-chip composer-toolbar-option" : "justify-end"}
+	/>;
 	if (variant === "composer") {
 		return effortControl;
 	}

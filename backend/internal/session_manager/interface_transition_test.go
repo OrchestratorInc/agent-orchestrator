@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -287,13 +289,13 @@ func (s *transitionStore) AcknowledgeSessionInterfaceTransitionNotice(
 	return rec, true, nil
 }
 
-func (s *transitionStore) EnqueueSessionInterfaceTransitionMessage(_ context.Context, transitionID, clientMessageID, message string, now time.Time) error {
+func (s *transitionStore) EnqueueSessionInterfaceTransitionMessage(_ context.Context, transitionID, clientMessageID, message string, now time.Time, opts ports.MessageDeliveryOptions) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nextMessage++
 	s.messages[transitionID] = append(s.messages[transitionID], domain.SessionInterfaceTransitionMessage{
 		ID: s.nextMessage, TransitionID: transitionID, ClientMessageID: clientMessageID,
-		Message: message, CreatedAt: now,
+		Message: message, CreatedAt: now, SenderSessionID: opts.SenderSessionID, AuthoredByUser: opts.AuthoredByUser,
 	})
 	return nil
 }
@@ -336,6 +338,19 @@ func (transitionAgent) NativeConversationID(_ context.Context, session ports.Ses
 	}
 	id := session.Metadata[ports.MetadataKeyAgentSessionID]
 	return id, id != "", nil
+}
+
+type transitionLaunchAuthAgent struct {
+	transitionAgent
+	status     ports.AgentAuthStatus
+	workingDir string
+	env        map[string]string
+}
+
+func (a *transitionLaunchAuthAgent) ValidateLaunchAuth(_ context.Context, workingDir string, env map[string]string) (ports.AgentAuthStatus, error) {
+	a.workingDir = workingDir
+	a.env = maps.Clone(env)
+	return a.status, nil
 }
 
 type failingRestoreTransitionAgent struct {
@@ -736,12 +751,7 @@ func (c *transitionChat) StartChat(ctx context.Context, cfg ChatStart) (ChatStar
 func (*transitionChat) StartChatTurn(context.Context, domain.SessionID, string) (string, error) {
 	return "", nil
 }
-func (c *transitionChat) RelayChatTurn(_ context.Context, _ domain.SessionID, text string) (string, error) {
-	c.relayMessages = append(c.relayMessages, text)
-	c.relayIDs = append(c.relayIDs, "")
-	return "", nil
-}
-func (c *transitionChat) RelayChatTurnWithID(_ context.Context, _ domain.SessionID, text, clientMessageID string) (string, error) {
+func (c *transitionChat) RelaySessionChatTurn(_ context.Context, _ domain.SessionID, text, clientMessageID string, _ ports.MessageDeliveryOptions) (string, error) {
 	c.relayMessages = append(c.relayMessages, text)
 	c.relayIDs = append(c.relayIDs, clientMessageID)
 	return "", nil
@@ -876,6 +886,22 @@ func TestInterfaceTransitionStatusHidesSwitchWhenChatUnsupported(t *testing.T) {
 	}
 	if status.ReasonCode != "CHAT_UNSUPPORTED" {
 		t.Fatalf("reasonCode = %q, want CHAT_UNSUPPORTED", status.ReasonCode)
+	}
+}
+
+func TestInterfaceTransitionStatusHidesChatWhenDriverUnavailable(t *testing.T) {
+	manager, _, _, chat, _ := newTransitionManager(t, domain.SessionModeTUI)
+	chat.preflightErr = ports.ErrChatDriverUnavailable
+
+	status, err := manager.InterfaceTransitionStatus(context.Background(), "session-1")
+	if err != nil {
+		t.Fatalf("InterfaceTransitionStatus: %v", err)
+	}
+	if status.Supported {
+		t.Fatal("status offered Chat when its driver cannot launch")
+	}
+	if status.ReasonCode != "TARGET_UNAVAILABLE" {
+		t.Fatalf("reasonCode = %q, want TARGET_UNAVAILABLE", status.ReasonCode)
 	}
 }
 
@@ -1167,7 +1193,7 @@ func TestInterfaceTransitionRollbackRejectsOwnerlessTUIHooksBeforeRelaunch(t *te
 	}); err != nil {
 		t.Fatalf("apply delayed ownerless hook: %v", err)
 	}
-	if after := store.sessions["session-1"]; after != before {
+	if after := store.sessions["session-1"]; !reflect.DeepEqual(after, before) {
 		t.Fatalf("ownerless rollback hook mutated session: got %+v, want %+v", after, before)
 	}
 
@@ -2677,6 +2703,25 @@ func TestInterfaceTransitionChatToTUIRebuildUsesChatModel(t *testing.T) {
 	}
 }
 
+func TestInterfaceTransitionChatToTUIRejectsUnauthorizedLaunchContext(t *testing.T) {
+	manager, store, _, _, _ := newTransitionManager(t, domain.SessionModeChat)
+	project := store.projects["proj"]
+	project.Config.Env = map[string]string{"ANTHROPIC_BASE_URL": "https://gateway.example"}
+	store.projects["proj"] = project
+	agent := &transitionLaunchAuthAgent{status: ports.AgentAuthStatusUnauthorized}
+	manager.agents = singleAgent{agent: agent}
+	rec := store.sessions["session-1"]
+	err := manager.preflightInterfaceTarget(context.Background(), rec, domain.SessionInterfaceTransition{
+		TargetMode: domain.SessionModeTUI, NativeConversationID: "native-1",
+	})
+	if !errors.Is(err, ports.ErrAgentAuthRequired) {
+		t.Fatalf("preflight error = %v, want ErrAgentAuthRequired", err)
+	}
+	if agent.workingDir != "/ws/session-1" || agent.env["ANTHROPIC_BASE_URL"] != "https://gateway.example" {
+		t.Fatalf("launch auth context = cwd %q env %#v", agent.workingDir, agent.env)
+	}
+}
+
 func TestInterfaceTransitionChatToTUIArmsInterruptBeforeReturning(t *testing.T) {
 	manager, store, _, chat, _ := newTransitionManager(t, domain.SessionModeChat)
 	transition, err := manager.StartInterfaceTransition(
@@ -2832,7 +2877,7 @@ func TestTransitionMessageRetryUsesStableChatIdempotencyKey(t *testing.T) {
 	}
 	store.transitions[transition.ID] = transition
 	if err := store.EnqueueSessionInterfaceTransitionMessage(
-		context.Background(), transition.ID, "handoff-message-1", "review is ready", now,
+		context.Background(), transition.ID, "handoff-message-1", "review is ready", now, ports.MessageDeliveryOptions{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -3166,6 +3211,13 @@ func TestRecoverInterruptedClaudeTUIToChatPreservesPoisonedCheckpointThroughResu
 	if err := manager.ReconcileBackground(reconcileCtx); err != nil {
 		t.Fatalf("reconcile background: %v", err)
 	}
+	stopped, ok, err := st.GetSession(ctx, created.ID)
+	if err != nil || !ok || stopped.Activity.State != domain.ActivityExited || stopped.Metadata.RuntimeLaunchID != "" {
+		t.Fatalf("startup must leave the interrupted source stopped: session=%+v err=%v", stopped, err)
+	}
+	if _, err := manager.ResumeAgentWithMode(ctx, created.ID); err != nil {
+		t.Fatalf("explicitly resume source: %v", err)
+	}
 	relaunched, ok, err := st.GetSession(ctx, created.ID)
 	if err != nil || !ok {
 		t.Fatalf("read relaunched source: ok=%v err=%v", ok, err)
@@ -3250,4 +3302,12 @@ func TestInterfaceTransitionStatusReportsUnverifiedWhenInspectionFails(t *testin
 	); err == nil || !strings.Contains(err.Error(), "transcript root unreadable") {
 		t.Fatalf("StartInterfaceTransition error = %v, want inspection failure", err)
 	}
+}
+
+func (c *transitionChat) QueueChatPrompt(_ context.Context, _ domain.SessionID, _ string) (string, error) {
+	return "", nil
+}
+
+func (c *transitionChat) DrainChatQueue(_ context.Context, _ domain.SessionID) error {
+	return nil
 }

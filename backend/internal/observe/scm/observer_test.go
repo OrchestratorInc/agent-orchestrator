@@ -457,7 +457,7 @@ func TestStartAsyncPerformsImmediatePollAndStopsOnCancel(t *testing.T) {
 	}
 }
 
-func TestPoll_DisablesOnceWhenCredentialsUnavailable(t *testing.T) {
+func TestPoll_SkipsProviderWhenCredentialsUnavailable(t *testing.T) {
 	store := testStoreWithSession()
 	provider := &fakeProvider{
 		credentialGate: true,
@@ -472,12 +472,47 @@ func TestPoll_DisablesOnceWhenCredentialsUnavailable(t *testing.T) {
 	if err := obs.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if provider.credentialChecks != 1 {
-		t.Fatalf("credential checks = %d, want one lazy check", provider.credentialChecks)
+	if provider.credentialChecks != 2 {
+		t.Fatalf("credential checks = %d, want one per poll while unavailable", provider.credentialChecks)
 	}
 	if provider.repoGuardCalls != 0 || provider.listCalls != 0 || len(provider.fetchBatches) != 0 {
 		t.Fatalf("provider API calls should be skipped without credentials: guards=%d lists=%d batches=%d",
 			provider.repoGuardCalls, provider.listCalls, len(provider.fetchBatches))
+	}
+}
+
+func TestPoll_ResumesAfterCredentialsBecomeAvailable(t *testing.T) {
+	store := testStoreWithSession()
+	provider := &fakeProvider{
+		credentialGate: true,
+		repoGuards:     map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v1"}},
+		observations:   map[string]ports.SCMObservation{},
+	}
+	var logs bytes.Buffer
+	obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(1, 0).UTC())
+	obs.logger = slog.New(slog.NewTextHandler(&logs, nil))
+
+	for i := 0; i < 2; i++ {
+		if err := obs.Poll(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if provider.repoGuardCalls != 0 {
+		t.Fatalf("provider API called before authentication: guards=%d", provider.repoGuardCalls)
+	}
+
+	provider.mu.Lock()
+	provider.credentialOK = true
+	provider.mu.Unlock()
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if obs.disabled || provider.credentialChecks != 3 || provider.repoGuardCalls != 1 {
+		t.Fatalf("observer did not resume after authentication: disabled=%v credential checks=%d guards=%d",
+			obs.disabled, provider.credentialChecks, provider.repoGuardCalls)
+	}
+	if got := strings.Count(logs.String(), "scm observer disabled: provider credentials unavailable"); got != 1 {
+		t.Fatalf("unavailable credentials warning count = %d, want one: %s", got, logs.String())
 	}
 }
 
@@ -870,7 +905,7 @@ func TestPoll_DiscoversWorkspaceChildRepoPR(t *testing.T) {
 
 func TestPoll_DiscoversWorkspaceChildRepoUpstreamPR(t *testing.T) {
 	oldRemoteURLs := gitRemoteURLsFunc
-	gitRemoteURLsFunc = func(path string) []string {
+	gitRemoteURLsFunc = func(_ context.Context, path string) []string {
 		if strings.HasSuffix(filepath.ToSlash(path), "/api") {
 			return []string{"https://github.com/o/api.git", "https://github.com/upstream/api.git"}
 		}
@@ -946,6 +981,22 @@ func TestPoll_IgnoresForkPRWithMatchingBranch(t *testing.T) {
 	}
 	if len(store.writes) != 0 {
 		t.Fatalf("fork PR must not be persisted, got %d writes", len(store.writes))
+	}
+}
+
+func TestPoll_DiscoversSameRepoPRAfterRename(t *testing.T) {
+	store := testStoreWithSession()
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
+		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{URL: "https://github.com/neworg/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "NewOrg/r", BaseRepo: "NewOrg/r", TargetBranch: "main", HeadSHA: "sha1"}}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1)},
+	}
+	obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(1, 0).UTC())
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.writes) == 0 || store.writes[0].pr.SessionID != "p-1" {
+		t.Fatalf("renamed-repo PR must be attributed to p-1, got %#v", store.writes)
 	}
 }
 
@@ -3141,7 +3192,7 @@ func TestPoll_SecondScanNameDoesNotRebaselineTrackedPR(t *testing.T) {
 	oldRepo := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "old", Name: "r", Repo: "old/r"}
 	newRepo := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "new", Name: "r", Repo: "new/r"}
 	restoreRemotes := gitRemoteURLsFunc
-	gitRemoteURLsFunc = func(string) []string {
+	gitRemoteURLsFunc = func(context.Context, string) []string {
 		return []string{"https://github.com/new/r.git", "https://github.com/old/r.git"}
 	}
 	defer func() { gitRemoteURLsFunc = restoreRemotes }()

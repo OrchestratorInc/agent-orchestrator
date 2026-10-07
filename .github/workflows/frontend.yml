@@ -21,7 +21,9 @@ permissions:
 
 jobs:
   mac-update-helper:
-    runs-on: macos-14
+    # Keep this on Intel to exercise the x64 release target natively while
+    # Swift cross-compiles and lipo-verifies the arm64 helper.
+    runs-on: macos-26-intel
     timeout-minutes: 15
     defaults:
       run:
@@ -61,7 +63,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             frontend/package-lock.json
-            frontend/src/landing/package-lock.json
+            frontend/src/docs/package-lock.json
             packages/cloud-client/package-lock.json
             packages/product-ui/package-lock.json
 
@@ -104,11 +106,11 @@ jobs:
       - name: Prepare pinned agent-browser runtime
         run: npm run browser-runtime:prepare -- --quiet
 
-      - name: Install landing dependencies
-        run: npm ci --prefix src/landing
+      - name: Install docs dependencies
+        run: npm ci --prefix src/docs
 
-      - name: Verify generated landing favicons
-        run: npm run icons:check --prefix src/landing
+      - name: Build docs
+        run: npm run build --prefix src/docs
 
       - name: Typecheck project
         run: npm run typecheck
@@ -120,6 +122,9 @@ jobs:
         env:
           AO_AGENT_BROWSER_TEST_BINARY: ${{ github.workspace }}/frontend/agent-browser/agent-browser
         run: npx vitest run
+
+      - name: Run guarded-navigation browser integration
+        run: npm run test:browser-postcondition-integration
 
   renderer-smoke:
     # RENDERER smoke (issue #2483, renderer slice) — the Playwright specs that run

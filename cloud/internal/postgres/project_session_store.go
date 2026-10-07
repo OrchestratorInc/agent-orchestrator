@@ -71,7 +71,7 @@ func (s *Store) CreateProject(
 			config,
 		), &project)
 		if err != nil {
-			return normalizeConstraintError(err)
+			return projectRepositoryConflict(err, input.RepositoryURL)
 		}
 		if _, err := tx.Exec(
 			ctx,
@@ -282,6 +282,34 @@ func (s *Store) ListProjects(
 		projects = projects[:limit]
 	}
 	return projects, hasMore, nil
+}
+
+// GetProject returns one project by id (tenant-scoped). Used at session creation
+// to read the project's coder dev-kit config so each session inherits the
+// template/size/startup/extra-repos chosen at project setup.
+func (s *Store) GetProject(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID string,
+	projectID string,
+) (domain.Project, error) {
+	var project domain.Project
+	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+		scanErr := scanProject(tx.QueryRow(
+			ctx,
+			`SELECT id, org_id, display_name, repository_url, default_branch,
+				github_repository_id, config, created_at, updated_at
+			FROM ao_projects
+			WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
+			orgID,
+			projectID,
+		), &project)
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return scanErr
+	})
+	return project, err
 }
 
 func (s *Store) CreateSession(
@@ -582,6 +610,9 @@ func createSessionTx(
 	if input.DeniedCommands == nil {
 		input.DeniedCommands = []string{}
 	}
+	if !input.Interface.Valid() {
+		input.Interface = domain.SessionInterfaceTUI
+	}
 	var session domain.Session
 
 	// Serialize quota allocation before inserting any rows that reference the
@@ -656,14 +687,15 @@ func createSessionTx(
 		`WITH generated AS (SELECT gen_random_uuid() AS id)
 		INSERT INTO ao_sessions (
 			id, org_id, project_id, kind, harness, display_name, branch,
-			prompt, mode, denied_commands, parent_session_id, created_by_user_id
+			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort
 		)
 		SELECT id, $1, $2, $3, $4, $5, 'ao/' || left(id::text, 8),
-			$6, $7, $8, NULLIF($9, '')::uuid, NULLIF($10, '')::uuid
+			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13
 		FROM generated
 		RETURNING id, org_id, project_id, kind, harness, display_name, branch,
-			mode, denied_commands, activity_state, is_terminated,
-			false, '', '', '', '', '', 0, created_at, updated_at`,
+			mode, model, denied_commands, interface, activity_state, is_terminated,
+			auto_inject_ci, auto_inject_review, terminate_on_pr_merge,
+			false, NULL::timestamptz, 0, '', '', '', '', '', 0, created_at, updated_at`,
 		orgID,
 		input.ProjectID,
 		input.Kind,
@@ -671,9 +703,12 @@ func createSessionTx(
 		input.DisplayName,
 		input.Prompt,
 		input.Mode,
+		input.Model,
 		input.DeniedCommands,
+		input.Interface,
 		parentSessionID,
 		actorUserID,
+		input.ReasoningEffort,
 	), &session)
 	if err != nil {
 		return domain.Session{}, normalizeConstraintError(err)
@@ -727,7 +762,7 @@ func createSessionTx(
 	}
 	if input.Prompt != "" {
 		if _, err := appendUserMessageEvent(
-			ctx, tx, orgID, session.ID, input.Prompt,
+			ctx, tx, orgID, session.ID, input.Prompt, domain.ChatTurnSettings{Model: input.Model, ReasoningEffort: input.ReasoningEffort},
 		); err != nil {
 			return domain.Session{}, err
 		}
@@ -915,23 +950,80 @@ func (s *Store) GetSession(
 	return session, err
 }
 
+func (s *Store) SetCloudSessionAutoInjectCI(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID string,
+	enabled bool,
+) (domain.Session, error) {
+	var session domain.Session
+	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE ao_sessions SET auto_inject_ci = $3, updated_at = now() WHERE org_id = $1 AND id = $2`, orgID, sessionID, enabled)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return ErrNotFound
+		}
+		return getSession(ctx, tx, orgID, sessionID, &session)
+	})
+	return session, err
+}
+
+func (s *Store) SetCloudSessionAutoInjectReview(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID string,
+	enabled bool,
+) (domain.Session, error) {
+	return s.setCloudSessionBooleanPolicy(ctx, principal, orgID, sessionID, "auto_inject_review", enabled)
+}
+
+func (s *Store) SetCloudSessionTerminateOnPRMerge(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID string,
+	enabled bool,
+) (domain.Session, error) {
+	return s.setCloudSessionBooleanPolicy(ctx, principal, orgID, sessionID, "terminate_on_pr_merge", enabled)
+}
+
+func (s *Store) setCloudSessionBooleanPolicy(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID, column string,
+	enabled bool,
+) (domain.Session, error) {
+	var session domain.Session
+	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+		query := `UPDATE ao_sessions SET ` + column + ` = $3, updated_at = now() WHERE org_id = $1 AND id = $2`
+		tag, err := tx.Exec(ctx, query, orgID, sessionID, enabled)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return ErrNotFound
+		}
+		return getSession(ctx, tx, orgID, sessionID, &session)
+	})
+	return session, err
+}
+
 const sessionSelect = `
 	SELECT session.id, session.org_id, session.project_id, session.kind,
 		session.harness, session.display_name, session.branch,
-		session.mode, session.denied_commands,
-		CASE
-			WHEN EXISTS (
-				SELECT 1 FROM ao_turns turn
-				WHERE turn.org_id = session.org_id AND turn.session_id = session.id
-					AND turn.state IN ('queued', 'claimed', 'running')
-			) THEN 'active'
-			ELSE session.activity_state
-		END AS activity_state,
+		session.mode, session.model, session.denied_commands, session.interface,
+		session.activity_state,
 		session.is_terminated,
+		session.auto_inject_ci,
+		session.auto_inject_review,
+		session.terminate_on_pr_merge,
 		EXISTS (
 			SELECT 1 FROM ao_worker_connections worker
 			WHERE worker.session_id = session.id AND worker.disconnected_at IS NULL
 		),
+		sandbox.worker_last_seen_at,
+		COALESCE(sandbox.startup_attempts, 0),
 		COALESCE(sandbox.provider, ''),
 		COALESCE(sandbox.desired_state, ''),
 		COALESCE(sandbox.observed_state, ''),
@@ -989,6 +1081,7 @@ func scanProject(row scanner, project *domain.Project) error {
 
 func scanSession(row scanner, session *domain.Session) error {
 	var activity string
+	var interfaceValue string
 	err := row.Scan(
 		&session.ID,
 		&session.OrgID,
@@ -998,10 +1091,17 @@ func scanSession(row scanner, session *domain.Session) error {
 		&session.DisplayName,
 		&session.Branch,
 		&session.Mode,
+		&session.Model,
 		&session.DeniedCommands,
+		&interfaceValue,
 		&activity,
 		&session.IsTerminated,
+		&session.AutoInjectCI,
+		&session.AutoInjectReview,
+		&session.TerminateOnPRMerge,
 		&session.RuntimeConnected,
+		&session.WorkerLastSeenAt,
+		&session.StartupAttempts,
 		&session.SandboxProvider,
 		&session.DesiredState,
 		&session.ObservedState,
@@ -1011,6 +1111,7 @@ func scanSession(row scanner, session *domain.Session) error {
 		&session.CreatedAt,
 		&session.UpdatedAt,
 	)
+	session.Interface = domain.SessionInterface(interfaceValue).Normalized()
 	session.ActivityState = contract.ActivityState(activity)
 	return err
 }

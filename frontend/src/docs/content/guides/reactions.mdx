@@ -1,0 +1,61 @@
+---
+title: Handle CI and review feedback
+description: Practical guidance for AO's built-in CI, review, conflict, and notification behavior.
+---
+
+AO routes CI failures, review feedback, and merge conflicts with built-in rules. These rules are not configured through a project `reactions:` field. See [Migration](/migration) before reusing old configuration examples.
+
+## Let AO route repository feedback
+
+Claim the pull request to the worker that should respond:
+
+```bash
+ao session claim-pr <pr-number-or-url>
+# From outside the worker, target it explicitly:
+ao session claim-pr <session-id> <pr-number-or-url>
+```
+
+The one-argument form uses `AO_SESSION_ID` and is preferred inside a worker session.
+
+AO then routes failing checks, requested changes, unresolved comments, and eligible merge conflicts to that session. Delivery is mode-aware, so the same workflow works for structured Chat and Terminal UI.
+
+## Avoid duplicate nudges
+
+AO remembers the feedback it has already sent. It sends another message when the content changes, not on every poll. This prevents the same CI failure or review comment from being repeated to a long-running session.
+
+## Know what requires a human
+
+The notification center provides durable read/unread history for:
+
+- a session waiting for input;
+- a pull request ready to merge;
+- a merged pull request;
+- a pull request closed without merging.
+
+Click a notification to open its session or PR context. Desktop toasts supplement the durable history while the app is running.
+
+## Intervene manually
+
+Send a focused instruction to a session from its Chat composer or Terminal UI. The CLI equivalent is:
+
+```bash
+ao send --help
+```
+
+Use the help output for the current target and message flags. For an independent code review, use `ao review trigger <worker-session-id>`.
+
+Merge is always an explicit action:
+
+```bash
+ao pr merge <pr-number>
+```
+
+For work on a schedule, use **Automations** rather than lifecycle reaction keys. For a reusable manual instruction or command, use project **Cues**. See [Automation reference](/configuration/lifecycle-automation) for both workflows and local-daemon scheduling limits.
+
+## Switch interfaces when useful
+
+For compatible Claude Code and Codex sessions, choose **Switch to chat UI** or **Switch to terminal UI**. AO keeps the session and worktree, then finishes or interrupts active work as directed before replacing the controller.
+
+<Callout type="info">
+	The [Dashboard guide](/dashboard#switch-interfaces) explains what happens to conversation history when you switch interfaces.
+</Callout>

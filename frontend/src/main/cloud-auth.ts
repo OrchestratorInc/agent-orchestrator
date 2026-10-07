@@ -1,5 +1,6 @@
 import { createWorkOS, type User } from "@workos-inc/node";
 import { app, dialog, ipcMain, safeStorage, shell } from "electron";
+import { createHash } from "node:crypto";
 import {
   chmod,
   mkdir,
@@ -17,6 +18,18 @@ import type { CloudAccount } from "../shared/cloud-account";
 import { revokeLocalSession } from "./cloud-auth-local";
 import { providerAuthFlow } from "./provider-auth-flow";
 
+// persistLocalClaudeOAuthToken writes a captured Claude setup-token under the AO
+// data dir so local claude sessions can authenticate with the SAME credential
+// pushed to the cloud (read back by the daemon's claudecode adapter). Scoped to
+// ~/.ao, never the user's ~/.claude; 0600 file in a 0700 dir.
+async function persistLocalClaudeOAuthToken(dataDir: string, token: string): Promise<void> {
+  const dir = path.join(dataDir, "harnesses", "claude-code");
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(dir, "oauth-token");
+  await writeFile(file, token, { mode: 0o600 });
+  await chmod(file, 0o600);
+}
+
 // The WorkOS AuthKit client id is public configuration (it appears in every
 // sign-in URL), so a baked default keeps sign-in working without build-time
 // setup; VITE_WORKOS_CLIENT_ID overrides it per build when needed.
@@ -24,15 +37,43 @@ const DEFAULT_WORKOS_CLIENT_ID = "client_01KZ3VRKC374HS91XGRDPT3671";
 const CLIENT_ID =
   import.meta.env.VITE_WORKOS_CLIENT_ID?.trim() ||
   (process.env.VITEST ? "client_test" : DEFAULT_WORKOS_CLIENT_ID);
-// The packaged app receives the WorkOS callback through the ao-app:// deep link.
-// A development build cannot: macOS routes ao-app:// to the installed app, not
-// the unpackaged Electron binary. Dev builds therefore default to a loopback
-// callback server (the standard desktop OAuth pattern) so sign-in works with
-// zero setup; AO_CLOUD_AUTH_REDIRECT overrides either default.
+// A loopback redirect is one we service with a local HTTP server: a dev build's
+// http://127.0.0.1 default, or an explicit 127.0.0.1/localhost override. An
+// HTTPS bounce page is NOT a loopback — it returns to the app via the ao-app://
+// deep link, so no local server is armed for it.
+function isLoopbackRedirect(redirectUri: string): boolean {
+  try {
+    const url = new URL(redirectUri);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      (url.hostname === "127.0.0.1" || url.hostname === "localhost")
+    );
+  } catch {
+    return false;
+  }
+}
+
+// The packaged app returns from WorkOS via an HTTPS bounce page on our own domain
+// (served by the control plane at /app/auth/return), which re-emits the result to
+// the ao-app:// deep link the installed app handles. Routing through that page —
+// rather than setting ao-app:// as the WorkOS redirect_uri directly — matters for
+// two reasons: the browser lands on a real HTTPS page instead of hanging forever
+// on an unloadable custom-scheme navigation (no stuck "loading" tab), and the OS
+// "open Agent Orchestrator?" prompt is attributed to our own domain (aoagents.dev)
+// instead of the opaque WorkOS AuthKit subdomain.
+//
+// A development build can't use the ao-app:// deep link (macOS routes it to the
+// installed app, not the unpackaged Electron binary), so it falls back to a
+// loopback callback server — the standard desktop-OAuth pattern — for zero-setup
+// sign-in. AO_CLOUD_AUTH_REDIRECT overrides either default (e.g. to point a
+// packaged build at a staging bounce page).
+const DEFAULT_PACKAGED_REDIRECT_URI = "https://api.aoagents.dev/app/auth/return";
 const REDIRECT_URI =
   process.env.AO_CLOUD_AUTH_REDIRECT?.trim() ||
-  (app.isPackaged ? "ao-app://callback" : "http://127.0.0.1:3000/callback");
-const useLoopbackRedirect = /^https?:\/\//i.test(REDIRECT_URI);
+  (app.isPackaged
+    ? DEFAULT_PACKAGED_REDIRECT_URI
+    : "http://127.0.0.1:3000/callback");
+const useLoopbackRedirect = isLoopbackRedirect(REDIRECT_URI);
 const AUTH_STORE_FILE = "cloud-auth.bin";
 const LEGACY_SESSION_FILE = "cloud-session.json";
 const PKCE_TTL_MS = 10 * 60 * 1000;
@@ -58,6 +99,9 @@ export interface StoredSession extends CloudAccount {
 
 export interface AuthStore {
   session: StoredSession | null;
+  // Digest of the verified callback, retained with its session so a browser
+  // return button can be clicked again without replaying a single-use code.
+  completedCallback?: string;
   pkce: {
     codeVerifier: string;
     state: string;
@@ -423,28 +467,46 @@ async function completeCloudSignIn(
   if (!workos) throw new Error("WorkOS is not configured.");
   if (!code || !callbackState) throw new Error("WorkOS callback is incomplete.");
 
-  const store = await readAuthStore(dataDir);
-  if (!store.pkce) throw new Error("No WorkOS sign-in is pending.");
-  if (store.pkce.expiresAt < Date.now()) {
-    await writeAuthStore(dataDir, { ...store, pkce: null });
-    throw new Error("The WorkOS sign-in request expired.");
-  }
-  if (callbackState !== store.pkce.state) {
-    throw new Error("WorkOS callback state did not match.");
-  }
+  const callbackDigest = createHash("sha256")
+    .update(JSON.stringify([code, callbackState]))
+    .digest("hex");
+  return withAuthMutation(dataDir, async () => {
+    const store = await readAuthStore(dataDir);
+    if (
+      store.session &&
+      !isLocalSession(store.session) &&
+      (!store.pkce || store.completedCallback === callbackDigest)
+    ) {
+      // With no login pending, returning to an already signed-in app cannot
+      // change its account. This also covers sessions saved before deduping.
+      return publicAccount(store.session);
+    }
+    if (!store.pkce) throw new Error("No WorkOS sign-in is pending.");
+    if (store.pkce.expiresAt < Date.now()) {
+      await writeAuthStore(dataDir, { ...store, pkce: null });
+      throw new Error("The WorkOS sign-in request expired.");
+    }
+    if (callbackState !== store.pkce.state) {
+      throw new Error("WorkOS callback state did not match.");
+    }
 
-  const result = await workos.userManagement.authenticateWithCode({
-    clientId: CLIENT_ID,
-    code,
-    codeVerifier: store.pkce.codeVerifier,
+    const result = await workos!.userManagement.authenticateWithCode({
+      clientId: CLIENT_ID,
+      code,
+      codeVerifier: store.pkce.codeVerifier,
+    });
+    const session = toStoredSession(
+      result.accessToken,
+      result.refreshToken,
+      result.user,
+    );
+    await writeAuthStore(dataDir, {
+      session,
+      pkce: null,
+      completedCallback: callbackDigest,
+    });
+    return publicAccount(session);
   });
-  const session = toStoredSession(
-    result.accessToken,
-    result.refreshToken,
-    result.user,
-  );
-  await writeAuthStore(dataDir, { session, pkce: null });
-  return publicAccount(session);
 }
 
 export async function handleCloudDeepLink(
@@ -626,8 +688,8 @@ export function installCloudIPC(
   });
   ipcMain.handle("cloud:connectProviderAuth", async (_event, input: unknown) => {
     if (typeof input !== "object" || input === null) throw new Error("Invalid Cloud provider login request.");
-    const { baseUrl, orgId, provider } = input as Record<string, unknown>;
-    if (typeof baseUrl !== "string" || typeof orgId !== "string" || typeof provider !== "string" || orgId.trim() === "") throw new Error("Invalid Cloud provider login request.");
+    const { baseUrl, provider, persistLocalClaudeToken } = input as Record<string, unknown>;
+    if (typeof baseUrl !== "string" || typeof provider !== "string") throw new Error("Invalid Cloud provider login request.");
     let base: URL;
     try {
       base = new URL(baseUrl);
@@ -650,9 +712,39 @@ export function installCloudIPC(
     }
 
     if (credential.provider !== provider) throw new Error("Cloud provider login returned an unexpected provider.");
+
+    if (provider === "github") {
+      // Returned to the renderer, which saves it via the daemon's
+      // PUT /api/v1/github/pat endpoint. Include the OAuth refresh material so
+      // the daemon can renew an expiring GitHub App token without a reconnect.
+      return {
+        secret: credential.secret,
+        refreshToken: credential.refreshToken,
+        expiresIn: credential.expiresIn,
+        refreshTokenExpiresIn: credential.refreshTokenExpiresIn,
+      };
+    }
+
     const basePath = base.pathname.replace(/\/+$/, "");
-    const target = new URL(`${base.origin}${basePath}/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/provider-connections/agents/${encodeURIComponent(credential.provider)}`);
-    const response = await fetch(target, { method: "PUT", redirect: "error", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ credentialType: credential.credentialType, secret: credential.secret }) });
+    // Cloud agent credentials are always personal: the caller's own connection,
+    // usable in every org they belong to.
+    const endpointPath = `/api/cloud/v1/me/providers/${encodeURIComponent(credential.provider)}`;
+    const target = new URL(`${base.origin}${basePath}${endpointPath}`);
+    const response = await fetch(target, {
+      method: "PUT",
+      redirect: "error",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ credentialType: credential.credentialType, secret: credential.secret }),
+    });
     if (!response.ok) throw new Error("AO Cloud could not save the provider credential.");
+
+    // Persist the captured Claude setup-token locally as a fallback for local
+    // sessions, only once the cloud copy is saved: a failed cloud save must not
+    // leave a local login behind. The daemon's claudecode adapter injects it only
+    // when no native login is present, so it never shadows an existing login.
+    if (persistLocalClaudeToken === true && credential.provider === "claude-code" && credential.credentialType === "oauth_token") {
+      await persistLocalClaudeOAuthToken(dataDir, credential.secret);
+    }
+    return undefined;
   });
 }

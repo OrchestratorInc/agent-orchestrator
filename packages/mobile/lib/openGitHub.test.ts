@@ -29,6 +29,35 @@ describe("openGitHub", () => {
 		expect(openURL).not.toHaveBeenCalled();
 	});
 
+	// The dependency landed in a branch whose Podfile.lock was never regenerated,
+	// so the module existed in node_modules and not in the app. Importing it there
+	// throws, and that used to take the screen down with a red box.
+	it("uses the system browser when the build has no in-app browser", async () => {
+		vi.resetModules();
+		vi.doMock("expo-web-browser", () => {
+			throw new Error("Cannot find native module 'ExpoWebBrowser'");
+		});
+		const { openGitHub: withoutBrowser } = await import("./openGitHub");
+		await withoutBrowser(PAGE);
+		expect(openURL).toHaveBeenCalledWith(PAGE);
+		expect(errorHaptic).not.toHaveBeenCalled();
+	});
+
+	// The in-app browser is presented on whatever is frontmost; from a native
+	// formSheet it either breaks the sheet or is dropped and locks the module.
+	it("leaves the app instead of presenting the in-app browser from a sheet", async () => {
+		await openGitHub(PR, { fromSheet: true });
+		expect(openURL).toHaveBeenCalledWith(PR);
+		expect(openBrowserAsync).not.toHaveBeenCalled();
+	});
+
+	it("still prefers the GitHub app from a sheet", async () => {
+		canOpenURL.mockResolvedValue(true);
+		await openGitHub(PR, { fromSheet: true });
+		expect(openURL).toHaveBeenCalledWith("github://repo/Untrivial-ai/agent-orchestrator/pull/5648");
+		expect(openBrowserAsync).not.toHaveBeenCalled();
+	});
+
 	it("prefers the GitHub app for a page it has a screen for", async () => {
 		canOpenURL.mockResolvedValue(true);
 		await openGitHub(PR);

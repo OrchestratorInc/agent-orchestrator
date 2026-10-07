@@ -1,0 +1,159 @@
+---
+title: Examples
+description: Practical workflows for desktop sessions, Chat and TUI, pull requests, reviews, previews, and mobile.
+---
+
+These examples use capabilities shipped in the current Go daemon and Electron desktop app. They do not rely on the retired TypeScript plugin configuration or an `examples/` directory.
+
+## Start a focused Chat worker
+
+1. Add a local GitHub repository in the desktop app.
+2. Create a task named **Fix settings validation**.
+3. Select an installed Chat-capable harness such as Codex or Claude Code.
+4. Choose **Chat** and use a bounded prompt:
+
+```text
+Reproduce the invalid settings error, add a regression test, and make the smallest fix.
+Run the focused tests and summarize changed behavior. Do not refactor unrelated settings code.
+```
+
+Watch provider activities and changed files in Chat. If an approval or structured question appears, answer it in the timeline.
+
+## Use a native Terminal UI
+
+Create another task and choose **Terminal UI**. AO creates the worktree and launches the harness's native interface through native PTY hosts on macOS/Linux (tmux for legacy/fallback) or ConPTY on Windows.
+
+Use the desktop terminal for native interactive commands. Send normal follow-up guidance through AO's message controls:
+
+```text
+The failing case is on Windows path normalization. Keep the Unix behavior unchanged.
+```
+
+## Switch Claude Code or Codex to Chat
+
+For a compatible idle TUI session, choose **Switch to chat UI**. AO stops the old controller, resumes the provider conversation through the native Chat driver, and keeps the same session and worktree.
+
+If the session is busy, choose deliberately:
+
+- **Finish work, then switch** waits for accepted work to finish before switching.
+- **Stop now and switch** cancels the active turn before switching.
+
+See [Dashboard: switch interfaces](/dashboard#switch-interfaces) for what happens to conversation history when you switch.
+
+## Claim an existing pull request
+
+The optional CLI can start a worker and associate an existing pull request:
+
+```bash
+ao spawn --project my-project --agent codex --name "Finish PR 142" --claim-pr 142
+```
+
+Or attach a pull request to an existing session:
+
+```bash
+ao session claim-pr 142
+# From outside the worker, target it explicitly:
+ao session claim-pr <session-id> 142
+```
+
+The shorter form reads the current worker from `AO_SESSION_ID`.
+
+AO observes GitHub PRs or GitLab MRs and displays their normalized facts. A claim only attaches ownership metadata; it does not check out the PR branch. Prepare the correct branch separately before implementation.
+
+## Run a reviewer
+
+Open a session with a linked pull request, go to **Reviews**, select a configured reviewer harness, and start a review. Reviewer runs are separate from worker harness configuration. See the [agent catalog](/plugins/agents) for reviewer support. Enable the session auto-review toggle if you want reviews on eligible PR heads while the worker is idle; merge remains explicit.
+
+Inspect the result, then send actionable findings to the worker. Keep human review in the loop before merging.
+
+## Preview a web app
+
+Start the development server in the session worktree, then select it explicitly:
+
+```bash
+ao preview http://127.0.0.1:5173
+```
+
+For a repository with `.ao/launch.json`:
+
+```bash
+ao preview start
+ao preview status
+```
+
+Open the Browser tab in the session inspector. Preview targets are session-scoped; AO does not auto-discover one when a worker starts.
+
+Use the Browser toolbar to annotate the rendered page and send feedback to Chat, open DevTools, or pop out the view. Browser settings manage profiles, supported imports, and downloads.
+
+To reuse a login, open **Settings → Browser**, create a named profile, then select it in the session Browser toolbar before signing in. A named profile shares its saved cookies across sessions. Use the temporary profile for a one-off session.
+
+To import from Chrome, Firefox, or Safari, choose **Import** in Browser settings and check which data the dialog supports on your OS. AO copies selected data into its own profile and does not change the source browser. Some cookies or logins may not transfer, so sign in again if needed. **Clear** removes saved browsing data; **Delete** removes the AO profile.
+
+## Use browser controls from an agent
+
+When the Browser tab is attached to the session, the optional CLI exposes commands such as:
+
+```bash
+ao browser snapshot
+ao browser click <ref>
+ao browser fill <ref> "hello"
+ao browser screenshot
+```
+
+Temporary network-metadata capture must be started explicitly and expires automatically. It omits request and response bodies plus sensitive values.
+
+## Pair the mobile app
+
+1. Open desktop settings and choose **Connect Mobile**.
+2. Scan the pairing QR from the mobile app; it fills the host, port, connection password, and any secure transport mode automatically.
+3. Treat the QR as a bearer credential and do not share it or screenshots of it. Rotate the connection password in desktop settings if it is exposed.
+4. Create or open a session from the phone.
+
+Use direct LAN access only on a trusted network. Wait for a ready QR; available secure remote endpoints can be added to its offer as setup completes. See [Connect Mobile](/configuration/remote-access). Turning it off closes the authenticated listener.
+
+## Useful CLI checks
+
+The CLI talks to the already-running daemon:
+
+```bash
+ao status
+ao session ls
+ao session get <session-id>
+ao send --session <session-id> --message "Run the targeted test and report the result."
+```
+
+The desktop app remains the recommended control surface.
+
+For reusable project work, create an agent Cue such as `ao cue create --project my-project --name "Check tests" --prompt "Run relevant tests and summarize failures"`, then choose **Run a cue** from a session. Use `--command "npm test"` instead of `--prompt` to run an exact command in a fresh local shell.
+
+For recurring work, create an **Automation** with a project, prompt, and schedule. Inspect each run in Automations. [Automation reference](/configuration/lifecycle-automation) includes a daily CLI example.
+
+Workers can use `ao report "Tests passed; ready for review"` to report to an existing orchestrator. The command also accepts artifact flags to attach files. Chat offers provider-supported skills, Model Context Protocol (MCP) tools, model and effort controls, and compaction actions.
+
+## Standalone work, reports, and recovery
+
+For a task without a repository, choose **New task → Standalone** and pick an agent, or run:
+
+```bash
+ao spawn --standalone --agent codex --name notes --prompt "Draft release notes"
+```
+
+AO creates a managed plain directory. Standalone work has no Git branch or PR claim, so move any output you want to keep into a real project before cleaning up the session. Project, branch, issue, PR, and orchestrator flags cannot be combined with `--standalone`.
+
+When an orchestrator already exists, a worker can send a checkpoint with `ao report "Focused tests passed"`. Use `ao report --done --note "Ready for review" --artifact ./requested-report.md` to include a file. Reports go to the existing orchestrator; they do not create one. If the command returns an error, check the worker's session before assuming the report was delivered.
+
+A person can send a follow-up through the session message controls or `ao send --session <id> --message "Check the Windows case"`. Use `--steer` only when you intend to change an active Chat turn.
+
+If an agent stops but its session remains, use **Resume agent** or `ao session resume-agent <id>`. If the session was terminated, use **Restore** or `ao session restore <id>` when offered. `exit-agent` stops only the controller; `kill` terminates the session.
+
+Recovery depends on the harness and saved provider state. It cannot recreate terminal screen output as Chat history. Check for uncommitted files before cleanup; AO does not force-delete a dirty registered worktree.
+
+<span id="next" />
+
+## Next steps
+
+<Cards>
+	<Card title="Quickstart" href="/quickstart" description="Run the first desktop workflow." />
+	<Card title="Dashboard" href="/dashboard" description="Understand each desktop surface used above." />
+	<Card title="Troubleshooting" href="/troubleshooting" description="Recover when a workflow does not behave as expected." />
+</Cards>

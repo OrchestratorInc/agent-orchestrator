@@ -9,7 +9,7 @@
 // `import type` only: pulling a value out of ./api would chain through
 // ./config into AsyncStorage and react-native, and this module must stay
 // importable by a plain unit test.
-import type { DashboardPR, DashboardSession } from "./api";
+import type { DashboardPR, DashboardSession, SessionPRSummary } from "./api";
 import type { Theme } from "./theme";
 
 /**
@@ -41,12 +41,14 @@ export function collectPRs(sessions: DashboardSession[]): { pr: DashboardPR; ses
 	return out;
 }
 
-export type Tone = "neutral" | "passive" | "success" | "warning" | "error";
+export type Tone = "neutral" | "passive" | "success" | "warning" | "error" | "merged";
 
 export function toneColor(t: Theme, tone: Tone): string {
 	switch (tone) {
 		case "success":
 			return t.green;
+		case "merged":
+			return t.purple;
 		case "warning":
 			return t.amber;
 		case "error":
@@ -173,7 +175,7 @@ export function mergeReasonLabel(reason: string): string {
  */
 export function prSummaryLine(pr: DashboardPR): { text: string; tone: Tone } {
 	const life = prLifecycle(pr);
-	if (life === "merged") return { text: "Merged", tone: "success" };
+	if (life === "merged") return { text: "Merged", tone: "merged" };
 	if (life === "closed") return { text: "Closed without merging", tone: "passive" };
 
 	const atoms: { text: string; tone: Tone }[] = [];
@@ -215,10 +217,11 @@ export type RichPR = {
  * noise about a PR nobody can act on.
  */
 export function prStatusAtoms(rich: RichPR): { text: string; tone: Tone }[] {
-	// Green, not the badge's purple: this line is the status summary, the same
-	// slot that says "CI passing · Mergeable". Purple is reserved for the
-	// lifecycle badge on the identity line above.
-	if (rich.state === "merged") return [{ text: "Merged", tone: "success" }];
+	// Purple, matching the lifecycle badge on the identity line above. This line
+	// used to say green — "the status summary slot" — which put the word Merged in
+	// a different colour from the badge saying the same thing two lines up, and in
+	// the same green the card uses for "Mergeable", a state you can still act on.
+	if (rich.state === "merged") return [{ text: "Merged", tone: "merged" }];
 	if (rich.state === "closed") return [{ text: "Closed", tone: "passive" }];
 
 	const atoms: { text: string; tone: Tone }[] = [];
@@ -240,6 +243,62 @@ export function prStatusAtoms(rich: RichPR): { text: string; tone: Tone }[] {
 	else if (rich.review?.hasUnresolvedHumanComments) atoms.push({ text: "Unresolved comments", tone: "warning" });
 
 	return atoms;
+}
+
+type PRPromptFacts = {
+	state: string;
+	ci: { state: string };
+	mergeability: { state: string };
+	review: { decision: string; hasUnresolvedHumanComments: boolean };
+};
+
+function prPromptFacts(pr: DashboardPR, summary?: SessionPRSummary): PRPromptFacts {
+	const ci = summary?.ci.state ?? (pr.ciStatus === "none" || !pr.ciStatus ? "unknown" : pr.ciStatus);
+	const mergeability = summary?.mergeability.state ?? pr.mergeability?.state ?? (
+		pr.mergeability?.mergeable === true
+			? "mergeable"
+			: pr.mergeability?.noConflicts === false || pr.mergeability?.blockers?.some((reason) => /conflict/i.test(reason))
+				? "conflicting"
+				: pr.mergeability?.mergeable === false
+					? "blocked"
+					: "unknown"
+	);
+	const review = summary?.review.decision ?? (
+		pr.reviewDecision === "pending" ? "review_required" : pr.reviewDecision ?? "none"
+	);
+	return {
+		state: summary?.state ?? prLifecycle(pr),
+		ci: { state: ci },
+		mergeability: { state: mergeability },
+		review: { decision: review, hasUnresolvedHumanComments: summary?.review.hasUnresolvedHumanComments ?? Boolean(pr.unresolvedThreads) },
+	};
+}
+
+/** Individual CI, merge and review facts for the composer shortcut. */
+export function prReviewPromptStatuses(pr: DashboardPR, summary?: SessionPRSummary): { text: string; tone: Tone }[] {
+	const facts = prPromptFacts(pr, summary);
+	const atoms = prStatusAtoms(facts);
+	if (atoms.length) return atoms;
+	return [{ text: facts.state === "draft" ? "Draft" : "Open", tone: "passive" }];
+}
+
+/** A concise headline whose color reflects the most actionable PR state. */
+export function prReviewPromptHeadline(pr: DashboardPR, summary?: SessionPRSummary): { text: string; tone: Tone } {
+	const facts = prPromptFacts(pr, summary);
+	if (facts.state === "merged") return { text: "Merged", tone: "merged" };
+	if (facts.state === "closed") return { text: "Closed", tone: "passive" };
+	if (facts.mergeability.state === "conflicting") return { text: "Has conflicts", tone: "error" };
+	if (facts.ci.state === "failing") return { text: "CI failing", tone: "error" };
+	if (facts.review.decision === "changes_requested") return { text: "Changes requested", tone: "warning" };
+	if (facts.review.hasUnresolvedHumanComments) return { text: "Comments to resolve", tone: "warning" };
+	if (facts.mergeability.state === "mergeable" && facts.ci.state === "passing" && facts.review.decision === "approved") {
+		return { text: "Ready to merge", tone: "success" };
+	}
+	if (facts.mergeability.state === "mergeable") return { text: "Mergeable", tone: "success" };
+	if (facts.mergeability.state === "blocked") return { text: "Blocked", tone: "warning" };
+	if (facts.mergeability.state === "unstable") return { text: "Unstable", tone: "warning" };
+	if (facts.state === "draft") return { text: "Draft", tone: "passive" };
+	return { text: "Ready for review", tone: "neutral" };
 }
 
 /**

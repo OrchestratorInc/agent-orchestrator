@@ -1,37 +1,44 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppState } from "react-native";
-import type { ServerConfig } from "../config";
+import { machineIdentity, type ServerConfig } from "../config";
 import {
 	cancelQueuedConversationTurn,
 	compactConversation,
 	getConversationConfigOptions,
 	getConversationModels,
 	getConversationPage,
+	getReviewerConversationPage,
 	getConversationSkills,
 	mergeConversationPages,
 	reloadMcpServers,
 	resolveApproval,
+	resolveReviewerApproval,
 	resolveInput,
+	resolveReviewerInput,
 	rollbackConversation,
 	sendConversationMessage,
+	sendReviewerConversationMessage,
 	setConversationConfigOption,
 	setConversationSettings,
 	setConversationTitle,
 	stageConversationAttachments,
 	steerConversation,
 	interruptConversation,
+	interruptReviewerConversation,
 	promoteQueuedConversationTurn,
+	recoverSentConversationMessage,
 	type ConversationPage,
 } from "./api";
 import type { ChatConfigOption, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
 import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages } from "./snapshot";
-import { conversationActionError, conversationErrorCode } from "./conversationErrors";
+import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
 import { subscribeConversationEvents } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
 import { createRequestGate } from "./requestGate";
 import { withAttachmentReferences } from "./messageAttachments";
 import { loadTurnOptionCatalog } from "./turnOptionsCatalog";
+import { NOT_PAIRED_ACTION_COPY } from "../connectionError";
+import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
 const REFRESH_DEBOUNCE_MS = 120;
 const conversationPageCache = createMobileConversationPageCache();
@@ -40,11 +47,15 @@ const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
 
 export type PendingSend = {
 	id: string;
+	draftText: string;
 	text: string;
+	kind?: "send" | "steer";
 	state: "sending" | "failed";
 	error?: string;
 	attachments?: ChatImage[];
 	resources?: ChatResource[];
+	hasAttachments: boolean;
+	restored?: boolean;
 };
 
 export type ConversationAction =
@@ -71,6 +82,7 @@ export type MobileConversation = {
 	configOptions: ChatConfigOption[];
 	skills: ChatSkill[];
 	pendingSends: PendingSend[];
+	completedRetry?: { id: string; draftText: string };
 	pendingActions: readonly ConversationAction[];
 	actionError?: string;
 	actionErrors: Partial<Record<ConversationAction, string>>;
@@ -79,10 +91,11 @@ export type MobileConversation = {
 	loadOlder(): Promise<void>;
 	loadTurnOptions(options?: { refresh?: boolean }): Promise<{ models: ChatModel[]; configOptions: ChatConfigOption[] }>;
 	loadSkills(): Promise<ChatSkill[]>;
-	send(text: string, attachments?: ChatImage[], resources?: ChatResource[]): Promise<void>;
+	send(text: string, attachments?: ChatImage[], resources?: ChatResource[]): Promise<string>;
 	retrySend(id: string): Promise<void>;
-	discardSend(id: string): void;
-	steer(text: string): Promise<void>;
+	discardSend(id: string): Promise<void>;
+	acknowledgeSend(id: string): Promise<void>;
+	steer(text: string): Promise<string>;
 	promoteQueuedTurn(turnId: string): Promise<void>;
 	cancelQueuedTurn(turnId: string): Promise<void>;
 	interrupt(): Promise<void>;
@@ -99,8 +112,10 @@ export type MobileConversation = {
 export function useMobileConversation(
 	cfg: ServerConfig | null,
 	sessionId: string,
+	options?: { reviewId?: string; eventSessionId?: string },
 ): MobileConversation {
-	const cacheKey = cfg ? conversationPageCacheKey(cfg, sessionId) : "";
+	const cacheKey = cfg ? conversationPageCacheKey(cfg, options?.reviewId ? `review:${options.reviewId}` : sessionId) : "";
+	const pendingKey = cfg ? pendingSendKey(machineIdentity(cfg), options?.reviewId ? `review:${options.reviewId}` : sessionId) : "";
 	const [initialState] = useState(() => cacheKey
 		? cachedConversationState(conversationPageCache, cacheKey)
 		: { pages: [] as ConversationPage[], loading: true });
@@ -114,6 +129,7 @@ export function useMobileConversation(
 	const [configOptions, setConfigOptions] = useState<ChatConfigOption[]>([]);
 	const [skills, setSkills] = useState<ChatSkill[]>([]);
 	const [pendingSends, setPendingSends] = useState<PendingSend[]>([]);
+	const [completedRetry, setCompletedRetry] = useState<{ id: string; draftText: string }>();
 	const [pendingActions, setPendingActions] = useState<ConversationAction[]>([]);
 	const [actionError, setActionError] = useState<string>();
 	const [actionErrors, setActionErrors] = useState<Partial<Record<ConversationAction, string>>>({});
@@ -131,7 +147,9 @@ export function useMobileConversation(
 		const request = refreshGate.begin();
 		setRefreshing(true);
 		try {
-			const live = await getConversationPage(cfg, sessionId);
+			const live = options?.reviewId
+				? await getReviewerConversationPage(cfg, options.reviewId)
+				: await getConversationPage(cfg, sessionId);
 			if (!mounted.current || !refreshGate.isCurrent(request)) return;
 			setPages((old) => {
 				const next = old[0]?.conversationId && old[0].conversationId !== live.conversationId
@@ -144,7 +162,7 @@ export function useMobileConversation(
 			setError(undefined);
 		} catch (cause) {
 			if (!mounted.current || !refreshGate.isCurrent(request)) return;
-			const classified = classifyConversationError(cause);
+			const classified = classifyConversationError(cause, Boolean(options?.reviewId));
 			if (classified.permanent) setUnavailable({ code: classified.code, message: classified.message });
 			else setError(classified.message);
 		} finally {
@@ -153,7 +171,7 @@ export function useMobileConversation(
 				setRefreshing(false);
 			}
 		}
-	}, [cacheKey, cfg, refreshGate, sessionId]);
+	}, [cacheKey, cfg, options?.reviewId, refreshGate, sessionId]);
 
 	const scheduleRefresh = useCallback(() => {
 		if (refreshTimer.current) clearTimeout(refreshTimer.current);
@@ -164,14 +182,16 @@ export function useMobileConversation(
 		if (!cfg || !snapshot?.hasMoreBefore || loadingOlder) return;
 		setLoadingOlder(true);
 		try {
-			const older = await getConversationPage(cfg, sessionId, snapshot.oldestSequence);
+			const older = options?.reviewId
+				? await getReviewerConversationPage(cfg, options.reviewId, snapshot.oldestSequence)
+				: await getConversationPage(cfg, sessionId, snapshot.oldestSequence);
 			if (mounted.current) setPages((old) => [...old, older]);
 		} catch (cause) {
 			if (mounted.current) setActionError(conversationActionError(cause));
 		} finally {
 			if (mounted.current) setLoadingOlder(false);
 		}
-	}, [cfg, sessionId, snapshot?.hasMoreBefore, snapshot?.oldestSequence, loadingOlder]);
+	}, [cfg, options?.reviewId, sessionId, snapshot?.hasMoreBefore, snapshot?.oldestSequence, loadingOlder]);
 
 	useEffect(() => {
 		mounted.current = true;
@@ -188,6 +208,22 @@ export function useMobileConversation(
 			if (refreshTimer.current) clearTimeout(refreshTimer.current);
 		};
 	}, [cacheKey, refresh, refreshGate]);
+
+	useEffect(() => {
+		setPendingSends([]);
+		setCompletedRetry(undefined);
+		if (!pendingKey) return;
+		let active = true;
+		void readPendingSend(pendingKey).then((saved) => {
+			if (active && saved) setPendingSends((old) => upsertPending(old, {
+				...saved, state: "failed", restored: true,
+				error: options?.reviewId && saved.hasAttachments
+					? "Check review history. If the reply is absent, discard it here, then reattach the files and send again."
+					: "Delivery may have succeeded. Retry with the same message or discard it after checking the conversation.",
+			}));
+		}).catch((cause) => { if (active) setError(conversationActionError(cause)); });
+		return () => { active = false; };
+	}, [pendingKey, options?.reviewId]);
 
 	const loadTurnOptions = useCallback(async (options?: { refresh?: boolean }) => {
 		if (!cfg || unavailable || !hasConversation) return { models, configOptions };
@@ -218,11 +254,12 @@ export function useMobileConversation(
 	}, [cacheKey, cfg, hasConversation, sessionId, skills, unavailable]);
 
 	useEffect(() => {
-		if (!cfg || unavailable) return;
-		return subscribeConversationEvents(sessionId, (event) => {
+		const eventSessionId = options?.eventSessionId ?? sessionId;
+		if (!cfg || unavailable || !eventSessionId) return;
+		return subscribeConversationEvents(cfg, eventSessionId, (event) => {
 			if (event.payload?.conversationId) scheduleRefresh();
 		});
-	}, [cfg, sessionId, scheduleRefresh, unavailable]);
+	}, [cfg, options?.eventSessionId, sessionId, scheduleRefresh, unavailable]);
 
 	// Poll the conversation on paths where the event stream cannot deliver.
 	// Over a Cloudflare quick tunnel the subscription above never fires — the
@@ -235,13 +272,6 @@ export function useMobileConversation(
 		const timer = setInterval(() => scheduleRefresh(), every);
 		return () => clearInterval(timer);
 	}, [cfg, unavailable, scheduleRefresh]);
-
-	useEffect(() => {
-		const subscription = AppState.addEventListener("change", (state) => {
-			if (state === "active") void refresh();
-		});
-		return () => subscription.remove();
-	}, [refresh]);
 
 	const runAction = useCallback(
 		async <T,>(kind: ConversationAction, action: () => Promise<T>, resetHistoricalPages = false): Promise<T> => {
@@ -269,56 +299,94 @@ export function useMobileConversation(
 
 	const deliver = useCallback(
 		async (pending: PendingSend) => {
-			if (!cfg) throw new Error("No AO server configured");
+			if (!cfg) throw new Error(NOT_PAIRED_ACTION_COPY);
 			setPendingSends((old) => upsertPending(old, { ...pending, state: "sending", error: undefined }));
 			try {
-				await sendConversationMessage(cfg, sessionId, {
-					text: pending.text,
-					clientMessageId: pending.id,
-					attachments: pending.attachments,
-					resources: pending.resources,
-				});
+				if (needsAttachmentRecovery(Boolean(pending.restored), pending.hasAttachments, Boolean(pending.attachments?.length || pending.resources?.length))) {
+					if (options?.reviewId) throw new Error("Check review history first. If the reply is absent, discard it here, then reattach the files and send again.");
+					try {
+						await recoverSentConversationMessage(cfg, sessionId, pending.id);
+					} catch (cause) {
+						if (conversationErrorCode(cause) === "CHAT_STEER_UNCERTAIN") {
+							throw new Error("This attachment message was not found. Discard it here, then reattach the files and send again.");
+						}
+						throw cause;
+					}
+				} else if (pending.kind === "steer") {
+					await steerConversation(cfg, sessionId, pending.text, pending.id);
+				} else {
+					const sendMessage = options?.reviewId ? sendReviewerConversationMessage : sendConversationMessage;
+					await sendMessage(cfg, options?.reviewId ?? sessionId, {
+						text: pending.text,
+						clientMessageId: pending.id,
+						attachments: pending.attachments,
+						resources: pending.resources,
+					});
+				}
 				setPendingSends((old) => old.filter((item) => item.id !== pending.id));
 				await refresh();
 			} catch (cause) {
 				const message = conversationActionError(cause);
+				if (pending.kind === "steer") setActionCodes((old) => ({ ...old, steer: conversationErrorCode(cause) }));
 				setPendingSends((old) => upsertPending(old, { ...pending, state: "failed", error: message }));
 				throw new Error(message);
 			}
 		},
-		[cfg, sessionId, refresh],
+		[cfg, options?.reviewId, sessionId, refresh],
 	);
 
 	const send = useCallback(
 		async (text: string, attachments?: ChatImage[], resources?: ChatResource[]) => {
+			if (!pendingKey) throw new Error(NOT_PAIRED_ACTION_COPY);
 			const id = clientMessageId();
 			let message = text;
 			let nativeAttachments = attachments;
 			if (attachments?.length) {
+				if (options?.reviewId && !sessionId.trim()) throw new Error("Attachments are unavailable until the worker session is linked.");
 				const paths = await requireConfig(cfg, (c) => stageConversationAttachments(c, sessionId, attachments));
 				message = withAttachmentReferences(message, paths);
 				if (!snapshot?.capabilities?.includes("images")) nativeAttachments = undefined;
 			}
-			await deliver({ id, text: message, state: "sending", attachments: nativeAttachments, resources });
+			const saved = await reservePendingSend(pendingKey, {
+				id, draftText: text, text: message, hasAttachments: Boolean(attachments?.length || resources?.length), kind: "send",
+			});
+			await deliver({
+				...saved, text: attachments?.length || resources?.length ? message : saved.text,
+				state: "sending", attachments: nativeAttachments, resources,
+				restored: saved.id !== id,
+			});
+			return saved.id;
 		},
-		[cfg, sessionId, snapshot?.capabilities, deliver],
+		[cfg, sessionId, snapshot?.capabilities, deliver, pendingKey],
 	);
 
 	const retrySend = useCallback(
 		async (id: string) => {
 			const pending = pendingSends.find((item) => item.id === id);
-			if (pending) await deliver(pending);
+			if (pending) {
+				await deliver(pending);
+				setCompletedRetry({ id, draftText: pending.draftText });
+			}
 		},
 		[pendingSends, deliver],
 	);
 
-	const discardSend = useCallback((id: string) => {
+	const discardSend = useCallback(async (id: string) => {
+		if (pendingKey) await clearPendingSend(pendingKey, id);
 		setPendingSends((old) => old.filter((item) => item.id !== id));
-	}, []);
-	const steer = useCallback(
-		(text: string) => runAction("steer", () => requireConfig(cfg, (c) => steerConversation(c, sessionId, text, clientMessageId()))),
-		[cfg, runAction, sessionId],
-	);
+	}, [pendingKey]);
+	const acknowledgeSend = useCallback(async (id: string) => {
+		if (pendingKey) await clearPendingSend(pendingKey, id);
+		setCompletedRetry((current) => current?.id === id ? undefined : current);
+	}, [pendingKey]);
+	const steer = useCallback(async (text: string) => {
+		if (!pendingKey) throw new Error(NOT_PAIRED_ACTION_COPY);
+		const id = clientMessageId();
+		const saved = await reservePendingSend(pendingKey, { id, draftText: text, text, hasAttachments: false, kind: "steer" });
+		await deliver({ ...saved, state: "sending", restored: saved.id !== id });
+		setActionCodes((old) => ({ ...old, steer: undefined }));
+		return saved.id;
+	}, [pendingKey, deliver]);
 	const cancelQueuedTurn = useCallback(
 		(turnId: string) => runAction("queue", () => requireConfig(cfg, (c) => cancelQueuedConversationTurn(c, sessionId, turnId))),
 		[cfg, runAction, sessionId],
@@ -328,18 +396,24 @@ export function useMobileConversation(
 		[cfg, runAction, sessionId],
 	);
 	const interrupt = useCallback(
-		() => runAction("interrupt", () => requireConfig(cfg, (c) => interruptConversation(c, sessionId))),
-		[cfg, runAction, sessionId],
+		() => runAction("interrupt", () => requireConfig(cfg, (c) => options?.reviewId
+			? interruptReviewerConversation(c, options.reviewId)
+			: interruptConversation(c, sessionId))),
+		[cfg, options?.reviewId, runAction, sessionId],
 	);
 	const resolveApprovalAction = useCallback(
 		(requestId: string, decisionId: string) =>
-			runAction("approval", () => requireConfig(cfg, (c) => resolveApproval(c, sessionId, requestId, decisionId))),
-		[cfg, runAction, sessionId],
+			runAction("approval", () => ignoreStaleApproval(() => requireConfig(cfg, (c) => options?.reviewId
+				? resolveReviewerApproval(c, options.reviewId, requestId, decisionId)
+				: resolveApproval(c, sessionId, requestId, decisionId)))),
+		[cfg, options?.reviewId, runAction, sessionId],
 	);
 	const resolveInputAction = useCallback(
 		(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>) =>
-			runAction("input", () => requireConfig(cfg, (c) => resolveInput(c, sessionId, requestId, action, content))),
-		[cfg, runAction, sessionId],
+			runAction("input", () => requireConfig(cfg, (c) => options?.reviewId
+				? resolveReviewerInput(c, options.reviewId, requestId, action, content)
+				: resolveInput(c, sessionId, requestId, action, content))),
+		[cfg, options?.reviewId, runAction, sessionId],
 	);
 	const compact = useCallback(
 		() => runAction("compact", () => requireConfig(cfg, (c) => compactConversation(c, sessionId))),
@@ -387,6 +461,7 @@ export function useMobileConversation(
 		configOptions,
 		skills,
 		pendingSends,
+		completedRetry,
 		pendingActions,
 		actionError,
 		actionErrors,
@@ -398,6 +473,7 @@ export function useMobileConversation(
 		send,
 		retrySend,
 		discardSend,
+		acknowledgeSend,
 		steer,
 		promoteQueuedTurn,
 		cancelQueuedTurn,
@@ -414,7 +490,7 @@ export function useMobileConversation(
 }
 
 async function requireConfig<T>(cfg: ServerConfig | null, action: (cfg: ServerConfig) => Promise<T>): Promise<T> {
-	if (!cfg) throw new Error("No AO server configured");
+	if (!cfg) throw new Error(NOT_PAIRED_ACTION_COPY);
 	return action(cfg);
 }
 
@@ -428,20 +504,10 @@ function upsertPending(items: PendingSend[], next: PendingSend): PendingSend[] {
 	return items.map((item, at) => (at === index ? next : item));
 }
 
-function classifyConversationError(error: unknown): { permanent: boolean; code?: string; message: string } {
+function classifyConversationError(error: unknown, reviewer = false): { permanent: boolean; code?: string; message: string } {
 	const code = typeof error === "object" && error !== null && "code" in error ? String(error.code ?? "") : undefined;
-	const permanentCodes = new Set([
-		"SESSION_MODE_MISMATCH",
-		"SESSION_NOT_FOUND",
-		"SESSION_MODE_UNSUPPORTED",
-		"CHAT_DRIVER_UNAVAILABLE",
-		"CHAT_DRIVER_INCOMPATIBLE",
-		"CHAT_AUTH_REQUIRED",
-		"CHAT_RESUME_FAILED",
-		"CHAT_CONTROLLER_NOT_READY",
-	]);
 	return {
-		permanent: Boolean(code && permanentCodes.has(code)),
+		permanent: conversationErrorIsPermanent(code, reviewer),
 		code,
 		message: conversationActionError(error),
 	};

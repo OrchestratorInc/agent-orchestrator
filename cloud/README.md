@@ -1,6 +1,10 @@
 # AO Cloud
 
-Private AO control-plane service. This foundation contains:
+AO Cloud is the hosted service for running AO workers in remote workspaces. Its
+control-plane service lives in this public repository. Desktop Cloud
+availability still depends on an enabled build, account access, and a reachable
+environment. See the [user guide](../frontend/src/docs/content/guides/cloud.mdx)
+and [Cloud development](../docs/cloud-development.md). The service contains:
 
 - the 28-table PostgreSQL founding schema;
 - WorkOS access-token verification and profile resolution;
@@ -15,13 +19,16 @@ Private AO control-plane service. This foundation contains:
   webhook processing; and
 - Dockerized local development plus an isolated hosted-staging launcher.
 
-The repository root also contains the authenticated Next.js Cloud UI. It uses
-the public `@aoagents/cloud-client` and `@aoagents/product-ui` sources for
-contracts, transport, status mapping, board layout, cards, and agent identity.
-It supports organization switching, projects, durable sessions, search, chat
-history, live event streams, worker turns, and replica-safe workspace files.
-The Cloud UI also persists personal GitHub OAuth, installation confirmation,
-repository grants, PR/issue synchronization, and sharing behavior. See
+The optional authenticated Next.js Cloud web app lives in the separate
+`private/ao-cloud` checkout. It uses the public `@aoagents/cloud-client` and
+`@aoagents/product-ui` sources for contracts, transport, status mapping, board
+layout, cards, and agent identity. Its current web flow supports organization
+switching, projects, durable sessions, search, chat history, live event streams,
+worker turns, and replica-safe workspace files. It presents GitHub OAuth,
+installation, repository-grant, PR/issue synchronization, and sharing controls;
+the Go control plane stores the durable state. The desktop has its own Cloud
+settings and project flows but no organization switcher. The web app is not
+required for the public desktop or control-plane development loop. See
 [`docs/control-plane.md`](docs/control-plane.md) for durable-state and cluster
 behavior, [`docs/deployment.md`](docs/deployment.md) for staging and production
 deployments, and [`docs/cloudagent-v1-parity.md`](docs/cloudagent-v1-parity.md)
@@ -37,12 +44,11 @@ for the CloudAgent V1 comparison and remaining performance work.
   with a persistent, per-session workspace volume.
 - **Staging desktop (`npm run cloud:staging`)** runs the desktop locally against
   `https://staging-api.aoagents.dev`. The hosted staging control plane uses the
-  shared WorkOS environment and its own staging database. Future workers run in
+  shared WorkOS environment and its own staging database. Workers run in
   staging, not on the developer's machine.
-- **Staging web (`npm run cloud:web:staging`)** runs the private Next.js UI
-  against that same staging API. It loads the server-only WorkOS API key and
-  client ID at launch from `ao-cloud/staging/workos` in AWS Secrets Manager;
-  credentials are never written to the repository or exposed to browser code.
+- **Optional web app** lives in the separate `private/ao-cloud` checkout. It
+  is not required for the public desktop/control-plane development loop; use
+  that checkout's own scripts when working on the web app.
 - **Production** uses `https://api.aoagents.dev`, the shared WorkOS environment,
   the production database, and the one production GitHub App. There is no
   supported local-desktop-against-production development command.
@@ -57,6 +63,22 @@ isolated to that environment, and each checkout obtains a fresh
 production-broker grant rather than treating the local project row as
 repository authority.
 
+## Costs and capacity
+
+This repository does not define customer pricing, billing, or account
+entitlements. The desktop does not include a billing page, and provider defaults
+in local configuration files are development settings rather than customer
+plans. Ask the team that granted Cloud access or the relevant organization admin
+for current pricing and limits.
+
+The service enforces a configurable concurrent-sandbox limit for each
+organization. The API reports an organization quota as
+`SANDBOX_QUOTA_EXCEEDED`. Provider capacity can be lower. Provider capacity
+errors are separate, and the service retries them in the background.
+Archive an unused session and wait for provider teardown before retrying. The
+deployment's configured limit and the provider's own account capacity are
+separate values.
+
 ## Hosted ingress
 
 The hosted control planes are publicly reachable through Cloudflare DNS-only
@@ -67,9 +89,12 @@ CNAMEs and AWS-managed TLS:
 - production: `https://api.aoagents.dev` →
   `ao-cloud-production-public`
 
-ACM certificates in `eu-north-1` terminate TLS. Both ECS services run two
-healthy replicas, `/healthz` reports deployment identity, and `/readyz` verifies
-database connectivity plus draining state. Production also exposes
+ACM certificates in `eu-north-1` terminate TLS. The current release scripts request
+one configured task for each service, and the deployment verifier requires exactly
+one desired/running task and one healthy ALB target. This documents the enforced
+configuration; inspect the live service before operating. `/healthz` reports
+deployment identity, and `/readyz` verifies database connectivity plus draining state.
+Production also exposes
 `/github/healthz`, which validates the configured credentials and App identity
 with GitHub and returns `503` when GitHub is disabled, misconfigured, or
 unavailable. It is diagnostic only and is not an ALB target-health dependency.
@@ -100,12 +125,12 @@ exposes the API on
 the stack running. Local auth is enabled; point the desktop app at it with
 `AO_CLOUD_OFFERING=on AO_CLOUD_CONTROL_PLANE_URL=http://127.0.0.1:8081 npm run dev`
 from `frontend/` and register a development email/password account in-app to
-sign in. The optional private Next.js Cloud UI on `http://127.0.0.1:3000`
-requires the (uninitialized) `private/ao-cloud` submodule and is not needed for
-desktop-app testing; when run it receives only an HttpOnly session cookie. The
-Docker socket is mounted only into the control-plane container so it can create
-sibling workers; worker containers never receive the socket. Local Docker
-workers do not auto-pause.
+sign in. The optional Next.js web app from `private/ao-cloud` can run at
+`http://127.0.0.1:3000`; it requires that uninitialized submodule and is not
+needed for desktop-app testing. When run, it receives only an HttpOnly session
+cookie. The Docker socket is mounted only into the control-plane container so
+it can create sibling workers; worker containers never receive the socket.
+Local Docker workers do not auto-pause.
 
 Use `npm run cloud:local:down` to stop containers while retaining data and
 `npm run cloud:local:reset` to stop them and delete the local database
@@ -119,7 +144,7 @@ lifecycle, including worker replacement with workspace persistence, without
 touching normal local Cloud data. It reports a clean skip when Docker is not
 available.
 
-To launch the desktop's currently implemented auth-only flow against a hosted
+To launch the desktop Cloud flow against a hosted
 staging deployment:
 
 ```bash
@@ -133,28 +158,16 @@ redirects and production responses, verifies `/readyz` reports
 `environment=staging`, and isolates Electron and daemon state under
 `~/.ao/staging-desktop` by default. If public ingress is unavailable, it exits
 with the failing readiness URL and HTTP/TLS error before Electron starts. The
-desktop currently uses the URL for staging preflight and future Cloud API
-calls; this branch does not add Cloud project/session UI. WorkOS desktop
-authentication continues to use the `ao-app://callback` deep link.
+desktop uses the URL for staging preflight and Cloud API calls, including
+projects and sessions. WorkOS desktop authentication continues to use the
+`ao-app://callback` deep link.
 
-To launch the web UI against hosted staging:
+The optional web app intentionally resolves public TypeScript package sources
+from the containing checkout. Its setup and staging launcher belong to
+`private/ao-cloud`; there is no `cloud:web:staging` script in the root
+`package.json`.
 
-```bash
-npm run cloud:web:staging
-```
-
-This command requires the `ao-cloud` AWS login profile (override with
-`AWS_PROFILE`) and uses `http://127.0.0.1:3000/callback` for WorkOS. That exact
-redirect URI is verified and created through the WorkOS API before launch.
-AuthKit's encrypted cookie key is generated once under `~/.ao/cloud-web`; app
-state and credentials never use an OS-default application-data directory.
-
-The web app intentionally resolves the public TypeScript package sources from
-the containing Agent Orchestrator checkout. Develop it through
-`private/ao-cloud` as the public repository's submodule; a standalone private
-clone does not contain those public packages.
-
-For a direct Go loop, requirements are Go 1.26.5 and PostgreSQL 15 or newer.
+For a direct Go loop, requirements are Go 1.27.1 and PostgreSQL 15 or newer.
 Development and test environments can apply embedded Goose migrations at
 startup, using `AO_CLOUD_MIGRATION_DATABASE_URL` when set and
 `AO_CLOUD_DATABASE_URL` otherwise. Hosted deployments run
@@ -169,6 +182,14 @@ lifetime, and AuthKit's `client_id` claim. The WorkOS API key is server-only and
 resolves profile fields that access tokens may omit. The JWKS URL is derived
 for standard WorkOS and custom AuthKit domains;
 `AO_CLOUD_WORKOS_JWKS_URL` can override it.
+
+AO keys each account by the WorkOS user ID it first saw. A WorkOS user or
+organization whose `external_id` holds another WorkOS ID of the same kind (set
+by `scripts/workos-copy-environment.py` when moving between WorkOS
+environments) signs in as that original ID. While users move, set
+`AO_CLOUD_WORKOS_LEGACY_ISSUER`, `AO_CLOUD_WORKOS_LEGACY_CLIENT_ID`, and
+`AO_CLOUD_WORKOS_LEGACY_API_KEY` to keep accepting the previous environment's
+tokens.
 
 Hosted environments use `AO_CLOUD_ENV=staging` or `production` and must set
 `AO_CLOUD_RELEASE` to an immutable image tag or Git SHA. Hosted startup fails
@@ -211,12 +232,13 @@ their respective databases. The AWS instances are named
 boundary is explicit. See [`docs/deployment.md`](docs/deployment.md) for the full
 deployment and rollback procedure.
 
-Each push to private `main` runs
+The optional web checkout may run
 `.github/workflows/update-public-submodule.yml`. When the
 `AO_PUBLIC_REPO_TOKEN` repository secret is configured with pull-request write
 access to `Untrivial-ai/agent-orchestrator`, it opens or refreshes a public PR
-that moves the optional `private/ao-cloud` gitlink to that exact private
-commit. Without the secret the pointer job is skipped.
+that moves the optional `private/ao-cloud` gitlink to that exact web-app
+commit. Without the secret the pointer job is skipped; this mechanism does
+not govern the `cloud/` control-plane sources in this repository.
 
 If a verified access token contains `org_id`, that WorkOS organization and the
 token's role are synchronized into AO membership. Tokens without `org_id`
@@ -250,11 +272,23 @@ All resource routes use `/api/cloud/v1`. Project and session creation require an
 | `GET` | `/orgs/{orgId}/sessions/{sessionId}/workspace/files` | List worker-workspace entries |
 | `GET/PUT` | `/orgs/{orgId}/sessions/{sessionId}/workspace/file` | Read or write a bounded UTF-8 workspace file |
 | `GET` | `/orgs/{orgId}/sessions/{sessionId}/workspace/diff` | Read a bounded worker-workspace git diff |
+| `GET` | `/orgs/{orgId}/sessions/{sessionId}/workspace/review` | List all tracked files, categorized working changes, and commits since the immutable session baseline |
+| `GET` | `/orgs/{orgId}/sessions/{sessionId}/workspace/tree` | Browse a lazy directory level, including change status |
+| `GET` | `/orgs/{orgId}/sessions/{sessionId}/workspace/search` | Search workspace paths and bounded text content |
+| `GET` | `/orgs/{orgId}/sessions/{sessionId}/workspace/review/file` | Read a scoped working-tree or committed file with its fingerprint and diff |
+| `POST` | `/orgs/{orgId}/sessions/{sessionId}/workspace/review/diffs` | Batch-load scoped committed, staged, unstaged, untracked, or combined patches |
+| `GET` | `/orgs/{orgId}/sessions/{sessionId}/workspace/review/revision` | Read the complete before or after revision for an expandable diff |
+| `PUT` | `/orgs/{orgId}/sessions/{sessionId}/workspace/review/file` | Write an editable file when its expected fingerprint still matches |
 | `POST` | `/orgs/{orgId}/sessions/{sessionId}/terminal-ticket` | Create a short-lived workspace-terminal ticket |
 | `GET` | `/terminal` | Upgrade a single-use ticket to the durable terminal WebSocket |
 
 WorkOS access tokens and local development tokens both use
 `Authorization: Bearer <token>`.
+
+The workspace review routes are provider-neutral. Docker, NodeOps, and Coder
+workers all execute the same Git/file review protocol through the durable
+worker-request transport; the control-plane API and desktop UI do not branch
+on the sandbox provider.
 
 GitHub App setup uses random, hashed, expiring state. The setup callback rotates
 that state into a separate OAuth PKCE challenge; the encrypted verifier is

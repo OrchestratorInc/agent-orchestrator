@@ -1,14 +1,18 @@
-import { Feather } from "@expo/vector-icons";
+import { Feather } from "../icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { machineIdentity, type ServerConfig } from "../config";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Image, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Image, Keyboard, PanResponder, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import Animated, { Easing, interpolateColor, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
+import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { haptics } from "../haptics";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { fontScaleCap } from "../tokens";
+import { fontScaleCap, iconSize, space, type } from "../tokens";
+import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { MicKey } from "../voice/MicKey";
 import { useVoiceInput } from "../voice/useVoiceInput";
 import { activeTurn, type ChatConfigOption, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
@@ -20,6 +24,7 @@ import {
 } from "./composerSuggestions";
 import { chatSheetRoute } from "./chatSheetRegistry";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
+import { ComposerGlass, composerGlassSupported } from "./composer-glass";
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
 import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, type ComposerDeliveryIntent } from "./composerDeliveryModel";
 import { contextMeterModel } from "./contextMeter";
@@ -27,19 +32,45 @@ import { RequestCard } from "./RequestCard";
 import type { RequestDockModel } from "./requestDockModel";
 import { createRequestGate } from "./requestGate";
 import { queuedConversationMessages } from "./timelineModel";
+import { userFacingError } from "../connectionError";
+import type { DashboardPR, SessionPRSummary } from "../api";
+import { PRReviewPrompt } from "./PRReviewPrompt";
+import { afterDraftWrites } from "./pendingSend";
 
 type Attachment =
 	| { id: string; kind: "image"; name: string; bytes: number; image: ChatImage }
 	| { id: string; kind: "resource"; name: string; bytes: number; resource: ChatResource };
 
 const MAX_EMBEDDED_FILE_BYTES = 500_000;
+
+/** The pill's resting height; it grows with the field up to COMPOSER_MAX_HEIGHT. */
+export const COMPOSER_HEIGHT = 56;
+export const COMPOSER_FIELD_HEIGHT = 44;
+/**
+ * Where the pill stops growing and the field starts scrolling instead.
+ *
+ * Main's numbers, kept because they were tuned against the same transcript: about
+ * six lines of a reply's worth of prompt, so the composer can never swallow the
+ * conversation it is writing into.
+ */
+const COMPOSER_MAX_HEIGHT = 150;
+const COMPOSER_FIELD_MAX_HEIGHT = 138;
+const COMPOSER_LINE_HEIGHT = type.subheadline.lineHeight;
+/** The pill's corner, and so also the radius of the glass drawn behind it. */
+const COMPOSER_RADIUS = 28;
 const MAX_ATTACHMENTS = 8;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_BYTES_TOTAL = 25 * 1024 * 1024;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp"]);
 
 export function ChatComposer({
+	reviewPR,
+	reviewPRSummary,
+	reviewPRCollapsed,
+	onCollapseReviewPR,
+	onOpenReview,
 	sessionId,
+	config,
 	snapshot,
 	skills,
 	filePaths,
@@ -53,6 +84,8 @@ export function ChatComposer({
 	interrupting,
 	disabled,
 	onSend,
+	onAcknowledgeSend,
+	completedRetry,
 	onSteer,
 	onPromoteQueuedTurn,
 	onCancelQueuedTurn,
@@ -60,7 +93,7 @@ export function ChatComposer({
 	onOpenSettings,
 	onSettings,
 	onConfigOption,
-	bottomInset,
+	restingInset,
 	quotaActive,
 	request,
 	requestDismissed,
@@ -70,7 +103,13 @@ export function ChatComposer({
 	onDismissRequest,
 	onRestoreRequest,
 }: {
+	reviewPR?: DashboardPR;
+	reviewPRSummary?: SessionPRSummary;
+	reviewPRCollapsed?: boolean;
+	onCollapseReviewPR?(): void;
+	onOpenReview?(): void;
 	sessionId: string;
+	config: ServerConfig | null;
 	snapshot: ConversationSnapshot;
 	skills: ChatSkill[];
 	filePaths: string[];
@@ -83,15 +122,22 @@ export function ChatComposer({
 	pending?: boolean;
 	interrupting?: boolean;
 	disabled?: boolean;
-	onSend(text: string, attachments?: ChatImage[], resources?: ChatResource[]): Promise<void>;
-	onSteer(text: string): Promise<void>;
+	onSend(text: string, attachments?: ChatImage[], resources?: ChatResource[]): Promise<string>;
+	onAcknowledgeSend(id: string): Promise<void>;
+	completedRetry?: { id: string; draftText: string };
+	onSteer(text: string): Promise<string>;
 	onPromoteQueuedTurn(turnId: string): Promise<void>;
 	onCancelQueuedTurn(turnId: string): Promise<void>;
 	onInterrupt(): void;
 	onOpenSettings(): void;
 	onSettings(settings: TurnSettings): Promise<void>;
 	onConfigOption(id: string, value: { value: string } | { enabled: boolean }): Promise<ChatConfigOption[]>;
-	bottomInset: number;
+	/**
+	 * What the dock owes with the keyboard down — the home-indicator inset. The
+	 * dock keeps it at all times and closes the difference to the keyboard by
+	 * itself; see `dockRise` below.
+	 */
+	restingInset: number;
 	/** The account-quota banner is up, so the context meter stands down. */
 	quotaActive?: boolean;
 	/** A pending request, which takes the composer's place until it is answered. */
@@ -107,8 +153,79 @@ export function ChatComposer({
 	const t = useTheme();
 	const router = useRouter();
 	const styles = useThemedStyles(makeStyles);
+	// The keyboard's own progress, 0 closed to 1 open. This is the same value the
+	// keyboard is animating with, so the dock moves in lockstep with it.
+	const keyboard = useReanimatedKeyboardAnimation();
+	const reviewPromptAvailable = Boolean(reviewPR && onOpenReview);
+	const reviewCardDragY = useSharedValue(0);
+	const reviewCardHeaderHeight = useSharedValue(0);
+	const reviewCardHeaderMeasured = useSharedValue(false);
+	const wasReviewPromptCollapsed = useRef(Boolean(reviewPRCollapsed));
+	const reviewCardHeaderStyle = useAnimatedStyle(() => {
+		if (!reviewCardHeaderMeasured.value) return {};
+		const progress = Math.max(0, Math.min(reviewCardDragY.value / 180, 1));
+		return {
+			height: reviewCardHeaderHeight.value * (1 - progress),
+			opacity: 1 - progress,
+			transform: [{ translateY: -12 * progress }],
+		};
+	});
+	const finishReviewCardCollapse = useCallback(() => { onCollapseReviewPR?.(); }, [onCollapseReviewPR]);
+	const collapseReviewCard = useCallback(() => {
+		haptics.tap();
+		reviewCardDragY.value = withTiming(180, { duration: 150 }, (finished) => {
+			if (finished) runOnJS(finishReviewCardCollapse)();
+		});
+	}, [finishReviewCardCollapse, reviewCardDragY]);
+	const reviewCardPan = useMemo(() => PanResponder.create({
+		onMoveShouldSetPanResponderCapture: (_event, gesture) => gesture.dy > 5 && gesture.dy > Math.abs(gesture.dx),
+		onPanResponderTerminationRequest: () => false,
+		onPanResponderGrant: () => { reviewCardDragY.value = 0; },
+		onPanResponderMove: (_event, gesture) => { reviewCardDragY.value = Math.max(0, gesture.dy); },
+		onPanResponderRelease: (_event, gesture) => {
+			if (gesture.dy > 72) collapseReviewCard();
+			else reviewCardDragY.value = withSpring(0, { damping: 18, stiffness: 220 });
+		},
+		onPanResponderTerminate: () => {
+			if (reviewCardDragY.value > 72) collapseReviewCard();
+			else reviewCardDragY.value = withSpring(0, { damping: 18, stiffness: 220 });
+		},
+	}), [collapseReviewCard, reviewCardDragY]);
+	const reviewCardDragStyle = useAnimatedStyle(() => {
+		const progress = Math.max(0, Math.min(reviewCardDragY.value / 180, 1));
+		const expandedSurface = composerGlassSupported ? "transparent" : t.bgElevated;
+		return {
+			// Keep only the composer pill elevated while dragging. If this shell stays
+			// elevated too, it reads as a gray slab behind the composer until release.
+			backgroundColor: interpolateColor(progress, [0, 1], [expandedSurface, t.bgBase]),
+			borderColor: interpolateColor(progress, [0, 1], [t.accentBorder, t.bgBase]),
+			borderWidth: StyleSheet.hairlineWidth * (1 - progress),
+			borderRadius: 24 + (COMPOSER_RADIUS - 24) * progress,
+			paddingHorizontal: space.sm * (1 - progress),
+			paddingVertical: space.xs * (1 - progress),
+		};
+	});
+	const reviewCardGlassStyle = useAnimatedStyle(() => ({ opacity: 1 - Math.max(0, Math.min(reviewCardDragY.value / 180, 1)) }));
+	const reviewComposerSurfaceStyle = useAnimatedStyle(() => ({
+		backgroundColor: interpolateColor(Math.max(0, Math.min(reviewCardDragY.value / 180, 1)), [0, 1], ["transparent", t.bgElevated]),
+	}));
+	const reviewComposerGlassStyle = useAnimatedStyle(() => ({ opacity: Math.max(0, Math.min(reviewCardDragY.value / 180, 1)) }));
+	useEffect(() => {
+		if (reviewPRCollapsed) {
+			reviewCardDragY.value = 180;
+		} else if (wasReviewPromptCollapsed.current && reviewPromptAvailable) {
+			// Glide the card up from the composer shape without a spring or bounce.
+			reviewCardDragY.value = withTiming(0, { duration: 240, easing: Easing.out(Easing.cubic) });
+		}
+		wasReviewPromptCollapsed.current = Boolean(reviewPRCollapsed);
+	}, [reviewCardDragY, reviewPRCollapsed, reviewPromptAvailable]);
+	const dockRise = useAnimatedStyle(() => ({
+		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * keyboard.progress.value }],
+	}));
 	const [text, setText] = useState("");
+	const [draftLoaded, setDraftLoaded] = useState(false);
 	const [cursor, setCursor] = useState(0);
+	const [fieldHeight, setFieldHeight] = useState(COMPOSER_FIELD_HEIGHT);
 	const [attachments, setAttachments] = useState<Attachment[]>([]);
 	const [localError, setLocalError] = useState<string>();
 	const [submitting, setSubmitting] = useState(false);
@@ -138,7 +255,8 @@ export function ChatComposer({
 	const steerEligible = Boolean(canSteer && hasDraft && attachments.length === 0);
 	const deliveryPresentation = composerDeliveryPresentation({ active, canSteer: Boolean(canSteer), hasDraft, hasAttachments: attachments.length > 0, hasQueued: visibleQueuedMessages.length > 0 });
 	const stopped = snapshot.controller.state === "stopped";
-	const draftKey = `ao.chat.draft.${sessionId}`;
+	const draftKey = config ? `ao.chat.draft.${machineIdentity(config)}.${sessionId}` : null;
+	const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const openingSuggestion = useRef<string | undefined>(undefined);
 	const pickerGate = useRef(createRequestGate()).current;
 	const latestText = useRef(text);
@@ -154,33 +272,77 @@ export function ChatComposer({
 		});
 	}, [queuedMessages]);
 
-	useEffect(() => { let mounted = true; void AsyncStorage.getItem(draftKey).then((value) => { if (mounted && value) setText((current) => current || value); }); return () => { mounted = false; }; }, [draftKey]);
-	useEffect(() => { const timer = setTimeout(() => void (text ? AsyncStorage.setItem(draftKey, text) : AsyncStorage.removeItem(draftKey)), 250); return () => clearTimeout(timer); }, [draftKey, text]);
+	useEffect(() => {
+		if (!draftKey) return;
+		let mounted = true;
+		void AsyncStorage.getItem(draftKey)
+			.then((value) => { if (mounted && value) setText((current) => current || value); })
+			.catch(() => {})
+			.finally(() => { if (mounted) setDraftLoaded(true); });
+		return () => { mounted = false; };
+	}, [draftKey]);
+	useEffect(() => {
+		if (!draftKey || !draftLoaded) return;
+		draftTimer.current = setTimeout(() => {
+			void afterDraftWrites(draftKey, () => text ? AsyncStorage.setItem(draftKey, text) : AsyncStorage.removeItem(draftKey)).catch(() => {});
+		}, 250);
+		return () => { if (draftTimer.current) clearTimeout(draftTimer.current); };
+	}, [draftKey, draftLoaded, text]);
+	useEffect(() => {
+		if (!completedRetry) return;
+		if (draftTimer.current) clearTimeout(draftTimer.current);
+		const current = latestText.current;
+		const matches = current.trim() === completedRetry.draftText;
+		if (matches) {
+			latestText.current = "";
+			setText("");
+			setAttachments([]);
+		}
+		void (async () => {
+			if (draftKey) {
+				await afterDraftWrites(draftKey, () => matches ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, current));
+			}
+			await onAcknowledgeSend(completedRetry.id);
+		})().catch((cause) => setLocalError(userFacingError(cause)));
+	}, [completedRetry, draftKey, onAcknowledgeSend]);
 
 	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setText((old) => old ? `${old} ${spoken}` : spoken), []) });
 
 	const submit = useCallback(async (intent: ComposerDeliveryIntent = "send") => {
-		if (submitting || pending || disabled) return;
+		if (submitting || pending || disabled || (draftKey && !draftLoaded)) return;
 		const trimmed = text.trim();
 		if (!trimmed && attachments.length === 0) return;
+		// Dismissed on the tap, not after the send lands. Waiting for the request
+		// tied the keyboard's exit to the network, so it dropped whenever the
+		// answer arrived — which read as the keyboard being taken away mid-sentence.
+		Keyboard.dismiss();
 		setLocalError(undefined);
 		setSubmitting(true);
+		if (draftTimer.current) clearTimeout(draftTimer.current);
 		try {
 			const images = attachments.filter((item): item is Extract<Attachment, { kind: "image" }> => item.kind === "image").map((item) => item.image);
 			const resources = attachments.filter((item): item is Extract<Attachment, { kind: "resource" }> => item.kind === "resource").map((item) => item.resource);
 			const route = composerDeliveryRoute(intent, steerEligible);
-			if (route === "steer") await onSteer(trimmed);
-			else await onSend(trimmed, images.length ? images : undefined, resources.length ? resources : undefined);
-			setText("");
-			setAttachments([]);
-			void AsyncStorage.removeItem(draftKey);
-			Keyboard.dismiss();
+			const id = route === "steer"
+				? await onSteer(trimmed)
+				: await onSend(trimmed, images.length ? images : undefined, resources.length ? resources : undefined);
+			if (draftKey) {
+				const current = latestText.current;
+				await afterDraftWrites(draftKey, () => current === text ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, current));
+			}
+			await onAcknowledgeSend(id);
+			if (latestText.current === text) {
+				latestText.current = "";
+				setText("");
+				setFieldHeight(COMPOSER_FIELD_HEIGHT);
+				setAttachments([]);
+			}
 			haptics.success();
 		} catch (cause) {
-			setLocalError(cause instanceof Error ? cause.message : String(cause));
+			setLocalError(userFacingError(cause));
 			haptics.error();
 		} finally { setSubmitting(false); }
-	}, [text, attachments, steerEligible, onSteer, onSend, draftKey, submitting, pending, disabled]);
+	}, [text, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled]);
 
 	const addImage = async () => {
 		setLocalError(undefined);
@@ -207,7 +369,7 @@ export function ChatComposer({
 			setAttachments(accepted);
 			setLocalError(errors.size ? [...errors].join(" ") : undefined);
 		} catch (cause) {
-			setLocalError(cause instanceof Error ? cause.message : "Could not open the photo library.");
+			setLocalError(userFacingError(cause, "Couldn't open your photo library."));
 		}
 	};
 	const addFile = async () => {
@@ -225,7 +387,7 @@ export function ChatComposer({
 				added.push({ id: `${asset.uri}-${Date.now()}`, kind: "resource", name: asset.name, bytes, resource: { uri: `mobile-attachment://${encodeURIComponent(asset.name)}`, name: asset.name, mimeType: asset.mimeType || "text/plain", text: body } });
 			}
 			setAttachments((old) => [...old, ...added]);
-		} catch (cause) { setLocalError(cause instanceof Error ? cause.message : String(cause)); }
+		} catch (cause) { setLocalError(userFacingError(cause)); }
 	};
 
 	const openPicker = useCallback(async (kind: "skills" | "files", activeTrigger?: ComposerSuggestion) => {
@@ -260,10 +422,16 @@ export function ChatComposer({
 		openingSuggestion.current = key;
 		void openPicker(suggestion.kind, suggestion);
 	}, [cursor, openPicker, pickerGate, text]);
-	return (
-		<View style={[styles.dock, { paddingBottom: bottomInset }]}>
+	const activeReviewPR = reviewPromptAvailable ? reviewPR : undefined;
+	const showReviewPrompt = Boolean(activeReviewPR);
+	const composerContents = (
+		<>
+				{activeReviewPR ? <Animated.View style={[styles.reviewCardHeader, reviewCardHeaderStyle]} onLayout={(event) => { if (!reviewCardHeaderMeasured.value && event.nativeEvent.layout.height > 0) { reviewCardHeaderHeight.value = event.nativeEvent.layout.height; reviewCardHeaderMeasured.value = true; } }}>
+					<PRReviewPrompt pr={activeReviewPR} summary={reviewPRSummary} onPress={onOpenReview ?? (() => {})} onCollapse={collapseReviewCard} />
+					<View style={styles.reviewDivider} />
+				</Animated.View> : null}
 			{voice.state === "starting" || voice.state === "recording" ? <View style={styles.voice}><Feather name="mic" size={12} color={t.red} /><Text style={styles.voiceText}>{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}</Text></View> : null}
-			{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <View key={item.id} style={styles.attachment}>{item.kind === "image" ? <Image accessibilityIgnoresInvertColors source={{ uri: `data:${item.image.mimeType};base64,${item.image.data}` }} style={styles.attachmentImage} /> : <Feather name="file-text" size={13} color={t.blue} />}<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text><Pressable hitSlop={7} accessibilityLabel={`Remove ${item.name}`} onPress={() => { haptics.tap(); setAttachments((old) => old.filter((candidate) => candidate.id !== item.id)); }}><Feather name="x" size={13} color={t.textTertiary} /></Pressable></View>)}</ScrollView> : null}
+			{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <View key={item.id} style={styles.attachment}>{item.kind === "image" ? <Image accessibilityIgnoresInvertColors source={{ uri: `data:${item.image.mimeType};base64,${item.image.data}` }} style={styles.attachmentImage} /> : <Feather name="file-text" size={12} color={t.accent} />}<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text><Pressable hitSlop={7} accessibilityLabel={`Remove ${item.name}`} onPress={() => { haptics.tap(); setAttachments((old) => old.filter((candidate) => candidate.id !== item.id)); }}><Feather name="x" size={12} color={t.textTertiary} /></Pressable></View>)}</ScrollView> : null}
 			{/* Composer-local only. Conversation and action failures are banners above
 			    the timeline; echoing them here showed one failure twice. */}
 			{localError || voice.error ? <Text accessibilityRole="alert" style={styles.error}>{localError || voice.error}</Text> : null}
@@ -274,7 +442,7 @@ export function ChatComposer({
 				{deliveryPresentation.showQueueNote ? <View style={styles.deliveryNote}>
 					<Feather name="clock" size={12} color={t.textTertiary} />
 					<Text numberOfLines={1} style={styles.deliveryNoteText}>{attachments.length ? "Attachments next" : "Sent after this"}</Text>
-					{deliveryPresentation.showSteerAction ? <Pressable accessibilityRole="button" accessibilityLabel="Steer this turn now" disabled={disabled || submitting || pending} onPress={() => { haptics.tap(); void submit("steer"); }} style={({ pressed }) => [styles.steerAction, pressed && { opacity: 0.7 }]}><Feather name="corner-up-right" size={14} color={t.blue} /></Pressable> : null}
+					{deliveryPresentation.showSteerAction ? <Pressable accessibilityRole="button" accessibilityLabel="Steer this turn now" disabled={disabled || submitting || pending} onPress={() => { haptics.tap(); void submit("steer"); }} style={({ pressed }) => [styles.steerAction, pressed && { opacity: 0.7 }]}><Feather name="corner-up-right" size={15} color={t.accent} /></Pressable> : null}
 				</View> : null}
 				{contextMeter ? <View accessibilityRole="progressbar" accessibilityLabel={`Context window ${contextMeter.percent}% used`} style={styles.contextMeter}>
 					<View style={styles.contextTrack}>
@@ -289,7 +457,7 @@ export function ChatComposer({
 					const cancelling = cancellingQueuedTurnId === entry.turnId;
 					const queueActionPending = Boolean(promotingQueuedTurnId || cancellingQueuedTurnId);
 					return <View key={entry.turnId} style={[styles.queueRow, index > 0 && styles.queueRowDivider]}>
-						<Feather name="corner-down-right" size={14} color={t.textTertiary} />
+						<Feather name="corner-down-right" size={15} color={t.textTertiary} />
 						<Text numberOfLines={1} style={styles.queueText}>{entry.message.text}</Text>
 						{canSteer ? <Pressable
 							accessibilityRole="button"
@@ -314,7 +482,7 @@ export function ChatComposer({
 							}}
 							style={({ pressed }) => [styles.queueSteer, pressed && { opacity: 0.55 }]}
 						>
-							{promoting ? <ActivityIndicator size="small" color={t.blue} /> : <Feather name="corner-up-right" size={15} color={t.blue} />}
+							{promoting ? <ActivityIndicator size="small" color={t.accent} /> : <Feather name="corner-up-right" size={15} color={t.accent} />}
 						</Pressable> : null}
 						<Pressable
 							accessibilityRole="button"
@@ -331,7 +499,7 @@ export function ChatComposer({
 							}}
 							style={({ pressed }) => [styles.queueDelete, pressed && { opacity: 0.55 }]}
 						>
-							{cancelling ? <ActivityIndicator size="small" color={t.textTertiary} /> : <Feather name="x" size={16} color={t.textTertiary} />}
+							{cancelling ? <ActivityIndicator size="small" color={t.textTertiary} /> : <Feather name="x" size={15} color={t.textTertiary} />}
 						</Pressable>
 					</View>;
 				})}
@@ -346,58 +514,111 @@ export function ChatComposer({
 				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.restoreText}>{request.title}</Text>
 				<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.restoreAction}>Answer</Text>
 			</Pressable> : null}
-			{requestCard ?? <View style={[styles.composer, stopped && { opacity: 0.55 }]}>
-				<ChatAttachmentMenu disabled={stopped} canAttachFile={Boolean(canEmbedFiles)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />
+			{requestCard ?? <Animated.View
+				style={[styles.composer, activeReviewPR && styles.reviewComposer, activeReviewPR && reviewComposerSurfaceStyle, stopped && { opacity: 0.55 }]}
+			>
+				{activeReviewPR ? <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, reviewComposerGlassStyle]}><ComposerGlass radius={COMPOSER_RADIUS} /></Animated.View> : <ComposerGlass radius={COMPOSER_RADIUS} />}
+				<ChatAttachmentMenu disabled={stopped || submitting} canAttachFile={Boolean(canEmbedFiles)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />
 				<TextInput
 					accessibilityLabel="Message the agent"
-					editable={!stopped}
+					editable={!stopped && !submitting}
 					value={text}
-					onChangeText={setText}
+					onChangeText={(value) => { latestText.current = value; setText(value); }}
 					onSelectionChange={(event) => setCursor(event.nativeEvent.selection.start)}
+					onContentSizeChange={(event) => {
+						if (!latestText.current) {
+							setFieldHeight(COMPOSER_FIELD_HEIGHT);
+							return;
+						}
+						// Native contentSize already includes the TextInput's vertical
+						// padding. Treat it as the field's full height; converting it to
+						// lines counted the padding as an extra line on the first render.
+						const contentHeight = Math.ceil(event.nativeEvent.contentSize.height);
+						setFieldHeight(Math.max(COMPOSER_FIELD_HEIGHT, Math.min(COMPOSER_FIELD_MAX_HEIGHT, contentHeight)));
+					}}
 					placeholder={stopped ? "Agent is stopped" : deliveryPresentation.placeholder}
 					placeholderTextColor={t.textFaint}
-					style={styles.input}
+					style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}
 					multiline
 					maxLength={40_000}
 				/>
-				<MicKey circular size={42} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
-				{primaryAction === "stop" ? <Pressable accessibilityRole="button" accessibilityLabel="Stop turn" accessibilityState={{ busy: interrupting, disabled: disabled || interrupting }} disabled={disabled || interrupting} onPress={() => { haptics.tap(); void onInterrupt(); }} style={[styles.stop, (disabled || interrupting) && { opacity: 0.55 }]}>{interrupting ? <ActivityIndicator size="small" color={t.textPrimary} /> : <Feather name="square" size={13} color={t.textPrimary} />}</Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={active ? "Queue message" : "Send message"} accessibilityState={{ disabled: disabled || stopped || pending || submitting }} disabled={disabled || stopped || pending || submitting || (!text.trim() && attachments.length === 0)} onPress={() => { haptics.tap(); void submit("send"); }} style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, (disabled || stopped || pending || submitting || (!text.trim() && attachments.length === 0)) && { opacity: 0.35 }]}>{pending || submitting ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>}
-			</View>}
-		</View>
+				<MicKey variant="plain" size={44} glyphSize={iconSize.lg} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
+				{primaryAction === "stop" ? <Pressable accessibilityRole="button" accessibilityLabel="Stop turn" accessibilityState={{ busy: interrupting, disabled: disabled || interrupting }} disabled={disabled || interrupting} onPress={() => { haptics.tap(); void onInterrupt(); }} style={[styles.stop, (disabled || interrupting) && { opacity: 0.55 }]}>{interrupting ? <ActivityIndicator size="small" color={t.textPrimary} /> : <Feather name="square" size={12} color={t.textPrimary} />}</Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={active ? "Queue message" : "Send message"} accessibilityState={{ disabled: disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) }} disabled={disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!text.trim() && attachments.length === 0)} onPress={() => { haptics.tap(); void submit("send"); }} style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, (disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!text.trim() && attachments.length === 0)) && { opacity: 0.35 }]}>{pending || submitting ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>}
+			</Animated.View>}
+		</>
+	);
+	return (
+		// The dock holds its resting inset at all times and rides the keyboard's own
+		// progress to close the difference, so its distance to the keyboard is
+		// `KEYBOARD_DOCK_GAP` at every frame of the animation rather than only once
+		// the keyboard has finished moving.
+		<Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>
+			{showReviewPrompt ? <Animated.View style={[styles.reviewArea, styles.reviewAreaWithPrompt]}>
+				<Animated.View style={[styles.reviewContainer, reviewCardDragStyle]} {...(reviewPRCollapsed ? {} : reviewCardPan.panHandlers)}>
+					{activeReviewPR ? <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, reviewCardGlassStyle]}><ComposerGlass radius={24} /></Animated.View> : null}
+					{composerContents}
+				</Animated.View>
+			</Animated.View> : composerContents}
+		</Animated.View>
 	);
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-	dock: { paddingHorizontal: 12, paddingTop: 7, gap: 6, backgroundColor: t.bgBase },
-	metaRow: { width: "100%", height: 44, flexDirection: "row", alignItems: "center" },
-	settingsSlot: { flex: 1, minWidth: 0, height: 44, alignItems: "flex-start", justifyContent: "center" },
-	composer: { minHeight: 54, maxHeight: 150, flexDirection: "row", alignItems: "flex-end", gap: 3, padding: 5, backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, borderRadius: 27, borderCurve: "continuous" },
-	input: { flex: 1, minHeight: 42, maxHeight: 138, color: t.textPrimary, fontSize: 15, lineHeight: 21, paddingHorizontal: 3, paddingVertical: 10, textAlignVertical: "top" },
-	send: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center", backgroundColor: t.textPrimary },
-	stop: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center", backgroundColor: t.bgSubtle, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
-	attachments: { gap: 7, paddingBottom: 7 },
-	attachment: { maxWidth: 180, flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: t.bgElevated, borderRadius: 9, borderWidth: 1, borderColor: t.borderSubtle, paddingHorizontal: 9, paddingVertical: 7 },
-	attachmentImage: { width: 28, height: 28, borderRadius: 6, backgroundColor: t.bgSubtle },
-	attachmentName: { flexShrink: 1, color: t.textSecondary, fontSize: 11 },
+	dock: { paddingHorizontal: space.md, paddingTop: space.xs, gap: space.xs, backgroundColor: t.bgBase },
+	reviewArea: { width: "100%", gap: space.xs },
+	reviewAreaWithPrompt: { gap: 0 },
+	reviewDivider: { width: "100%", borderTopWidth: 1, borderTopColor: t.borderStrong },
+	reviewContainer: { width: "100%", paddingHorizontal: space.sm, paddingVertical: space.xs, backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.accentBorder, borderRadius: 24, borderCurve: "continuous", overflow: "hidden" },
+	reviewCardHeader: { overflow: "hidden" },
+	// Three things can share this row — the turn settings, the queued-message note
+	// and the context meter — and the settings label is the only one that can be
+	// long. It is the one that yields: `flex: 1` with `minWidth: 0` to allow the
+	// squeeze, and `overflow: "hidden"` so a label that does not truncate cleanly
+	// cannot paint over its neighbours. The `gap` is the floor under that: even
+	// when everything fits, the two never touch.
+	metaRow: { width: "100%", height: 44, flexDirection: "row", alignItems: "center", gap: space.sm },
+	settingsSlot: { flex: 1, minWidth: 0, height: 44, alignItems: "flex-start", justifyContent: "center", overflow: "hidden" },
+	// One pill for the whole row: attach, the field, dictation, and the one filled
+	// control that commits. The pill's radius is half its resting height, so a
+	// single line reads as a capsule and a long message grows a rounded panel —
+	// no second border, no second surface.
+	//
+	// The fill goes transparent where the glass layer is drawing behind it: an
+	// opaque pill under a material is the one arrangement that turns glass grey.
+	//
+	// Bottom-align the controls so attach, mic and send stay anchored while the
+	// text field grows above them. The pill grows around the row; the glass fills
+	// that pill rather than receiving a separately measured height.
+	composer: { minHeight: COMPOSER_HEIGHT, maxHeight: COMPOSER_MAX_HEIGHT, flexDirection: "row", alignItems: "flex-end", gap: space.xxs, paddingHorizontal: space.xs, paddingVertical: space.xs, backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderRadius: COMPOSER_RADIUS, borderCurve: "continuous" },
+	reviewComposer: { backgroundColor: "transparent" },
+	// The native content-size event grows this from its one-line resting height;
+	// at the cap, the multiline field scrolls while the controls remain in place.
+	input: { fontFamily: "Geist_400Regular", flex: 1, minHeight: COMPOSER_FIELD_HEIGHT, maxHeight: COMPOSER_FIELD_MAX_HEIGHT, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: COMPOSER_LINE_HEIGHT, paddingVertical: space.md, textAlignVertical: "top" },
+	send: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
+	stop: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", backgroundColor: t.bgSubtle, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
+	attachments: { gap: space.xs, paddingBottom: space.xs },
+	attachment: { maxWidth: 180, flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.bgElevated, borderRadius: 8, borderWidth: 1, borderColor: t.borderSubtle, paddingHorizontal: space.sm, paddingVertical: space.xs },
+	attachmentImage: { width: 28, height: 28, borderRadius: 4, backgroundColor: t.bgSubtle },
+	attachmentName: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
 	// The way back to a request the user pushed aside to type instead.
-	restore: { flexDirection: "row", alignItems: "center", gap: 7, paddingVertical: 7, paddingHorizontal: 10, borderRadius: 12, backgroundColor: t.tintAmber },
-	restoreText: { flex: 1, minWidth: 0, color: t.amber, fontSize: 12, fontWeight: "700" },
-	restoreAction: { color: t.amber, fontSize: 12, fontWeight: "700", textDecorationLine: "underline" },
+	restore: { flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, paddingHorizontal: space.sm, borderRadius: 12, backgroundColor: t.tintAmber },
+	restoreText: { fontFamily: "Geist_600SemiBold", flex: 1, minWidth: 0, color: t.amber, fontSize: type.caption1.fontSize, fontWeight: "600" },
+	restoreAction: { fontFamily: "Geist_600SemiBold", color: t.amber, fontSize: type.caption1.fontSize, fontWeight: "600", textDecorationLine: "underline" },
 	// Sits at the end of the meta row; the bar carries the reading, the label names it.
-	contextMeter: { flexDirection: "row", alignItems: "center", gap: 6, height: 32, paddingLeft: 8 },
+	contextMeter: { flexShrink: 0, flexDirection: "row", alignItems: "center", gap: space.xs, height: 32, paddingLeft: space.sm },
 	contextTrack: { width: 34, height: 4, borderRadius: 2, overflow: "hidden", backgroundColor: t.bgSubtle },
 	contextFill: { height: 4, borderRadius: 2 },
-	contextText: { fontSize: 10, fontWeight: "700" },
-	deliveryNote: { maxWidth: "46%", height: 32, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 5, paddingRight: 5 },
-	deliveryNoteText: { flexShrink: 1, color: t.textTertiary, fontSize: 10, fontWeight: "600" },
-	steerAction: { width: 30, height: 30, alignItems: "center", justifyContent: "center", borderRadius: 15, backgroundColor: t.tintBlue },
+	contextText: { fontFamily: "Geist_600SemiBold", fontSize: type.caption2.fontSize, fontWeight: "600" },
+	deliveryNote: { flexShrink: 0, maxWidth: "46%", height: 32, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.xxs, paddingRight: space.xxs },
+	deliveryNoteText: { fontFamily: "Geist_600SemiBold", flexShrink: 1, color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600" },
+	steerAction: { width: 30, height: 30, alignItems: "center", justifyContent: "center", borderRadius: 16, backgroundColor: t.accentTint },
 	queueDock: { overflow: "hidden", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, borderRadius: 16, borderCurve: "continuous" },
-	queueRow: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 9, paddingLeft: 13, paddingRight: 4 },
+	queueRow: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.xxs },
 	queueRowDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
-	queueText: { flex: 1, color: t.textSecondary, fontSize: 13, lineHeight: 18, fontWeight: "500" },
+	queueText: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 	queueSteer: { width: 40, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 20 },
 	queueDelete: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
-	error: { color: t.red, fontSize: 11, lineHeight: 15, marginBottom: 6, paddingHorizontal: 3 },
-	voice: { flexDirection: "row", alignItems: "center", gap: 7, backgroundColor: t.tintRed, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 7, marginBottom: 7 },
-	voiceText: { flex: 1, color: t.textSecondary, fontSize: 11 },
+	error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, marginBottom: space.xs, paddingHorizontal: space.hair },
+	voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: 8, paddingHorizontal: space.sm, paddingVertical: space.xs, marginBottom: space.xs },
+	voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
 });

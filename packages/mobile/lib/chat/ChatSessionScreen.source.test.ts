@@ -6,6 +6,12 @@ const composerSource = readFileSync(new URL("./ChatComposer.tsx", import.meta.ur
 const apiSource = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
 
 describe("active turn controls", () => {
+	it("remounts the composer when a same-ID session changes host", () => {
+		expect(screenSource).toContain('key={config ? JSON.stringify([machineIdentity(config), session.id]) : session.id}');
+		expect(composerSource).toContain('`ao.chat.draft.${machineIdentity(config)}.${sessionId}`');
+		expect(composerSource).toContain('if (!draftKey || !draftLoaded) return;');
+	});
+
 	it("keeps working state in the conversation instead of a redundant status strip", () => {
 		expect(screenSource).not.toContain("LiveTurnBar");
 		expect(screenSource).not.toContain("Agent is working");
@@ -52,5 +58,22 @@ describe("active turn controls", () => {
 	it("renames the session, not the conversation", () => {
 		expect(screenSource).toContain("onRename: (next) => renameWorker(session.id, next)");
 		expect(screenSource).not.toContain("conversation.rename(next)");
+	});
+
+	it("shows a failed start's reason instead of only a stopped-agent banner", () => {
+		expect(screenSource).toContain('session.provisionState !== "failed"');
+		expect(screenSource).toContain('title="Session failed to start" message={failedStart}');
+		expect(screenSource).toContain('startFailure={failedStart}');
+		expect(screenSource).toContain('disabled={interfaceTransitionActive || Boolean(failedStart)}');
+	});
+
+	it("offers a live PR review shortcut while leaving the chat composer in place", () => {
+		expect(screenSource).toContain("sessionPRReadyForReview(session)");
+		expect(screenSource).toContain("reviewPR={reviewPromptPR}");
+		expect(screenSource).toContain("reviewRouteForPR(session.id, reviewPromptPR, currentHostId)");
+		expect(screenSource).toContain("reviewRouteForSession(session, currentHostId)");
+		expect(screenSource).toContain("encodeURIComponent(reviewPromptHostKey)");
+		expect(screenSource).toContain("reviewSummaries.summaryFor(config, session.id, reviewPromptPR.number)");
+		expect(screenSource).toContain("<ChatComposer");
 	});
 });
