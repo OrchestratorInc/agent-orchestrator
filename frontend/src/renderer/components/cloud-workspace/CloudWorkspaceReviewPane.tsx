@@ -6,7 +6,7 @@ import { cloudWorkspaceReviewDiffsQueryOptions } from "../../hooks/useCloudWorks
 import type { CloudCpClient, CloudCpWorkspaceReviewCommit, CloudCpWorkspaceReviewFileSummary, CloudCpWorkspaceReviewResponse, CloudCpWorkspaceReviewScope } from "../../lib/cloud-cp";
 import { cn } from "../../lib/utils";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
-import { cancelFileAnnotations, PanelMessage, RetryButton } from "../WorkspaceDiffView";
+import { cancelFileAnnotations, FileAnnotationSendBar, PanelMessage, RetryButton } from "../WorkspaceDiffView";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { CloudDiffFile } from "./CloudDiffFile";
@@ -199,6 +199,7 @@ export function CloudWorkspaceReviewPane({
 				</section>;
 			})}
 		</div>}
+		<FileAnnotationSendBar annotation={annotation} surface="review" />
 	</div>;
 }
 

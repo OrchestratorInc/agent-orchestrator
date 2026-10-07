@@ -23,6 +23,7 @@ import {
 	canSplitCompare,
 	cancelFileAnnotations,
 	FileAnnotationComposer,
+	FileAnnotationSendBar,
 	PanelMessage,
 	ReviewDiffBody,
 	RetryButton,
@@ -410,6 +411,7 @@ export function FileContentPane({
 				)}
 				</EditProvider>
 				{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}
+				<FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" />
 			</div>
 		);
 	}
@@ -422,6 +424,7 @@ export function FileContentPane({
 			) : fileView}
 			</EditProvider>
 			{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}
+			<FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" />
 		</div>
 	);
 }

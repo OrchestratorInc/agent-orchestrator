@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FileAnnotationComposer, ReviewDiffBody, type FileAnnotationModel } from "./WorkspaceDiffView";
+import { FileAnnotationComposer, FileAnnotationSendBar, ReviewDiffBody, type FileAnnotationModel } from "./WorkspaceDiffView";
 import type { WorkspaceFileDetail } from "../hooks/useSessionWorkspaceFiles";
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
@@ -242,7 +242,11 @@ describe("ReviewDiffBody", () => {
 		expect(screen.getByText("⌘/Ctrl + Enter to send")).toBeInTheDocument();
 		const textarea = screen.getByRole("textbox", { name: /Feedback for src\/App\.tsx/ });
 		fireEvent.change(textarea, { target: { value: "Rename this" } });
-		expect(model.setDraft).not.toHaveBeenCalled();
+		// The model hears that the box now has text, then nothing per keystroke.
+		expect(model.setDraft).toHaveBeenCalledTimes(1);
+		fireEvent.change(textarea, { target: { value: "Rename this prop" } });
+		expect(model.setDraft).toHaveBeenCalledTimes(1);
+		fireEvent.change(textarea, { target: { value: "Rename this" } });
 		fireEvent.keyDown(textarea, { key: "Enter" });
 		expect(model.submit).not.toHaveBeenCalled();
 		fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
@@ -306,8 +310,36 @@ describe("ReviewDiffBody", () => {
 		// Leaving a box hands its text to the model, so a send from another box includes it.
 		fireEvent.blur(secondBox);
 		expect(model.setDraft).toHaveBeenCalledWith(second, "Keep this guard");
-		fireEvent.click(screen.getByRole("button", { name: "Send all 2 comments" }));
+		const sendAll = screen.getByRole("button", { name: "Send all 2 comments" });
+		// The button spells out that it sends every comment, not just this box.
+		expect(sendAll).toHaveTextContent("Send all 2");
+		fireEvent.click(sendAll);
 		expect(model.submit).toHaveBeenCalledWith(second, "Keep this guard");
+	});
+
+	it("offers one bar to send or discard every written comment", () => {
+		const model = noopAnnotation();
+		const first = { path: "src/App.tsx", side: "new" as const, line: 3, surface: "review" as const };
+		const second = { path: "src/lib/api.ts", side: "file" as const, surface: "review" as const };
+		const empty = { path: "README.md", side: "new" as const, line: 1, surface: "review" as const };
+		model.targets = [first, second, empty];
+		model.draftFor = (target) => (target === empty ? "" : "Some feedback");
+		const { rerender } = render(<FileAnnotationSendBar annotation={model} surface="review" />);
+
+		expect(screen.getByRole("status")).toHaveTextContent("2 comments ready");
+		fireEvent.click(screen.getByRole("button", { name: "Send all 2" }));
+		expect(model.submit).toHaveBeenCalledWith();
+		fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+		expect(model.cancel).toHaveBeenCalledWith();
+
+		// A pane with no written comment of its own stays clear of the bar.
+		rerender(<FileAnnotationSendBar annotation={model} surface="focused" />);
+		expect(screen.queryByTestId("file-feedback-bar")).not.toBeInTheDocument();
+
+		model.targets = [first];
+		rerender(<FileAnnotationSendBar annotation={{ ...model }} surface="review" />);
+		expect(screen.getByRole("status")).toHaveTextContent("1 comment ready");
+		expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
 	});
 
 	describe("large diff virtualization", () => {

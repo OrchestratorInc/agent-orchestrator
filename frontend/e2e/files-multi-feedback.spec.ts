@@ -81,9 +81,13 @@ test("@P0 inline comments on several lines and files go to the agent in one mess
 	await expect(boxes.nth(1)).toHaveValue("Drop second.");
 	await expect(boxes.nth(2)).toHaveValue("Inline third.");
 	await expect(boxes.nth(2)).toBeFocused();
-	await expect(inspector.getByText("⌘/Ctrl + Enter to send all 3")).toBeVisible();
+	// Every box says the send covers all three.
+	await expect(inspector.getByText("⌘/Ctrl + Enter to send all 3")).toHaveCount(3);
 
-	await page.keyboard.press("ControlOrMeta+Enter");
+	// One bar under the files says how many comments are ready and sends them together.
+	const bar = inspector.getByTestId("file-feedback-bar");
+	await expect(bar).toContainText("3 comments ready");
+	await bar.getByRole("button", { name: "Send all 3" }).click();
 
 	await expect.poll(() => sent.length).toBe(1);
 	expect(sent[0]).toContain("3 inline feedback comments");

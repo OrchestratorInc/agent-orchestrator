@@ -765,7 +765,13 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 					)}
 					disabled={sending || sent}
 					onBlur={() => annotation.setDraft(target, text)}
-					onChange={(event) => setText(event.target.value)}
+					onChange={(event) => {
+						const next = event.target.value;
+						setText(next);
+						// The review bar counts written comments, so tell the model when
+						// this box starts or stops having text, not on every keystroke.
+						if (Boolean(next.trim()) !== Boolean(text.trim())) annotation.setDraft(target, next);
+					}}
 					onKeyDown={(event) => {
 						if (event.key === "Escape") {
 							event.preventDefault();
@@ -801,17 +807,45 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 					</Button>
 					<Button
 						aria-label={sent ? t("files.feedbackSent") : commentCount > 1 ? t("files.sendAllFeedback", { count: commentCount }) : t("files.sendFeedback")}
-						className="text-muted-foreground hover:text-foreground disabled:opacity-100"
+						className={cn("text-muted-foreground hover:text-foreground disabled:opacity-100", commentCount > 1 && "px-2 text-xs")}
 						disabled={!text.trim() || sending || sent}
-						size="icon-sm"
+						size={commentCount > 1 ? "sm" : "icon-sm"}
 						title={sent ? t("files.feedbackSent") : commentCount > 1 ? t("files.sendAllFeedback", { count: commentCount }) : t("files.sendFeedback")}
 						type="submit"
 						variant="ghost"
 					>
 						{sending ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : sent ? <Check aria-hidden="true" className="text-success" /> : <SendIcon aria-hidden="true" className={cn(!text.trim() && "opacity-50")} />}
+						{/* With several comments written, say that this sends them all. */}
+						{commentCount > 1 && !sending && !sent ? t("files.sendAllFeedbackShort", { count: commentCount }) : null}
 					</Button>
 				</div>
 			</form>
+		</div>
+	);
+}
+
+// One place to send or drop every written comment, so it is plain that the
+// boxes scattered through the files go to the agent together. `surface` keeps
+// it to the pane that holds comments; the count and the send cover them all.
+export function FileAnnotationSendBar({ annotation, className, surface }: { annotation: FileAnnotationModel; className?: string; surface: "focused" | "review" }) {
+	const { t } = useTranslation();
+	const written = annotation.targets.filter((target) => annotation.draftFor(target).trim());
+	const here = written.some((target) => (surface === "review" ? target.surface !== "focused" : target.surface !== "review"));
+	if (!here) return null;
+	const sending = annotation.status === "sending";
+	const sent = annotation.status === "sent";
+	return (
+		<div className={cn("flex min-h-9 shrink-0 items-center gap-1 border-t border-border bg-background px-3 py-1 font-sans", className)} data-testid="file-feedback-bar">
+			<span className="mr-auto min-w-0 truncate text-xs text-muted-foreground" role="status">
+				{annotation.status === "error" ? <span className="text-error">{annotation.error}</span> : sent ? t("files.feedbackSent") : t("files.feedbackReady", { count: written.length })}
+			</span>
+			<Button className="px-2 text-xs text-muted-foreground hover:text-foreground" disabled={sending || sent} onClick={() => annotation.cancel()} size="sm" type="button" variant="ghost">
+				{t("files.discardFeedback")}
+			</Button>
+			<Button className="px-2 text-xs" disabled={sending || sent} onClick={() => void annotation.submit()} size="sm" type="button" variant="primary">
+				{sending ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : sent ? <Check aria-hidden="true" /> : <SendIcon aria-hidden="true" />}
+				{written.length > 1 ? t("files.sendAllFeedbackShort", { count: written.length }) : t("files.sendFeedbackShort")}
+			</Button>
 		</div>
 	);
 }
