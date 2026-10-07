@@ -105,6 +105,10 @@ If you explicitly request Chat from an unsupported harness, spawning fails. An i
 
 Use `env`, `symlinks`, and `postCreate` for repeatable workspace setup. A failing `postCreate` command prevents the agent from starting, so keep setup commands deterministic. Symlink restrictions are described in [Configuration fields](#configuration-fields).
 
+Setup steps run in order in separate shells. Each step has its own 10-minute limit, with no total setup limit. Five steps can take up to 50 minutes. A failed or cancelled step stops launch. Cancellation stops the shell and its child processes before workspace rollback.
+
+The same command list runs on every platform. Use `sh` syntax on macOS/Linux and `cmd` syntax on Windows. Quoting, variables, and command chaining differ. For a project used on multiple platforms, call a script that supports each platform, such as `node scripts/setup.mjs`.
+
 Use `agentRules` or `agentRulesFile` for worker instructions and `orchestratorRules` for supervision instructions. If both worker fields are set, AO combines the inline rules and file contents.
 
 For example, these fields link local setup files, install dependencies, and load worker rules. This is a configuration fragment; keep any other existing fields when applying it:

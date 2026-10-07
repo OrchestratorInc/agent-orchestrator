@@ -5541,8 +5541,8 @@ func safeRelPath(rel string) (string, error) {
 }
 
 // runPostCreate runs each post-create command in the workspace via the platform
-// shell, so OS-agnostic commands like "pnpm install" work. A non-zero exit
-// aborts the spawn with the command output.
+// shell (sh on Unix, cmd on Windows). Each step has its own ten-minute
+// deadline. A non-zero exit aborts the spawn with bounded, redacted output.
 func runPostCreate(ctx context.Context, workspacePath, sourcePath string, commands []string, projectEnv map[string]string) error {
 	for index, command := range commands {
 		command = strings.TrimSpace(command)
@@ -5556,6 +5556,8 @@ func runPostCreate(ctx context.Context, workspacePath, sourcePath string, comman
 		} else {
 			cmd = aoprocess.CommandContext(stepCtx, "sh", "-c", command)
 		}
+		aoprocess.ConfigureTreeCancellation(cmd)
+		cmd.WaitDelay = time.Second
 		cmd.Dir = workspacePath
 		cmd.Env = os.Environ()
 		for key, value := range agentlaunch.MergeEnv(projectEnv, nil) {

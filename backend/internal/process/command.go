@@ -19,3 +19,11 @@ func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd 
 	configureHidden(cmd)
 	return cmd
 }
+
+// ConfigureTreeCancellation makes a context cancellation stop the command's
+// process group on Unix or its child tree on Windows. Call before Start.
+// The command must be created with CommandContext.
+func ConfigureTreeCancellation(cmd *exec.Cmd) {
+	configureProcessGroup(cmd)
+	cmd.Cancel = func() error { return killProcessTree(cmd) }
+}

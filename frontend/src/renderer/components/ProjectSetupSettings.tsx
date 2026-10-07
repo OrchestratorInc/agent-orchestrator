@@ -66,6 +66,7 @@ function SetupEditor({ project, onSaveState, onSaved }: { project: Project; onSa
 			<h2 className="text-base font-semibold text-settings-label">{t("settings.project.workspaceSetup")}</h2>
 			<p className="mt-2 text-sm text-settings-muted">{t(project.kind === "scratch" ? "settings.project.setupHintScratch" : "settings.project.setupHintGit")}</p>
 			<p className="mt-1 text-xs text-settings-muted">{t("settings.project.setupShellHint")}</p>
+			<p className="mt-1 text-xs text-settings-muted">{t("settings.project.setupPlatformHint")}</p>
 		</div>
 		{project.kind !== "scratch" && <div className="rounded-md border border-border p-3 text-xs text-settings-muted">
 			<p className="font-medium text-settings-label">{t("settings.project.setupPaths")}</p>
