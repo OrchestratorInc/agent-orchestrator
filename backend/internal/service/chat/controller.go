@@ -237,7 +237,12 @@ type Controller struct {
 	// turn-started notification arriving. Interrupt needs the distinction: a
 	// provider refuses to cancel a turn it has not acknowledged yet.
 	ackedTurnID string
-	state       ports.ChatControllerState
+	// artifactsShown holds the artifact paths the thread already shows in
+	// provider turn artifactsShownTurn: pages reported there, and renders
+	// kept as artifacts. A new turn replaces the set.
+	artifactsShownTurn string
+	artifactsShown     map[string]bool
+	state              ports.ChatControllerState
 	// settings are the provider choices applied to the next dispatch. Held here as
 	// well as on disk so a dispatch does not need a read, and updated together with
 	// the row so the two cannot drift.

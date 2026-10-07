@@ -11,7 +11,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
 type artifactDetail struct {
@@ -164,5 +166,49 @@ func TestRecordReportedArtifactWithoutARunningTurnShowsNothing(t *testing.T) {
 	h.svc.RecordReportedArtifact(ctx, testSession, page)
 	if rows := artifactRows(t, h); len(rows) != 1 {
 		t.Fatalf("rows = %+v, want one once a turn runs", rows)
+	}
+}
+
+// An agent that keeps a render as an artifact and then reports that file would
+// otherwise show the same page twice in the turn.
+func TestRecordReportedArtifactSkipsARenderKeptInTheSameTurn(t *testing.T) {
+	h, provider := steerHarness(t)
+	ctx := context.Background()
+	result, err := h.svc.PublishRender(ctx, testSession, chatsvc.RenderInput{HTML: "<p>q3</p>", Title: "Q3 status", Artifact: true})
+	if err != nil || result.ArtifactPath == "" {
+		t.Fatalf("PublishRender = %+v, %v", result, err)
+	}
+	h.svc.RecordReportedArtifact(ctx, testSession, result.ArtifactPath)
+	snapshot, err := h.st.LoadConversationSnapshot(ctx, h.ctrl.ConversationID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renders, artifacts := renderRows(snapshot), artifactRows(t, h); len(renders) != 1 || len(artifacts) != 0 {
+		t.Fatalf("renders = %d, artifacts = %+v; want the render alone", len(renders), artifacts)
+	}
+
+	// A different file in the same turn still shows.
+	writeArtifact(t, filepath.Dir(result.ArtifactPath), "appendix.html")
+	h.svc.RecordReportedArtifact(ctx, testSession, "appendix.html")
+	if rows := artifactRows(t, h); len(rows) != 1 || rows[0].Artifact.Path != "appendix.html" {
+		t.Fatalf("rows = %+v, want appendix.html", rows)
+	}
+
+	// The kept page reported in the next turn shows there.
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateCompleted
+	})
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "again", ClientMessageID: "turn-2", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(provider.sentTexts()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-2"})
+	h.svc.RecordReportedArtifact(ctx, testSession, result.ArtifactPath)
+	if rows := artifactRows(t, h); len(rows) != 2 || rows[1].Artifact.Path != "Q3 status.html" {
+		t.Fatalf("rows = %+v, want Q3 status.html in the next turn", rows)
 	}
 }

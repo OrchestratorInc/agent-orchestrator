@@ -117,7 +117,7 @@ func (s *Service) PublishRender(ctx context.Context, id domain.SessionID, in Ren
 	if controller.busy() {
 		heights = s.measureRender(ctx, id, strings.TrimRight(in.BaseURL, "/")+path)
 	}
-	activityID, err := controller.recordRender(ctx, renderID, title, height, heights, path)
+	activityID, turn, err := controller.recordRender(ctx, renderID, title, height, heights, path)
 	if err != nil {
 		// Only the timeline row lets anything find the page, so an unrecorded page goes.
 		if removeErr := s.renders.RemoveRender(context.WithoutCancel(ctx), id, renderID); removeErr != nil {
@@ -133,6 +133,8 @@ func (s *Service) PublishRender(ctx context.Context, id domain.SessionID, in Ren
 		} else {
 			// Absolute, so the agent can pass it to ao report --artifact.
 			result.ArtifactPath = filepath.Join(artifact.Dir, artifact.Path)
+			// A report of the file in this turn would show the page twice.
+			controller.markArtifactShown(turn, artifact.Path)
 		}
 	}
 	return result, nil
@@ -323,13 +325,14 @@ func readRenderHeights(value any) ([][2]int, error) {
 }
 
 // recordRender attaches a published page to the turn in flight, as a system
-// activity identified by its "render" discriminator, the way a steer is.
-func (c *Controller) recordRender(ctx context.Context, renderID, title string, height int, heights [][2]int, path string) (string, error) {
+// activity identified by its "render" discriminator, the way a steer is. It
+// returns the row's id and the provider turn it landed on.
+func (c *Controller) recordRender(ctx context.Context, renderID, title string, height int, heights [][2]int, path string) (string, string, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	providerTurnID, ok := c.awaitAcknowledgedTurn(ctx)
 	if !ok {
-		return "", ErrNoActiveTurn
+		return "", "", ErrNoActiveTurn
 	}
 	render := map[string]any{"id": renderID, "title": title, "height": height, "path": path}
 	if len(heights) > 0 {
@@ -337,7 +340,7 @@ func (c *Controller) recordRender(ctx context.Context, renderID, title string, h
 	}
 	detail, err := json.Marshal(map[string]any{"event": "render", "render": render})
 	if err != nil {
-		return "", fmt.Errorf("encode render detail: %w", err)
+		return "", "", fmt.Errorf("encode render detail: %w", err)
 	}
 	activityID := c.newID()
 	if err := c.store.UpsertActivity(ctx, c.conversation.ID, providerTurnID, domain.ConversationActivity{
@@ -348,9 +351,9 @@ func (c *Controller) recordRender(ctx context.Context, renderID, title string, h
 		Detail:         detail,
 		ProviderItemID: "render:" + renderID,
 	}, c.now()); err != nil {
-		return "", fmt.Errorf("record render on turn %s: %w", providerTurnID, err)
+		return "", "", fmt.Errorf("record render on turn %s: %w", providerTurnID, err)
 	}
-	return activityID, nil
+	return activityID, providerTurnID, nil
 }
 
 // ErrRenderCheckUnavailable reports that no desktop app is connected to load the page.

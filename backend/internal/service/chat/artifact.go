@@ -81,14 +81,17 @@ func artifactRelPath(dir, reference string) (string, bool) {
 }
 
 // recordArtifact shows a reported HTML artifact in the turn in flight, as a
-// system activity identified by its "artifact" discriminator. The same file
-// reported again in that turn updates its one row.
+// system activity identified by its "artifact" discriminator. A page that turn
+// already shows, reported before or kept from a render, is not shown again.
 func (c *Controller) recordArtifact(ctx context.Context, rel string) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	providerTurnID, ok := c.awaitAcknowledgedTurn(ctx)
 	if !ok {
 		return ErrNoActiveTurn
+	}
+	if c.artifactShown(providerTurnID, rel) {
+		return nil
 	}
 	name := path.Base(rel)
 	fileURL := "/api/v1/sessions/" + url.PathEscape(string(c.sessionID)) + "/artifact-files/" + (&url.URL{Path: rel}).EscapedPath()
@@ -109,5 +112,23 @@ func (c *Controller) recordArtifact(ctx context.Context, rel string) error {
 	}, c.now()); err != nil {
 		return fmt.Errorf("record artifact on turn %s: %w", providerTurnID, err)
 	}
+	c.markArtifactShown(providerTurnID, rel)
 	return nil
+}
+
+// markArtifactShown notes that provider turn turn shows the artifact at rel.
+// ponytail: in memory, so a daemon restart mid-turn can show a page twice.
+func (c *Controller) markArtifactShown(turn, rel string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.artifactsShownTurn != turn {
+		c.artifactsShownTurn, c.artifactsShown = turn, map[string]bool{}
+	}
+	c.artifactsShown[rel] = true
+}
+
+func (c *Controller) artifactShown(turn, rel string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.artifactsShownTurn == turn && c.artifactsShown[rel]
 }
