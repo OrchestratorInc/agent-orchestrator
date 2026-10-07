@@ -6,6 +6,7 @@ import {
 	readRenderLinkRequest,
 	readRenderRef,
 	readRenderTheme,
+	renderFileName,
 	renderThemeFragment,
 	renderThemeMessage,
 } from "./render-frame";
@@ -63,6 +64,15 @@ describe("render-frame helpers", () => {
 		expect(measuredRenderHeight(heights, 240)).toBe(900);
 		expect(measuredRenderHeight(heights, 1200)).toBe(500);
 		expect(measuredRenderHeight([[640, 300]], 1200)).toBe(300);
+	});
+
+	it("names a saved page after its title, without characters a file system refuses", () => {
+		expect(renderFileName("Turns by day")).toBe("Turns by day.html");
+		expect(renderFileName('Q3: a/b\\c *?"<>| \u0007 report\n')).toBe("Q3 a b c report.html");
+		expect(renderFileName("")).toBe("Page.html");
+		expect(renderFileName(' /:*?"<>| ')).toBe("Page.html");
+		expect(renderFileName(`${"x".repeat(119)} tail`)).toBe(`${"x".repeat(119)}.html`);
+		expect(renderFileName("y".repeat(300))).toBe(`${"y".repeat(120)}.html`);
 	});
 
 	it("reads only the bootstrap's own protocol messages", () => {

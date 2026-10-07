@@ -61,6 +61,21 @@ export function measuredRenderHeight(heights: Array<[number, number]>, width: nu
 	return Math.max(heights[low]![1], heights[high]![1]);
 }
 
+/**
+ * The file a saved render is written to: its title, without characters a file
+ * system refuses, capped at 120. Ported from T3 Code's `htmlRenderFileName`
+ * (packages/shared/src/htmlRender.ts).
+ */
+export function renderFileName(title: string): string {
+	const name = title
+		.replace(/[\\/:*?"<>|\p{Cc}]+/gu, " ")
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, 120)
+		.trim();
+	return `${name || "Page"}.html`;
+}
+
 export interface RenderTheme {
 	appearance: "light" | "dark";
 	variables: Record<string, string>;
