@@ -139,8 +139,8 @@ async function expandArchive() {
 }
 
 beforeEach(() => {
-	// The memory light and card chips are Developer mode tools.
-	useUiStore.setState({ developerMode: true });
+	// The memory light and card chips are Developer mode tools behind the Diagnostics toggle.
+	useUiStore.setState({ developerMode: true, diagnostics: true });
 	navigateMock.mockReset();
 	notificationShowMock.mockReset().mockResolvedValue(undefined);
 	postMock.mockReset().mockResolvedValue({ data: {} });
@@ -185,8 +185,11 @@ describe("SessionsBoard", () => {
 		expect(screen.getByTestId("session-resource")).toHaveAttribute("data-resource-tone", "neutral");
 	});
 
-	it("shows no memory light or card memory outside Developer mode", async () => {
-		useUiStore.setState({ developerMode: false });
+	it.each([
+		["outside Developer mode", { developerMode: false, diagnostics: true }],
+		["with Diagnostics off in Developer mode", { developerMode: true, diagnostics: false }],
+	])("shows no memory light or card memory %s", async (_case, flags) => {
+		useUiStore.setState(flags);
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([boardSession({ id: "running", title: "Running task", status: "idle", activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" } })])],
 			isSuccess: true, isError: false,

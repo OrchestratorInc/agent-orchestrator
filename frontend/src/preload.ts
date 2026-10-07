@@ -14,6 +14,7 @@ import type {
 	BrowserFindStopInput,
 	BrowserNavState,
 	BrowserRect,
+	BrowserRuntimeState,
 	BrowserTabsState,
 } from "./main/browser-view-host";
 import {
@@ -394,6 +395,8 @@ const api = {
 		},
 	},
 	browser: {
+		reconnectRuntime: () => ipcRenderer.invoke("browser:runtime:reconnect") as Promise<void>,
+		getRuntimeState: () => ipcRenderer.invoke("browser:runtime:state") as Promise<BrowserRuntimeState>,
 		nativeCompositionEnabled: true,
 		ensure: (sessionId: string) => ipcRenderer.invoke("browser:ensure", sessionId) as Promise<BrowserNavState>,
 		setBounds: (input: BrowserBoundsInput) => ipcRenderer.send("browser:setBounds", input),
@@ -516,6 +519,13 @@ const api = {
 			ipcRenderer.on("browser:agentActivity", wrapped);
 			return () => {
 				ipcRenderer.off("browser:agentActivity", wrapped);
+			};
+		},
+		onRuntimeState: (listener: (state: BrowserRuntimeState) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: BrowserRuntimeState) => listener(state);
+			ipcRenderer.on("browser:runtimeState", wrapped);
+			return () => {
+				ipcRenderer.off("browser:runtimeState", wrapped);
 			};
 		},
 		onDevToolsState: (listener: (state: BrowserDevToolsState) => void) => {

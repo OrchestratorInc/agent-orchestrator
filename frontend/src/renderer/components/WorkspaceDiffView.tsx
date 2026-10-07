@@ -649,7 +649,7 @@ export function LineFeedbackButtonControl({
 			className={cn(
 				"z-20 size-6 rounded-sm border-primary/70 shadow-md shadow-black/30 active:translate-y-0 active:scale-100",
 				gutter
-					? "relative mr-[-0.75rem]"
+					? "relative size-5"
 					: "absolute inset-y-0 left-6 my-auto opacity-0 transition-opacity focus-visible:opacity-100 group-hover/line:opacity-100",
 			)}
 			data-utility-button={gutter ? "" : undefined}

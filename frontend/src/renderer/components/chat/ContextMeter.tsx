@@ -153,7 +153,7 @@ function ContextReadout({ usage }: { usage: ConversationUsage }) {
 						<svg aria-hidden="true" className="size-5" viewBox="0 0 24 24">
 							<circle cx="12" cy="12" fill="none" r="9" stroke="currentColor" strokeWidth="3" />
 						</svg>
-						<span aria-hidden="true" className="absolute text-[10px]">?</span>
+						<span aria-hidden="true" className="absolute text-micro">?</span>
 					</span>
 				</TooltipTrigger>
 				<TooltipContent className={tooltipSurface}>
@@ -231,7 +231,7 @@ function QuotaWarning({
 			<TooltipTrigger asChild>
 				<span
 					className={cn(
-						"flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] tabular-nums",
+						"flex items-center gap-1 rounded border px-1.5 py-0.5 text-caption tabular-nums",
 						severity === "critical"
 							? "border-status-exited/40 text-status-exited"
 							: "border-status-needs-you/40 text-status-needs-you",

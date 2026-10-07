@@ -218,6 +218,10 @@ type AgentModelInfo struct {
 	// must render no effort control at all rather than an empty one.
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"defaultEffort,omitempty"`
+	// LastUsedAt is the latest activity of a session in scope whose current model
+	// is this model. It is derived from session history on every read, never
+	// stored on the cached catalog, and absent for a model no session ran.
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
 }
 
 // AgentModelCatalog is AO's normalized model-picker response.

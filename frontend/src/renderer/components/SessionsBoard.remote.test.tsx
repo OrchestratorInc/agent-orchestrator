@@ -64,6 +64,7 @@ vi.mock("../lib/shell-context", () => ({
 vi.mock("../stores/ui-store", () => {
 	const state = {
 		developerMode: true,
+		diagnostics: true,
 		remoteHosts: true,
 		requestNewTask: mocks.requestNewTask,
 		showGlobalToast: vi.fn(),

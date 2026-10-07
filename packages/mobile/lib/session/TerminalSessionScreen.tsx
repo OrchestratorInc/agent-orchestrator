@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ActivityIndicator, Alert, BackHandler, Keyboard, LayoutAnimation, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
-import { ApiError, getPreview, isTerminalStatus, killSession, killSessionReviewer, sendMessage } from "../api";
+import { ApiError, getPreview, killSession, killSessionReviewer, sendMessage } from "../api";
 import { authHeaders, isConfigured, type ServerConfig } from "../config";
 import { previewForConfig } from "../hostRoute";
 import { terminalTheme, type Theme } from "../theme";
@@ -39,7 +39,7 @@ import {
 } from "./useInterfaceTransition";
 import { terminalInterfaceFailureRecovery } from "./terminalInterfaceRecovery";
 import { adjustTerminalViewport } from "./terminalViewport";
-import type { RouteSession } from "./sessionRoute";
+import { isRuntimeGone, type RouteSession } from "./sessionRoute";
 import { iconSize, press, space, type } from "../tokens";
 import { backOr } from "../backNavigation";
 import { userFacingError } from "../connectionError";
@@ -703,7 +703,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			known.activity === "waiting_input" ||
 			known.activity === "blocked"),
 	);
-	const dead = notFound || (!shellOnly && known ? isTerminalStatus(known.status) : false);
+	const dead = notFound || (!shellOnly && known ? isRuntimeGone(known) : false);
 	// What counts as a live preview: any file the daemon surfaces (an .html build, or
 	// a generated doc like plan.md / a report) EXCEPT a repo's README, which the
 	// detector's markdown fallback always matches on a fresh checkout. Filtering the

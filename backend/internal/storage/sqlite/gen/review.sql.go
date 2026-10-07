@@ -7,7 +7,6 @@ package gen
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -884,23 +883,6 @@ func (q *Queries) ListRunningReviewRunsBySession(ctx context.Context, sessionID 
 		return nil, err
 	}
 	return items, nil
-}
-
-const markReviewRunDelivered = `-- name: MarkReviewRunDelivered :execrows
-UPDATE review_run SET status = 'delivered', delivered_at = ? WHERE id = ? AND status = 'complete' AND delivered_at IS NULL
-`
-
-type MarkReviewRunDeliveredParams struct {
-	DeliveredAt sql.NullTime
-	ID          string
-}
-
-func (q *Queries) MarkReviewRunDelivered(ctx context.Context, arg MarkReviewRunDeliveredParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markReviewRunDelivered, arg.DeliveredAt, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
 }
 
 const recordReviewChatControllerError = `-- name: RecordReviewChatControllerError :execrows

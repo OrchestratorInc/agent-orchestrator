@@ -385,8 +385,7 @@ func TestRollbackClassifiesAProviderRefusal(t *testing.T) {
 	}
 }
 
-// The title round trip: AO asks, the provider confirms on its own event, and only
-// then does the session label move. Nothing is written optimistically.
+// The title round trip: the provider accepts AO's request before the label moves.
 func TestSetTitleFlowsThroughTheProviderIntoTheSessionName(t *testing.T) {
 	recorder := newHistoryRecorder()
 	h := newHarnessWithConversation(t, recorder)

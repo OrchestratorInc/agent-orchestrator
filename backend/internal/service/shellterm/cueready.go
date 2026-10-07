@@ -44,7 +44,7 @@ func prepareCueShellReadiness(dataDir string, argv []string) (cueShellReadiness,
 		}
 	} else {
 		switch name {
-		case "bash", "zsh", "sh":
+		case "bash", "zsh", "sh", "fish":
 		default:
 			return result, nil
 		}
@@ -62,6 +62,12 @@ func prepareCueShellReadiness(dataDir string, argv []string) (cueShellReadiness,
 	_ = f.Close()
 	result.cleanup = func() { _ = os.Remove(result.file) }
 	switch name {
+	case "fish":
+		// Fish evaluates init commands after the user's configuration. Register
+		// a one-shot prompt event without replacing their prompt or startup files.
+		script := "function _ao_cue_ready --on-event fish_prompt; " +
+			"printf ready > \"$AO_CUE_READY_FILE\"; functions --erase _ao_cue_ready; end"
+		result.argv = append(result.argv, "--init-command", script)
 	case "bash", "bash.exe":
 		// Bash runs PROMPT_COMMAND immediately before rendering the first prompt.
 		// A profile that replaces it will cause a safe timeout.

@@ -1,6 +1,7 @@
 import type { TFunction } from "i18next";
 import { Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { cn } from "../../lib/utils";
 import { OptionMenu, OptionMenuContent, OptionMenuItem, OptionMenuTrigger } from "../ui/option-menu";
 
 export type EffortChoice = { value: string; label?: string };
@@ -12,6 +13,8 @@ export type EffortMenuProps = {
 	defaultValue?: string | null;
 	defaultEffort?: string;
 	availability?: EffortAvailability;
+	/** Chat composer menus: 12px rows with muted inactive items, like the model list. */
+	compact?: boolean;
 };
 
 const EFFORT_LEVEL_KEYS = {
@@ -56,8 +59,9 @@ export function effortDisplayLabel({ value, choices, followLabel, t, defaultEffo
 	return effortLevelKey(reported) ? formatEffortLabel(reported, t) : followLabel;
 }
 
-export function EffortMenuItems({ value, choices, onChange, defaultValue = "", defaultEffort, availability = "supported" }: EffortMenuProps) {
+export function EffortMenuItems({ value, choices, onChange, defaultValue = "", defaultEffort, availability = "supported", compact = false }: EffortMenuProps) {
 	const { t } = useTranslation();
+	const rowSize = compact ? "text-xs" : "text-[length:var(--font-size-base)]";
 	const levels = choices.filter((choice) => choice.value !== defaultValue && choice.value.toLowerCase() !== "default");
 	const following = value === defaultValue || (!value && defaultValue === "default");
 	const unknown = value && !following && !levels.some((choice) => choice.value === value);
@@ -67,14 +71,14 @@ export function EffortMenuItems({ value, choices, onChange, defaultValue = "", d
 		? levels.find((choice) => choice.value.toLowerCase() === reportedDefault || choice.label?.toLowerCase() === reportedDefault)
 		: undefined;
 	return <>
-		{unknown ? <OptionMenuItem disabled className="text-[length:var(--font-size-base)] text-muted-foreground">
+		{unknown ? <OptionMenuItem disabled className={cn(rowSize, "text-muted-foreground")}>
 			{t(availability === "unknown" ? "settings.models.currentEffort" : "settings.models.savedEffortUnavailable", { effort: formatEffortLabel(value, t) })}
 		</OptionMenuItem> : null}
 		{!unavailable && levels.map((choice) => {
 			const isDefault = choice === defaultChoice;
 			const active = choice.value === value || (following && isDefault);
 			return <OptionMenuItem key={choice.value} radio active={active}
-				onSelect={() => onChange(isDefault && defaultValue !== null ? defaultValue : choice.value)} className="text-[length:var(--font-size-base)] text-foreground">
+				onSelect={() => onChange(isDefault && defaultValue !== null ? defaultValue : choice.value)} className={cn(rowSize, compact && !active ? "text-muted-foreground" : "text-foreground")}>
 				<span className="flex-1">{choice.label || formatEffortLabel(choice.value, t)}</span>
 				<Check aria-hidden="true" className={`ml-3 size-3 shrink-0 ${active ? "" : "invisible"}`} />
 			</OptionMenuItem>;

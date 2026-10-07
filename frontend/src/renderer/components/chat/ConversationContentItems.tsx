@@ -1,5 +1,6 @@
 import { FileText, Image as ImageIcon, Tag } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { ChatImage } from "./ChatImage";
 import type { ConversationContentSummary } from "../../types/conversation";
 
 interface ConversationContentItem extends ConversationContentSummary {
@@ -36,11 +37,10 @@ export function ConversationContentItems({
 				if (previewableImage) {
 					imagePosition += 1;
 					return (
-						<li key={key} className="max-w-full overflow-hidden rounded-md border border-border bg-background">
-							<img
+						<li key={key} className="max-w-full">
+							<ChatImage
 								src={`data:${item.mimeType};base64,${item.data}`}
 								alt={imageAlt?.(imagePosition) ?? `${imageLabel} ${imagePosition}`}
-								className="block h-auto max-h-80 max-w-full object-contain"
 							/>
 						</li>
 					);
@@ -52,7 +52,7 @@ export function ConversationContentItems({
 					<li
 						key={key}
 						title={item.uri || label}
-						className="flex min-w-0 max-w-full items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground"
+						className="flex min-w-0 max-w-full items-center gap-1 rounded-md bg-interactive-hover px-2 py-1 text-xs text-muted-foreground"
 					>
 						<Icon aria-hidden="true" className="size-3 shrink-0" />
 						<span className="truncate">{label}</span>

@@ -315,21 +315,6 @@ func (s *Store) CancelRunningReviewRunsBySessionAndHarness(ctx context.Context, 
 	})
 }
 
-// MarkReviewRunDelivered records that lifecycle delivered the worker nudge for
-// a completed AO-internal review pass.
-func (s *Store) MarkReviewRunDelivered(ctx context.Context, id string, deliveredAt time.Time) (bool, error) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	n, err := s.qw.MarkReviewRunDelivered(ctx, gen.MarkReviewRunDeliveredParams{
-		DeliveredAt: sql.NullTime{Time: deliveredAt, Valid: true},
-		ID:          id,
-	})
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
-}
-
 // GetReviewRun returns one review pass by id.
 func (s *Store) GetReviewRun(ctx context.Context, id string) (domain.ReviewRun, bool, error) {
 	row, err := s.qr.GetReviewRun(ctx, id)

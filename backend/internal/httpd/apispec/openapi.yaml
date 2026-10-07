@@ -4634,6 +4634,59 @@ paths:
       summary: Enable or disable automatic review for a session
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/chat-view:
+    post:
+      operationId: setSessionChatView
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetChatViewRequest'
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Keep a viewed chat awake or release its view lease
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/conversation:
     get:
       operationId: getSessionConversation
@@ -6928,6 +6981,25 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      - description: File root to serve from. Defaults to the session workspace; artifact
+          selects the session artifact directory.
+        in: query
+        name: source
+        schema:
+          description: File root to serve from. Defaults to the session workspace;
+            artifact selects the session artifact directory.
+          enum:
+          - workspace
+          - artifact
+          type: string
+      - description: When true, serve Markdown files as raw source instead of rendering
+          them to HTML for Browser preview.
+        in: query
+        name: raw
+        schema:
+          description: When true, serve Markdown files as raw source instead of rendering
+            them to HTML for Browser preview.
+          type: boolean
       responses:
         "200":
           content:
@@ -6953,7 +7025,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Serve a static browser preview file from a session workspace
+      summary: Serve a static browser preview file from a session workspace or artifact
+        directory
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/preview/server:
@@ -8742,6 +8815,43 @@ paths:
       summary: Read the daemon-owned user preferences
       tags:
       - settings
+  /api/v1/settings/chat-hibernation:
+    patch:
+      operationId: updateChatHibernation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateChatHibernationRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Turn idle Chat hibernation on or off for this machine
+      tags:
+      - settings
   /api/v1/settings/cloud-offering:
     patch:
       operationId: updateCloudOffering
@@ -9617,6 +9727,11 @@ components:
           type: boolean
         label:
           type: string
+        lastUsedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         provider:
           type: string
       required:
@@ -10827,6 +10942,10 @@ components:
           $ref: '#/components/schemas/AgentSwitch'
         activity:
           $ref: '#/components/schemas/DomainActivity'
+        artifactFiles:
+          items:
+            $ref: '#/components/schemas/SessionArtifact'
+          type: array
         autoInjectCI:
           type: boolean
         autoInjectReview:
@@ -10869,6 +10988,11 @@ components:
           type: string
         harness:
           type: string
+        hibernatedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         id:
           type: string
         isPinned:
@@ -10887,6 +11011,14 @@ components:
           type: string
         kind:
           type: string
+        lastEventAt:
+          format: date-time
+          type: string
+        lastInteractionAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         lastUserMessageAt:
           format: date-time
           type:
@@ -10898,6 +11030,13 @@ components:
           - tui
           type: string
         model:
+          type: string
+        outputType:
+          enum:
+          - none
+          - pr
+          - artifact
+          - pr_artifact
           type: string
         pinnedAt:
           format: date-time
@@ -10919,6 +11058,10 @@ components:
           - ready
           - failed
           type: string
+        provisionSteps:
+          items:
+            $ref: '#/components/schemas/SessionProvisionStep'
+          type: array
         prs:
           items:
             $ref: '#/components/schemas/SessionPRFacts'
@@ -11005,6 +11148,7 @@ components:
       - terminateOnPrMerge
       - autoInjectReview
       - autoInjectCI
+      - outputType
       - createdAt
       - updatedAt
       - isPinned
@@ -11013,6 +11157,7 @@ components:
       - status
       - kanbanColumn
       - displayStatus
+      - lastEventAt
       - prs
       type: object
     ControllersSetKeepAwakeRequest:
@@ -11322,6 +11467,12 @@ components:
           - user
           - assistant
           type: string
+        senderDisplayName:
+          type: string
+        senderProjectId:
+          type: string
+        senderSessionId:
+          type: string
         sequence:
           format: int64
           type: integer
@@ -11512,6 +11663,7 @@ components:
           - ready
           - busy
           - recovering
+          - hibernated
           - stopped
           type: string
         conversationId:
@@ -11769,10 +11921,6 @@ components:
             when saving agent cues.
           maxLength: 4096
           type: string
-        description:
-          description: Optional human note about the cue, at most 240 bytes.
-          maxLength: 240
-          type: string
         name:
           description: Short cue name, unique within the project. Trimmed; must be
             non-empty and at most 64 bytes.
@@ -11805,8 +11953,6 @@ components:
         createdAt:
           format: date-time
           type: string
-        description:
-          type: string
         id:
           type: string
         name:
@@ -11824,7 +11970,6 @@ components:
       - id
       - projectId
       - name
-      - description
       - type
       - createdAt
       - updatedAt
@@ -12788,6 +12933,10 @@ components:
       type: object
     ListReviewsResponse:
       properties:
+        activeReviewers:
+          items:
+            $ref: '#/components/schemas/DomainReviewerSurface'
+          type: array
         reviewerActivityState:
           enum:
           - active
@@ -12814,6 +12963,7 @@ components:
       - reviewerHandleId
       - reviews
       - runs
+      - activeReviewers
       type: object
     ListSessionMemoryResponse:
       properties:
@@ -13447,6 +13597,8 @@ components:
           $ref: '#/components/schemas/TrackerIntakeConfig'
         worker:
           $ref: '#/components/schemas/RoleOverride'
+        workersRequestReview:
+          type: boolean
       type: object
     ProjectGetResponse:
       properties:
@@ -13950,6 +14102,7 @@ components:
         triggerSource:
           enum:
           - manual
+          - agent
           - auto
           type: string
         verdict:
@@ -14058,6 +14211,8 @@ components:
           maxLength: 4096
           minLength: 1
           type: string
+        senderSessionId:
+          type: string
         userAuthored:
           type: boolean
       required:
@@ -14086,6 +14241,35 @@ components:
           type: array
       required:
       - recent
+      type: object
+    SessionArtifact:
+      properties:
+        kind:
+          enum:
+          - html
+          - markdown
+          - file
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        previewUrl:
+          type: string
+        rawUrl:
+          type: string
+        size:
+          format: int64
+          type: integer
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - path
+      - name
+      - kind
+      - size
+      - updatedAt
       type: object
     SessionInterfaceTransition:
       properties:
@@ -14573,6 +14757,35 @@ components:
       required:
       - sessionId
       type: object
+    SessionProvisionStep:
+      properties:
+        endedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          enum:
+          - fetch
+          - worktree
+          - setup
+          - agent
+          type: string
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        status:
+          enum:
+          - pending
+          - running
+          - done
+          type: string
+      required:
+      - id
+      - status
+      type: object
     SessionResponse:
       properties:
         session:
@@ -14706,6 +14919,16 @@ components:
       - ok
       - sessionId
       - state
+      type: object
+    SetChatViewRequest:
+      properties:
+        active:
+          type: boolean
+        viewId:
+          type: string
+      required:
+      - viewId
+      - active
       type: object
     SetConversationConfigOptionRequest:
       properties:
@@ -14899,6 +15122,8 @@ components:
           items:
             type: string
           type: array
+        chatHibernationEnabled:
+          type: boolean
         client:
           type: string
         cloudControlPlaneUrl:
@@ -14922,6 +15147,7 @@ components:
       - client
       - localEnabled
       - cloudOffering
+      - chatHibernationEnabled
       - cloudEnabled
       - cloudControlPlaneUrl
       - trackerIntakeEnabled
@@ -15203,6 +15429,8 @@ components:
           type: string
         recoverOnly:
           type: boolean
+        senderSessionId:
+          type: string
         text:
           type: string
       required:
@@ -15433,6 +15661,10 @@ components:
       properties:
         agentConfig:
           $ref: '#/components/schemas/AgentConfig'
+        enableAutoInject:
+          description: Turn on the worker session's review auto-inject once a pass
+            has started, so the reviewer's PR review comments reach the worker.
+          type: boolean
         harness:
           enum:
           - claude-code
@@ -15463,13 +15695,35 @@ components:
           - chat
           - tui
           type: string
-        rerun:
-          description: Start a fresh manual pass for already-reviewed current heads;
-            reuse an active pass from the same reviewer.
+        prUrl:
+          description: Restrict the pass to this pull request, attaching it to the
+            session first if AO does not track it yet (never from another active session).
+            Omit to review every eligible PR on the session.
+          type: string
+        rejectReviewedHead:
+          description: Return 409 instead of reusing when every open PR head is already
+            being reviewed or already has a review.
           type: boolean
+        rerun:
+          description: Start a fresh pass for already-reviewed current heads; a different
+            reviewer may run alongside one that is still running. A person's rerun
+            reuses an active pass from the same reviewer; an agent's rerun returns
+            409 REVIEW_ALREADY_RUNNING instead.
+          type: boolean
+        source:
+          description: 'Who requested the pass: manual (a person, the default) or
+            agent (an AO session through the CLI).'
+          enum:
+          - manual
+          - agent
+          type: string
       type: object
     TriggerReviewResponse:
       properties:
+        autoInjectEnabled:
+          description: True when this request turned the worker session's review auto-inject
+            on.
+          type: boolean
         created:
           description: True when a new review pass was started; false when an existing
             run for the same commit was reused.
@@ -15491,6 +15745,7 @@ components:
       - reviews
       - runs
       - created
+      - autoInjectEnabled
       type: object
     UnregisterPushDeviceResponse:
       properties:
@@ -15539,6 +15794,15 @@ components:
           type:
           - "null"
           - string
+      type: object
+    UpdateChatHibernationRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
       type: object
     UpdateProjectSettingsInput:
       properties:

@@ -63,7 +63,7 @@ const system = {
 describe("MemoryDiagnostics", () => {
 	beforeEach(() => {
 		workspaces.splice(0, workspaces.length, { id: "p1", name: "radic", sessions: [session("s1")] } as unknown as WorkspaceSummary);
-		useUiStore.setState({ developerMode: true });
+		useUiStore.setState({ developerMode: true, diagnostics: true });
 		getMock.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/usage/memory/pressure") return { data: system };
 			return {
@@ -77,7 +77,7 @@ describe("MemoryDiagnostics", () => {
 	});
 
 	afterEach(() => {
-		useUiStore.setState({ developerMode: false });
+		useUiStore.setState({ developerMode: false, diagnostics: false });
 	});
 
 	it("settles after a reading instead of re-rendering itself in a loop", async () => {

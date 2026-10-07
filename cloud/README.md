@@ -183,6 +183,14 @@ resolves profile fields that access tokens may omit. The JWKS URL is derived
 for standard WorkOS and custom AuthKit domains;
 `AO_CLOUD_WORKOS_JWKS_URL` can override it.
 
+AO keys each account by the WorkOS user ID it first saw. A WorkOS user or
+organization whose `external_id` holds another WorkOS ID of the same kind (set
+by `scripts/workos-copy-environment.py` when moving between WorkOS
+environments) signs in as that original ID. While users move, set
+`AO_CLOUD_WORKOS_LEGACY_ISSUER`, `AO_CLOUD_WORKOS_LEGACY_CLIENT_ID`, and
+`AO_CLOUD_WORKOS_LEGACY_API_KEY` to keep accepting the previous environment's
+tokens.
+
 Hosted environments use `AO_CLOUD_ENV=staging` or `production` and must set
 `AO_CLOUD_RELEASE` to an immutable image tag or Git SHA. Hosted startup fails
 if local authentication is enabled or if the runtime database role is a
