@@ -139,6 +139,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.ReportR
 	if s.onCreated != nil {
 		s.onCreated(created)
 	}
+	// Synchronous on purpose: ao report --done is often the agent's last tool
+	// call, so a goroutine would race the turn's completion and could drop the
+	// artifact or put it on the next turn.
 	if s.artifacts != nil {
 		for _, output := range created.Outputs {
 			if output.Kind == domain.ReportOutputArtifact {
