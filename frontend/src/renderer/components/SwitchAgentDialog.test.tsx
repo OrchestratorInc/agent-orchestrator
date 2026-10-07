@@ -310,6 +310,25 @@ describe("SwitchAgentDialog", () => {
 		);
 	});
 
+	it("ignores a cached standalone project error", async () => {
+		const { queryClient } = renderDialog(standaloneWorker, vi.fn(), undefined, null);
+		const projectQuery = queryClient.getQueryCache().build(queryClient, {
+			queryKey: ["project", STANDALONE_WORKSPACE_ID],
+			queryFn: async () => ({}),
+		});
+		projectQuery.setState({
+			...projectQuery.state,
+			data: undefined,
+			error: new Error("Project id failed storage-path validation"),
+			status: "error",
+		});
+
+		await waitFor(() =>
+			expect(screen.getByRole("dialog")).not.toHaveTextContent("Project id failed storage-path validation"),
+		);
+		expect(screen.getByRole("dialog").querySelector('[role="alert"]')).not.toBeInTheDocument();
+	});
+
 	it("shows the project model and inherits it when switching without a model change", async () => {
 		const { queryClient } = renderDialog();
 		queryClient.setQueryData(["project", worker.workspaceId], {

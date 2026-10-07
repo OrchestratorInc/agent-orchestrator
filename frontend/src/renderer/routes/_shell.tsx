@@ -329,7 +329,7 @@ function ShellLayout() {
 	// looking at the project, so the picker never shows a loading flash the
 	// first time they actually open the dialog.
 	useEffect(() => {
-		if (!scopedProjectId) return;
+		if (!scopedProjectId || scopedProjectId === STANDALONE_WORKSPACE_ID) return;
 		const projectQueryKey = ["project", scopedProjectId];
 		void queryClient
 			.prefetchQuery({
