@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
@@ -18,10 +20,11 @@ import (
 type renderDetail struct {
 	Event  string `json:"event"`
 	Render struct {
-		ID     string `json:"id"`
-		Title  string `json:"title"`
-		Height int    `json:"height"`
-		Path   string `json:"path"`
+		ID      string   `json:"id"`
+		Title   string   `json:"title"`
+		Height  int      `json:"height"`
+		Path    string   `json:"path"`
+		Heights [][2]int `json:"heights"`
 	} `json:"render"`
 }
 
@@ -167,5 +170,110 @@ func TestCheckRenderWithoutTheDesktopAppSaysSo(t *testing.T) {
 	}
 	if _, err := h.svc.CheckRender(context.Background(), testSession, chatsvc.RenderCheckInput{HTML: "<p>x</p>", Width: 100}); !errors.Is(err, chatsvc.ErrRenderInvalid) {
 		t.Fatalf("width 100: err = %v, want ErrRenderInvalid", err)
+	}
+}
+
+// publishMeasured publishes a page with measure installed on h and returns
+// the result and the recorded render row.
+func publishMeasured(t *testing.T, h *harness, measure chatsvc.RenderMeasure) (chatsvc.RenderResult, domain.ConversationActivity) {
+	t.Helper()
+	h.svc.SetRenderMeasure(measure)
+	result, err := h.svc.PublishRender(context.Background(), testSession, chatsvc.RenderInput{
+		HTML: "<p>chart</p>", Title: "Chart", Height: 400, BaseURL: "http://127.0.0.1:3001/",
+	})
+	if err != nil {
+		t.Fatalf("PublishRender: %v", err)
+	}
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(renderRows(s)) == 1 })
+	return result, renderRows(snapshot)[0]
+}
+
+func TestPublishRenderRecordsTheMeasuredHeightsSortedByWidth(t *testing.T) {
+	h, _ := steerHarness(t)
+	var gotArgs map[string]any
+	var pageDuringMeasure []byte
+	result, row := publishMeasured(t, h, func(ctx context.Context, id domain.SessionID, args map[string]any) (any, error) {
+		gotArgs = args
+		renderID := strings.TrimPrefix(args["url"].(string), "http://127.0.0.1:3001/api/v1/sessions/"+string(id)+"/renders/")
+		if file, _, err := h.renders.OpenRender(ctx, id, renderID); err == nil {
+			pageDuringMeasure, _ = io.ReadAll(file)
+			_ = file.Close()
+		}
+		// Decoded JSON from the desktop app, out of order.
+		return map[string]any{"heights": []any{
+			[]any{1144.0, 88.0}, []any{320.0, 313.0}, []any{860.0, 120.0}, []any{375.0, 270.0}, []any{430.0, 233.0},
+			[]any{520.0, 193.0}, []any{640.0, 157.0}, []any{728.0, 138.0}, []any{1000.0, 100.0},
+		}}, nil
+	})
+	if want := "http://127.0.0.1:3001" + result.Path; gotArgs["url"] != want {
+		t.Errorf("url = %v, want %q", gotArgs["url"], want)
+	}
+	if want := []int{320, 375, 430, 520, 640, 728, 860, 1000, 1144}; !reflect.DeepEqual(gotArgs["widths"], want) {
+		t.Errorf("widths = %v, want %v", gotArgs["widths"], want)
+	}
+	if string(pageDuringMeasure) != "<p>chart</p>" {
+		t.Errorf("page during the measure = %q, want the stored page", pageDuringMeasure)
+	}
+	var d renderDetail
+	_ = json.Unmarshal(row.Detail, &d)
+	want := [][2]int{{320, 313}, {375, 270}, {430, 233}, {520, 193}, {640, 157}, {728, 138}, {860, 120}, {1000, 100}, {1144, 88}}
+	if !reflect.DeepEqual(d.Render.Heights, want) || d.Render.Height != 400 {
+		t.Errorf("height = %d, heights = %v, want 400 and %v", d.Render.Height, d.Render.Heights, want)
+	}
+}
+
+func TestPublishRenderWithoutMeasuredHeightsOmitsThem(t *testing.T) {
+	desktopErr := errors.New("render measure timed out after 20000 ms while loading the page")
+	for name, measure := range map[string]chatsvc.RenderMeasure{
+		"not wired": nil,
+		"no desktop app": func(context.Context, domain.SessionID, map[string]any) (any, error) {
+			return nil, chatsvc.ErrRenderCheckUnavailable
+		},
+		"desktop error": func(context.Context, domain.SessionID, map[string]any) (any, error) {
+			return nil, desktopErr
+		},
+		"too few heights": func(context.Context, domain.SessionID, map[string]any) (any, error) {
+			return map[string]any{"heights": []any{[]any{320.0, 200.0}}}, nil
+		},
+		"height out of range": func(_ context.Context, _ domain.SessionID, args map[string]any) (any, error) {
+			heights := []any{}
+			for _, width := range args["widths"].([]int) {
+				heights = append(heights, []any{float64(width), 5000.0})
+			}
+			return map[string]any{"heights": heights}, nil
+		},
+		"not heights": func(context.Context, domain.SessionID, map[string]any) (any, error) {
+			return "PNG", nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, _ := steerHarness(t)
+			_, row := publishMeasured(t, h, measure)
+			if strings.Contains(string(row.Detail), "heights") {
+				t.Fatalf("detail = %s, want no heights", row.Detail)
+			}
+		})
+	}
+}
+
+func TestPublishRenderStopsWaitingForAMeasureAtTheTimeout(t *testing.T) {
+	restore := chatsvc.SetRenderMeasureTimeout(50 * time.Millisecond)
+	t.Cleanup(restore)
+	h, _ := steerHarness(t)
+	var deadline time.Time
+	started := time.Now()
+	_, row := publishMeasured(t, h, func(ctx context.Context, _ domain.SessionID, _ map[string]any) (any, error) {
+		deadline, _ = ctx.Deadline()
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("publish took %v", elapsed)
+	}
+	if deadline.IsZero() || deadline.Sub(started) > time.Second {
+		t.Fatalf("measure deadline %v after the start, want the 50ms timeout", deadline.Sub(started))
+	}
+	if strings.Contains(string(row.Detail), "heights") {
+		t.Fatalf("detail = %s, want no heights", row.Detail)
 	}
 }

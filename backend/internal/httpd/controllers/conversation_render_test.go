@@ -166,7 +166,7 @@ func TestPublishRenderRouteMapsOutcomes(t *testing.T) {
 			if tc.message != "" && body.Message != tc.message {
 				t.Fatalf("message=%q, want %q", body.Message, tc.message)
 			}
-			if tc.err == nil && (body.RenderID != "r1" || svc.input != (chatsvc.RenderInput{HTML: "<p>x</p>", Title: "Chart", Height: 420})) {
+			if tc.err == nil && (body.RenderID != "r1" || svc.input != (chatsvc.RenderInput{HTML: "<p>x</p>", Title: "Chart", Height: 420, BaseURL: srv.URL})) {
 				t.Fatalf("renderId=%q input=%+v", body.RenderID, svc.input)
 			}
 		})

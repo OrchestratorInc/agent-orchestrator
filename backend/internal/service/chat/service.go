@@ -54,6 +54,7 @@ type Service struct {
 	reports          *reportsvc.Coordinator
 	renders          RenderFiles
 	renderCheck      RenderCheck
+	renderMeasure    RenderMeasure
 
 	mu               sync.RWMutex
 	controllers      map[domain.SessionID]*Controller

@@ -484,7 +484,8 @@ func Run() error {
 			}
 		},
 	})
-	chatSvc.SetRenderCheck(renderCheckViaDesktop(browserBroker))
+	chatSvc.SetRenderCheck(renderViaDesktop(browserBroker, "__render-check"))
+	chatSvc.SetRenderMeasure(renderViaDesktop(browserBroker, "__render-measure"))
 
 	codexModelDriver := codexappserver.New(codexagent.New(), log)
 	modelDiscoverer := modelcatalog.Discoverer{

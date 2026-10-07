@@ -34,7 +34,7 @@ func TestRenderCheckViaDesktopMapsMissingDesktopToUnavailable(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			broker := &fakeRenderCheckBroker{err: tc.err}
-			_, err := renderCheckViaDesktop(broker)(context.Background(), "proj-1", map[string]any{"url": "u", "width": 720})
+			_, err := renderViaDesktop(broker, "__render-check")(context.Background(), "proj-1", map[string]any{"url": "u", "width": 720})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want %v", err, tc.want)
 			}
@@ -47,8 +47,16 @@ func TestRenderCheckViaDesktopMapsMissingDesktopToUnavailable(t *testing.T) {
 
 func TestRenderCheckViaDesktopReturnsTheDesktopResult(t *testing.T) {
 	broker := &fakeRenderCheckBroker{result: browserruntime.Result{Value: map[string]any{"data": "iVBORw0KGgo="}}}
-	got, err := renderCheckViaDesktop(broker)(context.Background(), "proj-1", nil)
+	got, err := renderViaDesktop(broker, "__render-check")(context.Background(), "proj-1", nil)
 	if err != nil || got.(map[string]any)["data"] != "iVBORw0KGgo=" {
 		t.Fatalf("got=%v err=%v", got, err)
+	}
+}
+
+func TestRenderMeasureViaDesktopSendsItsOwnAction(t *testing.T) {
+	broker := &fakeRenderCheckBroker{err: browserruntime.ErrUnavailable}
+	_, err := renderViaDesktop(broker, "__render-measure")(context.Background(), "proj-1", nil)
+	if broker.action != "__render-measure" || !errors.Is(err, chatsvc.ErrRenderCheckUnavailable) {
+		t.Fatalf("action = %q, err = %v", broker.action, err)
 	}
 }

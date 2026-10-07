@@ -55,8 +55,10 @@ func (c *ConversationsController) publishRender(w http.ResponseWriter, r *http.R
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
+	// The desktop app measures the page from the origin the CLI reached, as
+	// a render check loads it.
 	result, err := svc.PublishRender(r.Context(), sessionID(r), chatsvc.RenderInput{
-		HTML: req.HTML, Title: req.Title, Height: req.Height,
+		HTML: req.HTML, Title: req.Title, Height: req.Height, BaseURL: "http://" + r.Host,
 	})
 	switch {
 	case err == nil:
