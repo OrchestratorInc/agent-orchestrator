@@ -5824,6 +5824,18 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	if !strings.Contains(sp, wantDir) {
 		t.Fatalf("system prompt missing artifact dir %q:\n%s", wantDir, sp)
 	}
+	for _, want := range []string{
+		"Ordinary progress updates, concise final answers, and validation summaries can stay in chat or AO report notes",
+		"working material, not deliverables",
+		"does not authorize external publishing",
+	} {
+		if !strings.Contains(sp, want) {
+			t.Fatalf("system prompt missing artifact boundary %q", want)
+		}
+	}
+	if strings.Contains(sp, "naturally document-shaped") {
+		t.Fatal("system prompt must not require files for ordinary summaries")
+	}
 }
 
 // TestRestore_OrchestratorRederivesSystemPrompt: the system prompt is derived,

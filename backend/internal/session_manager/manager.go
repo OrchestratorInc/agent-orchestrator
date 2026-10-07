@@ -5147,7 +5147,9 @@ func (m *Manager) artifactPrompt(id domain.SessionID) string {
 		"Any deliverable that is not part of a pull request — a one-pager, analysis, plan, design doc, report, or other generated file — must be written to `" + dir + "`, never into the git workspace, even temporarily. " +
 		"This applies even when a workspace-relative path like `docs/`, `docs/plans/`, or `notes/` would otherwise feel like the natural place for it: if it is not shipping in a PR, it does not belong in the workspace at all. " +
 		"Keep the workspace limited to code changes that will ship in a PR. Preserve any relative asset links between files you place in the artifact directory. " +
-		"When the user explicitly asks you to note something down, write something up, or keep a record of something, or when your response is itself naturally document-shaped (a summary, plan, analysis, or report), write it as a file in the artifact directory instead of only replying in chat — a reply that only exists in the conversation is lost once the session ends, an artifact file is not."
+		"Create a separate document when the user requests a durable document or when the task needs a reviewable deliverable. Ordinary progress updates, concise final answers, and validation summaries can stay in chat or AO report notes; do not create files solely because a response is a summary, plan, analysis, or report. " +
+		"Routine test logs, command output, scratch notes, and intermediate diagnostics are working material, not deliverables. Keep them out of report attachments unless requested or needed to explain an actionable failure. Prefer one consolidated deliverable over many diagnostic files. " +
+		"This directory is local storage. Saving a file here or attaching its reference to an AO report does not authorize external publishing; follow the user's publishing scope."
 }
 
 func (m *Manager) cleanupSystemPromptDir(id domain.SessionID) {
