@@ -109,6 +109,16 @@ def main() -> int:
     def count(name):
         counts[name] = counts.get(name, 0) + 1
 
+    def write(record_id, method, path, body):
+        # One rejected record must not stop the rest of the copy; report it
+        # and carry on, and the next run retries it.
+        try:
+            return target.request(method, path, body)
+        except RuntimeError as error:
+            print(f"failed {record_id}: {error}")
+            count("failed")
+            return None
+
     source_orgs = source.list("/organizations")
     target_orgs = target.list("/organizations")
     org_map = {org["external_id"]: org["id"] for org in target_orgs if org.get("external_id")}
@@ -128,7 +138,10 @@ def main() -> int:
         if domains:
             body["domain_data"] = domains
         if args.apply:
-            org_map[org["id"]] = target.request("POST", "/organizations", body)["id"]
+            created = write(org["id"], "POST", "/organizations", body)
+            if created is None:
+                continue
+            org_map[org["id"]] = created["id"]
         count("organizations created")
 
     source_users = source.list("/user_management/users")
@@ -156,8 +169,10 @@ def main() -> int:
                 print(f"skip {user['id']}: target {existing['id']} shares an email that is not verified on both sides")
                 count("users skipped (unverified)")
                 continue
-            if args.apply:
-                target.request("PUT", f"/user_management/users/{existing['id']}", {"external_id": user["id"]})
+            if args.apply and write(
+                user["id"], "PUT", f"/user_management/users/{existing['id']}", {"external_id": user["id"]}
+            ) is None:
+                continue
             user_map[user["id"]] = existing["id"]
             count("users linked")
             continue
@@ -170,7 +185,10 @@ def main() -> int:
             if user.get(field):
                 body[field] = user[field]
         if args.apply:
-            user_map[user["id"]] = target.request("POST", "/user_management/users", body)["id"]
+            created = write(user["id"], "POST", "/user_management/users", body)
+            if created is None:
+                continue
+            user_map[user["id"]] = created["id"]
         count("users created")
 
     target_memberships = {
@@ -191,22 +209,23 @@ def main() -> int:
         if (user_id, org_id) in target_memberships:
             count("memberships already present")
             continue
-        if args.apply:
-            target.request(
-                "POST",
-                "/user_management/organization_memberships",
-                {
-                    "user_id": user_id,
-                    "organization_id": org_id,
-                    "role_slug": (membership.get("role") or {}).get("slug") or "member",
-                },
-            )
+        if args.apply and write(
+            membership["id"],
+            "POST",
+            "/user_management/organization_memberships",
+            {
+                "user_id": user_id,
+                "organization_id": org_id,
+                "role_slug": (membership.get("role") or {}).get("slug") or "member",
+            },
+        ) is None:
+            continue
         count("memberships created")
 
     print(f"{mode}: source has {len(source_users)} users, {len(source_orgs)} organizations")
     for name, value in sorted(counts.items()):
         print(f"  {name}: {value}")
-    return 0
+    return 1 if counts.get("failed") else 0
 
 
 if __name__ == "__main__":
