@@ -1,6 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { foldClaudeAliasDefault } from "../lib/agent-model-choices";
 import { clientForHost } from "../lib/host-clients";
 
 export type AgentModelCatalog = components["schemas"]["AgentModelsResponse"];
@@ -33,7 +34,8 @@ async function requestAgentModels(
 					},
 				});
 	if (result.error) throw new Error(apiErrorMessage(result.error));
-	return result.data as AgentModelCatalog;
+	const catalog = result.data as AgentModelCatalog;
+	return agentId === "claude-code" ? { ...catalog, models: foldClaudeAliasDefault(catalog.models) } : catalog;
 }
 
 export function agentModelsQueryOptions(agentId: string, projectId: string, hostId?: string) {

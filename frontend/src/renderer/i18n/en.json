@@ -1278,6 +1278,7 @@
 	"settings.models.configureThenRefresh": "Configure the model in {{agent}}, then refresh.",
 	"settings.models.currentDefaults": "Pinned models",
 	"settings.models.recent": "Recent",
+	"settings.models.otherModels": "Other models",
 	"settings.models.loadFailed": "Could not load models.",
 	"settings.models.loading": "Loading models…",
 	"settings.models.matchingCount": "Showing {{visible}} of {{total}} matching models",
