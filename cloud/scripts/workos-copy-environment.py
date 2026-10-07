@@ -17,9 +17,9 @@ Usage:
     ... python3 cloud/scripts/workos-copy-environment.py --apply    # write
 
 A target user that already exists with the same email but no external_id is
-reported and skipped. Pass --link-existing to give it the source ID; that user
-then signs in to their original AO account instead of the one they created in
-the target environment.
+reported and skipped. Pass --link-existing to give it the source ID when both
+users have verified that email; that user then signs in to their original AO
+account instead of the one they created in the target environment.
 """
 
 import argparse
@@ -148,6 +148,13 @@ def main() -> int:
             if not args.link_existing:
                 print(f"skip {user['id']}: target {existing['id']} has the same email (use --link-existing)")
                 count("users skipped (exists)")
+                continue
+            # A shared email only proves identity once both users verified it.
+            # Otherwise anyone who registered the email in the target first
+            # would take over the source user's AO account.
+            if not existing.get("email_verified") or not user.get("email_verified"):
+                print(f"skip {user['id']}: target {existing['id']} shares an email that is not verified on both sides")
+                count("users skipped (unverified)")
                 continue
             if args.apply:
                 target.request("PUT", f"/user_management/users/{existing['id']}", {"external_id": user["id"]})
