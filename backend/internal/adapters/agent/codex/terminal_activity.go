@@ -169,6 +169,12 @@ func codexComposerFrame(output string) string {
 		if !strings.Contains(plainFooter, " · ") {
 			continue
 		}
+		// Newer Codex renders a hint row ("? for shortcuts · ...") below the
+		// model/status row. Both are footer chrome, so the frame ends above
+		// the whole contiguous " · " block, not just its last row.
+		for footer > start && strings.Contains(terminalui.PlainTerminalText(raw[footer-1]), " · ") {
+			footer--
+		}
 		for prompt := footer - 1; prompt >= start; prompt-- {
 			plainPrompt := strings.TrimSpace(terminalui.PlainTerminalText(raw[prompt]))
 			if strings.HasPrefix(plainPrompt, "›") {
