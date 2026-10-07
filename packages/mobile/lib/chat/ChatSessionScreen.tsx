@@ -41,6 +41,7 @@ import { ChatTimeline } from "./ChatTimeline";
 import { ConversationTitle } from "./ConversationTitle";
 import { chatSheetRoute, type ConversationActionsEntry } from "./chatSheetRegistry";
 import { quotaWarning } from "./conversationChrome";
+import { shouldAutoResume } from "./autoResume";
 import { controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { conversationMarkers } from "./timelineModel";
@@ -118,6 +119,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const filePathsRequest = useRef<Promise<{ paths: string[]; truncated: boolean }> | null>(null);
 	const [openingShell, setOpeningShell] = useState(false);
 	const [resuming, setResuming] = useState(false);
+	const [resumeError, setResumeError] = useState<string | undefined>();
 	// Banners closed this visit, by what they report. See conversationBanners.
 	const [dismissedBanners, setDismissedBanners] = useState<ReadonlySet<string>>(() => new Set());
 	const dismissBanner = useCallback((key: string) => setDismissedBanners((current) => new Set(current).add(key)), []);
@@ -364,6 +366,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const resume = useCallback(async (quiet = false) => {
 		if (resuming) return;
 		setResuming(true);
+		setResumeError(undefined);
 		try {
 			if (!config) throw new Error(NOT_PAIRED_ACTION_COPY);
 			if (terminated) await restoreSession(config, session.id);
@@ -371,18 +374,19 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			await refreshBoard();
 			await conversation.refresh();
 		} catch (cause) {
-			// An automatic attempt leaves the Resume banner to explain a failure.
-			if (!quiet) Alert.alert("Couldn't resume the agent", userFacingError(cause));
+			// An automatic attempt has no alert; the stopped banner carries the reason.
+			if (quiet) setResumeError(userFacingError(cause));
+			else Alert.alert("Couldn't resume the agent", userFacingError(cause));
 		} finally { setResuming(false); }
 	}, [config, conversation.refresh, refreshBoard, resuming, session.id, terminated]);
 
-	// The daemon leaves agents stopped after a restart and starts them when their
-	// session is opened, as the desktop does. One attempt per opening: a failure
-	// or a later exit stays stopped behind the Resume banner.
+	// The daemon leaves agents stopped after a restart; opening the session here
+	// starts them, as the desktop does. One attempt per opening: a failure or a
+	// later exit stays stopped behind the Resume banner, which shows the reason.
 	const autoResumeTried = useRef<string | undefined>(undefined);
 	useEffect(() => {
 		if (autoResumeTried.current === session.id) return;
-		if ("projectName" in session || terminated || session.status !== "exited" || session.provisionState === "failed" || !config) return;
+		if (!shouldAutoResume(session, terminated, Boolean(config))) return;
 		autoResumeTried.current = session.id;
 		void resume(true);
 	}, [config, resume, session, terminated]);
@@ -588,6 +592,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				startFailure={failedStart}
 				brokenServers={brokenServers}
 				resuming={resuming}
+				resumeError={resumeError}
 				terminated={terminated}
 				mcpReloading={conversation.pendingActions.includes("mcp")}
 				mcpError={conversation.actionErrors.mcp}
@@ -664,12 +669,12 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	);
 }
 
-function ConversationBanners({ snapshot, startFailure, brokenServers, resuming, terminated, mcpReloading, mcpError, mcpReloadSupported, turnInFlight, onResume, onReload, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; startFailure?: string; brokenServers: ReturnType<typeof brokenMcpServers>; resuming: boolean; terminated: boolean; mcpReloading: boolean; mcpError?: string; mcpReloadSupported: boolean; turnInFlight: boolean; onResume(): void; onReload(): void; onOpenShell(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {
+function ConversationBanners({ snapshot, startFailure, brokenServers, resuming, resumeError, terminated, mcpReloading, mcpError, mcpReloadSupported, turnInFlight, onResume, onReload, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; startFailure?: string; brokenServers: ReturnType<typeof brokenMcpServers>; resuming: boolean; resumeError?: string; terminated: boolean; mcpReloading: boolean; mcpError?: string; mcpReloadSupported: boolean; turnInFlight: boolean; onResume(): void; onReload(): void; onOpenShell(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {
 	const thread = snapshot.threadState;
 	const reauthAt = snapshot.account?.reauthRequiredAt;
 	return <>
 		{reauthAt ? <DismissibleBanner copy={reauthBanner(reauthAt, signInCommand(snapshot.harness))} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="key" action="Open shell" onPress={onOpenShell} /> : null}
-		{startFailure ? <DismissibleBanner copy={{ key: `start:${startFailure}`, title: "Session failed to start", body: startFailure }} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="alert-triangle" action={resuming ? "Retrying…" : "Retry"} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : snapshot.controller.state === "stopped" ? <DismissibleBanner copy={controllerStoppedBanner(terminated, snapshot.controller.error)} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="power" action={terminated ? (resuming ? "Restoring…" : "Restore") : (resuming ? "Resuming…" : "Resume")} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
+		{startFailure ? <DismissibleBanner copy={{ key: `start:${startFailure}`, title: "Session failed to start", body: startFailure }} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="alert-triangle" action={resuming ? "Retrying…" : "Retry"} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : snapshot.controller.state === "stopped" ? <DismissibleBanner copy={controllerStoppedBanner(terminated, resumeError ?? snapshot.controller.error)} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="power" action={terminated ? (resuming ? "Restoring…" : "Restore") : (resuming ? "Resuming…" : "Resume")} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
 		{/* Passing states clear themselves, so there is nothing to close. */}
 		{!startFailure && (snapshot.controller.state === "recovering" || snapshot.controller.state === "connecting") ? <InlineBanner tone="warning" icon="loader" title={snapshot.controller.state === "recovering" ? "Reconnecting to the agent…" : "Starting the agent…"} /> : null}
 		{threadBanner(thread?.status) ? <DismissibleBanner copy={threadBanner(thread?.status)!} dismissed={dismissed} onDismiss={onDismiss} tone={thread?.status === "system_error" ? "danger" : "warning"} icon="alert-triangle" /> : null}

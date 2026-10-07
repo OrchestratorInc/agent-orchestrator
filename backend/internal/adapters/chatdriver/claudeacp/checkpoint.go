@@ -14,6 +14,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+var _ ports.ChatDriverReconnector = (*checkpointDriver)(nil)
+
 type checkpointDriver struct {
 	ports.ChatDriver
 	plugin claudePlugin

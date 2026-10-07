@@ -81,7 +81,8 @@ describe("active turn controls", () => {
 describe("stopped agents", () => {
 	it("resumes an exited agent once when its session is opened", () => {
 		expect(screenSource).toContain("const autoResumeTried = useRef<string | undefined>(undefined);");
-		expect(screenSource).toContain('session.status !== "exited"');
+		expect(screenSource).toContain("shouldAutoResume(session, terminated, Boolean(config))");
+		expect(screenSource).toContain("controllerStoppedBanner(terminated, resumeError ?? snapshot.controller.error)");
 		expect(screenSource).toContain("void resume(true);");
 	});
 });

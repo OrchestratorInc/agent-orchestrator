@@ -56,8 +56,8 @@ describe("boardZoneOf", () => {
 		expect(boardZoneOf(session({ status: "working", displayStatus: "Blocked" }))).toBe("needs_you");
 	});
 
-	// A stopped agent is not waiting on anyone; the daemon restarts it when the
-	// session is opened, so a restart must not flood "Needs you".
+	// A stopped agent is not waiting on anyone; opening the session in a client
+	// resumes it, so a restart must not flood "Needs you".
 	it("keeps an exited agent in its delivery column", () => {
 		expect(boardZoneOf(session({ status: "exited", kanbanColumn: "building" }))).toBe("building");
 	});
