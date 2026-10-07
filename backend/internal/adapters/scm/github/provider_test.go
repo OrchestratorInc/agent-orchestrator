@@ -303,26 +303,33 @@ func TestParsePRURL(t *testing.T) {
 	}
 }
 
-func TestRestListPullToSCMCarriesHeadRepo(t *testing.T) {
-	var pull restListPull
-	pull.Number = 7
-	pull.State = "open"
-	pull.Head.Ref = "feat/x"
-	pull.Head.SHA = "deadbeef"
-	pull.Head.Repo.FullName = "forker/hello"
-	pull.Base.Ref = "main"
-	pull.User.Login = "octocat"
-	pull.User.AvatarURL = "https://avatars.githubusercontent.com/u/583231?v=4"
+func TestListPRsByRepo_HeadRepoUnderRequestedName(t *testing.T) {
+	f := newFakeGH(t)
+	// GitHub serves a renamed or transferred repository's old path and reports
+	// full names under the new path; repository ids stay the same.
+	f.on(http.MethodGet, "/repos/old-org/hello/pulls", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `[
+			{"number":7,"state":"open","head":{"ref":"ao/s-1/root","repo":{"id":10,"full_name":"new-org/hello"}},"base":{"ref":"main","repo":{"id":10,"full_name":"new-org/hello"}},"user":{"login":"octocat","avatar_url":"https://avatars.githubusercontent.com/u/583231?v=4"}},
+			{"number":8,"state":"open","head":{"ref":"feat/x","repo":{"id":20,"full_name":"forker/hello"}},"base":{"ref":"main","repo":{"id":10,"full_name":"new-org/hello"}},"user":{"login":"octocat"}}
+		]`)
+	})
+	p := newProviderForTest(t, f)
 
-	obs := restListPullToSCM(pull)
-	if obs.SourceBranch != "feat/x" {
-		t.Fatalf("SourceBranch = %q, want feat/x", obs.SourceBranch)
+	pulls, err := p.ListPRsByRepo(ctx(), ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "old-org", Name: "hello", Repo: "old-org/hello"}, time.Time{})
+	if err != nil {
+		t.Fatalf("ListPRsByRepo: %v", err)
 	}
-	if obs.HeadRepo != "forker/hello" {
-		t.Fatalf("HeadRepo = %q, want forker/hello", obs.HeadRepo)
+	if len(pulls) != 2 {
+		t.Fatalf("pulls = %d, want 2", len(pulls))
 	}
-	if obs.Author != "octocat" || obs.AuthorAvatarURL != "https://avatars.githubusercontent.com/u/583231?v=4" {
-		t.Fatalf("author = %q avatar = %q", obs.Author, obs.AuthorAvatarURL)
+	if pulls[0].HeadRepo != "old-org/hello" || pulls[0].SourceBranch != "ao/s-1/root" {
+		t.Fatalf("same-repository head = %q %q, want old-org/hello ao/s-1/root", pulls[0].HeadRepo, pulls[0].SourceBranch)
+	}
+	if pulls[1].HeadRepo != "forker/hello" {
+		t.Fatalf("fork head = %q, want forker/hello", pulls[1].HeadRepo)
+	}
+	if pulls[0].Author != "octocat" || pulls[0].AuthorAvatarURL != "https://avatars.githubusercontent.com/u/583231?v=4" {
+		t.Fatalf("author = %q avatar = %q", pulls[0].Author, pulls[0].AuthorAvatarURL)
 	}
 }
 

@@ -87,7 +87,7 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 			return nil, fmt.Errorf("github scm: decode open PR list: %w", err)
 		}
 		for _, pull := range pulls {
-			out = append(out, restListPullToSCM(pull))
+			out = append(out, restListPullToSCM(repo, pull))
 		}
 		if len(pulls) < perPage {
 			return out, nil
@@ -334,12 +334,16 @@ type restListPull struct {
 		Ref  string `json:"ref"`
 		SHA  string `json:"sha"`
 		Repo struct {
+			ID       int64  `json:"id"`
 			FullName string `json:"full_name"`
 		} `json:"repo"`
 	} `json:"head"`
 	Base struct {
-		Ref string `json:"ref"`
-		SHA string `json:"sha"`
+		Ref  string `json:"ref"`
+		SHA  string `json:"sha"`
+		Repo struct {
+			ID int64 `json:"id"`
+		} `json:"repo"`
 	} `json:"base"`
 	User struct {
 		Login     string `json:"login"`
@@ -349,8 +353,16 @@ type restListPull struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
-func restListPullToSCM(pull restListPull) ports.SCMPRObservation {
+// restListPullToSCM converts one entry of repo's pull list. GitHub serves a
+// renamed or transferred repository's old name with full names under the new
+// name, so a head in the base repository (same provider id) is reported under
+// the requested name that discovery scanned and attributes heads against.
+func restListPullToSCM(repo ports.SCMRepo, pull restListPull) ports.SCMPRObservation {
 	closed := strings.EqualFold(pull.State, "closed")
+	headRepo := pull.Head.Repo.FullName
+	if pull.Head.Repo.ID != 0 && pull.Head.Repo.ID == pull.Base.Repo.ID {
+		headRepo = repoFullName(repo)
+	}
 	return ports.SCMPRObservation{
 		ProviderID:        pull.NodeID,
 		URL:               firstNonEmpty(pull.HTMLURL, pull.URL),
@@ -359,7 +371,7 @@ func restListPullToSCM(pull restListPull) ports.SCMPRObservation {
 		Draft:             pull.Draft,
 		Closed:            closed,
 		SourceBranch:      pull.Head.Ref,
-		HeadRepo:          pull.Head.Repo.FullName,
+		HeadRepo:          headRepo,
 		TargetBranch:      pull.Base.Ref,
 		HeadSHA:           pull.Head.SHA,
 		Title:             pull.Title,
