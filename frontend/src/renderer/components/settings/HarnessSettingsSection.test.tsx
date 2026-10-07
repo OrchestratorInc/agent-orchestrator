@@ -451,6 +451,31 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Show diagnostics" })).toBeNull();
 	});
 
+	it("explains a harness with no installable method instead of questioning its ownership", async () => {
+		const reason = "Built into AO; update AO to update the harness.";
+		const readiness = catalogWithInstalled("goose");
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [...plans.agents.filter((plan) => plan.agentId !== "goose"), {
+				agentId: "goose", available: false, automatic: false, method: "manual", reason,
+				methods: [{ id: "manual", label: "Manual", available: false, recommended: true, reason, reinstallAvailable: false, updateAvailable: false, uninstallAvailable: false }],
+			}] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			if (path === "/api/v1/agents/{agent}/update-advisory") {
+				const agentId = (options as { params: { path: { agent: string } } }).params.path.agent;
+				return { data: { agentId, status: "unknown", reason: "version_unparseable", checkedAt: "2026-10-08T00:00:00Z" } } as never;
+			}
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: readiness } as never);
+		renderSection();
+		await userEvent.click(await screen.findByRole("button", { name: "Expand Goose options" }));
+		const row = await findAgentRow("goose");
+		expect(within(row).getAllByText(reason).length).toBeGreaterThan(0);
+		expect(within(row).queryByText("Installation method could not be verified. Manage this CLI using its original installer.")).toBeNull();
+		expect(within(row).queryByText("Update availability could not be verified.")).toBeNull();
+	});
+
 	it("does not guess ownership or offer a method picker for a manual installation", async () => {
 		mockInstalledOperations();
 		renderSection();

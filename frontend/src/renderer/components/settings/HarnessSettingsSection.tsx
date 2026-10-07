@@ -787,7 +787,10 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 				const maintenanceMethod = plan?.methods.find((method) => method.id === methodId);
 				const canUpdate = supportsOperation(maintenanceMethod, "update");
 				const canUninstall = supportsOperation(maintenanceMethod, "uninstall");
-				const ownershipReason = !methodId ? t("settings.harness.ownershipUnknown") : undefined;
+				// A harness with no installable method (built into AO, or an installer
+				// that must run interactively here) explains itself; ownership is not the question.
+				const manualOnly = Boolean(plan?.methods.length) && plan!.methods.every((method) => method.id === "manual");
+				const ownershipReason = !methodId ? (manualOnly && plan?.reason ? plan.reason : t("settings.harness.ownershipUnknown")) : undefined;
 				const updateReason = ownershipReason || maintenanceMethod?.updateReason || maintenanceMethod?.reason || t("settings.harness.updateUnsupported");
 				const uninstallReason = ownershipReason || maintenanceMethod?.uninstallReason || maintenanceMethod?.reason || t("settings.harness.uninstallUnsupported");
 				const advisoryQuery = advisoryMap.get(agentId);
@@ -927,7 +930,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 							</div>
 							{!canUninstall ? <p id={`harness-uninstall-reason-${agentId}`} className="text-xs text-settings-muted">{uninstallReason}</p> : null}
 							{showUpdate && !canUpdate && updateReason !== uninstallReason ? <p className="text-xs text-settings-muted">{updateReason}</p> : null}
-							{updateUnknown && !advisoryQuery?.isPending ? <p className="text-xs text-settings-muted">{t("settings.harness.updateCheckUnavailable")}</p> : null}
+							{updateUnknown && !advisoryQuery?.isPending && !manualOnly ? <p className="text-xs text-settings-muted">{t("settings.harness.updateCheckUnavailable")}</p> : null}
 						</> : null}
 						{rowError && !operationRequest ? <p role="alert" className="text-xs text-error">{rowError}</p> : null}
 						{jobFailed && !authBusy ? <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void verifyInstall(agentId)}>{t("settings.harness.verifyAgain")}</Button> : null}
