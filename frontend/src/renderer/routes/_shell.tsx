@@ -424,8 +424,8 @@ function ShellLayout() {
 			).GET("/api/v1/projects/{id}", {
 				params: { path: { id: modelsProjectId } },
 			});
-			const preferred =
-				data?.project?.config?.worker?.agent || data?.project?.agent;
+			const project = data?.project;
+			const preferred = project && "config" in project ? project.config?.worker?.agent || project.agent : undefined;
 			if (preferred)
 				await queryClient.prefetchQuery(
 					agentModelsQueryOptions(preferred, modelsProjectId, modelsHostId),

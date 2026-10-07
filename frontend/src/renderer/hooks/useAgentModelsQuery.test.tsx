@@ -26,6 +26,7 @@ function catalog(agentId: string, overrides: Partial<AgentModelCatalog> = {}): A
 		customModelEntry: "none",
 		source: "cli",
 		fetchedAt: "2026-10-07T00:00:00Z",
+		stale: false,
 		...overrides,
 	};
 }
