@@ -254,9 +254,12 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 		event.preventDefault();
 		const url = requestedURL(item);
 		const now = (options.now ?? Date.now)();
-		const existing = [...blockedRequests].find(([, request]) => request.url === url)?.[0];
+		// Only a repeat from the same tab is the same request. Another profile or
+		// tab asking for this URL gets its own row, so the file a row shows is
+		// always the one that row's Download fetches.
+		const existing = [...blockedRequests].find(([, request]) =>
+			request.url === url && request.session === session && request.webContents === webContents)?.[0];
 		if (existing) {
-			blockedRequests.set(existing, { url, session, webContents });
 			downloads = downloads.map((download) => download.id === existing ? { ...download, updatedAt: now } : download);
 			publish();
 			return;
@@ -287,13 +290,18 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 	};
 
 	const begin = (item: DownloadItemLike, id: string): void => {
-		const source = downloads.find((download) => download.id === id)?.source;
+		// The replayed request can report a different name than the one the user
+		// approved (a blob link loses its download attribute), so the approved
+		// row's name is the one that is saved.
+		const approved = downloads.find((download) => download.id === id);
+		const source = approved?.source;
+		const fileName = approved?.fileName ?? safeFilename(item.getFilename());
 		blockedRequests.delete(id);
 		downloads = downloads.filter((download) => download.id !== id);
 		let savePath: string;
 		try {
 			mkdirSync(options.downloadsDirectory, { recursive: true });
-			savePath = collisionSafePath(options.downloadsDirectory, safeFilename(item.getFilename()), reservedPaths);
+			savePath = collisionSafePath(options.downloadsDirectory, fileName, reservedPaths);
 			item.setSavePath(savePath);
 		} catch {
 			try {

@@ -119,8 +119,9 @@ describe("browser download manager", () => {
 		const test = setup();
 		const item = new FakeDownloadItem();
 		const event = { preventDefault: vi.fn() };
+		const tab = { isDestroyed: () => false, downloadURL: vi.fn() };
 
-		test.session.emit("will-download", event, item, { isDestroyed: () => false, downloadURL: vi.fn() });
+		test.session.emit("will-download", event, item, tab);
 
 		expect(event.preventDefault).toHaveBeenCalledOnce();
 		expect(item.setSavePath).not.toHaveBeenCalled();
@@ -135,8 +136,8 @@ describe("browser download manager", () => {
 		})]);
 		expect(JSON.stringify(test.manager.list())).not.toContain(item.url);
 
-		// The same link opened again stays one blocked entry.
-		test.session.emit("will-download", event, item, { isDestroyed: () => false, downloadURL: vi.fn() });
+		// The same link opened again in that tab stays one blocked entry.
+		test.session.emit("will-download", event, item, tab);
 		expect(test.manager.list().downloads).toHaveLength(1);
 
 		await test.manager.action({ id: "download-1", action: "remove" });
@@ -216,6 +217,66 @@ describe("browser download manager", () => {
 		test.session.emit("will-download", approvedEvent, item, tab);
 		expect(approvedEvent.preventDefault).not.toHaveBeenCalled();
 		expect(item.setSavePath).toHaveBeenCalledOnce();
+	});
+
+	it("keeps each blocked row tied to the profile that requested its file", async () => {
+		const root = mkdtempSync(path.join(os.tmpdir(), "ao-browser-downloads-"));
+		temporaryDirectories.push(root);
+		let nextId = 0;
+		const manager = createBrowserDownloadManager({
+			downloadsDirectory: path.join(root, "Downloads"),
+			historyPath: path.join(root, "data", "browser-downloads.json"),
+			shell: { openPath: vi.fn(async () => ""), showItemInFolder: vi.fn(), trashItem: vi.fn(async () => undefined) },
+			notify: vi.fn(),
+			createId: () => `download-${nextId++}`,
+		});
+		const sessionA = new EventEmitter();
+		const sessionB = new EventEmitter();
+		manager.attach(sessionA as never);
+		manager.attach(sessionB as never);
+		const tabA = { isDestroyed: () => false, downloadURL: vi.fn() };
+		const tabB = { isDestroyed: () => false, downloadURL: vi.fn() };
+		const itemA = new FakeDownloadItem();
+		itemA.getFilename = () => "account-a.csv";
+		const itemB = new FakeDownloadItem();
+		itemB.getFilename = () => "account-b.csv";
+
+		sessionA.emit("will-download", { preventDefault: vi.fn() }, itemA, tabA);
+		sessionB.emit("will-download", { preventDefault: vi.fn() }, itemB, tabB);
+
+		expect(manager.list().downloads.map((download) => [download.id, download.fileName, download.status])).toEqual([
+			["download-1", "account-b.csv", "blocked"],
+			["download-0", "account-a.csv", "blocked"],
+		]);
+
+		await manager.action({ id: "download-0", action: "allow" });
+		expect(tabA.downloadURL).toHaveBeenCalledWith(itemA.url);
+		expect(tabB.downloadURL).not.toHaveBeenCalled();
+
+		sessionA.emit("will-download", { preventDefault: vi.fn() }, itemA, tabA);
+		expect(manager.list().downloads.map((download) => [download.fileName, download.status])).toEqual([
+			["account-a.csv", "progressing"],
+			["account-b.csv", "blocked"],
+		]);
+	});
+
+	it("saves an allowed download under the name the user approved", async () => {
+		const test = setup();
+		const tab = { isDestroyed: () => false, downloadURL: vi.fn() };
+		const item = new FakeDownloadItem();
+		item.url = "blob:https://app.example.test/4b6f2c1e-0d7a-4f8e-9c55-1f2a3b4c5d6e";
+		test.session.emit("will-download", { preventDefault: vi.fn() }, item, tab);
+		expect(test.manager.list().downloads[0]).toMatchObject({ fileName: "report.txt", source: "app.example.test" });
+		await test.manager.action({ id: "download-1", action: "allow" });
+
+		// The replay of a blob link reports a bare UUID instead of the name.
+		const replay = new FakeDownloadItem();
+		replay.url = item.url;
+		replay.getFilename = () => "4b6f2c1e-0d7a-4f8e-9c55-1f2a3b4c5d6e";
+		test.session.emit("will-download", { preventDefault: vi.fn() }, replay, tab);
+
+		expect(replay.setSavePath).toHaveBeenCalledWith(path.join(test.downloadsDirectory, "report.txt"));
+		expect(test.manager.list().downloads[0]).toMatchObject({ fileName: "report.txt", status: "progressing" });
 	});
 
 	it("keeps a session-fallback approval inside the session that asked for it", async () => {
