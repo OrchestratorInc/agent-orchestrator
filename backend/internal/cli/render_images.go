@@ -111,9 +111,10 @@ func missingImagesError(missing []string) error {
 		". Use absolute paths to existing image files, or remove them.")
 }
 
-func imageTooLarge(path string, size int) error {
+// imageTooLarge names an image's size, "12.0 MiB" or "over 10.0 MiB".
+func imageTooLarge(path, size string) error {
 	return renderImageError(fmt.Sprintf("%s is %s; each local image must be at most %s.",
-		path, formatMiB(size), formatMiB(maxRenderImageBytes)))
+		path, size, formatMiB(maxRenderImageBytes)))
 }
 
 func pageTooLarge(size int) error {
@@ -147,7 +148,7 @@ func inlineLocalImages(html string) (inlined string, missing []string, err error
 	}
 	for _, path := range paths {
 		if sizes[path] > maxRenderImageBytes {
-			return "", nil, imageTooLarge(path, sizes[path])
+			return "", nil, imageTooLarge(path, formatMiB(sizes[path]))
 		}
 	}
 	pageBytes := len(html)
@@ -172,7 +173,8 @@ func inlineLocalImages(html string) (inlined string, missing []string, err error
 			continue
 		}
 		if len(data) > maxRenderImageBytes {
-			return "", nil, imageTooLarge(path, len(data))
+			// The read stopped one byte past the limit, so the real size is unknown.
+			return "", nil, imageTooLarge(path, "over "+formatMiB(maxRenderImageBytes))
 		}
 		readBytes += base64.StdEncoding.EncodedLen(len(data))
 		if readBytes > maxRenderPageBytes {

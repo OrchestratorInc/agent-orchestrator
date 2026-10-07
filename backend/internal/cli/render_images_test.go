@@ -242,7 +242,7 @@ func TestInlineLocalImagesRefusesAnImageThatGrowsAfterTheStat(t *testing.T) {
 	})
 
 	_, _, err := inlineLocalImages(`<img src="` + png + `">`)
-	if want := png + " is 10.0 MiB; each local image must be at most 10.0 MiB."; err == nil || err.Error() != want {
+	if want := png + " is over 10.0 MiB; each local image must be at most 10.0 MiB."; err == nil || err.Error() != want {
 		t.Fatalf("err = %v, want %q", err, want)
 	}
 }
