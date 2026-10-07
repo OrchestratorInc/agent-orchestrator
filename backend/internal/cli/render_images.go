@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"unicode"
 	"unicode/utf8"
 )
@@ -57,8 +58,11 @@ var localImagePattern = func() *regexp.Regexp {
 
 var windowsDrive = regexp.MustCompile(`(?i)^[a-z]:`)
 
-// openRenderImage is os.Open; tests count calls through it.
-var openRenderImage = os.Open
+// openRenderImage opens without blocking, so a FIFO swapped in after the stat
+// cannot hang the read; readRenderImage then refuses it. Tests wrap it.
+var openRenderImage = func(name string) (*os.File, error) {
+	return os.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+}
 
 type localImage struct {
 	start, end int
@@ -209,6 +213,9 @@ func readRenderImage(path string) ([]byte, bool) {
 		return nil, false
 	}
 	defer func() { _ = file.Close() }()
+	if info, err := file.Stat(); err != nil || !info.Mode().IsRegular() {
+		return nil, false
+	}
 	data, err := io.ReadAll(io.LimitReader(file, maxRenderImageBytes+1))
 	return data, err == nil
 }

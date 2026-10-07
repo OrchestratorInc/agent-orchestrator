@@ -234,11 +234,12 @@ func stubOpenRenderImage(t *testing.T, open func(string) (*os.File, error)) {
 
 func TestInlineLocalImagesRefusesAnImageThatGrowsAfterTheStat(t *testing.T) {
 	png := writeImage(t, t.TempDir(), "grows.png", pngSignature)
+	open := openRenderImage
 	stubOpenRenderImage(t, func(name string) (*os.File, error) {
 		if err := os.Truncate(name, 200<<20); err != nil {
 			t.Fatal(err)
 		}
-		return os.Open(name)
+		return open(name)
 	})
 
 	_, _, err := inlineLocalImages(`<img src="` + png + `">`)
@@ -255,9 +256,10 @@ func TestInlineLocalImagesReportsASymlinkToANonImageAsMissing(t *testing.T) {
 		t.Skipf("symlink: %v", err)
 	}
 	opens := 0
+	open := openRenderImage
 	stubOpenRenderImage(t, func(name string) (*os.File, error) {
 		opens++
-		return os.Open(name)
+		return open(name)
 	})
 
 	html := `<img src="` + link + `">`
