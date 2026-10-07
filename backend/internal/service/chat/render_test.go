@@ -109,9 +109,9 @@ func TestPublishRenderWithoutARunningTurnLeavesNoFile(t *testing.T) {
 func TestPublishRenderRejectsBadPagesBeforeStoring(t *testing.T) {
 	h, _ := steerHarness(t)
 	for name, in := range map[string]chatsvc.RenderInput{
-		"empty html": {HTML: "  ", Title: "x"},
-		"no title":   {HTML: "<p>x</p>", Title: "   "},
-		"over 1 MiB": {HTML: strings.Repeat("a", 1<<20+1), Title: "x"},
+		"empty html":  {HTML: "  ", Title: "x"},
+		"no title":    {HTML: "<p>x</p>", Title: "   "},
+		"over 25 MiB": {HTML: strings.Repeat("a", 25<<20+1), Title: "x"},
 	} {
 		if _, err := h.svc.PublishRender(context.Background(), testSession, in); !errors.Is(err, chatsvc.ErrRenderInvalid) {
 			t.Errorf("%s: err = %v, want ErrRenderInvalid", name, err)
@@ -120,6 +120,26 @@ func TestPublishRenderRejectsBadPagesBeforeStoring(t *testing.T) {
 	entries, _ := os.ReadDir(filepath.Join(h.rendersDir, "attachments", string(testSession)))
 	if len(entries) != 0 {
 		t.Fatalf("invalid pages were stored: %v", entries)
+	}
+}
+
+// The CLI inlines local images, so a page runs far past the HTML file an agent writes.
+func TestRenderAcceptsAPageOf25MiB(t *testing.T) {
+	h, _ := steerHarness(t)
+	ctx := context.Background()
+	h.svc.SetRenderCheck(func(context.Context, domain.SessionID, map[string]any) (any, error) {
+		return map[string]any{"data": "iVBORw0KGgo=", "width": 720.0, "height": 200.0, "contentHeight": 200.0}, nil
+	})
+	page := "<p>" + strings.Repeat("A", 25<<20-len("<p>"))
+
+	if _, err := h.svc.PublishRender(ctx, testSession, chatsvc.RenderInput{HTML: page, Title: "x"}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if _, err := h.svc.CheckRender(ctx, testSession, chatsvc.RenderCheckInput{HTML: page, BaseURL: "http://127.0.0.1:3001"}); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if _, err := h.svc.CheckRender(ctx, testSession, chatsvc.RenderCheckInput{HTML: page + "A"}); !errors.Is(err, chatsvc.ErrRenderInvalid) {
+		t.Fatalf("check over 25 MiB: err = %v, want ErrRenderInvalid", err)
 	}
 }
 

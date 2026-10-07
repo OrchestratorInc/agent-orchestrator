@@ -60,8 +60,10 @@ func newRenderCommand(ctx *commandContext) *cobra.Command {
 			"or restate the page in it.\n\n" +
 			"The file must be one self-contained HTML document (inline <style> and <script>,\n" +
 			"at most 1 MiB). Remote https:// resources such as a CDN chart library load\n" +
-			"as-is; local paths and relative URLs do not resolve, so embed images as data:\n" +
-			"URIs. AO stores its own copy, so write the file outside the repository.\n\n" +
+			"as-is; relative URLs do not resolve. A local image given by absolute path\n" +
+			"(src=\"/abs/shot.png\", CSS url(/abs/bg.webp), or a JS string) is put into\n" +
+			"the page, up to 10 MiB each. AO stores its own copy, so write the file\n" +
+			"outside the repository.\n\n" +
 			"Style with the theme variables AO injects on :root, which follow light/dark\n" +
 			"live: --background --foreground --muted --muted-foreground --card\n" +
 			"--card-foreground --popover --border --border-strong --primary\n" +
@@ -125,6 +127,14 @@ func (c *commandContext) publishRender(ctx context.Context, out io.Writer, file,
 	if err != nil {
 		return err
 	}
+	html, missing, err := inlineLocalImages(html)
+	if err != nil {
+		return usageError{err}
+	}
+	if len(missing) > 0 {
+		return usageError{renderImageError("These local images could not be read: " + strings.Join(missing, ", ") +
+			". Use absolute paths to existing image files, or remove them.")}
+	}
 	var resp renderAPIResponse
 	path := "sessions/" + url.PathEscape(sessionID) + "/renders"
 	if err := c.postJSON(ctx, path, renderAPIRequest{HTML: html, Title: title, Height: height}, &resp); err != nil {
@@ -143,6 +153,11 @@ func (c *commandContext) checkRender(cmd *cobra.Command, file string, width int,
 	if err != nil {
 		return err
 	}
+	// A check shows what an unreadable image does to the page instead of refusing it.
+	html, missing, err := inlineLocalImages(html)
+	if err != nil {
+		return usageError{err}
+	}
 	var resp renderCheckAPIResponse
 	path := "sessions/" + url.PathEscape(sessionID) + "/renders/check"
 	if err := c.postJSON(cmd.Context(), path, renderCheckAPIRequest{HTML: html, Width: width}, &resp); err != nil {
@@ -159,14 +174,17 @@ func (c *commandContext) checkRender(cmd *cobra.Command, file string, width int,
 	if _, err := fmt.Fprintf(w, "Content height: %d px at width %d.\n", resp.ContentHeight, width); err != nil {
 		return err
 	}
-	if len(resp.ConsoleMessages) == 0 {
-		return nil
+	// Image paths and console text come from the page and from any script it
+	// loads, so they are marked as untrusted the way `ao browser console` marks them.
+	lines := make([]string, 0, len(resp.ConsoleMessages)+1)
+	if len(missing) > 0 {
+		lines = append(lines, "missing images: "+strings.Join(missing, ", "))
 	}
-	// Console text comes from the page and from any script it loads, so it is
-	// marked as untrusted the way `ao browser console` marks it.
-	lines := make([]string, 0, len(resp.ConsoleMessages))
 	for _, m := range resp.ConsoleMessages {
 		lines = append(lines, fmt.Sprintf("console.%s: %s", m.Level, m.Text))
+	}
+	if len(lines) == 0 {
+		return nil
 	}
 	_, err = fmt.Fprintln(w, browserUntrustedText(strings.Join(lines, "\n")))
 	return err

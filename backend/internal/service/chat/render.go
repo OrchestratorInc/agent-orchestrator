@@ -15,7 +15,9 @@ import (
 )
 
 const (
-	maxRenderHTMLBytes  = 1 << 20
+	// The CLI inlines an agent's local images, so a page is far larger than
+	// the 1 MiB HTML file the agent writes.
+	maxRenderHTMLBytes  = 25 << 20
 	maxRenderTitleRunes = 200
 	minRenderHeight     = 80
 	maxRenderHeight     = 2000

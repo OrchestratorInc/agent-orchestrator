@@ -4629,7 +4629,7 @@ export interface components {
         PublishRenderRequest: {
             /** @description First-paint frame height in CSS pixels, clamped to 80-2000; the frame then fits the page. */
             height?: number;
-            /** @description A complete, self-contained HTML document, at most 1 MiB. */
+            /** @description A complete, self-contained HTML document, at most 25 MiB. */
             html: string;
             /** @description Short name for the page. */
             title: string;
@@ -4688,7 +4688,7 @@ export interface components {
             sessionId: string;
         };
         RenderCheckRequest: {
-            /** @description A complete, self-contained HTML document, at most 1 MiB. */
+            /** @description A complete, self-contained HTML document, at most 25 MiB. */
             html: string;
             /** @description Viewport width in CSS pixels, 240-1600. Defaults to 720. */
             width?: number;

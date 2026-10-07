@@ -23,7 +23,8 @@ import (
 )
 
 // Native chat images are sent to the provider and retained in conversation
-// history. Workspace file attachments use separate, larger spawn limits.
+// history. Workspace file attachments use separate, larger spawn limits. The
+// body limit also fits a 25 MiB render page as a JSON string.
 const (
 	maxConversationImageBytes  = 10 << 20
 	maxConversationImagesBytes = 25 << 20

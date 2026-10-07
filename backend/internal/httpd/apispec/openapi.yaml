@@ -13523,7 +13523,7 @@ components:
             the frame then fits the page.
           type: integer
         html:
-          description: A complete, self-contained HTML document, at most 1 MiB.
+          description: A complete, self-contained HTML document, at most 25 MiB.
           type: string
         title:
           description: Short name for the page.
@@ -13652,7 +13652,7 @@ components:
     RenderCheckRequest:
       properties:
         html:
-          description: A complete, self-contained HTML document, at most 1 MiB.
+          description: A complete, self-contained HTML document, at most 25 MiB.
           type: string
         width:
           description: Viewport width in CSS pixels, 240-1600. Defaults to 720.

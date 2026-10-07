@@ -14,8 +14,11 @@ ao render "$TMPDIR/turns-by-day.html" --title "Turns by day" --height 420
   reply must not announce it, say where it is, or restate it. Add only what the
   page does not say.
 - One self-contained HTML file: inline `<style>` and `<script>`, at most 1 MiB.
-  Remote `https://` resources (a CDN chart library, for example) load as-is.
-  Local paths and relative URLs do not resolve; embed images as `data:` URIs.
+  Remote `https://` resources (a CDN chart library, for example) load as they are.
+  Relative URLs do not resolve.
+- To show a local image, write its absolute path: `src="/abs/shot.png"`, CSS
+  `url(/abs/bg.webp)`, or a JS string. `ao render` puts the image into the page. PNG, JPEG, GIF,
+  WebP, AVIF, SVG, BMP, and ICO files work, each up to 10 MiB. Remote http(s) URLs load as they are.
 - Write the file outside the repository (for example under `$TMPDIR`) so it does
   not appear in the diff. AO stores its own copy.
 - AO measures the page when you publish it, so the frame opens at the right

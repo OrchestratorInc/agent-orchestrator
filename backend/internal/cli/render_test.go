@@ -49,7 +49,8 @@ func TestRenderPostsThePageToTheSession(t *testing.T) {
 	srv, capture := renderServer(t, http.StatusCreated,
 		`{"renderId":"r1","activityId":"a1","path":"/api/v1/sessions/aa-47/renders/r1"}`)
 	writeRunFileFor(t, cfg, srv)
-	page := writePage(t, []byte("<!doctype html><p>chart</p>"))
+	shot := writeImage(t, t.TempDir(), "shot.png", pngSignature)
+	page := writePage(t, []byte(`<!doctype html><img src="`+shot+`">`))
 
 	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
 		"render", page, "--title", "Turns by day", "--height", "420")
@@ -67,7 +68,8 @@ func TestRenderPostsThePageToTheSession(t *testing.T) {
 	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if req.HTML != "<!doctype html><p>chart</p>" || req.Title != "Turns by day" || req.Height != 420 {
+	// The CLI reads local images with the agent's own access and inlines them.
+	if req.HTML != `<!doctype html><img src="data:image/png;base64,iVBORw0KGgo=">` || req.Title != "Turns by day" || req.Height != 420 {
 		t.Fatalf("request = %+v", req)
 	}
 	if !strings.Contains(out, "r1") {
@@ -138,5 +140,51 @@ func TestRenderWithoutTitleOrCheckDoesNotCallTheDaemon(t *testing.T) {
 		"render", writePage(t, []byte("<p>x</p>")))
 	if err == nil || !strings.Contains(err.Error(), "--title") || capture.called {
 		t.Fatalf("err=%v called=%v; want a --title usage error and no request", err, capture.called)
+	}
+}
+
+func TestRenderWithAMissingLocalImagePublishesNothing(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "aa-47")
+	cfg := setConfigEnv(t)
+	srv, capture := renderServer(t, http.StatusCreated, `{}`)
+	writeRunFileFor(t, cfg, srv)
+	gone := filepath.Join(t.TempDir(), "shot.png")
+
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"render", writePage(t, []byte(`<img src="`+gone+`">`)), "--title", "x")
+	want := "These local images could not be read: " + gone + ". Use absolute paths to existing image files, or remove them."
+	if err == nil || err.Error() != want || capture.called {
+		t.Fatalf("err=%v called=%v; want %q and no request", err, capture.called, want)
+	}
+}
+
+func TestRenderCheckInlinesImagesAndListsTheMissingOnes(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "aa-47")
+	cfg := setConfigEnv(t)
+	srv, capture := renderServer(t, http.StatusOK,
+		`{"screenshot":{"mimeType":"image/png","data":"iVBORw0KGgo=","width":720,"height":200},"contentHeight":200,"consoleMessages":[]}`)
+	writeRunFileFor(t, cfg, srv)
+	dir := t.TempDir()
+	shot := writeImage(t, dir, "shot.png", pngSignature)
+	gone := filepath.Join(dir, "gone.png")
+
+	stdout, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"render", "--check", writePage(t, []byte(`<img src="`+shot+`"><img src="`+gone+`">`)),
+		"--out", filepath.Join(dir, "check.png"))
+	if err != nil {
+		t.Fatalf("render --check: %v\nstderr=%s", err, errOut)
+	}
+	var req struct {
+		HTML string `json:"html"`
+	}
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if want := `<img src="data:image/png;base64,iVBORw0KGgo="><img src="` + gone + `">`; req.HTML != want {
+		t.Fatalf("html = %s, want %s", req.HTML, want)
+	}
+	// The paths come from the page, so they are marked untrusted like console text.
+	if want := browserUntrustedText("missing images: " + gone); !strings.Contains(stdout, want) {
+		t.Fatalf("stdout missing %q:\n%s", want, stdout)
 	}
 }

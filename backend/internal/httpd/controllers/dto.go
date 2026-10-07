@@ -2963,7 +2963,7 @@ type ConversationTurnIDParam struct {
 // PublishRenderRequest is a self-contained HTML page an agent shows inline in
 // its chat thread.
 type PublishRenderRequest struct {
-	HTML   string `json:"html" description:"A complete, self-contained HTML document, at most 1 MiB."`
+	HTML   string `json:"html" description:"A complete, self-contained HTML document, at most 25 MiB."`
 	Title  string `json:"title" description:"Short name for the page."`
 	Height int    `json:"height,omitempty" description:"First-paint frame height in CSS pixels, clamped to 80-2000; the frame then fits the page."`
 }
@@ -2977,7 +2977,7 @@ type PublishRenderResponse struct {
 
 // RenderCheckRequest is a page an agent wants to see before it publishes it.
 type RenderCheckRequest struct {
-	HTML  string `json:"html" description:"A complete, self-contained HTML document, at most 1 MiB."`
+	HTML  string `json:"html" description:"A complete, self-contained HTML document, at most 25 MiB."`
 	Width int    `json:"width,omitempty" description:"Viewport width in CSS pixels, 240-1600. Defaults to 720."`
 }
 

@@ -1,6 +1,7 @@
 package controllers_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -227,6 +228,38 @@ func TestPublishRenderRouteMapsOutcomes(t *testing.T) {
 				t.Fatalf("renderId=%q input=%+v", body.RenderID, svc.input)
 			}
 		})
+	}
+}
+
+// A page with its local images inlined runs to 25 MiB, and its JSON body must
+// reach the service whole on both routes.
+func TestRenderRoutesAcceptA25MiBPage(t *testing.T) {
+	// Markup is the worst case for the body: encoding/json writes each < as
+	// \u003c, and the CLI accepts at most 1 MiB of it.
+	page := strings.Repeat("<", 1<<20) + strings.Repeat("A", 24<<20)
+	svc := &renderCheckStub{renderStub: &renderStub{fakeConversationService: &fakeConversationService{}}}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{DataDir: t.TempDir()}, log, nil, httpd.APIDeps{
+		Sessions: newFakeSessionService(), Conversations: svc,
+	}, httpd.ControlDeps{}))
+	t.Cleanup(srv.Close)
+
+	for path, status := range map[string]int{"/renders": http.StatusCreated, "/renders/check": http.StatusOK} {
+		body, err := json.Marshal(map[string]any{"html": page, "title": "x"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.Post(srv.URL+"/api/v1/sessions/proj-1"+path, "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != status {
+			t.Fatalf("%s with a %d-byte body = %d, want %d", path, len(body), resp.StatusCode, status)
+		}
+	}
+	if svc.input.HTML != page || svc.checkInput.HTML != page {
+		t.Fatalf("service got %d and %d bytes, want %d", len(svc.input.HTML), len(svc.checkInput.HTML), len(page))
 	}
 }
 
