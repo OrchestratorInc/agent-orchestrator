@@ -27,6 +27,7 @@ const maxDisplayNameLen = 100
 
 // Store is the read-only persistence surface needed to assemble controller-facing session read models.
 type Store interface {
+	GetSessionCleanupFacts(ctx context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error)
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 	GetSessionByClientRequestID(ctx context.Context, id string) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
@@ -78,6 +79,7 @@ type commander interface {
 	RestoreWithMode(ctx context.Context, id domain.SessionID) (sessionmanager.RestoreResult, error)
 	ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (sessionmanager.RestoreResult, error)
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
+	RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error)
 	RetireForReplacement(ctx context.Context, id domain.SessionID) error
 	WaitForMessageDeliveryReady(ctx context.Context, id domain.SessionID) error
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
@@ -828,6 +830,13 @@ func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	return freed, toAPIError(err)
 }
 
+// RequestKill acknowledges terminal intent without waiting for cleanup scripts.
+func (s *Service) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
+	s.cancelTitleRefinement(id)
+	result, err := s.manager.RequestKill(ctx, id)
+	return result, toAPIError(err)
+}
+
 // RollbackSpawn deletes a seed-state session row, or falls back to a Kill if
 // the session has spawn output. Used by the CLI to undo a `spawn --claim-pr`
 // when the claim step fails, avoiding the orphan terminated row that a plain
@@ -1225,9 +1234,21 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 	}); ok {
 		readiness = recovery.SessionStatusReadiness(rec)
 	}
+	var cleanup domain.WorkspaceDisposition
+	if rec.IsTerminated {
+		// ponytail: one read per archived session; batch if archive reads become a bottleneck.
+		facts, ok, err := s.store.GetSessionCleanupFacts(ctx, rec.ID)
+		if err != nil {
+			return domain.Session{}, fmt.Errorf("get workspace cleanup facts: %w", err)
+		}
+		if ok && facts.SessionGeneration == rec.CleanupGeneration {
+			cleanup = facts.WorkspaceDisposition
+		}
+	}
 	return domain.Session{
-		SessionRecord:   rec,
-		StatusReadiness: readiness,
+		SessionRecord:    rec,
+		WorkspaceCleanup: cleanup,
+		StatusReadiness:  readiness,
 		ChatProviderPreserved: rec.Mode == domain.SessionModeChat && !rec.IsTerminated &&
 			s.chatProviderPreserved != nil && s.chatProviderPreserved(rec.ID),
 		Status:           deriveStatus(rec, prs, now, s.harnessSignals(rec.Harness)),

@@ -353,6 +353,8 @@ type Store interface {
 	UpdateSessionArtifactOutput(ctx context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error)
 	UpdateBrowserCapabilityVerifier(ctx context.Context, id domain.SessionID, expected domain.SessionControllerOwner, verifier string) (bool, error)
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
+	UpsertSessionCleanupFacts(ctx context.Context, rec domain.SessionCleanupRecord) error
+	GetSessionCleanupFacts(ctx context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
 	// DeleteSession removes a session row only if it is still in seed state
@@ -1957,7 +1959,7 @@ func (m *Manager) destroySpawnWorkspace(ctx context.Context, ws ports.WorkspaceI
 		m.logger.Warn("spawn rollback: workspace ownership changed; preserving workspace", "sessionID", ws.SessionID, "error", err)
 		return false
 	}
-	if err := m.runPreRemove(ctx, ws.ProjectID, ws.Path); err != nil {
+	if err := m.runPreRemove(ws.ProjectID, ws.Path); err != nil {
 		m.logger.Warn("spawn rollback: workspace cleanup failed; preserving workspace", "sessionID", ws.SessionID, "error", err)
 		return false
 	}
@@ -2367,17 +2369,25 @@ func (m *Manager) recordTermination(ctx context.Context, id domain.SessionID, dr
 	return nil
 }
 
-// Kill stops the runtime, records terminal intent, then cleans up the workspace.
-// A workspace teardown refused by the worktree-remove safety
-// (uncommitted work) is never forced: Kill succeeds with freed=false,
-// signalling the workspace was preserved for later inspection/cleanup while
-// the session itself is still marked terminated.
-//
-// A session whose runtime handle or workspace path is missing (e.g. spawn
-// failed partway, handle lost after a crash) is still terminated after the
-// available destroy steps are skipped so it can be cleaned up from the
-// dashboard.
+// KillResult distinguishes accepted cleanup from a preserved workspace.
+type KillResult struct {
+	Freed          bool
+	CleanupPending bool
+}
+
+// Kill waits for workspace retirement for internal callers that depend on it.
 func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
+	result, err := m.kill(ctx, id, false)
+	return result.Freed, err
+}
+
+// RequestKill stops the agent and persists terminal intent before returning.
+// Configured cleanup commands use the daemon's existing background workers.
+func (m *Manager) RequestKill(ctx context.Context, id domain.SessionID) (KillResult, error) {
+	return m.kill(ctx, id, true)
+}
+
+func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundCleanup bool) (KillResult, error) {
 	// Teardown deliberately stops riding the caller's context. Kill runs a
 	// sequence (stop the agent, tear the controller down, mark the row
 	// terminated, drop the worktree) where being cancelled partway leaves a session
@@ -2394,28 +2404,33 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	ctx, cancelTeardown := context.WithTimeout(context.WithoutCancel(ctx), budget)
 	defer cancelTeardown()
 	if err := m.cancelAsyncChatSpawn(ctx, id); err != nil {
-		return false, fmt.Errorf("kill %s: cancel provisioning: %w", id, err)
+		return KillResult{}, fmt.Errorf("kill %s: cancel provisioning: %w", id, err)
 	}
 
 	if err := m.beginAgentOperation(ctx, id, agentOperationKill); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrSwitchInProgress
 		}
-		return false, fmt.Errorf("kill %s: %w", id, err)
+		return KillResult{}, fmt.Errorf("kill %s: %w", id, err)
 	}
-	defer m.endAgentOperation(id, agentOperationKill)
+	releaseOperation := func() { m.endAgentOperation(id, agentOperationKill) }
+	defer func() {
+		if releaseOperation != nil {
+			releaseOperation()
+		}
+	}()
 
 	if active, err := m.hasActiveInterfaceTransition(ctx, id); err != nil {
-		return false, fmt.Errorf("kill %s: interface transition: %w", id, err)
+		return KillResult{}, fmt.Errorf("kill %s: interface transition: %w", id, err)
 	} else if active {
-		return false, fmt.Errorf("kill %s: %w", id, ErrInterfaceTransitionInProgress)
+		return KillResult{}, fmt.Errorf("kill %s: %w", id, ErrInterfaceTransitionInProgress)
 	}
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
-		return false, fmt.Errorf("kill %s: %w", id, err)
+		return KillResult{}, fmt.Errorf("kill %s: %w", id, err)
 	}
 	if !ok {
-		return false, nil // already gone: benign race
+		return KillResult{}, nil // already gone: benign race
 	}
 	m.stopPreviewBestEffort(ctx, id)
 	m.destroyBrowserBestEffort(ctx, id)
@@ -2425,19 +2440,19 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	var workspaceProjectRows []ports.WorkspaceRepoInfo
 	workspaceProject := false
 	if rows, ok, rowErr := m.workspaceProjectRows(ctx, rec); rowErr != nil {
-		return false, fmt.Errorf("kill %s: workspace rows: %w", id, rowErr)
+		return KillResult{}, fmt.Errorf("kill %s: workspace rows: %w", id, rowErr)
 	} else if ok {
 		workspaceProjectRows = rows
 		workspaceProject = true
 	}
 	if err := m.terminateNativeSession(ctx, rec); err != nil {
-		return false, fmt.Errorf("kill %s: native session: %w", id, err)
+		return KillResult{}, fmt.Errorf("kill %s: native session: %w", id, err)
 	}
 	// Attachments are deliberately ignored by git, so stash cannot preserve
 	// legacy worktree-only files. Import them before any controller or worktree
 	// teardown; a failed import leaves the live session intact.
 	if err := m.importAttachments(ctx, rec); err != nil {
-		return false, fmt.Errorf("kill %s: preserve attachments: %w", id, err)
+		return KillResult{}, fmt.Errorf("kill %s: preserve attachments: %w", id, err)
 	}
 
 	// Exactly one controller exists, so exactly one gets torn down. A chat
@@ -2454,11 +2469,11 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 		// closes before the PID exits, so a hung host reads as gone. Terminating
 		// then would leave a possibly-live agent with no row pointing at it.
 		if err := m.runtime.Destroy(ctx, handle); err != nil {
-			return false, fmt.Errorf("kill %s: runtime: %w", id, err)
+			return KillResult{}, fmt.Errorf("kill %s: runtime: %w", id, err)
 		}
 	}
 	if err := m.terminateReviewer(ctx, id, "cancelled by worker session termination"); err != nil {
-		return false, fmt.Errorf("kill %s: reviewer: %w", id, err)
+		return KillResult{}, fmt.Errorf("kill %s: reviewer: %w", id, err)
 	}
 	// Gate shut any shell terminal scoped to this session BEFORE the worktree
 	// goes away: an open shell whose cwd is that directory can otherwise
@@ -2467,26 +2482,63 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	// one in the same race window. A runtime that cannot be confirmed dead
 	// stops Kill here — same shape as a dirty-workspace refusal — rather than
 	// letting the worktree disappear out from under it.
+	var releaseTerminals func()
+	defer func() {
+		if releaseTerminals != nil {
+			releaseTerminals()
+		}
+	}()
 	if ws.Path != "" {
 		release, err := m.beginShellTerminalTeardown(ctx, id)
 		if err != nil {
 			// Same shape as the dirty-workspace refusal below: the worktree is
 			// left alone and the session is still terminated.
-			return false, m.terminateWithPreservedWorkspace(ctx, id, nil, true)
+			return KillResult{}, m.terminateWithPreservedWorkspace(ctx, id, nil, true)
 		}
-		if release != nil {
-			defer release()
-		}
+		releaseTerminals = release
 	}
 	freed := false
 	if ws.Path != "" {
 		// Persist terminal intent before user commands can wait indefinitely.
 		// Workspace-project rows remain inventory for a later cleanup retry.
 		if err := m.recordTermination(ctx, id, !workspaceProject); err != nil {
-			return false, err
+			return KillResult{}, err
 		}
-		if err := m.runPreRemove(ctx, rec.ProjectID, ws.Path); err != nil {
-			return false, err
+		if backgroundCleanup {
+			project, err := m.loadProject(ctx, rec.ProjectID)
+			if err != nil {
+				return KillResult{}, err
+			}
+			if project.Kind.WithDefault() != domain.ProjectKindScratch && len(project.Config.PreRemove) > 0 {
+				if err := m.recordWorkspaceCleanup(ctx, rec, domain.DispositionPending, ""); err != nil {
+					return KillResult{}, err
+				}
+				// cleanupOne takes its own terminal guard. Keep the agent-operation
+				// guard throughout so neither restore nor retry can overlap this job.
+				if releaseTerminals != nil {
+					releaseTerminals()
+					releaseTerminals = nil
+				}
+				releaseOp := releaseOperation
+				releaseOperation = nil
+				m.runInBackground(func() {
+					defer releaseOp()
+					_, reason := m.cleanupOne(m.backgroundContext, rec, ws)
+					if reason == "" && workspaceProject {
+						if err := m.recordTermination(m.backgroundContext, id, true); err != nil {
+							reason = "workspace teardown failed"
+							m.logger.Warn("clear cleanup restore marker", "sessionID", id, "error", err)
+						}
+					}
+					if err := m.recordWorkspaceCleanupResult(m.backgroundContext, rec, reason); err != nil {
+						m.logger.Error("record background workspace cleanup", "sessionID", id, "error", err)
+					}
+				})
+				return KillResult{CleanupPending: true}, nil
+			}
+		}
+		if err := m.runPreRemove(rec.ProjectID, ws.Path); err != nil {
+			return KillResult{}, err
 		}
 		// Give workspace removal its own budget after untimed user commands.
 		cancelTeardown()
@@ -2497,7 +2549,7 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	if workspaceProject {
 		reclaim, err := m.destroyWorkspaceProjectRows(ctx, workspaceProjectRows)
 		if err != nil {
-			return false, m.terminateWithPreservedWorkspace(ctx, id, err, false)
+			return KillResult{}, m.terminateWithPreservedWorkspace(ctx, id, err, false)
 		}
 		freed = reclaim != ""
 		if freed {
@@ -2505,7 +2557,7 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 		}
 	} else if ws.Path != "" {
 		if err := m.workspace.Destroy(ctx, ws); err != nil {
-			return false, m.terminateWithPreservedWorkspace(ctx, id, err, true)
+			return KillResult{}, m.terminateWithPreservedWorkspace(ctx, id, err, true)
 		}
 		freed = true
 		m.cleanupAgentWorkspace(ctx, rec, ws.Path)
@@ -2516,10 +2568,10 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	// and are left as non-restorable inventory.
 	if ws.Path == "" || workspaceProject {
 		if err := m.recordTermination(ctx, id, true); err != nil {
-			return false, err
+			return KillResult{}, err
 		}
 	}
-	return freed, nil
+	return KillResult{Freed: freed}, nil
 }
 
 // RetireForReplacement terminates a live orchestrator and releases its branch
@@ -2609,7 +2661,7 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 	if err := m.recordTermination(ctx, rec.ID, true); err != nil {
 		return err
 	}
-	if err := m.runPreRemove(ctx, rec.ProjectID, ws.Path); err != nil {
+	if err := m.runPreRemove(rec.ProjectID, ws.Path); err != nil {
 		return fmt.Errorf("retire replacement %s: %w", id, err)
 	}
 	ctx, cancelWorkspace := context.WithTimeout(context.WithoutCancel(ctx), killTeardownBudget)
@@ -2689,7 +2741,7 @@ func (m *Manager) retireWorkspaceProjectForReplacement(ctx context.Context, rec 
 	if err := m.recordTermination(ctx, rec.ID, false); err != nil {
 		return err
 	}
-	if err := m.runPreRemove(ctx, rec.ProjectID, rec.Metadata.WorkspacePath); err != nil {
+	if err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath); err != nil {
 		return fmt.Errorf("retire replacement %s: %w", rec.ID, err)
 	}
 	ctx, cancelWorkspace := context.WithTimeout(context.WithoutCancel(ctx), killTeardownBudget)
@@ -4795,18 +4847,25 @@ func (m *Manager) cleanupWorkspaceUnderGate(ctx context.Context, rec domain.Sess
 		return ports.WorkspaceReclaimRemoved, "workspace teardown failed"
 	}
 	defer m.endAgentOperation(rec.ID, agentOperationKill)
-	release := m.acquireWorkspaceGate(rec.ProjectID)
-
-	inUse, err := m.isWorkspaceInUse(ctx, rec.ProjectID, ws.Path, "")
-	release()
+	facts, tracked, err := m.store.GetSessionCleanupFacts(ctx, rec.ID)
 	if err != nil {
-		m.logger.Warn("cleanup: workspace ownership check failed", "sessionID", rec.ID, "projectID", rec.ProjectID, "error", err)
+		m.logger.Error("read workspace cleanup facts", "sessionID", rec.ID, "error", err)
 		return ports.WorkspaceReclaimRemoved, "workspace teardown failed"
 	}
-	if inUse {
-		return ports.WorkspaceReclaimRemoved, "workspace in use by a live session"
+	tracked = tracked && facts.SessionGeneration == rec.CleanupGeneration
+	if tracked {
+		if err := m.recordWorkspaceCleanup(ctx, rec, domain.DispositionPending, ""); err != nil {
+			return ports.WorkspaceReclaimRemoved, "workspace teardown failed"
+		}
 	}
-	return m.cleanupOne(ctx, rec, ws)
+	reclaim, reason := m.cleanupOne(ctx, rec, ws)
+	if tracked {
+		if err := m.recordWorkspaceCleanupResult(ctx, rec, reason); err != nil {
+			m.logger.Error("record retried workspace cleanup", "sessionID", rec.ID, "error", err)
+			return reclaim, "workspace teardown failed"
+		}
+	}
+	return reclaim, reason
 }
 
 // isWorkspaceInUse reports whether any non-terminated session in the project
@@ -4838,6 +4897,19 @@ func (m *Manager) isWorkspaceInUse(ctx context.Context, projectID domain.Project
 // call) — most commonly because a scoped shell terminal could not be
 // confirmed closed, so reclaiming would pull the ground out from under it.
 func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo) (ports.WorkspaceReclaim, string) {
+	{
+		release := m.acquireWorkspaceGate(rec.ProjectID)
+
+		inUse, err := m.isWorkspaceInUse(ctx, rec.ProjectID, ws.Path, "")
+		release()
+		if err != nil {
+			m.logger.Warn("cleanup: workspace ownership check failed", "sessionID", rec.ID, "projectID", rec.ProjectID, "error", err)
+			return ports.WorkspaceReclaimRemoved, "workspace teardown failed"
+		}
+		if inUse {
+			return ports.WorkspaceReclaimRemoved, "workspace in use by a live session"
+		}
+	}
 	release, closeErr := m.beginShellTerminalTeardown(ctx, rec.ID)
 	if closeErr != nil {
 		m.logger.Warn("cleanup: shell terminal still open", "sessionID", rec.ID, "error", closeErr)
@@ -4850,11 +4922,11 @@ func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws p
 		m.logger.Warn("cleanup: attachment preservation failed", "sessionID", rec.ID, "error", err)
 		return ports.WorkspaceReclaimRemoved, "attachment preservation failed"
 	}
-	if err := m.runPreRemove(ctx, rec.ProjectID, ws.Path); err != nil {
+	if err := m.runPreRemove(rec.ProjectID, ws.Path); err != nil {
 		m.logger.Warn("cleanup: workspace script failed; preserving workspace", "sessionID", rec.ID, "error", err)
 		return ports.WorkspaceReclaimRemoved, cleanupSkipReason(err)
 	}
-	ctx, cancelWorkspace := context.WithTimeout(context.WithoutCancel(ctx), killTeardownBudget)
+	ctx, cancelWorkspace := context.WithTimeout(m.backgroundContext, killTeardownBudget)
 	defer cancelWorkspace()
 	releaseWorkspaceGate := m.acquireWorkspaceGate(rec.ProjectID)
 	defer releaseWorkspaceGate()

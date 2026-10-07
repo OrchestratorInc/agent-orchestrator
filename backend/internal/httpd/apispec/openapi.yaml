@@ -10865,6 +10865,14 @@ components:
         updatedAt:
           format: date-time
           type: string
+        workspaceCleanup:
+          enum:
+          - pending
+          - removed
+          - preserved_dirty
+          - failed
+          - not_applicable
+          type: string
       required:
       - id
       - kind
@@ -12461,6 +12469,8 @@ components:
       type: object
     KillSessionResponse:
       properties:
+        cleanupPending:
+          type: boolean
         freed:
           type: boolean
         ok:

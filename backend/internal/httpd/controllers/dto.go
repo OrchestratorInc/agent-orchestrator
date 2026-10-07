@@ -987,9 +987,10 @@ type InterfaceTransitionNoticeAckResponse struct {
 
 // KillSessionResponse is the body of POST /api/v1/sessions/{sessionId}/kill.
 type KillSessionResponse struct {
-	OK        bool             `json:"ok"`
-	SessionID domain.SessionID `json:"sessionId"`
-	Freed     bool             `json:"freed,omitempty"`
+	OK             bool             `json:"ok"`
+	SessionID      domain.SessionID `json:"sessionId"`
+	Freed          bool             `json:"freed,omitempty"`
+	CleanupPending bool             `json:"cleanupPending,omitempty"`
 }
 
 // RollbackSessionResponse is the body of POST /api/v1/sessions/{sessionId}/rollback.

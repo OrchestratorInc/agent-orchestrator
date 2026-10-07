@@ -43,7 +43,7 @@ func (e *cleanupStepError) Unwrap() []error { return []error{ErrCleanupScript, e
 
 // runPreRemove is called only for permanent AO-owned workspace retirement,
 // after the session's processes have stopped and before worktree removal.
-func (m *Manager) runPreRemove(_ context.Context, projectID domain.ProjectID, workspacePath string) error {
+func (m *Manager) runPreRemove(projectID domain.ProjectID, workspacePath string) error {
 	// Cleanup belongs to the daemon, not the request or its teardown deadline.
 	// It has no execution timer, but shutdown must still stop it.
 	ctx := m.backgroundContext
@@ -114,7 +114,14 @@ func runWorkspaceStep(ctx context.Context, workspacePath, command string, env ma
 	}
 	cmd.WaitDelay = time.Second
 	cmd.Stdout, cmd.Stderr = output, output
-	return cmd.Run()
+	err := cmd.Run()
+	// A successful shell can leave a detached child holding its output pipes.
+	// WaitDelay closes those pipes; it must not turn that shell success into a
+	// script failure. Real exit errors and daemon cancellation still fail.
+	if errors.Is(err, exec.ErrWaitDelay) && ctx.Err() == nil {
+		return nil
+	}
+	return err
 }
 
 // cleanupOutput holds the last 4 KiB of output from a cleanup step.
@@ -127,4 +134,37 @@ func (o *cleanupOutput) Write(p []byte) (int, error) {
 		o.tail = append([]byte(nil), o.tail[len(o.tail)-4096:]...)
 	}
 	return n, nil
+}
+
+// Cleanup facts already have CDC triggers, so completion also refreshes the UI.
+func (m *Manager) recordWorkspaceCleanup(ctx context.Context, rec domain.SessionRecord, disposition domain.WorkspaceDisposition, code string) error {
+	// Record cancellation too, while shutdown is draining background workers.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), terminalIntentBudget)
+	defer cancel()
+	now := time.Now().UTC()
+	facts, ok, err := m.store.GetSessionCleanupFacts(ctx, rec.ID)
+	if err != nil {
+		return err
+	}
+	if !ok || facts.SessionGeneration != rec.CleanupGeneration {
+		facts = domain.SessionCleanupRecord{SessionID: rec.ID, SessionGeneration: rec.CleanupGeneration, RuntimeReleasedAt: now}
+	}
+	if disposition == domain.DispositionPending {
+		facts.AttemptCount++
+		facts.LastAttemptAt = now
+	}
+	facts.WorkspaceDisposition, facts.FailureCode = disposition, code
+	facts.NextAttemptAt = time.Time{}
+	return m.store.UpsertSessionCleanupFacts(ctx, facts)
+}
+
+func (m *Manager) recordWorkspaceCleanupResult(ctx context.Context, rec domain.SessionRecord, reason string) error {
+	disposition, code := domain.DispositionRemoved, ""
+	if reason != "" {
+		disposition, code = domain.DispositionFailed, "WORKSPACE_CLEANUP_FAILED"
+		if reason == "workspace has uncommitted changes" {
+			disposition, code = domain.DispositionPreservedDirty, "WORKSPACE_DIRTY"
+		}
+	}
+	return m.recordWorkspaceCleanup(ctx, rec, disposition, code)
 }

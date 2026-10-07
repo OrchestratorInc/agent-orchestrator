@@ -1,4 +1,4 @@
-import { type QueryClient, useMutation, useMutationState, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import {
@@ -9,6 +9,7 @@ import {
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { captureRendererEvent } from "../lib/telemetry";
 import { createRendererCloudCpClient } from "./useCloudCp";
+import { useTranslation } from "react-i18next";
 import { settingsQueryKey, type Settings } from "./useSettings";
 import type { CloudCpSession } from "../lib/cloud-cp";
 import { clientForHost } from "../lib/host-clients";
@@ -172,30 +173,48 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 	});
 }
 
+function workspaceCleanupError(session: WorkspaceSession | undefined, t: ReturnType<typeof useTranslation>["t"]) {
+	if (session?.workspaceCleanup === "failed") return t("shell.workspaceCleanupFailed");
+	if (session?.workspaceCleanup === "preserved_dirty") return t("shell.workspaceCleanupDirty");
+	return null;
+}
+
 export function useTerminateSessionState(sessionId: string, hostId?: string) {
+	const { t } = useTranslation();
+	// Observe existing board data; this does not start another network request.
+	const { data } = useQuery<WorkspaceSummary[]>({ queryKey: workspaceQueryKeyForHost(hostId), enabled: false });
+	const session = data?.flatMap((workspace) => workspace.sessions).find((session) => session.id === sessionId);
 	const summary = summarizeBySession(useTerminateSessionMutations()).find(({ session }) =>
 		session.id === sessionId && session.hostId === hostId);
-
 	return {
-		error:
-			!summary?.isPending && summary?.latest.status === "error" && summary.latest.error instanceof Error
-				? summary.latest.error.message
-				: null,
-		isPending: summary?.isPending ?? false,
+		error: workspaceCleanupError(session, t) ??
+			(!summary?.isPending && summary?.latest.status === "error" && summary.latest.error instanceof Error
+				? summary.latest.error.message : null),
+		isPending: summary?.isPending === true || session?.workspaceCleanup === "pending",
 	};
 }
 
-export function useProjectTerminateSessionStates(workspaceId: string | undefined) {
-	return summarizeBySession(useTerminateSessionMutations())
-		.filter(({ isPending, latest, session }) => {
-			return !session.hostId && session.workspaceId === workspaceId && (isPending || latest.status === "error");
-		})
+export function useProjectTerminateSessionStates(workspaceId: string | undefined, hostId?: string) {
+	const { t } = useTranslation();
+	const { data } = useQuery<WorkspaceSummary[]>({ queryKey: workspaceQueryKeyForHost(hostId), enabled: false });
+	const sessions = data?.find((workspace) => workspace.id === workspaceId)?.sessions ?? [];
+	const states = summarizeBySession(useTerminateSessionMutations())
+		.filter(({ session }) => session.hostId === hostId && session.workspaceId === workspaceId)
 		.sort((a, b) => b.latest.submittedAt - a.latest.submittedAt)
 		.map(({ isPending, latest, session }) => ({
 			error: !isPending && latest.error instanceof Error ? latest.error.message : null,
-			isPending,
-			session,
+			isPending, session, cleanupPending: false,
 		}));
+	for (const session of sessions) {
+		const error = workspaceCleanupError(session, t);
+		const cleanupPending = session.workspaceCleanup === "pending";
+		if (!error && !cleanupPending) continue;
+		const previous = states.findIndex((state) => state.session.id === session.id);
+		const state = { error, isPending: cleanupPending, session, cleanupPending };
+		if (previous < 0) states.push(state);
+		else states[previous] = state;
+	}
+	return states.filter((state) => state.error || state.isPending);
 }
 
 export function clearTerminateSessionState(queryClient: QueryClient, sessionId: string, hostId?: string) {

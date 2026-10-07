@@ -61,6 +61,7 @@ func (f *fakeAgentReadiness) RecheckAgent(agentID string) {
 }
 
 type fakeStore struct {
+	cleanupFacts        map[domain.SessionID]domain.SessionCleanupRecord
 	sessions            map[domain.SessionID]domain.SessionRecord
 	getSessionErr       error
 	activeSwitches      map[domain.SessionID]domain.AgentSwitch
@@ -5758,5 +5759,42 @@ func TestGetReconcilesWhenPersistedArtifactOutputHasNoFilesLeft(t *testing.T) {
 	}
 	if len(reconciler.reconciled) != 1 {
 		t.Fatalf("reconciled = %v, want the removal persisted", reconciler.reconciled)
+	}
+}
+
+func (f *fakeStore) GetSessionCleanupFacts(_ context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error) {
+	rec, ok := f.cleanupFacts[id]
+	return rec, ok, nil
+}
+func (f *fakeCommander) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
+	freed, err := f.Kill(ctx, id)
+	return sessionmanager.KillResult{Freed: freed}, err
+}
+
+func TestSessionReadsExposeOnlyCurrentTerminatedCleanupFacts(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", IsTerminated: true, CleanupGeneration: 2}
+	st.cleanupFacts = map[domain.SessionID]domain.SessionCleanupRecord{
+		"mer-1": {SessionID: "mer-1", SessionGeneration: 2, WorkspaceDisposition: domain.DispositionFailed},
+	}
+	svc := &Service{store: st}
+	for _, tc := range []struct {
+		terminated bool
+		generation int64
+		want       domain.WorkspaceDisposition
+	}{
+		{true, 2, domain.DispositionFailed}, {false, 2, ""}, {true, 3, ""},
+	} {
+		rec := st.sessions["mer-1"]
+		rec.IsTerminated, rec.CleanupGeneration = tc.terminated, tc.generation
+		st.sessions[rec.ID] = rec
+		got, err := svc.Get(context.Background(), rec.ID)
+		if err != nil || got.WorkspaceCleanup != tc.want {
+			t.Fatalf("cleanup=%q want=%q err=%v", got.WorkspaceCleanup, tc.want, err)
+		}
+		list, err := svc.List(context.Background(), ListFilter{})
+		if err != nil || len(list) != 1 || list[0].WorkspaceCleanup != tc.want {
+			t.Fatalf("list=%+v err=%v", list, err)
+		}
 	}
 }

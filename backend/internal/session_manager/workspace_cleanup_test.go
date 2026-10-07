@@ -220,7 +220,7 @@ func TestCleanupFiltersReservedProjectEnvironment(t *testing.T) {
 	project := st.projects["mer"]
 	project.Config.Env = map[string]string{"AO_TEST_RESERVED": "spoof", "AO_WORKTREE_PATH": "spoof", "PROJECT_VALUE": "project"}
 	st.projects["mer"] = project
-	if err := m.runPreRemove(context.Background(), rec.ProjectID, rec.Metadata.WorkspacePath); err != nil {
+	if err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(rec.Metadata.WorkspacePath, "env-check"))
@@ -239,7 +239,7 @@ func TestWorkspaceStepBoundsOrphanedOutputPipes(t *testing.T) {
 	}
 	started := time.Now()
 	err := runWorkspaceStep(context.Background(), t.TempDir(), "sleep 3 &", nil, io.Discard)
-	if !errors.Is(err, exec.ErrWaitDelay) || time.Since(started) >= 3*time.Second {
+	if err != nil || time.Since(started) >= 3*time.Second {
 		t.Fatalf("orphaned pipe must not wait for the background child: err=%v duration=%v", err, time.Since(started))
 	}
 }
@@ -261,5 +261,85 @@ func TestRetireCleanupFailureCanBeRetried(t *testing.T) {
 	result, err := m.Cleanup(context.Background(), rec.ProjectID)
 	if err != nil || len(result.Cleaned) != 1 || ws.destroyed != 1 {
 		t.Fatalf("Retry cleanup cannot reach failed retirement: result=%+v err=%v", result, err)
+	}
+}
+
+func TestWorkspaceStepDoesNotHideFailureWithDetachedChild(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX background syntax")
+	}
+	err := runWorkspaceStep(context.Background(), t.TempDir(), "sleep 3 & exit 7", nil, io.Discard)
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 7 {
+		t.Fatalf("lost foreground failure: %v", err)
+	}
+}
+
+func TestRequestKillReturnsBeforeCleanupAndShutdownPreservesWorkspace(t *testing.T) {
+	m, st, ws, rec := newCleanupFixture(t, waitingCleanupCommand())
+	daemonCtx, stop := context.WithCancel(context.Background())
+	defer stop()
+	m.backgroundContext = daemonCtx
+	st.worktrees[rec.ID] = []domain.SessionWorktreeRecord{{SessionID: rec.ID, RepoName: domain.RootWorkspaceRepoName}}
+	result, err := m.RequestKill(context.Background(), rec.ID)
+	if err != nil || !result.CleanupPending || result.Freed || !st.sessions[rec.ID].IsTerminated || len(st.worktrees[rec.ID]) != 0 {
+		t.Fatalf("Kill must acknowledge terminal intent before cleanup: result=%+v err=%v", result, err)
+	}
+	waitForCleanupStart(t, rec.Metadata.WorkspacePath)
+	facts, ok, err := st.GetSessionCleanupFacts(context.Background(), rec.ID)
+	if err != nil || !ok || facts.WorkspaceDisposition != domain.DispositionPending {
+		t.Fatalf("pending cleanup not recorded: %+v %v", facts, err)
+	}
+	if _, err := m.RestoreWithMode(context.Background(), rec.ID); !errors.Is(err, ErrSwitchInProgress) {
+		t.Fatalf("restore must not overlap cleanup: %v", err)
+	}
+	retry, err := m.Cleanup(context.Background(), rec.ProjectID)
+	if err != nil || len(retry.Skipped) != 1 || retry.Skipped[0].Reason != "workspace cleanup is already running" {
+		t.Fatalf("duplicate cleanup ran: %+v %v", retry, err)
+	}
+	gate := make(chan func(), 1)
+	go func() { gate <- m.acquireWorkspaceGate(rec.ProjectID) }()
+	select {
+	case release := <-gate:
+		release()
+	case <-time.After(time.Second):
+		t.Fatal("background cleanup blocked the project")
+	}
+	stop()
+	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := m.WaitBackgroundWorkers(waitCtx); err != nil {
+		t.Fatal(err)
+	}
+	facts, _, _ = st.GetSessionCleanupFacts(context.Background(), rec.ID)
+	if facts.WorkspaceDisposition != domain.DispositionFailed || ws.destroyed != 0 {
+		t.Fatalf("shutdown must preserve the worktree and record failure: facts=%+v destroyed=%d", facts, ws.destroyed)
+	}
+	if err := m.beginAgentOperation(context.Background(), rec.ID, agentOperationRestore); err != nil {
+		t.Fatal(err)
+	}
+	m.endAgentOperation(rec.ID, agentOperationRestore)
+}
+
+func TestRequestKillCleanupFailureRemainsRetryable(t *testing.T) {
+	m, st, ws, rec := newCleanupFixture(t, "echo inherited-secret && exit 7")
+	var jobs []func()
+	m.runBackground = func(work func()) { jobs = append(jobs, work) }
+	result, err := m.RequestKill(context.Background(), rec.ID)
+	if err != nil || !result.CleanupPending || len(jobs) != 1 {
+		t.Fatalf("not accepted: %+v %v", result, err)
+	}
+	jobs[0]()
+	facts, _, _ := st.GetSessionCleanupFacts(context.Background(), rec.ID)
+	if facts.WorkspaceDisposition != domain.DispositionFailed || facts.FailureCode != "WORKSPACE_CLEANUP_FAILED" || facts.AttemptCount != 1 || ws.destroyed != 0 {
+		t.Fatalf("background failure lost or output persisted: %+v destroyed=%d", facts, ws.destroyed)
+	}
+	project := st.projects[string(rec.ProjectID)]
+	project.Config.PreRemove = []string{"echo fixed"}
+	st.projects[string(rec.ProjectID)] = project
+	retry, err := m.Cleanup(context.Background(), rec.ProjectID)
+	facts, _, _ = st.GetSessionCleanupFacts(context.Background(), rec.ID)
+	if err != nil || len(retry.Cleaned) != 1 || facts.WorkspaceDisposition != domain.DispositionRemoved || facts.FailureCode != "" || facts.AttemptCount != 2 {
+		t.Fatalf("retry did not clear the failure: result=%+v facts=%+v err=%v", retry, facts, err)
 	}
 }

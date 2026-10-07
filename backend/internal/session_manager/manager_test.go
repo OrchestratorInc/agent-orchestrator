@@ -45,6 +45,8 @@ func TestSeedRecordPreservesAutomationRunIdentity(t *testing.T) {
 }
 
 type fakeStore struct {
+	cleanupMu                          sync.Mutex
+	cleanupFacts                       map[domain.SessionID]domain.SessionCleanupRecord
 	sessions                           map[domain.SessionID]domain.SessionRecord
 	pr                                 map[domain.SessionID]domain.PRFacts
 	projects                           map[string]domain.ProjectRecord
@@ -11107,4 +11109,20 @@ func TestSendRecordsInteractionOnlyForDirectTerminalSender(t *testing.T) {
 			}
 		})
 	}
+}
+
+func (f *fakeStore) UpsertSessionCleanupFacts(_ context.Context, rec domain.SessionCleanupRecord) error {
+	f.cleanupMu.Lock()
+	defer f.cleanupMu.Unlock()
+	if f.cleanupFacts == nil {
+		f.cleanupFacts = make(map[domain.SessionID]domain.SessionCleanupRecord)
+	}
+	f.cleanupFacts[rec.SessionID] = rec
+	return nil
+}
+func (f *fakeStore) GetSessionCleanupFacts(_ context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error) {
+	f.cleanupMu.Lock()
+	defer f.cleanupMu.Unlock()
+	rec, ok := f.cleanupFacts[id]
+	return rec, ok, nil
 }

@@ -1581,6 +1581,9 @@ func (m *Manager) markSpawned(
 			return nil, fmt.Errorf("lifecycle: MarkSpawned for unknown session %q", id)
 		}
 		now := m.clock()
+		if rec.IsTerminated {
+			rec.CleanupGeneration++
+		}
 		rec.IsTerminated = false
 		rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}
 		// Each spawn/restore must re-prove its hook pipeline: clear the receipt so

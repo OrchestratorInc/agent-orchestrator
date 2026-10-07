@@ -3645,6 +3645,8 @@ export interface components {
             terminateOnPrMerge: boolean;
             /** Format: date-time */
             updatedAt: string;
+            /** @enum {string} */
+            workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
         };
         ControllersSetKeepAwakeRequest: {
             enabled: boolean;
@@ -4233,6 +4235,7 @@ export interface components {
             runs: components["schemas"]["ReviewRun"][];
         };
         KillSessionResponse: {
+            cleanupPending?: boolean;
             freed?: boolean;
             ok: boolean;
             sessionId: string;
