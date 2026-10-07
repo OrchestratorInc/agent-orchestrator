@@ -1188,14 +1188,21 @@ func activityKindFromTool(kind acpsdk.ToolKind) domain.ActivityKind {
 	}
 }
 
+// activityStatusFromTool maps an ACP tool call onto AO's activity lifecycle.
+//
+// ACP `pending` means the call exists but has not started executing: its input is
+// still streaming, or the provider is waiting on a permission decision. Either way
+// it is work in flight, which AO calls `running`. claude-agent-acp announces every
+// call as `pending` and moves it to `in_progress` only on an SDK progress
+// heartbeat, so a separate `pending` left most live Claude calls drawn as settled
+// steps and outside the turn-settlement sweeps, which close `running` rows only.
+// A permission request is its own approval activity; that one stays `pending`.
 func activityStatusFromTool(status acpsdk.ToolCallStatus) domain.ActivityStatus {
 	switch status {
 	case acpsdk.ToolCallStatusCompleted:
 		return domain.ActivityStatusCompleted
 	case acpsdk.ToolCallStatusFailed:
 		return domain.ActivityStatusFailed
-	case acpsdk.ToolCallStatusPending:
-		return domain.ActivityStatusPending
 	default:
 		return domain.ActivityStatusRunning
 	}
