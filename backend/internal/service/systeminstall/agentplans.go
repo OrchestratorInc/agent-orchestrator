@@ -250,6 +250,11 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	default:
 		plans = []Plan{{Target: target, Unsupported: true, Method: "manual", Reason: "unknown install target"}}
 	}
+	if owner, ok := s.derivedOwnerFor(target); ok {
+		if derived, ok := s.derivedOwnerPlan(target, owner); ok {
+			plans = withDerivedOwner(plans, derived)
+		}
+	}
 	for index := range plans {
 		plans[index].DocsURL = agentDocumentationURLs[target]
 		plans[index].Notice = installNotice(target)
@@ -429,6 +434,7 @@ var vendorUpdateCommands = map[Target][]string{
 	TargetQwen:       {"qwen", "update"},
 	TargetFX:         {"fx", "upgrade"},
 	TargetPi:         {"pi", "update", "self", "--no-approve"},
+	TargetPrimeAgent: {"prime-agent", "update"},
 }
 
 func packageWithoutLatest(pkg string) string {

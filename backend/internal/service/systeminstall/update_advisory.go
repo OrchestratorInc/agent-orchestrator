@@ -146,13 +146,16 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		return advisory, nil
 	}
 	var plans []Plan
+	var planner requestPlanner
+	plannerReady := false
 	recordedMethod := ""
 	if s.ownsInstallation != nil && s.managedVersion != nil {
-		if planner, err := s.newRequestPlanner(ctx); err == nil {
+		if built, err := s.newRequestPlanner(ctx); err == nil {
+			planner, plannerReady = built, true
 			if job.Status == StatusSucceeded {
 				recordedMethod = job.Method
 			}
-			plans = planner.agentMethodPlans(target, AgentOperationInstall)
+			plans = built.agentMethodPlans(target, AgentOperationInstall)
 		}
 	}
 	if len(plans) == 0 && s.officialVersion == nil {
@@ -174,6 +177,9 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 			source = candidate
 			break
 		}
+	}
+	if plannerReady {
+		s.refreshDerivedOwner(ctx, planner, target, verified.ResolvedPath, &source)
 	}
 	if source.Package == "" && s.officialVersion == nil {
 		if layout != "" {
@@ -207,7 +213,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		if !ok {
 			return advisory, nil
 		}
-		if !officialChannelFits(official.kind, layout) {
+		if !officialChannelFits(official.kind, layout) && !(npmInstallerTargets[target] && layout == layoutNPM) {
 			advisory.Reason = UpdateReasonOwnershipUnconfirmed
 			return advisory, nil
 		}
@@ -263,5 +269,43 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 // so it updates that copy however the user placed it.
 func vendorMaintainable(target Target, resolvedPath string) bool {
 	_, ok := vendorUpdateCommands[target]
-	return ok && resolvedPath != "" && packageLayout(resolvedPath) == ""
+	return ok && resolvedPath != "" && vendorLayout(target, packageLayout(resolvedPath))
+}
+
+// vendorLayout reports whether a binary in layout belongs to the vendor
+// installer: outside every package tool, or in npm's layout for installers
+// that install their own release tarball through npm.
+func vendorLayout(target Target, layout string) bool {
+	return layout == "" || npmInstallerTargets[target] && layout == layoutNPM
+}
+
+// refreshDerivedOwner reads the owner from the binary's own location when no
+// listed method owns it, and keeps it only once the package manager confirms
+// the package installed that binary. A derived npm owner is never kept for a
+// harness whose vendor installer uses npm with a tarball the registry lacks.
+func (s *Service) refreshDerivedOwner(ctx context.Context, planner requestPlanner, target Target, binaryPath string, source *Plan) {
+	owner, ok := deriveOwnerFromPath(binaryPath)
+	if !ok || owner.method == "npm" && npmInstallerTargets[target] {
+		s.setDerivedOwner(target, nil)
+		return
+	}
+	if source.Package != "" {
+		if source.Method == owner.method && packageWithoutLatest(source.Package) == owner.pkg && source.PackageCask == owner.cask {
+			s.setDerivedOwner(target, &owner)
+		} else {
+			s.setDerivedOwner(target, nil)
+		}
+		return
+	}
+	plan, ok := planner.derivedOwnerPlan(target, owner)
+	if !ok || plan.Package == "" {
+		s.setDerivedOwner(target, nil)
+		return
+	}
+	if owned, err := s.ownsInstallation(ctx, binaryPath, owner.method, owner.pkg, owner.cask); err != nil || !owned {
+		s.setDerivedOwner(target, nil)
+		return
+	}
+	*source = plan
+	s.setDerivedOwner(target, &owner)
 }

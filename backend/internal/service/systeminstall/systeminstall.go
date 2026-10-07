@@ -352,6 +352,7 @@ type Service struct {
 	ownsInstallation     func(context.Context, string, string, string, bool) (bool, error)
 	updateAdvisories     map[Target]UpdateAdvisory
 	updateChecksDisabled bool
+	derivedOwners        map[Target]derivedOwner
 	updateAdvisoryCalls  map[Target]*updateAdvisoryCall
 	// officialVersion reads a vendor release channel when no package manager
 	// owns the harness binary.
@@ -445,13 +446,13 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 		}
 		recommended := recommendedPlanIndex(plans)
 		plan := plans[recommended]
-		updatePlans := planner.agentMethodPlans(target, AgentOperationUpdate)
-		uninstallPlans := planner.agentMethodPlans(target, AgentOperationUninstall)
+		updateByMethod := plansByMethod(planner.agentMethodPlans(target, AgentOperationUpdate))
+		uninstallByMethod := plansByMethod(planner.agentMethodPlans(target, AgentOperationUninstall))
 		methods := make([]AgentInstallMethod, 0, len(plans))
 		for index, methodPlan := range plans {
 			reinstallPlan := reinstallByMethod[methodPlan.Method]
-			updatePlan := updatePlans[index]
-			uninstallPlan := uninstallPlans[index]
+			updatePlan := operationPlanFor(updateByMethod, methodPlan.Method)
+			uninstallPlan := operationPlanFor(uninstallByMethod, methodPlan.Method)
 			methods = append(methods, AgentInstallMethod{
 				ID: methodPlan.Method, Label: installMethodLabel(methodPlan.Method),
 				Available: !methodPlan.Unsupported, Recommended: index == recommended,
@@ -475,6 +476,23 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 		})
 	}
 	return out, nil
+}
+
+func plansByMethod(plans []Plan) map[string]Plan {
+	out := make(map[string]Plan, len(plans))
+	for _, plan := range plans {
+		out[plan.Method] = plan
+	}
+	return out
+}
+
+// operationPlanFor treats a method missing from a later listing, such as a
+// derived owner cleared in between, as unsupported rather than misaligned.
+func operationPlanFor(plans map[string]Plan, method string) Plan {
+	if plan, ok := plans[method]; ok {
+		return plan
+	}
+	return Plan{Method: method, Unsupported: true, Reason: "This installation method is no longer detected."}
 }
 
 func recommendedPlanIndex(plans []Plan) int {
@@ -1135,6 +1153,8 @@ func (s *Service) finishAgentJob(job *Job, status Status, output, errorMessage, 
 	job.UpdatedAt = &now
 	delete(s.updateAdvisories, job.Target)
 	delete(s.updateAdvisoryCalls, job.Target)
+	// The next advisory re-derives the owner of whatever binary now runs.
+	delete(s.derivedOwners, job.Target)
 	snapshot := *job
 	callback := s.onSucceeded
 	target := job.Target
