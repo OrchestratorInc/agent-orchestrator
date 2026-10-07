@@ -388,6 +388,7 @@ aws_cli ecs update-service \
 	--task-definition "$api_task" \
 	--desired-count 1 \
 	--health-check-grace-period-seconds 60 \
+	--availability-zone-rebalancing DISABLED \
 	--deployment-configuration \
 	"{\"maximumPercent\":100,\"minimumHealthyPercent\":0,\"deploymentCircuitBreaker\":{\"enable\":true,\"rollback\":true},\"alarms\":{\"alarmNames\":[\"${ROLLBACK_ALARM}\"],\"enable\":true,\"rollback\":true}}" \
 	>/dev/null

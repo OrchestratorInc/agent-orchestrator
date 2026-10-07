@@ -486,6 +486,7 @@ if [[ "$service_status" == "ACTIVE" ]]; then
 		--task-definition "$api_task" \
 		--desired-count 1 \
 		--health-check-grace-period-seconds 60 \
+		--availability-zone-rebalancing DISABLED \
 		--deployment-configuration "$deployment_configuration" \
 		>/dev/null
 else
@@ -500,6 +501,7 @@ else
 		--load-balancers \
 			"targetGroupArn=${target_group},containerName=control-plane,containerPort=8080" \
 		--deployment-configuration "$deployment_configuration" \
+		--availability-zone-rebalancing DISABLED \
 		--health-check-grace-period-seconds 60 \
 		--enable-ecs-managed-tags \
 		--propagate-tags TASK_DEFINITION \

@@ -241,7 +241,8 @@ own users, organizations, projects, sessions, events, and credentials.
 
 The service reads only these production-scoped secrets:
 
-- `ao-cloud/production/workos`
+- `ao-cloud/production/workos-next` (WorkOS Production plus the `legacy_*` WorkOS
+  Staging values; replaces `ao-cloud/production/workos`)
 - `ao-cloud/production/database-url`
 - `ao-cloud/production/migration-database-url`
 - `ao-cloud/production/provider-secret-key`
