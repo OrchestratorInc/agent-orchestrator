@@ -1595,3 +1595,43 @@ func TestReconnectMissingHostNeverLaunchesProvider(t *testing.T) {
 		t.Fatalf("error=%v", err)
 	}
 }
+
+func TestStartAndResumePassAOToolServersInThreadConfig(t *testing.T) {
+	servers := []ports.ChatMCPServerConfig{{
+		Name: "ao", Type: "stdio", Command: "/opt/ao/bin/ao", Args: []string{"mcp"},
+		Env: map[string]string{"AO_SESSION_ID": "ao-1"},
+	}}
+	want := `{"mcp_servers":{"ao":{"args":["mcp"],"command":"/opt/ao/bin/ao",` +
+		`"default_tools_approval_mode":"approve","env":{"AO_SESSION_ID":"ao-1"}}},"model_reasoning_effort":"high"}`
+	for _, method := range []string{"thread/start", "thread/resume"} {
+		t.Run(method, func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			var conv ports.ChatConversation
+			var err error
+			if method == "thread/start" {
+				conv, err = d.Start(context.Background(), ports.ChatStartConfig{
+					SessionID: "ao-1", WorkspacePath: "/tmp/ws", Effort: "high", MCPServers: servers,
+				})
+			} else {
+				conv, err = d.Resume(context.Background(), ports.ChatResumeConfig{
+					SessionID: "ao-1", ProviderConversationID: "thread-1", WorkspacePath: "/tmp/ws", Effort: "high", MCPServers: servers,
+				})
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", method, err)
+			}
+			defer func() { _ = conv.Close() }()
+
+			f := srv.awaitFrame(func(f frame) bool { return f.Method == method })
+			var params struct {
+				Config json.RawMessage `json:"config"`
+			}
+			if err := json.Unmarshal(f.Params, &params); err != nil {
+				t.Fatal(err)
+			}
+			if string(params.Config) != want {
+				t.Fatalf("config = %s\nwant     %s", params.Config, want)
+			}
+		})
+	}
+}
