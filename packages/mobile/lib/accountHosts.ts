@@ -3,7 +3,7 @@ import { getAccountAccessToken, loadAccount, type Account } from "./account";
 import { endpointBaseUrl, type Endpoint } from "./endpoints";
 import { loadHosts, removeHost, saveHost, type Host } from "./hosts";
 
-const CONTROL_PLANE = "https://api.aoagents.dev";
+const CONTROL_PLANE = (process.env.EXPO_PUBLIC_AO_CLOUD_API_BASE_URL || "https://api.aoagents.dev").replace(/\/$/, "");
 type AccountHost = { hostId: string; label: string; url: string; token: string };
 const ignoredKey = (accountId: string) => `ao.accountHosts.ignored.${accountId}`;
 

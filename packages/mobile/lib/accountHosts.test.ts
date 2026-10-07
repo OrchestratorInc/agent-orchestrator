@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Host } from "./hosts";
 
 const saved = vi.hoisted(() => ({ hosts: [] as Host[], ignored: new Map<string, string>() }));
@@ -23,6 +23,18 @@ beforeEach(() => {
 	saved.hosts = [];
 	saved.ignored.clear();
 	vi.unstubAllGlobals();
+});
+
+afterEach(() => vi.unstubAllEnvs());
+
+it("uses the configured staging directory instead of production", async () => {
+	vi.stubEnv("EXPO_PUBLIC_AO_CLOUD_API_BASE_URL", "https://staging-api.aoagents.dev/");
+	vi.resetModules();
+	const { syncAccountHosts: syncStaging } = await import("./accountHosts");
+	const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ hosts: [] }) }));
+	vi.stubGlobal("fetch", fetch);
+	await syncStaging(account);
+	expect(fetch).toHaveBeenCalledWith("https://staging-api.aoagents.dev/api/cloud/v1/me/hosts", expect.any(Object));
 });
 
 it("imports every account host and removes only stale account imports", async () => {
