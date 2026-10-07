@@ -3494,6 +3494,7 @@ describe("agent browser screenshot", () => {
 			"sess-1",
 			expect.objectContaining({ listTargets: expect.any(Function) }),
 			undefined,
+			{ annotate: false },
 		);
 		expect(result).toMatchObject({
 			data: Buffer.from("png-snapshot").toString("base64"),
@@ -3566,7 +3567,7 @@ describe("agent browser screenshot", () => {
 		await vi.waitFor(() => expect(webContents.capturePage).toHaveBeenCalledOnce());
 		controller.abort();
 		await expect(screenshot).rejects.toMatchObject({ code: "BROWSER_COMMAND_CANCELED" });
-		await expect(host.execute("sess-1", "snapshot")).resolves.toMatchObject({ snapshot: "ok" });
+		await expect(host.execute("sess-1", "snapshot")).resolves.toMatchObject({ text: "ok", refs: {} });
 	});
 
 	it("propagates non-timeout native screenshot errors without falling back", async () => {
