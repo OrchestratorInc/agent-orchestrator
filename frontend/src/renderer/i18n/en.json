@@ -1345,7 +1345,7 @@
 	"settings.project.workspaceSetup": "Workspace setup",
 	"settings.project.setupHintGit": "Runs in each new worktree after checkout and shared links, before its agent starts. Runs again only when a missing worktree is recreated during restore.",
 	"settings.project.setupHintScratch": "Runs in each new scratch workspace before its agent starts. Runs again only when a missing workspace is recreated during restore.",
-	"settings.project.setupShellHint": "Steps run in order in separate shells. Each step has its own 10-minute limit. There is no total setup limit. A failed step stops launch.",
+	"settings.project.setupShellHint": "Steps run in order in separate shells. Each step has its own 10-minute limit. Session-start and request deadlines can stop setup sooner. A failed step stops launch.",
 	"settings.project.setupPlatformHint": "Use sh syntax on macOS/Linux and cmd syntax on Windows. The same steps run on every platform. Shell syntax is not portable.",
 	"settings.project.setupPaths": "Available paths",
 	"settings.project.setupSourcePath": "original project folder",
