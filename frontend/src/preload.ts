@@ -362,6 +362,9 @@ const api = {
 			};
 		},
 	},
+	sideChats: {
+		capture: () => ipcRenderer.invoke("sideChats:capture") as Promise<void>,
+	},
 	editorHandoff: {
 		getState: (sessionId: string) =>
 			ipcRenderer.invoke("editorHandoff:getState", sessionId) as Promise<EditorHandoffState>,

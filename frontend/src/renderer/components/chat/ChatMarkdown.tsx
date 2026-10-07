@@ -165,6 +165,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 		<StreamingProse.Provider value={streaming}>
 			<SafeOriginContent.Provider value={safeOrigin}>
 			<div
+				data-chat-message-content=""
 				className={cn(
 					"chat-md leading-[1.58]",
 					muted ? "text-[13px] text-muted-foreground" : "text-sm text-foreground",
@@ -209,7 +210,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 			className="chat-code group/code my-2.5 overflow-hidden rounded-lg border border-border bg-surface"
 			data-wrap={wrap ? "true" : "false"}
 		>
-			<div className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
+			<div data-chat-selection-exclude="" className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
 				<span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
 					{language || "text"}
 				</span>

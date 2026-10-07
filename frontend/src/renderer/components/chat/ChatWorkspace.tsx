@@ -1,5 +1,4 @@
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
-import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 /**
  * The Chat surface for a session whose persisted mode is `chat`.
  *
@@ -23,7 +22,6 @@ import {
 	useRef,
 	useState,
 	useSyncExternalStore,
-	type ComponentProps,
 	type CSSProperties,
 	type KeyboardEvent as ReactKeyboardEvent,
 	type MouseEvent as ReactMouseEvent,
@@ -31,17 +29,11 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
-import { ArrowDown, ChevronRight, Loader2, TriangleAlert, Undo2 } from "lucide-react";
+import { ArrowDown, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
 import { Reorder, useDragControls } from "motion/react";
 import { useTranslation } from "react-i18next";
-import { useScrollFollow } from "../../hooks/useScrollFollow";
-import {
-	defaultRangeExtractor,
-	measureElement,
-	observeElementRect,
-	useVirtualizer,
-} from "@tanstack/react-virtual";
 import { cn } from "../../lib/utils";
+import { SelectionActionToolbar } from "./SelectionActionToolbar";
 import {
 	acknowledgeChatInlineEditMutation,
 	beginChatInlineEditMutation,
@@ -59,9 +51,11 @@ import {
 	readChatSessionDraft,
 	subscribeChatDraftRuntime,
 	writeChatInlineEdit,
+	writeChatExcerptReferences,
 	writeChatQueuedEdit,
 	type ChatDraftQueuedEdit,
 	type ChatDraftAttachment,
+	type ChatDraftExcerptReference,
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 	type ChatDraftInlineEdit,
@@ -72,7 +66,6 @@ import { purgeFileAttachments, purgeFileAttachmentsForSession } from "../../hook
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { sameContent, useStableList } from "../../lib/stable-list";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
-import { useSidebarChromeClearanceRef } from "../../hooks/useSidebarChromeGeometry";
 import { apiErrorCode, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
@@ -94,7 +87,6 @@ import {
 import { AgentAvatar } from "../AgentAvatar";
 import { SessionPaneTab } from "../CenterPane";
 import { Button } from "../ui/button";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../ui/accordion";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
 import { ShellTerminalTab } from "../ShellTerminalTab";
@@ -110,18 +102,17 @@ import {
 	TurnChangedFiles,
 	TurnDuration,
 	TurnOutcome,
-	LiveResponseStatus,
 	type TurnOutcomeRetryControl,
 } from "./ChatTimelineItems";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
-import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
+import { ChatComposer, type StoredComposerAttachment } from "./ChatComposer";
+import type { SideChatDraft } from "./sideChatDraft";
 import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
-import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { TurnPlan } from "./TurnPlan";
 import { TurnSettingsBar } from "./TurnSettingsBar";
@@ -153,13 +144,6 @@ import {
 	type TurnDiff,
 	type TurnSettings,
 } from "../../types/conversation";
-
-const EMPTY_CHAT_PLACEHOLDERS = [
-	"Fix a failing test in this project",
-	"Explain how this project is structured",
-	"Plan the next step for this feature",
-	"Find and fix a bug in this project",
-] as const;
 
 /**
  * The newest pending approval or question the live turn is waiting on.
@@ -232,6 +216,12 @@ function DraggableChatTab({ children, value }: { children: ReactNode; value: str
 const isMac = isMacPlatform();
 const isLinux = isLinuxPlatform();
 
+type TopbarBounds = {
+	leftInset: number;
+	rightInset: number;
+	width: number;
+};
+
 type MessageEditDraft = ChatDraftInlineEdit;
 
 /**
@@ -239,7 +229,7 @@ type MessageEditDraft = ChatDraftInlineEdit;
  * change while a running turn emits output, so retain the previous list when its
  * contents are equal and avoid redrawing the dock and composer subtree.
  */
-function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: string): QueuedMessage[] {
+function useQueuedMessages(snapshot: ConversationSnapshot): QueuedMessage[] {
 	const previous = useRef<QueuedMessage[]>([]);
 	return useMemo(() => {
 		const messagesByTurn = new Map(
@@ -254,7 +244,7 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 				.map((message) => [message.turnId as string, message]),
 		);
 		const next = snapshot.turns.flatMap((queuedTurn) => {
-			if (queuedTurn.state !== "queued" || queuedTurn.id === excludeTurnId) return [];
+			if (queuedTurn.state !== "queued") return [];
 			const message = messagesByTurn.get(queuedTurn.id);
 			return message ? [{ turnId: queuedTurn.id, message }] : [];
 		});
@@ -270,15 +260,13 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 		}
 		previous.current = next;
 		return next;
-	}, [excludeTurnId, snapshot.items, snapshot.turns]);
+	}, [snapshot.items, snapshot.turns]);
 }
 
 export interface ChatWorkspaceProps {
 	snapshot: ConversationSnapshot;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
 	uiSessionId?: string;
-	/** Durable draft owner for a conversation that is not a worker session. */
-	draftOwner?: ChatDraftScope;
 	/** The session title from the sidebar (matches what users see in the left sidebar) */
 	sessionTitle?: string;
 	/** The AO role using this shared conversation surface. */
@@ -304,11 +292,6 @@ export interface ChatWorkspaceProps {
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** Suppress a transient stopped snapshot while a mode handoff installs Chat. */
 	controllerTransitioning?: boolean;
-	/**
-	 * A stopped agent is being resumed after the chat opened. Unlike a mode
-	 * handoff, the history is final, so it stays readable; only sending waits.
-	 */
-	agentResuming?: boolean;
 	/** Freeze agent-owned Chat controls while a durable session mutation owns input. */
 	agentInputDisabled?: boolean;
 	/** Fence new agent work without blocking decisions required by the current turn. */
@@ -329,6 +312,7 @@ export interface ChatWorkspaceProps {
 		text: string,
 		attachments?: { mimeType: string; data: string }[],
 		clientMessageId?: string,
+		excerpts?: ChatDraftExcerptReference[],
 	) => void | Promise<unknown>;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	onResolveInput?: (
@@ -401,7 +385,7 @@ export interface ChatWorkspaceProps {
 	/** Opens the session Files inspector from a turn's changed-files Review control. */
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
-	onOpenFile?: (path: string, line?: number) => void;
+	onOpenFile?: (path: string) => void;
 	/**
 	 * Re-dispatch a failed turn's durable prompt as a new turn. Offered only for
 	 * eligible failed human turns, so the affordance is drawn on the failed-turn
@@ -418,6 +402,10 @@ export interface ChatWorkspaceProps {
 	editMessageError?: string;
 	/** Switch the visible conversation to another branch. */
 	onActivateBranch?: (branchId: string) => void | Promise<unknown>;
+	/** Open an independent side conversation; the selection is its quoted reference. */
+	onCreateSideChat?: (excerpt?: ChatDraftExcerptReference) => Promise<{ id: string } | undefined>;
+	onBtwAction?: (draft?: SideChatDraft) => Promise<void>;
+	createSideChatError?: string;
 	activateBranchPending?: boolean;
 	activateBranchError?: string;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
@@ -460,6 +448,10 @@ export interface ChatWorkspaceProps {
 	promoteQueuedTurnPendingTurnId?: string;
 	cancelQueuedTurnPendingTurnId?: string;
 	editQueuedTurnPendingTurnId?: string;
+	/** Start the tool servers again. Absent when the harness cannot. */
+	onReloadMcpServers?: () => void;
+	reloadingMcpServers?: boolean;
+	mcpReloadError?: string;
 }
 
 type ChatWorkspaceActivation =
@@ -475,29 +467,28 @@ function OfflineRemoteTerminal() {
  * Do not mount any renderer draft owner until the daemon incarnation has
  * authoritatively claimed its storage scope. The activation transition itself
  * owns cleanup of the predecessor; callbacks from that obsolete surface can
- * then only fail closed against the successor lease. If storage alone fails,
- * Chat still mounts, but with an in-memory composer that owns no saved drafts.
+ * then only fail closed against the successor lease.
  */
 export function ChatWorkspace(props: ChatWorkspaceProps) {
-	const { snapshot, session, draftOwner, uiSessionId = draftOwner?.sessionId ?? snapshot.sessionId } = props;
+	const translateDraft = useChatDraftTranslation();
+	const { snapshot, session, uiSessionId = snapshot.sessionId } = props;
 	const draftScope = useMemo<ChatDraftScope>(
-		() => draftOwner ?? ({
+		() => ({
 			sessionId: uiSessionId,
 			// Live surfaces carry the daemon-created session timestamp. Snapshot-only
 			// fixtures retain the legacy logical scope for deterministic previews.
 			incarnation: session?.createdAt ?? uiSessionId,
 		}),
-		[draftOwner, session?.createdAt, uiSessionId],
+		[session?.createdAt, uiSessionId],
 	);
 	const scopeKey = chatDraftScopeKey(draftScope);
 	const [activation, setActivation] = useState<ChatWorkspaceActivation>();
 	const [activationAttempt, setActivationAttempt] = useState(0);
-	const retryDraftPersistence = useCallback(() => setActivationAttempt((attempt) => attempt + 1), []);
 
 	useLayoutEffect(() => {
 		// Snapshot-only previews have no daemon session incarnation to arbitrate.
 		// Their legacy logical scope remains isolated to fixture/demo surfaces.
-		if (!session?.createdAt && !draftOwner) {
+		if (!session?.createdAt) {
 			setActivation({ key: scopeKey, state: "active" });
 			return;
 		}
@@ -508,10 +499,12 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 		}
 		if (result.replaced) purgeFileAttachmentsForSession(draftScope.sessionId);
 		setActivation({ key: scopeKey, state: "active" });
-	}, [activationAttempt, draftOwner, draftScope, scopeKey, session?.createdAt]);
+	}, [activationAttempt, draftScope, scopeKey, session?.createdAt]);
 
-	const obsolete = activation?.key === scopeKey && activation.state === "failed" && activation.reason === "obsolete";
-	if (activation?.key !== scopeKey || obsolete) {
+	if (activation?.key !== scopeKey || activation.state !== "active") {
+		const failure = activation?.key === scopeKey && activation.state === "failed"
+			? activation.reason
+			: undefined;
 		return (
 			<section
 				aria-label="Chat"
@@ -519,27 +512,30 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 				data-session-mode={snapshot.mode}
 				style={{ "--chat-font-size": `${CHAT_FONT_SIZE_DEFAULT}px` } as CSSProperties}
 			>
-				{obsolete ? (
+				{failure ? (
 					<div className="max-w-lg rounded-lg border border-border bg-card p-4">
 						<p className="text-sm text-foreground" role="alert">
-							This Chat view belongs to an older session incarnation. Reopen the current session to continue.
+							{failure === "obsolete"
+								? "This Chat view belongs to an older session incarnation. Reopen the current session to continue."
+								: translateDraft("chat.draft.storageUnavailable")}
 						</p>
+						{failure === "storage" ? (
+							<Button
+								className="mt-3"
+								onClick={() => setActivationAttempt((attempt) => attempt + 1)}
+								type="button"
+								variant="outline"
+							>
+								Retry draft restore
+							</Button>
+						) : null}
 					</div>
 				) : null}
 			</section>
 		);
 	}
 
-	const draftPersistenceAvailable = activation.state === "active";
-	return (
-		<ChatWorkspaceContent
-			key={scopeKey}
-			{...props}
-			draftScope={draftScope}
-			draftPersistenceAvailable={draftPersistenceAvailable}
-			onRetryDraftPersistence={draftPersistenceAvailable ? undefined : retryDraftPersistence}
-		/>
-	);
+	return <ChatWorkspaceContent key={scopeKey} {...props} draftScope={draftScope} />;
 }
 
 function ChatWorkspaceContent({
@@ -558,7 +554,6 @@ function ChatWorkspaceContent({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
-	agentResuming = false,
 	agentInputDisabled = false,
 	newWorkDisabled = false,
 	reviewerTerminal,
@@ -622,6 +617,9 @@ function ChatWorkspaceContent({
 	onActivateBranch,
 	activateBranchPending,
 	activateBranchError,
+	onCreateSideChat,
+	onBtwAction,
+	createSideChatError,
 	skills,
 	filePaths,
 	filePathsTruncated,
@@ -640,15 +638,13 @@ function ChatWorkspaceContent({
 	promoteQueuedTurnPendingTurnId,
 	cancelQueuedTurnPendingTurnId,
 	editQueuedTurnPendingTurnId,
+	onReloadMcpServers,
+	reloadingMcpServers,
+	mcpReloadError,
 	draftScope,
-	draftPersistenceAvailable,
-	onRetryDraftPersistence,
-}: ChatWorkspaceProps & {
-	draftScope: ChatDraftScope;
-	draftPersistenceAvailable: boolean;
-	onRetryDraftPersistence?: () => void;
-}) {
+}: ChatWorkspaceProps & { draftScope: ChatDraftScope }) {
 	const draftScopeKey = chatDraftScopeKey(draftScope);
+	const activeSideChat = snapshot.sideChats?.find((sideChat) => sideChat.active);
 	const uiSessionId = draftScope.sessionId;
 	const activeRemoteHostId = remoteHostId ?? session?.hostId;
 	const remoteCreateMux = useMemo(
@@ -656,53 +652,6 @@ function ChatWorkspaceContent({
 		[assetBaseUrl],
 	);
 	const turn = activeTurn(snapshot);
-	const startupState =
-		session?.provisionState === "provisioning" || session?.provisionState === "failed"
-			? session.provisionState
-			: undefined;
-	// While a session starts, its opening brief reads as sent: the setup checklist
-	// under it explains why nothing has answered yet. Later messages still queue.
-	const provisionSteps = session?.provisionSteps;
-	// Ready can arrive before the first turn does. Keep its setup slot through
-	// that gap; selecting the first turn also never promotes a queued follow-up.
-	const hasStartup = Boolean(
-		startupState || (provisionSteps?.length &&
-			(snapshot.turns[0]?.state === "queued" || snapshot.turns[0]?.state === "running")),
-	);
-	const openingTurnId = hasStartup
-		? snapshot.turns[0]?.id
-		: undefined;
-	const provisionError = session?.provisionError;
-	const sessionBranch = session?.branch;
-	const startup = useMemo(
-		() =>
-			hasStartup
-				? {
-						failed: startupState === "failed",
-						steps: provisionSteps ?? [],
-						error: provisionError,
-						agentName: agentLabel(snapshot.harness),
-						branch: sessionBranch,
-						openingTurnId,
-						onRetry: newWorkDisabled ? undefined : onResumeAgent,
-						retrying: resumingAgent,
-						retryError: resumeError,
-					}
-				: undefined,
-		[
-			hasStartup,
-			newWorkDisabled,
-			onResumeAgent,
-			openingTurnId,
-			provisionError,
-			provisionSteps,
-			resumeError,
-			resumingAgent,
-			sessionBranch,
-			snapshot.harness,
-			startupState,
-		],
-	);
 	const hasPendingInteraction = snapshot.items.some(
 		(item) =>
 			item.kind === "activity" &&
@@ -747,7 +696,7 @@ function ChatWorkspaceContent({
 		const composer = surfaceRef.current?.querySelector<HTMLElement>(
 			'[aria-label="Message the agent"]',
 		);
-		if (composer?.getAttribute("aria-disabled") !== "true") composerFocusRef.current?.focus();
+		if (composer?.getAttribute("aria-disabled") !== "true") composer?.focus();
 	}, []);
 	// Selection is durable UI state; availability only controls whether the tab is
 	// offered. Keeping these separate preserves a selected reviewer while an active
@@ -822,11 +771,11 @@ function ChatWorkspaceContent({
 			return { ...current, [uiSessionId]: next };
 		});
 	}, [auxiliaryTabOrder, availableTabKeys, onAuxiliaryTabOrderChange, uiSessionId]);
-	const queuedMessages = useQueuedMessages(snapshot, openingTurnId);
+	const queuedMessages = useQueuedMessages(snapshot);
 	const stablePromoteQueuedTurn = useStableCallback(onPromoteQueuedTurn);
 	const stableCancelQueuedTurn = useStableCallback(onCancelQueuedTurn);
 	const [queueEdit, setQueueEdit] = useState<ChatDraftQueuedEdit | undefined>(
-		() => (draftPersistenceAvailable ? readChatSessionDraft(draftScope).queuedEdit : undefined),
+		() => readChatSessionDraft(draftScope).queuedEdit,
 	);
 	const queueEditRef = useRef(queueEdit);
 	const [queueDraftError, setQueueDraftError] = useState<string>();
@@ -851,9 +800,9 @@ function ChatWorkspaceContent({
 		return result;
 	}, [draftScope]);
 	useEffect(() => {
-		setChatDraftBoundary(draftScope.sessionId, "queued-edit", queueDraftError ? "persistence-failed" : undefined);
-		return () => setChatDraftBoundary(draftScope.sessionId, "queued-edit", undefined);
-	}, [queueDraftError, draftScope.sessionId]);
+		setChatDraftBoundary(uiSessionId, "queued-edit", queueDraftError ? "persistence-failed" : undefined);
+		return () => setChatDraftBoundary(uiSessionId, "queued-edit", undefined);
+	}, [queueDraftError, uiSessionId]);
 	// Text equality cannot prove an attachment-only edit was accepted. Keep an
 	// uncertain edit and its original daemon revision until a save is acknowledged.
 	const changeQueuedDraft = useCallback((text: string) => {
@@ -895,7 +844,7 @@ function ChatWorkspaceContent({
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
 	const handleComposerSend = useCallback(
-		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[]) => {
+		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[]) => {
 			if (queueEdit) {
 				if (!onEditQueuedTurn) {
 					throw new Error("chat.draft.queueUnavailable");
@@ -942,10 +891,24 @@ function ChatWorkspaceContent({
 				}
 				return;
 			}
-			return onSend?.(text, attachments, clientMessageId);
+			return onSend?.(text, attachments, clientMessageId, excerpts);
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
+	const createSideChatWithExcerpt = useCallback(async (excerpt: ChatDraftExcerptReference) => {
+		if (!onCreateSideChat) return;
+		await onCreateSideChat(excerpt);
+	}, [onCreateSideChat]);
+	const addSideSelectionToMain = useCallback(async (excerpt: ChatDraftExcerptReference) => {
+		if (!activeSideChat || !onActivateBranch) return;
+		await onActivateBranch(activeSideChat.parentBranchId);
+		const current = readChatSessionDraft(draftScope).composer.excerpts ?? [];
+		const duplicate = current.some((item) =>
+			item.messageId === excerpt.messageId && item.revision === excerpt.revision && item.text === excerpt.text,
+		);
+		const result = writeChatExcerptReferences(draftScope, duplicate ? current : [...current, excerpt].slice(-8));
+		if (!result.ok) throw new Error("chat.draft.saveFailed");
+	}, [activeSideChat, draftScope, onActivateBranch]);
 	const stableInterrupt = useStableCallback(onInterrupt);
 	const stableSteer = useStableCallback(onSteer);
 	const beginQueuedEdit = useCallback(
@@ -1001,21 +964,44 @@ function ChatWorkspaceContent({
 	// the agent knows, so it is never one click.
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
 	const surfaceRef = useRef<HTMLElement | null>(null);
-	const composerFocusRef = useRef<ChatComposerHandle>(null);
-	// Storage failures can be transient, so try again when the user comes back. Only while
-	// the composer is empty: recovering remounts it, which would drop unsaved text.
-	useEffect(() => {
-		if (!onRetryDraftPersistence) return;
-		const retry = () => {
-			if (composerFocusRef.current?.isEmpty() !== false) onRetryDraftPersistence();
-		};
-		window.addEventListener("focus", retry);
-		return () => window.removeEventListener("focus", retry);
-	}, [onRetryDraftPersistence]);
 	const lastWheelZoomAtRef = useRef(0);
 	const wheelZoomRemainderRef = useRef(0);
 	const [terminalFontSize, setTerminalFontSize] = useState(initialTerminalFontSize);
 	const [isFullscreen, setIsFullscreen] = useState(false);
+	const [topbarBounds, setTopbarBounds] = useState<TopbarBounds>({
+		leftInset: 0,
+		rightInset: 0,
+		width: 0,
+	});
+
+	useEffect(() => {
+		const surface = surfaceRef.current;
+		if (!surface) return;
+		const workspaceSurface = surface.closest<HTMLElement>(".center-panel-surface");
+		const measure = () => {
+			const surfaceRect = surface.getBoundingClientRect();
+			const workspaceRect = workspaceSurface?.getBoundingClientRect() ?? surfaceRect;
+			const next = {
+				leftInset: workspaceRect.left,
+				rightInset: Math.max(0, window.innerWidth - workspaceRect.right),
+				width: surfaceRect.width,
+			};
+			setTopbarBounds((current) =>
+				current.leftInset === next.leftInset &&
+				current.rightInset === next.rightInset &&
+				current.width === next.width
+					? current
+					: next,
+			);
+		};
+		measure();
+		if (typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(measure);
+		observer.observe(surface);
+		if (workspaceSurface) observer.observe(workspaceSurface);
+		return () => observer.disconnect();
+	}, []);
+
 	useEffect(() => {
 		const handleFullscreenChange = () => {
 			setIsFullscreen(document.fullscreenElement === surfaceRef.current);
@@ -1164,9 +1150,9 @@ function ChatWorkspaceContent({
 		return () => aoBridge.app.setCloseShellTerminalShortcutEnabled(false);
 	}, [activeWorkspaceTab, onCloseShellTerminal, shellTarget]);
 
-	// Keep the rollback affordance mounted while a new turn runs; disable it until
-	// the daemon can safely accept it so the action row never shifts.
-	const rollbackTarget = onRollback && !newWorkDisabled ? (id: string) => setConfirming(id) : undefined;
+	// Offered only while the agent is idle. The daemon refuses a rollback mid-turn,
+	// and a control that exists to be refused is worse than one that waits.
+	const rollbackTarget = onRollback && !turn && !newWorkDisabled ? (id: string) => setConfirming(id) : undefined;
 	const discarded = snapshot.turns.filter((t) => t.rolledBack).length;
 
 	const brokenServers = useMemo(() => brokenMcpServers(snapshot), [snapshot]);
@@ -1208,18 +1194,10 @@ function ChatWorkspaceContent({
 					configOptions={configOptions ?? []}
 					onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
 					configPending={configOptionPending}
-					autoSelectEffortOnOpen={snapshot.items.length === 0 && !turn}
 					error={configOptionError}
-					// Turn settings require a live controller even while messages can queue.
-				// A background resume keeps the controls visible with their last values.
 					disabled={
-							(!agentResuming && (
-								snapshot.controller.state === "connecting" ||
-								snapshot.controller.state === "stopped"
-							)) ||
-							session?.provisionState === "provisioning" ||
-							controllerTransitioning || configOptionPending || newWorkDisabled
-						}
+						snapshot.controller.state === "stopped" || controllerTransitioning || configOptionPending || newWorkDisabled
+					}
 				/>
 			) : null,
 		[
@@ -1229,7 +1207,6 @@ function ChatWorkspaceContent({
 			controllerTransitioning,
 			models,
 			newWorkDisabled,
-			session?.provisionState,
 			onChooseConfigOption,
 			onChooseSettings,
 			onRememberPermissions,
@@ -1240,8 +1217,6 @@ function ChatWorkspaceContent({
 			approvalModes,
 			session?.cloud,
 			snapshot.controller.state,
-			snapshot.items.length,
-			turn,
 			stableModelReroute,
 			stableSettings,
 		],
@@ -1277,7 +1252,7 @@ function ChatWorkspaceContent({
 					canSteer={canSteerQueuedMessage}
 					onPromoteQueuedTurn={newWorkDisabled ? undefined : promoteQueuedTurn}
 					onBeginQueuedEdit={
-						newWorkDisabled || !draftPersistenceAvailable || !onEditQueuedTurn ? undefined : beginQueuedEdit
+						newWorkDisabled || !onEditQueuedTurn ? undefined : beginQueuedEdit
 					}
 					onCancelQueuedTurn={newWorkDisabled ? undefined : handleCancelQueuedTurn}
 					onReorderQueuedTurns={newWorkDisabled ? undefined : onReorderQueuedTurns}
@@ -1289,7 +1264,6 @@ function ChatWorkspaceContent({
 			beginQueuedEdit,
 			canSteerQueuedMessage,
 			cancelQueuedTurnPendingTurnId,
-			draftPersistenceAvailable,
 			handleCancelQueuedTurn,
 			newWorkDisabled,
 			onEditQueuedTurn,
@@ -1308,10 +1282,6 @@ function ChatWorkspaceContent({
 	// Empty chats center the prompt; once a turn or item exists the composer docks
 	// at the bottom and stays there for the rest of the session.
 	const conversationEmpty = snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0;
-	const { t } = useTranslation();
-	const [emptyChatPlaceholder] = useState(
-		() => EMPTY_CHAT_PLACEHOLDERS[Math.floor(Math.random() * EMPTY_CHAT_PLACEHOLDERS.length)],
-	);
 	const composerDockRef = useRef<HTMLDivElement>(null);
 	const composerCenteredTopRef = useRef<number | null>(null);
 	const composerFlipDyRef = useRef<number | null>(null);
@@ -1377,7 +1347,7 @@ function ChatWorkspaceContent({
 			onKeyDown={handleChatKeyDown}
 			onClick={handleChatSurfaceClick}
 			aria-label="Chat"
-			className="cursor-chat-surface flex h-full min-h-0 min-w-0 w-full flex-col overflow-hidden [font-size:var(--chat-font-size)]"
+			className="cursor-chat-surface flex h-full min-h-0 flex-col [font-size:var(--chat-font-size)]"
 			data-session-mode={snapshot.mode}
 			data-session-role={sessionRole}
 			style={
@@ -1410,6 +1380,7 @@ function ChatWorkspaceContent({
 				orderedAuxiliaryTabs={orderedAuxiliaryTabs}
 				onReorderAuxiliaryTabs={reorderAuxiliaryTabs}
 				inline={isFullscreen}
+				topbarBounds={topbarBounds}
 			/>}
 			<div className="relative flex min-h-0 flex-1 flex-col">
 				{reviewerTarget && session ? (
@@ -1476,18 +1447,14 @@ function ChatWorkspaceContent({
 				>
 					{/* Keep sign-in guidance available without repeating the error from chat. */}
 					{snapshot.account ? (
-						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
-					) : null}
-					{!draftPersistenceAvailable ? (
-						<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-2 text-[11px] text-muted-foreground">
-							<TriangleAlert aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
-							{t("chat.draft.storageUnavailable")}
-						</div>
+						<ReauthBanner account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
 					) : null}
 					<ControllerBanner
 						controller={snapshot.controller}
+						agentName={agentLabel(snapshot.harness)}
 						provisionState={session?.provisionState}
-						transitioning={controllerTransitioning || agentResuming}
+						provisionError={session?.provisionError}
+						transitioning={controllerTransitioning}
 						onResume={newWorkDisabled ? undefined : onResumeAgent}
 						resuming={resumingAgent}
 						resumeError={resumeError}
@@ -1496,6 +1463,25 @@ function ChatWorkspaceContent({
 						shellError={shellError}
 					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
+					<McpServerBanner
+						sessionId={uiSessionId}
+						servers={brokenServers}
+						onReload={newWorkDisabled ? undefined : onReloadMcpServers}
+						reloading={reloadingMcpServers}
+						turnInFlight={Boolean(turn)}
+						error={mcpReloadError}
+					/>
+					{((activeSideChat && onActivateBranch) || createSideChatError || activateBranchError) ? (
+						<div className="flex min-h-9 items-center gap-1 border-b border-border bg-sidebar/60 px-4 py-1.5 text-xs">
+							{activeSideChat && onActivateBranch ? <Button type="button" size="sm" variant="ghost"
+								onClick={() => void onActivateBranch(activeSideChat.parentBranchId)}>
+								Return to main
+							</Button> : null}
+							{createSideChatError || activateBranchError ? (
+								<span className="ml-auto text-destructive" role="alert">{createSideChatError ?? activateBranchError}</span>
+							) : null}
+						</div>
+					) : null}
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
@@ -1508,7 +1494,6 @@ function ChatWorkspaceContent({
 									assetBaseUrl={assetBaseUrl}
 									remoteHost={Boolean(activeRemoteHostId)}
 									draftScope={draftScope}
-									draftPersistenceAvailable={draftPersistenceAvailable}
 									hasOlder={hasOlder}
 									loadingOlder={loadingOlder}
 									onLoadOlder={onLoadOlder}
@@ -1518,7 +1503,7 @@ function ChatWorkspaceContent({
 									onOpenFiles={onOpenFiles}
 									onOpenFile={onOpenFile}
 									retryControl={retryControl}
-									onEditHumanMessage={draftPersistenceAvailable ? editHumanMessage : undefined}
+									onEditHumanMessage={editHumanMessage}
 									editPending={editMessagePending}
 									editBusy={Boolean(turn)}
 									editError={editMessageError}
@@ -1526,9 +1511,10 @@ function ChatWorkspaceContent({
 									activateBranchPending={activateBranchPending}
 									activateBranchError={activateBranchError}
 									newWorkDisabled={newWorkDisabled}
-									rollbackDisabled={Boolean(turn || rollbackPending || newWorkDisabled)}
 									localEchos={localEchos}
-									startup={startup}
+									minimumSequence={activeSideChat?.forkAfterSequence}
+									onAddSelectionToSideChat={!activeSideChat ? createSideChatWithExcerpt : undefined}
+									onAddSelectionToMainChat={activeSideChat ? addSideSelectionToMain : undefined}
 								/>
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
@@ -1540,90 +1526,62 @@ function ChatWorkspaceContent({
 								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
 							>
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
-								{conversationEmpty ? (
-									<h1 className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl">
-										{t("chat.welcome.heading")}
-									</h1>
-								) : null}
-								<div className="relative">
-									<McpServerBanner
-										key={draftScopeKey}
-										sessionId={uiSessionId}
-										incarnation={draftScope.incarnation}
-										servers={brokenServers}
-										placement={conversationEmpty ? "below" : "above"}
-										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
-									/>
-									<ChatComposer
-										focusRef={composerFocusRef}
-										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
-										queuedDock={composerQueuedDock}
-										approval={composerApproval}
-										elicitation={composerElicitation}
-										onSend={handleComposerSend}
-										draftSeed={composerDraftSeed}
-										editingQueuedTurnId={queueEdit?.turnId}
-										queuedEditRecovery={Boolean(queueEdit?.clientMessageId)}
-										savingQueuedEditPending={Boolean(
-											queueEdit?.turnId &&
-												editQueuedTurnPendingTurnId === queueEdit.turnId,
-										)}
-										onCancelQueuedEdit={cancelQueuedEdit}
-										onQueuedDraftChange={queueEdit ? changeQueuedDraft : undefined}
-										queuedDraftScope={queueEdit ? draftScope : undefined}
-										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
-										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
-										onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
-										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
-										settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
-										busy={busy}
-										willQueue={Boolean(turn) || session?.provisionState === "provisioning"}
-										queuePlaceholder={
-											session?.provisionState === "provisioning"
-												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
-												: undefined
-										}
-										disabled={(snapshot.controller.state === "stopped" || controllerTransitioning || agentResuming || newWorkDisabled) && !queueEdit?.clientMessageId}
-										// Switch/reconnect status is the topbar spinner beside ⋮ — not composer text.
-										disabledPlaceholder={
-											controllerTransitioning || newWorkDisabled
-												? ""
-												: agentResuming
-													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
-													: undefined
-										}
-										// Keep the composer useful outside the centered welcome state too. A
-										// task can have non-message activity before its first visible chat
-										// message, and the generic placeholder makes a still-empty composer
-										// look like a regression.
-										emptyPlaceholder={conversationEmpty ? emptyChatPlaceholder : undefined}
-										skills={skills}
-										filePaths={filePaths}
-										filePathsTruncated={filePathsTruncated}
-										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
-										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
-										autoFocus={!reviewerActive}
-										autoFocusKey={draftScope.sessionId}
-										// Steering is only meaningful into a turn that is running. A queued turn
-										// has not reached the provider, so there is nothing to steer.
-										onSteer={newWorkDisabled ? undefined : steer}
-										showSteerButton={showSteerButton}
-										canSteer={Boolean(onSteer) && turn?.state === "running"}
-										sendPending={sendPending || agentResuming}
-										steerPending={steerPending}
-										steerRefusal={steerRefusal}
-										onCompact={newWorkDisabled ? undefined : onCompact}
-										compacting={compacting}
-										compactUnavailable={compactUnavailable}
-										compactBlocked={Boolean(turn)}
-										draftSessionId={draftPersistenceAvailable && !queueEdit ? draftScope.sessionId : undefined}
-										draftSessionIncarnation={draftPersistenceAvailable ? draftScope.incarnation : undefined}
-										assetBaseUrl={assetBaseUrl}
-										assetSessionId={snapshot.sessionId}
-										remoteHost={Boolean(activeRemoteHostId)}
-										acceptedClientMessageIds={acceptedClientMessageIds}
-									/>
-								</div>
+								<ChatComposer
+									excerptSnapshot={snapshot}
+									key={`${draftScopeKey}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
+									queuedDock={composerQueuedDock}
+									approval={composerApproval}
+									elicitation={composerElicitation}
+									onSend={handleComposerSend}
+									draftSeed={composerDraftSeed}
+									editingQueuedTurnId={queueEdit?.turnId}
+									queuedEditRecovery={Boolean(queueEdit?.clientMessageId)}
+									savingQueuedEditPending={Boolean(
+										queueEdit?.turnId &&
+											editQueuedTurnPendingTurnId === queueEdit.turnId,
+									)}
+									onCancelQueuedEdit={cancelQueuedEdit}
+									onQueuedDraftChange={queueEdit ? changeQueuedDraft : undefined}
+									queuedDraftScope={queueEdit ? draftScope : undefined}
+									onQueuedAttachmentsChange={changeQueuedStagedAttachments}
+									onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
+									onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
+									commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
+									settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
+									busy={busy}
+									willQueue={Boolean(turn) || session?.provisionState === "provisioning"}
+									disabled={(snapshot.controller.state === "stopped" || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
+									// Switch/reconnect status is the topbar spinner beside ⋮ — not composer text.
+									disabledPlaceholder={
+										controllerTransitioning || newWorkDisabled ? "" : undefined
+									}
+									skills={skills}
+									filePaths={filePaths}
+									filePathsTruncated={filePathsTruncated}
+									onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
+									nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
+									autoFocus={!reviewerActive}
+									autoFocusKey={uiSessionId}
+									// Steering is only meaningful into a turn that is running. A queued turn
+									// has not reached the provider, so there is nothing to steer.
+									onSteer={newWorkDisabled ? undefined : steer}
+									showSteerButton={showSteerButton}
+									canSteer={Boolean(onSteer) && turn?.state === "running"}
+									sendPending={sendPending}
+									steerPending={steerPending}
+									steerRefusal={steerRefusal}
+									onCompact={newWorkDisabled ? undefined : onCompact}
+									onBtwAction={onBtwAction}
+									compacting={compacting}
+									compactUnavailable={compactUnavailable}
+									compactBlocked={Boolean(turn)}
+									draftSessionId={queueEdit ? undefined : uiSessionId}
+									draftSessionIncarnation={draftScope.incarnation}
+									assetBaseUrl={assetBaseUrl}
+									assetSessionId={snapshot.sessionId}
+									remoteHost={Boolean(activeRemoteHostId)}
+									acceptedClientMessageIds={acceptedClientMessageIds}
+								/>
 							</div>
 						</div>
 					</div>
@@ -1792,6 +1750,7 @@ function ChatHeader({
 	orderedAuxiliaryTabs,
 	onReorderAuxiliaryTabs,
 	inline,
+	topbarBounds,
 	session,
 	onSessionRenamed,
 }: {
@@ -1822,6 +1781,7 @@ function ChatHeader({
 	onSessionRenamed?: () => void | Promise<void>;
 	/** Fullscreen content cannot see the normal topbar portal outside its subtree. */
 	inline?: boolean;
+	topbarBounds: TopbarBounds;
 }) {
 	const { t } = useTranslation();
 	const providerLabel = agentLabel(snapshot.harness);
@@ -1849,7 +1809,6 @@ function ChatHeader({
 	// cluster sits over the session tab strip. Terminal already reserves that
 	// space; chat must too or the back/forward buttons land on the tab label.
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
-	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
 	const header = (
 		<header className="flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar">
 			<div
@@ -1859,12 +1818,13 @@ function ChatHeader({
 				<div
 					className={cn(
 						"flex min-w-0 shrink items-stretch",
-						isMac && "session-topbar-titlebar-clearance-mac",
+						!isSidebarOpen && isMac && "session-topbar-titlebar-clearance-mac",
 						!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
 					)}
 					data-testid="session-terminal-region"
-					ref={clearanceRef}
-					style={{ width: "100%" }}
+					style={{
+						width: topbarBounds.width > 0 ? topbarBounds.width : "100%",
+					}}
 				>
 					<div
 						aria-label="Chat tabs"
@@ -1978,7 +1938,9 @@ function ChatHeader({
  */
 function ControllerBanner({
 	controller,
+	agentName,
 	provisionState,
+	provisionError,
 	transitioning,
 	onResume,
 	resuming,
@@ -1988,7 +1950,9 @@ function ControllerBanner({
 	shellError,
 }: {
 	controller: { state: ControllerState; error?: string };
+	agentName: string;
 	provisionState?: WorkspaceSession["provisionState"];
+	provisionError?: string;
 	transitioning?: boolean;
 	onResume?: () => void;
 	resuming?: boolean;
@@ -1997,14 +1961,15 @@ function ControllerBanner({
 	openingShell?: boolean;
 	shellError?: string;
 }) {
-	// A session that is starting, or failed to start, has no controller yet. The
-	// setup checklist in the timeline explains that state and offers Retry.
-	if (provisionState === "provisioning" || provisionState === "failed") return null;
+	const provisioning = provisionState === "provisioning";
+	const failed = provisionState === "failed";
+	const starting = provisioning || failed;
+
 	// The transition coordinator intentionally stops one controller before it
 	// starts the other. The top-bar handoff state already explains that interval;
 	// presenting its intermediate snapshot as a crash produces a red false alarm.
-	if (transitioning && controller.state === "stopped") return null;
-	if (controller.state === "ready" || controller.state === "busy") return null;
+	if (!starting && transitioning && controller.state === "stopped") return null;
+	if (!starting && (controller.state === "ready" || controller.state === "busy")) return null;
 
 	const copy: Partial<Record<ControllerState, { title: string; tone: string }>> = {
 		connecting: {
@@ -2020,16 +1985,21 @@ function ControllerBanner({
 			tone: "text-destructive",
 		},
 	};
-	const shown = copy[controller.state];
+	const shown = provisioning
+		? { title: `Starting ${agentName}…`, tone: "text-muted-foreground" }
+		: failed
+			? { title: "This session could not be started", tone: "text-destructive" }
+			: copy[controller.state];
 	if (!shown) return null;
+	const loading = provisioning || (!failed && controller.state === "connecting");
 
 	return (
 		<div
-			role={controller.state === "stopped" ? "alert" : "status"}
+			role={failed || controller.state === "stopped" ? "alert" : "status"}
 			aria-atomic="true"
 			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
 		>
-			{controller.state === "connecting" ? (
+			{loading ? (
 				<Loader2
 					aria-hidden="true"
 					className="mt-0.5 size-3.5 shrink-0 animate-spin text-muted-foreground"
@@ -2039,10 +2009,34 @@ function ControllerBanner({
 			)}
 			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<strong className={cn("text-xs font-medium", shown.tone)}>{shown.title}</strong>
-				{controller.error ? (
+				{provisioning ? (
+					<span className="text-[11px] leading-snug text-muted-foreground">
+						Setting up the worktree and the agent. Keep typing — your messages are
+						queued and sent in order as soon as it is ready.
+					</span>
+				) : failed ? (
+					<>
+						{provisionError ? (
+							<span className="text-[11px] leading-snug text-muted-foreground">
+								{provisionError}
+							</span>
+						) : null}
+						<span className="text-[11px] leading-snug text-muted-foreground">
+							Your messages are saved here and will be sent if you retry.
+						</span>
+						{resumeError ? (
+							<span className="text-[11px] leading-snug text-destructive">{resumeError}</span>
+						) : null}
+						{onResume ? (
+							<Button type="button" size="sm" variant="outline" onClick={onResume} disabled={resuming}>
+								{resuming ? "Retrying…" : "Retry start"}
+							</Button>
+						) : null}
+					</>
+				) : controller.error ? (
 					<span className="text-[11px] leading-snug text-muted-foreground">{controller.error}</span>
 				) : null}
-				{controller.state === "stopped" ? (
+				{!starting && controller.state === "stopped" ? (
 					<>
 						<span className="text-[11px] leading-snug text-muted-foreground">
 							History is kept. Resume the agent or open a shell in the same worktree.
@@ -2101,21 +2095,11 @@ function ControllerBanner({
  * the turn that changed. Older pages are prepended explicitly instead of keeping
  * an unbounded history in every snapshot response.
  */
-const CHAT_VIRTUALIZE_THRESHOLD = 20;
-/** Opening a chat snaps to the end for this long while rows measure and history arrives. */
-const INITIAL_SNAP_MS = 1000;
-/** Wheel, key and touch intent pause the follow this long so the resulting scroll decides. */
-const READER_INTENT_HOLD_MS = 250;
-const CHAT_ESTIMATED_TURN_HEIGHT = 600;
-const CHAT_TURN_GAP = 18;
-const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
-
 function Timeline({
 	snapshot,
 	assetBaseUrl,
 	remoteHost,
 	draftScope,
-	draftPersistenceAvailable = true,
 	hasOlder,
 	loadingOlder,
 	onLoadOlder,
@@ -2133,16 +2117,15 @@ function Timeline({
 	activateBranchPending,
 	activateBranchError,
 	newWorkDisabled,
-	rollbackDisabled = false,
 	localEchos = [],
-	startup,
+	minimumSequence,
+	onAddSelectionToSideChat,
+	onAddSelectionToMainChat,
 }: {
 	snapshot: ConversationSnapshot;
 	assetBaseUrl?: string;
 	remoteHost?: boolean;
 	draftScope: ChatDraftScope;
-	/** False when drafts can't be saved; persisted inline edits are then ignored. */
-	draftPersistenceAvailable?: boolean;
 	hasOlder?: boolean;
 	loadingOlder?: boolean;
 	onLoadOlder?: () => void;
@@ -2150,7 +2133,7 @@ function Timeline({
 	busy?: boolean;
 	onRollback?: (turnId: string) => void;
 	onOpenFiles?: () => void;
-	onOpenFile?: (path: string, line?: number) => void;
+	onOpenFile?: (path: string) => void;
 	retryControl?: ChatRetryControl;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	editPending?: boolean;
@@ -2160,19 +2143,15 @@ function Timeline({
 	activateBranchPending?: boolean;
 	activateBranchError?: string;
 	newWorkDisabled?: boolean;
-	rollbackDisabled?: boolean;
 	localEchos?: ConversationLocalEcho[];
-	/** A session that is starting, or failed to start, and its setup checklist. */
-	startup?: ComponentProps<typeof SessionStartup> & { openingTurnId?: string };
+	minimumSequence?: number;
+	onAddSelectionToSideChat?: (excerpt: ChatDraftExcerptReference) => Promise<void>;
+	onAddSelectionToMainChat?: (excerpt: ChatDraftExcerptReference) => Promise<void>;
 }) {
 	const translateDraft = useChatDraftTranslation();
 	const uiSessionId = draftScope.sessionId;
 	const scroller = useRef<HTMLDivElement>(null);
 	const scrollContent = useRef<HTMLDivElement>(null);
-	const virtualContent = useRef<HTMLDivElement>(null);
-	const [virtualScrollMargin, setVirtualScrollMargin] = useState(20);
-	const measuredVirtualGroups = useRef(new WeakSet<TimelineGroup>());
-	const pendingVirtualLayout = useRef(false);
 	const promptSpacer = useRef<HTMLDivElement>(null);
 	const scrollTrack = useRef<HTMLDivElement>(null);
 	const drag = useRef<{
@@ -2182,54 +2161,24 @@ function Timeline({
 	} | null>(null);
 	const pinnedRef = useRef(true);
 	const [pinned, setPinned] = useState(true);
-	const getScroller = useCallback(() => scroller.current, []);
-	const {
-		glideToEnd,
-		followEnd,
-		cancel: cancelScrollFollow,
-		hold: holdScrollFollow,
-		markWritten,
-		isOwnScroll,
-		isFlying,
-		reaim,
-		endFlight,
-	} = useScrollFollow(getScroller);
-	// Set when the reader sends or jumps to the latest: the next layout glides there
-	// instead of snapping. Opening a chat never animates, so the first layout snaps.
-	const glideRequested = useRef(false);
-	const initialLayoutDone = useRef(false);
-	const initialLayoutAt = useRef(0);
-	const lastScrollTop = useRef(0);
-	const setPinnedNow = useCallback((next: boolean) => {
-		pinnedRef.current = next;
-		setPinned(next);
-	}, []);
-	// The reader took over (scrolled up, opened a disclosure): stop following.
-	const releaseFollow = useCallback(() => {
-		cancelScrollFollow();
-		if (pinnedRef.current) setPinnedNow(false);
-	}, [cancelScrollFollow, setPinnedNow]);
-	const requestGlideToEnd = useCallback(() => {
-		glideRequested.current = true;
-		setPinnedNow(true);
-	}, [setPinnedNow]);
-	const [activityDisclosureOverrides, setActivityDisclosureOverrides] = useState<Record<string, boolean>>({});
-	const onActivityDisclosureChange = useCallback((key: string, open: boolean) => {
-		setActivityDisclosureOverrides((current) => ({ ...current, [key]: open }));
-	}, []);
 	const [hoveredMarker, setHoveredMarker] = useState<number | null>(null);
+	const [selectionAction, setSelectionAction] = useState<{
+		excerpt: ChatDraftExcerptReference;
+		anchorX: number;
+		top: number;
+	} | null>(null);
 	const hoveredMarkerRef = useRef<number | null>(null);
 	hoveredMarkerRef.current = hoveredMarker;
 	const [messageEdit, setMessageEdit] = useState<MessageEditDraft | undefined>(
-		() => (draftPersistenceAvailable ? readChatSessionDraft(draftScope).inlineEdit : undefined),
+		() => readChatSessionDraft(draftScope).inlineEdit,
 	);
 	const messageEditRef = useRef(messageEdit);
 	const [durableInlineEditDelivery, setDurableInlineEditDelivery] =
 		useState<ChatInlineEditDelivery | undefined>(
-			() => (draftPersistenceAvailable ? readChatSessionDraft(draftScope).inlineEditDelivery : undefined),
+			() => readChatSessionDraft(draftScope).inlineEditDelivery,
 		);
 	const [inlineEditUncertain, setInlineEditUncertain] = useState(
-		() => draftPersistenceAvailable && readChatSessionDraft(draftScope).inlineEditDelivery?.state === "dispatching",
+		() => readChatSessionDraft(draftScope).inlineEditDelivery?.state === "dispatching",
 	);
 	const automaticInlineRecoveryAttempted = useRef<string | undefined>(undefined);
 	const [draftPersistenceError, setDraftPersistenceError] = useState<string>();
@@ -2258,6 +2207,94 @@ function Timeline({
 	const inlineEditLocked = inlineEditPending || Boolean(durableInlineEditDelivery);
 	const inlineEditSendBlocked =
 		inlineEditPending || (acceptedEditClearFailed && !durableInlineEditDelivery);
+
+	const captureTranscriptSelection = useCallback(() => {
+		const selection = window.getSelection();
+		if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+			setSelectionAction(null);
+			return;
+		}
+		const anchor = selection.anchorNode instanceof Element
+			? selection.anchorNode
+			: selection.anchorNode?.parentElement;
+		const focus = selection.focusNode instanceof Element
+			? selection.focusNode
+			: selection.focusNode?.parentElement;
+		const source = anchor?.closest<HTMLElement>("[data-chat-message-id]");
+		const content = anchor?.closest<HTMLElement>("[data-chat-message-content]");
+		if (
+			!source ||
+			!content ||
+			content !== focus?.closest<HTMLElement>("[data-chat-message-content]") ||
+			!source.contains(content) ||
+			source !== focus?.closest<HTMLElement>("[data-chat-message-id]") ||
+			!scrollContent.current?.contains(source)
+		) {
+			setSelectionAction(null);
+			return;
+		}
+		const range = selection.getRangeAt(0);
+		if (
+			anchor?.closest("[data-chat-selection-exclude]") ||
+			focus?.closest("[data-chat-selection-exclude]") ||
+			Array.from(content.querySelectorAll("[data-chat-selection-exclude]"))
+				.some((node) => range.intersectsNode(node))
+		) {
+			setSelectionAction(null);
+			return;
+		}
+		const text = selection.toString();
+		const messageId = source.dataset.chatMessageId;
+		const revision = Number(source.dataset.chatMessageRevision);
+		const role = source.dataset.chatMessageRole;
+		if (
+			!text.trim() ||
+			!messageId ||
+			!Number.isSafeInteger(revision) ||
+			(role !== "user" && role !== "assistant")
+		) {
+			setSelectionAction(null);
+			return;
+		}
+		const rect = range.getBoundingClientRect();
+		const timelineRect = scroller.current?.getBoundingClientRect();
+		if (!timelineRect) return;
+		setSelectionAction({
+			excerpt: {
+				id: crypto.randomUUID(),
+				conversationId: snapshot.conversationId,
+				messageId,
+				revision,
+				text,
+				role,
+			},
+			anchorX: rect.left - timelineRect.left + rect.width / 2,
+			top: Math.max(8, rect.top - timelineRect.top - 42),
+		});
+	}, [snapshot.conversationId]);
+
+	const addSelectionToChat = useCallback(async () => {
+		if (!selectionAction) return;
+		if (onAddSelectionToMainChat) await onAddSelectionToMainChat(selectionAction.excerpt);
+		const current = readChatSessionDraft(draftScope).composer.excerpts ?? [];
+		const duplicate = current.some(
+			(item) =>
+				item.messageId === selectionAction.excerpt.messageId &&
+				item.revision === selectionAction.excerpt.revision &&
+				item.text === selectionAction.excerpt.text,
+		);
+		const next = duplicate ? current : [...current, selectionAction.excerpt].slice(-8);
+		const result = writeChatExcerptReferences(draftScope, next);
+		setDraftPersistenceError(result.ok ? undefined : "chat.draft.saveFailed");
+		setSelectionAction(null);
+		window.getSelection()?.removeAllRanges();
+	}, [draftScope, onAddSelectionToMainChat, selectionAction]);
+	const addSelectionToSideChat = useCallback(async () => {
+		if (!selectionAction || !onAddSelectionToSideChat) return;
+		await onAddSelectionToSideChat(selectionAction.excerpt);
+		setSelectionAction(null);
+		window.getSelection()?.removeAllRanges();
+	}, [onAddSelectionToSideChat, selectionAction]);
 	const inlineEditRecoveryLabel = durableInlineEditDelivery
 		? durableInlineEditDelivery.state === "accepted"
 			? "chat.draft.clearEdit"
@@ -2268,16 +2305,16 @@ function Timeline({
 	);
 	useEffect(() => {
 		setChatDraftBoundary(
-			draftScope.sessionId,
+			uiSessionId,
 			"inline-edit",
 			[
 				...(draftPersistenceError ? (["persistence-failed"] as const) : []),
 			],
 		);
-	}, [draftPersistenceError, draftScope.sessionId]);
+	}, [draftPersistenceError, uiSessionId]);
 	useEffect(
-		() => () => setChatDraftBoundary(draftScope.sessionId, "inline-edit", undefined),
-		[draftScope.sessionId],
+		() => () => setChatDraftBoundary(uiSessionId, "inline-edit", undefined),
+		[uiSessionId],
 	);
 	// The inspector changes the minimap's visibility, but it must not cause this
 	// entire timeline to rerender. A live conversation can contain hundreds of
@@ -2303,21 +2340,7 @@ function Timeline({
 	// widens chat; shorter histories (common on non-Codex harnesses) often
 	// stop overflowing and used to lose the minimap exactly then.
 	const minimapEnabled = scrollbar.markers.length > 0;
-	const { t } = useTranslation();
-	const openingTurnId = startup?.openingTurnId;
-	// The checklist holds the working slot until the agent is up and its first
-	// turn is live; a clean start then leaves no trace.
-	const showStartup = Boolean(
-		startup &&
-			(startup.failed ||
-				!(turn?.state === "running" && turn.id === openingTurnId &&
-					startup.steps.length > 0 && startup.steps.every((step) => step.status === "done"))),
-	);
-	const queued = useMemo(() => {
-		const ids = queuedTurnIds(snapshot);
-		if (openingTurnId) ids.delete(openingTurnId);
-		return ids;
-	}, [openingTurnId, snapshot]);
+	const queued = useMemo(() => queuedTurnIds(snapshot), [snapshot]);
 	const decide = useStableCallback(onDecide);
 	const rollback = useStableCallback(onRollback);
 	const openFiles = useStableCallback(onOpenFiles);
@@ -2348,7 +2371,7 @@ function Timeline({
 			)?.turnId,
 		[snapshot.items],
 	);
-	const { editableTurns: editableTurnsNow, reconstructedTurns } = useMemo(() => {
+	const { editableTurns, reconstructedTurns } = useMemo(() => {
 		const editable = new Set<string>();
 		const reconstructed = new Set<string>();
 		if (snapshot.controller.state !== "ready") {
@@ -2406,9 +2429,9 @@ function Timeline({
 	// Retry/Abandon controls, so keep it actionable when an ambiguous send activates
 	// and refetches the replacement branch.
 	useEffect(() => {
-		if (draftPersistenceAvailable && readChatSessionDraft(draftScope).inlineEditDelivery) return;
+		if (readChatSessionDraft(draftScope).inlineEditDelivery) return;
 		setMessageEdit(undefined);
-	}, [draftPersistenceAvailable, draftScope, snapshot.activeBranchId, snapshot.sessionId]);
+	}, [draftScope, snapshot.activeBranchId, snapshot.sessionId]);
 	useEffect(() => {
 		const setInspectorOpen = (isOpen: boolean) => {
 			inspectorOpenRef.current = isOpen;
@@ -2456,14 +2479,14 @@ function Timeline({
 	}, [pinned]);
 
 	useEffect(() => {
-		const restored = draftPersistenceAvailable ? readChatSessionDraft(draftScope) : undefined;
-		messageEditRef.current = restored?.inlineEdit;
-		setMessageEdit(restored?.inlineEdit);
-		setDurableInlineEditDelivery(restored?.inlineEditDelivery);
-		setInlineEditUncertain(restored?.inlineEditDelivery?.state === "dispatching");
+		const restored = readChatSessionDraft(draftScope);
+		messageEditRef.current = restored.inlineEdit;
+		setMessageEdit(restored.inlineEdit);
+		setDurableInlineEditDelivery(restored.inlineEditDelivery);
+		setInlineEditUncertain(restored.inlineEditDelivery?.state === "dispatching");
 		setDraftPersistenceError(undefined);
 		setInlineEditRecoveryNotice(
-			restored?.inlineEditDelivery
+			restored.inlineEditDelivery
 				? restored.inlineEditDelivery.state === "accepted"
 					? "chat.draft.acceptedEdit"
 					: "chat.draft.editRestart"
@@ -2472,7 +2495,7 @@ function Timeline({
 		setAppliedEditAcceptanceSequence(0);
 		setInlineEditOutcomeNotice(undefined);
 		automaticInlineRecoveryAttempted.current = undefined;
-	}, [draftPersistenceAvailable, draftScope]);
+	}, [draftScope]);
 
 	const applyAcceptedInlineEditResult = useCallback((result: DraftClearResult) => {
 		setDurableInlineEditDelivery(result.draft.inlineEditDelivery);
@@ -2573,7 +2596,6 @@ function Timeline({
 		inlineEditMutation.accepted,
 	]);
 
-	const editableTurns = useStableSet(editableTurnsNow);
 	const startMessageEdit = useCallback((message: ConversationMessage) => {
 		if (!message.turnId || inlineEditLocked) return;
 		const result = writeChatInlineEdit(draftScope, {
@@ -2718,11 +2740,10 @@ function Timeline({
 		],
 	);
 
-	// Both churn with their deps while streaming; a stable identity keeps memoized turn groups from re-rendering.
-	const stableStartMessageEdit = useLatestCallback(startMessageEdit);
-	const stableSubmitMessageEdit = useLatestCallback(submitMessageEdit);
-
-	const readable = useMemo(() => readableItems(snapshot), [snapshot]);
+	const readable = useMemo(
+		() => readableItems(snapshot).filter((item) => minimumSequence === undefined || item.sequence > minimumSequence),
+		[minimumSequence, snapshot],
+	);
 	const items = useStableList(readable, itemKey, sameContent);
 	const seenHumanMessageIds = useRef<Set<string> | undefined>(undefined);
 	const lastSeenLatestSequence = useRef<number | undefined>(undefined);
@@ -2780,113 +2801,31 @@ function Timeline({
 				role: "user",
 				origin: "human",
 				text: echo.text,
+				content: echo.excerpts?.map((excerpt) => {
+					const source = items.find((item) => item.kind === "message" && item.id === excerpt.messageId);
+					return {
+						type: "excerpt",
+						excerpt: { selection: excerpt.text, sourceRole: source?.kind === "message" ? source.role : "user", sourceText: excerpt.text, messages: [] },
+					};
+				}),
 				streaming: false,
 				delivery: echo.turnId ? "accepted" : "sending",
 				createdAt: echo.createdAt,
 			}));
 	}, [items, localEchos, snapshot.latestSequence]);
 	const timelineItems = useStableList([...items, ...localItems], itemKey, sameContent);
-	const previousEchoIds = useRef<ReadonlySet<string>>(new Set(localEchos.map((echo) => echo.clientMessageId)));
-	useLayoutEffect(() => {
-		const ids = new Set(localEchos.map((echo) => echo.clientMessageId));
-		const sent = [...ids].some((id) => !previousEchoIds.current.has(id));
-		previousEchoIds.current = ids;
-		if (!sent) return;
-		// The reader just sent: bring them to their prompt even if they had scrolled away.
-		requestGlideToEnd();
-	}, [localEchos, requestGlideToEnd]);
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
-		if (openingTurnId) hiddenTurns.delete(openingTurnId);
 		return groupByTurn({ ...snapshot, items: timelineItems }).filter(
 			(group) => !group.turnId || !hiddenTurns.has(group.turnId),
 		);
-	}, [openingTurnId, snapshot, timelineItems]);
+	}, [snapshot, timelineItems]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
-	// Read by syncScrollLayout (a stable callback) so the initial snap only latches
-	// once real conversation content exists (history can load after the chat opens).
-	const groupCountRef = useRef(groups.length);
-	groupCountRef.current = groups.length;
 	const navigableGroups = useMemo(() => groups.filter(groupHasHumanPrompt), [groups]);
 	const previews = useMemo(() => navigableGroups.map(groupPreview), [navigableGroups]);
-	const virtualized = groups.length > CHAT_VIRTUALIZE_THRESHOLD;
-	const virtualItemKey = useCallback((index: number) => groups[index]!.key, [groups]);
-	const virtualizer = useVirtualizer({
-		// Scroll anchoring may notify during a layout effect; defer the React
-		// update rather than attempting a synchronous flush inside that effect.
-		useFlushSync: false,
-		// Measure short histories too, so crossing the windowing threshold can
-		// preserve the visible turn by key rather than restarting at the bottom.
-		enabled: groups.length > 0,
-		count: groups.length,
-		getScrollElement: () => scroller.current,
-		getItemKey: virtualItemKey,
-		estimateSize: () => CHAT_ESTIMATED_TURN_HEIGHT,
-		gap: CHAT_TURN_GAP,
-		overscan: 2,
-		scrollMargin: virtualScrollMargin,
-		initialRect: { width: 768, height: CHAT_INITIAL_VIEWPORT_HEIGHT },
-		initialOffset: () => virtualized
-			? Math.max(0, groups.length * (CHAT_ESTIMATED_TURN_HEIGHT + CHAT_TURN_GAP) - CHAT_INITIAL_VIEWPORT_HEIGHT)
-			: 0,
-		anchorTo: virtualized ? "end" : "start",
-		// The virtualizer's distance-from-end excludes the trailing prompt spacer.
-		// Disable end anchoring while unpinned so streamed output cannot mistake the
-		// reader's position for the physical end of the scroll container.
-		scrollEndThreshold: pinned ? 1 : -1,
-		// Appends are followed by syncScrollLayout, which glides and accounts for the
-		// prompt spacer; the virtualizer's own follow would snap past both.
-		followOnAppend: false,
-		// Bootstrap unmeasurable panels until their real geometry is available.
-		observeElementRect: (instance, callback) => observeElementRect(instance, (rect) =>
-			callback(rect.height ? rect : { width: rect.width, height: CHAT_INITIAL_VIEWPORT_HEIGHT })),
-		measureElement: (element, entry, instance) => {
-			const group = groups[Number(element.getAttribute("data-index"))];
-			if (group && !measuredVirtualGroups.current.has(group)) {
-				measuredVirtualGroups.current.add(group);
-				pendingVirtualLayout.current = true;
-			}
-			return measureElement(element, entry, instance) || CHAT_ESTIMATED_TURN_HEIGHT;
-		},
-		scrollToFn: (offset, { adjustments = 0 }, instance) => {
-			if (!instance.scrollElement) return;
-			// An instant write would abort our smooth glide (and land at a stale offset).
-			// Let the glide carry the adjustment: re-aim it at the new end instead. The
-			// next scroll event re-syncs the virtualizer's offset.
-			if (isFlying()) {
-				reaim();
-				return;
-			}
-			instance.scrollElement.scrollTop = offset + adjustments;
-			// Anchoring writes are ours; they must never read as the reader leaving the end.
-			markWritten(instance.scrollElement.scrollTop);
-		},
-		rangeExtractor: (range) => {
-			const indexes = defaultRangeExtractor(range);
-			// Keep an in-progress inline edit mounted while its row leaves view.
-			const editing = messageEdit ? groups.findIndex((group) => group.turnId === messageEdit.turnId) : -1;
-			if (editing >= 0 && !indexes.includes(editing)) indexes.push(editing);
-			if (pinned && !indexes.includes(groups.length - 1)) indexes.push(groups.length - 1);
-			return indexes.sort((a, b) => a - b);
-		},
-	});
-	virtualizer.shouldAdjustScrollPositionOnItemSizeChange = virtualized ? undefined : () => false;
-	const virtualRows = virtualizer.getVirtualItems();
-	const virtualHeight = virtualizer.getTotalSize();
-	const renderedGroups = virtualized
-		? virtualRows.map((row) => ({ group: groups[row.index]!, row, index: row.index }))
-		: groups.map((group, index) => ({ group, row: undefined, index }));
-	useEffect(() => {
-		const node = scroller.current;
-		const content = virtualized ? virtualContent.current
-			: virtualContent.current?.querySelector<HTMLElement>('[data-index="0"]');
-		if (node && content) {
-			setVirtualScrollMargin(content.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop);
-		}
-	}, [virtualized, hasOlder]);
 
-	// Long transcripts use measured/estimated row positions for the full minimap,
-	// including turns that are currently outside the mounted viewport.
+	// Keep the full transcript mounted (selection/find still work), but measure
+	// prompt positions only when content geometry changes, not on every scroll.
 	const anchorGeometry = useRef<{ height: number; width: number; positions: number[] } | null>(null);
 	const contentMutations = useRef<MutationObserver | null>(null);
 
@@ -2905,7 +2844,7 @@ function Timeline({
 		const fraction = maxScroll > 0 ? Math.min(1, Math.max(0, node.scrollTop / maxScroll)) : 0;
 		if (contentMutations.current?.takeRecords().length) anchorGeometry.current = null;
 		let geometry = anchorGeometry.current;
-		if (virtualized || !geometry || geometry.height !== node.scrollHeight || geometry.width !== node.clientWidth) {
+		if (!geometry || geometry.height !== node.scrollHeight || geometry.width !== node.clientWidth) {
 			const viewportRect = node.getBoundingClientRect();
 			const anchors = Array.from(
 				scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-scroll-anchor]") ?? [],
@@ -2913,10 +2852,7 @@ function Timeline({
 			geometry = {
 				height: node.scrollHeight,
 				width: node.clientWidth,
-				positions: virtualized ? groups.flatMap((group, index) => {
-					const row = virtualizer.measurementsCache[index];
-					return groupHasHumanPrompt(group) && row ? [row.start + row.size / 2] : [];
-				}) : anchors.map((anchor) => {
+				positions: anchors.map((anchor) => {
 					const rect = anchor.getBoundingClientRect();
 					return rect.top - viewportRect.top + node.scrollTop + rect.height / 2;
 				}),
@@ -2957,7 +2893,7 @@ function Timeline({
 				? current
 				: next,
 		);
-	}, [virtualized, virtualizer, groups]);
+	}, []);
 
 	/**
 	 * Size the trailing spacer so scrolling to the bottom parks the latest human
@@ -2974,64 +2910,29 @@ function Timeline({
 			"[data-chat-scroll-anchor]",
 		);
 		const anchor = anchors && anchors.length > 0 ? anchors[anchors.length - 1] : null;
-		const lastPromptIndex = groups.findLastIndex(groupHasHumanPrompt);
-		const virtualAnchor = virtualized && lastPromptIndex >= 0 ? virtualizer.measurementsCache[lastPromptIndex] : undefined;
-		const nextHeight = (virtualAnchor || anchor)
+		const nextHeight = anchor
 			? promptSpacerHeight({
 					viewportHeight: node.clientHeight,
 					contentHeightWithoutSpacer: node.scrollHeight - pad.offsetHeight,
 					anchorOffset:
-						virtualAnchor?.start ?? (anchor!.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop),
+						anchor.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop,
 					topInset: promptTopInset(node.clientHeight),
 				})
 			: 0;
 		if (Math.abs(pad.offsetHeight - nextHeight) > 0.5) {
 			pad.style.height = `${nextHeight}px`;
 		}
-	}, [virtualized, virtualizer, groups]);
-
-	// Opening a chat lands at the end instantly. Long histories measure their rows
-	// over the first frames (and may arrive in more than one snapshot), so keep
-	// snapping briefly after the first real layout instead of animating across them.
-	const followOrSnapToEnd = useCallback((node: HTMLElement) => {
-		if (!initialLayoutDone.current || performance.now() - initialLayoutAt.current < INITIAL_SNAP_MS) {
-			node.scrollTop = node.scrollHeight;
-			markWritten(node.scrollTop);
-			return;
-		}
-		followEnd();
-	}, [followEnd, markWritten]);
+	}, []);
 
 	const syncScrollLayout = useCallback(() => {
 		anchorGeometry.current = null;
 		syncPromptSpacer();
 		const node = scroller.current;
 		if (node && pinnedRef.current) {
-			if (glideRequested.current) {
-				glideRequested.current = false;
-				glideToEnd();
-			} else {
-				followOrSnapToEnd(node);
-			}
-		}
-		if (groupCountRef.current > 0 && !initialLayoutDone.current) {
-			initialLayoutDone.current = true;
-			initialLayoutAt.current = performance.now();
+			node.scrollTop = node.scrollHeight;
 		}
 		updateScrollbar();
-	}, [syncPromptSpacer, updateScrollbar, glideToEnd, followOrSnapToEnd]);
-
-	// Streamed text grows the content without a new sequence. While following, let
-	// the reply fill the prompt spacer first (the view holds still), then follow the
-	// end smoothly once the reply is taller than the viewport.
-	const syncStreamedGrowth = useCallback(() => {
-		if (!pinnedRef.current || !initialLayoutDone.current) return;
-		anchorGeometry.current = null;
-		syncPromptSpacer();
-		const node = scroller.current;
-		if (node) followOrSnapToEnd(node);
-		updateScrollbar();
-	}, [syncPromptSpacer, followOrSnapToEnd, updateScrollbar]);
+	}, [syncPromptSpacer, updateScrollbar]);
 
 	// A disclosure animation changes the content box but is not new conversation
 	// content. Re-measure it without re-pinning the viewport to the bottom; doing
@@ -3047,15 +2948,6 @@ function Timeline({
 	useEffect(() => {
 		syncScrollLayout();
 	}, [pinned, snapshot.latestSequence, groups.length, messageEdit?.turnId, syncScrollLayout]);
-	useEffect(() => {
-		if (!virtualized) return;
-		// Wait for measured sizes to reach the DOM before following new content.
-		// Resizing an already measured group only refreshes scroll metrics.
-		if (pendingVirtualLayout.current && virtualHeight === virtualizer.getTotalSize()) {
-			pendingVirtualLayout.current = false;
-			syncScrollLayout();
-		} else syncScrollMetrics();
-	}, [virtualized, virtualHeight, virtualizer, syncScrollLayout, syncScrollMetrics]);
 
 	useEffect(() => {
 		const content = scrollContent.current;
@@ -3072,71 +2964,24 @@ function Timeline({
 		};
 	}, []);
 
-	// Read through a ref so a streamed chunk (new `groups` identity) does not tear
-	// down and re-arm the observer, which would re-run a full layout per chunk.
-	const onContentResize = useRef(syncScrollMetrics);
-	onContentResize.current = () => {
-		if (pinnedRef.current) syncStreamedGrowth();
-		else syncScrollMetrics();
-	};
 	useEffect(() => {
 		syncScrollLayout();
 		if (typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(() => onContentResize.current());
+		const observer = new ResizeObserver(syncScrollMetrics);
 		if (scroller.current) observer.observe(scroller.current);
 		if (scrollContent.current) observer.observe(scrollContent.current);
 		return () => observer.disconnect();
-	}, [groups.length]);
+	}, [groups.length, syncScrollMetrics]);
 
 	function onScroll() {
 		const node = scroller.current;
 		if (!node) return;
-		const top = node.scrollTop;
-		const movedUp = top < lastScrollTop.current - 1;
-		lastScrollTop.current = top;
-		const distance = node.scrollHeight - top - node.clientHeight;
-		// Classified by where the scroll landed, not when: our own glide, follow and
-		// anchoring writes are recognized by position and never unpin. A reader scroll
-		// releases the follow once it is away from the end, or whenever it moves up
-		// (so a small nudge up is not pulled straight back). A scroll that only clamps
-		// to the end after content shrank is not the reader leaving.
-		if (isOwnScroll(top)) {
-			// Ours: no change.
-		} else if (distance >= 64 || (movedUp && distance > 2)) {
-			if (pinnedRef.current) releaseFollow();
-		} else if (!pinnedRef.current && !movedUp) {
-			setPinnedNow(true);
-		}
+		const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
+		setPinned(distance < 64);
 		updateScrollbar();
 	}
 
-	function onViewportWheel(event: ReactWheelEvent<HTMLDivElement>) {
-		// Wheel intent arrives before the scroll it causes. Hold the follow so a
-		// concurrent stream commit cannot pull the reader back, and let the scroll
-		// itself decide: a wheel consumed by a nested scroller (a code block) never
-		// moves the log, so it must not unpin it.
-		if (event.deltaY < 0) holdScrollFollow(READER_INTENT_HOLD_MS);
-	}
-
-	function onViewportKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-		const target = event.target as HTMLElement;
-		if (event.defaultPrevented || target.closest("input, textarea, select, [contenteditable='true'], [contenteditable=''], [role='menu'], [role='listbox'], [role='textbox']")) return;
-		if (event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" || (event.key === " " && event.shiftKey)) {
-			holdScrollFollow(READER_INTENT_HOLD_MS);
-		}
-	}
-
-	function onViewportPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-		// A disclosure the reader is opening: following the end would pull it out from
-		// under them. Menu triggers (aria-haspopup) open a popup, not content, so they
-		// keep the follow; so do clicks on empty margins.
-		if ((event.target as HTMLElement).closest("[aria-expanded]:not([aria-haspopup])")) {
-			releaseFollow();
-		}
-	}
-
 	function setScrollFromTrack(clientY: number) {
-		cancelScrollFollow();
 		const node = scroller.current;
 		const track = scrollTrack.current;
 		if (!node || !track) return;
@@ -3148,19 +2993,13 @@ function Timeline({
 	}
 
 	function onScrollbarPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-		cancelScrollFollow();
 		if (!minimapEnabled || inspectorOpenRef.current) return;
 		const track = scrollTrack.current;
 		const node = scroller.current;
 		if (!track || !node) return;
 		const marker = (event.target as HTMLElement).closest<HTMLElement>("[data-chat-scroll-marker]");
 		if (marker?.dataset.scrollTarget) {
-			const group = navigableGroups[Number(marker.dataset.markerIndex)];
-			if (virtualized && group) {
-				virtualizer.scrollToIndex(groups.findIndex((candidate) => candidate.key === group.key), { align: "center" });
-			} else {
-				node.scrollTop = Number(marker.dataset.scrollTarget);
-			}
+			node.scrollTop = Number(marker.dataset.scrollTarget);
 			onScroll();
 			return;
 		}
@@ -3209,7 +3048,6 @@ function Timeline({
 	}
 
 	function onScrollbarWheel(event: ReactWheelEvent<HTMLDivElement>) {
-		cancelScrollFollow();
 		if (!minimapEnabled || inspectorOpenRef.current) return;
 		const node = scroller.current;
 		if (!node) return;
@@ -3219,7 +3057,6 @@ function Timeline({
 	}
 
 	function onScrollbarKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-		cancelScrollFollow();
 		if (!minimapEnabled || inspectorOpenRef.current) return;
 		const node = scroller.current;
 		if (!node) return;
@@ -3252,19 +3089,27 @@ function Timeline({
 			// cannot invalidate the complete mounted conversation history or shell.
 			style={{ contain: "layout paint" }}
 		>
+			{selectionAction ? (
+				<SelectionActionToolbar anchorX={selectionAction.anchorX} top={selectionAction.top}>
+					<button type="button" onClick={() => void addSelectionToChat()} className="flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 hover:bg-interactive-hover">
+						<MessageSquarePlus aria-hidden="true" className="size-3.5 shrink-0" /> Add to chat
+					</button>
+					{onAddSelectionToSideChat ? (
+						<button type="button" onClick={() => void addSelectionToSideChat()} className="shrink-0 whitespace-nowrap border-l border-border px-2.5 py-1.5 hover:bg-interactive-hover">
+							Add to side chat
+						</button>
+					) : null}
+				</SelectionActionToolbar>
+			) : null}
 			<div
 				ref={scroller}
 				onScroll={onScroll}
-				onScrollEnd={endFlight}
-				onWheel={onViewportWheel}
-				onTouchMove={() => holdScrollFollow(READER_INTENT_HOLD_MS)}
-				onKeyDown={onViewportKeyDown}
-				onPointerDown={onViewportPointerDown}
+				onMouseUp={captureTranscriptSelection}
+				onKeyUp={captureTranscriptSelection}
 				className="chat-scroll-viewport cursor-chat-timeline h-full min-w-0 select-text overflow-x-hidden overflow-y-auto px-4 pt-5 pb-0"
 				role="log"
 				aria-live="polite"
 				aria-label="Conversation"
-				style={virtualized ? { overflowAnchor: "none" } : undefined}
 			>
 				<div ref={scrollContent} className="mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5">
 					{hasOlder ? (
@@ -3284,9 +3129,7 @@ function Timeline({
 							</Button>
 						</div>
 					) : null}
-					<div ref={virtualContent} className={virtualized ? "relative w-full" : "contents"}
-						style={virtualized ? { height: virtualHeight } : undefined}>
-					{renderedGroups.map(({ group, row, index }) => {
+					{groups.map((group) => {
 						const retrySelected = !retryControl?.turnId || retryControl.turnId === group.turnId;
 						const retry =
 							group.turnId &&
@@ -3310,19 +3153,10 @@ function Timeline({
 						return (
 							<div
 								key={group.key}
-								ref={virtualizer.measureElement}
-								data-index={index}
-								style={row ? {
-									position: "absolute", top: 0, left: 0, width: "100%",
-									transform: `translateY(${row.start - virtualScrollMargin}px)`,
-								} : undefined}
 								data-chat-scroll-anchor={groupHasHumanPrompt(group) ? "" : undefined}
 							>
 								<TurnGroup
 									group={group}
-									startup={showStartup && group.turnId === openingTurnId ? startup : undefined}
-									activityDisclosureOverrides={activityDisclosureOverrides}
-									onActivityDisclosureChange={onActivityDisclosureChange}
 									sessionId={snapshot.sessionId}
 									apiBaseUrl={apiBaseUrl}
 									onDecide={decide}
@@ -3332,13 +3166,13 @@ function Timeline({
 									retry={retry}
 									onEditHumanMessage={canEditHumanMessage ? editHumanMessage : undefined}
 									messageEdit={messageEdit}
-									onStartMessageEdit={stableStartMessageEdit}
+									onStartMessageEdit={startMessageEdit}
 									onUpdateMessageEdit={updateMessageEdit}
 									onCancelMessageEdit={cancelMessageEdit}
 									onAbandonEditRecovery={
 										canAbandonInlineEditRecovery ? abandonUncertainInlineEdit : undefined
 									}
-									onSubmitMessageEdit={stableSubmitMessageEdit}
+									onSubmitMessageEdit={submitMessageEdit}
 									editPending={inlineEditPending}
 									editSendBlocked={inlineEditSendBlocked}
 									editRecoveryLabel={translateDraft(inlineEditRecoveryLabel)}
@@ -3357,22 +3191,14 @@ function Timeline({
 									// never saw holds no history to discard, and the daemon refuses it
 									// rather than hiding rows the agent still remembers.
 									canRollback={Boolean(onRollback && group.turnId && group.rollbackable)}
-									rollbackDisabled={rollbackDisabled}
 									busy={busy}
 									queued={Boolean(group.turnId && queued.has(group.turnId))}
 								/>
 							</div>
 						);
 					})}
-					</div>
-					{/* Normally drawn inside the opening turn's group; this covers a start
-					    whose brief is not in the timeline. */}
-					{startup && showStartup && !groups.some((group) => group.turnId === openingTurnId) ? (
-						<LiveResponseStatus startupLabel={t(startup.failed ? "chat.startup.failed" : "chat.startup.running")} failed={startup.failed}>
-							<SessionStartup {...startup} />
-						</LiveResponseStatus>
-					) : turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
-						<LiveResponseStatus startedAt={turn.startedAt ?? turn.requestedAt} />
+					{turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
+						<TurnLiveStatus startedAt={turn.startedAt ?? turn.requestedAt} />
 					) : null}
 					{messageEdit && !editedMessageVisible ? (
 						<div className="flex justify-end" data-chat-scroll-anchor="">
@@ -3458,7 +3284,6 @@ function Timeline({
 										key={index}
 										data-chat-scroll-marker=""
 										data-scroll-target={marker.scrollTop}
-										data-marker-index={index}
 										onPointerEnter={() => setHoveredMarker(index)}
 										className="chat-scroll-marker-hit"
 										style={{ top: marker.top }}
@@ -3509,7 +3334,7 @@ function Timeline({
 					variant="outline"
 					aria-label="Jump to latest"
 					title="Jump to latest"
-					onClick={requestGlideToEnd}
+					onClick={() => setPinned(true)}
 					className="absolute bottom-3 left-1/2 size-12 -translate-x-1/2 rounded-full border-border-strong bg-raised p-0 text-foreground shadow-sm hover:bg-surface dark:bg-raised dark:hover:bg-surface"
 				>
 					<ArrowDown aria-hidden="true" className="size-5" />
@@ -3526,8 +3351,6 @@ function Timeline({
  */
 const TurnGroup = memo(function TurnGroup({
 	group,
-	activityDisclosureOverrides,
-	onActivityDisclosureChange,
 	sessionId,
 	apiBaseUrl,
 	onDecide,
@@ -3552,22 +3375,18 @@ const TurnGroup = memo(function TurnGroup({
 	activateBranchPending,
 	activateBranchError,
 	canRollback,
-	rollbackDisabled,
 	retry,
 	busy,
 	queued,
 	newHumanMessageIds,
-	startup,
 }: {
 	group: TimelineGroup;
-	activityDisclosureOverrides: Readonly<Record<string, boolean>>;
-	onActivityDisclosureChange: (key: string, open: boolean) => void;
 	sessionId: string;
 	apiBaseUrl: string | null;
 	onDecide: (requestId: string, decisionId: string) => void;
 	onRollback: (turnId: string) => void;
 	onOpenFiles?: () => void;
-	onOpenFile?: (path: string, line?: number) => void;
+	onOpenFile?: (path: string) => void;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	messageEdit?: MessageEditDraft;
 	onStartMessageEdit: (message: ConversationMessage) => void;
@@ -3587,18 +3406,13 @@ const TurnGroup = memo(function TurnGroup({
 	activateBranchError?: string;
 	/** The daemon would accept a rollback of this turn, so offer the affordance. */
 	canRollback: boolean;
-	/** Keep rollback mounted but inert while another turn is active. */
-	rollbackDisabled: boolean;
 	/** Present only when this failed turn is eligible for a new attempt. */
 	retry?: TurnOutcomeRetryControl;
 	busy?: boolean;
 	/** This turn was recorded but not sent, so its message can say so. */
 	queued: boolean;
 	newHumanMessageIds: ReadonlySet<string>;
-	/** The opening turn of a starting session: its setup checklist. */
-	startup?: ComponentProps<typeof SessionStartup>;
 }) {
-	const { t } = useTranslation();
 	const hasTerminalFailure =
 		group.outcome?.state === "failed" && Boolean(group.outcome.error);
 	const runs = useMemo(
@@ -3617,164 +3431,60 @@ const TurnGroup = memo(function TurnGroup({
 			),
 		[group.items, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure],
 	);
-	const copyableMessageId = group.live || group.outcome
+	const copyableMessageId = group.outcome
 		? [...group.items]
 				.reverse()
-				.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id
+				.find((item) => item.kind === "message" && item.role === "assistant")?.id
 		: undefined;
-	let finalAssistantRunIndex = -1;
-	if (group.outcome) {
-		for (let index = runs.length - 1; index >= 0; index -= 1) {
-			const item = runs[index]?.items[0];
-			if (item?.kind === "message" && item.role === "assistant" && item.text.trim() !== "") {
-				finalAssistantRunIndex = index;
-				break;
-			}
-		}
-	}
-	// Only the prompt that opened the turn sits above the Working row. A steer or a
-	// later message stays where it happened among the work, so the reader sees
-	// what the agent had done when it arrived.
-	const firstWorkIndex = runs.findIndex((run) => !isHumanRun(run.items[0]));
-	const leadingHumanCount = firstWorkIndex < 0 ? runs.length : firstWorkIndex;
-	const humanRuns = runs.slice(0, leadingHumanCount);
-	const workedRuns = runs.filter(
-		(_run, index) => index >= leadingHumanCount && index !== finalAssistantRunIndex,
-	);
-	const finalRun = finalAssistantRunIndex >= 0 ? runs[finalAssistantRunIndex] : undefined;
-	// Errors and system warnings stay readable after the turn settles instead of
-	// folding away with the routine work.
-	const noticeRuns = group.outcome ? workedRuns.filter(isNoticeRun) : [];
-	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
-	// Keep the live row mounted while its spinner animates out, then hand over to the settled row.
-	const [showSettledStatus, setShowSettledStatus] = useState(!group.live);
-	useEffect(() => {
-		if (group.live) {
-			setShowSettledStatus(false);
-			return;
-		}
-		const timer = window.setTimeout(() => setShowSettledStatus(true), 440);
-		return () => window.clearTimeout(timer);
-	}, [group.live]);
-	const renderRun = (run: TimelineRun) =>
-		run.kind === "activities" ? (
-			<ActivityRun
-				key={run.key}
-				disclosureKey={`${group.key}:${run.key}`}
-				disclosureOverrides={activityDisclosureOverrides}
-				onDisclosureChange={onActivityDisclosureChange}
-				activities={run.items.filter(
-					(item): item is ConversationActivity => item.kind === "activity",
-				)}
-			/>
-		) : (
-			<TimelineItem
-				key={run.key}
-				item={run.items[0]!}
-				sessionId={sessionId}
-				apiBaseUrl={apiBaseUrl}
-				onDecide={onDecide}
-				onEditHumanMessage={onEditHumanMessage}
-				messageEdit={messageEdit}
-				onStartMessageEdit={onStartMessageEdit}
-				onUpdateMessageEdit={onUpdateMessageEdit}
-				onCancelMessageEdit={onCancelMessageEdit}
-				onAbandonEditRecovery={onAbandonEditRecovery}
-				onSubmitMessageEdit={onSubmitMessageEdit}
-				editPending={editPending}
-				editSendBlocked={editSendBlocked}
-				editRecoveryLabel={editRecoveryLabel}
-				editBusy={editBusy}
-				editError={editError}
-				branchPoints={branchPoints}
-				editableTurns={editableTurns}
-				onActivateBranch={onActivateBranch}
-				activateBranchPending={activateBranchPending}
-				activateBranchError={activateBranchError}
-				busy={busy}
-				queued={queued}
-				newHumanMessageIds={newHumanMessageIds}
-				showCopy={run.items[0]?.id === copyableMessageId}
-				live={group.live}
-				onRollback={
-					canRollback && run.items[0]?.id === copyableMessageId
-						? () => onRollback(group.turnId as string)
-						: undefined
-				}
-				rollbackDisabled={rollbackDisabled}
-			/>
-		);
-	// One flat keyed list rather than a slot per section, so a run keeps its element
-	// when the turn settles: the final answer leaving the worked runs, or a notice
-	// moving out from among them, does not remount it or drop the reader's selection.
-	const body: ReactNode[] = humanRuns.map(renderRun);
-	// A live provider failure replaces the Working row with its reconnect card, and a
-	// turn that stops without an outcome (cancelled) has no settled row to hand over to.
-	// The setup checklist sits exactly where the Working row will, so the handoff
-	// does not move anything.
-	if (startup || (!group.liveProviderFailure && (group.live || (group.outcome && !showSettledStatus)))) {
-		body.push(
-			<LiveResponseStatus
-				key="turn-working"
-				startedAt={group.liveStartedAt}
-				settling={!startup && !group.live}
-				startupLabel={startup ? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : undefined}
-				failed={startup?.failed}
-			>
-				{startup ? <SessionStartup {...startup} /> : null}
-			</LiveResponseStatus>,
-		);
-	}
-	const outcome = showSettledStatus ? group.outcome : undefined;
-	if (!outcome) {
-		body.push(...workedRuns.map(renderRun));
-	} else if (foldedRuns.length > 0) {
-		const disclosureKey = `${group.key}:worked`;
-		body.push(
-			<Accordion
-				key="turn-worked"
-				type="single"
-				collapsible
-				className="-mx-1 border-b border-border"
-				// Held above the virtualizer, so the accordion stays open when its row scrolls away and back.
-				value={activityDisclosureOverrides[disclosureKey] ? "worked" : ""}
-				onValueChange={(value) => onActivityDisclosureChange(disclosureKey, value === "worked")}
-			>
-				<AccordionItem value="worked" className="border-0">
-					<AccordionTrigger
-						className="chat-worked-trigger h-7 select-none gap-1 px-1 py-0 text-sm font-normal text-muted-foreground transition-colors hover:text-foreground active:transform-none"
-						headerClassName="hover:bg-transparent data-[state=open]:bg-transparent"
-						trailing={null}
-					>
-						<span className="inline-flex w-fit items-center gap-1">
-							Worked for
-							{outcome.durationMs !== undefined ? <TurnDuration durationMs={outcome.durationMs} inline /> : null}
-							<ChevronRight aria-hidden="true" className="size-3.5 shrink-0 transition-transform duration-200 group-data-[state=open]/row:rotate-90" />
-						</span>
-					</AccordionTrigger>
-					{/* Padding lives on the inner div: the content element's height is what animates,
-					    so any padding on it itself would stay put while it opens and closes. */}
-					<AccordionContent className="chat-worked-accordion-content">
-						<div className="space-y-2 px-1 pb-2 pt-1">{foldedRuns.map(renderRun)}</div>
-					</AccordionContent>
-				</AccordionItem>
-			</Accordion>,
-		);
-	} else {
-		body.push(
-			<div key="turn-worked-plain" className="-mx-1 flex h-7 select-none items-center border-b border-border px-1 py-0 text-sm font-normal text-muted-foreground">
-				<span className="inline-flex w-fit items-center gap-1">
-					Worked for
-					{outcome.durationMs !== undefined ? <TurnDuration durationMs={outcome.durationMs} inline /> : null}
-				</span>
-			</div>,
-		);
-	}
-	if (outcome) body.push(...noticeRuns.map(renderRun));
-	if (finalRun) body.push(renderRun(finalRun));
 	return (
 		<div className="flex min-w-0 flex-col gap-2.5">
-			{body}
+			{runs.map((run) =>
+				run.kind === "activities" ? (
+					<ActivityRun
+						key={run.key}
+						activities={run.items.filter(
+							(item): item is ConversationActivity => item.kind === "activity",
+						)}
+					/>
+				) : (
+					<TimelineItem
+						key={run.key}
+						item={run.items[0]!}
+						sessionId={sessionId}
+						apiBaseUrl={apiBaseUrl}
+						onDecide={onDecide}
+						onEditHumanMessage={onEditHumanMessage}
+						messageEdit={messageEdit}
+						onStartMessageEdit={onStartMessageEdit}
+						onUpdateMessageEdit={onUpdateMessageEdit}
+						onCancelMessageEdit={onCancelMessageEdit}
+						onAbandonEditRecovery={onAbandonEditRecovery}
+						onSubmitMessageEdit={onSubmitMessageEdit}
+						editPending={editPending}
+						editSendBlocked={editSendBlocked}
+						editRecoveryLabel={editRecoveryLabel}
+						editBusy={editBusy}
+						editError={editError}
+						branchPoints={branchPoints}
+						editableTurns={editableTurns}
+						onActivateBranch={onActivateBranch}
+						activateBranchPending={activateBranchPending}
+						activateBranchError={activateBranchError}
+						busy={busy}
+						queued={queued}
+						newHumanMessageIds={newHumanMessageIds}
+						showCopy={run.items[0]?.id === copyableMessageId}
+						onRollback={
+							canRollback && run.items[0]?.id === copyableMessageId
+								? () => onRollback(group.turnId as string)
+								: undefined
+						}
+						durationMs={
+							run.items[0]?.id === copyableMessageId ? group.outcome?.durationMs : undefined
+						}
+					/>
+				),
+			)}
 			{/* Both of these are current state of the turn rather than steps in it, which
 			    is why they sit at its end: a checklist that ticks itself off and a file
 			    list that grows both change while the reader watches, and at the end of a
@@ -3790,23 +3500,32 @@ const TurnGroup = memo(function TurnGroup({
 					onOpenFile={onOpenFile}
 				/>
 			) : null}
-			{group.live ? <TurnLiveStatus blocked={group.blocked} providerFailure={group.liveProviderFailure} /> : null}
+			{group.live ? (
+				<TurnLiveStatus
+					startedAt={group.liveStartedAt}
+					blocked={group.blocked}
+					providerFailure={group.liveProviderFailure}
+				/>
+			) : null}
 			{/* No assistant prose to hang the undo / duration on — still offer them
 			    before the outcome divider so a tool-only turn is not stuck without a
 			    way back or a record of how long it took. */}
-			{!copyableMessageId && !group.live && canRollback ? (
-				<div className="flex h-7 items-center gap-0.5">
+			{!copyableMessageId &&
+			(canRollback || (group.outcome?.durationMs !== undefined && group.outcome.durationMs > 0)) ? (
+				<div className="mt-2 flex h-[18px] items-center gap-0.5">
 					{canRollback ? (
 						<button
 							type="button"
 							onClick={() => onRollback(group.turnId as string)}
-							disabled={rollbackDisabled}
 							aria-label="Roll back to here"
 							title="Roll back to here"
-							className="flex items-center rounded px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+							className="flex items-center rounded px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
 						>
 							<Undo2 aria-hidden="true" className="size-3" />
 						</button>
+					) : null}
+					{group.outcome?.durationMs !== undefined && group.outcome.durationMs > 0 ? (
+						<TurnDuration durationMs={group.outcome.durationMs} />
 					) : null}
 				</div>
 			) : null}
@@ -3822,12 +3541,22 @@ const TurnGroup = memo(function TurnGroup({
 });
 
 function TurnLiveStatus({
+	startedAt,
 	blocked,
 	providerFailure,
 }: {
+	startedAt?: string;
 	blocked?: boolean;
 	providerFailure?: ConversationActivity;
 }) {
+	const [elapsed, setElapsed] = useState(() => elapsedSince(startedAt));
+
+	useEffect(() => {
+		if (blocked) return;
+		const timer = setInterval(() => setElapsed(elapsedSince(startedAt)), 1000);
+		return () => clearInterval(timer);
+	}, [blocked, startedAt]);
+
 	if (blocked) {
 		return (
 			<span role="alert" className="sr-only">
@@ -3861,7 +3590,28 @@ function TurnLiveStatus({
 		);
 	}
 
-	return null;
+	return (
+		<div className="flex min-h-6 items-center gap-2 px-1 py-0.5" data-testid="live-turn-status">
+			<Loader2
+				aria-hidden="true"
+				className="size-3 shrink-0 animate-spin text-status-working opacity-100"
+			/>
+			<span role="status" aria-live="polite" className="text-xs font-medium text-muted-foreground">
+				Working for {elapsed}
+			</span>
+		</div>
+	);
+}
+
+function elapsedSince(iso?: string): string {
+	if (!iso) return "0s";
+	const start = new Date(iso).getTime();
+	if (Number.isNaN(start)) return "0s";
+	const seconds = Math.max(0, Math.round((Date.now() - start) / 1000));
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m`;
+	return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 function TimelineItem({
@@ -3890,9 +3640,8 @@ function TimelineItem({
 	queued,
 	newHumanMessageIds,
 	showCopy,
-	live,
 	onRollback,
-	rollbackDisabled,
+	durationMs,
 }: {
 	item: ConversationItem;
 	sessionId: string;
@@ -3924,11 +3673,10 @@ function TimelineItem({
 	newHumanMessageIds: ReadonlySet<string>;
 	/** This is the final assistant response of a turn that has finished. */
 	showCopy?: boolean;
-	live?: boolean;
 	/** Undo this finished turn from the answer that owns its copy action. */
 	onRollback?: () => void;
-	/** Keep the action row mounted while another turn is running. */
-	rollbackDisabled?: boolean;
+	/** Finished-turn duration; shown next to rollback on the final answer. */
+	durationMs?: number;
 	/** This message is the live edge of its turn, rather than an earlier fragment
 	 * followed by tool activity. */
 }) {
@@ -3938,9 +3686,8 @@ function TimelineItem({
 				<AssistantMessage
 					message={item}
 					showCopy={showCopy}
-					live={live}
 					onRollback={onRollback}
-					rollbackDisabled={rollbackDisabled}
+					durationMs={durationMs}
 				/>
 			);
 		}
@@ -4125,16 +3872,6 @@ function groupHasHumanPrompt(group: TimelineGroup): boolean {
 	);
 }
 
-function settledTurnDuration(turn: ConversationTurn): number | undefined {
-	if (!turn.completedAt) return undefined;
-	const startedAt = Date.parse(turn.startedAt ?? turn.requestedAt);
-	const completedAt = Date.parse(turn.completedAt);
-	if (!Number.isFinite(startedAt) || !Number.isFinite(completedAt)) return undefined;
-	// Match the live label's start fallback and whole-second minimum so completion
-	// cannot make a visible timer disappear or jump backward.
-	return Math.max(1_000, completedAt - startedAt);
-}
-
 // Retry correlation is daemon-owned rather than inferred from repeated text.
 // Match it against turn ids in this snapshot before consuming an affordance.
 function retrySourceTurnIds(snapshot: ConversationSnapshot): Set<string> {
@@ -4272,7 +4009,10 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		group.rollbackable = Boolean(turn.providerTurnId);
 		group.outcome = {
 			state: turn.state,
-			durationMs: settledTurnDuration(turn),
+			durationMs:
+				turn.completedAt && turn.startedAt
+					? new Date(turn.completedAt).getTime() - new Date(turn.startedAt).getTime()
+					: undefined,
 			error: turn.errorMessage || (turn.state === "failed"
 				? [...group.items].reverse().find(
 					(item): item is ConversationActivity => item.kind === "activity" && item.activityKind === "error",
@@ -4282,24 +4022,4 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 	}
 
 	return groups;
-}
-
-function isHumanRun(item: ConversationItem | undefined): boolean {
-	return (item?.kind === "message" && item.role === "user") || (item?.kind === "activity" && isSteer(item));
-}
-
-/** An error or stamped system warning, which a settled turn keeps outside its folded work. */
-function isNoticeRun(run: TimelineRun): boolean {
-	const item = run.items[0];
-	if (run.kind !== "single" || item?.kind !== "activity") return false;
-	if (item.activityKind === "error") return true;
-	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
-}
-
-/** Mirrors the items `TimelineItem` draws nothing for, so they cannot fill an empty accordion. */
-function rendersNothing(run: TimelineRun): boolean {
-	const item = run.items[0];
-	if (run.kind !== "single" || !item) return false;
-	if (item.kind === "message") return item.role === "assistant" && item.text.trim() === "";
-	return item.activityKind === "user_input" || (item.activityKind === "approval" && item.status === "pending");
 }

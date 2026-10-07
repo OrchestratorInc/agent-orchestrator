@@ -615,6 +615,7 @@ type PermissionMode = domain.PermissionMode
 // These re-export the domain constants so existing adapter code is unchanged.
 const (
 	PermissionModeDefault           = domain.PermissionModeDefault
+	PermissionModeReadOnly          = domain.PermissionModeReadOnly
 	PermissionModeAcceptEdits       = domain.PermissionModeAcceptEdits
 	PermissionModeAuto              = domain.PermissionModeAuto
 	PermissionModeBypassPermissions = domain.PermissionModeBypassPermissions
@@ -627,6 +628,7 @@ const (
 func NormalizePermissionMode(mode PermissionMode) PermissionMode {
 	switch mode {
 	case PermissionModeDefault,
+		PermissionModeReadOnly,
 		PermissionModeAcceptEdits,
 		PermissionModeAuto,
 		PermissionModeBypassPermissions:

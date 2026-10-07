@@ -152,6 +152,12 @@ export interface ConversationContentSummary {
 	mimeType?: string;
 	uri?: string;
 	name?: string;
+	excerpt?: {
+		selection: string;
+		sourceRole: string;
+		sourceText: string;
+		messages: { role: string; text: string }[];
+	};
 }
 
 export interface QueuedMessageEditOptions {
@@ -193,6 +199,15 @@ export interface ConversationBranchPoint {
 	total: number;
 	previousBranchId?: string;
 	nextBranchId?: string;
+}
+
+export interface ConversationSideChat {
+	id: string;
+	parentBranchId: string;
+	label: string;
+	forkAfterSequence: number;
+	active: boolean;
+	createdAt: string;
 }
 
 /** One choice the provider says is valid for a pending request. */
@@ -752,6 +767,7 @@ export interface ConversationSnapshot {
 	activeBranchId?: string;
 	branchedFromEarlierMessage?: boolean;
 	branchPoints?: ConversationBranchPoint[];
+	sideChats?: ConversationSideChat[];
 	/** How the active historical branch acquired its provider context. */
 	branchMaterialization?: ConversationBranchMaterialization;
 	/** What the next turn will be sent with. Daemon-owned, so it survives a

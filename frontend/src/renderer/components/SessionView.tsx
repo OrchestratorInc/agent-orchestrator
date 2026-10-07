@@ -1699,6 +1699,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined
 									}
 									onSelectChat={selectSessionTerminal}
+									onSideOpened={() => setInspectorOpenForSession(sessionId, false)}
+									inspectorOpen={isInspectorOpen}
 									shellTerminals={shellTerminals}
 									shellTarget={
 										routedTerminalTarget.kind === "shell" ? routedTerminalTarget : undefined

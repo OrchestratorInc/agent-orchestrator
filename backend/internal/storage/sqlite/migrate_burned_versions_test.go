@@ -188,10 +188,9 @@ var shippedMigrations = map[int64]string{
 	185: "0185_worktree_startup_cues.sql",
 	186: "0186_remove_cue_description.sql",
 	187: "0187_remove_cue_startup_options.sql",
-	// 188 removes the obsolete cue worktree-startup schema; project setup now
-	// owns automatic workspace initialization.
 	188: "0188_remove_worktree_startup_cues.sql",
 	189: "0189_session_interaction.sql",
+	190: "0190_conversation_side_chats.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

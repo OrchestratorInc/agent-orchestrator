@@ -8,15 +8,13 @@ import { AppLink } from "../AppLink";
  * re-sorting. Those belong to the daemon.
  */
 
-import { stagedAttachmentParts, attachmentName, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
-import { ChatImage } from "./ChatImage";
+import { stagedAttachmentParts, attachmentName, attachmentURL, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
 import {
 	ACCENT_ACTION_SEGMENT,
 	ACCENT_ACTION_SHELL,
 	QUIET_ACTION_PILL,
 } from "./action-pill";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useTranslation } from "react-i18next";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
@@ -43,7 +41,6 @@ import {
 	SquareTerminal,
 	Undo2,
 	User,
-	X,
 } from "lucide-react";
 
 /** Fixed icon column, matching the prototype's row anatomy. */
@@ -64,7 +61,7 @@ import { cn } from "../../lib/utils";
 import { caretNotation, stripAnsi } from "../../lib/ansi";
 import { getApiBaseUrl } from "../../lib/api-client";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
-import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
+import { ActivityTitle, ChatMarkdown, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -118,13 +115,6 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
 const ORIGIN_REPORT_COLLAPSE_AT = 600;
 const ORIGIN_REPORT_PREVIEW_LENGTH = 240;
 
-function originReportPreview(text: string): string {
-	const cut = text.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH);
-	const lastCompleteLine = cut.lastIndexOf("\n");
-	const preview = lastCompleteLine > 0 ? cut.slice(0, lastCompleteLine) : cut;
-	return `${preview.trimEnd()}…`;
-}
-
 /** Smooth baseline, with adaptive catch-up when provider chunks outrun playback. */
 const STREAM_BASE_CHARACTERS_PER_SECOND = 58;
 const STREAM_TARGET_BACKLOG_CHARACTERS = 72;
@@ -157,10 +147,7 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 	const [visibleText, setVisibleText] = useState(() => message.text);
 	const visibleRef = useRef(visibleText);
 	const targetRef = useRef(message.text);
-	const targetGraphemes = useMemo(
-		() => message.streaming ? streamGraphemes(message.text) : [],
-		[message.text, message.streaming],
-	);
+	const targetGraphemes = useMemo(() => streamGraphemes(message.text), [message.text]);
 	const visibleGraphemeCountRef = useRef(targetGraphemes.length);
 	const targetGraphemesRef = useRef(targetGraphemes);
 	const messageIdRef = useRef(message.id);
@@ -278,9 +265,9 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 		// different target grapheme. Reconcile that trailing fragment before using
 		// the old grapheme count, otherwise the drain can skip the merged suffix.
 		const reconciled = reconciledStreamPrefix(visibleRef.current, targetGraphemesRef.current);
-		visibleGraphemeCountRef.current = reconciled.count;
 		if (reconciled.text !== visibleRef.current) {
 			visibleRef.current = reconciled.text;
+			visibleGraphemeCountRef.current = reconciled.count;
 			setVisibleText(reconciled.text);
 		}
 		if (visibleGraphemeCountRef.current < targetGraphemesRef.current.length) scheduleDrain();
@@ -409,41 +396,6 @@ function formatTokens(tokens: number): string {
 	return `${(tokens / 1000).toFixed(1)}k`;
 }
 
-/**
- * Prose whose inline staged image paths (written by the composer's image chips)
- * render as chips that open the image. "Image N" counts images in attachment
- * order, the same label the attachment row and the composer use.
- */
-function ProseWithInlineImages({
-	text,
-	attachments,
-	sessionId,
-	apiBaseUrl,
-	renderText,
-}: {
-	text: string;
-	attachments: string[];
-	sessionId: string;
-	apiBaseUrl: string | null;
-	renderText: (text: string) => ReactNode;
-}) {
-	const { t } = useTranslation();
-	const images = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
-	if (apiBaseUrl === null || images.length === 0) return renderText(text);
-	return splitInlineImagePaths(text, (path) => images.includes(path)).map((segment, index) =>
-		segment.path === undefined ? (
-			<Fragment key={index}>{renderText(segment.text)}</Fragment>
-		) : (
-			<ChatImage
-				key={index}
-				inline
-				src={attachmentURL(apiBaseUrl, sessionId, segment.path)}
-				alt={t("chat.image.numbered", { index: images.indexOf(segment.path) + 1 })}
-			/>
-		),
-	);
-}
-
 function StagedAttachmentItems({
 	paths,
 	sessionId,
@@ -457,18 +409,21 @@ function StagedAttachmentItems({
 	ariaLabel: string;
 	className?: string;
 }) {
-	const { t } = useTranslation();
 	if (paths.length === 0) return null;
-	const images = paths.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
 	return (
 		<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
 			{paths.map((path) => {
 				const name = attachmentName(path);
 				return IMAGE_ATTACHMENT_PATH.test(path) && apiBaseUrl !== null ? (
-					<li key={path} className="max-w-full">
-						<ChatImage
+					<li
+						key={path}
+						className="max-w-full overflow-hidden rounded-md border border-border bg-background"
+					>
+						<img
 							src={attachmentURL(apiBaseUrl, sessionId, path)}
-							alt={t("chat.image.numbered", { index: images.indexOf(path) + 1 })}
+							alt={name}
+							loading="lazy"
+							className="block h-auto max-h-80 max-w-full object-contain"
 						/>
 					</li>
 				) : (
@@ -492,29 +447,12 @@ function shortenPaths(text: string): string {
 }
 
 function formatDuration(ms: number): string {
-	// Status labels are intentionally discrete: start at one second and advance
-	// in whole seconds so the live and settled rows never show fractional time.
-	if (ms < 60_000) return `${Math.max(1, Math.floor(ms / 1000))}s`;
-	const totalMinutes = Math.floor(ms / 60_000);
-	if (totalMinutes < 60) return `${totalMinutes}m`;
-	const hours = Math.floor(totalMinutes / 60);
-	const minutes = totalMinutes % 60;
-	return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
-}
-
-function formatDecisionDuration(ms: number): string {
-	if (ms < 1_000) return `${Math.max(0, Math.round(ms))}ms`;
-	return `${(ms / 1_000).toFixed(1)}s`;
-}
-
-export function ResponseSpinner() {
-	return (
-		<Loader2
-			aria-hidden="true"
-			data-testid="response-spinner"
-			className="size-3 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
-		/>
-	);
+	if (ms < 1000) return `${ms}ms`;
+	if (ms < 60_000) {
+		// Drop a trailing ".0" so whole seconds read as "3s", not "3.0s".
+		return `${(ms / 1000).toFixed(1).replace(/\.0$/, "")}s`;
+	}
+	return `${Math.round(ms / 60_000)}m`;
 }
 
 function formatTime(iso: string): string {
@@ -603,7 +541,12 @@ export function HumanMessage({
 	const visibleMessageText = humanVisibleText(message.text);
 	const { body, attachments } = stagedAttachmentParts(visibleMessageText);
 	return (
-		<div className="group/message flex flex-col items-end gap-1">
+		<div
+			className="group/message flex flex-col items-end gap-1"
+			data-chat-message-id={!queued && !editing ? message.id : undefined}
+			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
+			data-chat-message-role={!queued && !editing ? message.role : undefined}
+		>
 			{/* A queued message reads as not-yet-sent rather than as sent-and-ignored:
 			    the agent has not seen it, and the timeline should not imply it has. */}
 			{editing ? (
@@ -639,16 +582,11 @@ export function HumanMessage({
 					)}
 				>
 					{body ? (
-						<p className="break-words whitespace-pre-wrap text-pretty">
-							<ProseWithInlineImages
-								text={body}
-								attachments={attachments}
-								sessionId={sessionId}
-								apiBaseUrl={apiBaseUrl}
-								renderText={(text) => <SessionLinkedText text={text} />}
-							/>
+						<p data-chat-message-content="" className="break-words whitespace-pre-wrap text-pretty">
+							<SessionLinkedText text={body} />
 						</p>
 					) : null}
+					<ConversationContentItems content={(message.content ?? []).filter((item) => item.type === "excerpt")} ariaLabel="Referenced selections" imageLabel="Image" className={cn(body && "mt-2")} />
 					<StagedAttachmentItems
 						paths={attachments}
 						sessionId={sessionId}
@@ -722,67 +660,42 @@ export function OriginMessage({ message }: { message: ConversationMessage }) {
 		return <BrowserAnnotationOrigin message={message} annotations={browserAnnotations} />;
 	}
 
-	const senderSessionId = message.senderSessionId?.trim();
-	const senderProjectId = message.senderProjectId?.trim();
-	const senderLabel = message.senderDisplayName?.trim() || senderSessionId;
-	const senderHref = senderSessionId && senderProjectId
-		? `ao://sessions/${encodeURIComponent(senderProjectId)}/${encodeURIComponent(senderSessionId)}`
-		: undefined;
-	const visibleText = senderSessionId ? stripSteerSenderPrefix(message.text, senderSessionId) : message.text;
-	const longReport = visibleText.length > ORIGIN_REPORT_COLLAPSE_AT;
+	const longReport = message.text.length > ORIGIN_REPORT_COLLAPSE_AT;
 	const preview = longReport
-		? originReportPreview(visibleText)
-		: visibleText;
+		? `${message.text.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
+		: message.text;
 
-	return (
-		<AutomationMessageFrame
-			label={senderSessionId ? <>{"[from "}{senderHref ? <SessionLabelLink href={senderHref}>{senderLabel}</SessionLabelLink> : senderLabel}{"]"}</> : message.senderLabel ?? message.origin}
-			createdAt={message.createdAt}
-		>
-			{longReport && !expanded ? (
-				<div className="line-clamp-3">
-					<OriginPreviewMarkdown text={preview} />
-				</div>
-			) : (
-				<ChatMarkdown text={visibleText} muted safeOrigin className="whitespace-pre-wrap text-sm leading-relaxed" />
-			)}
-			{longReport ? <AutomationExpandButton expanded={expanded} onClick={() => setExpanded((current) => !current)} /> : null}
-		</AutomationMessageFrame>
-	);
-}
-
-function AutomationMessageFrame({
-	label,
-	createdAt,
-	children,
-}: {
-	label: ReactNode;
-	createdAt: string;
-	children: ReactNode;
-}) {
 	return (
 		<div className="cursor-chat-origin-message rounded-md border border-border border-l-2 border-l-logo-accent/60 px-3.5 py-2.5">
-			<div className="mb-1.5 flex min-w-0 items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+			<div className="mb-1.5 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
 				<CircleAlert aria-hidden="true" className="size-3.5 shrink-0 text-logo-accent" />
-				<span className="min-w-0 truncate">{label}</span>
-				<span className="ml-auto shrink-0 font-normal tabular-nums">{formatTime(createdAt)}</span>
+				<span className="truncate">{message.senderLabel ?? message.origin}</span>
+				<span className="ml-auto shrink-0 font-normal tabular-nums">
+					{formatTime(message.createdAt)}
+				</span>
 			</div>
-			{children}
+			{longReport && expanded ? (
+				<ChatMarkdown text={message.text} muted />
+			) : (
+				<p className={cn("whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
+					<SessionLinkedText text={preview} />
+				</p>
+			)}
+			{longReport ? (
+				<button
+					type="button"
+					onClick={() => setExpanded((current) => !current)}
+					aria-expanded={expanded}
+					className="mt-2 flex items-center gap-1 text-[11px] font-medium text-logo-accent transition-colors hover:text-markdown-link-hover"
+				>
+					<ChevronRight
+						aria-hidden="true"
+						className={cn("size-3 transition-transform", expanded && "rotate-90")}
+					/>
+					{expanded ? "Hide report" : "Show full report"}
+				</button>
+			) : null}
 		</div>
-	);
-}
-
-function AutomationExpandButton({ expanded, onClick }: { expanded: boolean; onClick: () => void }) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			aria-expanded={expanded}
-			className="mt-2 flex items-center gap-1 text-[11px] font-medium text-logo-accent transition-colors hover:text-markdown-link-hover"
-		>
-			<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform", expanded && "rotate-90")} />
-			{expanded ? "Hide report" : "Show full report"}
-		</button>
 	);
 }
 
@@ -836,28 +749,31 @@ function BrowserAnnotationOrigin({
 export function AssistantMessage({
 	message,
 	showCopy = false,
-	live = false,
 	onRollback,
-	rollbackDisabled = false,
+	durationMs,
 }: {
 	message: ConversationMessage;
-	/** The final answer owns the copy action; it stays available while that answer streams. */
+	/** Only the final answer of a finished turn owns the turn's copy action. */
 	showCopy?: boolean;
-	/** The enclosing turn is still active, even if its last text chunk has landed. */
-	live?: boolean;
 	/**
 	 * Discard this turn and everything after it. Lives next to copy so the finished
 	 * answer owns both "keep this" and "undo from here".
 	 */
 	onRollback?: () => void;
-	/** Keep the rollback action mounted while another response is streaming. */
-	rollbackDisabled?: boolean;
+	/** How long the finished turn took; sits next to rollback on the action row. */
+	durationMs?: number;
 }) {
 	const visibleText = useSmoothStreamingText(message);
 	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
-	const showActions = !live && !renderingStreaming && (showCopy || Boolean(onRollback));
+	const hasDuration = durationMs !== undefined && durationMs > 0;
+	const showActions = !renderingStreaming && (showCopy || Boolean(onRollback) || hasDuration);
 	return (
-		<div className="group/message relative" data-chat-streaming-output={renderingStreaming ? "" : undefined}>
+		<div
+			className="group/message relative"
+			data-chat-message-id={!renderingStreaming ? message.id : undefined}
+			data-chat-message-revision={!renderingStreaming ? message.revision : undefined}
+			data-chat-message-role={!renderingStreaming ? message.role : undefined}
+		>
 			<ChatMarkdown text={visibleText} streaming={renderingStreaming} />
 			{showActions ? (
 				// One action row for the completed answer, not one after every prose
@@ -865,16 +781,14 @@ export function AssistantMessage({
 				// duration stay visible; only the wall-clock time reveals on hover.
 				<div className="mt-1 flex h-7 items-center gap-0.5">
 					{showCopy ? (
-						<div className="-ml-1.5 size-7 shrink-0">
-							{/* The stored markdown, not a re-serialization of what was rendered:
-							   pasting it into an editor has to give back what the agent wrote. */}
-							<CopyButton
-								text={message.text}
-								label="Copy message as markdown"
-								compact
-								className="size-7 justify-center rounded-md px-0 py-0 transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
-							/>
-						</div>
+						/* The stored markdown, not a re-serialization of what was rendered:
+						   pasting it into an editor has to give back what the agent wrote. */
+						<CopyButton
+							text={message.text}
+							label="Copy message as markdown"
+							compact
+							className="-ml-1.5 size-7 justify-center rounded-md px-0 py-0 transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
+						/>
 					) : null}
 					{onRollback ? (
 						<Tooltip>
@@ -882,9 +796,8 @@ export function AssistantMessage({
 								<button
 									type="button"
 									onClick={onRollback}
-									disabled={rollbackDisabled}
 									aria-label="Roll back to here"
-									className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none motion-reduce:active:scale-100"
+									className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
 								>
 									<Undo2 aria-hidden="true" className="size-3" />
 								</button>
@@ -892,6 +805,7 @@ export function AssistantMessage({
 							<TooltipContent side="bottom">Roll back to here</TooltipContent>
 						</Tooltip>
 					) : null}
+					{hasDuration ? <TurnDuration durationMs={durationMs} /> : null}
 					<span
 						className="w-auto shrink-0 px-1 text-[11px] tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
 						aria-label={`Sent ${formatMessageTimestamp(message.createdAt)}`}
@@ -900,76 +814,6 @@ export function AssistantMessage({
 					</span>
 				</div>
 			) : null}
-		</div>
-	);
-}
-
-
-export function LiveResponseStatus({ startedAt, settling = false, startupLabel, failed = false, children }: {
-	startedAt?: string;
-	settling?: boolean;
-	startupLabel?: string;
-	failed?: boolean;
-	children?: ReactNode;
-}) {
-	const reducedMotion = useReducedMotion();
-	const started = useMemo(() => {
-		const parsed = startedAt ? Date.parse(startedAt) : Date.now();
-		return Number.isFinite(parsed) ? parsed : Date.now();
-	}, [startedAt]);
-	const [now, setNow] = useState(() => Date.now());
-	useEffect(() => {
-		if (settling) {
-			// The interval stops while settling; refresh once so the frozen label
-			// matches the final duration instead of lagging up to a second.
-			setNow(Date.now());
-			return;
-		}
-		const timer = window.setInterval(() => setNow(Date.now()), 1000);
-		return () => window.clearInterval(timer);
-	}, [settling]);
-	const elapsedMs = Math.max(0, now - started);
-	// Settling animates opacity and transform only, never layout, so it stays smooth
-	// even when the main thread is busy finishing the turn. These are keyframe
-	// animations rather than transitions so they also play when the row first
-	// mounts already settled. The spinner shrinks and fades in place while the label
-	// slides left by the spinner's footprint (12px + 6px gap), landing exactly where
-	// the settled "Worked for" row puts it. The label keeps its shimmer class
-	// throughout (only the highlight fades), so the text never changes paint
-	// technique and cannot blink.
-	return (
-		<div className="min-w-0">
-			<div className="-mx-1 flex h-7 select-none items-center gap-1.5 border-b border-border px-1 py-0">
-				<span
-					aria-hidden={settling || undefined}
-					data-settling={settling || undefined}
-					className="chat-working-spinner-slot flex shrink-0 origin-center"
-				>
-					{failed ? <X className="size-3 text-destructive" /> : <ResponseSpinner />}
-				</span>
-				<span
-					role={failed ? "alert" : "status"}
-					data-testid="live-working-label"
-					data-settling={settling || undefined}
-					className={cn("text-sm font-normal", failed ? "text-destructive" : "chat-working-shimmer")}
-				>
-					{startupLabel ?? `${settling ? "Worked for" : "Working for"} ${formatDuration(elapsedMs)}`}
-				</span>
-			</div>
-			<AnimatePresence initial={false}>
-				{children ? (
-					<motion.div
-						key="startup-checklist"
-						initial={false}
-						animate={{ height: "auto", opacity: 1 }}
-						exit={{ height: 0, opacity: 0 }}
-						transition={{ duration: reducedMotion ? 0 : 0.2, ease: "easeOut" }}
-						className="overflow-hidden"
-					>
-						{children}
-					</motion.div>
-				) : null}
-			</AnimatePresence>
 		</div>
 	);
 }
@@ -2085,7 +1929,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 									    for it is carried rather than flattened to "automatically". */}
 									{detail.decisionSource}
 									{detail.durationMs !== undefined && detail.durationMs > 0
-										? ` · ${formatDecisionDuration(detail.durationMs)}`
+										? ` · ${formatDuration(detail.durationMs)}`
 										: ""}
 								</dd>
 							</>
@@ -2337,21 +2181,8 @@ export function SteerMessage({
 	sessionId: string;
 	apiBaseUrl?: string | null;
 }) {
-	const [expanded, setExpanded] = useState(false);
 	const text = activity.detail?.text ?? activity.summary;
-	const senderSessionId = activity.detail?.senderSessionId?.trim();
-	const senderProjectId = activity.detail?.senderProjectId?.trim();
-	const senderLabel = activity.detail?.senderDisplayName?.trim() || senderSessionId;
-	const automationSteer = Boolean(senderSessionId);
-	const senderHref = senderSessionId && senderProjectId
-		? `ao://sessions/${encodeURIComponent(senderProjectId)}/${encodeURIComponent(senderSessionId)}`
-		: undefined;
-	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : text;
-	const { body, attachments } = stagedAttachmentParts(visibleText);
-	const longReport = body.length > ORIGIN_REPORT_COLLAPSE_AT;
-	const preview = longReport
-		? `${body.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
-		: body;
+	const { body, attachments } = stagedAttachmentParts(text);
 	let stagedImagesToMatch = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path)).length;
 	// Composer images are recorded twice: once as durable staged paths and once as
 	// native prompt blocks. Suppress only the corresponding leading native images;
@@ -2361,15 +2192,10 @@ export function SteerMessage({
 		stagedImagesToMatch -= 1;
 		return false;
 	});
-	const automationBody = (
-		<>
-			{longReport && expanded ? (
-				<ChatMarkdown text={body} muted />
-			) : body ? (
-				<p className={cn("whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
-					<SessionLinkedText text={preview} />
-				</p>
-			) : null}
+	return (
+		<div className="flex flex-col items-end gap-1">
+			<div className="w-fit max-w-[min(78%,560px)] break-words whitespace-pre-wrap rounded-[10px] border border-accent-dim bg-raised px-3 py-2.5 text-sm leading-[1.55] text-foreground">
+				{body ? <p>{body}</p> : null}
 				<StagedAttachmentItems
 					paths={attachments}
 					sessionId={sessionId}
@@ -2384,58 +2210,13 @@ export function SteerMessage({
 					imageAlt={(position) => `Steered attachment ${position}`}
 					className={cn((body || attachments.length > 0) && "mt-2")}
 				/>
-			{longReport ? <AutomationExpandButton expanded={expanded} onClick={() => setExpanded((current) => !current)} /> : null}
-		</>
-	);
-	return (
-		<div className={cn("flex flex-col gap-1", automationSteer ? "items-stretch" : "items-end")}>
-			{automationSteer ? (
-				<AutomationMessageFrame
-					label={<>[from {senderHref ? <SessionLabelLink href={senderHref}>{senderLabel}</SessionLabelLink> : senderLabel}]</>}
-					createdAt={activity.createdAt}
-				>
-					{automationBody}
-				</AutomationMessageFrame>
-			) : (
-				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] border border-accent-dim bg-raised px-3 py-2.5 text-foreground">
-					{body ? (
-						<p>
-							<ProseWithInlineImages
-								text={body}
-								attachments={attachments}
-								sessionId={sessionId}
-								apiBaseUrl={apiBaseUrl}
-								renderText={(text) => text}
-							/>
-						</p>
-					) : null}
-					<StagedAttachmentItems
-						paths={attachments}
-						sessionId={sessionId}
-						apiBaseUrl={apiBaseUrl}
-						ariaLabel="Steered attachments"
-						className={cn(body && "mt-2")}
-					/>
-					<ConversationContentItems
-						content={remainingContent}
-						ariaLabel={attachments.length > 0 ? "Steered content" : "Steered attachments"}
-						imageLabel="Image"
-						imageAlt={(position) => `Steered attachment ${position}`}
-						className={cn((body || attachments.length > 0) && "mt-2")}
-					/>
-				</div>
-			)}
+			</div>
 			<span className="flex items-center gap-1 text-[11px] text-muted-foreground">
 				<CornerDownRight aria-hidden="true" className="size-3" />
 				Steered into the running turn
 			</span>
 		</div>
 	);
-}
-
-function stripSteerSenderPrefix(text: string, senderSessionId: string): string {
-	const prefix = `[from ${senderSessionId}]`;
-	return text.startsWith(prefix) ? text.slice(prefix.length).replace(/^\s+/, "") : text;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2774,7 +2555,7 @@ export function TurnChangedFiles({
 	/** Opens the session Files inspector for the full workspace diff. */
 	onReview?: () => void;
 	/** Opens the Files inspector focused on this path. */
-	onOpenFile?: (path: string, line?: number) => void;
+	onOpenFile?: (path: string) => void;
 	/**
 	 * Timeline items from the same turn. Turn diffs often carry repo-relative
 	 * basenames (`random_words.txt`); file_change rows and command cwds often
@@ -2983,16 +2764,10 @@ function fileBasename(path: string): string {
 /* -------------------------------------------------------------------------- */
 
 /** Turn wall-clock duration; lives on the action row next to rollback, not the Done divider. */
-export function TurnDuration({ durationMs, inline = false }: { durationMs: number; inline?: boolean }) {
+export function TurnDuration({ durationMs }: { durationMs: number }) {
 	if (durationMs <= 0) return null;
 	return (
-		<span
-			className={cn(
-				"shrink-0 font-sans text-sm leading-none tabular-nums text-muted-foreground",
-				inline && "group-hover/row:text-foreground",
-				!inline && "px-1",
-			)}
-		>
+		<span className="shrink-0 px-1 font-sans text-[12px] leading-none tabular-nums text-muted-foreground">
 			{formatDuration(durationMs)}
 		</span>
 	);

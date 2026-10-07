@@ -892,13 +892,14 @@ INSERT INTO conversation_branches (
     id, conversation_id, session_id, provider_conversation_id,
     parent_branch_id, fork_after_turn_id, replaced_turn_id,
     replacement_turn_id, fork_after_sequence, strategy, replay_cutoff_sequence,
-    replay_truncated, provider_scope_id, provider_ids_scoped, created_at
+    replay_truncated, provider_scope_id, provider_ids_scoped, purpose, label, created_at
 ) VALUES (
     ?1, ?2, ?3,
     ?4, ?5,
     ?6, ?7,
     ?8, ?9, ?10,
-    ?11, ?12, ?13, ?14, ?15
+    ?11, ?12, ?13, ?14,
+    ?15, ?16, ?17
 )
 `
 
@@ -917,6 +918,8 @@ type InsertConversationBranchParams struct {
 	ReplayTruncated        int64
 	ProviderScopeID        string
 	ProviderIdsScoped      int64
+	Purpose                string
+	Label                  string
 	CreatedAt              time.Time
 }
 
@@ -936,6 +939,8 @@ func (q *Queries) InsertConversationBranch(ctx context.Context, arg InsertConver
 		arg.ReplayTruncated,
 		arg.ProviderScopeID,
 		arg.ProviderIdsScoped,
+		arg.Purpose,
+		arg.Label,
 		arg.CreatedAt,
 	)
 	return err
@@ -1861,26 +1866,26 @@ func (q *Queries) SelectConversationActivityByProviderItem(ctx context.Context, 
 }
 
 const selectConversationBranch = `-- name: SelectConversationBranch :one
-WITH RECURSIVE lineage(id, parent_branch_id, replaced_turn_id, provider_scope_id, depth) AS (
+WITH RECURSIVE lineage(id, parent_branch_id, replaced_turn_id, provider_scope_id, purpose, depth) AS (
     SELECT branch.id, branch.parent_branch_id, branch.replaced_turn_id,
-           branch.provider_scope_id, 0
+           branch.provider_scope_id, branch.purpose, 0
     FROM conversation_branches AS branch
     WHERE branch.conversation_id = ?1
       AND branch.id = ?2
     UNION ALL
     SELECT parent.id, parent.parent_branch_id, parent.replaced_turn_id,
-           parent.provider_scope_id, lineage.depth + 1
+           parent.provider_scope_id, parent.purpose, lineage.depth + 1
     FROM lineage
     JOIN conversation_branches AS parent ON parent.id = lineage.parent_branch_id
     WHERE parent.conversation_id = ?1
 )
-SELECT b.id, b.conversation_id, b.session_id, b.provider_conversation_id, b.parent_branch_id, b.fork_after_turn_id, b.replaced_turn_id, b.replacement_turn_id, b.fork_after_sequence, b.created_at, b.strategy, b.replay_cutoff_sequence, b.replay_truncated, b.provider_scope_id, b.provider_ids_scoped, b.review_id, b.id = c.active_branch_id AS active,
+SELECT b.id, b.conversation_id, b.session_id, b.provider_conversation_id, b.parent_branch_id, b.fork_after_turn_id, b.replaced_turn_id, b.replacement_turn_id, b.fork_after_sequence, b.created_at, b.strategy, b.replay_cutoff_sequence, b.replay_truncated, b.provider_scope_id, b.provider_ids_scoped, b.review_id, b.purpose, b.label, b.id = c.active_branch_id AS active,
        CAST(COALESCE((
            SELECT lineage.provider_scope_id
            FROM lineage
            WHERE lineage.provider_scope_id <> ''
               OR lineage.parent_branch_id IS NULL
-              OR lineage.replaced_turn_id IS NULL
+              OR (lineage.replaced_turn_id IS NULL AND lineage.purpose <> 'side')
            ORDER BY lineage.depth
            LIMIT 1
        ), '') AS TEXT) AS effective_provider_scope_id,
@@ -1888,7 +1893,7 @@ SELECT b.id, b.conversation_id, b.session_id, b.provider_conversation_id, b.pare
            SELECT lineage.id
            FROM lineage
            WHERE lineage.parent_branch_id IS NULL
-              OR lineage.replaced_turn_id IS NULL
+              OR (lineage.replaced_turn_id IS NULL AND lineage.purpose <> 'side')
            ORDER BY lineage.depth
            LIMIT 1
        ), '') AS TEXT) AS provider_binding_id
@@ -1921,6 +1926,8 @@ type SelectConversationBranchRow struct {
 	ProviderScopeID          string
 	ProviderIdsScoped        int64
 	ReviewID                 sql.NullString
+	Purpose                  string
+	Label                    string
 	Active                   bool
 	EffectiveProviderScopeID string
 	ProviderBindingID        string
@@ -1946,6 +1953,8 @@ func (q *Queries) SelectConversationBranch(ctx context.Context, arg SelectConver
 		&i.ProviderScopeID,
 		&i.ProviderIdsScoped,
 		&i.ReviewID,
+		&i.Purpose,
+		&i.Label,
 		&i.Active,
 		&i.EffectiveProviderScopeID,
 		&i.ProviderBindingID,
@@ -1954,26 +1963,26 @@ func (q *Queries) SelectConversationBranch(ctx context.Context, arg SelectConver
 }
 
 const selectConversationBranches = `-- name: SelectConversationBranches :many
-WITH RECURSIVE lineages(branch_id, id, parent_branch_id, replaced_turn_id, provider_scope_id, depth) AS (
+WITH RECURSIVE lineages(branch_id, id, parent_branch_id, replaced_turn_id, provider_scope_id, purpose, depth) AS (
     SELECT branch.id, branch.id, branch.parent_branch_id, branch.replaced_turn_id,
-           branch.provider_scope_id, 0
+           branch.provider_scope_id, branch.purpose, 0
     FROM conversation_branches AS branch
     WHERE branch.conversation_id = ?1
     UNION ALL
     SELECT lineage.branch_id, parent.id, parent.parent_branch_id,
-           parent.replaced_turn_id, parent.provider_scope_id, lineage.depth + 1
+           parent.replaced_turn_id, parent.provider_scope_id, parent.purpose, lineage.depth + 1
     FROM lineages AS lineage
     JOIN conversation_branches AS parent ON parent.id = lineage.parent_branch_id
     WHERE parent.conversation_id = ?1
 )
-SELECT b.id, b.conversation_id, b.session_id, b.provider_conversation_id, b.parent_branch_id, b.fork_after_turn_id, b.replaced_turn_id, b.replacement_turn_id, b.fork_after_sequence, b.created_at, b.strategy, b.replay_cutoff_sequence, b.replay_truncated, b.provider_scope_id, b.provider_ids_scoped, b.review_id, b.id = c.active_branch_id AS active,
+SELECT b.id, b.conversation_id, b.session_id, b.provider_conversation_id, b.parent_branch_id, b.fork_after_turn_id, b.replaced_turn_id, b.replacement_turn_id, b.fork_after_sequence, b.created_at, b.strategy, b.replay_cutoff_sequence, b.replay_truncated, b.provider_scope_id, b.provider_ids_scoped, b.review_id, b.purpose, b.label, b.id = c.active_branch_id AS active,
        CAST(COALESCE((
            SELECT lineage.provider_scope_id
            FROM lineages AS lineage
            WHERE lineage.branch_id = b.id
              AND (lineage.provider_scope_id <> ''
                   OR lineage.parent_branch_id IS NULL
-                  OR lineage.replaced_turn_id IS NULL)
+                  OR (lineage.replaced_turn_id IS NULL AND lineage.purpose <> 'side'))
            ORDER BY lineage.depth
            LIMIT 1
        ), '') AS TEXT) AS effective_provider_scope_id,
@@ -1981,7 +1990,8 @@ SELECT b.id, b.conversation_id, b.session_id, b.provider_conversation_id, b.pare
            SELECT lineage.id
            FROM lineages AS lineage
            WHERE lineage.branch_id = b.id
-             AND (lineage.parent_branch_id IS NULL OR lineage.replaced_turn_id IS NULL)
+             AND (lineage.parent_branch_id IS NULL
+                  OR (lineage.replaced_turn_id IS NULL AND lineage.purpose <> 'side'))
            ORDER BY lineage.depth
            LIMIT 1
        ), '') AS TEXT) AS provider_binding_id
@@ -2008,6 +2018,8 @@ type SelectConversationBranchesRow struct {
 	ProviderScopeID          string
 	ProviderIdsScoped        int64
 	ReviewID                 sql.NullString
+	Purpose                  string
+	Label                    string
 	Active                   bool
 	EffectiveProviderScopeID string
 	ProviderBindingID        string
@@ -2039,6 +2051,8 @@ func (q *Queries) SelectConversationBranches(ctx context.Context, conversationID
 			&i.ProviderScopeID,
 			&i.ProviderIdsScoped,
 			&i.ReviewID,
+			&i.Purpose,
+			&i.Label,
 			&i.Active,
 			&i.EffectiveProviderScopeID,
 			&i.ProviderBindingID,
@@ -2238,7 +2252,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence, depth) AS (
     FROM active_path AS path
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NULL
-       OR branch.replaced_turn_id IS NULL
+       OR (branch.replaced_turn_id IS NULL AND branch.purpose <> 'side')
     ORDER BY path.depth
     LIMIT 1
 ), active_opaque_scope_floor AS (
@@ -2247,11 +2261,11 @@ WITH RECURSIVE active_path(branch_id, max_sequence, depth) AS (
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.provider_scope_id <> ''
        OR branch.parent_branch_id IS NULL
-       OR branch.replaced_turn_id IS NULL
+       OR (branch.replaced_turn_id IS NULL AND branch.purpose <> 'side')
     ORDER BY path.depth
     LIMIT 1
 ), active_branch AS (
-    SELECT branch.id, branch.conversation_id, branch.session_id, branch.provider_conversation_id, branch.parent_branch_id, branch.fork_after_turn_id, branch.replaced_turn_id, branch.replacement_turn_id, branch.fork_after_sequence, branch.created_at, branch.strategy, branch.replay_cutoff_sequence, branch.replay_truncated, branch.provider_scope_id, branch.provider_ids_scoped, branch.review_id
+    SELECT branch.id, branch.conversation_id, branch.session_id, branch.provider_conversation_id, branch.parent_branch_id, branch.fork_after_turn_id, branch.replaced_turn_id, branch.replacement_turn_id, branch.fork_after_sequence, branch.created_at, branch.strategy, branch.replay_cutoff_sequence, branch.replay_truncated, branch.provider_scope_id, branch.provider_ids_scoped, branch.review_id, branch.purpose, branch.label
     FROM conversations AS conversation
     JOIN conversation_branches AS branch ON branch.id = conversation.active_branch_id
     WHERE conversation.id = ?1
@@ -2451,6 +2465,41 @@ func (q *Queries) SelectConversationMessageByClientID(ctx context.Context, arg S
 		&i.SenderSessionID,
 		&i.SenderProjectID,
 		&i.SenderDisplayName,
+	)
+	return i, err
+}
+
+const selectConversationMessageByID = `-- name: SelectConversationMessageByID :one
+SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash FROM conversation_messages
+WHERE conversation_id = ? AND id = ?
+LIMIT 1
+`
+
+type SelectConversationMessageByIDParams struct {
+	ConversationID string
+	ID             string
+}
+
+func (q *Queries) SelectConversationMessageByID(ctx context.Context, arg SelectConversationMessageByIDParams) (ConversationMessage, error) {
+	row := q.db.QueryRowContext(ctx, selectConversationMessageByID, arg.ConversationID, arg.ID)
+	var i ConversationMessage
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.TurnID,
+		&i.Sequence,
+		&i.Revision,
+		&i.Role,
+		&i.Origin,
+		&i.Text,
+		&i.Streaming,
+		&i.ProviderItemID,
+		&i.ClientMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeliveryContentJson,
+		&i.BranchID,
+		&i.ClientPayloadHash,
 	)
 	return i, err
 }
@@ -2685,7 +2734,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence, depth) AS (
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.provider_scope_id <> ''
        OR branch.parent_branch_id IS NULL
-       OR branch.replaced_turn_id IS NULL
+       OR (branch.replaced_turn_id IS NULL AND branch.purpose <> 'side')
     ORDER BY path.depth
     LIMIT 1
 )
