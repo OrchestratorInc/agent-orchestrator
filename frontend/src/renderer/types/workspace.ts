@@ -351,10 +351,12 @@ function sessionRecentlyMessagedNewer(a: WorkspaceSession, b: WorkspaceSession):
 
 /** The sidebar's direction-age label and sort share the same timestamp. */
 function sessionLastMessageTimestamp(session: WorkspaceSession): number {
-	return validTimestamp(session.lastInteractionAt)
-  ?? validTimestamp(session.lastUserMessageAt)
-  ?? validTimestamp(session.createdAt)
-  ?? 0;
+	return (
+		validTimestamp(session.lastInteractionAt) ??
+		validTimestamp(session.lastUserMessageAt) ??
+		validTimestamp(session.createdAt) ??
+		0
+	);
 }
 
 function timestamp(value?: string): number {
