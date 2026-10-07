@@ -27,3 +27,14 @@ func TestRecordReportedArtifactSkipsAFIFOWithoutBlocking(t *testing.T) {
 		t.Fatalf("rows = %+v, want none", rows)
 	}
 }
+
+// On Unix a backslash is a file name character, but the artifact file route
+// reads it as a separator, so such a page could never load in the thread.
+func TestRecordReportedArtifactSkipsABackslashName(t *testing.T) {
+	h, _ := steerHarness(t)
+	writeArtifact(t, sessionartifacts.Dir(h.rendersDir, testSession), `q3\report.html`)
+	h.svc.RecordReportedArtifact(context.Background(), testSession, `q3\report.html`)
+	if rows := artifactRows(t, h); len(rows) != 0 {
+		t.Fatalf("rows = %+v, want none", rows)
+	}
+}

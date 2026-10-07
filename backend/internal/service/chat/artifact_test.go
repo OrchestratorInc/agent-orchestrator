@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
@@ -94,6 +96,11 @@ func TestRecordReportedArtifactSkipsWhatItCannotShow(t *testing.T) {
 	dir := sessionartifacts.Dir(h.rendersDir, testSession)
 	writeArtifact(t, dir, "notes.md")
 	writeArtifact(t, dir, "folder.html/index.html")
+	// One byte past what the artifact file route serves; sparse, so cheap.
+	huge := writeArtifact(t, dir, "huge.html")
+	if err := os.Truncate(huge, attachmentstore.MaxFileBytes+1); err != nil {
+		t.Fatal(err)
+	}
 	outside := writeArtifact(t, t.TempDir(), "outside.html")
 	if err := os.Symlink(outside, filepath.Join(dir, "escape.html")); err != nil {
 		t.Fatal(err)
@@ -105,6 +112,7 @@ func TestRecordReportedArtifactSkipsWhatItCannotShow(t *testing.T) {
 		"../outside.html",
 		"escape.html",
 		"folder.html",
+		"huge.html",
 		"gone.html",
 		"",
 	} {
@@ -128,13 +136,33 @@ func TestRecordReportedArtifactSkipsWhatItCannotShow(t *testing.T) {
 	if rows := artifactRows(t, h); len(rows) != 0 {
 		t.Fatalf("rows = %+v, want none", rows)
 	}
+
+	// A page in the default directory (no stored one) does show.
+	writeArtifact(t, dir, "page.html")
+	h.svc.RecordReportedArtifact(ctx, testSession, "page.html")
+	if rows := artifactRows(t, h); len(rows) != 1 || rows[0].Artifact.Path != "page.html" {
+		t.Fatalf("rows = %+v, want page.html alone", rows)
+	}
 }
 
 func TestRecordReportedArtifactWithoutARunningTurnShowsNothing(t *testing.T) {
-	h := newHarnessForHarness(t, domain.HarnessCodex)
+	provider := newSteerRecorder()
+	h := newHarnessWithConversation(t, provider)
+	ctx := context.Background()
 	page := writeArtifact(t, sessionartifacts.Dir(h.rendersDir, testSession), "page.html")
-	h.svc.RecordReportedArtifact(context.Background(), testSession, page)
+	h.svc.RecordReportedArtifact(ctx, testSession, page)
 	if rows := artifactRows(t, h); len(rows) != 0 {
 		t.Fatalf("rows = %+v, want none", rows)
+	}
+
+	// The same controller shows the page once a turn runs, so the skip above
+	// was the missing turn, not a missing controller.
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "go", ClientMessageID: "turn-1", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
+	h.svc.RecordReportedArtifact(ctx, testSession, page)
+	if rows := artifactRows(t, h); len(rows) != 1 {
+		t.Fatalf("rows = %+v, want one once a turn runs", rows)
 	}
 }

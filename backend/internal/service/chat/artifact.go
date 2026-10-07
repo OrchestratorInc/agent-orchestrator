@@ -7,12 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
@@ -43,19 +44,13 @@ func (s *Service) recordReportedArtifact(ctx context.Context, id domain.SessionI
 	if ext := strings.ToLower(path.Ext(rel)); ext != ".html" && ext != ".htm" {
 		return errors.New("not an HTML page")
 	}
-	// os.Root refuses a symlink that leaves the directory, as the artifact
-	// file route does. Stat, not open: a FIFO must not hang the report.
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return err
+	// Only what the artifact file route serves: the same lookup, and its cap.
+	entry, ok := previewutil.EntryAtPath(dir, rel)
+	if !ok {
+		return errors.New("not a regular file the artifact file route serves")
 	}
-	info, err := root.Stat(filepath.FromSlash(rel))
-	_ = root.Close()
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return errors.New("not a regular file")
+	if entry.Size > attachmentstore.MaxFileBytes {
+		return fmt.Errorf("%d bytes; the artifact file route serves up to %d", entry.Size, attachmentstore.MaxFileBytes)
 	}
 	controller, err := s.Controller(id)
 	if err != nil {
