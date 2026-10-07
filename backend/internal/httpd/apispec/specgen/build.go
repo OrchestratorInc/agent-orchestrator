@@ -2426,6 +2426,18 @@ func sessionOperations() []operation {
 			contentTypes: map[int]string{http.StatusOK: "text/html"},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/artifact-files/*", id: "getSessionArtifactFile", tag: "sessions",
+			summary:    "Serve a session artifact file sandboxed, an HTML page with the render theme bootstrap",
+			pathParams: []any{controllers.SessionIDParam{}, renderSourceQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, ""},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+			contentTypes: map[int]string{http.StatusOK: "text/html"},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/preview/app/*", id: "getSessionPreviewApp", tag: "sessions",
 			summary:      "Proxy the running session-owned application preview",
 			pathParams:   []any{controllers.SessionIDParam{}},

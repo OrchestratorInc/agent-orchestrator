@@ -173,24 +173,38 @@ func (c *ConversationsController) renderFile(w http.ResponseWriter, r *http.Requ
 		envelope.WriteError(w, r, fmt.Errorf("read render: %w", err))
 		return
 	}
-	sum := sha256.Sum256(stored)
+	serveSandboxedPage(w, r, stored)
+}
+
+// serveSandboxedPage serves an agent's HTML page with the theme bootstrap.
+// ?source=1 is the page as the agent wrote it, for reading: plain text,
+// without the bootstrap, under a tag the document's can never match.
+func serveSandboxedPage(w http.ResponseWriter, r *http.Request, page []byte) {
+	// The page gets the bootstrap as it is served, so a daemon upgrade
+	// changes the document; the ETag names both parts.
+	etag := renderpage.Version + "-" + contentTag(page)
+	if r.URL.Query().Get("source") == "1" {
+		serveSandboxed(w, r, page, "text/plain; charset=utf-8", "src-"+etag)
+		return
+	}
+	serveSandboxed(w, r, renderpage.Document(page), "text/html; charset=utf-8", etag)
+}
+
+// serveSandboxed serves body in the render sandbox (renderContentSecurityPolicy),
+// unsniffed, sent without a referrer, and revalidated on every load.
+func serveSandboxed(w http.ResponseWriter, r *http.Request, body []byte, contentType, etag string) {
 	h := w.Header()
 	h.Set("Content-Security-Policy", renderContentSecurityPolicy)
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
-	// The page is stored raw and gets the bootstrap as it is served, so a
-	// daemon upgrade changes the document; the ETag names both parts.
 	h.Set("Cache-Control", "private, no-cache")
-	etag := renderpage.Version + "-" + hex.EncodeToString(sum[:])[:16]
-	// ?source=1 is the page as the agent wrote it, for reading: plain text,
-	// without the bootstrap, under a tag the document's can never match.
-	if r.URL.Query().Get("source") == "1" {
-		h.Set("Content-Type", "text/plain; charset=utf-8")
-		h.Set("ETag", `"src-`+etag+`"`)
-		http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(stored))
-		return
-	}
-	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Content-Type", contentType)
 	h.Set("ETag", `"`+etag+`"`)
-	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(renderpage.Document(stored)))
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(body))
+}
+
+// contentTag names content by the first 64 bits of its SHA-256.
+func contentTag(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])[:16]
 }

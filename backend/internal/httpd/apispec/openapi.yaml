@@ -4436,6 +4436,58 @@ paths:
       summary: Retry safe source restoration for an agent switch
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/artifact-files/*:
+    get:
+      operationId: getSessionArtifactFile
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: 'Set to 1 to read the page as the agent wrote it: the stored
+          bytes as text/plain, without the theme bootstrap.'
+        in: query
+        name: source
+        schema:
+          description: 'Set to 1 to read the page as the agent wrote it: the stored
+            bytes as text/plain, without the theme bootstrap.'
+          enum:
+          - "1"
+          type:
+          - "null"
+          - string
+      responses:
+        "200":
+          content:
+            text/html:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Serve a session artifact file sandboxed, an HTML page with the render
+        theme bootstrap
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/attachments:
     post:
       operationId: stageSessionAttachments
