@@ -105,6 +105,8 @@ If you explicitly request Chat from an unsupported harness, spawning fails. An i
 
 Use `env`, `symlinks`, and `postCreate` for repeatable workspace setup. A failing `postCreate` command prevents the agent from starting, so keep setup commands deterministic. Symlink restrictions are described in [Configuration fields](#configuration-fields).
 
+`postCreate` commands run in the actual session workspace. The daemon supplies `AO_SESSION_ID`, `AO_PROJECT_ID`, `AO_ISSUE_ID`, `AO_DATA_DIR`, `AO_RUN_FILE`, and `AO_WORKSPACE_PATH`; project `env` and inherited values cannot override them. Before running commands, AO persists the owning session's exact workspace branch, path, and repository path, so hooks can look up their own session. Recovery does not bypass unfinished setup and preserves dirty workspaces and their session ownership.
+
 Use `agentRules` or `agentRulesFile` for worker instructions and `orchestratorRules` for supervision instructions. If both worker fields are set, AO combines the inline rules and file contents.
 
 For example, these fields link local setup files, install dependencies, and load worker rules. This is a configuration fragment; keep any other existing fields when applying it:
