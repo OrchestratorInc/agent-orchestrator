@@ -153,6 +153,8 @@ export function GeneralSettingsSection({
 	const soundNotificationsSaveError = useSoundNotificationsStore((state) => state.saveError);
 	const developerMode = useUiStore((state) => state.developerMode);
 	const setDeveloperMode = useUiStore((state) => state.setDeveloperMode);
+	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
+	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
 	const virtualDevicesEnabled = useUiStore((state) => state.virtualDevicesEnabled);
 	const setVirtualDevicesEnabled = useUiStore((state) => state.setVirtualDevicesEnabled);
 
@@ -215,6 +217,13 @@ export function GeneralSettingsSection({
 			<SettingsSection title={t("settings.sessions")} grouped>
 				<SessionInterfaceRow />
 				{isWindowsPlatform() ? <TerminalShellRows /> : null}
+				<SettingsRow label={t("settings.terminalCopyOnSelect")}>
+					<Switch
+						aria-label={t("settings.terminalCopyOnSelect")}
+						checked={terminalCopyOnSelect}
+						onCheckedChange={setTerminalCopyOnSelect}
+					/>
+				</SettingsRow>
 				<SettingsRow label={t("settings.soundNotifications")}>
 					<Switch
 						aria-label={t("settings.soundNotifications")}
@@ -255,10 +264,36 @@ export function GeneralSettingsSection({
 							/>
 						</SettingsRow>
 						<CloudOfferingRow />
+						<DiagnosticsRow />
 					</>
 				) : null}
 			</SettingsSection>
 		</>
+	);
+}
+
+/**
+ * Developer Mode-only toggle for memory and CPU monitoring: the card chips,
+ * the board's memory light and window, and the Diagnostics settings page.
+ * Off by default so Developer mode alone does not poll process trees.
+ */
+function DiagnosticsRow() {
+	const { t } = useTranslation();
+	const diagnostics = useUiStore((state) => state.diagnostics);
+	const setDiagnostics = useUiStore((state) => state.setDiagnostics);
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow label={t("settings.diagnostics")}>
+				<Switch
+					aria-label={t("settings.diagnostics")}
+					checked={diagnostics}
+					onCheckedChange={setDiagnostics}
+				/>
+			</SettingsRow>
+			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">
+				{t("settings.diagnosticsToggleHint")}
+			</p>
+		</div>
 	);
 }
 
