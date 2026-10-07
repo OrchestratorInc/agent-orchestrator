@@ -953,6 +953,9 @@ func (c *conversation) Terminate() error {
 	return c.closeProvider(true, true)
 }
 
+// ACP retains its current policy; background-terminal protection is Codex-only.
+func (c *conversation) CanHibernate(context.Context) (bool, error) { return true, nil }
+
 // Hibernate releases the bridge and its provider without closing the native
 // ACP session. session/close can delete the resume state on some agents.
 func (c *conversation) Hibernate() error {

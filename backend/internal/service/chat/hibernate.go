@@ -229,6 +229,13 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 		controller.sendMu.Unlock()
 		return false, nil
 	}
+	if ready, err := hibernator.CanHibernate(ctx); err != nil || !ready {
+		controller.sendMu.Unlock()
+		if err != nil {
+			return false, fmt.Errorf("check chat provider background work: %w", err)
+		}
+		return false, nil
+	}
 	// Activity from outside Chat can change while eligibility is read. Recheck
 	// before recording the shutdown intent with a revision-checked write.
 	fresh, err := s.requireChatSession(ctx, id)

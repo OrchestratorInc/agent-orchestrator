@@ -27,6 +27,9 @@ type hibernationConversation struct {
 	markerErr         error
 	rejectMarker      bool
 	shutdownErr       error
+	backgroundRunning bool
+	backgroundErr     error
+	backgroundChecks  atomic.Int32
 }
 
 type hibernationSessionStore struct {
@@ -52,6 +55,11 @@ func (s *hibernationSessionStore) LatestVisibleUserTurnSettled(ctx context.Conte
 		s.conversation.onEligibilityRead()
 	}
 	return settled, err
+}
+
+func (c *hibernationConversation) CanHibernate(context.Context) (bool, error) {
+	c.backgroundChecks.Add(1)
+	return !c.backgroundRunning, c.backgroundErr
 }
 
 func (c *hibernationConversation) Hibernate() error {
@@ -146,12 +154,40 @@ func TestHibernationGateKeepsCompletedIdleProviderWarmUntilEnabled(t *testing.T)
 	if got := eligibilityReads.Load(); got != 0 {
 		t.Fatalf("disabled hibernation read %d turn outcomes, want 0", got)
 	}
+	if got := conv.backgroundChecks.Load(); got != 0 {
+		t.Fatalf("disabled hibernation checked provider background work %d times", got)
+	}
 	enabled.Store(true)
 	if stopped, err := h.svc.HibernateChat(ctx, testSession); err != nil || !stopped || conv.calls.Load() != 1 {
 		t.Fatalf("enabled hibernation: stopped=%v err=%v calls=%d", stopped, err, conv.calls.Load())
 	}
 	if got := eligibilityReads.Load(); got != 1 {
 		t.Fatalf("enabled hibernation read %d turn outcomes, want 1", got)
+	}
+}
+
+func TestHibernateChatKeepsBackgroundWorkAlive(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("inventory_error=%v", fail), func(t *testing.T) {
+			h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
+			conv.backgroundRunning = !fail
+			if fail {
+				conv.backgroundErr = errors.New("background inventory unavailable")
+			}
+			ctx := context.Background()
+			stopped, err := h.svc.HibernateChat(ctx, testSession)
+			if stopped || !errors.Is(err, conv.backgroundErr) || conv.calls.Load() != 0 || !h.svc.HasLiveChatController(testSession) {
+				t.Fatalf("background work: stopped=%v err=%v calls=%d live=%v", stopped, err, conv.calls.Load(), h.svc.HasLiveChatController(testSession))
+			}
+			rec, _, err := h.st.GetSession(ctx, testSession)
+			if err != nil || rec.HibernatedAt != nil {
+				t.Fatalf("background work recorded shutdown intent: at=%v err=%v", rec.HibernatedAt, err)
+			}
+			conv.backgroundRunning, conv.backgroundErr = false, nil
+			if stopped, err := h.svc.HibernateChat(ctx, testSession); err != nil || !stopped || conv.calls.Load() != 1 {
+				t.Fatalf("background work ended: stopped=%v err=%v calls=%d", stopped, err, conv.calls.Load())
+			}
+		})
 	}
 }
 

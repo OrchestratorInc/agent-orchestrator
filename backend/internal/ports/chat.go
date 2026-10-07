@@ -1122,6 +1122,9 @@ type ChatProviderTerminator interface {
 // ChatProviderHibernator stops the controller and provider process while
 // retaining the native conversation for a later Resume.
 type ChatProviderHibernator interface {
+	// CanHibernate checks provider-owned work that can outlive a settled turn.
+	// An error must leave the provider running.
+	CanHibernate(ctx context.Context) (bool, error)
 	Hibernate() error
 }
 
