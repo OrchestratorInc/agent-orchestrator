@@ -26,7 +26,7 @@ import type { components } from "../../api/schema";
 import type { ImportFolderScan } from "../../preload";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
-import { CoderTemplatePicker, visibleCoderTemplates } from "./CoderTemplatePicker";
+import { CoderTemplatePicker } from "./CoderTemplatePicker";
 import { useCoderTemplates } from "../hooks/useCoderTemplates";
 import { SearchablePicker } from "./SearchablePicker";
 import { buildCoderRequestOptions, useCoderSessionOptionsStore } from "../stores/coder-session-options-store";
@@ -1464,7 +1464,7 @@ function CloudProjectCard({
 	const coderTemplateId = useCoderSessionOptionsStore((s) => s.templateId);
 	const coderTemplateMissing =
 		usesCoder &&
-		visibleCoderTemplates(coderTemplates.templates).length > 0 &&
+		coderTemplates.templates.length > 0 &&
 		coderTemplateId.trim() === "";
 	const resetCoderOptions = useCoderSessionOptionsStore((s) => s.reset);
 	useEffect(() => {

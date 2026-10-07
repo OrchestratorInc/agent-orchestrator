@@ -7,8 +7,8 @@ import { AdditionalRepositoriesPicker, CoderTemplatePicker } from "./CoderTempla
 vi.mock("../hooks/useCoderTemplates", () => ({
 	useCoderTemplates: () => ({
 		templates: [
-			// The picker lists the org's templates, hiding only AO-internal plumbing
-			// names (ao-azure-vm*, ao-linux-docker*); these pass through.
+			// The picker lists every template the backend returns, as-is (no code
+			// filtering); curation is done by removing templates in Coder.
 			{ id: "template-1", name: "ao-devkit", displayName: "Fast workspace", description: "More CPU", parameters: ["size"] },
 			{ id: "template-2", name: "ao-devkit-large", displayName: "Lean workspace", description: "Less CPU", parameters: [] },
 		],
