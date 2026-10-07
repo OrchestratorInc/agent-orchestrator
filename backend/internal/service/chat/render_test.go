@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
@@ -301,4 +303,106 @@ func TestPublishRenderStopsWaitingForAMeasureAtTheTimeout(t *testing.T) {
 	if strings.Contains(string(row.Detail), "heights") {
 		t.Fatalf("detail = %s, want no heights", row.Detail)
 	}
+}
+
+func TestSaveRenderAsArtifactWritesTheServedPage(t *testing.T) {
+	h := newHarnessForHarness(t, domain.HarnessCodex)
+	ctx := context.Background()
+	// A failed output-type update is only logged; the file is saved.
+	h.reconcileErr = errors.New("store unavailable")
+	if err := h.renders.PutRender(ctx, testSession, "r1", []byte("<!doctype html><p>chart</p>")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := h.svc.SaveRenderAsArtifact(ctx, testSession, "r1", "Turns: by day")
+	if err != nil {
+		t.Fatalf("SaveRenderAsArtifact: %v", err)
+	}
+	if got != (chatsvc.RenderArtifact{Path: "Turns by day.html", Name: "Turns by day.html"}) {
+		t.Fatalf("artifact = %+v", got)
+	}
+	file := filepath.Join(sessionartifacts.Dir(h.rendersDir, testSession), got.Path)
+	saved, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The bootstrap is included, so the file renders on its own.
+	if want := renderpage.Document([]byte("<!doctype html><p>chart</p>")); string(saved) != string(want) {
+		t.Fatalf("saved = %.200q, want the served document", saved)
+	}
+	if info, _ := os.Stat(file); info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v, want 0600", info.Mode().Perm())
+	}
+	if !reflect.DeepEqual(h.reconciled, []domain.SessionID{testSession}) {
+		t.Fatalf("reconciled = %v, want the session once", h.reconciled)
+	}
+
+	// The same page again is the same file, and nothing is written.
+	again, err := h.svc.SaveRenderAsArtifact(ctx, testSession, "r1", "Turns: by day")
+	if err != nil || again != got || len(h.reconciled) != 1 {
+		t.Fatalf("second save = %+v, %v; reconciled %v", again, err, h.reconciled)
+	}
+
+	// A different page under the same title gets the next free name.
+	if err := h.renders.PutRender(ctx, testSession, "r2", []byte("<p>other</p>")); err != nil {
+		t.Fatal(err)
+	}
+	other, err := h.svc.SaveRenderAsArtifact(ctx, testSession, "r2", "Turns: by day")
+	if err != nil || other.Path != "Turns by day (2).html" {
+		t.Fatalf("different page = %+v, %v", other, err)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(file))
+	if len(entries) != 2 {
+		t.Fatalf("artifact dir = %v, want two files", entries)
+	}
+}
+
+func TestSaveRenderAsArtifactRefusesAMissingRender(t *testing.T) {
+	h := newHarnessForHarness(t, domain.HarnessCodex)
+	for _, renderID := range []string{"gone", "../attachment-a.png", ""} {
+		if _, err := h.svc.SaveRenderAsArtifact(context.Background(), testSession, renderID, "x"); !errors.Is(err, chatsvc.ErrRenderNotFound) {
+			t.Errorf("%q: err = %v, want ErrRenderNotFound", renderID, err)
+		}
+	}
+	if _, err := h.svc.SaveRenderAsArtifact(context.Background(), testSession, "gone", " "); !errors.Is(err, chatsvc.ErrRenderInvalid) {
+		t.Errorf("blank title: err = %v, want ErrRenderInvalid", err)
+	}
+}
+
+func TestPublishRenderWithArtifactKeepsThePage(t *testing.T) {
+	h, _ := steerHarness(t)
+	result, err := h.svc.PublishRender(context.Background(), testSession, chatsvc.RenderInput{
+		HTML: "<p>chart</p>", Title: "Chart", Artifact: true,
+	})
+	if err != nil {
+		t.Fatalf("PublishRender: %v", err)
+	}
+	if result.ArtifactPath != "Chart.html" || result.ArtifactError != "" {
+		t.Fatalf("result = %+v", result)
+	}
+	if _, err := os.Stat(filepath.Join(sessionartifacts.Dir(h.rendersDir, testSession), "Chart.html")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublishRenderStaysPublishedWhenTheArtifactSaveFails(t *testing.T) {
+	h, _ := steerHarness(t)
+	ctx := context.Background()
+	// The stored artifact dir wins over the default one, and here it is a file.
+	blocked := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocked, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.UpdateSessionArtifactOutput(ctx, testSession, blocked, domain.SessionOutputNone); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := h.svc.PublishRender(ctx, testSession, chatsvc.RenderInput{HTML: "<p>chart</p>", Title: "Chart", Artifact: true})
+	if err != nil {
+		t.Fatalf("PublishRender: %v", err)
+	}
+	if result.RenderID == "" || result.ArtifactPath != "" || !strings.Contains(result.ArtifactError, "not-a-dir") {
+		t.Fatalf("result = %+v", result)
+	}
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(renderRows(s)) == 1 })
 }

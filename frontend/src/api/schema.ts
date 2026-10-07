@@ -2381,6 +2381,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/renders/{renderId}/artifact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Keep a published render as a session artifact */
+        post: operations["saveSessionRenderArtifact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/renders/check": {
         parameters: {
             query?: never;
@@ -4675,6 +4692,8 @@ export interface components {
             sourceTurnId: string;
         };
         PublishRenderRequest: {
+            /** @description Also keep the page as a session artifact, a deliverable the user keeps. */
+            artifact?: boolean;
             /** @description First-paint frame height in CSS pixels, clamped to 80-2000; the frame then fits the page. */
             height?: number;
             /** @description A complete, self-contained HTML document, at most 25 MiB. */
@@ -4684,6 +4703,10 @@ export interface components {
         };
         PublishRenderResponse: {
             activityId: string;
+            /** @description With artifact: why the page was not kept. The page is still published. */
+            artifactError?: string;
+            /** @description With artifact: the kept page, relative to the session's artifact directory. */
+            artifactPath?: string;
             path: string;
             renderId: string;
         };
@@ -4873,6 +4896,15 @@ export interface components {
             killed?: boolean;
             ok: boolean;
             sessionId: string;
+        };
+        SaveRenderArtifactRequest: {
+            /** @description Name for the file. Characters a file system refuses are replaced. */
+            title: string;
+        };
+        SaveRenderArtifactResponse: {
+            name: string;
+            /** @description The file, relative to the session's artifact directory. */
+            path: string;
         };
         SendConversationMessageRequest: {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];
@@ -15001,6 +15033,80 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    saveSessionRenderArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Render identifier returned when the page was published. */
+                renderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveRenderArtifactRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SaveRenderArtifactResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

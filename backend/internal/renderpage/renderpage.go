@@ -31,7 +31,23 @@ var (
 	// before the doctype would drop the page into quirks mode.
 	leadingDoctype = regexp.MustCompile(`(?is)^\x{FEFF}?(?:\s|<!--.*?-->)*<!doctype[^>]*>`)
 	pageViewport   = regexp.MustCompile(`(?i)<meta\s[^>]*name\s*=\s*["']?viewport`)
+	// Characters a file system refuses, and control characters.
+	unsafeFileNameChars = regexp.MustCompile(`[\\/:*?"<>|\p{Cc}]+`)
 )
+
+// FileName is the file a saved render is written to: its title, without
+// characters a file system refuses, whitespace collapsed, capped at 120 runes.
+// A port of renderFileName in frontend/src/renderer/lib/render-frame.ts.
+func FileName(title string) string {
+	name := strings.Join(strings.Fields(unsafeFileNameChars.ReplaceAllString(title, " ")), " ")
+	if runes := []rune(name); len(runes) > 120 {
+		name = strings.TrimSpace(string(runes[:120]))
+	}
+	if name == "" {
+		name = "Page"
+	}
+	return name + ".html"
+}
 
 // Version names the bootstrap this build injects. The render route puts it in
 // the ETag, so a page fetched before a daemon upgrade is not reused after it.

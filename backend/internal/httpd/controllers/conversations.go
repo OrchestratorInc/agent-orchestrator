@@ -119,6 +119,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/renders", c.publishRender)
 	r.Post("/sessions/{sessionId}/renders/check", c.checkRender)
 	r.Get("/sessions/{sessionId}/renders/{renderId}", c.renderFile)
+	r.Post("/sessions/{sessionId}/renders/{renderId}/artifact", c.saveRenderArtifact)
 	r.Get("/reviews/{reviewId}/conversation/models", c.reviewModels)
 	r.Patch("/reviews/{reviewId}/conversation/settings", c.reviewSetSettings)
 	r.Get("/reviews/{reviewId}/conversation", c.reviewSnapshot)

@@ -7362,6 +7362,70 @@ paths:
       summary: Serve a published render as a sandboxed HTML document
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/renders/{renderId}/artifact:
+    post:
+      operationId: saveSessionRenderArtifact
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Render identifier returned when the page was published.
+        in: path
+        name: renderId
+        required: true
+        schema:
+          description: Render identifier returned when the page was published.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveRenderArtifactRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaveRenderArtifactResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Keep a published render as a session artifact
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/renders/check:
     post:
       operationId: checkSessionRender
@@ -13670,6 +13734,10 @@ components:
       type: object
     PublishRenderRequest:
       properties:
+        artifact:
+          description: Also keep the page as a session artifact, a deliverable the
+            user keeps.
+          type: boolean
         height:
           description: First-paint frame height in CSS pixels, clamped to 80-2000;
             the frame then fits the page.
@@ -13687,6 +13755,14 @@ components:
     PublishRenderResponse:
       properties:
         activityId:
+          type: string
+        artifactError:
+          description: 'With artifact: why the page was not kept. The page is still
+            published.'
+          type: string
+        artifactPath:
+          description: 'With artifact: the kept page, relative to the session''s artifact
+            directory.'
           type: string
         path:
           type: string
@@ -14165,6 +14241,27 @@ components:
       required:
       - ok
       - sessionId
+      type: object
+    SaveRenderArtifactRequest:
+      properties:
+        title:
+          description: Name for the file. Characters a file system refuses are replaced.
+          maxLength: 200
+          minLength: 1
+          type: string
+      required:
+      - title
+      type: object
+    SaveRenderArtifactResponse:
+      properties:
+        name:
+          type: string
+        path:
+          description: The file, relative to the session's artifact directory.
+          type: string
+      required:
+      - path
+      - name
       type: object
     SendConversationMessageRequest:
       properties:

@@ -121,3 +121,21 @@ func TestBootstrapStylesFullscreenFromTheDisplayMode(t *testing.T) {
 		}
 	}
 }
+
+// The cases mirror renderFileName in frontend/src/renderer/lib/render-frame.test.ts.
+func TestFileNameMatchesTheRenderer(t *testing.T) {
+	for title, want := range map[string]string{
+		"Turns by day":                          "Turns by day.html",
+		"Q3: a/b\\c *?\"<>| \u0007 report\n":    "Q3 a b c report.html",
+		"":                                      "Page.html",
+		" /:*?\"<>| ":                           "Page.html",
+		strings.Repeat("x", 119) + " tail":      strings.Repeat("x", 119) + ".html",
+		strings.Repeat("y", 300):                strings.Repeat("y", 120) + ".html",
+		strings.Repeat("é", 130):                strings.Repeat("é", 120) + ".html",
+		"tab\there\u00a0and\u2003wide   spaces": "tab here and wide spaces.html",
+	} {
+		if got := FileName(title); got != want {
+			t.Errorf("FileName(%q) = %q, want %q", title, got, want)
+		}
+	}
+}

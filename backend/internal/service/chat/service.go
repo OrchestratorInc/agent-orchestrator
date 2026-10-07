@@ -53,6 +53,8 @@ type Service struct {
 	stopProviderHost   func(context.Context, domain.SessionID) error
 	reports            *reportsvc.Coordinator
 	renders            RenderFiles
+	dataDir            string
+	reconcileOutput    func(context.Context, domain.SessionID) error
 	renderCheck        RenderCheck
 	renderMeasure      RenderMeasure
 	wakeChat           func(context.Context, domain.SessionID) error
@@ -134,6 +136,12 @@ type Options struct {
 	StopProviderHost func(context.Context, domain.SessionID) error
 	// Renders stores agent HTML renders. Nil refuses PublishRender.
 	Renders RenderFiles
+	// DataDir locates a session's artifact directory when its record names
+	// none, for a render kept as an artifact.
+	DataDir string
+	// ReconcileOutputType updates a session's output type at once after a
+	// render is kept as an artifact. Nil leaves it to the artifact observer.
+	ReconcileOutputType func(context.Context, domain.SessionID) error
 	// HibernationEnabled reads the daemon-owned feature gate. Nil is disabled.
 	HibernationEnabled func() bool
 }
@@ -163,6 +171,8 @@ func New(opts Options) *Service {
 		onModelChanged:         opts.OnModelChanged,
 		stopProviderHost:       opts.StopProviderHost,
 		renders:                opts.Renders,
+		dataDir:                opts.DataDir,
+		reconcileOutput:        opts.ReconcileOutputType,
 		hibernationEnabled:     opts.HibernationEnabled,
 		controllers:            make(map[domain.SessionID]*Controller),
 		ownerControllers:       make(map[domain.ConversationOwner]*Controller),

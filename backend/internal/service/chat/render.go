@@ -1,17 +1,24 @@
 package chat
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
 const (
@@ -31,6 +38,9 @@ const (
 // wrapped message says what to change.
 var ErrRenderInvalid = errors.New("invalid render")
 
+// ErrRenderNotFound reports a render id that names no stored page.
+var ErrRenderNotFound = errors.New("render not found")
+
 var (
 	// renderMeasureWidths are the reader widths a published page is measured
 	// at, T3 Code's set; each frame opens at the height for its own width.
@@ -43,24 +53,30 @@ var (
 // RenderFiles stores render pages; *attachmentstore.Store satisfies it.
 type RenderFiles interface {
 	PutRender(ctx context.Context, id domain.SessionID, renderID string, data []byte) error
+	OpenRender(ctx context.Context, id domain.SessionID, renderID string) (*os.File, fs.FileInfo, error)
 	RemoveRender(ctx context.Context, id domain.SessionID, renderID string) error
 }
 
 // RenderInput is a self-contained HTML page an agent shows in its thread.
 // BaseURL is the daemon origin the desktop app can load to measure the page,
-// e.g. http://127.0.0.1:3001.
+// e.g. http://127.0.0.1:3001. Artifact also keeps the page as a session artifact.
 type RenderInput struct {
-	HTML    string
-	Title   string
-	Height  int
-	BaseURL string
+	HTML     string
+	Title    string
+	Height   int
+	BaseURL  string
+	Artifact bool
 }
 
-// RenderResult names the stored page and the timeline row that shows it.
+// RenderResult names the stored page and the timeline row that shows it. With
+// RenderInput.Artifact, ArtifactPath names the kept page, or ArtifactError says
+// why it was not kept.
 type RenderResult struct {
-	RenderID   string
-	ActivityID string
-	Path       string
+	RenderID      string
+	ActivityID    string
+	Path          string
+	ArtifactPath  string
+	ArtifactError string
 }
 
 // PublishRender stores an agent's HTML page and shows it in the turn the agent
@@ -106,7 +122,111 @@ func (s *Service) PublishRender(ctx context.Context, id domain.SessionID, in Ren
 		}
 		return RenderResult{}, err
 	}
-	return RenderResult{RenderID: renderID, ActivityID: activityID, Path: path}, nil
+	result := RenderResult{RenderID: renderID, ActivityID: activityID, Path: path}
+	// The page is already in the thread, so a failed save does not fail the publish.
+	if in.Artifact {
+		if artifact, err := s.SaveRenderAsArtifact(ctx, id, renderID, title); err != nil {
+			result.ArtifactError = err.Error()
+		} else {
+			result.ArtifactPath = artifact.Path
+		}
+	}
+	return result, nil
+}
+
+// RenderArtifact is a render kept as a session artifact. Path is relative to
+// the session's artifact directory.
+type RenderArtifact struct {
+	Path string
+	Name string
+}
+
+// maxRenderArtifactNames bounds the "Name (n).html" names a save tries.
+const maxRenderArtifactNames = 100
+
+// SaveRenderAsArtifact keeps a published render as a session artifact, a
+// deliverable the user keeps. The file is the page as the render route serves
+// it, bootstrap included, so it renders on its own. A file of that name with
+// the same bytes is returned as it is; otherwise the next free "Name (n).html"
+// is written, and the session's output type is updated at once.
+func (s *Service) SaveRenderAsArtifact(ctx context.Context, id domain.SessionID, renderID, title string) (RenderArtifact, error) {
+	title = strings.TrimSpace(title)
+	if n := len([]rune(title)); n == 0 || n > maxRenderTitleRunes {
+		return RenderArtifact{}, fmt.Errorf("%w: the title must be 1-%d characters", ErrRenderInvalid, maxRenderTitleRunes)
+	}
+	if s.renders == nil {
+		return RenderArtifact{}, errors.New("render storage is not configured")
+	}
+	record, err := s.requireChatSession(ctx, id)
+	if err != nil {
+		return RenderArtifact{}, err
+	}
+	file, _, err := s.renders.OpenRender(ctx, id, renderID)
+	if errors.Is(err, fs.ErrNotExist) {
+		return RenderArtifact{}, ErrRenderNotFound
+	}
+	if err != nil {
+		return RenderArtifact{}, fmt.Errorf("open render: %w", err)
+	}
+	stored, err := io.ReadAll(io.LimitReader(file, maxRenderHTMLBytes))
+	_ = file.Close()
+	if err != nil {
+		return RenderArtifact{}, fmt.Errorf("read render: %w", err)
+	}
+	dir := record.Metadata.ArtifactDir
+	if dir == "" {
+		dir = sessionartifacts.Dir(s.dataDir, id)
+	}
+	if dir == "" {
+		return RenderArtifact{}, errors.New("the session has no artifact directory")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return RenderArtifact{}, fmt.Errorf("create artifact directory: %w", err)
+	}
+	doc := renderpage.Document(stored)
+	base := strings.TrimSuffix(renderpage.FileName(title), ".html")
+	for n := 1; n <= maxRenderArtifactNames; n++ {
+		name := base + ".html"
+		if n > 1 {
+			name = fmt.Sprintf("%s (%d).html", base, n)
+		}
+		path := filepath.Join(dir, name)
+		if sameRenderArtifact(path, doc) {
+			return RenderArtifact{Path: name, Name: name}, nil
+		}
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return RenderArtifact{}, fmt.Errorf("save render artifact: %w", err)
+		}
+		_, err = f.Write(doc)
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			_ = os.Remove(path)
+			return RenderArtifact{}, fmt.Errorf("save render artifact: %w", err)
+		}
+		if s.reconcileOutput != nil {
+			if err := s.reconcileOutput(ctx, id); err != nil {
+				s.log.Warn("render artifact saved; output type not updated", "session", id, "file", name, "error", err)
+			}
+		}
+		return RenderArtifact{Path: name, Name: name}, nil
+	}
+	return RenderArtifact{}, fmt.Errorf("save render artifact: %s and the next %d names are taken", base+".html", maxRenderArtifactNames-1)
+}
+
+// sameRenderArtifact reports whether path is a regular file holding doc.
+func sameRenderArtifact(path string, doc []byte) bool {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() != int64(len(doc)) {
+		return false
+	}
+	existing, err := os.ReadFile(path)
+	return err == nil && bytes.Equal(existing, doc)
 }
 
 // measureRender asks the desktop app for the page's height at each reader

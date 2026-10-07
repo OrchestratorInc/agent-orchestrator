@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
@@ -34,7 +35,7 @@ func (s *renderStub) PublishRender(_ context.Context, _ domain.SessionID, in cha
 	return s.result, s.err
 }
 
-func renderRouter(t *testing.T, dataDir string, svc *renderStub) *httptest.Server {
+func renderRouter(t *testing.T, dataDir string, svc controllers.ConversationService) *httptest.Server {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{DataDir: dataDir}, log, nil, httpd.APIDeps{
@@ -333,6 +334,94 @@ func TestRenderCheckRouteReturnsTheScreenshotAndNamesTheOrigin(t *testing.T) {
 			}
 			if svc.checkInput.Width != 390 || svc.checkInput.BaseURL != srv.URL {
 				t.Fatalf("input = %+v", svc.checkInput)
+			}
+		})
+	}
+}
+
+type renderArtifactStub struct {
+	*renderStub
+	renderID, title string
+	artifact        chatsvc.RenderArtifact
+	saveErr         error
+}
+
+func (s *renderArtifactStub) SaveRenderAsArtifact(_ context.Context, _ domain.SessionID, renderID, title string) (chatsvc.RenderArtifact, error) {
+	s.renderID, s.title = renderID, title
+	return s.artifact, s.saveErr
+}
+
+func TestSaveRenderArtifactRouteMapsOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		status  int
+		code    string
+		message string
+	}{
+		{"created", nil, http.StatusCreated, "", ""},
+		{"missing render", chatsvc.ErrRenderNotFound, http.StatusNotFound, "RENDER_NOT_FOUND", "render not found"},
+		{"bad title", fmt.Errorf("%w: the title must be 1-200 characters", chatsvc.ErrRenderInvalid), http.StatusBadRequest, "RENDER_INVALID", ""},
+		{"tui session", chatsvc.ErrNotChatMode, http.StatusConflict, "SESSION_MODE_MISMATCH", renderNeedsChatMessage},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &renderArtifactStub{
+				renderStub: &renderStub{fakeConversationService: &fakeConversationService{}},
+				artifact:   chatsvc.RenderArtifact{Path: "Turns by day.html", Name: "Turns by day.html"},
+				saveErr:    tc.err,
+			}
+			srv := renderRouter(t, t.TempDir(), svc)
+			resp, err := http.Post(srv.URL+"/api/v1/sessions/proj-1/renders/r1/artifact", "application/json",
+				strings.NewReader(`{"title":"Turns by day"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			var body struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+				Path    string `json:"path"`
+				Name    string `json:"name"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&body)
+			if resp.StatusCode != tc.status || body.Code != tc.code {
+				t.Fatalf("status=%d code=%q, want %d %q", resp.StatusCode, body.Code, tc.status, tc.code)
+			}
+			if tc.message != "" && body.Message != tc.message {
+				t.Fatalf("message=%q, want %q", body.Message, tc.message)
+			}
+			if svc.renderID != "r1" || svc.title != "Turns by day" {
+				t.Fatalf("service got render %q title %q", svc.renderID, svc.title)
+			}
+			if tc.err == nil && (body.Path != "Turns by day.html" || body.Name != "Turns by day.html") {
+				t.Fatalf("body = %+v", body)
+			}
+		})
+	}
+}
+
+func TestPublishRenderRouteReportsTheArtifact(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result chatsvc.RenderResult
+		want   string
+	}{
+		{"kept", chatsvc.RenderResult{RenderID: "r1", ArtifactPath: "Chart.html"}, `"artifactPath":"Chart.html"`},
+		// The page is in the thread either way, so a failed save is still a 201.
+		{"not kept", chatsvc.RenderResult{RenderID: "r1", ArtifactError: "save render artifact: disk full"}, `"artifactError":"save render artifact: disk full"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &renderStub{fakeConversationService: &fakeConversationService{}, result: tc.result}
+			srv := renderRouter(t, t.TempDir(), svc)
+			resp, err := http.Post(srv.URL+"/api/v1/sessions/proj-1/renders", "application/json",
+				strings.NewReader(`{"html":"<p>x</p>","title":"Chart","artifact":true}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusCreated || !strings.Contains(string(body), tc.want) || !svc.input.Artifact {
+				t.Fatalf("status=%d body=%s artifact=%v", resp.StatusCode, body, svc.input.Artifact)
 			}
 		})
 	}

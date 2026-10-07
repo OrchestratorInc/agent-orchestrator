@@ -3108,6 +3108,10 @@ type harness struct {
 	hostStops  atomic.Int32
 	renders    *attachmentstore.Store
 	rendersDir string
+	// reconciled lists the sessions whose output type a save asked to update;
+	// reconcileErr is what that update returns.
+	reconciled   []domain.SessionID
+	reconcileErr error
 
 	clockMu sync.Mutex
 	clock   time.Time
@@ -3203,6 +3207,11 @@ func newHarnessWithConversationAndStoreForHarness(
 		},
 		Now:     h.now,
 		Renders: h.renders,
+		DataDir: h.rendersDir,
+		ReconcileOutputType: func(_ context.Context, id domain.SessionID) error {
+			h.reconciled = append(h.reconciled, id)
+			return h.reconcileErr
+		},
 	})
 
 	ctrl, err := svc.Start(context.Background(), chatsvc.StartConfig{
