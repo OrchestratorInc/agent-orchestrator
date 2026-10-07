@@ -3,6 +3,9 @@
 	"productName": "Agent Orchestrator",
 	"version": "0.13.0",
 	"private": true,
+	"engines": {
+		"node": "24.x"
+	},
 	"description": "Electron + TypeScript frontend for the agent-orchestrator rewrite",
 	"author": "Agent Orchestrator",
 	"license": "MIT",

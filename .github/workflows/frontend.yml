@@ -32,9 +32,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: frontend/package.json
       - name: Test native helper build configuration
         run: node --test scripts/build-update-helper.node-test.mjs
+      - name: Verify desktop Node version contract
+        run: node --test scripts/desktop-node-version.test.mjs
       - name: Test repair installer packaging and guards
         run: node --test scripts/build-mac-repair-installer.node-test.mjs
       - name: Compile helper for both macOS architectures
@@ -59,7 +61,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: frontend/package.json
           cache: npm
           cache-dependency-path: |
             frontend/package-lock.json
@@ -148,7 +150,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: frontend/package.json
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
