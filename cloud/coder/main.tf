@@ -62,7 +62,28 @@ resource "coder_agent" "main" {
       echo "Installing dev-kit tooling: $DEVKIT_PKGS"
       sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $DEVKIT_PKGS || true
     fi
+    # Ensure every supported coding harness can launch. The baked workspace image
+    # carries claude + opencode; codex and cursor-agent are installed here when the
+    # image predates baking them, so a codex/cursor session does not hang with
+    # "harness binary unavailable". Idempotent (skipped once present) and
+    # non-fatal (a failed optional install never blocks the workspace). Once the
+    # image bakes all four (see Sandbox.Dockerfile), these become no-ops.
+    if ! command -v codex >/dev/null 2>&1; then
+      echo "Installing codex harness"
+      sudo npm install --global '@openai/codex@0.147.0' || true
+    fi
+    if ! command -v cursor-agent >/dev/null 2>&1; then
+      echo "Installing cursor-agent harness"
+      sudo mkdir -p /opt/cursor-agent/2026.08.11-e8db854 && \
+        curl --fail --location --silent --show-error \
+          'https://downloads.cursor.com/lab/2026.08.11-e8db854/linux/x64/agent-cli-package.tar.gz' \
+          | sudo tar --strip-components=1 -xzf - -C /opt/cursor-agent/2026.08.11-e8db854 && \
+        sudo ln -sf /opt/cursor-agent/2026.08.11-e8db854/cursor-agent /usr/local/bin/cursor-agent || true
+    fi
     claude --version
+    codex --version || echo "codex unavailable"
+    cursor-agent --version || echo "cursor-agent unavailable"
+    opencode --version || echo "opencode unavailable"
   EOT
 
   env = {
