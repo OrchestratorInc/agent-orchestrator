@@ -780,13 +780,123 @@ func TestHooks_UserPromptSubmitReportsOnlyMainUserCheckpoint(t *testing.T) {
 }
 
 func TestHookConversationFactsCorrelatesAcceptedReportDelivery(t *testing.T) {
-	prompt := domain.WrapReportDelivery("report-batch:abc123", "Reports since your previous turn:")
-	payload := []byte(`{"prompt":` + mustJSONString(t, prompt) + `,"prompt_id":"native-turn"}`)
-	got := hookConversationFacts(domain.HarnessClaudeCode, "user-prompt-submit", payload)
-	if got.CheckpointOrigin != domain.ConversationCheckpointOriginCoordination ||
-		got.CoordinationID != "report-batch:abc123" || got.LatestUserPrompt != "" {
-		t.Fatalf("conversation facts = %+v", got)
+	// Claude transcript lines 1538, 687, 659, and 1303 from the replay
+	// investigation. Keep the paste boundaries; shorten unrelated report text.
+	tests := []struct {
+		name, prompt, deliveryID string
+	}{
+		{
+			name: "fully wrapped",
+			prompt: `
+
+<pasted_content id="eead">
+<ao-report-delivery id="report-batch:rpt_7bf824eb-2fd9-4b15-a920-04f0469aac0f">
+Reports since your previous turn:
+
+[stuck] ao://sessions/ao-agentic-testing/ao-agentic-testing-28
+artifact: /evidence/unattended-rebuild-02/create.log
+</ao-report-delivery>
+</pasted_content id="eead">
+`,
+			deliveryID: "report-batch:rpt_7bf824eb-2fd9-4b15-a920-04f0469aac0f",
+		},
+		{
+			name: "partially wrapped",
+			prompt: `
+
+<pasted_content id="eead">
+<ao-report-delivery id="report-batch:rpt_7e0c477b-4631-4357-8763-969d2e2ac026">
+Reports since your previous turn:
+
+artifact: /evidence/vnc-headless-6gb-02
+</pasted_content id="eead">
+
+/character-fidelity-result-01.json
+</ao-report-delivery>`,
+			deliveryID: "report-batch:rpt_7e0c477b-4631-4357-8763-969d2e2ac026",
+		},
+		{
+			name: "multiple paste blocks",
+			prompt: `
+
+<pasted_content id="eead">
+<ao-report-delivery id="report-batch:rpt_7e0c477b-4631-4357-8763-969d2e2ac026">
+Reports since your previous turn:
+
+artifact: /evidence/vnc-headless-6gb-02
+</pasted_content id="eead">
+
+
+<pasted_content id="eead">
+/character-fidelity-result-01.json
+</ao-report-delivery>
+</pasted_content id="eead">
+`,
+			deliveryID: "report-batch:rpt_7e0c477b-4631-4357-8763-969d2e2ac026",
+		},
+		{
+			name:       "unwrapped",
+			prompt:     domain.WrapReportDelivery("report-batch:rpt_a0cdacc3-6362-43b0-aa86-9030fcdcecf1", "Reports since your previous turn:"),
+			deliveryID: "report-batch:rpt_a0cdacc3-6362-43b0-aa86-9030fcdcecf1",
+		},
+		{
+			name:       "plain closing tag",
+			prompt:     "<pasted_content id=\"eead\">\n" + domain.WrapReportDelivery("report-batch:abc123", "worker finished") + "\n</pasted_content>",
+			deliveryID: "report-batch:abc123",
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := []byte(`{"prompt":` + mustJSONString(t, tt.prompt) + `,"prompt_id":"native-turn"}`)
+			got := hookConversationFacts(domain.HarnessClaudeCode, "user-prompt-submit", payload)
+			if got.CheckpointOrigin != domain.ConversationCheckpointOriginCoordination ||
+				got.CoordinationID != tt.deliveryID || got.LatestUserPrompt != "" || got.ProviderTurnID != "native-turn" {
+				t.Fatalf("conversation facts = %+v", got)
+			}
+		})
+	}
+}
+
+func TestHookConversationFactsRejectsInvalidReportPastes(t *testing.T) {
+	report := domain.WrapReportDelivery("report-batch:abc123", "worker finished")
+	pasteOpen, pasteClose := "<pasted_content id=\"eead\">\n", "\n</pasted_content id=\"eead\">"
+	wrapped := pasteOpen + report + pasteClose
+	tests := []struct {
+		name, prompt string
+	}{
+		{name: "missing closing tag", prompt: pasteOpen + report},
+		{name: "mismatched paste id", prompt: pasteOpen + report + "\n</pasted_content id=\"other\">"},
+		{name: "malformed opening tag", prompt: "<pasted_content id=eead>\n" + report + pasteClose},
+		{name: "lookalike opening tag", prompt: "<pasted_content_other id=\"eead\">\n" + report + pasteClose},
+		{name: "invalid delivery id", prompt: pasteOpen + domain.WrapReportDelivery("bad value", "worker finished") + pasteClose},
+		{name: "empty delivery id", prompt: pasteOpen + domain.WrapReportDelivery("", "worker finished") + pasteClose},
+		{name: "long delivery id", prompt: pasteOpen + domain.WrapReportDelivery(strings.Repeat("a", 129), "worker finished") + pasteClose},
+		{name: "human text before report", prompt: "Please speed up.\n" + report},
+		{name: "human text before paste", prompt: "Please speed up.\n" + wrapped},
+		{name: "human text inside paste", prompt: pasteOpen + "Please speed up.\n" + report + pasteClose},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := []byte(`{"prompt":` + mustJSONString(t, tt.prompt) + `}`)
+			got := hookConversationFacts(domain.HarnessClaudeCode, "user-prompt-submit", payload)
+			if got.CheckpointOrigin != domain.ConversationCheckpointOriginHuman ||
+				got.CoordinationID != "" || got.LatestUserPrompt != tt.prompt {
+				t.Fatalf("conversation facts = %+v", got)
+			}
+		})
+	}
+	t.Run("other harness", func(t *testing.T) {
+		payload := []byte(`{"prompt":` + mustJSONString(t, wrapped) + `}`)
+		got := hookConversationFacts(domain.HarnessCodex, "user-prompt-submit", payload)
+		if got.CheckpointOrigin != domain.ConversationCheckpointOriginHuman || got.CoordinationID != "" || got.LatestUserPrompt != wrapped {
+			t.Fatalf("conversation facts = %+v", got)
+		}
+	})
+	t.Run("domain parser stays strict", func(t *testing.T) {
+		if id, ok := domain.ReportDeliveryID(wrapped); ok || id != "" {
+			t.Fatalf("ReportDeliveryID(wrapped) = %q, %v", id, ok)
+		}
+	})
 }
 
 func TestHooks_SubagentStopCannotReportMainConversationCheckpoint(t *testing.T) {

@@ -380,6 +380,10 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 	}
 	_ = json.Unmarshal(payload, &p)
 	observedPrompt := firstHookValue(p.Prompt, p.UserPrompt, p.UserPromptCamel)
+	coordinationPrompt := observedPrompt
+	if agent == domain.HarnessClaudeCode {
+		coordinationPrompt = normalizeClaudePastedPrompt(observedPrompt)
+	}
 	var userPrompt, assistant, turnID string
 	origin := domain.ConversationCheckpointOriginUnknown
 	// Conversation checkpoints are trusted only at the main-turn boundaries that
@@ -417,14 +421,14 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 	// AO's own handoff request and continuation kickoff are coordination turns,
 	// not the latest real user instruction. They remain in provider history but
 	// must not overwrite deterministic user intent.
-	if isAOCoordinationMessage(observedPrompt) {
+	if isAOCoordinationMessage(coordinationPrompt) {
 		userPrompt = ""
 		assistant = ""
 		if event == "user-prompt-submit" || event == "stop" {
 			origin = domain.ConversationCheckpointOriginCoordination
 		}
 	}
-	coordinationID, _ := domain.CoordinationDeliveryID(observedPrompt)
+	coordinationID, _ := domain.CoordinationDeliveryID(coordinationPrompt)
 	return hookConversationSnapshot{
 		ProviderTurnID:        turnID,
 		LatestUserPrompt:      capHookText(userPrompt, maxHookInteractionLen),
@@ -433,6 +437,27 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 		CoordinationID:        coordinationID,
 		TranscriptPath:        capHookText(firstHookValue(p.TranscriptPath, p.TranscriptPathCamel), maxHookTranscriptPath),
 	}
+}
+
+var claudePastedContentPrefix = regexp.MustCompile(`^<pasted_content id="([A-Za-z0-9_-]+)">`)
+
+// normalizeClaudePastedPrompt removes only Claude's leading paste wrapper.
+// A report envelope can continue after the pasted segment, so keep that suffix.
+// Human text before the wrapper or inside it still precedes the report envelope.
+func normalizeClaudePastedPrompt(prompt string) string {
+	match := claudePastedContentPrefix.FindStringSubmatch(prompt)
+	if match == nil {
+		return prompt
+	}
+	content := strings.TrimPrefix(prompt, match[0])
+	before, after, ok := strings.Cut(content, `</pasted_content id="`+match[1]+`">`)
+	if !ok {
+		before, after, ok = strings.Cut(content, "</pasted_content>")
+	}
+	if !ok {
+		return prompt
+	}
+	return before + after
 }
 
 func firstHookValue(values ...string) string {
