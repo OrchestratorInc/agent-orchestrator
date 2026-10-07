@@ -645,8 +645,10 @@ const UNTRUSTED_END = "<<<END UNTRUSTED EXTERNAL CONTENT>>>";
 // preview origin instead.
 const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
 const TEMPORARY_BROWSER_PARTITION_PREFIX = "persist:ao-browser-temporary-";
-// How long a confirmed profile switch waits for in-flight agent commands and
-// stopped page loads to finish before it gives up.
+// A confirmed profile switch refuses new agent commands and waits for the
+// in-flight ones (and stopped page loads) to finish. Agent commands can run for
+// up to 60s, so without a cap the switch would hang and block every other agent
+// command that long. After this, it fails with "still busy" and the user retries.
 const PROFILE_SWITCH_SETTLE_MS = 10_000;
 
 function temporaryBrowserPartition(): string {
