@@ -60,7 +60,6 @@ import {
 	useCloudSessionQuery,
 	useWorkspaceQuery,
 	useWorkspaceSession,
-	workspaceQueryKey,
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
 import { cloudLifecycleStage } from "../lib/cloud-lifecycle";
@@ -69,7 +68,7 @@ import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
 import { clearSwitchAgentState } from "../hooks/useSwitchAgent";
-import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
+import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useHostConnection } from "../hooks/useHostConnection";
 import { sessionReviewsQueryKey } from "../lib/session-reviews";
@@ -370,7 +369,6 @@ function CloudPausedStatus() {
 }
 
 export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: SessionViewProps) {
-
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const uiSessionId = sessionUiKey(sessionId, hostId);
@@ -1261,9 +1259,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		(chatTargetKind === "worker" || chatTargetKind === "reviewer" || chatTargetKind === "shell");
 	const chatViewActive =
 		session?.mode === "chat" &&
-		!hostId &&
 		!session.cloud &&
-		daemonStatus.state === "ready" &&
+		(hostId ? Boolean(remoteBase) : daemonStatus.state === "ready") &&
 		routedTerminalTarget.kind === "worker" &&
 		(!activeShellTerminalHandleId ||
 			(shellTerminalsQuery.data !== undefined &&
@@ -1276,33 +1273,41 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		let left = false;
 		let refreshed = false;
 		let pending = Promise.resolve();
-		const setViewActive = (active: boolean) => {
-			pending = pending.catch(() => {}).then(async () => {
-				const { error } = await apiClient.POST("/api/v1/sessions/{sessionId}/chat-view", {
+		const setViewActive = async (active: boolean) => {
+			try {
+				const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/chat-view", {
 					params: { path: { sessionId } },
 					body: { viewId, active },
 				});
 				if (error) throw error;
 				if (active && !left && !refreshed) {
 					refreshed = true;
-					void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId) });
-					void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+					void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
+					void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				}
+			} finally {
+				// Release a late registration too; leaving must not wait on wake.
+				if (active && left) void setViewActive(false).catch(() => {});
+			}
+		};
+		const renewView = () => {
+			pending = pending.catch(() => {}).then(() => {
+				if (!left) return setViewActive(true);
 			});
 			return pending;
 		};
 		const refreshAfterWakeError = () => {
 			if (left) return;
-			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId) });
+			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
 		};
-		void setViewActive(true).catch(refreshAfterWakeError);
-		const renewal = window.setInterval(() => { void setViewActive(true).catch(refreshAfterWakeError); }, 10_000);
+		void renewView().catch(refreshAfterWakeError);
+		const renewal = window.setInterval(() => { void renewView().catch(refreshAfterWakeError); }, 10_000);
 		return () => {
 			left = true;
 			window.clearInterval(renewal);
 			void setViewActive(false).catch(() => {});
 		};
-	}, [chatViewActive, queryClient, sessionId]);
+	}, [chatViewActive, hostId, queryClient, sessionId]);
 	const {
 		agentSwitch: handoffAgentSwitch,
 		switchControlPresentation: handoffControlPresentation,
@@ -1771,7 +1776,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									agentResuming={quietResume}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
-
 									onOpenShell={addShellTerminal}
 									openingShell={openShellTerminal.isPending}
 									shellError={

@@ -768,6 +768,15 @@ func (s *Store) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, er
 	return mapListAllSessionsRows(rows), nil
 }
 
+// ListChatHibernationCandidates avoids decoding inactive sessions and activity JSON.
+func (s *Store) ListChatHibernationCandidates(ctx context.Context) ([]domain.SessionID, error) {
+	ids, err := s.qr.ListChatHibernationCandidates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list chat hibernation candidates: %w", err)
+	}
+	return ids, nil
+}
+
 func mapListSessionsByProjectRows(rows []gen.ListSessionsByProjectRow) []domain.SessionRecord {
 	out := make([]domain.SessionRecord, 0, len(rows))
 	for _, r := range rows {

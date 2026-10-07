@@ -3,11 +3,51 @@ package store_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+func TestListChatHibernationCandidatesFiltersInSQL(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	seedProject(t, s, "mer")
+	var want []domain.SessionID
+	for _, change := range []func(*domain.SessionRecord){
+		func(*domain.SessionRecord) {},
+		func(r *domain.SessionRecord) { r.Mode = domain.SessionModeTUI },
+		func(r *domain.SessionRecord) { r.IsTerminated = true },
+		func(r *domain.SessionRecord) { r.IsTaskPreparation = true },
+		func(r *domain.SessionRecord) { r.ProvisionState = domain.SessionProvisionProvisioning },
+		func(r *domain.SessionRecord) { r.Activity.State = domain.ActivityActive },
+		func(r *domain.SessionRecord) { r.Metadata.ProviderConversationID = "" },
+	} {
+		rec := sampleRecord("mer")
+		rec.Mode, rec.Activity.State, rec.Metadata.ProviderConversationID = domain.SessionModeChat, domain.ActivityIdle, "native-id"
+		change(&rec)
+		created, err := s.CreateSession(ctx, rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec.EligibleForChatHibernation() {
+			want = append(want, created.ID)
+		}
+	}
+	got, err := s.ListChatHibernationCandidates(ctx)
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("candidates = %v, %v; want %v", got, err, want)
+	}
+	current, _, _ := s.GetSession(ctx, want[0])
+	now := time.Now().UTC()
+	if applied, err := s.SetSessionHibernated(ctx, current.ID, current.Revision, &now); err != nil || !applied {
+		t.Fatalf("mark asleep = %v, %v", applied, err)
+	}
+	if got, err := s.ListChatHibernationCandidates(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("already sleeping candidates = %v, %v", got, err)
+	}
+}
 
 func TestSessionHibernationMarkerUsesRevisionAndSurvivesOrdinaryUpdate(t *testing.T) {
 	ctx := context.Background()

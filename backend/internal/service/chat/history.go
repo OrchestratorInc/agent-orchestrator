@@ -192,6 +192,11 @@ func (s *Service) EditMessage(
 		return EditMessageResult{}, err
 	}
 	defer release()
+	gate := s.controllerGate(domain.SessionConversationOwner(id))
+	if err := gate.lock(ctx); err != nil {
+		return EditMessageResult{}, err
+	}
+	defer gate.unlock()
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return EditMessageResult{}, err
 	}
@@ -828,6 +833,11 @@ func (s *Service) ActivateBranch(ctx context.Context, id domain.SessionID, branc
 		return "", err
 	}
 	defer release()
+	gate := s.controllerGate(domain.SessionConversationOwner(id))
+	if err := gate.lock(ctx); err != nil {
+		return "", err
+	}
+	defer gate.unlock()
 	return s.activateBranchLocked(ctx, id, branchID)
 }
 
@@ -1119,18 +1129,11 @@ func (s *Service) SetTitle(ctx context.Context, id domain.SessionID, title strin
 	if !ok {
 		return "", ErrRenameUnsupported
 	}
-	// The response confirms acceptance, while the later provider notification
-	// is what actually commits AO's title. Hibernate must wait for that event.
-	controller.mu.Lock()
-	controller.pendingTitle = normalized
-	controller.mu.Unlock()
 	if err := renamer.SetTitle(ctx, normalized); err != nil {
-		controller.mu.Lock()
-		if controller.pendingTitle == normalized {
-			controller.pendingTitle = ""
-		}
-		controller.mu.Unlock()
 		return "", classify(fmt.Errorf("set title for %s: %w", id, err))
+	}
+	if err := controller.applyThreadTitle(ctx, normalized, s.now()); err != nil {
+		return "", err
 	}
 	return normalized, nil
 }

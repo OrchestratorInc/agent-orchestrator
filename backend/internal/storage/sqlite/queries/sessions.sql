@@ -277,6 +277,14 @@ SELECT id, project_id, num, issue_id, kind, harness,
     hibernated_at
 FROM sessions ORDER BY project_id, num;
 
+-- name: ListChatHibernationCandidates :many
+SELECT id FROM sessions
+WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
+    AND provision_state IN ('', 'ready') AND hibernated_at IS NULL
+    AND activity_state = 'idle' AND activity_last_at IS NOT NULL
+    AND trim(provider_conversation_id) <> ''
+ORDER BY id;
+
 -- name: PromoteTaskPreparation :execrows
 -- Claim the hidden row without touching branch/workspace facts that may be
 -- published concurrently by speculative worktree creation.

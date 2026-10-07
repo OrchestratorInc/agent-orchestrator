@@ -105,15 +105,29 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	m.agentOpMu.Lock()
-	if m.agentOperationActiveLocked(id) {
+	var drained <-chan struct{}
+	for {
+		m.agentOpMu.Lock()
+		if m.agentOperationActiveLocked(id) {
+			current := m.agentOperations[id]
+			m.agentOpMu.Unlock()
+			if current != agentOperationHibernate || kind == agentOperationHibernate {
+				return errAgentOperationInProgress
+			}
+			// Background cleanup yields to every explicit operation once its
+			// bounded shutdown completes; it must not make Kill/Switch fail.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(20 * time.Millisecond):
+				continue
+			}
+		}
+		m.agentOperations[id] = kind
+		drained = m.inputDrained[id]
 		m.agentOpMu.Unlock()
-		return errAgentOperationInProgress
+		break
 	}
-	m.agentOperations[id] = kind
-	drained := m.inputDrained[id]
-	m.agentOpMu.Unlock()
-
 	if drained == nil {
 		return nil
 	}
@@ -346,16 +360,6 @@ func (m *Manager) beginAgentResume(ctx context.Context, id domain.SessionID) err
 			m.agentOpMu.Lock()
 			activeOperation := m.agentOperations[id]
 			m.agentOpMu.Unlock()
-			if activeOperation == agentOperationHibernate {
-				// A human resume may arrive while the idle sweep is closing its
-				// process. Wait for the close and durable marker before launching.
-				select {
-				case <-waitCtx.Done():
-					return waitCtx.Err()
-				case <-time.After(20 * time.Millisecond):
-					continue
-				}
-			}
 			if activeOperation == agentOperationSwitch {
 				return ErrSwitchInProgress
 			}

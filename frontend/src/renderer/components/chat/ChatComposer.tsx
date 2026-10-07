@@ -196,7 +196,7 @@ export const ChatComposer = memo(function ChatComposer({
 	remoteHost = false,
 	assetSessionId,
 	acceptedClientMessageIds,
-		emptyPlaceholder,
+	emptyPlaceholder,
 }: {
 	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (

@@ -53,10 +53,10 @@ type Service struct {
 	stopProviderHost   func(context.Context, domain.SessionID) error
 	reports            *reportsvc.Coordinator
 	wakeChat           func(context.Context, domain.SessionID) error
-	hibernateChat      func(context.Context, domain.SessionID) error
 	hibernationEnabled func() bool
 	viewMu             sync.Mutex
 	viewLeases         map[domain.SessionID]map[string]time.Time
+	viewClosedAt       map[domain.SessionID]time.Time
 	wakeMu             sync.Mutex
 	waking             map[domain.SessionID]int
 	wakeRuns           map[domain.SessionID]*wakeRun
@@ -1337,11 +1337,18 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 		}
 		return errors.Join(stopErr, s.clearHibernation(ctx, id))
 	}
-	err := controller.Terminate(ctx)
 	controller.mu.Lock()
 	preserved := controller.preserveProviderOnStop
+	hibernating := controller.handoff == controllerHandoffHibernate
 	controller.mu.Unlock()
-	if preserved && s.stopProviderHost != nil {
+	var hostErr error
+	if hibernating && s.stopProviderHost != nil {
+		// Hibernate may already have consumed the adapter's close-once guard.
+		// Explicit Kill can still retry authenticated shutdown of this owner.
+		hostErr = s.stopProviderHost(ctx, id)
+	}
+	err := errors.Join(hostErr, controller.Terminate(ctx))
+	if preserved && !hibernating && s.stopProviderHost != nil {
 		// Close may already have retired this handle (for example after a failed
 		// projection). Explicit Stop targets current session ownership under the
 		// start/stop gate; a stale handle's Terminate must not target a replacement.

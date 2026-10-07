@@ -152,6 +152,32 @@ func TestResumeWaitsForHibernation(t *testing.T) {
 	m.endAgentResume(id)
 }
 
+func TestExplicitOperationsWaitForHibernation(t *testing.T) {
+	for _, kind := range []agentOperationKind{agentOperationKill, agentOperationExit, agentOperationSwitch, agentOperationRestore} {
+		t.Run(string(kind), func(t *testing.T) {
+			m := newInputLeaseTestManager()
+			id := domain.SessionID("worker-1")
+			if err := m.beginAgentOperation(context.Background(), id, agentOperationHibernate); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			acquired := make(chan error, 1)
+			go func() { acquired <- m.beginAgentOperation(ctx, id, kind) }()
+			select {
+			case err := <-acquired:
+				t.Fatalf("explicit operation failed/overtook hibernation: %v", err)
+			case <-time.After(30 * time.Millisecond):
+			}
+			m.endAgentOperation(id, agentOperationHibernate)
+			if err := <-acquired; err != nil {
+				t.Fatal(err)
+			}
+			m.endAgentOperation(id, kind)
+		})
+	}
+}
+
 func eventuallySessionInput(t *testing.T, timeout time.Duration, fn func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

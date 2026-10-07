@@ -353,6 +353,7 @@ type Store interface {
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
+	ListChatHibernationCandidates(ctx context.Context) ([]domain.SessionID, error)
 	// DeleteSession removes a session row only if it is still in seed state
 	// (no workspace, runtime handle, agent session id, or prompt; not
 	// terminated). Returns deleted=true when removal happened; deleted=false
@@ -2752,31 +2753,18 @@ func (m *Manager) recordAgentExited(ctx context.Context, rec domain.SessionRecor
 // HibernateIdleChats releases eligible Chat provider processes. The chat
 // service rechecks turn completion and controller quiescence under its send lock.
 func (m *Manager) HibernateIdleChats(ctx context.Context) error {
-	records, err := m.store.ListAllSessions(ctx)
+	ids, err := m.store.ListChatHibernationCandidates(ctx)
 	if err != nil {
 		return fmt.Errorf("list chats for hibernation: %w", err)
 	}
 	var errs []error
-	for _, candidate := range records {
-		if !candidate.EligibleForChatHibernation() {
-			continue
-		}
-		err := m.hibernateEligibleChat(ctx, candidate.ID)
+	for _, id := range ids {
+		err := m.hibernateEligibleChat(ctx, id)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("hibernate chat %s: %w", candidate.ID, err))
+			errs = append(errs, fmt.Errorf("hibernate chat %s: %w", id, err))
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// HibernateChatIfIdle handles a view closing without waiting for the next
-// sweep. It shares the same operation and transition gates as the sweep.
-func (m *Manager) HibernateChatIfIdle(ctx context.Context, id domain.SessionID) error {
-	rec, found, err := m.store.GetSession(ctx, id)
-	if err != nil || !found || !rec.EligibleForChatHibernation() {
-		return err
-	}
-	return m.hibernateEligibleChat(ctx, id)
 }
 
 func (m *Manager) hibernateEligibleChat(ctx context.Context, id domain.SessionID) error {

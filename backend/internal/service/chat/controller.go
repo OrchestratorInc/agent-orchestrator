@@ -230,9 +230,8 @@ type Controller struct {
 	dispatchingTurnID string
 	// A compact request can be accepted before its provider turn starts.
 	compactionPending bool
-	// A successful rename is not durable in AO until the provider's matching
-	// notification has projected. Keep the provider alive across that gap.
-	pendingTitle string
+	// Provider calls keep automatic hibernation out without blocking explicit Kill.
+	operations int
 	// ackedTurnID is the turn the PROVIDER has confirmed it started, which lags
 	// pendingTurnID by the round trip between turn/start returning and the
 	// turn-started notification arriving. Interrupt needs the distinction: a
@@ -282,6 +281,17 @@ type Controller struct {
 	stopped  chan struct{}
 	once     sync.Once
 	closeErr error
+}
+
+func (c *Controller) beginOperation() func() {
+	c.mu.Lock()
+	c.operations++
+	c.mu.Unlock()
+	return func() {
+		c.mu.Lock()
+		c.operations--
+		c.mu.Unlock()
+	}
 }
 
 // ErrNoActiveTurn reports an interrupt with nothing to cancel.
@@ -3226,12 +3236,6 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		if event.ControllerState == ports.ChatControllerStopped && !suppressStoppedActivity {
 			c.reportActivity(ctx, domain.ActivityExited, "chat.controller.stopped", now)
 		}
-	case ports.ChatEventThreadRenamed:
-		c.mu.Lock()
-		if c.pendingTitle == NormalizeTitle(event.Title) {
-			c.pendingTitle = ""
-		}
-		c.mu.Unlock()
 	case ports.ChatEventAccountChanged:
 		if event.Account != nil && event.Account.ReauthRequired {
 			c.reportActivity(ctx, domain.ActivityWaitingInput, "chat.account.reauth", now)
