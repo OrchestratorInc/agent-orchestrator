@@ -1,0 +1,108 @@
+package chat
+
+import (
+	"cmp"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
+	"path"
+	"path/filepath"
+	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
+	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
+)
+
+var _ reportsvc.ArtifactRecorder = (*Service)(nil)
+
+// RecordReportedArtifact shows an HTML page a chat agent reported with
+// ao report --artifact in the turn it is running. It is best effort and never
+// fails the report: a terminal session, no turn in flight, a reference that is
+// not an HTML file in the session's artifact directory, or any error is only
+// logged.
+func (s *Service) RecordReportedArtifact(ctx context.Context, id domain.SessionID, reference string) {
+	if err := s.recordReportedArtifact(ctx, id, reference); err != nil {
+		s.log.Debug("reported artifact not shown in the thread", "session", id, "reference", reference, "error", err)
+	}
+}
+
+func (s *Service) recordReportedArtifact(ctx context.Context, id domain.SessionID, reference string) error {
+	record, err := s.requireChatSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	dir := cmp.Or(record.Metadata.ArtifactDir, sessionartifacts.Dir(s.dataDir, id))
+	rel, ok := artifactRelPath(dir, reference)
+	if !ok {
+		return errors.New("not in the session's artifact directory")
+	}
+	if ext := strings.ToLower(path.Ext(rel)); ext != ".html" && ext != ".htm" {
+		return errors.New("not an HTML page")
+	}
+	// The same confinement the artifact file route serves with.
+	file, _, _, err := previewutil.OpenWorkspaceFile(dir, rel)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", rel, err)
+	}
+	_ = file.Close()
+	controller, err := s.Controller(id)
+	if err != nil {
+		return err
+	}
+	return controller.recordArtifact(ctx, rel)
+}
+
+// artifactRelPath is reference as a slash-separated path inside dir: an
+// absolute path under dir, or a path relative to it, once cleaned.
+func artifactRelPath(dir, reference string) (string, bool) {
+	if dir == "" {
+		return "", false
+	}
+	rel := filepath.Clean(reference)
+	if filepath.IsAbs(rel) {
+		var err error
+		if rel, err = filepath.Rel(filepath.Clean(dir), rel); err != nil {
+			return "", false
+		}
+	}
+	if !filepath.IsLocal(rel) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
+// recordArtifact shows a reported HTML artifact in the turn in flight, as a
+// system activity identified by its "artifact" discriminator. The same file
+// reported again in that turn updates its one row.
+func (c *Controller) recordArtifact(ctx context.Context, rel string) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	providerTurnID, ok := c.awaitAcknowledgedTurn(ctx)
+	if !ok {
+		return ErrNoActiveTurn
+	}
+	name := path.Base(rel)
+	fileURL := "/api/v1/sessions/" + url.PathEscape(string(c.sessionID)) + "/artifact-files/" + (&url.URL{Path: rel}).EscapedPath()
+	detail, err := json.Marshal(map[string]any{
+		"event":    "artifact",
+		"artifact": map[string]string{"path": rel, "name": name, "url": fileURL},
+	})
+	if err != nil {
+		return fmt.Errorf("encode artifact detail: %w", err)
+	}
+	if err := c.store.UpsertActivity(ctx, c.conversation.ID, providerTurnID, domain.ConversationActivity{
+		ID:             c.newID(),
+		Kind:           domain.ActivityKindSystem,
+		Status:         domain.ActivityStatusCompleted,
+		Summary:        name,
+		Detail:         detail,
+		ProviderItemID: "artifact:" + providerTurnID + ":" + rel,
+	}, c.now()); err != nil {
+		return fmt.Errorf("record artifact on turn %s: %w", providerTurnID, err)
+	}
+	return nil
+}
