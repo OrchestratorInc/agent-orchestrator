@@ -3,15 +3,24 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 type failingProvisionStore struct {
-	*fakeStore
+	Store
 	setErr   error
 	failIDs  map[domain.SessionID]bool
 	attempts map[domain.SessionID]int
@@ -22,7 +31,7 @@ func (s *failingProvisionStore) SetSessionProvisionState(ctx context.Context, id
 	if s.failIDs[id] && s.setErr != nil {
 		return false, s.setErr
 	}
-	return s.fakeStore.SetSessionProvisionState(ctx, id, state, message, now)
+	return s.Store.SetSessionProvisionState(ctx, id, state, message, now)
 }
 
 func TestStartupSafetyDoesNotAbortOnInterruptedProvisionStateWrite(t *testing.T) {
@@ -35,7 +44,7 @@ func TestStartupSafetyDoesNotAbortOnInterruptedProvisionStateWrite(t *testing.T)
 		}
 	}
 	store := &failingProvisionStore{
-		fakeStore: st, setErr: errors.New("database is locked"),
+		Store: st, setErr: errors.New("database is locked"),
 		failIDs:  map[domain.SessionID]bool{"mer-1": true, "mer-4": true},
 		attempts: map[domain.SessionID]int{},
 	}
@@ -83,6 +92,120 @@ func TestStartupSafetyDoesNotAbortOnInterruptedProvisionStateWrite(t *testing.T)
 	}
 }
 
+func TestKillPreservesPublishedWorkspaceAfterStartupSettlementFailure(t *testing.T) {
+	for _, setup := range []domain.SessionProvisionStepStatus{domain.SessionProvisionStepRunning, domain.SessionProvisionStepDone, ""} {
+		for _, dirty := range []bool{false, true} {
+			t.Run(string(setup)+"/dirty="+strconv.FormatBool(dirty), func(t *testing.T) {
+				ctx := context.Background()
+				dataDir, repo := t.TempDir(), newManagerGitRepo(t)
+				st, err := sqlite.Open(dataDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = st.Close() }()
+				project := domain.ProjectRecord{ID: "mer", Path: repo, Config: testRoleAgents()}
+				project.Config.DefaultBranch = "main"
+				if setup != "" {
+					project.Config.PostCreate = []string{"true"}
+				}
+				if err := st.UpsertProject(ctx, project); err != nil {
+					t.Fatal(err)
+				}
+				steps := []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepAgent, Status: domain.SessionProvisionStepPending}}
+				if setup != "" {
+					steps = append(steps, domain.SessionProvisionStep{ID: domain.SessionProvisionStepSetup, Status: setup})
+				}
+				rec, err := st.CreateSession(ctx, domain.SessionRecord{ProjectID: domain.ProjectID(project.ID), Kind: domain.KindWorker,
+					Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+					ProvisionState: domain.SessionProvisionProvisioning, ProvisionSteps: steps,
+					CreatedAt: time.Now().UTC(), Metadata: domain.SessionMetadata{Prompt: "durably queued task"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				ws, err := gitworktree.New(gitworktree.Options{ManagedRoot: t.TempDir(), RepoResolver: gitworktree.StaticRepoResolver{"mer": repo}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				info, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: domain.ProjectID(project.ID), SessionID: rec.ID,
+					Kind: rec.Kind, Branch: "ao/mer-1/interrupted", BaseBranch: "main", RepoPath: repo})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := st.SetSessionProvisionSteps(ctx, rec.ID, steps, time.Now().UTC()); err != nil {
+					t.Fatal(err)
+				}
+				payload := filepath.Join(info.Path, "retained-payload")
+				const contents = "prior writer payload\n"
+				if err := os.WriteFile(payload, []byte(contents), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if !dirty {
+					runManagerGit(t, info.Path, "add", "retained-payload")
+					runManagerGit(t, info.Path, "commit", "-m", "retain prior writer payload")
+				}
+				if got := runManagerGit(t, info.Path, "status", "--porcelain"); (got != "") != dirty {
+					t.Fatalf("workspace dirty=%v, want %v: %s", got != "", dirty, got)
+				}
+				if got := runManagerGit(t, repo, "worktree", "list", "--porcelain"); !strings.Contains(got, "worktree "+info.Path+"\n") {
+					t.Fatalf("fixture workspace is not independently registered: %s", got)
+				}
+				if updated, err := st.SetSessionProvisionedWorkspace(ctx, rec.ID, info.Branch, info.Path, repo, time.Now().UTC()); err != nil || !updated {
+					t.Fatalf("publish workspace: updated=%v error=%v", updated, err)
+				}
+				// Reopen the native store. The replacement Manager owns no prior start.
+				if err := st.Close(); err != nil {
+					t.Fatal(err)
+				}
+				st, err = sqlite.Open(dataDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before, found, err := st.GetSession(ctx, rec.ID)
+				if err != nil || !found || before.Metadata.WorkspacePath != info.Path || before.ProvisionState != domain.SessionProvisionProvisioning || !reflect.DeepEqual(before.ProvisionSteps, steps) {
+					t.Fatalf("restored published start: row=%+v found=%v error=%v", before, found, err)
+				}
+				store := &failingProvisionStore{Store: st, setErr: errors.New("database is locked"),
+					failIDs: map[domain.SessionID]bool{rec.ID: true}, attempts: map[domain.SessionID]int{}}
+				launcher, rt := &recordingLauncher{}, &fakeRuntime{}
+				m := New(Deps{Runtime: rt, Agents: fakeAgents{}, Workspace: ws, Store: store,
+					Lifecycle: lifecycle.New(st, nil), Messenger: &fakeMessenger{}, Chat: launcher,
+					DataDir: dataDir, Logger: slog.New(slog.DiscardHandler)})
+				if err := m.ReconcileStartupSafety(ctx); err != nil {
+					t.Fatal(err)
+				}
+				unsettled, found, err := st.GetSession(ctx, rec.ID)
+				if err != nil || !found || !reflect.DeepEqual(unsettled, before) || store.attempts[rec.ID] != 1 {
+					t.Fatalf("failed startup settlement changed publication: row=%+v attempts=%d error=%v", unsettled, store.attempts[rec.ID], err)
+				}
+				store.setErr = nil // Writes recover before the public Kill dispatch.
+				if freed, err := m.Kill(ctx, rec.ID); freed || !errors.Is(err, ErrWorkspaceWriterStopUnproven) {
+					t.Errorf("Kill accepted an unowned published start: freed=%v error=%v", freed, err)
+				}
+				after, found, err := st.GetSession(ctx, rec.ID)
+				if err != nil || !found || !reflect.DeepEqual(after, before) || store.attempts[rec.ID] != 1 {
+					t.Errorf("Kill rewrote interrupted publication: row=%+v attempts=%d error=%v", after, store.attempts[rec.ID], err)
+				}
+				if got := runManagerGit(t, repo, "worktree", "list", "--porcelain"); !strings.Contains(got, "worktree "+info.Path+"\n") {
+					t.Errorf("Kill removed independently registered workspace: %s", got)
+				}
+				if body, err := os.ReadFile(payload); err != nil || string(body) != contents {
+					t.Errorf("Kill lost prior writer payload: %q error=%v", body, err)
+				}
+				if len(launcher.started) != 0 || rt.created != 0 {
+					t.Fatal("replacement Manager launched a controller")
+				}
+				if err := m.ReconcileBackground(ctx); err != nil {
+					t.Fatal(err)
+				}
+				settled, found, err := st.GetSession(ctx, rec.ID)
+				if err != nil || !found || settled.IsTerminated || settled.ProvisionState != domain.SessionProvisionFailed || settled.ProvisionError != interruptedProvisioningError || settled.Metadata != before.Metadata || store.attempts[rec.ID] != 2 {
+					t.Errorf("deferred startup settlement lost interruption provenance: row=%+v attempts=%d error=%v", settled, store.attempts[rec.ID], err)
+				}
+			})
+		}
+	}
+}
+
 func TestBackgroundProvisionRetryDoesNotTouchReusedSessionID(t *testing.T) {
 	m, st, _, _ := newManager()
 	created := time.Date(2026, time.September, 20, 12, 0, 0, 0, time.UTC)
@@ -92,7 +215,7 @@ func TestBackgroundProvisionRetryDoesNotTouchReusedSessionID(t *testing.T) {
 		CreatedAt: created,
 	}
 	store := &failingProvisionStore{
-		fakeStore: st, setErr: errors.New("database is locked"),
+		Store: st, setErr: errors.New("database is locked"),
 		failIDs: map[domain.SessionID]bool{"mer-1": true}, attempts: map[domain.SessionID]int{},
 	}
 	m.store = store

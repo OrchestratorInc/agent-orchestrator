@@ -32,6 +32,10 @@ that workspace. A shell or descendant can survive daemon-only `SIGKILL`, even
 when Git reports the workspace clean. A Chat controller generation can be
 reserved before `ControllerReady`; that reservation alone is not a committed
 provider/controller identity and does not permit recovery or teardown.
+If startup cannot persist its interrupted-start failure, Kill preserves the
+published provisioning row and refuses with unproven writer-stop evidence.
+Only the current Manager that owns and joins the start may mark it cancelled;
+stale starts with no published workspace retain ordinary cancellation.
 
 A synchronous runtime creation failure with no setup stage records the existing
 failed provision state only when the runtime reports no effect or successful

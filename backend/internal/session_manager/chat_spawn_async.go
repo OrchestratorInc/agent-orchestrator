@@ -559,6 +559,10 @@ func (m *Manager) cancelAsyncChatSpawn(ctx context.Context, id domain.SessionID)
 	if err != nil || !ok || !rec.ProvisionState.IsProvisioning() {
 		return err
 	}
+	// Only the owning Manager can join a published start's writer.
+	if run == nil && rec.Metadata.WorkspacePath != "" {
+		return ErrWorkspaceWriterStopUnproven
+	}
 	_, err = m.setProvisionState(ctx, id, domain.SessionProvisionFailed, "Session start was cancelled")
 	return err
 }
