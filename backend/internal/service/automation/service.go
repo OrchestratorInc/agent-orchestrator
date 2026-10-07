@@ -7,7 +7,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	rrule "github.com/teambition/rrule-go"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -235,24 +234,11 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 		if input.Timezone != nil {
 			timezone = *input.Timezone
 		}
+		anchorTimezone := ""
 		if input.RRule == nil && input.Cron == nil {
-			rruleText = rec.RRuleText
-			if strings.TrimSpace(timezone) != rec.Timezone {
-				loc, locationErr := time.LoadLocation(rec.Timezone)
-				if locationErr != nil {
-					return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", locationErr.Error(), nil)
-				}
-				option, parseErr := rrule.StrToROptionInLocation(rruleText, loc)
-				if parseErr != nil {
-					return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", parseErr.Error(), nil)
-				}
-				rruleText = option.RRuleString()
-				if !option.Dtstart.IsZero() {
-					rruleText = "DTSTART:" + option.Dtstart.Format("20060102T150405") + "\nRRULE:" + rruleText
-				}
-			}
+			rruleText, anchorTimezone = rec.RRuleText, rec.Timezone
 		}
-		schedule, scheduleErr := CanonicalizeSchedule(ScheduleInput{RRule: rruleText, Cron: cronText, Timezone: timezone}, now)
+		schedule, scheduleErr := CanonicalizeSchedule(ScheduleInput{RRule: rruleText, Cron: cronText, Timezone: timezone, AnchorTimezone: anchorTimezone}, now)
 		if scheduleErr != nil {
 			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", scheduleErr.Error(), nil)
 		}

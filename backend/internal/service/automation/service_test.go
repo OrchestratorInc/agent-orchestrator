@@ -302,6 +302,42 @@ func TestUpdateTimezonePreservesIntervalAnchor(t *testing.T) {
 	}
 }
 
+// A timezone-only edit must not delay a schedule that has already started:
+// re-anchoring a recent DTSTART in a zone further west would otherwise put it
+// in the future and skip every occurrence before it.
+func TestUpdateTimezoneDoesNotDelayStartedSchedule(t *testing.T) {
+	for _, tc := range []struct {
+		name, cron, rrule, to, next string
+	}{
+		{"hourly keeps cadence", "", "FREQ=HOURLY", "America/Los_Angeles", "2026-10-06T13:01:00Z"},
+		{"daily runs today", "0 9 * * *", "", "America/Los_Angeles", "2026-10-06T16:00:00Z"},
+		{"weekly runs today", "0 9 * * 2,4", "", "America/Los_Angeles", "2026-10-06T16:00:00Z"},
+		{"future anchor stays put", "", "DTSTART:20261101T093000Z\nRRULE:FREQ=DAILY;INTERVAL=2", "America/New_York", "2026-11-01T14:30:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, time.October, 6, 12, 0, 0, 0, time.UTC)
+			store := newFakeStore()
+			svc := New(Deps{Store: store, Clock: func() time.Time { return now }})
+			disabled := false
+			created, err := svc.Create(context.Background(), CreateInput{
+				ProjectID: "scheduled", DisplayName: "Recent", Prompt: "Review", Kind: domain.KindWorker,
+				Cron: tc.cron, RRule: tc.rrule, Timezone: "UTC", Enabled: &disabled,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			now = now.Add(5 * time.Minute)
+			got, err := svc.Update(context.Background(), created.ID, UpdateInput{Timezone: &tc.to})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Timezone != tc.to || got.NextRunAt.Format(time.RFC3339) != tc.next {
+				t.Fatalf("Update = %#v, want next %s in %s", got, tc.next, tc.to)
+			}
+		})
+	}
+}
+
 func TestUpdateTimezoneRejectsExplicitConflictingRule(t *testing.T) {
 	now := time.Date(2026, time.October, 6, 16, 0, 0, 0, time.UTC)
 	store := newFakeStore()
