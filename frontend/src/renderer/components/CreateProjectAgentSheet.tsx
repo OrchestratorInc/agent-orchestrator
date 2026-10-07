@@ -221,6 +221,10 @@ export function CreateProjectAgentSheet({
 		}
 	}, [authorizedAgents, open, orchestratorAgentTouched, sessionHistory, workerAgentTouched]);
 
+	// Unmount the dialog on submit; hiding or changing its modal mode can
+	// remount Radix content and replay its entrance/exit animations.
+	if (isBusy) return null;
+
 	return (
 		<Dialog.Root
 			open={open && !settingsOpen}

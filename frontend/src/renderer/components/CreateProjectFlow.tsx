@@ -118,7 +118,6 @@ type ProjectSource = "clone" | "local" | "workspace";
 /** Where the new project should live: on this machine or in AO Cloud. */
 type ProjectOffering = "local" | "cloud";
 type RemoteBrowseRequest = { kind: ProjectKind; preserveCurrentDialog: boolean } | { kind: "clone_destination" };
-type CreateProgressStage = "starting" | "connecting" | "creating" | "settingUp" | "finishing" | "complete";
 
 function initialCloneDetails(hostId?: string): CloneRepositoryDetails {
 	return {
@@ -132,17 +131,6 @@ function createProjectViewReducer(state: CreateProjectView, action: CreateProjec
 	if (action.type === "open") return action.view;
 	if (action.type === "closeProjectImport") return state === "blocked" || state === "prepare_git" ? null : state;
 	return state === action.view ? null : state;
-}
-
-function createProgressMessage(stage: CreateProgressStage, workspace: boolean): string {
-	switch (stage) {
-		case "starting": return "Preparing the project";
-		case "connecting": return "Connecting to the repository";
-		case "creating": return workspace ? "Creating the workspace" : "Creating the project";
-		case "settingUp": return "Setting up the project";
-		case "finishing": return "Finishing project setup";
-		default: return "Project created";
-	}
 }
 
 // Shared create-project flow. The daemon owner determines the folder picker,
@@ -225,7 +213,6 @@ export function CreateProjectFlow({
 	const [isChoosingPath, setIsChoosingPath] = useState(false);
 	const [isCreating, setIsCreating] = useState(false);
 	const [isInitializing, setIsInitializing] = useState(false);
-	const [createProgress, setCreateProgress] = useState({ open: false, value: 0, stage: "starting" as CreateProgressStage });
 	const [isPreparingGit, setIsPreparingGit] = useState(false);
 	const [repositorySetup, setRepositorySetup] = useState<"NOT_A_GIT_REPO" | "PROJECT_UNBORN" | null>(null);
 	const [repositorySetupWarning, setRepositorySetupWarning] = useState<string | null>(null);
@@ -248,27 +235,7 @@ export function CreateProjectFlow({
 	const setCloneDialogOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "clone" } : { type: "close", view: "clone" });
 	const setFolderPickerOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "folder" } : { type: "close", view: "folder" });
 	const setProjectImportStep = (step: ProjectImportStep | null) => dispatchView(step ? { type: "open", view: step } : { type: "closeProjectImport" });
-	useEffect(() => {
-		if (!createProgress.open) return;
-		const startedAt = Date.now();
-		const updateProgress = () => {
-			const elapsed = Date.now() - startedAt;
-			if (elapsed < 800) {
-				setCreateProgress({ open: true, stage: "starting", value: Math.min(12, 4 + elapsed / 100) });
-			} else if (elapsed < 1800) {
-				setCreateProgress({ open: true, stage: "connecting", value: 12 + ((elapsed - 800) / 1000) * 18 });
-			} else if (elapsed < 5000) {
-				setCreateProgress({ open: true, stage: "creating", value: 30 + ((elapsed - 1800) / 3200) * 38 });
-			} else if (elapsed < 7600) {
-				setCreateProgress({ open: true, stage: "settingUp", value: 68 + ((elapsed - 5000) / 2600) * 17 });
-			} else {
-				setCreateProgress({ open: true, stage: "finishing", value: Math.min(90, 85 + (elapsed - 7600) / 1000) });
-			}
-		};
-		updateProgress();
-		const timer = window.setInterval(updateProgress, 250);
-		return () => window.clearInterval(timer);
-	}, [createProgress.open]);
+
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const resetProjectImportState = () => {
 		setProjectValidation(null);
@@ -510,20 +477,15 @@ export function CreateProjectFlow({
 	}, [sourceSignal]);
 
 	const createProject = async (selection: CreateProjectAgentSelection) => {
-		if (!selectedPath) return;
+		if (!selectedPath || isCreating || isInitializing) return;
 		setError(null);
 		setIsCreating(true);
-		const showProgress = Boolean(cloneSelection);
-		if (showProgress) {
-			setCreateProgress({ open: true, stage: "starting", value: 0 });
-		}
+		useUiStore.getState().setProjectCreationPending(true);
 		try {
 			if (cloneSelection) {
 				const prepared = preparedClone.current();
 				if (!prepared) throw new Error(t("createProject.couldNotAdd"));
 				await onCreateProject({ path: selectedPath, clonePreparationId: prepared.preparationId, ...selection });
-				setCreateProgress({ open: true, stage: "complete", value: 100 });
-				await new Promise((resolve) => window.setTimeout(resolve, 180));
 				setSelectedPath(null);
 				setCloneSelection(null);
 				preparedClone.complete();
@@ -551,10 +513,6 @@ export function CreateProjectFlow({
 			...(defaultBranch ? { defaultBranch } : {}),
 			...selection,
 		});
-			if (showProgress) {
-				setCreateProgress({ open: true, stage: "complete", value: 100 });
-				await new Promise((resolve) => window.setTimeout(resolve, 180));
-			}
 			setSelectedPath(null);
 		} catch (err) {
 			const code = err instanceof Error && "code" in err ? (err.code as string | undefined) : undefined;
@@ -591,7 +549,7 @@ export function CreateProjectFlow({
 				setSelectedPath(null);
 			}
 		} finally {
-			setCreateProgress((current) => ({ ...current, open: false }));
+			useUiStore.getState().setProjectCreationPending(false);
 			setIsCreating(false);
 			setIsInitializing(false);
 		}
@@ -786,7 +744,7 @@ export function CreateProjectFlow({
 					error,
 					label,
 				})}
-			<CreateProjectFlowBackdrop open={modePickerOpen || cloneDialogOpen || folderDialogOpen || selectedPath !== null || createProgress.open || childTransitioning || projectImportOpen || remoteBrowse !== null} />
+			{!isCreating && !isInitializing ? <CreateProjectFlowBackdrop open={modePickerOpen || cloneDialogOpen || folderDialogOpen || selectedPath !== null || childTransitioning || projectImportOpen || remoteBrowse !== null} /> : null}
 			{hasModePicker && embedded && !modePickerOpen && !cloneDialogOpen && selectedPath === null && (
 				<div className="flex w-full flex-col items-center gap-3">
 					{cloudEnabled && offering === "cloud" ? (
@@ -985,7 +943,7 @@ export function CreateProjectFlow({
 						: undefined
 				}
 				onSubmit={createProject}
-				open={selectedPath !== null && !createProgress.open}
+				open={selectedPath !== null}
 				path={selectedPath}
 				repositorySetupNeeded={repositorySetup !== null}
 				repositorySetupWarning={repositorySetupWarning}
@@ -1003,11 +961,7 @@ export function CreateProjectFlow({
 					else void chooseDirectory(remoteBrowse.kind, path, remoteBrowse.preserveCurrentDialog);
 				}}
 			/> : null}
-			<CreateProjectProgressDialog
-				message={createProgressMessage(createProgress.stage, selectedKind === "workspace")}
-				open={createProgress.open}
-				progress={createProgress.value}
-			/>
+
 			{error && !hasModePicker && (
 				<span className="sr-only" role="status">
 					{error}
@@ -1174,24 +1128,6 @@ function CreateProjectFlowBackdrop({ open }: { open: boolean }) {
 		</AnimatePresence>,
 		document.body,
 	);
-}
-
-function CreateProjectProgressDialog({ message, open, progress }: { message: string; open: boolean; progress: number }) {
-	const { t } = useTranslation();
-	const roundedProgress = Math.round(progress);
-	return <Dialog.Root open={open}><Dialog.Portal><Dialog.Content
-		className="fixed left-1/2 top-1/2 z-overlay w-[min(440px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-border bg-popover p-0 text-popover-foreground shadow-xl data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none"
-		onEscapeKeyDown={(event) => event.preventDefault()}
-		onInteractOutside={(event) => event.preventDefault()}
-		onPointerDownOutside={(event) => event.preventDefault()}
-	><div className="px-5 pb-5 pt-5">
-		<Dialog.Title className="text-[18px] font-semibold text-[var(--color-text-import-title)]">{t("createProject.cloneProgressTitle", { defaultValue: "Creating the project" })}</Dialog.Title>
-		<Dialog.Description className="sr-only">{t("createProject.cloneProgressDescription", { defaultValue: "Creating the project" })}</Dialog.Description>
-		<div className="mt-6 space-y-3">
-			<div aria-label={`${roundedProgress}%`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={roundedProgress} className="h-2 w-full overflow-hidden rounded-full bg-muted" role="progressbar"><div className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out" style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} /></div>
-			<p className="min-h-5 text-[13px] text-muted-foreground" role="status">{message}</p>
-		</div>
-	</div></Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
 function CreateProjectSourceDialog({

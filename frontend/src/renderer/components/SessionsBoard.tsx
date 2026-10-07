@@ -1,3 +1,4 @@
+import { OrchestratorLoadingScreen } from "./OrchestratorLoadingScreen";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
@@ -233,6 +234,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	) : boardOwnsNotificationCenter ? (
 		<NotificationCenter />
 	) : undefined;
+
+	if (projectId && (isProvisioning || projectActions.isSpawning)) {
+		return <div className="relative h-full"><OrchestratorLoadingScreen /></div>;
+	}
 
 	return (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="board" data-host-id={hostId} data-project-id={projectId}>

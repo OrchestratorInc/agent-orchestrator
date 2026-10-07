@@ -1,3 +1,4 @@
+import { OrchestratorLoadingScreen } from "../components/OrchestratorLoadingScreen";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
@@ -33,7 +34,7 @@ import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
 import { useDaemonStatus } from "../hooks/useDaemonStatus";
 import { useOpenShellTerminal } from "../hooks/useShellTerminals";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
-import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKey, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
+import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKey, toWorkspaceSession, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId, hasTrustedApiBaseUrl } from "../lib/api-client";
@@ -427,6 +428,11 @@ function ShellLayout() {
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
 	const setProjectProvisioning = useUiStore((state) => state.setProjectProvisioning);
+	const openingOrchestrator = useUiStore((state) =>
+		state.projectCreationPending || Boolean(
+			routeParams.projectId && state.provisioningProjectIds.has(sessionUiKey(routeParams.projectId, routeParams.hostId)),
+		),
+	);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const replacementErrorProjectId = Object.keys(orchestratorReplacementErrors)[0] ?? null;
 	const isStartupLoading =
@@ -485,6 +491,7 @@ function ShellLayout() {
 		// surface the retry banner; a late success still navigates below and
 		// the board clears the banner once the orchestrator appears.
 		const provisioningGuard = window.setTimeout(() => {
+			if (!useUiStore.getState().provisioningProjectIds.has(workspace.id)) return;
 			setProjectProvisioning(workspace.id, false);
 			setOrchestratorStartupError(
 				workspace.id,
@@ -518,13 +525,15 @@ function ShellLayout() {
 				source,
 			});
 			const sessionId = spawnData.session.id;
-			window.clearTimeout(provisioningGuard);
-			setProjectProvisioning(workspace.id, false);
-			// Wait for the refetch so the session route never renders before
-			// the new session is in the workspace query (which would flash
-			// the session-not-found state). The daemon just created it, so
-			// one invalidate is enough — no polling loop.
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+			// Keep the same loading surface until the conversation or terminal is ready.
+			// The response is already an addressable session. Publish it before
+			// opening Chat; a background list refresh must not gate navigation.
+			await queryClient.cancelQueries({ queryKey: workspaceQueryKey });
+			queryClient.setQueryData<WorkspaceSummary[]>(workspaceQueryKey, (current = []) =>
+				current.map((item) => item.id === workspace.id
+					? { ...item, sessions: [toWorkspaceSession(spawnData.session, { id: workspace.id, name: workspace.name }), ...item.sessions.filter((session) => session.id !== sessionId)] }
+					: item),
+			);
 			void navigate({
 				to: "/projects/$projectId/sessions/$sessionId",
 				params: { projectId: workspace.id, sessionId },
@@ -561,17 +570,17 @@ function ShellLayout() {
 				sessions: [],
 			};
 			void captureRendererEvent(`ao.renderer.${source}_succeeded`, { project_id: workspace.id });
+			// A pre-create list request must not erase the newly registered project.
+			await queryClient.cancelQueries({ queryKey: workspaceQueryKey });
 			updateWorkspaces((current) => [workspace, ...current.filter((item) => item.id !== workspace.id)]);
 			setOrchestratorStartupError(workspace.id, null);
 			setProjectProvisioning(workspace.id, true);
-			// Navigate to the project board immediately so the IDE paints, then
-			// hand off to the detached provisioning flow. Resolving here (rather
-			// than after the spawn) is what closes the setup modal and makes
-			// the board usable while the orchestrator starts in the background.
-			void navigate({ to: "/projects/$projectId", params: { projectId: workspace.id } });
+			// Close setup immediately. A single loading surface covers the board
+			// and session routes until the orchestrator UI is ready.
+			await navigate({ to: "/projects/$projectId", params: { projectId: workspace.id } });
 			void provisionOrchestrator(workspace, input, source);
 		},
-		[navigate, provisionOrchestrator, setOrchestratorStartupError, setProjectProvisioning, updateWorkspaces],
+		[navigate, provisionOrchestrator, queryClient, setOrchestratorStartupError, setProjectProvisioning, updateWorkspaces],
 	);
 
 	const createProject = useCallback(
@@ -1289,13 +1298,14 @@ function ShellLayout() {
 						remoteFailedHostIds={remoteFailedHostIds}
 					/>
 					<main className={cn("flex min-w-0 flex-1 flex-col overflow-x-hidden", !sidebarHasLayout && "sidebar-hidden")}>
-						<div className="min-h-0 flex-1 overflow-x-hidden">
+						<div className="relative min-h-0 flex-1 overflow-x-hidden" data-orchestrator-page>
 							{/* Board/session routes render inside the same inset box the welcome board and settings paint for themselves, so every screen sits within the app's outer boundary. */}
 							<ShellCenter
 								hideShellTopbar={hideShellTopbar}
 								isSessionRoute={Boolean(routeParams.sessionId)}
 								selfFramedCenterPanel={selfFramedCenterPanel}
 							/>
+							{openingOrchestrator ? <OrchestratorLoadingScreen framed /> : null}
 						</div>
 						</main>
 					</div>

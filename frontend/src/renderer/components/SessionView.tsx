@@ -658,6 +658,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// the actual terminal attachment before dismissing the startup view.
 	const expectsTerminal = session?.mode !== "chat" && !browserOnly;
 	const sessionReady = expectsTerminal ? terminalAttached : cloudStage === "connected";
+	useEffect(() => {
+		if (session?.kind !== "orchestrator" || session.cloud || session.mode === "chat") return;
+		if (terminalAttached || session.provisionState === "failed") {
+			useUiStore.getState().setProjectProvisioning(session.workspaceId, false, hostId);
+		}
+	}, [hostId, session?.kind, session?.cloud, session?.mode, session?.provisionState, session?.workspaceId, terminalAttached]);
 	const connectedSessionRef = useRef("");
 	if (sessionReady) connectedSessionRef.current = sessionId;
 	const hasConnectedOnce = connectedSessionRef.current === sessionId;
@@ -1765,7 +1771,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// direct control-plane lookup is in flight; only show "not found" after
 	// both sources have settled.
 	const cloudSessionResolving = cloudLookupEnabled && cloudRouteSession.isLoading;
-	if (!session && (hostId ? !remoteSessionQuery.isLoading : !workspaceQuery.isLoading && !cloudSessionResolving)) {
+	if (!session && (hostId ? !remoteSessionQuery.isLoading : !workspaceQuery.isLoading && !workspaceSessionQuery.isLoading && !cloudSessionResolving)) {
 		const remoteCode = hostId && remoteSessionQuery.error ? apiErrorCode(remoteSessionQuery.error) : undefined;
 		const remoteError = hostId ? t(remoteCode === "BAD_PASSWORD" ? "remote.hostUnauthorized"
 			: remoteCode === "HOST_API_INCOMPATIBLE" ? "remote.hostIncompatible"

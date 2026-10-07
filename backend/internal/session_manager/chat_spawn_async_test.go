@@ -1046,3 +1046,77 @@ func TestSpawnAsyncChat_PreparedWorktreeChecklistSkipsFetch(t *testing.T) {
 		t.Fatalf("steps = %q, want %q", got, want)
 	}
 }
+
+func TestSpawnOrchestratorPrefersAsyncChat(t *testing.T) {
+	launcher := &recordingLauncher{}
+	m, st, rt := newChatManager(launcher)
+	deferred := deferredBackground(m)
+	cfg := asyncChatSpawnConfig("")
+	cfg.Kind = domain.KindOrchestrator
+	cfg.RequestedMode = ""
+	cfg.Async = true
+	rec, _, _, err := m.Spawn(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Mode != domain.SessionModeChat || rec.ProvisionState != domain.SessionProvisionProvisioning {
+		t.Fatalf("session mode/state = %s/%s", rec.Mode, rec.ProvisionState)
+	}
+	if len(launcher.started) != 0 || rt.created != 0 {
+		t.Fatal("agent launched before response")
+	}
+	if len(*deferred) != 1 {
+		t.Fatalf("background starts = %d", len(*deferred))
+	}
+	(*deferred)[0]()
+	if st.sessions[rec.ID].ProvisionState != domain.SessionProvisionReady {
+		t.Fatalf("startup failed: %+v", st.sessions[rec.ID])
+	}
+	if len(launcher.started) != 1 {
+		t.Fatalf("controllers started = %d", len(launcher.started))
+	}
+}
+
+func TestSpawnOrchestratorFallsBackToTerminalWhenChatUnsupported(t *testing.T) {
+	launcher := &recordingLauncher{preflightErr: ports.ErrChatUnsupported}
+	m, _, rt := newChatManager(launcher)
+	cfg := asyncChatSpawnConfig("")
+	cfg.Kind = domain.KindOrchestrator
+	cfg.RequestedMode = ""
+	rec, _, _, err := m.Spawn(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Mode != domain.SessionModeTUI || rt.created != 1 {
+		t.Fatalf("mode/runtime = %s/%d", rec.Mode, rt.created)
+	}
+	if len(launcher.started) != 0 {
+		t.Fatal("unsupported Chat launched a controller")
+	}
+}
+
+func TestSpawnOrchestratorAsyncFailurePreservesSessionForRetry(t *testing.T) {
+	launcher := &recordingLauncher{startErr: errors.New("provider refused the session")}
+	m, st, _ := newChatManager(launcher)
+	deferred := deferredBackground(m)
+	cfg := asyncChatSpawnConfig("")
+	cfg.Kind = domain.KindOrchestrator
+	rec, _, _, err := m.Spawn(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	(*deferred)[0]()
+	failed := st.sessions[rec.ID]
+	if failed.ProvisionState != domain.SessionProvisionFailed || failed.IsTerminated {
+		t.Fatalf("failed session = %+v", failed)
+	}
+	launcher.startErr = nil
+	_, _, err = m.retryFailedChatSpawn(context.Background(), failed, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	(*deferred)[1]()
+	if st.sessions[rec.ID].ProvisionState != domain.SessionProvisionReady {
+		t.Fatalf("retry failed: %+v", st.sessions[rec.ID])
+	}
+}

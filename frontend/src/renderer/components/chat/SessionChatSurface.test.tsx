@@ -222,6 +222,29 @@ afterEach(() => {
 });
 
 describe("SessionChatSurface link routing", () => {
+	it("keeps project loading through provisioning and conversation loading, then reveals chat", () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const orchestrator = { ...session, kind: "orchestrator" as const, provisionState: "provisioning" as const };
+		useUiStore.getState().setProjectProvisioning(session.workspaceId, true);
+		conversationState.snapshot = snapshotFor(session.id);
+		const view = render(<Wrapper client={queryClient}><SessionChatSurface session={orchestrator} /></Wrapper>);
+		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(true);
+		conversationState.isLoading = true;
+		view.rerender(<Wrapper client={queryClient}><SessionChatSurface session={{ ...orchestrator, provisionState: "ready" }} /></Wrapper>);
+		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(true);
+		conversationState.isLoading = false;
+		view.rerender(<Wrapper client={queryClient}><SessionChatSurface session={{ ...orchestrator, provisionState: "ready" }} /></Wrapper>);
+		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(false);
+	});
+
+	it("releases project loading to show a failed orchestrator's retry UI", () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		useUiStore.getState().setProjectProvisioning(session.workspaceId, true);
+		conversationState.snapshot = snapshotFor(session.id);
+		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, kind: "orchestrator", provisionState: "failed", provisionError: "branch already checked out" }} /></Wrapper>);
+		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(false);
+	});
+
 	it("keeps OpenCode approvals writable when its provider supplies Build/Plan mode", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], harness: "opencode" };
 		configState.options = [{

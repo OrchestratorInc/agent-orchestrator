@@ -102,6 +102,7 @@ const shellMocks = vi.hoisted(() => {
 			getQueryData: vi.fn(),
 			getQueryState: vi.fn(),
 			invalidateQueries: vi.fn(),
+			cancelQueries: vi.fn(),
 			prefetchQuery: vi.fn(async () => undefined),
 			setQueryData: vi.fn(),
 		},
@@ -163,6 +164,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
 	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
 	workspaceQueryOptions: {},
+	toWorkspaceSession: (session: { id: string }, project: { id: string; name: string }) => ({ ...session, workspaceId: project.id, workspaceName: project.name }),
 }));
 
 vi.mock("../lib/host-clients", () => ({
@@ -408,6 +410,8 @@ beforeEach(() => {
 	shellMocks.queryClient.getQueryData.mockReset().mockReturnValue(workspaces);
 	shellMocks.queryClient.getQueryState.mockReset().mockReturnValue({ dataUpdatedAt: 0 });
 	useUiStore.setState({
+		projectCreationPending: false,
+		provisioningProjectIds: new Set(),
 		createProjectNonce: 0,
 		developerMode: false,
 		folderDropRequest: null,
@@ -601,6 +605,48 @@ describe("shell workspace startup", () => {
 				},
 			},
 		});
+	});
+
+	it("keeps one rounded loading pane from submission through project and session navigation", async () => {
+		useUiStore.getState().setProjectCreationPending(true);
+		try {
+			const view = await renderShell();
+			const loading = screen.getByTestId("orchestrator-loading-screen");
+			expect(loading.parentElement).toHaveAttribute("data-orchestrator-page");
+			expect(loading).not.toHaveClass("fixed");
+			expect(screen.getByRole("status").closest(".center-panel-surface")).toBeInTheDocument();
+			shellMocks.state.routeParams = { projectId: "proj-1" };
+			act(() => {
+				useUiStore.getState().setProjectProvisioning("proj-1", true);
+				useUiStore.getState().setProjectCreationPending(false);
+			});
+			view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+			expect(screen.getByTestId("orchestrator-loading-screen")).toBe(loading);
+			shellMocks.state.routeParams = { projectId: "proj-1", sessionId: "sess-1" };
+			view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+			expect(screen.getByTestId("orchestrator-loading-screen")).toBe(loading);
+			act(() => useUiStore.getState().setProjectProvisioning("proj-1", false));
+			expect(screen.queryByTestId("orchestrator-loading-screen")).not.toBeInTheDocument();
+		} finally {
+			useUiStore.getState().setProjectCreationPending(false);
+			useUiStore.getState().setProjectProvisioning("proj-1", false);
+		}
+	});
+
+	it("opens the returned orchestrator without waiting for a workspace refetch", async () => {
+		shellMocks.state.daemonStatus = { state: "ready", port: 3001 };
+		vi.mocked(apiClient.POST)
+			.mockResolvedValueOnce({ data: { project: { id: "proj-new", name: "New", kind: "single_repo", path: "/repo/new" } } })
+			.mockResolvedValueOnce({ data: { session: { id: "orch-new", projectId: "proj-new", kind: "orchestrator", mode: "chat", provisionState: "provisioning" } } });
+		await renderShell();
+		await shellMocks.state.shellValue?.createProject?.({ path: "/repo/new", workerAgent: "codex", orchestratorAgent: "codex" });
+		await waitFor(() => expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-new", sessionId: "orch-new" },
+		}));
+		const publish = shellMocks.queryClient.setQueryData.mock.calls.at(-1)?.[1] as (current: WorkspaceSummary[]) => WorkspaceSummary[];
+		expect(publish([{ id: "proj-new", name: "New", sessions: [] } as unknown as WorkspaceSummary])[0].sessions[0]).toMatchObject({ id: "orch-new", mode: "chat", provisionState: "provisioning" });
+		expect(useUiStore.getState().provisioningProjectIds.has("proj-new")).toBe(true);
 	});
 
 	it("leaves the session topbar row to the session split instead of reserving a full-width shell row", async () => {

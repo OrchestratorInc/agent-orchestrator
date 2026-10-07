@@ -184,6 +184,8 @@ vi.mock("./CreateProjectAgentSheet", async (importOriginal) => ({
 	...(await importOriginal<typeof import("./CreateProjectAgentSheet")>()),
 	CreateProjectAgentSheet: ({
 		error,
+		isCreating,
+		isInitializing,
 		kind,
 		onSubmit,
 		open,
@@ -191,13 +193,15 @@ vi.mock("./CreateProjectAgentSheet", async (importOriginal) => ({
 		shake,
 	}: {
 		error?: string | null;
+		isCreating: boolean;
+		isInitializing: boolean;
 		kind: string;
 		onSubmit: (selection: { workerAgent: string; orchestratorAgent: string }) => Promise<void>;
 		open: boolean;
 		path: string | null;
 		shake?: boolean;
 	}) =>
-		open ? (
+		open && (isCreating || isInitializing) ? null : open ? (
 			<div className={shake ? "modal-shake" : undefined} data-kind={kind} data-path={path ?? ""} data-testid="agent-sheet">
 				{error ? <span>{error}</span> : null}
 				<button
@@ -376,7 +380,7 @@ beforeEach(() => {
 	githubDaemonMocks.saveGitHubPAT.mockReset().mockResolvedValue(undefined);
 	cloudMocks.signIn.mockReset();
 	window.localStorage.clear();
-	useUiStore.setState({ globalToast: null, globalToasts: [] });
+	useUiStore.setState({ globalToast: null, globalToasts: [], projectCreationPending: false });
 });
 
 describe("CreateProjectFlow remote host", () => {
@@ -722,7 +726,7 @@ describe("CreateProjectFlow droppedPath", () => {
 		expect(await screen.findByLabelText("Clone URL")).toHaveValue("");
 	});
 
-	it("keeps clone progress open without offering cancellation", async () => {
+	it("goes from clone agent setup directly to page loading without a progress modal", async () => {
 		const user = userEvent.setup();
 		let finishCreate!: () => void;
 		const onCreateProject = vi.fn(() => new Promise<void>((resolve) => {
@@ -740,15 +744,17 @@ describe("CreateProjectFlow droppedPath", () => {
 			path: "/repo/cloned",
 			clonePreparationId: "prep-cloned",
 		}));
-		expect(await screen.findByRole("dialog", { name: "Creating the project" })).toBeInTheDocument();
+		expect(useUiStore.getState().projectCreationPending).toBe(true);
+		expect(screen.queryByRole("dialog", { name: "Creating the project" })).not.toBeInTheDocument();
 
 		expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
 		fireEvent.keyDown(document, { key: "Escape" });
-		expect(screen.getByRole("dialog", { name: "Creating the project" })).toBeInTheDocument();
+		expect(useUiStore.getState().projectCreationPending).toBe(true);
 		expect(screen.queryByTestId("agent-sheet")).not.toBeInTheDocument();
 
 		await act(async () => finishCreate());
-		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Creating the project" })).not.toBeInTheDocument());
+		await waitFor(() => expect(useUiStore.getState().projectCreationPending).toBe(false));
+		expect(screen.queryByTestId("agent-sheet")).not.toBeInTheDocument();
 	});
 
 });

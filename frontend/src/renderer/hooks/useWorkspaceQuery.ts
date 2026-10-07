@@ -83,7 +83,7 @@ function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): 
 	};
 }
 
-function toWorkspaceSession(
+export function toWorkspaceSession(
 	session: components["schemas"]["ControllersSessionView"],
 	project: Pick<WorkspaceSummary, "id" | "name">,
 ): WorkspaceSession {

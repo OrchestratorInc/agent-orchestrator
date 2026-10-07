@@ -1,3 +1,4 @@
+import { useUiStore } from "../../stores/ui-store";
 /**
  * The central surface for a chat-mode session.
  *
@@ -461,6 +462,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(renderShellFallback
 			? unavailableConversationSnapshot(session)
 			: undefined);
+	// Project creation keeps one loading screen mounted across route and query
+	// changes. Release it only when this surface can show chat or its error.
+	useEffect(() => {
+		if (session.kind !== "orchestrator" || session.provisionState === "provisioning") return;
+		if (isLoading && !renderShellFallback) return;
+		useUiStore.getState().setProjectProvisioning(session.workspaceId, false, hostId);
+	}, [hostId, isLoading, renderShellFallback, session.kind, session.provisionState, session.workspaceId]);
 	const visibilityPresentationKind = agentSwitchVisibilityPresentationKind(shownSwitchPresentation);
 	useAgentSwitchPresentationVisibility({
 		localRouteKey: `session/${uiSessionId}`,

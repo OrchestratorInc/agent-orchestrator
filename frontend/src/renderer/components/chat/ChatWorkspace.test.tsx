@@ -1845,6 +1845,38 @@ describe("ChatWorkspace timeline", () => {
 		expect(onChooseSettings).not.toHaveBeenCalled();
 	});
 
+	it("shows startup progress for an orchestrator with no messages or turns", () => {
+		render(
+			<ChatWorkspace
+				sessionRole="orchestrator"
+				snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }}
+				session={{ ...chatSession, kind: "orchestrator", provisionState: "provisioning", provisionSteps: startingSteps("running") }}
+			/>,
+		);
+		expect(screen.getByTestId("orchestrator-startup-status")).toBeInTheDocument();
+		expect(screen.getByRole("status")).toHaveTextContent("Start Codex");
+		expect(screen.queryByTestId("session-startup")).not.toBeInTheDocument();
+		expect(screen.getByText("What do you want to work on?")).toBeInTheDocument();
+	});
+
+	it("shows startup failure and retry for an orchestrator with no messages or turns", async () => {
+		const user = userEvent.setup();
+		const resume = vi.fn();
+		render(
+			<ChatWorkspace
+				sessionRole="orchestrator"
+				snapshot={{ ...chatFixtureEmpty, controller: { state: "stopped" } }}
+				session={{ ...chatSession, kind: "orchestrator", provisionState: "failed", provisionError: "branch already checked out in another worktree", provisionSteps: startingSteps("running") }}
+				onResumeAgent={resume}
+			/>,
+		);
+		expect(screen.getByRole("alert")).toHaveTextContent("Session setup failed");
+		expect(screen.getByTestId("orchestrator-startup-status")).toHaveTextContent("branch already checked out in another worktree");
+		expect(screen.getByText("What do you want to work on?")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Retry start" }));
+		expect(resume).toHaveBeenCalledOnce();
+	});
+
 	it("keeps a failed start's checklist with the failed step and Retry", async () => {
 		const user = userEvent.setup();
 		const resume = vi.fn();

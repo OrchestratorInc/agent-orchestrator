@@ -1360,7 +1360,8 @@ function ChatWorkspaceContent({
 	);
 	// Empty chats center the prompt; once a turn or item exists the composer docks
 	// at the bottom and stays there for the rest of the session.
-	const conversationEmpty = snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0;
+	const compactStartup = sessionRole === "orchestrator" && startupState ? startup : undefined;
+	const conversationEmpty = snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || Boolean(compactStartup));
 	const { t } = useTranslation();
 	const [emptyChatPlaceholder] = useState(
 		() => EMPTY_CHAT_PLACEHOLDERS[Math.floor(Math.random() * EMPTY_CHAT_PLACEHOLDERS.length)],
@@ -1603,7 +1604,7 @@ function ChatWorkspaceContent({
 									newWorkDisabled={newWorkDisabled}
 									rollbackDisabled={Boolean(turn || rollbackPending || newWorkDisabled)}
 									localEchos={localEchos}
-									startup={startup}
+									startup={sessionRole === "orchestrator" ? undefined : startup}
 								/>
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
@@ -1707,6 +1708,7 @@ function ChatWorkspaceContent({
 										acceptedClientMessageIds={acceptedClientMessageIds}
 									/>
 								</div>
+								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
 							</div>
 						</div>
 					</div>
@@ -1747,6 +1749,25 @@ function ChatWorkspaceContent({
 				}}
 			/>
 		</section>
+	);
+}
+
+function OrchestratorStartupStatus({ failed, steps, error, agentName, onRetry, retrying, retryError }: ComponentProps<typeof SessionStartup>) {
+	const { t } = useTranslation();
+	const currentStep = steps.find((step) => step.status === "running") ?? steps.find((step) => step.status === "pending");
+	const stepLabel = currentStep?.id === "agent"
+		? t("chat.startup.step.agent", { agent: agentName })
+		: currentStep ? t(`chat.startup.step.${currentStep.id}`) : t("chat.startup.label");
+	return (
+		<div data-testid="orchestrator-startup-status" className="px-2 text-xs text-muted-foreground">
+			<div role={failed ? "alert" : "status"} className="flex items-center gap-2">
+				{failed ? <TriangleAlert aria-hidden="true" className="size-3.5 text-destructive" /> : <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />}
+				<span>{failed ? t("chat.startup.failed") : stepLabel}</span>
+				{failed && onRetry ? <button type="button" className="ml-auto text-foreground underline underline-offset-2" onClick={onRetry} disabled={retrying}>{retrying ? t("chat.startup.retrying") : t("chat.startup.retry")}</button> : null}
+			</div>
+			{failed && error ? <details className="mt-2"><summary className="cursor-pointer">Error details</summary><p className="mt-1 break-words">{error}</p></details> : null}
+			{retryError ? <p role="alert" className="mt-1 text-destructive">{retryError}</p> : null}
+		</div>
 	);
 }
 
@@ -3371,7 +3392,7 @@ function Timeline({
 		updateScrollbar();
 	}
 
-	if (timelineItems.length === 0 && !messageEdit && !turn) {
+	if (timelineItems.length === 0 && !messageEdit && !turn && !showStartup) {
 		return null;
 	}
 

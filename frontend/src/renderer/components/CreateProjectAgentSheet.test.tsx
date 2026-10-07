@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -29,7 +30,7 @@ beforeEach(() => {
 function renderSheet(
 	onSubmit = vi.fn().mockResolvedValue(undefined),
 	queryClient?: QueryClient,
-	options: { shake?: boolean; hostId?: string } = {},
+	options: { shake?: boolean; hostId?: string; isCreating?: boolean } = {},
 ) {
 	queryClient ??= new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	if (queryClient.getQueryData(agentReadinessQueryKey) === undefined) {
@@ -43,9 +44,10 @@ function renderSheet(
 	render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
+				<div data-orchestrator-page />
 				<CreateProjectAgentSheet
 					hostId={options.hostId}
-					isCreating={false}
+					isCreating={options.isCreating ?? false}
 					kind="single_repo"
 					onOpenChange={() => undefined}
 					onSubmit={onSubmit}
@@ -58,6 +60,40 @@ function renderSheet(
 	);
 	return onSubmit;
 }
+
+it("unmounts setup while the shell owns project loading", () => {
+	renderSheet(undefined, undefined, { isCreating: true });
+	expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+	expect(screen.queryByTestId("orchestrator-loading-screen")).not.toBeInTheDocument();
+});
+
+it("unmounts the modal on submit and does not bring it back when creation succeeds", async () => {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	queryClient.setQueryData(agentReadinessQueryKey, { agents: [agentReadiness("codex")] });
+	queryClient.setQueryData(workspaceQueryKey, []);
+	let finish!: () => void;
+	const pending = new Promise<void>((resolve) => { finish = resolve; });
+	function Harness() {
+		const [busy, setBusy] = useState(false);
+		const [open, setOpen] = useState(true);
+		return <QueryClientProvider client={queryClient}><TooltipProvider>
+			<div data-orchestrator-page />
+			<CreateProjectAgentSheet open={open} isCreating={busy} kind="single_repo" path="/repo/new-project" onOpenChange={setOpen} onSubmit={async () => {
+				setBusy(true);
+				await pending;
+				setOpen(false);
+				setBusy(false);
+			}} />
+		</TooltipProvider></QueryClientProvider>;
+	}
+	render(<Harness />);
+	await userEvent.click(await screen.findByRole("button", { name: "Create and start" }));
+	expect(screen.queryByTestId("orchestrator-loading-screen")).not.toBeInTheDocument();
+	expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+	await act(async () => finish());
+	expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+	expect(screen.queryByTestId("orchestrator-loading-screen")).not.toBeInTheDocument();
+});
 
 async function chooseOption(trigger: HTMLElement, optionName: string) {
 	await userEvent.click(trigger);
