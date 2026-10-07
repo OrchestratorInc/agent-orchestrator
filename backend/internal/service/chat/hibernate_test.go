@@ -1110,6 +1110,10 @@ func TestSendDuringHibernationAcceptsThenWakesNativeConversation(t *testing.T) {
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateCompleted
 	})
+	// Wait for projection to release the dispatch lock before testing shutdown.
+	if err := svc.DrainQueued(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
 	h.advance(6 * time.Minute)
 	rec, found, err := st.GetSession(ctx, testSession)
 	if err != nil || !found {
