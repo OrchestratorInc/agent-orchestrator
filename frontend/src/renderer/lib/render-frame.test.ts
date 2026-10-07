@@ -43,6 +43,9 @@ describe("render-frame helpers", () => {
 			{ url: "/api/v1/sessions/p-1/renders/r1" },
 			{ url: "/api/v1/sessions/p-1/artifact-files/" },
 			{ url: "https://evil.example/api/v1/sessions/p-1/artifact-files/x.html" },
+			{ url: "/api/v1/sessions/p-1/artifact-files/../../../config" },
+			{ url: "/api/v1/sessions/p-1/artifact-files/%2e%2e/renders/r1" },
+			{ url: "/api/v1/sessions/../artifact-files/x.html" },
 		]) {
 			expect(read(bad), JSON.stringify(bad)).toBeUndefined();
 		}

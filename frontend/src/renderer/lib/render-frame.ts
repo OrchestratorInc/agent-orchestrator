@@ -3,7 +3,7 @@ import type { ArtifactRef, ConversationActivity, RenderRef } from "../types/conv
 export const RENDER_MIN_HEIGHT = 80;
 export const RENDER_MAX_HEIGHT = 2000;
 const RENDER_PATH = /^\/api\/v1\/sessions\/[^/]+\/renders\/[^/]+$/;
-const ARTIFACT_URL = /^\/api\/v1\/sessions\/[^/]+\/artifact-files\/.+/;
+const ARTIFACT_URL = /^(\/api\/v1\/sessions\/[^/]+\/artifact-files\/).+/;
 const MAX_MEASURED_WIDTHS = 16;
 
 export function clampRenderHeight(height: number): number {
@@ -39,11 +39,16 @@ export function readArtifactRef(detail: ConversationActivity["detail"]): Artifac
 		!isRelativePath(artifact.path) ||
 		typeof artifact.name !== "string" ||
 		typeof artifact.url !== "string" ||
-		!ARTIFACT_URL.test(artifact.url)
+		!staysUnder(artifact.url, ARTIFACT_URL.exec(artifact.url)?.[1])
 	) {
 		return undefined;
 	}
 	return { path: artifact.path, name: artifact.name, url: artifact.url };
+}
+
+/** Whether url, once the browser resolves its dot segments (escaped ones too), is still under prefix. */
+function staysUnder(url: string, prefix: string | undefined): boolean {
+	return prefix !== undefined && new URL(url, "http://127.0.0.1").pathname.startsWith(prefix);
 }
 
 /** Non-empty, not rooted or drive-lettered, and no `..` segment. */
