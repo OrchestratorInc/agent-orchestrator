@@ -11,7 +11,7 @@ export type SystemRequirement = components["schemas"]["SystemRequirement"];
 export const systemRequirementsQueryKey = ["system-requirements"] as const;
 export const githubAuthTerminalQueryKey = ["github-auth-terminal"] as const;
 export const githubAuthAutoLoginOfferedQueryKey = ["github-auth-auto-login-offered"] as const;
-const GITHUB_AUTH_POLL_INTERVAL_MS = 2_500;
+const GITHUB_AUTH_POLL_INTERVAL_MS = 1_000;
 
 async function fetchSystemRequirements(): Promise<components["schemas"]["SystemRequirementsResponse"]> {
 	const { data, error } = await apiClient.GET("/api/v1/system/requirements");

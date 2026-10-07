@@ -62,12 +62,23 @@ export function useGitHubSetup({ poll = false }: { poll?: boolean } = {}) {
 	useEffect(() => {
 		if (!poll || (cliReady && authSatisfied)) return;
 		const timer = window.setInterval(() => {
-			// Each half is only worth probing while it can still change.
+			// Each half is only worth probing while it can still change. While a
+			// login terminal is open the auth query already polls on its own, so
+			// probing here too would just double the work.
 			if (!cliReady) void requirementsRef.current();
-			if (!authSatisfied) void authRef.current();
+			if (!authSatisfied && !loginRunning) void authRef.current();
 		}, STEP_POLL_INTERVAL_MS);
-		return () => window.clearInterval(timer);
-	}, [authSatisfied, cliReady, poll]);
+		// Approving in the browser pulls focus away from the app. Probe the moment
+		// it comes back instead of waiting out the next tick.
+		const onFocus = () => {
+			if (!authSatisfied) void authRef.current();
+		};
+		window.addEventListener("focus", onFocus);
+		return () => {
+			window.clearInterval(timer);
+			window.removeEventListener("focus", onFocus);
+		};
+	}, [authSatisfied, cliReady, loginRunning, poll]);
 
 	// Browser-based authentication can finish just before the CLI writes its
 	// credentials and exits. Recheck briefly after terminal completion instead
