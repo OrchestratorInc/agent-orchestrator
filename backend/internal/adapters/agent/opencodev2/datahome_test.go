@@ -13,19 +13,19 @@ import (
 func TestDataHomeIsSiblingOfUserDataHome(t *testing.T) {
 	parent := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", parent)
-	got, err := DataHome()
+	got, err := DataHome(context.Background())
 	if err != nil || got != filepath.Join(parent, "opencode-v2-home") {
 		t.Fatalf("DataHome = (%q, %v)", got, err)
 	}
 	t.Setenv("XDG_DATA_HOME", got)
-	if again, _ := DataHome(); again != got {
+	if again, _ := DataHome(context.Background()); again != got {
 		t.Fatalf("DataHome is not idempotent: %q != %q", again, got)
 	}
 }
 
 func TestDataHomeRejectsRelativeXDGDataHome(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "relative/data")
-	if _, err := DataHome(); err == nil || !strings.Contains(err.Error(), "must be absolute") {
+	if _, err := DataHome(context.Background()); err == nil || !strings.Contains(err.Error(), "must be absolute") {
 		t.Fatalf("DataHome error = %v, want absolute-path rejection", err)
 	}
 }
@@ -44,7 +44,7 @@ func TestDataHomeMigratesLegacyStoreWithoutOverwritingIsolatedState(t *testing.T
 		t.Fatal(err)
 	}
 
-	home, err := DataHome()
+	home, err := DataHome(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestDataHomeMigratesLegacyStoreWithoutOverwritingIsolatedState(t *testing.T
 	if err := os.WriteFile(filepath.Join(home, "opencode", "auth.json"), []byte("isolated-auth"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := DataHome(); err != nil {
+	if _, err := DataHome(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(filepath.Join(home, "opencode", "auth.json"))

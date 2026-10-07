@@ -38,13 +38,13 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	}, log)
 }
 
-func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	content, err := opencodev2.PrepareACPConfigContent(
 		cfg.Env["OPENCODE_CONFIG_CONTENT"], cfg.SystemPrompt, cfg.Permissions)
 	if err != nil {
 		return nil, nil, err
 	}
-	dataHome, err := opencodev2.DataHome()
+	dataHome, err := opencodev2.DataHome(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opencode-v2 ACP: prepare data home: %w", err)
 	}

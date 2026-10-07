@@ -264,7 +264,7 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 	}
 	env := request.Env
 	if request.AgentID == "opencode-v2" {
-		dataHome, err := opencodev2.DataHome()
+		dataHome, err := opencodev2.DataHome(ctx)
 		if err != nil {
 			return ports.AgentModelCatalog{}, fmt.Errorf("opencode-v2 model catalog: prepare data home: %w", err)
 		}

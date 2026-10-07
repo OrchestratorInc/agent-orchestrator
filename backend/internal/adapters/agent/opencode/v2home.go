@@ -1,14 +1,20 @@
 package opencode
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
+	"time"
+
+	moderncsqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const v2DataHomeDirName = "opencode-v2-home"
@@ -58,14 +64,21 @@ func V2NPMBinDir() (string, error) {
 	return filepath.Join(prefix, "bin"), nil
 }
 
-var v2DataMigrationMu sync.Mutex
+var v2DataMigrationLock = make(chan struct{}, 1)
 
 // PrepareV2DataHome returns the isolated OpenCode 2 data home after copying a
 // pre-isolation OpenCode store into it once. The legacy store is left intact
 // for OpenCode 1; an existing isolated store is never overwritten.
-func PrepareV2DataHome() (string, error) {
-	v2DataMigrationMu.Lock()
-	defer v2DataMigrationMu.Unlock()
+func PrepareV2DataHome(ctx context.Context) (string, error) {
+	select {
+	case v2DataMigrationLock <- struct{}{}:
+		defer func() { <-v2DataMigrationLock }()
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 
 	destinationHome, err := V2DataHome()
 	if err != nil {
@@ -94,7 +107,7 @@ func PrepareV2DataHome() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("opencode: stage legacy data migration: %w", err)
 	}
-	if err := copyTree(source, staging); err != nil {
+	if err := copyTree(ctx, source, staging); err != nil {
 		cleanupErr := os.RemoveAll(staging)
 		return "", errors.Join(fmt.Errorf("opencode: copy legacy data store: %w", err), cleanupErr)
 	}
@@ -111,7 +124,7 @@ func PrepareV2DataHome() (string, error) {
 	return destinationHome, nil
 }
 
-func copyTree(source, destination string) error {
+func copyTree(ctx context.Context, source, destination string) error {
 	sourceRoot, err := os.OpenRoot(source)
 	if err != nil {
 		return err
@@ -121,6 +134,9 @@ func copyTree(source, destination string) error {
 		return errors.Join(err, sourceRoot.Close())
 	}
 	walkErr := filepath.Walk(source, func(path string, info os.FileInfo, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -134,6 +150,9 @@ func copyTree(source, destination string) error {
 			}
 			return destinationRoot.Mkdir(relative, info.Mode().Perm())
 		}
+		if relative == "opencode.db" || relative == "opencode.db-wal" || relative == "opencode.db-shm" || relative == "opencode.db-journal" {
+			return nil
+		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("unsupported legacy data entry %q", path)
 		}
@@ -146,7 +165,7 @@ func copyTree(source, destination string) error {
 			_ = input.Close()
 			return err
 		}
-		_, copyErr := io.Copy(output, input)
+		copyErr := copyFileContext(ctx, output, input)
 		inputCloseErr := input.Close()
 		closeErr := output.Close()
 		if copyErr != nil {
@@ -157,5 +176,65 @@ func copyTree(source, destination string) error {
 		}
 		return closeErr
 	})
-	return errors.Join(walkErr, sourceRoot.Close(), destinationRoot.Close())
+	closeErr := errors.Join(sourceRoot.Close(), destinationRoot.Close())
+	if walkErr != nil || closeErr != nil {
+		return errors.Join(walkErr, closeErr)
+	}
+	databasePath := filepath.Join(source, "opencode.db")
+	if _, err := os.Stat(databasePath); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return snapshotSQLiteDatabase(ctx, databasePath, filepath.Join(destination, "opencode.db"))
+}
+
+func copyFileContext(ctx context.Context, destination io.Writer, source io.Reader) error {
+	buffer := make([]byte, 128*1024)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		read, readErr := source.Read(buffer)
+		if read > 0 {
+			if _, err := destination.Write(buffer[:read]); err != nil {
+				return err
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+}
+
+func snapshotSQLiteDatabase(ctx context.Context, source, destination string) error {
+	sourceURL := url.URL{Path: source}
+	db, err := sql.Open("sqlite", "file:"+sourceURL.EscapedPath()+"?mode=ro&_pragma=busy_timeout(0)")
+	if err != nil {
+		return err
+	}
+	for {
+		_, snapshotErr := db.ExecContext(ctx, `VACUUM INTO ?`, destination)
+		if snapshotErr == nil {
+			return db.Close()
+		}
+		if err := ctx.Err(); err != nil {
+			return errors.Join(err, db.Close())
+		}
+		var sqliteErr *moderncsqlite.Error
+		if !errors.As(snapshotErr, &sqliteErr) || sqliteErr.Code()&0xff != sqlite3.SQLITE_BUSY {
+			return errors.Join(snapshotErr, db.Close())
+		}
+		if err := os.Remove(destination); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return errors.Join(err, db.Close())
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(ctx.Err(), db.Close())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }

@@ -218,3 +218,50 @@ func TestResolveBinaryForMajorSharesOneProbeDeadline(t *testing.T) {
 		t.Fatalf("error = %v, want one overall deadline", err)
 	}
 }
+
+func TestResolveBinaryForMajorReturnsCancellationOverEarlierMismatch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	first, second := t.TempDir(), t.TempDir()
+	firstRan, secondRan := filepath.Join(t.TempDir(), "first"), filepath.Join(t.TempDir(), "second")
+	if err := os.WriteFile(filepath.Join(first, "opencode"), []byte("#!/bin/sh\nprintf hit > '"+firstRan+"'\nprintf '1.18.33\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(second, "opencode"), []byte("#!/bin/sh\nprintf hit > '"+secondRan+"'\nexec /bin/sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", first+string(os.PathListSeparator)+second)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("VOLTA_HOME", t.TempDir())
+	t.Setenv("FNM_DIR", t.TempDir())
+	oldPaths := opencodeUnixPaths
+	opencodeUnixPaths = nil
+	t.Cleanup(func() { opencodeUnixPaths = oldPaths })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := ResolveBinaryForMajor(ctx, 2)
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(secondRan); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("second candidate was not probed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	err := <-done
+	if _, statErr := os.Stat(firstRan); statErr != nil {
+		t.Fatalf("first candidate was not probed: %v", statErr)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want cancellation instead of earlier mismatch", err)
+	}
+}

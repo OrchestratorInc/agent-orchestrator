@@ -96,7 +96,7 @@ func command(ctx context.Context, binary string, cfg ports.LaunchConfig, nativeI
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	dataHome, err := DataHome()
+	dataHome, err := DataHome(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("opencode-v2: prepare data home: %w", err)
 	}
@@ -282,7 +282,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	cmd := aoprocess.CommandContext(probeCtx, binary, "auth", "list", "--standalone", "--format", "json")
-	dataHome, err := DataHome()
+	dataHome, err := DataHome(probeCtx)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}

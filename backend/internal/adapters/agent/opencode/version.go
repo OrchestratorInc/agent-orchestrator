@@ -59,10 +59,7 @@ func ResolveBinaryForMajor(ctx context.Context, major int) (string, error) {
 			mismatchErr = err
 		}
 		if probeCtx.Err() != nil {
-			if mismatchErr != nil {
-				return "", mismatchErr
-			}
-			return "", err
+			return "", probeCtx.Err()
 		}
 		if firstErr == nil {
 			firstErr = err

@@ -178,7 +178,7 @@ func (s *Service) Start(ctx context.Context, agentID string) (StartResult, error
 		InitialInputReadyStates: plan.initialInputReadyStates,
 	}
 	if plan.AgentID == "opencode-v2" {
-		dataHome, err := opencodev2.DataHome()
+		dataHome, err := opencodev2.DataHome(ctx)
 		if err != nil {
 			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", err.Error())
 		}
