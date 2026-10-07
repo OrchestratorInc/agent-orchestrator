@@ -95,23 +95,25 @@ function ScriptsEditor({ project, onSaveState, onSaved }: { project: Project; on
 			</TabsList>
 			{(["setup", "cleanup"] as const).map((kind) => <TabsContent className="space-y-4" key={kind} value={kind}>
 				{kind === "cleanup" && scratch ? <p className="text-sm text-settings-muted">{t("settings.project.cleanupScratchUnavailable")}</p> : <>
-					<div className="space-y-1 text-xs leading-4 text-settings-muted">
+					<div className="space-y-1 text-pretty text-xs leading-4 text-settings-muted">
 						<p>{t(kind === "setup" ? scratch ? "settings.project.setupHintScratch" : "settings.project.setupHintGit" : "settings.project.cleanupHint")}</p>
 						<p>{t(`settings.project.${kind}ShellHint`)}</p>
-						{kind === "setup" && <p>{t("settings.project.setupPlatformHint")}</p>}
+						<p>{t("settings.project.setupPlatformHint")}</p>
 					</div>
-					{!scratch && <div className="rounded-md border border-border p-3 text-xs text-settings-muted">
-						<p className="font-medium text-settings-label">{t(`settings.project.${kind}Paths`)}</p>
-						<p><code>{"AO_SOURCE_TREE_PATH"}</code> — {t(`settings.project.${kind}SourcePath`)}</p>
-						<p><code>{"AO_WORKTREE_PATH"}</code> — {t(`settings.project.${kind}WorktreePath`)}</p>
-					</div>}
+					{!scratch && <details className="rounded-md border border-border p-3 text-xs text-settings-muted">
+						<summary className="cursor-pointer font-medium text-settings-label">{t(`settings.project.${kind}Paths`)}</summary>
+						<div className="mt-2 space-y-1">
+							<p><code>{"AO_SOURCE_TREE_PATH"}</code> — {t(`settings.project.${kind}SourcePath`)}</p>
+							<p><code>{"AO_WORKTREE_PATH"}</code> — {t(`settings.project.${kind}WorktreePath`)}</p>
+						</div>
+					</details>}
 					<div className="space-y-4">
 						{drafts[kind].map((step, index) => <div key={index}>
 							<div className="mb-1 flex items-center justify-between">
 								<label className="text-sm font-medium text-settings-label" htmlFor={`${kind}-step-${index}`}>{t(`settings.project.${kind}Step`, { number: index + 1 })}</label>
 								<button aria-label={t(kind === "setup" ? "settings.project.removeSetupStep" : "settings.project.removeCleanupStep", { number: index + 1 })} className="rounded p-1 text-settings-muted hover:text-error focus-visible:ring-2 focus-visible:ring-ring" disabled={mutation.isPending || retry.isPending} onClick={() => updateSteps(kind, drafts[kind].length === 1 ? [""] : drafts[kind].filter((_, i) => i !== index))} type="button"><Trash2 aria-hidden="true" size={16} /></button>
 							</div>
-							<textarea className="settings-field-control min-h-24 w-full font-mono text-xs" disabled={mutation.isPending || retry.isPending} id={`${kind}-step-${index}`} spellCheck={false} value={step} onChange={(event) => updateSteps(kind, drafts[kind].map((item, i) => i === index ? event.target.value : item))} />
+							<textarea className="settings-field-control min-h-24 w-full px-4 py-3 font-mono text-xs" disabled={mutation.isPending || retry.isPending} id={`${kind}-step-${index}`} spellCheck={false} value={step} onChange={(event) => updateSteps(kind, drafts[kind].map((item, i) => i === index ? event.target.value : item))} />
 						</div>)}
 						<Button className="gap-1.5" disabled={mutation.isPending || retry.isPending} onClick={() => updateSteps(kind, [...drafts[kind], ""])} size="sm" type="button" variant="outline"><Plus aria-hidden="true" size={16} />{t(kind === "setup" ? "settings.project.addSetupStep" : "settings.project.addCleanupStep")}</Button>
 					</div>
