@@ -208,6 +208,20 @@ type DeviceStreamParam struct {
 	Channel string `path:"channel" enum:"mjpeg,avcc,config,health,input" description:"Allowlisted media or input channel."`
 }
 
+// DeviceStatusQuery selects the session whose local virtual devices are
+// inspected or controlled. The daemon keeps this as a query parameter so the
+// same capability headers can be used by both the list and setup surfaces.
+type DeviceStatusQuery struct {
+	SessionID domain.SessionID `query:"sessionId" description:"AO session identifier."`
+}
+
+// DeviceCredentialsHeaders carries the opaque capabilities issued to the
+// owning AO worker and desktop supervisor for local device operations.
+type DeviceCredentialsHeaders struct {
+	Agent   string `header:"X-AO-Device-Capability" description:"Opaque device capability injected into the owning AO worker."`
+	Desktop string `header:"X-AO-Desktop-Device-Capability" description:"Opaque desktop capability for local device inspection."`
+}
+
 type DeviceStatusResponse struct {
 	SessionID    domain.SessionID                  `json:"sessionId"`
 	Capabilities []domain.DevicePlatformCapability `json:"capabilities"`

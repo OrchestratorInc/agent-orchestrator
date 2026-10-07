@@ -8010,9 +8010,9 @@ export interface operations {
                 sessionId?: string;
             };
             header?: {
-                /** @description Opaque capability injected into the owning AO worker. */
+                /** @description Opaque device capability injected into the owning AO worker. */
                 "X-AO-Device-Capability"?: string;
-                /** @description Private Electron-main capability; never available to renderer JavaScript. */
+                /** @description Opaque desktop capability for local device inspection. */
                 "X-AO-Desktop-Device-Capability"?: string;
             };
             path?: never;
@@ -8089,9 +8089,9 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque capability injected into the owning AO worker. */
+                /** @description Opaque device capability injected into the owning AO worker. */
                 "X-AO-Device-Capability"?: string;
-                /** @description Private Electron-main capability; never available to renderer JavaScript. */
+                /** @description Opaque desktop capability for local device inspection. */
                 "X-AO-Desktop-Device-Capability"?: string;
             };
             path?: never;
@@ -8175,9 +8175,9 @@ export interface operations {
                 sessionId?: string;
             };
             header?: {
-                /** @description Opaque capability injected into the owning AO worker. */
+                /** @description Opaque device capability injected into the owning AO worker. */
                 "X-AO-Device-Capability"?: string;
-                /** @description Private Electron-main capability; never available to renderer JavaScript. */
+                /** @description Opaque desktop capability for local device inspection. */
                 "X-AO-Desktop-Device-Capability"?: string;
             };
             path?: never;
@@ -8254,9 +8254,9 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque capability injected into the owning AO worker. */
+                /** @description Opaque device capability injected into the owning AO worker. */
                 "X-AO-Device-Capability"?: string;
-                /** @description Private Electron-main capability; never available to renderer JavaScript. */
+                /** @description Opaque desktop capability for local device inspection. */
                 "X-AO-Desktop-Device-Capability"?: string;
             };
             path?: never;
@@ -8340,9 +8340,9 @@ export interface operations {
                 sessionId?: string;
             };
             header?: {
-                /** @description Opaque capability injected into the owning AO worker. */
+                /** @description Opaque device capability injected into the owning AO worker. */
                 "X-AO-Device-Capability"?: string;
-                /** @description Private Electron-main capability; never available to renderer JavaScript. */
+                /** @description Opaque desktop capability for local device inspection. */
                 "X-AO-Desktop-Device-Capability"?: string;
             };
             path?: never;
