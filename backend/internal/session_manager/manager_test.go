@@ -5618,6 +5618,7 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		"Use `ao send` for session communication",
 		"`ao session ls --project mer`",
 		"`ao session get <worker-session-id>`",
+		"`ao session interrupt <session-id>`",
 		"Delegate implementation, fixes, tests, and PR ownership to worker sessions",
 		filepath.ToSlash(filepath.Join("skills", "using-ao", "SKILL.md")),
 		"AO desktop Browser panel",
@@ -10091,6 +10092,20 @@ func TestSendSemanticTUIRejectsAdapterWithoutAcceptanceSignal(t *testing.T) {
 	}
 	if len(msg.msgs) != 0 {
 		t.Fatalf("pane writes = %d, want 0", len(msg.msgs))
+	}
+}
+
+func TestInterruptTUIWithoutSemanticAcceptance(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	if err := m.InterruptTUI(context.Background(), "s1"); err != nil {
+		t.Fatalf("InterruptTUI: %v", err)
+	}
+	if got := rt.interrupts; !reflect.DeepEqual(got, []string{"runtime-1"}) {
+		t.Fatalf("runtime interrupts = %v", got)
 	}
 }
 

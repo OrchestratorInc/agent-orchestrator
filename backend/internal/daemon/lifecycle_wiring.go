@@ -200,6 +200,7 @@ type sessionLifecycle interface {
 	WaitBackgroundWorkers(ctx context.Context) error
 	WaitAgentSwitchWorkers(ctx context.Context) error
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
+	InterruptTUI(ctx context.Context, id domain.SessionID) error
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
 	// SetShellTerminalCloser late-binds Kill/Cleanup to close a session's
 	// scoped shell terminals before its worktree is torn down. shellterm.Service

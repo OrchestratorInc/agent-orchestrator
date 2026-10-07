@@ -87,6 +87,8 @@ func sessionCommandServer(t *testing.T) (*httptest.Server, *sessionRequestLog) {
 			_, _ = io.WriteString(w, `{"ok":true,"cleaned":["demo-old","demo-orch"],"skipped":[]}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/kill":
 			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1","freed":true}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/conversation/interrupt":
+			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/restore":
 			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1","session":`+sessionJSON("demo-1", "demo", "worker", "idle", false)+`}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/exit-agent":
@@ -442,6 +444,26 @@ func TestSessionKill_SuccessWithProjectScope(t *testing.T) {
 	}
 }
 
+func TestSessionInterrupt_SuccessWithProjectScope(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, log := sessionCommandServer(t)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "session", "interrupt", "demo-1", "--project", "demo")
+	if err != nil {
+		t.Fatalf("session interrupt failed: %v\nstderr=%s", err, errOut)
+	}
+	if out != "interrupt requested for session demo-1\n" {
+		t.Fatalf("unexpected interrupt output: %q", out)
+	}
+	want := []string{"GET /api/v1/sessions/demo-1", "POST /api/v1/sessions/demo-1/conversation/interrupt"}
+	if got := log.all(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("requests = %#v, want %#v", got, want)
+	}
+}
+
 // TestSessionKill_PreservedWorkspaceNote: freed=false means the daemon
 // terminated the session but kept the worktree (uncommitted changes are never
 // force-deleted) — the CLI must say so instead of implying a full teardown.
@@ -761,7 +783,7 @@ func TestSessionRename_SuccessWithProjectScope(t *testing.T) {
 
 func TestSessionCommands_MissingIDIsUsageError(t *testing.T) {
 	setConfigEnv(t)
-	for _, sub := range []string{"get", "kill", "restore", "exit-agent", "resume-agent"} {
+	for _, sub := range []string{"get", "kill", "interrupt", "restore", "exit-agent", "resume-agent"} {
 		t.Run(sub, func(t *testing.T) {
 			_, _, err := executeCLI(t, Deps{}, "session", sub)
 			if err == nil {

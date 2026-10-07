@@ -31,6 +31,7 @@ func TestCLIActorTypeKeepsKnownLegacyUserCommands(t *testing.T) {
 	for _, commandPath := range []string{
 		"ao agent ls",
 		"ao session claim-pr",
+		"ao session interrupt",
 		"ao session switch-agent",
 		"ao session agent-switch",
 		"ao session agent-switch ls",

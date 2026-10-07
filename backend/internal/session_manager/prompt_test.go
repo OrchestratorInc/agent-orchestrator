@@ -103,6 +103,8 @@ func TestBuildSystemPrompt_OrchestratorRequiresConfirmationAndAOOnlyDelegation(t
 		"You may coordinate multiple workers, but AO workers only",
 		"ao session claim-pr <worker-session-id> <pr-ref>",
 		"must pass the target worker session explicitly",
+		"ao session interrupt <session-id>",
+		"ao session kill <session-id>",
 		"Add `--model <id>` when the human or task explicitly requests a specific model",
 		"Never drop an explicitly requested `--model` or substitute another model automatically",
 		"ask the human to choose an alternative",

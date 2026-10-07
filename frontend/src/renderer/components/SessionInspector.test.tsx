@@ -912,6 +912,23 @@ describe("SessionInspector PR section", () => {
 
   });
 
+  it("stops an active TUI turn without archiving its session", async () => {
+    renderWithQuery(
+      <SessionInspector session={session([], {
+        mode: "tui",
+        status: "working",
+        activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" },
+      })} />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Stop turn" }));
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/{sessionId}/conversation/interrupt",
+      { params: { path: { sessionId: "sess-1" } } },
+    ));
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/kill")).toHaveLength(0);
+  });
+
   it("persists the CI injection policy before a PR exists", async () => {
     renderWithQuery(<SessionInspector session={session([])} />);
 

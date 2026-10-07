@@ -195,6 +195,7 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newSessionTopCommand(ctx))
 	cmd.AddCommand(newSessionGetCommand(ctx))
 	cmd.AddCommand(newSessionKillCommand(ctx))
+	cmd.AddCommand(newSessionInterruptCommand(ctx))
 	cmd.AddCommand(newSessionRestoreCommand(ctx))
 	cmd.AddCommand(newSessionExitAgentCommand(ctx))
 	cmd.AddCommand(newSessionResumeAgentCommand(ctx))
@@ -257,6 +258,24 @@ func newSessionKillCommand(ctx *commandContext) *cobra.Command {
 				return err
 			}
 			return ctx.killSession(cmd.Context(), cmd, id, opts)
+		},
+	}
+	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
+	return cmd
+}
+
+func newSessionInterruptCommand(ctx *commandContext) *cobra.Command {
+	var opts sessionOptions
+	cmd := &cobra.Command{
+		Use:   "interrupt <id>",
+		Short: "Interrupt an active turn without terminating the session",
+		Args:  oneSessionIDArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := normalizeSessionID(args[0])
+			if err != nil {
+				return err
+			}
+			return ctx.interruptSession(cmd.Context(), cmd, id, opts)
 		},
 	}
 	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
@@ -620,6 +639,19 @@ func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id
 	// freed=false: the workspace was preserved (e.g. uncommitted changes) — the
 	// session is terminated either way, but the worktree is left for inspection.
 	_, err := fmt.Fprintf(cmd.OutOrStdout(), "session %s killed (workspace preserved)\n", res.SessionID)
+	return err
+}
+
+func (c *commandContext) interruptSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionOptions) error {
+	if opts.project != "" {
+		if _, err := c.fetchScopedSession(ctx, id, opts.project); err != nil {
+			return err
+		}
+	}
+	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/conversation/interrupt", struct{}{}, nil); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "interrupt requested for session %s\n", id)
 	return err
 }
 

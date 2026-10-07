@@ -70,11 +70,8 @@ type reviewerConversationService interface {
 	InterruptForOwner(ctx context.Context, owner domain.ConversationOwner) error
 }
 
-// ConversationsController owns the Chat routes for a session.
-//
-// Every route dispatches from the session's persisted mode inside the service, so
-// a client cannot reach the Chat path for a session that was created in TUI mode
-// even by calling these URLs directly. UI visibility is not the boundary.
+// ConversationsController owns the Chat routes for a session. The interrupt
+// route also stops a TUI session through its runtime; other routes require Chat.
 type ConversationsController struct {
 	Svc ConversationService
 }
