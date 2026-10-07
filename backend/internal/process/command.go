@@ -15,7 +15,7 @@ func Command(name string, args ...string) *exec.Cmd {
 
 // CommandContext is Command with cancellation support.
 func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // Callers intentionally select argv; project hooks execute user-authored shell commands.
 	configureHidden(cmd)
 	return cmd
 }
