@@ -280,6 +280,7 @@ FROM sessions ORDER BY project_id, num;
 -- name: ListChatHibernationCandidates :many
 SELECT id FROM sessions
 WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
+    AND kind <> 'orchestrator'
     AND provision_state IN ('', 'ready') AND hibernated_at IS NULL
     AND activity_state = 'idle' AND activity_last_at IS NOT NULL
     AND trim(provider_conversation_id) <> ''

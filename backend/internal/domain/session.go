@@ -330,6 +330,7 @@ type SessionProvisionStep struct {
 // still checks live provider work and view leases under its controller gate.
 func (s SessionRecord) EligibleForChatHibernation() bool {
 	return NormalizeSessionMode(s.Mode) == SessionModeChat &&
+		s.Kind != KindOrchestrator &&
 		!s.IsTerminated && !s.IsTaskPreparation && s.ProvisionState.WithDefault() == SessionProvisionReady &&
 		s.HibernatedAt == nil && s.Activity.State == ActivityIdle &&
 		!s.Activity.LastActivityAt.IsZero() &&

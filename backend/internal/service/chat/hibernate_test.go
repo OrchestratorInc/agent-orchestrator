@@ -141,6 +141,7 @@ func settledHibernationHarness(t *testing.T, state domain.TurnState, gate ...fun
 	if err != nil || !found {
 		t.Fatalf("get session = %v, %v", found, err)
 	}
+	rec.Kind = domain.KindWorker
 	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: h.now()}
 	rec.Metadata.ProviderConversationID = conv.ProviderConversationID()
 	if err := h.st.UpdateSession(ctx, rec); err != nil {
@@ -171,6 +172,29 @@ func TestHibernationGateKeepsCompletedIdleProviderWarmUntilEnabled(t *testing.T)
 	}
 	if got := eligibilityReads.Load(); got != 1 {
 		t.Fatalf("enabled hibernation read %d turn outcomes, want 1", got)
+	}
+}
+
+func TestHibernateChatKeepsOrchestratorAwake(t *testing.T) {
+	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
+	ctx := context.Background()
+	rec, found, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !found {
+		t.Fatalf("get orchestrator = %v, %v", found, err)
+	}
+	rec.Kind = domain.KindOrchestrator
+	if err := h.st.UpdateSession(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	if slept, err := h.svc.HibernateChat(ctx, testSession); err != nil || slept || conv.calls.Load() != 0 || !h.svc.HasLiveChatController(testSession) {
+		t.Fatalf("orchestrator hibernation: slept=%v err=%v stops=%d live=%v", slept, err, conv.calls.Load(), h.svc.HasLiveChatController(testSession))
+	}
+	if got := conv.backgroundChecks.Load(); got != 0 {
+		t.Fatalf("orchestrator background inventory calls = %d, want 0", got)
+	}
+	rec, _, err = h.st.GetSession(ctx, testSession)
+	if err != nil || rec.HibernatedAt != nil {
+		t.Fatalf("orchestrator shutdown intent: at=%v err=%v", rec.HibernatedAt, err)
 	}
 }
 
@@ -1119,6 +1143,7 @@ func TestSendDuringHibernationAcceptsThenWakesNativeConversation(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("get session = %v, %v", found, err)
 	}
+	rec.Kind = domain.KindWorker
 	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: h.now().Add(-6 * time.Minute)}
 	rec.Metadata.ProviderConversationID = first.ProviderConversationID()
 	if err := st.UpdateSession(ctx, rec); err != nil {
