@@ -29,7 +29,7 @@ func CleanWorkspacePath(raw string) (string, bool) {
 // OpenWorkspaceFile opens a regular file beneath workspacePath using os.Root.
 // os.Root follows symlinks that remain inside the workspace and rejects links
 // that escape it, so callers can safely serve the returned handle without a
-// second path lookup.
+// second path lookup. Anything but a regular file is fs.ErrNotExist.
 func OpenWorkspaceFile(workspacePath, assetPath string) (*os.File, fs.FileInfo, string, error) {
 	clean, ok := CleanWorkspacePath(assetPath)
 	if !ok {
@@ -41,11 +41,20 @@ func OpenWorkspaceFile(workspacePath, assetPath string) (*os.File, fs.FileInfo, 
 	}
 	defer func() { _ = root.Close() }()
 
+	// Stat first: opening a FIFO blocks until a writer appears.
+	info, err := root.Stat(filepath.FromSlash(clean))
+	if err != nil {
+		return nil, nil, "", err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil, "", fs.ErrNotExist
+	}
 	file, err := root.Open(filepath.FromSlash(clean))
 	if err != nil {
 		return nil, nil, "", err
 	}
-	info, err := file.Stat()
+	// Checked again on the open file: the path can be swapped after the stat.
+	info, err = file.Stat()
 	if err != nil {
 		_ = file.Close()
 		return nil, nil, "", err
