@@ -310,7 +310,6 @@ func consumeEscape(output string, start int) (next int, params string, sgr bool)
 	}
 }
 
-// applySGR updates dim and bold from one SGR parameter list.
 func applySGR(dim, bold bool, params string) (bool, bool) {
 	if params == "" {
 		return false, false

@@ -1730,7 +1730,6 @@ func TestInterfaceTransitionTUIToChatSwitchesPastAVisibleDraft(t *testing.T) {
 		t.Fatal(err)
 	}
 	settled := awaitTransition(t, store, transition.ID)
-	// Unsent composer text never blocks a switch; the draft is discarded.
 	if settled.Phase != domain.SessionInterfaceTransitionCompleted {
 		t.Fatalf("transition = %+v, want completed despite a visible draft", settled)
 	}

@@ -1007,8 +1007,6 @@ func (m *Manager) prepareSourceHandoff(
 					return errDrainDecisionPending
 				case current.Activity.State == domain.ActivityIdle &&
 					observation.Work == ports.TerminalSurfaceWorkIdle:
-					// Unsent composer text never blocks a switch: the user
-					// chose to switch, so an idle provider is enough.
 					idleProven = true
 				case observation.Work == ports.TerminalSurfaceWorkActive:
 					surfaceKnownBusy = true

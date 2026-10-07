@@ -49,7 +49,6 @@ func TestLastPromptComposerState(t *testing.T) {
 		{name: "dim placeholder", output: "❯ \x1b[2mAsk a question\x1b[0m", want: ComposerEmpty},
 		{name: "draft", output: "❯ keep this draft", want: ComposerDraft},
 		{name: "wrapped draft", output: "❯\nkeep this draft", want: ComposerDraft},
-		// The 2 in a 38;2;R;G;B truecolor payload is not SGR dim.
 		{name: "truecolor draft", output: "❯ \x1b[38;2;246;226;183mkeep this draft", want: ComposerDraft},
 		{name: "colon truecolor draft", output: "❯ \x1b[38:2::246:226:183mkeep this draft", want: ComposerDraft},
 		{

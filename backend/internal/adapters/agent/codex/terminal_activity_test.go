@@ -87,8 +87,6 @@ func TestInspectTerminalSurfaceSeparatesCodexWorkFromComposer(t *testing.T) {
 			wantEditor: ports.TerminalComposerEmpty,
 		},
 		{
-			// Codex >= 0.159 renders a second footer row that also contains
-			// " · ", so the status row above it is footer chrome, not input.
 			name: "idle empty composer above a two-row footer",
 			output: "\x1b[1m›\x1b[m \x1b[2mAsk Codex to do anything\x1b[m\n\n" +
 				"  \x1b[38;2;246;226;183mGPT-6.1-Sol low\x1b[m · \x1b[38;2;171;223;167m~/project\x1b[m\n" +
