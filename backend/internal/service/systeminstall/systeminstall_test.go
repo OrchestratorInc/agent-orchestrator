@@ -1429,3 +1429,55 @@ func TestResolveMatchesServicePlan(t *testing.T) {
 		t.Fatal("Resolve of an unknown target must be Unsupported")
 	}
 }
+
+func TestVendorInstallerUpdateUsesHarnessSelfUpdateCommand(t *testing.T) {
+	s := newTestService("darwin", "bash", "sh")
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for target, want := range map[Target][]string{
+		TargetClaudeCode: {"claude", "update"},
+		TargetCodex:      {"codex", "update"},
+		TargetOpencode:   {"opencode", "upgrade", "--method", "curl"},
+		TargetGoose:      {"goose", "update"},
+		TargetKimchi:     {"kimchi", "update", "self", "--force"},
+		TargetOMP:        {"omp", "update"},
+		TargetAutohand:   {"autohand", "update"},
+		TargetCursor:     {"cursor-agent", "update"},
+	} {
+		plan, err := planner.resolveAgentMethod(target, "official-installer", AgentOperationUpdate)
+		if err != nil {
+			t.Fatalf("%s: %v", target, err)
+		}
+		if !slices.Equal(plan.Command, want) || plan.Script != nil {
+			t.Fatalf("%s update = %v script=%v, want %v", target, plan.Command, plan.Script, want)
+		}
+	}
+	if _, err := planner.resolveAgentMethod(TargetGrok, "official-installer", AgentOperationUpdate); !errors.Is(err, ErrInstallMethod) {
+		t.Fatalf("Grok update error = %v, want ErrInstallMethod for a vendor without a self-update command", err)
+	}
+}
+
+func TestOpenCodeVendorUpdatePinsAdvisoryRelease(t *testing.T) {
+	s := newTestService("darwin", "bash")
+	s.updateAdvisories = map[Target]UpdateAdvisory{TargetOpencode: {AgentID: string(TargetOpencode), Status: UpdateStatusBehindLatest, CurrentVersion: "1.18.34", LatestVersion: "1.18.35", CheckedAt: time.Now()}}
+	version := "1.18.34"
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/Users/test/.opencode/bin/opencode", Output: version}, nil
+	})
+	var ran []string
+	s.commands = commandRunnerFunc(func(_ context.Context, argv []string, _, _ io.Writer) error {
+		ran = argv
+		version = "1.18.35"
+		return nil
+	})
+	if _, err := s.StartAgentOperation(context.Background(), TargetOpencode, "official-installer", AgentOperationUpdate); err != nil {
+		t.Fatal(err)
+	}
+	s.workers.Wait()
+	waitForStatus(t, s, TargetOpencode, StatusSucceeded)
+	if want := []string{"opencode", "upgrade", "1.18.35", "--method", "curl"}; !slices.Equal(ran, want) {
+		t.Fatalf("ran %v, want %v", ran, want)
+	}
+}

@@ -651,6 +651,9 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		if baseline, err = s.confirmInstalledOwner(ctx, target, plan); err != nil {
 			return Job{}, err
 		}
+		if operation == AgentOperationUpdate && baseline != nil {
+			plan = pinVendorUpdate(plan, baseline.latest)
+		}
 	}
 	if operation == AgentOperationUpdate && expected != "" {
 		if baseline == nil {

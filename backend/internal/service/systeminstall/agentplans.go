@@ -3,6 +3,7 @@ package systeminstall
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -355,16 +356,12 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		case "bun":
 			plan.Command = []string{"bun", "install", "-g", packageWithoutLatest(plan.Package) + "@latest"}
 		case "official-installer":
-			binary := map[Target]string{TargetClaudeCode: "claude", TargetCodex: "codex", TargetOpencode: "opencode"}[plan.Target]
-			verb := "update"
-			if plan.Target == TargetOpencode {
-				verb = "upgrade"
-			}
-			if binary == "" {
+			command, ok := vendorUpdateCommands[plan.Target]
+			if !ok {
 				plan.Unsupported = true
 				plan.Reason = "This vendor installer does not expose a supported update command."
 			} else {
-				plan.Command = []string{binary, verb}
+				plan.Command = slices.Clone(command)
 			}
 		default:
 			plan.Unsupported = true
@@ -398,6 +395,22 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		}
 	}
 	return plan
+}
+
+// vendorUpdateCommands are the harnesses' own self-update commands, used only
+// when the vendor installer, not a package manager, owns the running binary.
+// Each updates the stable channel without a terminal: Kimchi's "self" leaves
+// its extensions alone and --force skips its confirmation prompt, and
+// OpenCode is told the install method AO already proved.
+var vendorUpdateCommands = map[Target][]string{
+	TargetClaudeCode: {"claude", "update"},
+	TargetCodex:      {"codex", "update"},
+	TargetOpencode:   {"opencode", "upgrade", "--method", "curl"},
+	TargetGoose:      {"goose", "update"},
+	TargetKimchi:     {"kimchi", "update", "self", "--force"},
+	TargetOMP:        {"omp", "update"},
+	TargetAutohand:   {"autohand", "update"},
+	TargetCursor:     {"cursor-agent", "update"},
 }
 
 func packageWithoutLatest(pkg string) string {
@@ -478,4 +491,14 @@ func (s *Service) planPipx(target Target, pkg string) Plan {
 
 func manualPlan(target Target, reason, docsURL string) Plan {
 	return Plan{Target: target, Unsupported: true, Method: "manual", Reason: reason, DocsURL: docsURL}
+}
+
+// pinVendorUpdate asks OpenCode for the exact release the update advisory
+// reported, so the version installed is the one the update badge announced.
+func pinVendorUpdate(plan Plan, latest string) Plan {
+	if plan.Method != "official-installer" || plan.Target != TargetOpencode || latest == "" || len(plan.Command) < 2 {
+		return plan
+	}
+	plan.Command = append([]string{plan.Command[0], plan.Command[1], latest}, plan.Command[2:]...)
+	return plan
 }
