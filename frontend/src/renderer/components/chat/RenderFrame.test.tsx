@@ -334,10 +334,11 @@ describe("render activity", () => {
 			await user.click(keep);
 			expect(keep).toBeDisabled();
 			expect(fetch).toHaveBeenCalledTimes(1);
-			const [url, init] = fetch.mock.calls[0]!;
-			expect(url).toBe("http://127.0.0.1:3001/api/v1/sessions/proj-1/renders/r1/artifact");
-			expect(init).toMatchObject({ method: "POST" });
-			expect(JSON.parse(String(init?.body))).toEqual({ title: "Turns by day" });
+			// The API client hands fetch a Request, or a rebased URL and init.
+			const request = new Request(...(fetch.mock.calls[0]! as [RequestInfo | URL, RequestInit?]));
+			expect(request.url).toBe("http://127.0.0.1:3001/api/v1/sessions/proj-1/renders/r1/artifact");
+			expect(request.method).toBe("POST");
+			expect(await request.json()).toEqual({ title: "Turns by day" });
 			await act(async () =>
 				respond(new Response(JSON.stringify({ path: "Turns by day.html", name: "Turns by day.html" }), { status: 201 })),
 			);

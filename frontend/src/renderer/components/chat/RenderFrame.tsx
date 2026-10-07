@@ -1,8 +1,7 @@
 import { Code2, Download, ExternalLink, FilePlus, Loader2, Maximize2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { components } from "../../../api/schema";
-import { getApiBaseUrl } from "../../lib/api-client";
+import { apiClient, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
 import {
 	clampRenderHeight,
 	measuredRenderHeight,
@@ -137,8 +136,8 @@ function RenderAction({ label, children, ...props }: ButtonProps & { label: stri
 }
 
 /** The render as the daemon serves it; `?source=1` is the page as the agent wrote it. */
-async function fetchRender(path: string, init: RequestInit = {}): Promise<Response> {
-	const response = await fetch(`${getApiBaseUrl()}${path}`, init);
+async function fetchRender(path: string, signal?: AbortSignal): Promise<Response> {
+	const response = await fetch(`${getApiBaseUrl()}${path}`, { signal });
 	if (!response.ok) throw new Error(`render ${path}: HTTP ${response.status}`);
 	return response;
 }
@@ -155,13 +154,14 @@ async function saveRender(render: RenderRef) {
 
 /** Keeps the page as a session artifact; resolves to the saved file's name. */
 async function saveRenderAsArtifact(render: RenderRef): Promise<string> {
-	const response = await fetchRender(`${render.path}/artifact`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ title: render.title }),
+	// readRenderRef only accepts /api/v1/sessions/{sessionId}/renders/{renderId}.
+	const sessionId = decodeURIComponent(render.path.split("/")[4] ?? "");
+	const { data, error } = await apiClient.POST("/api/v1/sessions/{sessionId}/renders/{renderId}/artifact", {
+		params: { path: { sessionId, renderId: render.id } },
+		body: { title: render.title },
 	});
-	const artifact = (await response.json()) as components["schemas"]["SaveRenderArtifactResponse"];
-	return artifact.name;
+	if (!data) throw new Error(apiErrorMessage(error, "save render as artifact failed"));
+	return data.name;
 }
 
 /** The page's HTML as plain text. No highlighting: a page can run to 25 MiB. */
@@ -171,7 +171,7 @@ function RenderSource({ render }: { render: RenderRef }) {
 	const [source, setSource] = useState<string | null>();
 	useEffect(() => {
 		const controller = new AbortController();
-		fetchRender(`${render.path}?source=1`, { signal: controller.signal })
+		fetchRender(`${render.path}?source=1`, controller.signal)
 			.then((response) => response.text())
 			.then(setSource, () => {
 				if (!controller.signal.aborted) setSource(null);
