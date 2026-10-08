@@ -1271,7 +1271,7 @@ func TestSwitchAgentChatForwardsResolvedCodexEffort(t *testing.T) {
 	// The switched-to controller gets AO's tool server too.
 	want := []ports.ChatMCPServerConfig{{
 		Name: "ao", Type: "stdio", Command: "/opt/ao/bin/ao", Args: []string{"mcp"},
-		Env: map[string]string{EnvSessionID: string(rec.ID), EnvRunFile: "/ao-test/running.json"},
+		Env: map[string]string{EnvSessionID: string(rec.ID), EnvRunFile: "/ao-test/running.json", EnvDataDir: manager.dataDir},
 	}}
 	if got := launcher.started[0].MCPServers; !reflect.DeepEqual(got, want) {
 		t.Fatalf("switch MCPServers = %+v, want %+v", got, want)
