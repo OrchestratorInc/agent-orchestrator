@@ -55,6 +55,7 @@ export type SettingsModal =
 			hostId?: string;
 			/** Page to open on, so callers can deep-link a project setting. */
 			section?: ProjectSettingsSection;
+			cloudOrgId?: string;
 	};
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
@@ -180,7 +181,8 @@ export type UiState = {
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
 	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; preserveProject?: boolean }) => void;
-	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection }) => void;
+	/** `options` as a string is the owning daemon's host ID (remote projects). */
+	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
 	syncSystemTheme: () => void;
@@ -246,7 +248,9 @@ function initialDeveloperMode() {
 }
 
 function initialRemoteHosts() {
-	return getLocalStorage()?.getItem(remoteHostsStorageKey) === "true";
+	// Developer mode remains the feature gate. Once enabled, signed-in devices
+	// should discover account hosts without an extra per-device setup switch.
+	return getLocalStorage()?.getItem(remoteHostsStorageKey) !== "false";
 }
 
 function initialDiagnostics() {
@@ -385,6 +389,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			projectId,
 			...(typeof options === "string" && options !== "local" ? { hostId: options } : {}),
 			...(typeof options === "object" && options?.section ? { section: options.section } : {}),
+			...(typeof options === "object" && options?.cloudOrgId !== undefined ? { cloudOrgId: options.cloudOrgId } : {}),
 		},
 	}),
 	closeSettings: () => set((state) => ({

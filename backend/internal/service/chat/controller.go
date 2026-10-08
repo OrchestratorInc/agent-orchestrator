@@ -181,6 +181,7 @@ const (
 	controllerHandoffInterfaceDrain
 	controllerHandoffInterfaceInterrupt
 	controllerHandoffIdleBranch
+	controllerHandoffHibernate
 )
 
 func interfaceHandoff(policy domain.SessionInterfaceTransitionPolicy) controllerHandoff {
@@ -227,6 +228,16 @@ type Controller struct {
 	// Eager providers can emit turn/started before SendTurn returns with the
 	// provider id; that event must bind this row instead of adopting a duplicate.
 	dispatchingTurnID string
+	// sendingTurnID is the last turn Send decided to dispatch rather than queue. Its
+	// row is written queued before dispatch moves it on, so a snapshot read in that
+	// gap would show an idle agent's message as waiting in the queue. It is kept after
+	// the send returns: a snapshot can load the row while it is still queued and read
+	// this marker afterward, and only a queued row is ever overlaid.
+	sendingTurnID string
+	// A compact request can be accepted before its provider turn starts.
+	compactionPending bool
+	// Provider calls keep automatic hibernation out without blocking explicit Kill.
+	operations int
 	// ackedTurnID is the turn the PROVIDER has confirmed it started, which lags
 	// pendingTurnID by the round trip between turn/start returning and the
 	// turn-started notification arriving. Interrupt needs the distinction: a
@@ -276,6 +287,17 @@ type Controller struct {
 	stopped  chan struct{}
 	once     sync.Once
 	closeErr error
+}
+
+func (c *Controller) beginOperation() func() {
+	c.mu.Lock()
+	c.operations++
+	c.mu.Unlock()
+	return func() {
+		c.mu.Lock()
+		c.operations--
+		c.mu.Unlock()
+	}
 }
 
 // ErrNoActiveTurn reports an interrupt with nothing to cancel.
@@ -1392,6 +1414,20 @@ func (c *Controller) sendLocked(
 
 	now := c.now()
 	turnID := c.newID()
+	markedSending := false
+	if !queueWhenBusy || !c.busy() {
+		c.setSendingTurn(turnID)
+		markedSending = true
+	}
+	dispatched := false
+	// The marker outlives a send that dispatched, but not one that did not. A failed
+	// insert, a duplicate, a queued row or a dispatch error leaves no running turn,
+	// and a stale marker would report a still-queued row as running.
+	defer func() {
+		if markedSending && !dispatched {
+			c.clearSendingTurn(turnID)
+		}
+	}()
 	deliveryContent := ""
 	if len(msg.Content) > 0 {
 		encoded, err := json.Marshal(msg.Content)
@@ -1437,6 +1473,11 @@ func (c *Controller) sendLocked(
 	if queueWhenBusy && c.busy() {
 		// AppendUserMessage wrote it as queued, which is exactly where it belongs
 		// until the running turn ends. drain picks it up from there.
+		c.mu.Lock()
+		c.log.Info("chat send queued behind busy controller",
+			"session", c.sessionID, "clientMessageId", msg.ClientMessageID, "turn", turnID,
+			"pendingTurn", c.pendingTurnID, "compactionPending", c.compactionPending, "state", c.state)
+		c.mu.Unlock()
 		return domain.ConversationTurn{
 			ID:                 turnID,
 			ConversationID:     c.conversation.ID,
@@ -1447,7 +1488,9 @@ func (c *Controller) sendLocked(
 		}, nil
 	}
 
-	return c.dispatch(ctx, turnID, msg, now)
+	turn, err := c.dispatch(ctx, turnID, msg, now)
+	dispatched = err == nil
+	return turn, err
 }
 
 // RetryTurn re-dispatches a failed turn's durable prompt as a new turn.
@@ -1667,11 +1710,34 @@ func (c *Controller) mergeUsage(update ports.ChatUsage) domain.ConversationUsage
 	return c.usage
 }
 
+func (c *Controller) setSendingTurn(turnID string) {
+	c.mu.Lock()
+	c.sendingTurnID = turnID
+	c.mu.Unlock()
+}
+
+func (c *Controller) clearSendingTurn(turnID string) {
+	c.mu.Lock()
+	if c.sendingTurnID == turnID {
+		c.sendingTurnID = ""
+	}
+	c.mu.Unlock()
+}
+
+// DispatchingTurnIDs are the turns AO is handing, or has just handed, to the
+// provider, whether still being recorded or already crossing the provider boundary.
+// A client must not present one as queued: nothing is ahead of it.
+func (c *Controller) DispatchingTurnIDs() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return []string{c.sendingTurnID, c.dispatchingTurnID}
+}
+
 // busy reports whether a provider turn is in flight.
 func (c *Controller) busy() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.pendingTurnID != ""
+	return c.pendingTurnID != "" || c.compactionPending
 }
 
 // dispatch hands a recorded turn to the provider. Callers must hold sendMu.
@@ -2128,11 +2194,8 @@ var ErrCompactionWhileBusy = errors.New("cannot compact while a turn is in fligh
 // arriving in between would start a turn that the compaction then destroys — the
 // exact outcome the check exists to prevent.
 //
-// The lock is released as soon as the provider accepts. The compaction itself runs
-// as a provider turn for the next ten seconds or so, and holding sendMu across that
-// would make the whole conversation unresponsive; the provider's own single-turn
-// rule is what keeps a send from landing mid-compaction, and a send that arrives
-// then queues behind the compaction turn like any other.
+// The lock is released as soon as the provider accepts. Until its turn-started
+// event commits, compactionPending keeps sends queued and idle hibernation out.
 func (c *Controller) Compact(ctx context.Context) (ports.ChatCompactionResult, error) {
 	compactor, ok := c.conv.(ports.ChatCompactor)
 	if !ok || !c.Capabilities().Has(ports.ChatCapabilityCompaction) {
@@ -2148,7 +2211,16 @@ func (c *Controller) Compact(ctx context.Context) (ports.ChatCompactionResult, e
 	if c.busy() {
 		return ports.ChatCompactionResult{}, ErrCompactionWhileBusy
 	}
-	return compactor.Compact(ctx)
+	c.mu.Lock()
+	c.compactionPending = true
+	c.mu.Unlock()
+	result, err := compactor.Compact(ctx)
+	if err != nil {
+		c.mu.Lock()
+		c.compactionPending = false
+		c.mu.Unlock()
+	}
+	return result, err
 }
 
 // turnAckWait bounds how long Interrupt waits for the provider to acknowledge a
@@ -2538,15 +2610,15 @@ func (c *Controller) project() {
 
 	for event := range c.conv.Events() {
 		c.mu.Lock()
-		preserveProvider := c.preserveProviderOnStop
+		preserveWork := c.preserveProviderOnStop || c.handoff == controllerHandoffHibernate
 		c.mu.Unlock()
-		if preserveProvider && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped {
+		if preserveWork && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped {
 			continue
 		}
 		// A lifecycle event and a concurrent Send must agree on whether the root
 		// conversation is busy. Holding the same lock Send/dispatch use closes the
 		// window between the durable projection and the in-memory ownership update.
-		lifecycle := event.Kind == ports.ChatEventTurnStarted || event.Kind == ports.ChatEventTurnCompleted
+		lifecycle := event.Kind == ports.ChatEventTurnStarted || event.Kind == ports.ChatEventTurnCompleted || event.Kind == ports.ChatEventCompacted
 		if lifecycle {
 			c.sendMu.Lock()
 		}
@@ -2592,8 +2664,11 @@ func (c *Controller) project() {
 	c.state = ports.ChatControllerStopped
 	suppressStoppedActivity := c.suppressStoppedActivity
 	preserveProvider := c.preserveProviderOnStop
+	hibernating := c.handoff == controllerHandoffHibernate
 	c.mu.Unlock()
-	if preserveProvider {
+	// Hibernate admitted no running work, but Send can append an optimistic
+	// message during shutdown. Keep that queue for the replacement controller.
+	if preserveProvider || hibernating {
 		return
 	}
 
@@ -2719,13 +2794,20 @@ func (c *Controller) applyCommittedTurnLifecycle(event ports.ChatEvent) bool {
 			return false
 		}
 		c.pendingTurnID = event.ProviderTurnID
+		c.compactionPending = false
 		c.ackedTurnID = event.ProviderTurnID
 		c.state = ports.ChatControllerBusy
 		return true
 	case ports.ChatEventTurnCompleted:
-		if c.pendingTurnID != event.ProviderTurnID {
+		if c.pendingTurnID != event.ProviderTurnID && (!c.compactionPending || c.pendingTurnID != "") {
+			// A completion that names a different turn leaves the controller busy. If
+			// the pending turn never completes, every later send queues behind it.
+			c.log.Info("chat turn completion ignored: provider turn does not match pending turn",
+				"session", c.sessionID, "completedTurn", event.ProviderTurnID,
+				"pendingTurn", c.pendingTurnID, "compactionPending", c.compactionPending)
 			return false
 		}
+		c.compactionPending = false
 		c.pendingTurnID = ""
 		c.dispatchingTurnID = ""
 		if c.ackedTurnID == event.ProviderTurnID {
@@ -3181,6 +3263,20 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		c.reportActivity(ctx, domain.ActivityWaitingInput, "chat.input.requested", now)
 	case ports.ChatEventInputResolved:
 		c.reportInteractionResolved(ctx, "chat.input.resolved", now)
+	case ports.ChatEventCompacted:
+		if event.ProviderConversationID != "" && event.ProviderConversationID != c.conv.ProviderConversationID() {
+			return
+		}
+		c.mu.Lock()
+		settled := c.compactionPending && c.pendingTurnID == ""
+		if settled {
+			c.compactionPending = false
+			c.state = ports.ChatControllerReady
+		}
+		c.mu.Unlock()
+		if settled {
+			_ = c.drainLocked(ctx, true)
+		}
 	case ports.ChatEventControllerState:
 		// Volatile state moves only after the provider event and all of its durable
 		// cleanup committed. Otherwise a rollback can say "stopped" in memory while

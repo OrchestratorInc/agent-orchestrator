@@ -131,6 +131,16 @@ func TestBrowserCommandValidationAndErrors(t *testing.T) {
 	if status != http.StatusConflict || !containsAll(body, `"code":"BROWSER_TARGET_MISMATCH"`, `"message":"Browser automation could not target AO tab t2"`) {
 		t.Fatalf("target mismatch = %d body=%s", status, body)
 	}
+	runtime.err = browserruntime.CommandError{Code: "AGENT_BROWSER_TIMEOUT", Message: "agent-browser command timed out"}
+	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/browser/commands", `{"sessionId":"ao-1","action":"screenshot"}`)
+	if status != http.StatusGatewayTimeout || !containsAll(body, `"code":"AGENT_BROWSER_TIMEOUT"`) {
+		t.Fatalf("native timeout = %d body=%s", status, body)
+	}
+	runtime.err = context.DeadlineExceeded
+	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/browser/commands", `{"sessionId":"ao-1","action":"screenshot"}`)
+	if status != http.StatusGatewayTimeout || !containsAll(body, `"code":"BROWSER_COMMAND_TIMEOUT"`) {
+		t.Fatalf("request deadline = %d body=%s", status, body)
+	}
 }
 
 func containsAll(body []byte, parts ...string) bool {

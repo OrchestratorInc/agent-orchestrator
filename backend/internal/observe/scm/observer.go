@@ -166,6 +166,14 @@ type Config struct {
 	// host. Without a matching identity, new automatic attachments are disabled;
 	// existing attachments continue to refresh and explicit claims still work.
 	ScopedIdentityResolver ports.ScopedIdentityResolver
+	// BranchStates refreshes sessions' local commit and push facts on this
+	// tick. Nil skips it.
+	BranchStates BranchStateReconciler
+}
+
+// BranchStateReconciler reads every live session's branch facts from git.
+type BranchStateReconciler interface {
+	ReconcileBranchStates(ctx context.Context) error
 }
 
 // ObserverCache stores provider ETags and review polling timestamps in memory.
@@ -246,12 +254,14 @@ type Observer struct {
 	rateLimitUntil map[string]time.Time
 	// Cache holds bounded in-memory provider ETags and review poll timestamps.
 	Cache ObserverCache
+	// branchStates refreshes local branch facts on each tick.
+	branchStates BranchStateReconciler
 }
 
 // New constructs an Observer with default cadence/cache settings for zero
 // values in cfg.
 func New(provider Provider, store Store, lifecycle Lifecycle, cfg Config) *Observer {
-	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}}
+	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
 	}
@@ -342,6 +352,13 @@ func (o *Observer) Poll(ctx context.Context) error {
 	now := o.clock().UTC()
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	// Branch facts are local git reads, so they run before, and never depend
+	// on, the provider credential gate below.
+	if o.branchStates != nil {
+		if err := o.branchStates.ReconcileBranchStates(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			o.logger.Warn("scm observer: branch state reconcile failed", "err", err)
+		}
 	}
 	subjects, sessionRepos, err := o.discoverSubjects(ctx)
 	if err != nil {

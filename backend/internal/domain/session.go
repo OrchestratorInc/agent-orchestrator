@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // These ID types are distinct string types so they can't be swapped at a call
 // site by accident.
@@ -249,6 +252,9 @@ type SessionRecord struct {
 	// of the API read model.
 	FirstSignalAt time.Time `json:"-"`
 	IsTerminated  bool      `json:"isTerminated"`
+	// HibernatedAt records that the idle Chat controller was stopped while the
+	// session and conversation remain resumable. Nil means no recorded hibernation.
+	HibernatedAt *time.Time `json:"hibernatedAt,omitempty"`
 	// TerminateOnPRMerge is a user-controlled lifecycle policy. When enabled,
 	// completing the session's PR set through a merge tears down the session.
 	TerminateOnPRMerge bool              `json:"terminateOnPrMerge"`
@@ -287,6 +293,23 @@ type SessionRecord struct {
 	// boundary, and kept after the start settles. A step still running when the
 	// session reads ProvisionState failed is the step that failed.
 	ProvisionSteps []SessionProvisionStep `json:"provisionSteps,omitempty"`
+	// BranchState is what the daemon last observed about the session branch:
+	// its commits on top of the base and whether they reached the remote. The
+	// branch-state reconcile writes it only when a fact changes; nil until the first
+	// observation, and a failed git read keeps the last known value.
+	BranchState *SessionBranchState `json:"branchState,omitempty"`
+}
+
+// SessionBranchState is the session branch's commit and push facts.
+type SessionBranchState struct {
+	// Commits is how many commits the branch has on top of its base.
+	Commits int `json:"commits"`
+	// RemoteBranch is the remote-tracking branch, such as "origin/feat/x".
+	// Empty means the branch has never been pushed.
+	RemoteBranch string `json:"remoteBranch,omitempty"`
+	// Unpushed is how many branch commits are not on RemoteBranch. It equals
+	// Commits while RemoteBranch is empty.
+	Unpushed int `json:"unpushed"`
 }
 
 // SessionProvisionStepID names one stage of an asynchronous Chat start.
@@ -318,6 +341,17 @@ type SessionProvisionStep struct {
 	Status    SessionProvisionStepStatus `json:"status" enum:"pending,running,done"`
 	StartedAt *time.Time                 `json:"startedAt,omitempty"`
 	EndedAt   *time.Time                 `json:"endedAt,omitempty"`
+}
+
+// EligibleForChatHibernation is the cheap durable-fact filter. The chat service
+// still checks live provider work and view leases under its controller gate.
+func (s SessionRecord) EligibleForChatHibernation() bool {
+	return NormalizeSessionMode(s.Mode) == SessionModeChat &&
+		s.Kind != KindOrchestrator &&
+		!s.IsTerminated && !s.IsTaskPreparation && s.ProvisionState.WithDefault() == SessionProvisionReady &&
+		s.HibernatedAt == nil && s.Activity.State == ActivityIdle &&
+		!s.Activity.LastActivityAt.IsZero() &&
+		strings.TrimSpace(s.Metadata.ProviderConversationID) != ""
 }
 
 // SessionProvisionState is a session's start-up progress.

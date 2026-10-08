@@ -709,7 +709,10 @@ func (m *Manager) nativeConversationNotStarted(
 			return false
 		}
 		branch, err := store.ConversationBranch(ctx, conversation.ID, conversation.ActiveBranchID)
-		if err != nil || branch.SessionID != rec.ID || branch.ParentBranchID != "" ||
+		// A project root's session_id records the orchestrator that created it;
+		// after a rebind the owner is the conversation's current session.
+		if err != nil || branch.ParentBranchID != "" ||
+			(branch.SessionID != rec.ID && conversation.Scope != domain.ConversationScopeProject) ||
 			branch.ProviderConversationID != rec.Metadata.ProviderConversationID {
 			return false
 		}
@@ -1210,10 +1213,15 @@ func (m *Manager) rollbackInterfaceTransition(
 			return
 		}
 	}
+	// A fresh relaunch drops the provider id only in memory. When the epoch never
+	// committed, a Chat source still owns that id durably, so it must resume it:
+	// a fresh start would present an owner the database does not hold.
+	fresh := transition.NativeConversationID == "" &&
+		(modeChanged || transition.SourceMode != domain.SessionModeChat)
 	if err := m.startTransitionTarget(
 		ctx,
 		transition.SessionID,
-		transition.NativeConversationID == "",
+		fresh,
 		false,
 		domain.SessionInterfaceTransitionHistoryStrict,
 	); err != nil {

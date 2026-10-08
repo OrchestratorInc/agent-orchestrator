@@ -120,17 +120,15 @@ func (s *Service) Steer(
 	if strings.TrimSpace(msg.Text) == "" {
 		return SteerResult{}, ErrSteerTextRequired
 	}
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return SteerResult{}, err
-	}
 	msg = s.resolveSteerSender(ctx, msg)
 	if msg.SenderSessionID != "" {
 		msg.Origin = domain.MessageOriginAutomation
 	}
-	controller, err := s.Controller(id)
+	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return SteerResult{}, err
 	}
+	defer release()
 	return controller.Steer(ctx, msg)
 }
 
@@ -168,9 +166,6 @@ func (s *Service) SteerOrSend(
 	if msg.ClientMessageID == "" {
 		return SteerOrSendResult{}, ErrSteerDeliveryUncertain
 	}
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return SteerOrSendResult{}, err
-	}
 	msg = s.resolveSteerSender(ctx, msg)
 	// A cross-session steer that finds no active turn falls through to the normal
 	// send path. Keep that message attributed as automation so idle and busy
@@ -178,10 +173,11 @@ func (s *Service) SteerOrSend(
 	if msg.SenderSessionID != "" {
 		msg.Origin = domain.MessageOriginAutomation
 	}
-	controller, err := s.Controller(id)
+	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return SteerOrSendResult{}, err
 	}
+	defer release()
 	return controller.SteerOrSend(ctx, msg, recoverOnly)
 }
 

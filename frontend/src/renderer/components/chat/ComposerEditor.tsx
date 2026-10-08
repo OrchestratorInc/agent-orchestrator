@@ -65,6 +65,8 @@ export type ComposerEditorHandle = {
 	clear(): void;
 	setText(text: string): void;
 	insertToken(trigger: ComposerTrigger, value: string): void;
+	/** Inserts a file reference chip at the caret (or the end) that sends `wire`. */
+	insertReference(path: string, display: string, wire: string): void;
 	/**
 	 * Hold the caret's place for images still being staged. Returns a reservation
 	 * for fillImages, so the chips land where the user pasted, not wherever the
@@ -239,6 +241,16 @@ function $createComposerTokenNode(kind: TokenKind, value: string): ComposerToken
 	const slash = value.lastIndexOf("/");
 	const display = kind === "skill" ? wire : slash >= 0 ? value.slice(slash + 1) : value;
 	return new ComposerTokenNode(kind, value, display, wire);
+}
+
+function $insertComposerReference(path: string, display: string, wire: string): void {
+	let selection = $getSelection();
+	if (!$isRangeSelection(selection)) {
+		$getRoot().selectEnd();
+		selection = $getSelection();
+	}
+	if (!$isRangeSelection(selection)) return;
+	selection.insertNodes([new ComposerTokenNode("file", path, display, wire), $createTextNode(" ")]);
 }
 
 function $serializeComposer(): string {
@@ -433,6 +445,11 @@ const EditorBridge = forwardRef<
 					$insertComposerToken(trigger, value);
 				}, { discrete: true });
 			},
+			insertReference: (path, display, wire) => {
+				editor.update(() => {
+					$insertComposerReference(path, display, wire);
+				}, { discrete: true });
+			},
 			reserveImages: () => {
 				let reservation: string | undefined;
 				editor.update(() => {
@@ -514,6 +531,8 @@ export const ComposerEditor = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		/** Hides the text while a send is in flight; the draft is still held for recovery. */
+		concealed?: boolean;
 		label: string;
 		placeholder: string;
 		menuOpen: boolean;
@@ -530,6 +549,7 @@ export const ComposerEditor = forwardRef<
 >(function ComposerEditor(
 	{
 		disabled,
+		concealed,
 		label,
 		placeholder,
 		menuOpen,
@@ -599,12 +619,13 @@ export const ComposerEditor = forwardRef<
 							}}
 							className={cn(
 								"chat-composer-scrollbar max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 pl-[7px] pr-0 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-background",
-								disabled && "opacity-50",
+								concealed ? "invisible" : disabled && "opacity-50",
 							)}
 						/>
 					}
 					ErrorBoundary={LexicalErrorBoundary}
 				/>
+				{concealed ? <div aria-hidden="true">{placeholderNode()}</div> : null}
 				<HistoryPlugin />
 				<EditorBridge
 					ref={ref}

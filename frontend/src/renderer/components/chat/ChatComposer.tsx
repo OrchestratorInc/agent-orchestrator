@@ -99,6 +99,7 @@ import {
 } from "../../lib/chat-drafts";
 import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages } from "./messageAttachments";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
+import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 
 // These responses precede AppendUserMessage. Provider/transport errors can
 // follow durable acceptance and must keep the original delivery ID for recovery.
@@ -116,11 +117,14 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	"SESSION_NOT_FOUND",
 	"SESSION_MODE_MISMATCH",
 	"CHAT_CONTROLLER_NOT_READY",
+	"CHAT_RESUME_FAILED",
 	"CHAT_INTERFACE_TRANSITION",
 ]);
 
 // Native image blocks are persisted with the chat turn and sent to the provider.
 // Larger attachments still reach the agent through their staged workspace paths.
+/** How long a sent draft stays hidden before it reappears if the daemon has not answered. */
+const SEND_CONCEAL_MS = 3000;
 const MAX_NATIVE_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
 
@@ -368,6 +372,17 @@ export const ChatComposer = memo(function ChatComposer({
 	const previousTrigger = useRef<ComposerTrigger | undefined>(undefined);
 	const triggerRef = useRef<ComposerTrigger | undefined>(undefined);
 	const automaticDeliveryRecoveryAttempted = useRef<string | undefined>(undefined);
+	// Code selected in a file or diff view ("Ask in chat") arrives here as a
+	// reference chip. Only the session's ordinary prompt accepts it; a queued-turn
+	// edit has no draftSessionId and stays out of the way.
+	useEffect(() => {
+		if (!draftSessionId) return;
+		return subscribeChatComposerReferences(draftSessionId, (reference) => {
+			editor.current?.insertReference(reference.path, reference.display, reference.wire);
+			// The Chat surface may only now be coming forward from behind a file tab.
+			window.requestAnimationFrame(() => window.requestAnimationFrame(() => editor.current?.focus()));
+		});
+	}, [draftSessionId]);
 	const restoredSeedKey = useRef<string | undefined>(undefined);
 	const restoredSessionId = useRef<string | undefined>(undefined);
 	const persistedDraft = useMemo(
@@ -529,6 +544,28 @@ export const ChatComposer = memo(function ChatComposer({
 			draftScope &&
 			!submitting,
 	);
+	// A plain send already shows its echo in the timeline. Its text stays held in the
+	// editor until the daemon accepts, so a rejection or lost response can restore it,
+	// but it is not drawn meanwhile: the composer reads as sent, not stranded.
+	const sendInFlight = Boolean(
+		submitting &&
+			!staged &&
+			!deliveryUncertain &&
+			durableDelivery?.kind === "send" &&
+			durableDelivery.state === "dispatching",
+	);
+	// The request has no timeout. If the daemon stalls, bring the text back so a stuck
+	// send never reads as a vanished draft.
+	const [concealExpired, setConcealExpired] = useState(false);
+	useEffect(() => {
+		if (!sendInFlight) {
+			setConcealExpired(false);
+			return;
+		}
+		const timer = window.setTimeout(() => setConcealExpired(true), SEND_CONCEAL_MS);
+		return () => window.clearTimeout(timer);
+	}, [sendInFlight]);
+	const sendConcealed = sendInFlight && !concealExpired;
 	const canSend =
 		(hasText || staged) &&
 		(savingQueuedEdit || !busy) &&
@@ -1381,11 +1418,12 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 	}
 
-	// Images also get an inline chip at the caret so the prose can say which image
-	// it means; the chip serializes to the staged path the agent reads.
+	// Images get an inline chip only beside prose that can refer to them.
+	// Image-only drafts already show every image in the attachment strip.
 	function attachFiles(files: File[]) {
 		// Reserve the spot now: staging can take a while, and the user keeps typing.
-		const reservation = files.some((file) => file.type.startsWith("image/"))
+		const reservation = proseBesideImages(textRef.current.trim(), composerImages.map((image) => image.path)) &&
+			files.some((file) => file.type.startsWith("image/"))
 			? editor.current?.reserveImages()
 			: undefined;
 		void fileAttachments.addFiles(files).then((added) => {
@@ -1475,7 +1513,7 @@ export const ChatComposer = memo(function ChatComposer({
 			>
 				{approval}
 				{commandError ? (
-					<p role="alert" className="px-1.5 text-[11px] leading-snug text-destructive">
+					<p role="alert" className="px-1.5 text-xs leading-snug text-destructive">
 						{commandError}
 					</p>
 				) : null}
@@ -1542,7 +1580,7 @@ export const ChatComposer = memo(function ChatComposer({
 							return (
 							<li
 								key={file.id}
-								className="flex items-center gap-1.5 rounded border border-border bg-background py-0.5 pl-0.5 pr-1"
+								className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
 							>
 								{preview ? (
 									<img src={preview} alt="" className="size-6 rounded-sm object-cover" />
@@ -1552,7 +1590,7 @@ export const ChatComposer = memo(function ChatComposer({
 									</div>
 								)}
 								<span
-									className="max-w-[120px] truncate text-[11px] text-muted-foreground"
+									className="max-w-[120px] truncate text-xs text-muted-foreground"
 									title={file.name}
 								>
 									{file.name}
@@ -1584,6 +1622,7 @@ export const ChatComposer = memo(function ChatComposer({
 					ref={editor}
 					images={composerImages}
 					disabled={controlsDisabled || queuedEditRecovery || draftMutationPending}
+					concealed={sendConcealed}
 					label="Message the agent"
 					placeholder={
 						disabledPlaceholder ?? (disabled
@@ -1604,7 +1643,7 @@ export const ChatComposer = memo(function ChatComposer({
 				/>
 
 				{attachmentError ? (
-					<p role="alert" className="px-1.5 text-[11px] leading-snug text-destructive">
+					<p role="alert" className="px-1.5 text-xs leading-snug text-destructive">
 						{translateDraft(attachmentError)}
 					</p>
 				) : null}
@@ -1621,7 +1660,7 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 				) : null}
 				{fileAttachments.preparing ? (
-					<p role="status" className="px-1.5 text-[11px] leading-snug text-muted-foreground">
+					<p role="status" className="px-1.5 text-xs leading-snug text-muted-foreground">
 						Saving attachments… Wait before leaving this chat.
 					</p>
 				) : null}
@@ -1630,7 +1669,7 @@ export const ChatComposer = memo(function ChatComposer({
 			    in the box and the message says which of "send it instead" and "try again
 			    in a moment" applies. */}
 				{steerRefusal ?? steerOutcomeNotice ? (
-					<p role="status" className="px-1.5 text-[11px] leading-snug text-warning">
+					<p role="status" className="px-1.5 text-xs leading-snug text-warning">
 						{translateDraft(steerRefusal ?? steerOutcomeNotice)}
 					</p>
 				) : null}

@@ -25,7 +25,7 @@ const RECENT_MODELS_STORAGE_KEY = "ao.recentModels.v1";
 const ignoreEffortChange = () => {};
 
 export type ModelEffortSelection = Pick<ModelTuningControlsProps,
-	"effort" | "onEffortChange" | "onEffortReset" | "onValidityChange" | "roleLabel"
+	"effort" | "effortsWithoutModel" | "onEffortChange" | "onEffortReset" | "onValidityChange" | "roleLabel"
 >;
 
 type AgentModel = NonNullable<AgentModelCatalog["models"]>[number];
@@ -120,6 +120,7 @@ export function AgentModelCombobox({
 		models: concreteModels,
 		model: explicitModel,
 		effort: tuning?.effort ?? "",
+		effortsWithoutModel: tuning?.effortsWithoutModel,
 		onEffortChange: tuning?.onEffortChange ?? ignoreEffortChange,
 		onEffortReset: tuning?.onEffortReset,
 		onValidityChange: tuning?.onValidityChange,
