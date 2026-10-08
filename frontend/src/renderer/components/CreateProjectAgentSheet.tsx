@@ -479,7 +479,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 					onCloseAutoFocus={management.onCloseAutoFocus}
 					disabled={disabled}
 					onChange={onChange}
-					triggerClassName={cn(variant === "settings-control" && "w-full justify-between", invalid && "text-error")}
+					triggerClassName={cn(variant === "settings-control" && "w-fit", invalid && "text-error")}
 					menuClassName={cn("settings-agent-menu-surface", AGENT_MENU_WIDTH)}
 					menuItemClassName="settings-agent-menu-item"
 					renderTrigger={() => (

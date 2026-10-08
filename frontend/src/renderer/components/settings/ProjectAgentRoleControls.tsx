@@ -98,7 +98,7 @@ export function AgentModelField({
 							options={options}
 							placeholder={t("settings.models.modeNotReported")}
 							action={selectedMode && !defaultMode ? { label: t("settings.models.useAgentMode"), onSelect: () => onModeChange("") } : undefined}
-							triggerClassName="w-full justify-between"
+							triggerClassName="w-fit"
 							disabled={options.length === 0 && !(selectedMode && !defaultMode)}
 							onChange={(value) => {
 								onModeChange(value === defaultMode ? "" : value);
@@ -158,7 +158,7 @@ export function AgentModelField({
 						disabled={(query.isFetching && !catalog) || agentId === ""}
 						onChange={selectCatalogModel}
 						onCustom={selectCustomModel}
-						triggerClassName="w-full justify-between bg-[var(--color-bg-settings-trigger)] text-[var(--color-text-settings-trigger)] hover:bg-[var(--color-bg-settings-trigger-hover)] data-[state=open]:bg-[var(--color-bg-settings-trigger-hover)]"
+						triggerClassName="w-fit bg-[var(--color-bg-settings-trigger)] text-[var(--color-text-settings-trigger)] hover:bg-[var(--color-bg-settings-trigger-hover)] data-[state=open]:bg-[var(--color-bg-settings-trigger-hover)]"
 						compact
 						recentScope={agentId}
 						showEffortInTrigger={false}

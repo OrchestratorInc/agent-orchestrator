@@ -113,7 +113,7 @@ function CloudAgentPicker({ role, draft, value, disabled, onChange }: ProjectAge
 	return <SettingsOptionMenu aria-label={`${t(`settings.models.${role}Role`)} ${t("settings.project.agent").toLocaleLowerCase()}`}
 		disabled={disabled} value={shown} placeholder={t("settings.cloudProject.sessionSelection")}
 		options={[{ value: "", label: t(role === "reviewer" ? "settings.cloudProject.sessionAgent" : "settings.cloudProject.sessionSelection") }, ...CLOUD_AGENT_PROVIDERS.map((agent) => ({ value: agent, label: agentLabel(agent), icon: <AgentAvatar provider={agent} className="size-icon-lg" decorative /> }))]}
-		triggerClassName="w-full justify-between" menuClassName="settings-agent-menu-surface" menuItemClassName="settings-agent-menu-item"
+		triggerClassName="w-fit" menuClassName="settings-agent-menu-surface" menuItemClassName="settings-agent-menu-item"
 		renderMenuItem={(option, selected) => <AgentSelectMenuItem agentId={option.value || undefined} label={option.label} selected={selected} />}
 		onChange={onChange} />;
 }
