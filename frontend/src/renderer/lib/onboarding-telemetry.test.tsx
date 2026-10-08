@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const capture = vi.hoisted(() => vi.fn(async () => undefined));
+const capture = vi.hoisted(() => vi.fn(async (_event: string, _props?: unknown) => undefined));
 vi.mock("./telemetry", () => ({ captureRendererEvent: capture }));
 
 import { reportOnboardingStep, useOnboardingStep } from "./onboarding-telemetry";
