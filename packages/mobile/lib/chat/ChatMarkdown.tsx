@@ -60,7 +60,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 							{block.items.map((item, itemIndex) => (
 								<View key={itemIndex} style={styles.listRow}>
 									<Text style={styles.marker}>{item.checked !== undefined ? (item.checked ? "☑" : "☐") : block.ordered ? `${itemIndex + 1}.` : "•"}</Text>
-									<Text style={[styles.body, styles.listBody, item.checked && styles.taskDone]}>{inline(item.text, styles)}</Text>
+									<Text selectable style={[styles.body, styles.listBody, item.checked && styles.taskDone]}>{inline(item.text, styles)}</Text>
 								</View>
 							))}
 						</View>
@@ -68,7 +68,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 				}
 				if (block.kind === "heading") {
 					return (
-						<Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>
+						<Text key={index} selectable style={[styles.heading, block.level > 2 && styles.smallHeading]}>
 							{inline(block.text, styles)}
 						</Text>
 					);
@@ -76,7 +76,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 				if (block.kind === "quote") {
 					return (
 						<View key={index} style={styles.quote}>
-							<Text style={styles.quoteText}>{inline(block.text, styles)}</Text>
+							<Text selectable style={styles.quoteText}>{inline(block.text, styles)}</Text>
 						</View>
 					);
 				}
@@ -95,13 +95,13 @@ let preferredCodeWrap = false;
 function MarkdownImage({ alt, url }: { alt: string; url: string }) {
 	const styles = useThemedStyles(makeStyles);
 	const [failed, setFailed] = useState(false);
-	if (failed) return <Text style={styles.imageFallback}>Image unavailable: {alt || url}</Text>;
-	return <View style={styles.imageCard}><Image accessibilityLabel={alt || "Conversation image"} accessibilityIgnoresInvertColors source={{ uri: url }} resizeMode="contain" onError={() => setFailed(true)} style={styles.image} />{alt ? <Text style={styles.imageCaption}>{alt}</Text> : null}</View>;
+	if (failed) return <Text selectable style={styles.imageFallback}>Image unavailable: {alt || url}</Text>;
+	return <View style={styles.imageCard}><Image accessibilityLabel={alt || "Conversation image"} accessibilityIgnoresInvertColors source={{ uri: url }} resizeMode="contain" onError={() => setFailed(true)} style={styles.image} />{alt ? <Text selectable style={styles.imageCaption}>{alt}</Text> : null}</View>;
 }
 
 function MarkdownTable({ headers, rows }: { headers: string[]; rows: string[][] }) {
 	const styles = useThemedStyles(makeStyles);
-	return <ScrollView horizontal showsHorizontalScrollIndicator><View style={styles.table}><View style={[styles.tableRow, styles.tableHeader]}>{headers.map((cell, index) => <Text key={index} style={[styles.tableCell, styles.tableHeaderText]}>{cell}</Text>)}</View>{rows.map((row, rowIndex) => <View key={rowIndex} style={styles.tableRow}>{headers.map((_, cellIndex) => <Text key={cellIndex} style={styles.tableCell}>{row[cellIndex] ?? ""}</Text>)}</View>)}</View></ScrollView>;
+	return <ScrollView horizontal showsHorizontalScrollIndicator><View style={styles.table}><View style={[styles.tableRow, styles.tableHeader]}>{headers.map((cell, index) => <Text key={index} selectable style={[styles.tableCell, styles.tableHeaderText]}>{cell}</Text>)}</View>{rows.map((row, rowIndex) => <View key={rowIndex} style={styles.tableRow}>{headers.map((_, cellIndex) => <Text key={cellIndex} selectable style={styles.tableCell}>{row[cellIndex] ?? ""}</Text>)}</View>)}</View></ScrollView>;
 }
 
 function CodeBlock({ text, language, streaming }: { text: string; language?: string; streaming?: boolean }) {
