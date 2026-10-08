@@ -4,6 +4,8 @@ package gemini
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -131,11 +133,38 @@ func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return bin, nil
 }
 
-// AuthStatus remains unknown because Gemini has no cheap credential-validation command.
-// Key or OAuth-file presence alone cannot establish that an account works.
+// AuthStatus reports configured when Gemini has locally cached credentials.
+// This is deliberately not authorized: checking a file or environment variable
+// cannot establish that the credential is still valid.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	_, err := p.ResolveBinary(ctx)
-	return ports.AgentAuthStatusUnknown, err
+	if _, err := p.ResolveBinary(ctx); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	if hasCachedCredentials() {
+		return ports.AgentAuthStatusConfigured, nil
+	}
+	return ports.AgentAuthStatusUnknown, nil
+}
+
+func hasCachedCredentials() bool {
+	for _, name := range []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"} {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			return true
+		}
+	}
+	home := strings.TrimSpace(os.Getenv("GEMINI_CLI_HOME"))
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		home = filepath.Join(home, ".gemini")
+	} else {
+		home = filepath.Join(home, ".gemini")
+	}
+	info, err := os.Stat(filepath.Join(home, "oauth_creds.json"))
+	return err == nil && !info.IsDir() && info.Size() > 0
 }
 
 // ResolveBinaryPresence keeps initial inventory discovery free of child processes.

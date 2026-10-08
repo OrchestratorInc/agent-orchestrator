@@ -26,8 +26,10 @@ Permission mapping:
 | Bypass permissions | `yolo` |
 
 Tool allowlists and denylists are rejected because Gemini's native policy engine
-has not been integrated. AO reports authentication as unknown until Gemini
-itself establishes it; file or API-key presence is not proof of valid access.
+has not been integrated. AO reports authentication as `configured` when it finds
+Gemini's cached OAuth credentials or an API key environment variable. This is a
+local configuration check only; it does not prove that the credential is still
+valid, so Gemini remains the authoritative check at launch.
 
 Chat mode is not registered. The separate opt-in ACP conformance gate still
 requires authenticated streaming, permissions, cancellation, restart, and native
