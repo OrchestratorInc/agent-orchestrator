@@ -26,7 +26,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"opencode-v2", "Log in to OpenCode 2", "opencode", "Native provider chooser", "https://opencode.ai/v2/docs", "", ActionLogin, []string{"opencode", "auth", "login"}},
 		{"mimo-code", "Log in to MiMo Code", "mimo", "Native provider chooser", "https://mimo.mi.com/docs/en-US/tokenplan/integration/mimo-code", "", ActionLogin, []string{"mimo", "auth", "login"}},
 		{"aider", "Set up Aider", "", "Configure provider credentials using Aider's documented environment or configuration-file options", "https://aider.chat/docs/config/api-keys.html", "", ActionSetup, nil},
-		{"copilot", "Log in to GitHub Copilot", "copilot", "Native GitHub device/browser flow", "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli", "", ActionLogin, []string{"copilot", "login"}},
+		{"copilot", "Log in to GitHub Copilot", "copilot", "Copilot opens its account picker automatically", "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli", "", ActionLogin, []string{"copilot"}},
 		{"grok", "Log in to Grok", "grok", "Native login; device-auth remains available inside the CLI", "https://docs.x.ai/build/overview", "", ActionLogin, []string{"grok", "login"}},
 		{"kimi", "Log in to Kimi", "kimi", "Kimi opens its login picker automatically", "https://moonshotai.github.io/kimi-code/en/", "", ActionLogin, []string{"kimi"}},
 		{"pi", "Log in to Pi", "pi", "Pi opens its login picker automatically", "https://github.com/earendil-works/pi", "", ActionLogin, []string{"pi"}},
