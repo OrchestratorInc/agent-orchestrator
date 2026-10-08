@@ -187,11 +187,6 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 				</>}
 				{generalExtra}
 			</> : <>
-				<ProjectSettingsSection title={t("settings.project.agents")} titleHidden grouped>
-				<div className={`${AGENT_ROLE_GRID} text-xs font-medium text-settings-muted`}>
-					<span className="w-28 shrink-0" />
-					<div className={AGENT_ROLE_COLUMNS}><span>{t("settings.project.agent")}</span><span>{t("settings.project.modelOverride")}</span><span>{t("settings.project.approval")}</span></div>
-				</div>
 				{visibleRoles.map((role) => {
 					const fields = roleFields[role];
 					const selectedAgent = draft[fields.agent];
@@ -214,23 +209,19 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 							: {}),
 						[fields.permissions]: value,
 					}));
-					return <div key={role} className="settings-row-bar items-start">
-						<span className="w-28 shrink-0 pt-2 text-sm leading-5 text-settings-label">{t(`settings.models.${role}Role`)}</span>
-						<div className={AGENT_ROLE_COLUMNS}>
-						<div className="min-w-0">{renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}</div>
-						<div className="min-w-0 space-y-1.5"><AgentModelField role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
+					return <ProjectSettingsSection key={role} title={t(`settings.models.${role}Role`)} grouped>
+						<ProjectSettingsRow label={t("settings.project.agent")}><div className="w-full max-w-sm min-w-0">{renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}</div></ProjectSettingsRow>
+						<ProjectSettingsRow label={t("settings.project.modelOverride")}><div className="w-full max-w-sm min-w-0 space-y-1.5"><AgentModelField role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
 							allowCustomFallback={capabilities.runtimeDefaults} followCatalogDefaults={!capabilities.runtimeDefaults}
 							supportedEfforts={capabilities.runtimeDefaults ? agent === "codex" ? ["low", "medium", "high", "xhigh", "max"] : agent === "claude-code" ? ["low", "medium", "high", "max"] : undefined : undefined}
 							emptyLabel={capabilities.runtimeDefaults && agent === "" ? t("settings.cloudProject.sessionModel") : undefined}
 							independentMode={capabilities.runtimeDefaults && agent === "cursor"}
 							onModelChange={(value) => updateConfig(fields.model, value)} onModeChange={(value) => updateConfig(fields.mode, value)} onEffortChange={(value) => updateConfig(fields.effort, value)} onValidityChange={(valid) => setValidity((current) => current[role] === valid ? current : { ...current, [role]: valid })} />
 							{capabilities.runtimeDefaults && agent === "cursor" && <SettingsOptionMenu aria-label={t(`settings.models.${role}Mode`)} value={draft[fields.mode]} triggerClassName="w-full justify-between" options={[{ value: "", label: t("settings.cloudProject.agentMode") }, { value: "plan", label: t("settings.cloudProject.plan") }, { value: "ask", label: t("settings.cloudProject.ask") }]} onChange={(value) => updateConfig(fields.mode, value)} />}
-						</div>
-						<div className="min-w-0"><ProjectRolePermissions role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={updatePermissions} /></div>
-						</div>
-					</div>;
+						</div></ProjectSettingsRow>
+						<ProjectSettingsRow label={t("settings.project.approval")}><div className="w-full max-w-sm min-w-0"><ProjectRolePermissions role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={updatePermissions} /></div></ProjectSettingsRow>
+					</ProjectSettingsSection>;
 				})}
-				</ProjectSettingsSection>
 				{capabilities.requiredAgents && (!draft.workerAgent || !draft.orchestratorAgent) && <p className="px-3 pb-2 text-xs text-error" role="alert">{t("settings.project.agentsRequired")}</p>}
 				{warning && <p className="px-3 pb-2 text-xs text-warning" role="status">{warning}</p>}
 			</>}
@@ -239,9 +230,6 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		{!onSaveState && <div className="flex justify-end"><Button type="submit" disabled={!dirty || mutation.isPending}>{mutation.isPending ? t("settings.project.saving") : t("files.saveFile")}</Button></div>}
 	</ProjectSettingsFormView>;
 }
-
-const AGENT_ROLE_GRID = "flex items-center gap-(--size-settings-row-icon-gap) py-2";
-const AGENT_ROLE_COLUMNS = "grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,0.8fr)] items-start gap-2";
 
 function ProjectRolePermissions({ role, agent, value, runtimeDefaults, onChange }: { role: ProjectSettingsRole; agent: string; value: string; runtimeDefaults?: boolean; onChange: (value: string) => void }) {
 	const { t } = useTranslation();
