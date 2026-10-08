@@ -301,6 +301,10 @@ func TestBootstrapWorkerStreamsArchiveWithoutSecretsInURL(t *testing.T) {
 				"chgrp",
 				"chmod g+wx",
 				"sudo -n -b -u",
+				// The worker runs without a controlling terminal so a git
+				// prompt cannot SIGTTIN-stop it on sudo use_pty images.
+				"command -v setsid",
+				"$ao_setsid sh -c",
 			} {
 				if !strings.Contains(command, expected) {
 					t.Errorf("bootstrap command missing durable path contract %q", expected)
