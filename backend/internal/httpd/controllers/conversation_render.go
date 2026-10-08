@@ -31,13 +31,15 @@ const (
 	// session and storage, and corsMiddleware refuses Origin: null, so even a
 	// render opened top-level cannot call the daemon. No popups, no modals,
 	// no top navigation.
-	renderContentSecurityPolicy = "sandbox allow-scripts allow-forms"
+	// No workers: a worker's requests carry no frame, so the desktop app's
+	// guard that keeps agent pages off the local network could not see them.
+	renderContentSecurityPolicy = "sandbox allow-scripts allow-forms; worker-src 'none'"
 	// An HTML artifact framed inline keeps a real origin of its own, the
 	// ao-inline-artifact.<session>.localhost host, so its module scripts, fetch
 	// of sibling files and fonts load same-origin. That origin is not the app's,
 	// and corsMiddleware refuses it everywhere but its own host, so the page
 	// still cannot call the daemon.
-	inlineArtifactContentSecurityPolicy = "sandbox allow-scripts allow-forms allow-same-origin"
+	inlineArtifactContentSecurityPolicy = "sandbox allow-scripts allow-forms allow-same-origin; worker-src 'none'"
 	// A terminal session has no thread to show a page in; point the agent at
 	// the command that does work there.
 	renderNeedsChatMessage = "ao render works only in chat sessions; in a terminal session, open the file with ao preview <file>"

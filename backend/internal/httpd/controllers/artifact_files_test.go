@@ -58,7 +58,7 @@ func getArtifactFile(t *testing.T, srv *httptest.Server, rawPath, ifNoneMatch st
 func wantSandboxHeaders(t *testing.T, resp *http.Response, contentType string) {
 	t.Helper()
 	for header, want := range map[string]string{
-		"Content-Security-Policy": "sandbox allow-scripts allow-forms",
+		"Content-Security-Policy": "sandbox allow-scripts allow-forms; worker-src 'none'",
 		"Content-Type":            contentType,
 		"X-Content-Type-Options":  "nosniff",
 		"Referrer-Policy":         "no-referrer",
@@ -178,7 +178,7 @@ func TestInlineArtifactOriginServesItsFilesButNotTheAPI(t *testing.T) {
 	if status != http.StatusOK || !strings.Contains(string(body), `<style id="ao-theme">`) {
 		t.Fatalf("page: status=%d body=%.200q", status, body)
 	}
-	if got := header.Get("Content-Security-Policy"); got != "sandbox allow-scripts allow-forms allow-same-origin" {
+	if got := header.Get("Content-Security-Policy"); got != "sandbox allow-scripts allow-forms allow-same-origin; worker-src 'none'" {
 		t.Fatalf("page CSP = %q, want the inline sandbox with allow-same-origin", got)
 	}
 	// Same-origin requests carry the page's own Origin and are served.

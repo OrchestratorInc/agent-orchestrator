@@ -74,7 +74,7 @@ func TestRenderRouteServesTheStoredPageSandboxed(t *testing.T) {
 		t.Fatalf("stored file = %q, want the raw page", stored)
 	}
 	for header, want := range map[string]string{
-		"Content-Security-Policy": "sandbox allow-scripts allow-forms",
+		"Content-Security-Policy": "sandbox allow-scripts allow-forms; worker-src 'none'",
 		"Content-Type":            "text/html; charset=utf-8",
 		"X-Content-Type-Options":  "nosniff",
 		"Referrer-Policy":         "no-referrer",
@@ -102,7 +102,7 @@ func TestRenderRouteServesTheStoredPageSandboxed(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = notModified.Body.Close()
-	if notModified.StatusCode != http.StatusNotModified || notModified.Header.Get("Content-Security-Policy") != "sandbox allow-scripts allow-forms" {
+	if notModified.StatusCode != http.StatusNotModified || notModified.Header.Get("Content-Security-Policy") != "sandbox allow-scripts allow-forms; worker-src 'none'" {
 		t.Fatalf("If-None-Match: %s = %d (CSP %q), want 304 with the sandbox", etag, notModified.StatusCode, notModified.Header.Get("Content-Security-Policy"))
 	}
 
@@ -156,7 +156,7 @@ func TestRenderRouteServesTheStoredSourceAsPlainText(t *testing.T) {
 	}
 	for header, want := range map[string]string{
 		"Content-Type":            "text/plain; charset=utf-8",
-		"Content-Security-Policy": "sandbox allow-scripts allow-forms",
+		"Content-Security-Policy": "sandbox allow-scripts allow-forms; worker-src 'none'",
 		"X-Content-Type-Options":  "nosniff",
 		"Referrer-Policy":         "no-referrer",
 		"Cache-Control":           "private, no-cache",

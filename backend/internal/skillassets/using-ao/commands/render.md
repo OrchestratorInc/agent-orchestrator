@@ -19,7 +19,8 @@ ao render "$TMPDIR/turns-by-day.html" --title "Turns by day" --height 420
   page does not say.
 - One self-contained HTML file: inline `<style>` and `<script>`, at most 1 MiB.
   Remote `https://` resources (a CDN chart library, for example) load as they are.
-  Relative URLs do not resolve.
+  Relative URLs do not resolve. Web workers do not run, and a page can reach no
+  address on this computer or its local network.
 - To show a local image, write its absolute path: `src="/abs/shot.png"`, CSS
   `url(/abs/bg.webp)`, or a JS string. `ao render` puts the image into the page. PNG, JPEG, GIF,
   WebP, AVIF, SVG, BMP, and ICO files work, each up to 10 MiB. Remote http(s) URLs load as they are.
