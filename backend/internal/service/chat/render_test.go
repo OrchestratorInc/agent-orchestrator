@@ -211,8 +211,42 @@ func publishMeasured(t *testing.T, h *harness, measure chatsvc.RenderMeasure) (c
 	if err != nil {
 		t.Fatalf("PublishRender: %v", err)
 	}
+	h.svc.WaitRenderMeasures()
 	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(renderRows(s)) == 1 })
 	return result, renderRows(snapshot)[0]
+}
+
+// The agent does not wait for the desktop app to measure its page: publish
+// returns with the row recorded, and the heights settle onto that row later.
+func TestPublishRenderReturnsBeforeTheMeasureAndSettlesTheHeightsLater(t *testing.T) {
+	h, _ := steerHarness(t)
+	release := make(chan struct{})
+	h.svc.SetRenderMeasure(func(_ context.Context, _ domain.SessionID, args map[string]any) (any, error) {
+		<-release
+		heights := []any{}
+		for _, width := range args["widths"].([]int) {
+			heights = append(heights, []any{float64(width), 300.0})
+		}
+		return map[string]any{"heights": heights}, nil
+	})
+	if _, err := h.svc.PublishRender(context.Background(), testSession, chatsvc.RenderInput{
+		HTML: "<p>chart</p>", Title: "Chart", Height: 400, BaseURL: "http://127.0.0.1:3001",
+	}); err != nil {
+		t.Fatalf("PublishRender: %v", err)
+	}
+	before := renderRows(h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(renderRows(s)) == 1 }))[0]
+	if strings.Contains(string(before.Detail), "heights") {
+		t.Fatalf("detail before the measure = %s, want no heights yet", before.Detail)
+	}
+	close(release)
+	h.svc.WaitRenderMeasures()
+	after := renderRows(h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		rows := renderRows(s)
+		return len(rows) == 1 && strings.Contains(string(rows[0].Detail), "heights")
+	}))[0]
+	if after.ID != before.ID || after.Sequence != before.Sequence {
+		t.Fatalf("settled row %s/%d, want the recorded row %s/%d", after.ID, after.Sequence, before.ID, before.Sequence)
+	}
 }
 
 func TestPublishRenderRecordsTheMeasuredHeightsSortedByWidth(t *testing.T) {
@@ -295,7 +329,7 @@ func TestPublishRenderStopsWaitingForAMeasureAtTheTimeout(t *testing.T) {
 		return nil, ctx.Err()
 	})
 	if elapsed := time.Since(started); elapsed > 5*time.Second {
-		t.Fatalf("publish took %v", elapsed)
+		t.Fatalf("publish and measure took %v", elapsed)
 	}
 	if deadline.IsZero() || deadline.Sub(started) > time.Second {
 		t.Fatalf("measure deadline %v after the start, want the 50ms timeout", deadline.Sub(started))

@@ -112,12 +112,7 @@ func (s *Service) PublishRender(ctx context.Context, id domain.SessionID, in Ren
 	}
 	path := "/api/v1/sessions/" + url.PathEscape(string(id)) + "/renders/" + url.PathEscape(renderID)
 	height := min(max(in.Height, minRenderHeight), maxRenderHeight)
-	// Without a turn in flight the page is never recorded, so it is not measured.
-	var heights [][2]int
-	if controller.busy() {
-		heights = s.measureRender(ctx, id, strings.TrimRight(in.BaseURL, "/")+path)
-	}
-	activityID, turn, err := controller.recordRender(ctx, renderID, title, height, heights, path)
+	activityID, turn, err := controller.recordRender(ctx, renderID, title, height, nil, path)
 	if err != nil {
 		// Only the timeline row lets anything find the page, so an unrecorded page goes.
 		if removeErr := s.renders.RemoveRender(context.WithoutCancel(ctx), id, renderID); removeErr != nil {
@@ -126,6 +121,7 @@ func (s *Service) PublishRender(ctx context.Context, id domain.SessionID, in Ren
 		return RenderResult{}, err
 	}
 	result := RenderResult{RenderID: renderID, ActivityID: activityID, Path: path}
+	s.measureRenderLater(ctx, controller, id, turn, activityID, renderID, title, height, path, strings.TrimRight(in.BaseURL, "/")+path)
 	// The page is already in the thread, so a failed save does not fail the publish.
 	if in.Artifact {
 		if artifact, err := s.SaveRenderAsArtifact(ctx, id, renderID, title); err != nil {
@@ -278,6 +274,29 @@ func sameRenderArtifact(root *os.Root, name string, doc []byte) bool {
 // width, sorted by width. Measuring is best effort: without the desktop app,
 // past the timeout, or on any error, the page is published without heights and
 // opens at the agent's height.
+// measureRenderLater measures a recorded page in the background and settles
+// the heights onto its row. Measuring loads the page in the desktop app, which
+// takes up to renderMeasureTimeout (and a reconnect wait with no app at all), so
+// the agent does not wait for it; a reader's frame fits the page's own reported
+// height until the heights arrive.
+func (s *Service) measureRenderLater(ctx context.Context, controller *Controller, id domain.SessionID, turn, activityID, renderID, title string, height int, path, pageURL string) {
+	if s.renderMeasure == nil {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	s.renderMeasures.Add(1)
+	go func() {
+		defer s.renderMeasures.Done()
+		heights := s.measureRender(ctx, id, pageURL)
+		if len(heights) == 0 {
+			return
+		}
+		if err := controller.upsertRender(ctx, turn, activityID, renderID, title, height, heights, path); err != nil {
+			s.log.Debug("render heights not recorded", "session", id, "render", renderID, "error", err)
+		}
+	}()
+}
+
 func (s *Service) measureRender(ctx context.Context, id domain.SessionID, pageURL string) [][2]int {
 	if s.renderMeasure == nil {
 		return nil
@@ -334,26 +353,33 @@ func (c *Controller) recordRender(ctx context.Context, renderID, title string, h
 	if !ok {
 		return "", "", ErrNoActiveTurn
 	}
+	activityID := c.newID()
+	if err := c.upsertRender(ctx, providerTurnID, activityID, renderID, title, height, heights, path); err != nil {
+		return "", "", fmt.Errorf("record render on turn %s: %w", providerTurnID, err)
+	}
+	return activityID, providerTurnID, nil
+}
+
+// upsertRender writes a render row. A second write with the same render id
+// settles the existing row by its provider item id, so measured heights added
+// later keep the row's place in the thread, even after the turn has ended.
+func (c *Controller) upsertRender(ctx context.Context, providerTurnID, activityID, renderID, title string, height int, heights [][2]int, path string) error {
 	render := map[string]any{"id": renderID, "title": title, "height": height, "path": path}
 	if len(heights) > 0 {
 		render["heights"] = heights
 	}
 	detail, err := json.Marshal(map[string]any{"event": "render", "render": render})
 	if err != nil {
-		return "", "", fmt.Errorf("encode render detail: %w", err)
+		return fmt.Errorf("encode render detail: %w", err)
 	}
-	activityID := c.newID()
-	if err := c.store.UpsertActivity(ctx, c.conversation.ID, providerTurnID, domain.ConversationActivity{
+	return c.store.UpsertActivity(ctx, c.conversation.ID, providerTurnID, domain.ConversationActivity{
 		ID:             activityID,
 		Kind:           domain.ActivityKindSystem,
 		Status:         domain.ActivityStatusCompleted,
 		Summary:        title,
 		Detail:         detail,
 		ProviderItemID: "render:" + renderID,
-	}, c.now()); err != nil {
-		return "", "", fmt.Errorf("record render on turn %s: %w", providerTurnID, err)
-	}
-	return activityID, providerTurnID, nil
+	}, c.now())
 }
 
 // ErrRenderCheckUnavailable reports that no desktop app is connected to load the page.

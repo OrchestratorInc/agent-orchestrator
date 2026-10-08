@@ -49,14 +49,16 @@ type Service struct {
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 	// onModelChanged syncs ChatUI's model override (including clearing it) to
 	// session metadata before the next prompt routes or a later TUI rebuild.
-	onModelChanged     func(domain.SessionID, string)
-	stopProviderHost   func(context.Context, domain.SessionID) error
-	reports            *reportsvc.Coordinator
-	renders            RenderFiles
-	dataDir            string
-	reconcileOutput    func(context.Context, domain.SessionID) error
-	renderCheck        RenderCheck
-	renderMeasure      RenderMeasure
+	onModelChanged   func(domain.SessionID, string)
+	stopProviderHost func(context.Context, domain.SessionID) error
+	reports          *reportsvc.Coordinator
+	renders          RenderFiles
+	dataDir          string
+	reconcileOutput  func(context.Context, domain.SessionID) error
+	renderCheck      RenderCheck
+	renderMeasure    RenderMeasure
+	// renderMeasures tracks background measures, so tests can wait for them.
+	renderMeasures     sync.WaitGroup
 	wakeChat           func(context.Context, domain.SessionID) error
 	hibernationEnabled func() bool
 	viewMu             sync.Mutex

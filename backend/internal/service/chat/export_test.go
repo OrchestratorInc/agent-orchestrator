@@ -17,3 +17,6 @@ func SetRenderMeasureTimeout(timeout time.Duration) (restore func()) {
 	renderMeasureTimeout = timeout
 	return func() { renderMeasureTimeout = previous }
 }
+
+// WaitRenderMeasures waits for the background measures PublishRender started.
+func (s *Service) WaitRenderMeasures() { s.renderMeasures.Wait() }
