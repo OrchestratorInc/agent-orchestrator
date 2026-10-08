@@ -2629,6 +2629,33 @@ func TestACPToolDetailCapsInputAndDropsImageData(t *testing.T) {
 	}
 }
 
+// claude-agent-acp passes an MCP image result through as rawOutput in the
+// Anthropic shape, with the base64 under source.data.
+func TestACPToolDetailDropsAnthropicImageData(t *testing.T) {
+	shot := strings.Repeat("iVBORw0KGgo", 400)
+	tool := &toolState{
+		id: "mcp-2", kind: acpsdk.ToolKindOther, status: acpsdk.ToolCallStatusCompleted,
+		rawOutput: []any{
+			map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": shot}},
+			map[string]any{"type": "text", "text": "ok"},
+		},
+	}
+	event := (&conversation{}).toolEvent("turn-1", tool, true)
+	if strings.Contains(string(event.Detail), shot) {
+		t.Fatalf("detail stored the screenshot: %.300s", event.Detail)
+	}
+	var detail struct {
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal(event.Detail, &detail); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf(`[{"bytes":%d,"mimeType":"image/png","type":"image"},{"text":"ok","type":"text"}]`, len(shot))
+	if detail.Output != want {
+		t.Fatalf("output = %s\nwant     %s", detail.Output, want)
+	}
+}
+
 func TestACPToolDetailKeepsReadContentAndSmallInput(t *testing.T) {
 	file := strings.Repeat("line of a file\n", 2000)
 	tool := &toolState{

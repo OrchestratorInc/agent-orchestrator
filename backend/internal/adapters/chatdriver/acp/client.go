@@ -887,7 +887,10 @@ func contentWithoutImageData(content []acpsdk.ToolCallContent) []any {
 	return out
 }
 
-// withoutImageData replaces every image block in a decoded JSON value with imageStub.
+// withoutImageData replaces every image block in a decoded JSON value with
+// imageStub: MCP's {type:"image", data, mimeType} and the Anthropic
+// {type:"image", source:{type:"base64", media_type, data}} that
+// claude-agent-acp passes through as rawOutput.
 func withoutImageData(value any) any {
 	switch v := value.(type) {
 	case []any:
@@ -897,8 +900,15 @@ func withoutImageData(value any) any {
 		}
 		return out
 	case map[string]any:
-		if data, ok := v["data"].(string); ok && v["type"] == "image" {
-			return imageStub(v["mimeType"], data)
+		if v["type"] == "image" {
+			if data, ok := v["data"].(string); ok {
+				return imageStub(v["mimeType"], data)
+			}
+			if source, ok := v["source"].(map[string]any); ok {
+				if data, ok := source["data"].(string); ok {
+					return imageStub(source["media_type"], data)
+				}
+			}
 		}
 		out := make(map[string]any, len(v))
 		for key, item := range v {
