@@ -22,6 +22,13 @@ describe("blocksRenderFrameNavigation", () => {
 		expect(blocksRenderFrameNavigation(artifact, "https://phish.example/login")).toBe(true);
 	});
 
+	it("holds an artifact framed from its own inline origin on its page", () => {
+		const inline = "http://ao-inline-artifact.x.localhost:3001/q3/report.html";
+		expect(blocksRenderFrameNavigation(inline, `${inline}#totals`)).toBe(false);
+		expect(blocksRenderFrameNavigation(inline, "http://ao-inline-artifact.x.localhost:3001/q3/other.html")).toBe(true);
+		expect(blocksRenderFrameNavigation(inline, "https://phish.example/login")).toBe(true);
+	});
+
 	it("leaves every other frame alone", () => {
 		expect(blocksRenderFrameNavigation("https://docs.example/", "https://elsewhere.example/")).toBe(false);
 	});

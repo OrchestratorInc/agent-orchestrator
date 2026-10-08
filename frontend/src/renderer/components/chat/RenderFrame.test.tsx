@@ -432,6 +432,23 @@ describe("artifact activity", () => {
 
 	const artifactFrame = () => screen.getByTitle("Q3 (final).html") as HTMLIFrameElement;
 
+	it("frames the artifact from its own inline origin, same-origin there, when the session lists one", () => {
+		const inlineUrl = "http://ao-inline-artifact.x.localhost:3001/q3/Q3%20(final).html";
+		renderArtifact([{ ...sessionArtifact("q3/Q3 (final).html"), inlineUrl }]);
+		expect(artifactFrame().getAttribute("src")).toMatch(/^http:\/\/ao-inline-artifact\.x\.localhost:3001\/q3\/Q3%20\(final\)\.html#ao-theme=/);
+		expect(artifactFrame().getAttribute("sandbox")).toBe("allow-scripts allow-forms allow-same-origin");
+	});
+
+	it("never frames an inline URL off the inline-artifact origin with allow-same-origin", () => {
+		// allow-same-origin on the app's own origin would let the page script the app.
+		for (const inlineUrl of ["http://localhost:5173/q3/x.html", "app://renderer/x.html", "http://ao-inline-artifact.x.example/x.html"]) {
+			const { unmount } = renderArtifact([{ ...sessionArtifact("q3/Q3 (final).html"), inlineUrl }]);
+			expect(artifactFrame().getAttribute("sandbox")).toBe("allow-scripts allow-forms");
+			expect(artifactFrame().getAttribute("src")).toMatch(/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/artifact-files\//);
+			unmount();
+		}
+	});
+
 	beforeEach(() => setApiBaseUrl("http://127.0.0.1:3001"));
 	afterEach(() => {
 		setApiBaseUrl(null);

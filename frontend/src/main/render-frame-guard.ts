@@ -14,7 +14,8 @@ export function blocksRenderFrameNavigation(currentUrl: string, targetUrl: strin
 	} catch {
 		return false;
 	}
-	if (!RENDER_PATH.test(current.pathname)) return false;
+	// An HTML artifact framed from its own inline origin is held the same way.
+	if (!RENDER_PATH.test(current.pathname) && !current.hostname.startsWith("ao-inline-artifact.")) return false;
 	try {
 		const target = new URL(targetUrl);
 		return target.origin !== current.origin || target.pathname !== current.pathname || target.search !== current.search;

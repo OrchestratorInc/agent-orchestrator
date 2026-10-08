@@ -38,9 +38,28 @@ export function useChatRemoteHost(): boolean {
 	return useContext(ChatImageSourceContext)?.remoteHost ?? false;
 }
 
-/** The Browser panel URL the session lists for one of its artifact files, by path. */
-export function useChatArtifactPreview(path: string | undefined): { sessionId: string; previewUrl: string } | undefined {
+/**
+ * Whether a URL is on an inline-artifact origin. The chat frames such a page
+ * with allow-same-origin, which is only safe on an origin that is not the
+ * app's own, so nothing else is accepted.
+ */
+export function isInlineArtifactUrl(url: string): boolean {
+	try {
+		const { protocol, hostname } = new URL(url);
+		return protocol === "http:" && hostname.startsWith("ao-inline-artifact.") && hostname.endsWith(".localhost");
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * What the session lists for one of its artifact files, by path: the Browser
+ * panel URL, and the URL that frames the page inline from its own origin.
+ */
+export function useChatArtifactLinks(path: string | undefined): { sessionId: string; previewUrl?: string; inlineUrl?: string } | undefined {
 	const source = useContext(ChatImageSourceContext);
-	const previewUrl = path === undefined ? undefined : source?.artifacts?.find((artifact) => artifact.path === path)?.previewUrl;
-	return source && previewUrl ? { sessionId: source.sessionId, previewUrl } : undefined;
+	const artifact = path === undefined ? undefined : source?.artifacts?.find((candidate) => candidate.path === path);
+	if (!source || !artifact) return undefined;
+	const inlineUrl = artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
+	return { sessionId: source.sessionId, previewUrl: artifact.previewUrl, inlineUrl };
 }

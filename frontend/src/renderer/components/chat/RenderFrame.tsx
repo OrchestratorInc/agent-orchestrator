@@ -22,7 +22,7 @@ import type { ArtifactRef, RenderRef } from "../../types/conversation";
 import { Button, type ButtonProps } from "../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { useChatArtifactPreview, useChatRemoteHost } from "./chat-image-source";
+import { useChatArtifactLinks, useChatRemoteHost } from "./chat-image-source";
 
 /** What a frame shows: a page the agent rendered, or an HTML artifact it reported. */
 interface FramePage {
@@ -33,6 +33,12 @@ interface FramePage {
 	heights?: Array<[number, number]>;
 	/** The file Save writes. */
 	fileName: string;
+	/**
+	 * The page on its own inline-artifact origin. When set, the frame loads it
+	 * from there with allow-same-origin, so its module scripts, fetches and
+	 * fonts work; the daemon refuses that origin, and it is not the app's.
+	 */
+	frameUrl?: string;
 	/**
 	 * Caps the inline frame and scrolls the page inside it. An artifact is an
 	 * ordinary document, not written to the render rules, so a page sized to
@@ -93,8 +99,8 @@ function RenderDocument({
 	// they never reload the page.
 	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const src = useMemo(
-		() => `${baseUrl}${page.path}${renderThemeFragment(themeRef.current, displayMode, page.scrollable)}`,
-		[baseUrl, page.path, displayMode, page.scrollable],
+		() => `${page.frameUrl ?? `${baseUrl}${page.path}`}${renderThemeFragment(themeRef.current, displayMode, page.scrollable)}`,
+		[baseUrl, page.path, page.frameUrl, displayMode, page.scrollable],
 	);
 	const [contentHeight, setContentHeight] = useState<number>();
 	// The inline frame's width picks its measured first height; read before the
@@ -140,7 +146,7 @@ function RenderDocument({
 			ref={frameRef}
 			src={src}
 			title={page.title}
-			sandbox="allow-scripts allow-forms"
+			sandbox={page.frameUrl ? "allow-scripts allow-forms allow-same-origin" : "allow-scripts allow-forms"}
 			loading="lazy"
 			onLoad={postTheme}
 			className={cn("block w-full border-0", className)}
@@ -254,11 +260,18 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 	const { t } = useTranslation();
 	const remoteHost = useChatRemoteHost();
 	const render = "render" in props ? props.render : undefined;
+	const links = useChatArtifactLinks("artifact" in props ? props.artifact.path : undefined);
 	const page: FramePage =
 		"render" in props
 			? { title: props.render.title, path: props.render.path, height: props.render.height, heights: props.render.heights, fileName: renderFileName(props.render.title) }
-			: { title: props.artifact.name, path: props.artifact.url, height: ARTIFACT_FRAME_HEIGHT, fileName: props.artifact.name, scrollable: true };
-	const panel = useChatArtifactPreview("artifact" in props ? props.artifact.path : undefined);
+			: {
+					title: props.artifact.name,
+					path: props.artifact.url,
+					height: ARTIFACT_FRAME_HEIGHT,
+					fileName: props.artifact.name,
+					scrollable: true,
+					frameUrl: links?.inlineUrl,
+				};
 	const [expanded, setExpanded] = useState(false);
 	const [showSource, setShowSource] = useState(false);
 	const [saving, setSaving] = useState(false);
@@ -338,7 +351,9 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 								<FilePlus className="size-3.5" />
 							</RenderAction>
 						) : null}
-						{panel ? <OpenInPanelAction {...panel} onOpen={() => setExpanded(false)} /> : null}
+						{links?.previewUrl ? (
+							<OpenInPanelAction sessionId={links.sessionId} previewUrl={links.previewUrl} onOpen={() => setExpanded(false)} />
+						) : null}
 						<RenderAction
 							label={t("chat.render.openInBrowser")}
 							onClick={() =>

@@ -141,7 +141,8 @@ export function contentSecurityPolicy(mode: "build" | "serve"): string {
 		// served by the loopback daemon.
 		// 'self' lets dev:web, whose API base is relative, frame a page; the page
 		// keeps its own sandbox from the daemon's CSP header either way.
-		"frame-src 'self' http://127.0.0.1:*",
+		// *.localhost is the inline-artifact origin an HTML artifact is framed from.
+		"frame-src 'self' http://127.0.0.1:* http://*.localhost:*",
 	].join("; ");
 }
 
