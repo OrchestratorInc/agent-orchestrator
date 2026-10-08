@@ -515,6 +515,78 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
 
+	function mockClaudeLogin({ probeStatus = "authorized" }: { probeStatus?: string } = {}) {
+		const authorized = catalogWithInstalled("claude-code");
+		authorized.agents[0].authentication.state = "authorized";
+		const calls = { auth: 0, probe: 0 };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [
+				{ agentId: "claude-code", action: "login", launchMode: "terminal", available: true },
+			] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/probe") {
+				calls.probe += 1;
+				return { data: { agent: { id: "claude-code", label: "Claude Code", authStatus: probeStatus }, supported: true, installed: true } } as never;
+			}
+			if (path === "/api/v1/agents/readiness/ensure") return { data: calls.probe > 0 ? authorized : catalog } as never;
+			if (path === "/api/v1/agents/refresh") return { data: catalog } as never;
+			if (path === "/api/v1/agents/{agent}/auth") {
+				calls.auth += 1;
+				return { data: {
+					agentId: "claude-code", action: "login", guidance: "",
+					terminal: { handleId: "auth-terminal-1", title: "Claude Code login", workingDir: "/tmp", createdAt: "2026-09-15T00:00:00Z" },
+				} } as never;
+			}
+			return { data: undefined } as never;
+		});
+		vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+		return calls;
+	}
+
+	// The task composer's "Log in" shortcut opens this page asking it to start
+	// the login, so the user lands in the same flow the row's button runs.
+	it("starts the focused harness login once when opened from a login shortcut", async () => {
+		const calls = mockClaudeLogin();
+		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<HarnessSettingsSection focusAgentId="claude-code" startLogin />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		await within(row).findByTestId("inline-terminal-body");
+		expect(calls.auth).toBe(1);
+	});
+
+	// A login fixed here must clear a stale model-discovery error in an open
+	// task composer without the user pressing refresh.
+	it("invalidates the harness's cached model catalogs after a login check", async () => {
+		const calls = mockClaudeLogin();
+		const user = userEvent.setup();
+		const { client } = renderSection();
+		const local = ["agent-models", "claude-code", ""] as const;
+		const otherAgent = ["agent-models", "codex", ""] as const;
+		client.setQueryData(local, { agentId: "claude-code", models: [], warning: "OAuth access token has expired." });
+		client.setQueryData(otherAgent, { agentId: "codex", models: [] });
+		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		await user.click(await within(row).findByRole("button", { name: "Login" }));
+		await within(row).findByTestId("inline-terminal-body");
+		expect(client.getQueryState(local)?.isInvalidated).toBe(false);
+
+		act(() => terminalStateCallback.value?.("exited"));
+		await waitFor(() => expect(calls.probe).toBeGreaterThan(0));
+		await waitFor(() => expect(client.getQueryState(local)?.isInvalidated).toBe(true));
+		expect(client.getQueryState(otherAgent)?.isInvalidated).toBe(false);
+	});
+
 	// The first check right after a login terminal exits can fail transiently;
 	// the panel must not report a completed login as signed out.
 	async function loginWithProbeResults(statuses: string[], readinessAfterProbes: number, terminalInput?: string) {

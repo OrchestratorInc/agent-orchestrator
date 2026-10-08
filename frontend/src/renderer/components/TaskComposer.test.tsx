@@ -2022,4 +2022,123 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
 		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
 	});
+
+	describe("model login errors", () => {
+		const expiredDetail = "claude-code model discovery: claude-code: model discovery: Anthropic rejected the credential: OAuth access token has expired. Re-authenticate to continue.";
+		function claudeCatalog(extra: Record<string, unknown>) {
+			return {
+				agent: "claude-code",
+				selectionMode: "catalog",
+				models: [
+					{ id: "sonnet", label: "Sonnet 5.5" },
+					{ id: "opus", label: "Opus 5.5" },
+				],
+				allowCustom: true,
+				stale: true,
+				...extra,
+			};
+		}
+		function serveClaude(catalog: () => Record<string, unknown>) {
+			h.get.mockImplementation(async (path: string) => path.includes("/models")
+				? { data: catalog() }
+				: { data: { status: "ok", project: { agent: "claude-code", config: {} } } });
+		}
+
+		afterEach(() => {
+			useUiStore.setState({ settingsModal: null });
+		});
+
+		it("replaces the raw provider error with a login shortcut and an inline retry", async () => {
+			h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })] };
+			serveClaude(() => claudeCatalog({ warning: expiredDetail, warningCode: "auth_required" }));
+			h.post.mockImplementation(async (path: string) => path === "/api/v1/agents/{agent}/models/refresh"
+				? { data: claudeCatalog({ stale: false }) }
+				: { data: {} });
+
+			render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+
+			const notice = await screen.findByTestId("model-catalog-notice");
+			expect(notice).toHaveTextContent("Claude Code isn't logged in on this computer, so its models couldn't load.");
+			expect(screen.queryByText(expiredDetail)).not.toBeInTheDocument();
+			await userEvent.click(screen.getByRole("button", { name: "Details" }));
+			expect(screen.getByText(expiredDetail)).toBeInTheDocument();
+
+			await userEvent.click(screen.getByRole("button", { name: "Log in" }));
+			expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({
+				scope: "global", section: "harness", focusAgentId: "claude-code", harnessView: "local", startLogin: true,
+			}));
+
+			await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+			await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", expect.objectContaining({
+				params: expect.objectContaining({ path: { agent: "claude-code" } }),
+			})));
+			await waitFor(() => expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument());
+		});
+
+		it("explains an expired login that Claude Code renews on its own", async () => {
+			h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "configured" })] };
+			serveClaude(() => claudeCatalog({ warning: "the saved Claude Code login token expired", warningCode: "auth_expired" }));
+			render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+			expect(await screen.findByTestId("model-catalog-notice")).toHaveTextContent("Claude Code's saved login has expired.");
+			expect(screen.getByRole("button", { name: "Log in again" })).toBeInTheDocument();
+		});
+
+		it("recognizes a login error from a daemon that predates warning codes", async () => {
+			serveClaude(() => claudeCatalog({ warning: expiredDetail }));
+			render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+			expect(await screen.findByTestId("model-catalog-notice")).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Log in" })).toBeInTheDocument();
+		});
+
+		it("keeps other model warnings as plain text", async () => {
+			serveClaude(() => claudeCatalog({ warning: "provider temporarily unavailable" }));
+			render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+			expect(await screen.findByText("provider temporarily unavailable")).toBeInTheDocument();
+			expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument();
+		});
+
+		// A cloud task runs with the cloud credential; this computer's login only
+		// shapes the model list, so it must never read as a blocking error.
+		it("keeps a cloud project startable with a quiet note when the local login fails", async () => {
+			h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
+			h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })] };
+			h.get.mockImplementation(async () => ({ data: claudeCatalog({ warning: expiredDetail, warningCode: "auth_required" }) }));
+			h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
+			const onCreated = vi.fn();
+			render(<Wrap><TaskComposer projectId="cloud-1" onCreated={onCreated} /></Wrap>);
+
+			const notice = await screen.findByTestId("model-catalog-notice");
+			expect(notice).toHaveTextContent("Cloud tasks use your cloud connection and can still start.");
+			expect(notice).not.toHaveClass("text-warning");
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+			fireEvent.change(task(), { target: { value: "Do the work" } });
+			await waitForTaskReady();
+			fireEvent.click(startTask());
+			await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
+		});
+
+		it("re-reads the catalog by itself once the agent reads as logged in", async () => {
+			h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })] };
+			let loggedIn = false;
+			serveClaude(() => loggedIn ? claudeCatalog({ stale: false }) : claudeCatalog({ warning: expiredDetail, warningCode: "auth_required" }));
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const view = render(<Wrap queryClient={queryClient}><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+			await screen.findByTestId("model-catalog-notice");
+
+			loggedIn = true;
+			h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "authorized" })] };
+			view.rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+			await waitFor(() => expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument());
+		});
+
+		it("re-reads the catalog when the window regains focus while a login error shows", async () => {
+			let loggedIn = false;
+			serveClaude(() => loggedIn ? claudeCatalog({ stale: false }) : claudeCatalog({ warning: expiredDetail, warningCode: "auth_required" }));
+			render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+			await screen.findByTestId("model-catalog-notice");
+			loggedIn = true;
+			act(() => { window.dispatchEvent(new Event("focus")); });
+			await waitFor(() => expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument());
+		});
+	});
 });

@@ -10,7 +10,7 @@ import {
 	useAgentReadinessQuery,
 } from "../../hooks/useAgentReadinessQuery";
 import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../hooks/useAgentAuth";
-import { agentModelsQueryPrefix } from "../../hooks/useAgentModelsQuery";
+import { invalidateAgentModelCatalogs } from "../../hooks/useAgentModelsQuery";
 import { fetchSessionMemory, formatCPU, formatMemory, sessionMemoryQueryOptions } from "../../hooks/useSessionMemory";
 import { closeShellTerminal, shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../hooks/useShellTerminals";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
@@ -177,11 +177,14 @@ export function HarnessSettingsSection({
 	focusAgentId,
 	hostId,
 	initialView = "local",
+	startLogin = false,
 	titleHidden = false,
 }: {
 	focusAgentId?: string;
 	hostId?: string;
 	initialView?: HarnessView;
+	/** Start focusAgentId's local login flow once its row is ready (a shortcut from a login error elsewhere). */
+	startLogin?: boolean;
 	titleHidden?: boolean;
 }) {
 	const { t } = useTranslation();
@@ -211,7 +214,7 @@ export function HarnessSettingsSection({
 				triggerClassName="w-fit max-w-full"
 			/> : null}
 		{!cloudView && selectedHostId !== LOCAL_HOST && !remoteOffline ? <p className="text-xs text-muted-foreground">{t("settings.harness.remoteBrowserAuthNote")}</p> : null}
-		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} search={search} /> : remoteOffline ? <p className="text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} search={search} />}
+		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} search={search} /> : remoteOffline ? <p className="text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} search={search} startLogin={startLogin && selectedHostId === (hostId ?? LOCAL_HOST)} />}
 	</SettingsSection>;
 }
 
@@ -269,7 +272,7 @@ function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: string; 
 	</>;
 }
 
-function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: string; hostId?: string; search: string }) {
+function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false }: { focusAgentId?: string; hostId?: string; search: string; startLogin?: boolean }) {
 	const { i18n, t } = useTranslation();
 	const queryClient = useQueryClient();
 	const client = clientForSessionHost(hostId);
@@ -347,7 +350,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 				await Promise.all([
 					queryClient.invalidateQueries({ queryKey: installerKey }),
 					queryClient.invalidateQueries({ queryKey: authPlansKey }),
-					queryClient.invalidateQueries({ queryKey: hostId ? ["agent-models", hostId, agentId] : agentModelsQueryPrefix(agentId) }),
+					invalidateAgentModelCatalogs(queryClient, agentId, hostId),
 				]);
 			}
 		});
@@ -402,6 +405,19 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 	useEffect(() => () => {
 		if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
 	}, []);
+
+	// A "Log in" shortcut elsewhere (the task composer's model error) lands here
+	// and starts the same login flow the row's own button would, exactly once.
+	const startAuthRef = useRef<(agentId: AgentId) => Promise<void>>(async () => undefined);
+	const autoLoginHandledRef = useRef(false);
+	useEffect(() => {
+		if (!startLogin || autoLoginHandledRef.current || !targetAgentId) return;
+		if (agents.isPending || authPlans.isPending) return;
+		autoLoginHandledRef.current = true;
+		const plan = agentAuthPlans.get(targetAgentId);
+		if (!plan || !plan.available || plan.action === "instructions") return;
+		void startAuthRef.current(targetAgentId);
+	}, [agentAuthPlans, agents.isPending, authPlans.isPending, startLogin, targetAgentId]);
 
 	useEffect(() => {
 		if (!activeKey) return;
@@ -539,6 +555,8 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 		}
 	};
 
+	startAuthRef.current = startAuth;
+
 	const checkAuth = useCallback(async (
 		agentId: AgentId,
 		{ fresh = false }: { fresh?: boolean } = {},
@@ -549,6 +567,10 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 			if (existing) await existing;
 			try {
 				const result = await probeAgentAuth(agentId, hostId);
+				// The probe also makes the daemon rediscover this agent's model
+				// catalogs; drop the renderer's copies so a stale login error in
+				// an open composer or picker clears without a manual refresh.
+				void invalidateAgentModelCatalogs(queryClient, agentId, hostId);
 				const readiness = await ensureAgentReadiness([agentId], "display", hostId);
 				cacheAgentReadiness(queryClient, readiness, hostId);
 				return result;

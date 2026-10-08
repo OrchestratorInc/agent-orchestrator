@@ -54,8 +54,9 @@ func TestClaudeCatalogPrefersProviderModels(t *testing.T) {
 
 // A settings.json alias default (e.g. "sonnet") does not match the concrete
 // snapshot IDs provider discovery returns, so it is carried as its own entry.
-// It must surface with the human label the CLI uses, not the raw alias, so the
-// picker reads "Sonnet" instead of "sonnet" or "Model not reported".
+// It must surface with the human label the CLI uses, not the raw alias, and
+// with the version the provider's own list resolves it to, so the picker reads
+// "Sonnet 4.5" instead of "sonnet" or "Model not reported".
 func TestClaudeConfiguredAliasDefaultCarriesHumanLabel(t *testing.T) {
 	list := func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 		return []ports.AgentModelInfo{
@@ -78,8 +79,8 @@ func TestClaudeConfiguredAliasDefaultCarriesHumanLabel(t *testing.T) {
 	if len(defaults) != 1 {
 		t.Fatalf("default models = %+v, want exactly one", defaults)
 	}
-	if defaults[0].ID != "sonnet" || defaults[0].Label != "Sonnet" {
-		t.Fatalf("default = %+v, want {ID: sonnet, Label: Sonnet}", defaults[0])
+	if defaults[0].ID != "sonnet" || defaults[0].Label != "Sonnet 4.5" {
+		t.Fatalf("default = %+v, want {ID: sonnet, Label: Sonnet 4.5}", defaults[0])
 	}
 }
 
