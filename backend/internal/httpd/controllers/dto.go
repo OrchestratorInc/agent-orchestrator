@@ -3342,6 +3342,8 @@ type TestingRunResponse struct {
 type StartTestingAttemptRequest struct {
 	_              struct{} `additionalProperties:"false"`
 	Harness        string   `json:"harness,omitempty"`
+	Model          string   `json:"model,omitempty" maxLength:"256"`
+	Effort         string   `json:"effort,omitempty" maxLength:"32"`
 	WorkerPrompt   string   `json:"workerPrompt" minLength:"1" maxLength:"65536"`
 	TimeoutSeconds int      `json:"timeoutSeconds,omitempty" minimum:"1" maximum:"7200" description:"Defaults to 1800 seconds."`
 }
@@ -3381,6 +3383,14 @@ type TestingScreenshotCall struct {
 	SessionID string                       `json:"sessionId" minLength:"1"`
 	RequestID string                       `json:"requestId" minLength:"1" maxLength:"128"`
 	Input     domain.TestScreenshotRequest `json:"input"`
+}
+
+// TestingObserveCall documents the same-capture pixel and AX observation.
+type TestingObserveCall struct {
+	_         struct{}                  `additionalProperties:"false"`
+	SessionID string                    `json:"sessionId" minLength:"1"`
+	RequestID string                    `json:"requestId" minLength:"1" maxLength:"128"`
+	Input     domain.TestObserveRequest `json:"input"`
 }
 
 // TestingClickCall documents the click input envelope.
@@ -3433,10 +3443,12 @@ type TestingReportCall struct {
 
 // TestingToolResponse contains one tool result and its evidence receipts.
 type TestingToolResponse struct {
-	Screenshot *domain.TestScreenshot         `json:"screenshot,omitempty"`
-	Action     *domain.TestActionResult       `json:"action,omitempty"`
-	Logs       *domain.TestLogResult          `json:"logs,omitempty"`
-	Query      *domain.TestDaemonQueryResult  `json:"query,omitempty"`
-	Report     *domain.TestSubmitReportResult `json:"report,omitempty"`
-	Evidence   []domain.TestEvidenceReceipt   `json:"evidence"`
+	Screenshot        *domain.TestScreenshot         `json:"screenshot,omitempty"`
+	Action            *domain.TestActionResult       `json:"action,omitempty"`
+	ObservationStatus string                         `json:"observationStatus,omitempty" enum:"captured,settled,unsettled,failed"`
+	ObservationError  string                         `json:"observationError,omitempty"`
+	Logs              *domain.TestLogResult          `json:"logs,omitempty"`
+	Query             *domain.TestDaemonQueryResult  `json:"query,omitempty"`
+	Report            *domain.TestSubmitReportResult `json:"report,omitempty"`
+	Evidence          []domain.TestEvidenceReceipt   `json:"evidence"`
 }

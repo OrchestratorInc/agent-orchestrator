@@ -105,12 +105,13 @@ func TestTestingMCPNegotiationAndSchemas(t *testing.T) {
 			var want map[string]any
 			if err := json.Unmarshal([]byte(`{
 				"screenshot":{"type":"object","properties":{},"additionalProperties":false},
-				"click":{"type":"object","properties":{"screenshotId":{"type":"string","minLength":1},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"button":{"enum":["left","right","middle"]}},"required":["screenshotId","x","y"],"additionalProperties":false},
-				"type":{"type":"object","properties":{"screenshotId":{"type":"string","minLength":1},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"text":{"type":"string","maxLength":16384}},"required":["screenshotId","x","y","text"],"additionalProperties":false},
+				"click":{"type":"object","properties":{"screenshotId":{"type":"string","minLength":1},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"button":{"enum":["left","right","middle"]},"elementId":{"type":"string","minLength":1,"maxLength":128}},"required":["screenshotId"],"additionalProperties":false,"oneOf":[{"required":["elementId"],"not":{"anyOf":[{"required":["x"]},{"required":["y"]}]}},{"required":["x","y"],"not":{"required":["elementId"]}}]},
+				"type":{"type":"object","properties":{"screenshotId":{"type":"string","minLength":1},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"text":{"type":"string","maxLength":16384},"elementId":{"type":"string","minLength":1,"maxLength":128}},"required":["screenshotId","text"],"additionalProperties":false,"oneOf":[{"required":["elementId"],"not":{"anyOf":[{"required":["x"]},{"required":["y"]}]}},{"required":["x","y"],"not":{"required":["elementId"]}}]},
 				"key":{"type":"object","properties":{"screenshotId":{"type":"string","minLength":1},"keys":{"type":"array","items":{"type":"string","minLength":1},"minItems":1,"maxItems":4}},"required":["screenshotId","keys"],"additionalProperties":false},
 				"read_target_logs":{"type":"object","properties":{"cursor":{"type":"string","maxLength":256},"maxBytes":{"type":"integer","minimum":1,"maximum":262144}},"additionalProperties":false},
-				"target_daemon_query":{"type":"object","properties":{"resource":{"enum":["projects","sessions"]}},"required":["resource"],"additionalProperties":false},
-				"submit_report":{"type":"object","properties":{"outcome":{"enum":["reproduced","not_reproduced","needs_information","environment_blocked","partial","cancelled"]},"markdown":{"type":"string","maxLength":65536}},"required":["outcome","markdown"],"additionalProperties":false}
+				"target_daemon_query":{"type":"object","properties":{"resource":{"enum":["projects","sessions","reviews","conversation"]},"sessionId":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"}},"required":["resource"],"oneOf":[{"properties":{"resource":{"enum":["projects","sessions"]}},"not":{"required":["sessionId"]}},{"properties":{"resource":{"enum":["reviews","conversation"]}},"required":["sessionId"]}],"additionalProperties":false},
+				"submit_report":{"type":"object","properties":{"outcome":{"enum":["reproduced","not_reproduced","needs_information","environment_blocked","partial","cancelled"]},"markdown":{"type":"string","maxLength":65536}},"required":["outcome","markdown"],"additionalProperties":false},
+				"observe":{"type":"object","properties":{},"additionalProperties":false}
 			}`), &want); err != nil {
 				t.Fatal(err)
 			}
@@ -126,8 +127,8 @@ func TestTestingMCPNegotiationAndSchemas(t *testing.T) {
 				}
 				got[tool.Name] = schema
 			}
-			if len(tools.Tools) != 7 || !reflect.DeepEqual(got, want) {
-				t.Fatalf("tools/list differs from the seven-tool contract: %#v", got)
+			if len(tools.Tools) != 8 || !reflect.DeepEqual(got, want) {
+				t.Fatalf("tools/list differs from the eight-tool contract: %#v", got)
 			}
 			finish()
 		})
@@ -143,8 +144,8 @@ func TestTestingMCPForwardsToolsAndScreenshot(t *testing.T) {
 	var calls []string
 	requestIDs := map[string]bool{}
 	inputs := map[string]string{
-		"screenshot": `{}`, "click": `{"screenshotId":"shot-1","x":0,"y":0}`,
-		"type": `{"screenshotId":"shot-1","x":0,"y":0,"text":"hello"}`,
+		"screenshot": `{}`, "observe": `{}`, "click": `{"screenshotId":"shot-1","x":0,"y":0}`,
+		"type": `{"screenshotId":"shot-1","elementId":"element-1","text":"hello"}`,
 		"key":  `{"screenshotId":"shot-1","keys":["ENTER"]}`, "read_target_logs": `{}`,
 		"target_daemon_query": `{"resource":"sessions"}`, "submit_report": `{"outcome":"partial","markdown":"# Observations"}`,
 	}
@@ -179,11 +180,17 @@ func TestTestingMCPForwardsToolsAndScreenshot(t *testing.T) {
 			t.Errorf("%s input differs from call: %s", name, envelope.Input)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if name == "screenshot" {
-			_ = json.NewEncoder(w).Encode(testingScreenshotDTO{Screenshot: &domain.TestScreenshot{
+		if name == "screenshot" || name == "observe" || name == "click" || name == "type" || name == "key" {
+			envelope := testingScreenshotDTO{Screenshot: &domain.TestScreenshot{
 				Frame:    domain.TestDesktopFrame{ScreenshotID: "shot-1", Width: 1, Height: 1, CapturedAt: time.Date(2026, 10, 6, 1, 2, 3, 0, time.UTC)},
 				MIMEType: "image/png", Data: png,
-			}, Evidence: []domain.TestEvidenceReceipt{{ID: "evidence-1", AttemptID: "attempt-1", Kind: "screenshot"}}})
+				Elements: []domain.TestElement{{ElementID: "element-1", Role: "AXTextField", Label: "Clone", Value: "hello", Frame: domain.TestWindowBounds{Width: 1, Height: 1}}},
+			}, ObservationStatus: "captured", Evidence: []domain.TestEvidenceReceipt{{ID: "evidence-1", AttemptID: "attempt-1", Kind: "screenshot"}}}
+			if name == "click" || name == "type" || name == "key" {
+				envelope.Action = &domain.TestActionResult{Delivered: true, InputPath: "pointer"}
+				envelope.ObservationStatus = "settled"
+			}
+			_ = json.NewEncoder(w).Encode(envelope)
 		} else {
 			_, _ = io.WriteString(w, responses[name])
 		}
@@ -193,8 +200,9 @@ func TestTestingMCPForwardsToolsAndScreenshot(t *testing.T) {
 	session, finish := testingMCPPipe(t, "2025-06-18")
 	for _, tc := range []struct{ name, input string }{
 		{"screenshot", `{}`},
+		{"observe", `{}`},
 		{"click", `{"screenshotId":"shot-1","x":0,"y":0}`},
-		{"type", `{"screenshotId":"shot-1","x":0,"y":0,"text":"hello"}`},
+		{"type", `{"screenshotId":"shot-1","elementId":"element-1","text":"hello"}`},
 		{"key", `{"screenshotId":"shot-1","keys":["ENTER"]}`},
 		{"read_target_logs", `{}`},
 		{"target_daemon_query", `{"resource":"sessions"}`},
@@ -204,7 +212,7 @@ func TestTestingMCPForwardsToolsAndScreenshot(t *testing.T) {
 		if err != nil || result.IsError {
 			t.Fatalf("%s result=%+v err=%v", tc.name, result, err)
 		}
-		if tc.name == "screenshot" {
+		if tc.name == "screenshot" || tc.name == "observe" || tc.name == "click" || tc.name == "type" || tc.name == "key" {
 			if len(result.Content) != 2 {
 				t.Fatalf("screenshot content: %+v", result.Content)
 			}
@@ -214,20 +222,29 @@ func TestTestingMCPForwardsToolsAndScreenshot(t *testing.T) {
 			}
 			text := result.Content[1].(*mcp.TextContent).Text
 			var metadata struct {
-				ScreenshotID  string `json:"screenshotId"`
-				Width, Height int
-				CapturedAt    string                       `json:"capturedAt"`
-				Evidence      []domain.TestEvidenceReceipt `json:"evidence"`
+				ScreenshotID      string `json:"screenshotId"`
+				Width, Height     int
+				CapturedAt        string                       `json:"capturedAt"`
+				Evidence          []domain.TestEvidenceReceipt `json:"evidence"`
+				Elements          []domain.TestElement         `json:"elements"`
+				Action            *domain.TestActionResult     `json:"action"`
+				ObservationStatus string                       `json:"observationStatus"`
 			}
-			if err := json.Unmarshal([]byte(text), &metadata); err != nil || metadata.ScreenshotID != "shot-1" || metadata.Width != 1 || metadata.Height != 1 || metadata.CapturedAt != "2026-10-06T01:02:03Z" || len(metadata.Evidence) != 1 || metadata.Evidence[0].ID != "evidence-1" {
+			if err := json.Unmarshal([]byte(text), &metadata); err != nil || metadata.ScreenshotID != "shot-1" || metadata.Width != 1 || metadata.Height != 1 || metadata.CapturedAt != "2026-10-06T01:02:03Z" || len(metadata.Evidence) != 1 || metadata.Evidence[0].ID != "evidence-1" || len(metadata.Elements) != 1 || metadata.Elements[0].Value != "hello" {
 				t.Fatalf("screenshot metadata: %s", text)
+			}
+			if (tc.name == "click" || tc.name == "type" || tc.name == "key") && (metadata.Action == nil || !metadata.Action.Delivered || metadata.ObservationStatus != "settled") {
+				t.Fatal("action delivery or observation missing", text)
+			}
+			if strings.Contains(text, `"data"`) {
+				t.Fatal("image duplicated in text", text)
 			}
 		} else if len(result.Content) != 1 || result.Content[0].(*mcp.TextContent).Text != responses[tc.name] {
 			t.Fatalf("%s content=%+v", tc.name, result.Content)
 		}
 	}
 	finish()
-	if len(calls) != 7 {
+	if len(calls) != 8 {
 		t.Fatalf("daemon calls: %v", calls)
 	}
 }
@@ -260,6 +277,9 @@ func TestTestingMCPRejectsInvalidInputsBeforeDaemon(t *testing.T) {
 	session, finish := testingMCPPipe(t, "2025-06-18")
 	for _, tc := range []struct{ name, input string }{
 		{"screenshot", `{"target":"supervisor"}`},
+		{"click", `{"screenshotId":"s","elementId":"e","x":0,"y":0}`},
+		{"click", `{"screenshotId":"s","elementId":""}`},
+		{"observe", `{"target":"other"}`},
 		{"click", `{"screenshotId":"s","x":-1,"y":0}`},
 		{"click", `{"screenshotId":"s","x":0.5,"y":0}`},
 		{"click", `{"screenshotId":"s","x":0,"y":0,"button":"other"}`},

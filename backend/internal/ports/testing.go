@@ -46,6 +46,8 @@ type TestingCleanupResult struct {
 // Input validates that frame and request refer to that same live window, maps
 // screenshot pixels to native points, and refuses input outside its bounds.
 // It must never fall back to full-desktop input or expose a provider MCP server.
+// Screenshot returns pixels and bounded AX rows from the same capture. Element
+// IDs belong to that capture and binding, and input consumes the capture.
 type TestingDesktopControl interface {
 	BindWindow(ctx context.Context, target domain.TestTargetIdentity) (domain.TestTargetIdentity, error)
 	Screenshot(ctx context.Context, target domain.TestTargetIdentity) (domain.TestScreenshot, error)

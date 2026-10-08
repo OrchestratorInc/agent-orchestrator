@@ -30,7 +30,7 @@ func (s *Service) recordingDirectory(st *attemptState) string {
 
 func (s *Service) recordingJournal(ctx context.Context, record domain.TestActionRecord) error {
 	if err := s.deps.Evidence.AppendAction(ctx, record); err != nil {
-		return apierr.Internal("TEST_EVIDENCE_WRITE_FAILED", "Cannot save recording journal")
+		return fmt.Errorf("%w: %w", apierr.Internal("TEST_EVIDENCE_WRITE_FAILED", "Cannot save recording journal"), err)
 	}
 	return nil
 }
@@ -101,37 +101,42 @@ func (s *Service) stopRecording(ctx context.Context, st *attemptState, target do
 	journalErr := s.recordingJournal(ctx, record)
 	// Stop even when the journal fails: cancellation must not leave a recorder
 	// running. The cleanup still reports the evidence failure explicitly.
-	result, err := recorder.StopRecording(ctx, target)
+	result, stopErr := recorder.StopRecording(ctx, target)
 	result.Gap = ""
+	// Final evidence must survive an expired recording-stop deadline.
+	copyCtx, copyCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	var saveErr error
+	if stopErr == nil {
+		saveErr = s.saveRecording(copyCtx, st, result)
+	}
+	copyCancel()
+	// Terminal diagnostics get a fresh budget after the copy finishes or fails.
+	completionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	err := errors.Join(journalErr, stopErr, saveErr)
 	if err != nil {
 		result.Gap = err.Error()
 	}
-	// Final evidence must survive an expired recording-stop deadline.
-	completionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	if err == nil {
-		if e := s.saveRecording(completionCtx, st, result); e != nil {
-			err = e
-		}
+	metadata, _ := json.Marshal(result)
+	_, metadataErr := s.deps.Evidence.Write(completionCtx, st.record.ID, ports.TestingEvidenceArtifact{Kind: "recording_metadata", MIMEType: "application/json"}, strings.NewReader(string(metadata)))
+	if metadataErr != nil {
+		metadataErr = fmt.Errorf("%w: %w", apierr.Internal("TEST_EVIDENCE_WRITE_FAILED", "Cannot save recording metadata"), metadataErr)
+		err = errors.Join(err, metadataErr)
+		result.Gap = err.Error()
 	}
 	record.At = s.deps.Clock.Now().UTC()
 	record.State = "completed"
 	if err != nil {
-		record.State = "failed"
-		record.Detail = err.Error()
+		record.State, record.Detail = "failed", err.Error()
 	}
 	record.RecordingGap = result.Gap
 	record.Recording, _ = json.Marshal(result)
-	metadata, _ := json.Marshal(result)
-	_, metadataErr := s.deps.Evidence.Write(completionCtx, st.record.ID, ports.TestingEvidenceArtifact{Kind: "recording_metadata", MIMEType: "application/json"}, strings.NewReader(string(metadata)))
-	if metadataErr != nil {
-		record.State = "failed"
-		record.Detail = "Recording metadata could not be saved as evidence."
-		metadataErr = apierr.Internal("TEST_EVIDENCE_WRITE_FAILED", "Cannot save recording metadata")
-	}
 	completionErr := s.recordingJournal(completionCtx, record)
+	if completionErr != nil {
+		result.Gap = errors.Join(err, completionErr).Error()
+	}
 	gapErr := s.setRecordingGap(completionCtx, st, result.Gap)
-	return errors.Join(journalErr, err, metadataErr, completionErr, gapErr)
+	return errors.Join(err, completionErr, gapErr)
 }
 
 func (s *Service) saveRecording(ctx context.Context, st *attemptState, result ports.TestingRecordingResult) error {
@@ -165,7 +170,7 @@ func (s *Service) saveRecording(ctx context.Context, st *attemptState, result po
 		return fmt.Errorf("recording path is not a nonempty regular movie")
 	}
 	if _, err := s.deps.Evidence.Write(ctx, st.record.ID, ports.TestingEvidenceArtifact{Kind: "recording", MIMEType: result.MIMEType}, movie); err != nil {
-		return apierr.Internal("TEST_EVIDENCE_WRITE_FAILED", "Cannot save finalized recording")
+		return fmt.Errorf("%w: %w", apierr.Internal("TEST_EVIDENCE_WRITE_FAILED", "Cannot save finalized recording"), err)
 	}
 	return nil
 }

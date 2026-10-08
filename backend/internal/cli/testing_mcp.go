@@ -25,12 +25,13 @@ const testingCapabilityHeader = "X-AO-Test-Capability"
 var testingMCPTools = []struct {
 	name, description, schema string
 }{
-	{"screenshot", "Capture the attempt's bound window at original resolution.", `{"type":"object","properties":{},"additionalProperties":false}`},
-	{"click", "Click a pixel in a saved screenshot of the bound window.", `{"type":"object","properties":{"screenshotId":{"type":"string","minLength":1},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"button":{"enum":["left","right","middle"]}},"required":["screenshotId","x","y"],"additionalProperties":false}`},
-	{"type", "Focus a screenshot pixel and enter text in the bound window.", `{"type":"object","properties":{"screenshotId":{"type":"string","minLength":1},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"text":{"type":"string","maxLength":16384}},"required":["screenshotId","x","y","text"],"additionalProperties":false}`},
-	{"key", "Send a key or chord to the bound window.", `{"type":"object","properties":{"screenshotId":{"type":"string","minLength":1},"keys":{"type":"array","items":{"type":"string","minLength":1},"minItems":1,"maxItems":4}},"required":["screenshotId","keys"],"additionalProperties":false}`},
+	{"observe", "Observe the bound window first: image and bounded accessibility from the same capture. Prefer elementId for actions; coordinates are a fallback. IDs are consumed by input and replaced by the next observation. If inputReady is false, observe again before input.", `{"type":"object","properties":{},"additionalProperties":false}`},
+	{"screenshot", "Capture the bound window as image plus accessibility. Coordinates use the returned image pixels; full-resolution evidence is retained.", `{"type":"object","properties":{},"additionalProperties":false}`},
+	{"click", "Call observe first; prefer elementId, with x/y as a pointer fallback. Send one click and return a fresh observation. Delivery is not proof of effect; never repeat input after capture failure.", `{"type":"object","properties":{"screenshotId":{"type":"string","minLength":1},"elementId":{"type":"string","minLength":1,"maxLength":128},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"button":{"enum":["left","right","middle"]}},"required":["screenshotId"],"oneOf":[{"required":["elementId"],"not":{"anyOf":[{"required":["x"]},{"required":["y"]}]}},{"required":["x","y"],"not":{"required":["elementId"]}}],"additionalProperties":false}`},
+	{"type", "Call observe first; prefer elementId, with x/y as a pointer-focus fallback. Enter text once and return a fresh observation. Inspect its value/image; never repeat input after capture failure.", `{"type":"object","properties":{"screenshotId":{"type":"string","minLength":1},"elementId":{"type":"string","minLength":1,"maxLength":128},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"text":{"type":"string","maxLength":16384}},"required":["screenshotId","text"],"oneOf":[{"required":["elementId"],"not":{"anyOf":[{"required":["x"]},{"required":["y"]}]}},{"required":["x","y"],"not":{"required":["elementId"]}}],"additionalProperties":false}`},
+	{"key", "Send one key or chord using the latest observation and return a fresh observation. Never repeat input after capture failure.", `{"type":"object","properties":{"screenshotId":{"type":"string","minLength":1},"keys":{"type":"array","items":{"type":"string","minLength":1},"minItems":1,"maxItems":4}},"required":["screenshotId","keys"],"additionalProperties":false}`},
 	{"read_target_logs", "Read bounded target logs. maxBytes defaults to 65536.", `{"type":"object","properties":{"cursor":{"type":"string","maxLength":256},"maxBytes":{"type":"integer","minimum":1,"maximum":262144}},"additionalProperties":false}`},
-	{"target_daemon_query", "Read projects or sessions from the bound target daemon.", `{"type":"object","properties":{"resource":{"enum":["projects","sessions"]}},"required":["resource"],"additionalProperties":false}`},
+	{"target_daemon_query", "Read bound target projects/sessions, or reviews/conversation for one sessionId.", `{"type":"object","properties":{"resource":{"enum":["projects","sessions","reviews","conversation"]},"sessionId":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"}},"required":["resource"],"oneOf":[{"properties":{"resource":{"enum":["projects","sessions"]}},"not":{"required":["sessionId"]}},{"properties":{"resource":{"enum":["reviews","conversation"]}},"required":["sessionId"]}],"additionalProperties":false}`},
 	{"submit_report", "Save the attempt outcome and Markdown report, up to 64 KiB.", `{"type":"object","properties":{"outcome":{"enum":["reproduced","not_reproduced","needs_information","environment_blocked","partial","cancelled"]},"markdown":{"type":"string","maxLength":65536}},"required":["outcome","markdown"],"additionalProperties":false}`},
 }
 
@@ -117,7 +118,7 @@ func (c *commandContext) newTestingMCPServer(attemptID, sessionID, capability st
 			if err != nil {
 				return nil, nil, errors.New(redactTestingCapability(err.Error(), capability))
 			}
-			if tool.name != "screenshot" {
+			if tool.name != "screenshot" && tool.name != "observe" && tool.name != "click" && tool.name != "type" && tool.name != "key" {
 				return &mcp.CallToolResult{Content: []mcp.Content{
 					&mcp.TextContent{Text: redactTestingCapability(string(response), capability)},
 				}}, nil, nil
@@ -127,24 +128,37 @@ func (c *commandContext) newTestingMCPServer(attemptID, sessionID, capability st
 				return nil, nil, errors.New("daemon returned an invalid screenshot response")
 			}
 			screenshot := envelope.Screenshot
+			if screenshot == nil && envelope.Action != nil {
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{
+					&mcp.TextContent{Text: redactTestingCapability(string(response), capability)},
+					&mcp.TextContent{Text: "Post-action observation failed. Inspect delivery above; do not repeat the input. Call observe to recover."},
+				}}, nil, nil
+			}
 			if screenshot == nil || screenshot.MIMEType != "image/png" || len(screenshot.Data) == 0 ||
 				screenshot.Frame.ScreenshotID == "" || screenshot.Frame.Width <= 0 || screenshot.Frame.Height <= 0 || screenshot.Frame.CapturedAt.IsZero() {
 				return nil, nil, errors.New("daemon returned an incomplete PNG screenshot")
 			}
 			frame := screenshot.Frame
 			metadata, err := json.Marshal(struct {
-				ScreenshotID string                       `json:"screenshotId"`
-				Width        int                          `json:"width"`
-				Height       int                          `json:"height"`
-				CapturedAt   string                       `json:"capturedAt"`
-				Evidence     []domain.TestEvidenceReceipt `json:"evidence"`
-			}{frame.ScreenshotID, frame.Width, frame.Height, frame.CapturedAt.Format(time.RFC3339Nano), envelope.Evidence})
+				ScreenshotID      string                       `json:"screenshotId"`
+				Width             int                          `json:"width"`
+				Height            int                          `json:"height"`
+				CapturedAt        string                       `json:"capturedAt"`
+				Evidence          []domain.TestEvidenceReceipt `json:"evidence"`
+				Elements          []domain.TestElement         `json:"elements"`
+				Truncated         bool                         `json:"truncated"`
+				InputReady        bool                         `json:"inputReady"`
+				Action            *domain.TestActionResult     `json:"action,omitempty"`
+				ObservationStatus string                       `json:"observationStatus,omitempty"`
+				ObservationError  string                       `json:"observationError,omitempty"`
+			}{frame.ScreenshotID, frame.Width, frame.Height, frame.CapturedAt.Format(time.RFC3339Nano), envelope.Evidence,
+				screenshot.Elements, screenshot.Truncated, screenshot.InputReady, envelope.Action, envelope.ObservationStatus, envelope.ObservationError})
 			if err != nil {
 				return nil, nil, err
 			}
-			return &mcp.CallToolResult{Content: []mcp.Content{
+			return &mcp.CallToolResult{IsError: envelope.ObservationStatus == "failed", Content: []mcp.Content{
 				&mcp.ImageContent{Data: screenshot.Data, MIMEType: screenshot.MIMEType},
-				&mcp.TextContent{Text: string(metadata)},
+				&mcp.TextContent{Text: redactTestingCapability(string(metadata), capability)},
 			}}, nil, nil
 		})
 	}

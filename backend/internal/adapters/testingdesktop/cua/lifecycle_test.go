@@ -54,6 +54,8 @@ func TestBindWindowDoesNotAdmitRefusedDriver(t *testing.T) {
 				}
 				if len(args) == 5 && args[2] == "call" {
 					switch args[3] {
+					case "start_session":
+						return jsonOutput(map[string]any{"active": true, "revived": false}), nil
 					case "check_permissions":
 						permissionCalls++
 						if failure == "provider error" && !granted {

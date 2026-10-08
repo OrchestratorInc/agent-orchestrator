@@ -33,6 +33,8 @@ type testingRunDTO struct {
 
 type testingAttemptStartDTO struct {
 	Harness        string `json:"harness,omitempty"`
+	Model          string `json:"model,omitempty"`
+	Effort         string `json:"effort,omitempty"`
 	WorkerPrompt   string `json:"workerPrompt"`
 	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"`
 }
@@ -62,8 +64,11 @@ type testingToolRequestDTO struct {
 }
 
 type testingScreenshotDTO struct {
-	Screenshot *domain.TestScreenshot       `json:"screenshot"`
-	Evidence   []domain.TestEvidenceReceipt `json:"evidence"`
+	Screenshot        *domain.TestScreenshot       `json:"screenshot"`
+	Action            *domain.TestActionResult     `json:"action,omitempty"`
+	ObservationStatus string                       `json:"observationStatus,omitempty"`
+	ObservationError  string                       `json:"observationError,omitempty"`
+	Evidence          []domain.TestEvidenceReceipt `json:"evidence"`
 }
 
 func newTestingCommand(ctx *commandContext) *cobra.Command {
@@ -73,7 +78,7 @@ func newTestingCommand(ctx *commandContext) *cobra.Command {
 }
 
 func newTestingStartCommand(ctx *commandContext) *cobra.Command {
-	var project, issueFile, issueURL, commit, recipe, promptFile, agent string
+	var project, issueFile, issueURL, commit, recipe, promptFile, agent, model, effort string
 	var timeout int
 	var jsonOutput bool
 	cmd := &cobra.Command{
@@ -112,7 +117,7 @@ func newTestingStartCommand(ctx *commandContext) *cobra.Command {
 			}
 			var attempt testingAttemptStartedDTO
 			if err := ctx.postJSON(cmd.Context(), "testing/runs/"+url.PathEscape(run.RunID)+"/attempts", testingAttemptStartDTO{
-				Harness: agent, WorkerPrompt: prompt, TimeoutSeconds: timeout,
+				Harness: agent, Model: model, Effort: effort, WorkerPrompt: prompt, TimeoutSeconds: timeout,
 			}, &attempt); err != nil {
 				return fmt.Errorf("run %s created; start attempt: %w", run.RunID, err)
 			}
@@ -133,6 +138,8 @@ func newTestingStartCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().StringVar(&recipe, "recipe", "local-ao", "Configured testing recipe ID")
 	cmd.Flags().StringVar(&promptFile, "prompt-file", "", "File containing the investigator prompt, up to 64 KiB")
 	cmd.Flags().StringVar(&agent, "agent", "", "Investigator agent harness, defaults to project configuration")
+	cmd.Flags().StringVar(&model, "model", "", "Investigator model, defaults to project configuration")
+	cmd.Flags().StringVar(&effort, "effort", "", "Investigator effort, validated by the selected provider")
 	cmd.Flags().IntVar(&timeout, "timeout", 1800, "Attempt timeout in seconds, from 1 to 7200")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print JSON")
 	return cmd

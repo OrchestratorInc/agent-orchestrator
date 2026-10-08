@@ -103,7 +103,7 @@ func testingProvidersFromEnv(cfg config.Config, getenv func(string) string, targ
 		return testingProviders{}, fmt.Errorf("configure testing desktop: %w", err)
 	}
 	providers := testingProviders{Target: target, Desktop: testingDesktopBridge{desktop}, Close: desktop.Close,
-		Recipes: map[string]testingsvc.Recipe{"local-ao": {ID: "local-ao", CheckoutPath: checkout, Snapshot: "isolated local AO checkout", DeliveryMode: string(mode), VisualMarker: true}}}
+		Recipes: map[string]testingsvc.Recipe{"local-ao": {ID: "local-ao", CheckoutPath: checkout, Snapshot: "isolated local AO checkout", DeliveryMode: string(mode), VisualMarker: getenv("AO_TESTING_REAL_PROVIDERS") != "1", RealProviders: getenv("AO_TESTING_REAL_PROVIDERS") == "1"}}}
 	return providers, nil
 }
 

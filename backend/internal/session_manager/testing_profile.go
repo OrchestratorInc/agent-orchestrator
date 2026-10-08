@@ -54,7 +54,9 @@ func (m *Manager) LaunchTestingWorker(ctx context.Context, request testingsvc.Wo
 	rec, _, _, err := m.spawn(ctx, ports.SpawnConfig{
 		ProjectID: request.ProjectID, Harness: request.Harness,
 		Kind: domain.KindWorker, RequestedMode: domain.SessionModeChat,
-		Prompt: request.Prompt,
+		Prompt:         request.Prompt,
+		AgentConfig:    ports.AgentConfig{Model: request.Model, Effort: request.Effort},
+		EffortOverride: request.Effort != "",
 	}, func(ctx context.Context, id domain.SessionID) error {
 		binding, err := request.Prepare(ctx, id)
 		if err != nil {

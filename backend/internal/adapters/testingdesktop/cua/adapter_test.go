@@ -85,6 +85,8 @@ func newFixture(t *testing.T) *fixture {
 			t.Fatal(err)
 		}
 		switch args[3] {
+		case "start_session":
+			return jsonOutput(map[string]any{"active": true, "revived": false}), nil
 		case "list_windows":
 			pid := 123
 			if f.foreign {
@@ -106,6 +108,10 @@ func newFixture(t *testing.T) *fixture {
 			f.captureData = data.Bytes()
 			return jsonOutput(captureState{PID: 123, WindowID: 456, Bounds: f.bounds, Width: f.width, Height: f.height, Scale: 2, Capture: "private-provider-capture", Elements: f.elements}), nil
 		case "click", "type_text", "press_key":
+			if args[3] == "click" && input["capture_id"] != nil &&
+				(input["x"] == nil || input["y"] == nil || input["element_token"] != nil) {
+				return jsonOutput(map[string]any{"code": "invalid_arguments", "summary": "capture_id requires pixel coordinates without an element token"}), errors.New("exit status 1")
+			}
 			if f.providerError {
 				return jsonOutput(map[string]any{"code": "ax_window_unresolved", "effect": "refused", "summary": "exact window unavailable"}), errors.New("exit 1")
 			}
@@ -173,6 +179,12 @@ func TestWindowInjectionAndNativePixels(t *testing.T) {
 		var args map[string]any
 		if err := json.Unmarshal([]byte(call.args[4]), &args); err != nil {
 			t.Fatal(err)
+		}
+		if call.args[3] == "start_session" {
+			if len(args) != 1 || args["session"] == "" {
+				t.Fatalf("session lifecycle call must name only its owned label: %v", args)
+			}
+			continue
 		}
 		if args["pid"] != float64(123) || args["session"] == "" {
 			t.Fatalf("missing pinned PID/session: %v", args)
@@ -384,8 +396,13 @@ func TestPreviewTypingResolvesOriginalAXCoordinates(t *testing.T) {
 	f.width, f.height = 2640, 1560
 	f.bounds.Width, f.bounds.Height = 1320, 780
 	f.elements = []capturedElement{{Role: "AXTextField", Token: "clone-url", Frame: &pixelBounds{X: 1200, Y: 650, Width: 300, Height: 100}}}
-	frame := f.screenshot(t)
-	_, err := f.adapter.Type(context.Background(), f.target, frame, domain.TestTypeRequest{ScreenshotID: frame.ScreenshotID, X: 784, Y: 416, Text: "typed-by-investigator"})
+	shot, err := f.adapter.Screenshot(context.Background(), f.target)
+	if err != nil || len(shot.Elements) != 1 {
+		t.Fatal("missing observed field", err)
+	}
+	frame := shot.Frame
+	frame.ScreenshotID = "evidence-screenshot-1"
+	_, err = f.adapter.Type(context.Background(), f.target, frame, domain.TestTypeRequest{ScreenshotID: frame.ScreenshotID, ElementID: shot.Elements[0].ElementID, Text: "typed-by-investigator"})
 	if err != nil {
 		t.Fatal(err)
 	}

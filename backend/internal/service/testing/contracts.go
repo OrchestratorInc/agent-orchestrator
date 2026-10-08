@@ -39,6 +39,8 @@ type WorkerLauncher interface {
 type WorkerLaunchRequest struct {
 	ProjectID domain.ProjectID
 	Harness   domain.AgentHarness
+	Model     string
+	Effort    string
 	RunID     domain.TestRunID
 	AttemptID domain.TestAttemptID
 	Prompt    string
@@ -64,11 +66,12 @@ type Timer interface{ Stop() bool }
 
 // Recipe is server-configured target setup, snapshotted at run creation.
 type Recipe struct {
-	ID           string `json:"id"`
-	CheckoutPath string `json:"checkoutPath"`
-	Snapshot     string `json:"snapshot"`
-	DeliveryMode string `json:"deliveryMode,omitempty"`
-	VisualMarker bool   `json:"visualMarker,omitempty"`
+	ID            string `json:"id"`
+	CheckoutPath  string `json:"checkoutPath"`
+	Snapshot      string `json:"snapshot"`
+	DeliveryMode  string `json:"deliveryMode,omitempty"`
+	VisualMarker  bool   `json:"visualMarker,omitempty"`
+	RealProviders bool   `json:"realProviders,omitempty"`
 }
 
 // Deps supplies persistence, providers and target recipes.
@@ -100,6 +103,8 @@ type CreateRunInput struct {
 // StartAttemptInput selects the worker and attempt deadline.
 type StartAttemptInput struct {
 	Harness      domain.AgentHarness
+	Model        string
+	Effort       string
 	WorkerPrompt string
 	Timeout      time.Duration
 }
@@ -111,12 +116,14 @@ type StartAttemptResult struct {
 	WorkerSessionID domain.SessionID     `json:"workerSessionId"`
 }
 
-// ToolResult contains exactly one tool result and the saved evidence receipts.
+// ToolResult retains input delivery even if its post-action observation fails.
 type ToolResult struct {
-	Screenshot *domain.TestScreenshot         `json:"screenshot,omitempty"`
-	Action     *domain.TestActionResult       `json:"action,omitempty"`
-	Logs       *domain.TestLogResult          `json:"logs,omitempty"`
-	Query      *domain.TestDaemonQueryResult  `json:"query,omitempty"`
-	Report     *domain.TestSubmitReportResult `json:"report,omitempty"`
-	Evidence   []domain.TestEvidenceReceipt   `json:"evidence"`
+	Screenshot        *domain.TestScreenshot         `json:"screenshot,omitempty"`
+	Action            *domain.TestActionResult       `json:"action,omitempty"`
+	ObservationStatus string                         `json:"observationStatus,omitempty" enum:"captured,settled,unsettled,failed"`
+	ObservationError  string                         `json:"observationError,omitempty"`
+	Logs              *domain.TestLogResult          `json:"logs,omitempty"`
+	Query             *domain.TestDaemonQueryResult  `json:"query,omitempty"`
+	Report            *domain.TestSubmitReportResult `json:"report,omitempty"`
+	Evidence          []domain.TestEvidenceReceipt   `json:"evidence"`
 }

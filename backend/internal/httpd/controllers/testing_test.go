@@ -22,14 +22,16 @@ type testingServiceFake struct {
 	input                json.RawMessage
 	fail                 error
 	calls                int
+	startInput           testingsvc.StartAttemptInput
 }
 
 func (f *testingServiceFake) CreateRun(_ context.Context, in testingsvc.CreateRunInput) (domain.TestRunRecord, error) {
 	f.calls++
 	return domain.TestRunRecord{ID: "run", ProjectID: in.ProjectID, CreatedAt: time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC)}, f.fail
 }
-func (f *testingServiceFake) StartAttempt(_ context.Context, id domain.TestRunID, _ testingsvc.StartAttemptInput) (testingsvc.StartAttemptResult, error) {
+func (f *testingServiceFake) StartAttempt(_ context.Context, id domain.TestRunID, in testingsvc.StartAttemptInput) (testingsvc.StartAttemptResult, error) {
 	f.calls++
+	f.startInput = in
 	return testingsvc.StartAttemptResult{RunID: id, AttemptID: "attempt", WorkerSessionID: "worker"}, f.fail
 }
 func (f *testingServiceFake) Cancel(_ context.Context, id domain.TestAttemptID) (domain.TestAttemptRecord, error) {
@@ -174,5 +176,16 @@ func TestTestingWorkerErrorsKeepCodeCauseAndRequestID(t *testing.T) {
 				t.Fatal("testing worker error lost its API details", w.Code, w.Body.String(), err)
 			}
 		})
+	}
+}
+
+func TestTestingStartForwardsExplicitInvestigatorProfile(t *testing.T) {
+	f := &testingServiceFake{}
+	w := testingRequest(testingRouter(f), http.MethodPost, "/api/v1/testing/runs/run/attempts", `{"harness":"claude-code","model":"claude-opus-5-5","effort":"medium","workerPrompt":"inspect","timeoutSeconds":60}`, "")
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if f.startInput.Harness != domain.HarnessClaudeCode || f.startInput.Model != "claude-opus-5-5" || f.startInput.Effort != "medium" {
+		t.Fatalf("lost investigator profile: %+v", f.startInput)
 	}
 }

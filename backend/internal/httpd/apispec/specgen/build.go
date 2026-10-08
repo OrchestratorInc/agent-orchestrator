@@ -15,6 +15,7 @@ import (
 	openapi "github.com/swaggest/openapi-go"
 	"github.com/swaggest/openapi-go/openapi31"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
@@ -44,6 +45,7 @@ func Build() ([]byte, error) {
 	r.DefaultOptions = append(r.DefaultOptions,
 		func(rc *jsonschema.ReflectContext) { rc.EnvelopNullability = true },
 		jsonschema.InterceptProp(requiredFromJSONTag),
+		jsonschema.InterceptSchema(testingInputAlternatives),
 		jsonschema.InterceptNullability(nonNullableSlices),
 		jsonschema.InterceptNullability(validNullableReferenceUnions),
 		// Clean component schema names (which become the generated TS type names):
@@ -157,6 +159,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSettingsResponse":   "SettingsResponse",
 	"DomainTestEvidenceReceipt":     "TestEvidenceReceipt",
 	"DomainTestScreenshotRequest":   "TestScreenshotRequest",
+	"DomainTestObserveRequest":      "TestObserveRequest",
+	"DomainTestElement":             "TestElement",
 	"DomainTestClickRequest":        "TestClickRequest",
 	"DomainTestTypeRequest":         "TestTypeRequest",
 	"DomainTestKeyRequest":          "TestKeyRequest",
@@ -181,6 +185,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersTestingAttemptResponse":                    "TestingAttemptResponse",
 	"ControllersTestingEvidenceResponse":                   "TestingEvidenceResponse",
 	"ControllersTestingScreenshotCall":                     "TestingScreenshotCall",
+	"ControllersTestingObserveCall":                        "TestingObserveCall",
 	"ControllersTestingClickCall":                          "TestingClickCall",
 	"ControllersTestingTypeCall":                           "TestingTypeCall",
 	"ControllersTestingKeyCall":                            "TestingKeyCall",
@@ -634,6 +639,30 @@ func requiredFromJSONTag(p jsonschema.InterceptPropParams) error {
 	}
 	p.ParentSchema.Required = append(p.ParentSchema.Required, name)
 	return nil
+}
+
+// The testing tools require one addressing path, including zero coordinates.
+func testingInputAlternatives(p jsonschema.InterceptSchemaParams) (bool, error) {
+	if !p.Processed || !p.Value.IsValid() {
+		return false, nil
+	}
+	typ := p.Value.Type()
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if typ != reflect.TypeOf(domain.TestClickRequest{}) && typ != reflect.TypeOf(domain.TestTypeRequest{}) {
+		return false, nil
+	}
+	element := jsonschema.Schema{Required: []string{"elementId"}}
+	coordinates := jsonschema.Schema{Required: []string{"x", "y"}}
+	x := jsonschema.Schema{Required: []string{"x"}}
+	y := jsonschema.Schema{Required: []string{"y"}}
+	anyCoordinate := jsonschema.Schema{AnyOf: []jsonschema.SchemaOrBool{x.ToSchemaOrBool(), y.ToSchemaOrBool()}}
+	element.WithNot(anyCoordinate.ToSchemaOrBool())
+	noElement := jsonschema.Schema{Required: []string{"elementId"}}
+	coordinates.WithNot(noElement.ToSchemaOrBool())
+	p.Schema.OneOf = []jsonschema.SchemaOrBool{element.ToSchemaOrBool(), coordinates.ToSchemaOrBool()}
+	return false, nil
 }
 
 // --- operation registry -----------------------------------------------------
@@ -3182,6 +3211,7 @@ func testingOperations() []operation {
 		input    any
 	}{
 		{"screenshot", "testingScreenshot", controllers.TestingScreenshotCall{}},
+		{"observe", "testingObserve", controllers.TestingObserveCall{}},
 		{"click", "testingClick", controllers.TestingClickCall{}},
 		{"type", "testingType", controllers.TestingTypeCall{}},
 		{"key", "testingKey", controllers.TestingKeyCall{}},

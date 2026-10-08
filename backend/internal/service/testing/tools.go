@@ -7,8 +7,10 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image/png"
 	"io"
+	"math"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -19,7 +21,7 @@ import (
 )
 
 // ToolNames lists the exact native testing tools mounted by HTTP and MCP.
-var ToolNames = []string{"screenshot", "click", "type", "key", "read_target_logs", "target_daemon_query", "submit_report"}
+var ToolNames = []string{"screenshot", "observe", "click", "type", "key", "read_target_logs", "target_daemon_query", "submit_report"}
 
 // IsTool reports whether name belongs to the native testing profile.
 func IsTool(name string) bool {
@@ -53,12 +55,14 @@ func decodeInput(raw json.RawMessage, name string) (any, json.RawMessage, error)
 	switch name {
 	case "screenshot":
 		input = &domain.TestScreenshotRequest{}
+	case "observe":
+		input = &domain.TestObserveRequest{}
 	case "click":
 		input = &domain.TestClickRequest{}
-		required = []string{"screenshotId", "x", "y"}
+		required = []string{"screenshotId"}
 	case "type":
 		input = &domain.TestTypeRequest{}
-		required = []string{"screenshotId", "x", "y", "text"}
+		required = []string{"screenshotId", "text"}
 	case "key":
 		input = &domain.TestKeyRequest{}
 		required = []string{"screenshotId", "keys"}
@@ -96,6 +100,20 @@ func decodeInput(raw json.RawMessage, name string) (any, json.RawMessage, error)
 	if decoder.Decode(new(any)) != io.EOF {
 		return nil, nil, invalid("Trailing tool input")
 	}
+	if name == "click" || name == "type" {
+		_, element := fields["elementId"]
+		_, x := fields["x"]
+		_, y := fields["y"]
+		if (element && (x || y)) || (!element && (!x || !y)) {
+			return nil, nil, invalid("Supply elementId or both x and y, never both addressing paths")
+		}
+		if element {
+			var id string
+			if json.Unmarshal(fields["elementId"], &id) != nil || strings.TrimSpace(id) == "" || len(id) > 128 {
+				return nil, nil, invalid("Invalid element ID")
+			}
+		}
+	}
 	switch v := input.(type) {
 	case *domain.TestClickRequest:
 		if v.ScreenshotID == "" || v.X < 0 || v.Y < 0 {
@@ -128,7 +146,16 @@ func decodeInput(raw json.RawMessage, name string) (any, json.RawMessage, error)
 			return nil, nil, invalid("Invalid log bounds")
 		}
 	case *domain.TestDaemonQueryRequest:
-		if v.Resource != domain.TestDaemonProjects && v.Resource != domain.TestDaemonSessions {
+		switch v.Resource {
+		case domain.TestDaemonProjects, domain.TestDaemonSessions:
+			if v.SessionID != "" {
+				return nil, nil, invalid("Session ID is only allowed for a session resource")
+			}
+		case domain.TestDaemonReviews, domain.TestDaemonConversation:
+			if !domain.ValidTestSessionID(v.SessionID) {
+				return nil, nil, invalid("Invalid target session ID")
+			}
+		default:
 			return nil, nil, invalid("Invalid daemon resource")
 		}
 	case *domain.TestSubmitReportRequest:
@@ -242,6 +269,14 @@ func (s *Service) Execute(ctx context.Context, id domain.TestAttemptID, session 
 		record.At = s.deps.Clock.Now().UTC()
 		record.State = "completed"
 		record.Detail = "Tool completed"
+		if result.Action != nil {
+			record.InputPath = result.Action.InputPath
+			record.RequestedInputPath = result.Action.RequestedInputPath
+		}
+		if result.ObservationStatus == "failed" {
+			record.State = "failed"
+			record.Detail = "Input delivered; post-action observation failed: " + result.ObservationError
+		}
 		if err != nil {
 			record.State = "failed"
 			record.Detail = "Tool failed or was cancelled; partial action may have been delivered"
@@ -253,6 +288,10 @@ func (s *Service) Execute(ctx context.Context, id domain.TestAttemptID, session 
 		}
 		if e := s.deps.Evidence.AppendAction(journalCtx, record); e != nil {
 			err = apierr.Internal("TEST_EVIDENCE_WRITE_FAILED", "Cannot save action completion; partial action may have been delivered")
+			if result.Action != nil && result.Action.Delivered {
+				result.ObservationStatus, result.ObservationError = "failed", "TEST_EVIDENCE_WRITE_FAILED"
+				err = nil // Keep the delivery fact visible in the HTTP/MCP result.
+			}
 		}
 	}()
 	if _, _, err = s.authorize(callCtx, id, session, token); err != nil {
@@ -264,11 +303,11 @@ func (s *Service) Execute(ctx context.Context, id domain.TestAttemptID, session 
 	if err := callCtx.Err(); err != nil {
 		return result, err
 	}
-	result, err = s.dispatch(callCtx, st, grant.target, input)
+	result, err = s.dispatch(callCtx, st, grant.target, input, requestID)
 	if err != nil {
 		return result, err
 	}
-	if callCtx.Err() != nil && name != "submit_report" {
+	if callCtx.Err() != nil && name != "submit_report" && result.Action == nil {
 		return result, callCtx.Err()
 	}
 	return result, nil
@@ -288,62 +327,182 @@ func (s *Service) frame(st *attemptState, target domain.TestTargetIdentity, id s
 func (s *Service) save(ctx context.Context, st *attemptState, result *ToolResult, kind, mime string, data []byte, frame *domain.TestDesktopFrame) (domain.TestEvidenceReceipt, error) {
 	receipt, err := s.deps.Evidence.Write(ctx, st.record.ID, ports.TestingEvidenceArtifact{Kind: kind, MIMEType: mime, Frame: frame}, bytes.NewReader(data))
 	if err != nil {
-		return receipt, apierr.Internal("TEST_EVIDENCE_WRITE_FAILED", "Cannot save tool evidence; partial action may have been delivered")
+		return receipt, fmt.Errorf("%w: %w", apierr.Internal("TEST_EVIDENCE_WRITE_FAILED", "Cannot save tool evidence; partial action may have been delivered"), err)
 	}
 	result.Evidence = append(result.Evidence, receipt)
 	return receipt, nil
 }
-func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.TestTargetIdentity, input any) (result ToolResult, err error) {
+
+func (s *Service) consumeFrame(st *attemptState, id string) {
+	s.mu.Lock()
+	delete(st.frames, id)
+	s.mu.Unlock()
+}
+
+// capture saves the exact pixels and bounded AX together. Each new provider
+// capture invalidates prior input receipts, even if capture or storage fails.
+func (s *Service) capture(ctx context.Context, st *attemptState, target domain.TestTargetIdentity, result *ToolResult) error {
+	s.mu.Lock()
+	clear(st.frames)
+	s.mu.Unlock()
+	shot, err := s.deps.Desktop.Screenshot(ctx, target)
+	if err != nil {
+		return fmt.Errorf("%w: %w", apierr.Unavailable("TEST_SCREENSHOT_FAILED", "Bound target observation failed; do not repeat input"), err)
+	}
+	evidenceShot := &shot
+	if shot.Original != nil {
+		evidenceShot = shot.Original
+	}
+	for _, capture := range []*domain.TestScreenshot{&shot, evidenceShot} {
+		if !sameTarget(capture.Frame.Target, target) || capture.Frame.Width < 1 || capture.Frame.Height < 1 || capture.Frame.Bounds.Width <= 0 || capture.Frame.Bounds.Height <= 0 || capture.MIMEType != "image/png" || len(capture.Data) == 0 {
+			return targetChanged()
+		}
+		geometry, e := png.DecodeConfig(bytes.NewReader(capture.Data))
+		if e != nil || geometry.Width != capture.Frame.Width || geometry.Height != capture.Frame.Height {
+			return targetChanged()
+		}
+	}
+	if shot.Elements == nil {
+		shot.Elements = []domain.TestElement{}
+	}
+	ids := map[string]bool{}
+	if len(shot.Elements) > 300 {
+		return targetChanged()
+	}
+	for _, element := range shot.Elements {
+		f := element.Frame
+		if element.ElementID == "" || len(element.ElementID) > 128 || ids[element.ElementID] ||
+			utf8.RuneCountInString(element.Role) > 64 || utf8.RuneCountInString(element.Label) > 256 || utf8.RuneCountInString(element.Value) > 256 ||
+			math.IsNaN(f.X) || math.IsNaN(f.Y) || !(f.Width > 0) || !(f.Height > 0) || f.X < 0 || f.Y < 0 ||
+			f.X+f.Width > float64(shot.Frame.Width) || f.Y+f.Height > float64(shot.Frame.Height) {
+			return targetChanged()
+		}
+		ids[element.ElementID] = true
+	}
+	metadata := evidenceShot.Frame
+	metadata.Target, metadata.CaptureHandle = domain.TestTargetIdentity{}, ""
+	receipt, err := s.save(ctx, st, result, "screenshot", evidenceShot.MIMEType, evidenceShot.Data, &metadata)
+	if err != nil {
+		return err
+	}
+	shot.Frame.ScreenshotID = receipt.ID
+	observation, err := json.Marshal(struct {
+		Frame     domain.TestDesktopFrame `json:"frame"`
+		Elements  []domain.TestElement    `json:"elements"`
+		Truncated bool                    `json:"truncated"`
+	}{shot.Frame, shot.Elements, shot.Truncated})
+	if err != nil {
+		return err
+	}
+	if _, err = s.save(ctx, st, result, "observation", "application/json", observation, nil); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	st.frames[receipt.ID] = shot.Frame
+	s.mu.Unlock()
+	shot.InputReady = true
+	result.Screenshot = &shot
+	return nil
+}
+
+// observationDigest excludes ephemeral element IDs and capture timestamps.
+// AX changes matter even when the pixels are identical.
+func observationDigest(shot *domain.TestScreenshot) [32]byte {
+	elements := append([]domain.TestElement(nil), shot.Elements...)
+	for i := range elements {
+		elements[i].ElementID = ""
+	}
+	metadata, _ := json.Marshal(struct {
+		Bounds        domain.TestWindowBounds
+		Width, Height int
+		Elements      []domain.TestElement
+		Truncated     bool
+	}{shot.Frame.Bounds, shot.Frame.Width, shot.Frame.Height, elements, shot.Truncated})
+	hash := sha256.New()
+	_, _ = hash.Write(metadata)
+	pixels := shot.Data
+	if shot.Original != nil {
+		pixels = shot.Original.Data
+	}
+	_, _ = hash.Write(pixels)
+	var digest [32]byte
+	copy(digest[:], hash.Sum(nil))
+	return digest
+}
+
+func (s *Service) settle(ctx context.Context, st *attemptState, target domain.TestTargetIdentity, result *ToolResult) error {
+	settleCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	var previous [32]byte
+	havePrevious := false
+	for {
+		last := result.Screenshot
+		if err := s.capture(settleCtx, st, target, result); err != nil {
+			if havePrevious && ctx.Err() == nil && errors.Is(settleCtx.Err(), context.DeadlineExceeded) && errors.Is(err, context.DeadlineExceeded) {
+				// A newer capture may have invalidated this saved receipt. Retain
+				// its visual evidence without allowing another input with its IDs.
+				retained := *last
+				retained.InputReady = false
+				result.Screenshot = &retained
+				result.ObservationStatus, result.ObservationError = "unsettled", "TEST_SETTLE_TIMEOUT"
+				return nil
+			}
+			return err
+		}
+		current := observationDigest(result.Screenshot)
+		if havePrevious && current == previous {
+			result.ObservationStatus = "settled"
+			return nil
+		}
+		previous, havePrevious = current, true
+		// Sampling spacing avoids calling two immediate captures a settled UI.
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-timer.C:
+		case <-settleCtx.Done():
+			timer.Stop()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			result.ObservationStatus = "unsettled"
+			return nil
+		}
+	}
+}
+
+func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.TestTargetIdentity, input any, requestID string) (result ToolResult, err error) {
 	result.Evidence = []domain.TestEvidenceReceipt{}
 	switch v := input.(type) {
-	case *domain.TestScreenshotRequest:
-		shot, e := s.deps.Desktop.Screenshot(ctx, target)
-		if e != nil {
-			return result, apierr.Unavailable("TEST_SCREENSHOT_FAILED", "Bound target screenshot failed")
+	case *domain.TestScreenshotRequest, *domain.TestObserveRequest:
+		if err := s.capture(ctx, st, target, &result); err != nil {
+			return result, err
 		}
-		evidenceShot := &shot
-		if shot.Original != nil {
-			evidenceShot = shot.Original
-		}
-		for _, capture := range []*domain.TestScreenshot{&shot, evidenceShot} {
-			if !sameTarget(capture.Frame.Target, target) || capture.Frame.Width < 1 || capture.Frame.Height < 1 || capture.Frame.Bounds.Width <= 0 || capture.Frame.Bounds.Height <= 0 || capture.MIMEType != "image/png" || len(capture.Data) == 0 {
-				return result, targetChanged()
-			}
-			geometry, e := png.DecodeConfig(bytes.NewReader(capture.Data))
-			if e != nil || geometry.Width != capture.Frame.Width || geometry.Height != capture.Frame.Height {
-				return result, targetChanged()
-			}
-		}
-		// Evidence receives metadata only. Keep the adapter's private capture
-		// receipt intact in memory for subsequent input, even if a store mutates
-		// the metadata pointer it receives.
-		metadata := evidenceShot.Frame
-		metadata.Target = domain.TestTargetIdentity{}
-		metadata.CaptureHandle = ""
-		receipt, e := s.save(ctx, st, &result, "screenshot", evidenceShot.MIMEType, evidenceShot.Data, &metadata)
-		if e != nil {
-			return result, e
-		}
-		shot.Frame.ScreenshotID = receipt.ID
-		s.mu.Lock()
-		st.frames[receipt.ID] = shot.Frame
-		s.mu.Unlock()
-		result.Screenshot = &shot
+		result.ObservationStatus = "captured"
 	case *domain.TestClickRequest:
-		f, e := s.frame(st, target, v.ScreenshotID, &v.X, &v.Y)
+		var x, y *int
+		if v.ElementID == "" {
+			x, y = &v.X, &v.Y
+		}
+		f, e := s.frame(st, target, v.ScreenshotID, x, y)
 		if e != nil {
 			return result, e
 		}
+		s.consumeFrame(st, v.ScreenshotID)
 		action, e := s.deps.Desktop.Click(ctx, target, f, *v)
 		if e != nil {
 			return result, inputFailure(e)
 		}
 		result.Action = &action
 	case *domain.TestTypeRequest:
-		f, e := s.frame(st, target, v.ScreenshotID, &v.X, &v.Y)
+		var x, y *int
+		if v.ElementID == "" {
+			x, y = &v.X, &v.Y
+		}
+		f, e := s.frame(st, target, v.ScreenshotID, x, y)
 		if e != nil {
 			return result, e
 		}
+		s.consumeFrame(st, v.ScreenshotID)
 		action, e := s.deps.Desktop.Type(ctx, target, f, *v)
 		if e != nil {
 			return result, inputFailure(e)
@@ -354,6 +513,7 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 		if e != nil {
 			return result, e
 		}
+		s.consumeFrame(st, v.ScreenshotID)
 		action, e := s.deps.Desktop.Key(ctx, target, f, *v)
 		if e != nil {
 			return result, inputFailure(e)
@@ -398,8 +558,20 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 	}
 	if result.Action != nil {
 		data, _ := json.Marshal(result.Action)
-		if _, err = s.save(ctx, st, &result, "delivery", "application/json", data, nil); err != nil {
-			return result, err
+		if _, err := s.save(ctx, st, &result, "delivery", "application/json", data, nil); err != nil {
+			result.ObservationStatus, result.ObservationError = "failed", "TEST_EVIDENCE_WRITE_FAILED"
+			s.deps.Log.Warn("testing post-action evidence failed", "attemptID", st.record.ID, "requestID", requestID, "cause", workerLaunchCause(err))
+		} else if !result.Action.Delivered {
+			result.ObservationStatus, result.ObservationError = "failed", "TEST_INPUT_NOT_DELIVERED"
+		} else if err := s.settle(ctx, st, target, &result); err != nil {
+			result.Screenshot = nil
+			result.ObservationStatus = "failed"
+			result.ObservationError = "TEST_SCREENSHOT_FAILED"
+			var failure *apierr.Error
+			if errors.As(err, &failure) {
+				result.ObservationError = failure.Code
+			}
+			s.deps.Log.Warn("testing post-action observation failed", "attemptID", st.record.ID, "requestID", requestID, "cause", workerLaunchCause(err))
 		}
 	}
 	return result, nil
@@ -407,7 +579,7 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 
 func inputFailure(err error) error {
 	if errors.Is(err, ports.ErrTestingInputRefused) {
-		return apierr.Conflict("TEST_INPUT_REFUSED", "Target input refused before dispatch; nothing was sent", nil)
+		return fmt.Errorf("%w: %w", apierr.Conflict("TEST_INPUT_REFUSED", "Target input refused before dispatch; nothing was sent", nil), err)
 	}
-	return apierr.Unavailable("TEST_INPUT_FAILED", "Target input failed; delivery is unverified")
+	return fmt.Errorf("%w: %w", apierr.Unavailable("TEST_INPUT_FAILED", "Target input failed; delivery is unverified"), err)
 }

@@ -170,6 +170,26 @@ func (a *Adapter) checkDriver(ctx context.Context) error {
 	return nil
 }
 
+// startSession creates or revives only this binding's provider session before
+// observation. Inputs never revive a session or reuse its retired receipts.
+func (a *Adapter) startSession(ctx context.Context, b *binding) error {
+	var result struct {
+		Active  bool `json:"active"`
+		Revived bool `json:"revived"`
+	}
+	err := a.call(ctx, "start_session", map[string]any{"session": b.session}, &result)
+	if err != nil || !result.Active || result.Revived {
+		b.receipt, b.lastTyped = nil, nil
+	}
+	if err != nil {
+		return err
+	}
+	if !result.Active {
+		return &Error{Code: "provider_protocol", Detail: "call start_session did not return an active session", cause: ErrProvider}
+	}
+	return nil
+}
+
 // Release revokes one attempt's provider session and screenshot receipt. The
 // target environment remains responsible for stopping its Electron process.
 func (a *Adapter) Release(ctx context.Context, target domain.TestTargetIdentity) error {

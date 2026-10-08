@@ -3167,6 +3167,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/testing/attempts/{attemptId}/tools/observe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Call the target-bound observe tool */
+        post: operations["testingObserve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/testing/attempts/{attemptId}/tools/read_target_logs": {
         parameters: {
             query?: never;
@@ -5699,7 +5716,9 @@ export interface components {
             transition: components["schemas"]["SessionInterfaceTransition"];
         };
         StartTestingAttemptRequest: {
+            effort?: string;
             harness?: string;
+            model?: string;
             /** @description Defaults to 1800 seconds. */
             timeoutSeconds?: number;
             workerPrompt: string;
@@ -5807,6 +5826,10 @@ export interface components {
         TestActionResult: {
             delivered: boolean;
             detail?: string;
+            /** @description Actual provider-reported path, or unknown when it is not reported. */
+            inputPath?: string;
+            /** @enum {string} */
+            requestedInputPath?: "ax" | "pointer" | "keyboard" | "ax+keyboard" | "pointer+keyboard";
         };
         TestClickRequest: {
             /**
@@ -5814,18 +5837,21 @@ export interface components {
              * @enum {string}
              */
             button: "left" | "right" | "middle";
+            /** @description Use an element from this observation, or supply both x and y instead. */
+            elementId?: string;
             screenshotId: string;
-            x: number;
-            y: number;
-        };
+            x?: number;
+            y?: number;
+        } & (unknown | unknown);
         TestDaemonQueryRequest: {
             /** @enum {string} */
-            resource: "projects" | "sessions";
+            resource: "projects" | "sessions" | "reviews" | "conversation";
+            sessionId?: string;
         };
         TestDaemonQueryResult: {
             data: unknown;
             /** @enum {string} */
-            resource: "projects" | "sessions";
+            resource: "projects" | "sessions" | "reviews" | "conversation";
         };
         TestDesktopFrame: {
             bounds: components["schemas"]["TestWindowBounds"];
@@ -5836,6 +5862,15 @@ export interface components {
             scale: number;
             screenshotId: string;
             width: number;
+        };
+        TestElement: {
+            elementId: string;
+            enabled?: null | boolean;
+            focused?: null | boolean;
+            frame: components["schemas"]["TestWindowBounds"];
+            label?: string;
+            role: string;
+            value?: string;
         };
         TestEvidenceReceipt: {
             attemptId: string;
@@ -5858,6 +5893,7 @@ export interface components {
             text: string;
             truncated: boolean;
         };
+        TestObserveRequest: Record<string, never>;
         TestReadLogsRequest: {
             cursor?: string;
             /** @default 65536 */
@@ -5866,8 +5902,12 @@ export interface components {
         TestScreenshot: {
             /** Format: base64 */
             data: string;
+            elements: components["schemas"]["TestElement"][];
             frame: components["schemas"]["TestDesktopFrame"];
+            /** @description False means the retained image is for inspection only; observe again before input. */
+            inputReady: boolean;
             mimeType: string;
+            truncated: boolean;
         };
         TestScreenshotRequest: Record<string, never>;
         TestSubmitReportRequest: {
@@ -5880,11 +5920,13 @@ export interface components {
             outcome: string;
         };
         TestTypeRequest: {
+            /** @description Use an element from this observation, or supply both x and y instead. */
+            elementId?: string;
             screenshotId: string;
             text: string;
-            x: number;
-            y: number;
-        };
+            x?: number;
+            y?: number;
+        } & (unknown | unknown);
         TestWindowBounds: {
             /** Format: double */
             height: number;
@@ -5928,6 +5970,11 @@ export interface components {
             requestId: string;
             sessionId: string;
         };
+        TestingObserveCall: {
+            input: components["schemas"]["TestObserveRequest"];
+            requestId: string;
+            sessionId: string;
+        };
         TestingQueryCall: {
             input: components["schemas"]["TestDaemonQueryRequest"];
             requestId: string;
@@ -5952,6 +5999,9 @@ export interface components {
             action?: components["schemas"]["TestActionResult"];
             evidence: components["schemas"]["TestEvidenceReceipt"][];
             logs?: components["schemas"]["TestLogResult"];
+            observationError?: string;
+            /** @enum {string} */
+            observationStatus?: "captured" | "settled" | "unsettled" | "failed";
             query?: components["schemas"]["TestDaemonQueryResult"];
             report?: components["schemas"]["TestSubmitReportResult"];
             screenshot?: components["schemas"]["TestScreenshot"];
@@ -18386,6 +18436,98 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["TestingKeyCall"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestingToolResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unsupported Media Type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    testingObserve: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Launch-only worker capability. Never persist it, put it in a URL or log it. */
+                "X-AO-Test-Capability"?: string;
+            };
+            path: {
+                attemptId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestingObserveCall"];
             };
         };
         responses: {

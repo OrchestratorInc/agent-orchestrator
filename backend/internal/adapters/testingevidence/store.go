@@ -21,7 +21,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-const maxArtifactBytes = 32 << 20
+const (
+	maxArtifactBytes = 32 << 20
+	// Movies can span the whole attempt. Stream them under a separate disk
+	// bound instead of retaining the complete recording in daemon memory.
+	maxRecordingBytes = 512 << 20
+)
 
 // AttemptLookup resolves the owning run without depending on SQLite.
 type AttemptLookup interface {
@@ -115,6 +120,58 @@ func syncDir(root *os.Root) error {
 	return f.Sync()
 }
 
+// writeArtifact hashes while copying with bounded memory. Failed copies remove
+// only their newly created file and never publish a receipt or change the source.
+func writeArtifact(ctx context.Context, root *os.Root, name string, data io.Reader, limit int64) (size int64, digest string, err error) {
+	staging := name + ".pending"
+	file, err := root.OpenFile(staging, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return 0, "", err
+	}
+	defer func() {
+		if err != nil {
+			_ = root.Remove(staging)
+		}
+	}()
+	hash := sha256.New()
+	size, err = io.CopyBuffer(io.MultiWriter(file, hash), io.LimitReader(contextReader{ctx: ctx, reader: data}, limit+1), make([]byte, 64<<10))
+	if err == nil && size > limit {
+		err = fmt.Errorf("evidence exceeds %d MiB", limit>>20)
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil {
+		err = root.Rename(staging, name)
+	}
+	if err != nil {
+		return 0, "", err
+	}
+	return size, hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
+}
+
 // Write saves an artifact and its receipt before returning success.
 func (s *Store) Write(ctx context.Context, id domain.TestAttemptID, a ports.TestingEvidenceArtifact, data io.Reader) (domain.TestEvidenceReceipt, error) {
 	s.mu.Lock()
@@ -122,16 +179,6 @@ func (s *Store) Write(ctx context.Context, id domain.TestAttemptID, a ports.Test
 	var zero domain.TestEvidenceReceipt
 	if !safePart(a.Kind) || a.MIMEType == "" {
 		return zero, fmt.Errorf("invalid evidence artifact")
-	}
-	bytes, err := io.ReadAll(io.LimitReader(data, maxArtifactBytes+1))
-	if err != nil {
-		return zero, err
-	}
-	if len(bytes) > maxArtifactBytes {
-		return zero, fmt.Errorf("evidence exceeds 32 MiB")
-	}
-	if err := ctx.Err(); err != nil {
-		return zero, err
 	}
 	root, err := s.directory(ctx, id, true)
 	if err != nil {
@@ -155,26 +202,45 @@ func (s *Store) Write(ctx context.Context, id domain.TestAttemptID, a ports.Test
 		extension = ".mov"
 	}
 	name := a.Kind + "-" + artifactID + extension
-	if err := writeSynced(root, name, bytes); err != nil {
+	limit := int64(maxArtifactBytes)
+	if a.Kind == "recording" && a.MIMEType == "video/quicktime" {
+		limit = maxRecordingBytes
+	}
+	size, digest, err := writeArtifact(ctx, root, name, data, limit)
+	if err != nil {
 		return zero, err
 	}
-	sum := sha256.Sum256(bytes)
-	receipt := domain.TestEvidenceReceipt{ID: artifactID, AttemptID: id, Kind: a.Kind, RelativePath: name, MIMEType: a.MIMEType, SizeBytes: int64(len(bytes)), SHA256: hex.EncodeToString(sum[:]), CreatedAt: time.Now().UTC()}
+	receipt := domain.TestEvidenceReceipt{ID: artifactID, AttemptID: id, Kind: a.Kind, RelativePath: name, MIMEType: a.MIMEType, SizeBytes: size, SHA256: digest, CreatedAt: time.Now().UTC()}
 	if a.Frame != nil {
 		frame := *a.Frame
 		frame.ScreenshotID = artifactID
 		a.Frame = &frame
 	}
+	complete := false
+	defer func() {
+		if !complete {
+			_ = root.Remove(name)
+			_ = root.Remove(artifactID + ".receipt.json")
+			_ = root.Remove(artifactID + ".receipt.json.pending")
+		}
+	}()
 	metadata, err := json.Marshal(savedReceipt{Receipt: receipt, Frame: a.Frame})
 	if err != nil {
 		return zero, err
 	}
-	if err := writeSynced(root, artifactID+".receipt.json", metadata); err != nil {
+	if err := writeSynced(root, artifactID+".receipt.json.pending", metadata); err != nil {
+		return zero, err
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+	if err := root.Rename(artifactID+".receipt.json.pending", artifactID+".receipt.json"); err != nil {
 		return zero, err
 	}
 	if err := syncDir(root); err != nil {
 		return zero, err
 	}
+	complete = true
 	return receipt, nil
 }
 

@@ -30,13 +30,15 @@ func TestTestingStartUsesDaemonContract(t *testing.T) {
 		name     string
 		extra    []string
 		harness  string
+		model    string
+		effort   string
 		recipe   string
 		timeout  int
 		issueURL string
 		json     bool
 	}{
 		{name: "defaults", recipe: "local-ao", timeout: 1800},
-		{name: "explicit", extra: []string{"--agent", "claude-code", "--recipe", "configured-recipe", "--timeout", "90", "--issue-url", "https://github.com/org/repo/issues/1", "--json"}, harness: "claude-code", recipe: "configured-recipe", timeout: 90, issueURL: "https://github.com/org/repo/issues/1", json: true},
+		{name: "explicit", extra: []string{"--agent", "claude-code", "--model", "claude-opus-5-5", "--effort", "medium", "--recipe", "configured-recipe", "--timeout", "90", "--issue-url", "https://github.com/org/repo/issues/1", "--json"}, harness: "claude-code", model: "claude-opus-5-5", effort: "medium", recipe: "configured-recipe", timeout: 90, issueURL: "https://github.com/org/repo/issues/1", json: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := setConfigEnv(t)
@@ -72,6 +74,12 @@ func TestTestingStartUsesDaemonContract(t *testing.T) {
 					want := map[string]any{"workerPrompt": "Investigate the issue\n", "timeoutSeconds": float64(tc.timeout)}
 					if tc.harness != "" {
 						want["harness"] = tc.harness
+					}
+					if tc.model != "" {
+						want["model"] = tc.model
+					}
+					if tc.effort != "" {
+						want["effort"] = tc.effort
 					}
 					if !reflect.DeepEqual(input, want) {
 						t.Errorf("attempt body=%+v want=%+v", input, want)

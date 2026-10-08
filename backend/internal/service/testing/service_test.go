@@ -336,9 +336,26 @@ func TestHappyPathReportAndEvidenceSurviveTargetStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := shot.Screenshot.Frame.ScreenshotID
-	for name, input := range map[string]any{"click": domain.TestClickRequest{ScreenshotID: id, X: 1, Y: 1}, "type": domain.TestTypeRequest{ScreenshotID: id, X: 0, Y: 0, Text: "hello"}, "key": domain.TestKeyRequest{ScreenshotID: id, Keys: []string{"Meta", "a"}}, "read_target_logs": domain.TestReadLogsRequest{}, "target_daemon_query": domain.TestDaemonQueryRequest{Resource: domain.TestDaemonSessions}} {
-		if _, err = f.call(name, name, input); err != nil {
+	for _, name := range []string{"click", "type", "key", "read_target_logs", "target_daemon_query"} {
+		var input any
+		switch name {
+		case "click":
+			input = domain.TestClickRequest{ScreenshotID: id, X: 1, Y: 1}
+		case "type":
+			input = domain.TestTypeRequest{ScreenshotID: id, Text: "hello"}
+		case "key":
+			input = domain.TestKeyRequest{ScreenshotID: id, Keys: []string{"Meta", "a"}}
+		case "read_target_logs":
+			input = domain.TestReadLogsRequest{}
+		case "target_daemon_query":
+			input = domain.TestDaemonQueryRequest{Resource: domain.TestDaemonSessions}
+		}
+		result, err := f.call(name, name, input)
+		if err != nil {
 			t.Fatal(name, err)
+		}
+		if result.Screenshot != nil {
+			id = result.Screenshot.Frame.ScreenshotID
 		}
 	}
 	result, err := f.call("report", "submit_report", domain.TestSubmitReportRequest{Outcome: domain.TestOutcomeReproduced, Markdown: "1. Click the target.\nObserved the issue."})

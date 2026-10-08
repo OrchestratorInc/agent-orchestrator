@@ -123,7 +123,8 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 		return empty, fmt.Errorf("resolve target tmux: %w", err)
 	}
 	var recipe struct {
-		VisualMarker bool `json:"visualMarker"`
+		VisualMarker  bool `json:"visualMarker"`
+		RealProviders bool `json:"realProviders"`
 	}
 	if spec.RecipeSnapshot != "" {
 		if err := json.Unmarshal([]byte(spec.RecipeSnapshot), &recipe); err != nil {
@@ -163,7 +164,7 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 	a.launches[id] = s
 	a.mu.Unlock()
 	s.mu.Lock()
-	s.env = targetEnv(os.Environ(), s, recipe.VisualMarker)
+	s.env = targetEnv(os.Environ(), s, recipe.VisualMarker, recipe.RealProviders)
 	pid, err := a.ops.start(electronPath(frontend), frontend, s.env, log)
 	if err != nil {
 		s.stopped = true
@@ -287,12 +288,16 @@ func strippedEnv(inherited []string) []string {
 	return env
 }
 
-func targetEnv(inherited []string, s *launch, marker bool) []string {
+func targetEnv(inherited []string, s *launch, marker, realProviders bool) []string {
+	fake := "1"
+	if realProviders {
+		fake = "0"
+	}
 	env := strippedEnv(inherited)
 	env = append(env, "AO_DATA_DIR="+s.target.DataDir,
 		"AO_RUN_FILE="+filepath.Join(s.root, "running.json"), "AO_PORT="+strconv.Itoa(s.port),
 		"AO_DEV_ELECTRON_DIR="+filepath.Join(s.root, "electron"), "AO_APP_RUN_ID="+s.target.LaunchID,
-		"AO_FAKE_HARNESS=1", "AO_TMUX_SOCKET_NAME=testing-"+s.target.ID,
+		"AO_FAKE_HARNESS="+fake, "AO_TMUX_SOCKET_NAME=testing-"+s.target.ID,
 		"AO_TMUX_BINARY="+s.tmux,
 		// Node URL reports an opaque origin for the privileged app:// scheme.
 		// An explicit valid origin prevents the dev helper adding "null".
@@ -448,11 +453,19 @@ func (a *Adapter) get(ctx context.Context, s *launch, route string) (json.RawMes
 func (a *Adapter) QueryDaemon(ctx context.Context, target domain.TestTargetIdentity, request domain.TestDaemonQueryRequest) (domain.TestDaemonQueryResult, error) {
 	var result domain.TestDaemonQueryResult
 	var route string
+	if (request.Resource == domain.TestDaemonProjects || request.Resource == domain.TestDaemonSessions) && request.SessionID != "" {
+		return result, errors.New("session ID is only allowed for a session resource")
+	}
 	switch request.Resource {
 	case domain.TestDaemonProjects:
 		route = "/api/v1/projects"
 	case domain.TestDaemonSessions:
 		route = "/api/v1/sessions"
+	case domain.TestDaemonReviews, domain.TestDaemonConversation:
+		if !domain.ValidTestSessionID(request.SessionID) {
+			return result, errors.New("invalid target session ID")
+		}
+		route = "/api/v1/sessions/" + request.SessionID + "/" + string(request.Resource)
 	default:
 		return result, errors.New("unsupported target daemon resource")
 	}

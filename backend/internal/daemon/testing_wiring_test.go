@@ -53,16 +53,21 @@ type wiringWorker struct{ testingsvc.WorkerLauncher }
 func TestTestingProviderComposition(t *testing.T) {
 	for _, tc := range []struct {
 		name, checkout, mode string
+		real                 bool
 		wantMode             cua.DeliveryMode
 		configured           bool
 	}{
 		{name: "unset recipe", wantMode: cua.Background},
 		{name: "configured background", checkout: "/isolated/checkout", wantMode: cua.Background, configured: true},
+		{name: "real providers", checkout: "/isolated/checkout", wantMode: cua.Background, configured: true, real: true},
 		{name: "explicit foreground", checkout: "/isolated/checkout", mode: "foreground", wantMode: cua.Foreground, configured: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Config{DataDir: t.TempDir()}
 			env := map[string]string{"AO_TESTING_TARGET_CHECKOUT": tc.checkout, "AO_TESTING_DESKTOP_DELIVERY": tc.mode}
+			if tc.real {
+				env["AO_TESTING_REAL_PROVIDERS"] = "1"
+			}
 			desktop := &wiringDesktop{}
 			created := false
 			providers, err := testingProvidersFromEnv(cfg, func(key string) string { return env[key] }, &wiringTarget{}, func(got cua.Config) (testingDesktopAdapter, error) {
@@ -103,7 +108,7 @@ func TestTestingProviderComposition(t *testing.T) {
 				}
 			} else {
 				var recipe testingsvc.Recipe
-				if err != nil || json.Unmarshal([]byte(run.RecipeSnapshot), &recipe) != nil || recipe.CheckoutPath != tc.checkout || recipe.DeliveryMode != string(tc.wantMode) || !recipe.VisualMarker {
+				if err != nil || json.Unmarshal([]byte(run.RecipeSnapshot), &recipe) != nil || recipe.CheckoutPath != tc.checkout || recipe.DeliveryMode != string(tc.wantMode) || recipe.VisualMarker == tc.real || recipe.RealProviders != tc.real {
 					t.Fatal("configured recipe not retained", run, err)
 				}
 			}

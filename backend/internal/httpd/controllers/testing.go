@@ -95,7 +95,7 @@ func (c *TestingController) start(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_TESTING_REQUEST", "Invalid timeout", nil)
 		return
 	}
-	result, err := c.Svc.StartAttempt(r.Context(), domain.TestRunID(chi.URLParam(r, "runId")), testingsvc.StartAttemptInput{Harness: domain.AgentHarness(in.Harness), WorkerPrompt: in.WorkerPrompt, Timeout: time.Duration(in.TimeoutSeconds) * time.Second})
+	result, err := c.Svc.StartAttempt(r.Context(), domain.TestRunID(chi.URLParam(r, "runId")), testingsvc.StartAttemptInput{Harness: domain.AgentHarness(in.Harness), Model: in.Model, Effort: in.Effort, WorkerPrompt: in.WorkerPrompt, Timeout: time.Duration(in.TimeoutSeconds) * time.Second})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return

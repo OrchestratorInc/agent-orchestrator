@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -277,7 +278,7 @@ func TestExpiredCleanupContextStillSavesRecordingGapAndStopsTarget(t *testing.T)
 	}
 	st.gate <- struct{}{}
 	rec, _, err := f.store.GetTestAttempt(context.Background(), f.start.AttemptID)
-	if err != nil || rec.CleanupState != domain.TestCleanupFailed || rec.RecordingGap != context.Canceled.Error() || f.provider.stops != 1 {
+	if err != nil || rec.CleanupState != domain.TestCleanupFailed || !strings.Contains(rec.RecordingGap, context.Canceled.Error()) || f.provider.stops != 1 {
 		t.Fatal("expired cleanup skipped gap persistence or target stop", rec, err)
 	}
 	receipts, err := f.svc.ListEvidence(context.Background(), rec.ID)
@@ -292,7 +293,7 @@ func TestExpiredCleanupContextStillSavesRecordingGapAndStopsTarget(t *testing.T)
 	t.Fatal("expired cleanup lost final recording metadata")
 }
 
-func TestRecordingFailureOnlySetsGapForRecorderErrorAndStillStopsTarget(t *testing.T) {
+func TestRecordingFailureSetsActionableGapAndStillStopsTarget(t *testing.T) {
 	for _, failure := range []string{"provider_stop", "recording", "recording_metadata", "foreign_path"} {
 		t.Run(failure, func(t *testing.T) {
 			f, desktop := movieFixture(t, nil)
@@ -311,11 +312,18 @@ func TestRecordingFailureOnlySetsGapForRecorderErrorAndStillStopsTarget(t *testi
 				t.Fatal("recording failure reported successful cleanup")
 			}
 			rec, _, err := f.store.GetTestAttempt(ctx, f.start.AttemptID)
-			wantGap := ""
-			if failure == "provider_stop" {
-				wantGap = desktop.stopErr.Error()
+			wantCause := ""
+			switch failure {
+			case "provider_stop":
+				wantCause = "stop failed"
+			case "foreign_path":
+				wantCause = "outside attempt evidence storage"
+			case "recording":
+				wantCause = "Cannot save finalized recording: disk full"
+			case "recording_metadata":
+				wantCause = "Cannot save recording metadata: disk full"
 			}
-			if err != nil || rec.RecordingGap != wantGap || rec.CleanupState != domain.TestCleanupFailed || f.provider.stops != 1 {
+			if err != nil || !strings.Contains(rec.RecordingGap, wantCause) || rec.CleanupState != domain.TestCleanupFailed || f.provider.stops != 1 {
 				t.Fatal("recording failure misclassified gap or skipped target stop", rec, err)
 			}
 			journal, err := os.ReadFile(filepath.Join(f.dir, "testing", string(f.run.ID), string(rec.ID), "actions.jsonl"))
@@ -329,7 +337,7 @@ func TestRecordingFailureOnlySetsGapForRecorderErrorAndStillStopsTarget(t *testi
 					t.Fatal(err)
 				}
 				if record.Tool == "stop_recording" && record.State == "failed" {
-					foundFailure = record.Detail != "" && record.RecordingGap == wantGap
+					foundFailure = record.Detail != "" && record.RecordingGap == rec.RecordingGap && strings.Contains(record.Detail, wantCause)
 				}
 			}
 			if !foundFailure {
@@ -337,6 +345,58 @@ func TestRecordingFailureOnlySetsGapForRecorderErrorAndStillStopsTarget(t *testi
 			}
 		})
 	}
+}
+
+type exhaustedMovieCopy struct{ ports.TestingEvidenceStore }
+
+func (e exhaustedMovieCopy) Write(ctx context.Context, id domain.TestAttemptID, artifact ports.TestingEvidenceArtifact, data io.Reader) (domain.TestEvidenceReceipt, error) {
+	if artifact.Kind == "recording" {
+		<-ctx.Done()
+		return domain.TestEvidenceReceipt{}, ctx.Err()
+	}
+	return e.TestingEvidenceStore.Write(ctx, id, artifact, data)
+}
+
+func TestRecordingCopyBudgetDoesNotConsumeTerminalDiagnosticsBudget(t *testing.T) {
+	f, _ := movieFixture(t, nil)
+	f.svc.deps.Evidence = exhaustedMovieCopy{TestingEvidenceStore: f.evidence}
+	_, _ = f.svc.Cancel(context.Background(), f.start.AttemptID)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err := f.svc.WaitCleanup(ctx, f.start.AttemptID); err == nil {
+		t.Fatal("copy timeout reported success")
+	}
+	rec, _, err := f.store.GetTestAttempt(ctx, f.start.AttemptID)
+	if err != nil || !strings.Contains(rec.RecordingGap, "context deadline exceeded") || f.provider.stops != 1 {
+		t.Fatal("copy failure lost gap or target cleanup", rec, err)
+	}
+	receipts, err := f.svc.ListEvidence(ctx, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := false
+	for _, receipt := range receipts {
+		if receipt.Kind == "recording" {
+			t.Fatal("timed-out copy published receipt")
+		}
+		if receipt.Kind == "recording_metadata" {
+			metadata = true
+		}
+	}
+	journal, err := os.ReadFile(filepath.Join(f.dir, "testing", string(f.run.ID), string(rec.ID), "actions.jsonl"))
+	if err != nil || !metadata {
+		t.Fatal("copy budget swallowed diagnostics", err)
+	}
+	for _, line := range bytes.Split(bytes.TrimSpace(journal), []byte("\n")) {
+		var record domain.TestActionRecord
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Tool == "stop_recording" && record.State == "failed" && strings.Contains(record.Detail, "context deadline exceeded") && record.RecordingGap == rec.RecordingGap {
+			return
+		}
+	}
+	t.Fatal("copy timeout lost completion journal")
 }
 
 func TestRecordingStartErrorRetainsReasonUntilSuccessfulStop(t *testing.T) {

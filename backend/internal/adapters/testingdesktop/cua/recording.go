@@ -65,6 +65,9 @@ func (a *Adapter) StartRecording(ctx context.Context, target domain.TestTargetId
 	if b.recording != nil {
 		return recordingGap(b.recording.result, refuse("recording_exists", "this binding already has a recording"))
 	}
+	if err := a.startSession(ctx, b); err != nil {
+		return recordingGap(RecordingResult{}, err)
+	}
 	w, err := a.liveWindow(ctx, b)
 	if err != nil {
 		return recordingGap(RecordingResult{}, err)

@@ -13,9 +13,13 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"golang.org/x/image/draw"
@@ -89,24 +93,33 @@ type captureReceipt struct {
 	screenshotID  string
 	keyToken      string
 	elements      []capturedElement
+	addressable   map[string]capturedElement
 	width, height int // original provider capture pixels, never worker-supplied
 }
 
 type captureState struct {
-	PID      int                     `json:"pid"`
-	WindowID int                     `json:"window_id"`
-	Bounds   domain.TestWindowBounds `json:"window_bounds"`
-	Width    int                     `json:"screenshot_width"`
-	Height   int                     `json:"screenshot_height"`
-	Scale    float64                 `json:"screenshot_scale"`
-	Capture  string                  `json:"capture_id"`
-	Elements []capturedElement       `json:"elements"`
+	PID              int                     `json:"pid"`
+	WindowID         int                     `json:"window_id"`
+	Bounds           domain.TestWindowBounds `json:"window_bounds"`
+	Width            int                     `json:"screenshot_width"`
+	Height           int                     `json:"screenshot_height"`
+	Scale            float64                 `json:"screenshot_scale"`
+	Capture          string                  `json:"capture_id"`
+	Elements         []capturedElement       `json:"elements"`
+	Truncated        bool                    `json:"truncated"`
+	ElementsComplete *bool                   `json:"elements_complete"`
 }
 
 type capturedElement struct {
-	Role  string       `json:"role"`
-	Token string       `json:"element_token"`
-	Frame *pixelBounds `json:"screenshot_frame"`
+	Role    string          `json:"role"`
+	Label   string          `json:"label"`
+	Title   string          `json:"title"`
+	Value   json.RawMessage `json:"value"`
+	Enabled *bool           `json:"enabled"`
+	Focused *bool           `json:"focused"`
+	Visible *bool           `json:"visible"`
+	Token   string          `json:"element_token"`
+	Frame   *pixelBounds    `json:"screenshot_frame"`
 }
 
 type pixelBounds struct {
@@ -211,6 +224,9 @@ func (a *Adapter) BindWindow(ctx context.Context, target domain.TestTargetIdenti
 		if !sameTarget(candidate, existing.target) || (target.WindowID != "" && target.WindowID != candidate.WindowID) {
 			return target, refuse("target_changed", "a target ID cannot be rebound to a different launch or window")
 		}
+		if err := a.startSession(ctx, existing); err != nil {
+			return target, err
+		}
 		if _, err := a.liveWindow(ctx, existing); err != nil {
 			return target, err
 		}
@@ -220,6 +236,9 @@ func (a *Adapter) BindWindow(ctx context.Context, target domain.TestTargetIdenti
 		return target, err
 	}
 	b := &binding{target: target, session: "ao-" + uuid.NewString()}
+	if err := a.startSession(ctx, b); err != nil {
+		return target, err
+	}
 	windows, err := a.windows(ctx, b)
 	if err != nil {
 		return target, err
@@ -257,6 +276,9 @@ func (a *Adapter) screenshot(ctx context.Context, target domain.TestTargetIdenti
 		return shot, err
 	}
 	b.receipt = nil
+	if err = a.startSession(ctx, b); err != nil {
+		return shot, err
+	}
 	if _, err = a.liveWindow(ctx, b); err != nil {
 		return shot, err
 	}
@@ -271,8 +293,9 @@ func (a *Adapter) screenshot(ctx context.Context, target domain.TestTargetIdenti
 	defer func() { err = errors.Join(err, os.Remove(path)) }()
 	args := a.targetArgs(b)
 	args["max_image_dimension"] = 0
-	args["include_accessibility_tree"] = a.cfg.DeliveryMode == Foreground
-	args["timeout_ms"] = 5000
+	args["include_accessibility_tree"] = true
+	args["max_elements"] = 300
+	args["timeout_ms"] = 1000
 	args["screenshot_out_file"] = path
 	capturedAt := a.now().UTC() // conservative age includes the capture call
 	var state captureState
@@ -307,12 +330,13 @@ func (a *Adapter) screenshot(ctx context.Context, target domain.TestTargetIdenti
 	if err != nil {
 		return shot, fmt.Errorf("resize captured PNG: %w", err)
 	}
-	shot = domain.TestScreenshot{Frame: frame, MIMEType: "image/png", Data: preview}
+	shot = domain.TestScreenshot{Frame: frame, MIMEType: "image/png", Data: preview, InputReady: true}
 	if width != state.Width || height != state.Height {
 		shot.Original = &domain.TestScreenshot{Frame: frame, MIMEType: "image/png", Data: data}
 		shot.Frame.Width, shot.Frame.Height = width, height
 	}
 	b.receipt = &captureReceipt{frame: shot.Frame, providerID: state.Capture, elements: state.Elements, width: state.Width, height: state.Height}
+	shot.Elements, shot.Truncated = b.receipt.observationElements(state)
 	if b.lastTyped != nil {
 		if b.lastTyped.bounds != frame.Bounds {
 			b.lastTyped = nil
@@ -321,6 +345,58 @@ func (a *Adapter) screenshot(ctx context.Context, target domain.TestTargetIdenti
 		}
 	}
 	return shot, nil
+}
+
+func boundedText(text string, limit int) (string, bool) {
+	if utf8.RuneCountInString(text) <= limit {
+		return text, false
+	}
+	return string([]rune(text)[:limit]), true
+}
+
+func (r *captureReceipt) observationElements(state captureState) ([]domain.TestElement, bool) {
+	elements := []domain.TestElement{}
+	r.addressable = map[string]capturedElement{}
+	truncated := state.Truncated || len(state.Elements) >= 300 || (state.ElementsComplete != nil && !*state.ElementsComplete)
+	for _, element := range state.Elements {
+		f := element.Frame
+		if element.Token == "" || element.Role == "" || f == nil || (element.Visible != nil && !*element.Visible) ||
+			!validBounds(domain.TestWindowBounds{X: f.X, Y: f.Y, Width: f.Width, Height: f.Height}) {
+			continue
+		}
+		x, y := math.Max(0, f.X), math.Max(0, f.Y)
+		right, bottom := math.Min(float64(r.width), f.X+f.Width), math.Min(float64(r.height), f.Y+f.Height)
+		if right <= x || bottom <= y {
+			continue
+		}
+		if len(elements) == 300 {
+			truncated = true
+			break
+		}
+		label := element.Label
+		if label == "" {
+			label = element.Title
+		}
+		value := ""
+		if element.Role == "AXTextField" || element.Role == "AXTextArea" {
+			_ = json.Unmarshal(element.Value, &value)
+		}
+		role, cutRole := boundedText(element.Role, 64)
+		label, cutLabel := boundedText(label, 256)
+		value, cutValue := boundedText(value, 256)
+		truncated = truncated || cutRole || cutLabel || cutValue
+		id := uuid.NewString()
+		mapX := func(value float64) float64 { return value / float64(r.width) * float64(r.frame.Width) }
+		mapY := func(value float64) float64 { return value / float64(r.height) * float64(r.frame.Height) }
+		left, top := mapX(x), mapY(y)
+		elements = append(elements, domain.TestElement{ElementID: id, Role: role, Label: label, Value: value,
+			Enabled: element.Enabled, Focused: element.Focused,
+			Frame: domain.TestWindowBounds{X: left, Y: top, Width: mapX(right) - left, Height: mapY(bottom) - top}})
+		// Resolve only the visible portion, never a center outside this window.
+		element.Frame = &pixelBounds{X: x, Y: y, Width: right - x, Height: bottom - y}
+		r.addressable[id] = element
+	}
+	return elements, truncated
 }
 
 func screenshotPreview(data []byte, width, height int) ([]byte, int, int, error) {
@@ -361,21 +437,37 @@ func coherentScale(s captureState) bool {
 		math.Abs(float64(s.Width)-s.Bounds.Width*s.Scale) <= 1 && math.Abs(float64(s.Height)-s.Bounds.Height*s.Scale) <= 1
 }
 
-// Click admits one fresh screenshot and sends its immutable Cua capture ID.
+// Click admits one fresh screenshot. Pixel clicks also send its Cua capture ID.
 func (a *Adapter) Click(ctx context.Context, target domain.TestTargetIdentity, frame domain.TestDesktopFrame, request domain.TestClickRequest) (domain.TestActionResult, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if request.Button != "" && request.Button != domain.TestMouseButtonLeft && request.Button != domain.TestMouseButtonRight && request.Button != domain.TestMouseButtonMiddle {
 		return domain.TestActionResult{}, refuse("invalid_button", "unsupported mouse button")
 	}
-	b, receipt, err := a.admit(ctx, target, frame, request.ScreenshotID, &pixel{request.X, request.Y})
+	p := &pixel{request.X, request.Y}
+	if request.ElementID != "" {
+		p = nil
+	}
+	b, receipt, err := a.admit(ctx, target, frame, request.ScreenshotID, p, request.ElementID)
 	if err != nil {
 		return domain.TestActionResult{}, err
 	}
 	args := a.inputArgs(b)
 	point := receipt.originalPoint(pixel{request.X, request.Y})
-	args["x"], args["y"] = point.x, point.y
-	args["capture_id"] = receipt.providerID
+	if request.ElementID != "" {
+		element := receipt.addressable[request.ElementID]
+		if request.Button == domain.TestMouseButtonMiddle {
+			f := element.Frame
+			args["x"], args["y"] = int(f.X+f.Width/2), int(f.Y+f.Height/2)
+		} else {
+			args["element_token"] = element.Token
+		}
+	} else {
+		args["x"], args["y"] = point.x, point.y
+	}
+	if args["x"] != nil && args["y"] != nil {
+		args["capture_id"] = receipt.providerID
+	}
 	if request.Button != "" {
 		args["button"] = string(request.Button)
 	}
@@ -383,12 +475,15 @@ func (a *Adapter) Click(ctx context.Context, target domain.TestTargetIdentity, f
 	return a.dispatch(ctx, "click", args)
 }
 
-// Type uses pixel focus, or a fresh AX token when foreground capture resolves
-// exactly one field. An incomplete AX tree does not prevent pixel input.
+// Type preserves pixel focus for coordinates and uses AX for an element ID.
 func (a *Adapter) Type(ctx context.Context, target domain.TestTargetIdentity, frame domain.TestDesktopFrame, request domain.TestTypeRequest) (domain.TestActionResult, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	b, receipt, err := a.admit(ctx, target, frame, request.ScreenshotID, &pixel{request.X, request.Y})
+	p := &pixel{request.X, request.Y}
+	if request.ElementID != "" {
+		p = nil
+	}
+	b, receipt, err := a.admit(ctx, target, frame, request.ScreenshotID, p, request.ElementID)
 	if err != nil {
 		return domain.TestActionResult{}, err
 	}
@@ -396,13 +491,13 @@ func (a *Adapter) Type(ctx context.Context, target domain.TestTargetIdentity, fr
 	point := receipt.originalPoint(pixel{request.X, request.Y})
 	args["x"], args["y"], args["text"] = point.x, point.y, request.Text
 	b.lastTyped = nil
-	if a.cfg.DeliveryMode == Foreground {
-		token := typedFieldToken(receipt.elements, point)
-		if token != "" {
-			delete(args, "x")
-			delete(args, "y")
-			args["element_token"] = token
-		}
+	if request.ElementID != "" {
+		element := receipt.addressable[request.ElementID]
+		delete(args, "x")
+		delete(args, "y")
+		args["element_token"] = element.Token
+		f := element.Frame
+		point = pixel{int(f.X + f.Width/2), int(f.Y + f.Height/2)}
 	}
 	// Remember the addressed field, including uncertain partial delivery. A
 	// subsequent key still requires a new screenshot and a fresh field token.
@@ -418,7 +513,7 @@ func (a *Adapter) Key(ctx context.Context, target domain.TestTargetIdentity, fra
 	if err != nil {
 		return domain.TestActionResult{}, err
 	}
-	b, receipt, err := a.admit(ctx, target, frame, request.ScreenshotID, nil)
+	b, receipt, err := a.admit(ctx, target, frame, request.ScreenshotID, nil, "")
 	if err != nil {
 		return domain.TestActionResult{}, err
 	}
@@ -454,7 +549,7 @@ func typedFieldToken(elements []capturedElement, point pixel) string {
 
 type pixel struct{ x, y int }
 
-func (a *Adapter) admit(ctx context.Context, target domain.TestTargetIdentity, frame domain.TestDesktopFrame, screenshotID string, p *pixel) (*binding, *captureReceipt, error) {
+func (a *Adapter) admit(ctx context.Context, target domain.TestTargetIdentity, frame domain.TestDesktopFrame, screenshotID string, p *pixel, elementID string) (*binding, *captureReceipt, error) {
 	b, err := a.bound(ctx, target)
 	if err != nil {
 		return nil, nil, err
@@ -471,6 +566,12 @@ func (a *Adapter) admit(ctx context.Context, target domain.TestTargetIdentity, f
 	}
 	if p != nil && (p.x < 0 || p.y < 0 || p.x >= frame.Width || p.y >= frame.Height) {
 		return nil, nil, refuse("coordinate_outside_window", "point lies outside returned screenshot pixels")
+	}
+	if elementID != "" {
+		element, ok := r.addressable[elementID]
+		if !ok || (element.Enabled != nil && !*element.Enabled) {
+			return nil, nil, refuse("element_mismatch", "element is foreign, stale or disabled; observe again")
+		}
 	}
 	r.screenshotID = screenshotID
 	w, err := a.liveWindow(ctx, b)
@@ -500,7 +601,21 @@ func (a *Adapter) dispatch(ctx context.Context, name string, args map[string]any
 	if (result.Effect != "confirmed" && result.Effect != "unverifiable") || result.Summary == "" {
 		return domain.TestActionResult{}, &Error{Code: "provider_protocol", Detail: "input result lacks an explicit delivery effect", cause: ErrProvider}
 	}
-	return domain.TestActionResult{Delivered: true, Detail: fmt.Sprintf("delivery_mode=%s; %s", args["delivery_mode"], result.Summary)}, nil
+	inputPath := "keyboard"
+	if name == "click" {
+		inputPath = "pointer"
+		if args["element_token"] != nil {
+			inputPath = "ax"
+		}
+	} else if name == "type_text" {
+		inputPath = "pointer+keyboard"
+		if args["element_token"] != nil {
+			inputPath = "ax+keyboard"
+		}
+	} else if args["element_token"] != nil {
+		inputPath = "ax+keyboard"
+	}
+	return domain.TestActionResult{Delivered: true, InputPath: "unknown", RequestedInputPath: inputPath, Detail: fmt.Sprintf("delivery_mode=%s; %s", args["delivery_mode"], result.Summary)}, nil
 }
 
 func (a *Adapter) bound(ctx context.Context, target domain.TestTargetIdentity) (*binding, error) {
@@ -602,19 +717,21 @@ func (a *Adapter) inputArgs(b *binding) map[string]any {
 
 func (a *Adapter) call(ctx context.Context, name string, args map[string]any, result any) error {
 	if err := a.checkDriver(ctx); err != nil {
-		return err
+		return fmt.Errorf("cua call %s: %w", name, errors.Join(err, ctx.Err()))
 	}
 	encoded, err := json.Marshal(args)
 	if err != nil {
-		return err
+		return fmt.Errorf("cua call %s encode arguments: %w", name, err)
 	}
 	out, runErr := a.run(ctx, a.binary(), "--socket", a.socket(), "call", name, string(encoded))
 	var status struct {
 		Code    string          `json:"code"`
 		Effect  string          `json:"effect"`
 		Summary string          `json:"summary"`
+		Message string          `json:"message"`
 		IsError bool            `json:"isError"`
 		Reason  json.RawMessage `json:"reason"`
+		Error   json.RawMessage `json:"error"`
 	}
 	decodeErr := json.Unmarshal(out.Stdout, &status)
 	if runErr != nil || decodeErr != nil || status.IsError || status.Effect == "refused" {
@@ -623,18 +740,131 @@ func (a *Adapter) call(ctx context.Context, name string, args map[string]any, re
 			code = "provider_failure"
 		}
 		detail := status.Summary
-		if detail == "" {
-			detail = string(status.Reason)
+		if strings.TrimSpace(detail) == "" {
+			detail = status.Message
 		}
-		if detail == "" && runErr != nil {
-			detail = runErr.Error()
+		for _, raw := range []json.RawMessage{status.Reason, status.Error} {
+			if strings.TrimSpace(detail) == "" {
+				detail = providerDiagnosticCause(raw, 0)
+			}
 		}
-		return &Error{Code: code, Detail: detail, cause: errors.Join(ErrProvider, runErr, decodeErr, ctx.Err())}
+		if strings.TrimSpace(detail) == "" {
+			detail = string(out.Stderr)
+		}
+		if strings.TrimSpace(detail) == "" && !json.Valid(out.Stdout) {
+			detail = string(out.Stdout)
+		}
+		code = providerDiagnosticText(code, args, 64)
+		if !providerDiagnosticCode.MatchString(code) {
+			code = "provider_failure"
+		}
+		return &Error{Code: code, Detail: providerCallDiagnostic(ctx, name, args, detail, runErr, decodeErr), cause: errors.Join(ErrProvider, runErr, decodeErr, ctx.Err())}
 	}
 	if result != nil {
 		if err := json.Unmarshal(out.Stdout, result); err != nil {
-			return &Error{Code: "provider_protocol", Detail: "invalid structured result", cause: errors.Join(ErrProvider, err)}
+			return &Error{Code: "provider_protocol", Detail: providerCallDiagnostic(ctx, name, args, "invalid structured result", nil, err), cause: errors.Join(ErrProvider, err, ctx.Err())}
 		}
 	}
 	return nil
+}
+
+const providerDiagnosticLimit = 1024
+
+var (
+	providerDiagnosticCode    = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+	providerDiagnosticPrivate = regexp.MustCompile(`(?i)\b(?:[a-z0-9_]*(?:token|password|secret|api[_-]?key|capability)|authorization|credentials?|cookies?|prompt|text|screenshot(?:_data)?|image(?:_data)?|base64|data|payload)\b["']?\s*[:=]\s*(?:"(?:\\.|[^"])*(?:"|$)|'(?:\\.|[^'])*(?:'|$)|[^\r\n]*)|\b(?:Bearer|Basic)\s+[^\s,;]+|data:image/[^\s]+|https?://[^\s/@]+:[^\s/@]+@[^\s]+|[A-Za-z0-9+/=_-]{43,}`)
+)
+
+// Only diagnostic fields are read from structured causes. Provider result and
+// argument objects can contain captures, typed text and credentials.
+func providerDiagnosticCause(raw json.RawMessage, depth int) string {
+	if depth > 2 || len(raw) == 0 || len(raw) > 8*providerDiagnosticLimit {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text
+	}
+	var cause struct {
+		Summary string          `json:"summary"`
+		Message string          `json:"message"`
+		Reason  json.RawMessage `json:"reason"`
+		Error   json.RawMessage `json:"error"`
+		Cause   json.RawMessage `json:"cause"`
+	}
+	if json.Unmarshal(raw, &cause) != nil {
+		return ""
+	}
+	for _, text := range []string{cause.Summary, cause.Message} {
+		if strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
+	for _, nested := range []json.RawMessage{cause.Reason, cause.Error, cause.Cause} {
+		if text := providerDiagnosticCause(nested, depth+1); strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func providerCallDiagnostic(ctx context.Context, name string, args map[string]any, detail string, runErr, decodeErr error) string {
+	parts := []string{"call " + providerDiagnosticText(name, nil, 64)}
+	if runErr != nil {
+		parts = append(parts, "run: "+providerDiagnosticText(runErr.Error(), args, 128))
+	}
+	if decodeErr != nil {
+		parts = append(parts, "decode: "+providerDiagnosticText(decodeErr.Error(), args, 128))
+	}
+	if err := ctx.Err(); err != nil {
+		parts = append(parts, "context: "+err.Error())
+	}
+	if strings.TrimSpace(detail) == "" {
+		detail = "no recognized provider diagnostic"
+	}
+	parts = append(parts, "cause: "+providerDiagnosticText(detail, args, 512))
+	return strings.Join(parts, "; ")
+}
+
+func providerDiagnosticText(text string, args map[string]any, limit int) string {
+	values := make([]string, 0, len(args))
+	for key, value := range args {
+		if key == "scope" || key == "delivery_mode" || key == "button" {
+			continue
+		}
+		if value, ok := value.(string); ok && value != "" {
+			values = append(values, value)
+		}
+	}
+	// A session or capture token can be embedded in typed text. Redacting the
+	// longest value first keeps that replacement independent of map order.
+	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
+	for _, value := range values {
+		text = strings.ReplaceAll(text, value, "[redacted]")
+	}
+	if len(text) > 8*providerDiagnosticLimit {
+		text = text[:8*providerDiagnosticLimit]
+		for !utf8.ValidString(text) && len(text) > 8*providerDiagnosticLimit-utf8.UTFMax {
+			text = text[:len(text)-1]
+		}
+	}
+	if !utf8.ValidString(text) || strings.ContainsRune(text, '\x00') {
+		return "[non-text output omitted]"
+	}
+	text = providerDiagnosticPrivate.ReplaceAllString(text, "[redacted]")
+	text = strings.Map(func(r rune) rune {
+		if r < ' ' || r == '\x7f' {
+			return ' '
+		}
+		return r
+	}, text)
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) > limit {
+		text = text[:limit-len(" [truncated]")]
+		for !utf8.ValidString(text) {
+			text = text[:len(text)-1]
+		}
+		text += " [truncated]"
+	}
+	return text
 }

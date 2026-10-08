@@ -130,7 +130,7 @@ func writeInfo(t *testing.T, s *launch) {
 func TestTargetEnvironmentStripsInheritedAO(t *testing.T) {
 	f := fixture(t)
 	inherited := []string{"PATH=/bin", "HOME=/private/home", "AO_DATA_DIR=/real/data", "AO_RUN_FILE=/real/run", "AO_TMUX_BINARY=/real/tmux", "AO_TMUX_SOCKET_NAME=ao", "AO_BROWSER_TOKEN=secret-sentinel", "AO_TELEMETRY_TOKEN=secret-sentinel", "AO_FUTURE_VARIABLE=secret-sentinel", "NODE_OPTIONS=--require unsafe", "ELECTRON_RUN_AS_NODE=1", "ELECTRON_ENABLE_LOGGING=0"}
-	env := targetEnv(inherited, f.s, true)
+	env := targetEnv(inherited, f.s, true, false)
 	values := make(map[string]string)
 	for _, entry := range env {
 		key, value, _ := strings.Cut(entry, "=")
@@ -272,6 +272,14 @@ func TestCancelledCleanupNeverSignals(t *testing.T) {
 }
 
 func TestStartUsesPreparedCheckoutAndCapturedIdentity(t *testing.T) {
+	for _, real := range []bool{false, true} {
+		t.Run(fmt.Sprintf("real=%t", real), func(t *testing.T) { testStartUsesPreparedCheckout(t, real) })
+	}
+}
+
+func testStartUsesPreparedCheckout(t *testing.T, real bool) {
+	t.Helper()
+	t.Setenv("AO_FAKE_HARNESS", "inherited-sentinel")
 	f := fixture(t)
 	f.a.launches = make(map[string]*launch)
 	base := filepath.Join(f.s.root, ".ao", "dev", "agentic-target")
@@ -327,7 +335,11 @@ func TestStartUsesPreparedCheckoutAndCapturedIdentity(t *testing.T) {
 			key, value, _ := strings.Cut(entry, "=")
 			values[key] = value
 		}
-		if values["AO_FAKE_HARNESS"] != "1" || values["AO_DEV_ELECTRON_DIR"] != filepath.Join(base, "attempt", "electron") {
+		wantFake := "1"
+		if real {
+			wantFake = "0"
+		}
+		if values["AO_FAKE_HARNESS"] != wantFake || values["AO_DEV_ELECTRON_DIR"] != filepath.Join(base, "attempt", "electron") {
 			t.Fatal("missing isolation")
 		}
 		if values["AO_TMUX_BINARY"] != "/fixture/ao/tmux" {
@@ -343,6 +355,9 @@ func TestStartUsesPreparedCheckoutAndCapturedIdentity(t *testing.T) {
 		return 11, nil
 	}
 	spec := ports.TestingTargetSpec{AttemptID: "attempt", Generation: 1, CheckoutPath: checkout, CommitSHA: strings.TrimSpace(string(head)), Deadline: time.Now().Add(time.Second)}
+	if real {
+		spec.RecipeSnapshot = `{"realProviders":true}`
+	}
 	target, err := f.a.Start(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)

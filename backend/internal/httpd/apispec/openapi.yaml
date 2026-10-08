@@ -9758,6 +9758,81 @@ paths:
       summary: Call the target-bound key tool
       tags:
       - testing
+  /api/v1/testing/attempts/{attemptId}/tools/observe:
+    post:
+      operationId: testingObserve
+      parameters:
+      - in: path
+        name: attemptId
+        required: true
+        schema:
+          type: string
+      - description: Launch-only worker capability. Never persist it, put it in a
+          URL or log it.
+        in: header
+        name: X-AO-Test-Capability
+        schema:
+          description: Launch-only worker capability. Never persist it, put it in
+            a URL or log it.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingObserveCall'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestingToolResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "415":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unsupported Media Type
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Call the target-bound observe tool
+      tags:
+      - testing
   /api/v1/testing/attempts/{attemptId}/tools/read_target_logs:
     post:
       operationId: testingReadTargetLogs
@@ -16605,7 +16680,13 @@ components:
     StartTestingAttemptRequest:
       additionalProperties: false
       properties:
+        effort:
+          maxLength: 32
+          type: string
         harness:
+          type: string
+        model:
+          maxLength: 256
           type: string
         timeoutSeconds:
           description: Defaults to 1800 seconds.
@@ -16849,11 +16930,37 @@ components:
           type: boolean
         detail:
           type: string
+        inputPath:
+          description: Actual provider-reported path, or unknown when it is not reported.
+          type: string
+        requestedInputPath:
+          enum:
+          - ax
+          - pointer
+          - keyboard
+          - ax+keyboard
+          - pointer+keyboard
+          type: string
       required:
       - delivered
       type: object
     TestClickRequest:
       additionalProperties: false
+      oneOf:
+      - not:
+          anyOf:
+          - required:
+            - x
+          - required:
+            - "y"
+        required:
+        - elementId
+      - not:
+          required:
+          - elementId
+        required:
+        - x
+        - "y"
       properties:
         button:
           default: left
@@ -16861,6 +16968,12 @@ components:
           - left
           - right
           - middle
+          type: string
+        elementId:
+          description: Use an element from this observation, or supply both x and
+            y instead.
+          maxLength: 128
+          minLength: 1
           type: string
         screenshotId:
           minLength: 1
@@ -16873,8 +16986,6 @@ components:
           type: integer
       required:
       - screenshotId
-      - x
-      - "y"
       type: object
     TestDaemonQueryRequest:
       additionalProperties: false
@@ -16883,6 +16994,11 @@ components:
           enum:
           - projects
           - sessions
+          - reviews
+          - conversation
+          type: string
+        sessionId:
+          maxLength: 128
           type: string
       required:
       - resource
@@ -16894,6 +17010,8 @@ components:
           enum:
           - projects
           - sessions
+          - reviews
+          - conversation
           type: string
       required:
       - resource
@@ -16923,6 +17041,34 @@ components:
       - height
       - scale
       - capturedAt
+      type: object
+    TestElement:
+      properties:
+        elementId:
+          type: string
+        enabled:
+          type:
+          - "null"
+          - boolean
+        focused:
+          type:
+          - "null"
+          - boolean
+        frame:
+          $ref: '#/components/schemas/TestWindowBounds'
+        label:
+          maxLength: 256
+          type: string
+        role:
+          maxLength: 64
+          type: string
+        value:
+          maxLength: 256
+          type: string
+      required:
+      - elementId
+      - role
+      - frame
       type: object
     TestEvidenceReceipt:
       properties:
@@ -16982,6 +17128,9 @@ components:
       - text
       - truncated
       type: object
+    TestObserveRequest:
+      additionalProperties: false
+      type: object
     TestReadLogsRequest:
       additionalProperties: false
       properties:
@@ -16999,14 +17148,28 @@ components:
         data:
           format: base64
           type: string
+        elements:
+          items:
+            $ref: '#/components/schemas/TestElement'
+          maxItems: 300
+          type: array
         frame:
           $ref: '#/components/schemas/TestDesktopFrame'
+        inputReady:
+          description: False means the retained image is for inspection only; observe
+            again before input.
+          type: boolean
         mimeType:
           type: string
+        truncated:
+          type: boolean
       required:
       - frame
       - mimeType
       - data
+      - elements
+      - truncated
+      - inputReady
       type: object
     TestScreenshotRequest:
       additionalProperties: false
@@ -17042,7 +17205,28 @@ components:
       type: object
     TestTypeRequest:
       additionalProperties: false
+      oneOf:
+      - not:
+          anyOf:
+          - required:
+            - x
+          - required:
+            - "y"
+        required:
+        - elementId
+      - not:
+          required:
+          - elementId
+        required:
+        - x
+        - "y"
       properties:
+        elementId:
+          description: Use an element from this observation, or supply both x and
+            y instead.
+          maxLength: 128
+          minLength: 1
+          type: string
         screenshotId:
           minLength: 1
           type: string
@@ -17057,8 +17241,6 @@ components:
           type: integer
       required:
       - screenshotId
-      - x
-      - "y"
       - text
       type: object
     TestWindowBounds:
@@ -17189,6 +17371,23 @@ components:
       - requestId
       - input
       type: object
+    TestingObserveCall:
+      additionalProperties: false
+      properties:
+        input:
+          $ref: '#/components/schemas/TestObserveRequest'
+        requestId:
+          maxLength: 128
+          minLength: 1
+          type: string
+        sessionId:
+          minLength: 1
+          type: string
+      required:
+      - sessionId
+      - requestId
+      - input
+      type: object
     TestingQueryCall:
       additionalProperties: false
       properties:
@@ -17261,6 +17460,15 @@ components:
           type: array
         logs:
           $ref: '#/components/schemas/TestLogResult'
+        observationError:
+          type: string
+        observationStatus:
+          enum:
+          - captured
+          - settled
+          - unsettled
+          - failed
+          type: string
         query:
           $ref: '#/components/schemas/TestDaemonQueryResult'
         report:
