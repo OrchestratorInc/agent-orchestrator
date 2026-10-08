@@ -195,3 +195,14 @@ describe("workspace file open requests", () => {
 		expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
 	});
 });
+
+describe("inspector page", () => {
+	it("holds the page a chat opened beside it until it is closed, per session", () => {
+		const page = { key: "render:r1", title: "Turns by day", path: "/api/v1/sessions/s-1/renders/r1", fileName: "Turns by day.html" };
+		useUiStore.getState().setInspectorPage("s-1", page);
+		expect(useUiStore.getState().inspectorSessions["s-1"]?.page).toEqual(page);
+		expect(useUiStore.getState().inspectorSessions["s-2"]?.page).toBeUndefined();
+		useUiStore.getState().setInspectorPage("s-1", undefined);
+		expect(useUiStore.getState().inspectorSessions["s-1"]?.page).toBeUndefined();
+	});
+});

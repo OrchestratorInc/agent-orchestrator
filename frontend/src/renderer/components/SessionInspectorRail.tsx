@@ -33,7 +33,7 @@ export function inspectorSizing(view: InspectorView): InspectorSizing {
 	return {
 		chatMinWidth: 560,
 		defaultWidth: 500,
-		minWidth: view === "files" ? 460 : 340,
+		minWidth: view === "files" ? 460 : view === "page" ? 400 : 340,
 		maxPercent: 55,
 		mode: view === "files" ? "files" : "utility",
 		storageKey: "ao.inspector.widthPx",

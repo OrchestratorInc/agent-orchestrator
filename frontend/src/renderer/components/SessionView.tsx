@@ -96,6 +96,8 @@ import { isOrchestratorSession, sessionAgentExited, sessionIsActive } from "../t
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { matchesRendererShortcut } from "../stores/keybindings-store";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
+import { RenderPanelContext } from "./chat/RenderFrame";
+import type { PanelPage } from "../lib/render-frame";
 import {
 	INSPECTOR_SEPARATOR_RESERVE_PX,
 	inspectorMaxWidthCss,
@@ -462,6 +464,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const setInspectorOpenForSession = useUiStore((state) => state.setInspectorOpen);
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
 	const setInspectorViewForSession = useUiStore((state) => state.setInspectorView);
+	const inspectorPage = useUiStore((state) => state.inspectorSessions[uiSessionId]?.page);
+	const setInspectorPage = useUiStore((state) => state.setInspectorPage);
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
 	const workspaceFileOpenRequest = useUiStore((state) => state.workspaceFileOpenRequest);
 	const clearWorkspaceFileOpenRequest = useUiStore((state) => state.clearWorkspaceFileOpenRequest);
@@ -1133,6 +1137,20 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			sizing,
 		],
 	);
+	// A render or an HTML artifact opens beside the chat, in the inspector's
+	// Page view, rather than over it.
+	const openPageBeside = useCallback(
+		(page: PanelPage) => {
+			setInspectorPage(uiSessionId, page);
+			transitionInspectorView("page");
+			setInspectorOpenForSession(uiSessionId, true);
+		},
+		[setInspectorOpenForSession, setInspectorPage, transitionInspectorView, uiSessionId],
+	);
+	const closePage = useCallback(() => {
+		setInspectorPage(uiSessionId, undefined);
+		transitionInspectorView("summary");
+	}, [setInspectorPage, transitionInspectorView, uiSessionId]);
 
 	const newTerminalError = openShellTerminal.error ? apiErrorMessage(openShellTerminal.error) : undefined;
 	const newShellTerminalAction = useMemo(() =>
@@ -1677,225 +1695,327 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}
 
 	return (
-		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
-			{!hostId && !session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
-				<p className="px-4 py-2 text-xs text-error" role="alert">
-					{apiErrorMessage(autoResume.error)}
-				</p>
-			) : null}
-			<div
-				className="session-split relative flex min-h-0 flex-1 overflow-hidden"
-				data-testid="panel-group"
-				data-workspace-mode={sizing.mode}
-				id="session-workspace"
-				ref={sessionSplitRef}
-				style={
-					{
-						"--session-inspector-max-width": inspectorMaxWidthCss(
-							sizing.maxPercent,
-							sizing.chatMinWidth,
-						),
-						"--session-inspector-motion-duration": `${INSPECTOR_SPRING_MS}ms`,
-						"--session-inspector-motion-easing": INSPECTOR_SPRING_EASING,
-					} as CSSProperties
-				}
-			>
+		// An orchestrator's inspector shows only its Browser, so its chat opens a page in the system browser.
+		<RenderPanelContext.Provider value={browserOnly ? null : openPageBeside}>
+			<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
+				{!hostId && !session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
+					<p className="px-4 py-2 text-xs text-error" role="alert">
+						{apiErrorMessage(autoResume.error)}
+					</p>
+				) : null}
 				<div
-					className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
-					data-panel=""
-					id="terminal"
+					className="session-split relative flex min-h-0 flex-1 overflow-hidden"
+					data-testid="panel-group"
+					data-workspace-mode={sizing.mode}
+					id="session-workspace"
+					ref={sessionSplitRef}
+					style={
+						{
+							"--session-inspector-max-width": inspectorMaxWidthCss(
+								sizing.maxPercent,
+								sizing.chatMinWidth,
+							),
+							"--session-inspector-motion-duration": `${INSPECTOR_SPRING_MS}ms`,
+							"--session-inspector-motion-easing": INSPECTOR_SPRING_EASING,
+						} as CSSProperties
+					}
 				>
-					<div className="relative flex h-full min-h-0 flex-col">
-						<SessionTopbarHost
-							className="relative z-chrome flex h-inspector-tabs w-full shrink-0 overflow-hidden"
-							data-testid="session-topbar-host"
-						/>
-						<div className="relative min-h-0 flex-1" ref={bindHandoffDialogContainer}>
-							{cloudStage === "paused_by_coder" ? <CloudPausedStatus /> : null}
-							{session && !session.cloud && handoffDialogContainer ? (
-								<SwitchAgentDialog
-									agentSwitch={handoffAgentSwitch}
-									container={handoffDialogContainer}
-									onOpenChange={handleHandoffDialogOpenChange}
-									open={handoffDialogOpen}
-									session={session}
-								/>
-							) : null}
-							{/* The committed mode owns the agent surface. Auxiliary shell and
-							    reviewer targets remain terminal surfaces in either mode. */}
-							<div
-								className={cn("h-full min-h-0", fileTabs.activePath && "invisible pointer-events-none")}
-								inert={fileTabs.activePath ? true : undefined}
-							>
-							{showChatSurface && session?.cloud ? (
-								<CloudSessionChatSurface
-									controllerTransitioning={interfaceUi.controllerTransitioning}
-									headerActions={sessionHeaderActions}
-									newWorkDisabled={interfaceUi.newWorkDisabled}
-									onConversationWorkChange={interfaceUi.onConversationWorkChange}
-									onOpenFiles={browserOnly ? undefined : prepareFilesInspector}
-									onOpenFile={openCenterFile}
-									session={session}
-									sessionTabAction={sessionTabActions}
-								/>
-							) : showChatSurface ? (
-								<>
-								<SessionChatSurface
-									key={uiSessionId}
-									assetBaseUrl={remoteBase}
-									hostId={hostId}
-									session={session}
-									reviewerTerminal={reviewerTerminal}
-									reviewerChat={reviewerChat}
-									reviewerChatSelected={Boolean(reviewerChatId)}
-									onOpenReviewerTerminal={selectReviewerTerminal}
-									onOpenReviewerChat={(target) => selectReviewerChat(target.reviewId)}
-									onSessionRenamed={refreshWorkspaces}
-									reviewerTarget={
-										routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined
-									}
-									onSelectChat={selectSessionTerminal}
-									shellTerminals={shellTerminals}
-									shellTarget={
-										routedTerminalTarget.kind === "shell" ? routedTerminalTarget : undefined
-									}
-									onSelectShellTerminal={selectShellTerminal}
-									onCloseShellTerminal={closeShellTerminalByHandle}
-									onRenameShellTerminal={renameShellTerminalByHandle}
-									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
-									theme={theme}
-									headerActions={sessionHeaderActions}
-									sessionTabAction={sessionTabActions}
-									sessionTabActionWide={sessionTabActionWide}
-									tabStripAction={newShellTerminalAction}
-									handoffDialogOpen={handoffDialogOpen}
-									workspaceTabs={centerFileTabs}
-									workspaceActiveTabKey={activeWorkspaceTabKey}
-									workspaceFileActive={Boolean(fileTabs.activePath)}
-									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
-									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
-									controllerResumeError={!hostId && autoResume.variables === sessionId && autoResume.isError
-										? apiErrorMessage(autoResume.error) : undefined}
-									controllerTransitioning={interfaceUi.controllerTransitioning}
-									agentResuming={quietResume}
-									newWorkDisabled={interfaceUi.newWorkDisabled}
-									onConversationWorkChange={interfaceUi.onConversationWorkChange}
-									onOpenShell={addShellTerminal}
-									openingShell={openShellTerminal.isPending}
-									shellError={
-										openShellTerminal.error ? apiErrorMessage(openShellTerminal.error) : undefined
-									}
-									onOpenFiles={browserOnly ? undefined : handleOpenFiles}
-									onOpenFile={handleOpenFile}
-									onOpenLinkInBrowser={browserView.openLink}
-								/>
-								{reviewerChatId ? (
+					<div
+						className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+						data-panel=""
+						id="terminal"
+					>
+						<div className="relative flex h-full min-h-0 flex-col">
+							<SessionTopbarHost
+								className="relative z-chrome flex h-inspector-tabs w-full shrink-0 overflow-hidden"
+								data-testid="session-topbar-host"
+							/>
+							<div className="relative min-h-0 flex-1" ref={bindHandoffDialogContainer}>
+								{cloudStage === "paused_by_coder" ? <CloudPausedStatus /> : null}
+								{session && !session.cloud && handoffDialogContainer ? (
+									<SwitchAgentDialog
+										agentSwitch={handoffAgentSwitch}
+										container={handoffDialogContainer}
+										onOpenChange={handleHandoffDialogOpenChange}
+										open={handoffDialogOpen}
+										session={session}
+									/>
+								) : null}
+								{/* The committed mode owns the agent surface. Auxiliary shell and
+								    reviewer targets remain terminal surfaces in either mode. */}
+								<div
+									className={cn("h-full min-h-0", fileTabs.activePath && "invisible pointer-events-none")}
+									inert={fileTabs.activePath ? true : undefined}
+								>
+								{showChatSurface && session?.cloud ? (
+									<CloudSessionChatSurface
+										controllerTransitioning={interfaceUi.controllerTransitioning}
+										headerActions={sessionHeaderActions}
+										newWorkDisabled={interfaceUi.newWorkDisabled}
+										onConversationWorkChange={interfaceUi.onConversationWorkChange}
+										onOpenFiles={browserOnly ? undefined : prepareFilesInspector}
+										onOpenFile={openCenterFile}
+										session={session}
+										sessionTabAction={sessionTabActions}
+									/>
+								) : showChatSurface ? (
+									<>
+									<SessionChatSurface
+										key={uiSessionId}
+										assetBaseUrl={remoteBase}
+										hostId={hostId}
+										session={session}
+										reviewerTerminal={reviewerTerminal}
+										reviewerChat={reviewerChat}
+										reviewerChatSelected={Boolean(reviewerChatId)}
+										onOpenReviewerTerminal={selectReviewerTerminal}
+										onOpenReviewerChat={(target) => selectReviewerChat(target.reviewId)}
+										onSessionRenamed={refreshWorkspaces}
+										reviewerTarget={
+											routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined
+										}
+										onSelectChat={selectSessionTerminal}
+										shellTerminals={shellTerminals}
+										shellTarget={
+											routedTerminalTarget.kind === "shell" ? routedTerminalTarget : undefined
+										}
+										onSelectShellTerminal={selectShellTerminal}
+										onCloseShellTerminal={closeShellTerminalByHandle}
+										onRenameShellTerminal={renameShellTerminalByHandle}
+										daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
+										theme={theme}
+										headerActions={sessionHeaderActions}
+										sessionTabAction={sessionTabActions}
+										sessionTabActionWide={sessionTabActionWide}
+										tabStripAction={newShellTerminalAction}
+										handoffDialogOpen={handoffDialogOpen}
+										workspaceTabs={centerFileTabs}
+										workspaceActiveTabKey={activeWorkspaceTabKey}
+										workspaceFileActive={Boolean(fileTabs.activePath)}
+										auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
+										onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
+										controllerResumeError={!hostId && autoResume.variables === sessionId && autoResume.isError
+											? apiErrorMessage(autoResume.error) : undefined}
+										controllerTransitioning={interfaceUi.controllerTransitioning}
+										agentResuming={quietResume}
+										newWorkDisabled={interfaceUi.newWorkDisabled}
+										onConversationWorkChange={interfaceUi.onConversationWorkChange}
+										onOpenShell={addShellTerminal}
+										openingShell={openShellTerminal.isPending}
+										shellError={
+											openShellTerminal.error ? apiErrorMessage(openShellTerminal.error) : undefined
+										}
+										onOpenFiles={browserOnly ? undefined : handleOpenFiles}
+										onOpenFile={handleOpenFile}
+										onOpenLinkInBrowser={browserView.openLink}
+									/>
+									{reviewerChatId ? (
+										<div className="absolute inset-0">
+											<ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} />
+										</div>
+									) : null}
+									</>
+								) : (
+									<CenterPane
+										hostId={hostId}
+										agentInputDisabled={interfaceUi.agentInputDisabled}
+										daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
+										onCloseShellTerminal={closeShellTerminalByHandle}
+										onRenameShellTerminal={renameShellTerminalByHandle}
+										onSelectSessionTerminal={selectSessionTerminal}
+										onSessionTerminalAttached={onSessionTerminalAttached}
+										onSelectReviewerTerminal={selectReviewerTerminal}
+										onSelectReviewerChat={(target) => selectReviewerChat(target.reviewId)}
+										onSelectShellTerminal={selectShellTerminal}
+										reviewerTerminal={reviewerTerminal}
+										reviewerChat={reviewerChat}
+										reviewerChatSelected={Boolean(reviewerChatId)}
+										reviewerChatContent={reviewerChatId ? <ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} /> : undefined}
+										session={session}
+										shellTerminals={shellTerminals}
+										terminalTarget={routedTerminalTarget}
+										theme={theme}
+										topbarActions={sessionHeaderActions}
+										sessionTabAction={sessionTabActions}
+										sessionTabActionWide={sessionTabActionWide}
+										tabStripAction={newShellTerminalAction}
+										handoffDialogOpen={handoffDialogOpen}
+										workspaceTabs={centerFileTabs}
+										workspaceActiveTabKey={activeWorkspaceTabKey}
+										workspaceFileActive={Boolean(fileTabs.activePath)}
+										auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
+										onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
+									/>
+								)}
+								</div>
+								{fileTabs.activePath ? (
 									<div className="absolute inset-0">
-										<ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} />
+						{session?.cloud ? (
+							<CloudFileContentPane
+								annotation={fileAnnotation}
+								commitSha={activeCenterFileRequest?.commitSha}
+								initialEditing={activeCenterFileInitialEditing}
+								initialLine={activeCenterFileInitialLine}
+								initialMode={activeCenterFileRequest?.mode ?? "file"}
+								initialRequestKey={activeCenterFileRequest?.key ?? 0}
+								onDirtyChange={setCenterFileDirty}
+								path={fileTabs.activePath}
+								scope={activeCenterFileRequest?.scope}
+								session={session}
+								split={filesSplit}
+							/>
+										) : (
+											<SessionFileWorkspace
+												hostId={hostId}
+												annotation={fileAnnotation}
+												commitSha={activeCenterFileRequest?.commitSha}
+								initialEditing={activeCenterFileInitialEditing}
+								initialLine={activeCenterFileInitialLine}
+												initialMode={activeCenterFileRequest?.mode ?? "file"}
+												initialRequestKey={activeCenterFileRequest?.key ?? 0}
+												onDirtyChange={setCenterFileDirty}
+								onInitialEditingConsumed={markCenterFileEditingConsumed}
+								onInitialLineConsumed={markCenterFileLineConsumed}
+												path={fileTabs.activePath}
+												sessionId={sessionId}
+												split={filesSplit}
+												scope={activeCenterFileRequest?.scope}
+											/>
+										)}
 									</div>
 								) : null}
-								</>
-							) : (
-								<CenterPane
-									hostId={hostId}
-									agentInputDisabled={interfaceUi.agentInputDisabled}
-									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
-									onCloseShellTerminal={closeShellTerminalByHandle}
-									onRenameShellTerminal={renameShellTerminalByHandle}
-									onSelectSessionTerminal={selectSessionTerminal}
-									onSessionTerminalAttached={onSessionTerminalAttached}
-									onSelectReviewerTerminal={selectReviewerTerminal}
-									onSelectReviewerChat={(target) => selectReviewerChat(target.reviewId)}
-									onSelectShellTerminal={selectShellTerminal}
-									reviewerTerminal={reviewerTerminal}
-									reviewerChat={reviewerChat}
-									reviewerChatSelected={Boolean(reviewerChatId)}
-									reviewerChatContent={reviewerChatId ? <ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} /> : undefined}
-									session={session}
-									shellTerminals={shellTerminals}
-									terminalTarget={routedTerminalTarget}
-									theme={theme}
-									topbarActions={sessionHeaderActions}
-									sessionTabAction={sessionTabActions}
-									sessionTabActionWide={sessionTabActionWide}
-									tabStripAction={newShellTerminalAction}
-									handoffDialogOpen={handoffDialogOpen}
-									workspaceTabs={centerFileTabs}
-									workspaceActiveTabKey={activeWorkspaceTabKey}
-									workspaceFileActive={Boolean(fileTabs.activePath)}
-									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
-									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
-								/>
-							)}
+								{interfaceUi.notice}
 							</div>
-							{fileTabs.activePath ? (
-								<div className="absolute inset-0">
-					{session?.cloud ? (
-						<CloudFileContentPane
-							annotation={fileAnnotation}
-							commitSha={activeCenterFileRequest?.commitSha}
-							initialEditing={activeCenterFileInitialEditing}
-							initialLine={activeCenterFileInitialLine}
-							initialMode={activeCenterFileRequest?.mode ?? "file"}
-							initialRequestKey={activeCenterFileRequest?.key ?? 0}
-							onDirtyChange={setCenterFileDirty}
-							path={fileTabs.activePath}
-							scope={activeCenterFileRequest?.scope}
-							session={session}
-							split={filesSplit}
-						/>
-									) : (
-										<SessionFileWorkspace
-											hostId={hostId}
-											annotation={fileAnnotation}
-											commitSha={activeCenterFileRequest?.commitSha}
-							initialEditing={activeCenterFileInitialEditing}
-							initialLine={activeCenterFileInitialLine}
-											initialMode={activeCenterFileRequest?.mode ?? "file"}
-											initialRequestKey={activeCenterFileRequest?.key ?? 0}
-											onDirtyChange={setCenterFileDirty}
-							onInitialEditingConsumed={markCenterFileEditingConsumed}
-							onInitialLineConsumed={markCenterFileLineConsumed}
-											path={fileTabs.activePath}
-											sessionId={sessionId}
-											split={filesSplit}
-											scope={activeCenterFileRequest?.scope}
-										/>
-									)}
-								</div>
-							) : null}
-							{interfaceUi.notice}
 						</div>
 					</div>
+					{hasInspector ? (
+						<SessionInspectorRail
+							sessionKey={uiSessionId}
+							showCollapsedHandle={!browserOnly}
+							isOpen={isInspectorOpen}
+							onCloseAnimationComplete={handleInspectorCloseAnimationComplete}
+							onExpand={() => setInspectorOpenForSession(uiSessionId, true)}
+							restoreMinWidth={
+								sizing.mode === "browser" ? (browserEntryWidthFloorRef.current ?? undefined) : undefined
+							}
+							sizing={sizing}
+							settledClosed={!isInspectorOpen && inspectorSettledClosed}
+							splitRef={sessionSplitRef}
+						>
+							<SessionInspector
+								hostId={hostId}
+								browserOnly={browserOnly}
+								browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}
+								browserPoppedOut={browserPoppedOut}
+								filesView={
+									inspectorView === "files" && session ? (
+										session.cloud ? (
+											<CloudWorkspaceDiff annotation={fileAnnotation} onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} session={session} split={filesSplit} />
+										) : (
+											<SessionFileExplorer
+												artifacts={session.artifactFiles ?? []}
+												hostId={hostId}
+												onOpenFile={openCenterFile}
+												onRevealHandled={handleRevealHandled}
+												onRevealRequestConsumed={handleFilePreviewRequestConsumed}
+												onSplitChange={setFilesSplit}
+												onToggleMaximized={handleToggleFilesPopOut}
+												revealRequest={filePreviewRequestsBySession[uiSessionId] ?? null}
+												sessionId={session.id}
+												split={filesSplit}
+											/>
+										)
+									) : null
+								}
+								isInspectorVisible={inspectorPanelVisible}
+								onOpenArtifact={browserOnly ? undefined : handleOpenArtifact}
+								onOpenFiles={browserOnly ? undefined : handleOpenFiles}
+								onOpenReviewFile={handleOpenReviewFile}
+								onOpenReviewerTerminal={selectReviewerTerminal}
+								onOpenReviewerChat={selectReviewerChat}
+								onWorkerMessageSent={showChatSurface || reviewerChatId ? selectSessionTerminal : undefined}
+								onToggleBrowserPopOut={handleToggleBrowserPopOut}
+								onViewChange={transitionInspectorView}
+								view={inspectorView}
+								page={browserOnly ? undefined : inspectorPage}
+								onClosePage={closePage}
+								browserView={hostId || inspectorView === "browser" ? browserView : undefined}
+								session={session}
+							/>
+						</SessionInspectorRail>
+					) : null}
 				</div>
 				{hasInspector ? (
-					<SessionInspectorRail
-						sessionKey={uiSessionId}
-						showCollapsedHandle={!browserOnly}
-						isOpen={isInspectorOpen}
-						onCloseAnimationComplete={handleInspectorCloseAnimationComplete}
-						onExpand={() => setInspectorOpenForSession(uiSessionId, true)}
-						restoreMinWidth={
-							sizing.mode === "browser" ? (browserEntryWidthFloorRef.current ?? undefined) : undefined
-						}
-						sizing={sizing}
-						settledClosed={!isInspectorOpen && inspectorSettledClosed}
-						splitRef={sessionSplitRef}
-					>
-						<SessionInspector
-							hostId={hostId}
-							browserOnly={browserOnly}
-							browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}
-							browserPoppedOut={browserPoppedOut}
-							filesView={
-								inspectorView === "files" && session ? (
-									session.cloud ? (
-										<CloudWorkspaceDiff annotation={fileAnnotation} onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} session={session} split={filesSplit} />
+					<div className="session-pinned-actions" data-testid="session-pinned-actions" style={noDragStyle}>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<TopbarButton
+									aria-label={
+										browserOnly
+											? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
+											: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
+									}
+									aria-pressed={isInspectorOpen}
+									onClick={handleToggleInspector}
+									style={noDragStyle}
+									variant="icon"
+								>
+									{browserOnly ? (
+										<span className="relative inline-flex">
+											<Globe2 aria-hidden="true" className="size-icon-md" />
+											{!isInspectorOpen && browserUnseen ? (
+												<span
+													aria-hidden="true"
+													className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
+													data-testid="orchestrator-browser-unseen-indicator"
+												/>
+											) : null}
+										</span>
+									) : (
+										<PanelRight className="size-icon-md" aria-hidden="true" />
+									)}
+								</TopbarButton>
+							</TooltipTrigger>
+							<TooltipContent side="bottom">
+								{browserOnly
+									? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
+									: isInspectorOpen ? t("shell.closeInspectorTitle") : t("shell.openInspectorTitle")}
+							</TooltipContent>
+						</Tooltip>
+						{/* Keep the global notification action trailing at the window edge. */}
+						<NotificationCenter style={noDragStyle} />
+					</div>
+				) : null}
+				{interfaceUi.cloudLoader
+					? <CloudInterfaceSwitchLoader target={interfaceUi.target} />
+					: showLifecycleLoader || showCompletedLoader
+						? <CloudSessionLifecycleLoader
+							key={`${sessionId}:${cloudReconnecting && !workspaceRestarting ? "terminal" : "startup"}`}
+							sessionId={sessionId}
+							orgId={session?.cloud?.orgId ?? ""}
+							createdAt={session?.cloud?.observedState === "requested" ? session.createdAt : undefined}
+							observedState={session?.cloud?.observedState}
+							workerConnected={Boolean(session?.runtimeConnected)}
+							terminalOnly={cloudReconnecting && !workspaceRestarting}
+							completed={showCompletedLoader}
+						/>
+						: null}
+				{interfaceUi.dialogs}
+				{/* Maximized files wear the maximized browser's chrome: a backdrop, the
+	          filter pinned in the titlebar band where the browser's address bar
+	          sits, and an inset frame for the explorer. The explorer mounts once
+	          the band exists so the filter never renders inline first. */}
+				{filesPoppedOut && session
+					? createPortal(
+							<SessionFilesPopOut>{(topbarHost) =>
+								<FilesTopbarHostContext.Provider value={topbarHost}>
+									{session.cloud ? (
+										<CloudWorkspaceDiff annotation={fileAnnotation} isMaximized onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} session={session} split={filesSplit} />
 									) : (
 										<SessionFileExplorer
 											artifacts={session.artifactFiles ?? []}
 											hostId={hostId}
-											onOpenFile={openCenterFile}
+											isMaximized
 											onRevealHandled={handleRevealHandled}
 											onRevealRequestConsumed={handleFilePreviewRequestConsumed}
 											onSplitChange={setFilesSplit}
@@ -1904,131 +2024,34 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 											sessionId={session.id}
 											split={filesSplit}
 										/>
-									)
-								) : null
-							}
-							isInspectorVisible={inspectorPanelVisible}
-							onOpenArtifact={browserOnly ? undefined : handleOpenArtifact}
-							onOpenFiles={browserOnly ? undefined : handleOpenFiles}
-							onOpenReviewFile={handleOpenReviewFile}
-							onOpenReviewerTerminal={selectReviewerTerminal}
-							onOpenReviewerChat={selectReviewerChat}
-							onWorkerMessageSent={showChatSurface || reviewerChatId ? selectSessionTerminal : undefined}
-							onToggleBrowserPopOut={handleToggleBrowserPopOut}
-							onViewChange={transitionInspectorView}
-							view={inspectorView}
-							browserView={hostId || inspectorView === "browser" ? browserView : undefined}
-							session={session}
-						/>
-					</SessionInspectorRail>
-				) : null}
-			</div>
-			{hasInspector ? (
-				<div className="session-pinned-actions" data-testid="session-pinned-actions" style={noDragStyle}>
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<TopbarButton
-								aria-label={
-									browserOnly
-										? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-										: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
-								}
-								aria-pressed={isInspectorOpen}
-								onClick={handleToggleInspector}
-								style={noDragStyle}
-								variant="icon"
-							>
-								{browserOnly ? (
-									<span className="relative inline-flex">
-										<Globe2 aria-hidden="true" className="size-icon-md" />
-										{!isInspectorOpen && browserUnseen ? (
-											<span
-												aria-hidden="true"
-												className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
-												data-testid="orchestrator-browser-unseen-indicator"
-											/>
-										) : null}
-									</span>
-								) : (
-									<PanelRight className="size-icon-md" aria-hidden="true" />
-								)}
-							</TopbarButton>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">
-							{browserOnly
-								? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-								: isInspectorOpen ? t("shell.closeInspectorTitle") : t("shell.openInspectorTitle")}
-						</TooltipContent>
-					</Tooltip>
-					{/* Keep the global notification action trailing at the window edge. */}
-					<NotificationCenter style={noDragStyle} />
-				</div>
-			) : null}
-			{interfaceUi.cloudLoader
-				? <CloudInterfaceSwitchLoader target={interfaceUi.target} />
-				: showLifecycleLoader || showCompletedLoader
-					? <CloudSessionLifecycleLoader
-						key={`${sessionId}:${cloudReconnecting && !workspaceRestarting ? "terminal" : "startup"}`}
-						sessionId={sessionId}
-						orgId={session?.cloud?.orgId ?? ""}
-						createdAt={session?.cloud?.observedState === "requested" ? session.createdAt : undefined}
-						observedState={session?.cloud?.observedState}
-						workerConnected={Boolean(session?.runtimeConnected)}
-						terminalOnly={cloudReconnecting && !workspaceRestarting}
-						completed={showCompletedLoader}
-					/>
+									)}
+								</FilesTopbarHostContext.Provider>
+							}</SessionFilesPopOut>,
+							document.body,
+						)
 					: null}
-			{interfaceUi.dialogs}
-			{/* Maximized files wear the maximized browser's chrome: a backdrop, the
-          filter pinned in the titlebar band where the browser's address bar
-          sits, and an inset frame for the explorer. The explorer mounts once
-          the band exists so the filter never renders inline first. */}
-			{filesPoppedOut && session
-				? createPortal(
-						<SessionFilesPopOut>{(topbarHost) =>
-							<FilesTopbarHostContext.Provider value={topbarHost}>
-								{session.cloud ? (
-									<CloudWorkspaceDiff annotation={fileAnnotation} isMaximized onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} session={session} split={filesSplit} />
-								) : (
-									<SessionFileExplorer
-										artifacts={session.artifactFiles ?? []}
-										hostId={hostId}
-										isMaximized
-										onRevealHandled={handleRevealHandled}
-										onRevealRequestConsumed={handleFilePreviewRequestConsumed}
-										onSplitChange={setFilesSplit}
-										onToggleMaximized={handleToggleFilesPopOut}
-										revealRequest={filePreviewRequestsBySession[uiSessionId] ?? null}
-										sessionId={session.id}
-										split={filesSplit}
-									/>
-								)}
-							</FilesTopbarHostContext.Provider>
-						}</SessionFilesPopOut>,
-						document.body,
-					)
-				: null}
-			{/* Maximized browser: a fixed overlay across the app workspace,
-          portaled to <body> so it escapes the shell layout (covering the
-          sidebar + topbar, not just the session area) and sits outside any
-          `[data-panel]` column, so the native WebContentsView is not clamped
-          and fills the window below any native titlebar overlay. */}
-			{browserPopOutMounted && session
-				? createPortal(
-						<SessionBrowserPopOut onTopbarHost={setBrowserPopoutTopbarHost} phase={browserPopOutPhase === "open" ? "open" : "mounting"}>
-								{browserPoppedOut && browserPopoutTopbarHost ? <BrowserPanelView
-									active
-									annotationQueue={browserAnnotationQueue}
-									browserView={browserView}
-									onTogglePopOut={handleToggleBrowserPopOut}
-									poppedOut
-									session={session}
-									topbarHost={browserPopoutTopbarHost}
-								/> : null}
-						</SessionBrowserPopOut>,
-						document.body,
-					)
-				: null}
-		</div>
+				{/* Maximized browser: a fixed overlay across the app workspace,
+	          portaled to <body> so it escapes the shell layout (covering the
+	          sidebar + topbar, not just the session area) and sits outside any
+	          `[data-panel]` column, so the native WebContentsView is not clamped
+	          and fills the window below any native titlebar overlay. */}
+				{browserPopOutMounted && session
+					? createPortal(
+							<SessionBrowserPopOut onTopbarHost={setBrowserPopoutTopbarHost} phase={browserPopOutPhase === "open" ? "open" : "mounting"}>
+									{browserPoppedOut && browserPopoutTopbarHost ? <BrowserPanelView
+										active
+										annotationQueue={browserAnnotationQueue}
+										browserView={browserView}
+										onTogglePopOut={handleToggleBrowserPopOut}
+										poppedOut
+										session={session}
+										topbarHost={browserPopoutTopbarHost}
+									/> : null}
+							</SessionBrowserPopOut>,
+							document.body,
+						)
+					: null}
+			</div>
+		</RenderPanelContext.Provider>
 	);
 }

@@ -103,6 +103,27 @@ export function renderFileName(title: string): string {
 	return `${name || "Page"}.html`;
 }
 
+/**
+ * A render or an HTML artifact the chat opened in the inspector, beside the
+ * conversation. It carries everything the panel needs, since the inspector
+ * sits outside the chat that resolved it.
+ */
+export interface PanelPage {
+	/** The render id or the artifact path: one panel per page. */
+	key: string;
+	title: string;
+	/** Daemon-relative route the page is served from. */
+	path: string;
+	/** The file Save writes. */
+	fileName: string;
+	/** An artifact's own inline origin, framed with allow-same-origin. */
+	frameUrl?: string;
+	/** Set for a render, which Save as artifact keeps. */
+	render?: RenderRef;
+	/** Set for an artifact the session can open in its Browser panel. */
+	browserPanel?: { sessionId: string; previewUrl: string };
+}
+
 export interface RenderTheme {
 	appearance: "light" | "dark";
 	variables: Record<string, string>;

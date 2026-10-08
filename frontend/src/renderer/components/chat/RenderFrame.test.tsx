@@ -1,18 +1,31 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement } from "react";
+import { useState, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiBaseUrl } from "../../lib/api-client";
+import type { PanelPage } from "../../lib/render-frame";
 import { useUiStore } from "../../stores/ui-store";
 import type { ConversationActivity } from "../../types/conversation";
 import type { SessionArtifact } from "../../types/workspace";
 import { TooltipProvider } from "../ui/tooltip";
 import { ActivityRow } from "./ChatTimelineItems";
 import { ChatImageSourceProvider } from "./chat-image-source";
+import { RenderPagePanel, RenderPanelContext } from "./RenderFrame";
 
 function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
+}
+
+/** The session view's part: it opens a page beside the chat, in the inspector. */
+function WithPanel({ children }: { children: ReactNode }) {
+	const [page, setPage] = useState<PanelPage>();
+	return (
+		<RenderPanelContext.Provider value={setPage}>
+			{children}
+			{page ? <RenderPagePanel key={page.key} page={page} onClose={() => setPage(undefined)} /> : null}
+		</RenderPanelContext.Provider>
+	);
 }
 
 function renderActivity(height = 300, heights?: Array<[number, number]>): ConversationActivity {
@@ -186,32 +199,50 @@ describe("render activity", () => {
 		}
 	});
 
-	it("expands the page across the whole dialog, in fullscreen display mode", async () => {
+	it("opens the page beside the chat, filling the panel, in fullscreen display mode", async () => {
 		const user = userEvent.setup();
-		render(<ActivityRow activity={renderActivity()} />);
+		render(
+			<WithPanel>
+				<ActivityRow activity={renderActivity()} />
+			</WithPanel>,
+		);
 		const inline = frame();
-		await user.click(screen.getByRole("button", { name: "Expand page" }));
-		const frames = await screen.findAllByTitle("Turns by day");
-		expect(frames).toHaveLength(2);
-		const expanded = frames.find((f) => f !== inline) as HTMLIFrameElement;
-		// The dialog gives the page its full width; the page centers itself.
-		expect(expanded.parentElement?.getAttribute("role")).toBe("dialog");
-		expect(expanded.className).toContain("w-full");
-		expect(expanded.className).toContain("flex-1");
-		expect(expanded.className).not.toContain("max-w");
-		expect(expanded.style.width).toBe("");
-		expect(expanded.style.height).toBe("");
-		expect(fragmentOf(expanded).displayMode).toBe("fullscreen");
+		await user.click(screen.getByRole("button", { name: "Open beside the chat" }));
+		const panel = await screen.findByRole("region", { name: "Turns by day" });
+		expect(screen.queryByRole("dialog")).toBeNull();
+		const beside = within(panel).getByTitle("Turns by day") as HTMLIFrameElement;
+		// The panel gives the page its full width; the page centers itself.
+		expect(beside.className).toContain("w-full");
+		expect(beside.className).toContain("flex-1");
+		expect(beside.style.height).toBe("");
+		expect(fragmentOf(beside).displayMode).toBe("fullscreen");
 		expect(fragmentOf(inline).displayMode).toBe("inline");
-		expect(inline.isConnected).toBe(true);
 		expect(inline.style.height).toBe("300px");
+		await user.click(within(panel).getByRole("button", { name: "Close page" }));
+		expect(screen.queryByRole("region", { name: "Turns by day" })).toBeNull();
+	});
+
+	it("opens the page in the system browser where no inspector can show it", async () => {
+		const user = userEvent.setup();
+		const open = vi.spyOn(window, "open").mockReturnValue(null);
+		try {
+			render(<ActivityRow activity={renderActivity()} />);
+			await user.click(screen.getByRole("button", { name: "Open beside the chat" }));
+			expect(open).toHaveBeenCalledWith(expect.stringMatching(/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/), "_blank", "noopener,noreferrer");
+		} finally {
+			open.mockRestore();
+		}
 	});
 
 	it("tells each frame its display mode with every theme change", async () => {
 		const user = userEvent.setup();
-		render(<ActivityRow activity={renderActivity()} />);
+		render(
+			<WithPanel>
+				<ActivityRow activity={renderActivity()} />
+			</WithPanel>,
+		);
 		const inline = frame();
-		await user.click(screen.getByRole("button", { name: "Expand page" }));
+		await user.click(screen.getByRole("button", { name: "Open beside the chat" }));
 		const expanded = (await screen.findAllByTitle("Turns by day")).find((f) => f !== inline) as HTMLIFrameElement;
 		const sent = new Map<HTMLIFrameElement, unknown[]>([
 			[inline, []],
@@ -233,38 +264,39 @@ describe("render activity", () => {
 	});
 	async function expand() {
 		const user = userEvent.setup();
-		render(<ActivityRow activity={renderActivity()} />);
-		await user.click(screen.getByRole("button", { name: "Expand page" }));
-		return { user, dialog: await screen.findByRole("dialog") };
+		render(
+			<WithPanel>
+				<ActivityRow activity={renderActivity()} />
+			</WithPanel>,
+		);
+		await user.click(screen.getByRole("button", { name: "Open beside the chat" }));
+		return { user, panel: await screen.findByRole("region", { name: "Turns by day" }) };
 	}
 
-	it("heads the expanded page with its title and the source, save and browser actions", async () => {
-		const { dialog } = await expand();
-		expect(within(dialog).getByRole("heading", { name: "Turns by day" })).toBeInTheDocument();
-		for (const name of ["View source", "Save page", "Save as artifact", "Open in external browser", "Close"]) {
-			expect(within(dialog).getByRole("button", { name })).toBeInTheDocument();
+	it("heads the page beside the chat with its title and the source, save, browser and close actions", async () => {
+		const { panel } = await expand();
+		expect(within(panel).getByRole("heading", { name: "Turns by day" })).toBeInTheDocument();
+		for (const name of ["View source", "Save page", "Save as artifact", "Open in external browser", "Close page"]) {
+			expect(within(panel).getByRole("button", { name })).toBeInTheDocument();
 		}
-		expect(within(dialog).getByRole("button", { name: "View source" })).toHaveAttribute("aria-pressed", "false");
-		// Focus starts on the dialog itself, so no action's tooltip opens with it.
-		expect(document.activeElement).toBe(dialog);
-		expect(screen.queryByRole("tooltip")).toBeNull();
+		expect(within(panel).getByRole("button", { name: "View source" })).toHaveAttribute("aria-pressed", "false");
 	});
 
 	it("swaps the page for its source, as plain text, and back", async () => {
 		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<p>chart</p>\n<script>draw()</script>"));
 		try {
-			const { user, dialog } = await expand();
-			await user.click(within(dialog).getByRole("button", { name: "View source" }));
-			const source = await within(dialog).findByText(/<p>chart<\/p>/);
+			const { user, panel } = await expand();
+			await user.click(within(panel).getByRole("button", { name: "View source" }));
+			const source = await within(panel).findByText(/<p>chart<\/p>/);
 			expect(source.tagName).toBe("PRE");
 			expect(source.textContent).toBe("<p>chart</p>\n<script>draw()</script>");
 			expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/proj-1/renders/r1?source=1", expect.anything());
 			expect(screen.getAllByTitle("Turns by day")).toHaveLength(1);
-			const toggle = within(dialog).getByRole("button", { name: "View source" });
+			const toggle = within(panel).getByRole("button", { name: "View source" });
 			expect(toggle).toHaveAttribute("aria-pressed", "true");
 			await user.click(toggle);
 			expect(screen.getAllByTitle("Turns by day")).toHaveLength(2);
-			expect(within(dialog).queryByText(/<p>chart<\/p>/)).toBeNull();
+			expect(within(panel).queryByText(/<p>chart<\/p>/)).toBeNull();
 		} finally {
 			fetch.mockRestore();
 		}
@@ -273,9 +305,9 @@ describe("render activity", () => {
 	it("says so when the source cannot be fetched", async () => {
 		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 404 }));
 		try {
-			const { user, dialog } = await expand();
-			await user.click(within(dialog).getByRole("button", { name: "View source" }));
-			expect(await within(dialog).findByRole("alert")).toHaveTextContent("Could not load the page source.");
+			const { user, panel } = await expand();
+			await user.click(within(panel).getByRole("button", { name: "View source" }));
+			expect(await within(panel).findByRole("alert")).toHaveTextContent("Could not load the page source.");
 		} finally {
 			fetch.mockRestore();
 		}
@@ -292,8 +324,8 @@ describe("render activity", () => {
 			clicked.push(this);
 		});
 		try {
-			const { user, dialog } = await expand();
-			await user.click(within(dialog).getByRole("button", { name: "Save page" }));
+			const { user, panel } = await expand();
+			await user.click(within(panel).getByRole("button", { name: "Save page" }));
 			await waitFor(() => expect(revoked).toHaveBeenCalledWith("blob:render"));
 			// The page as served, bootstrap included; no fragment.
 			expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/proj-1/renders/r1", expect.anything());
@@ -314,8 +346,8 @@ describe("render activity", () => {
 		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 		useUiStore.getState().clearGlobalToast();
 		try {
-			const { user, dialog } = await expand();
-			const save = within(dialog).getByRole("button", { name: "Save page" });
+			const { user, panel } = await expand();
+			const save = within(panel).getByRole("button", { name: "Save page" });
 			await user.click(save);
 			expect(save).toBeDisabled();
 			await act(async () => respond(new Response("{}", { status: 500 })));
@@ -337,8 +369,8 @@ describe("render activity", () => {
 		const fetch = vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise((resolve) => (respond = resolve)));
 		useUiStore.getState().clearGlobalToast();
 		try {
-			const { user, dialog } = await expand();
-			const keep = within(dialog).getByRole("button", { name: "Save as artifact" });
+			const { user, panel } = await expand();
+			const keep = within(panel).getByRole("button", { name: "Save as artifact" });
 			await user.click(keep);
 			expect(keep).toBeDisabled();
 			expect(fetch).toHaveBeenCalledTimes(1);
@@ -365,8 +397,8 @@ describe("render activity", () => {
 		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 		useUiStore.getState().clearGlobalToast();
 		try {
-			const { user, dialog } = await expand();
-			const keep = within(dialog).getByRole("button", { name: "Save as artifact" });
+			const { user, panel } = await expand();
+			const keep = within(panel).getByRole("button", { name: "Save as artifact" });
 			await user.click(keep);
 			await waitFor(() => expect(keep).toBeEnabled());
 			expect(useUiStore.getState().globalToasts).toEqual([
@@ -383,8 +415,8 @@ describe("render activity", () => {
 	it("opens the page in the browser, in fullscreen display mode", async () => {
 		const open = vi.spyOn(window, "open").mockReturnValue(null);
 		try {
-			const { user, dialog } = await expand();
-			await user.click(within(dialog).getByRole("button", { name: "Open in external browser" }));
+			const { user, panel } = await expand();
+			await user.click(within(panel).getByRole("button", { name: "Open in external browser" }));
 			expect(open).toHaveBeenCalledTimes(1);
 			const [url, target, features] = open.mock.calls[0]!;
 			expect(url).toMatch(/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/);
@@ -416,9 +448,11 @@ describe("artifact activity", () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 		return render(
 			<QueryClientProvider client={client}>
-				<ChatImageSourceProvider sessionId="proj-1" artifacts={artifacts}>
-					<ActivityRow activity={artifactActivity} />
-				</ChatImageSourceProvider>
+				<WithPanel>
+					<ChatImageSourceProvider sessionId="proj-1" artifacts={artifacts}>
+						<ActivityRow activity={artifactActivity} />
+					</ChatImageSourceProvider>
+				</WithPanel>
 			</QueryClientProvider>,
 		);
 	}
@@ -426,8 +460,8 @@ describe("artifact activity", () => {
 	async function expandArtifact(artifacts?: SessionArtifact[]) {
 		const user = userEvent.setup();
 		renderArtifact(artifacts);
-		await user.click(screen.getByRole("button", { name: "Expand page" }));
-		return { user, dialog: await screen.findByRole("dialog") };
+		await user.click(screen.getByRole("button", { name: "Open beside the chat" }));
+		return { user, panel: await screen.findByRole("region", { name: "Q3 (final).html" }) };
 	}
 
 	const artifactFrame = () => screen.getByTitle("Q3 (final).html") as HTMLIFrameElement;
@@ -487,23 +521,22 @@ describe("artifact activity", () => {
 		expect(screen.getByText(/Q3 \(final\)\.html/)).toHaveTextContent("Q3 (final).html · Open this session on its host to see the page.");
 	});
 
-	it("heads the dialog with the artifact's name and has no Save as artifact", async () => {
-		const { dialog } = await expandArtifact([sessionArtifact("other.html")]);
-		expect(within(dialog).getByRole("heading", { name: "Q3 (final).html" })).toBeInTheDocument();
-		for (const name of ["View source", "Save page", "Open in external browser", "Close"]) {
-			expect(within(dialog).getByRole("button", { name })).toBeInTheDocument();
+	it("heads the panel with the artifact's name and has no Save as artifact", async () => {
+		const { panel } = await expandArtifact([sessionArtifact("other.html")]);
+		expect(within(panel).getByRole("heading", { name: "Q3 (final).html" })).toBeInTheDocument();
+		for (const name of ["View source", "Save page", "Open in external browser", "Close page"]) {
+			expect(within(panel).getByRole("button", { name })).toBeInTheDocument();
 		}
-		expect(within(dialog).queryByRole("button", { name: "Save as artifact" })).toBeNull();
+		expect(within(panel).queryByRole("button", { name: "Save as artifact" })).toBeNull();
 		// The session lists no preview for this path.
-		expect(within(dialog).queryByRole("button", { name: "Open in Browser panel" })).toBeNull();
+		expect(within(panel).queryByRole("button", { name: "Open in Browser panel" })).toBeNull();
 	});
 
-	it("opens the session's preview of the artifact in the Browser panel and closes the dialog", async () => {
+	it("opens the session's preview of the artifact in the Browser panel", async () => {
 		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
 		try {
-			const { user, dialog } = await expandArtifact([sessionArtifact("q3/Q3 (final).html")]);
-			await user.click(within(dialog).getByRole("button", { name: "Open in Browser panel" }));
-			expect(screen.queryByRole("dialog")).toBeNull();
+			const { user, panel } = await expandArtifact([sessionArtifact("q3/Q3 (final).html")]);
+			await user.click(within(panel).getByRole("button", { name: "Open in Browser panel" }));
 			expect(useUiStore.getState().inspectorSessions["proj-1"]).toMatchObject({ isOpen: true, view: "browser" });
 			await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
 			const request = new Request(...(fetch.mock.calls[0]! as [RequestInfo | URL, RequestInit?]));
@@ -525,11 +558,11 @@ describe("artifact activity", () => {
 			clicked.push(this);
 		});
 		try {
-			const { user, dialog } = await expandArtifact();
-			await user.click(within(dialog).getByRole("button", { name: "View source" }));
-			expect(await within(dialog).findByText("<p>report</p>")).toBeInTheDocument();
+			const { user, panel } = await expandArtifact();
+			await user.click(within(panel).getByRole("button", { name: "View source" }));
+			expect(await within(panel).findByText("<p>report</p>")).toBeInTheDocument();
 			expect(fetch).toHaveBeenCalledWith(`http://127.0.0.1:3001${url}?source=1`, expect.anything());
-			await user.click(within(dialog).getByRole("button", { name: "Save page" }));
+			await user.click(within(panel).getByRole("button", { name: "Save page" }));
 			await waitFor(() => expect(revoked).toHaveBeenCalledWith("blob:artifact"));
 			expect(fetch).toHaveBeenCalledWith(`http://127.0.0.1:3001${url}`, expect.anything());
 			expect(clicked.map((link) => link.download)).toEqual(["Q3 (final).html"]);
