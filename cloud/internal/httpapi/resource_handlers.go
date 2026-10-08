@@ -105,6 +105,8 @@ type sessionResponse struct {
 	ProjectID          string                   `json:"projectId"`
 	Kind               string                   `json:"kind"`
 	Harness            string                   `json:"harness"`
+	ReviewerHarness    string                   `json:"reviewerHarness,omitempty"`
+	AutoReviewEnabled  bool                     `json:"autoReviewEnabled"`
 	DisplayName        string                   `json:"displayName"`
 	Branch             string                   `json:"branch"`
 	Mode               string                   `json:"mode"`
@@ -310,6 +312,12 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		s.writeProjectStoreError(w, r, err)
 		return
 	}
+	s.logger.Info(
+		"project created",
+		"org_id", orgID,
+		"user_id", principalFrom(r).UserID,
+		"project_id", project.ID,
+	)
 	writeJSON(w, http.StatusCreated, map[string]any{"project": toProjectResponse(project)})
 }
 
@@ -586,6 +594,12 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		// project; that is user-fixable, so surface it as a clear 422 rather than a
 		// deployment-misconfiguration 500.
 		if errors.Is(err, sandbox.ErrCoderTemplateRequired) {
+			s.logger.Warn(
+				"session create rejected: coder template required",
+				"org_id", orgID,
+				"user_id", principalFrom(r).UserID,
+				"project_id", request.ProjectID,
+			)
 			writeError(
 				w, r, http.StatusUnprocessableEntity, "coder_template_required",
 				"Choose a Coder template for this project before starting a session.",
@@ -627,6 +641,15 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	s.logger.Info(
+		"session created",
+		"org_id", orgID,
+		"user_id", principalFrom(r).UserID,
+		"project_id", request.ProjectID,
+		"session_id", session.ID,
+		"provider", plan.Provider,
+		"harness", request.Harness,
+	)
 	writeJSON(w, http.StatusCreated, map[string]any{"session": toSessionResponse(session, nil)})
 }
 
@@ -1155,6 +1178,8 @@ func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionRe
 		ProjectID:          session.ProjectID,
 		Kind:               session.Kind,
 		Harness:            session.Harness,
+		ReviewerHarness:    session.ReviewerHarness,
+		AutoReviewEnabled:  session.AutoReviewEnabled,
 		DisplayName:        session.DisplayName,
 		Branch:             session.Branch,
 		Mode:               session.Mode,

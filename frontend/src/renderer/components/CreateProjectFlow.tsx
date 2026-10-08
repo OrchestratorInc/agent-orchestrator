@@ -27,6 +27,7 @@ import type { ImportFolderScan } from "../../preload";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
 import { CoderTemplatePicker } from "./CoderTemplatePicker";
+import { useCoderTemplates } from "../hooks/useCoderTemplates";
 import { SearchablePicker } from "./SearchablePicker";
 import { buildCoderRequestOptions, useCoderSessionOptionsStore } from "../stores/coder-session-options-store";
 import { useCloudGate } from "../hooks/useCloudGate";
@@ -1328,11 +1329,13 @@ function CloudAgentSetupStep({
 	onCreate,
 	isCreating,
 	createError,
+	templateMissing,
 }: {
 	onBack: () => void;
 	onCreate: (selection: { workerAgent: string; orchestratorAgent: string }) => void;
 	isCreating: boolean;
 	createError: string | null;
+	templateMissing: boolean;
 }) {
 	const { t } = useTranslation();
 	const connections = useProviderConnections();
@@ -1352,7 +1355,7 @@ function CloudAgentSetupStep({
 	}, [readyAgentId]);
 
 	const anyAgentReady = cloudAgents.some((agent) => agent.authentication.state === "authorized");
-	const canCreate = !isCreating && workerAgent !== "" && orchestratorAgent !== "";
+	const canCreate = !isCreating && workerAgent !== "" && orchestratorAgent !== "" && !templateMissing;
 
 	return (
 		<div className="flex flex-col gap-5">
@@ -1403,6 +1406,11 @@ function CloudAgentSetupStep({
 					</Button>
 				</div>
 			) : null}
+			{templateMissing ? (
+				<p className="text-[12px] leading-5 text-muted-foreground" role="alert">
+					{t("createProject.coderTemplateRequiredHint", { defaultValue: "Select a Coder template above before creating this project." })}
+				</p>
+			) : null}
 			<div className={onboardingFooterActionsClass}>
 				<Button type="button" variant="outline" onClick={onBack} disabled={isCreating}>
 					{t("createProject.back", { defaultValue: "Back" })}
@@ -1447,6 +1455,17 @@ function CloudProjectCard({
 	const sessionSandboxProvider =
 		resolveSandboxProviderPreference(selectedSandboxProvider, sandboxProviders.available) ?? sandboxProviders.default;
 	const usesCoder = sessionSandboxProvider === "coder";
+	// A coder project must pick a concrete template before it is created. With no
+	// template, session start fails later with a 422 (coder_template_required) —
+	// there is no implicit org-default for a bring-your-own-Coder deployment. So
+	// require a selection whenever coder is active and the org has selectable
+	// templates, and block create until one is chosen.
+	const coderTemplates = useCoderTemplates(org?.id, usesCoder);
+	const coderTemplateId = useCoderSessionOptionsStore((s) => s.templateId);
+	const coderTemplateMissing =
+		usesCoder &&
+		coderTemplates.templates.length > 0 &&
+		coderTemplateId.trim() === "";
 	const resetCoderOptions = useCoderSessionOptionsStore((s) => s.reset);
 	useEffect(() => {
 		resetCoderOptions();
@@ -1647,6 +1666,11 @@ function CloudProjectCard({
 		setIsCreating(true);
 		try {
 			const coder = usesCoder ? buildCoderRequestOptions(useCoderSessionOptionsStore.getState()) : undefined;
+			if (coderTemplateMissing) {
+				setSubmitError(t("createProject.coderTemplateRequired", { defaultValue: "Select a Coder template before creating this project." }));
+				setIsCreating(false);
+				return;
+			}
 			// The App path authorizes by repository id and derives the default
 			// branch server-side. Coder config nests under `config.coder`, which
 			// the control plane reads for the dev-kit template and extra repos.
@@ -1865,6 +1889,7 @@ function CloudProjectCard({
 						onCreate={(selection) => void createProject(selection)}
 						isCreating={isCreating}
 						createError={submitError}
+						templateMissing={coderTemplateMissing}
 					/>
 				) : null}
 

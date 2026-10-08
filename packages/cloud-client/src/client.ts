@@ -25,6 +25,7 @@ import type {
   PaginationOptions,
   Project,
   ProjectPage,
+  ProjectSettingsInput,
   PutAgentProviderConnectionInput,
   RedactedProviderConnection,
   RequestOptions,
@@ -162,6 +163,16 @@ export class CloudClient {
       body: input,
       idempotencyKey: options.idempotencyKey,
       signal: options.signal,
+    });
+  }
+
+  getProject(orgId: string, projectId: string, options: RequestOptions = {}): Promise<{ project: Project }> {
+    return this.request(this.orgPath(orgId, `/projects/${encodeURIComponent(projectId)}`), options);
+  }
+
+  updateProjectSettings(orgId: string, projectId: string, input: ProjectSettingsInput, options: RequestOptions = {}): Promise<{ project: Project }> {
+    return this.request(this.orgPath(orgId, `/projects/${encodeURIComponent(projectId)}/settings`), {
+      method: "PATCH", body: input, signal: options.signal,
     });
   }
 
@@ -453,6 +464,25 @@ export class CloudClient {
       {
         method: "POST",
         body: typeof message === "string" ? { text: message } : message,
+        idempotencyKey: options.idempotencyKey,
+        signal: options.signal,
+      },
+    );
+  }
+
+  sendSessionReviewToWorker(
+    orgId: string,
+    sessionId: string,
+    reviewRunId: string,
+    options: IdempotentRequestOptions,
+  ): Promise<{ event: UserMessageEvent }> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/reviews/${encodeURIComponent(reviewRunId)}/send`,
+      ),
+      {
+        method: "POST",
         idempotencyKey: options.idempotencyKey,
         signal: options.signal,
       },
@@ -968,6 +998,12 @@ export class WorkerClient {
     return this.request("/api/cloud/v1/worker/credential", {
       cache: "no-store",
       signal: options.signal,
+    });
+  }
+
+  getReviewerCredential(reviewRunId: string, options: RequestOptions = {}): Promise<WorkerCredentialResponse> {
+    return this.request(`/api/cloud/v1/worker/credential?reviewRunId=${encodeURIComponent(reviewRunId)}`, {
+      cache: "no-store", signal: options.signal,
     });
   }
 

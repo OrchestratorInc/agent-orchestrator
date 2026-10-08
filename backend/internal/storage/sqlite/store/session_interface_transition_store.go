@@ -315,7 +315,7 @@ func (s *Store) commitSessionControllerEpoch(
 		// Chat reservation and event namespace in the same transaction, so a
 		// later return can bind that identity without inventing inherited history.
 		released, err := q.ReleaseUntouchedConversationProvider(ctx, gen.ReleaseUntouchedConversationProviderParams{
-			SessionID:       sql.NullString{String: string(id), Valid: true},
+			SessionID:       &id,
 			ProviderScopeID: uuid.NewString(),
 		})
 		if err != nil {
@@ -329,6 +329,44 @@ func (s *Store) commitSessionControllerEpoch(
 		return false, fmt.Errorf("commit controller epoch transaction for %s: %w", id, err)
 	}
 	return true, nil
+}
+
+// ReplaceUnpersistedChatProvider moves a Chat whose provider never persisted
+// its reserved conversation onto the fresh conversation the provider started
+// instead. The session and its untouched root branch move together; recorded
+// history or a different current owner fails the swap and changes nothing.
+func (s *Store) ReplaceUnpersistedChatProvider(
+	ctx context.Context,
+	id domain.SessionID,
+	expectedProviderConversationID, providerConversationID string,
+) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "replace unpersisted Chat provider for "+string(id), func(q *gen.Queries) error {
+		moved, err := q.ReplaceUnpersistedChatProvider(ctx, gen.ReplaceUnpersistedChatProviderParams{
+			ProviderConversationID:         providerConversationID,
+			ID:                             id,
+			ExpectedProviderConversationID: expectedProviderConversationID,
+		})
+		if err != nil {
+			return fmt.Errorf("move session provider: %w", err)
+		}
+		if moved != 1 {
+			return errors.New("controller owner changed")
+		}
+		rebound, err := q.ReplaceUntouchedConversationProvider(ctx, gen.ReplaceUntouchedConversationProviderParams{
+			ProviderConversationID:         providerConversationID,
+			SessionID:                      &id,
+			ExpectedProviderConversationID: expectedProviderConversationID,
+		})
+		if err != nil {
+			return fmt.Errorf("rebind root branch: %w", err)
+		}
+		if rebound != 1 {
+			return errors.New("empty root proof changed")
+		}
+		return nil
+	})
 }
 
 // EnqueueSessionInterfaceTransitionMessage queues a user message while an interface transition is active.

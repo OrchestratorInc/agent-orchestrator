@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="assets/ao-logo.svg" alt="Orchestrator.inc logo" width="144" height="144" />
 
 ### Orchestrator.inc
 

@@ -40,7 +40,7 @@ func (s *Service) queueWithoutController(
 			return domain.ConversationTurn{}, err
 		}
 	}
-	if !record.ProvisionState.IsProvisioning() {
+	if !record.ProvisionState.IsProvisioning() && record.HibernatedAt == nil {
 		return domain.ConversationTurn{}, ErrNotProvisioning
 	}
 	conversation, err := s.ensureConversation(ctx, record)
@@ -86,7 +86,7 @@ func (s *Service) queueWithoutController(
 	// The controller may have appeared after Send read the provisioning row, or
 	// after a prior drain found the queue empty. Kicking the same serialized drain
 	// here closes both races; NextQueuedTurn still owns ordering.
-	if controller, controllerErr := s.Controller(record.ID); controllerErr == nil {
+	if controller, controllerErr := s.Controller(record.ID); controllerErr == nil && controller.State() != ports.ChatControllerStopped {
 		_ = controller.drain(ctx) // The message is already accepted; drain logs failures.
 	}
 	return turn, nil

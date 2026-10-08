@@ -151,6 +151,13 @@ export interface CloudCpListQuery {
 // Projects (`resource_handlers.go`)
 // ---------------------------------------------------------------------------
 
+import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer } from "../../../../../packages/cloud-client/src/types";
+
+export type CloudCpProjectAgentConfig = ProjectAgentConfig;
+export type CloudCpProjectRoleConfig = ProjectRoleConfig;
+export type CloudCpProjectReviewer = ProjectReviewer;
+export type CloudCpProjectSettingsRequest = ProjectSettingsInput;
+
 export interface CloudCpProject {
 	id: string;
 	orgId: string;
@@ -158,7 +165,7 @@ export interface CloudCpProject {
 	repositoryUrl: string;
 	defaultBranch: string;
 	githubRepositoryId?: string;
-	config: Record<string, unknown>;
+	config: ProjectConfig;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -336,6 +343,8 @@ export interface CloudCpSession {
 	projectId: string;
 	kind: string;
 	harness: string;
+	reviewerHarness?: string;
+	autoReviewEnabled?: boolean;
 	displayName: string;
 	branch: string;
 	mode: string;
@@ -425,6 +434,14 @@ export interface CloudCpAcknowledgeInterfaceTransitionNoticeResponse {
 
 export interface CloudCpSessionResponse {
 	session: CloudCpSession;
+}
+
+export interface CloudCpUpdateSessionPreferencesRequest {
+	reviewerHarness?: string;
+	autoReviewEnabled?: boolean;
+	autoInjectCI?: boolean;
+	autoInjectReview?: boolean;
+	terminateOnPrMerge?: boolean;
 }
 
 export interface CloudCpSessionListResponse {
@@ -648,7 +665,10 @@ export interface CloudCpSessionChildrenResponse {
 	page: CloudCpPageInfo;
 }
 
-/** Detailed PR data used by the shared local/cloud inspector UI. */
+// ---------------------------------------------------------------------------
+// Pull requests and AO reviews (`pull_request_handlers.go`)
+// ---------------------------------------------------------------------------
+
 export interface CloudCpPullRequestSummary {
 	url: string;
 	htmlUrl?: string;
@@ -720,6 +740,58 @@ export interface CloudCpSessionPullRequestsResponse {
 	pullRequests: CloudCpPullRequestSummary[];
 }
 
+export type CloudCpAOReviewRunStatus = "running" | "complete" | "delivered" | "failed" | "cancelled";
+export type CloudCpAOReviewVerdict = "" | "approved" | "changes_requested";
+export type CloudCpAOReviewState = "needs_review" | "running" | "up_to_date" | "changes_requested" | "ineligible";
+
+export interface CloudCpAOReviewRun {
+	id: string;
+	reviewId: string;
+	sessionId: string;
+	batchId: string;
+	harness: string;
+	triggerSource: "manual" | "auto";
+	pullRequestUrl: string;
+	targetSha: string;
+	status: CloudCpAOReviewRunStatus;
+	verdict: CloudCpAOReviewVerdict;
+	body: string;
+	providerReviewId: string;
+	reviewerTerminalId?: string;
+	createdAt: string;
+	deliveredAt?: string;
+	autoInjectReview: boolean;
+}
+
+export interface CloudCpPRReviewState {
+	pullRequestUrl: string;
+	pullRequestNumber: number;
+	title: string;
+	targetSha: string;
+	status: CloudCpAOReviewState;
+	latestRun?: CloudCpAOReviewRun;
+	previousRun?: CloudCpAOReviewRun;
+}
+
+export interface CloudCpSessionReviewState {
+	sessionId: string;
+	reviewerHandleId?: string;
+	reviewerHarness?: string;
+	availableReviewerHarnesses: string[];
+	reviews: CloudCpPRReviewState[];
+	runs: CloudCpAOReviewRun[];
+}
+
+export interface CloudCpHarnessStatus {
+	harness: "claude-code" | "codex" | "cursor";
+	status: "missing" | "ready" | "failed";
+	version?: string;
+	error?: string;
+}
+
+export interface CloudCpHarnessInspectResponse {
+	harnesses: CloudCpHarnessStatus[];
+}
 export interface CloudCpListSessionsQuery extends CloudCpListQuery {
 	/** Restrict the listing to one project. */
 	projectId?: string;
@@ -830,6 +902,8 @@ export type CloudCpTerminalKind = "workspace" | "agent";
 /** POST /orgs/{orgId}/sessions/{sessionId}/terminal-ticket */
 export interface CloudCpTerminalTicketRequest {
 	kind: CloudCpTerminalKind;
+	/** Optional exact terminal surface, used for a dedicated reviewer terminal. */
+	terminalId?: string;
 }
 
 export interface CloudCpTerminalTicketResponse {

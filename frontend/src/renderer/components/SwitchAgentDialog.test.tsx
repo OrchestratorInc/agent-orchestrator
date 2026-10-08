@@ -4,7 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { agentModelsQueryKey } from "../hooks/useAgentModelsQuery";
 import { apiClient } from "../lib/api-client";
-import type { AgentSwitchSummary, WorkspaceSession } from "../types/workspace";
+import {
+	STANDALONE_WORKSPACE_ID,
+	type AgentSwitchSummary,
+	type WorkspaceSession,
+} from "../types/workspace";
 import { SwitchAgentDialog } from "./SwitchAgentDialog";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -49,6 +53,16 @@ const worker: WorkspaceSession = {
 	workspaceName: "my-app",
 };
 
+const standaloneWorker: WorkspaceSession = {
+	...worker,
+	branch: undefined,
+	id: "standalone-1",
+	terminalHandleId: "standalone-terminal",
+	title: "research something",
+	workspaceId: STANDALONE_WORKSPACE_ID,
+	workspaceName: "Scratchpad",
+};
+
 function renderDialog(
 	session: WorkspaceSession = worker,
 	onOpenChange = vi.fn(),
@@ -58,9 +72,17 @@ function renderDialog(
 	const queryClient = new QueryClient({
 		defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
 	});
-	if (projectConfig !== null) queryClient.setQueryData(session.hostId ? ["project", session.hostId, session.workspaceId] : ["project", session.workspaceId], projectConfig);
+	if (projectConfig !== null) {
+		queryClient.setQueryData(
+			session.hostId
+				? ["project", session.hostId, session.workspaceId]
+				: ["project", session.workspaceId],
+			projectConfig,
+		);
+	}
+	const catalogProjectId = session.workspaceId === STANDALONE_WORKSPACE_ID ? "" : session.workspaceId;
 	for (const agentId of ["claude-code", "codex", "fx"]) {
-		queryClient.setQueryData(agentModelsQueryKey(agentId, session.workspaceId, session.hostId), {
+		queryClient.setQueryData(agentModelsQueryKey(agentId, catalogProjectId, session.hostId), {
 			agentId,
 			allowCustom: false,
 			fetchedAt: "2026-06-10T00:00:00Z",
@@ -263,6 +285,48 @@ describe("SwitchAgentDialog", () => {
 			expect.objectContaining({ model: "", targetHarness: "codex" }),
 			expect.any(Object),
 		);
+	});
+
+	it("switches standalone sessions without loading the standalone sentinel as a project", async () => {
+		const getSpy = vi.spyOn(apiClient, "GET").mockRejectedValue(new Error("unexpected project lookup"));
+		renderDialog(standaloneWorker, vi.fn(), undefined, null);
+		const dialog = screen.getByRole("dialog", { name: "Switch agent" });
+
+		expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+		expect(within(dialog).getByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.4");
+		expect(getSpy).not.toHaveBeenCalled();
+
+		await userEvent.click(within(dialog).getByRole("button", { name: "Switch" }));
+
+		expect(getSpy).not.toHaveBeenCalled();
+		expect(switchMocks.mutate).toHaveBeenCalledWith(
+			{
+				idempotencyKey: "idempotency-1",
+				model: "",
+				session: standaloneWorker,
+				targetHarness: "codex",
+			},
+			{ onSuccess: expect.any(Function) },
+		);
+	});
+
+	it("ignores a cached standalone project error", async () => {
+		const { queryClient } = renderDialog(standaloneWorker, vi.fn(), undefined, null);
+		const projectQuery = queryClient.getQueryCache().build(queryClient, {
+			queryKey: ["project", STANDALONE_WORKSPACE_ID],
+			queryFn: async () => ({}),
+		});
+		projectQuery.setState({
+			...projectQuery.state,
+			data: undefined,
+			error: new Error("Project id failed storage-path validation"),
+			status: "error",
+		});
+
+		await waitFor(() =>
+			expect(screen.getByRole("dialog")).not.toHaveTextContent("Project id failed storage-path validation"),
+		);
+		expect(screen.getByRole("dialog").querySelector('[role="alert"]')).not.toBeInTheDocument();
 	});
 
 	it("shows the project model and inherits it when switching without a model change", async () => {

@@ -20,10 +20,12 @@ const navigateMock = vi.hoisted(() => vi.fn());
 const openShellTerminalMock = vi.hoisted(() => vi.fn());
 const adoptedShellHandles = vi.hoisted(() => new Map<string, string>());
 const closeShellTerminalMock = vi.hoisted(() => vi.fn());
+const cloudReviewGetMock = vi.hoisted(() => vi.fn());
 const cloudCpClientMock = vi.hoisted(() => ({
 	resumeSession: vi.fn(async () => ({ session: {} })),
 	listChatEvents: vi.fn(),
 	getSession: vi.fn(),
+	getSessionReviewState: cloudReviewGetMock,
 }));
 const cloudResumeMock = cloudCpClientMock.resumeSession;
 const cloudGetSessionMock = cloudCpClientMock.getSession;
@@ -54,6 +56,7 @@ const settingsState = vi.hoisted(() => ({
 	chatHarnesses: undefined as string[] | undefined,
 }));
 const reviewGetMock = vi.hoisted(() => vi.fn());
+const chatViewPostMock = vi.hoisted(() => vi.fn());
 const inspectorVisibilityRenders = vi.hoisted(() => [] as boolean[]);
 const chatSurfaceRenders = vi.hoisted(() => [] as string[]);
 const artifactFeedbackConsumes = vi.hoisted(() => [] as number[]);
@@ -120,6 +123,32 @@ vi.mock("../lib/cloud-cp/stream-bridge", () => ({
 }));
 vi.mock("../hooks/useSessionInterfaceTransition", async (importOriginal) => ({
 	...await importOriginal<typeof import("../hooks/useSessionInterfaceTransition")>(),
+	interfaceTransitionIsActive: (transition?: { phase?: string }) =>
+		Boolean(
+			transition &&
+				[
+					"requested",
+					"preflighting",
+					"draining",
+					"source_stopping",
+					"source_stopped",
+					"target_starting",
+					"activating",
+				].includes(transition.phase ?? ""),
+		),
+	interfaceTransitionIsCancellable: (transition?: { phase?: string }) =>
+		Boolean(
+			transition && ["requested", "preflighting", "draining"].includes(transition.phase ?? ""),
+		),
+	interfaceTransitionHasUnacknowledgedNotice: (transition?: {
+		phase?: string;
+		noticeAcknowledgedAt?: string;
+	}) =>
+		Boolean(
+			transition &&
+				!transition.noticeAcknowledgedAt &&
+				(transition.phase === "failed" || transition.phase === "recovery_required"),
+		),
 	useSessionInterfaceTransitionStatus: () => ({
 		transition: interfaceTransitionState.status?.transition,
 		isLoading: false,
@@ -149,7 +178,10 @@ vi.mock("../hooks/useSessionInterfaceTransition", async (importOriginal) => ({
 vi.mock("../lib/api-client", () => ({
 	apiClient: {
 		GET: reviewGetMock,
-		POST: resumeAgentPostMock,
+		POST: vi.fn((path: string, ...args: unknown[]) =>
+			path.endsWith("/resume-agent")
+				? resumeAgentPostMock(path, ...args)
+				: chatViewPostMock(path, ...args)),
 	},
 	apiErrorCode: (error: { code?: string }) => error.code,
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
@@ -197,6 +229,7 @@ const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() =
 		isLoading: false,
 	};
 	const shellTerminalsState: {
+		loaded: boolean;
 		data: Array<{
 			handleId: string;
 			projectId?: string;
@@ -206,6 +239,7 @@ const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() =
 			createdAt: string;
 		}>;
 	} = {
+		loaded: true,
 		data: [],
 	};
 	return { workspaces, workspaceQueryState, shellTerminalsState };
@@ -386,10 +420,13 @@ vi.mock("./chat/SessionChatSurface", async () => {
 
 vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => ({
 	...await importOriginal<typeof import("./chat/CloudSessionChatSurface")>(),
-	CloudSessionChatSurface: ({ sessionTabAction, controllerTransitioning, newWorkDisabled, onConversationWorkChange }: { sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean; onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void }) => (
+	CloudSessionChatSurface: ({ sessionTabAction, controllerTransitioning, newWorkDisabled, onConversationWorkChange, reviewerTerminal, reviewerTarget, onOpenReviewerTerminal, onSelectChat }: { sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean; onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void; reviewerTerminal?: { handleId: string; harness: string }; reviewerTarget?: { handleId: string; harness: string }; onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void; onSelectChat?: () => void }) => (
 		<div data-testid="cloud-chat-surface" data-transitioning={controllerTransitioning ? "true" : "false"} data-new-work-disabled={newWorkDisabled ? "true" : "false"}>
 			{sessionTabAction}
 			<button type="button" onClick={() => onConversationWorkChange?.({ ...chatSurfaceWorkState })}>report cloud chat work</button>
+			<button type="button" onClick={() => onSelectChat?.()}>cloud chat tab</button>
+			{reviewerTerminal ? <button type="button" onClick={() => onOpenReviewerTerminal?.(reviewerTerminal)}>cloud reviewer tab</button> : null}
+			<span data-testid="cloud-chat-target">{reviewerTarget ? `reviewer:${reviewerTarget.handleId}:${reviewerTarget.harness}` : "chat"}</span>
 		</div>
 	),
 }));
@@ -580,9 +617,9 @@ vi.mock("./SessionFileWorkspace", () => ({
 	SessionFileWorkspace: ({ annotation, initialEditing, initialLine, initialMode, initialRequestKey, onInitialLineConsumed, path, scope, split }: {
 		annotation: {
 			begin: (target: { path: string; scope: string; side: string; surface: string }) => void;
-			draft: string;
-			setDraft: (draft: string) => void;
-			target: { path: string } | null;
+			draftFor: (target: { path: string }) => string;
+			setDraft: (target: { path: string }, draft: string) => void;
+			targets: Array<{ path: string }>;
 		};
 		initialEditing?: boolean;
 		initialLine?: number;
@@ -598,7 +635,7 @@ vi.mock("./SessionFileWorkspace", () => ({
 				{path}
 				{initialLine != null ? <button onClick={() => onInitialLineConsumed?.(path, initialRequestKey ?? 0)} type="button">consume initial line</button> : null}
 				<button onClick={() => annotation.begin({ path, scope: scope ?? "combined", side: "file", surface: "focused" })} type="button">header feedback</button>
-				{annotation.target ? <input aria-label="feedback draft" onChange={(event) => annotation.setDraft(event.target.value)} value={annotation.draft} /> : null}
+				{annotation.targets.map((target) => <input aria-label="feedback draft" key={target.path} onChange={(event) => annotation.setDraft(target, event.target.value)} value={annotation.draftFor(target)} />)}
 			</div>
 		);
 	},
@@ -724,6 +761,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 		return cloudSessionQueryState;
 	},
 	cloudSessionsQueryKey: ["cloud-sessions"],
+	workspaceQueryKey: ["workspaces"],
 	useWorkspaceQuery: () => ({
 		data: workspaceQueryState.data,
 		isLoading: workspaceQueryState.isLoading,
@@ -742,7 +780,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 // real hooks would need a QueryClientProvider this suite deliberately omits.
 vi.mock("../hooks/useShellTerminals", () => ({
 	adoptedShellHandle: (handleId: string) => adoptedShellHandles.get(handleId),
-	useShellTerminals: () => ({ data: shellTerminalsState.data, isLoading: false }),
+	useShellTerminals: () => ({ data: shellTerminalsState.loaded ? shellTerminalsState.data : undefined, isLoading: !shellTerminalsState.loaded }),
 	useOpenShellTerminal: () => ({ open: openShellTerminalMock, isPending: false }),
 	useCloseShellTerminal: () => ({ mutate: closeShellTerminalMock }),
 	useRenameShellTerminal: () => ({ mutate: vi.fn() }),
@@ -907,6 +945,7 @@ describe("SessionView", () => {
 		browserViewState.url = "";
 		browserViewState.agentBrowserActive = false;
 		shellTerminalsState.data = [];
+		shellTerminalsState.loaded = true;
 		navigateMock.mockReset();
 		openShellTerminalMock.mockReset();
 		adoptedShellHandles.clear();
@@ -922,6 +961,8 @@ describe("SessionView", () => {
 		closeShellTerminalMock.mockReset();
 		cloudResumeMock.mockReset();
 		cloudResumeMock.mockResolvedValue({ session: {} });
+		cloudReviewGetMock.mockReset();
+		cloudReviewGetMock.mockResolvedValue({ sessionId: "sess-2", reviews: [], runs: [] });
 		cloudGetSessionMock.mockReset();
 		subscribeSessionEventsMock.mockClear();
 		listSessionEventsMock.mockReset();
@@ -952,6 +993,7 @@ describe("SessionView", () => {
 		reviewGetMock.mockReset();
 		resumeAgentPostMock.mockReset();
 		resumeAgentPostMock.mockResolvedValue({ data: {}, error: undefined });
+		chatViewPostMock.mockReset().mockResolvedValue({ error: undefined });
 		reviewGetMock.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/sessions/{sessionId}/workspace/manifest") {
 				return {
@@ -1200,6 +1242,113 @@ describe("SessionView", () => {
 		expect(screen.queryByTestId("terminal-target")).not.toBeInTheDocument();
 	});
 
+	it("keeps only the selected primary Chat tab awake", async () => {
+		workerSession("sess-1").mode = "chat";
+		shellTerminalsState.data = [{
+			handleId: "chat-shell",
+			sessionId: "sess-1",
+			title: "chat shell",
+			workingDir: "/p",
+			createdAt: "2026-08-04T00:00:00Z",
+		}];
+		const view = render(<SessionView sessionId="sess-1" />);
+		await waitFor(() => expect(chatViewPostMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/chat-view",
+			expect.objectContaining({
+				params: { path: { sessionId: "sess-1" } },
+				body: { viewId: expect.any(String), active: true },
+			}),
+		));
+		const viewId = chatViewPostMock.mock.calls[0][1].body.viewId;
+
+		act(() => useUiStore.getState().setActiveShellTerminal("chat-shell"));
+		await waitFor(() => expect(chatViewPostMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/chat-view",
+			{ params: { path: { sessionId: "sess-1" } }, body: { viewId, active: false } },
+		));
+		fireEvent.click(screen.getByRole("button", { name: "select chat tab" }));
+		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => input.body.active)).toHaveLength(2));
+		view.unmount();
+		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => !input.body.active)).toHaveLength(2));
+	});
+
+	it("releases Chat without waiting for a pending wake and cleans up its late response", async () => {
+		workerSession("sess-1").mode = "chat";
+		let finishWake!: (result: { error: undefined }) => void;
+		chatViewPostMock.mockImplementationOnce(() => new Promise((resolve) => { finishWake = resolve; }));
+		const view = render(<SessionView sessionId="sess-1" />);
+		await waitFor(() => expect(chatViewPostMock).toHaveBeenCalledTimes(1));
+		const viewId = chatViewPostMock.mock.calls[0][1].body.viewId;
+		view.unmount();
+		await waitFor(() => expect(chatViewPostMock).toHaveBeenLastCalledWith(
+			"/api/v1/sessions/{sessionId}/chat-view",
+			{ params: { path: { sessionId: "sess-1" } }, body: { viewId, active: false } },
+		));
+		await act(async () => { finishWake({ error: undefined }); });
+		expect(chatViewPostMock.mock.calls.filter(([, input]) => !input.body.active)).toHaveLength(2);
+	});
+
+	it("retries a failed automatic wake only after reopening Chat", async () => {
+		workerSession("sess-1").mode = "chat";
+		chatViewPostMock.mockReset()
+			.mockResolvedValueOnce({ error: { code: "CHAT_RESUME_FAILED" } })
+			.mockResolvedValue({ error: undefined });
+		const view = render(<SessionView sessionId="sess-1" />);
+		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => input.body.active)).toHaveLength(1));
+
+		view.rerender(<SessionView sessionId="sess-2" />);
+		await waitFor(() => expect(chatViewPostMock.mock.calls.some(([, input]) => input.body.active === false)).toBe(true));
+		view.rerender(<SessionView sessionId="sess-1" />);
+		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => input.body.active)).toHaveLength(2));
+	});
+
+	it("does not wake Chat while restoring its selected shell tab", async () => {
+		workerSession("sess-1").mode = "chat";
+		shellTerminalsState.data = [{
+			handleId: "chat-shell",
+			sessionId: "sess-1",
+			title: "chat shell",
+			workingDir: "/p",
+			createdAt: "2026-08-04T00:00:00Z",
+		}];
+		useUiStore.setState({ activeShellTerminalHandleId: "chat-shell" });
+		shellTerminalsState.loaded = false;
+
+		const view = render(<SessionView sessionId="sess-1" />);
+		expect(chatViewPostMock).not.toHaveBeenCalled();
+		shellTerminalsState.loaded = true;
+		view.rerender(<SessionView sessionId="sess-1" />);
+		await waitFor(() => expect(screen.getByTestId("terminal-target")).toHaveTextContent("shell"));
+		expect(chatViewPostMock).not.toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/chat-view",
+			expect.objectContaining({ body: expect.objectContaining({ active: true }) }),
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "select chat tab" }));
+		await waitFor(() => expect(chatViewPostMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/chat-view",
+			expect.objectContaining({ body: expect.objectContaining({ active: true }) }),
+		));
+	});
+
+	it("keeps Chat awake when the selected shell belongs to another session", async () => {
+		workerSession("sess-1").mode = "chat";
+		shellTerminalsState.data = [{
+			handleId: "other-shell",
+			sessionId: "sess-2",
+			title: "other shell",
+			workingDir: "/p",
+			createdAt: "2026-08-04T00:00:00Z",
+		}];
+		useUiStore.setState({ activeShellTerminalHandleId: "other-shell" });
+
+		render(<SessionView sessionId="sess-1" />);
+		await waitFor(() => expect(chatViewPostMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/chat-view",
+			expect.objectContaining({ body: expect.objectContaining({ active: true }) }),
+		));
+	});
+
 	it("remounts the session-owned Chat surface when navigation selects another Chat session", () => {
 		workerSession("sess-1").mode = "chat";
 		workerSession("sess-2").mode = "chat";
@@ -1242,6 +1391,78 @@ describe("SessionView", () => {
 		expect(openShellTerminalMock).toHaveBeenCalledWith(
 			{ projectId: "proj-1", sessionId: "sess-2", cloud: { orgId: "cloud-org" } },
 		);
+	});
+
+	it("opens a newly running Cloud reviewer terminal in the session view", async () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.cloud = { orgId: "cloud-org" };
+		cloudReviewGetMock.mockResolvedValue({
+			sessionId: "sess-2",
+			reviewerHandleId: "cloud-reviewer-7",
+			reviewerHarness: "codex",
+			reviews: [{ status: "running" }],
+			runs: [],
+		});
+
+		render(<SessionView sessionId="sess-2" />);
+
+		// The reviewer opens as a tab inside the Cloud chat, not the local chat surface.
+		await waitFor(() => expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("reviewer:cloud-reviewer-7:codex"));
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+		// Chat stays reachable while the review runs, and the Reviewer tab reopens it.
+		fireEvent.click(screen.getByRole("button", { name: "cloud chat tab" }));
+		await waitFor(() => expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("chat"));
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+		expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("chat");
+		fireEvent.click(screen.getByRole("button", { name: "cloud reviewer tab" }));
+		await waitFor(() => expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("reviewer:cloud-reviewer-7:codex"));
+	});
+
+	it("adds an automatic Cloud review as a tab without taking over the chat", async () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.cloud = { orgId: "cloud-org" };
+		cloudReviewGetMock.mockResolvedValue({
+			sessionId: "sess-2",
+			reviewerHandleId: "cloud-reviewer-8",
+			reviewerHarness: "codex",
+			reviews: [{ status: "running" }],
+			runs: [{ id: "run-8", reviewerTerminalId: "cloud-reviewer-8", status: "running", triggerSource: "auto" }],
+		});
+
+		render(<SessionView sessionId="sess-2" />);
+
+		expect(await screen.findByRole("button", { name: "cloud reviewer tab" })).toBeInTheDocument();
+		expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("chat");
+	});
+
+	it("keeps a delivered Cloud reviewer terminal selected long enough to show its completion", async () => {
+		const session = workerSession("sess-2");
+		session.cloud = { orgId: "cloud-org" };
+		cloudReviewGetMock.mockResolvedValue({
+			sessionId: "sess-2",
+			reviewerHandleId: "cloud-reviewer-7",
+			reviewerHarness: "codex",
+			reviews: [{ status: "running" }],
+			runs: [{ id: "run-7", reviewerTerminalId: "cloud-reviewer-7", status: "running" }],
+		});
+
+		const view = render(<SessionView sessionId="sess-2" />);
+		await waitFor(() => expect(screen.getByTestId("terminal-target")).toHaveTextContent("reviewer"));
+
+		act(() => {
+			view.client.setQueryData(["cloud-session-reviews", "https://cloud.example.test", "cloud-org", "sess-2"], {
+				sessionId: "sess-2",
+				reviewerHandleId: "",
+				reviewerHarness: "codex",
+				reviews: [{ status: "up_to_date" }],
+				runs: [{ id: "run-7", reviewerTerminalId: "cloud-reviewer-7", status: "delivered" }],
+			});
+		});
+
+		await waitFor(() => expect(screen.getByTestId("terminal-target")).toHaveTextContent("reviewer"));
+		expect(screen.getByTestId("reviewer-harness")).toHaveTextContent("codex");
 	});
 
 	it("resumes a cloud session only after its detail view is opened", async () => {
@@ -3517,10 +3738,10 @@ describe("SessionView", () => {
 
 			render(<SessionView sessionId="sess-1" />);
 
-			expect(screen.getAllByRole("alert")).toHaveLength(1);
-			const alert = screen.getByRole("alert");
-			expect(alert).toHaveTextContent("Interface switch needs attention");
-			expect(alert).toHaveTextContent(errorDetail);
+			const alert = screen.getByRole("status", { name: /^Interface switch needs attention/ });
+			expect(alert).toHaveAttribute("aria-label", expect.stringContaining("Interface switch needs attention"));
+			expect(alert).toHaveAttribute("aria-label", expect.stringContaining(errorDetail));
+			expect(alert).toHaveAttribute("aria-live", "polite");
 			expect(within(alert).queryByRole("button")).not.toBeInTheDocument();
 			expect(screen.getByTestId("terminal-center")).toHaveAttribute("data-agent-input-disabled", "true");
 			expect(screen.getByRole("status", { name: /^Interface switch needs attention/ }).querySelector(".animate-spin")).toBeNull();

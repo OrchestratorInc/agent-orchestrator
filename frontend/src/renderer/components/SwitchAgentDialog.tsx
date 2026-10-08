@@ -25,7 +25,11 @@ import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { isConcreteModelID } from "../lib/agent-model-choices";
 import { AGENT_LABELS, AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
-import type { AgentSwitchSummary, WorkspaceSession } from "../types/workspace";
+import {
+	STANDALONE_WORKSPACE_ID,
+	type AgentSwitchSummary,
+	type WorkspaceSession,
+} from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { AgentModelPicker } from "./AgentModelPicker";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
@@ -213,9 +217,11 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 	const [mode, setMode] = useState("");
 	const [modelTouched, setModelTouched] = useState(false);
 	const hostId = session.hostId;
+	const isStandalone = session.workspaceId === STANDALONE_WORKSPACE_ID;
+	const catalogProjectId = isStandalone ? "" : session.workspaceId;
 	const projectQuery = useQuery({
 		queryKey: hostId ? ["project", hostId, session.workspaceId] : ["project", session.workspaceId],
-		enabled: open,
+		enabled: open && !isStandalone,
 		staleTime: 30_000,
 		queryFn: async () => {
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/projects/{id}", {
@@ -226,11 +232,16 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 			return data.project as components["schemas"]["Project"];
 		},
 	});
-	const modelCatalog = useQuery(agentModelsQueryOptions(targetHarness, session.workspaceId, hostId)).data;
-	const projectKnown = Boolean(projectQuery.data);
-	const role = session.kind === "orchestrator" ? projectQuery.data?.config?.orchestrator : projectQuery.data?.config?.worker;
+	const modelCatalog = useQuery(agentModelsQueryOptions(targetHarness, catalogProjectId, hostId)).data;
+	// Standalone sessions have no project configuration. Ignore any project query
+	// state that may have been prefetched under the standalone sentinel so it
+	// cannot surface a validation error or affect the picker defaults.
+	const project = isStandalone ? undefined : projectQuery.data;
+	const projectError = isStandalone ? undefined : projectQuery.error;
+	const projectKnown = Boolean(project);
+	const role = session.kind === "orchestrator" ? project?.config?.orchestrator : project?.config?.worker;
 	const roleMatches = !role?.agent || role.agent === targetHarness;
-	const projectModel = projectKnown ? (roleMatches ? role?.agentConfig?.model : "") || projectQuery.data?.config?.agentConfig?.model || "" : "";
+	const projectModel = projectKnown ? (roleMatches ? role?.agentConfig?.model : "") || project?.config?.agentConfig?.model || "" : "";
 	// Agent switching passes Model to ChatStart; it does not pass the project's Mode.
 	const inheritedChoice = isConcreteModelID(projectModel) ? projectModel : "";
 	const catalogDefault = modelCatalog?.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id || "";
@@ -425,19 +436,19 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 						</div>
 					) : (
 						<form className="flex flex-col gap-3 px-4 pb-4 pt-4" onSubmit={submit}>
-						{error || projectQuery.error || modelWarning ? (
+						{error || projectError || modelWarning ? (
 							<div>
 								{error ? (
 									<p className="text-caption leading-4 text-error" role="alert">
 										{error}
 									</p>
 								) : null}
-								{!error && projectQuery.error ? (
+								{!error && projectError ? (
 									<p className="text-caption leading-4 text-error" role="alert">
-										{projectQuery.error instanceof Error ? projectQuery.error.message : t("newTask.configUnavailable")}
+										{projectError instanceof Error ? projectError.message : t("newTask.configUnavailable")}
 									</p>
 								) : null}
-								{!error && !projectQuery.error && modelWarning ? (
+								{!error && !projectError && modelWarning ? (
 									<p className="text-caption text-warning">{modelWarning}</p>
 								) : null}
 							</div>
@@ -473,7 +484,7 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 											setModelTouched(true);
 										}}
 										onWarningChange={setModelWarning}
-										projectId={session.workspaceId}
+										projectId={catalogProjectId}
 										hostId={hostId}
 										value={modelCatalog?.selectionMode === "mode" ? "" : visibleChoice}
 									/>

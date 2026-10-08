@@ -1083,6 +1083,11 @@ func (c *SessionsController) getWorkspaceFileBlob(w http.ResponseWriter, r *http
 	_, _ = w.Write(blob.Data)
 }
 
+// branchStateReconciler refreshes a session's persisted branch facts.
+type branchStateReconciler interface {
+	ReconcileSessionBranchState(ctx context.Context, id domain.SessionID) error
+}
+
 func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/events")
@@ -1144,18 +1149,22 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 				return
 			}
 			flusher.Flush()
-			manifest, refreshErr := c.Svc.RefreshWorkspaceManifest(r.Context(), sessionID(r))
-			if refreshErr != nil {
-				continue
+			if manifest, refreshErr := c.Svc.RefreshWorkspaceManifest(r.Context(), sessionID(r)); refreshErr == nil {
+				payload.Kind = "version"
+				payload.WorkspaceVersion = manifest.WorkspaceVersion
+				payload.Refreshing = false
+				data, _ = json.Marshal(payload)
+				if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
+					return
+				}
+				flusher.Flush()
 			}
-			payload.Kind = "version"
-			payload.WorkspaceVersion = manifest.WorkspaceVersion
-			payload.Refreshing = false
-			data, _ = json.Marshal(payload)
-			if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
-				return
+			// The same watch sees commits and pushes. Branch facts refresh after
+			// the file list so a commit never delays it, and their change
+			// streams to every client as session_updated.
+			if reconciler, ok := c.Svc.(branchStateReconciler); ok {
+				_ = reconciler.ReconcileSessionBranchState(r.Context(), sessionID(r))
 			}
-			flusher.Flush()
 		case <-keepAlive.C:
 			if _, err := fmt.Fprint(w, "event: heartbeat\ndata: {}\n\n"); err != nil {
 				return

@@ -65,11 +65,18 @@ type UpdateProject struct {
 }
 
 type Session struct {
-	ID                 string
-	OrgID              string
-	ProjectID          string
-	Kind               string
-	Harness            string
+	ID        string
+	OrgID     string
+	ProjectID string
+	Kind      string
+	Harness   string
+	// ReviewerHarness overrides Harness only for manually-triggered PR review
+	// terminals. An empty value deliberately follows the worker harness.
+	ReviewerHarness    string
+	AutoReviewEnabled  bool
+	AutoInjectCI       bool
+	AutoInjectReview   bool
+	TerminateOnPRMerge bool
 	DisplayName        string
 	Branch             string
 	Mode               string
@@ -86,9 +93,6 @@ type Session struct {
 	ObservedState      string
 	RuntimeState       string
 	RuntimeError       string
-	AutoInjectCI       bool
-	AutoInjectReview   bool
-	TerminateOnPRMerge bool
 	// WorkerEpoch is the highest worker epoch the session has minted for its
 	// agent terminal. It advances every time a fresh worker connects (a resume
 	// from idle-pause, a restore, or any re-provision), so a client can key its

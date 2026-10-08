@@ -61,6 +61,13 @@ UPDATE sessions
 SET model = sqlc.arg(model)
 WHERE id = sqlc.arg(id);
 
+-- name: SetSessionHibernated :execrows
+-- Revision fencing keeps an idle decision from overwriting a later send,
+-- controller change, or lifecycle write. Generic updates leave this fact alone.
+UPDATE sessions
+SET hibernated_at = sqlc.narg(hibernated_at)
+WHERE id = sqlc.arg(id) AND revision = sqlc.arg(expected_revision);
+
 -- name: UpdateSessionArtifactOutput :execrows
 -- Narrow write for lifecycle.Manager.ReconcileSessionOutputType: touches only
 -- the two output-derivation columns. A full read-then-UpdateSession write here
@@ -88,6 +95,15 @@ WHERE id = sqlc.arg(id)
   AND agent_session_id_launch_id = sqlc.arg(expected_agent_session_id_launch_id)
   AND provider_conversation_id = sqlc.arg(expected_provider_conversation_id)
   AND controller_generation = sqlc.arg(expected_controller_generation);
+
+-- name: ReplaceUnpersistedChatProvider :execrows
+-- Move a Chat from a provider id the provider never persisted to the fresh id
+-- it started instead. Guarded on the old id so a newer owner is never replaced.
+UPDATE sessions SET
+    provider_conversation_id = sqlc.arg(provider_conversation_id)
+WHERE id = sqlc.arg(id)
+  AND session_mode = 'chat'
+  AND provider_conversation_id = sqlc.arg(expected_provider_conversation_id);
 
 -- name: RecordSessionLatestUserPrompt :execrows
 UPDATE sessions SET
@@ -208,8 +224,9 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts
+    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    claude_activity_facts, codex_activity_facts,
+    hibernated_at
 FROM sessions WHERE id = ?;
 
 -- name: GetSessionByAutomationRunID :one
@@ -226,8 +243,9 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts
+    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    claude_activity_facts, codex_activity_facts,
+    hibernated_at
 FROM sessions WHERE automation_run_id = ?;
 
 -- name: ListSessionsByProject :many
@@ -244,8 +262,9 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts
+    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    claude_activity_facts, codex_activity_facts,
+    hibernated_at
 FROM sessions WHERE project_id IS ? ORDER BY num;
 
 -- name: ListAllSessions :many
@@ -262,9 +281,19 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts
+    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    claude_activity_facts, codex_activity_facts,
+    hibernated_at
 FROM sessions ORDER BY project_id, num;
+
+-- name: ListChatHibernationCandidates :many
+SELECT id FROM sessions
+WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
+    AND kind <> 'orchestrator'
+    AND provision_state IN ('', 'ready') AND hibernated_at IS NULL
+    AND activity_state = 'idle' AND activity_last_at IS NOT NULL
+    AND trim(provider_conversation_id) <> ''
+ORDER BY id;
 
 -- name: PromoteTaskPreparation :execrows
 -- Claim the hidden row without touching branch/workspace facts that may be
@@ -374,6 +403,14 @@ WHERE id = sqlc.arg(id);
 UPDATE sessions SET
     provision_steps = sqlc.arg(provision_steps),
     updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id);
+
+-- name: SetSessionBranchState :execrows
+-- Narrow write for the branch-state reconcile: it names only branch_state, so a
+-- stale read can never replay other session columns. updated_at is left
+-- alone because an observed git fact is not user-visible recency.
+UPDATE sessions SET
+    branch_state = sqlc.arg(branch_state)
 WHERE id = sqlc.arg(id);
 
 -- name: SessionIsSeed :one

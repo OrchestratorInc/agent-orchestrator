@@ -687,6 +687,8 @@ type Session struct {
 	ArtifactDir                      string
 	SessionOutputType                string
 	LatestInteractionAt              sql.NullTime
+	HibernatedAt                     sql.NullTime
+	BranchState                      string
 }
 
 type SessionCleanupFact struct {

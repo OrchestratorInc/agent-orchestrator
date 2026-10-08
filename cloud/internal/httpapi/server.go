@@ -57,6 +57,7 @@ type Store interface {
 	CreateSession(context.Context, domain.Principal, string, string, int, domain.CreateSession) (domain.Session, error)
 	ListSessions(context.Context, domain.Principal, string, string, *domain.Cursor, int) ([]domain.Session, bool, error)
 	GetSession(context.Context, domain.Principal, string, string) (domain.Session, error)
+	CheckSessionWriteAccess(context.Context, domain.Principal, string, string) error
 	SetCloudSessionAutoInjectCI(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SetCloudSessionAutoInjectReview(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SetCloudSessionTerminateOnPRMerge(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
@@ -101,8 +102,8 @@ type Store interface {
 	ClaimWorkerRequest(context.Context, string, string, string, int64, time.Duration) (domain.WorkerRequest, bool, error)
 	CompleteWorkerRequest(context.Context, string, string, string, string, int64, int, json.RawMessage) error
 	FailWorkerRequest(context.Context, string, string, string, string, int64, int, string, string) error
-	IssueTerminalTicket(context.Context, domain.Principal, string, string, string, time.Duration) (string, []string, error)
-	OpenTerminal(context.Context, string, string, time.Duration) (domain.TerminalSession, error)
+	IssueTerminalTicket(context.Context, domain.Principal, string, string, string, string, time.Duration) (string, []string, error)
+	OpenTerminal(context.Context, string, string, string, time.Duration) (domain.TerminalSession, error)
 	RefreshTerminalInteraction(context.Context, domain.TerminalSession, time.Duration) error
 	QueueTerminalInput(context.Context, domain.TerminalSession, string, []byte) error
 	QueueTerminalResize(context.Context, domain.TerminalSession, uint16, uint16) error
@@ -189,6 +190,7 @@ type Server struct {
 	drain                   chan struct{}
 	logger                  *slog.Logger
 	github                  *githubapp.Service
+	reviewService           *githubapp.Service
 	checkoutBroker          CheckoutBroker
 	patWrites               *githubapp.PATWriteService
 	brokerAuthToken         string
@@ -231,6 +233,7 @@ type Options struct {
 	Release                 string
 	Logger                  *slog.Logger
 	GitHub                  *githubapp.Service
+	ReviewService           *githubapp.Service
 	CheckoutBroker          CheckoutBroker
 	PATWrites               *githubapp.PATWriteService
 	BrokerAuthToken         string
@@ -312,6 +315,7 @@ func New(options Options) *Server {
 		drain:                     make(chan struct{}),
 		logger:                    logger,
 		github:                    options.GitHub,
+		reviewService:             options.ReviewService,
 		checkoutBroker:            options.CheckoutBroker,
 		patWrites:                 options.PATWrites,
 		brokerAuthToken:           options.BrokerAuthToken,
@@ -336,6 +340,9 @@ func New(options Options) *Server {
 	}
 	if server.checkoutBroker == nil && options.GitHub != nil {
 		server.checkoutBroker = options.GitHub
+	}
+	if server.reviewService == nil && options.GitHub != nil {
+		server.reviewService = options.GitHub
 	}
 	server.provisioning.Provider = sandboxProvider
 	if server.provisioning.Release == "" {
@@ -372,10 +379,14 @@ func New(options Options) *Server {
 		router.Post("/api/cloud/v1/control/github/scratch-projects", server.createEnvironmentScratchProject)
 	}
 	router.Route("/api/cloud/v1", func(router chi.Router) {
+		router.Post("/remote-hosts/{hostId}/address", server.updateRemoteHostAddress)
 		router.Post("/auth/local/register", server.registerLocal)
 		router.Post("/auth/local/login", server.loginLocal)
 		router.With(server.authenticate).Post("/auth/local/logout", server.logoutLocal)
 		router.With(server.authenticate).Get("/me", server.me)
+		router.With(server.authenticate).Get("/me/hosts", server.listRemoteHosts)
+		router.With(server.authenticate).Put("/me/hosts/{hostId}", server.putRemoteHost)
+		router.With(server.authenticate).Delete("/me/hosts/{hostId}", server.deleteRemoteHost)
 		router.With(server.authenticate).Post("/orgs", server.createOrganization)
 		router.With(server.authenticate).Get("/invitations", server.listMyInvitations)
 		router.With(server.authenticate).Get("/me/providers", server.listUserProviderConnections)
@@ -424,6 +435,7 @@ func New(options Options) *Server {
 			router.Post("/worker/pull-requests", server.workerRaisePullRequest)
 			router.Post("/worker/pull-requests/claim", server.workerClaimPullRequest)
 			router.Post("/worker/pull-requests/refs", server.workerReportGitRefs)
+			router.Post("/worker/reviews/trigger", server.workerTriggerReviews)
 			router.Post("/worker/reviews/{reviewRunId}/submit", server.workerSubmitReview)
 			router.Get("/worker/children", server.listWorkerChildren)
 			router.Post("/worker/children", server.createWorkerChild)
@@ -463,6 +475,8 @@ func New(options Options) *Server {
 			router.Patch("/notifications/{notificationId}", server.markNotificationRead)
 			router.Post("/notifications/read-all", server.markAllNotificationsRead)
 			router.Post("/projects", server.createProject)
+			router.Get("/projects/{projectId}", server.getProject)
+			router.Patch("/projects/{projectId}/settings", server.updateProjectSettings)
 			router.Patch("/projects/{projectId}", server.updateProject)
 			router.Delete("/projects/{projectId}", server.deleteProject)
 			router.Get("/projects/{projectId}/shares", server.listProjectShareLinks)
@@ -483,6 +497,7 @@ func New(options Options) *Server {
 			router.Post("/sessions", server.createSession)
 			router.Get("/sandbox/coder/templates", server.listCoderTemplates)
 			router.Get("/sessions/{sessionId}", server.getSession)
+			router.Patch("/sessions/{sessionId}/preferences", server.updateSessionPreferences)
 			router.Patch("/sessions/{sessionId}/auto-inject-ci", server.setCloudSessionAutoInjectCI)
 			router.Patch("/sessions/{sessionId}/auto-inject-review", server.setCloudSessionAutoInjectReview)
 			router.Patch("/sessions/{sessionId}/merge-policy", server.setCloudSessionMergePolicy)
@@ -519,6 +534,11 @@ func New(options Options) *Server {
 			router.Get("/sessions/{sessionId}/pull-requests", server.listSessionPullRequests)
 			router.Post("/sessions/{sessionId}/pull-requests/{number}/merge", server.mergeSessionPullRequest)
 			router.Get("/sessions/{sessionId}/reviews", server.getSessionReviewState)
+			router.Post("/sessions/{sessionId}/reviews/trigger", server.triggerSessionReviews)
+			router.Post("/sessions/{sessionId}/reviews/cancel", server.cancelSessionReviews)
+			router.Post("/sessions/{sessionId}/reviews/{reviewRunId}/send", server.sendReviewToWorker)
+			router.Get("/sessions/{sessionId}/reviewer-harnesses", server.inspectSessionReviewerHarnesses)
+			router.Post("/sessions/{sessionId}/reviewer-harnesses/{harness}/install", server.installSessionReviewerHarness)
 			router.Get("/sessions/{sessionId}/interface-transition", server.getSessionInterfaceTransition)
 			router.Post("/sessions/{sessionId}/interface-transition", server.startSessionInterfaceTransition)
 			router.Delete("/sessions/{sessionId}/interface-transition", server.cancelSessionInterfaceTransition)
@@ -621,23 +641,20 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 		case "/api/cloud/v1/worker/transport/claim", "/api/cloud/v1/worker/turns/claim":
 			level = slog.LevelDebug
 		}
-		s.logger.Log(
-			r.Context(),
-			level,
-			"HTTP request complete",
-			"method",
-			r.Method,
-			"route",
-			route,
-			"status",
-			status,
-			"duration_ms",
-			time.Since(started).Milliseconds(),
-			"request_id",
-			requestID(r),
-			"release",
-			s.release,
-		)
+		attrs := []any{
+			"method", r.Method,
+			"route", route,
+			"status", status,
+			"duration_ms", time.Since(started).Milliseconds(),
+			"request_id", requestID(r),
+			"release", s.release,
+		}
+		// Stamp the URL-scoped organization so the access log is greppable by
+		// tenant for fast RCA (empty on non-org routes like worker/health).
+		if orgID := chi.URLParam(r, "orgId"); orgID != "" {
+			attrs = append(attrs, "org_id", orgID)
+		}
+		s.logger.Log(r.Context(), level, "HTTP request complete", attrs...)
 	})
 }
 

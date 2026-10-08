@@ -148,13 +148,33 @@ export interface paths {
             };
             cookie?: never;
         };
-        get?: never;
+        get: operations["getProject"];
         put?: never;
         post?: never;
         delete: operations["deleteProject"];
         options?: never;
         head?: never;
         patch: operations["updateProject"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Merge supplied settings only. Omitted fields are preserved, nested role objects merge, and reviewers replace the array. Null is rejected. */
+        patch: operations["updateProjectSettings"];
         trace?: never;
     };
     "/api/cloud/v1/orgs/{orgId}/github/installations": {
@@ -432,6 +452,122 @@ export interface paths {
         get: operations["getSessionReviewState"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/trigger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["triggerSessionReviews"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["cancelSessionReviews"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/send": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["sendSessionReviewToWorker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateSessionPreferences"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviewer-harnesses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get: operations["inspectSessionReviewerHarnesses"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviewer-harnesses/{harness}/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                harness: components["schemas"]["CloudReviewerHarness"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["installSessionReviewerHarness"];
         delete?: never;
         options?: never;
         head?: never;
@@ -885,7 +1021,8 @@ export interface paths {
             cookie?: never;
         };
         /** @description Returns the valid default coding-agent credential selected by the
-         *     session harness. The secret must never be logged or persisted.
+         *     session harness, or the durable reviewer harness when reviewRunId is supplied.
+         *     The secret must never be logged or persisted.
          *      */
         get: operations["getWorkerCredential"];
         put?: never;
@@ -1324,6 +1461,69 @@ export interface components {
             hasMore: boolean;
             nextCursor?: string;
         };
+        /** @enum {string} */
+        CloudAgentHarness: "claude-code" | "codex" | "cursor" | "opencode";
+        ProjectAgentConfig: {
+            model?: string;
+            /**
+             * @description Cursor CLI mode. Omit or use an empty string for the agent default.
+             * @enum {string}
+             */
+            mode?: "" | "plan" | "ask";
+            /**
+             * @description Reasoning effort for Codex or Claude Code. Claude Code does not accept xhigh.
+             * @enum {string}
+             */
+            effort?: "" | "low" | "medium" | "high" | "xhigh" | "max";
+            /**
+             * @description Native approval policy. OpenCode does not accept accept-edits. Empty uses the session execution policy.
+             * @enum {string}
+             */
+            permissions?: "" | "default" | "auto" | "accept-edits" | "bypass-permissions";
+        };
+        ProjectRoleConfig: {
+            agent: components["schemas"]["CloudAgentHarness"];
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
+        };
+        ProjectRoleConfigPatch: {
+            agent?: components["schemas"]["CloudAgentHarness"];
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
+        };
+        ProjectReviewer: {
+            harness: components["schemas"]["CloudAgentHarness"];
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
+        };
+        /** @description Canonical nested role settings. Legacy workerAgent and orchestratorAgent are normalized on reads and removed on the next settings write. Nested agents take precedence. */
+        ProjectConfig: {
+            /** @description Prefix for new session branches. Empty uses ao; existing sessions are unchanged. */
+            sessionPrefix?: string;
+            worker?: components["schemas"]["ProjectRoleConfig"];
+            orchestrator?: components["schemas"]["ProjectRoleConfig"];
+            /** @description Empty or absent uses the session agent for reviews. */
+            reviewers?: components["schemas"]["ProjectReviewer"][];
+            /** @description Defaults to enabled when absent. Independent of session autoInjectReview feedback delivery. */
+            autoReview?: boolean;
+        } & {
+            [key: string]: unknown;
+        };
+        ProjectSettingsConfigPatch: {
+            /** @description Prefix for new session branches. Empty uses ao; existing sessions are unchanged. */
+            sessionPrefix?: string;
+            /** @description Null removes the worker override and uses the session agent selection. */
+            worker?: components["schemas"]["ProjectRoleConfigPatch"] | null;
+            /** @description Null removes the orchestrator override and uses the session agent selection. */
+            orchestrator?: components["schemas"]["ProjectRoleConfigPatch"] | null;
+            reviewers?: components["schemas"]["ProjectReviewer"][];
+            autoReview?: boolean;
+        };
+        ProjectSettingsInput: {
+            displayName?: string;
+            defaultBranch?: string;
+            config?: components["schemas"]["ProjectSettingsConfigPatch"];
+        };
+        ProjectResponse: {
+            project: components["schemas"]["Project"];
+        };
         Project: {
             /** Format: uuid */
             id: string;
@@ -1335,9 +1535,7 @@ export interface components {
             defaultBranch: string;
             /** @description GitHub's integer repository ID encoded as a decimal string to preserve precision. */
             githubRepositoryId?: string;
-            config: {
-                [key: string]: unknown;
-            };
+            config: components["schemas"]["ProjectConfig"];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -1516,6 +1714,7 @@ export interface components {
             interfaceMode: components["schemas"]["SessionInterfaceMode"];
             /** @description Coding-agent model to launch with; empty uses the harness default. */
             model?: string;
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
             deniedCommands: string[];
             /** Format: uri */
             repositoryUrl: string;
@@ -1871,6 +2070,9 @@ export interface components {
                 desiredState: "deleted";
             };
         };
+        SessionResponse: {
+            session: components["schemas"]["Session"];
+        };
         /** @enum {string} */
         SessionInterfaceMode: "tui" | "chat";
         /** @enum {string} */
@@ -1918,6 +2120,11 @@ export interface components {
             projectId: string;
             kind: components["schemas"]["SessionKind"];
             harness: string;
+            reviewerHarness?: string;
+            autoReviewEnabled: boolean;
+            autoInjectCI: boolean;
+            autoInjectReview: boolean;
+            terminateOnPrMerge: boolean;
             displayName: string;
             branch: string;
             mode: components["schemas"]["SessionMode"];
@@ -1953,6 +2160,25 @@ export interface components {
             deniedCommands: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
+        };
+        UpdateSessionPreferencesInput: {
+            reviewerHarness?: components["schemas"]["CloudReviewerHarness"] | string;
+            autoReviewEnabled?: boolean;
+            autoInjectCI?: boolean;
+            autoInjectReview?: boolean;
+            terminateOnPrMerge?: boolean;
+        };
+        /** @enum {string} */
+        CloudReviewerHarness: "claude-code" | "codex" | "cursor";
+        HarnessStatus: {
+            harness: components["schemas"]["CloudReviewerHarness"];
+            /** @enum {string} */
+            status: "missing" | "ready" | "failed";
+            version?: string;
+            error?: string;
+        };
+        HarnessInspectResponse: {
+            harnesses: components["schemas"]["HarnessStatus"][];
         };
         SessionPage: {
             items: components["schemas"]["Session"][];
@@ -2085,6 +2311,8 @@ export interface components {
             sessionId: string;
             batchId: string;
             harness: string;
+            /** @enum {string} */
+            triggerSource: "manual" | "auto";
             pullRequestUrl: string;
             targetSha: string;
             status: components["schemas"]["AOReviewRunStatus"];
@@ -2112,6 +2340,7 @@ export interface components {
             sessionId: string;
             reviewerHandleId?: string;
             reviewerHarness?: string;
+            availableReviewerHarnesses: components["schemas"]["CloudReviewerHarness"][];
             reviews: components["schemas"]["AOPullRequestReviewState"][];
             runs: components["schemas"]["AOReviewRun"][];
         };
@@ -2726,6 +2955,30 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project and normalized settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     deleteProject: {
         parameters: {
             query?: never;
@@ -2775,6 +3028,34 @@ export interface operations {
                     "application/json": {
                         project: components["schemas"]["Project"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateProjectSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectSettingsInput"];
+            };
+        };
+        responses: {
+            /** @description Validated settings persisted atomically. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -3282,6 +3563,172 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionReviewState"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    triggerSessionReviews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current commit was already reviewed or is ineligible. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReviewState"];
+                };
+            };
+            /** @description A reviewer terminal was started. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReviewState"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelSessionReviews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Review state after cancellation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReviewState"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    sendSessionReviewToWorker: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stored review was accepted and durably queued for the worker agent. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["UserMessageEvent"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateSessionPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSessionPreferencesInput"];
+            };
+        };
+        responses: {
+            /** @description The updated cloud session. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    inspectSessionReviewerHarnesses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Supported reviewer CLI availability inside the live sandbox. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HarnessInspectResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    installSessionReviewerHarness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                harness: components["schemas"]["CloudReviewerHarness"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The installed and verified reviewer CLI. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HarnessStatus"];
                 };
             };
             default: components["responses"]["Error"];
@@ -3981,7 +4428,10 @@ export interface operations {
     };
     getWorkerCredential: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Select the snapshotted reviewer credential for a running review owned by this session. */
+                reviewRunId?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;

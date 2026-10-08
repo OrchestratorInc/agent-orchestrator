@@ -35,6 +35,9 @@ import type {
 	CloudCpProjectDeletedResponse,
 	CloudCpProjectListResponse,
 	CloudCpProjectResponse,
+	CloudCpSessionPullRequestsResponse,
+	CloudCpSessionReviewState,
+	CloudCpProjectSettingsRequest,
 	CloudCpProviderConnectionResponse,
 	CloudCpProviderConnectionsResponse,
 	CloudCpGitHubReposResponse,
@@ -49,9 +52,10 @@ import type {
 	CloudCpSendMessageResponse,
 	CloudCpSteerTurnResponse,
 	CloudCpSessionChildrenResponse,
+	CloudCpHarnessInspectResponse,
+	CloudCpHarnessStatus,
 	CloudCpSessionDeletedResponse,
 	CloudCpSessionListResponse,
-	CloudCpSessionPullRequestsResponse,
 	CloudCpResumeSessionResponse,
 	CloudCpRestoreSessionResponse,
 	CloudCpSessionResponse,
@@ -77,6 +81,7 @@ import type {
 	CloudCpTerminalTicketRequest,
 	CloudCpTerminalTicketResponse,
 	CloudCpUpdateProjectRequest,
+	CloudCpUpdateSessionPreferencesRequest,
 	CloudCpValidateRepositoryAccessRequest,
 	CloudCpValidateRepositoryAccessResponse,
 } from "./types";
@@ -149,6 +154,8 @@ export interface CloudCpClient {
 		body: CloudCpCreateProjectRequest,
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpProjectResponse>;
+	getProject(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<CloudCpProjectResponse>;
+	updateProjectSettings(orgId: string, projectId: string, body: CloudCpProjectSettingsRequest, options?: CloudCpRequestOptions): Promise<CloudCpProjectResponse>;
 	updateProject(
 		orgId: string,
 		projectId: string,
@@ -172,6 +179,23 @@ export interface CloudCpClient {
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSessionResponse>;
 	getSession(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
+	updateSessionPreferences(
+		orgId: string,
+		sessionId: string,
+		body: CloudCpUpdateSessionPreferencesRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpSessionResponse>;
+	inspectSessionReviewerHarnesses(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpHarnessInspectResponse>;
+	installSessionReviewerHarness(
+		orgId: string,
+		sessionId: string,
+		harness: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpHarnessStatus>;
 	getInterfaceTransition(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpInterfaceTransitionStatusResponse>;
 	startInterfaceTransition(
 		orgId: string,
@@ -217,6 +241,21 @@ export interface CloudCpClient {
 		sessionId: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpSessionPullRequestsResponse>;
+	getSessionReviewState(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpSessionReviewState>;
+	triggerSessionReviews(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpSessionReviewState>;
+	cancelSessionReviews(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpSessionReviewState>;
 	mergePullRequest(orgId: string, sessionId: string, number: number, prUrl: string, expectedHeadSha: string, options?: CloudCpRequestOptions): Promise<{ status: string }>;
 	deleteSession(
 		orgId: string,
@@ -256,6 +295,12 @@ export interface CloudCpClient {
 		orgId: string,
 		sessionId: string,
 		body: CloudCpSendMessageRequest,
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpSendMessageResponse>;
+	sendSessionReviewToWorker(
+		orgId: string,
+		sessionId: string,
+		reviewRunId: string,
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSendMessageResponse>;
 	listChatModels(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpChatModelsResponse>;
@@ -468,7 +513,11 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			return;
 		}
 		if (response.body === null) {
-			fail(new CloudCpError("The event stream response has no body.", { status: response.status }));
+			fail(
+				new CloudCpError("The event stream response has no body.", {
+					status: response.status,
+				}),
+			);
 			return;
 		}
 
@@ -544,13 +593,26 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
 			}),
 		updateProject: (orgId, projectId, body, o) =>
-			requestJson("PATCH", `/orgs/${seg(orgId)}/projects/${seg(projectId)}`, { body, signal: o?.signal }),
+			requestJson("PATCH", `/orgs/${seg(orgId)}/projects/${seg(projectId)}`, {
+				body,
+				signal: o?.signal,
+			}),
+		getProject: (orgId, projectId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/projects/${seg(projectId)}`, { signal: o?.signal }),
+		updateProjectSettings: (orgId, projectId, body, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/settings`, { body, signal: o?.signal }),
 		deleteProject: (orgId, projectId, o) =>
-			requestJson("DELETE", `/orgs/${seg(orgId)}/projects/${seg(projectId)}`, { signal: o?.signal }),
+			requestJson("DELETE", `/orgs/${seg(orgId)}/projects/${seg(projectId)}`, {
+				signal: o?.signal,
+			}),
 
 		listSessions: (orgId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions`, {
-				query: { projectId: query?.projectId, limit: query?.limit, cursor: query?.cursor },
+				query: {
+					projectId: query?.projectId,
+					limit: query?.limit,
+					cursor: query?.cursor,
+				},
 				signal: o?.signal,
 			}),
 		createSession: (orgId, body, o) =>
@@ -585,6 +647,14 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/auto-inject-review`, { body: { autoInjectReview }, signal: o?.signal }),
 		setSessionMergePolicy: (orgId, sessionId, terminateOnPrMerge, o) =>
 			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/merge-policy`, { body: { terminateOnPrMerge }, signal: o?.signal }),
+		updateSessionPreferences: (orgId, sessionId, body, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/preferences`, { body, signal: o?.signal }),
+		inspectSessionReviewerHarnesses: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviewer-harnesses`, { signal: o?.signal }),
+		installSessionReviewerHarness: (orgId, sessionId, harness, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviewer-harnesses/${seg(harness)}/install`, {
+				signal: o?.signal,
+			}),
 		listCoderTemplates: (orgId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sandbox/coder/templates`, { signal: o?.signal }),
 		getOrgCoderConfig: (orgId, o) =>
@@ -606,8 +676,16 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/pull-requests/${seg(String(number))}/merge`, {
 				body: { prUrl, expectedHeadSha }, signal: o?.signal,
 			}),
+		getSessionReviewState: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews`, { signal: o?.signal }),
+		triggerSessionReviews: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews/trigger`, { signal: o?.signal }),
+		cancelSessionReviews: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews/cancel`, { signal: o?.signal }),
 		deleteSession: (orgId, sessionId, o) =>
-			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, { signal: o?.signal }),
+			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, {
+				signal: o?.signal,
+			}),
 		resumeSession: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/resume`, {
 				signal: o?.signal,
@@ -662,6 +740,11 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		sendSessionMessage: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/messages`, {
 				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		sendSessionReviewToWorker: (orgId, sessionId, reviewRunId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews/${seg(reviewRunId)}/send`, {
 				signal: o?.signal,
 				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
 			}),
