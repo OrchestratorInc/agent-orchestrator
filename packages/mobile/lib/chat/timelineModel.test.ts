@@ -45,6 +45,12 @@ describe("mobile Chat timeline model", () => {
 		]);
 	});
 
+	it("renders Android exchanges in natural order without an inverted list transform", () => {
+		const plan = timelineModel.conversationTimelineRenderPlan(snapshot(), undefined, "android");
+		expect(plan).toMatchObject({ kind: "list", inverted: false });
+		expect(plan.groups.map((group) => group.key)).toEqual(["turn-t1", "turn-t2"]);
+	});
+
 	it("keeps queued questions with their own answers instead of strict-sequence interleaving", () => {
 		const groups = groupConversationByTurn(snapshot());
 		expect(groups.map((group) => group.items.map((item) => item.id))).toEqual([["u1", "a1"], ["u2", "a2"]]);
