@@ -146,14 +146,16 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		mutation.mutate(env);
 	};
 	return <form id="project-settings-form" className="project-settings-form flex min-h-full flex-col gap-(--size-settings-section-inner-gap)" onSubmit={(event) => { event.preventDefault(); save(); }}>
-		{showEmpty ? null : <p className="text-sm leading-5 text-settings-muted">{t("settings.project.environmentHint")}</p>}
-		{showEmpty ? <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
-			<div className="flex items-center justify-center gap-2">
-				<Button onClick={() => { setActiveTab("paste"); setError(null); }} type="button" variant="outline"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
-				<Button onClick={() => update([...rows, { name: "", value: "", visible: false }])} type="button"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
+		<p className="text-sm leading-5 text-settings-muted">{t("settings.project.environmentHint")}</p>
+		{showEmpty ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
+			<div className="settings-row-bar">
+				<span className="text-sm leading-5 text-settings-label">{t("settings.project.environmentEmptyTitle")}</span>
+				<div className="flex items-center gap-2">
+					<Button onClick={() => { setActiveTab("paste"); setError(null); }} type="button" variant="ghost"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
+					<Button onClick={() => update([...rows, { name: "", value: "", visible: false }])} type="button" variant="ghost"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
+				</div>
 			</div>
-			<p className="mt-4 max-w-xs text-sm leading-6 text-settings-muted">{t("settings.project.environmentEmptyHint")}</p>
-		</div> : activeTab === "variables" ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
+		</ProjectSettingsSection> : activeTab === "variables" ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
 			{rows.map((row, index) => <div className="settings-row-bar gap-2" key={index}>
 				<input aria-label={`${t("settings.project.envName")} ${index + 1}`} className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1" placeholder={t("settings.project.envName")} value={row.name} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} />
 				<input aria-label={`${t("settings.project.envValue")} ${index + 1}`} autoComplete="off" className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1" placeholder={t("settings.project.envValue")} type={row.visible ? "text" : "password"} value={row.value} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />

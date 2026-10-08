@@ -207,12 +207,18 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 		const cues = cuesQuery.data ?? [];
 		if (cues.length === 0) {
 			return (
-				<div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
-					<Button type="button" disabled={busy} onClick={openNew}>
-						<Plus aria-hidden="true" />
-						{t("cues.newCue")}
-					</Button>
-					<p className="mt-4 max-w-xs text-sm leading-6 text-settings-muted">{t("cues.settingsDescription")}</p>
+				<div className="project-settings-form">
+					<section>
+						<div className="settings-grouped-rows flex w-full flex-col">
+							<div className="settings-row-bar">
+								<span className="text-sm leading-5 text-settings-label">{t("cues.empty")}</span>
+								<Button type="button" variant="ghost" disabled={busy} onClick={openNew}>
+									<Plus aria-hidden="true" />
+									{t("cues.newCue")}
+								</Button>
+							</div>
+						</div>
+					</section>
 				</div>
 			);
 		}
@@ -320,9 +326,9 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 
 	const empty = !formOpen && cuesQuery.isFetchedAfterMount && !cuesQuery.isFetching && !cuesQuery.isError && (cuesQuery.data ?? []).length === 0;
 	return (
-		<div className={empty ? "flex h-full min-h-0 flex-1 flex-col" : "flex flex-col gap-(--size-settings-section-inner-gap)"}>
-			{empty ? null : <p className="text-sm leading-5 text-settings-muted">{t("cues.settingsDescription")}</p>}
-			<fieldset className={empty ? "flex min-h-0 min-w-0 flex-1 flex-col" : "min-w-0"} disabled={busy}>{formOpen ? renderForm() : renderList()}</fieldset>
+		<div className="flex flex-col gap-(--size-settings-section-inner-gap)">
+			<p className="text-sm leading-5 text-settings-muted">{t("cues.settingsDescription")}</p>
+			<fieldset className="min-w-0" disabled={busy}>{formOpen ? renderForm() : renderList()}</fieldset>
 			{empty ? null : (
 			<div className="flex items-center justify-end gap-2">
 				{formOpen ? (
