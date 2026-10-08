@@ -106,3 +106,17 @@ func TestClaudeUninstallRefusesCopyOutsideNativeLayout(t *testing.T) {
 		t.Fatalf("a copy outside the native layout was removed: %v", err)
 	}
 }
+
+func TestUninstallGuideIsPerOSAndOnlyForConfirmedHarnesses(t *testing.T) {
+	unix := uninstallGuideFor(TargetClaudeCode, "darwin")
+	if unix == nil || !unix.Documented || !slices.Equal(unix.ProgramPaths, []string{"~/.local/bin/claude", "~/.local/share/claude"}) || !slices.Contains(unix.UserDataPaths, "~/.claude") {
+		t.Fatalf("Unix guide = %+v", unix)
+	}
+	windows := uninstallGuideFor(TargetClaudeCode, "windows")
+	if windows == nil || !strings.HasSuffix(windows.ProgramPaths[0], `claude.exe`) {
+		t.Fatalf("Windows guide = %+v", windows)
+	}
+	if guide := uninstallGuideFor(TargetUnreal, "darwin"); guide != nil {
+		t.Fatalf("a harness without confirmed paths got a guide: %+v", guide)
+	}
+}

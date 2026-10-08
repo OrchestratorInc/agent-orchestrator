@@ -3140,6 +3140,7 @@ export interface components {
             methods: components["schemas"]["AgentInstallMethod"][];
             notice?: string;
             reason?: string;
+            uninstallGuide?: components["schemas"]["AgentUninstallGuide"];
         };
         AgentInstallationObservation: {
             /** Format: date-time */
@@ -3230,6 +3231,16 @@ export interface components {
         };
         AgentSwitchResponse: {
             switch: components["schemas"]["AgentSwitch"];
+        };
+        AgentUninstallGuide: {
+            /** @description Vendor page with uninstall instructions. */
+            docsUrl?: string;
+            /** @description Whether the vendor documents these paths. */
+            documented: boolean;
+            /** @description Program files and directories to remove. */
+            programPaths: string[];
+            /** @description Optional settings, sign-in and history paths. */
+            userDataPaths?: string[];
         };
         AgentUpdateAdvisory: {
             agentId: string;

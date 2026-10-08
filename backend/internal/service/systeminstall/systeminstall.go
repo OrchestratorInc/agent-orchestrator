@@ -194,14 +194,16 @@ type Plan struct {
 // AgentPlan is the display-safe plan returned to the settings page. Command is
 // a preview of fixed server-owned argv and is never accepted from the client.
 type AgentPlan struct {
-	AgentID             string               `json:"agentId"`
-	Available           bool                 `json:"available"`
-	Automatic           bool                 `json:"automatic"`
-	Method              string               `json:"method"`
-	Command             string               `json:"command,omitempty"`
-	Reason              string               `json:"reason,omitempty"`
-	Notice              string               `json:"notice,omitempty"`
-	DocumentationURL    string               `json:"documentationUrl"`
+	AgentID          string `json:"agentId"`
+	Available        bool   `json:"available"`
+	Automatic        bool   `json:"automatic"`
+	Method           string `json:"method"`
+	Command          string `json:"command,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+	Notice           string `json:"notice,omitempty"`
+	DocumentationURL string `json:"documentationUrl"`
+	// UninstallGuide explains removing a vendor install AO cannot remove.
+	UninstallGuide      *UninstallGuide      `json:"uninstallGuide,omitempty"`
 	ExpectedDestination string               `json:"expectedDestination,omitempty"`
 	Methods             []AgentInstallMethod `json:"methods"`
 }
@@ -477,6 +479,7 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 			DocumentationURL:    plan.DocsURL,
 			ExpectedDestination: plan.ExpectedDestination,
 			Methods:             methods,
+			UninstallGuide:      uninstallGuideFor(target, s.goos),
 		})
 	}
 	return out, nil

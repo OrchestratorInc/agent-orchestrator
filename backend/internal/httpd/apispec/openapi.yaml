@@ -9434,6 +9434,8 @@ components:
           type: string
         reason:
           type: string
+        uninstallGuide:
+          $ref: '#/components/schemas/AgentUninstallGuide'
       required:
       - agentId
       - available
@@ -9708,6 +9710,28 @@ components:
           $ref: '#/components/schemas/AgentSwitch'
       required:
       - switch
+      type: object
+    AgentUninstallGuide:
+      properties:
+        docsUrl:
+          description: Vendor page with uninstall instructions.
+          type: string
+        documented:
+          description: Whether the vendor documents these paths.
+          type: boolean
+        programPaths:
+          description: Program files and directories to remove.
+          items:
+            type: string
+          type: array
+        userDataPaths:
+          description: Optional settings, sign-in and history paths.
+          items:
+            type: string
+          type: array
+      required:
+      - programPaths
+      - documented
       type: object
     AgentUpdateAdvisory:
       properties:

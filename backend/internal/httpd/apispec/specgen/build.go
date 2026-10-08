@@ -384,6 +384,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"SysteminstallAgentPlan":                      "AgentInstallPlan",
 	"SysteminstallAgentInstallMethod":             "AgentInstallMethod",
 	"SysteminstallUpdateAdvisory":                 "AgentUpdateAdvisory",
+	"SysteminstallUninstallGuide":                 "AgentUninstallGuide",
 	"ControllersAgentUpdateAdvisoryQuery":         "AgentUpdateAdvisoryQuery",
 	"ControllersAgentInstallerCatalogResponse":    "AgentInstallerCatalogResponse",
 	"ControllersStartAgentInstallRequest":         "StartAgentInstallRequest",
