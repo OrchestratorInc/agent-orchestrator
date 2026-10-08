@@ -5659,15 +5659,27 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		"relative to the session workspace root",
 		"use `ao preview README.md`, not `../README.md`",
 		"existing confined loopback preview",
-		"When a chart, table, diagram, or mockup is clearer than text, call `html_preview`, then `html_render`. If you cannot see them, search your tools for them. If you find nothing, read `",
-		"` and use `ao render`. Do not use a built-in visualize skill.",
 	} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
 		}
 	}
-	if words := len(strings.Fields(m.aoSkillPointer())); words > 260 {
-		t.Fatalf("always-on AO skill pointer grew to %d words; keep details in routed command guides:\n%s", words, m.aoSkillPointer())
+	// This orchestrator runs in a terminal, where the html tools and ao render
+	// do not exist, so its prompt does not send it looking for them.
+	if strings.Contains(systemPrompt, "## Showing pages in chat") {
+		t.Fatalf("terminal session prompt names the chat-only html tools:\n%s", systemPrompt)
+	}
+	chatPointer := m.aoSkillPointer(true)
+	for _, want := range []string{
+		"When a chart, table, diagram, or mockup is clearer than text, call `html_preview`, then `html_render`. If you cannot see them, search your tools for them. If you find nothing, read `",
+		"` and use `ao render`. Do not use a built-in visualize skill.",
+	} {
+		if !strings.Contains(chatPointer, want) {
+			t.Fatalf("chat pointer missing %q:\n%s", want, chatPointer)
+		}
+	}
+	if words := len(strings.Fields(chatPointer)); words > 260 {
+		t.Fatalf("always-on AO skill pointer grew to %d words; keep details in routed command guides:\n%s", words, chatPointer)
 	}
 	if strings.Contains(agent.lastLaunch.Prompt, "You are the human-facing orchestrator") {
 		t.Fatalf("coordinator role must not be in the user prompt:\n%s", agent.lastLaunch.Prompt)
@@ -5794,7 +5806,7 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 			lookPath := func(string) (string, error) { return "/bin/true", nil }
 			m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
-			sp, err := m.buildSystemPrompt(ctx, tc.kind, "mer", "mer-1")
+			sp, err := m.buildSystemPrompt(ctx, tc.kind, "mer", "mer-1", false)
 			if err != nil {
 				t.Fatalf("buildSystemPrompt: %v", err)
 			}
@@ -5846,7 +5858,7 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 		LookPath:  lookPath,
 	})
 
-	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7")
+	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", false)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}

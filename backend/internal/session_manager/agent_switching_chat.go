@@ -184,7 +184,7 @@ func (m *Manager) executeChatAgentSwitch(
 		return result, fmt.Errorf("switch Chat agent %s: target config: %w", id, err)
 	}
 
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, true)
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: system prompt: %w", id, err)
 	}
@@ -618,7 +618,7 @@ func (m *Manager) rollbackStoppedChatAgentSwitchSource(
 	if !ok {
 		return ErrUnknownHarness
 	}
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, true)
 	if err != nil {
 		return err
 	}
