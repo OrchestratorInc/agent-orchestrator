@@ -49,7 +49,9 @@ import type { ConversationSnapshot } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
 import { AgentSwitchProgressTrack } from "../AgentSwitchProgressTrack";
+import { useUiStore } from "../../stores/ui-store";
 import { ChatWorkspace } from "./ChatWorkspace";
+import { startingConversationSnapshot } from "./OrchestratorStartingChat";
 import { hasProviderPermissionMode } from "./TurnSettingsBar";
 
 export interface ConversationWorkState {
@@ -456,11 +458,21 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		switchPresentation?.lockAgentTerminal && !switchPresentation.allowSourceInput,
 	);
 	const renderShellFallback = Boolean(shellTarget && session);
+	const optimisticChat = session.kind === "orchestrator" && isLoading && !renderShellFallback;
 	const renderSnapshot =
 		snapshot ??
+		(optimisticChat ? startingConversationSnapshot(session.id, session.provider) : undefined) ??
 		(renderShellFallback
 			? unavailableConversationSnapshot(session)
 			: undefined);
+	// Keep the project marked as starting until its controller is ready, so
+	// sidebar actions cannot launch a duplicate orchestrator.
+	useEffect(() => {
+		if (session.kind !== "orchestrator" || session.provisionState === "provisioning") return;
+		if (isLoading && !renderShellFallback) return;
+		if (session.provisionState !== "failed" && !targetChatControllerReady && !renderShellFallback && !error && !unavailable) return;
+		useUiStore.getState().setProjectProvisioning(session.workspaceId, false, hostId);
+	}, [error, hostId, isLoading, renderShellFallback, session.kind, session.provisionState, session.workspaceId, targetChatControllerReady, unavailable]);
 	const visibilityPresentationKind = agentSwitchVisibilityPresentationKind(shownSwitchPresentation);
 	useAgentSwitchPresentationVisibility({
 		localRouteKey: `session/${uiSessionId}`,
@@ -476,7 +488,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		),
 	});
 
-	if (isLoading && !renderShellFallback) {
+	if (isLoading && !renderShellFallback && !optimisticChat) {
 		return (
 			<Centered>
 				<Loader2 aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />
@@ -575,6 +587,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}
+				settingsReady={!optimisticChat && (targetChatControllerReady || agentResuming) && (!can(renderSnapshot, "config_options") || configOptions.loaded)}
 				models={models}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
 				onRememberPermissions={can(renderSnapshot, "config_options") && !configOptions.loaded
@@ -722,21 +735,8 @@ function ChatAgentSwitchStatus({
 
 function unavailableConversationSnapshot(session: WorkspaceSession): ConversationSnapshot {
 	return {
-		conversationId: session.id,
-		sessionId: session.id,
-		harness: session.provider,
-		mode: "chat",
+		...startingConversationSnapshot(session.id, session.provider),
 		controller: { state: "stopped", error: "Conversation unavailable" },
-		latestSequence: 0,
-		oldestSequence: 0,
-		hasMoreBefore: false,
-		activeBranchId: "branch-root",
-		branchPoints: [],
-		settings: {},
-		mcpServers: [],
-		capabilities: [],
-		turns: [],
-		items: [],
 	};
 }
 

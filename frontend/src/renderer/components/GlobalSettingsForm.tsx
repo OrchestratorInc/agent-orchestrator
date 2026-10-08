@@ -35,7 +35,6 @@ export function GlobalSettingsForm({
 		<div
 			aria-label={t("settings.title")}
 			className="flex w-full flex-col gap-(--size-settings-section-gap)"
-			data-testid="settings-page"
 		>
 			{globalSettingsItemsFor(section, context).map((item) => (
 				<Fragment key={item.id}>

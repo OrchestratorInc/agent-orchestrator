@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
-import { SettingsDialog } from "./SettingsDialog";
+import { SettingsDialog } from "./SettingsPageTestHarness";
 import { globalSettingsItemsFor, visibleGlobalSettings } from "./settings/settingsCatalog";
 
 const { postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => ({
@@ -154,7 +154,7 @@ describe("SettingsDialog", () => {
 		await userEvent.click(cuesSection);
 
 		expect(screen.getByTestId("project-cues-settings")).toHaveTextContent("proj-1");
-		expect(cuesSection).toHaveAttribute("aria-current", "page");
+		expect(cuesSection).toHaveAttribute("data-active", "true");
 		expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
 	});
 
@@ -163,7 +163,7 @@ describe("SettingsDialog", () => {
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("project-cues-settings")).toHaveTextContent("proj-1");
-		expect(screen.getByRole("button", { name: "Cues" })).toHaveAttribute("aria-current", "page");
+		expect(screen.getByRole("button", { name: "Cues" })).toHaveAttribute("data-active", "true");
 	});
 
 	it("loads a cloud project's settings from the control plane, not the local daemon", async () => {
@@ -226,7 +226,7 @@ describe("SettingsDialog", () => {
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("mobile");
-		expect(screen.getByRole("button", { name: "Mobile" })).toHaveAttribute("aria-current", "page");
+		expect(screen.getByRole("button", { name: "Mobile" })).toHaveAttribute("data-active", "true");
 		await vi.waitFor(() => expect(postMock).toHaveBeenCalledWith(
 			"/api/v1/agents/codex/accounts/ensure",
 			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
@@ -239,7 +239,7 @@ describe("SettingsDialog", () => {
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("remoteHosts");
-		expect(screen.getByRole("button", { name: "Remote hosts" })).toHaveAttribute("aria-current", "page");
+		expect(screen.getByRole("button", { name: "Remote hosts" })).toHaveAttribute("data-active", "true");
 	});
 
 	it("hides Remote hosts and redirects its settings page when Developer mode is off", async () => {
@@ -251,30 +251,6 @@ describe("SettingsDialog", () => {
 		expect(screen.queryByRole("button", { name: "Remote hosts" })).not.toBeInTheDocument();
 	});
 
-	it("keeps the settings surface above its blurred backdrop", async () => {
-		useUiStore.getState().openGlobalSettings("mobile");
-		renderSettingsDialog();
-
-		const overlay = screen.getByTestId("settings-dialog-overlay");
-		const dialog = await screen.findByRole("dialog");
-		expect(overlay).toHaveClass("dialog-overlay");
-		// Keep the scrim below Settings so Chromium never composites its backdrop
-		// blur over the dialog at fractional display scaling. Settings itself stays
-		// on z-overlay: later-portaled confirms and menus can still paint above it.
-		expect(overlay).toHaveClass("z-[calc(var(--z-overlay)-1)]");
-		expect(dialog).toHaveClass("z-overlay");
-		expect(dialog).not.toHaveClass("z-[calc(var(--z-overlay)+1)]");
-	});
-
-	it("keeps the backdrop blur on the layer below settings", async () => {
-		useUiStore.getState().openGlobalSettings("mobile");
-		renderSettingsDialog();
-
-		const overlay = screen.getByTestId("settings-dialog-overlay");
-		expect(overlay).toHaveClass("dialog-overlay");
-		expect(overlay.style.backdropFilter).toBe("");
-	});
-
 	it("opens Harness and forwards its agent focus target without redirecting to Codex Accounts", async () => {
 		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code" });
 		renderSettingsDialog();
@@ -282,8 +258,8 @@ describe("SettingsDialog", () => {
 		const form = await screen.findByTestId("global-settings-section");
 		expect(form).toHaveTextContent("harness");
 		expect(form).toHaveAttribute("data-focus-agent", "claude-code");
-		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("aria-current", "page");
-		expect(screen.getByRole("button", { name: "Subscriptions" })).not.toHaveAttribute("aria-current", "page");
+		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("data-active", "true");
+		expect(screen.getByRole("button", { name: "Subscriptions" })).not.toHaveAttribute("data-active", "true");
 	});
 
 	it("forwards the remote host from a Manage agents action to Harness", async () => {
@@ -376,24 +352,22 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("agents");
 		expect(screen.getByRole("button", { name: "General" })).toBeEnabled();
-		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+		await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 		expect(postMock.mock.calls.map(([path]) => path)).toEqual(["/api/v1/agents/codex/accounts/ensure"]);
 	});
 
-	it("traps focus and closes from Escape or the backdrop", async () => {
+	it("renders inside the page and closes from Escape or Back", async () => {
 		useUiStore.getState().openGlobalSettings("general");
 		renderSettingsDialog();
 
-		const dialog = await screen.findByRole("dialog");
-		expect(dialog).toHaveAttribute("aria-modal", "true");
-		await vi.waitFor(() => expect(screen.getByRole("button", { name: "Close settings" })).toHaveFocus());
+		expect(await screen.findByTestId("settings-page")).toBeInTheDocument();
 		await userEvent.keyboard("{Escape}");
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 
 		useUiStore.getState().openGlobalSettings("general");
-		fireEvent.pointerDown(await screen.findByTestId("settings-dialog-overlay"));
+		await userEvent.click(await screen.findByRole("button", { name: "Back" }));
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 	});
 
@@ -401,7 +375,7 @@ describe("SettingsDialog", () => {
 		useUiStore.getState().openGlobalSettings("general");
 		renderSettingsDialog();
 
-		await screen.findByRole("dialog");
+		await screen.findByTestId("settings-page");
 		const nestedMenu = document.createElement("div");
 		nestedMenu.setAttribute("role", "menu");
 		const nestedItem = document.createElement("button");
@@ -413,7 +387,7 @@ describe("SettingsDialog", () => {
 		expect(useUiStore.getState().settingsModal).not.toBeNull();
 		nestedMenu.remove();
 
-		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		fireEvent.keyDown(screen.getByTestId("settings-page"), { key: "Escape" });
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 	});
 
@@ -421,7 +395,7 @@ describe("SettingsDialog", () => {
 		useUiStore.getState().openGlobalSettings("browserProfiles");
 		renderSettingsDialog();
 
-		const dialog = await screen.findByRole("dialog");
+		const dialog = await screen.findByTestId("settings-page");
 		const inlineEdit = document.createElement("input");
 		inlineEdit.setAttribute("data-settings-inline-edit", "");
 		dialog.append(inlineEdit);
@@ -430,7 +404,7 @@ describe("SettingsDialog", () => {
 		expect(useUiStore.getState().settingsModal).not.toBeNull();
 		inlineEdit.remove();
 
-		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		fireEvent.keyDown(screen.getByTestId("settings-page"), { key: "Escape" });
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 	});
 
@@ -438,7 +412,7 @@ describe("SettingsDialog", () => {
 		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "stale-agent" });
 		renderSettingsDialog();
 
-		await screen.findByRole("dialog");
+		await screen.findByTestId("settings-page");
 		document.body.focus();
 		fireEvent.keyDown(document.body, { key: "Escape" });
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());

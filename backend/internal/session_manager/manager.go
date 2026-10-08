@@ -988,6 +988,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// if it is unavailable for this harness or installation, fall back to TUI.
 	modeExplicitlyRequested := cfg.RequestedMode.Valid()
 	mode := m.resolveSessionMode(ctx, cfg.RequestedMode)
+	if cfg.Kind == domain.KindOrchestrator && !modeExplicitlyRequested {
+		mode = domain.SessionModeChat
+	}
 	if mode == domain.SessionModeChat {
 		if m.chat == nil {
 			if modeExplicitlyRequested {
@@ -1043,7 +1046,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 
-	asyncChat := cfg.Async && mode == domain.SessionModeChat && cfg.Kind == domain.KindWorker && m.chat != nil
+	asyncChat := cfg.Async && mode == domain.SessionModeChat && m.chat != nil && (cfg.Kind == domain.KindOrchestrator || cfg.Kind == domain.KindWorker)
 
 	var prep *taskPreparation
 	if cfg.AutomationRunID == nil && cfg.Branch == "" {
@@ -1789,7 +1792,7 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 		if projectKind == domain.ProjectKindScratch {
 			baseBranch = ""
 		}
-		ws, err := m.workspace.Create(ctx, ports.WorkspaceConfig{
+		workspaceCfg := ports.WorkspaceConfig{
 			ProjectID:     cfg.ProjectID,
 			SessionID:     id,
 			Kind:          cfg.Kind,
@@ -1798,7 +1801,13 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 			FreshBranch:   cfg.TaskPreparation != "",
 			BaseBranch:    baseBranch,
 			BaseRef:       baseRefs[filepath.Clean(project.Path)],
-		})
+		}
+		ws, err := m.workspace.Create(ctx, workspaceCfg)
+		if errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) && cfg.Kind == domain.KindOrchestrator && cfg.Branch == "" {
+			// Leave the occupied worktree intact; the adapter selects an unused suffix.
+			workspaceCfg.FreshBranch = true
+			ws, err = m.workspace.Create(ctx, workspaceCfg)
+		}
 		return ws, nil, err
 	}
 	workspaceProject, ok := m.workspace.(ports.WorkspaceProject)

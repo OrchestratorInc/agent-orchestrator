@@ -226,7 +226,7 @@ const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() =
 		{ id: "proj-1", name: "my-app", path: "/p", type: "main", sessions: [worker, secondWorker, orchestrator] },
 		{ id: "proj-2", name: "other-app", path: "/q", type: "main", sessions: [crossProjectWorker] },
 	];
-	const workspaceQueryState: { data: WorkspaceSummary[] | undefined; isLoading: boolean } = {
+	const workspaceQueryState: { data: WorkspaceSummary[] | undefined; isLoading: boolean; directLoading?: boolean } = {
 		data: workspaces,
 		isLoading: false,
 	};
@@ -774,7 +774,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 		data: workspaceQueryState.data
 			?.flatMap((workspace) => workspace.sessions)
 			.find((session) => session.id === sessionId),
-		isLoading: workspaceQueryState.isLoading,
+		isLoading: workspaceQueryState.directLoading ?? workspaceQueryState.isLoading,
 		});
 	},
 }));
@@ -927,6 +927,7 @@ describe("SessionView", () => {
 		}
 		workspaceQueryState.data = workspaces;
 		workspaceQueryState.isLoading = false;
+		workspaceQueryState.directLoading = undefined;
 		useUiStore.setState({
 			activeShellTerminalHandleId: null,
 			workspaceFileOpenRequest: null,
@@ -1155,6 +1156,16 @@ describe("SessionView", () => {
 		render(<SessionView cloudOrgId="cloud-org" sessionId="sess-1" />);
 		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
 		expect(cloudSessionLookup).toHaveBeenLastCalledWith("cloud-org", "sess-1", false);
+	});
+
+	it("waits for the direct session lookup after the workspace list has loaded", () => {
+		workspaceQueryState.data = [];
+		workspaceQueryState.directLoading = true;
+		const view = render(<SessionView projectId="proj-1" sessionId="starting-orchestrator" />);
+		expect(screen.queryByText(/Session not found/)).not.toBeInTheDocument();
+		workspaceQueryState.directLoading = false;
+		view.rerender(<SessionView projectId="proj-1" sessionId="starting-orchestrator" />);
+		expect(screen.getByText(/Session not found/)).toBeInTheDocument();
 	});
 
 	it("does not use another project's cached session as a local route fallback", () => {

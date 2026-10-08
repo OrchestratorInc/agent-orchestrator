@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpProject, CloudCpProjectSettingsRequest } from "../lib/cloud-cp";
 import { CloudProjectCoderSettings } from "./CloudProjectSettingsForm";
 import { ProjectSettingsForm } from "./ProjectSettingsForm";
-import { SettingsDialog } from "./SettingsDialog";
+import { SettingsDialog } from "./SettingsPageTestHarness";
 import { useUiStore } from "../stores/ui-store";
 import { TooltipProvider } from "./ui/tooltip";
 

@@ -315,6 +315,7 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.Session{}, 0, 0, apierr.Invalid("STANDALONE_WORKER_REQUIRED", "Standalone sessions must be workers", nil)
 	}
 	if cfg.Kind == domain.KindOrchestrator {
+		cfg.Async = true
 		unlock := s.lockOrchestratorProject(cfg.ProjectID)
 		defer unlock()
 
@@ -598,6 +599,7 @@ func (s *Service) SpawnOrchestrator(
 	sess, _, _, err := s.spawn(ctx, ports.SpawnConfig{
 		ProjectID:     projectID,
 		Kind:          domain.KindOrchestrator,
+		Async:         true,
 		RequestedMode: mode,
 		AgentConfig: ports.AgentConfig{
 			Permissions: approval,

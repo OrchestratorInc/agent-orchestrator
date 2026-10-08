@@ -106,10 +106,10 @@ The layout is desktop-first. On constrained widths, preserve task content first,
 
 Sidebar and inspector share `ResizeHandle`. Do not regress:
 
-- Grip is a fixed, hover/active-only pill on the **center-pane border** (sidebar: `.center-panel-surface` left; inspector: panel `border-l`) — not inset into the panel, not a CSS `::after` on the hit strip, not always-visible.
-- Height is **80vh**, vertically centered — not full inset-y / not titlebar-tall.
-- While dragging, the grip moves 1:1 with width delta and **must stop at the same min/max as the panel**. Never follow raw `clientX` past limits. Inspector also clamps against computed CSS `max-width` (`--session-inspector-max-width`); prop/`rangeRef` max alone is insufficient.
-- Call sites must pass the same `minWidth`/`maxWidth` as `useResizable`. No unclamped grip fallback.
+- On hover only, a 2px line is drawn over the **center-pane border** (sidebar: `.center-panel-surface` left; inspector: panel `border-l`), fading out at the top and bottom, with a short opacity fade in/out. No pill, nothing painted on click/drag, not always-visible.
+- The line is pure CSS inside the hit strip (no JS positioning); `useResizable` stays the only width integrator.
+- While dragging, width **must stop at the same min/max as the panel**. Never follow raw `clientX` past limits. Inspector also clamps against computed CSS `max-width` (`--session-inspector-max-width`); prop/`rangeRef` max alone is insufficient.
+- Call sites must pass the same `minWidth`/`maxWidth` as `useResizable`.
 
 ### Brand → home
 
@@ -187,10 +187,10 @@ Do not introduce one-off hex values, arbitrary radius, or unreviewed spacing. Us
 
 ## 7. Typography
 
-Use the loaded Geist families. Do not add a new web font or substitute a generic font for visual novelty.
+Use the font tokens. On macOS they resolve to the system faces (SF Pro / SF Mono); elsewhere to the bundled Geist families. Do not add a new web font or substitute a generic font for visual novelty.
 
-- **UI and body:** `--font-family-base` (`Geist Variable` first).
-- **Code, terminal, compact labels:** `--font-family-mono` (`Geist Mono Variable` first).
+- **UI and body:** `--font-family-base` (`-apple-system` on macOS, `Geist Variable` elsewhere).
+- **Code, terminal, compact labels:** `--font-family-mono` (`SF Mono` on macOS, `Geist Mono Variable` elsewhere).
 - **Weights:** 500 medium for controls and small hierarchy; 600 only for headings, selected values, and genuinely primary emphasis.
 - **Numbers:** use tabular figures for metrics, timestamps, diffs, and columns where alignment matters.
 
@@ -412,6 +412,7 @@ Approve only when the answer to every applicable check is yes. Otherwise classif
 | --- | --- | --- |
 | 2026-09-03 | Dark-first, token-led, compact operational UI | Matches AO's long-running desktop workflow and renderer source of truth. |
 | 2026-09-03 | Geist/Geist Mono remain the typographic system | They are bundled, legible at dense sizes, and already define renderer hierarchy. |
+| 2026-10-09 | macOS uses SF Pro / SF Mono; Geist stays the bundled default elsewhere | System faces match native macOS chrome and get optical sizing for free. |
 | 2026-09-03 | Color is reserved for semantics and active focus | Parallel-agent supervision depends on fast, trustworthy scanning. |
 | 2026-09-03 | Shared list containers with dividers are preferred over spaced sibling cards | Better density and clearer grouping for projects and sessions. |
 | 2026-09-03 | Existing platform shell behavior is part of the design system | macOS traffic lights, Windows titlebar, and collapsible inspector are product behavior, not incidental CSS. |
@@ -424,3 +425,4 @@ Approve only when the answer to every applicable check is yes. Otherwise classif
 | 2026-09-16 | Home: quiet Star-us link; 2×2 action grid with standalone in-grid; recent rows use NavRowHighlight | Rejected accent CTAs, Connect Mobile on home, and flat hover washes — keep home minimal and aligned with sidebar row chrome. |
 | 2026-09-16 | Brand mark clicks to home with no hover/focus fill | Separate home affordance and sidebar focus wash on the brand were rejected. |
 | 2026-09-16 | Resize grips: fixed 80vh hover pill on center-pane border; clamp to panel min/max ∩ CSS max-width | Rejected always-on/`::after`/inset grips and unclamped pointer-following (inspector flew past both limits). |
+| 2026-10-08 | Resize grips: replaced the 80vh pill with a hover-only 2px line on the edge that fades out at both ends | The pill (including active/click state and cursor-following variants) looked bad; JS border tracking removed. |

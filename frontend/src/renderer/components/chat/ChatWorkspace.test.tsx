@@ -1845,6 +1845,67 @@ describe("ChatWorkspace timeline", () => {
 		expect(onChooseSettings).not.toHaveBeenCalled();
 	});
 
+	it("shimmers the entire centered composer until the orchestrator is ready", async () => {
+		const view = render(
+			<ChatWorkspace
+				sessionRole="orchestrator"
+				snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }}
+				session={{ ...chatSession, kind: "orchestrator", provisionState: "provisioning", provisionSteps: startingSteps("running") }}
+			/>,
+		);
+		expect(screen.getByLabelText("Message the agent").closest("form")).toHaveAttribute("data-starting", "true");
+		expect(screen.queryByTestId("orchestrator-startup-status")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("session-startup")).not.toBeInTheDocument();
+		expect(screen.getByText("What do you want to work on?")).toBeInTheDocument();
+		const composer = screen.getByLabelText("Message the agent");
+		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+		view.rerender(<ChatWorkspace sessionRole="orchestrator" snapshot={chatFixtureEmpty} session={{ ...chatSession, kind: "orchestrator", provisionState: "ready" }} />);
+		expect(screen.getByLabelText("Message the agent")).toBe(composer);
+		expect(composer.closest("form")).not.toHaveAttribute("data-starting");
+		expect(await screen.findByText("Ask anything about this project")).toBeInTheDocument();
+	});
+
+	it.each([
+		["fetch", "Getting the latest code"],
+		["worktree", "Preparing your workspace"],
+		["setup", "Running your project setup"],
+		["agent", "Starting your orchestrator"],
+	] as const)("shows the actual %s setup step in the placeholder", (id, message) => {
+		render(<ChatWorkspace snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} sessionRole="orchestrator" startingSteps={[{ id, status: "running" }]} />);
+		expect(screen.getByText(message)).toBeInTheDocument();
+	});
+
+	it("waits for provider settings before showing composer dropdowns", () => {
+		const props = {
+			snapshot: chatFixtureEmpty,
+			onChooseSettings: vi.fn(),
+			models: [{ id: "test-model", displayName: "Test model", default: true }],
+		};
+		const view = render(<ChatWorkspace {...props} settingsReady={false} />);
+		expect(screen.queryByRole("group", { name: "Turn settings" })).not.toBeInTheDocument();
+		view.rerender(<ChatWorkspace {...props} settingsReady />);
+		expect(screen.getByRole("group", { name: "Turn settings" })).toBeInTheDocument();
+	});
+
+	it("shows startup failure and retry for an orchestrator with no messages or turns", async () => {
+		const user = userEvent.setup();
+		const resume = vi.fn();
+		render(
+			<ChatWorkspace
+				sessionRole="orchestrator"
+				snapshot={{ ...chatFixtureEmpty, controller: { state: "stopped" } }}
+				session={{ ...chatSession, kind: "orchestrator", provisionState: "failed", provisionError: "branch already checked out in another worktree", provisionSteps: startingSteps("running") }}
+				onResumeAgent={resume}
+			/>,
+		);
+		expect(screen.getByRole("alert")).toHaveTextContent("Session setup failed");
+		expect(screen.getByTestId("orchestrator-startup-status")).toHaveTextContent("branch already checked out in another worktree");
+		expect(screen.getByText("What do you want to work on?")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Retry start" }));
+		expect(resume).toHaveBeenCalledOnce();
+	});
+
 	it("keeps a failed start's checklist with the failed step and Retry", async () => {
 		const user = userEvent.setup();
 		const resume = vi.fn();

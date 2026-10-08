@@ -90,6 +90,7 @@ import {
 	isOrchestratorSession,
 	type SessionKind,
 	type WorkspaceSession,
+	type SessionProvisionStep,
 } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
 import { SessionPaneTab } from "../CenterPane";
@@ -309,6 +310,8 @@ export interface ChatWorkspaceProps {
 	 * handoff, the history is final, so it stays readable; only sending waits.
 	 */
 	agentResuming?: boolean;
+	startingSteps?: readonly SessionProvisionStep[];
+	settingsReady?: boolean;
 	/** Freeze agent-owned Chat controls while a durable session mutation owns input. */
 	agentInputDisabled?: boolean;
 	/** Fence new agent work without blocking decisions required by the current turn. */
@@ -321,6 +324,7 @@ export interface ChatWorkspaceProps {
 	reviewerChatSelected?: boolean;
 	/** The parent surface owns the shared session tab strip. */
 	hideHeader?: boolean;
+	inlineHeader?: boolean;
 	/** Older durable history is available but not loaded into the DOM yet. */
 	hasOlder?: boolean;
 	loadingOlder?: boolean;
@@ -559,6 +563,8 @@ function ChatWorkspaceContent({
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
 	agentResuming = false,
+	startingSteps,
+	settingsReady = true,
 	agentInputDisabled = false,
 	newWorkDisabled = false,
 	reviewerTerminal,
@@ -567,6 +573,7 @@ function ChatWorkspaceContent({
 	onOpenReviewerChat,
 	reviewerChatSelected = false,
 	hideHeader = false,
+	inlineHeader = false,
 	session,
 	onSessionRenamed,
 	reviewerTarget,
@@ -670,7 +677,7 @@ function ChatWorkspaceContent({
 			: undefined;
 	// While a session starts, its opening brief reads as sent: the setup checklist
 	// under it explains why nothing has answered yet. Later messages still queue.
-	const provisionSteps = session?.provisionSteps;
+	const provisionSteps = session?.provisionSteps ?? startingSteps;
 	// Ready can arrive before the first turn does. Keep its setup slot through
 	// that gap; selecting the first turn also never promotes a queued follow-up.
 	const hasStartup = Boolean(
@@ -1245,7 +1252,7 @@ function ChatWorkspaceContent({
 	const stablePendingUserInput = useStableValue(pendingUserInput);
 	const composerSettings = useMemo(
 		() =>
-			onChooseSettings || onChooseConfigOption ? (
+			settingsReady && (onChooseSettings || onChooseConfigOption) ? (
 				<TurnSettingsBar
 					models={models ?? []}
 					settings={stableSettings}
@@ -1276,6 +1283,7 @@ function ChatWorkspaceContent({
 				/>
 			) : null,
 		[
+			settingsReady,
 			configOptionError,
 			configOptionPending,
 			configOptions,
@@ -1360,10 +1368,25 @@ function ChatWorkspaceContent({
 	);
 	// Empty chats center the prompt; once a turn or item exists the composer docks
 	// at the bottom and stays there for the rest of the session.
-	const conversationEmpty = snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0;
+	const orchestratorStarting = sessionRole === "orchestrator" && startupState !== "failed" && (
+		startupState === "provisioning" || agentResuming ||
+		snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"
+	);
+	const currentSetupStep = provisionSteps?.find((step) => step.status === "running")?.id;
+	const setupPlaceholder = currentSetupStep === "fetch" ? "Getting the latest code"
+		: currentSetupStep === "worktree" ? "Preparing your workspace"
+		: currentSetupStep === "setup" ? "Running your project setup"
+		: currentSetupStep === "agent" ? "Starting your orchestrator"
+		: provisionSteps?.length && provisionSteps.every((step) => step.status === "done")
+			? "Connecting to your orchestrator"
+			: "Getting your project ready";
+	const compactStartup = sessionRole === "orchestrator" && startupState === "failed" ? startup : undefined;
+	const conversationEmpty = snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
 	const { t } = useTranslation();
 	const [emptyChatPlaceholder] = useState(
-		() => EMPTY_CHAT_PLACEHOLDERS[Math.floor(Math.random() * EMPTY_CHAT_PLACEHOLDERS.length)],
+		() => sessionRole === "orchestrator"
+			? "Ask anything about this project"
+			: EMPTY_CHAT_PLACEHOLDERS[Math.floor(Math.random() * EMPTY_CHAT_PLACEHOLDERS.length)],
 	);
 	const composerDockRef = useRef<HTMLDivElement>(null);
 	// The composer itself, not the dock: the dock also holds the welcome heading, which
@@ -1483,7 +1506,7 @@ function ChatWorkspaceContent({
 				workspaceActiveTabKey={workspaceActiveTabKey}
 				orderedAuxiliaryTabs={orderedAuxiliaryTabs}
 				onReorderAuxiliaryTabs={reorderAuxiliaryTabs}
-				inline={isFullscreen}
+				inline={isFullscreen || inlineHeader}
 			/>}
 			<div className="relative flex min-h-0 flex-1 flex-col">
 				{reviewerTarget && session ? (
@@ -1560,7 +1583,7 @@ function ChatWorkspaceContent({
 					) : null}
 					<ControllerBanner
 						controller={snapshot.controller}
-						provisionState={session?.provisionState}
+						provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
 						transitioning={controllerTransitioning || agentResuming}
 						automaticWakePending={suppressStopped}
 						onResume={newWorkDisabled ? undefined : onResumeAgent}
@@ -1603,7 +1626,7 @@ function ChatWorkspaceContent({
 									newWorkDisabled={newWorkDisabled}
 									rollbackDisabled={Boolean(turn || rollbackPending || newWorkDisabled)}
 									localEchos={localEchos}
-									startup={startup}
+									startup={sessionRole === "orchestrator" ? undefined : startup}
 								/>
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
@@ -1660,16 +1683,19 @@ function ChatWorkspaceContent({
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
 										busy={busy}
-										willQueue={Boolean(turn) || session?.provisionState === "provisioning"}
+										willQueue={Boolean(turn) || (sessionRole !== "orchestrator" && session?.provisionState === "provisioning")}
 										queuePlaceholder={
 											session?.provisionState === "provisioning"
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
-										disabled={((snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
+										starting={orchestratorStarting}
+										disabled={(orchestratorStarting || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
 										// Switch/reconnect status is the topbar spinner beside ⋮ — not composer text.
 										disabledPlaceholder={
-											controllerTransitioning || newWorkDisabled
+											orchestratorStarting
+												? setupPlaceholder
+												: controllerTransitioning || newWorkDisabled
 												? ""
 												: agentResuming
 													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
@@ -1707,6 +1733,7 @@ function ChatWorkspaceContent({
 										acceptedClientMessageIds={acceptedClientMessageIds}
 									/>
 								</div>
+								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
 							</div>
 						</div>
 					</div>
@@ -1747,6 +1774,21 @@ function ChatWorkspaceContent({
 				}}
 			/>
 		</section>
+	);
+}
+
+function OrchestratorStartupStatus({ error, onRetry, retrying, retryError }: ComponentProps<typeof SessionStartup>) {
+	const { t } = useTranslation();
+	return (
+		<div data-testid="orchestrator-startup-status" className="px-2 text-xs text-muted-foreground">
+			<div role="alert" className="flex items-center gap-2">
+				<TriangleAlert aria-hidden="true" className="size-3.5 text-destructive" />
+				<span>{t("chat.startup.failed")}</span>
+				{onRetry ? <button type="button" className="ml-auto text-foreground underline underline-offset-2" onClick={onRetry} disabled={retrying}>{retrying ? t("chat.startup.retrying") : t("chat.startup.retry")}</button> : null}
+			</div>
+			{error ? <details className="mt-2"><summary className="cursor-pointer">Error details</summary><p className="mt-1 break-words">{error}</p></details> : null}
+			{retryError ? <p role="alert" className="mt-1 text-destructive">{retryError}</p> : null}
+		</div>
 	);
 }
 
@@ -3371,7 +3413,7 @@ function Timeline({
 		updateScrollbar();
 	}
 
-	if (timelineItems.length === 0 && !messageEdit && !turn) {
+	if (timelineItems.length === 0 && !messageEdit && !turn && !showStartup) {
 		return null;
 	}
 
