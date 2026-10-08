@@ -812,8 +812,9 @@ button.settings-row-bar {
 .project-settings-form > section > h2,
 .project-settings-form > fieldset > section > h2 {
 	padding-inline: 0;
-	font-size: var(--font-size-xs);
+	font-size: var(--font-size-sm);
 	font-weight: 500;
+	line-height: 1rem;
 	color: var(--color-text-settings-muted);
 }
 
@@ -6105,6 +6106,6 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 }
 .cloud-project-settings-form > fieldset > section > .settings-grouped-rows .settings-row-bar {
 	min-height: 3.5rem;
-	padding-inline: var(--space-3) 0;
+	padding-inline: 0;
 	border-top: 0;
 }
