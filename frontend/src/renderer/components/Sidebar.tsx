@@ -318,7 +318,7 @@ function useGrabbingCursor(active: boolean) {
  *  must keep their open/closed and Show more state while it is hidden. */
 const SIDEBAR_COLLAPSIBLE: "offcanvas" | "icon" = "offcanvas";
 export const SIDEBAR_DEFAULT_WIDTH = 240;
-/** Floor/ceiling for sidebar resize — pass the same values to useResizable AND ResizeHandle. */
+/** Floor/ceiling for sidebar resize — pass the same values to useResizable. */
 export const SIDEBAR_MIN_WIDTH = 200;
 export const SIDEBAR_MAX_WIDTH = 420;
 const SIDEBAR_BRAND_TRAILING_GAP = 12;
@@ -710,13 +710,6 @@ export function Sidebar({
 			resizeAuxiliaryTargetRef?.current ?? null,
 		];
 	}, [resizeAuxiliaryTargetRef]);
-	// Stable getter — ResizeHandle keeps callbacks in refs; an inline arrow would
-	// rebuild observers on every Sidebar render (daemon ticks / activity).
-	const getSidebarBorderElement = useCallback(
-		() =>
-			resizeScopeRef.current?.querySelector<HTMLElement>('[data-slot="sidebar-container"]') ?? null,
-		[],
-	);
 	const {
 		onPointerDown: onResizePointerDown,
 		onCollapsedPointerDown: onCollapsedResizePointerDown,
@@ -1288,11 +1281,9 @@ export function Sidebar({
 				)}
 			</SidebarFooter>
 
-			{/* Grip follows the painted sidebar-container edge; useResizable owns clamp. */}
+			{/* useResizable owns clamp. */}
 			<ResizeHandle
 				className="group-data-[state=collapsed]:hidden"
-				getBorderElement={getSidebarBorderElement}
-				getObserveElements={getResizeTargets}
 				onDoubleClick={onResizeDoubleClick}
 				onPointerDown={onResizePointerDown}
 				side="right"

@@ -106,10 +106,10 @@ The layout is desktop-first. On constrained widths, preserve task content first,
 
 Sidebar and inspector share `ResizeHandle`. Do not regress:
 
-- Grip is a fixed, hover/active-only pill on the **center-pane border** (sidebar: `.center-panel-surface` left; inspector: panel `border-l`) — not inset into the panel, not a CSS `::after` on the hit strip, not always-visible.
-- Height is **80vh**, vertically centered — not full inset-y / not titlebar-tall.
-- While dragging, the grip moves 1:1 with width delta and **must stop at the same min/max as the panel**. Never follow raw `clientX` past limits. Inspector also clamps against computed CSS `max-width` (`--session-inspector-max-width`); prop/`rangeRef` max alone is insufficient.
-- Call sites must pass the same `minWidth`/`maxWidth` as `useResizable`. No unclamped grip fallback.
+- On hover only, a 2px line is drawn over the **center-pane border** (sidebar: `.center-panel-surface` left; inspector: panel `border-l`), fading out at the top and bottom, with a short opacity fade in/out. No pill, nothing painted on click/drag, not always-visible.
+- The line is pure CSS inside the hit strip (no JS positioning); `useResizable` stays the only width integrator.
+- While dragging, width **must stop at the same min/max as the panel**. Never follow raw `clientX` past limits. Inspector also clamps against computed CSS `max-width` (`--session-inspector-max-width`); prop/`rangeRef` max alone is insufficient.
+- Call sites must pass the same `minWidth`/`maxWidth` as `useResizable`.
 
 ### Brand → home
 
@@ -424,3 +424,4 @@ Approve only when the answer to every applicable check is yes. Otherwise classif
 | 2026-09-16 | Home: quiet Star-us link; 2×2 action grid with standalone in-grid; recent rows use NavRowHighlight | Rejected accent CTAs, Connect Mobile on home, and flat hover washes — keep home minimal and aligned with sidebar row chrome. |
 | 2026-09-16 | Brand mark clicks to home with no hover/focus fill | Separate home affordance and sidebar focus wash on the brand were rejected. |
 | 2026-09-16 | Resize grips: fixed 80vh hover pill on center-pane border; clamp to panel min/max ∩ CSS max-width | Rejected always-on/`::after`/inset grips and unclamped pointer-following (inspector flew past both limits). |
+| 2026-10-08 | Resize grips: replaced the 80vh pill with a hover-only 2px line on the edge that fades out at both ends | The pill (including active/click state and cursor-following variants) looked bad; JS border tracking removed. |

@@ -53,6 +53,7 @@ import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { CopyButton } from "./chat/CopyButton";
 import { ResumeAgentControl } from "./ResumeAgentControl";
+import { SessionBranchSummary } from "./SessionBranchSummary";
 import {
 	sessionScmSummaryQueryKey,
 	useSessionScmSummary,
@@ -60,7 +61,7 @@ import {
 	type SessionPRSummary,
 } from "../hooks/useSessionScmSummary";
 import { useSessionUsage, type SessionUsage } from "../hooks/useSessionUsage";
-import { sessionWorkspaceFilesQueryKey, useSessionWorkspaceFilesChangedCount } from "../hooks/useSessionWorkspaceFiles";
+import { sessionWorkspaceFilesQueryKey, sessionWorkspaceHistoryQueryOptions, useSessionWorkspaceFilesChangedCount } from "../hooks/useSessionWorkspaceFiles";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
@@ -250,6 +251,7 @@ export const SessionInspector = memo(function SessionInspector({
 		if (next === "files") onOpenFiles?.();
 	}, [onOpenFiles, onViewChange]);
 	const openReviews = useCallback(() => setView("reviews"), [setView]);
+	const openFilesView = useCallback(() => setView("files"), [setView]);
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
@@ -266,6 +268,7 @@ export const SessionInspector = memo(function SessionInspector({
 		return {
 			...entry,
 			badge: entry.id === "browser" && browserUnseen,
+			count: entry.id === "files" ? filesChangedCount : undefined,
 			displayLabel:
 				entry.id === "files" && filesChangedCount !== undefined && (filesChangedCount > 0 || hasWorkspaceInventory)
 					? t("files.tabCount", { count: filesChangedCount })
@@ -332,6 +335,7 @@ export const SessionInspector = memo(function SessionInspector({
 							canOpenReviews={reviewsAvailable}
 							hostId={hostId}
 							onOpenArtifact={onOpenArtifact}
+							onOpenFiles={openFilesView}
 							onOpenReviews={openReviews}
 							session={session}
 						/>
@@ -365,12 +369,14 @@ const SummaryView = memo(function SummaryView({
 	canOpenReviews,
 	onOpenArtifact,
 	hostId,
+	onOpenFiles,
 	onOpenReviews,
 	session,
 }: {
 	canOpenReviews: boolean;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	hostId?: string;
+	onOpenFiles: () => void;
 	onOpenReviews: () => void;
 	session: WorkspaceSession;
 }) {
@@ -401,11 +407,13 @@ const SummaryView = memo(function SummaryView({
 	const hasPRs = prCount > 0;
 	const artifacts = sessionArtifacts(session);
 	const hasArtifacts = artifacts.length > 0;
-	const showPRSection = hasPRs || session.outputType === "pr" || session.outputType === "pr_artifact";
 	const prSectionTitle = prCount > 1 ? t("inspector.pullRequests", { count: prCount }) : t("inspector.pullRequest");
 	const artifactSectionTitle = artifacts.length > 1
 		? t("inspector.artifacts", { count: artifacts.length })
 		: t("inspector.artifact");
+	const openPRNumber = prSummaries.find((pr) => pr.state === "open" || pr.state === "draft")?.number;
+	// CI, review, and merge policies act on a PR. Standalone sessions keep the row for Archive.
+	const showSessionControls = hasPRs || session.workspaceId === STANDALONE_WORKSPACE_ID;
 	// Cloud orchestrators list the workers they spawned; local orchestrators
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
@@ -414,7 +422,7 @@ const SummaryView = memo(function SummaryView({
 		<SessionInspectorSummaryView
 			activity={
 				<>
-					<ActivityTimeline prs={prSummaries} session={session} />
+					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
 					<ResumeAgentControl
 						className="w-full"
 						containerClassName="mt-3 border-t border-(--color-border-settings-input) pt-3"
@@ -437,12 +445,14 @@ const SummaryView = memo(function SummaryView({
 				) : undefined
 			}
 			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
-			completion={<SessionControls hostId={hostId} session={session} />}
-			pullRequestCards={
-				showPRSection ? (
-					<div className="flex flex-col gap-1.5">
-						{hasPRs ? (
-							<>
+			branch={
+				<SessionBranchSummary
+					hostId={hostId}
+					onOpenFiles={onOpenFiles}
+					openPRNumber={openPRNumber}
+					pullRequests={hasPRs ? (
+						<Section surface={false} title={prSectionTitle}>
+							<div className="flex flex-col gap-1.5">
 								{prSummaries.map((pr) => (
 									<PRSummaryCard
 										canOpenReviews={canOpenReviews}
@@ -455,14 +465,13 @@ const SummaryView = memo(function SummaryView({
 									/>
 								))}
 								{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectQuery.data)} key={pr.url} pr={pr} />)}
-							</>
-						) : (
-							<p className={inspectorEmptyClass}>{t("inspector.noPROpened")}</p>
-						)}
-					</div>
-				) : undefined
+							</div>
+						</Section>
+					) : null}
+					session={session}
+				/>
 			}
-			pullRequestTitle={showPRSection ? prSectionTitle : undefined}
+			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
 			usage={
 				showUsageError ? (
@@ -1525,7 +1534,20 @@ function ArtifactSummaryCard({
 
 type SortableTimelineEvent = InspectorTimelineEvent & { sortTime: number };
 
-function ActivityTimeline({ prs, session }: { prs: SessionPRSummary[]; session: WorkspaceSession }) {
+// ponytail: newest 5 commits only; a "show all" control when long sessions need it.
+const TIMELINE_COMMIT_LIMIT = 5;
+
+function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: SessionPRSummary[]; session: WorkspaceSession }) {
+	// Keyed on the daemon's commit count, not the shared history query that every
+	// file edit invalidates, so only a new commit refetches.
+	const commitCount = session.branchState?.commits ?? 0;
+	const history = useQuery({
+		queryKey: ["session-activity-commits", hostId ?? "", session.id, commitCount],
+		queryFn: sessionWorkspaceHistoryQueryOptions(session.id, undefined, hostId).queryFn,
+		staleTime: Infinity,
+		placeholderData: (previous) => previous,
+		enabled: !session.cloud && session.kind !== "orchestrator",
+	});
 	const events: SortableTimelineEvent[] = [];
 	const pushEvent = (event: InspectorTimelineEvent, timestamp?: string | null) => {
 		events.push({ ...event, sortTime: timelineSortTime(timestamp) });
@@ -1540,6 +1562,21 @@ function ActivityTimeline({ prs, session }: { prs: SessionPRSummary[]; session: 
 		},
 		createdAt,
 	);
+
+	for (const commit of history.data?.commits.slice(0, TIMELINE_COMMIT_LIMIT) ?? []) {
+		pushEvent(
+			{
+				tone: "neutral",
+				content: (
+					<>
+						{appI18n.t("inspector.timeline.committed")} <span className="text-passive">{commit.subject}</span>
+					</>
+				),
+				timestamp: formatTimeCompact(commit.timestamp),
+			},
+			commit.timestamp,
+		);
+	}
 
 	for (const pr of prs.filter((pr) => pr.state === "draft")) {
 		pushEvent(

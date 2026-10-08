@@ -293,6 +293,23 @@ type SessionRecord struct {
 	// boundary, and kept after the start settles. A step still running when the
 	// session reads ProvisionState failed is the step that failed.
 	ProvisionSteps []SessionProvisionStep `json:"provisionSteps,omitempty"`
+	// BranchState is what the daemon last observed about the session branch:
+	// its commits on top of the base and whether they reached the remote. The
+	// branch-state reconcile writes it only when a fact changes; nil until the first
+	// observation, and a failed git read keeps the last known value.
+	BranchState *SessionBranchState `json:"branchState,omitempty"`
+}
+
+// SessionBranchState is the session branch's commit and push facts.
+type SessionBranchState struct {
+	// Commits is how many commits the branch has on top of its base.
+	Commits int `json:"commits"`
+	// RemoteBranch is the remote-tracking branch, such as "origin/feat/x".
+	// Empty means the branch has never been pushed.
+	RemoteBranch string `json:"remoteBranch,omitempty"`
+	// Unpushed is how many branch commits are not on RemoteBranch. It equals
+	// Commits while RemoteBranch is empty.
+	Unpushed int `json:"unpushed"`
 }
 
 // SessionProvisionStepID names one stage of an asynchronous Chat start.

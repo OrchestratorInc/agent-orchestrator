@@ -20,6 +20,7 @@ import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterface
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { useUiStore } from "../stores/ui-store";
+import { useSessionGitActionStore } from "../stores/session-git-action-store";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 import type {
   PRState,
@@ -589,8 +590,11 @@ describe("SessionInspector PR section", () => {
 
   it("shows a reported external PR from one SCM request without tracked actions", async () => {
     const respond = commonGetsResponder();
-    getMock.mockImplementation(async (path: string) =>
-      path === "/api/v1/sessions/{sessionId}/pr"
+    getMock.mockImplementation(async (path: string) => {
+      if (path === "/api/v1/projects/{id}") {
+        return { data: { status: "ok", project: { id: "ws-1", repo: "https://gitlab.com/my-app/backend", config: {} } } };
+      }
+      return path === "/api/v1/sessions/{sessionId}/pr"
         ? { data: { prs: [], linkedPrs: [{
           url: "https://gitlab.com/release/notes/-/merge_requests/9",
           provider: "gitlab",
@@ -598,8 +602,8 @@ describe("SessionInspector PR section", () => {
           repo: "release/notes",
           number: 9,
         }] } }
-        : respond(path),
-    );
+        : respond(path);
+    });
     renderWithQuery(<SessionInspector session={session([])} />, undefined, (client) => {
       client.setQueryData(["project", "ws-1"], { repo: "https://gitlab.com/my-app/backend", config: {} });
     });
@@ -885,9 +889,12 @@ describe("SessionInspector PR section", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("shows the empty state when the session's output is a PR but none are open yet", () => {
+  it("omits the pull request section and PR policies until a PR is known, even for PR output", () => {
     renderWithQuery(<SessionInspector session={session([], { outputType: "pr" })} />);
-    expect(screen.getByText("No pull request opened yet.")).toBeInTheDocument();
+    expect(screen.queryByText("Pull request")).not.toBeInTheDocument();
+    expect(screen.queryByText("No pull request opened yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Session controls")).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Automatically fix CI failures" })).not.toBeInTheDocument();
   });
 
   it("hides the section entirely when the session has no known output type", () => {
@@ -918,7 +925,7 @@ describe("SessionInspector PR section", () => {
     const ciRow = policyRow("Automatically fix CI failures");
     const reviewRow = policyRow("Automatically fix review comments");
     const terminateRow = policyRow(
-      "Terminate session when pull requests merge",
+      "Archive session when pull requests merge",
     );
     const prCard = prSection("Pull request")
       .getByText("PR #7")
@@ -942,7 +949,7 @@ describe("SessionInspector PR section", () => {
     for (const name of [
       "Automatically fix CI failures",
       "Automatically fix review comments",
-      "Terminate session when pull requests merge",
+      "Archive session when pull requests merge",
     ]) {
       const toggle = screen.getByRole("switch", { name });
       expect(toggle).toHaveClass("h-4", "w-8", "rounded-full");
@@ -973,8 +980,8 @@ describe("SessionInspector PR section", () => {
 
   });
 
-  it("persists the CI injection policy before a PR exists", async () => {
-    renderWithQuery(<SessionInspector session={session([])} />);
+  it("persists the CI injection policy", async () => {
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")])} />);
 
     const toggle = screen.getByRole("switch", {
       name: "Automatically fix CI failures",
@@ -1498,11 +1505,11 @@ describe("SessionInspector usage", () => {
 
 describe("SessionInspector completion controls", () => {
   it("persists the terminate-on-merge preference", async () => {
-    renderWithQuery(<SessionInspector session={session([])} />);
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")])} />);
 
     await userEvent.click(
       screen.getByRole("switch", {
-        name: "Terminate session when pull requests merge",
+        name: "Archive session when pull requests merge",
       }),
     );
 
@@ -1536,7 +1543,7 @@ describe("SessionInspector completion controls", () => {
 
     expect(
       screen.queryByRole("switch", {
-        name: "Terminate session when pull requests merge",
+        name: "Archive session when pull requests merge",
       }),
     ).not.toBeInTheDocument();
     await userEvent.click(
@@ -1581,7 +1588,7 @@ describe("SessionInspector completion controls", () => {
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("switch", {
-        name: "Terminate session when pull requests merge",
+        name: "Archive session when pull requests merge",
       }),
     ).not.toBeInTheDocument();
 
@@ -1652,7 +1659,7 @@ describe("SessionInspector completion controls", () => {
     expect(screen.queryByText("Completion")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("switch", {
-        name: "Terminate session when pull requests merge",
+        name: "Archive session when pull requests merge",
       }),
     ).not.toBeInTheDocument();
   });
@@ -1985,7 +1992,9 @@ describe("SessionInspector Activity section", () => {
     expect(within(activityRow).getByText("2h ago")).toBeInTheDocument();
   });
 
-  it("aligns text-row dots lower while keeping the Activity chip dot centered", () => {
+  it("renders each Activity event as one row with its time on the right", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
     renderWithQuery(
       <SessionInspector
         session={session([pr(7, "open")], {
@@ -1996,32 +2005,41 @@ describe("SessionInspector Activity section", () => {
       />,
     );
 
-    const workspaceRow = activitySection()
-      .getByText(/Created workspace/)
-      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-    const workspaceMarker = workspaceRow.querySelector(
-      "span[aria-hidden='true'].rounded-full",
-    ) as HTMLElement;
-    expect(workspaceMarker.parentElement).toHaveClass(
-      "relative",
-      "flex",
-      "items-center",
-    );
-    expect(workspaceMarker).toHaveClass("top-1.5");
-    expect(workspaceMarker).not.toHaveClass("top-1/2", "-translate-y-1/2");
+    for (const label of [/Created workspace/, "Idle"]) {
+      const row = activitySection()
+        .getByText(label)
+        .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
+      expect(row).toHaveClass("flex", "items-center");
+      expect(row.firstElementChild).toHaveClass("rounded-full");
+      expect(row.lastElementChild).toHaveClass("font-mono");
+    }
+    expect(screen.queryByTestId("inspector-timeline-connector")).not.toBeInTheDocument();
+  });
 
-    const activityRow = activitySection()
-      .getByText("Idle")
-      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-    const activityMarker = activityRow.querySelector(
-      "span[aria-hidden='true'].rounded-full",
-    ) as HTMLElement;
-    expect(activityMarker.parentElement).toHaveClass(
-      "relative",
-      "flex",
-      "items-center",
+  it("lists the branch's newest commits in Activity", async () => {
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) =>
+      path === "/api/v1/sessions/{sessionId}/workspace/history"
+        ? {
+          data: {
+            sessionId: "sess-1",
+            commits: Array.from({ length: 7 }, (_, index) => ({
+              sha: `c${index}`,
+              subject: `commit ${index}`,
+              author: "ada",
+              timestamp: `2026-06-15T10:0${index}:00Z`,
+              files: [],
+            })),
+          },
+          error: undefined,
+        }
+        : respond(path),
     );
-    expect(activityMarker).toHaveClass("top-1/2", "-translate-y-1/2");
+    renderWithQuery(<SessionInspector session={session([])} />);
+
+    expect(await activitySection().findByText("commit 0")).toBeInTheDocument();
+    expect(activitySection().getAllByText("Committed")).toHaveLength(5);
+    expect(activitySection().queryByText("commit 5")).not.toBeInTheDocument();
   });
 
   it("uses the timeline node as the single live activity indicator", () => {
@@ -2255,17 +2273,6 @@ describe("SessionInspector Activity section", () => {
       "Draft PR #424h ago",
     ]);
 
-    const eventRows = section.querySelectorAll(
-      "[data-testid='inspector-timeline-event']",
-    );
-    expect(
-      section.querySelectorAll("[data-testid='inspector-timeline-connector']"),
-    ).toHaveLength(eventRows.length - 1);
-    expect(
-      within(eventRows[eventRows.length - 1] as HTMLElement).queryByTestId(
-        "inspector-timeline-connector",
-      ),
-    ).not.toBeInTheDocument();
   });
 });
 
@@ -4467,7 +4474,7 @@ describe("SessionInspector summary reviews", () => {
     );
   });
 
-  it("hides Reviews when the session has no PR while keeping its durable preference in Summary", async () => {
+  it("hides Reviews and the review preference when the session has no PR", async () => {
     mockCommonGets();
     renderWithQuery(<SessionInspector session={session([], { outputType: "pr" })} />);
 
@@ -4479,9 +4486,9 @@ describe("SessionInspector summary reviews", () => {
       "Files",
     ]);
     expect(
-      screen.getByRole("switch", { name: "Automatically fix review comments" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("No pull request opened yet.")).toBeInTheDocument();
+      screen.queryByRole("switch", { name: "Automatically fix review comments" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("No pull request opened yet.")).not.toBeInTheDocument();
   });
 
   it("falls back to Summary when a controlled Reviews selection has no PR", async () => {
@@ -4499,7 +4506,7 @@ describe("SessionInspector summary reviews", () => {
       "true",
     );
     expect(screen.queryByRole("tab", { name: "Reviews" })).not.toBeInTheDocument();
-    expect(screen.getByText("Session controls")).toBeInTheDocument();
+    expect(screen.getByText("Activity")).toBeInTheDocument();
     await waitFor(() => expect(onViewChange).toHaveBeenCalledWith("summary"));
   });
 });
@@ -4855,5 +4862,204 @@ describe("SessionInspector Cloud reviews", () => {
       handleId: "cloud-reviewer-7",
       harness: "claude-code",
     });
+  });
+});
+
+describe("SessionInspector branch summary", () => {
+  const changedFile = (path: string, additions: number, deletions: number) => ({
+    path,
+    status: "modified" as const,
+    additions,
+    deletions,
+    size: 100,
+    binary: false,
+    editable: true,
+    fileFingerprint: path,
+  });
+  type ChangedFile = ReturnType<typeof changedFile>;
+
+  // Uncommitted work comes from the workspace manifest; commit and push facts
+  // come from the daemon on the session itself (branchState).
+  function mockGitState({
+    uncommitted = [],
+    committed = [],
+  }: { uncommitted?: ChangedFile[]; committed?: ChangedFile[] }) {
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => {
+      if (path === "/api/v1/sessions/{sessionId}/workspace/manifest") {
+        return {
+          data: {
+            sessionId: "sess-1",
+            workspaceVersion: "v1",
+            compareBaseRef: "origin/main",
+            files: [...committed, ...uncommitted],
+            sections: { staged: [], unstaged: uncommitted, untracked: [], committed },
+            summary: { files: 0, additions: 0, deletions: 0 },
+            truncated: false,
+            degraded: false,
+            stale: false,
+            refreshing: false,
+          },
+          error: undefined,
+        };
+      }
+      return respond(path);
+    });
+  }
+  const pushed = (commits: number) => ({ commits, remoteBranch: "origin/feat/ns", unpushed: 0 });
+
+  const sendCalls = () => postCallsFor("/api/v1/sessions/{sessionId}/send");
+  const branch = () => within(screen.getByRole("region", { name: "Branch" }));
+
+  beforeEach(() => {
+    useSessionGitActionStore.setState({ pending: {} });
+  });
+
+  it("shows uncommitted work and commits, pushes, and opens a PR in one step", async () => {
+    mockGitState({ uncommitted: [changedFile("src/a.ts", 10, 2), changedFile("src/b.ts", 3, 1)] });
+    renderWithQuery(<SessionInspector session={session([])} />);
+
+    expect(await screen.findByText("2 uncommitted files")).toBeInTheDocument();
+    expect(branch().getByText("feat/ns")).toBeInTheDocument();
+    expect(branch().getByText("→ main")).toBeInTheDocument();
+    expect(branch().getByText("+13")).toBeInTheDocument();
+    expect(within(screen.getByRole("tab", { name: "Files" })).getByText("2")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Commit & create PR" }));
+
+    await waitFor(() => expect(sendCalls()).toHaveLength(1));
+    expect(sendCalls()[0][1]).toEqual({
+      params: { path: { sessionId: "sess-1" } },
+      body: { message: expect.stringContaining("open a pull request against `main`") },
+    });
+    expect(await screen.findByRole("button", { name: "Creating PR…" })).toBeDisabled();
+    expect(screen.queryByText(/agent/i)).not.toBeInTheDocument();
+  });
+
+  it("opens the Files tab from a status row", async () => {
+    mockGitState({ uncommitted: [changedFile("src/a.ts", 1, 0)] });
+    renderWithQuery(<SessionInspector session={session([])} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /1 uncommitted file/ }));
+
+    expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("offers push before a PR when commits never left this machine", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([], { branchState: { commits: 2, unpushed: 2 } })} />);
+
+    expect(await screen.findByText("2 commits")).toBeInTheDocument();
+    expect(screen.getByText("not pushed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Push & create PR" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "More git actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Push" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Create draft PR" }));
+
+    await waitFor(() => expect(sendCalls()).toHaveLength(1));
+    expect(sendCalls()[0][1].body.message).toContain("open a draft pull request");
+    expect(await screen.findByRole("button", { name: "Creating PR…" })).toBeDisabled();
+  });
+
+  it("offers a plain Create PR once every commit is pushed", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([], { branchState: pushed(2) })} />);
+
+    expect(await screen.findByText("pushed")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Create PR" })).toBeInTheDocument();
+  });
+
+  it("commits without pushing from the menu", async () => {
+    mockGitState({ uncommitted: [changedFile("src/a.ts", 1, 0)] });
+    renderWithQuery(<SessionInspector session={session([])} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "More git actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Commit" }));
+
+    await waitFor(() => expect(sendCalls()).toHaveLength(1));
+    expect(sendCalls()[0][1].body.message).toBe("Commit all uncommitted changes with a clear message. Do not push.");
+    expect(await screen.findByRole("button", { name: "Committing…" })).toBeDisabled();
+  });
+
+  it("updates the open PR when new work is uncommitted", async () => {
+    mockGitState({ uncommitted: [changedFile("src/c.ts", 4, 0)], committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(3) })} />);
+
+    expect(await screen.findByText("1 uncommitted file")).toBeInTheDocument();
+    expect(branch().getByText("PR #7")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create PR" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Commit & push to #7" }));
+
+    await waitFor(() => expect(sendCalls()).toHaveLength(1));
+    expect(sendCalls()[0][1].body.message).toContain("push this branch to update PR #7");
+    expect(await screen.findByRole("button", { name: "Committing and pushing…" })).toBeDisabled();
+  });
+
+  it("shows no git action when the PR already has every commit", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(3) })} />);
+
+    expect(await screen.findByText("3 commits")).toBeInTheDocument();
+    expect(screen.getByText("pushed")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More git actions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Push|Commit & push) to #7$/ })).not.toBeInTheDocument();
+  });
+
+  it("leaves the loading state once the PR appears", async () => {
+    mockGitState({ uncommitted: [changedFile("src/a.ts", 1, 0)] });
+    const { queryClient, rerender } = renderWithQuery(<SessionInspector session={session([])} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Commit & create PR" }));
+    expect(await screen.findByRole("button", { name: "Creating PR…" })).toBeInTheDocument();
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <SessionInspector session={session([pr(7, "open")])} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Creating PR…" })).not.toBeInTheDocument());
+    expect(useSessionGitActionStore.getState().pending).toEqual({});
+  });
+
+  it("finishes Pushing when the daemon reports the branch pushed", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    const { queryClient, rerender } = renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: { commits: 3, remoteBranch: "origin/feat/ns", unpushed: 1 } })} />,
+    );
+
+    expect(await screen.findByText("1 not pushed")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Push to #7" }));
+    expect(await screen.findByRole("button", { name: "Pushing…" })).toBeDisabled();
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <SessionInspector session={session([pr(7, "open")], { branchState: pushed(3) })} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Pushing…" })).not.toBeInTheDocument());
+    expect(screen.getByText("pushed")).toBeInTheDocument();
+  });
+
+  it("restores the action and shows the error when the request fails", async () => {
+    mockGitState({ uncommitted: [changedFile("src/a.ts", 1, 0)] });
+    postMock.mockImplementation(async (path: string) =>
+      path === "/api/v1/sessions/{sessionId}/send"
+        ? { data: undefined, error: { message: "Session is terminated" } }
+        : { data: { ok: true, sessionId: "sess-1" }, error: undefined },
+    );
+    renderWithQuery(<SessionInspector session={session([])} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Commit & create PR" }));
+
+    expect(await screen.findByText("Session is terminated")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Commit & create PR" })).toBeEnabled();
   });
 });

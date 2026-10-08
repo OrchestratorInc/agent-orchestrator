@@ -3650,6 +3650,7 @@ export interface components {
             autoInjectReview: boolean;
             autoReviewEnabled: boolean;
             branch?: string;
+            branchState?: components["schemas"]["SessionBranchState"];
             chatProviderPreserved: boolean;
             /** Format: date-time */
             createdAt: string;
@@ -4847,6 +4848,11 @@ export interface components {
             size: number;
             /** Format: date-time */
             updatedAt: string;
+        };
+        SessionBranchState: {
+            commits: number;
+            remoteBranch?: string;
+            unpushed: number;
         };
         SessionInterfaceTransition: {
             /** Format: date-time */

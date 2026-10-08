@@ -208,6 +208,10 @@ type Service struct {
 	// independently spawn its own git subprocesses for identical work.
 	workspaceGroup singleflight.Group
 	manifestGroup  singleflight.Group
+	// branchStateMu serializes branch-state reconciles and guards branchTips,
+	// each session's last reconciled branch, remote, and base tips.
+	branchStateMu sync.Mutex
+	branchTips    map[domain.SessionID]string
 	// signalCapable reports whether a harness has a hook pipeline that can
 	// deliver activity signals at all. Only capable harnesses are eligible for
 	// the no_signal downgrade: a hook-less harness staying silent forever is
