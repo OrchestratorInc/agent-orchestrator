@@ -925,7 +925,7 @@ describe("SessionInspector PR section", () => {
     const ciRow = policyRow("Automatically fix CI failures");
     const reviewRow = policyRow("Automatically fix review comments");
     const terminateRow = policyRow(
-      "Terminate session when pull requests merge",
+      "Archive session when pull requests merge",
     );
     const prCard = prSection("Pull request")
       .getByText("PR #7")
@@ -949,7 +949,7 @@ describe("SessionInspector PR section", () => {
     for (const name of [
       "Automatically fix CI failures",
       "Automatically fix review comments",
-      "Terminate session when pull requests merge",
+      "Archive session when pull requests merge",
     ]) {
       const toggle = screen.getByRole("switch", { name });
       expect(toggle).toHaveClass("h-4", "w-8", "rounded-full");
@@ -1509,7 +1509,7 @@ describe("SessionInspector completion controls", () => {
 
     await userEvent.click(
       screen.getByRole("switch", {
-        name: "Terminate session when pull requests merge",
+        name: "Archive session when pull requests merge",
       }),
     );
 
@@ -1543,7 +1543,7 @@ describe("SessionInspector completion controls", () => {
 
     expect(
       screen.queryByRole("switch", {
-        name: "Terminate session when pull requests merge",
+        name: "Archive session when pull requests merge",
       }),
     ).not.toBeInTheDocument();
     await userEvent.click(
@@ -1588,7 +1588,7 @@ describe("SessionInspector completion controls", () => {
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("switch", {
-        name: "Terminate session when pull requests merge",
+        name: "Archive session when pull requests merge",
       }),
     ).not.toBeInTheDocument();
 
@@ -1659,7 +1659,7 @@ describe("SessionInspector completion controls", () => {
     expect(screen.queryByText("Completion")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("switch", {
-        name: "Terminate session when pull requests merge",
+        name: "Archive session when pull requests merge",
       }),
     ).not.toBeInTheDocument();
   });
