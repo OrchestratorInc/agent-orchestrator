@@ -3,7 +3,7 @@ import Constants from "expo-constants";
 import * as Device from "expo-device";
 import { Platform } from "react-native";
 import PostHog from "posthog-react-native";
-import type { SessionMode } from "../api";
+import { getTelemetryIdentity, type SessionMode } from "../api";
 import { buildMobileContext } from "./context";
 import { type ActiveStorage } from "./dailyActive";
 import {
@@ -14,7 +14,8 @@ import {
 } from "./config";
 import { MOBILE_EVENTS } from "./events";
 import { checkRateLimit, mergeRateState, type RateLimitState } from "./rateLimit";
-import { createMobileTelemetry, type MobileTelemetry } from "./telemetry";
+import { createMobileTelemetry, type DesktopTelemetryIdentity, type MobileTelemetry } from "./telemetry";
+import type { ServerConfig } from "../config";
 
 // The one file that touches the SDK and the native runtime. Everything else in
 // telemetry/ is pure and unit-tested; this wires the real PostHog client and is
@@ -75,10 +76,9 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 		host: MOBILE_POSTHOG_HOST,
 		enableSessionReplay: false,
 		captureAppLifecycleEvents: false,
-		// Anonymous ingestion rate. Identified events bill ~3.3x, and nothing here
-		// calls identify(), so a person profile would only ever cost more for no
-		// signal.
-		personProfiles: "never",
+		// Anonymous ingestion rate until a paired desktop's identity is adopted
+		// (adoptDesktopIdentity); only then does identify() create a profile.
+		personProfiles: "identified_only",
 	});
 
 	const version =
@@ -97,8 +97,41 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 	telemetry = createMobileTelemetry(client, context, {
 		disabledEvents: MOBILE_DISABLED_EVENTS,
 		allow: allowEvent,
+		onOptOutChange: (optedOut) => {
+			void (optedOut
+				? AsyncStorage.setItem(OPT_OUT_STORAGE_KEY, "1")
+				: AsyncStorage.removeItem(OPT_OUT_STORAGE_KEY)
+			).catch(() => {});
+		},
 	});
 	return telemetry;
+}
+
+// The desktop's opt-out is sticky on the phone: it survives unpairing and only a
+// paired desktop that is opted in lifts it.
+const OPT_OUT_STORAGE_KEY = "ao.telemetry.optedOut";
+
+/** Restores the persisted opt-out. Awaited before the first heartbeat. */
+export async function loadMobileOptOut(): Promise<void> {
+	try {
+		if ((await AsyncStorage.getItem(OPT_OUT_STORAGE_KEY)) === "1") telemetry?.setOptedOut(true);
+	} catch {
+		/* unreadable storage: stay opted in rather than guess */
+	}
+}
+
+/**
+ * Adopts the identity and opt-out of the connected desktops. Any desktop that
+ * has opted out wins; otherwise the first one that reports an identity is used.
+ * ponytail: first connected desktop wins when several are paired.
+ */
+export async function syncDesktopTelemetryIdentity(configs: ServerConfig[]): Promise<void> {
+	if (!telemetry || configs.length === 0) return;
+	const results = await Promise.all(configs.map((cfg) => getTelemetryIdentity(cfg).catch(() => null)));
+	const reported = results.filter((r): r is DesktopTelemetryIdentity => r !== null);
+	const optedOut = reported.find((r) => r.optedOut);
+	const next = optedOut ?? reported.find((r) => r.distinctId);
+	if (next) telemetry.adoptDesktopIdentity(next);
 }
 
 /** The capture facade, or null before init. Call sites no-op when null. */
