@@ -1242,6 +1242,7 @@
 	"settings.project.kind.unknown": "inconnu",
 	"settings.project.kind.workspace": "espace de travail",
 	"settings.project.modelOverride": "Remplacement du modèle",
+	"settings.project.approval": "Approbation",
 	"settings.project.name": "Nom du projet",
 	"settings.project.nameRequired": "Le nom du projet est obligatoire.",
 	"settings.project.nameTooLong": "Le nom du projet doit comporter {{max}} caractères ou moins.",

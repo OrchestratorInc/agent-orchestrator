@@ -1204,6 +1204,7 @@
 	"settings.project.kind.unknown": "未知",
 	"settings.project.kind.workspace": "工作区",
 	"settings.project.modelOverride": "模型覆盖",
+	"settings.project.approval": "审批",
 	"settings.project.name": "项目名称",
 	"settings.project.nameRequired": "项目名称为必填项。",
 	"settings.project.nameTooLong": "项目名称不得超过 {{max}} 个字符。",

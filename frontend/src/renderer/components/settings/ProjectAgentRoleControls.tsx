@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, type ReactNode } from "react";
+import { useEffect } from "react";
 import { Info } from "lucide-react";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -172,27 +172,6 @@ export function AgentModelField({
 			</div>
 			{warning && <p className="px-1 text-xs leading-row text-warning">{warning}</p>}
 		</>
-	);
-}
-
-export function ProjectAgentRoleRow({ label, agent, model }: { label: string; agent: ReactNode; model: ReactNode }) {
-	return (
-		<div className="grid min-h-16 grid-cols-[6rem_minmax(0,0.85fr)_minmax(0,1.25fr)] items-center gap-3 py-2">
-			<span className="text-sm font-medium text-settings-label">{label}</span>
-			<div className="min-w-0">{agent}</div>
-			<div className="min-w-0">{model}</div>
-		</div>
-	);
-}
-
-export function ProjectAgentRoleHeader() {
-	const { t } = useTranslation();
-	return (
-		<div className="grid grid-cols-[6rem_minmax(0,0.85fr)_minmax(0,1.25fr)] gap-3 py-2 text-xs font-medium text-settings-muted">
-			<span />
-			<span>{t("settings.project.agent")}</span>
-			<span>{t("settings.project.modelOverride")}</span>
-		</div>
 	);
 }
 

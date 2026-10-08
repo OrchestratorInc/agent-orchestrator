@@ -1222,6 +1222,7 @@
 	"settings.project.kind.unknown": "不明",
 	"settings.project.kind.workspace": "ワークスペース",
 	"settings.project.modelOverride": "モデルの上書き",
+	"settings.project.approval": "承認",
 	"settings.project.name": "プロジェクト名",
 	"settings.project.nameRequired": "プロジェクト名は必須です。",
 	"settings.project.nameTooLong": "プロジェクト名は{{max}}文字以下である必要があります。",

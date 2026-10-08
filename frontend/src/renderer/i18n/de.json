@@ -1222,6 +1222,7 @@
 	"settings.project.kind.unknown": "unbekannt",
 	"settings.project.kind.workspace": "workspace",
 	"settings.project.modelOverride": "Modell-Überschreibung",
+	"settings.project.approval": "Genehmigung",
 	"settings.project.name": "Projektname",
 	"settings.project.nameRequired": "Projektname ist erforderlich.",
 	"settings.project.nameTooLong": "Projektname darf maximal {{max}} Zeichen lang sein.",

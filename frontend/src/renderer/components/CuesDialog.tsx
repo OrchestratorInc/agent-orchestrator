@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, Loader2, MessageSquare, Pencil, Plus, TerminalSquare, Trash2, X } from "lucide-react";
+import { Loader2, MessageSquare, Pencil, Plus, TerminalSquare, Trash2, X } from "lucide-react";
 import { apiErrorMessage } from "../lib/api-client";
 import { useUiStore } from "../stores/ui-store";
 import {
@@ -270,10 +270,6 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 		const command = draft.type === "command";
 		const contentId = command ? "cue-command" : "cue-prompt";
 		return <div className="flex flex-col gap-(--size-settings-section-inner-gap)">
-			{!createOnly && formOpen === "new" ? <button type="button" className="flex w-fit items-center gap-1.5 text-sm font-medium text-settings-muted hover:text-foreground" onClick={() => { if (!pending.current) { setFormError(null); setFormOpen(null); } }}>
-				<ArrowLeft aria-hidden="true" className="size-4" />
-				{t("cues.backToCues")}
-			</button> : null}
 			<div className="flex flex-col gap-1.5">
 				<label htmlFor="cue-name" className="settings-field-label">
 					{t("cues.nameLabel")}

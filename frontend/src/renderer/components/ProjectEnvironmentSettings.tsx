@@ -77,7 +77,6 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 	const [pasteText, setPasteText] = useState("");
 	const [importedCount, setImportedCount] = useState<number | null>(null);
 	const dirty = JSON.stringify(Object.fromEntries(rows.map(({ name, value }) => [name, value]))) !== saved;
-	const variableCount = rows.filter(({ name }) => name.trim()).length;
 	const mutation = useMutation({
 		mutationFn: async (env: Record<string, string>) => {
 			// Refresh before the whole-config PUT so this page cannot erase changes made elsewhere.
@@ -144,16 +143,8 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		setError(null);
 		mutation.mutate(env);
 	};
-	return <form id="project-settings-form" className="flex min-h-full flex-col gap-3" onSubmit={(event) => { event.preventDefault(); save(); }}>
-		<div className="flex flex-wrap items-start justify-between gap-2">
-			<div className="min-w-0">
-				<div className="flex flex-wrap items-center gap-2">
-					<h2 className="text-sm font-semibold text-settings-label">{t("settings.project.environmentVariables")}</h2>
-					<span className="rounded-full border border-border bg-muted/30 px-2 py-0.5 text-2xs font-medium text-muted-foreground">{t("settings.project.environmentCount", { count: variableCount })}</span>
-				</div>
-				<p className="mt-1 max-w-2xl text-xs leading-4 text-settings-muted">{t("settings.project.environmentHint")}</p>
-			</div>
-		</div>
+	return <form id="project-settings-form" className="flex min-h-full flex-col gap-(--size-settings-section-inner-gap)" onSubmit={(event) => { event.preventDefault(); save(); }}>
+		<p className="text-sm leading-5 text-settings-muted">{t("settings.project.environmentHint")}</p>
 		<Tabs className="flex min-h-0 flex-1 flex-col gap-3" onValueChange={(value) => { setActiveTab(value as "variables" | "paste"); setError(null); }} value={activeTab}>
 			<TabsList aria-label={t("settings.project.environmentVariables")} className="shrink-0 self-start rounded-md bg-muted/30">
 				<TabsTrigger value="variables">{t("settings.project.environmentVariables")}</TabsTrigger>
