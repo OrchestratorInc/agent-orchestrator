@@ -13,5 +13,5 @@ CREATE UNIQUE INDEX IF NOT EXISTS ao_review_runs_auto_pull_request_sha_idx
 
 -- +goose Down
 
-DROP INDEX ao_review_runs_auto_pull_request_sha_idx;
-ALTER TABLE ao_review_runs DROP COLUMN trigger_source;
+DROP INDEX IF EXISTS ao_review_runs_auto_pull_request_sha_idx;
+ALTER TABLE ao_review_runs DROP COLUMN IF EXISTS trigger_source;

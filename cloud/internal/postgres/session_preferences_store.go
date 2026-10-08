@@ -10,15 +10,21 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ApplyPullRequestAutomation applies idempotent feedback and merge policy for
-// one freshly observed PR. sendMessageTx is fenced by a stable idempotency key,
-// so the background scanner may call this after every observation safely.
+// ApplyPullRequestAutomation applies idempotent feedback policy for one freshly
+// observed PR. sendMessageTx is fenced by a stable idempotency key, so the
+// background scanner may call this after every observation safely.
+//
+// terminate_on_pr_merge is intentionally not enforced here. 00047 defaults it
+// to TRUE for every existing session, so acting on it from this fallback path
+// would start terminating sessions and deleting sandboxes on merge for all of
+// them, and only when the webhook path missed the merge. Enforcing it needs an
+// explicit default decision and one shared code path for webhook and fallback.
 func (s *Store) ApplyPullRequestAutomation(ctx context.Context, pr domain.PullRequest) error {
 	return s.withOrg(ctx, pr.OrgID, func(tx pgx.Tx) error {
-		var autoInjectCI, autoInjectReview, terminateOnMerge bool
-		if err := tx.QueryRow(ctx, `SELECT auto_inject_ci, auto_inject_review, terminate_on_pr_merge
+		var autoInjectCI, autoInjectReview bool
+		if err := tx.QueryRow(ctx, `SELECT auto_inject_ci, auto_inject_review
 			FROM ao_sessions WHERE org_id = $1 AND id = $2`, pr.OrgID, pr.SessionID,
-		).Scan(&autoInjectCI, &autoInjectReview, &terminateOnMerge); err != nil {
+		).Scan(&autoInjectCI, &autoInjectReview); err != nil {
 			return err
 		}
 		fingerprint := strings.TrimSpace(pr.HeadSHA)
@@ -38,19 +44,6 @@ func (s *Store) ApplyPullRequestAutomation(ctx context.Context, pr domain.PullRe
 			if _, err := sendMessageTx(ctx, tx, pr.OrgID, pr.SessionID,
 				fmt.Sprintf("pr-feedback:%s:%s:review-changes", pr.ID, fingerprint), text, "", "", "", nil, domain.ChatTurnSettings{},
 			); err != nil {
-				return err
-			}
-		}
-		if terminateOnMerge && pr.State == "merged" {
-			if _, err := tx.Exec(ctx, `UPDATE ao_sessions
-				SET is_terminated = true, activity_state = 'exited', updated_at = now()
-				WHERE org_id = $1 AND id = $2 AND is_terminated = false`, pr.OrgID, pr.SessionID); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(ctx, `UPDATE ao_sandboxes
-				SET desired_state = 'deleted', deletion_requested_at = COALESCE(deletion_requested_at, now()),
-					startup_started_at = NULL, reconcile_after = now(), updated_at = now()
-				WHERE org_id = $1 AND session_id = $2 AND desired_state <> 'deleted'`, pr.OrgID, pr.SessionID); err != nil {
 				return err
 			}
 		}

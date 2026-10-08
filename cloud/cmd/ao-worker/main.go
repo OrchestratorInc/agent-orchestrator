@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/notificationoutbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/skillassets"
@@ -578,38 +577,6 @@ func startInteractiveAgent(
 	for key, value := range runtimeEnv {
 		agentCommand.Env[key] = value
 	}
-	// A review shares the checkout but always gets a new native conversation.
-	// The selected provider is fetched only when its reviewer terminal opens so
-	// a user can change the Cloud sidebar setting without restarting the worker.
-	transportSupervisor.SetReviewCommandFactory(func(reviewCtx context.Context, harness string) (workerexec.Command, error) {
-		if harness == "" {
-			harness = bootstrap.Launch.Harness
-		}
-		reviewBinary, err := workertransport.ResolveHarnessBinary(harness)
-		if err != nil {
-			return workerexec.Command{}, err
-		}
-		reviewCredential, err := client.CredentialForProvider(reviewCtx, harness)
-		if err != nil {
-			return workerexec.Command{}, fmt.Errorf("load reviewer credential: %w", err)
-		}
-		reviewLaunch := bootstrap.Launch
-		reviewLaunch.Harness = harness
-		reviewLaunch.SessionID = uuid.NewString()
-		reviewLaunch.AgentSessionID = ""
-		reviewCommand, err := (workerexec.HarnessBuilder{
-			DataDir:  dataDir,
-			Binaries: map[string]string{harness: reviewBinary},
-		}).BuildInteractive(reviewLaunch, reviewCredential, workspace)
-		if err != nil {
-			return workerexec.Command{}, fmt.Errorf("build reviewer command: %w", err)
-		}
-		for key, value := range runtimeEnv {
-			reviewCommand.Env[key] = value
-		}
-		reviewCommand.Env[worker.ReviewTerminalEnv] = "1"
-		return reviewCommand, nil
-	})
 	agentTerminal, err := client.ensureAgentTerminal(ctx)
 	if err != nil {
 		if agentCommand.Cleanup != nil {
@@ -820,14 +787,6 @@ func (c *client) EnsureAgentTerminal(ctx context.Context) (worker.AgentTerminalR
 
 func (c *client) Credential(ctx context.Context) (worker.CredentialResponse, error) {
 	return c.agentCredential(ctx, "")
-}
-
-func (c *client) CredentialForProvider(ctx context.Context, provider string) (worker.CredentialResponse, error) {
-	query := ""
-	if provider != "" {
-		query = "?provider=" + url.QueryEscape(provider)
-	}
-	return c.agentCredential(ctx, query)
 }
 
 func (c *client) reviewCredential(ctx context.Context, reviewRunID string) (worker.CredentialResponse, error) {

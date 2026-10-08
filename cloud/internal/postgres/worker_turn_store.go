@@ -500,38 +500,28 @@ func (s *Store) WorkerAgentCredential(
 	orgID, sessionID, workerID string,
 	epoch int64,
 ) (domain.WorkerCredential, error) {
-	return s.workerAgentCredential(ctx, orgID, sessionID, workerID, epoch, "", "")
-}
-
-// WorkerAgentCredentialForProvider redeems another connected provider for a
-// dedicated reviewer terminal. The same worker/session fence and resolution
-// rules apply as the interactive agent credential.
-func (s *Store) WorkerAgentCredentialForProvider(
-	ctx context.Context,
-	orgID, sessionID, workerID string,
-	epoch int64,
-	provider string,
-) (domain.WorkerCredential, error) {
-	return s.workerAgentCredential(ctx, orgID, sessionID, workerID, epoch, provider, "")
+	return s.workerAgentCredential(ctx, orgID, sessionID, workerID, epoch, "")
 }
 
 // WorkerReviewCredential can select only a running review owned by this session.
 func (s *Store) WorkerReviewCredential(ctx context.Context, orgID, sessionID, workerID string, epoch int64, reviewRunID string) (domain.WorkerCredential, error) {
-	return s.workerAgentCredential(ctx, orgID, sessionID, workerID, epoch, "", reviewRunID)
+	return s.workerAgentCredential(ctx, orgID, sessionID, workerID, epoch, reviewRunID)
 }
 
 func (s *Store) workerAgentCredential(
 	ctx context.Context,
 	orgID, sessionID, workerID string,
 	epoch int64,
-	requestedProvider, reviewRunID string,
+	reviewRunID string,
 ) (domain.WorkerCredential, error) {
 	var credential domain.WorkerCredential
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		if err := requireCurrentWorker(ctx, tx, orgID, sessionID, workerID, epoch); err != nil {
 			return err
 		}
-		provider := requestedProvider
+		// Empty selects the session's own harness below; a running review owned
+		// by this session may select only its snapshotted reviewer harness.
+		provider := ""
 		if reviewRunID != "" {
 			if err := tx.QueryRow(ctx,
 				`SELECT COALESCE(reviewer_config->>'harness', '') FROM ao_review_runs

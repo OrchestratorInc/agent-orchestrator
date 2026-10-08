@@ -11,7 +11,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ao_review_runs_active_pull_request_sha_idx
     WHERE status = 'running';
 
 -- +goose Down
-DROP INDEX ao_review_runs_active_pull_request_sha_idx;
+DROP INDEX IF EXISTS ao_review_runs_active_pull_request_sha_idx;
 ALTER TABLE ao_review_runs
     ADD CONSTRAINT ao_review_runs_pull_request_id_target_sha_key
     UNIQUE (pull_request_id, target_sha);

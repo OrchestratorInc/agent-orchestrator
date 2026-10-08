@@ -1199,16 +1199,15 @@ func (s *Server) workerCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "CREDENTIALS_UNAVAILABLE", "Coding-agent credentials are unavailable.")
 		return
 	}
-	provider := r.URL.Query().Get("provider")
+	// A worker redeems only its own session's harness credential, or the
+	// snapshotted harness of a running review it owns. There is deliberately no
+	// arbitrary-provider selector: the worker token is readable by the agent, so
+	// one would let a compromised session pull every connected credential.
+	if r.URL.Query().Has("provider") {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "provider is not supported.")
+		return
+	}
 	reviewRunID := r.URL.Query().Get("reviewRunId")
-	if provider != "" && reviewRunID != "" {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "provider and reviewRunId cannot be combined.")
-		return
-	}
-	if provider != "" && !validAgentProvider(provider) {
-		writeError(w, r, http.StatusUnprocessableEntity, "INVALID_CREDENTIAL", "The selected coding-agent credential is invalid.")
-		return
-	}
 	var credential domain.WorkerCredential
 	var err error
 	if reviewRunID != "" {
@@ -1223,7 +1222,7 @@ func (s *Server) workerCredential(w http.ResponseWriter, r *http.Request) {
 		}
 		credential, err = store.WorkerReviewCredential(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch, reviewRunID)
 	} else {
-		credential, err = s.workerCredentialForProvider(r.Context(), claims, provider)
+		credential, err = s.store.WorkerAgentCredential(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
 	}
 	if err != nil {
 		s.writeWorkerStoreError(w, r, err)
@@ -1254,19 +1253,6 @@ func (s *Server) workerCredential(w http.ResponseWriter, r *http.Request) {
 		CredentialType: credential.CredentialType,
 		Secret:         string(plaintext),
 	})
-}
-
-type workerCredentialProviderStore interface {
-	WorkerAgentCredentialForProvider(context.Context, string, string, string, int64, string) (domain.WorkerCredential, error)
-}
-
-func (s *Server) workerCredentialForProvider(ctx context.Context, claims worker.Claims, provider string) (domain.WorkerCredential, error) {
-	if provider != "" {
-		if store, ok := s.store.(workerCredentialProviderStore); ok {
-			return store.WorkerAgentCredentialForProvider(ctx, claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch, provider)
-		}
-	}
-	return s.store.WorkerAgentCredential(ctx, claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
 }
 
 func (s *Server) writeWorkerStoreError(w http.ResponseWriter, r *http.Request, err error) {
