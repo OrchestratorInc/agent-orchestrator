@@ -230,9 +230,31 @@ describe("render-check proxy render-page allowance", () => {
 	});
 });
 
+describe("render-check proxy with no network", () => {
+	it("reaches the allowed page and nothing else, without resolving a name", async () => {
+		const port = await startRenderCheckProxy("none");
+		const pagePort = await echoServer();
+		const refused: string[] = [];
+		const release = allowRenderPage("127.0.0.1", pagePort, (destination) => refused.push(destination));
+		const { code, socket } = await connectThrough(port, ipv4Target("127.0.0.1", pagePort));
+		expect(code).toBe(0);
+		socket.destroy();
+
+		const lookups = vi.mocked(lookup).mock.calls.length;
+		expect(await replyCode(port, domainTarget("example.com", 443))).toBe(2);
+		expect(await replyCode(port, ipv4Target("93.184.216.34", 443))).toBe(2);
+		// A name sent to a "none" proxy is never looked up, so DNS carries nothing out.
+		expect(vi.mocked(lookup).mock.calls.length).toBe(lookups);
+		expect(refused).toEqual(["example.com:443", "93.184.216.34:443"]);
+		release();
+	});
+});
+
 describe("startRenderCheckProxy", () => {
-	it("runs one proxy per process", async () => {
-		expect(await startRenderCheckProxy()).toBe(await startRenderCheckProxy());
+	it("runs one proxy per process for each network", async () => {
+		expect(await startRenderCheckProxy()).toBe(await startRenderCheckProxy("public"));
+		expect(await startRenderCheckProxy("none")).toBe(await startRenderCheckProxy("none"));
+		expect(await startRenderCheckProxy("none")).not.toBe(await startRenderCheckProxy());
 	});
 
 	it("fails instead of crashing when it cannot listen, and starts on the next try", async () => {

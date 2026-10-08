@@ -1,11 +1,15 @@
-import type { BrowserWindow, Session } from "electron";
-import { allowRenderPage, startRenderCheckProxy } from "./render-check-proxy";
+import type { BrowserWindow, NativeImage, Session } from "electron";
+import { allowRenderPage, type RenderNetwork, startRenderCheckProxy } from "./render-check-proxy";
 
 export type RenderCheckMessage = { level: "debug" | "log" | "warning" | "error"; text: string };
 export type RenderCheckResult = {
 	data: string;
+	/** The page size the screenshot shows, in CSS pixels. */
 	width: number;
 	height: number;
+	/** The PNG's pixel size, smaller than the page when a large image was scaled down. */
+	imageWidth: number;
+	imageHeight: number;
 	contentHeight: number;
 	consoleMessages: RenderCheckMessage[];
 };
@@ -35,9 +39,14 @@ const MEASURE_RESIZE_LIMIT_MS = 1_000;
 // or Array, cannot change what it reads. The window has no preload, so this
 // world holds nothing else.
 const MEASURE_WORLD_ID = 999;
-// No "persist:" prefix: Electron keeps this partition in memory only, and every
-// check shares it, so checks do not each leave a session behind.
-const PARTITION = "ao-render-check";
+// No "persist:" prefix: Electron keeps these partitions in memory only, and
+// every check on a network shares one, so checks do not each leave a session
+// behind. Each network has its own partition, since a partition has one proxy.
+const PARTITIONS: Record<RenderNetwork, string> = { public: "ao-render-check", none: "ao-render-check-offline" };
+// A screenshot this large or larger is scaled down: base64 in the 8 MiB
+// browser-runtime result frame, and under the per-image limits of the models
+// an agent hands it to.
+const MAX_SCREENSHOT_BYTES = 3.5 * 1024 * 1024;
 // One deadline for all the work on a page (load, settle, measure, capture): a
 // page that blocks its main thread after loading must not keep the hidden window alive.
 const CHECK_DEADLINE_MS = 20_000;
@@ -51,18 +60,19 @@ export const CONTENT_HEIGHT_SCRIPT = `(() => {
 	return Math.ceil(r.scrollHeight > r.clientHeight ? r.scrollHeight : r.getBoundingClientRect().height);
 })()`;
 
-// Every check shares the partition's session, so it is proxied once.
+// Every check on a network shares its partition's session, so it is proxied once.
 const proxiedSessions = new WeakMap<Session, Promise<void>>();
 
 /**
- * Sends every connection the check window makes through the public-address
- * proxy. "<-loopback>" matters: without it Chromium connects to loopback
- * directly and skips the proxy.
+ * Sends every connection the check window makes through the proxy listener
+ * for its network. "<-loopback>" matters: without it Chromium connects to
+ * loopback directly and skips the proxy. With a proxy, Chromium resolves no
+ * names itself, so a "none" page cannot leak data through DNS either.
  */
-function proxyPartition(session: Session): Promise<void> {
+function proxyPartition(session: Session, network: RenderNetwork): Promise<void> {
 	let proxied = proxiedSessions.get(session);
 	if (!proxied) {
-		proxied = startRenderCheckProxy()
+		proxied = startRenderCheckProxy(network)
 			.then((port) => session.setProxy({ proxyRules: `socks5://127.0.0.1:${port}`, proxyBypassRules: "<-loopback>" }))
 			.catch((error: unknown) => {
 				proxiedSessions.delete(session);
@@ -92,6 +102,13 @@ function renderURL(url: unknown): URL {
 	throw renderCheckError("INVALID_ARGUMENT", "a render check needs a daemon render URL");
 }
 
+/** The network the daemon allows this agent's pages: never more than the agent's own sandbox has. */
+function renderNetwork(network: unknown): RenderNetwork {
+	if (network === undefined || network === "public") return "public";
+	if (network === "none") return "none";
+	throw renderCheckError("INVALID_ARGUMENT", 'render network must be "public" or "none"');
+}
+
 function isRenderWidth(width: unknown): width is number {
 	return typeof width === "number" && Number.isInteger(width) && width >= 240 && width <= 1_600;
 }
@@ -104,6 +121,63 @@ function clampHeight(height: number): number {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Evaluates `code` (an array expression) in the isolated world. A script that
+ * fails there resolves undefined instead of rejecting, so that reads as empty.
+ */
+async function readPage(window: BrowserWindow, code: string): Promise<unknown[]> {
+	return (await window.webContents.executeJavaScriptInIsolatedWorld(MEASURE_WORLD_ID, [{ code }])) ?? [];
+}
+
+/**
+ * Resizes the viewport and waits until the page sees the new size: the resize
+ * reaches the page a frame or more after setContentSize, and paints keep
+ * arriving at the old size until then.
+ */
+async function resizeTo(window: BrowserWindow, width: number, height: number): Promise<void> {
+	window.setContentSize(width, height);
+	const limit = Date.now() + MEASURE_RESIZE_LIMIT_MS;
+	while (Date.now() < limit) {
+		const [viewWidth, viewHeight] = await readPage(window, "[innerWidth, innerHeight]");
+		if (viewWidth === width && viewHeight === height) return;
+		await sleep(MEASURE_POLL_MS);
+	}
+	throw renderCheckError("BROWSER_COMMAND_FAILED", `render check failed: the viewport did not reach ${width}x${height} px`);
+}
+
+/** The next frame painted after this call, captured. invalidate() guarantees a frame. */
+async function capturePainted(window: BrowserWindow): Promise<NativeImage> {
+	const contents = window.webContents;
+	const painted = new Promise<void>((resolve) => contents.once("paint", () => resolve()));
+	contents.invalidate();
+	await painted;
+	return contents.capturePage();
+}
+
+/** Whether an image shows the whole width x height page, at any device scale. */
+function showsWholePage(image: NativeImage, width: number, height: number): boolean {
+	const size = image.getSize();
+	const scale = size.width / width;
+	return scale > 0 && Math.abs(size.height - height * scale) <= Math.ceil(scale);
+}
+
+/**
+ * The screenshot as a PNG no larger than MAX_SCREENSHOT_BYTES where it can be:
+ * each pass scales it by the square root of the overshoot, a little more, so
+ * three passes cover any page a check allows.
+ */
+function boundedPNG(image: NativeImage): { png: Buffer; width: number; height: number } {
+	let current = image;
+	let png = current.toPNG();
+	for (let pass = 0; pass < 3 && png.length > MAX_SCREENSHOT_BYTES; pass++) {
+		const factor = Math.sqrt(MAX_SCREENSHOT_BYTES / png.length) * 0.9;
+		current = current.resize({ width: Math.max(1, Math.floor(current.getSize().width * factor)), quality: "good" });
+		png = current.toPNG();
+	}
+	const size = current.getSize();
+	return { png, width: size.width, height: size.height };
+}
+
+/**
  * The page's height once its viewport is `width` wide. The resize reaches the
  * page a frame or more after setContentSize, and paints keep arriving at the
  * old size until then, so the page's own viewport is read with its height.
@@ -112,9 +186,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 async function heightAt(window: BrowserWindow, width: number): Promise<number> {
 	window.setContentSize(width, MEASURE_VIEWPORT_HEIGHT);
-	// A script that fails in an isolated world resolves undefined instead of rejecting.
-	const read = async (): Promise<unknown[]> =>
-		(await window.webContents.executeJavaScriptInIsolatedWorld(MEASURE_WORLD_ID, [{ code: `[innerWidth, ${CONTENT_HEIGHT_SCRIPT}]` }])) ?? [];
+	const read = () => readPage(window, `[innerWidth, ${CONTENT_HEIGHT_SCRIPT}]`);
 	const limit = Date.now() + MEASURE_RESIZE_LIMIT_MS;
 	while (Date.now() < limit) {
 		const [viewport] = await read();
@@ -144,6 +216,7 @@ async function withRenderWindow<T>(
 	deps: RenderCheckDeps,
 	name: string,
 	page: URL,
+	network: RenderNetwork,
 	size: { width: number; height: number },
 	signal: AbortSignal | undefined,
 	use: (view: RenderWindow) => Promise<T>,
@@ -151,13 +224,16 @@ async function withRenderWindow<T>(
 	const window = new deps.BrowserWindow({
 		show: false,
 		...size,
+		// The size is the page's viewport, not the window's outer frame, so the
+		// page lays out at the width the agent asked for on every platform.
+		useContentSize: true,
 		webPreferences: {
 			offscreen: true,
 			sandbox: true,
 			contextIsolation: true,
 			nodeIntegration: false,
 			backgroundThrottling: false,
-			partition: PARTITION,
+			partition: PARTITIONS[network],
 		},
 	});
 	let release: (() => void) | undefined;
@@ -183,13 +259,17 @@ async function withRenderWindow<T>(
 		// The page itself is the one local address the check may load. Each refused
 		// destination is reported once, so the agent knows why a resource is missing.
 		const refused = new Set<string>();
+		const why =
+			network === "none"
+				? "The agent has no network access, so the check loads no network resources."
+				: "A render check loads only public addresses.";
 		release = allowRenderPage(page.hostname, Number(page.port || 80), (destination) => {
 			if (refused.has(destination)) return;
 			refused.add(destination);
-			record({ level: "warning", text: `AO blocked a request to ${destination}. A render check loads only public addresses.` });
+			record({ level: "warning", text: `AO blocked a request to ${destination}. ${why}` });
 		});
 		const run = async () => {
-			await proxyPartition(contents.session);
+			await proxyPartition(contents.session, network);
 			await contents.loadURL(page.href);
 			view.stage = "settling";
 			await sleep(SETTLE_MS);
@@ -224,28 +304,39 @@ export async function checkRender(
 	signal?: AbortSignal,
 ): Promise<RenderCheckResult> {
 	const page = renderURL(args.url);
+	const network = renderNetwork(args.network);
 	const { width } = args;
 	if (!isRenderWidth(width)) {
 		throw renderCheckError("INVALID_ARGUMENT", "render check width must be an integer from 240 to 1600");
 	}
-	return withRenderWindow(deps, "render check", page, { width, height: 800 }, signal, async (view) => {
-		const contents = view.window.webContents;
+	return withRenderWindow(deps, "render check", page, network, { width, height: 800 }, signal, async (view) => {
 		view.stage = "measuring the page";
-		const contentHeight = Number(await contents.executeJavaScript(CONTENT_HEIGHT_SCRIPT));
+		const [measured] = await readPage(view.window, `[${CONTENT_HEIGHT_SCRIPT}]`);
+		const contentHeight = Number(measured);
 		const height = clampHeight(contentHeight);
 		view.stage = "capturing the screenshot";
-		// The resize lands asynchronously; capture the first frame painted after
-		// it, or the image is cropped to the old size. invalidate() guarantees a
-		// frame even when the size did not change.
-		const painted = new Promise<void>((resolve) => contents.once("paint", () => resolve()));
-		view.window.setContentSize(width, height);
-		contents.invalidate();
-		await painted;
-		const image = await contents.capturePage();
+		// Captured only once the page sees the new size, and again if the first
+		// frame was still the old size, or the image is cropped to it.
+		await resizeTo(view.window, width, height);
+		let image = await capturePainted(view.window);
+		if (!showsWholePage(image, width, height)) image = await capturePainted(view.window);
 		if (image.isEmpty()) {
 			throw renderCheckError("BROWSER_COMMAND_FAILED", "render check captured an empty image");
 		}
-		return { data: image.toPNG().toString("base64"), width, height, contentHeight, consoleMessages: view.consoleMessages };
+		if (!showsWholePage(image, width, height)) {
+			const size = image.getSize();
+			throw renderCheckError("BROWSER_COMMAND_FAILED", `render check captured ${size.width}x${size.height}, not the ${width}x${height} page`);
+		}
+		const shot = boundedPNG(image);
+		return {
+			data: shot.png.toString("base64"),
+			width,
+			height,
+			imageWidth: shot.width,
+			imageHeight: shot.height,
+			contentHeight,
+			consoleMessages: view.consoleMessages,
+		};
 	});
 }
 
@@ -259,12 +350,13 @@ export async function measureRender(
 	signal?: AbortSignal,
 ): Promise<RenderMeasureResult> {
 	const page = renderURL(args.url);
+	const network = renderNetwork(args.network);
 	const { widths } = args;
 	if (!Array.isArray(widths) || widths.length === 0 || widths.length > MAX_MEASURE_WIDTHS || !widths.every(isRenderWidth)) {
 		throw renderCheckError("INVALID_ARGUMENT", "render measure needs 1 to 16 widths, each an integer from 240 to 1600");
 	}
 	const size = { width: widths[0]!, height: MEASURE_VIEWPORT_HEIGHT };
-	return withRenderWindow(deps, "render measure", page, size, signal, async (view) => {
+	return withRenderWindow(deps, "render measure", page, network, size, signal, async (view) => {
 		const heights: Array<[number, number]> = [];
 		for (const width of widths) {
 			view.stage = `measuring the page at ${width} px`;

@@ -1,18 +1,35 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CONTENT_HEIGHT_SCRIPT, checkRender, measureRender } from "./render-check";
-import { allowRenderPage } from "./render-check-proxy";
+import { allowRenderPage, startRenderCheckProxy } from "./render-check-proxy";
 
 // The proxy itself is tested over real sockets in render-check-proxy.test.ts.
 vi.mock("./render-check-proxy", () => ({
-	startRenderCheckProxy: async () => 1080,
+	startRenderCheckProxy: vi.fn(async (network: string) => (network === "none" ? 1081 : 1080)),
 	allowRenderPage: vi.fn(() => vi.fn()),
 }));
 
 const url = "http://127.0.0.1:3001/api/v1/sessions/p-1/renders/check-id-001";
 
-function fakes(
-	options: { loadError?: Error; measureNeverReturns?: boolean; emptyImage?: boolean; manualPaint?: boolean; refused?: string[] } = {},
-) {
+type FakeOptions = {
+	loadError?: Error;
+	measureNeverReturns?: boolean;
+	emptyImage?: boolean;
+	manualPaint?: boolean;
+	refused?: string[];
+	/** The height the page needs; 412 unless set. */
+	contentHeight?: number;
+	/** The first capture is still the frame from before the resize. */
+	staleFirstCapture?: boolean;
+	/** PNG bytes per pixel of the captured image, to make large screenshots. */
+	pngBytesPerPixel?: number;
+};
+
+/**
+ * A hidden window around a page. The page's viewport reaches a new size one
+ * read after setContentSize, as a real resize does; reads go through the
+ * isolated world, so the page's main world is never used.
+ */
+function fakes(options: FakeOptions = {}) {
 	const events: string[] = [];
 	const listeners = new Map<string, (...args: unknown[]) => void>();
 	const paintListeners: Array<() => void> = [];
@@ -40,12 +57,19 @@ function fakes(
 			if (options.loadError) throw options.loadError;
 			listeners.get("console-message")?.({}, 3, "Uncaught ReferenceError: d3 is not defined", 1, url);
 		}),
-		executeJavaScript: vi.fn((_script: string): Promise<unknown> => (options.measureNeverReturns ? new Promise(() => {}) : Promise.resolve(412))),
+		executeJavaScript: vi.fn((_script: string): Promise<unknown> => Promise.resolve(undefined)),
 		// A script that fails in an isolated world resolves undefined.
-		executeJavaScriptInIsolatedWorld: vi.fn(
-			(_worldId: number, _scripts: Array<{ code: string }>): Promise<unknown> =>
-				options.measureNeverReturns ? new Promise(() => {}) : Promise.resolve(undefined),
-		),
+		executeJavaScriptInIsolatedWorld: vi.fn((_worldId: number, scripts: Array<{ code: string }>): Promise<unknown> => {
+			if (options.measureNeverReturns) return new Promise(() => {});
+			const code = scripts[0]?.code;
+			if (code === `[${CONTENT_HEIGHT_SCRIPT}]`) return Promise.resolve([options.contentHeight ?? 412]);
+			if (code === "[innerWidth, innerHeight]") {
+				const seen = [...viewport];
+				viewport = [...target];
+				return Promise.resolve(seen);
+			}
+			return Promise.resolve(undefined);
+		}),
 		// An offscreen page repaints on invalidate(); manualPaint holds that frame back.
 		invalidate: vi.fn(() => {
 			events.push("invalidate");
@@ -53,16 +77,33 @@ function fakes(
 		}),
 		capturePage: vi.fn(async () => {
 			events.push("capture");
-			return { isEmpty: () => Boolean(options.emptyImage), toPNG: () => Buffer.from("png-bytes") };
+			const stale = options.staleFirstCapture && contents.capturePage.mock.calls.length === 1;
+			return image(stale ? created : options.emptyImage ? [0, 0] : target);
 		}),
 	};
+	const image = ([width, height]: number[]): Record<string, unknown> => ({
+		isEmpty: () => width === 0,
+		getSize: () => ({ width, height }),
+		toPNG: () =>
+			options.pngBytesPerPixel ? Buffer.alloc(Math.ceil(width * height * options.pngBytesPerPixel)) : Buffer.from("png-bytes"),
+		resize: ({ width: to }: { width: number }) => image([to, Math.round((height * to) / width)]),
+	});
+	let created = [0, 0];
+	let viewport = [0, 0];
+	let target = [0, 0];
 	const window = {
 		webContents: contents,
-		setContentSize: vi.fn((width: number, height: number) => events.push(`resize ${width}x${height}`)),
+		setContentSize: vi.fn((width: number, height: number) => {
+			events.push(`resize ${width}x${height}`);
+			target = [width, height];
+		}),
 		destroy: vi.fn(),
 	};
 	// A function, not an arrow: checkRender calls it with `new` (vitest 4 rejects arrow constructors).
-	const BrowserWindow = vi.fn(function (_options: Record<string, unknown>) {
+	const BrowserWindow = vi.fn(function (options: { width: number; height: number }) {
+		created = [options.width, options.height];
+		viewport = [...created];
+		target = [...created];
 		return window;
 	});
 	return { contents, window, BrowserWindow, permissionRequest, events, paint };
@@ -90,15 +131,19 @@ describe("checkRender", () => {
 			data: png,
 			width: 390,
 			height: 412,
+			imageWidth: 390,
+			imageHeight: 412,
 			contentHeight: 412,
 			consoleMessages: [{ level: "error", text: "Uncaught ReferenceError: d3 is not defined" }],
 		});
 		// Offscreen so it paints without ever being on screen; one fixed partition
-		// with no "persist:" prefix, so checks share one in-memory session.
+		// with no "persist:" prefix, so checks share one in-memory session. The
+		// size is the viewport's, so the page lays out at the asked-for width.
 		expect(f.BrowserWindow).toHaveBeenCalledWith({
 			show: false,
 			width: 390,
 			height: 800,
+			useContentSize: true,
 			webPreferences: {
 				offscreen: true,
 				sandbox: true,
@@ -111,7 +156,9 @@ describe("checkRender", () => {
 		const decide = vi.fn();
 		f.permissionRequest({}, "media", decide);
 		expect(decide).toHaveBeenCalledWith(false);
-		expect(f.contents.executeJavaScript).toHaveBeenCalledWith(CONTENT_HEIGHT_SCRIPT);
+		// Read where the page's own globals cannot reach.
+		expect(f.contents.executeJavaScriptInIsolatedWorld).toHaveBeenCalledWith(999, [{ code: `[${CONTENT_HEIGHT_SCRIPT}]` }]);
+		expect(f.contents.executeJavaScript).not.toHaveBeenCalled();
 		expect(f.window.destroy).toHaveBeenCalled();
 	});
 
@@ -156,8 +203,7 @@ describe("checkRender", () => {
 	});
 
 	it("caps the captured height at 2000 px", async () => {
-		const f = fakes();
-		f.contents.executeJavaScript.mockResolvedValue(5_000);
+		const f = fakes({ contentHeight: 5_000 });
 		await expect(checkRender(f as never, { url, width: 390 })).resolves.toMatchObject({ height: 2_000, contentHeight: 5_000 });
 		expect(f.window.setContentSize).toHaveBeenCalledWith(390, 2_000);
 	});
@@ -169,6 +215,36 @@ describe("checkRender", () => {
 			message: expect.stringMatching(/empty/),
 		});
 		expect(f.window.destroy).toHaveBeenCalled();
+	});
+
+	it("captures again when the first frame is still the size from before the resize", async () => {
+		const f = fakes({ staleFirstCapture: true });
+		await expect(checkRender(f as never, { url, width: 390 })).resolves.toMatchObject({ imageWidth: 390, imageHeight: 412 });
+		expect(f.contents.capturePage).toHaveBeenCalledTimes(2);
+	});
+
+	it("scales a screenshot too large to hand back until it fits, and says so", async () => {
+		const f = fakes({ contentHeight: 2_000, pngBytesPerPixel: 6 });
+		const result = await checkRender(f as never, { url, width: 1_600 });
+		expect(result).toMatchObject({ width: 1_600, height: 2_000 });
+		expect(Buffer.from(result.data, "base64").length).toBeLessThanOrEqual(3.5 * 1024 * 1024);
+		expect(result.imageWidth).toBeLessThan(1_600);
+		expect(result.imageHeight).toBe(Math.round((2_000 * result.imageWidth) / 1_600));
+	});
+
+	it("loads a page with no network in its own partition and proxy when the agent has none", async () => {
+		const f = fakes({ refused: ["example.com:443"] });
+		const result = await checkRender(f as never, { url, width: 390, network: "none" });
+		expect(f.BrowserWindow).toHaveBeenCalledWith(
+			expect.objectContaining({ webPreferences: expect.objectContaining({ partition: "ao-render-check-offline" }) }),
+		);
+		expect(startRenderCheckProxy).toHaveBeenLastCalledWith("none");
+		expect(f.contents.session.setProxy).toHaveBeenCalledWith({ proxyRules: "socks5://127.0.0.1:1081", proxyBypassRules: "<-loopback>" });
+		expect(result.consoleMessages[0]).toEqual({
+			level: "warning",
+			text: "AO blocked a request to example.com:443. The agent has no network access, so the check loads no network resources.",
+		});
+		await expect(checkRender(fakes() as never, { url, width: 390, network: "lan" })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
 	});
 
 	it("destroys the window when the page fails to load", async () => {
@@ -240,7 +316,7 @@ describe("checkRender deadline and cancellation", () => {
 		await vi.advanceTimersByTimeAsync(100);
 		controller.abort();
 		await rejected;
-		expect(f.contents.executeJavaScript).not.toHaveBeenCalled();
+		expect(f.contents.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled();
 		expect(f.window.destroy).toHaveBeenCalled();
 	});
 
@@ -258,7 +334,7 @@ describe("checkRender deadline and cancellation", () => {
 		const controller = new AbortController();
 		const removeListener = vi.spyOn(controller.signal, "removeEventListener");
 		const result = checkRender(f as never, { url, width: 720 }, controller.signal);
-		await vi.advanceTimersByTimeAsync(300);
+		await vi.advanceTimersByTimeAsync(400);
 		await expect(result).resolves.toMatchObject({ contentHeight: 412 });
 		expect(vi.getTimerCount()).toBe(0);
 		expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));

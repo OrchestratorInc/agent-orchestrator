@@ -114,18 +114,29 @@ export function allowRenderPage(host: string, port: number, onRefused: (destinat
 }
 
 /**
- * The addresses to connect to for a CONNECT target: none when the name does
- * not resolve, "local" when any address it resolves to is local and the target
- * is not an allowed render page. The caller connects only to addresses checked
- * here, so a name that later resolves elsewhere (DNS rebinding) changes nothing.
+ * The network a proxy listener lets pages reach besides the allowed render
+ * pages: public addresses, or nothing at all for an agent whose own sandbox
+ * has no network.
  */
-async function addressesFor(host: string, port: number) {
+export type RenderNetwork = "public" | "none";
+
+/**
+ * The addresses to connect to for a CONNECT target: none when the name does
+ * not resolve, "refused" when the target is not an allowed render page and is
+ * local, or anything at all on a "none" listener. The caller connects only to
+ * addresses checked here, so a name that later resolves elsewhere (DNS
+ * rebinding) changes nothing.
+ */
+async function addressesFor(host: string, port: number, network: RenderNetwork) {
+	const isAllowed = allowed.has(destination(host, port));
+	// Refused before any lookup, so a "none" page cannot leak a name through DNS.
+	if (!isAllowed && network === "none") return "refused";
 	const family = isIP(host);
 	const addresses = family
 		? [{ address: host, family }]
 		: await lookup(host, { all: true, verbatim: true }).catch(() => []);
-	if (addresses.length === 0 || allowed.has(destination(host, port))) return addresses;
-	return addresses.some(({ address, family }) => isLocal(address, family)) ? "local" : addresses;
+	if (addresses.length === 0 || isAllowed) return addresses;
+	return addresses.some(({ address, family }) => isLocal(address, family)) ? "refused" : addresses;
 }
 
 // SOCKS5 (RFC 1928) replies: success, refused by rule, host unreachable, command unsupported.
@@ -166,7 +177,7 @@ function track(socket: Socket): Socket {
 }
 
 /** One client: no-auth greeting, one CONNECT, then bytes both ways. */
-function serve(client: Socket): void {
+function serve(client: Socket, network: RenderNetwork): void {
 	track(client);
 	let data = Buffer.alloc(0);
 	let greeted = false;
@@ -198,10 +209,10 @@ function serve(client: Socket): void {
 			early.push(chunk);
 		};
 		client.on("data", holdEarly);
-		void addressesFor(request.host, request.port).then((addresses) => {
+		void addressesFor(request.host, request.port, network).then((addresses) => {
 			if (client.destroyed) return;
 			client.off("data", holdEarly);
-			if (addresses === "local") {
+			if (addresses === "refused") {
 				const refused = destination(request.host, request.port);
 				for (const listener of refusalListeners) listener(refused);
 				return refuse(client, 2);
@@ -236,24 +247,30 @@ function serve(client: Socket): void {
 	client.on("data", onData);
 }
 
-let started: Promise<number> | undefined;
+const started = new Map<RenderNetwork, Promise<number>>();
 
 /**
- * Starts the proxy on loopback, once per process, and returns its port. The
- * render-check session sends every connection through it, and it connects
- * only to public addresses and the allowed render pages. It carries bytes
- * only, so HTTP, TLS, and WebSockets pass through unchanged.
+ * Starts the proxy listener for `network` on loopback, once per process, and
+ * returns its port. A render-check session sends every connection through
+ * one, and it connects only to the allowed render pages and, for "public",
+ * public addresses. Each network has its own listener, because Chromium's
+ * SOCKS5 carries nothing that tells one check's connections from another's.
+ * It carries bytes only, so HTTP, TLS, and WebSockets pass through unchanged.
  */
-export function startRenderCheckProxy(): Promise<number> {
-	started ??= new Promise<number>((resolve, reject) => {
-		const server = createServer(serve);
-		// A failure to listen fails this check, and the next check tries again;
-		// once listening, a server error must not reach Node as an unhandled event.
-		server.on("error", reject);
-		server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port));
-	}).catch((error: unknown) => {
-		started = undefined;
-		throw error;
-	});
-	return started;
+export function startRenderCheckProxy(network: RenderNetwork = "public"): Promise<number> {
+	let listening = started.get(network);
+	if (!listening) {
+		listening = new Promise<number>((resolve, reject) => {
+			const server = createServer((client) => serve(client, network));
+			// A failure to listen fails this check, and the next check tries again;
+			// once listening, a server error must not reach Node as an unhandled event.
+			server.on("error", reject);
+			server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port));
+		}).catch((error: unknown) => {
+			started.delete(network);
+			throw error;
+		});
+		started.set(network, listening);
+	}
+	return listening;
 }
