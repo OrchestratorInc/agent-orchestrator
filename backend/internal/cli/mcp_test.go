@@ -85,8 +85,10 @@ func TestMCPListsBothTools(t *testing.T) {
 		t.Fatalf("tools = %+v", tools)
 	}
 	for _, tool := range tools {
-		want := map[string]any{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": true,
-			"idempotentHint": tool.Name == "html_preview"}
+		// html_render can write an artifact file, so only html_preview is read-only.
+		preview := tool.Name == "html_preview"
+		want := map[string]any{"readOnlyHint": preview, "destructiveHint": false, "openWorldHint": true,
+			"idempotentHint": preview}
 		for key, value := range want {
 			if tool.Annotations[key] != value {
 				t.Errorf("%s %s = %v, want %v", tool.Name, key, tool.Annotations[key], value)
@@ -190,6 +192,26 @@ func TestMCPHTMLPreviewReturnsTheScreenshotAndReport(t *testing.T) {
 	want := `{"width":390,"contentHeight":412,"consoleMessages":[{"level":"error","text":"d3 is not defined"}],"missingImages":["` + gone + `"]}`
 	if got.Content[1].Type != "text" || got.Content[1].Text != want {
 		t.Fatalf("report = %s, want %s", got.Content[1].Text, want)
+	}
+}
+
+// A check that ran without network says so, so the agent knows why remote
+// resources did not load.
+func TestMCPHTMLPreviewSaysWhenTheCheckRanWithoutNetwork(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "aa-47")
+	cfg := setConfigEnv(t)
+	srv, _ := renderServer(t, http.StatusOK,
+		`{"screenshot":{"mimeType":"image/png","data":"iVBORw0KGgo=","width":720,"height":120},"contentHeight":120,"consoleMessages":[],"network":"none"}`)
+	writeRunFileFor(t, cfg, srv)
+
+	reply := runMCP(t, mcpCall("html_preview", map[string]any{"html": "<p>x</p>"}))[0]
+	if len(reply.Result.Content) != 2 || !strings.Contains(reply.Result.Content[1].Text, renderCheckOfflineNote) {
+		t.Fatalf("result = %+v, want the offline note", reply.Result)
+	}
+	stdout, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"render", "--check", writePage(t, []byte("<p>x</p>")), "--out", filepath.Join(t.TempDir(), "c.png"))
+	if err != nil || !strings.Contains(stdout, renderCheckOfflineNote) {
+		t.Fatalf("render --check: err=%v stdout=%s, want the offline note", err, stdout)
 	}
 }
 

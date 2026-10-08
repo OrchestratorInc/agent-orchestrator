@@ -136,9 +136,13 @@ func (c *ConversationsController) checkRender(w http.ResponseWriter, r *http.Req
 			messages = append(messages, RenderConsoleMessage{Level: m.Level, Text: m.Text})
 		}
 		envelope.WriteJSON(w, http.StatusOK, RenderCheckResponse{
-			Screenshot:      RenderCheckScreenshot{MimeType: "image/png", Data: result.PNG, Width: result.Width, Height: result.Height},
+			Screenshot: RenderCheckScreenshot{
+				MimeType: "image/png", Data: result.PNG, Width: result.Width, Height: result.Height,
+				ImageWidth: result.ImageWidth, ImageHeight: result.ImageHeight,
+			},
 			ContentHeight:   result.ContentHeight,
 			ConsoleMessages: messages,
+			Network:         result.Network,
 		})
 	case errors.Is(err, chatsvc.ErrRenderInvalid):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "RENDER_INVALID", err.Error(), nil)

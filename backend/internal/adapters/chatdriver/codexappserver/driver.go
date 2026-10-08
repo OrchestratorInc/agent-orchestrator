@@ -305,6 +305,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
+	conv.launchMode = cfg.Permissions
 	params := map[string]any{
 		"cwd":               cfg.WorkspacePath,
 		"approvalPolicy":    policy,
@@ -379,12 +380,14 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// loaded thread. Host replay bridges output and unresolved server requests
 		// across the daemon detach without waiting for the active turn to settle.
 		conv.readOnly = cfg.ReadOnly
+		conv.launchMode = cfg.Permissions
 		conv.start(cfg.ProviderConversationID, cfg.Model, cfg.Effort)
 		return conv, nil
 	}
 
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
+	conv.launchMode = cfg.Permissions
 	params := map[string]any{
 		"threadId":          cfg.ProviderConversationID,
 		"cwd":               cfg.WorkspacePath,
@@ -621,6 +624,21 @@ func approvalReviewer(mode ports.PermissionMode) string {
 		return "auto_review"
 	}
 	return "user"
+}
+
+// SandboxAllowsNetwork reports whether this thread's agent can reach the
+// network. Codex's workspace-write sandbox, used for accept-edits and auto, has
+// no network (AO never grants it), while full access and the read-only
+// reviewer sandbox do.
+func (c *conversation) SandboxAllowsNetwork(turnMode ports.PermissionMode) bool {
+	if c.readOnly {
+		return true
+	}
+	if turnMode == "" {
+		turnMode = c.launchMode
+	}
+	_, sandbox := approvalSettings(turnMode)
+	return sandbox == "danger-full-access"
 }
 
 func launchApprovalSettings(mode ports.PermissionMode, readOnly bool) (policy, sandbox, reviewer string) {

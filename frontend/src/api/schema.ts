@@ -4785,13 +4785,24 @@ export interface components {
             consoleMessages: components["schemas"]["RenderConsoleMessage"][];
             /** @description Height the page needs at this width, in CSS pixels. */
             contentHeight: number;
+            /**
+             * @description Network the page could use. none when the agent's own sandbox has no network, so remote resources did not load.
+             * @enum {string}
+             */
+            network: "public" | "none";
             screenshot: components["schemas"]["RenderCheckScreenshot"];
         };
         RenderCheckScreenshot: {
             /** @description Base64 PNG. */
             data: string;
+            /** @description Page height the screenshot shows, in CSS pixels. */
             height: number;
+            /** @description PNG height in pixels, when it differs from the page height. */
+            imageHeight?: number;
+            /** @description PNG width in pixels, when it differs from the page width. */
+            imageWidth?: number;
             mimeType: string;
+            /** @description Page width the screenshot shows, in CSS pixels. */
             width: number;
         };
         RenderConsoleMessage: {

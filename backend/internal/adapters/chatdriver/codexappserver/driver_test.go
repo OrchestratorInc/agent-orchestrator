@@ -1135,6 +1135,29 @@ func TestProbeReportsMissingBinary(t *testing.T) {
 }
 
 // Chat must not be quietly stricter than the terminal path for the same setting.
+// AO's own tools that load agent pages ask this before they use the network.
+func TestSandboxAllowsNetworkFollowsTheCodexSandbox(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		readOnly   bool
+		launchMode ports.PermissionMode
+		turnMode   ports.PermissionMode
+		want       bool
+	}{
+		{"full access at launch", false, ports.PermissionModeDefault, "", true},
+		{"accept edits at launch", false, ports.PermissionModeAcceptEdits, "", false},
+		{"auto at launch", false, ports.PermissionModeAuto, "", false},
+		{"turn narrows full access", false, ports.PermissionModeDefault, ports.PermissionModeAcceptEdits, false},
+		{"turn widens accept edits", false, ports.PermissionModeAcceptEdits, ports.PermissionModeDefault, true},
+		{"read-only reviewer", true, ports.PermissionModeAcceptEdits, "", true},
+	} {
+		conv := &conversation{readOnly: tc.readOnly, launchMode: tc.launchMode}
+		if got := conv.SandboxAllowsNetwork(tc.turnMode); got != tc.want {
+			t.Errorf("%s: SandboxAllowsNetwork = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestApprovalSettingsMirrorTUIPosture(t *testing.T) {
 	for _, tc := range []struct {
 		readOnly                  bool

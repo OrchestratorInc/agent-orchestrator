@@ -182,12 +182,17 @@ func (c *commandContext) callHTMLPreview(ctx context.Context, raw json.RawMessag
 	if err != nil {
 		return mcpToolError(err)
 	}
+	note := ""
+	if resp.Network == "none" {
+		note = renderCheckOfflineNote
+	}
 	report, err := json.Marshal(struct {
 		Width           int      `json:"width"`
 		ContentHeight   int      `json:"contentHeight"`
 		ConsoleMessages any      `json:"consoleMessages"`
 		MissingImages   []string `json:"missingImages,omitempty"`
-	}{args.Width, resp.ContentHeight, resp.ConsoleMessages, missing})
+		Note            string   `json:"note,omitempty"`
+	}{args.Width, resp.ContentHeight, resp.ConsoleMessages, missing, note})
 	if err != nil {
 		return mcpToolError(err)
 	}
@@ -294,7 +299,8 @@ var mcpTools = []map[string]any{
 			"required": []string{"html", "title"},
 		},
 		"annotations": map[string]any{
-			"title": "Render HTML", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true,
+			// Not read-only: with artifact it writes a file to the artifact directory.
+			"title": "Render HTML", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true,
 		},
 	},
 }

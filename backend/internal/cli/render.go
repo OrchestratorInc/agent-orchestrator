@@ -52,7 +52,12 @@ type renderCheckAPIResponse struct {
 		Level string `json:"level"`
 		Text  string `json:"text"`
 	} `json:"consoleMessages"`
+	Network string `json:"network"`
 }
+
+// renderCheckOfflineNote tells the agent why remote resources did not load
+// in a check that ran without network.
+const renderCheckOfflineNote = "The check ran without network access, as your sandbox has none. Remote resources did not load."
 
 func newRenderCommand(ctx *commandContext) *cobra.Command {
 	var title string
@@ -227,6 +232,11 @@ func (c *commandContext) checkRender(cmd *cobra.Command, file string, width int,
 	}
 	if _, err := fmt.Fprintf(w, "Content height: %d px at width %d.\n", resp.ContentHeight, width); err != nil {
 		return err
+	}
+	if resp.Network == "none" {
+		if _, err := fmt.Fprintln(w, renderCheckOfflineNote); err != nil {
+			return err
+		}
 	}
 	// Image paths and console text come from the page and from any script it
 	// loads, so they are marked as untrusted the way `ao browser console` marks them.

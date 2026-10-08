@@ -78,6 +78,8 @@ func fullSnapshotReader(st *sqlite.Store) chatsvc.SnapshotReader {
 /* ---- a fake conversation the controller can drive ---------------------- */
 
 type fakeConversation struct {
+	// noNetwork makes SandboxAllowsNetwork report a sandbox with no network.
+	noNetwork bool
 	events                 chan ports.ChatEvent
 	providerConversationID string
 
@@ -256,6 +258,10 @@ func newFakeConversation() *fakeConversation {
 }
 
 func (f *fakeConversation) ProviderConversationID() string { return f.providerConversationID }
+
+// SandboxAllowsNetwork is the agent sandbox's network, as Codex reports it;
+// noNetwork plays a Codex thread in accept-edits or auto.
+func (f *fakeConversation) SandboxAllowsNetwork(ports.PermissionMode) bool { return !f.noNetwork }
 func (f *fakeConversation) Capabilities() ports.ChatCapabilities {
 	f.mu.Lock()
 	defer f.mu.Unlock()

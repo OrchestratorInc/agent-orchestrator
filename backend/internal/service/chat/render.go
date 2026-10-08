@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
@@ -287,7 +288,7 @@ func (s *Service) measureRenderLater(ctx context.Context, controller *Controller
 	s.renderMeasures.Add(1)
 	go func() {
 		defer s.renderMeasures.Done()
-		heights := s.measureRender(ctx, id, pageURL)
+		heights := s.measureRender(ctx, id, pageURL, controller.renderNetwork())
 		if len(heights) == 0 {
 			return
 		}
@@ -297,13 +298,13 @@ func (s *Service) measureRenderLater(ctx context.Context, controller *Controller
 	}()
 }
 
-func (s *Service) measureRender(ctx context.Context, id domain.SessionID, pageURL string) [][2]int {
+func (s *Service) measureRender(ctx context.Context, id domain.SessionID, pageURL, network string) [][2]int {
 	if s.renderMeasure == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, renderMeasureTimeout)
 	defer cancel()
-	value, err := s.renderMeasure(ctx, id, map[string]any{"url": pageURL, "widths": renderMeasureWidths})
+	value, err := s.renderMeasure(ctx, id, map[string]any{"url": pageURL, "widths": renderMeasureWidths, "network": network})
 	var heights [][2]int
 	if err == nil {
 		heights, err = readRenderHeights(value)
@@ -409,11 +410,35 @@ type RenderConsoleMessage struct {
 
 // RenderCheckResult is what the page looked like at the requested width.
 type RenderCheckResult struct {
-	PNG             string                 `json:"data"`
-	Width           int                    `json:"width"`
-	Height          int                    `json:"height"`
+	PNG    string `json:"data"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+	// ImageWidth and ImageHeight are the PNG's pixel size, which the desktop app
+	// scales down when the full-size image would be too large to hand back.
+	ImageWidth      int                    `json:"imageWidth,omitempty"`
+	ImageHeight     int                    `json:"imageHeight,omitempty"`
 	ContentHeight   int                    `json:"contentHeight"`
 	ConsoleMessages []RenderConsoleMessage `json:"consoleMessages"`
+	// Network is the network the page could use: RenderNetworkPublic, or
+	// RenderNetworkNone when the agent's own sandbox has none.
+	Network string `json:"network"`
+}
+
+// The network a page loaded by a render check or measure may use. It is never
+// more than the agent's own sandbox allows, so the html tools are not a way
+// around it.
+const (
+	RenderNetworkPublic = "public"
+	RenderNetworkNone   = "none"
+)
+
+// renderNetwork is the network this agent's pages may use in the desktop app's
+// hidden window.
+func (c *Controller) renderNetwork() string {
+	if sandbox, ok := c.conv.(ports.ChatSandboxNetwork); ok && !sandbox.SandboxAllowsNetwork(c.Settings().ApprovalMode) {
+		return RenderNetworkNone
+	}
+	return RenderNetworkPublic
 }
 
 // SetRenderCheck installs the desktop-app page loader after daemon wiring.
@@ -458,7 +483,12 @@ func (s *Service) CheckRender(ctx context.Context, id domain.SessionID, in Rende
 	}()
 	pageURL := strings.TrimRight(in.BaseURL, "/") +
 		"/api/v1/sessions/" + url.PathEscape(string(id)) + "/renders/" + url.PathEscape(renderID)
-	value, err := s.renderCheck(ctx, id, map[string]any{"url": pageURL, "width": width})
+	// No live controller means no way to tell what the agent's sandbox allows.
+	network := RenderNetworkNone
+	if controller, err := s.Controller(id); err == nil {
+		network = controller.renderNetwork()
+	}
+	value, err := s.renderCheck(ctx, id, map[string]any{"url": pageURL, "width": width, "network": network})
 	if err != nil {
 		return RenderCheckResult{}, err
 	}
@@ -475,5 +505,6 @@ func (s *Service) CheckRender(ctx context.Context, id domain.SessionID, in Rende
 	if result.PNG == "" {
 		return RenderCheckResult{}, errors.New("desktop app returned a render check with no screenshot")
 	}
+	result.Network = network
 	return result, nil
 }

@@ -13948,12 +13948,20 @@ components:
         contentHeight:
           description: Height the page needs at this width, in CSS pixels.
           type: integer
+        network:
+          description: Network the page could use. none when the agent's own sandbox
+            has no network, so remote resources did not load.
+          enum:
+          - public
+          - none
+          type: string
         screenshot:
           $ref: '#/components/schemas/RenderCheckScreenshot'
       required:
       - screenshot
       - contentHeight
       - consoleMessages
+      - network
       type: object
     RenderCheckScreenshot:
       properties:
@@ -13961,10 +13969,18 @@ components:
           description: Base64 PNG.
           type: string
         height:
+          description: Page height the screenshot shows, in CSS pixels.
+          type: integer
+        imageHeight:
+          description: PNG height in pixels, when it differs from the page height.
+          type: integer
+        imageWidth:
+          description: PNG width in pixels, when it differs from the page width.
           type: integer
         mimeType:
           type: string
         width:
+          description: Page width the screenshot shows, in CSS pixels.
           type: integer
       required:
       - mimeType

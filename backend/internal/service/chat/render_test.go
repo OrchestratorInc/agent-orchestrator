@@ -170,8 +170,9 @@ func TestCheckRenderLoadsTheStoredPageAndDeletesIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckRender: %v", err)
 	}
-	if !strings.HasPrefix(gotArgs["url"].(string), "http://127.0.0.1:3001/api/v1/sessions/"+string(testSession)+"/renders/check-") || gotArgs["width"] != 720 {
-		t.Fatalf("args = %v", gotArgs)
+	if !strings.HasPrefix(gotArgs["url"].(string), "http://127.0.0.1:3001/api/v1/sessions/"+string(testSession)+"/renders/check-") || gotArgs["width"] != 720 ||
+		gotArgs["network"] != chatsvc.RenderNetworkPublic || result.Network != chatsvc.RenderNetworkPublic {
+		t.Fatalf("args = %v, network = %q", gotArgs, result.Network)
 	}
 	// The desktop app loads it through the render route, which adds the bootstrap.
 	if string(pageDuringCheck) != "<p>chart</p>" {
@@ -183,6 +184,30 @@ func TestCheckRenderLoadsTheStoredPageAndDeletesIt(t *testing.T) {
 	entries, _ := os.ReadDir(filepath.Join(h.rendersDir, "attachments", string(testSession)))
 	if len(entries) != 0 {
 		t.Fatalf("check left files behind: %v", entries)
+	}
+}
+
+// The html tools are not a way around the agent's sandbox: an agent with no
+// network gets checks and measures with no network either.
+func TestRenderCheckAndMeasureUseNoMoreNetworkThanTheAgentHas(t *testing.T) {
+	h, provider := steerHarness(t)
+	provider.noNetwork = true
+	var checkArgs map[string]any
+	h.svc.SetRenderCheck(func(_ context.Context, _ domain.SessionID, args map[string]any) (any, error) {
+		checkArgs = args
+		return map[string]any{"data": "iVBORw0KGgo=", "width": 720.0, "height": 120.0, "contentHeight": 120.0}, nil
+	})
+	result, err := h.svc.CheckRender(context.Background(), testSession, chatsvc.RenderCheckInput{HTML: "<p>x</p>", BaseURL: "http://127.0.0.1:3001"})
+	if err != nil || checkArgs["network"] != chatsvc.RenderNetworkNone || result.Network != chatsvc.RenderNetworkNone {
+		t.Fatalf("check: err=%v args=%v network=%q, want none", err, checkArgs, result.Network)
+	}
+	var measureArgs map[string]any
+	publishMeasured(t, h, func(_ context.Context, _ domain.SessionID, args map[string]any) (any, error) {
+		measureArgs = args
+		return nil, errors.New("not measured")
+	})
+	if measureArgs["network"] != chatsvc.RenderNetworkNone {
+		t.Fatalf("measure args = %v, want network none", measureArgs)
 	}
 }
 

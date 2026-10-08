@@ -3059,8 +3059,11 @@ type RenderCheckRequest struct {
 type RenderCheckScreenshot struct {
 	MimeType string `json:"mimeType"`
 	Data     string `json:"data" description:"Base64 PNG."`
-	Width    int    `json:"width"`
-	Height   int    `json:"height"`
+	Width    int    `json:"width" description:"Page width the screenshot shows, in CSS pixels."`
+	Height   int    `json:"height" description:"Page height the screenshot shows, in CSS pixels."`
+	// The desktop app scales a very large image down so it can be handed back.
+	ImageWidth  int `json:"imageWidth,omitempty" description:"PNG width in pixels, when it differs from the page width."`
+	ImageHeight int `json:"imageHeight,omitempty" description:"PNG height in pixels, when it differs from the page height."`
 }
 
 // RenderConsoleMessage is one console line the page wrote while it loaded.
@@ -3074,6 +3077,7 @@ type RenderCheckResponse struct {
 	Screenshot      RenderCheckScreenshot  `json:"screenshot"`
 	ContentHeight   int                    `json:"contentHeight" description:"Height the page needs at this width, in CSS pixels."`
 	ConsoleMessages []RenderConsoleMessage `json:"consoleMessages"`
+	Network         string                 `json:"network" enum:"public,none" description:"Network the page could use. none when the agent's own sandbox has no network, so remote resources did not load."`
 }
 
 // RenderIDParam names a published render.
