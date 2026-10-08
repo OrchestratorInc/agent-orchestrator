@@ -159,7 +159,9 @@ export function AgentModelField({
 						onChange={selectCatalogModel}
 						onCustom={selectCustomModel}
 						triggerClassName="w-full justify-between bg-[var(--color-bg-settings-trigger)] text-[var(--color-text-settings-trigger)] hover:bg-[var(--color-bg-settings-trigger-hover)] data-[state=open]:bg-[var(--color-bg-settings-trigger-hover)]"
-						compact={agentId === "codex"}
+						compact
+						recentScope={agentId}
+						showEffortInTrigger={false}
 						tuning={{
 							effort,
 							effortsWithoutModel: supportedEfforts,
