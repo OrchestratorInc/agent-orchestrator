@@ -86,6 +86,11 @@ func run(logger *slog.Logger) error {
 	if workspace == "" {
 		return errors.New("AO_WORKSPACE_DIR is required")
 	}
+	// Nothing the worker runs may wait on an interactive prompt: there is no
+	// one to answer it, and on a terminal it can stop the worker outright. A
+	// git operation without usable credentials (the checkpoint push to a
+	// read-only grant) must fail and be logged, not ask for a username.
+	disableInteractivePrompts()
 	dataDir := strings.TrimSpace(os.Getenv("AO_DATA_DIR"))
 	if dataDir == "" {
 		dataDir = os.TempDir()

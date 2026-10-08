@@ -58,6 +58,7 @@ import type {
 	CloudCpSessionListResponse,
 	CloudCpResumeSessionResponse,
 	CloudCpRestoreSessionResponse,
+	CloudCpRetrySessionStartupResponse,
 	CloudCpSessionResponse,
 	CloudCpAcknowledgeInterfaceTransitionNoticeResponse,
 	CloudCpCancelInterfaceTransitionResponse,
@@ -290,6 +291,16 @@ export interface CloudCpClient {
 		sessionId: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpRestoreSessionResponse>;
+	/**
+	 * Re-arm startup for a session whose worker never started: resets the
+	 * startup window and retries bootstrap on the existing workspace. 409
+	 * `startup_retry_unavailable` when the session is not retryable.
+	 */
+	retrySessionStartup(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpRetrySessionStartupResponse>;
 
 	sendSessionMessage(
 		orgId: string,
@@ -734,6 +745,10 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		restoreSession: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/restore`, {
+				signal: o?.signal,
+			}),
+		retrySessionStartup: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/startup-retry`, {
 				signal: o?.signal,
 			}),
 

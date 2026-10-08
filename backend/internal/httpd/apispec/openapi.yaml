@@ -9648,6 +9648,11 @@ components:
           type: string
         warning:
           type: string
+        warningCode:
+          enum:
+          - auth_required
+          - auth_expired
+          type: string
       required:
       - agentId
       - selectionMode

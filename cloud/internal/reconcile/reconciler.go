@@ -33,6 +33,7 @@ type Store interface {
 	AppendSessionEvent(ctx context.Context, orgID, sessionID, eventType string, payload json.RawMessage) (domain.ClientEvent, error)
 	MarkSandboxDeletionRequested(ctx context.Context, owner, orgID, sessionID string) error
 	RecordSandboxStartupRepair(ctx context.Context, owner, orgID, sessionID string) (int, error)
+	RecordSandboxStartupError(ctx context.Context, owner, orgID, sessionID, code, message string) error
 	CompleteSandboxDeletion(ctx context.Context, owner, orgID, sessionID string) error
 	DisconnectSessionWorkers(ctx context.Context, orgID, sessionID string) error
 }
@@ -57,6 +58,10 @@ type Options struct {
 	WorkerHelperBinary []byte
 	// WorkerHelperDestination is where the AO CLI lands inside the sandbox.
 	WorkerHelperDestination string
+	// WorkerBuilds adds worker/helper builds for CPU architectures beyond the
+	// linux/amd64 WorkerBinary, keyed by GOARCH. A provider that detects the
+	// sandbox CPU (Coder) installs the matching build.
+	WorkerBuilds map[string]sandbox.WorkerBuild
 	// WorkerUser is the unprivileged account used to run hosted workers.
 	WorkerUser string
 	// KeepWarm disables idle teardown. When set (AO_CLOUD_IDLE_PAUSE_THRESHOLD=0),
@@ -148,6 +153,10 @@ const (
 	// supervision.
 	inlineRunningWait = 6 * time.Second
 	inlineRunningPoll = 300 * time.Millisecond
+	// notReadyRetryInterval paces bootstrap retries while a provider reports
+	// its compute cannot take a worker yet (a Coder startup script still
+	// running). The startup ceiling still bounds the total wait.
+	notReadyRetryInterval = 10 * time.Second
 	// Active work refreshes a provider deadline when it enters the shorter
 	// window, leaving a second window of tolerance for reconcile/API jitter.
 	activeDeadlineRefreshWindow = 5 * time.Minute
@@ -544,7 +553,7 @@ func (r *Reconciler) reconcileSandbox(ctx context.Context, record domain.Sandbox
 		record.WorkerLastSeenAt == nil &&
 		(record.StartupAttempts >= maxStartupRepairs ||
 			r.terminalStartupDeadlineElapsed(record)) {
-		return r.terminate(ctx, record, environment, provider)
+		return r.terminate(ctx, record, environment, provider, nil)
 	}
 
 	if record.DesiredState == domain.SandboxDesiredPaused ||
@@ -660,7 +669,11 @@ func (r *Reconciler) reconcileSandbox(ctx context.Context, record domain.Sandbox
 			(record.ObservedState == domain.SandboxObservedProvisioning &&
 				record.WorkerLastSeenAt == nil &&
 				r.startupDeadlineElapsed(record)) {
-			return r.fail(ctx, record, r.providerStartupTimeoutError())
+			cause := r.providerStartupTimeoutError(record)
+			if record.WorkerLastSeenAt == nil && r.startupDeadlineElapsed(record) {
+				r.recordStartupError(ctx, record, cause)
+			}
+			return r.fail(ctx, record, cause)
 		}
 		return r.observe(ctx, record, string(environment.ID), domain.SandboxObservedProvisioning, "", 5*time.Second)
 	default:
@@ -838,7 +851,7 @@ func (r *Reconciler) superviseRunning(
 			if err := bootstrapper.BootstrapWorker(
 				ctx, environment.ID, r.workerBootstrap(record, spec, false),
 			); err != nil {
-				return r.fail(ctx, record, err)
+				return r.bootstrapFailed(ctx, record, environment, provider, err)
 			}
 			return r.observe(ctx, record, string(environment.ID),
 				domain.SandboxObservedBootstrapping, "", r.options.Interval)
@@ -876,7 +889,7 @@ func (r *Reconciler) superviseRunning(
 			if err := bootstrapper.BootstrapWorker(
 				ctx, environment.ID, r.workerBootstrap(record, spec, false),
 			); err != nil {
-				return r.fail(ctx, record, err)
+				return r.bootstrapFailed(ctx, record, environment, provider, err)
 			}
 			return r.observe(ctx, record, string(environment.ID),
 				domain.SandboxObservedBootstrapping, "", r.options.Interval)
@@ -921,7 +934,7 @@ func (r *Reconciler) refreshRestoredWorker(
 	if err := bootstrapper.BootstrapWorker(
 		ctx, environment.ID, r.workerBootstrap(record, spec, true),
 	); err != nil {
-		return r.fail(ctx, record, err)
+		return r.bootstrapFailed(ctx, record, environment, provider, err)
 	}
 	return r.observe(ctx, record, string(environment.ID),
 		domain.SandboxObservedBootstrapping, "", r.options.Interval)
@@ -936,7 +949,7 @@ func (r *Reconciler) refreshRestoredWorker(
 // instead of holding the box awake (and billed) forever.
 func (r *Reconciler) startingUp(record domain.Sandbox) bool {
 	return record.StartupStartedAt != nil &&
-		time.Since(*record.StartupStartedAt) < r.options.StartupTimeout
+		time.Since(*record.StartupStartedAt) < r.startupTimeout(record)
 }
 
 func (r *Reconciler) startupDeadlineElapsed(record domain.Sandbox) bool {
@@ -944,7 +957,43 @@ func (r *Reconciler) startupDeadlineElapsed(record domain.Sandbox) bool {
 	if record.StartupStartedAt != nil {
 		startedAt = *record.StartupStartedAt
 	}
-	return time.Since(startedAt) >= r.options.StartupTimeout
+	return time.Since(startedAt) >= r.startupTimeout(record)
+}
+
+// startupTimeout is the sandbox's ready-wait budget: the per-session value a
+// bring-your-own Coder connection stamped on the profile, else the deployment
+// StartupTimeout.
+func (r *Reconciler) startupTimeout(record domain.Sandbox) time.Duration {
+	if profile, ok := coderProfile(record); ok && profile.StartupTimeoutSeconds > 0 {
+		return time.Duration(profile.StartupTimeoutSeconds) * time.Second
+	}
+	return r.options.StartupTimeout
+}
+
+// terminalStartupTimeout is the hard ceiling on a never-checked-in worker. A
+// per-session startup budget raises it so the ceiling never undercuts the
+// session's own ready wait.
+func (r *Reconciler) terminalStartupTimeout(record domain.Sandbox) time.Duration {
+	return max(r.options.TerminalStartupTimeout, r.startupTimeout(record))
+}
+
+func coderProfile(record domain.Sandbox) (sandbox.CoderSessionProfile, bool) {
+	if record.Provider != sandbox.ProviderCoder {
+		return sandbox.CoderSessionProfile{}, false
+	}
+	profile, err := sandbox.DecodeCoderSessionProfile(record.ResourceProfile)
+	if err != nil {
+		return sandbox.CoderSessionProfile{}, false
+	}
+	return profile, true
+}
+
+// customerOwnedCompute reports whether the sandbox runs on infrastructure an
+// organization brought itself (a bring-your-own connection). AO never stops or
+// deletes such compute on its own initiative after a startup failure: the
+// customer may be inspecting it, and stopping it destroys the evidence.
+func customerOwnedCompute(record domain.Sandbox) bool {
+	return record.ProviderConnectionID != ""
 }
 
 // terminalStartupDeadlineElapsed reports whether a worker that has never checked
@@ -956,7 +1005,7 @@ func (r *Reconciler) terminalStartupDeadlineElapsed(record domain.Sandbox) bool 
 	if record.StartupStartedAt != nil {
 		startedAt = *record.StartupStartedAt
 	}
-	return time.Since(startedAt) >= r.options.TerminalStartupTimeout
+	return time.Since(startedAt) >= r.terminalStartupTimeout(record)
 }
 
 // terminate abandons a permanently broken session. It best-effort stops the
@@ -964,41 +1013,163 @@ func (r *Reconciler) terminalStartupDeadlineElapsed(record domain.Sandbox) bool 
 // auto-pause, then records a terminal observation the reconcile entry parks. It
 // never writes desired state: tearing the record down is the control plane's
 // call, made when a user deletes the session.
+//
+// Customer-owned compute (a bring-your-own connection) is never stopped here:
+// the session is parked and the error recorded, but the workspace is left
+// exactly as it is. cause, when set, is a definitive failure that parks the
+// session before the ceiling (for example an unsupported CPU architecture).
 func (r *Reconciler) terminate(
 	ctx context.Context,
 	record domain.Sandbox,
 	environment sandbox.Environment,
 	provider sandbox.Provider,
+	cause *sandbox.StartupError,
 ) error {
-	r.log.Warn("terminating sandbox after startup ceiling",
+	ceiling := r.terminalStartupTimeout(record)
+	customerOwned := customerOwnedCompute(record)
+	r.log.Warn("terminating sandbox after startup failure",
 		"session_id", record.SessionID,
 		"provider", record.Provider,
 		"provider_id", environment.ID,
-		"ceiling", r.options.TerminalStartupTimeout,
+		"ceiling", ceiling,
+		"customer_owned", customerOwned,
 	)
 	if err := r.store.DisconnectSessionWorkers(ctx, record.OrgID, record.SessionID); err != nil {
 		r.log.Warn("disconnect terminated worker", "session_id", record.SessionID, "err", err)
 	}
-	switch environment.State {
-	case sandbox.StateStopped, sandbox.StatePaused, sandbox.StateDeleted, sandbox.StateDeleting:
-	default:
-		if err := provider.Stop(ctx, environment.ID); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
-			r.log.Warn("stop terminated sandbox", "session_id", record.SessionID, "err", err)
+	if !customerOwned {
+		switch environment.State {
+		case sandbox.StateStopped, sandbox.StatePaused, sandbox.StateDeleted, sandbox.StateDeleting:
+		default:
+			if err := provider.Stop(ctx, environment.ID); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
+				r.log.Warn("stop terminated sandbox", "session_id", record.SessionID, "err", err)
+			}
 		}
 	}
-	message := fmt.Sprintf(
-		"The session's worker never started within %s and has been stopped. This usually means the repository could not be checked out (for example a private repository not connected through the GitHub App).",
-		r.options.TerminalStartupTimeout,
-	)
+	if cause == nil {
+		cause = r.startupCeilingError(record, environment, ceiling)
+		// A specific reason recorded during the startup attempts (a terminal
+		// that never opened, an unusable storage directory) explains the
+		// failure better than the generic ceiling message, so keep it.
+		if record.StartupErrorCode == "" {
+			r.recordStartupError(ctx, record, cause)
+		}
+	} else {
+		r.recordStartupError(ctx, record, cause)
+	}
 	return r.observe(ctx, record, string(environment.ID),
-		domain.SandboxObservedTerminated, message, 24*time.Hour)
+		domain.SandboxObservedTerminated, cause.Message, 24*time.Hour)
 }
 
-func (r *Reconciler) providerStartupTimeoutError() error {
-	return fmt.Errorf(
+// startupCeilingError explains a sandbox whose worker never checked in before
+// the startup ceiling, distinguishing compute that never became ready from a
+// worker that never started on ready compute.
+func (r *Reconciler) startupCeilingError(
+	record domain.Sandbox,
+	environment sandbox.Environment,
+	ceiling time.Duration,
+) *sandbox.StartupError {
+	customerOwned := customerOwnedCompute(record)
+	if environment.State == sandbox.StateProvisioning {
+		message := fmt.Sprintf("Your sandbox wasn't ready after %s.", humanDuration(ceiling))
+		if record.Provider == sandbox.ProviderCoder {
+			message = fmt.Sprintf("Your Coder workspace wasn't ready after %s.", humanDuration(ceiling))
+		}
+		if customerOwned {
+			message += " AO left the workspace running so you can inspect it."
+		}
+		return &sandbox.StartupError{Code: sandbox.StartupErrorWorkspaceNotReady, Message: message}
+	}
+	if customerOwned {
+		return &sandbox.StartupError{
+			Code: sandbox.StartupErrorWorkerNeverStarted,
+			Message: fmt.Sprintf(
+				"AO's worker never started in your workspace within %s. AO left the workspace running so you can inspect it.",
+				humanDuration(ceiling),
+			),
+		}
+	}
+	return &sandbox.StartupError{
+		Code: sandbox.StartupErrorWorkerNeverStarted,
+		Message: fmt.Sprintf(
+			"The session's worker never started within %s and has been stopped. This usually means the repository could not be checked out (for example a private repository not connected through the GitHub App).",
+			ceiling,
+		),
+	}
+}
+
+func (r *Reconciler) providerStartupTimeoutError(record domain.Sandbox) *sandbox.StartupError {
+	timeout := r.startupTimeout(record)
+	message := fmt.Sprintf(
 		"The sandbox did not become ready within %s. AO kept the existing environment and will retry.",
-		r.options.StartupTimeout,
+		timeout,
 	)
+	if record.Provider == sandbox.ProviderCoder {
+		message = fmt.Sprintf(
+			"Your Coder workspace wasn't ready after %s. AO kept the workspace and will keep checking.",
+			humanDuration(timeout),
+		)
+	}
+	return &sandbox.StartupError{Code: sandbox.StartupErrorWorkspaceNotReady, Message: message}
+}
+
+// humanDuration renders whole minutes as "20 minutes" and anything else in Go
+// duration notation.
+func humanDuration(d time.Duration) string {
+	if d >= time.Minute && d%time.Minute == 0 {
+		if minutes := int(d / time.Minute); minutes != 1 {
+			return fmt.Sprintf("%d minutes", minutes)
+		}
+		return "1 minute"
+	}
+	return d.String()
+}
+
+// bootstrapFailed routes a worker bootstrap failure. A provider that reports
+// its compute is not ready yet (ErrWorkspaceNotReady) is retried later without
+// being counted as a failed repair; a definitive failure (an unsupported CPU
+// architecture) parks the session immediately; anything else is a normal
+// failure the next tick repairs. The user-facing reason is recorded in every
+// case so the session can explain itself.
+func (r *Reconciler) bootstrapFailed(
+	ctx context.Context,
+	record domain.Sandbox,
+	environment sandbox.Environment,
+	provider sandbox.Provider,
+	err error,
+) error {
+	var startupErr *sandbox.StartupError
+	if errors.As(err, &startupErr) && startupErr.Code == sandbox.StartupErrorUnsupportedArchitecture {
+		r.log.Warn("sandbox CPU architecture is not supported",
+			"session_id", record.SessionID, "provider_id", environment.ID, "err", err)
+		return r.terminate(ctx, record, environment, provider, startupErr)
+	}
+	r.recordStartupError(ctx, record, err)
+	if errors.Is(err, sandbox.ErrWorkspaceNotReady) && record.WorkerLastSeenAt == nil {
+		r.log.Info("sandbox not ready for worker bootstrap; will retry",
+			"session_id", record.SessionID,
+			"provider", record.Provider,
+			"provider_id", environment.ID,
+			"err", err,
+		)
+		return r.observe(ctx, record, string(environment.ID),
+			domain.SandboxObservedProvisioning, err.Error(), notReadyRetryInterval)
+	}
+	return r.fail(ctx, record, err)
+}
+
+// recordStartupError stores err's user-facing reason, when it carries one.
+// Losing it must not fail reconciliation, so errors are only logged.
+func (r *Reconciler) recordStartupError(ctx context.Context, record domain.Sandbox, err error) {
+	var startupErr *sandbox.StartupError
+	if !errors.As(err, &startupErr) || startupErr.Code == "" || startupErr.Message == "" {
+		return
+	}
+	if recordErr := r.store.RecordSandboxStartupError(
+		ctx, r.owner, record.OrgID, record.SessionID, startupErr.Code, startupErr.Message,
+	); recordErr != nil && !errors.Is(recordErr, postgres.ErrSandboxLeaseLost) {
+		r.log.Warn("record sandbox startup error", "session_id", record.SessionID, "err", recordErr)
+	}
 }
 
 func repairReason(record domain.Sandbox, startupExpired, heartbeatExpired bool) string {
@@ -1089,6 +1260,13 @@ func (r *Reconciler) provision(
 			if err := bootstrapper.BootstrapWorker(
 				ctx, environment.ID, r.workerBootstrap(record, spec, false),
 			); err != nil {
+				r.recordStartupError(ctx, record, err)
+				if errors.Is(err, sandbox.ErrWorkspaceNotReady) {
+					// Keep the freshly created environment ID: the next tick retries
+					// the bootstrap once the provider reports it ready.
+					return r.observe(ctx, record, string(environment.ID),
+						domain.SandboxObservedProvisioning, err.Error(), notReadyRetryInterval)
+				}
 				return r.fail(ctx, record, err)
 			}
 			return r.observe(ctx, record, string(environment.ID),
@@ -1267,16 +1445,29 @@ func (r *Reconciler) workerBootstrap(
 ) sandbox.WorkerBootstrap {
 	requireIdentity := record.Provider == sandbox.ProviderCoder &&
 		(restoring || record.WorkerLastSeenAt != nil)
+	requireMount := false
+	if profile, ok := coderProfile(record); ok {
+		requireMount = profile.RequiresMountedDurableRoot(customerOwnedCompute(record))
+	}
+	builds := make(map[string]sandbox.WorkerBuild, len(r.options.WorkerBuilds)+1)
+	for arch, build := range r.options.WorkerBuilds {
+		builds[arch] = build
+	}
+	builds[sandbox.ArchAMD64] = sandbox.WorkerBuild{
+		Binary: r.options.WorkerBinary, HelperBinary: r.options.WorkerHelperBinary,
+	}
 	return sandbox.WorkerBootstrap{
-		Binary:                 r.options.WorkerBinary,
-		Destination:            r.options.WorkerDestination,
-		HelperBinary:           r.options.WorkerHelperBinary,
-		HelperDestination:      r.options.WorkerHelperDestination,
-		User:                   r.options.WorkerUser,
-		Environment:            spec.Environment,
-		DurableRoot:            spec.DurableRoot,
-		DurableIdentity:        record.SessionID,
-		RequireDurableIdentity: requireIdentity,
+		Binary:                    r.options.WorkerBinary,
+		Destination:               r.options.WorkerDestination,
+		HelperBinary:              r.options.WorkerHelperBinary,
+		HelperDestination:         r.options.WorkerHelperDestination,
+		Builds:                    builds,
+		User:                      r.options.WorkerUser,
+		Environment:               spec.Environment,
+		DurableRoot:               spec.DurableRoot,
+		DurableIdentity:           record.SessionID,
+		RequireDurableIdentity:    requireIdentity,
+		RequireMountedDurableRoot: requireMount,
 	}
 }
 
