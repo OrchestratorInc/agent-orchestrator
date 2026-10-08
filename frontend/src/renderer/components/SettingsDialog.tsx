@@ -449,7 +449,7 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 							<div className="mt-auto"><SettingsSaveStatus layer={layer} /></div>
 						</aside>
 						<div className="flex min-w-0 flex-1 flex-col bg-card">
-							<DialogHeader className={cn(settingsDialogHeaderClass, "flex h-auto shrink-0 flex-row items-center justify-between border-b-0 px-(--size-modal-padding) py-3")}>
+							<DialogHeader className={cn(settingsDialogHeaderClass, "flex h-auto shrink-0 flex-row items-center justify-between border-b-0 py-3 pl-(--size-modal-padding) pr-3")}>
 								<Dialog.Title className="settings-dialog-title">{layer.title}{layer.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}</Dialog.Title>
 								<Dialog.Description className="sr-only">{t("settings.project.dialogDescription")}</Dialog.Description>
 								<button aria-label={t("settings.close")} className="settings-close-button" disabled={layer.cueBusy} onClick={layer.close} ref={closeButtonRef} type="button">

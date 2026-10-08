@@ -76,7 +76,8 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 	const [activeTab, setActiveTab] = useState<"variables" | "paste">("variables");
 	const [pasteText, setPasteText] = useState("");
 	const [importedCount, setImportedCount] = useState<number | null>(null);
-	const dirty = JSON.stringify(Object.fromEntries(rows.map(({ name, value }) => [name, value]))) !== saved;
+	const filled = rows.filter(({ name, value }) => name !== "" || value !== "");
+	const dirty = JSON.stringify(Object.fromEntries(filled.map(({ name, value }) => [name, value]))) !== saved;
 	const mutation = useMutation({
 		mutationFn: async (env: Record<string, string>) => {
 			// Refresh before the whole-config PUT so this page cannot erase changes made elsewhere.
@@ -124,18 +125,23 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		setPasteText("");
 		setActiveTab("variables");
 	};
+	// A draft that cannot be saved must still tell the dialog, or a pending close waits forever.
+	const reject = (message: string) => {
+		setError(message);
+		onSaveState?.({ phase: "failed", dirty, requestPending: false, error: message });
+	};
 	const save = () => {
 		if (activeTab === "paste" && pasteText.trim()) {
-			setError(t("settings.project.envPastePending"));
+			reject(t("settings.project.envPastePending"));
 			return;
 		}
 		const env: Record<string, string> = {};
 		const names = new Set<string>();
-		for (const row of rows) {
+		for (const row of filled) {
 			const name = row.name;
 			const folded = name.toUpperCase();
 			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || names.has(folded)) {
-				setError(t("settings.project.envInvalid"));
+				reject(t("settings.project.envInvalid"));
 				return;
 			}
 			names.add(folded);
@@ -150,7 +156,7 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		if (!dirty || mutation.isPending || activeTab !== "variables") return;
 		const env: Record<string, string> = {};
 		const names = new Set<string>();
-		for (const row of rows) {
+		for (const row of filled) {
 			const folded = row.name.toUpperCase();
 			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(row.name) || names.has(folded)) return;
 			names.add(folded);
