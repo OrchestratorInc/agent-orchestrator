@@ -11,8 +11,18 @@ On a fresh Ubuntu 24.04 x64 machine, SSH in as a non-root user with `sudo`:
 ssh -i /path/to/private-key USER@HOST_ADDRESS
 ```
 
-Run **one** command on the VM. Both install AO, prerequisites, a persistent
-user service, and a Cloudflare quick tunnel, then print the connection details.
+Run **one** command on the VM. Each installs AO, prerequisites, a persistent
+user service, and a Cloudflare quick tunnel, then prints the connection details.
+
+**Nightly users** (installs the newest published nightly without building from source):
+
+```bash
+bash -c 'set -o pipefail; sudo apt-get update && sudo apt-get install -y curl && curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash -s -- --nightly'
+```
+
+Use a nightly desktop app with a nightly host. Updating your laptop alone does
+not update the VM. Until stable includes account linking, use this command for
+the pair-once, automatic-discovery flow below. Nightlies are experimental.
 
 **Testing an unreleased branch** (builds from that branch): replace
 `codex/your-pr-branch` with the branch name published on GitHub.
@@ -21,7 +31,7 @@ user service, and a Cloudflare quick tunnel, then print the connection details.
 SOURCE_REF=codex/your-pr-branch bash -c 'set -o pipefail; sudo apt-get update && sudo apt-get install -y curl && curl -fsSL "https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/${SOURCE_REF}/scripts/bootstrap-self-hosted.sh" | bash -s -- --source-ref "${SOURCE_REF}"'
 ```
 
-**After merge and release** (installs the published binary):
+**Stable users** (installs the latest published stable binary, not nightly):
 
 ```bash
 bash -c 'set -o pipefail; sudo apt-get update && sudo apt-get install -y curl && curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash'
@@ -78,7 +88,8 @@ or `journalctl --user -u ao-self-hosted.service -n 100 --no-pager` for logs.
 Run `~/.local/bin/ao remote-host disable` to stop remote access.
 
 For macOS or another service manager, use the
-[lower-level installer](../scripts/setup-self-hosted.sh). On macOS it installs
+[lower-level installer](../scripts/setup-self-hosted.sh); pass `--nightly` to
+select the nightly channel. On macOS it installs
 a LaunchAgent that runs only while the user is logged in; for a container,
 use `--install-only` and supervise `ao daemon` yourself. Windows is not a
 native host. Projects still need their own build dependencies on the host.
