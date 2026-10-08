@@ -445,8 +445,19 @@ describe("artifact activity", () => {
 			/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/artifact-files\/q3\/Q3%20%28final%29\.html#ao-theme=/,
 		);
 		expect(artifactFrame().style.height).toBe("400px");
-		post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 720 } }, artifactFrame().contentWindow);
-		expect(artifactFrame().style.height).toBe("720px");
+		post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 520 } }, artifactFrame().contentWindow);
+		expect(artifactFrame().style.height).toBe("520px");
+	});
+
+	it("caps the inline artifact at 640 and lets the page scroll inside it, so a page sized to its viewport cannot ratchet the frame", () => {
+		renderArtifact();
+		const fragment = JSON.parse(decodeURIComponent(artifactFrame().getAttribute("src")!.split("#ao-theme=")[1]!));
+		expect(fragment).toMatchObject({ displayMode: "inline", scrollable: true });
+		// A min-height:100vh page reports the frame height plus its padding, again and again.
+		for (const height of [448, 496, 688, 1_200, 2_000]) {
+			post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height } }, artifactFrame().contentWindow);
+		}
+		expect(artifactFrame().style.height).toBe("640px");
 	});
 
 	it("shows the remote-host note instead of a frame", () => {

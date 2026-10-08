@@ -33,10 +33,18 @@ interface FramePage {
 	heights?: Array<[number, number]>;
 	/** The file Save writes. */
 	fileName: string;
+	/**
+	 * Caps the inline frame and scrolls the page inside it. An artifact is an
+	 * ordinary document, not written to the render rules, so a page sized to
+	 * its viewport would otherwise grow the frame each time it reported.
+	 */
+	scrollable?: boolean;
 }
 
-// An artifact is never measured: its frame opens at this height, then fits the page.
+// An artifact is never measured: its frame opens at this height, then fits the
+// page up to ARTIFACT_FRAME_MAX_HEIGHT, past which it scrolls inside the frame.
 const ARTIFACT_FRAME_HEIGHT = 400;
+const ARTIFACT_FRAME_MAX_HEIGHT = 640;
 
 /** The app theme as handed to renders; follows data-theme and data-style-theme flips on <html>. */
 function useRenderTheme(): RenderTheme {
@@ -85,8 +93,8 @@ function RenderDocument({
 	// they never reload the page.
 	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const src = useMemo(
-		() => `${baseUrl}${page.path}${renderThemeFragment(themeRef.current, displayMode)}`,
-		[baseUrl, page.path, displayMode],
+		() => `${baseUrl}${page.path}${renderThemeFragment(themeRef.current, displayMode, page.scrollable)}`,
+		[baseUrl, page.path, displayMode, page.scrollable],
 	);
 	const [contentHeight, setContentHeight] = useState<number>();
 	// The inline frame's width picks its measured first height; read before the
@@ -103,7 +111,8 @@ function RenderDocument({
 		observer.observe(frame);
 		return () => observer.disconnect();
 	}, [displayMode, heights]);
-	const postTheme = () => frameRef.current?.contentWindow?.postMessage(renderThemeMessage(themeRef.current, displayMode), "*");
+	const postTheme = () =>
+		frameRef.current?.contentWindow?.postMessage(renderThemeMessage(themeRef.current, displayMode, page.scrollable), "*");
 	useEffect(() => {
 		postTheme();
 	}, [theme]);
@@ -137,7 +146,12 @@ function RenderDocument({
 			className={cn("block w-full border-0", className)}
 			style={
 				displayMode === "inline"
-					? { height: clampRenderHeight(contentHeight ?? (heights && width ? measuredRenderHeight(heights, width) : page.height)) }
+					? {
+							height: Math.min(
+								clampRenderHeight(contentHeight ?? (heights && width ? measuredRenderHeight(heights, width) : page.height)),
+								page.scrollable ? ARTIFACT_FRAME_MAX_HEIGHT : Number.POSITIVE_INFINITY,
+							),
+						}
 					: undefined
 			}
 		/>
@@ -243,7 +257,7 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 	const page: FramePage =
 		"render" in props
 			? { title: props.render.title, path: props.render.path, height: props.render.height, heights: props.render.heights, fileName: renderFileName(props.render.title) }
-			: { title: props.artifact.name, path: props.artifact.url, height: ARTIFACT_FRAME_HEIGHT, fileName: props.artifact.name };
+			: { title: props.artifact.name, path: props.artifact.url, height: ARTIFACT_FRAME_HEIGHT, fileName: props.artifact.name, scrollable: true };
 	const panel = useChatArtifactPreview("artifact" in props ? props.artifact.path : undefined);
 	const [expanded, setExpanded] = useState(false);
 	const [showSource, setShowSource] = useState(false);

@@ -111,11 +111,16 @@ func TestVersionIsAShortDigestOfTheBootstrap(t *testing.T) {
 	}
 }
 
-func TestBootstrapStylesFullscreenFromTheDisplayMode(t *testing.T) {
-	// Centers a width-capped top-level block and shows the scrollbar; the
-	// page's own margins win over this low-specificity rule.
-	const fullscreenCSS = `body>*{margin-inline:auto}html{scrollbar-width:auto}html::-webkit-scrollbar{display:block}`
-	for _, want := range []string{fullscreenCSS, `"ao-display"`, `"fullscreen"`, ".displayMode"} {
+func TestBootstrapStylesFullscreenAndScrollableFrames(t *testing.T) {
+	// Fullscreen centers a width-capped top-level block (the page's own margins
+	// win over this low-specificity rule) and shows the scrollbar; a scrollable
+	// frame, AO's own field, shows the scrollbar alone.
+	for _, want := range []string{
+		`"body>*{margin-inline:auto}" + showScrollbar`,
+		`showScrollbar = "html{scrollbar-width:auto}html::-webkit-scrollbar{display:block}"`,
+		`scrollable ? showScrollbar : ""`,
+		`"ao-display"`, `"fullscreen"`, ".displayMode", ".scrollable",
+	} {
 		if !strings.Contains(bootstrapJS, want) {
 			t.Errorf("bootstrap missing %q", want)
 		}

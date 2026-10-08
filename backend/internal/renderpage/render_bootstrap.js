@@ -12,11 +12,17 @@
   var framed = window.parent !== window;
   var seq = 0;
   // Fullscreen gives the page the whole dialog width: center a top-level block
-  // that has a max width, and show the scrollbar. Inline stays as it is.
-  function setDisplayMode(mode) {
+  // that has a max width, and show the scrollbar. A scrollable page (AO's own
+  // field) scrolls inside a capped inline frame, so it shows the scrollbar
+  // too. Inline otherwise stays as it is.
+  var mode, scrollable = false;
+  var showScrollbar = "html{scrollbar-width:auto}html::-webkit-scrollbar{display:block}";
+  function setDisplay(nextMode, nextScrollable) {
+    if (nextMode !== undefined) mode = nextMode;
+    if (nextScrollable !== undefined) scrollable = nextScrollable === true;
     display.textContent = mode === "fullscreen"
-      ? "body>*{margin-inline:auto}html{scrollbar-width:auto}html::-webkit-scrollbar{display:block}"
-      : "";
+      ? "body>*{margin-inline:auto}" + showScrollbar
+      : scrollable ? showScrollbar : "";
   }
   function apply(t) {
     if (!theme || !t || typeof t !== "object" || !t.variables || typeof t.variables !== "object") return;
@@ -31,7 +37,7 @@
     if (m) {
       var initial = JSON.parse(decodeURIComponent(m[1]));
       apply(initial);
-      setDisplayMode(initial && initial.displayMode);
+      if (initial) setDisplay(initial.displayMode, initial.scrollable);
       history.replaceState(history.state, "", location.pathname + location.search);
     }
   } catch (e) {}
@@ -41,7 +47,7 @@
     if (e.source !== window.parent || !d || d.jsonrpc !== "2.0" ||
         d.method !== "ui/notifications/host-context-changed" || !p) return;
     // MCP Apps context updates may be partial; an absent field is unchanged.
-    if (p.displayMode !== undefined) setDisplayMode(p.displayMode);
+    setDisplay(p.displayMode, p.scrollable);
     if (p.styles) apply({ appearance: p.theme, variables: p.styles.variables });
   });
   if (!framed) return;
