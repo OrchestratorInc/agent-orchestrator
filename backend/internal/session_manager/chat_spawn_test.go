@@ -1461,8 +1461,11 @@ func TestChatStartsPassTheAOToolServerWithOnlyDaemonCoordinates(t *testing.T) {
 
 	want := []ports.ChatMCPServerConfig{{
 		Name: "ao", Type: "stdio", Command: "/opt/ao/bin/ao", Args: []string{"mcp"},
-		Env: map[string]string{EnvSessionID: string(rec.ID), EnvRunFile: "/ao-test/running.json"},
+		Env: map[string]string{EnvSessionID: string(rec.ID), EnvRunFile: "/ao-test/running.json", EnvDataDir: mgr.dataDir},
 	}}
+	if mgr.dataDir == "" {
+		t.Fatal("test manager has no data dir")
+	}
 	if len(launcher.started) != 2 || launcher.started[1].ProviderConversationID == "" {
 		t.Fatalf("want a spawn and a resume, got %d starts", len(launcher.started))
 	}

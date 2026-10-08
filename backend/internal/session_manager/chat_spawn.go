@@ -326,8 +326,10 @@ func (m *Manager) aoMCPServers(harness domain.AgentHarness, env map[string]strin
 			"executable", executable, "error", err)
 		return nil
 	}
-	serverEnv := make(map[string]string, 2)
-	for _, key := range []string{EnvSessionID, EnvRunFile} {
+	// AO_DATA_DIR too: a harness may start the server with exactly this env, and
+	// without it config.Load needs $HOME to find the data dir.
+	serverEnv := make(map[string]string, 3)
+	for _, key := range []string{EnvSessionID, EnvRunFile, EnvDataDir} {
 		if value := env[key]; value != "" {
 			serverEnv[key] = value
 		}

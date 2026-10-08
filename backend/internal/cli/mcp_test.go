@@ -129,6 +129,23 @@ func TestMCPHTMLRenderPublishesThePageWithItsImages(t *testing.T) {
 	}
 }
 
+// A harness may start the server with exactly the env AO hands it (session,
+// run file, data dir) and no $HOME; a tool call must still reach the daemon.
+func TestMCPToolCallNeedsNoHome(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "aa-47")
+	cfg := setConfigEnv(t)
+	t.Setenv("AO_PORT", "")
+	t.Setenv("HOME", "")
+	srv, capture := renderServer(t, http.StatusCreated,
+		`{"renderId":"r1","activityId":"a1","path":"/api/v1/sessions/aa-47/renders/r1"}`)
+	writeRunFileFor(t, cfg, srv)
+
+	reply := runMCP(t, mcpCall("html_render", map[string]any{"html": "<p>hi</p>", "title": "Turns"}))[0]
+	if reply.Result.IsError || capture.path != "/api/v1/sessions/aa-47/renders" {
+		t.Fatalf("result = %+v, hit %s", reply.Result, capture.path)
+	}
+}
+
 func TestMCPHTMLRenderWithArtifactNamesTheFileOrTheError(t *testing.T) {
 	for _, tc := range []struct{ name, resp, want string }{
 		{"kept", `{"renderId":"r1","artifactPath":"/ao/artifacts/aa-47/Turns.html"}`, renderShownText("r1") + "\nsaved as artifact: /ao/artifacts/aa-47/Turns.html"},
