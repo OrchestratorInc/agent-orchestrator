@@ -1499,6 +1499,10 @@ type Snapshot struct {
 	BranchedFromEarlierMessage       bool
 	OldestSequence                   int64
 	HasMoreBefore                    bool
+	// WorkspacePath is the session's workspace root, so a turn diff's absolute
+	// paths can be told apart: inside the workspace, or somewhere the Files API
+	// will never open. Empty when not known (a reviewer chat).
+	WorkspacePath string
 	// Usage and RateLimits are current state carried on the snapshot the client
 	// already polls, rather than timeline entries or a second request. Both are nil
 	// until the provider has reported, so a client can tell "not known yet" from a
@@ -1617,6 +1621,7 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 		Harness:                          record.Harness,
 		Mode:                             domain.NormalizeSessionMode(record.Mode),
 		Controller:                       state,
+		WorkspacePath:                    record.Metadata.WorkspacePath,
 		Turns:                            rows.Turns,
 		Messages:                         rows.Messages,
 		Activities:                       rows.Activities,
@@ -1717,6 +1722,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		Harness:                          record.Harness,
 		Mode:                             domain.NormalizeSessionMode(record.Mode),
 		Controller:                       state,
+		WorkspacePath:                    record.Metadata.WorkspacePath,
 		Turns:                            rows.Turns,
 		Messages:                         rows.Messages,
 		Activities:                       rows.Activities,

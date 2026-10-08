@@ -3793,10 +3793,12 @@ export interface components {
             additions: number;
             deletions: number;
             oldPath?: string;
+            outsideWorkspace?: boolean;
             path: string;
             rolledBack?: boolean;
             /** @enum {string} */
             status: "added" | "modified" | "deleted" | "renamed";
+            workspacePath?: string;
         };
         ConversationImageContentRequest: {
             data: string;

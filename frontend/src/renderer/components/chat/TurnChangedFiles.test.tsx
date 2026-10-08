@@ -135,6 +135,40 @@ describe("TurnChangedFiles", () => {
 		expect(onOpenFile).toHaveBeenCalledWith(path);
 	});
 
+	it("opens the daemon's workspace-relative path for an absolute turn diff path", async () => {
+		const onOpenFile = vi.fn();
+		const path = "/home/ao/.ao/data/worktrees/demo/demo-1/dist/out.md";
+		render(
+			<TurnChangedFiles
+				diff={diff({ files: [{ path, workspacePath: "dist/out.md", additions: 1, deletions: 0, status: "added" }] })}
+				onOpenFile={onOpenFile}
+			/>,
+		);
+		await userEvent.click(screen.getByRole("button", { name: /Open dist\/out\.md in Files/ }));
+		expect(onOpenFile).toHaveBeenCalledWith("dist/out.md");
+	});
+
+	it("does not offer to open a file outside the session workspace", async () => {
+		const user = userEvent.setup();
+		const onOpenFile = vi.fn();
+		const path = "/home/ao/.claude/projects/demo/memory/ao-terminals-are-complementary.md";
+		render(
+			<TurnChangedFiles
+				diff={diff({ files: [{ path, outsideWorkspace: true, additions: 12, deletions: 0, status: "added" }] })}
+				onOpenFile={onOpenFile}
+			/>,
+		);
+		expect(screen.queryByRole("button", { name: /in Files/ })).not.toBeInTheDocument();
+		const row = screen.getByRole("button", { name: "ao-terminals-are-complementary.md is outside this session's workspace" });
+		expect(row).toHaveAttribute("aria-disabled", "true");
+		await user.hover(row);
+		const tooltip = await screen.findByRole("tooltip");
+		expect(tooltip).toHaveTextContent("memory/ao-terminals-are-complementary.md");
+		expect(tooltip).toHaveTextContent("Outside this session's workspace");
+		await user.click(row);
+		expect(onOpenFile).not.toHaveBeenCalled();
+	});
+
 	it("shows the full path on basename hover", async () => {
 		const user = userEvent.setup();
 		render(<TurnChangedFiles diff={diff()} />);

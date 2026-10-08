@@ -138,6 +138,10 @@ export interface DiffFile {
 	status: DiffStatus;
 	/** Set only for a rename. */
 	oldPath?: string;
+	/** `path` relative to the session workspace, when the daemon placed an absolute path inside it. */
+	workspacePath?: string;
+	/** An absolute path outside the session workspace: changed by the agent, but not openable in Files. */
+	outsideWorkspace?: boolean;
 }
 
 export interface TurnDiff {

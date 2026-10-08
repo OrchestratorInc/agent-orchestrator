@@ -2742,6 +2742,12 @@ type ConversationDiffFileResponse struct {
 	Status    string `json:"status" enum:"added,modified,deleted,renamed"`
 	// OldPath is set only for a rename.
 	OldPath string `json:"oldPath,omitempty"`
+	// WorkspacePath is Path relative to the session workspace, set when the
+	// provider reported an absolute path inside it.
+	WorkspacePath string `json:"workspacePath,omitempty"`
+	// OutsideWorkspace marks an absolute path outside the session workspace. The
+	// agent changed it, but the Files API cannot open it.
+	OutsideWorkspace bool `json:"outsideWorkspace,omitempty"`
 	// RolledBack marks a turn an undo discarded. Its messages and activities are
 	// absent from this snapshot because the agent no longer remembers them; the turn
 	// is still reported so a client can say what was taken back rather than letting

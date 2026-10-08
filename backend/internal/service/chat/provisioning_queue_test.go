@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -446,5 +447,40 @@ func TestControllerPublishedWhileProvisioningCannotOvertakeQueuedPrompt(t *testi
 	}
 	if got := conv.sentTexts(); len(got) != 1 || got[0] != "opening prompt" {
 		t.Fatalf("provider received %v, want only the opening prompt first", got)
+	}
+}
+
+// The snapshot carries the session's workspace root so a turn diff's absolute
+// paths can be placed inside or outside it.
+func TestSnapshotCarriesSessionWorkspacePath(t *testing.T) {
+	dir := t.TempDir()
+	st := sqlitetest.MustOpenAt(t, dir)
+	ctx := context.Background()
+	if err := st.UpsertProject(ctx, domain.ProjectRecord{
+		ID: string(testProject), Path: dir, RegisteredAt: time.Now().UTC().Truncate(time.Second),
+	}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	workspace := filepath.Join(dir, "worktree")
+	rec, err := st.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: testProject, Kind: domain.KindWorker,
+		Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+		ProvisionState: domain.SessionProvisionProvisioning,
+		Metadata:       domain.SessionMetadata{WorkspacePath: workspace},
+		CreatedAt:      time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	svc := provisioningService(t, st)
+	if _, err := svc.Send(ctx, rec.ID, ports.ChatUserMessage{Text: "hello", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := svc.Snapshot(ctx, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.WorkspacePath != workspace {
+		t.Fatalf("snapshot workspace = %q, want %q", snapshot.WorkspacePath, workspace)
 	}
 }
