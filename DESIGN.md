@@ -187,10 +187,10 @@ Do not introduce one-off hex values, arbitrary radius, or unreviewed spacing. Us
 
 ## 7. Typography
 
-Use the loaded Geist families. Do not add a new web font or substitute a generic font for visual novelty.
+Use the font tokens. On macOS they resolve to the system faces (SF Pro / SF Mono); elsewhere to the bundled Geist families. Do not add a new web font or substitute a generic font for visual novelty.
 
-- **UI and body:** `--font-family-base` (`Geist Variable` first).
-- **Code, terminal, compact labels:** `--font-family-mono` (`Geist Mono Variable` first).
+- **UI and body:** `--font-family-base` (`-apple-system` on macOS, `Geist Variable` elsewhere).
+- **Code, terminal, compact labels:** `--font-family-mono` (`SF Mono` on macOS, `Geist Mono Variable` elsewhere).
 - **Weights:** 500 medium for controls and small hierarchy; 600 only for headings, selected values, and genuinely primary emphasis.
 - **Numbers:** use tabular figures for metrics, timestamps, diffs, and columns where alignment matters.
 
@@ -412,6 +412,7 @@ Approve only when the answer to every applicable check is yes. Otherwise classif
 | --- | --- | --- |
 | 2026-09-03 | Dark-first, token-led, compact operational UI | Matches AO's long-running desktop workflow and renderer source of truth. |
 | 2026-09-03 | Geist/Geist Mono remain the typographic system | They are bundled, legible at dense sizes, and already define renderer hierarchy. |
+| 2026-10-09 | macOS uses SF Pro / SF Mono; Geist stays the bundled default elsewhere | System faces match native macOS chrome and get optical sizing for free. |
 | 2026-09-03 | Color is reserved for semantics and active focus | Parallel-agent supervision depends on fast, trustworthy scanning. |
 | 2026-09-03 | Shared list containers with dividers are preferred over spaced sibling cards | Better density and clearer grouping for projects and sessions. |
 | 2026-09-03 | Existing platform shell behavior is part of the design system | macOS traffic lights, Windows titlebar, and collapsible inspector are product behavior, not incidental CSS. |
