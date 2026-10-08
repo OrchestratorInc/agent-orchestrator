@@ -50,6 +50,7 @@ import { readEditorSettings, writeEditorPreference } from "./main/editor-setting
 import { createEditorHandoff } from "./main/editor-handoff";
 import { launchCommand } from "./main/launch-command";
 import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
+import { agentPageRequestAllowed, isAgentPageUrl } from "./main/render-frame-network";
 import {
 	decideRelocation,
 	inspectInstalledBundle,
@@ -714,6 +715,36 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.on("will-frame-navigate", (event) => {
 		if (event.isMainFrame || !event.frame) return;
 		if (blocksRenderFrameNavigation(event.frame.url, event.url)) event.preventDefault();
+	});
+
+	// Agent pages framed in the chat (renders, HTML artifacts) stay off this
+	// computer and its network, as the render check's window does: they may
+	// load public addresses and the daemon. Only requests from inside such a
+	// frame are checked; the app's own pass untouched. Pages cannot start
+	// workers (their CSP has worker-src 'none'), whose requests carry no frame.
+	const blockedPageHosts = new Set<string>();
+	shellWebContents.session.webRequest.onBeforeRequest((details, callback) => {
+		let fromPage = false;
+		try {
+			for (let frame = details.frame; frame && !fromPage; frame = frame.parent) fromPage = isAgentPageUrl(frame.url);
+		} catch {
+			// The frame went away mid-request; nothing of its page is left to load.
+		}
+		if (!fromPage) return callback({});
+		const daemonPort = daemonStatus.state === "ready" ? daemonStatus.port : undefined;
+		void agentPageRequestAllowed(details.url, daemonPort).then(
+			(allowed) => {
+				if (!allowed) {
+					const host = URL.canParse(details.url) ? new URL(details.url).host : details.url.slice(0, 80);
+					if (blockedPageHosts.size < 100 && !blockedPageHosts.has(host)) {
+						blockedPageHosts.add(host);
+						console.warn(`AO: blocked an agent page request to ${host}`);
+					}
+				}
+				callback({ cancel: !allowed });
+			},
+			() => callback({ cancel: true }),
+		);
 	});
 
 	shellWebContents.on("will-prevent-unload", (event) => {

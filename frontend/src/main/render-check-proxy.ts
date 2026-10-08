@@ -79,7 +79,7 @@ function ownAddresses(): BlockList {
  * including a public address one of its interfaces holds. Both lists match
  * IPv4-mapped IPv6 against their IPv4 entries.
  */
-function isLocal(address: string, family: number): boolean {
+export function isLocal(address: string, family: number): boolean {
 	const type = family === 6 ? "ipv6" : "ipv4";
 	if (LOCAL_ADDRESSES.check(address, type) || ownAddresses().check(address, type)) return true;
 	const embedded = family === 6 ? embeddedIPv4(address) : undefined;
