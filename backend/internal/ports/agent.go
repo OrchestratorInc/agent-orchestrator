@@ -37,6 +37,17 @@ var ErrAgentBinaryIdentityUnknown = errors.New("agent: binary identity unknown")
 // keep the last catalog and retry once the agent reports a login.
 var ErrAgentModelDiscoverySignInRequired = errors.New("agent: sign-in required to list models")
 
+// ErrAgentModelDiscoveryCredentialRejected marks a discovery failure caused by
+// the provider definitively rejecting the agent's credential. The catalog
+// service reports it as an auth problem so clients can offer a login instead
+// of a raw provider error.
+var ErrAgentModelDiscoveryCredentialRejected = errors.New("agent: credential rejected while listing models")
+
+// ErrAgentModelDiscoveryCredentialExpired marks a discovery failure caused by
+// a stored login whose access token expired while a refresh token remains.
+// The agent CLI renews such a login on its next run; it is not a sign-out.
+var ErrAgentModelDiscoveryCredentialExpired = errors.New("agent: stored login expired while listing models")
+
 // AgentAuthStatus describes the result of a short local auth probe for an
 // installed agent. It is advisory only: credentials, quota, selected model
 // availability, or CLI state can still fail at session spawn/model-call time.
