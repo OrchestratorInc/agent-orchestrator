@@ -38,7 +38,7 @@ func EnsureWorkspaceTrusted(ctx context.Context, workspacePath string) error {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return nil
+		return nil //nolint:nilerr // Copilot can still ask for folder trust interactively.
 	}
 	return ensureCopilotFolderTrusted(filepath.Join(copilotHomeDir(home), "config.json"), workspacePath)
 }
@@ -64,13 +64,13 @@ func ensureCopilotFolderTrusted(configPath, workspacePath string) error {
 		// for folder trust interactively. A top-level null decodes without
 		// error but leaves config nil, so it is rejected the same way.
 		if err := json.Unmarshal(body, &config); err != nil || config == nil {
-			return nil
+			return nil //nolint:nilerr // Leave unsupported config untouched; Copilot owns the fallback prompt.
 		}
 	}
 	var folders []string
 	if raw, ok := config[copilotTrustedFoldersKey]; ok {
 		if err := json.Unmarshal(raw, &folders); err != nil {
-			return nil
+			return nil //nolint:nilerr // Leave an unsupported trust shape untouched.
 		}
 	}
 	for _, existing := range folders {
