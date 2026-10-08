@@ -42,6 +42,7 @@ import { cloudAgentInfos } from "../lib/cloud-agents";
 import { aoBridge } from "../lib/bridge";
 import { CloudCpError } from "../lib/cloud-cp";
 import { DEFAULT_CODER_WORKSPACE_NAME_PREFIX, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
+import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import type { CloudCpGitHubAppRepository } from "../lib/cloud-cp/types";
 import { useCloudSession } from "../lib/cloud-session";
 import { useUiStore } from "../stores/ui-store";
@@ -1473,7 +1474,12 @@ function CloudProjectCard({
 		coderTemplateId.trim() === "";
 	const coderWorkspaceNamePrefix = useCoderSessionOptionsStore((s) => s.workspaceNamePrefix);
 	const setCoderWorkspaceNamePrefix = useCoderSessionOptionsStore((s) => s.setWorkspaceNamePrefix);
-	const coderWorkspaceNamePrefixInvalid = usesCoder && !isValidCoderWorkspaceNamePrefix(coderWorkspaceNamePrefix.trim());
+	// Workspace naming is a bring-your-own-Coder control: only an org that
+	// connected its own Coder deployment sees and sends the prefix.
+	const orgOwnsCoder = useOrgCoderConfig().data != null;
+	const showCoderWorkspaceNamePrefix = usesCoder && orgOwnsCoder;
+	const coderWorkspaceNamePrefixInvalid =
+		showCoderWorkspaceNamePrefix && !isValidCoderWorkspaceNamePrefix(coderWorkspaceNamePrefix.trim());
 	const resetCoderOptions = useCoderSessionOptionsStore((s) => s.reset);
 	useEffect(() => {
 		resetCoderOptions();
@@ -1673,7 +1679,10 @@ function CloudProjectCard({
 		setSubmitError(null);
 		setIsCreating(true);
 		try {
-			const coder = usesCoder ? buildCoderRequestOptions(useCoderSessionOptionsStore.getState()) : undefined;
+			const coderOptions = useCoderSessionOptionsStore.getState();
+			const coder = usesCoder
+				? buildCoderRequestOptions({ ...coderOptions, workspaceNamePrefix: showCoderWorkspaceNamePrefix ? coderOptions.workspaceNamePrefix : "" })
+				: undefined;
 			if (coderTemplateMissing) {
 				setSubmitError(t("createProject.coderTemplateRequired", { defaultValue: "Select a Coder template before creating this project." }));
 				setIsCreating(false);
@@ -1892,7 +1901,7 @@ function CloudProjectCard({
 				{usesCoder && selectedRepo !== undefined ? (
 					<div className="space-y-4">
 						<CoderTemplatePicker orgId={org?.id} />
-						<div className="flex flex-col gap-2 text-sm">
+						{showCoderWorkspaceNamePrefix ? <div className="flex flex-col gap-2 text-sm">
 							<Label htmlFor="coderWorkspaceNamePrefix" className="font-medium text-foreground">
 								{t("coder.workspacePrefix.label")}
 							</Label>
@@ -1916,7 +1925,7 @@ function CloudProjectCard({
 							>
 								{coderWorkspaceNamePrefixInvalid ? t("coder.workspacePrefix.invalid") : t("coder.workspacePrefix.hint")}
 							</p>
-						</div>
+						</div> : null}
 					</div>
 				) : null}
 

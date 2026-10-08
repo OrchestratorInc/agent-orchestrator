@@ -308,6 +308,7 @@ describe("Cloud project Coder template", () => {
 	});
 
 	it("edits the workspace name prefix through the settings patch, only when it changes", async () => {
+		mocks.orgCoderConfig = { baseUrl: "https://coder.acme.test" };
 		project.config.coder = { templateId: "tpl-1" };
 		mount("general");
 		await userEvent.click(await screen.findByRole("button", { name: "Edit Workspace name prefix" }));
@@ -328,6 +329,7 @@ describe("Cloud project Coder template", () => {
 	});
 
 	it("never sends an invalid workspace name prefix", async () => {
+		mocks.orgCoderConfig = { baseUrl: "https://coder.acme.test" };
 		project.config.coder = { templateId: "tpl-1" };
 		mount("general");
 		await userEvent.click(await screen.findByRole("button", { name: "Edit Workspace name prefix" }));
@@ -338,14 +340,29 @@ describe("Cloud project Coder template", () => {
 	});
 
 	it("shows the workspace name prefix only for a Coder project", async () => {
+		mocks.orgCoderConfig = { baseUrl: "https://coder.acme.test" };
 		renderCoder();
 		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
 		expect(screen.queryByRole("button", { name: "Edit Workspace name prefix" })).not.toBeInTheDocument();
 	});
 
 	it("shows the workspace name prefix when new sessions run on Coder", async () => {
+		mocks.orgCoderConfig = { baseUrl: "https://coder.acme.test" };
 		mocks.me.mockResolvedValue({ sandboxProviders: { available: ["coder"], default: "coder" } });
 		renderCoder();
+		expect(await screen.findByRole("button", { name: "Edit Workspace name prefix" })).toBeInTheDocument();
+	});
+
+	it("hides the workspace name prefix for an org without its own Coder", async () => {
+		project.config.coder = { templateId: "tpl-1" };
+		mount("general");
+		expect(await screen.findByText("Coder template")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Edit Workspace name prefix" })).not.toBeInTheDocument();
+	});
+
+	it("keeps an existing workspace name prefix editable so it can be cleared", async () => {
+		project.config.coder = { templateId: "tpl-1", workspaceNamePrefix: "legacy" };
+		mount("general");
 		expect(await screen.findByRole("button", { name: "Edit Workspace name prefix" })).toBeInTheDocument();
 	});
 });

@@ -115,7 +115,11 @@ export function CloudProjectCoderSettings({ project }: { project: CloudCpProject
 			)}
 		</ProjectSettingsRow>
 		{coder?.size ? <ProjectSettingsValueRow label={t("settings.project.coderSize")} value={coder.size} /> : null}
-		<CoderWorkspaceNamePrefixRow project={project} />
+		{/* Workspace naming is a bring-your-own-Coder control; an existing
+		    prefix stays visible so it can still be cleared. */}
+		{orgCoderConfig != null || (coder?.workspaceNamePrefix?.trim() ?? "") !== "" ? (
+			<CoderWorkspaceNamePrefixRow project={project} />
+		) : null}
 	</SettingsGroup>;
 }
 
