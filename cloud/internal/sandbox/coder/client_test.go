@@ -431,7 +431,7 @@ func TestPreinstalledBootstrapUsesExactHashesAndLaunchOnlyArchive(t *testing.T) 
 		t.Fatalf("launch-only archive is missing launch configuration: %+v", files)
 	}
 
-	command := bootstrapCommandForArchive(bootstrap, len(base64.StdEncoding.EncodeToString(archive)), true)
+	command := bootstrapCommandForArchive(bootstrap, "", len(base64.StdEncoding.EncodeToString(archive)), true)
 	workerHash := sha256.Sum256(bootstrap.Binary)
 	helperHash := sha256.Sum256(bootstrap.HelperBinary)
 	for _, expected := range []string{
@@ -497,7 +497,7 @@ func TestPreinstalledBootstrapCommandWiresHTTPSelfHeal(t *testing.T) {
 
 	// The heal shell must be embedded in the real bootstrap command, and the
 	// launch-only fast path must not reinstall a staged binary.
-	command := bootstrapCommandForArchive(bootstrap, 128, true)
+	command := bootstrapCommandForArchive(bootstrap, "", 128, true)
 	if !strings.Contains(command, "/api/cloud/v1/worker/binary/") || !strings.Contains(command, preinstalledMiss) {
 		t.Fatal("bootstrap command does not embed the HTTP self-heal and PTY fallback")
 	}
