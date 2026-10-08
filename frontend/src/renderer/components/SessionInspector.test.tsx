@@ -400,26 +400,6 @@ describe("SessionInspector tabs", () => {
     expect(screen.getByText("workspace file review")).toBeInTheDocument();
   });
 
-  it("shows a Page tab only while the chat has a page open beside it", async () => {
-    const onClosePage = vi.fn();
-    const page = {
-      key: "render:r1",
-      title: "Turns by day",
-      path: "/api/v1/sessions/proj-1/renders/r1",
-      fileName: "Turns by day.html",
-    };
-    const { unmount } = renderWithQuery(<SessionInspector session={session([])} />);
-    expect(screen.queryByRole("tab", { name: "Page" })).not.toBeInTheDocument();
-    unmount();
-
-    renderWithQuery(<SessionInspector onClosePage={onClosePage} page={page} session={session([])} view="page" />);
-    expect(screen.getByRole("tab", { name: "Page" })).toHaveAttribute("aria-selected", "true");
-    const panel = screen.getByRole("region", { name: "Turns by day" });
-    expect(within(panel).getByTitle("Turns by day")).toBeInTheDocument();
-    await userEvent.click(within(panel).getByRole("button", { name: "Close page" }));
-    expect(onClosePage).toHaveBeenCalledTimes(1);
-  });
-
   it("warms the workspace files cache before the Files tab opens", async () => {
     renderWithQuery(<SessionInspector session={session([])} />);
 

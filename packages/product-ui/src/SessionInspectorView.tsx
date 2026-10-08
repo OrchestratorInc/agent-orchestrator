@@ -22,7 +22,7 @@ import { scmUserAvatarUrl } from "./scm-avatar";
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
-export type InspectorView = "summary" | "reviews" | "browser" | "files" | "page";
+export type InspectorView = "summary" | "reviews" | "browser" | "files";
 
 export type InspectorTab = {
 	badge?: boolean;
@@ -47,7 +47,6 @@ export function SessionInspectorShellView({
 	isVisible = true,
 	loadingText,
 	onViewChange,
-	pageView,
 	reviewsView,
 	summaryView,
 	tabs,
@@ -61,8 +60,6 @@ export function SessionInspectorShellView({
 	isVisible?: boolean;
 	loadingText?: string;
 	onViewChange: (view: InspectorView) => void;
-	/** A render or an HTML artifact opened beside the chat. It fills the body. */
-	pageView?: ReactNode;
 	reviewsView?: ReactNode;
 	summaryView?: ReactNode;
 	tabs: InspectorTab[];
@@ -179,12 +176,11 @@ export function SessionInspectorShellView({
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && activeView !== "page" && inspectorScrollableBodyClass,
+					activeView !== "browser" && activeView !== "files" && inspectorScrollableBodyClass,
 					activeView === "browser" &&
 						!browserPoppedOut &&
 						"session-inspector__body--browser p-0 overflow-hidden [&>[role=tabpanel]]:border-0 [&>[role=tabpanel]]:rounded-none",
 					activeView === "files" && "p-0 overflow-hidden [&>[role=tabpanel]]:h-full",
-					activeView === "page" && "flex flex-col p-0 overflow-hidden",
 				)}
 				inert={!isVisible}
 			>
@@ -192,7 +188,6 @@ export function SessionInspectorShellView({
 				{activeView === "reviews" ? reviewsView : null}
 				{activeView === "browser" ? browserView : null}
 				{activeView === "files" ? filesView : null}
-				{activeView === "page" ? pageView : null}
 			</div>
 		</aside>
 	);

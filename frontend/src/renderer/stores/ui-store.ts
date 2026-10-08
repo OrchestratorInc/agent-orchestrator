@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
 import { sessionUiKey } from "../lib/hosts";
-import type { PanelPage } from "../lib/render-frame";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
 import type { FilesSource } from "../hooks/useSessionWorkspaceFiles";
@@ -60,13 +59,11 @@ export type SettingsModal =
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
 export type WorkbenchTab = "changes" | "files" | "terminal";
-export type InspectorView = "summary" | "reviews" | "browser" | "files" | "page";
+export type InspectorView = "summary" | "reviews" | "browser" | "files";
 
 export type InspectorSessionState = {
 	isOpen: boolean;
 	view: InspectorView;
-	/** The render or artifact open in the Page view, beside the chat. */
-	page?: PanelPage;
 	/** The current non-empty browser content lifecycle has already been revealed. */
 	browserContentRevealed?: boolean;
 	/** Real browser activity occurred while Browser was not visible. */
@@ -191,8 +188,6 @@ export type UiState = {
 	setInspectorOpen: (sessionId: string, isOpen: boolean) => void;
 	toggleInspector: (sessionId: string) => void;
 	setInspectorView: (sessionId: string, view: InspectorView) => void;
-	/** Opens a page in the inspector's Page view, or with undefined closes it. */
-	setInspectorPage: (sessionId: string, page: PanelPage | undefined) => void;
 	/**
 	 * Runs the "entering this session" defaults — Summary tab, baseline browser
 	 * reveal — exactly once per session's lifetime. Backed by persisted store
@@ -439,16 +434,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 				inspectorSessions: {
 					...state.inspectorSessions,
 					[sessionId]: { ...current, view, browserUnseen },
-				},
-			};
-		}),
-	setInspectorPage: (sessionId, page) =>
-		set((state) => {
-			const current = inspectorState(state.inspectorSessions, sessionId);
-			return {
-				inspectorSessions: {
-					...state.inspectorSessions,
-					[sessionId]: { ...current, page },
 				},
 			};
 		}),

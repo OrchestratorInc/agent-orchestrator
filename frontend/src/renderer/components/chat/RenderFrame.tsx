@@ -1,5 +1,5 @@
-import { Code2, Download, ExternalLink, FilePlus, Globe2, Loader2, PanelRightOpen, X } from "lucide-react";
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Code2, Download, ExternalLink, FilePlus, Globe2, Loader2, Maximize2 } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { useOpenArtifactPreview } from "../../hooks/useOpenArtifactPreview";
 import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
@@ -13,7 +13,6 @@ import {
 	renderThemeFragment,
 	renderThemeMessage,
 	renderThemesEqual,
-	type PanelPage,
 	type RenderDisplayMode,
 	type RenderTheme,
 } from "../../lib/render-frame";
@@ -21,6 +20,7 @@ import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import type { ArtifactRef, RenderRef } from "../../types/conversation";
 import { Button, type ButtonProps } from "../ui/button";
+import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { useChatArtifactLinks, useChatRemoteHost } from "./chat-image-source";
 
@@ -239,41 +239,56 @@ function RenderSource({ path }: { path: string }) {
 }
 
 /** Opens an artifact in the session's Browser panel, on its own preview origin. */
-function OpenInPanelAction({ sessionId, previewUrl }: { sessionId: string; previewUrl: string }) {
+function OpenInPanelAction({ sessionId, previewUrl, onOpen }: { sessionId: string; previewUrl: string; onOpen: () => void }) {
 	const { t } = useTranslation();
 	const openArtifactPreview = useOpenArtifactPreview(sessionId);
 	return (
-		<RenderAction label={t("chat.artifact.openInPanel")} onClick={() => openArtifactPreview(previewUrl)}>
+		<RenderAction
+			label={t("chat.artifact.openInPanel")}
+			onClick={() => {
+				onOpen();
+				openArtifactPreview(previewUrl);
+			}}
+		>
 			<Globe2 className="size-3.5" />
 		</RenderAction>
 	);
 }
 
-/**
- * Opens a page beside the chat, in the session's inspector. The session view
- * provides it; a chat with no inspector around it opens the page in the
- * system browser instead.
- */
-export const RenderPanelContext = createContext<((page: PanelPage) => void) | null>(null);
-
-/** The page as the system browser should open it: the daemon route, themed, full width. */
-function externalPageUrl(page: Pick<PanelPage, "path">): string {
-	return `${getApiBaseUrl()}${page.path}${renderThemeFragment(readRenderTheme(), "fullscreen")}`;
-}
-
-/**
- * A render or an HTML artifact open beside the chat, in the inspector's Page
- * view: the page fills the panel, and its actions sit in a header row above it.
- */
-export function RenderPagePanel({ page, onClose }: { page: PanelPage; onClose: () => void }) {
+/** A render, or an HTML artifact, inline in its turn and expandable to a dialog. */
+export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactRef }) {
 	const { t } = useTranslation();
+	const remoteHost = useChatRemoteHost();
+	const render = "render" in props ? props.render : undefined;
+	const links = useChatArtifactLinks("artifact" in props ? props.artifact.path : undefined);
+	const page: FramePage =
+		"render" in props
+			? { title: props.render.title, path: props.render.path, height: props.render.height, heights: props.render.heights, fileName: renderFileName(props.render.title) }
+			: {
+					title: props.artifact.name,
+					path: props.artifact.url,
+					height: ARTIFACT_FRAME_HEIGHT,
+					fileName: props.artifact.name,
+					scrollable: true,
+					frameUrl: links?.inlineUrl,
+				};
+	const [expanded, setExpanded] = useState(false);
 	const [showSource, setShowSource] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [savingArtifact, setSavingArtifact] = useState(false);
-	const framePage: FramePage = { title: page.title, path: page.path, height: ARTIFACT_FRAME_HEIGHT, fileName: page.fileName, frameUrl: page.frameUrl };
+	// The local daemon has no copy of a remote host's render, and the remote
+	// proxy URL must not reach the page: its path carries the proxy's capability
+	// token, which the page could read from its own location.
+	if (remoteHost) {
+		return (
+			<p className="text-xs text-muted-foreground">
+				{page.title} · {t("chat.render.remoteHost")}
+			</p>
+		);
+	}
 	const save = () => {
 		setSaving(true);
-		saveRender(framePage)
+		saveRender(page)
 			.catch((error: unknown) => {
 				console.error("save render", error);
 				useUiStore.getState().showGlobalToast(t("chat.render.saveError"), undefined, "error");
@@ -291,91 +306,74 @@ export function RenderPagePanel({ page, onClose }: { page: PanelPage; onClose: (
 			.finally(() => setSavingArtifact(false));
 	};
 	return (
-		<section aria-label={page.title} className="flex min-h-0 flex-1 flex-col">
-			<div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2">
-				<h2 className="min-w-0 flex-1 truncate text-sm font-medium">{page.title}</h2>
-				<RenderAction
-					label={t("chat.render.viewSource")}
-					aria-pressed={showSource}
-					className="aria-pressed:bg-muted"
-					onClick={() => setShowSource((current) => !current)}
-				>
-					<Code2 className="size-3.5" />
-				</RenderAction>
-				<RenderAction label={t("chat.render.save")} disabled={saving} onClick={save}>
-					<Download className="size-3.5" />
-				</RenderAction>
-				{page.render ? (
-					<RenderAction label={t("chat.render.saveAsArtifact")} disabled={savingArtifact} onClick={() => saveArtifact(page.render!)}>
-						<FilePlus className="size-3.5" />
-					</RenderAction>
-				) : null}
-				{page.browserPanel ? <OpenInPanelAction {...page.browserPanel} /> : null}
-				<RenderAction label={t("chat.render.openInBrowser")} onClick={() => window.open(externalPageUrl(page), "_blank", "noopener,noreferrer")}>
-					<ExternalLink className="size-3.5" />
-				</RenderAction>
-				<RenderAction label={t("chat.render.closePage")} onClick={onClose}>
-					<X className="size-3.5" />
-				</RenderAction>
-			</div>
-			{showSource ? (
-				<RenderSource path={page.path} />
-			) : (
-				// Inset to the header's title, so the page lines up with it in the panel.
-				<div className="flex min-h-0 flex-1 px-2">
-					<RenderDocument key={page.key} page={framePage} displayMode="fullscreen" className="min-h-0 w-full flex-1" />
-				</div>
-			)}
-		</section>
-	);
-}
-
-/** A render, or an HTML artifact, inline in its turn; it opens beside the chat for a closer look. */
-export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactRef }) {
-	const { t } = useTranslation();
-	const remoteHost = useChatRemoteHost();
-	const openBeside = useContext(RenderPanelContext);
-	const links = useChatArtifactLinks("artifact" in props ? props.artifact.path : undefined);
-	const page: FramePage =
-		"render" in props
-			? { title: props.render.title, path: props.render.path, height: props.render.height, heights: props.render.heights, fileName: renderFileName(props.render.title) }
-			: {
-					title: props.artifact.name,
-					path: props.artifact.url,
-					height: ARTIFACT_FRAME_HEIGHT,
-					fileName: props.artifact.name,
-					scrollable: true,
-					frameUrl: links?.inlineUrl,
-				};
-	// The local daemon has no copy of a remote host's render, and the remote
-	// proxy URL must not reach the page: its path carries the proxy's capability
-	// token, which the page could read from its own location.
-	if (remoteHost) {
-		return (
-			<p className="text-xs text-muted-foreground">
-				{page.title} · {t("chat.render.remoteHost")}
-			</p>
-		);
-	}
-	const panelPage: PanelPage = {
-		key: "render" in props ? `render:${props.render.id}` : `artifact:${props.artifact.path}`,
-		title: page.title,
-		path: page.path,
-		fileName: page.fileName,
-		frameUrl: page.frameUrl,
-		render: "render" in props ? props.render : undefined,
-		browserPanel: links?.previewUrl ? { sessionId: links.sessionId, previewUrl: links.previewUrl } : undefined,
-	};
-	return (
 		<div className="group/render relative min-w-0">
 			<RenderDocument page={page} displayMode="inline" />
 			<RenderAction
-				label={t("chat.render.openBeside")}
+				label={t("chat.render.expand")}
 				className="absolute end-1 top-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-visible:opacity-100"
-				onClick={() => (openBeside ? openBeside(panelPage) : window.open(externalPageUrl(page), "_blank", "noopener,noreferrer"))}
+				onClick={() => {
+					setShowSource(false);
+					setExpanded(true);
+				}}
 			>
-				<PanelRightOpen className="size-3.5" />
+				<Maximize2 className="size-3.5" />
 			</RenderAction>
+			<Dialog open={expanded} onOpenChange={setExpanded}>
+				<DialogContent
+					aria-describedby={undefined}
+					className="z-overlay flex h-[calc(100svh-6rem)] w-[calc(100vw-6rem)] max-w-none flex-col gap-2 p-2 outline-none"
+					// Focus the dialog, not its first action: a focused action opens its tooltip.
+					onOpenAutoFocus={(event) => {
+						event.preventDefault();
+						(event.currentTarget as HTMLElement).focus();
+					}}
+				>
+					{/* pe-9 keeps the actions clear of the dialog's own close button. */}
+					<div className="flex h-8 shrink-0 items-center gap-1 ps-2 pe-9">
+						<DialogTitle className="min-w-0 flex-1 truncate text-subtitle">{page.title}</DialogTitle>
+						<RenderAction
+							label={t("chat.render.viewSource")}
+							aria-pressed={showSource}
+							className="aria-pressed:bg-muted"
+							onClick={() => setShowSource((current) => !current)}
+						>
+							<Code2 className="size-3.5" />
+						</RenderAction>
+						<RenderAction
+							label={t("chat.render.save")}
+							disabled={saving}
+							onClick={save}
+						>
+							<Download className="size-3.5" />
+						</RenderAction>
+						{render ? (
+							<RenderAction label={t("chat.render.saveAsArtifact")} disabled={savingArtifact} onClick={() => saveArtifact(render)}>
+								<FilePlus className="size-3.5" />
+							</RenderAction>
+						) : null}
+						{links?.previewUrl ? (
+							<OpenInPanelAction sessionId={links.sessionId} previewUrl={links.previewUrl} onOpen={() => setExpanded(false)} />
+						) : null}
+						<RenderAction
+							label={t("chat.render.openInBrowser")}
+							onClick={() =>
+								window.open(
+									`${getApiBaseUrl()}${page.path}${renderThemeFragment(readRenderTheme(), "fullscreen")}`,
+									"_blank",
+									"noopener,noreferrer",
+								)
+							}
+						>
+							<ExternalLink className="size-3.5" />
+						</RenderAction>
+					</div>
+					{!expanded ? null : showSource ? (
+						<RenderSource path={page.path} />
+					) : (
+						<RenderDocument page={page} displayMode="fullscreen" className="min-h-0 w-full flex-1" />
+					)}
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }

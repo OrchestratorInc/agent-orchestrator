@@ -1,6 +1,4 @@
 import { AppLink } from "./AppLink";
-import { RenderPagePanel } from "./chat/RenderFrame";
-import type { PanelPage } from "../lib/render-frame";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
@@ -38,7 +36,6 @@ import {
 	Play,
 	Loader2,
 	MessageSquare,
-	PanelRight,
 	X,
 } from "lucide-react";
 import type { components } from "../../api/schema";
@@ -116,7 +113,7 @@ export type { InspectorView } from "@aoagents/product-ui";
 
 const VIEW_DEFS: {
 	id: InspectorView;
-	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.files" | "inspector.page";
+	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.files";
 	icon: ReactNode;
 }[] = [
 	{
@@ -168,12 +165,6 @@ const VIEW_DEFS: {
 			</svg>
 		),
 	},
-	{
-		// Shown only while the chat has a render or an HTML artifact open beside it.
-		id: "page",
-		labelKey: "inspector.page",
-		icon: <PanelRight aria-hidden="true" />,
-	},
 ];
 
 const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
@@ -204,8 +195,6 @@ export const SessionInspector = memo(function SessionInspector({
 	browserView,
 	view: viewProp,
 	onViewChange,
-	page,
-	onClosePage,
 }: {
 	browserOnly?: boolean;
 	session?: WorkspaceSession;
@@ -225,9 +214,6 @@ export const SessionInspector = memo(function SessionInspector({
 	/** Controlled active tab. Omit to let the inspector own its own selection. */
 	view?: InspectorView;
 	onViewChange?: (view: InspectorView) => void;
-	/** The render or artifact the chat opened beside it, shown in the Page view. */
-	page?: PanelPage;
-	onClosePage?: () => void;
 }) {
 	const { t } = useTranslation();
 	const hostId = hostIdProp ?? session?.hostId;
@@ -267,10 +253,7 @@ export const SessionInspector = memo(function SessionInspector({
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
 	const availableViewDefs = onlyBrowser ? VIEW_DEFS.filter((entry) => entry.id === "browser")
-		: VIEW_DEFS.filter(
-				(entry) =>
-					(!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews") && (page !== undefined || entry.id !== "page"),
-			);
+		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews"));
 	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	useEffect(() => {
 		if (view === requestedView) return;
@@ -339,7 +322,6 @@ export const SessionInspector = memo(function SessionInspector({
 				isVisible={isInspectorVisible}
 				loadingText={session ? undefined : t("inspector.loadingSession")}
 				onViewChange={setView}
-				pageView={page ? <RenderPagePanel key={page.key} page={page} onClose={() => onClosePage?.()} /> : undefined}
 				reviewsView={
 					session ? <ReviewsView hostId={hostId} onOpenReviewFile={onOpenReviewFile} onOpenReviewerTerminal={onOpenReviewerTerminal} onOpenReviewerChat={onOpenReviewerChat} onWorkerMessageSent={onWorkerMessageSent} session={session} /> : undefined
 				}
