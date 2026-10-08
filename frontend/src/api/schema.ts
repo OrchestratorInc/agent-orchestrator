@@ -3222,6 +3222,8 @@ export interface components {
             /** Format: date-time */
             validatedAt?: string;
             warning?: string;
+            /** @enum {string} */
+            warningCode?: "auth_required" | "auth_expired";
         };
         AgentReadinessResponse: {
             agents: components["schemas"]["AgentReadinessSnapshot"][];
