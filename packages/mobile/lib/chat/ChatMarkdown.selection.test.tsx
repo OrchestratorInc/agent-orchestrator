@@ -12,6 +12,7 @@ vi.mock("react-native", () => ({
 	View: "View",
 }));
 vi.mock("../icons", () => ({ Feather: "Feather" }));
+vi.mock("@bsky.app/react-native-uitextview", () => ({ UITextView: "UITextView" }));
 vi.mock("expo-clipboard", () => ({ setStringAsync: vi.fn() }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn(), success: vi.fn() } }));
 vi.mock("../openGitHub", () => ({ openGitHub: vi.fn() }));
@@ -54,6 +55,11 @@ it("lets readers select response prose in every rendered Markdown block", () => 
 		.map(textOf);
 	for (const response of ["Heading response", "List response", "Quoted response", "Column response", "Cell response", "Image caption", "Code response", "Paragraph response"]) {
 		expect(selectableText, `${response} should support native text selection`).toContain(response);
+	}
+	const rangeSelectableText = renderer.root.findAll((node) => node.props.selectable === true && node.props.uiTextView === true)
+		.map(textOf);
+	for (const response of ["Heading response", "List response", "Quoted response", "Column response", "Cell response", "Image caption", "Code response", "Paragraph response"]) {
+		expect(rangeSelectableText, `${response} should support native range selection on iOS`).toContain(response);
 	}
 
 	act(() => renderer.unmount());
