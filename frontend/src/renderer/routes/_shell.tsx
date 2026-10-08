@@ -38,6 +38,7 @@ import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useW
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId, hasTrustedApiBaseUrl } from "../lib/api-client";
+import { resolveCssColorToHex } from "../lib/css-color";
 import { refreshDaemonStatus } from "../lib/daemon-status";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
@@ -1016,6 +1017,16 @@ function ShellLayout() {
 		void aoBridge.theme?.persistTerminal(resolvedTheme);
 	}, [resolvedTheme]);
 
+	// Match the native window background to the sidebar fill. Deferred a frame so
+	// data-theme has been applied before the token is read.
+	useEffect(() => {
+		const frame = requestAnimationFrame(() => {
+			const color = resolveCssColorToHex("--sidebar");
+			if (color) void aoBridge.theme?.setWindowBackground(color);
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [resolvedTheme]);
+
 	// Follow OS appearance while the user keeps Theme on System — updates
 	// resolvedTheme (and thus React consumers) without writing light/dark to storage.
 	useEffect(() => {
@@ -1328,7 +1339,10 @@ function ShellLayout() {
 							aria-hidden="true"
 							data-slot="titlebar-drag-region"
 							className={cn(
-								"fixed top-0 left-0 z-chrome transition-[height] duration-200 ease-out motion-reduce:transition-none",
+								// Own opaque fill: the shell root goes transparent while a live native
+								// browser page shows, so this strip would otherwise reveal the darker
+								// native window background.
+								"fixed top-0 left-0 z-chrome bg-sidebar transition-[height] duration-200 ease-out motion-reduce:transition-none",
 								sidebarHasLayout ? "w-(--ao-sidebar-w,var(--size-sidebar-default))" : "w-titlebar-content-offset",
 								isFullScreen ? "pointer-events-none h-0" : "h-traffic-light-clearance",
 							)}

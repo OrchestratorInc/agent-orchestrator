@@ -51,6 +51,7 @@ export const aoBridge: AoBridge =
 		theme: {
 			set: async () => undefined,
 			persistTerminal: async () => undefined,
+			setWindowBackground: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
