@@ -194,7 +194,7 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 		if (cuesQuery.isError) {
 			return (
 				<div className="flex flex-col items-center gap-3 py-8 text-center">
-					<p role="alert" className="text-sm text-destructive">
+					<p role="alert" className="text-sm text-error">
 						{apiErrorMessage(cuesQuery.error, t("cues.loadFailed"))}
 					</p>
 					<Button type="button" variant="outline" size="sm" onClick={() => void cuesQuery.refetch()}>
@@ -290,7 +290,7 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 			</div>
 
 			<div className="flex flex-col gap-1.5">
-				<label className="settings-field-label">{t("cues.typeLabel")}</label>
+				<span className="settings-field-label">{t("cues.typeLabel")}</span>
 				<SettingsOptionMenu
 					aria-label={t("cues.typeLabel")}
 					value={draft.type}
@@ -330,7 +330,8 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 		</div>;
 	};
 
-	const empty = !formOpen && cuesQuery.isFetchedAfterMount && !cuesQuery.isFetching && !cuesQuery.isError && (cuesQuery.data ?? []).length === 0;
+	// The footer action only exists once a list is showing; an empty list carries its own button.
+	const empty = !formOpen && !cuesQuery.isError && (!cuesQuery.isFetchedAfterMount || (cuesQuery.data ?? []).length === 0);
 	return (
 		<div className="flex flex-col gap-(--size-settings-section-inner-gap)">
 			<p className="text-sm leading-5 text-settings-muted">{t("cues.settingsDescription")}</p>

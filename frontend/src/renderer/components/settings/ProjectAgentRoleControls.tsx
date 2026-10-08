@@ -9,6 +9,8 @@ import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../
 import { LOCAL_HOST } from "../../lib/hosts";
 import { AgentModelCombobox } from "./AgentModelCombobox";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
+import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
+import { cn } from "../../lib/utils";
 
 export function AgentModelField({
 	role,
@@ -158,7 +160,7 @@ export function AgentModelField({
 						disabled={(query.isFetching && !catalog) || agentId === ""}
 						onChange={selectCatalogModel}
 						onCustom={selectCustomModel}
-						triggerClassName="w-fit bg-[var(--color-bg-settings-trigger)] text-[var(--color-text-settings-trigger)] hover:bg-[var(--color-bg-settings-trigger-hover)] data-[state=open]:bg-[var(--color-bg-settings-trigger-hover)]"
+						triggerClassName={cn(MENU_TRIGGER_CHROME, "w-fit")}
 						compact
 						recentScope={agentId}
 						menuAlign="start"

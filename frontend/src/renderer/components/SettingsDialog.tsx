@@ -2,7 +2,7 @@ import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, X, type Lucide
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudSession } from "../lib/cloud-session";
@@ -140,6 +140,11 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 				closeWhenSavedRef.current = true;
 				return;
 			}
+			// A draft that cannot be saved is dropped; waiting for a save would hang the close.
+			if (projectSaveState.unsaveable) {
+				closeSettings();
+				return;
+			}
 			if (projectSaveState.dirty) {
 				const form = document.getElementById("project-settings-form") as HTMLFormElement | null;
 				if (form) {
@@ -159,6 +164,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		if (!closeWhenSavedRef.current) return;
 		if (projectSaveState.phase === "failed" || projectSaveState.replacementError) {
 			closeWhenSavedRef.current = false;
+		} else if (projectSaveState.unsaveable && !projectSaveState.requestPending) {
+			closeWhenSavedRef.current = false;
+			closeSettings();
 		} else if (!projectSaveState.dirty && !projectSaveState.requestPending &&
 			(projectSaveState.phase === "saved" || projectSaveState.phase === "idle")) {
 			closeWhenSavedRef.current = false;
@@ -202,7 +210,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	}, [queryClient, settingsModal?.scope]);
 
 	const selectProjectSection = (id: ProjectSettingsSection) => {
-		if (projectSaveState.dirty && id !== activeProjectSection) {
+		if (projectSaveState.dirty && !projectSaveState.unsaveable && id !== activeProjectSection) {
 			setPendingProjectSection(id);
 			(document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit();
 		} else {
@@ -218,7 +226,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		: globalSections.map(({ id, label, icon }) => ({ id, label: label(t), icon, active: activeSection === id, onSelect: () => selectGlobalSection(id) }));
 	const showSaveStatus = isProjectSettings && activeProjectSection !== "cues" &&
 		(projectSaveState.phase === "failed" ||
-			projectSaveState.phase === "pending" ||
+			(projectSaveState.phase === "pending" && !projectSaveState.unsaveable) ||
 			projectSaveState.phase === "saving" ||
 			Boolean(remoteHostId && projectSaveState.replacementError));
 
@@ -296,15 +304,25 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 	const activeRef = useRef(active);
 	activeRef.current = active;
 	const isOpen = active !== null;
+	// Hand focus back to whatever opened settings once the page closes.
+	useEffect(() => {
+		if (!isOpen) return;
+		const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		return () => { if (opener?.isConnected) opener.focus({ preventScroll: true }); };
+	}, [isOpen]);
 	useEffect(() => {
 		if (!isOpen) return;
 		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.key !== "Escape") return;
+			if (event.key !== "Escape" || event.isComposing) return;
 			const target = event.target instanceof Element ? event.target : null;
 			// In-place edits (a profile rename) and login flows (terminal, cloud login panel) take Escape themselves.
 			if (target?.closest("[data-settings-inline-edit]")) return;
-			// Open menus, listboxes, and dialogs take Escape to dismiss themselves.
-			if (document.querySelector('[role="menu"], [role="listbox"], [role="dialog"], [data-radix-popper-content-wrapper]')) return;
+			// Open menus, listboxes, and dialogs take Escape to dismiss themselves. Only popups the
+			// event came from (or that hold focus) count, so a stray tooltip cannot swallow it.
+			if (event.isComposing) return;
+			const focused = document.activeElement instanceof Element ? document.activeElement : null;
+			const popup = '[role="menu"], [role="listbox"], [role="dialog"], [data-radix-popper-content-wrapper]';
+			if ([target, focused].some((element) => element?.closest(popup))) return;
 			activeRef.current?.close();
 		};
 		// Capture phase so a field that handles its own Escape cannot swallow the close.
@@ -325,6 +343,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
  * centered, scrolling content column on the normal page background.
  */
 export function SettingsPane() {
+	const { t } = useTranslation();
 	const page = useContext(SettingsPageContext);
 	const paddingLeft = useTopbarPaddingLeft();
 	if (!page) return null;
@@ -338,6 +357,9 @@ export function SettingsPane() {
 					<span className="min-w-0 truncate text-foreground">{layer.title}</span>
 					{layer.remoteHostId && <span className="truncate text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}
 				</h1>
+				<button aria-label={t("settings.close")} className="settings-close-button ml-auto shrink-0" disabled={layer.cueBusy} onClick={layer.close} style={{ WebkitAppRegion: "no-drag" } as CSSProperties} type="button">
+					<X aria-hidden="true" className="size-4" />
+				</button>
 			</motion.header>
 			{/* A covered project layer stays mounted so its draft survives recovery settings above it. */}
 			{page.layers.map((entry) => (

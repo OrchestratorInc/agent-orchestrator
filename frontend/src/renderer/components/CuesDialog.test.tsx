@@ -90,7 +90,7 @@ test("settings block stale content after refresh failure and support retry", asy
 
 test("validates bytes and required command, preserves content and recovers from save failure", async () => {
 	setup(<CuesSettings projectId="project" />);
-	fireEvent.click(screen.getByRole("button", { name: "New cue" }));
+	fireEvent.click(await screen.findByRole("button", { name: "New cue" }));
 	fireEvent.change(screen.getByLabelText("Name"), { target: { value: "é".repeat(33) } });
 	fireEvent.change(screen.getByLabelText("Command"), { target: { value: "  " } });
 	fireEvent.click(screen.getByRole("button", { name: "Create" }));

@@ -825,7 +825,6 @@ button.settings-row-bar {
 
 .project-settings-form > section > .settings-grouped-rows .settings-row-bar,
 .project-settings-form > fieldset > section > .settings-grouped-rows .settings-row-bar {
-	min-height: 3.5rem;
 	padding-inline: 0;
 }
 
@@ -6093,19 +6092,3 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	}
 }
 
-/* Cloud settings use a fieldset for save-state disabling. Keep headings aligned
- * with the dialog title and indent row labels without moving right values. */
-.cloud-project-settings-form > fieldset > section {
-	gap: var(--space-2);
-}
-.cloud-project-settings-form > fieldset > section > h2 {
-	padding-inline: 0;
-}
-.cloud-project-settings-form > fieldset > section > .settings-grouped-rows {
-	background: transparent;
-}
-.cloud-project-settings-form > fieldset > section > .settings-grouped-rows .settings-row-bar {
-	min-height: 3.5rem;
-	padding-inline: 0;
-	border-top: 0;
-}

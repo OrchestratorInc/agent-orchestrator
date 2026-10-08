@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "./SettingsDialog";
 import { SettingsSidebarNav } from "./Sidebar";
 import { SidebarProvider } from "./ui/sidebar";
+import { TooltipProvider } from "./ui/tooltip";
 
 function Nav() {
 	const { t } = useTranslation();
@@ -20,10 +21,12 @@ function Nav() {
 export function SettingsDialog() {
 	return (
 		<SettingsProvider>
-			<SidebarProvider>
-				<Nav />
-				<SettingsPane />
-			</SidebarProvider>
+			<TooltipProvider>
+				<SidebarProvider>
+					<Nav />
+					<SettingsPane />
+				</SidebarProvider>
+			</TooltipProvider>
 		</SettingsProvider>
 	);
 }

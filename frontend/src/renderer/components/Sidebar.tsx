@@ -3202,6 +3202,7 @@ function SidebarTopNavRow({
 				"transition-none",
 				"group-data-[collapsible=icon]:size-control-board! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:rounded-lg group-data-[collapsible=icon]:p-0!",
 			)}
+			aria-current={active ? "page" : undefined}
 			disabled={disabled}
 			isActive={active}
 			onClick={onClick}
@@ -3231,7 +3232,7 @@ export function SettingsSidebarNav({ layer }: { layer: NonNullable<ReturnType<ty
 					<SidebarMenu aria-label={t("settings.navSectionsAria")} className="gap-0.5" role="navigation">
 						{layer.navItems.map(({ id, label, icon: Icon, active, disabled, onSelect }) => (
 							<SidebarMenuItem key={id}>
-								<SidebarTopNavRow active={active} disabled={disabled} icon={<Icon aria-hidden="true" />} label={label} onClick={onSelect} />
+								<SidebarTopNavRow active={active} disabled={disabled} icon={<Icon aria-hidden="true" />} label={label} onClick={onSelect} tooltip={label} />
 							</SidebarMenuItem>
 						))}
 					</SidebarMenu>

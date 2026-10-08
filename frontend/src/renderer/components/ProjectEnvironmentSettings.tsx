@@ -54,8 +54,8 @@ export function ProjectEnvironmentSettings({ projectId, onSaveState }: { project
 			return data.project as Project;
 		},
 	});
-	if (query.isLoading) return <p className="text-sm text-settings-muted">{t("settings.project.loading")}</p>;
-	if (query.isError || !query.data) return <p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p>;
+	if (query.isLoading) return <div className="project-settings-form" aria-busy="true" aria-label={t("settings.project.loading")}><section><div className="settings-grouped-rows flex w-full flex-col"><div className="settings-row-bar" /></div></section></div>;
+	if (query.isError || !query.data) return <div className="flex flex-col items-start gap-3"><p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p><Button type="button" variant="outline" size="sm" onClick={() => void query.refetch()}>{t("settings.project.retry")}</Button></div>;
 	return <VariablesEditor key={projectId} projectId={projectId} initial={query.data.config?.env} onSaveState={onSaveState} onSaved={() => {
 		void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
@@ -69,6 +69,7 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 	onSaved: () => void;
 }) {
 	const { t } = useTranslation();
+	const attempted = useRef<string | null>(null);
 	const [rows, setRows] = useState(() => rowsFromEnv(initial));
 	const [saved, setSaved] = useState(() => JSON.stringify(initial ?? {}));
 	const [error, setError] = useState<string | null>(null);
@@ -78,6 +79,19 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 	const [importedCount, setImportedCount] = useState<number | null>(null);
 	const filled = rows.filter(({ name, value }) => name !== "" || value !== "");
 	const dirty = JSON.stringify(Object.fromEntries(filled.map(({ name, value }) => [name, value]))) !== saved;
+	// The env map this draft would save, or null while a name is invalid or duplicated.
+	const envDraft = (() => {
+		const env: Record<string, string> = {};
+		const names = new Set<string>();
+		for (const row of filled) {
+			const folded = row.name.toUpperCase();
+			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(row.name) || names.has(folded)) return null;
+			names.add(folded);
+			env[row.name] = row.value;
+		}
+		return env;
+	})();
+	const unsaveable = dirty && envDraft === null;
 	const mutation = useMutation({
 		mutationFn: async (env: Record<string, string>) => {
 			// Refresh before the whole-config PUT so this page cannot erase changes made elsewhere.
@@ -102,12 +116,13 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		onSaveState?.({
 			phase: mutation.isError ? "failed" : mutation.isPending ? "saving" : dirty ? "pending" : savedAt ? "saved" : "idle",
 			dirty,
+			unsaveable,
 			requestPending: mutation.isPending,
 			error: mutation.error instanceof Error ? mutation.error.message : undefined,
 		});
-	}, [dirty, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt]);
+	}, [dirty, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt, unsaveable]);
 	const showEmpty = rows.length === 0 && activeTab === "variables";
-	const update = (next: Row[]) => { setRows(next); setError(null); setSavedAt(false); setImportedCount(null); };
+	const update = (next: Row[]) => { attempted.current = null; setRows(next); setError(null); setSavedAt(false); setImportedCount(null); };
 	const importPasted = () => {
 		const parsed = parsePastedEnv(pasteText);
 		if (parsed.invalidLine || parsed.rows.length === 0) {
@@ -151,22 +166,13 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		mutation.mutate(env);
 	};
 	// Autosave: a draft with valid, unique names saves shortly after the last edit.
-	const attempted = useRef<string | null>(null);
 	useEffect(() => {
-		if (!dirty || mutation.isPending || activeTab !== "variables") return;
-		const env: Record<string, string> = {};
-		const names = new Set<string>();
-		for (const row of filled) {
-			const folded = row.name.toUpperCase();
-			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(row.name) || names.has(folded)) return;
-			names.add(folded);
-			env[row.name] = row.value;
-		}
-		const key = JSON.stringify(env);
+		if (!dirty || mutation.isPending || activeTab !== "variables" || envDraft === null) return;
+		const key = JSON.stringify(envDraft);
 		if (attempted.current === key) return;
-		const timer = window.setTimeout(() => { attempted.current = key; mutation.mutate(env); }, 700);
+		const timer = window.setTimeout(() => { attempted.current = key; mutation.mutate(envDraft); }, 700);
 		return () => window.clearTimeout(timer);
-	}, [activeTab, dirty, mutation, rows]);
+	}, [activeTab, dirty, mutation, rows]); // eslint-disable-line react-hooks/exhaustive-deps
 	return <form id="project-settings-form" className="project-settings-form flex min-h-full flex-col gap-(--size-settings-section-inner-gap)" onSubmit={(event) => { event.preventDefault(); save(); }}>
 		<p className="text-sm leading-5 text-settings-muted">{t("settings.project.environmentDescription")}</p>
 		{showEmpty ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
@@ -177,18 +183,19 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 					<Button onClick={() => update([...rows, { name: "", value: "", visible: false }])} type="button" variant="ghost"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
 				</div>
 			</div>
-		</ProjectSettingsSection> : activeTab === "variables" ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
+		</ProjectSettingsSection> : activeTab === "variables" ? <><ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
 			{rows.map((row, index) => <div className="settings-row-bar gap-2" key={index}>
 				<input aria-label={`${t("settings.project.envName")} ${index + 1}`} className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1 rounded-md!" placeholder={t("settings.project.envName")} value={row.name} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} />
 				<input aria-label={`${t("settings.project.envValue")} ${index + 1}`} autoComplete="off" className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1 rounded-md!" placeholder={t("settings.project.envValue")} type={row.visible ? "text" : "password"} value={row.value} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />
 				<Button aria-label={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} className="size-7 shrink-0 p-0 text-settings-muted hover:text-foreground" onClick={() => update(rows.map((item, i) => i === index ? { ...item, visible: !item.visible } : item))} size="icon-sm" title={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} type="button" variant="ghost">{row.visible ? <EyeOff className="size-3.5" aria-hidden="true" /> : <Eye className="size-3.5" aria-hidden="true" />}</Button>
 				<Button aria-label={t("settings.project.removeVariable", { name: row.name || index + 1 })} className="size-7 shrink-0 p-0 text-settings-muted hover:text-destructive" onClick={() => update(rows.filter((_, i) => i !== index))} size="icon-sm" title={t("settings.project.removeVariable", { name: row.name || index + 1 })} type="button" variant="ghost"><Trash2 className="size-3.5" aria-hidden="true" /></Button>
 			</div>)}
-			<div className="flex items-center justify-end gap-2 pt-2">
+		</ProjectSettingsSection>
+		<div className="flex items-center justify-end gap-2">
 				<Button onClick={() => { setActiveTab("paste"); setError(null); }} type="button" variant="outline"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
 				<Button onClick={() => update([...rows, { name: "", value: "", visible: false }])} type="button"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
 			</div>
-		</ProjectSettingsSection> : <ProjectSettingsSection title={t("settings.project.pasteVariables")}>
+		</> : <ProjectSettingsSection title={t("settings.project.pasteVariables")}>
 			<p className="text-sm leading-5 text-settings-muted">{t("settings.project.envPasteHint")}</p>
 			<textarea aria-label={t("settings.project.pasteVariables")} autoComplete="off" className="settings-field-control min-h-(--size-textarea-min) min-w-0 resize-none rounded-md! py-2.5 font-mono" id="project-env-paste" onChange={(event) => setPasteText(event.target.value)} spellCheck={false} value={pasteText} />
 			<div className="flex justify-end gap-2">
