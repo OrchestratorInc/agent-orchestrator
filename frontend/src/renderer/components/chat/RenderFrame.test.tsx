@@ -58,6 +58,12 @@ describe("render activity", () => {
 		expect(frame().style.height).toBe("300px");
 	});
 
+	it("follows the daemon to a new port, so a frame never points at a dead one", () => {
+		render(<ActivityRow activity={renderActivity()} />);
+		act(() => setApiBaseUrl("http://127.0.0.1:3555"));
+		expect(frame().getAttribute("src")).toMatch(/^http:\/\/127\.0\.0\.1:3555\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/);
+	});
+
 	it("shows a note instead of a frame in a remote host's chat", () => {
 		// The local daemon has no copy of a remote host's render, and the remote
 		// proxy URL carries a capability token the page could read.

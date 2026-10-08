@@ -1,8 +1,8 @@
 import { Code2, Download, ExternalLink, FilePlus, Globe2, Loader2, Maximize2 } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { useOpenArtifactPreview } from "../../hooks/useOpenArtifactPreview";
-import { apiClient, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
+import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import {
 	clampRenderHeight,
 	measuredRenderHeight,
@@ -79,7 +79,15 @@ function RenderDocument({
 	const frameRef = useRef<HTMLIFrameElement>(null);
 	const themeRef = useRef(theme);
 	themeRef.current = theme;
-	const [src] = useState(() => `${getApiBaseUrl()}${page.path}${renderThemeFragment(theme, displayMode)}`);
+	// The daemon can come back on another port, so the src follows the API base
+	// (a frame not yet loaded would otherwise point at a dead port). The theme
+	// rides in the fragment only for the first paint; later flips are posted, so
+	// they never reload the page.
+	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+	const src = useMemo(
+		() => `${baseUrl}${page.path}${renderThemeFragment(themeRef.current, displayMode)}`,
+		[baseUrl, page.path, displayMode],
+	);
 	const [contentHeight, setContentHeight] = useState<number>();
 	// The inline frame's width picks its measured first height; read before the
 	// first paint, so the frame opens at that height rather than the agent's.
