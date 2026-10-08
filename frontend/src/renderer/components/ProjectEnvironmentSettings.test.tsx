@@ -55,7 +55,7 @@ it("rejects a pasted reserved name without partially changing the draft", async 
 	await userEvent.click(screen.getByRole("button", { name: "Add to draft" }));
 	expect(screen.getByRole("alert")).toHaveTextContent("Check line 2");
 	expect(screen.queryByLabelText("Value 2")).not.toBeInTheDocument();
-	await userEvent.click(screen.getByRole("tab", { name: "Environment variables" }));
+	await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 	expect(screen.getByLabelText("Value 1")).toHaveValue("old");
 	expect(putMock).not.toHaveBeenCalled();
 	expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "idle", dirty: false }));

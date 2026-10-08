@@ -7,7 +7,7 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { Button } from "./ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import { ProjectSettingsSection } from "@aoagents/product-ui";
 
 type Row = { name: string; value: string; visible: boolean };
 type Project = components["schemas"]["Project"];
@@ -143,55 +143,31 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		setError(null);
 		mutation.mutate(env);
 	};
-	return <form id="project-settings-form" className="flex min-h-full flex-col gap-(--size-settings-section-inner-gap)" onSubmit={(event) => { event.preventDefault(); save(); }}>
+	return <form id="project-settings-form" className="project-settings-form flex min-h-full flex-col gap-(--size-settings-section-inner-gap)" onSubmit={(event) => { event.preventDefault(); save(); }}>
 		<p className="text-sm leading-5 text-settings-muted">{t("settings.project.environmentHint")}</p>
-		<Tabs className="flex min-h-0 flex-1 flex-col gap-3" onValueChange={(value) => { setActiveTab(value as "variables" | "paste"); setError(null); }} value={activeTab}>
-			<TabsList aria-label={t("settings.project.environmentVariables")} className="shrink-0 self-start rounded-md bg-muted/30">
-				<TabsTrigger value="variables">{t("settings.project.environmentVariables")}</TabsTrigger>
-				<TabsTrigger value="paste"><FileCode2 aria-hidden="true" className="size-4" />{t("settings.project.pasteVariables")}</TabsTrigger>
-			</TabsList>
-			<TabsContent className="flex min-h-0 flex-1 flex-col gap-3" value="variables">
-				<div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-muted/10">
-					<div className="min-h-0 flex-1 overflow-y-auto">
-						{rows.length > 0 ? <>
-							<div className="sticky top-0 z-chrome grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-border bg-muted/20 px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-								<span>{t("settings.project.envName")}</span>
-								<span>{t("settings.project.envValue")}</span>
-								<span className="sr-only">{t("settings.project.showVariable")}</span>
-								<span aria-hidden="true" className="sr-only">{t("settings.project.envValue")}</span>
-							</div>
-							{rows.map((row, index) => <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-border px-3 py-2.5 last:border-b-0" key={index}>
-								<input aria-label={`${t("settings.project.envName")} ${index + 1}`} className="settings-field-control min-w-0" placeholder={t("settings.project.envName")} value={row.name} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} />
-								<input aria-label={`${t("settings.project.envValue")} ${index + 1}`} autoComplete="off" className="settings-field-control min-w-0" placeholder={t("settings.project.envValue")} type={row.visible ? "text" : "password"} value={row.value} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />
-								<button aria-label={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} className="rounded p-2 text-settings-muted hover:text-settings-label focus-visible:ring-2 focus-visible:ring-ring" onClick={() => update(rows.map((item, i) => i === index ? { ...item, visible: !item.visible } : item))} title={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} type="button">{row.visible ? <EyeOff size={16} /> : <Eye size={16} />}</button>
-								<button aria-label={t("settings.project.removeVariable", { name: row.name || index + 1 })} className="rounded p-2 text-settings-muted hover:text-error focus-visible:ring-2 focus-visible:ring-ring" onClick={() => update(rows.filter((_, i) => i !== index))} title={t("settings.project.removeVariable", { name: row.name || index + 1 })} type="button"><Trash2 size={16} /></button>
-							</div>)}
-						</> : <div className="flex flex-col items-center px-6 py-10 text-center">
-							<KeyRound aria-hidden="true" className="mb-3 size-5 text-settings-muted" />
-							<p className="text-sm font-medium text-settings-label">{t("settings.project.environmentEmptyTitle")}</p>
-							<p className="mt-1 max-w-sm text-sm text-settings-muted">{t("settings.project.environmentEmptyHint")}</p>
-						</div>}
-					</div>
-					<div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border bg-background/30 px-3 py-2.5">
-						<Button className="gap-1.5" onClick={() => update([...rows, { name: "", value: "", visible: false }])} size="sm" type="button" variant="outline"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
-						<Button className="gap-1.5" onClick={() => { setActiveTab("paste"); setError(null); }} size="sm" type="button" variant="ghost"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
-					</div>
-				</div>
-			</TabsContent>
-			<TabsContent className="flex min-h-0 flex-1 flex-col gap-3" value="paste">
-				<div className="flex min-h-0 flex-1 flex-col gap-2.5 rounded-lg border border-border bg-muted/10 p-3">
-					<div className="shrink-0">
-						<p className="text-sm font-medium text-settings-label">{t("settings.project.pasteVariables")}</p>
-						<p className="mt-1 text-sm text-settings-muted">{t("settings.project.envPasteHint")}</p>
-					</div>
-					<textarea aria-label={t("settings.project.pasteVariables")} autoComplete="off" className="settings-field-control min-h-28 min-w-0 flex-1 font-mono text-sm" id="project-env-paste" onChange={(event) => setPasteText(event.target.value)} spellCheck={false} value={pasteText} />
-					<div className="flex shrink-0 justify-end gap-2">
-						<Button onClick={() => { setActiveTab("variables"); setPasteText(""); setError(null); }} size="sm" type="button" variant="outline">{t("settings.project.envPasteCancel")}</Button>
-						<Button disabled={!pasteText.trim()} onClick={importPasted} size="sm" type="button">{t("settings.project.importVariables")}</Button>
-					</div>
-				</div>
-			</TabsContent>
-		</Tabs>
+		{activeTab === "variables" ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
+			{rows.length > 0 ? rows.map((row, index) => <div className="settings-row-bar gap-2" key={index}>
+				<input aria-label={`${t("settings.project.envName")} ${index + 1}`} className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1" placeholder={t("settings.project.envName")} value={row.name} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} />
+				<input aria-label={`${t("settings.project.envValue")} ${index + 1}`} autoComplete="off" className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1" placeholder={t("settings.project.envValue")} type={row.visible ? "text" : "password"} value={row.value} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />
+				<Button aria-label={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} className="size-7 shrink-0 p-0 text-settings-muted hover:text-foreground" onClick={() => update(rows.map((item, i) => i === index ? { ...item, visible: !item.visible } : item))} size="icon-sm" title={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} type="button" variant="ghost">{row.visible ? <EyeOff className="size-3.5" aria-hidden="true" /> : <Eye className="size-3.5" aria-hidden="true" />}</Button>
+				<Button aria-label={t("settings.project.removeVariable", { name: row.name || index + 1 })} className="size-7 shrink-0 p-0 text-settings-muted hover:text-destructive" onClick={() => update(rows.filter((_, i) => i !== index))} size="icon-sm" title={t("settings.project.removeVariable", { name: row.name || index + 1 })} type="button" variant="ghost"><Trash2 className="size-3.5" aria-hidden="true" /></Button>
+			</div>) : <div className="flex flex-col items-center px-6 py-10 text-center">
+				<KeyRound aria-hidden="true" className="mb-3 size-5 text-settings-muted" />
+				<p className="text-sm font-medium text-settings-label">{t("settings.project.environmentEmptyTitle")}</p>
+				<p className="mt-1 max-w-sm text-sm text-settings-muted">{t("settings.project.environmentEmptyHint")}</p>
+			</div>}
+			<div className="flex items-center justify-end gap-2 pt-2">
+				<Button onClick={() => { setActiveTab("paste"); setError(null); }} type="button" variant="outline"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
+				<Button onClick={() => update([...rows, { name: "", value: "", visible: false }])} type="button"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
+			</div>
+		</ProjectSettingsSection> : <ProjectSettingsSection title={t("settings.project.pasteVariables")}>
+			<p className="text-sm leading-5 text-settings-muted">{t("settings.project.envPasteHint")}</p>
+			<textarea aria-label={t("settings.project.pasteVariables")} autoComplete="off" className="settings-field-control min-h-(--size-textarea-min) min-w-0 resize-none py-2.5 font-mono" id="project-env-paste" onChange={(event) => setPasteText(event.target.value)} spellCheck={false} value={pasteText} />
+			<div className="flex justify-end gap-2">
+				<Button onClick={() => { setActiveTab("variables"); setPasteText(""); setError(null); }} type="button" variant="outline">{t("settings.project.envPasteCancel")}</Button>
+				<Button disabled={!pasteText.trim()} onClick={importPasted} type="button">{t("settings.project.importVariables")}</Button>
+			</div>
+		</ProjectSettingsSection>}
 		{importedCount !== null && <p role="status" className="text-sm text-settings-muted">{t("settings.project.envImported", { count: importedCount })}</p>}
 		{error && <p role="alert" className="text-sm text-error">{error}</p>}
 		{mutation.isError && <p role="alert" className="text-sm text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
