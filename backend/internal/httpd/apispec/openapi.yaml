@@ -9713,11 +9713,17 @@ components:
       type: object
     AgentUninstallGuide:
       properties:
+        command:
+          description: Vendor uninstall command for this install.
+          type: string
         docsUrl:
           description: Vendor page with uninstall instructions.
           type: string
         documented:
-          description: Whether the vendor documents these paths.
+          description: Whether the vendor documents these steps.
+          type: boolean
+        editsShellProfile:
+          description: Whether the installer added a PATH line to the shell profile.
           type: boolean
         programPaths:
           description: Program files and directories to remove.
@@ -9731,6 +9737,7 @@ components:
           type: array
       required:
       - programPaths
+      - editsShellProfile
       - documented
       type: object
     AgentUpdateAdvisory:

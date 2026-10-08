@@ -3233,10 +3233,14 @@ export interface components {
             switch: components["schemas"]["AgentSwitch"];
         };
         AgentUninstallGuide: {
+            /** @description Vendor uninstall command for this install. */
+            command?: string;
             /** @description Vendor page with uninstall instructions. */
             docsUrl?: string;
-            /** @description Whether the vendor documents these paths. */
+            /** @description Whether the vendor documents these steps. */
             documented: boolean;
+            /** @description Whether the installer added a PATH line to the shell profile. */
+            editsShellProfile: boolean;
             /** @description Program files and directories to remove. */
             programPaths: string[];
             /** @description Optional settings, sign-in and history paths. */

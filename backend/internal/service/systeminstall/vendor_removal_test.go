@@ -120,3 +120,34 @@ func TestUninstallGuideIsPerOSAndOnlyForConfirmedHarnesses(t *testing.T) {
 		t.Fatalf("a harness without confirmed paths got a guide: %+v", guide)
 	}
 }
+
+func TestUninstallGuidesNameOnlyOwnedUserScopedPaths(t *testing.T) {
+	shared := []string{"~/.local/bin/agent", "~/.cursor", "~/.gemini", `%USERPROFILE%\.cursor`, `%USERPROFILE%\.gemini`}
+	for target, spec := range uninstallGuides {
+		platforms := []uninstallGuidePlatform{spec.unix, spec.windows}
+		if spec.darwin != nil {
+			platforms = append(platforms, *spec.darwin)
+		}
+		if spec.docsURL != "" && !strings.HasPrefix(spec.docsURL, "https://") {
+			t.Errorf("%s docs URL %q is not https", target, spec.docsURL)
+		}
+		for _, platform := range platforms {
+			for _, path := range append(slices.Clone(platform.program), platform.userData...) {
+				if slices.Contains(shared, path) {
+					t.Errorf("%s lists %q, which other tools also own", target, path)
+				}
+				userScoped := strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "/Applications/") ||
+					strings.HasPrefix(path, `%USERPROFILE%\`) || strings.HasPrefix(path, `%LOCALAPPDATA%\`) || strings.HasPrefix(path, `%APPDATA%\`)
+				if !userScoped {
+					t.Errorf("%s lists %q outside the user's directories", target, path)
+				}
+			}
+		}
+	}
+	if guide := uninstallGuideFor(TargetKiro, "darwin"); guide == nil || guide.Command != "kiro-cli uninstall" || guide.ProgramPaths[0] != "/Applications/Kiro CLI.app" {
+		t.Fatalf("Kiro macOS guide = %+v", guide)
+	}
+	if guide := uninstallGuideFor(TargetFX, "windows"); guide != nil {
+		t.Fatalf("fx has no Windows installer but got %+v", guide)
+	}
+}
