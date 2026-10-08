@@ -59,7 +59,7 @@ export type SettingsModal =
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
 export type WorkbenchTab = "changes" | "files" | "terminal";
-export type InspectorView = "summary" | "reviews" | "browser" | "files";
+export type InspectorView = "summary" | "reviews" | "browser" | "device" | "files";
 
 export type InspectorSessionState = {
 	isOpen: boolean;
@@ -126,6 +126,8 @@ export type UiState = {
 	diagnostics: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
 	terminalCopyOnSelect: boolean;
+	/** Opt-in for the local iOS Simulator and Android Emulator inspector surface. */
+	virtualDevicesEnabled: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
@@ -175,6 +177,7 @@ export type UiState = {
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
+	setVirtualDevicesEnabled: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
@@ -232,6 +235,7 @@ const developerModeStorageKey = "ao.developerMode";
 const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
+const virtualDevicesStorageKey = "ao.virtualDevices.enabled";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -257,6 +261,10 @@ function initialDiagnostics() {
 
 function initialTerminalCopyOnSelect() {
 	return getLocalStorage()?.getItem(terminalCopyOnSelectStorageKey) !== "false";
+}
+
+function initialVirtualDevicesEnabled() {
+	return getLocalStorage()?.getItem(virtualDevicesStorageKey) === "true";
 }
 
 function syncDeveloperModeToUpdater(enabled: boolean): void {
@@ -315,6 +323,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
+	virtualDevicesEnabled: initialVirtualDevicesEnabled(),
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	orchestratorReplacementErrors: {},
@@ -363,6 +372,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
 		set({ terminalCopyOnSelect });
+	},
+	setVirtualDevicesEnabled: (virtualDevicesEnabled) => {
+		getLocalStorage()?.setItem(virtualDevicesStorageKey, String(virtualDevicesEnabled));
+		set({ virtualDevicesEnabled });
 	},
 	updateInstallPromptOpen: false,
 	openUpdateInstallPrompt: () => set({ updateInstallPromptOpen: true }),

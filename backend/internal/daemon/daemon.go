@@ -27,6 +27,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	chatdriverregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
+	deviceadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/device"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
@@ -54,6 +55,7 @@ import (
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	cuesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/cue"
+	devicesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/device"
 	devimportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/devimport"
 	fsbrowsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/fsbrowser"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
@@ -595,6 +597,11 @@ func Run() error {
 		},
 	})
 	sessMgr = wiredSessMgr
+	deviceRuntime := deviceadapter.New(cfg.DataDir)
+	deviceService := devicesvc.NewWithDeps(sessionSvc, deviceRuntime, browserAuthority, browserRuntimeToken, devicesvc.Deps{SetupRuntime: deviceRuntime, SetupStore: store})
+	if err := deviceService.Recover(ctx); err != nil {
+		return fmt.Errorf("recover device setup jobs: %w", err)
+	}
 	if fenced, ok := sessMgr.(interface{ SetPersistentHostReconcileDone(<-chan struct{}) }); ok {
 		fenced.SetPersistentHostReconcileDone(persistentHostsReconciled)
 	}
@@ -906,6 +913,7 @@ func Run() error {
 		SystemChecks:       systemChecks,
 		Installer:          systemInstall,
 		Sessions:           sessionSvc,
+		LocalDevices:       deviceService,
 		Automations:        automationSvc,
 		DesktopWorkspaces:  sessionSvc,
 		PRs:                prActions,
@@ -1110,6 +1118,11 @@ func Run() error {
 	}
 	codexSwitchCancel()
 	managedPreview.Close()
+	deviceStopCtx, deviceStopCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+	if err := deviceService.Close(deviceStopCtx); err != nil {
+		log.Error("device runtime shutdown", "err", err)
+	}
+	deviceStopCancel()
 	<-previewDone
 	// Detach chat controllers before stopping the lifecycle stack. Persistent
 	// provider hosts deliberately survive this daemon and preserve in-flight

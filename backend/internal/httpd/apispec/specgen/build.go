@@ -89,6 +89,8 @@ func Build() ([]byte, error) {
 			"Connect Mobile LAN bridge control (loopback/desktop only)"),
 		*(&openapi31.Tag{Name: "browser"}).WithDescription(
 			"Target-isolated desktop browser runtime (loopback only)"),
+		*(&openapi31.Tag{Name: "devices"}).WithDescription(
+			"Session-scoped iOS Simulator and Android Emulator control (loopback only)"),
 		*(&openapi31.Tag{Name: "fs"}).WithDescription(
 			"Read-only filesystem browsing for remote clients"),
 		*(&openapi31.Tag{Name: "system"}).WithDescription(
@@ -259,6 +261,15 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersBrowserStatusResponse":                    "BrowserStatusResponse",
 	"ControllersBrowserCommandRequest":                    "BrowserCommandRequest",
 	"ControllersBrowserCommandResponse":                   "BrowserCommandResponse",
+	"ControllersDeviceStatusQuery":                        "DeviceStatusQuery",
+	"ControllersDeviceCredentialsHeaders":                 "DeviceCredentialsHeaders",
+	"ControllersDeviceStatusResponse":                     "DeviceStatusResponse",
+	"ControllersDeviceListResponse":                       "DeviceListResponse",
+	"ControllersDeviceCommandRequest":                     "DeviceCommandRequest",
+	"ControllersDeviceCommandResponse":                    "DeviceCommandResponse",
+	"ControllersDeviceSetupResponse":                      "DeviceSetupResponse",
+	"ControllersDeviceSetupCommandRequest":                "DeviceSetupCommandRequest",
+	"ControllersDeviceSetupCommandResponse":               "DeviceSetupCommandResponse",
 	"ControllersSetSessionMergePolicyRequest":             "SetSessionMergePolicyRequest",
 	"ControllersSetSessionMergePolicyResponse":            "SetSessionMergePolicyResponse",
 	"ControllersSetSessionAutoInjectReviewRequest":        "SetSessionAutoInjectReviewRequest",
@@ -628,6 +639,7 @@ func operations() []operation {
 	ops = append(ops, mobileOperations()...)
 	ops = append(ops, mobileDeviceOperations()...)
 	ops = append(ops, browserOperations()...)
+	ops = append(ops, deviceOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
 	ops = append(ops, cueOperations()...)
 	ops = append(ops, systemOperations()...)
@@ -635,6 +647,25 @@ func operations() []operation {
 	ops = append(ops, endpointsOperations()...)
 	ops = append(ops, linkPreviewOperations()...)
 	return ops
+}
+
+func deviceOperations() []operation {
+	commonErrors := []respUnit{
+		{http.StatusBadRequest, envelope.APIError{}},
+		{http.StatusForbidden, envelope.APIError{}},
+		{http.StatusNotFound, envelope.APIError{}},
+		{http.StatusConflict, envelope.APIError{}},
+		{http.StatusServiceUnavailable, envelope.APIError{}},
+		{http.StatusNotImplemented, envelope.APIError{}},
+	}
+	return []operation{
+		{method: http.MethodGet, path: "/api/v1/devices/status", id: "getDeviceStatus", tag: "devices", summary: "Get local virtual-device capabilities and the session attachment", pathParams: []any{controllers.DeviceStatusQuery{}, controllers.DeviceCredentialsHeaders{}}, resps: append([]respUnit{{http.StatusOK, controllers.DeviceStatusResponse{}}}, commonErrors...)},
+		{method: http.MethodGet, path: "/api/v1/devices", id: "listDevices", tag: "devices", summary: "List local iOS Simulators and Android Emulators", pathParams: []any{controllers.DeviceStatusQuery{}, controllers.DeviceCredentialsHeaders{}}, resps: append([]respUnit{{http.StatusOK, controllers.DeviceListResponse{}}}, commonErrors...)},
+		{method: http.MethodPost, path: "/api/v1/devices/commands", id: "executeDeviceCommand", tag: "devices", summary: "Execute an allowlisted action on a session-scoped local virtual device", pathParams: []any{controllers.DeviceCredentialsHeaders{}}, reqBody: controllers.DeviceCommandRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.DeviceCommandResponse{}}}, commonErrors...)},
+		{method: http.MethodGet, path: "/api/v1/devices/setup", id: "getDeviceSetup", tag: "devices", summary: "Get durable managed virtual-device setup progress", pathParams: []any{controllers.DeviceStatusQuery{}, controllers.DeviceCredentialsHeaders{}}, resps: append([]respUnit{{http.StatusOK, controllers.DeviceSetupResponse{}}}, commonErrors...)},
+		{method: http.MethodPost, path: "/api/v1/devices/setup", id: "executeDeviceSetup", tag: "devices", summary: "Start, retry, or cancel a managed virtual-device setup", pathParams: []any{controllers.DeviceCredentialsHeaders{}}, reqBody: controllers.DeviceSetupCommandRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.DeviceSetupCommandResponse{}}}, commonErrors...)},
+		{method: http.MethodGet, path: "/api/v1/devices/stream/{ticket}/{channel}", id: "streamDevice", tag: "devices", summary: "Stream allowlisted media or upgrade an input socket for an attached virtual device", pathParams: []any{controllers.DeviceStreamParam{}}, resps: []respUnit{{http.StatusOK, ""}, {http.StatusUnauthorized, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusBadGateway, envelope.APIError{}}}, contentTypes: map[int]string{http.StatusOK: "application/octet-stream"}},
+	}
 }
 
 func automationOperations() []operation {

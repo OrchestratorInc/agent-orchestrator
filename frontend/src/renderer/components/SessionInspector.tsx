@@ -36,6 +36,7 @@ import {
 	Play,
 	Loader2,
 	MessageSquare,
+	Smartphone,
 	X,
 } from "lucide-react";
 import type { components } from "../../api/schema";
@@ -77,6 +78,7 @@ import {
 } from "../types/workspace";
 import { getAgentActivityView, getSessionTimelinePillView } from "../lib/session-presentation";
 import { BrowserPanelView, type BrowserAnnotationQueueModel } from "./BrowserPanel";
+import { DevicePanel } from "./DevicePanel";
 import type { BrowserViewModel } from "../hooks/useBrowserView";
 import { FilesTopbarHostContext } from "./files-topbar-host";
 import { useUiStore } from "../stores/ui-store";
@@ -112,7 +114,7 @@ export type { InspectorView } from "@aoagents/product-ui";
 
 const VIEW_DEFS: {
 	id: InspectorView;
-	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.files";
+	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.device" | "inspector.files";
 	icon: ReactNode;
 }[] = [
 	{
@@ -144,6 +146,11 @@ const VIEW_DEFS: {
 				<path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18" />
 			</svg>
 		),
+	},
+	{
+		id: "device",
+		labelKey: "inspector.device",
+		icon: <Smartphone aria-hidden="true" />,
 	},
 	{
 		id: "files",
@@ -225,6 +232,7 @@ export const SessionInspector = memo(function SessionInspector({
 	const browserUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.browserUnseen) : false,
 	);
+	const devicesAvailable = useUiStore((state) => state.developerMode && state.virtualDevicesEnabled);
 	const inspectorQueryClient = useQueryClient();
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
 		onlyBrowser || session?.cloud ? undefined : session?.id,
@@ -252,7 +260,7 @@ export const SessionInspector = memo(function SessionInspector({
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
 	const availableViewDefs = onlyBrowser ? VIEW_DEFS.filter((entry) => entry.id === "browser")
-		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews"));
+		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews") && (devicesAvailable || entry.id !== "device"));
 	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	useEffect(() => {
 		if (view === requestedView) return;
@@ -303,6 +311,7 @@ export const SessionInspector = memo(function SessionInspector({
 						</FilesTopbarHostContext.Provider>
 					) : undefined
 				}
+				deviceView={session ? <DevicePanel sessionId={session.id} /> : undefined}
 						headerActions={
 							view === "browser" && !browserPoppedOut ? (
 								<>
@@ -1259,10 +1268,10 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 		const workspaces = queryClient.getQueryData<WorkspaceSummary[]>(workspaceKey) ?? [];
 		const workspace = workspaces.find((w) => w.id === session.workspaceId);
 		const nextNav = resolveNextNavigationAfterSessionKill(workspace, session.id);
-		
+
 		setConfirmOpen(false);
 		terminate.mutate(hostId ? { ...session, hostId } : session);
-		
+
 		if (nextNav.target === "session") {
 			void navigate(sessionNavigateTarget(session.workspaceId, nextNav.sessionId, hostId));
 		} else {
