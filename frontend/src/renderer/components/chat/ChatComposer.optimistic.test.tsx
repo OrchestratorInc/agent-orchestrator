@@ -1,0 +1,244 @@
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+import { readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../../lib/chat-drafts";
+import { typeInLexicalEditor } from "../../test/lexical";
+import { TooltipProvider } from "../ui/tooltip";
+import { ChatComposer } from "./ChatComposer";
+
+function pendingSend() {
+	let resolve!: () => void;
+	let reject!: (error: unknown) => void;
+	const promise = new Promise<void>((accept, refuse) => {
+		resolve = accept;
+		reject = refuse;
+	});
+	const onSend = vi.fn().mockReturnValueOnce(promise).mockResolvedValue(undefined);
+	return { onSend, resolve, reject };
+}
+
+function renderComposer(sessionId: string, onSend: Parameters<typeof ChatComposer>[0]["onSend"], attachments = false) {
+	return render(
+		<TooltipProvider>
+			<ChatComposer
+				draftSessionId={sessionId}
+				onSend={onSend}
+				nativeImages={attachments}
+				onStageAttachments={attachments ? vi.fn().mockResolvedValue([".ao/attachments/original.png"]) : undefined}
+			/>
+		</TooltipProvider>,
+	);
+}
+
+async function startSend(onSend: ReturnType<typeof pendingSend>["onSend"], text: string) {
+	const field = screen.getByLabelText("Message the agent");
+	await typeInLexicalEditor(field, text);
+	fireEvent.keyDown(field, { key: "Enter" });
+	await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+	await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+	return field;
+}
+
+describe("optimistic message delivery", () => {
+	it("keeps the memory-only fallback locked until a rejected message is restored", async () => {
+		const pending = pendingSend();
+		render(<TooltipProvider><ChatComposer onSend={pending.onSend} /></TooltipProvider>);
+		const field = screen.getByLabelText("Message the agent");
+		await typeInLexicalEditor(field, "memory-only request");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(pending.onSend).toHaveBeenCalledOnce());
+		expect(field.textContent).toBe("");
+		expect(field).toHaveAttribute("contenteditable", "false");
+
+		await act(async () => pending.reject({ code: "CHAT_RESUME_FAILED", message: "Could not resume" }));
+
+		expect(field).toHaveTextContent("memory-only request");
+		expect(field).toHaveAttribute("contenteditable", "true");
+		expect(screen.getByRole("alert")).toHaveTextContent("Your draft was kept");
+	});
+
+	it("preserves a next draft with the same text as the pending message", async () => {
+		const sessionId = "optimistic-identical-next-draft";
+		const pending = pendingSend();
+		renderComposer(sessionId, pending.onSend);
+		const field = await startSend(pending.onSend, "x");
+		await typeInLexicalEditor(field, "x");
+
+		await act(async () => pending.resolve());
+
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(field).toHaveTextContent("x");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("x");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
+		expect(pending.onSend.mock.calls[1][0]).toBe("x");
+		expect(pending.onSend.mock.calls[1][2]).not.toBe(pending.onSend.mock.calls[0][2]);
+	});
+
+	it("does not overwrite a newer restored draft when the old surface accepts its message", async () => {
+		const sessionId = "optimistic-newer-restored-draft";
+		const pending = pendingSend();
+		const original = renderComposer(sessionId, pending.onSend);
+		const originalField = await startSend(pending.onSend, "original message");
+		await typeInLexicalEditor(originalField, "draft before leaving");
+		original.unmount();
+		writeChatComposerText(sessionId, "newer draft from replacement");
+
+		await act(async () => pending.resolve());
+
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("newer draft from replacement");
+		renderComposer(sessionId, pending.onSend);
+		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("newer draft from replacement");
+	});
+
+	it("keeps the composer clear and editable when Chat remounts during delivery", async () => {
+		const sessionId = "optimistic-remount-in-flight";
+		const pending = pendingSend();
+		const original = renderComposer(sessionId, pending.onSend);
+		await startSend(pending.onSend, "pending message");
+		original.unmount();
+		renderComposer(sessionId, pending.onSend);
+		const replacement = screen.getByLabelText("Message the agent");
+		await waitFor(() => expect(replacement).toHaveAttribute("contenteditable", "true"));
+		expect(replacement.textContent).toBe("");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		await typeInLexicalEditor(replacement, "next draft after returning");
+
+		await act(async () => pending.resolve());
+
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(replacement).toHaveTextContent("next draft after returning");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("next draft after returning");
+		expect(pending.onSend).toHaveBeenCalledOnce();
+	});
+
+	it("restores a refused message after Chat remounts without a next draft", async () => {
+		const sessionId = "optimistic-remount-wake-refused";
+		const pending = pendingSend();
+		const original = renderComposer(sessionId, pending.onSend);
+		await startSend(pending.onSend, "message to restore");
+		original.unmount();
+		renderComposer(sessionId, pending.onSend);
+		const replacement = screen.getByLabelText("Message the agent");
+		expect(replacement.textContent).toBe("");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+		await act(async () => pending.reject({ code: "CHAT_RESUME_FAILED", message: "Could not resume" }));
+
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("message to restore");
+		expect(replacement).toHaveTextContent("message to restore");
+		expect(replacement).toHaveAttribute("contenteditable", "true");
+	});
+
+	it("retries a rejected original message and image without replacing or attaching them to the next draft", async () => {
+		const sessionId = "optimistic-rejected-image-request";
+		const pending = pendingSend();
+		renderComposer(sessionId, pending.onSend, true);
+		const field = screen.getByLabelText("Message the agent");
+		fireEvent.paste(field, {
+			clipboardData: {
+				files: [new File([new Uint8Array([137, 80, 78, 71])], "original.png", { type: "image/png" })],
+				items: [],
+				getData: () => "",
+			},
+		});
+		await screen.findByLabelText("Remove original.png");
+		await startSend(pending.onSend, "inspect this image");
+		await typeInLexicalEditor(field, "write a README");
+
+		await act(async () => pending.reject({ code: "CHAT_RESUME_FAILED", message: "Could not resume" }));
+
+		expect(field).toHaveTextContent("write a README");
+		await userEvent.click(await screen.findByRole("button", { name: "Retry message safely" }));
+		await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
+		expect(pending.onSend.mock.calls[1]).toEqual(pending.onSend.mock.calls[0]);
+		expect(pending.onSend.mock.calls[1][1]).toEqual([{ mimeType: "image/png", data: "iVBORw==" }]);
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(field).toHaveTextContent("write a README");
+		expect(screen.queryByLabelText("Remove original.png")).not.toBeInTheDocument();
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(3));
+		expect(pending.onSend.mock.calls[2][0]).toBe("write a README");
+		expect(pending.onSend.mock.calls[2][1]).toBeUndefined();
+	});
+
+	it("keeps both drafts after a rejected send when the next draft could not be saved", async () => {
+		const sessionId = "optimistic-rejected-unsaved-next-draft";
+		const pending = pendingSend();
+		renderComposer(sessionId, pending.onSend);
+		const field = await startSend(pending.onSend, "original request");
+		const storage = window.localStorage;
+		let failWrite = true;
+		const localStorage = vi.spyOn(window, "localStorage", "get").mockReturnValue({
+			getItem: storage.getItem.bind(storage),
+			removeItem: storage.removeItem.bind(storage),
+			setItem: (key: string, value: string) => {
+				if (failWrite && JSON.parse(value).composer?.text === "unsaved next draft") {
+					throw new DOMException("full", "QuotaExceededError");
+				}
+				storage.setItem(key, value);
+			},
+		} as Storage);
+		try {
+			await typeInLexicalEditor(field, "unsaved next draft");
+			await act(async () => pending.reject({ code: "CHAT_RESUME_FAILED", message: "Could not resume" }));
+			expect(field).toHaveTextContent("unsaved next draft");
+			failWrite = false;
+			await userEvent.click(await screen.findByRole("button", { name: "Retry message safely" }));
+			await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
+			expect(pending.onSend.mock.calls[1]).toEqual(pending.onSend.mock.calls[0]);
+			await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+			expect(field).toHaveTextContent("unsaved next draft");
+			expect(readChatSessionDraft(sessionId).composer.text).toBe("unsaved next draft");
+		} finally {
+			localStorage.mockRestore();
+		}
+	});
+
+	it("preserves typing while a restored image is read before dispatch", async () => {
+		const sessionId = "optimistic-restored-image-read";
+		writeChatComposerText(sessionId, "inspect restored image");
+		writeChatAttachments(sessionId, [{
+			id: "restored-image",
+			name: "restored.png",
+			mimeType: "image/png",
+			bytes: 4,
+			path: ".ao/attachments/restored.png",
+		}]);
+		let resolveRead!: (response: Response) => void;
+		const read = new Promise<Response>((resolve) => { resolveRead = resolve; });
+		const fetch = vi.spyOn(globalThis, "fetch").mockReturnValue(read);
+		const pending = pendingSend();
+		const view = renderComposer(sessionId, pending.onSend, true);
+		try {
+			const field = screen.getByLabelText("Message the agent");
+			fireEvent.keyDown(field, { key: "Enter" });
+			await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+			expect(pending.onSend).not.toHaveBeenCalled();
+			expect(field.textContent).toBe("");
+			await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+			await typeInLexicalEditor(field, "next draft during image read");
+
+			const response = new Response();
+			vi.spyOn(response, "blob").mockResolvedValue(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }));
+			await act(async () => resolveRead(response));
+
+			await waitFor(() => expect(pending.onSend).toHaveBeenCalledOnce());
+			expect(pending.onSend).toHaveBeenCalledWith(
+				"inspect restored image\n\nAttached files (read these files in the workspace):\n- .ao/attachments/restored.png",
+				[{ mimeType: "image/png", data: "iVBORw==" }],
+				expect.any(String),
+			);
+			expect(field).toHaveTextContent("next draft during image read");
+			await act(async () => pending.resolve());
+			await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+			expect(field).toHaveTextContent("next draft during image read");
+			expect(readChatSessionDraft(sessionId).composer.text).toBe("next draft during image read");
+		} finally {
+			view.unmount();
+			fetch.mockRestore();
+		}
+	});
+});

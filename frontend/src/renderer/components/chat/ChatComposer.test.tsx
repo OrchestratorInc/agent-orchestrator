@@ -668,7 +668,7 @@ describe("send keys", () => {
 		render(<ChatComposer onSend={onSend} draftSessionId={sessionId} />);
 		const restored = screen.getByLabelText("Message the agent");
 		expect(restored).toHaveTextContent("later revision");
-		expect(restored).toHaveAttribute("contenteditable", "false");
+		expect(restored).toHaveAttribute("contenteditable", "true");
 
 		await act(async () => acceptSend());
 		await waitFor(() => expect(restored).toHaveAttribute("contenteditable", "true"));
@@ -722,7 +722,8 @@ describe("send keys", () => {
 			await screen.findByTestId("replacement-composer-surface"),
 		).getByLabelText("Message the agent");
 		expect(renderedReplacement).toBeInTheDocument();
-		expect(readChatSessionDraft(sessionId).composer.text).toBe(
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("");
+		expect(readChatSessionDraft(sessionId).composer.delivery?.draft?.text).toBe(
 			"send exactly once across the render gap",
 		);
 
@@ -801,8 +802,11 @@ describe("send keys", () => {
 			"replacement-attachment-composer-surface",
 		);
 		expect(
-			within(renderedReplacementSurface).getByLabelText("Remove accepted-once.png"),
-		).toBeInTheDocument();
+			within(renderedReplacementSurface).queryByLabelText("Remove accepted-once.png"),
+		).not.toBeInTheDocument();
+		expect(readChatSessionDraft(sessionId).composer.delivery?.draft?.attachments).toMatchObject([
+			{ path: ".ao/attachments/accepted-once.png" },
+		]);
 
 		await act(async () => acceptSend());
 		await waitFor(() =>
@@ -1815,7 +1819,8 @@ describe("attachments", () => {
 		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
 
 		expect(screen.queryByLabelText("Remove locked.png")).not.toBeInTheDocument();
-		expect(readChatSessionDraft(sessionId).composer.attachments).toHaveLength(1);
+		expect(readChatSessionDraft(sessionId).composer.attachments).toEqual([]);
+		expect(readChatSessionDraft(sessionId).composer.delivery?.draft?.attachments).toHaveLength(1);
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
 		await typeInComposer(field, "next draft");
 		await act(async () => acceptSend());
@@ -2247,7 +2252,7 @@ it("reserves a restored image draft before asynchronous native-byte reads", asyn
 		expect(delivery).toMatchObject({ state: "dispatching", nativeImages: true, clientMessageId: expect.any(String) });
 		view.unmount();
 		view = render(<ChatComposer onSend={onSend} draftSessionId={sessionId} nativeImages />);
-		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("contenteditable", "false");
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("contenteditable", "true");
 		expect(getChatDraftBoundaries(sessionId)).toEqual([]);
 		const response = new Response();
 		vi.spyOn(response, "blob").mockResolvedValue(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }));
@@ -2320,7 +2325,11 @@ it("keeps staged paths authoritative across a remount until acceptance clears th
 	const revision = readChatSessionDraft(sessionId).composer.revision;
 	view.unmount();
 	view = render(<ChatComposer onSend={send} onStageAttachments={stage} draftSessionId={sessionId} />);
-	expect(readChatSessionDraft(sessionId).composer).toMatchObject({ revision, attachments: [{ path: ".ao/attachments/once.png" }] });
+	expect(readChatSessionDraft(sessionId).composer).toMatchObject({
+		revision,
+		attachments: [],
+		delivery: { draft: { attachments: [{ path: ".ao/attachments/once.png" }] } },
+	});
 	await act(async () => { response.resolve(); });
 	await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveTextContent(/^$/));
 	expect(readChatSessionDraft(sessionId).composer.text).toBe("");

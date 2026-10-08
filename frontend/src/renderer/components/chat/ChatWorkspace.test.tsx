@@ -3273,7 +3273,7 @@ describe("ChatWorkspace message actions", () => {
 		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("");
 	});
 
-	it("locks and clears an accepted composer draft across a same-session remount", async () => {
+	it("keeps the composer clear and editable across a same-session remount during delivery", async () => {
 		const snapshot = idleSnapshot();
 		let acceptSend!: () => void;
 		const onSend = vi.fn(
@@ -3291,14 +3291,18 @@ describe("ChatWorkspace message actions", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} onSend={onSend} />);
 		const replacement = screen.getByLabelText("Message the agent");
-		expect(replacement).toHaveTextContent("send exactly once");
-		expect(replacement).toHaveAttribute("contenteditable", "false");
+		expect(replacement.textContent).toBe("");
+		expect(replacement).toHaveAttribute("contenteditable", "true");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(readChatSessionDraft(snapshot.sessionId).composer.delivery?.draft?.text).toBe("send exactly once");
+		await typeInLexicalEditor(replacement, "next draft after returning");
 		fireEvent.keyDown(replacement, { key: "Enter" });
 		expect(onSend).toHaveBeenCalledTimes(1);
 
 		await act(async () => acceptSend());
-		await waitFor(() => expect(replacement).toHaveTextContent(""));
-		expect(readChatSessionDraft(snapshot.sessionId).composer.text).toBe("");
+		await waitFor(() => expect(readChatSessionDraft(snapshot.sessionId).composer.delivery).toBeUndefined());
+		expect(replacement).toHaveTextContent("next draft after returning");
+		expect(readChatSessionDraft(snapshot.sessionId).composer.text).toBe("next draft after returning");
 		expect(getChatComposerMutation(snapshot.sessionId)).toEqual({ pending: false });
 	});
 

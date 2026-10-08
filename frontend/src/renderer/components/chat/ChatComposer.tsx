@@ -340,7 +340,6 @@ export const ChatComposer = memo(function ChatComposer({
 		string | null
 	>(null);
 	const [submitting, setSubmitting] = useState(false);
-	const [optimisticSend, setOptimisticSend] = useState(false);
 	const [durableDelivery, setDurableDelivery] = useState<ChatComposerDelivery | undefined>(() =>
 		draftScope
 			? readChatSessionDraft(draftScope).composer.delivery
@@ -401,12 +400,14 @@ export const ChatComposer = memo(function ChatComposer({
 		getComposerMutation,
 		getComposerMutation,
 	);
+	const optimisticSend = Boolean(durableDelivery?.draft && composerMutation.pending);
 	const [appliedAcceptanceSequence, setAppliedAcceptanceSequence] = useState(0);
 	const composerRevision = useRef(persistedDraft?.composer.revision ?? 0);
+	const unsavedText = useRef<{ text: string; revision: number } | undefined>(undefined);
 	const synchronouslyClearedDeliveryRevision = useRef<number | undefined>(undefined);
 	const restoredAttachments = useMemo<FileAttachment[]>(
 		() =>
-			(persistedDraft?.composer.attachments ?? draftSeed?.stagedAttachments)?.map((attachment) => ({
+			(persistedDraft?.composer.delivery?.draft?.attachments ?? persistedDraft?.composer.attachments ?? draftSeed?.stagedAttachments)?.map((attachment) => ({
 				id: attachment.id,
 				name: attachment.name,
 				mimeType: attachment.mimeType,
@@ -424,7 +425,9 @@ export const ChatComposer = memo(function ChatComposer({
 				onQueuedAttachmentsChange?.(descriptors);
 				return;
 			}
-			const result = writeChatAttachments(draftScope, descriptors);
+			const sentAttachments = readChatSessionDraft(draftScope).composer.delivery?.draft?.attachments;
+			const result = writeChatAttachments(draftScope, descriptors.filter((attachment) =>
+				!sentAttachments?.some((sent) => sent.id === attachment.id)));
 			composerRevision.current = result.draft.composer.revision;
 			setAttachmentDraftPersistenceError(
 				result.ok
@@ -458,8 +461,11 @@ export const ChatComposer = memo(function ChatComposer({
 		synchronouslyClearedDeliveryRevision.current = undefined;
 		const currentDraft = draftScope ? readChatSessionDraft(draftScope) : undefined;
 		composerRevision.current = currentDraft?.composer.revision ?? 0;
+		unsavedText.current = undefined;
 		setDurableDelivery(currentDraft?.composer.delivery);
 		setAppliedAcceptanceSequence(0);
+		setSendError(null);
+		setSteerOutcomeNotice(null);
 		setTextDraftPersistenceError(null);
 		setDeliveryRecoveryNotice(restoredDeliveryNotice(currentDraft?.composer.delivery));
 		setDeliveryUncertain(currentDraft?.composer.delivery?.state === "dispatching");
@@ -508,7 +514,8 @@ export const ChatComposer = memo(function ChatComposer({
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
 
 	const staged = fileAttachments.attachments.length > 0 || visibleRetainedAttachments.length > 0;
-	const stripAttachments = (optimisticSend ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
+	const nextDraftHasChanged = Boolean(durableDelivery?.draft && composerRevision.current > durableDelivery.revision + 1);
+	const stripAttachments = (optimisticSend || nextDraftHasChanged ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
 		const preview = file.dataUrl ?? (path && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
@@ -696,6 +703,14 @@ export const ChatComposer = memo(function ChatComposer({
 			setTextDraftPersistenceError(null);
 			setDeliveryRecoveryNotice(null);
 			if (!result.cleared) {
+				textRef.current = result.draft.composer.text;
+				hasTextRef.current = textRef.current.trim().length > 0;
+				setHasText(hasTextRef.current);
+				editor.current?.setText(textRef.current);
+				if (result.draft.composer.attachments.length === 0) {
+					fileAttachments.clear();
+					return false;
+				}
 				for (const attachment of fileAttachments.getAttachments()) {
 					if (!result.draft.composer.attachments.some((kept) => kept.id === attachment.id)) {
 						fileAttachments.remove(attachment.id);
@@ -717,9 +732,10 @@ export const ChatComposer = memo(function ChatComposer({
 				fileAttachments.clear();
 				return true;
 			}
-			const saved = composerRevision.current !== acceptedRevision
-				? writeChatComposerText(draftScope, textRef.current)
+			const saved = unsavedText.current
+				? writeChatComposerText(draftScope, unsavedText.current.text, undefined, unsavedText.current.revision)
 				: undefined;
+			if (saved?.ok) unsavedText.current = undefined;
 			const result: DraftClearResult = saved?.ok === false
 				? { ok: false, cleared: false, draft: saved.draft }
 				: clearAcceptedChatComposer(draftScope, acceptedRevision, undefined,
@@ -813,10 +829,12 @@ export const ChatComposer = memo(function ChatComposer({
 		// session record again at the effect/commit boundary so acknowledgement cannot
 		// turn the runtime snapshot into an ABA that resurrects accepted text or staged
 		// attachment descriptors.
+		if (unsavedText.current || (composerMutation.pending && restoredSeedKey.current !== undefined)) return;
 		const committedDraft = draftScope ? readChatSessionDraft(draftScope) : undefined;
-		if (committedDraft) {
+		// Keep this surface's native bytes for retry; only a new surface needs descriptors.
+		if (committedDraft && (!committedDraft.composer.delivery?.draft || restoredSeedKey.current === undefined)) {
 			fileAttachments.reconcilePersistedAttachments(
-				committedDraft.composer.attachments.map((attachment) => ({
+				(committedDraft.composer.delivery?.draft?.attachments ?? committedDraft.composer.attachments).map((attachment) => ({
 					id: attachment.id,
 					name: attachment.name,
 					mimeType: attachment.mimeType,
@@ -827,7 +845,11 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 		const committedSeedText =
 			draftSeed?.text ??
-			(committedDraft ? committedDraft.composer.text : draftSeedText);
+			(committedDraft
+				? committedDraft.composer.text || (!getChatComposerMutation(draftScope ?? "").pending
+					? committedDraft.composer.delivery?.draft?.text ?? ""
+					: "")
+				: draftSeedText);
 		if (committedSeedText === undefined) {
 			restoredSeedKey.current = undefined;
 			return;
@@ -843,8 +865,10 @@ export const ChatComposer = memo(function ChatComposer({
 		setDismissedKey(null);
 		highlightedRef.current = 0;
 		setHighlighted(0);
-		setSendError(null);
-		setSteerOutcomeNotice(null);
+		if (draftSeed) {
+			setSendError(null);
+			setSteerOutcomeNotice(null);
+		}
 		// A history action intentionally creates a new draft and must be persisted.
 		// A session restore is already durable; writing it again here needlessly
 		// changes the accepted-send revision during mount.
@@ -858,6 +882,7 @@ export const ChatComposer = memo(function ChatComposer({
 			);
 		}
 	}, [
+		composerMutation.pending,
 		draftScope,
 		draftSeed,
 		draftSeedId,
@@ -915,11 +940,13 @@ export const ChatComposer = memo(function ChatComposer({
 	const onEditorChange = useCallback((snapshot: ComposerEditorSnapshot) => {
 		// Changing Lexical's editability can publish the optimistic visual clear.
 		if (optimisticSend && !snapshot.text && !textRef.current) return;
+		const previousText = textRef.current;
 		textRef.current = snapshot.text;
 		onQueuedDraftChange?.(snapshot.text);
-		if (draftScope) {
+		if (draftScope && snapshot.text !== previousText) {
 			const result = writeChatComposerText(draftScope, snapshot.text);
 			composerRevision.current = result.draft.composer.revision;
+			unsavedText.current = result.ok ? undefined : { text: snapshot.text, revision: result.draft.composer.revision - 1 };
 			// A disabled Lexical editor can still publish an internal state update
 			// while its editability changes. It must not erase the recovery notice
 			// for a durable delivery that still owns this exact composer revision.
@@ -1133,7 +1160,11 @@ export const ChatComposer = memo(function ChatComposer({
 		const attachmentScope = queuedDraftScope ?? draftScope;
 		const retainedNativeImageCount = visibleRetainedAttachments.filter((item) => item.contentType === "image").length;
 		let nativeImageBytes = 0;
-		const nativeImageAttachments = settledAttachments.filter((attachment) => {
+		const deliveryAttachments = recoveringDelivery?.draft?.attachments.map<FileAttachment>((attachment) =>
+			settledAttachments.find((staged) => staged.id === attachment.id) ?? {
+				...attachment, stagedPath: attachment.path,
+			});
+		const nativeImageAttachments = (deliveryAttachments ?? settledAttachments).filter((attachment) => {
 			// Retained image sizes are server-owned and unknown here. Keep new images
 			// as workspace files so an edit cannot exceed the native 25 MiB budget.
 			if (!sendNativeImages || retainedNativeImageCount > 0 || !isSupportedImageAttachment(attachment.mimeType) ||
@@ -1189,7 +1220,6 @@ export const ChatComposer = memo(function ChatComposer({
 			try {
 				if (clearForLocalEcho) {
 					clearEditorView();
-					setOptimisticSend(true);
 				}
 				if (shouldSteer && onSteer) {
 					const outcome = nativePayloads.length > 0
@@ -1226,7 +1256,6 @@ export const ChatComposer = memo(function ChatComposer({
 						: "chat.draft.sendFailed",
 				);
 			} finally {
-				setOptimisticSend(false);
 				setSubmitting(false);
 			}
 			return;
@@ -1237,6 +1266,7 @@ export const ChatComposer = memo(function ChatComposer({
 			: message;
 		const prepared = prepareChatComposerDelivery(draftScope, {
 			kind: recoveringDelivery?.kind ?? (shouldSteer ? "steer" : "send"),
+			optimistic: !shouldSteer,
 			nativeImages: sendNativeImages,
 			composerText: currentText,
 			attachments: settledAttachments.flatMap((attachment) =>
@@ -1260,6 +1290,7 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 		const delivery = prepared.mutation;
+		if (!prepared.recovered && delivery.draft) clearEditorView();
 		synchronouslyClearedDeliveryRevision.current = undefined;
 		setDeliveryUncertain(false);
 		if (!prepared.recovered) composerRevision.current = prepared.draft.composer.revision;
@@ -1304,10 +1335,6 @@ export const ChatComposer = memo(function ChatComposer({
 					return;
 				}
 			} else {
-				if (!prepared.recovered) {
-					clearEditorView();
-					setOptimisticSend(true);
-				}
 				await onSend(
 					delivery.requestText,
 					sendNativeImages && nativePayloads.length > 0 ? nativePayloads : undefined,
@@ -1320,10 +1347,10 @@ export const ChatComposer = memo(function ChatComposer({
 			setHighlighted(0);
 		} catch (error) {
 			if (delivery.kind === "send" && !textRef.current) {
-				textRef.current = currentText;
-				hasTextRef.current = currentText.trim().length > 0;
+				textRef.current = delivery.draft?.text ?? currentText;
+				hasTextRef.current = textRef.current.trim().length > 0;
 				setHasText(hasTextRef.current);
-				editor.current?.setText(currentText);
+				editor.current?.setText(textRef.current);
 			}
 			// Refusal of a retry says nothing about a previous attempt whose response
 			// was lost. Only an initial, definitively unaccepted send can be edited.
@@ -1331,10 +1358,17 @@ export const ChatComposer = memo(function ChatComposer({
 				delivery.kind === "send" && !prepared.recovered &&
 				DEFINITIVE_SEND_REJECTIONS.has(apiErrorCode(error) ?? "")
 			) {
-				const cleared = clearRejectedChatComposerDelivery(
-					draftScope, delivery.clientMessageId, delivery.revision,
-				);
+				const cleared = unsavedText.current
+					? { ok: false, draft: readChatSessionDraft(draftScope) }
+					: clearRejectedChatComposerDelivery(draftScope, delivery.clientMessageId, delivery.revision);
 				setDurableDelivery(cleared.draft.composer.delivery);
+				if (cleared.ok && !cleared.draft.composer.delivery) {
+					composerRevision.current = cleared.draft.composer.revision;
+					textRef.current = cleared.draft.composer.text;
+					hasTextRef.current = textRef.current.trim().length > 0;
+					setHasText(hasTextRef.current);
+					editor.current?.setText(textRef.current);
+				}
 				setDeliveryUncertain(false);
 				setDeliveryRecoveryNotice(null);
 				setTextDraftPersistenceError(cleared.ok ? null : "chat.draft.saveFailed");
@@ -1348,7 +1382,6 @@ export const ChatComposer = memo(function ChatComposer({
 					: "chat.draft.sendUncertain",
 			);
 		} finally {
-			setOptimisticSend(false);
 			if (!mutationFinished) cancelChatComposerMutation(draftScope, mutationToken);
 			setSubmitting(false);
 		}
@@ -1483,7 +1516,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const attachmentError =
 		fileAttachments.error ??
 		draftPersistenceError ??
-		deliveryRecoveryNotice ??
+		(optimisticSend ? null : deliveryRecoveryNotice) ??
 		sendError ??
 		(fileAttachments.attachments.some((file) => !file.data && !file.stagedPath)
 			? "chat.draft.filesUnavailable" : null) ??
