@@ -10,6 +10,8 @@ import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
+import { CloudProjectSettingsForm } from "./CloudProjectSettingsForm";
+import { useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
 import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
 import { type GlobalSettingsSection, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
@@ -77,6 +79,14 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 
 	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, is11x });
 	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
+	// A cloud project lives only in the control plane; the local daemon has no
+	// record of it. Resolve it here so its settings load from the control plane.
+	const localProjectScope = displaySettings?.scope === "project" && !remoteHostId;
+	const cloudProjects = useCloudProjectsQuery({ enabled: localProjectScope });
+	const cloudProject = localProjectScope
+		? cloudProjects.data?.find((project) => project.id === displaySettings.projectId)
+		: undefined;
+	const cloudProjectsPending = localProjectScope && cloudProjects.isLoading;
 
 	const projectSections: Array<{
 		id: ProjectSettingsSection;
@@ -86,7 +96,9 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 		{ id: "general", label: t("settings.project.general"), icon: MonitorCog },
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
 	];
-	if (!remoteHostId) {
+	if (cloudProject) {
+		projectSections.splice(1);
+	} else if (!remoteHostId) {
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
 	}
@@ -315,7 +327,11 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 							</DialogHeader>
 							<div aria-busy={!isBodyReady} className={cn(settingsDialogBodyClass, "settings-dialog-body flex-1 px-(--size-modal-padding) pt-0")}>
 								{isBodyReady ? (
-									displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "cues" ? (
+									cloudProject ? (
+										<CloudProjectSettingsForm key={cloudProject.id} project={cloudProject} onSaveState={setProjectSaveState} />
+									) : cloudProjectsPending ? (
+										<p className="text-sm text-settings-muted">{t("settings.project.loading")}</p>
+									) : displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "cues" ? (
 										<CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />
 									) : displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "environment" ? (
 										<ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />

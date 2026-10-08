@@ -7,7 +7,10 @@ import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsDialog } from "./SettingsDialog";
 import { globalSettingsItemsFor, visibleGlobalSettings } from "./settings/settingsCatalog";
 
-const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
+const { postMock, cloudProjectsState } = vi.hoisted(() => ({
+	postMock: vi.fn(),
+	cloudProjectsState: { data: [] as Array<{ id: string; displayName: string }>, isLoading: false },
+}));
 
 const accountsResponse = {
 	accountRevision: 0,
@@ -64,6 +67,18 @@ vi.mock("./GlobalSettingsForm", () => ({
 	),
 }));
 
+// Cloud projects come from the control plane; none by default, so the
+// local-daemon form stays in play unless a test seeds one.
+vi.mock("../hooks/useWorkspaceQuery", () => ({
+	useCloudProjectsQuery: () => cloudProjectsState,
+}));
+
+vi.mock("./CloudProjectSettingsForm", () => ({
+	CloudProjectSettingsForm: ({ project }: { project: { displayName: string } }) => (
+		<div data-testid="cloud-project-settings">{project.displayName}</div>
+	),
+}));
+
 vi.mock("./CuesDialog", () => ({
 	CuesSettings: ({ projectId }: { projectId: string }) => <div data-testid="project-cues-settings">{projectId}</div>,
 }));
@@ -86,6 +101,8 @@ describe("SettingsDialog", () => {
 			? Promise.resolve({ data: accountsResponse })
 			: Promise.resolve({ data: { operationId: "login-1", status: "cancelled" } }));
 		useUiStore.setState({ developerMode: false, settingsModal: null });
+		cloudProjectsState.data = [];
+		cloudProjectsState.isLoading = false;
 	});
 
 	function renderSettingsDialog() {
@@ -135,6 +152,28 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("project-cues-settings")).toHaveTextContent("proj-1");
 		expect(screen.getByRole("button", { name: "Cues" })).toHaveAttribute("aria-current", "page");
+	});
+
+	it("loads a cloud project's settings from the control plane, not the local daemon", async () => {
+		cloudProjectsState.data = [{ id: "cloud-1", displayName: "ao-landing" }];
+		useUiStore.getState().openProjectSettings("cloud-1");
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("cloud-project-settings")).toHaveTextContent("ao-landing");
+		expect(screen.queryByRole("button", { name: "Start pending save" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "General" })).toBeInTheDocument();
+		for (const section of ["Agents", "Environment", "Cues"]) {
+			expect(screen.queryByRole("button", { name: section })).not.toBeInTheDocument();
+		}
+	});
+
+	it("waits for the cloud project list before falling back to local project settings", async () => {
+		cloudProjectsState.isLoading = true;
+		useUiStore.getState().openProjectSettings("cloud-1");
+		renderSettingsDialog();
+
+		expect(await screen.findByText("Loading project settings…")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Start pending save" })).not.toBeInTheDocument();
 	});
 
 	it("does not offer local environment settings for a remote project", async () => {
