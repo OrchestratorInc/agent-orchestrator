@@ -15,7 +15,7 @@ import {
 	chatFixtureThreadError,
 } from "../../lib/chat-fixture";
 import { appI18n } from "../../i18n";
-import type { ConversationMessage, ConversationSnapshot } from "../../types/conversation";
+import type { ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
 import type { WorkspaceSession } from "../../types/workspace";
@@ -881,6 +881,45 @@ describe("ChatWorkspace timeline", () => {
 		expect(onInterrupt).toHaveBeenCalledOnce();
 	});
 
+	it("keeps the Working row below the newest work of a long running turn", () => {
+		const createdAt = "2026-10-08T12:00:00Z";
+		const command = (sequence: number, status: "completed" | "running"): ConversationItem => ({
+			kind: "activity",
+			id: `command-${sequence}`,
+			turnId: "turn-long",
+			sequence,
+			revision: 0,
+			activityKind: "command",
+			status,
+			summary: `npm run step-${sequence}`,
+			detail: { command: `npm run step-${sequence}` },
+			createdAt,
+		});
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			turns: [{ id: "turn-long", state: "running", requestedAt: createdAt, startedAt: createdAt }],
+			items: [
+				{ kind: "message", id: "prompt", turnId: "turn-long", sequence: 1, revision: 0, role: "user", origin: "human", text: "Render the video", streaming: false, createdAt },
+				command(2, "completed"),
+				command(3, "completed"),
+				{ kind: "message", id: "progress", turnId: "turn-long", sequence: 4, revision: 0, role: "assistant", origin: "provider", text: "Rendering the full intro.", streaming: false, createdAt },
+				command(5, "completed"),
+				command(6, "running"),
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		const working = screen.getByTestId("live-working-label");
+		const prompt = screen.getByText("Render the video");
+		const progress = screen.getByText("Rendering the full intro.");
+		const latestRun = screen.getAllByRole("button", { name: /Ran 2 tool calls/ }).at(-1)!;
+		expect(prompt.compareDocumentPosition(working) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(progress.compareDocumentPosition(working) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(latestRun.compareDocumentPosition(working) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
 	it("shows Working when a running turn has not produced a timeline group yet", () => {
 		const requestedAt = new Date(Date.now() - 2_000).toISOString();
 		const snapshot: ConversationSnapshot = {
@@ -998,16 +1037,16 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		// Read the transcript in document order: only the prompt sits above Working, and
-		// the steer stays after the work it interrupted and before the reply to it.
+		// Read the transcript in document order: the steer stays after the work it
+		// interrupted and before the reply to it, and Working follows the newest work.
 		const text = screen.getByRole("log").textContent ?? "";
 		const positions = [
 			"Run the unit tests",
-			"Working for",
 			"Starting with the test suite.",
 			"Ran command",
 			"Only the unit ones, please",
 			"Switching to the unit tests.",
+			"Working for",
 		].map((fragment) => text.indexOf(fragment));
 		expect(positions.every((position) => position >= 0)).toBe(true);
 		expect(positions).toEqual([...positions].sort((a, b) => a - b));
