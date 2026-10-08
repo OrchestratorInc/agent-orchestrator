@@ -1,6 +1,6 @@
 import { UITextView as Text } from "@bsky.app/react-native-uitextview";
 import { memo, useMemo } from "react";
-import { type StyleProp, type TextStyle } from "react-native";
+import { Platform, type StyleProp, type TextStyle } from "react-native";
 import { useTheme } from "../ThemeProvider";
 import { highlightCode, type SyntaxTokenKind } from "./syntaxHighlight";
 
@@ -26,7 +26,7 @@ export const HighlightedCodeText = memo(function HighlightedCodeText({
 		[code, language, streaming],
 	);
 	return (
-		<Text selectable uiTextView style={style}>
+		<Text selectable uiTextView selectionColor={Platform.OS === "android" ? t.accentBorder : t.accent} style={style}>
 			{tokens?.map((token, index) => (
 				<Text key={`${index}:${token.text.length}`} style={{ color: tokenColor(token.kind, t) }}>
 					{token.text}

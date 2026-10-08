@@ -1,0 +1,34 @@
+diff --git a/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm b/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm
+index 45700cd..5d1798b 100644
+--- a/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm
++++ b/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm
+@@ -200,6 +200,10 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+     _textView.selectable = newViewProps.selectable;
+   }
+ 
++  if (oldViewProps.selectionColor != newViewProps.selectionColor) {
++    _textView.tintColor = RCTUIColorFromSharedColor(newViewProps.selectionColor);
++  }
++
+   if (oldViewProps.allowFontScaling != newViewProps.allowFontScaling) {
+     if (@available(iOS 11.0, *)) {
+       _textView.adjustsFontForContentSizeCategory = newViewProps.allowFontScaling;
+diff --git a/node_modules/@bsky.app/react-native-uitextview/src/RNUITextViewNativeComponent.ts b/node_modules/@bsky.app/react-native-uitextview/src/RNUITextViewNativeComponent.ts
+index 30b49b0..44da022 100644
+--- a/node_modules/@bsky.app/react-native-uitextview/src/RNUITextViewNativeComponent.ts
++++ b/node_modules/@bsky.app/react-native-uitextview/src/RNUITextViewNativeComponent.ts
+@@ -1,5 +1,6 @@
+ import {
+   type CodegenTypes,
++  type ColorValue,
+   type ViewProps,
+   codegenNativeComponent,
+ } from 'react-native'
+@@ -30,6 +31,7 @@ interface NativeProps extends ViewProps {
+   allowFontScaling?: CodegenTypes.WithDefault<boolean, true>
+   ellipsizeMode?: CodegenTypes.WithDefault<EllipsizeMode, 'tail'>
+   selectable?: boolean
++  selectionColor?: ColorValue
+   onTextLayout?: CodegenTypes.BubblingEventHandler<TextLayoutEvent>
+   /**
+    * Callback fired when the text selection changes.
