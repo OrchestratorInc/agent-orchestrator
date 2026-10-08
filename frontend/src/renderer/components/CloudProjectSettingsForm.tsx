@@ -13,6 +13,7 @@ import { Pencil, TriangleAlert } from "lucide-react";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useCoderTemplates } from "../hooks/useCoderTemplates";
+import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
 import type { CloudCpProject, CloudCpProjectCoderConfig } from "../lib/cloud-cp";
 import { ProductExternalLink } from "./ProductExternalLink";
@@ -53,6 +54,14 @@ export function CloudProjectSettingsForm({
 	const { templates, isLoading: templatesLoading } = useCoderTemplates(project.orgId, templateId !== "");
 	const template = templates.find((candidate) => candidate.id === templateId);
 	const templateLabel = template ? template.displayName || template.name : templatesLoading ? "…" : templateId;
+	// No project template only blocks sessions for a bring-your-own-Coder org
+	// without an org-default template (the control plane's
+	// coder_template_required). Otherwise the deployment or org default applies,
+	// and non-Coder providers need no template at all.
+	const orgCoder = useOrgCoderConfig();
+	const orgCoderConfig = orgCoder.data as { templateId?: string; defaultTemplateId?: string } | null | undefined;
+	const orgDefaultTemplateId = (orgCoderConfig?.templateId ?? orgCoderConfig?.defaultTemplateId ?? "").trim();
+	const templateRequired = templateId === "" && orgCoderConfig != null && orgDefaultTemplateId === "";
 
 	const [form, setForm] = useState<CloudProjectForm>({
 		displayName: project.displayName,
@@ -156,11 +165,13 @@ export function CloudProjectSettingsForm({
 				<ProjectSettingsRow label={t("settings.project.coderTemplate")}>
 					{templateId !== "" ? (
 						<span className="settings-row-value" title={templateId}>{templateLabel}</span>
-					) : (
+					) : templateRequired ? (
 						<span className="settings-row-value flex items-center gap-1.5 text-error" role="alert">
 							<TriangleAlert className="size-4 shrink-0" aria-hidden="true" />
 							{t("settings.project.coderTemplateMissing")}
 						</span>
+					) : (
+						<span className="settings-row-value">{orgCoder.isLoading ? "…" : t("settings.project.coderTemplateDefault")}</span>
 					)}
 				</ProjectSettingsRow>
 				{coder?.size ? <ProjectSettingsValueRow label={t("settings.project.coderSize")} value={coder.size} /> : null}

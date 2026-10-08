@@ -1215,6 +1215,7 @@
 	"settings.project.coderTitle": "Coder",
 	"settings.project.coderTemplate": "Modèle Coder",
 	"settings.project.coderTemplateMissing": "Aucun modèle. Les sessions ne peuvent pas démarrer ; créez un nouveau projet et choisissez un modèle.",
+	"settings.project.coderTemplateDefault": "Modèle par défaut",
 	"settings.project.coderSize": "Taille de machine",
 	"settings.project.cloudBranchRequired": "La branche par défaut est obligatoire.",
 	"settings.project.kind.singleRepo": "dépôt unique",

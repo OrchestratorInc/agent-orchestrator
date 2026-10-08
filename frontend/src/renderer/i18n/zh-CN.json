@@ -1177,6 +1177,7 @@
 	"settings.project.coderTitle": "Coder",
 	"settings.project.coderTemplate": "Coder 模板",
 	"settings.project.coderTemplateMissing": "没有模板。会话无法启动；请创建新项目并选择模板。",
+	"settings.project.coderTemplateDefault": "默认模板",
 	"settings.project.coderSize": "机器规格",
 	"settings.project.cloudBranchRequired": "默认分支为必填项。",
 	"settings.project.kind.singleRepo": "单仓库",

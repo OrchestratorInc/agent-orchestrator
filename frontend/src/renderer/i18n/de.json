@@ -1195,6 +1195,7 @@
 	"settings.project.coderTitle": "Coder",
 	"settings.project.coderTemplate": "Coder-Vorlage",
 	"settings.project.coderTemplateMissing": "Keine Vorlage. Sitzungen können nicht starten; erstelle ein neues Projekt und wähle eine Vorlage.",
+	"settings.project.coderTemplateDefault": "Standardvorlage",
 	"settings.project.coderSize": "Maschinengröße",
 	"settings.project.cloudBranchRequired": "Standard-Branch ist erforderlich.",
 	"settings.project.kind.singleRepo": "einzelnes Repo",

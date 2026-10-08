@@ -8,6 +8,7 @@ import { CloudProjectSettingsForm } from "./CloudProjectSettingsForm";
 const h = vi.hoisted(() => ({
 	updateProject: vi.fn(),
 	templates: [] as Array<{ id: string; name: string; displayName: string }>,
+	orgCoderConfig: null as { baseUrl: string; templateId?: string } | null,
 }));
 
 vi.mock("../hooks/useCloudCp", () => ({
@@ -16,6 +17,10 @@ vi.mock("../hooks/useCloudCp", () => ({
 
 vi.mock("../hooks/useCloudOrg", () => ({
 	useCloudOrg: () => ({ org: { id: "org-1" } }),
+}));
+
+vi.mock("../hooks/useOrgCoderConfig", () => ({
+	useOrgCoderConfig: () => ({ data: h.orgCoderConfig, isLoading: false }),
 }));
 
 vi.mock("../hooks/useCoderTemplates", () => ({
@@ -48,6 +53,7 @@ describe("CloudProjectSettingsForm", () => {
 	beforeEach(() => {
 		h.updateProject.mockReset().mockResolvedValue({ project: cloudProject() });
 		h.templates = [{ id: "tpl-1", name: "azure-linux", displayName: "Azure Linux" }];
+		h.orgCoderConfig = null;
 	});
 
 	it("shows the cloud project's details and its Coder template", () => {
@@ -60,10 +66,26 @@ describe("CloudProjectSettingsForm", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
-	it("flags a project created without a Coder template", () => {
+	it("flags a template-less project when the org's own Coder has no default template", () => {
+		h.orgCoderConfig = { baseUrl: "https://coder.acme.test" };
 		renderForm(cloudProject());
 
 		expect(screen.getByRole("alert")).toHaveTextContent("No template. Sessions can't start");
+	});
+
+	it("shows the inherited default when the org has no bring-your-own Coder", () => {
+		renderForm(cloudProject());
+
+		expect(screen.getByText("Default template")).toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("shows the inherited default when the org's own Coder sets a default template", () => {
+		h.orgCoderConfig = { baseUrl: "https://coder.acme.test", templateId: "tpl-1" };
+		renderForm(cloudProject());
+
+		expect(screen.getByText("Default template")).toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
 	it("saves a renamed project to the control plane", async () => {

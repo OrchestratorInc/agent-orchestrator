@@ -1195,6 +1195,7 @@
 	"settings.project.coderTitle": "Coder",
 	"settings.project.coderTemplate": "Coder テンプレート",
 	"settings.project.coderTemplateMissing": "テンプレートがありません。セッションを開始できません。新しいプロジェクトを作成してテンプレートを選択してください。",
+	"settings.project.coderTemplateDefault": "デフォルトテンプレート",
 	"settings.project.coderSize": "マシンサイズ",
 	"settings.project.cloudBranchRequired": "デフォルトブランチは必須です。",
 	"settings.project.kind.singleRepo": "Gitリポジトリ",

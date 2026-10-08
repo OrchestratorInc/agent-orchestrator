@@ -1195,6 +1195,7 @@
 	"settings.project.coderTitle": "Coder",
 	"settings.project.coderTemplate": "Coder 템플릿",
 	"settings.project.coderTemplateMissing": "템플릿이 없습니다. 세션을 시작할 수 없습니다. 새 프로젝트를 만들고 템플릿을 선택하세요.",
+	"settings.project.coderTemplateDefault": "기본 템플릿",
 	"settings.project.coderSize": "머신 크기",
 	"settings.project.cloudBranchRequired": "기본 브랜치는 필수입니다.",
 	"settings.project.kind.singleRepo": "Git 저장소",

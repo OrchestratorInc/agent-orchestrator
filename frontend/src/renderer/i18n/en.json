@@ -1336,6 +1336,7 @@
 	"settings.project.coderTitle": "Coder",
 	"settings.project.coderTemplate": "Coder template",
 	"settings.project.coderTemplateMissing": "No template. Sessions can't start; create a new project and choose a template.",
+	"settings.project.coderTemplateDefault": "Default template",
 	"settings.project.coderSize": "Machine size",
 	"settings.project.cloudBranchRequired": "Default branch is required.",
 	"settings.project.kind.singleRepo": "Git repository",
