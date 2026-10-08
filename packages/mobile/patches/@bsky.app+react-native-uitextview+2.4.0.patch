@@ -2,10 +2,7 @@ diff --git a/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm 
 index 45700cd..5d1798b 100644
 --- a/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm
 +++ b/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm
-@@ -200,6 +200,10 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
-     _textView.selectable = newViewProps.selectable;
-   }
- 
+@@ -203,3 +203,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
 +  if (oldViewProps.selectionColor != newViewProps.selectionColor) {
 +    _textView.tintColor = RCTUIColorFromSharedColor(newViewProps.selectionColor);
 +  }
