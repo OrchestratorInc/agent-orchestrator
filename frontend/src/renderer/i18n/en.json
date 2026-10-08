@@ -1417,6 +1417,7 @@
 	"settings.project.environment": "Environment",
 	"settings.project.environmentVariables": "Environment variables",
 	"settings.project.environmentHint": "Used by new agents, terminals, setup commands, reviewers, previews, and Cues. Running processes keep their current values; restart them to apply changes. Values are stored in local project settings without encryption. Masking only hides them on this screen. AO does not create or auto-read a .env file.",
+	"settings.project.environmentDescription": "Variables for new agents, terminals and previews. Stored without encryption.",
 	"settings.project.environmentCount_one": "{{count}} variable",
 	"settings.project.environmentCount_other": "{{count}} variables",
 	"settings.project.environmentEmptyTitle": "No variables yet",

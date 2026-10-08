@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff, FileCode2, Plus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
@@ -106,7 +106,6 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		});
 	}, [dirty, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt]);
 	const showEmpty = rows.length === 0 && activeTab === "variables";
-	const showFooter = rows.length > 0 || dirty;
 	const update = (next: Row[]) => { setRows(next); setError(null); setSavedAt(false); setImportedCount(null); };
 	const importPasted = () => {
 		const parsed = parsePastedEnv(pasteText);
@@ -145,8 +144,25 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		setError(null);
 		mutation.mutate(env);
 	};
+	// Autosave: a draft with valid, unique names saves shortly after the last edit.
+	const attempted = useRef<string | null>(null);
+	useEffect(() => {
+		if (!dirty || mutation.isPending || activeTab !== "variables") return;
+		const env: Record<string, string> = {};
+		const names = new Set<string>();
+		for (const row of rows) {
+			const folded = row.name.toUpperCase();
+			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(row.name) || names.has(folded)) return;
+			names.add(folded);
+			env[row.name] = row.value;
+		}
+		const key = JSON.stringify(env);
+		if (attempted.current === key) return;
+		const timer = window.setTimeout(() => { attempted.current = key; mutation.mutate(env); }, 700);
+		return () => window.clearTimeout(timer);
+	}, [activeTab, dirty, mutation, rows]);
 	return <form id="project-settings-form" className="project-settings-form flex min-h-full flex-col gap-(--size-settings-section-inner-gap)" onSubmit={(event) => { event.preventDefault(); save(); }}>
-		<p className="text-sm leading-5 text-settings-muted">{t("settings.project.environmentHint")}</p>
+		<p className="text-sm leading-5 text-settings-muted">{t("settings.project.environmentDescription")}</p>
 		{showEmpty ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
 			<div className="settings-row-bar">
 				<span className="text-sm leading-5 text-settings-label">{t("settings.project.environmentEmptyTitle")}</span>
@@ -157,8 +173,8 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 			</div>
 		</ProjectSettingsSection> : activeTab === "variables" ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
 			{rows.map((row, index) => <div className="settings-row-bar gap-2" key={index}>
-				<input aria-label={`${t("settings.project.envName")} ${index + 1}`} className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1" placeholder={t("settings.project.envName")} value={row.name} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} />
-				<input aria-label={`${t("settings.project.envValue")} ${index + 1}`} autoComplete="off" className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1" placeholder={t("settings.project.envValue")} type={row.visible ? "text" : "password"} value={row.value} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />
+				<input aria-label={`${t("settings.project.envName")} ${index + 1}`} className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1 rounded-md!" placeholder={t("settings.project.envName")} value={row.name} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} />
+				<input aria-label={`${t("settings.project.envValue")} ${index + 1}`} autoComplete="off" className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1 rounded-md!" placeholder={t("settings.project.envValue")} type={row.visible ? "text" : "password"} value={row.value} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />
 				<Button aria-label={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} className="size-7 shrink-0 p-0 text-settings-muted hover:text-foreground" onClick={() => update(rows.map((item, i) => i === index ? { ...item, visible: !item.visible } : item))} size="icon-sm" title={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} type="button" variant="ghost">{row.visible ? <EyeOff className="size-3.5" aria-hidden="true" /> : <Eye className="size-3.5" aria-hidden="true" />}</Button>
 				<Button aria-label={t("settings.project.removeVariable", { name: row.name || index + 1 })} className="size-7 shrink-0 p-0 text-settings-muted hover:text-destructive" onClick={() => update(rows.filter((_, i) => i !== index))} size="icon-sm" title={t("settings.project.removeVariable", { name: row.name || index + 1 })} type="button" variant="ghost"><Trash2 className="size-3.5" aria-hidden="true" /></Button>
 			</div>)}
@@ -168,7 +184,7 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 			</div>
 		</ProjectSettingsSection> : <ProjectSettingsSection title={t("settings.project.pasteVariables")}>
 			<p className="text-sm leading-5 text-settings-muted">{t("settings.project.envPasteHint")}</p>
-			<textarea aria-label={t("settings.project.pasteVariables")} autoComplete="off" className="settings-field-control min-h-(--size-textarea-min) min-w-0 resize-none py-2.5 font-mono" id="project-env-paste" onChange={(event) => setPasteText(event.target.value)} spellCheck={false} value={pasteText} />
+			<textarea aria-label={t("settings.project.pasteVariables")} autoComplete="off" className="settings-field-control min-h-(--size-textarea-min) min-w-0 resize-none rounded-md! py-2.5 font-mono" id="project-env-paste" onChange={(event) => setPasteText(event.target.value)} spellCheck={false} value={pasteText} />
 			<div className="flex justify-end gap-2">
 				<Button onClick={() => { setActiveTab("variables"); setPasteText(""); setError(null); }} type="button" variant="outline">{t("settings.project.envPasteCancel")}</Button>
 				<Button disabled={!pasteText.trim()} onClick={importPasted} type="button">{t("settings.project.importVariables")}</Button>
@@ -177,9 +193,5 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		{importedCount !== null && <p role="status" className="text-sm text-settings-muted">{t("settings.project.envImported", { count: importedCount })}</p>}
 		{error && <p role="alert" className="text-sm text-error">{error}</p>}
 		{mutation.isError && <p role="alert" className="text-sm text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
-		{showFooter && <div className="sticky bottom-0 z-chrome mt-auto flex items-center justify-between gap-3 border-t border-border bg-(--color-bg-primary) py-3">
-			<span aria-live="polite" className="min-w-0 truncate text-xs text-settings-muted">{dirty ? t("settings.project.unsavedChanges") : savedAt ? t("settings.project.saved") : ""}</span>
-			<Button disabled={!dirty || mutation.isPending} type="submit">{t("settings.project.saveChanges")}</Button>
-		</div>}
 	</form>;
 }

@@ -1298,6 +1298,7 @@
 	"settings.project.environmentEmptyTitle": "No variables yet",
 	"settings.project.environmentEmptyHint": "Add one variable or paste a .env file to configure new processes for this project.",
 	"settings.project.environmentHint": "Available to new AO-launched processes for this project, including agents, setup commands, terminals, reviewers, previews, and command Cues. Running processes keep their current values. No .env file is created; tools that read .env still need a file. Masking is visual: values remain in local project config and its API.",
+	"settings.project.environmentDescription": "Variables pour les nouveaux agents, terminaux et aperçus. Stockées sans chiffrement.",
 	"settings.project.envName": "Name",
 	"settings.project.envValue": "Value",
 	"settings.project.envInvalid": "Use unique variable names with letters, numbers, and underscores, starting with a letter or underscore.",

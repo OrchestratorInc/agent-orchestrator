@@ -361,7 +361,7 @@ export function SettingsSaveStatus({ layer: layerProp }: { layer?: SettingsLayer
 	const pageLayer = useSettingsPage();
 	const layer = layerProp ?? pageLayer;
 	if (!layer?.showSaveStatus) return null;
-	const { projectSaveState, activeProjectSection, remoteHostId } = layer;
+	const { projectSaveState, remoteHostId } = layer;
 	return (
 		<div className="mt-2 border-t border-(--color-border-settings-dialog-header) px-2 py-3 text-xs" role="status" aria-live="polite">
 			{projectSaveState.phase === "failed" || (remoteHostId && projectSaveState.replacementError) ? (
@@ -374,7 +374,7 @@ export function SettingsSaveStatus({ layer: layerProp }: { layer?: SettingsLayer
 				</div>
 			) : (
 				<p className="flex items-center gap-2 text-settings-muted">
-					{projectSaveState.phase === "pending" && activeProjectSection === "environment" ? t("settings.project.unsavedChanges") : <><Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />{t("settings.project.saving")}</>}
+					<><Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />{t("settings.project.saving")}</>
 				</p>
 			)}
 		</div>

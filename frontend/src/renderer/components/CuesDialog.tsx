@@ -11,7 +11,6 @@ import {
 } from "../hooks/useCuesQuery";
 import { CUE_LIMITS } from "../lib/cues";
 import type { CueDTO, CueInput } from "../lib/cues";
-import { ProjectSettingsRow, ProjectSettingsSection } from "@aoagents/product-ui";
 import { Button } from "./ui/button";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
@@ -185,10 +184,10 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 
 	const renderList = () => {
 		if (!cuesQuery.isFetchedAfterMount || cuesQuery.isFetching) {
+			// Hold the list's footprint while loading so nothing flashes before the real rows.
 			return (
-				<div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-					<Loader2 className="size-4 animate-spin" aria-hidden="true" />
-					{t("cues.loading")}
+				<div className="project-settings-form" aria-busy="true" aria-label={t("cues.loading")}>
+					<section><div className="settings-grouped-rows flex w-full flex-col"><div className="settings-row-bar" /></div></section>
 				</div>
 			);
 		}
@@ -275,38 +274,43 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 	const renderForm = () => {
 		const command = draft.type === "command";
 		const contentId = command ? "cue-command" : "cue-prompt";
-		return <div className="project-settings-form flex flex-col gap-(--size-settings-section-inner-gap)">
-			<ProjectSettingsSection title={t("cues.nameLabel")} titleHidden grouped>
-				<ProjectSettingsRow label={t("cues.nameLabel")}>
-					<input
-						id="cue-name"
-						aria-label={t("cues.nameLabel")}
-						value={draft.name}
-						onChange={(event) => setDraft((d) => ({ ...d, name: event.target.value }))}
-						placeholder={t("cues.namePlaceholder")}
-						className="settings-field-control h-(--size-settings-action-height) w-full max-w-sm rounded-md!"
-						autoFocus
-					/>
-				</ProjectSettingsRow>
-				<ProjectSettingsRow label={t("cues.typeLabel")}>
-					<SettingsOptionMenu
-						aria-label={t("cues.typeLabel")}
-						value={draft.type}
-						options={[
-							{ value: "command", label: t("cues.typeName.command"), icon: <CueTypeIcon type="command" className="size-3! shrink-0 text-settings-muted" /> },
-							{ value: "agent", label: t("cues.typeName.agent"), icon: <CueTypeIcon type="agent" className="size-3! shrink-0 text-settings-muted" /> },
-						]}
-						onChange={(type) => setDraft((current) => ({ ...current, type }))}
-						triggerClassName="w-fit"
-						menuAlign="end"
-						menuClassName="border-0! shadow-md!"
-					/>
-				</ProjectSettingsRow>
-			</ProjectSettingsSection>
-			<ProjectSettingsSection title={t(command ? "cues.commandLabel" : "cues.agentLabel")}>
+		return <div className="flex flex-col gap-(--size-settings-section-inner-gap)">
+			<div className="flex flex-col gap-1.5">
+				<label htmlFor="cue-name" className="settings-field-label">
+					{t("cues.nameLabel")}
+				</label>
+				<input
+					id="cue-name"
+					value={draft.name}
+					onChange={(event) => setDraft((d) => ({ ...d, name: event.target.value }))}
+					placeholder={t("cues.namePlaceholder")}
+					className="settings-field-control h-(--size-settings-action-height) rounded-md!"
+					autoFocus
+				/>
+			</div>
+
+			<div className="flex flex-col gap-1.5">
+				<label className="settings-field-label">{t("cues.typeLabel")}</label>
+				<SettingsOptionMenu
+					aria-label={t("cues.typeLabel")}
+					value={draft.type}
+					options={[
+						{ value: "command", label: t("cues.typeName.command"), icon: <CueTypeIcon type="command" className="size-3! shrink-0 text-settings-muted" /> },
+						{ value: "agent", label: t("cues.typeName.agent"), icon: <CueTypeIcon type="agent" className="size-3! shrink-0 text-settings-muted" /> },
+					]}
+					onChange={(type) => setDraft((current) => ({ ...current, type }))}
+					triggerClassName="w-fit self-start"
+					menuAlign="start"
+					menuClassName="border-0! shadow-md!"
+				/>
+			</div>
+
+			<div className="flex flex-col gap-1.5">
+				<label htmlFor={contentId} className="settings-field-label">
+					{t(command ? "cues.commandLabel" : "cues.agentLabel")}
+				</label>
 				<textarea
 					id={contentId}
-					aria-label={t(command ? "cues.commandLabel" : "cues.agentLabel")}
 					value={command ? draft.command : draft.prompt}
 					onChange={(event) => {
 						const value = event.target.value;
@@ -315,7 +319,9 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 					placeholder={t(command ? "cues.commandPlaceholder" : "cues.promptPlaceholder")}
 					className="settings-field-control min-h-(--size-textarea-min) resize-none overflow-y-auto py-2.5 rounded-md! disabled:cursor-not-allowed disabled:opacity-50"
 				/>
-			</ProjectSettingsSection>
+			</div>
+
+
 			{formError ? (
 				<p role="alert" className="text-caption leading-4 text-error">
 					{formError}

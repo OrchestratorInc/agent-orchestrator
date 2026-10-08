@@ -60,3 +60,14 @@ it("rejects a pasted reserved name without partially changing the draft", async 
 	expect(putMock).not.toHaveBeenCalled();
 	expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "idle", dirty: false }));
 });
+
+it("autosaves a valid draft without a save button", async () => {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+	render(<QueryClientProvider client={client}><ProjectEnvironmentSettings projectId="p" /></QueryClientProvider>);
+	const value = await screen.findByLabelText("Value 1");
+	expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+	await userEvent.clear(value);
+	await userEvent.type(value, "auto");
+	await waitFor(() => expect(putMock).toHaveBeenCalledOnce(), { timeout: 3000 });
+	expect(putMock.mock.calls[0][1].body.config.env).toEqual({ EXISTING: "auto" });
+});
