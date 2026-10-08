@@ -14,7 +14,7 @@ import { NotificationRuntime } from "../components/NotificationCenter";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { GlobalNewTaskDialog } from "../components/GlobalNewTaskDialog";
 import { GlobalToast } from "../components/GlobalToast";
-import { SettingsDialog } from "../components/SettingsDialog";
+import { SettingsPane, SettingsProvider } from "../components/SettingsDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { KeyboardShortcutsSettingsDialog } from "../components/settings/KeyboardShortcutsSettingsDialog";
 import { ShellTopbar } from "../components/ShellTopbar";
@@ -77,8 +77,32 @@ export const Route = createFileRoute("/_shell")({
 		if (!usesPreviewWorkspaceData && !hasTrustedApiBaseUrl()) return;
 		return context.queryClient.fetchQuery({ ...workspaceQueryOptions, staleTime: 0 });
 	},
-	component: ShellLayout,
+	component: ShellLayoutWithSettings,
 });
+
+function ShellLayoutWithSettings() {
+	return (
+		<SettingsProvider>
+			<ShellLayout />
+		</SettingsProvider>
+	);
+}
+
+/**
+ * The routed page stays mounted while settings is open (so a session's scroll,
+ * drafts, and terminal survive) and is only hidden behind the settings page.
+ */
+function ShellOutlet() {
+	const settingsOpen = useUiStore((state) => state.settingsModal !== null);
+	return (
+		<>
+			<div className={cn("flex min-h-0 flex-1 flex-col", settingsOpen && "hidden")}>
+				<Outlet />
+			</div>
+			<SettingsPane />
+		</>
+	);
+}
 
 function errorMessage(error: unknown) {
 	return error instanceof Error ? error.message : "Could not load projects";
@@ -142,32 +166,27 @@ const ShellCenter = memo(function ShellCenter({
 	// an extra strip there would displace session tabs from the native controls.
 	// Windows already owns a separate WindowTitlebar.
 	const draggableSessionFrame = isSessionRoute && isLinux;
+	const settingsOpen = useUiStore((state) => state.settingsModal !== null);
 	if (hideShellTopbar) {
 		return selfFramedCenterPanel ? (
 			<Outlet />
 		) : (
 			<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
-				<div className="flex min-h-0 flex-1 flex-col">
-					<Outlet />
-				</div>
+				<ShellOutlet />
 			</CenterPanelShell>
 		);
 	}
 	if (framedAppTopbar) {
 		return (
 			<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
-				{isSessionRoute ? null : <ShellTopbar />}
-				<div className="flex min-h-0 flex-1 flex-col">
-					<Outlet />
-				</div>
+				{isSessionRoute || settingsOpen ? null : <ShellTopbar />}
+				<ShellOutlet />
 			</CenterPanelShell>
 		);
 	}
 	return (
 		<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
-			<div className="flex min-h-0 flex-1 flex-col">
-				<Outlet />
-			</div>
+			<ShellOutlet />
 		</CenterPanelShell>
 	);
 });
@@ -210,6 +229,7 @@ function ShellLayout() {
 	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
+	const settingsOpen = useUiStore((state) => state.settingsModal !== null);
 	const sidebarHasLayout = useUiStore(sidebarOccupiesLayout);
 	// The drag strip above the sidebar must be exactly as wide as the sidebar.
 	// `--ao-sidebar-w` only reaches the strip if it already exists when the
@@ -1178,7 +1198,6 @@ function ShellLayout() {
 				) : null}
 				<GlobalNewTaskDialog />
 				<GlobalToast />
-				<SettingsDialog />
 				<RestartToUpdateDialog />
 				<TelemetryConsentRenewalDialog />
 				<KeyboardShortcutsDialog
@@ -1219,7 +1238,7 @@ function ShellLayout() {
             macOS/Linux. */}
 				<WindowTitlebar />
 				{/* App routes render their topbar inside the framed panel, matching the board chrome across platforms while leaving OS titlebars native. */}
-				{!framedAppTopbar && !hideShellTopbar && !routeParams.sessionId ? <ShellTopbar /> : null}
+				{!framedAppTopbar && !hideShellTopbar && !routeParams.sessionId && !settingsOpen ? <ShellTopbar /> : null}
 				{/* Controlled by the ui-store so TitlebarNav / Topbar toggles (which
 			    call the store directly) stay in sync. Direct dragging scopes its
 			    width override to the sidebar's layout consumers. */}

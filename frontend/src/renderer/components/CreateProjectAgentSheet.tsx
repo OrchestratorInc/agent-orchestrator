@@ -3,6 +3,7 @@ import {
 	ProjectSetupFormView,
 	ProjectSetupHeaderView,
 } from "@aoagents/product-ui";
+import { useUiStore } from "../stores/ui-store";
 import { useTranslation } from "react-i18next";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "@tanstack/react-query";
@@ -125,6 +126,8 @@ export function CreateProjectAgentSheet({
 	shake = false,
 }: CreateProjectAgentSheetProps) {
 	const { t } = useTranslation();
+	// Settings opens as a page in the center pane; step aside so it is not hidden behind this modal.
+	const settingsOpen = useUiStore((state) => state.settingsModal !== null);
 	const [isExiting, setIsExiting] = useState(false);
 	const contentOpen = open || isExiting;
 	const displayedAction = useRef(action);
@@ -220,7 +223,7 @@ export function CreateProjectAgentSheet({
 
 	return (
 		<Dialog.Root
-			open={open}
+			open={open && !settingsOpen}
 			onOpenChange={(next) => {
 				if (isBusy) return;
 				setIsExiting(!next);

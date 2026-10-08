@@ -2164,6 +2164,7 @@
 	"settings.harness.verifyAgain": "Verify again",
 	"settings.harness.verifying": "Verifying…",
 	"settings.navSectionsAria": "设置分区",
+	"settings.back": "返回",
 	"settings.project.settings": "项目设置",
 	"settings.dialogDescription": "管理{{section}}设置。",
 	"settings.project.dialogDescription": "管理此项目的设置。",

@@ -36,6 +36,7 @@ import {
 	Trash2,
 	User,
 	X,
+	ArrowLeft,
 } from "lucide-react";
 import {
 	useCallback,
@@ -123,6 +124,7 @@ import { OrchestratorIcon } from "./icons";
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
+import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -633,6 +635,7 @@ export function Sidebar({
 	// rendered outside the shell (unit tests) — the mirror simply doesn't render.
 	const daemonStatus = useShellMaybe()?.daemonStatus ?? null;
 	const commandPaletteEnabled = useCommandPaletteEnabled();
+	const settingsPage = useSettingsPage();
 	const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
 	const existingProjectPaths = useMemo(
 		() => workspaces
@@ -939,6 +942,10 @@ export function Sidebar({
 				</Tooltip>
 			</SidebarHeader>
 
+			{settingsPage ? (
+				<SettingsSidebarNav layer={settingsPage} />
+			) : (
+			<>
 			{/* Keep Search + section chrome fixed above the scrollable sidebar content. */}
 			<div className="flex shrink-0 flex-col gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5">
 				{commandPaletteEnabled ? (
@@ -1134,6 +1141,8 @@ export function Sidebar({
 					</SidebarGroupContent>
 				</SidebarGroup>
 			</SidebarContent>
+			</>
+			)}
 
 			{/* Footer — Settings opens the global settings page directly.
 			    Footer rows share NAV_ROW height so Settings, Connect mobile,
@@ -1149,6 +1158,21 @@ export function Sidebar({
 						daemon {daemonStatus.state}
 					</span>
 				)}
+				{settingsPage ? (
+					<button
+						className={FOOTER_NAV_BUTTON_CLASS}
+						disabled={settingsPage.cueBusy}
+						onClick={settingsPage.close}
+						type="button"
+					>
+						<NavRowHighlight />
+						<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+							<ArrowLeft aria-hidden="true" />
+							<span className="tracking-tight">{t("settings.back")}</span>
+						</span>
+					</button>
+				) : (
+				<>
 				<div
 					aria-hidden={isCollapsed || undefined}
 					// `hidden` (display: none) is for the real icon rail only. Hiding the footer
@@ -1246,6 +1270,8 @@ export function Sidebar({
 						<TooltipContent side="right">{t("shell.settings")}</TooltipContent>
 					</Tooltip>
 				</div>
+				</>
+				)}
 			</SidebarFooter>
 
 			{/* Grip follows the painted sidebar-container edge; useResizable owns clamp. */}
@@ -3146,6 +3172,7 @@ function SectionDisclosure({
  * (NavRowHighlight pill, foreground text, instant) cannot drift apart. */
 function SidebarTopNavRow({
 	active = false,
+	disabled,
 	icon,
 	label,
 	onClick,
@@ -3153,6 +3180,7 @@ function SidebarTopNavRow({
 	trailing,
 }: {
 	active?: boolean;
+	disabled?: boolean;
 	icon: ReactNode;
 	label: string;
 	onClick: () => void;
@@ -3169,6 +3197,7 @@ function SidebarTopNavRow({
 				"transition-none",
 				"group-data-[collapsible=icon]:size-control-board! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:rounded-lg group-data-[collapsible=icon]:p-0!",
 			)}
+			disabled={disabled}
 			isActive={active}
 			onClick={onClick}
 			tooltip={tooltip}
@@ -3184,6 +3213,27 @@ function SidebarTopNavRow({
 				</span>
 			) : null}
 		</SidebarMenuButton>
+	);
+}
+
+/** Settings sections in place of the project tree while the settings page is open. */
+export function SettingsSidebarNav({ layer }: { layer: NonNullable<ReturnType<typeof useSettingsPage>> }) {
+	const { t } = useTranslation();
+	return (
+		<SidebarContent className="scrollbar-none gap-0 px-2">
+			<SidebarGroup className="p-0">
+				<SidebarGroupContent>
+					<SidebarMenu aria-label={t("settings.navSectionsAria")} className="gap-0.5" role="navigation">
+						{layer.navItems.map(({ id, label, icon: Icon, active, disabled, onSelect }) => (
+							<SidebarMenuItem key={id}>
+								<SidebarTopNavRow active={active} disabled={disabled} icon={<Icon aria-hidden="true" />} label={label} onClick={onSelect} />
+							</SidebarMenuItem>
+						))}
+					</SidebarMenu>
+				</SidebarGroupContent>
+				<SettingsSaveStatus />
+			</SidebarGroup>
+		</SidebarContent>
 	);
 }
 

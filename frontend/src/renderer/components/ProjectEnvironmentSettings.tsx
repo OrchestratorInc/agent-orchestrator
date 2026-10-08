@@ -204,7 +204,7 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		{importedCount !== null && <p role="status" className="text-sm text-settings-muted">{t("settings.project.envImported", { count: importedCount })}</p>}
 		{error && <p role="alert" className="text-sm text-error">{error}</p>}
 		{mutation.isError && <p role="alert" className="text-sm text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
-		<div className="sticky bottom-0 z-chrome mt-auto flex items-center justify-between gap-3 border-t border-border bg-card py-3">
+		<div className="sticky bottom-0 z-chrome mt-auto flex items-center justify-between gap-3 border-t border-border bg-(--color-bg-primary) py-3">
 			<span aria-live="polite" className="min-w-0 truncate text-xs text-settings-muted">{dirty ? t("settings.project.unsavedChanges") : savedAt ? t("settings.project.saved") : ""}</span>
 			<Button disabled={!dirty || mutation.isPending} type="submit">{t("settings.project.saveChanges")}</Button>
 		</div>

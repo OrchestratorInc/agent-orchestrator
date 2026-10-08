@@ -250,7 +250,11 @@ vi.mock("../components/TitlebarNav", async () => {
 	};
 });
 vi.mock("../components/WindowTitlebar", () => ({ WindowTitlebar: () => null }));
-vi.mock("../components/SettingsDialog", () => ({ SettingsDialog: () => null }));
+vi.mock("../components/SettingsDialog", () => ({
+	SettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+	SettingsPane: () => null,
+	useSettingsPage: () => null,
+}));
 vi.mock("../components/KeyboardShortcutsDialog", () => ({
 	KeyboardShortcutsDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="keyboard-shortcuts" /> : null),
 }));

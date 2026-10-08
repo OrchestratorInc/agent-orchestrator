@@ -50,7 +50,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { CueRunMenu } from "./chat/CueRunMenu";
 
 const isMac = isMacPlatform();
-const dragStyle = isMac ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined;
+export const topbarDragStyle = isMac ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined;
 const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
 // The one app topbar (.dashboard-app-header). On Win/Linux the shell mounts it
@@ -78,27 +78,12 @@ const PADDING_CLEARANCE_FULLSCREEN = 112;
 // (92) + --size-titlebar-content-gap (12) - --size-center-panel-inline-inset (16).
 const PADDING_CLEARANCE_LINUX = 114;
 
-export function ShellTopbar({
-	embedded = false,
-	sessionAction,
-	compactActions = false,
-}: {
-	embedded?: boolean;
-	sessionAction?: ReactNode;
-	compactActions?: boolean;
-} = {}) {
-	const { t } = useTranslation();
-	const location = useLocation();
-	const queryClient = useQueryClient();
-	const navigate = useNavigate();
-	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
-	const hostId = params.hostId;
-	const currentSessionId = params.sessionId;
+/** Left padding of the app topbar, animated as the sidebar toggles so the lead clears the window controls. */
+export function useTopbarPaddingLeft(embedded = false) {
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const isFullScreen = useWindowFullScreen();
 	const prefersReducedMotion = useReducedMotion();
 	const mac = isMacPlatform();
-	const boardActionsInPanel = usesBoardActionsInPanel();
 	const linux = isLinuxPlatform();
 	const targetPaddingLeft =
 		!embedded && !isSidebarOpen && mac
@@ -117,6 +102,27 @@ export function ShellTopbar({
 		);
 		return controls.stop;
 	}, [targetPaddingLeft, paddingLeft, prefersReducedMotion]);
+	return paddingLeft;
+}
+
+export function ShellTopbar({
+	embedded = false,
+	sessionAction,
+	compactActions = false,
+}: {
+	embedded?: boolean;
+	sessionAction?: ReactNode;
+	compactActions?: boolean;
+} = {}) {
+	const { t } = useTranslation();
+	const location = useLocation();
+	const queryClient = useQueryClient();
+	const navigate = useNavigate();
+	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
+	const hostId = params.hostId;
+	const currentSessionId = params.sessionId;
+	const boardActionsInPanel = usesBoardActionsInPanel();
+	const paddingLeft = useTopbarPaddingLeft(embedded);
 	const workspaceQuery = useWorkspaceScope(params.projectId, params.sessionId, hostId);
 	const workspaceScope = workspaceQuery.data;
 	const session = workspaceScope?.session;
@@ -167,7 +173,7 @@ export function ShellTopbar({
 			className={
 				embedded ? "contents" : cn(topbarHeaderClass, "workspace-topbar-container", isSessionRoute && "pr-2")
 			}
-			style={embedded ? undefined : { ...dragStyle, paddingLeft }}
+			style={embedded ? undefined : { ...topbarDragStyle, paddingLeft }}
 		>
 			{!embedded ? (
 				<div className="flex min-w-0 items-center gap-3">

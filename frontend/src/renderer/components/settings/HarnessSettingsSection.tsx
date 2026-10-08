@@ -195,7 +195,7 @@ export function HarnessSettingsSection({
 	useEffect(() => setSelectedHostId(hostId ?? LOCAL_HOST), [hostId]);
 	const remoteOffline = selectedHostId !== LOCAL_HOST && !connected.includes(selectedHostId);
 	return <SettingsSection title={t("settings.harness")} titleHidden={titleHidden} sectionId="harness">
-		<div className="sticky top-0 z-10 flex items-center gap-2 bg-card pb-2">
+		<div className="sticky top-0 z-10 -mt-[18px] flex items-center gap-2 bg-(--color-bg-primary) pb-2 pt-[18px]">
 			<label className="flex h-9! min-w-0 flex-1 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3">
 				<Search aria-hidden="true" className="size-4 shrink-0 text-settings-muted" />
 				<span className="sr-only">{t("settings.harness.search")}</span>

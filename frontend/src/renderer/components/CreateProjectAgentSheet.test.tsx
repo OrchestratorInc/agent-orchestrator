@@ -23,6 +23,7 @@ vi.mock("../hooks/useSettings", () => ({
 
 beforeEach(() => {
 	trackerIntakeGate.enabled = true;
+	useUiStore.setState({ settingsModal: null });
 });
 
 function renderSheet(

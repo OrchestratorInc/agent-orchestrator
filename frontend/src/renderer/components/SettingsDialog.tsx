@@ -1,7 +1,6 @@
-import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, X, type LucideIcon } from "lucide-react";
+import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, type LucideIcon } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import * as Dialog from "@radix-ui/react-dialog";
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudSession } from "../lib/cloud-session";
@@ -12,10 +11,11 @@ import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSetting
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
-import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
+import { motion } from "motion/react";
+import { topbarHeaderClass } from "./TopbarButton";
+import { topbarDragStyle, useTopbarPaddingLeft } from "./ShellTopbar";
 import { type GlobalSettingsSection, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
-import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
@@ -32,18 +32,7 @@ function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
 }
 
-export function SettingsDialog() {
-	const settingsModal = useUiStore((state) => state.settingsModal);
-	const projectSettings = settingsModal?.scope === "project" ? settingsModal : settingsModal?.returnTo;
-	return (
-		<>
-			{projectSettings && <SettingsDialogLayer key={refKey({ host: projectSettings.hostId ?? LOCAL_HOST, id: projectSettings.projectId })} settingsModal={projectSettings} />}
-			{settingsModal?.scope === "global" && <SettingsDialogLayer key="global" settingsModal={settingsModal} />}
-		</>
-	);
-}
-
-function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }) {
+function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const closeSettings = useUiStore((state) => state.closeSettings);
@@ -61,12 +50,15 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 	// The selected page includes several store/query subscribers. Mount it one
 	// frame after the lightweight dialog chrome so the opening interaction can
 	// paint first.
-	const deferSettingsBody = settingsModal.scope === "global";
+	const deferSettingsBody = settingsModal?.scope === "global";
 	const [bodySettings, setBodySettings] = useState<SettingsModal | null>(() =>
 		deferSettingsBody ? null : settingsModal,
 	);
 	useEffect(() => {
-		if (settingsModal === null) return;
+		if (settingsModal === null) {
+			setBodySettings(null);
+			return;
+		}
 		if (!deferSettingsBody) {
 			setBodySettings(settingsModal);
 			return;
@@ -131,11 +123,12 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 	const closeWhenSavedRef = useRef(false);
 	const globalSettingsWasOpen = useRef(false);
 
-	const activeLabel = isProjectSettings
+	const activeLabel = !settingsModal ? "" : isProjectSettings
 		? (projectSections.find((s) => s.id === activeProjectSection)?.label ?? t("settings.project.general"))
 		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, diagnostics, is11x }).label(t);
 
 	const closeSettingsDialog = () => {
+		if (!settingsModal) return;
 		if (cueBusy) return;
 		if (isProjectSettings) {
 			if (closeWhenSavedRef.current) return;
@@ -168,25 +161,6 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 			closeSettings();
 		}
 	}, [closeSettings, projectSaveState]);
-	const closeButtonRef = useRef<HTMLButtonElement>(null);
-	const contentRef = useRef<HTMLDivElement>(null);
-	const returnFocusRef = useRef(document.activeElement as HTMLElement | null);
-	const returnDialogRef = useRef(returnFocusRef.current?.closest<HTMLElement>('[role="dialog"]') ?? null);
-	const hasAgentFocusTarget = settingsModal.scope === "global" && Boolean(settingsModal.focusAgentId);
-	useEffect(() => {
-		if (hasAgentFocusTarget) return;
-		// The modal contains focus immediately. Move visible focus after the
-		// first paint because focus() forces style resolution.
-		let focusTimer = 0;
-		const focusFrame = requestAnimationFrame(() => {
-			focusTimer = window.setTimeout(() => closeButtonRef.current?.focus({ preventScroll: true }), 0);
-		});
-		return () => {
-			cancelAnimationFrame(focusFrame);
-			window.clearTimeout(focusTimer);
-		};
-	}, [hasAgentFocusTarget]);
-
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
 			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, is11x }).id);
@@ -223,168 +197,179 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 			.catch(() => undefined);
 	}, [queryClient, settingsModal?.scope]);
 
-	return (
-		<Dialog.Root
-			open
-			onOpenChange={(open) => {
-				if (!open) closeSettingsDialog();
-			}}
-		>
-			<Dialog.Portal>
-				<Dialog.Overlay
-					className="dialog-overlay z-[calc(var(--z-overlay)-1)] animate-overlay-in motion-reduce:animate-none"
-					data-testid="settings-dialog-overlay"
-					onWheel={(event) => event.preventDefault()}
-				/>
-				<Dialog.Content
-					aria-modal="true"
-					className={cn(
-						settingsDialogSurfaceClass,
-						"fixed left-1/2 top-1/2 z-overlay h-(--size-settings-dialog-height) w-(--size-settings-dialog-wide) max-h-none -translate-x-1/2 -translate-y-1/2 origin-center overflow-hidden p-0 animate-modal-in motion-reduce:animate-none sm:rounded-lg",
-						isProjectSettings && "h-[min(40rem,calc(100vh-3rem))]",
-					)}
-					onOpenAutoFocus={(event) => event.preventDefault()}
-					onEscapeKeyDown={(event) => {
-						const target = event.target instanceof Element ? event.target : null;
-						// An in-place edit (a profile rename) takes Escape to cancel itself,
-						// not to close Settings around it.
-						if (target?.closest("[data-settings-inline-edit]")) {
-							event.preventDefault();
-							return;
-						}
-						if (contentRef.current?.contains(event.target as Node)) return;
-						const activeElement = document.activeElement instanceof Element ? document.activeElement : null;
-						const nestedPopup = [target, activeElement].some((element) => element?.closest('[role="menu"], [role="listbox"], [data-radix-popper-content-wrapper]'));
-						if (nestedPopup) event.preventDefault();
-					}}
-					onCloseAutoFocus={(event) => {
-						event.preventDefault();
-						// Successful recovery removes its CTA. The originating dialog
-						// remains mounted and can receive focus when that happens.
-						const target = returnFocusRef.current?.isConnected ? returnFocusRef.current : returnDialogRef.current;
-						if (target?.isConnected) target.focus({ preventScroll: true });
-					}}
-					ref={contentRef}
-				>
-					<div className="flex h-full min-h-0">
-						<aside className="flex w-48 shrink-0 flex-col border-r border-(--color-border-settings-dialog-header) bg-card">
-							<p className="px-3 pb-1 pt-1.5 text-2xs font-medium tracking-normal text-muted-foreground/60">{t("settings.title")}</p>
-							<nav aria-label={t("settings.navSectionsAria")} className="flex flex-col gap-0.5 p-2 pt-0">
-								{isProjectSettings
-									? projectSections.map(({ id, label, icon }) => (
-											<SettingsNavItem active={activeProjectSection === id} disabled={cueBusy} icon={icon} key={id} label={label} onClick={() => {
-												if (projectSaveState.dirty && id !== activeProjectSection) {
-													setPendingProjectSection(id);
-													(document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit();
-												} else {
-													setActiveProjectSection(id);
-												}
-											}} />
-										))
-									: globalSections.map(({ id, label, icon }) => (
-											<SettingsNavItem
-												active={activeSection === id}
-												icon={icon}
-												key={id}
-												label={label(t)}
-												onClick={() => {
-													setActiveSection(id);
-													setFocusAgentId(undefined);
-												}}
-											/>
-										))}
-							</nav>
-							{isProjectSettings && activeProjectSection !== "cues" &&
-								(projectSaveState.phase === "failed" ||
-									projectSaveState.phase === "pending" ||
-									projectSaveState.phase === "saving" ||
-									(remoteHostId && projectSaveState.replacementError)) && (
-								<div className="mt-auto border-t border-(--color-border-settings-dialog-header) px-4 py-3 text-xs" role="status" aria-live="polite">
-									{projectSaveState.phase === "failed" || (remoteHostId && projectSaveState.replacementError) ? (
-										<div className="space-y-2 text-error">
-											<p className="flex items-start gap-2" role="alert"><TriangleAlert className="size-4 shrink-0" aria-hidden="true" />{projectSaveState.error ?? projectSaveState.replacementError ?? t("settings.project.saveFailed")}</p>
-											<button className="text-settings-label underline underline-offset-2" onClick={() => {
-												if (projectSaveState.retry) projectSaveState.retry();
-												else (document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit();
-											}} type="button">{t("createProject.retry")}</button>
-										</div>
-									) : (
-										<p className="flex items-center gap-2 text-settings-muted">
-											{projectSaveState.phase === "pending" && activeProjectSection === "environment" ? t("settings.project.unsavedChanges") : <><Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />{t("settings.project.saving")}</>}
-										</p>
-									)}
-								</div>
-							)}
-						</aside>
+	const selectProjectSection = (id: ProjectSettingsSection) => {
+		if (projectSaveState.dirty && id !== activeProjectSection) {
+			setPendingProjectSection(id);
+			(document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit();
+		} else {
+			setActiveProjectSection(id);
+		}
+	};
+	const selectGlobalSection = (id: GlobalSettingsSection) => {
+		setActiveSection(id);
+		setFocusAgentId(undefined);
+	};
+	const navItems: SettingsNavEntry[] = isProjectSettings
+		? projectSections.map(({ id, label, icon }) => ({ id, label, icon, active: activeProjectSection === id, disabled: cueBusy, onSelect: () => selectProjectSection(id) }))
+		: globalSections.map(({ id, label, icon }) => ({ id, label: label(t), icon, active: activeSection === id, onSelect: () => selectGlobalSection(id) }));
+	const showSaveStatus = isProjectSettings && activeProjectSection !== "cues" &&
+		(projectSaveState.phase === "failed" ||
+			projectSaveState.phase === "pending" ||
+			projectSaveState.phase === "saving" ||
+			Boolean(remoteHostId && projectSaveState.replacementError));
 
-						{/* Main area — same bg as the app page */}
-						<div className="flex min-w-0 flex-1 flex-col bg-card">
-							<DialogHeader className={cn(settingsDialogHeaderClass, "flex h-auto shrink-0 flex-row items-center justify-between border-b-0 px-(--size-modal-padding) py-3")}>
-								<Dialog.Title className={cn(isProjectSettings ? "settings-dialog-title" : "text-2xl font-bold text-foreground")}>{activeLabel}{remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(remoteHostId) ?? remoteHostId}</span>}</Dialog.Title>
-								<Dialog.Description className="sr-only">
-									{isProjectSettings
-										? t("settings.project.dialogDescription")
-										: t("settings.dialogDescription", {
-												section: activeLabel.toLowerCase(),
-											})}
-								</Dialog.Description>
-								<button
-									aria-label={t("settings.close")}
-									className="settings-close-button"
-									disabled={cueBusy}
-									onClick={closeSettingsDialog}
-									ref={closeButtonRef}
-									type="button"
-								>
-									<X aria-hidden="true" className="size-4" />
-								</button>
-							</DialogHeader>
-							<div aria-busy={!isBodyReady} className={cn(settingsDialogBodyClass, "settings-dialog-body flex-1 px-(--size-modal-padding) pt-0")}>
-								{isBodyReady ? (
-									cloudProjectsPending ? (
-										<p className="text-sm text-settings-muted">{t("settings.project.loading")}</p>
-									) : cloudLookupFailed ? (
-										<div className="space-y-2 text-sm text-error" role="alert">
-											<p>{t("settings.project.cloudLoadFailed")} {cloudProjects.error instanceof Error ? cloudProjects.error.message : ""}</p>
-											<button className="text-settings-label underline underline-offset-2" onClick={() => void cloudProjects.refetch()} type="button">{t("settings.project.retry")}</button>
-										</div>
-									) : displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "cues" ? (
-										<CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />
-									) : displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "environment" ? (
-										<ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />
-									) : displaySettings?.scope === "project" ? (
-										<ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />
-									) : (
-										<GlobalSettingsForm cloudEnabled={cloudEnabled} is11x={is11x} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} section={activeSection} />
-									)
-								) : (
-									<div aria-hidden="true" className="h-full" data-testid="settings-dialog-body-pending" />
-								)}
-							</div>
-						</div>
+	return {
+		modal: settingsModal,
+		navItems,
+		showSaveStatus,
+		projectSaveState,
+		activeProjectSection,
+		remoteHostId,
+		cueBusy,
+		close: closeSettingsDialog,
+		title: activeLabel,
+		rootLabel: t("settings.title"),
+		isBodyReady,
+		bodyKey: displaySettings?.scope === "project" ? refKey({ host: displaySettings.hostId ?? LOCAL_HOST, id: displaySettings.projectId }) : "global",
+		body: () => {
+			if (!isBodyReady) return <div aria-hidden="true" className="h-full" data-testid="settings-dialog-body-pending" />;
+			if (cloudProjectsPending) return <p className="text-sm text-settings-muted">{t("settings.project.loading")}</p>;
+			if (cloudLookupFailed) {
+				return (
+					<div className="space-y-2 text-sm text-error" role="alert">
+						<p>{t("settings.project.cloudLoadFailed")} {cloudProjects.error instanceof Error ? cloudProjects.error.message : ""}</p>
+						<button className="text-settings-label underline underline-offset-2" onClick={() => void cloudProjects.refetch()} type="button">{t("settings.project.retry")}</button>
 					</div>
-				</Dialog.Content>
-			</Dialog.Portal>
-		</Dialog.Root>
+				);
+			}
+			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "cues") {
+				return <CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />;
+			}
+			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "environment") {
+				return <ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project") {
+				return <ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />;
+			}
+			return <GlobalSettingsForm cloudEnabled={cloudEnabled} is11x={is11x} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} section={activeSection} />;
+		},
+	};
+}
+
+export type SettingsNavEntry = {
+	id: string;
+	label: string;
+	icon: LucideIcon;
+	active: boolean;
+	disabled?: boolean;
+	onSelect: () => void;
+};
+
+type SettingsLayer = ReturnType<typeof useSettingsLayer>;
+
+type SettingsPageValue = { active: SettingsLayer; layers: SettingsLayer[] };
+
+const SettingsPageContext = createContext<SettingsPageValue | null>(null);
+
+/** The settings layer currently on top, or null while settings is closed. */
+export function useSettingsPage() {
+	return useContext(SettingsPageContext)?.active ?? null;
+}
+
+/**
+ * Owns settings state for the shell so the sidebar (section list, Back) and the
+ * center pane (page body) stay in sync. A recovery settings page opened above a
+ * project form keeps the project layer's state alive underneath.
+ */
+export function SettingsProvider({ children }: { children: ReactNode }) {
+	const settingsModal = useUiStore((state) => state.settingsModal);
+	const projectModal = settingsModal?.scope === "project" ? settingsModal : settingsModal?.returnTo ?? null;
+	const globalModal = settingsModal?.scope === "global" ? settingsModal : null;
+	const projectLayer = useSettingsLayer(projectModal);
+	const globalLayer = useSettingsLayer(globalModal);
+	const active = globalModal ? globalLayer : projectModal ? projectLayer : null;
+	const activeRef = useRef(active);
+	activeRef.current = active;
+	const isOpen = active !== null;
+	useEffect(() => {
+		if (!isOpen) return;
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key !== "Escape") return;
+			const target = event.target instanceof Element ? event.target : null;
+			// An in-place edit (a profile rename) takes Escape to cancel itself.
+			if (target?.closest("[data-settings-inline-edit]")) return;
+			// Open menus, listboxes, and dialogs take Escape to dismiss themselves.
+			if (document.querySelector('[role="menu"], [role="listbox"], [role="dialog"], [data-radix-popper-content-wrapper]')) return;
+			activeRef.current?.close();
+		};
+		// Capture phase so a field that handles its own Escape cannot swallow the close.
+		document.addEventListener("keydown", onKeyDown, true);
+		return () => document.removeEventListener("keydown", onKeyDown, true);
+	}, [isOpen]);
+	return (
+		<SettingsPageContext.Provider value={active ? { active, layers: [projectModal ? projectLayer : null, globalModal ? globalLayer : null].filter((layer) => layer !== null) } : null}>
+			{children}
+		</SettingsPageContext.Provider>
 	);
 }
 
-function SettingsNavItem({ active, disabled, icon: Icon, label, onClick }: { active: boolean; disabled?: boolean; icon: LucideIcon; label: string; onClick: () => void }) {
+/**
+ * Settings page rendered inside the center panel, in place of the routed page:
+ * the standard app topbar carrying a "Settings / <page>" breadcrumb above a
+ * centered, scrolling content column on the normal page background.
+ */
+export function SettingsPane() {
+	const page = useContext(SettingsPageContext);
+	const paddingLeft = useTopbarPaddingLeft();
+	if (!page) return null;
+	const layer = page.active;
 	return (
-		<button
-			aria-current={active ? "page" : undefined}
-			className={cn(
-				NAV_ROW_HIGHLIGHT_HOST_CLASS,
-				"flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm font-medium text-muted-foreground transition-none focus:outline-none focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50",
+		<div className="flex min-h-0 flex-1 flex-col" data-testid="settings-page">
+			<motion.header className={cn(topbarHeaderClass, "workspace-topbar-container")} style={{ ...topbarDragStyle, paddingLeft }}>
+				<h1 className="text-brand flex min-w-0 items-center gap-2 font-medium leading-none tracking-tight">
+					<span className="text-muted-foreground">{layer.rootLabel}</span>
+					<span aria-hidden="true" className="text-muted-foreground/50">/</span>
+					<span className="min-w-0 truncate text-foreground">{layer.title}</span>
+					{layer.remoteHostId && <span className="truncate text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}
+				</h1>
+			</motion.header>
+			{/* A covered project layer stays mounted so its draft survives recovery settings above it. */}
+			{page.layers.map((entry) => (
+				<div
+					aria-busy={!entry.isBodyReady}
+					className={cn("settings-thin-scrollbar min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
+					key={entry.bodyKey}
+				>
+					<div className="settings-dialog-body flex w-full flex-col gap-4 px-[18px] pb-12 pt-[18px]">
+						{entry.body()}
+					</div>
+				</div>
+			))}
+		</div>
+	);
+}
+
+/** Save progress / failure for the project form, shown under the section list. */
+export function SettingsSaveStatus() {
+	const { t } = useTranslation();
+	const layer = useSettingsPage();
+	if (!layer?.showSaveStatus) return null;
+	const { projectSaveState, activeProjectSection, remoteHostId } = layer;
+	return (
+		<div className="mt-2 border-t border-(--color-border-settings-dialog-header) px-2 py-3 text-xs" role="status" aria-live="polite">
+			{projectSaveState.phase === "failed" || (remoteHostId && projectSaveState.replacementError) ? (
+				<div className="space-y-2 text-error">
+					<p className="flex items-start gap-2" role="alert"><TriangleAlert className="size-4 shrink-0" aria-hidden="true" />{projectSaveState.error ?? projectSaveState.replacementError ?? t("settings.project.saveFailed")}</p>
+					<button className="text-settings-label underline underline-offset-2" onClick={() => {
+						if (projectSaveState.retry) projectSaveState.retry();
+						else (document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit();
+					}} type="button">{t("createProject.retry")}</button>
+				</div>
+			) : (
+				<p className="flex items-center gap-2 text-settings-muted">
+					{projectSaveState.phase === "pending" && activeProjectSection === "environment" ? t("settings.project.unsavedChanges") : <><Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />{t("settings.project.saving")}</>}
+				</p>
 			)}
-			data-active={active}
-			disabled={disabled}
-			onClick={onClick}
-			type="button"
-		>
-			<NavRowHighlight active={active} disabled={disabled} />
-			<Icon aria-hidden="true" className="relative z-[1] size-icon-md shrink-0" />
-			<span className="relative z-[1] min-w-0 flex-1 truncate">{label}</span>
-		</button>
+		</div>
 	);
 }
