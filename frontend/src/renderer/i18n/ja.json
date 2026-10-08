@@ -1198,6 +1198,8 @@
 	"settings.project.coderTemplateDefault": "デフォルトテンプレート",
 	"settings.project.coderSize": "マシンサイズ",
 	"settings.project.cloudBranchRequired": "デフォルトブランチは必須です。",
+	"settings.project.cloudLoadFailed": "このクラウドプロジェクトを読み込めませんでした。",
+	"settings.project.retry": "再試行",
 	"settings.project.kind.singleRepo": "Gitリポジトリ",
 	"settings.project.kind.unknown": "不明",
 	"settings.project.kind.workspace": "ワークスペース",

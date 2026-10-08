@@ -7,9 +7,16 @@ import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsDialog } from "./SettingsDialog";
 import { globalSettingsItemsFor, visibleGlobalSettings } from "./settings/settingsCatalog";
 
-const { postMock, cloudProjectsState } = vi.hoisted(() => ({
+const { postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => ({
 	postMock: vi.fn(),
-	cloudProjectsState: { data: [] as Array<{ id: string; displayName: string }>, isLoading: false },
+	cloudProjectsState: {
+		data: [] as Array<{ id: string; displayName: string }> | undefined,
+		isLoading: false,
+		isError: false,
+		error: null as Error | null,
+		refetch: vi.fn(),
+	},
+	localWorkspacesState: { ids: [] as string[] },
 }));
 
 const accountsResponse = {
@@ -71,6 +78,10 @@ vi.mock("./GlobalSettingsForm", () => ({
 // local-daemon form stays in play unless a test seeds one.
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useCloudProjectsQuery: () => cloudProjectsState,
+	workspaceQueryOptions: {
+		queryKey: ["workspaces"],
+		queryFn: () => Promise.resolve(localWorkspacesState.ids.map((id: string) => ({ id }))),
+	},
 }));
 
 vi.mock("./CloudProjectSettingsForm", () => ({
@@ -103,6 +114,10 @@ describe("SettingsDialog", () => {
 		useUiStore.setState({ developerMode: false, settingsModal: null });
 		cloudProjectsState.data = [];
 		cloudProjectsState.isLoading = false;
+		cloudProjectsState.isError = false;
+		cloudProjectsState.error = null;
+		cloudProjectsState.refetch.mockReset();
+		localWorkspacesState.ids = [];
 	});
 
 	function renderSettingsDialog() {
@@ -174,6 +189,30 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByText("Loading project settings…")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Start pending save" })).not.toBeInTheDocument();
+	});
+
+	it("surfaces a failed cloud lookup instead of asking the local daemon for a cloud project", async () => {
+		cloudProjectsState.data = undefined;
+		cloudProjectsState.isError = true;
+		cloudProjectsState.error = new Error("Cloud control plane request failed with status 503.");
+		useUiStore.getState().openProjectSettings("cloud-1");
+		renderSettingsDialog();
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't load this cloud project. Cloud control plane request failed with status 503.");
+		expect(screen.queryByRole("button", { name: "Start pending save" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(cloudProjectsState.refetch).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps local project settings when the cloud lookup fails for a project the daemon lists", async () => {
+		cloudProjectsState.data = undefined;
+		cloudProjectsState.isError = true;
+		cloudProjectsState.error = new Error("offline");
+		localWorkspacesState.ids = ["proj-1"];
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+
+		expect(await screen.findByRole("button", { name: "Start pending save" })).toBeInTheDocument();
 	});
 
 	it("does not offer local environment settings for a remote project", async () => {

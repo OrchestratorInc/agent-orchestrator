@@ -1339,6 +1339,8 @@
 	"settings.project.coderTemplateDefault": "Default template",
 	"settings.project.coderSize": "Machine size",
 	"settings.project.cloudBranchRequired": "Default branch is required.",
+	"settings.project.cloudLoadFailed": "Couldn't load this cloud project.",
+	"settings.project.retry": "Retry",
 	"settings.project.kind.singleRepo": "Git repository",
 	"settings.project.kind.unknown": "Unknown",
 	"settings.project.kind.workspace": "Workspace",

@@ -1,5 +1,5 @@
 import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, X, type LucideIcon } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -11,7 +11,7 @@ import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { CloudProjectSettingsForm } from "./CloudProjectSettingsForm";
-import { useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
+import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
 import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
 import { type GlobalSettingsSection, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
@@ -86,7 +86,17 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 	const cloudProject = localProjectScope
 		? cloudProjects.data?.find((project) => project.id === displaySettings.projectId)
 		: undefined;
-	const cloudProjectsPending = localProjectScope && cloudProjects.isLoading;
+	// Only fall back to the local daemon's form for a project the local daemon
+	// actually lists: a failed cloud lookup must not masquerade as a local
+	// project (the daemon would answer "Unknown project" for a cloud id).
+	const projectId = displaySettings?.scope === "project" ? displaySettings.projectId : "";
+	const knownLocal = useQuery({
+		...workspaceQueryOptions,
+		enabled: localProjectScope,
+		select: (workspaces) => workspaces.some((workspace) => workspace.id === projectId),
+	}).data === true;
+	const cloudProjectsPending = localProjectScope && !knownLocal && cloudProjects.isLoading;
+	const cloudLookupFailed = localProjectScope && !cloudProject && !knownLocal && cloudProjects.isError;
 
 	const projectSections: Array<{
 		id: ProjectSettingsSection;
@@ -331,6 +341,11 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 										<CloudProjectSettingsForm key={cloudProject.id} project={cloudProject} onSaveState={setProjectSaveState} />
 									) : cloudProjectsPending ? (
 										<p className="text-sm text-settings-muted">{t("settings.project.loading")}</p>
+									) : cloudLookupFailed ? (
+										<div className="space-y-2 text-sm text-error" role="alert">
+											<p>{t("settings.project.cloudLoadFailed")} {cloudProjects.error instanceof Error ? cloudProjects.error.message : ""}</p>
+											<button className="text-settings-label underline underline-offset-2" onClick={() => void cloudProjects.refetch()} type="button">{t("settings.project.retry")}</button>
+										</div>
 									) : displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "cues" ? (
 										<CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />
 									) : displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "environment" ? (

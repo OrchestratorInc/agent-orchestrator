@@ -1218,6 +1218,8 @@
 	"settings.project.coderTemplateDefault": "Template padrão",
 	"settings.project.coderSize": "Tamanho da máquina",
 	"settings.project.cloudBranchRequired": "A branch padrão é obrigatória.",
+	"settings.project.cloudLoadFailed": "Não foi possível carregar este projeto na nuvem.",
+	"settings.project.retry": "Tentar novamente",
 	"settings.project.kind.singleRepo": "repositório único",
 	"settings.project.kind.unknown": "desconhecido",
 	"settings.project.kind.workspace": "workspace",

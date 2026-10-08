@@ -1198,6 +1198,8 @@
 	"settings.project.coderTemplateDefault": "Standardvorlage",
 	"settings.project.coderSize": "Maschinengröße",
 	"settings.project.cloudBranchRequired": "Standard-Branch ist erforderlich.",
+	"settings.project.cloudLoadFailed": "Dieses Cloud-Projekt konnte nicht geladen werden.",
+	"settings.project.retry": "Erneut versuchen",
 	"settings.project.kind.singleRepo": "einzelnes Repo",
 	"settings.project.kind.unknown": "unbekannt",
 	"settings.project.kind.workspace": "workspace",

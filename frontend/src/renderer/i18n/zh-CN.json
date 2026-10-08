@@ -1180,6 +1180,8 @@
 	"settings.project.coderTemplateDefault": "默认模板",
 	"settings.project.coderSize": "机器规格",
 	"settings.project.cloudBranchRequired": "默认分支为必填项。",
+	"settings.project.cloudLoadFailed": "无法加载此云项目。",
+	"settings.project.retry": "重试",
 	"settings.project.kind.singleRepo": "单仓库",
 	"settings.project.kind.unknown": "未知",
 	"settings.project.kind.workspace": "工作区",

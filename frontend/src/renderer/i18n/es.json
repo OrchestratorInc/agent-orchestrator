@@ -1218,6 +1218,8 @@
 	"settings.project.coderTemplateDefault": "Plantilla predeterminada",
 	"settings.project.coderSize": "Tamaño de máquina",
 	"settings.project.cloudBranchRequired": "La rama predeterminada es obligatoria.",
+	"settings.project.cloudLoadFailed": "No se pudo cargar este proyecto en la nube.",
+	"settings.project.retry": "Reintentar",
 	"settings.project.kind.singleRepo": "repo único",
 	"settings.project.kind.unknown": "desconocido",
 	"settings.project.kind.workspace": "espacio de trabajo",

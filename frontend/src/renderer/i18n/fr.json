@@ -1218,6 +1218,8 @@
 	"settings.project.coderTemplateDefault": "Modèle par défaut",
 	"settings.project.coderSize": "Taille de machine",
 	"settings.project.cloudBranchRequired": "La branche par défaut est obligatoire.",
+	"settings.project.cloudLoadFailed": "Impossible de charger ce projet cloud.",
+	"settings.project.retry": "Réessayer",
 	"settings.project.kind.singleRepo": "dépôt unique",
 	"settings.project.kind.unknown": "inconnu",
 	"settings.project.kind.workspace": "espace de travail",
