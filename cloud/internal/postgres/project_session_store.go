@@ -712,6 +712,13 @@ func createSessionTx(
 	if err != nil {
 		return domain.Session{}, err
 	}
+	// The project's auto-review setting seeds each new worker's own toggle, as
+	// local projects do. The session toggle alone decides afterwards.
+	settings, err := domain.DecodeProjectSettings(projectConfig)
+	if err != nil {
+		return domain.Session{}, ErrInvalid
+	}
+	autoReview := input.Kind == "worker" && settings.AutoReview != nil && *settings.AutoReview
 
 	prefix, err := domain.ProjectSessionPrefix(projectConfig)
 	if err != nil {
@@ -722,10 +729,11 @@ func createSessionTx(
 		`WITH generated AS (SELECT gen_random_uuid() AS id)
 		INSERT INTO ao_sessions (
 			id, org_id, project_id, kind, harness, display_name, branch,
-			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort, agent_config
+			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort, agent_config,
+			auto_review_enabled
 		)
 		SELECT id, $1, $2, $3, $4, $5, $15 || '/' || left(id::text, 8),
-			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14
+			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16
 		FROM generated
 		RETURNING `+sessionInsertReturning,
 		orgID,
@@ -743,6 +751,7 @@ func createSessionTx(
 		input.ReasoningEffort,
 		agentConfigJSON,
 		prefix,
+		autoReview,
 	), &session)
 	if err != nil {
 		return domain.Session{}, normalizeConstraintError(err)
@@ -1092,7 +1101,7 @@ const sessionSelect = `
 // preference defaults explicit here: INSERT ... RETURNING cannot use the
 // joined sessionSelect used by subsequent reads.
 const sessionInsertReturning = `id, org_id, project_id, kind, harness,
-	'' AS reviewer_harness, false AS auto_review_enabled,
+	'' AS reviewer_harness, auto_review_enabled,
 	display_name, branch, mode, model, denied_commands, interface,
 	activity_state, is_terminated, auto_inject_ci, auto_inject_review,
 	terminate_on_pr_merge, false, NULL::timestamptz, 0,

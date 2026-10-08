@@ -17,7 +17,11 @@ Cloud project ID. OpenCode uses the connected Cloud credential type as its
 catalog scope. Custom Cloud model IDs remain editable when the local catalog
 does not list them, and effort choices are limited to the Cloud API values.
 Cloud saves explicit model and effort selections even when the local catalog
-marks them as defaults, since Cloud runtime defaults may differ. Cursor model
+marks them as defaults, since Cloud runtime defaults may differ. An unset model
+shows the catalog's default model name rather than a placeholder. Each role's
+agent is fixed and shown read-only (a project without a reviewer shows the
+worker agent it reviews with); model, effort, permissions, and Cursor mode stay
+editable. Editing an inherited reviewer pins it to that worker agent. Cursor model
 and mode selections are independent; changing either preserves the other.
 Codex and Claude effort can be selected without a model override. The model
 stays unset in project config, and Cloud applies the explicit effort at launch.
@@ -64,11 +68,12 @@ fresh process and conversation with that harness's credentials and an isolated
 credential directory. Claude reviewers load only their isolated user settings,
 leaving workspace hooks active for the worker alone. Later settings changes do
 not alter that run. Older runs without a snapshot retain their session agent.
-Missing reviewer config uses the session agent, model, and permissions; missing
-`autoReview` enables reviews.
+Missing reviewer config uses the session agent, model, and permissions.
 
-`autoReview` controls whether new AO review runs start. Session
-`autoInjectReview` controls delivery of review feedback to the worker; disabling
-injection does not disable reviews. Issue Intake and session prefix are not
+`autoReview` seeds each new worker session's automatic-review toggle, as local
+projects do; missing means off. Afterwards the session's own toggle alone
+decides whether automatic reviews start. Session `autoInjectReview` controls
+delivery of review feedback to the worker; disabling injection does not disable
+reviews. Issue Intake and session prefix are not
 exposed because the Cloud settings launch path does not consume them.
 Local Cues settings stay in local project settings because Cloud does not consume them.

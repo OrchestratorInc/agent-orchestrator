@@ -435,6 +435,7 @@ func New(options Options) *Server {
 			router.Post("/worker/pull-requests", server.workerRaisePullRequest)
 			router.Post("/worker/pull-requests/claim", server.workerClaimPullRequest)
 			router.Post("/worker/pull-requests/refs", server.workerReportGitRefs)
+			router.Post("/worker/reviews/trigger", server.workerTriggerReviews)
 			router.Post("/worker/reviews/{reviewRunId}/submit", server.workerSubmitReview)
 			router.Get("/worker/children", server.listWorkerChildren)
 			router.Post("/worker/children", server.createWorkerChild)

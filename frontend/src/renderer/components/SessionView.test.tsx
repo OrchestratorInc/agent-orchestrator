@@ -420,10 +420,13 @@ vi.mock("./chat/SessionChatSurface", async () => {
 
 vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => ({
 	...await importOriginal<typeof import("./chat/CloudSessionChatSurface")>(),
-	CloudSessionChatSurface: ({ sessionTabAction, controllerTransitioning, newWorkDisabled, onConversationWorkChange }: { sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean; onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void }) => (
+	CloudSessionChatSurface: ({ sessionTabAction, controllerTransitioning, newWorkDisabled, onConversationWorkChange, reviewerTerminal, reviewerTarget, onOpenReviewerTerminal, onSelectChat }: { sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean; onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void; reviewerTerminal?: { handleId: string; harness: string }; reviewerTarget?: { handleId: string; harness: string }; onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void; onSelectChat?: () => void }) => (
 		<div data-testid="cloud-chat-surface" data-transitioning={controllerTransitioning ? "true" : "false"} data-new-work-disabled={newWorkDisabled ? "true" : "false"}>
 			{sessionTabAction}
 			<button type="button" onClick={() => onConversationWorkChange?.({ ...chatSurfaceWorkState })}>report cloud chat work</button>
+			<button type="button" onClick={() => onSelectChat?.()}>cloud chat tab</button>
+			{reviewerTerminal ? <button type="button" onClick={() => onOpenReviewerTerminal?.(reviewerTerminal)}>cloud reviewer tab</button> : null}
+			<span data-testid="cloud-chat-target">{reviewerTarget ? `reviewer:${reviewerTarget.handleId}:${reviewerTarget.harness}` : "chat"}</span>
 		</div>
 	),
 }));
@@ -1404,7 +1407,34 @@ describe("SessionView", () => {
 
 		render(<SessionView sessionId="sess-2" />);
 
-		await waitFor(() => expect(screen.getByTestId("terminal-target")).toHaveTextContent("reviewer"));
+		// The reviewer opens as a tab inside the Cloud chat, not the local chat surface.
+		await waitFor(() => expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("reviewer:cloud-reviewer-7:codex"));
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+		// Chat stays reachable while the review runs, and the Reviewer tab reopens it.
+		fireEvent.click(screen.getByRole("button", { name: "cloud chat tab" }));
+		await waitFor(() => expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("chat"));
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+		expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("chat");
+		fireEvent.click(screen.getByRole("button", { name: "cloud reviewer tab" }));
+		await waitFor(() => expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("reviewer:cloud-reviewer-7:codex"));
+	});
+
+	it("adds an automatic Cloud review as a tab without taking over the chat", async () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.cloud = { orgId: "cloud-org" };
+		cloudReviewGetMock.mockResolvedValue({
+			sessionId: "sess-2",
+			reviewerHandleId: "cloud-reviewer-8",
+			reviewerHarness: "codex",
+			reviews: [{ status: "running" }],
+			runs: [{ id: "run-8", reviewerTerminalId: "cloud-reviewer-8", status: "running", triggerSource: "auto" }],
+		});
+
+		render(<SessionView sessionId="sess-2" />);
+
+		expect(await screen.findByRole("button", { name: "cloud reviewer tab" })).toBeInTheDocument();
+		expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("chat");
 	});
 
 	it("keeps a delivered Cloud reviewer terminal selected long enough to show its completion", async () => {

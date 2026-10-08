@@ -142,6 +142,19 @@ type ClaimPullRequestResponse struct {
 	HTMLURL string `json:"htmlUrl"`
 }
 
+// TriggerReviewResponse lists this session's open pull requests that a
+// worker-requested AO review covers. Started is false when a review of that
+// head was already running.
+type TriggerReviewResponse struct {
+	Reviews []TriggeredReview `json:"reviews"`
+}
+
+type TriggeredReview struct {
+	Number  int    `json:"number"`
+	URL     string `json:"url"`
+	Started bool   `json:"started"`
+}
+
 // SubmitReviewRequest reports a review session's verdict on the AO review
 // pass it was asked to perform. Verdict is "approved" or "changes_requested".
 type SubmitReviewRequest struct {

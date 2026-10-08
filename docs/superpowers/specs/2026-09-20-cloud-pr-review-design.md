@@ -155,7 +155,14 @@ running state rather than opening duplicate terminals.
 
 Automatic review observes a newly discovered eligible PR head and uses the same
 trigger path with `trigger_source=auto`; it does not maintain a second review
-implementation. Automatic review is disabled while the chosen harness lacks a
+implementation. A session's toggle is seeded from the project's `autoReview`
+setting at creation, as in local projects.
+
+A worker can request the same review with `ao review trigger` (for example when
+the human asks it to review its PR). The worker route reviews only that
+session's own open PRs, with the session's selected reviewer, and records a
+`manual` run. The desktop opens a manually started reviewer as a tab beside the
+session's Chat or terminal; an automatic review only adds the tab. Automatic review is disabled while the chosen harness lacks a
 credential or binary and surfaces the reason in review state.
 
 Automatic CI and review feedback controls determine whether newly observed

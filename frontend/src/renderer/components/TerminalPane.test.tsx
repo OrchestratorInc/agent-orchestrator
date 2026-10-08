@@ -267,6 +267,38 @@ describe("cloud terminal routing", () => {
 	});
 });
 
+describe("TerminalPane Cloud reviewer connections", () => {
+	it("dials each Cloud reviewer through the control plane by its own terminal ID", async () => {
+		const cloudSession = { ...worker, cloud: { orgId: "cloud-org" } } as WorkspaceSession;
+		const reviewer = (handleId: string) => ({ kind: "reviewer", handleId, harness: "codex", sessionId: cloudSession.id }) satisfies TerminalTarget;
+		const connect = async () => {
+			// A reviewer pane mounts fresh, outside the retained cache, yet must not
+			// fall back to the local daemon mux.
+			await waitFor(() => expect(terminalSessionOptions.at(-1)?.createMux).toBeTypeOf("function"));
+			terminalSessionOptions.at(-1)?.createMux?.();
+			await cloudMuxOptions.at(-1)?.mintTicket("agent");
+			return (cloudTicketMock.mock.calls.at(-1) as unknown[] | undefined)?.[2];
+		};
+		const view = renderCachedPane({ session: cloudSession, sessions: [cloudSession], terminalTarget: reviewer("reviewer-1") });
+		try {
+			expect(await connect()).toEqual({ kind: "agent", terminalId: "reviewer-1" });
+			view.show(cloudSession, reviewer("reviewer-2"));
+			expect(await connect()).toEqual({ kind: "agent", terminalId: "reviewer-2" });
+		} finally {
+			view.restore();
+		}
+	});
+
+	it("keeps local reviewer panes on the local daemon", () => {
+		const view = renderCachedPane({ session: worker, sessions: [worker], terminalTarget: { kind: "reviewer", handleId: "local-reviewer", harness: "codex", sessionId: worker.id } });
+		try {
+			expect(terminalSessionOptions.at(-1)?.createMux).toBeUndefined();
+		} finally {
+			view.restore();
+		}
+	});
+});
+
 function renderPane(
 	session?: WorkspaceSession,
 	inputRequest?: { id: number; data: string },

@@ -121,6 +121,10 @@ export function AgentModelField({
 	if (supportedEfforts && isConcreteModelID(model) && !models.some((item) => item.id === model)) {
 		models.push({ id: model, label: model, efforts: [...supportedEfforts] });
 	}
+	// Cloud saves only explicit picks, but an unset model still names the one the
+	// agent uses by default rather than a generic placeholder.
+	const catalogDefault = followCatalogDefaults ? undefined : catalog?.models?.find((item) => item.isDefault && isConcreteModelID(item.id));
+	const unsetLabel = emptyLabel ?? (catalogDefault ? agentModelDisplayLabel(agentId, catalogDefault.label) : undefined);
 	const customModelEntry = catalog?.customModelEntry ?? (catalog?.allowCustom || allowCustomFallback ? "direct" : "none");
 	const refreshCatalog = async () => {
 		const refreshed = await refreshAgentModels(agentId, projectId, hostId);
@@ -142,7 +146,7 @@ export function AgentModelField({
 						aria-label={label}
 						value={model}
 						models={models}
-						emptyLabel={emptyLabel}
+						emptyLabel={unsetLabel}
 						allowCustom={catalog?.allowCustom}
 						customModelEntry={customModelEntry}
 						agentLabel={agentId}

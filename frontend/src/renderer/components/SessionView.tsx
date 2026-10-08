@@ -737,8 +737,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			return cloudCpClient.getSessionReviewState(session.cloud.orgId, sessionId);
 		},
 		retry: 1,
+		// The agent (`ao review trigger`) and automatic review start reviews too, so
+		// keep watching while the session has a PR; a running review polls faster.
 		refetchInterval: (query) =>
-			query.state.data?.reviews.some((review) => review.status === "running") ? 2500 : false,
+			query.state.data?.reviews.some((review) => review.status === "running")
+				? 2500
+				: session?.prs.length ? 5000 : false,
 	});
 	const availableReviewerTerminal = session?.cloud
 		? cloudReviewerQuery.data?.reviewerHandleId?.trim()
@@ -1133,19 +1137,31 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const cloudReviewIsRunning = Boolean(
 		session?.cloud && cloudReviewerQuery.data?.reviews.some((review) => review.status === "running"),
 	);
+	// Open each newly started reviewer once, then leave the tab choice to the
+	// user so Chat stays reachable while it runs. Automatic reviews only add
+	// the Reviewer tab, as they do in local sessions.
+	const openedCloudReviewersRef = useRef(new Set<string>());
+	const cloudReviewerHandleId = reviewerTerminal?.handleId;
+	const cloudReviewerHarness = reviewerTerminal?.harness;
+	const cloudReviewerTrigger = cloudReviewerHandleId
+		? cloudReviewRunForTerminal(cloudReviewerQuery.data, cloudReviewerHandleId)?.triggerSource
+		: undefined;
 	useEffect(() => {
-		if (!session?.cloud || !reviewerTerminal || !cloudReviewIsRunning) return;
+		if (!session?.cloud || !cloudReviewerHandleId || !cloudReviewerHarness || !cloudReviewIsRunning) return;
+		if (openedCloudReviewersRef.current.has(cloudReviewerHandleId)) return;
+		openedCloudReviewersRef.current.add(cloudReviewerHandleId);
+		if (cloudReviewerTrigger === "auto") return;
 		setTerminalTarget((current) =>
-			current.kind === "reviewer" && current.handleId === reviewerTerminal.handleId
+			current.kind === "reviewer" && current.handleId === cloudReviewerHandleId
 				? current
 				: {
 						kind: "reviewer",
-						handleId: reviewerTerminal.handleId,
-						harness: reviewerTerminal.harness,
+						handleId: cloudReviewerHandleId,
+						harness: cloudReviewerHarness,
 						sessionId,
 					},
 		);
-	}, [cloudReviewIsRunning, reviewerTerminal, session?.cloud, sessionId]);
+	}, [cloudReviewIsRunning, cloudReviewerHandleId, cloudReviewerHarness, cloudReviewerTrigger, session?.cloud, sessionId]);
 	const isOrchestrator = session ? isOrchestratorSession(session) : false;
 	const hasInspector = Boolean(session);
 	const sizing = useMemo(() => inspectorSizing(inspectorView), [inspectorView]);
@@ -1803,7 +1819,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								className={cn("h-full min-h-0", fileTabs.activePath && "invisible pointer-events-none")}
 								inert={fileTabs.activePath ? true : undefined}
 							>
-							{showChatSurface && session?.cloud && routedTerminalTarget.kind === "worker" && !reviewerChatId ? (
+							{showChatSurface && session?.cloud && (routedTerminalTarget.kind === "worker" || routedTerminalTarget.kind === "reviewer") && !reviewerChatId ? (
 								<CloudSessionChatSurface
 									controllerTransitioning={interfaceUi.controllerTransitioning}
 									headerActions={sessionHeaderActions}
@@ -1813,6 +1829,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onOpenFile={openCenterFile}
 									session={session}
 									sessionTabAction={sessionTabActions}
+									reviewerTerminal={reviewerTerminal}
+									onOpenReviewerTerminal={selectReviewerTerminal}
+									reviewerTarget={routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined}
+									onSelectChat={selectSessionTerminal}
+									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
+									theme={theme}
+									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
+									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
 								/>
 							) : showChatSurface ? (
 								<>

@@ -41,7 +41,9 @@ func (s *Store) CreateReviewRun(
 		if err != nil {
 			return err
 		}
-		if triggerSource == "auto" && (activity != "idle" || (settings.AutoReview != nil && !*settings.AutoReview)) {
+		// Automatic callers already require the session's own auto-review toggle;
+		// the project setting only seeds that toggle for new sessions.
+		if triggerSource == "auto" && activity != "idle" {
 			return nil
 		}
 		if triggerSource == "auto" {

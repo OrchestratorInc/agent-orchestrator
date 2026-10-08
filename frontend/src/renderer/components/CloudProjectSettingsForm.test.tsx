@@ -82,34 +82,64 @@ describe("Cloud project settings", () => {
 		["worker", "Worker", "codex"], ["worker", "Worker", "claude-code"],
 		["orchestrator", "Orchestrator", "codex"], ["orchestrator", "Orchestrator", "claude-code"],
 		["reviewer", "Reviewer", "codex"], ["reviewer", "Reviewer", "claude-code"],
-	] as const)("locks agent/model but persists %s effort for %s with %s", async (role, label, agent) => {
-		const agentConfig = { model: "private-model", effort: "high" as const, permissions: "auto" as const };
+	] as const)("keeps the %s agent fixed but edits model, effort and approval for %s with %s", async (role, label, agent) => {
+		const agentConfig = { effort: "high" as const, permissions: "auto" as const };
 		if (role === "reviewer") project.config.reviewers = [{ harness: agent, agentConfig }];
 		else project.config[role] = { agent, agentConfig };
+		mocks.localGet.mockResolvedValue({ data: { selectionMode: "catalog", allowCustom: true, models: [
+			{ id: "local-default", label: "Local default", isDefault: true, efforts: ["low", "high", "max"], defaultEffort: "low" },
+			{ id: "other-model", label: "Other model", efforts: ["low", "high", "max"] },
+		] } });
 		const view = mount();
 		expect(await screen.findByRole("button", { name: `${label} agent` })).toBeDisabled();
-		expect(screen.getByRole("button", { name: `${label} model` })).toBeDisabled();
-		expect(screen.getByRole("button", { name: `${label} model` })).toHaveTextContent("private-model");
-		expect(screen.getByRole("button", { name: `${label} approval` })).toBeDisabled();
-		await choose(`${label} effort`, "Low");
-		const expected = { model: "private-model", mode: "", effort: "low", permissions: "auto" };
-		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
-			config: role === "reviewer" ? { reviewers: [{ harness: agent, agentConfig: expected }] } : { [role]: { agent, agentConfig: expected } },
-		}));
+		const model = await screen.findByRole("button", { name: `${label} model` });
+		// An unset model names the agent's real default instead of a placeholder.
+		await waitFor(() => expect(model).toHaveTextContent("Local default · High"));
+		expect(model).not.toHaveTextContent("Agent default");
+		expect(model).toBeEnabled();
+		expect(screen.getByRole("button", { name: `${label} approval` })).toBeEnabled();
+		const expectedPatch = (config: { model: string; effort: string; permissions: string }) => {
+			const agentConfig = { ...config, mode: "" };
+			return { config: role === "reviewer" ? { reviewers: [{ harness: agent, agentConfig }] } : { [role]: { agent, agentConfig } } };
+		};
+		await choose(`${label} approval`, "Bypass permissions");
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "", effort: "high", permissions: "bypass-permissions" })));
+		await choose(`${label} model`, "Other model");
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "other-model", effort: "low", permissions: "bypass-permissions" })));
 		view.unmount();
 		mount();
-		expect(await screen.findByRole("button", { name: `${label} effort` })).toHaveTextContent("Low");
-		expect(mocks.localGet).not.toHaveBeenCalled();
+		expect(await screen.findByRole("button", { name: `${label} model` })).toHaveTextContent("Other model · Low");
+		expect(screen.getByRole("button", { name: `${label} approval` })).toHaveTextContent("Bypass permissions");
+		expect(screen.getByRole("button", { name: `${label} agent` })).toBeDisabled();
 	});
 
-	it("keeps unavailable effort disabled without changing the session's agent", async () => {
+	it("shows the agent each role runs with and never changes it", async () => {
 		project.config = { worker: { agent: "opencode" }, orchestrator: { agent: "cursor" } };
 		mount();
+		expect(await screen.findByRole("button", { name: "Worker agent" })).toHaveTextContent("OpenCode");
+		expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Cursor");
+		// Without a project reviewer, Cloud reviews with the session's (worker) agent.
+		expect(screen.getByRole("button", { name: "Reviewer agent" })).toHaveTextContent("OpenCode");
 		for (const role of ["Worker", "Orchestrator", "Reviewer"]) {
-			expect(await screen.findByRole("button", { name: `${role} agent` })).toBeDisabled();
-			expect(screen.getByRole("button", { name: `${role} effort` })).toBeDisabled();
+			expect(screen.getByRole("button", { name: `${role} agent` })).toBeDisabled();
 		}
+		await screen.findByRole("button", { name: "Worker model" });
+		expect(screen.queryByText("Agent default")).not.toBeInTheDocument();
 		expect(mocks.patch).not.toHaveBeenCalled();
+	});
+
+	it("pins the inherited reviewer to the worker agent when its settings change", async () => {
+		delete project.config.reviewers;
+		mount();
+		const reviewer = await screen.findByRole("button", { name: "Reviewer agent" });
+		expect(reviewer).toHaveTextContent("Codex");
+		expect(reviewer).toBeDisabled();
+		await waitFor(() => expect(screen.getByRole("button", { name: "Reviewer model" })).toHaveTextContent("worker-model · Max"));
+		await choose("Reviewer approval", "Bypass permissions");
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
+			config: { reviewers: [{ harness: "codex", agentConfig: { model: "worker-model", mode: "", effort: "max", permissions: "bypass-permissions" } }] },
+		}));
 	});
 
 	it("shows repository and edits session prefix without replacing other settings", async () => {
@@ -143,12 +173,15 @@ describe("Cloud project settings", () => {
 		expect(screen.getByText("legacy")).toBeInTheDocument();
 	});
 
-	it("keeps auto review independently editable", async () => {
-		mount("general");
+	it("keeps auto review off until the project enables it, like local projects", async () => {
+		const view = mount("general");
 		const autoReview = await screen.findByRole("switch", { name: "Auto review PRs" });
-		expect(autoReview).toBeChecked();
+		expect(autoReview).not.toBeChecked();
 		await userEvent.click(autoReview);
-		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { autoReview: false } }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { autoReview: true } }));
+		view.unmount();
+		mount("general");
+		expect(await screen.findByRole("switch", { name: "Auto review PRs" })).toBeChecked();
 	});
 
 	it("shows Cloud lookup errors without looking up a local project", async () => {

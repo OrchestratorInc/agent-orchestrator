@@ -40,7 +40,8 @@ export function cloudProjectSettingsDraft(project: CloudCpProject): CloudProject
 			agent: cloudAgent(config.reviewers?.[0]?.harness),
 			agentConfig: { ...emptyCloudAgentConfig(), ...config.reviewers?.[0]?.agentConfig },
 		},
-		autoReview: config.autoReview ?? true,
+		// Like local projects, automatic review is off until the project enables it.
+		autoReview: config.autoReview ?? false,
 	};
 }
 

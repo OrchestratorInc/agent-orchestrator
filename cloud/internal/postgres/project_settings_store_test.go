@@ -201,8 +201,56 @@ func TestReviewsSnapshotIndependentReviewerAndSeparateAutoReviewFromInjection(t 
 	if _, err := store.WorkerReviewCredential(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch, uuid.NewString()); err == nil {
 		t.Fatal("credential lookup accepted an unrelated review")
 	}
-	if _, created, err := store.CreateReviewRun(ctx, fixture.orgID, pr.ID, fixture.sessionID, "sha-2", "", "auto"); err != nil || created {
-		t.Fatalf("autoReview=false created=%v err=%v", created, err)
+	// The project setting only seeds new sessions; a session whose own toggle
+	// put it on the automatic path is still reviewed.
+	if _, created, err := store.CreateReviewRun(ctx, fixture.orgID, pr.ID, fixture.sessionID, "sha-2", "", "auto"); err != nil || !created {
+		t.Fatalf("autoReview=false on an enabled session created=%v err=%v", created, err)
+	}
+}
+
+func TestAutomaticReviewFollowsTheSessionToggleNotTheProjectDefault(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	if _, err := admin.Exec(ctx, `UPDATE ao_projects SET config = '{"autoReview":false}' WHERE id = $1`, fixture.projectID); err != nil {
+		t.Fatal(err)
+	}
+	pr, err := store.CreatePullRequestRecord(ctx, fixture.orgID, fixture.sessionID, "github", "owner/repo", "author", 7, "https://github.test/owner/repo/pull/7", "feature", "main", "sha-1", "Toggle test", 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := store.CreateReviewRun(ctx, fixture.orgID, pr.ID, fixture.sessionID, "sha-1", "", "auto"); err != nil || !created {
+		t.Fatalf("project autoReview=false vetoed an enabled session: created=%v err=%v", created, err)
+	}
+}
+
+func TestProjectAutoReviewSeedsNewWorkerSessions(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	for _, test := range []struct {
+		config string
+		kind   string
+		want   bool
+	}{
+		{`{}`, "worker", false},
+		{`{"autoReview":false}`, "worker", false},
+		{`{"autoReview":true}`, "worker", true},
+		{`{"autoReview":true}`, "orchestrator", false},
+	} {
+		if _, err := admin.Exec(ctx, `UPDATE ao_projects SET config = $2 WHERE id = $1`, fixture.projectID, test.config); err != nil {
+			t.Fatal(err)
+		}
+		session, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 10, domain.CreateSession{ProjectID: fixture.projectID, Kind: test.kind, Harness: "codex", DisplayName: test.kind, Mode: "trusted"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stored bool
+		if err := admin.QueryRow(ctx, `SELECT auto_review_enabled FROM ao_sessions WHERE id = $1`, session.ID).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if session.AutoReviewEnabled != test.want || stored != test.want {
+			t.Fatalf("config %s %s: returned=%v stored=%v, want %v", test.config, test.kind, session.AutoReviewEnabled, stored, test.want)
+		}
 	}
 }
 

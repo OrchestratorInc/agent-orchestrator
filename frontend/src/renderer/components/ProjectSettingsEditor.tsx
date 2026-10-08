@@ -7,7 +7,6 @@ import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSectio
 import { deriveRepoHost, deriveRepoPath, IntakeFields, intakeNeedsRule } from "./IntakeFields";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { AgentModelField, ProjectAgentRoleHeader, ProjectAgentRoleRow, ProjectAutoReviewToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
-import { formatEffortLabel } from "./settings/EffortPicker";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Button } from "./ui/button";
 
@@ -59,8 +58,8 @@ type Capabilities = {
 	requiredBranch?: boolean;
 	/** Cloud defaults and tuning belong to its runtime, rather than the local catalog. */
 	runtimeDefaults?: boolean;
-	/** Cloud currently permits changing effort only. Local controls stay editable. */
-	effortOnly?: boolean;
+	/** Cloud keeps each role's agent fixed; its model, effort, and permissions stay editable. Local agents stay editable. */
+	lockedAgents?: boolean;
 };
 type RoleFields = {
 	agent: "workerAgent" | "orchestratorAgent" | "reviewerHarness";
@@ -165,7 +164,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	}, [didSave]);
 	const patch = (values: Partial<ProjectSettingsDraft>) => setDraft((current) => ({ ...current, ...values }));
 	const warning = reviewerWarning?.(draft.reviewerHarness);
-	return <ProjectSettingsFormView id="project-settings-form" className={`project-settings-form gap-5${capabilities.effortOnly ? " cloud-project-settings-form" : ""}`} onSubmit={submit}>
+	return <ProjectSettingsFormView id="project-settings-form" className={`project-settings-form gap-5${capabilities.runtimeDefaults ? " cloud-project-settings-form" : ""}`} onSubmit={submit}>
 		<fieldset disabled={disabled || mutation.isPending} className="flex min-w-0 flex-col gap-5">
 			{section === "general" ? <>
 				<ProjectSettingsSection title={t("settings.project.details")} grouped>
@@ -205,21 +204,21 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 						[key]: value,
 					}));
 					return <ProjectAgentRoleRow key={role} label={t(`settings.models.${role}Role`)}
-						agent={renderAgent({ disabled: capabilities.effortOnly, role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}
-						model={capabilities.effortOnly ? <CloudEffortSettings role={role} agent={agent} model={draft[fields.model]} effort={draft[fields.effort]} onChange={(value) => updateConfig(fields.effort, value)} /> : <div className="space-y-1.5"><AgentModelField role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
+						agent={renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}
+						model={<div className="space-y-1.5"><AgentModelField role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
 							allowCustomFallback={capabilities.runtimeDefaults} followCatalogDefaults={!capabilities.runtimeDefaults}
 							supportedEfforts={capabilities.runtimeDefaults ? agent === "codex" ? ["low", "medium", "high", "xhigh", "max"] : agent === "claude-code" ? ["low", "medium", "high", "max"] : undefined : undefined}
-							emptyLabel={capabilities.runtimeDefaults ? t(agent === "" ? "settings.cloudProject.sessionModel" : "settings.cloudProject.agentDefault") : undefined}
+							emptyLabel={capabilities.runtimeDefaults && agent === "" ? t("settings.cloudProject.sessionModel") : undefined}
 							independentMode={capabilities.runtimeDefaults && agent === "cursor"}
 							onModelChange={(value) => updateConfig(fields.model, value)} onModeChange={(value) => updateConfig(fields.mode, value)} onEffortChange={(value) => updateConfig(fields.effort, value)} onValidityChange={(valid) => setValidity((current) => current[role] === valid ? current : { ...current, [role]: valid })} />
-							{capabilities.runtimeDefaults && agent === "cursor" && <SettingsOptionMenu aria-label={t(`settings.models.${role}Mode`)} value={draft[fields.mode]} triggerClassName="w-full justify-between" options={[{ value: "", label: t("settings.cloudProject.agentDefault") }, { value: "plan", label: t("settings.cloudProject.plan") }, { value: "ask", label: t("settings.cloudProject.ask") }]} onChange={(value) => updateConfig(fields.mode, value)} />}
+							{capabilities.runtimeDefaults && agent === "cursor" && <SettingsOptionMenu aria-label={t(`settings.models.${role}Mode`)} value={draft[fields.mode]} triggerClassName="w-full justify-between" options={[{ value: "", label: t("settings.cloudProject.agentMode") }, { value: "plan", label: t("settings.cloudProject.plan") }, { value: "ask", label: t("settings.cloudProject.ask") }]} onChange={(value) => updateConfig(fields.mode, value)} />}
 						</div>} />;
 				})}
 				<div className={capabilities.reviewer ? "grid grid-cols-3 gap-3 border-t border-border/60 pt-4" : "grid grid-cols-2 gap-3 border-t border-border/60 pt-4"}>
 					{visibleRoles.map((role) => {
 						const fields = roleFields[role];
 						const agent = draft[fields.agent] || (role === "reviewer" ? defaultReviewer(draft) : "");
-						return <ProjectRolePermissions disabled={capabilities.effortOnly} key={role} role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={(value) => setDraft((current) => ({
+						return <ProjectRolePermissions key={role} role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={(value) => setDraft((current) => ({
 							...current,
 							...(role === "reviewer" && !current.reviewerHarness && agent
 								? { reviewerHarness: agent, ...(agent === current.workerAgent ? { reviewerModel: current.workerModel, reviewerEffort: current.workerEffort } : {}) }
@@ -237,21 +236,10 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	</ProjectSettingsFormView>;
 }
 
-function ProjectRolePermissions({ role, agent, value, runtimeDefaults, disabled, onChange }: { disabled?: boolean; role: ProjectSettingsRole; agent: string; value: string; runtimeDefaults?: boolean; onChange: (value: string) => void }) {
+function ProjectRolePermissions({ role, agent, value, runtimeDefaults, onChange }: { role: ProjectSettingsRole; agent: string; value: string; runtimeDefaults?: boolean; onChange: (value: string) => void }) {
 	const { t } = useTranslation();
 	const label = t("settings.project.roleApproval", { role: t(`settings.models.${role}Role`) });
 	const values = runtimeDefaults ? ["", "default", "auto", ...(agent === "opencode" ? [] : ["accept-edits"]), "bypass-permissions"] : [...(agent === "codex" ? [] : ["default"]), "auto", "accept-edits", "bypass-permissions"];
-	const options = values.map((permission) => ({ value: permission, label: permission === "" ? t("settings.cloudProject.sessionPolicy") : permission === "default" ? t(runtimeDefaults ? "settings.cloudProject.agentDefault" : agent === "claude-code" ? "settings.project.permissionUseClaude" : "settings.project.permissionUseAgent") : t(permission === "accept-edits" ? "settings.project.permissionAcceptEdits" : permission === "auto" ? "settings.project.permissionAuto" : "settings.project.permissionBypass") }));
-	return <div className="min-w-0 space-y-1.5"><span className="text-xs text-settings-muted">{label}</span><SettingsOptionMenu aria-label={label} value={runtimeDefaults ? value : value === "default" && agent === "codex" ? "bypass-permissions" : value || "auto"} options={options} disabled={disabled || (runtimeDefaults && !agent)} placeholder={t("settings.project.permissionNotReported")} triggerClassName="w-full justify-between" onChange={onChange} /></div>;
-}
-
-// Separate effort from the locked model control so keyboard and pointer users
-// can still tune supported Cloud harnesses without changing their agent.
-function CloudEffortSettings({ role, agent, model, effort, onChange }: { role: ProjectSettingsRole; agent: string; model: string; effort: string; onChange: (value: string) => void }) {
-	const { t } = useTranslation();
-	const levels = agent === "codex" ? ["low", "medium", "high", "xhigh", "max"] : agent === "claude-code" ? ["low", "medium", "high", "max"] : [];
-	return <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,0.7fr)] gap-2">
-		<SettingsOptionMenu aria-label={t(`settings.models.${role}Model`)} value={model} options={[{ value: model, label: model || t(agent ? "settings.cloudProject.agentDefault" : "settings.cloudProject.sessionModel") }]} disabled onChange={() => {}} triggerClassName="w-full justify-between" />
-		<SettingsOptionMenu aria-label={`${t(`settings.models.${role}Role`)} ${t("settings.models.effort").toLocaleLowerCase()}`} value={effort} options={[{ value: "", label: t("settings.cloudProject.agentDefault") }, ...levels.map((value) => ({ value, label: formatEffortLabel(value, t) }))]} disabled={!levels.length} onChange={onChange} triggerClassName="w-full justify-between" />
-	</div>;
+	const options = values.map((permission) => ({ value: permission, label: permission === "" ? t("settings.cloudProject.sessionPolicy") : permission === "default" ? t(agent === "claude-code" ? "settings.project.permissionUseClaude" : "settings.project.permissionUseAgent") : t(permission === "accept-edits" ? "settings.project.permissionAcceptEdits" : permission === "auto" ? "settings.project.permissionAuto" : "settings.project.permissionBypass") }));
+	return <div className="min-w-0 space-y-1.5"><span className="text-xs text-settings-muted">{label}</span><SettingsOptionMenu aria-label={label} value={runtimeDefaults ? value : value === "default" && agent === "codex" ? "bypass-permissions" : value || "auto"} options={options} disabled={runtimeDefaults && !agent} placeholder={t("settings.project.permissionNotReported")} triggerClassName="w-full justify-between" onChange={onChange} /></div>;
 }

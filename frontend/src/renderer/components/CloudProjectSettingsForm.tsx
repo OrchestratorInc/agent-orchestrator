@@ -57,10 +57,12 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 		return { values: toEditorDraft(saved.current) };
 	};
 	return <ProjectSettingsEditor initialValues={toEditorDraft(cloudProjectSettingsDraft(project))} section={section}
-		capabilities={{ workflow: true, sessionPrefix: true, intake: false, reviewer: true, requiredAgents: false, nameLimit: 120, requiredBranch: true, runtimeDefaults: true, effortOnly: true }}
+		capabilities={{ workflow: true, sessionPrefix: true, intake: false, reviewer: true, requiredAgents: false, nameLimit: 120, requiredBranch: true, runtimeDefaults: true, lockedAgents: true }}
 		details={[{ label: t("settings.project.id"), value: project.id }, { label: t("settings.project.kind"), value: t("settings.project.kind.cloud") }, { label: t("settings.project.repo"), value: project.repositoryUrl, href: project.repositoryUrl }]}
 		generalExtra={<CloudProjectCoderSettings project={project} />}
 		modelScope={(agent) => agent === "opencode" && opencodeCredential ? credentialModelScope(opencodeCredential) : ""}
+		// Without a project reviewer, Cloud reviews with the session's agent: the worker's.
+		defaultReviewer={(draft) => draft.workerAgent}
 		autoReviewDescription={t("settings.cloudProject.autoReviewDescription")} renderAgent={(props) => <CloudAgentPicker {...props} />}
 		save={save} onSaveState={onSaveState} />;
 }
@@ -104,10 +106,12 @@ export function CloudProjectCoderSettings({ project }: { project: CloudCpProject
 	</SettingsGroup>;
 }
 
-function CloudAgentPicker({ role, value, disabled, onChange }: ProjectAgentPickerProps) {
+function CloudAgentPicker({ role, draft, value, disabled, onChange }: ProjectAgentPickerProps) {
 	const { t } = useTranslation();
+	// The agent is fixed in Cloud; show the one a reviewer actually runs with.
+	const shown = value || (role === "reviewer" ? draft.workerAgent : "");
 	return <SettingsOptionMenu aria-label={`${t(`settings.models.${role}Role`)} ${t("settings.project.agent").toLocaleLowerCase()}`}
-		disabled={disabled} value={value} placeholder={t("settings.cloudProject.sessionSelection")}
+		disabled={disabled} value={shown} placeholder={t("settings.cloudProject.sessionSelection")}
 		options={[{ value: "", label: t(role === "reviewer" ? "settings.cloudProject.sessionAgent" : "settings.cloudProject.sessionSelection") }, ...CLOUD_AGENT_PROVIDERS.map((agent) => ({ value: agent, label: agentLabel(agent), icon: <AgentAvatar provider={agent} className="size-icon-lg" decorative /> }))]}
 		triggerClassName="w-full justify-between" menuClassName="settings-agent-menu-surface" menuItemClassName="settings-agent-menu-item"
 		renderMenuItem={(option, selected) => <AgentSelectMenuItem agentId={option.value || undefined} label={option.label} selected={selected} />}

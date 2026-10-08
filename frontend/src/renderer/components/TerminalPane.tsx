@@ -99,6 +99,8 @@ type TerminalCacheController = {
 	activate: (descriptor: TerminalCacheDescriptor, props: TerminalPaneProps, slot: HTMLDivElement) => void;
 	deactivate: (cacheKey: string, slot: HTMLDivElement) => void;
 	update: (cacheKey: string, props: TerminalPaneProps) => void;
+	/** The stable transport factory for a pane: the control plane for Cloud, else the local daemon pool. */
+	resolveCreateMux: (session?: WorkspaceSession, terminalTarget?: TerminalTarget) => () => TerminalMux;
 };
 
 const TerminalCacheContext = createContext<TerminalCacheController | null>(null);
@@ -342,7 +344,11 @@ export function TerminalCacheProvider({
 			const cloud = paneSession?.cloud;
 			if (!cloud) return muxPool.acquire;
 			const kind = cloudTerminalKind(terminalTarget);
-			const identity = terminalTarget?.kind === "shell" ? terminalTarget.handleId : "agent";
+			// A reviewer shares the agent mux kind but is its own terminal: key it by
+			// handle so it never reuses the agent's or an earlier review's factory.
+			const identity = terminalTarget?.kind === "shell"
+				? terminalTarget.handleId
+				: terminalTarget?.kind === "reviewer" ? `reviewer:${terminalTarget.handleId}` : "agent";
 			// Include the reset nonce so a restored session (new worker epoch) gets a
 			// brand-new factory closure — and therefore a fresh cursor at 0 — instead
 			// of the cached one whose cursor still points at the dead epoch's replay
@@ -632,8 +638,8 @@ export function TerminalCacheProvider({
 	);
 
 	const controller = useMemo<TerminalCacheController>(
-		() => ({ activate, deactivate, update }),
-		[activate, deactivate, update],
+		() => ({ activate, deactivate, update, resolveCreateMux }),
+		[activate, deactivate, update, resolveCreateMux],
 	);
 
 	return (
@@ -811,6 +817,13 @@ export function TerminalPane({
 	if (cache && descriptor && !createMux) {
 		return <CachedTerminalSlot descriptor={descriptor} props={props} />;
 	}
+	// Reviewers mount fresh rather than through the cache, but a Cloud reviewer
+	// still runs in the sandbox: dial it through the control plane by its
+	// terminal ID. Without this it would reach the local daemon, which has no
+	// such terminal and reports it finished.
+	const attachedCreateMux = createMux ?? (cache && session?.cloud && terminalTarget.kind === "reviewer"
+		? cache.resolveCreateMux(session, terminalTarget)
+		: undefined);
 
 	return (
 		<AttachedTerminal
@@ -828,7 +841,7 @@ export function TerminalPane({
 			onTerminalContentReadyChange={onTerminalContentReadyChange}
 			inputRequest={inputRequest}
 			onInputRequestResult={onInputRequestResult}
-			createMux={createMux}
+			createMux={attachedCreateMux}
 			terminalTarget={terminalTarget}
 		/>
 	);

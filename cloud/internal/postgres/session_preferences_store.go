@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -88,6 +89,54 @@ func (s *Store) AutomaticReviewSession(
 		).Scan(&sessionID, &harness, &enabled)
 	})
 	return sessionID, harness, enabled, err
+}
+
+// WorkerReviewTarget resolves a review the session's own worker requests: the
+// session's effective reviewer, the reviewers its creator can redeem, and the
+// pull requests this session owns or claimed. It needs no user principal.
+func (s *Store) WorkerReviewTarget(
+	ctx context.Context,
+	orgID, sessionID string,
+) (reviewerHarness string, available []string, prs []domain.PullRequest, err error) {
+	err = s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var terminated bool
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(NULLIF(reviewer_harness, ''), harness), is_terminated
+			FROM ao_sessions WHERE org_id = $1 AND id = $2`, orgID, sessionID,
+		).Scan(&reviewerHarness, &terminated); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if terminated {
+			return ErrNotFound
+		}
+		creatorID, err := sessionCreatorID(ctx, tx, orgID, sessionID)
+		if err != nil {
+			return err
+		}
+		if available, err = availableReviewerHarnesses(ctx, tx, orgID, creatorID); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT `+pullRequestColumns+`
+			FROM ao_pull_requests pr
+			WHERE pr.org_id = $1 AND (pr.session_id = $2 OR pr.claimed_by_session_id = $2)
+			ORDER BY pr.created_at DESC`, orgID, sessionID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			pr, err := scanPullRequest(rows)
+			if err != nil {
+				return err
+			}
+			prs = append(prs, pr)
+		}
+		return rows.Err()
+	})
+	return reviewerHarness, available, prs, err
 }
 
 // AvailableSessionReviewerHarnesses returns only providers whose valid default
