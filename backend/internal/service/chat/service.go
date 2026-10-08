@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -37,6 +38,10 @@ var (
 const (
 	maxExcerptReferences = 8
 	maxExcerptTextBytes  = 24 * 1024
+	// Each excerpt carries its source turn so a short selection keeps its
+	// meaning. Long turns are truncated so eight excerpts cannot flood the
+	// provider prompt or the durable delivery row.
+	maxExcerptPairedTextBytes = 16 * 1024
 )
 
 // SessionReader is the session-fact surface the service needs. It reads the
@@ -1247,23 +1252,15 @@ func hydrateExcerptReferences(ctx context.Context, controller *Controller, msg *
 	if len(msg.Excerpts) == 0 {
 		return nil
 	}
-	if len(msg.Excerpts) > maxExcerptReferences {
-		return fmt.Errorf("%w: at most %d excerpts may be attached", ErrExcerptInvalid, maxExcerptReferences)
+	if err := validateExcerptReferences(msg.Excerpts, controller.conversation.ID); err != nil {
+		return err
 	}
 	messages, err := controller.store.ConversationMessages(ctx, controller.conversation.ID)
 	if err != nil {
 		return fmt.Errorf("read excerpt transcript: %w", err)
 	}
-	total := 0
 	for _, excerpt := range msg.Excerpts {
 		text := strings.TrimSpace(excerpt.Text)
-		if excerpt.ConversationID != controller.conversation.ID || excerpt.MessageID == "" || text == "" || excerpt.Revision < 0 {
-			return fmt.Errorf("%w: source conversation, message, revision, and text are required", ErrExcerptInvalid)
-		}
-		total += len(text)
-		if total > maxExcerptTextBytes {
-			return fmt.Errorf("%w: attached excerpts exceed %d bytes", ErrExcerptInvalid, maxExcerptTextBytes)
-		}
 		var source domain.ConversationMessage
 		found := false
 		for _, candidate := range messages {
@@ -1303,11 +1300,46 @@ func hydrateExcerptReferences(ctx context.Context, controller *Controller, msg *
 		msg.Content = append(msg.Content, ports.ChatContent{
 			Type: "excerpt", URI: ports.ChatExcerptResourceURIPrefix + source.ID,
 			Name: fmt.Sprintf("%s message", source.Role), MIMEType: "text/plain", Text: text,
-			Excerpt: &ports.ChatExcerptContext{Reference: excerpt, SelectedText: text, UserMessage: userText, AssistantMessage: assistantText},
+			Excerpt: &ports.ChatExcerptContext{
+				Reference: excerpt, SelectedText: text,
+				UserMessage:      truncateExcerptContext(userText),
+				AssistantMessage: truncateExcerptContext(assistantText),
+			},
 		})
 	}
 	msg.Excerpts = nil
 	return nil
+}
+
+// validateExcerptReferences checks what can be checked without the transcript,
+// so a send queued before its controller starts is bounded the same way.
+func validateExcerptReferences(excerpts []ports.ChatExcerptReference, conversationID string) error {
+	if len(excerpts) > maxExcerptReferences {
+		return fmt.Errorf("%w: at most %d excerpts may be attached", ErrExcerptInvalid, maxExcerptReferences)
+	}
+	total := 0
+	for _, excerpt := range excerpts {
+		text := strings.TrimSpace(excerpt.Text)
+		if excerpt.ConversationID != conversationID || excerpt.MessageID == "" || text == "" || excerpt.Revision < 0 {
+			return fmt.Errorf("%w: source conversation, message, revision, and text are required", ErrExcerptInvalid)
+		}
+		total += len(text)
+		if total > maxExcerptTextBytes {
+			return fmt.Errorf("%w: attached excerpts exceed %d bytes", ErrExcerptInvalid, maxExcerptTextBytes)
+		}
+	}
+	return nil
+}
+
+func truncateExcerptContext(text string) string {
+	if len(text) <= maxExcerptPairedTextBytes {
+		return text
+	}
+	cut := maxExcerptPairedTextBytes
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "\n[truncated]"
 }
 
 // Resolve answers a pending approval.

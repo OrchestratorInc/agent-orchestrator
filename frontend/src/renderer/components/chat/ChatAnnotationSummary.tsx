@@ -52,7 +52,7 @@ export function ChatAnnotationSummary({
 					}}
 					onBlur={() => { pointerFocus.current = false; closing.current = false; }}
 					className={cn(
-						"inline-flex w-fit max-w-full self-start min-w-0 items-center gap-1.5 rounded-[10px] border border-logo-accent/25 bg-logo-accent/5 px-2.5 py-1.5 text-[11px] leading-tight text-muted-foreground transition-colors hover:bg-logo-accent/10 disabled:cursor-not-allowed disabled:opacity-50",
+						"inline-flex w-fit max-w-full select-none self-start min-w-0 items-center gap-1.5 rounded-[10px] border border-logo-accent/25 bg-logo-accent/5 px-2.5 py-1.5 text-[11px] leading-tight text-muted-foreground transition-colors hover:bg-logo-accent/10 disabled:cursor-not-allowed disabled:opacity-50",
 						className,
 					)}
 				>

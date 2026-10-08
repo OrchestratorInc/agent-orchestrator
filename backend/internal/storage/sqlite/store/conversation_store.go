@@ -1136,24 +1136,6 @@ func (s *Store) ConversationMessageByClientID(
 	return messageToDomain(row), true, nil
 }
 
-// ConversationMessageByID finds a durable conversation message by its server id.
-func (s *Store) ConversationMessageByID(
-	ctx context.Context,
-	conversationID, messageID string,
-) (domain.ConversationMessage, bool, error) {
-	row, err := s.qr.SelectConversationMessageByID(ctx,
-		gen.SelectConversationMessageByIDParams{
-			ConversationID: conversationID, ID: messageID,
-		})
-	if errors.Is(err, sql.ErrNoRows) {
-		return domain.ConversationMessage{}, false, nil
-	}
-	if err != nil {
-		return domain.ConversationMessage{}, false, err
-	}
-	return messageToDomain(row), true, nil
-}
-
 // ConversationMessages returns the durable transcript in sequence order.
 func (s *Store) ConversationMessages(ctx context.Context, conversationID string) ([]domain.ConversationMessage, error) {
 	rows, err := s.qr.SelectConversationMessages(ctx, conversationID)

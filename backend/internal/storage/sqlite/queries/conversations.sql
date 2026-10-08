@@ -1073,11 +1073,6 @@ SELECT * FROM conversation_messages
 WHERE conversation_id = ? AND client_message_id = ?
 LIMIT 1;
 
--- name: SelectConversationMessageByID :one
-SELECT * FROM conversation_messages
-WHERE conversation_id = ? AND id = ?
-LIMIT 1;
-
 -- A native history import has the provider turn identity but not AO's turn id.
 -- Looking through the turn also detects a message AO wrote before dispatch, which
 -- prevents a Chat -> TUI -> Chat cycle from rendering the same prompt twice.

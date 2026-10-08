@@ -1,9 +1,12 @@
 package chat
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestSourceContainsExcerptSelection(t *testing.T) {
@@ -32,5 +35,30 @@ func TestSourceContainsExcerptSelection(t *testing.T) {
 				t.Fatalf("sourceContainsExcerptSelection(%q, %q) = %v, want %v", tt.source, tt.selection, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTruncateExcerptContextKeepsRuneBoundary(t *testing.T) {
+	text := strings.Repeat("a", maxExcerptPairedTextBytes-1) + "é tail"
+	got := truncateExcerptContext(text)
+	if !utf8.ValidString(got) || !strings.HasSuffix(got, "\n[truncated]") {
+		t.Fatalf("truncated = %q", got[len(got)-20:])
+	}
+	if short := "short"; truncateExcerptContext(short) != short {
+		t.Fatal("short context changed")
+	}
+}
+
+func TestExcerptDeliveryFallsBackToReferenceText(t *testing.T) {
+	// Turns queued before a controller existed store only the reference.
+	msg := excerptDeliveryMessage(ports.ChatUserMessage{
+		Text: "explain",
+		Content: []ports.ChatContent{{Type: "excerpt", Excerpt: &ports.ChatExcerptContext{
+			Reference: ports.ChatExcerptReference{Text: "  selected words  "},
+		}}},
+	})
+	if len(msg.Content) != 0 || !strings.Contains(msg.Text, "---\nselected words\n---") ||
+		strings.Contains(msg.Text, "Full paired turn") {
+		t.Fatalf("delivery = %q", msg.Text)
 	}
 }

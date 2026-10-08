@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -59,9 +60,18 @@ func (s *Service) queueWithoutController(
 		deliveryContent = string(encoded)
 	}
 	if len(msg.Excerpts) > 0 {
+		// The transcript is verified when the controller drains this turn; bound
+		// the stored references now so the queue cannot hold oversized payloads.
+		if err := validateExcerptReferences(msg.Excerpts, conversation.ID); err != nil {
+			return domain.ConversationTurn{}, err
+		}
 		queuedContent := append([]ports.ChatContent(nil), msg.Content...)
 		for _, excerpt := range msg.Excerpts {
-			queuedContent = append(queuedContent, ports.ChatContent{Type: "excerpt", Excerpt: &ports.ChatExcerptContext{Reference: excerpt}})
+			// SelectedText keeps the timeline chip and a later retry meaningful;
+			// the paired turn is only resolved at drain time.
+			queuedContent = append(queuedContent, ports.ChatContent{Type: "excerpt", Excerpt: &ports.ChatExcerptContext{
+				Reference: excerpt, SelectedText: strings.TrimSpace(excerpt.Text),
+			}})
 		}
 		encoded, marshalErr := json.Marshal(queuedContent)
 		if marshalErr != nil {

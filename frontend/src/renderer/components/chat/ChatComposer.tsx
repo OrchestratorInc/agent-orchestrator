@@ -122,6 +122,10 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	"CHAT_CONTROLLER_NOT_READY",
 	"CHAT_RESUME_FAILED",
 	"CHAT_INTERFACE_TRANSITION",
+	// Excerpts are verified before AppendUserMessage, so retrying the same
+	// references can only fail again; return them to the draft for removal.
+	"CHAT_EXCERPT_INVALID",
+	"CHAT_EXCERPT_STALE",
 ]);
 
 // Native image blocks are persisted with the chat turn and sent to the provider.
@@ -591,7 +595,10 @@ export const ChatComposer = memo(function ChatComposer({
 	const queuesDraft = Boolean(willQueue && !savingQueuedEdit && !queuedEditRecovery);
 	// Cmd/Ctrl+Enter or Cmd/Ctrl+click steers the current draft into the running
 	// turn; the send button only shows it while the modifier is held.
-	const canSteerDraft = Boolean(canSteer && onSteer) && !savingQueuedEdit;
+	// Steering has no excerpt payload, so attached excerpts would be cleared with
+	// the accepted draft without reaching the agent. Queue those drafts instead.
+	const canSteerDraft =
+		Boolean(canSteer && onSteer) && !savingQueuedEdit && contextReferences.length === 0;
 	const steersDraft = modifierHeld && canSteerDraft;
 	const showsSteer = steersDraft && !durableDelivery && !queuedEditRecovery;
 	const sendActionLabel = translateDraft(durableDelivery
@@ -1143,7 +1150,7 @@ export const ChatComposer = memo(function ChatComposer({
 			setSendError("chat.draft.filesUnavailable");
 			return;
 		}
-		const shouldSteer = Boolean(forceSteer && !savingQueuedEdit);
+		const shouldSteer = Boolean(forceSteer && !savingQueuedEdit && contextReferences.length === 0);
 		const message = withAttachmentReferences(body, attachedPaths) || (contextReferences.length > 0 ? `Use the attached ${contextReferences.length} chat excerpt(s) as context` : "");
 		// Ordinary delivery reserves its exact draft before these staged reads await.
 		// Queue editors use their existing owner/revision CAS before mutation.

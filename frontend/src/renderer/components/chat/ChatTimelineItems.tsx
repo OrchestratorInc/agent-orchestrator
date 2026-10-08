@@ -866,10 +866,13 @@ export function AssistantMessage({
 	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
 	const showActions = !live && !renderingStreaming && (showCopy || Boolean(onRollback));
 	return (
-		<div className="group/message relative" data-chat-streaming-output={renderingStreaming ? "" : undefined}
-            data-chat-message-id={!live && !renderingStreaming ? message.id : undefined}
-            data-chat-message-revision={!live && !renderingStreaming ? message.revision : undefined}
-            data-chat-message-role={!live && !renderingStreaming ? message.role : undefined}>
+		<div
+			className="group/message relative"
+			data-chat-streaming-output={renderingStreaming ? "" : undefined}
+			data-chat-message-id={!live && !renderingStreaming ? message.id : undefined}
+			data-chat-message-revision={!live && !renderingStreaming ? message.revision : undefined}
+			data-chat-message-role={!live && !renderingStreaming ? message.role : undefined}
+		>
 			<div data-chat-message-body=""><ChatMarkdown text={visibleText} streaming={renderingStreaming} /></div>
 			{showActions ? (
 				// One action row for the completed answer, not one after every prose

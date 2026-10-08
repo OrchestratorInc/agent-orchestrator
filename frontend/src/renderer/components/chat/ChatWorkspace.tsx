@@ -2340,10 +2340,15 @@ function Timeline({
 	const annotationHighlightCleanup = useRef<(() => void) | undefined>(undefined);
 	const annotationHighlightTimer = useRef<number | undefined>(undefined);
 	const annotationRetryCount = useRef(0);
+	// Group count when navigation last asked for older history. A finished load
+	// that adds nothing (a failed page or a source outside this branch) must end
+	// the search instead of requesting the same page again.
+	const annotationOlderRequestGroups = useRef<number | undefined>(undefined);
 	const selectAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
 		releaseFollow();
 		setAnnotationNavigationError(undefined);
 		annotationRetryCount.current = 0;
+		annotationOlderRequestGroups.current = undefined;
 		if (!annotation.messageId) {
 			const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
 				.find((element) => annotationTextMatches(annotationBody(element), annotation.text));
@@ -3126,8 +3131,10 @@ function Timeline({
 		if (!annotationTarget) return;
 		const index = groups.findIndex((group) => group.items.some((item) => item.id === annotationTarget.messageId));
 		if (index < 0) {
-			if (hasOlder && onLoadOlder) {
-				if (!loadingOlder) onLoadOlder();
+			if (loadingOlder) return;
+			if (hasOlder && onLoadOlder && annotationOlderRequestGroups.current !== groups.length) {
+				annotationOlderRequestGroups.current = groups.length;
+				onLoadOlder();
 				return;
 			}
 			setAnnotationNavigationError("The referenced message is no longer available in this chat.");

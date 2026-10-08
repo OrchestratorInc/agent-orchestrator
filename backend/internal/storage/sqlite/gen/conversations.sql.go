@@ -2544,44 +2544,6 @@ func (q *Queries) SelectConversationMessageByClientID(ctx context.Context, arg S
 	return i, err
 }
 
-const selectConversationMessageByID = `-- name: SelectConversationMessageByID :one
-SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name FROM conversation_messages
-WHERE conversation_id = ? AND id = ?
-LIMIT 1
-`
-
-type SelectConversationMessageByIDParams struct {
-	ConversationID string
-	ID             string
-}
-
-func (q *Queries) SelectConversationMessageByID(ctx context.Context, arg SelectConversationMessageByIDParams) (ConversationMessage, error) {
-	row := q.db.QueryRowContext(ctx, selectConversationMessageByID, arg.ConversationID, arg.ID)
-	var i ConversationMessage
-	err := row.Scan(
-		&i.ID,
-		&i.ConversationID,
-		&i.TurnID,
-		&i.Sequence,
-		&i.Revision,
-		&i.Role,
-		&i.Origin,
-		&i.Text,
-		&i.Streaming,
-		&i.ProviderItemID,
-		&i.ClientMessageID,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.DeliveryContentJson,
-		&i.BranchID,
-		&i.ClientPayloadHash,
-		&i.SenderSessionID,
-		&i.SenderProjectID,
-		&i.SenderDisplayName,
-	)
-	return i, err
-}
-
 const selectConversationMessageByProviderItem = `-- name: SelectConversationMessageByProviderItem :one
 SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name FROM conversation_messages
 WHERE conversation_id = ? AND provider_item_id = ?

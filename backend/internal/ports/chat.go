@@ -192,10 +192,6 @@ const (
 	ChatCapabilityRollback ChatCapability = "rollback"
 	// ChatCapabilityFork means a conversation can be branched.
 	ChatCapabilityFork ChatCapability = "fork"
-	// ChatCapabilityReadOnly turns provider execution into an enforced read-only
-	// sandbox. Side chats are unavailable without it; prompt wording alone is not
-	// treated as a security boundary.
-	ChatCapabilityReadOnly ChatCapability = "read_only"
 	// ChatCapabilityPromptReplay means AO can open a fresh provider session with
 	// a durable textual transcript supplied as context. This is an approximation
 	// of fork for providers whose protocol cannot fork from a historical turn.
