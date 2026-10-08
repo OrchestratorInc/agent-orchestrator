@@ -53,7 +53,6 @@ var AllHarnesses = []AgentHarness{
 	HarnessCline, HarnessKimi, HarnessMuse, HarnessKiro, HarnessKilocode, HarnessVibe, HarnessPi,
 	HarnessKimchi, HarnessPrimeAgent, HarnessAutohand,
 	HarnessOMP, HarnessFX, HarnessUnreal, HarnessMiMoCode, HarnessDeepSeek,
-	HarnessOMP, HarnessFX, HarnessUnreal,
 	HarnessZCode,
 }
 

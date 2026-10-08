@@ -20,8 +20,8 @@ PRAGMA writable_schema = ON;
 UPDATE sqlite_master
 SET sql = replace(
     sql,
-    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''omp'', ''unreal-agent'', ''fx'', ''fake'')',
-    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''omp'', ''unreal-agent'', ''fx'', ''zcode'', ''fake'')'
+    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''opencode-v2'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''gemini'', ''omp'', ''unreal-agent'', ''fx'', ''mimo-code'', ''deepseek-harness'', ''fake''))',
+    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''opencode-v2'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''gemini'', ''omp'', ''unreal-agent'', ''fx'', ''mimo-code'', ''deepseek-harness'', ''zcode'', ''fake''))'
 )
 WHERE type = 'table' AND name = 'sessions';
 -- +goose StatementEnd
@@ -29,8 +29,8 @@ WHERE type = 'table' AND name = 'sessions';
 UPDATE sqlite_master
 SET sql = replace(
     sql,
-    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''omp'', ''unreal-agent'', ''fx'', ''qm'', ''fake'')',
-    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''omp'', ''unreal-agent'', ''fx'', ''zcode'', ''qm'', ''fake'')'
+    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''opencode-v2'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''gemini'', ''omp'', ''unreal-agent'', ''fx'', ''mimo-code'', ''qm'', ''deepseek-harness'', ''fake''))',
+    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''opencode-v2'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''gemini'', ''omp'', ''unreal-agent'', ''fx'', ''mimo-code'', ''qm'', ''deepseek-harness'', ''zcode'', ''fake''))'
 )
 WHERE type = 'table' AND name = 'sessions';
 -- +goose StatementEnd
@@ -46,8 +46,8 @@ PRAGMA writable_schema = ON;
 UPDATE sqlite_master
 SET sql = replace(
     sql,
-    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''omp'', ''unreal-agent'', ''fx'', ''zcode'', ''fake'')',
-    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''omp'', ''unreal-agent'', ''fx'', ''fake'')'
+    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''opencode-v2'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''gemini'', ''omp'', ''unreal-agent'', ''fx'', ''mimo-code'', ''deepseek-harness'', ''fake''))',
+    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''opencode-v2'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''gemini'', ''omp'', ''unreal-agent'', ''fx'', ''mimo-code'', ''deepseek-harness'', ''zcode'', ''fake''))'
 )
 WHERE type = 'table' AND name = 'sessions';
 -- +goose StatementEnd
@@ -55,8 +55,8 @@ WHERE type = 'table' AND name = 'sessions';
 UPDATE sqlite_master
 SET sql = replace(
     sql,
-    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''omp'', ''unreal-agent'', ''fx'', ''zcode'', ''qm'', ''fake'')',
-    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''omp'', ''unreal-agent'', ''fx'', ''qm'', ''fake'')'
+    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''opencode-v2'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''gemini'', ''omp'', ''unreal-agent'', ''fx'', ''mimo-code'', ''qm'', ''deepseek-harness'', ''fake''))',
+    'CHECK (harness IN ('''', ''claude-code'', ''codex'', ''aider'', ''opencode'', ''opencode-v2'', ''grok'', ''droid'', ''amp'', ''agy'', ''crush'', ''cursor'', ''qwen'', ''copilot'', ''goose'', ''auggie'', ''continue'', ''devin'', ''cline'', ''kimi'', ''muse'', ''kiro'', ''kilocode'', ''vibe'', ''pi'', ''kimchi'', ''prime-agent'', ''autohand'', ''gemini'', ''omp'', ''unreal-agent'', ''fx'', ''mimo-code'', ''qm'', ''deepseek-harness'', ''zcode'', ''fake''))'
 )
 WHERE type = 'table' AND name = 'sessions';
 -- +goose StatementEnd

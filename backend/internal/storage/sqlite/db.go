@@ -2105,7 +2105,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsUnreal := !strings.Contains(schema, "'unreal-agent'")
 	needsMiMo := !strings.Contains(schema, "'mimo-code'")
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsMiMo && !needsDeepSeek {
+	needsZCode := !strings.Contains(schema, "'zcode'")
+	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsMiMo && !needsDeepSeek && !needsZCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2197,6 +2198,12 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		// variant ends with the retained 'fake' fixture harness, so anchor there
 		// instead of enumerating the shapes repaired above.
 		repairs = append(repairs, replacement{"'fake'))", "'deepseek-harness', 'fake'))"})
+	}
+	if needsZCode {
+		// Same shape as the DeepSeek repair: migration 0191 rewrites the known
+		// variants by exact string, and any database that missed it still ends
+		// with the 'fake' fixture harness to anchor on.
+		repairs = append(repairs, replacement{"'fake'))", "'zcode', 'fake'))"})
 	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
