@@ -1,12 +1,16 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ProjectSettingsRow, ProjectSettingsSection as SettingsGroup, ProjectSettingsValueRow } from "@aoagents/product-ui";
+import { TriangleAlert } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useCoderTemplates } from "../hooks/useCoderTemplates";
+import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
 import { CLOUD_AGENT_PROVIDERS, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { agentLabel } from "../lib/agent-options";
-import type { CloudCpProject } from "../lib/cloud-cp";
+import type { CloudCpProject, CloudCpProjectCoderConfig } from "../lib/cloud-cp";
 import { cloudProjectSettingsDraft, cloudProjectSettingsPatch, type CloudProjectRoleDraft, type CloudProjectSettingsDraft } from "../lib/cloud-project-settings";
 import { AgentAvatar } from "./AgentAvatar";
 import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSection } from "./ProjectSettingsForm";
@@ -54,10 +58,50 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 	};
 	return <ProjectSettingsEditor initialValues={toEditorDraft(cloudProjectSettingsDraft(project))} section={section}
 		capabilities={{ workflow: true, sessionPrefix: true, intake: false, reviewer: true, requiredAgents: false, nameLimit: 120, requiredBranch: true, runtimeDefaults: true, effortOnly: true }}
-		details={[{ label: t("settings.project.id"), value: project.id }, { label: t("settings.project.repo"), value: project.repositoryUrl, href: project.repositoryUrl }]}
+		details={[{ label: t("settings.project.id"), value: project.id }, { label: t("settings.project.kind"), value: t("settings.project.kind.cloud") }, { label: t("settings.project.repo"), value: project.repositoryUrl, href: project.repositoryUrl }]}
+		generalExtra={<CloudProjectCoderSettings project={project} />}
 		modelScope={(agent) => agent === "opencode" && opencodeCredential ? credentialModelScope(opencodeCredential) : ""}
 		autoReviewDescription={t("settings.cloudProject.autoReviewDescription")} renderAgent={(props) => <CloudAgentPicker {...props} />}
 		save={save} onSaveState={onSaveState} />;
+}
+
+/** The coder config the control plane stores on a project (config.coder). */
+function coderConfigOf(project: CloudCpProject): CloudCpProjectCoderConfig | undefined {
+	const coder = project.config?.coder;
+	return coder && typeof coder === "object" ? (coder as CloudCpProjectCoderConfig) : undefined;
+}
+
+/** The project's Coder template, fixed at creation and shown read-only. */
+export function CloudProjectCoderSettings({ project }: { project: CloudCpProject }) {
+	const { t } = useTranslation();
+	const coder = coderConfigOf(project);
+	const templateId = coder?.templateId?.trim() ?? "";
+	const { templates, isLoading: templatesLoading } = useCoderTemplates(project.orgId, templateId !== "");
+	const template = templates.find((candidate) => candidate.id === templateId);
+	const templateLabel = template ? template.displayName || template.name : templatesLoading ? "…" : templateId;
+	// No project template only blocks sessions for a bring-your-own-Coder org
+	// without an org-default template (the control plane's
+	// coder_template_required). Otherwise the deployment or org default applies,
+	// and non-Coder providers need no template at all.
+	const orgCoder = useOrgCoderConfig();
+	const orgCoderConfig = orgCoder.data as { templateId?: string; defaultTemplateId?: string } | null | undefined;
+	const orgDefaultTemplateId = (orgCoderConfig?.templateId ?? orgCoderConfig?.defaultTemplateId ?? "").trim();
+	const templateRequired = templateId === "" && orgCoderConfig != null && orgDefaultTemplateId === "";
+	return <SettingsGroup title={t("settings.project.coderTitle")} grouped>
+		<ProjectSettingsRow label={t("settings.project.coderTemplate")}>
+			{templateId !== "" ? (
+				<span className="settings-row-value" title={templateId}>{templateLabel}</span>
+			) : templateRequired ? (
+				<span className="settings-row-value flex items-center gap-1.5 text-error" role="alert">
+					<TriangleAlert className="size-4 shrink-0" aria-hidden="true" />
+					{t("settings.project.coderTemplateMissing")}
+				</span>
+			) : (
+				<span className="settings-row-value">{orgCoder.isLoading ? "…" : t("settings.project.coderTemplateDefault")}</span>
+			)}
+		</ProjectSettingsRow>
+		{coder?.size ? <ProjectSettingsValueRow label={t("settings.project.coderSize")} value={coder.size} /> : null}
+	</SettingsGroup>;
 }
 
 function CloudAgentPicker({ role, value, disabled, onChange }: ProjectAgentPickerProps) {

@@ -1,5 +1,5 @@
 import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, X, type LucideIcon } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -10,10 +10,12 @@ import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
+import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
 import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
 import { type GlobalSettingsSection, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
+import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
@@ -76,8 +78,28 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 
 	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, is11x });
 	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
+	// A cloud project lives only in the control plane; the local daemon has no
+	// record of it. Resolve it here so its settings load from the control plane.
+	const explicitCloudOrgId = displaySettings?.scope === "project" ? displaySettings.cloudOrgId : undefined;
+	const localProjectScope = displaySettings?.scope === "project" && !remoteHostId && explicitCloudOrgId === undefined;
+	const cloudProjects = useCloudProjectsQuery({ enabled: localProjectScope });
+	const cloudProject = localProjectScope
+		? cloudProjects.data?.find((project) => project.id === displaySettings.projectId)
+		: undefined;
+	// Only fall back to the local daemon's form for a project the local daemon
+	// actually lists: a failed cloud lookup must not masquerade as a local
+	// project (the daemon would answer "Unknown project" for a cloud id).
+	const projectId = displaySettings?.scope === "project" ? displaySettings.projectId : "";
+	const knownLocal = useQuery({
+		...workspaceQueryOptions,
+		enabled: localProjectScope,
+		select: (workspaces) => workspaces.some((workspace) => workspace.id === projectId),
+	}).data === true;
+	const cloudProjectsPending = localProjectScope && !knownLocal && cloudProjects.isLoading;
+	const cloudLookupFailed = localProjectScope && !cloudProject && !knownLocal && cloudProjects.isError;
 
-	const isCloudProjectSettings = settingsModal.scope === "project" && settingsModal.cloudOrgId !== undefined;
+	const cloudOrgId = explicitCloudOrgId ?? cloudProject?.orgId;
+	const isCloudProjectSettings = displaySettings?.scope === "project" && cloudOrgId !== undefined;
 	const projectSections: Array<{
 		id: ProjectSettingsSection;
 		label: string;
@@ -246,7 +268,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 				>
 					<div className="flex h-full min-h-0">
 						<aside className="flex w-48 shrink-0 flex-col border-r border-(--color-border-settings-dialog-header) bg-card">
-							<p className="px-3 pb-1 pt-3 text-2xs font-semibold tracking-wider text-muted-foreground/60">{t("settings.title")}</p>
+							<p className="px-3 pb-1 pt-1.5 text-2xs font-medium tracking-normal text-muted-foreground/60">{t("settings.title")}</p>
 							<nav aria-label={t("settings.navSectionsAria")} className="flex flex-col gap-0.5 p-2 pt-0">
 								{isProjectSettings
 									? projectSections.map(({ id, label, icon }) => (
@@ -319,12 +341,19 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 							</DialogHeader>
 							<div aria-busy={!isBodyReady} className={cn(settingsDialogBodyClass, "settings-dialog-body flex-1 px-(--size-modal-padding) pt-0")}>
 								{isBodyReady ? (
-									displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "cues" ? (
+									cloudProjectsPending ? (
+										<p className="text-sm text-settings-muted">{t("settings.project.loading")}</p>
+									) : cloudLookupFailed ? (
+										<div className="space-y-2 text-sm text-error" role="alert">
+											<p>{t("settings.project.cloudLoadFailed")} {cloudProjects.error instanceof Error ? cloudProjects.error.message : ""}</p>
+											<button className="text-settings-label underline underline-offset-2" onClick={() => void cloudProjects.refetch()} type="button">{t("settings.project.retry")}</button>
+										</div>
+									) : displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "cues" ? (
 										<CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />
 									) : displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "environment" ? (
 										<ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />
 									) : displaySettings?.scope === "project" ? (
-										<ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={displaySettings.cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />
+										<ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />
 									) : (
 										<GlobalSettingsForm cloudEnabled={cloudEnabled} is11x={is11x} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} section={activeSection} />
 									)
@@ -345,15 +374,17 @@ function SettingsNavItem({ active, disabled, icon: Icon, label, onClick }: { act
 		<button
 			aria-current={active ? "page" : undefined}
 			className={cn(
-				"flex h-9 w-full items-center gap-2 rounded-md px-2.5 text-left text-sm font-medium transition-[background-color,color,transform] duration-fast ease-out active:scale-press focus:outline-none focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
-				active ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
+				NAV_ROW_HIGHLIGHT_HOST_CLASS,
+				"flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm font-medium text-muted-foreground transition-none focus:outline-none focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50",
 			)}
+			data-active={active}
 			disabled={disabled}
 			onClick={onClick}
 			type="button"
 		>
-			<Icon aria-hidden="true" className="size-4 shrink-0" />
-			{label}
+			<NavRowHighlight active={active} disabled={disabled} />
+			<Icon aria-hidden="true" className="relative z-[1] size-icon-md shrink-0" />
+			<span className="relative z-[1] min-w-0 flex-1 truncate">{label}</span>
 		</button>
 	);
 }

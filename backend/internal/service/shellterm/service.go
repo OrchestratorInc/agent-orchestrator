@@ -71,6 +71,9 @@ type Service struct {
 	now         func() time.Time
 	newHandleID func() (string, error)
 	executable  func() (string, error)
+	// initialInputTimeout bounds the wait for an auth terminal's ready marker;
+	// tests shorten it to exercise the timeout path.
+	initialInputTimeout time.Duration
 
 	// gatesMu guards gates itself (the map), not the individual gate mutexes it
 	// holds.
@@ -179,6 +182,7 @@ func NewService(shellRuntime ShellRuntime, store Store, projects ProjectRootLoca
 		now:                 time.Now,
 		newHandleID:         newShellTerminalHandleID,
 		executable:          os.Executable,
+		initialInputTimeout: initialInputTimeout,
 		gates:               map[domain.SessionID]*sessionGate{},
 	}
 }
@@ -384,7 +388,7 @@ func (s *Service) OpenCommandTerminal(ctx context.Context, in OpenCommandTermina
 		return ShellTerminal{}, err
 	}
 	if len(in.InitialInputReadyStates) > 0 {
-		go s.sendInitialInputWhenReady(context.WithoutCancel(ctx), ports.RuntimeHandle{ID: terminal.HandleID}, in.InitialInput, in.InitialInputReadyStates)
+		go s.sendInitialInputWhenReady(context.WithoutCancel(ctx), ports.RuntimeHandle{ID: terminal.HandleID}, in.InitialInput, in.InitialInputReadyStates, in.SendInitialInputOnReadyTimeout)
 	}
 	return terminal, nil
 }
@@ -499,23 +503,46 @@ const (
 	initialInputTimeout      = 10 * time.Second
 	initialInputPollInterval = 50 * time.Millisecond
 	initialInputOutputLines  = 100
+
+	initialInputFallbackSendTimeout = 5 * time.Second
 )
 
-func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.RuntimeHandle, input string, readyStates []InitialInputReadyState) {
-	ctx, cancel := context.WithTimeout(ctx, initialInputTimeout)
+// MatchInitialInputReadyState returns the first ready state whose marker text
+// appears in output, or nil when the terminal has not reached any of them.
+func MatchInitialInputReadyState(output string, readyStates []InitialInputReadyState) *InitialInputReadyState {
+	for i := range readyStates {
+		if strings.Contains(output, readyStates[i].Text) {
+			return &readyStates[i]
+		}
+	}
+	return nil
+}
+
+// sendInitialInputAfterTimeout delivers the reviewed input once the ready
+// wait has expired without a marker, as long as the terminal is still alive.
+func (s *Service) sendInitialInputAfterTimeout(handle ports.RuntimeHandle, input string) {
+	ctx, cancel := context.WithTimeout(context.Background(), initialInputFallbackSendTimeout)
+	defer cancel()
+	alive, err := s.runtime.IsAlive(ctx, handle)
+	if err != nil || !alive {
+		s.log.Warn("authentication terminal exited before initial input", "handleId", handle.ID, "error", err)
+		return
+	}
+	s.log.Info("authentication terminal showed no ready marker; sending initial input anyway", "handleId", handle.ID)
+	if err := s.runtime.SendMessage(ctx, handle, input); err != nil {
+		s.log.Warn("authentication terminal initial input failed", "handleId", handle.ID, "error", err)
+	}
+}
+
+func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.RuntimeHandle, input string, readyStates []InitialInputReadyState, sendOnTimeout bool) {
+	ctx, cancel := context.WithTimeout(ctx, s.initialInputTimeout)
 	defer cancel()
 	ticker := time.NewTicker(initialInputPollInterval)
 	defer ticker.Stop()
 	for {
 		output, err := s.runtime.GetOutput(ctx, handle, initialInputOutputLines)
 		if err == nil {
-			var ready *InitialInputReadyState
-			for i := range readyStates {
-				if strings.Contains(output, readyStates[i].Text) {
-					ready = &readyStates[i]
-					break
-				}
-			}
+			ready := MatchInitialInputReadyState(output, readyStates)
 			if ready == nil {
 				goto wait
 			}
@@ -533,6 +560,10 @@ func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.Ru
 	wait:
 		select {
 		case <-ctx.Done():
+			if sendOnTimeout {
+				s.sendInitialInputAfterTimeout(handle, input)
+				return
+			}
 			s.log.Warn("authentication terminal did not become ready for initial input", "handleId", handle.ID)
 			return
 		case <-ticker.C:

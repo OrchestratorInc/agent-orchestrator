@@ -3,15 +3,26 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpProject, CloudCpProjectSettingsRequest } from "../lib/cloud-cp";
+import { CloudProjectCoderSettings } from "./CloudProjectSettingsForm";
 import { ProjectSettingsForm } from "./ProjectSettingsForm";
 import { SettingsDialog } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
 import { TooltipProvider } from "./ui/tooltip";
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn(), localGet: vi.fn(), connections: vi.fn(), ready: true }));
+const mocks = vi.hoisted(() => ({
+	get: vi.fn(), patch: vi.fn(), localGet: vi.fn(), connections: vi.fn(), ready: true,
+	templates: [] as Array<{ id: string; name: string; displayName: string }>,
+	orgCoderConfig: null as { baseUrl: string; templateId?: string } | null,
+}));
 vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { getProject: mocks.get, updateProjectSettings: mocks.patch, listUserProviderConnections: mocks.connections }, ready: mocks.ready, baseUrl: "https://cloud.test" }) }));
 vi.mock("../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true }) }));
-vi.mock("../hooks/useWorkspaceQuery", () => ({ workspaceQueryKey: ["workspaces"], cloudProjectsQueryKey: ["cloud-projects"], useWorkspaceQuery: () => ({ data: [] }) }));
+vi.mock("../hooks/useWorkspaceQuery", () => ({
+	workspaceQueryKey: ["workspaces"], cloudProjectsQueryKey: ["cloud-projects"], useWorkspaceQuery: () => ({ data: [] }),
+	workspaceQueryOptions: { queryKey: ["workspaces"], queryFn: async () => [] },
+	useCloudProjectsQuery: () => ({ data: undefined, isLoading: false, isError: false, refetch: vi.fn() }),
+}));
+vi.mock("../hooks/useCoderTemplates", () => ({ useCoderTemplates: () => ({ templates: mocks.templates, isLoading: false, isError: false }) }));
+vi.mock("../hooks/useOrgCoderConfig", () => ({ useOrgCoderConfig: () => ({ data: mocks.orgCoderConfig, isLoading: false }) }));
 vi.mock("../lib/api-client", () => ({ apiClient: { GET: mocks.localGet }, apiErrorMessage: (error: { message: string }) => error.message }));
 
 let project: CloudCpProject;
@@ -37,6 +48,8 @@ beforeEach(() => {
 		models: ["worker-model", "orchestrator-model", "reviewer-model", "review-codex"].map((id) => ({ id, label: id, efforts: ["low", "high", "max"] })),
 	} }));
 	mocks.ready = true;
+	mocks.templates = [{ id: "tpl-1", name: "azure-linux", displayName: "Azure Linux" }];
+	mocks.orgCoderConfig = null;
 	useUiStore.setState({ settingsModal: null });
 	project = {
 		id: "project", orgId: "org", displayName: "Cloud project", repositoryUrl: "https://github.com/owner/repo", defaultBranch: "main", createdAt: "now", updatedAt: "now",
@@ -205,9 +218,45 @@ describe("Cloud project settings", () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		render(<QueryClientProvider client={client}><TooltipProvider><SettingsDialog /></TooltipProvider></QueryClientProvider>);
 		expect(await screen.findByRole("button", { name: "Edit Project name" })).toBeInTheDocument();
-		expect(screen.getByText("Cloud project")).toBeInTheDocument();
+		expect(screen.getByText("https://github.com/owner/repo")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Cues" })).not.toBeInTheDocument();
 		expect(mocks.get).toHaveBeenCalledWith("org", "project", { signal: expect.any(AbortSignal) });
 		expect(mocks.localGet).not.toHaveBeenCalled();
+	});
+});
+
+describe("Cloud project Coder template", () => {
+	const renderCoder = (config: CloudCpProject["config"] = {}) => render(<QueryClientProvider client={new QueryClient()}><CloudProjectCoderSettings project={{ ...project, config }} /></QueryClientProvider>);
+
+	it("shows the project's Coder template and size", () => {
+		renderCoder({ coder: { templateId: "tpl-1", size: "medium" } });
+		expect(screen.getByText("Azure Linux")).toBeInTheDocument();
+		expect(screen.getByText("medium")).toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("flags a template-less project when the org's own Coder has no default template", () => {
+		mocks.orgCoderConfig = { baseUrl: "https://coder.acme.test" };
+		renderCoder();
+		expect(screen.getByRole("alert")).toHaveTextContent("No template. Sessions can't start");
+	});
+
+	it("shows the inherited default when the org has no bring-your-own Coder", () => {
+		renderCoder();
+		expect(screen.getByText("Default template")).toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("shows the inherited default when the org's own Coder sets a default template", () => {
+		mocks.orgCoderConfig = { baseUrl: "https://coder.acme.test", templateId: "tpl-1" };
+		renderCoder();
+		expect(screen.getByText("Default template")).toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("shows the template on the cloud project's General settings", async () => {
+		mocks.templates = [{ id: "preserve", name: "preserve", displayName: "Preserved template" }];
+		mount("general");
+		expect(await screen.findByText("Preserved template")).toBeInTheDocument();
 	});
 });

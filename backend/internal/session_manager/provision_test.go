@@ -542,3 +542,50 @@ func TestSpawnPermissionPrecedence(t *testing.T) {
 		t.Fatalf("non-spawn resolution changed: %q", got.Permissions)
 	}
 }
+
+// A configured family alias has no capabilities of its own; it must accept
+// exactly the efforts of the family's newest concrete model.
+func TestResolveClaudeFamilyAliasUsesNewestModelEfforts(t *testing.T) {
+	models := []ports.AgentModelInfo{
+		{ID: "opus", Label: "Opus", IsDefault: true},
+		{ID: "sonnet", Label: "Sonnet"},
+		{ID: "haiku", Label: "Haiku"},
+		{ID: "fable", Label: "Fable"},
+		{ID: "claude-opus-4-1", Label: "Claude Opus 4.1", Efforts: []string{"low", "medium"}},
+		{ID: "claude-opus-5-5", Label: "Claude Opus 5.5", Efforts: []string{"low", "medium", "high", "xhigh", "max"}},
+		{ID: "claude-sonnet-5-5", Label: "Claude Sonnet 5.5", Efforts: []string{"low", "medium", "high"}},
+		{ID: "claude-haiku-4-5-20251001", Label: "Claude Haiku 4.5", Efforts: []string{"low"}},
+		{ID: "claude-fable-5-1", Label: "Claude Fable 5.1", Efforts: []string{"medium", "high", "max"}},
+	}
+	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: models}}}
+	all := []string{"low", "medium", "high", "xhigh", "max"}
+	cases := map[string][]string{
+		"opus":             {"low", "medium", "high", "xhigh", "max"},
+		"opus[1m]":         nil,
+		"sonnet":           {"low", "medium", "high"},
+		"haiku":            {"low"},
+		"fable":            {"medium", "high", "max"},
+		"claude-opus-5-5":  {"low", "medium", "high", "xhigh", "max"},
+		"claude-opus-4-1":  {"low", "medium"},
+		"claude-fable-5-1": {"medium", "high", "max"},
+	}
+	for model, allowed := range cases {
+		for _, effort := range all {
+			_, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+				ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+				AgentConfig:    ports.AgentConfig{Model: model, Effort: effort},
+				EffortOverride: true,
+			}, domain.ProjectConfig{})
+			want := containsString(allowed, effort)
+			if model == "opus[1m]" {
+				continue // not in catalog: rejected before effort is checked
+			}
+			if want && err != nil {
+				t.Errorf("model %q effort %q: unexpected error %v", model, effort, err)
+			}
+			if !want && !errors.Is(err, ports.ErrUnsupportedEffort) {
+				t.Errorf("model %q effort %q: error = %v, want ErrUnsupportedEffort", model, effort, err)
+			}
+		}
+	}
+}

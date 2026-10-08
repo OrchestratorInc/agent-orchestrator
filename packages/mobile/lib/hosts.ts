@@ -20,13 +20,15 @@ export type Host = {
 	/** Connection token. Lives in the device keystore, never in AsyncStorage. */
 	token: string;
 	lastConnected: number;
+	/** Present only for a machine discovered through AO Cloud. */
+	accountUserId?: string;
 };
 
 /** activeHost() uses explicit selection or the most recent machine. */
 
 /** Ignore recency-only writes so another host reconnecting does not restart live connections. */
 export function sameHostConnections(left: Host[], right: Host[]): boolean {
-	const connectionFields = (hosts: Host[]) => hosts.map(({ id, name, platform, endpoints, token }) => [id, name, platform, endpoints, token]);
+	const connectionFields = (hosts: Host[]) => hosts.map(({ id, name, platform, endpoints, token, accountUserId }) => [id, name, platform, endpoints, token, accountUserId]);
 	return JSON.stringify(connectionFields(left)) === JSON.stringify(connectionFields(right));
 }
 

@@ -77,7 +77,7 @@ const roleFields: Record<ProjectSettingsRole, RoleFields> = {
 
 // Both persistence adapters render this page. Drafts, validation, autosave and
 // common controls live here so a UI change applies to local and Cloud projects.
-export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, reviewerWarning, autoReviewDescription, save, onSaveState, saveUnchanged = false, disabled = false }: {
+export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, reviewerWarning, autoReviewDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra }: {
 	initialValues: ProjectSettingsDraft;
 	section: SettingsSection;
 	capabilities: Capabilities;
@@ -94,6 +94,8 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	save: (values: ProjectSettingsDraft) => Promise<{ values?: ProjectSettingsDraft; replacementError?: string | null }>;
 	onSaveState?: (state: ProjectSettingsSaveState) => void;
 	saveUnchanged?: boolean;
+	/** Read-only sections appended to the General page (e.g. a Cloud project's Coder template). */
+	generalExtra?: ReactNode;
 	/** Pauses autosave and submit, e.g. while the owning host is offline. */
 	disabled?: boolean;
 }) {
@@ -184,6 +186,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 						{capabilities.workersRequestReview && <ProjectWorkersRequestReviewToggle checked={draft.workersRequestReview ?? false} onCheckedChange={(workersRequestReview) => patch({ workersRequestReview })} />}
 					</ProjectSettingsSection>
 				</>}
+				{generalExtra}
 			</> : <ProjectSettingsSection title={t("settings.project.agents")} titleHidden grouped>
 				<ProjectAgentRoleHeader />
 				{visibleRoles.map((role) => {

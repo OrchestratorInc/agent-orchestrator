@@ -31,6 +31,7 @@ import {
 	Fragment,
 	memo,
 	useContext,
+	useEffect,
 	useMemo,
 	useState,
 	type MouseEvent as ReactMouseEvent,
@@ -43,6 +44,7 @@ import { cn } from "../../lib/utils";
 import { isLoopbackHostname } from "../../lib/loopback";
 import { canonicalLanguage } from "../../lib/code-highlight";
 import { fenceOf } from "../../lib/markdown-fence";
+import { EMOJI_GRAPHEME, rehypeStreamFade } from "../../lib/rehype-stream-fade";
 import { findSessionLinks, isSessionLink, remarkSessionLinks } from "../../lib/session-links";
 import {
 	isPotentialWorkspaceFileLink,
@@ -79,6 +81,12 @@ export const ActivityTitle = memo(function ActivityTitle({ text }: { text: strin
 
 /** GitHub-flavoured markdown: tables, strikethrough, task lists, autolinks. */
 const PLUGINS = [remarkGfm, remarkSessionLinks];
+const STREAMING_REHYPE = [rehypeStreamFade];
+// Reduced motion gets plain text, not a span per character that never animates.
+const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+// How long a settled reply keeps its fade spans, so the last characters (and the final
+// flush of buffered text) finish fading in before they are dropped.
+const FADE_SHED_MS = 450;
 
 /**
  * Whether the prose is still arriving, for the fences inside it.
@@ -161,17 +169,32 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	className?: string;
 	safeOrigin?: boolean;
 }) {
+	// Replies opened from history mount settled and never wrap; live ones keep the fade a
+	// beat past the end of the stream.
+	const [fading, setFading] = useState(streaming);
+	if (streaming && !fading) setFading(true);
+	useEffect(() => {
+		if (streaming) return;
+		const timer = setTimeout(() => setFading(false), FADE_SHED_MS);
+		return () => clearTimeout(timer);
+	}, [streaming]);
+
 	return (
 		<StreamingProse.Provider value={streaming}>
 			<SafeOriginContent.Provider value={safeOrigin}>
 			<div
 				className={cn(
 					"chat-md leading-[1.58]",
-					muted ? "text-[13px] text-muted-foreground" : "text-sm text-foreground",
+					muted ? "text-sm text-muted-foreground" : "text-sm text-foreground",
 					className,
 				)}
 			>
-				<Markdown remarkPlugins={PLUGINS} components={COMPONENTS} urlTransform={chatUrlTransform}>
+				<Markdown
+					remarkPlugins={PLUGINS}
+					rehypePlugins={fading && !prefersReducedMotion() ? STREAMING_REHYPE : undefined}
+					components={COMPONENTS}
+					urlTransform={chatUrlTransform}
+				>
 					{text}
 				</Markdown>
 			</div>
@@ -210,7 +233,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 			data-wrap={wrap ? "true" : "false"}
 		>
 			<div className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
-				<span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+				<span className="text-caption text-muted-foreground">
 					{language || "text"}
 				</span>
 				{/* Hover-revealed, and focus-revealed so the keyboard can reach it. The
@@ -237,7 +260,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 				</div>
 			</div>
 			<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
-				<code className="font-mono text-[12px] leading-[1.6] text-foreground">
+				<code className="font-mono text-xs leading-[1.6] text-foreground">
 					<HighlightedCode code={code} language={grammar} streaming={streaming} />
 				</code>
 			</pre>
@@ -245,7 +268,6 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 	);
 }
 
-const EMOJI_GRAPHEME = /\p{Extended_Pictographic}|\p{Regional_Indicator}|[#*0-9]\uFE0F?\u20E3/u;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function compactEmoji(children: ReactNode): ReactNode {
@@ -415,7 +437,7 @@ function InlineCode({ children }: { children?: ReactNode }) {
 	const text = typeof children === "string" ? children : undefined;
 	const filePath = text && onFileOpen ? findWorkspaceFilePath(text, workspacePaths) : undefined;
 	const code = (
-		<code className="rounded bg-surface px-[5px] py-[2px] font-mono text-[11.5px] text-markdown-code">
+		<code className="rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code">
 			{children}
 		</code>
 	);
@@ -440,22 +462,22 @@ const COMPONENTS: Components = {
 	// Headings step down in size but stay in the conversation's voice — an agent's
 	// "## Findings" is a paragraph label, not a page title.
 	h1: ({ children }) => (
-		<h3 className="mb-1.5 mt-4 text-[15px] font-semibold leading-snug text-foreground first:mt-0">
+		<h3 className="mb-1.5 mt-4 text-subtitle font-semibold leading-snug text-foreground first:mt-0">
 			{children}
 		</h3>
 	),
 	h2: ({ children }) => (
-		<h4 className="mb-1.5 mt-3.5 text-[14px] font-semibold leading-snug text-foreground first:mt-0">
+		<h4 className="mb-1.5 mt-3.5 text-sm font-semibold leading-snug text-foreground first:mt-0">
 			{children}
 		</h4>
 	),
 	h3: ({ children }) => (
-		<h5 className="mb-1 mt-3 text-[13.5px] font-semibold leading-snug text-foreground first:mt-0">
+		<h5 className="mb-1 mt-3 text-sm font-semibold leading-snug text-foreground first:mt-0">
 			{children}
 		</h5>
 	),
 	h4: ({ children }) => (
-		<h6 className="mb-1 mt-3 text-[13px] font-semibold uppercase tracking-wide text-muted-foreground first:mt-0">
+		<h6 className="mb-1 mt-3 text-xs font-semibold text-muted-foreground first:mt-0">
 			{children}
 		</h6>
 	),
@@ -510,7 +532,7 @@ const COMPONENTS: Components = {
 	// never scrolls sideways.
 	table: ({ children }) => (
 		<div className="my-2.5 overflow-x-auto rounded-lg border border-border">
-			<table className="w-full border-collapse text-[12.5px]">{children}</table>
+			<table className="w-full border-collapse text-xs">{children}</table>
 		</div>
 	),
 	thead: ({ children }) => <thead className="bg-raised/40">{children}</thead>,

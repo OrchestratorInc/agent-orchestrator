@@ -25,7 +25,7 @@ var plans = []Plan{
 	plan("copilot", ActionLogin, "Log in to GitHub Copilot", []string{"copilot", "login"}, "Native GitHub device/browser flow", "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli"),
 	plan("grok", ActionLogin, "Log in to Grok", []string{"grok", "login"}, "Native login; device-auth remains available inside the CLI", "https://docs.x.ai/build/overview"),
 	kimiLoginPlan(),
-	terminalInputPlan("pi", ActionLogin, "Log in to Pi", []string{"pi"}, "/login\r", "Select Open login after Pi finishes starting", "https://github.com/earendil-works/pi"),
+	piLoginPlan(),
 	plan("amp", ActionLogin, "Log in to Amp", []string{"amp", "login"}, "Native browser flow", "https://ampcode.com/manual"),
 	plan("auggie", ActionLogin, "Log in to Auggie", []string{"auggie", "login"}, "Native browser flow", "https://docs.augmentcode.com/cli/overview"),
 	terminalInputPlan("droid", ActionLogin, "Log in to Droid", []string{"droid"}, "/login\r", "Select Open login after Droid finishes starting", "https://docs.factory.ai/droid-cli/cli-reference"),
@@ -75,6 +75,25 @@ func kimiLoginPlan() Plan {
 	p.initialInput = "/login"
 	p.initialInputReadyStates = []shellterm.InitialInputReadyState{{Text: "Run /login or /provider to get started."}}
 	p.prepareWorkspace = kimi.EnsureWorkspaceTrusted
+	return p
+}
+
+// piLoginPlan opens Pi's TUI and injects /login automatically; Pi has no
+// login subcommand. The primary ready marker is the footer's context stat: a
+// fresh Pi session always renders "0.0%/<window>" there, with or without a
+// selected model and even with quietStartup, which drops the onboarding line
+// kept as a second marker. Pi keeps text typed during its brief startup tail
+// in the editor, and the runtime's pause before Enter covers that window. If a
+// future Pi renders neither marker, /login is still sent when the ready wait
+// expires: by then Pi is at its prompt, where /login is always valid.
+func piLoginPlan() Plan {
+	p := plan("pi", ActionLogin, "Log in to Pi", []string{"pi"}, "Pi opens its login picker automatically", "https://github.com/earendil-works/pi")
+	p.initialInput = "/login"
+	p.initialInputReadyStates = []shellterm.InitialInputReadyState{
+		{Text: "0.0%/"},
+		{Text: "Pi can explain its own features"},
+	}
+	p.sendInitialInputOnReadyTimeout = true
 	return p
 }
 

@@ -17,8 +17,8 @@
  * provider's; only the grouping of the triggers is AO's.
  */
 
-import { Fragment, useMemo, type FocusEvent, type ReactNode } from "react";
-import { Shuffle } from "lucide-react";
+import { Fragment, useMemo, useState, type FocusEvent, type ReactNode } from "react";
+import { ChevronDown, Shuffle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
 	OptionMenu,
@@ -33,7 +33,7 @@ import {
 import { fallbackEffort, useApplyEffortDefault } from "../../lib/effort";
 import { cn } from "../../lib/utils";
 import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } from "../settings/EffortPicker";
-import { agentModelDisplayLabel, isDefaultPlaceholderLabel } from "../../lib/agent-model-choices";
+import { agentModelDisplayLabel, isDefaultPlaceholderLabel, splitClaudeModels } from "../../lib/agent-model-choices";
 import { Switch } from "../ui/switch";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import type {
@@ -78,8 +78,8 @@ const CODEX_APPROVAL_ORDER: ApprovalMode[] = [
 ];
 
 const TRIGGER_CLASS =
-	"h-7 gap-1 bg-transparent rounded-lg px-3 text-[12px]! leading-none text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground";
-const CHAT_MENU_CLASS = "chat-settings-menu text-[12px]!";
+	"h-7 gap-1 bg-transparent rounded-lg px-3 text-xs! leading-none text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground";
+const CHAT_MENU_CLASS = "chat-settings-menu text-xs!";
 
 export function TurnSettingsBar({
 	models,
@@ -148,18 +148,19 @@ export function TurnSettingsBar({
 		})),
 		[harness, models],
 	);
+	const claudeLabels = useMemo(() => (harness === "claude-code" ? claudeChoiceLabels(displayModels) : undefined), [harness, displayModels]);
 	const displayConfigOptions = useMemo(
 		() => (configOptions ?? []).map((option) => isModelOption(option) ? {
 			...option,
 			choices: option.choices.map((choice) => ({
 				...choice,
-				name: agentModelDisplayLabel(harness, choice.name),
+				name: claudeLabels?.(choice.value) ?? agentModelDisplayLabel(harness, choice.name),
 				description: choice.description
 					? agentModelDisplayLabel(harness, choice.description)
 					: choice.description,
 			})),
 		} : option),
-		[configOptions, harness],
+		[claudeLabels, configOptions, harness],
 	);
 	const selected = displayModels.find((model) => model.id === settings.model);
 	const fallback = settings.model ? undefined : displayModels.find((model) => model.default);
@@ -272,6 +273,7 @@ export function TurnSettingsBar({
 
 					{onChangeConfigOption && clubbedLeft && !nativeModelMenu ? (
 						<ClubbedConfigPicker
+							groupClaude={harness === "claude-code"}
 							modelOptions={grouped.model}
 							effortOptions={grouped.effort}
 							executionMode={inlineExecutionMode}
@@ -336,20 +338,37 @@ export function TurnSettingsBar({
 				) : null}
 			</div>
 			{rememberPermissionsPending || (rememberedPermissionMode !== undefined && rememberedPermissionMode === rememberMode && !planning && !configPending) ? (
-				<p role="status" className="px-1 text-[11px] text-muted-foreground">
+				<p role="status" className="px-1 text-xs text-muted-foreground">
 					{rememberPermissionsPending ? "Saving project permissions…" : "Permission mode saved for new sessions in this project."}
 				</p>
 			) : null}
 			{rememberPermissionsError ? (
-				<p role="alert" className="px-1 text-[11px] text-destructive">{rememberPermissionsError}</p>
+				<p role="alert" className="px-1 text-xs text-destructive">{rememberPermissionsError}</p>
 			) : null}
 			{error ? (
-				<p role="alert" className="px-1 text-[11px] leading-snug text-destructive">
+				<p role="alert" className="px-1 text-xs leading-snug text-destructive">
 					{error}
 				</p>
 			) : null}
 		</div>
 	);
+}
+
+/**
+ * The provider's model option offers family aliases ("opus") and bare ids. The new-task
+ * picker names them by version, so the chat does too: an alias is the newest model of
+ * its family in the catalog, and an id is its catalog entry.
+ */
+function claudeChoiceLabels(catalog: { id: string; displayName: string }[]) {
+	if (catalog.length === 0) return undefined;
+	const entries = catalog.map((model) => ({ id: model.id, label: model.displayName }));
+	const newest = splitClaudeModels(entries).current;
+	return (value: string): string | undefined => {
+		const id = value.replace(/\[.*?\]$/, "").toLowerCase();
+		const exact = entries.find((model) => model.id.toLowerCase() === id);
+		if (exact) return exact.label;
+		return newest.find((model) => model.id.toLowerCase().includes(`-${id}-`) || model.label.toLowerCase().startsWith(id))?.label;
+	};
 }
 
 function ModelEffortPicker({
@@ -456,6 +475,7 @@ function ModelEffortPicker({
 								choices={effortChoices}
 								availability={availability}
 								defaultEffort={defaultEffort}
+								compact
 								onChange={(value) => onChange({ ...settings, reasoningEffort: value || undefined })}
 							/>
 						</OptionMenuSubContent>
@@ -484,7 +504,9 @@ function ClubbedConfigPicker({
 	extraOptions,
 	disabled,
 	onChange,
+	groupClaude,
 }: {
+	groupClaude?: boolean;
 	modelOptions: ChatConfigOption[];
 	effortOptions: ChatConfigOption[];
 	executionMode?: ChatConfigOption;
@@ -530,6 +552,7 @@ function ClubbedConfigPicker({
 				option={option}
 				disabled={disabled}
 				onChange={(value) => onChange(option.id, value)}
+				groupClaude={groupClaude}
 			/>
 		);
 	}
@@ -547,7 +570,7 @@ function ClubbedConfigPicker({
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS}>
 				{modelOptions.map((option) => (
-					<OptionSubmenu key={option.id} option={option} onChange={onChange} scrollable />
+					<OptionSubmenu key={option.id} option={option} onChange={onChange} scrollable groupClaude={groupClaude} />
 				))}
 				{effortOptions.map((option) => (
 					<EffortOptionSubmenu key={option.id} option={option} onChange={onChange} />
@@ -609,7 +632,7 @@ function EffortOptionSubmenu({
 		<OptionMenuSub>
 			<OptionMenuSubTrigger label={followLabel} value={effortDisplayLabel({ ...acpEffortProps(option), followLabel, t })} />
 			<OptionMenuSubContent className={CHAT_MENU_CLASS}>
-				<EffortMenuItems {...acpEffortMenuProps(option)} onChange={(value) => onChange(option.id, { value })} />
+				<EffortMenuItems {...acpEffortMenuProps(option)} compact onChange={(value) => onChange(option.id, { value })} />
 			</OptionMenuSubContent>
 		</OptionMenuSub>
 	);
@@ -748,12 +771,14 @@ function OptionSubmenu({
 	label,
 	onChange,
 	scrollable,
+	groupClaude,
 }: {
 	option: ChatConfigOption;
 	/** A semantic label when one provider option is deliberately split in two. */
 	label?: string;
 	onChange: (optionId: string, value: ChatConfigOptionValue) => void;
 	scrollable?: boolean;
+	groupClaude?: boolean;
 }) {
 	const current = optionCurrentLabel(option);
 	return (
@@ -765,7 +790,7 @@ function OptionSubmenu({
 				onFocus={isModelOption(option) ? focusModelSearch : undefined}
 			>
 				{isModelOption(option) ? (
-					<ConfigModelChoices option={option} onChange={(value) => onChange(option.id, value)} />
+					<ConfigModelChoices option={option} onChange={(value) => onChange(option.id, value)} groupClaude={groupClaude} />
 				) : (
 					<ConfigOptionChoices
 						option={option}
@@ -784,6 +809,7 @@ function ConfigOptionPicker({
 	onChange,
 	disabled,
 	footer,
+	groupClaude,
 }: {
 	option: ChatConfigOption;
 	label?: string;
@@ -791,6 +817,7 @@ function ConfigOptionPicker({
 	onChange: (value: ChatConfigOptionValue) => void;
 	disabled?: boolean;
 	footer?: ReactNode;
+	groupClaude?: boolean;
 }) {
 	return (
 		<Picker
@@ -800,7 +827,7 @@ function ConfigOptionPicker({
 			onFocus={isModelOption(option) ? focusModelSearch : undefined}
 		>
 			{isModelOption(option) ? (
-				<ConfigModelChoices option={option} onChange={onChange} />
+				<ConfigModelChoices option={option} onChange={onChange} groupClaude={groupClaude} />
 			) : (
 				<ConfigOptionChoices option={option} onChange={onChange} />
 			)}
@@ -812,24 +839,51 @@ function ConfigOptionPicker({
 function ConfigModelChoices({
 	option,
 	onChange,
+	groupClaude,
 }: {
 	option: ChatConfigOption;
 	onChange: (value: ChatConfigOptionValue) => void;
+	/** Newest model per Claude family first, the rest behind a toggle, as in the new-task picker. */
+	groupClaude?: boolean;
 }) {
+	const { t } = useTranslation();
 	const models = useMemo(() => option.choices.map((choice) => ({
 		...choice,
 		id: choice.value,
 		label: choice.name,
 	})), [option.choices]);
+	const claude = useMemo(() => (groupClaude ? splitClaudeModels(models) : undefined), [groupClaude, models]);
+	const [otherOpen, setOtherOpen] = useState(false);
+	const selectedIsOther = Boolean(claude?.other.some((model) => model.id === option.currentValue));
+	const showOther = otherOpen || selectedIsOther;
+	const menuModels = claude ? (showOther ? [...claude.current, ...claude.other] : claude.current) : models;
 	return (
-		<ModelMenuChoices models={models}>
+		<ModelMenuChoices models={menuModels}>
 			{(matches, searchActiveID, optionID) => (
-				<ConfigOptionChoices
-					option={{ ...option, choices: matches }}
-					onChange={onChange}
-					searchActiveID={searchActiveID}
-					optionID={optionID}
-				/>
+				<>
+					<ConfigOptionChoices
+						option={{ ...option, choices: matches }}
+						onChange={onChange}
+						searchActiveID={searchActiveID}
+						optionID={optionID}
+					/>
+					{claude?.other.length && !selectedIsOther ? (
+						<OptionMenuItem
+							// The composer focuses its editor on any click that bubbles out of the portal,
+							// which would pull focus out of the menu and close it.
+							onClick={(event) => event.stopPropagation()}
+							onSelect={(event) => {
+								event.preventDefault();
+								setOtherOpen((open) => !open);
+							}}
+							className="text-xs text-muted-foreground"
+							aria-expanded={otherOpen}
+						>
+							{t("settings.models.otherModels")}
+							<ChevronDown className={cn("ml-auto size-3 opacity-70 transition-transform", otherOpen && "rotate-180")} aria-hidden="true" />
+						</OptionMenuItem>
+					) : null}
+				</>
 			)}
 		</ModelMenuChoices>
 	);
@@ -879,7 +933,7 @@ function ConfigOptionChoices({
 				return (
 					<Fragment key={choice.value}>
 						{choice.group && choice.group !== previousGroup ? (
-							<OptionMenuLabel className="px-3 pb-1 pt-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+							<OptionMenuLabel className="px-3 pb-1 pt-2 text-micro text-muted-foreground">
 								{choice.groupName || choice.group}
 							</OptionMenuLabel>
 						) : null}
@@ -1094,6 +1148,10 @@ function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 				choice === implicit ? { ...choice, name: label } : choice,
 			),
 		};
+	}
+	// A model picker lists models only; the agent's own choice is not a row of its own.
+	if (isModelOption(mapped) && mapped.currentValue !== implicit.value) {
+		return { ...mapped, choices: mapped.choices.filter((choice) => choice !== implicit) };
 	}
 	return {
 		...mapped,

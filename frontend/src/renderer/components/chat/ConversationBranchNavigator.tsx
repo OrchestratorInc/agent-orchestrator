@@ -17,7 +17,7 @@ export function ConversationBranchNavigator({
 	const { t } = useTranslation();
 	if (point.total <= 1) return null;
 	return (
-		<div className="flex min-w-0 items-center gap-0.5 text-[10.5px] text-muted-foreground">
+		<div className="flex min-w-0 items-center gap-0.5 text-caption text-muted-foreground">
 		{point.previousBranchId ? (
 			<Tooltip>
 				<TooltipTrigger asChild>

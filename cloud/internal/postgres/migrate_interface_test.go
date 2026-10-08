@@ -14,6 +14,13 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
+func TestMigrationVersionsAreUnique(t *testing.T) {
+	goose.SetBaseFS(migrationFiles)
+	if _, err := goose.CollectMigrations("migrations", 0, goose.MaxVersion); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMigrateInterfaceHandoffFromMainVersion(t *testing.T) {
 	databaseURL := os.Getenv("AO_CLOUD_TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -73,8 +80,12 @@ func TestMigrateInterfaceHandoffFromMainVersion(t *testing.T) {
 		WHERE is_applied ORDER BY id DESC LIMIT 1`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 55 {
-		t.Fatalf("post-upgrade migration version = %d, want 55", version)
+	migrations, err := goose.CollectMigrations("migrations", 0, goose.MaxVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := migrations[len(migrations)-1].Version; version != want {
+		t.Fatalf("post-upgrade migration version = %d, want %d", version, want)
 	}
 	var transitionTableExists bool
 	if err := db.QueryRowContext(ctx,

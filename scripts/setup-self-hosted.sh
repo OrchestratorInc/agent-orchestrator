@@ -3,15 +3,18 @@
 set -euo pipefail
 
 usage() {
-	printf '%s\n' 'Usage: setup-self-hosted.sh [--bundle PATH] [--tunnel] [--install-only]'
+	printf '%s\n' 'Usage: setup-self-hosted.sh [--nightly | --bundle PATH] [--tunnel] [--install-only]'
 	printf '%s\n' 'Installs AO under ~/.ao/host, starts a user service, and prints pairing details.'
+	printf '%s\n' 'Downloads stable by default; --nightly downloads the newest published nightly.'
 }
 
 bundle=""
+nightly=false
 tunnel=false
 install_only=false
 while (($#)); do
 	case "$1" in
+		--nightly) nightly=true; shift ;;
 		--bundle) bundle="${2:?--bundle needs a path}"; shift 2 ;;
 		--tunnel) tunnel=true; shift ;;
 		--install-only) install_only=true; shift ;;
@@ -19,6 +22,9 @@ while (($#)); do
 		*) usage >&2; exit 2 ;;
 	esac
 done
+if "$nightly" && [[ -n "$bundle" ]]; then
+	printf '%s\n' '--nightly cannot be combined with --bundle.' >&2; exit 2
+fi
 
 if [[ "$(id -u)" == 0 ]]; then
 	printf '%s\n' 'Run this as the user who will own AO sessions, not as root.' >&2
@@ -102,13 +108,22 @@ PY
 else
 	command -v curl >/dev/null || { printf '%s\n' 'curl is required.' >&2; exit 1; }
 	metadata="$stage/release.json"
-	curl -fsSL --retry 3 'https://api.github.com/repos/Untrivial-ai/agent-orchestrator/releases/latest' -o "$metadata"
-	asset_info="$(python3 - "$metadata" "$asset" <<'PY'
+	release_api='https://api.github.com/repos/Untrivial-ai/agent-orchestrator/releases/latest'
+	"$nightly" && release_api='https://api.github.com/repos/Untrivial-ai/agent-orchestrator/releases?per_page=100'
+	curl -fsSL --retry 3 "$release_api" -o "$metadata"
+	asset_info="$(python3 - "$metadata" "$asset" "$nightly" <<'PY'
 import json, re, sys
 release = json.load(open(sys.argv[1]))
+if sys.argv[3] == 'true':
+    candidates = [r for r in release if r.get('prerelease') and not r.get('draft')
+                  and '-nightly.' in r.get('tag_name', '') and r.get('published_at')]
+    if not candidates:
+        raise SystemExit('No published nightly release found.')
+    release = max(candidates, key=lambda r: r['published_at'])
 item = next((a for a in release.get('assets', []) if a['name'] == sys.argv[2]), None)
 if not item or not re.fullmatch(r'sha256:[0-9a-f]{64}', item.get('digest') or ''):
     raise SystemExit(f'No verified release asset: {sys.argv[2]}')
+print(f"Downloading AO release: {release['tag_name']}", file=sys.stderr)
 print(item['browser_download_url'])
 print(item['digest'][7:])
 PY

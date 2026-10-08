@@ -66,6 +66,7 @@ it("keeps equal local, Box A, and Box B session IDs isolated through chat sends"
 		? { hostId: "box-b", label: "Box B", url, base: "http://127.0.0.1:4001" }
 		: { hostId: "box-a", label: "Box A", url, base: "http://127.0.0.1:4000" });
 	const posts: string[] = [];
+	const views: { url: string; active: boolean }[] = [];
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const request = input instanceof Request ? input : new Request(input);
 		const path = new URL(request.url).pathname;
@@ -76,6 +77,10 @@ it("keeps equal local, Box A, and Box B session IDs isolated through chat sends"
 		if (path.endsWith("/conversation/messages")) {
 			posts.push(request.url);
 			return Response.json({ state: "accepted", turnId: `turn-${host}` }, { status: 202 });
+		}
+		if (path.endsWith("/chat-view")) {
+			views.push({ url: request.url, active: (await request.json()).active });
+			return new Response(null, { status: 204 });
 		}
 		return Response.json({});
 	}));
@@ -101,6 +106,12 @@ it("keeps equal local, Box A, and Box B session IDs isolated through chat sends"
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 	boxB.unmount();
+	await waitFor(() => expect(views).toEqual(expect.arrayContaining([
+		{ url: "http://127.0.0.1:4000/api/v1/sessions/session-1/chat-view", active: true },
+		{ url: "http://127.0.0.1:4000/api/v1/sessions/session-1/chat-view", active: false },
+		{ url: "http://127.0.0.1:4001/api/v1/sessions/session-1/chat-view", active: true },
+		{ url: "http://127.0.0.1:4001/api/v1/sessions/session-1/chat-view", active: false },
+	])));
 });
 
 it("removes remote chat actions when its host disconnects, without falling back to local", async () => {
@@ -681,6 +692,7 @@ it("opens the returned reviewer Chat when a remote review is triggered", async (
 });
 
 it("opens a TUI reviewer terminal through Box B's mux handle", async () => {
+	HTMLElement.prototype.scrollTo = vi.fn();
 	remoteConnect.mockResolvedValue({ hostId: "box-b", label: "Box B", url: "http://box-b:3001", base: "http://127.0.0.1:4001" });
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const request = input instanceof Request ? input : new Request(input);

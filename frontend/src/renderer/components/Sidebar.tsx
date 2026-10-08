@@ -2540,18 +2540,17 @@ const SessionActions = memo(function SessionActions({
 	);
 });
 
-// CloudSignInRow: the entry point that starts the WorkOS sign-in flow. Shown
-// only when the cloud offering is enabled (entitled client + flag + control
-// plane), WorkOS is configured, and no one is signed in yet.
+// AO account sign-in is shared by Cloud execution and developer-mode remote hosts.
 function CloudSignInRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
 	const { cloudEnabled } = useCloudGate();
+	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, status, signIn } = useCloudSession();
 	// Dev + loopback CP: open the local email/password dialog instead of WorkOS.
 	const { available: localAuthAvailable } = useCloudLocalAuth();
 	const openLocalSignIn = useLocalSignInDialogStore((s) => s.openDialog);
 	const onSignIn = () => (localAuthAvailable ? openLocalSignIn() : signIn());
-	if (!configured || !cloudEnabled || status !== "unauthenticated") return null;
+	if (!configured || (!cloudEnabled && !developerMode) || status !== "unauthenticated") return null;
 
 	return (
 		<button
@@ -2574,12 +2573,13 @@ function CloudSignInRow({ tabIndex }: { tabIndex: number }) {
 function CloudSignInRailButton({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
 	const { cloudEnabled } = useCloudGate();
+	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, status, signIn } = useCloudSession();
 	// Dev + loopback CP: open the local email/password dialog instead of WorkOS.
 	const { available: localAuthAvailable } = useCloudLocalAuth();
 	const openLocalSignIn = useLocalSignInDialogStore((s) => s.openDialog);
 	const onSignIn = () => (localAuthAvailable ? openLocalSignIn() : signIn());
-	if (!configured || !cloudEnabled || status !== "unauthenticated") return null;
+	if (!configured || (!cloudEnabled && !developerMode) || status !== "unauthenticated") return null;
 
 	return (
 		<Tooltip>
@@ -2607,8 +2607,9 @@ function CloudSignInRailButton({ tabIndex }: { tabIndex: number }) {
 function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
 	const { cloudEnabled } = useCloudGate();
+	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, session, status, signOut } = useCloudSession();
-	if (!configured || !cloudEnabled || status !== "authenticated") return null;
+	if (!configured || (!cloudEnabled && !developerMode) || status !== "authenticated") return null;
 
 	return (
 		<DropdownMenu>
@@ -2647,8 +2648,9 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
 	const { cloudEnabled } = useCloudGate();
+	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, session, status, signOut } = useCloudSession();
-	if (!configured || !cloudEnabled || status !== "authenticated") return null;
+	if (!configured || (!cloudEnabled && !developerMode) || status !== "authenticated") return null;
 
 	return (
 		<Tooltip>
