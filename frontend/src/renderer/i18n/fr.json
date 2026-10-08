@@ -1,4 +1,6 @@
 {
+	"chat.annotationReferences": "Referenced chat annotations",
+	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} démarre. Les messages sont envoyés dans l’ordre",
 	"settings.coder11x.navLabel": "Coder",
 	"settings.coder11x.templatesListLabel": "Templates on your Coder",

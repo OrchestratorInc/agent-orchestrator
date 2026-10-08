@@ -11239,6 +11239,13 @@ components:
           type: string
         name:
           type: string
+        sourceMessageId:
+          type: string
+        sourceRevision:
+          format: int64
+          type: integer
+        text:
+          type: string
         type:
           type: string
         uri:
@@ -11270,6 +11277,23 @@ components:
       - additions
       - deletions
       - status
+      type: object
+    ConversationExcerptReferenceRequest:
+      properties:
+        conversationId:
+          type: string
+        messageId:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        text:
+          type: string
+      required:
+      - conversationId
+      - messageId
+      - revision
+      - text
       type: object
     ConversationImageContentRequest:
       properties:
@@ -13947,6 +13971,10 @@ components:
           type: array
         clientMessageId:
           type: string
+        excerpts:
+          items:
+            $ref: '#/components/schemas/ConversationExcerptReferenceRequest'
+          type: array
         resources:
           items:
             $ref: '#/components/schemas/ConversationResourceContentRequest'

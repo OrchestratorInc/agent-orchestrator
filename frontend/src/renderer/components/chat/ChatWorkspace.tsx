@@ -25,15 +25,18 @@ import {
 	useSyncExternalStore,
 	type ComponentProps,
 	type CSSProperties,
+	type MutableRefObject,
 	type KeyboardEvent as ReactKeyboardEvent,
 	type MouseEvent as ReactMouseEvent,
 	type PointerEvent as ReactPointerEvent,
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
-import { ArrowDown, ChevronRight, Loader2, TriangleAlert, Undo2 } from "lucide-react";
+import { ArrowDown, ChevronRight, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
 import { Reorder, useDragControls } from "motion/react";
 import { useTranslation } from "react-i18next";
+import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
+import { actionMenuContentClass, actionMenuItemClass } from "../ui/menu-styles";
 import { useScrollFollow } from "../../hooks/useScrollFollow";
 import {
 	defaultRangeExtractor,
@@ -42,6 +45,7 @@ import {
 	useVirtualizer,
 } from "@tanstack/react-virtual";
 import { cn } from "../../lib/utils";
+import { annotationBody, annotationTextMatches, annotationTextRange, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
 import {
 	acknowledgeChatInlineEditMutation,
 	beginChatInlineEditMutation,
@@ -59,9 +63,11 @@ import {
 	readChatSessionDraft,
 	subscribeChatDraftRuntime,
 	writeChatInlineEdit,
+	writeChatExcerptReferences,
 	writeChatQueuedEdit,
 	type ChatDraftQueuedEdit,
 	type ChatDraftAttachment,
+	type ChatDraftExcerptReference,
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 	type ChatDraftInlineEdit,
@@ -329,6 +335,7 @@ export interface ChatWorkspaceProps {
 		text: string,
 		attachments?: { mimeType: string; data: string }[],
 		clientMessageId?: string,
+		excerpts?: ChatDraftExcerptReference[],
 	) => void | Promise<unknown>;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	onResolveInput?: (
@@ -945,7 +952,7 @@ function ChatWorkspaceContent({
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
 	const handleComposerSend = useCallback(
-		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[]) => {
+		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[]) => {
 			if (queueEdit) {
 				if (!onEditQueuedTurn) {
 					throw new Error("chat.draft.queueUnavailable");
@@ -992,7 +999,7 @@ function ChatWorkspaceContent({
 				}
 				return;
 			}
-			return onSend?.(text, attachments, clientMessageId);
+			return onSend?.(text, attachments, clientMessageId, excerpts);
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
@@ -1052,6 +1059,10 @@ function ChatWorkspaceContent({
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
 	const surfaceRef = useRef<HTMLElement | null>(null);
 	const composerFocusRef = useRef<ChatComposerHandle>(null);
+	const annotationNavigationRef = useRef<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>(null);
+	const navigateToAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
+		annotationNavigationRef.current?.(annotation);
+	}, []);
 	// Storage failures can be transient, so try again when the user comes back. Only while
 	// the composer is empty: recovering remounts it, which would drop unsaved text.
 	useEffect(() => {
@@ -1578,6 +1589,7 @@ function ChatWorkspaceContent({
 						<ChatLinkProvider onLinkOpen={onLinkOpen} onFileOpen={onOpenFile} onSessionLinkOpen={onSessionLinkOpen} remoteHost={Boolean(activeRemoteHostId)} workspacePaths={filePaths}>
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)}>
 								<Timeline
+									annotationNavigationRef={annotationNavigationRef}
 									key={draftScopeKey}
 									snapshot={snapshot}
 									assetBaseUrl={assetBaseUrl}
@@ -1638,6 +1650,7 @@ function ChatWorkspaceContent({
 										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
 									/>
 									<ChatComposer
+										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
 										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
 										queuedDock={composerQueuedDock}
@@ -2205,6 +2218,7 @@ const CHAT_TURN_GAP = 18;
 const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
 
 function Timeline({
+	annotationNavigationRef,
 	snapshot,
 	assetBaseUrl,
 	remoteHost,
@@ -2231,6 +2245,7 @@ function Timeline({
 	localEchos = [],
 	startup,
 }: {
+	annotationNavigationRef: MutableRefObject<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>;
 	snapshot: ConversationSnapshot;
 	assetBaseUrl?: string;
 	remoteHost?: boolean;
@@ -2313,6 +2328,42 @@ function Timeline({
 		setActivityDisclosureOverrides((current) => ({ ...current, [key]: open }));
 	}, []);
 	const [hoveredMarker, setHoveredMarker] = useState<number | null>(null);
+	const [selectionAction, setSelectionAction] = useState<{
+		excerpt: ChatDraftExcerptReference;
+		range: Range;
+	} | null>(null);
+	const selectionButton = useRef<HTMLDivElement>(null);
+	const clearSelectionAction = useCallback(() => setSelectionAction(null), []);
+	const selectionPosition = useChatSelectionPosition(selectionAction?.range, scroller, selectionButton, clearSelectionAction);
+	const [annotationTarget, setAnnotationTarget] = useState<{ text: string; messageId?: string; revision?: number }>();
+	const [annotationNavigationError, setAnnotationNavigationError] = useState<string>();
+	const annotationHighlightCleanup = useRef<(() => void) | undefined>(undefined);
+	const annotationHighlightTimer = useRef<number | undefined>(undefined);
+	const annotationRetryCount = useRef(0);
+	const selectAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
+		releaseFollow();
+		setAnnotationNavigationError(undefined);
+		annotationRetryCount.current = 0;
+		if (!annotation.messageId) {
+			const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
+				.find((element) => annotationTextMatches(annotationBody(element), annotation.text));
+			if (source) {
+				setAnnotationTarget({ ...annotation, messageId: source.dataset.chatMessageId });
+				return;
+			}
+			setAnnotationNavigationError("This annotation's source is unavailable. Reselect the text to create a new reference.");
+			return;
+		}
+		setAnnotationTarget({ ...annotation });
+	}, [releaseFollow]);
+	useEffect(() => {
+		annotationNavigationRef.current = selectAnnotation;
+		return () => { annotationNavigationRef.current = null; };
+	}, [annotationNavigationRef, selectAnnotation]);
+	useEffect(() => () => {
+		window.clearTimeout(annotationHighlightTimer.current);
+		annotationHighlightCleanup.current?.();
+	}, []);
 	const hoveredMarkerRef = useRef<number | null>(null);
 	hoveredMarkerRef.current = hoveredMarker;
 	const [messageEdit, setMessageEdit] = useState<MessageEditDraft | undefined>(
@@ -2353,6 +2404,69 @@ function Timeline({
 	const inlineEditLocked = inlineEditPending || Boolean(durableInlineEditDelivery);
 	const inlineEditSendBlocked =
 		inlineEditPending || (acceptedEditClearFailed && !durableInlineEditDelivery);
+
+	const captureTranscriptSelection = useCallback(() => {
+		const selection = window.getSelection();
+		if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+			setSelectionAction(null);
+			return;
+		}
+		const anchor = selection.anchorNode instanceof Element
+			? selection.anchorNode
+			: selection.anchorNode?.parentElement;
+		const focus = selection.focusNode instanceof Element
+			? selection.focusNode
+			: selection.focusNode?.parentElement;
+		const source = anchor?.closest<HTMLElement>("[data-chat-message-id]");
+		if (
+			!source ||
+			source !== focus?.closest<HTMLElement>("[data-chat-message-id]") ||
+			!scrollContent.current?.contains(source)
+		) {
+			setSelectionAction(null);
+			return;
+		}
+		const text = selection.toString().trim();
+		const messageId = source.dataset.chatMessageId;
+		const revision = Number(source.dataset.chatMessageRevision);
+		const role = source.dataset.chatMessageRole;
+		if (
+			!text ||
+			!messageId ||
+			!Number.isSafeInteger(revision) ||
+			(role !== "user" && role !== "assistant")
+		) {
+			setSelectionAction(null);
+			return;
+		}
+		setSelectionAction({
+			excerpt: {
+				id: crypto.randomUUID(),
+				conversationId: snapshot.conversationId,
+				messageId,
+				revision,
+				text,
+				role,
+			},
+			range: selection.getRangeAt(0).cloneRange(),
+		});
+	}, [snapshot.conversationId]);
+
+	const addSelectionToChat = useCallback(async () => {
+		if (!selectionAction) return;
+		const current = readChatSessionDraft(draftScope).composer.excerpts ?? [];
+		const duplicate = current.some(
+			(item) =>
+				item.messageId === selectionAction.excerpt.messageId &&
+				item.revision === selectionAction.excerpt.revision &&
+				item.text === selectionAction.excerpt.text,
+		);
+		const next = duplicate ? current : [...current, selectionAction.excerpt].slice(-8);
+		const result = writeChatExcerptReferences(draftScope, next);
+		setDraftPersistenceError(result.ok ? undefined : "chat.draft.saveFailed");
+		setSelectionAction(null);
+		window.getSelection()?.removeAllRanges();
+	}, [draftScope, selectionAction]);
 	const inlineEditRecoveryLabel = durableInlineEditDelivery
 		? durableInlineEditDelivery.state === "accepted"
 			? "chat.draft.clearEdit"
@@ -2859,6 +2973,12 @@ function Timeline({
 				role: "user",
 				origin: "human",
 				text: echo.text,
+				content: echo.excerpts?.map((excerpt) => ({
+					type: "excerpt",
+					text: excerpt.text,
+					sourceMessageId: excerpt.messageId,
+					sourceRevision: excerpt.revision,
+				})),
 				streaming: false,
 				delivery: echo.backgroundWake || echo.turnId ? "accepted" : "sending",
 				createdAt: echo.createdAt,
@@ -3002,6 +3122,65 @@ function Timeline({
 	const renderedGroups = virtualized
 		? virtualRows.map((row) => ({ group: groups[row.index]!, row, index: row.index }))
 		: groups.map((group, index) => ({ group, row: undefined, index }));
+	useEffect(() => {
+		if (!annotationTarget) return;
+		const index = groups.findIndex((group) => group.items.some((item) => item.id === annotationTarget.messageId));
+		if (index < 0) {
+			if (hasOlder && onLoadOlder) {
+				if (!loadingOlder) onLoadOlder();
+				return;
+			}
+			setAnnotationNavigationError("The referenced message is no longer available in this chat.");
+			setAnnotationTarget(undefined);
+			return;
+		}
+		const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
+			.find((element) => element.dataset.chatMessageId === annotationTarget.messageId);
+		if (!source) {
+			const disclosureKey = `${groups[index].key}:worked`;
+			if (!activityDisclosureOverrides[disclosureKey]) {
+				setActivityDisclosureOverrides((current) => ({ ...current, [disclosureKey]: true }));
+			}
+			if (virtualized) virtualizer.scrollToIndex(index, { align: "center" });
+			if (annotationRetryCount.current++ >= 20) {
+				setAnnotationNavigationError("The referenced message could not be brought into view.");
+				setAnnotationTarget(undefined);
+				return;
+			}
+			const retryTimer = window.setTimeout(() => {
+				setAnnotationTarget((current) => current ? { ...current } : current);
+			}, 80);
+			return () => window.clearTimeout(retryTimer);
+		}
+		// Wait until the popover has closed/restored focus before scrolling.
+		const frame = requestAnimationFrame(() => {
+			window.clearTimeout(annotationHighlightTimer.current);
+			annotationHighlightCleanup.current?.();
+			annotationHighlightCleanup.current = highlightChatAnnotation(source, annotationTarget.text, annotationTarget.revision);
+			const scrollerNode = scroller.current;
+			let range = annotationTextRange(annotationBody(source), annotationTarget.text);
+			if (range && scrollerNode) {
+				const rangeRect = range.getBoundingClientRect();
+				const scrollerRect = scrollerNode.getBoundingClientRect();
+				const padding = 12;
+				const visible = rangeRect.top >= scrollerRect.top + padding && rangeRect.bottom <= scrollerRect.bottom - padding;
+				if (!visible) {
+					source.scrollIntoView({ behavior: "auto", block: "center" });
+					// Re-read after the source jump; layout may have moved the selected
+					// range before the final centering adjustment.
+					range = annotationTextRange(annotationBody(source), annotationTarget.text);
+					if (range) {
+						const nextRect = range.getBoundingClientRect();
+						const delta = nextRect.top + nextRect.height / 2 - (scrollerRect.top + scrollerRect.height / 2);
+						scrollerNode.scrollTo({ top: scrollerNode.scrollTop + delta, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+					}
+				}
+			}
+			annotationHighlightTimer.current = window.setTimeout(() => annotationHighlightCleanup.current?.(), 2200);
+			setAnnotationTarget(undefined);
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [annotationTarget, groups, hasOlder, loadingOlder, onLoadOlder, virtualized, virtualizer, virtualRows, activityDisclosureOverrides]);
 	useEffect(() => {
 		const node = scroller.current;
 		const content = virtualized ? virtualContent.current
@@ -3384,8 +3563,22 @@ function Timeline({
 			// cannot invalidate the complete mounted conversation history or shell.
 			style={{ contain: "layout paint" }}
 		>
+			{selectionAction ? (
+				<div
+					ref={selectionButton}
+					style={{ left: selectionPosition?.left ?? 0, top: selectionPosition?.top ?? 0, visibility: selectionPosition?.visible ? "visible" : "hidden" }}
+					onMouseDown={(event) => event.preventDefault()}
+					className={cn(actionMenuContentClass, "absolute min-w-0 w-max max-w-full shadow-lg")}
+				>
+					<button type="button" onClick={() => void addSelectionToChat()} className={cn(actionMenuItemClass, "shrink-0 whitespace-nowrap hover:bg-interactive-hover hover:text-foreground")}>
+						<MessageSquarePlus aria-hidden="true" className="size-3.5" /> Add to chat
+					</button>
+				</div>
+			) : null}
 			<div
 				ref={scroller}
+				onMouseUp={captureTranscriptSelection}
+				onKeyUp={captureTranscriptSelection}
 				onScroll={onScroll}
 				onScrollEnd={endFlight}
 				onWheel={onViewportWheel}
@@ -3399,6 +3592,7 @@ function Timeline({
 				style={virtualized ? { overflowAnchor: "none" } : undefined}
 			>
 				<div ref={scrollContent} className="mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5">
+					{annotationNavigationError ? <p role="status" className="text-xs text-muted-foreground">{annotationNavigationError}</p> : null}
 					{hasOlder ? (
 						<div className="flex justify-center pb-1">
 							<Button
@@ -3453,6 +3647,7 @@ function Timeline({
 								<TurnGroup
 									group={group}
 									startup={showStartup && group.turnId === openingTurnId ? startup : undefined}
+									onSelectAnnotation={selectAnnotation}
 									activityDisclosureOverrides={activityDisclosureOverrides}
 									onActivityDisclosureChange={onActivityDisclosureChange}
 									sessionId={snapshot.sessionId}
@@ -3690,6 +3885,7 @@ const TurnGroup = memo(function TurnGroup({
 	queued,
 	newHumanMessageIds,
 	startup,
+	onSelectAnnotation,
 }: {
 	group: TimelineGroup;
 	activityDisclosureOverrides: Readonly<Record<string, boolean>>;
@@ -3729,6 +3925,7 @@ const TurnGroup = memo(function TurnGroup({
 	newHumanMessageIds: ReadonlySet<string>;
 	/** The opening turn of a starting session: its setup checklist. */
 	startup?: ComponentProps<typeof SessionStartup>;
+	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 }) {
 	const { t } = useTranslation();
 	const hasTerminalFailure =
@@ -3834,6 +4031,7 @@ const TurnGroup = memo(function TurnGroup({
 						: undefined
 				}
 				rollbackDisabled={rollbackDisabled}
+				onSelectAnnotation={onSelectAnnotation}
 			/>
 		);
 	// One flat keyed list rather than a slot per section, so a run keeps its element
@@ -4025,6 +4223,7 @@ function TimelineItem({
 	live,
 	onRollback,
 	rollbackDisabled,
+	onSelectAnnotation,
 }: {
 	item: ConversationItem;
 	sessionId: string;
@@ -4061,6 +4260,7 @@ function TimelineItem({
 	onRollback?: () => void;
 	/** Keep the action row mounted while another turn is running. */
 	rollbackDisabled?: boolean;
+	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	/** This message is the live edge of its turn, rather than an earlier fragment
 	 * followed by tool activity. */
 }) {
@@ -4107,6 +4307,7 @@ function TimelineItem({
 					onActivateBranch={onActivateBranch}
 					activateBranchPending={activateBranchPending}
 					activateBranchError={activateBranchError}
+					onSelectAnnotation={onSelectAnnotation}
 				/>
 			);
 		}

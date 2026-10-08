@@ -51,6 +51,7 @@ import {
 import { ArrowUp, CornerUpRight, ListPlus, Loader2, Plus, Square, X } from "lucide-react";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
 import { cn } from "../../lib/utils";
 import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
@@ -89,11 +90,13 @@ import {
 	readChatSessionDraft,
 	subscribeChatDraftRuntime,
 	writeChatAttachments,
+	writeChatExcerptReferences,
 	writeChatComposerText,
 	type ChatDraftMutationToken,
 	type ChatComposerDelivery,
 	type ChatDraftScope,
 	type ChatDraftAttachment,
+	type ChatDraftExcerptReference,
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
@@ -200,13 +203,16 @@ export const ChatComposer = memo(function ChatComposer({
 	assetSessionId,
 	acceptedClientMessageIds,
 	emptyPlaceholder,
+	onSelectAnnotation,
 }: {
+	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (
 		text: string,
 		attachments?: FileAttachmentPayload[],
 		clientMessageId?: string,
 		retainedContent?: number[],
+		excerpts?: ChatDraftExcerptReference[],
 	) => void | Promise<unknown>;
 	settings?: ReactNode;
 	/** A provider decision that temporarily replaces ordinary message entry. */
@@ -402,6 +408,9 @@ export const ChatComposer = memo(function ChatComposer({
 		getComposerMutation,
 		getComposerMutation,
 	);
+	const contextReferences = draftScope
+		? readChatSessionDraft(draftScope).composer.excerpts ?? []
+		: [];
 	const [appliedAcceptanceSequence, setAppliedAcceptanceSequence] = useState(0);
 	const composerRevision = useRef(persistedDraft?.composer.revision ?? 0);
 	const synchronouslyClearedDeliveryRevision = useRef<number | undefined>(undefined);
@@ -519,7 +528,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const composerImages: ComposerImage[] = stripAttachments.flatMap(({ file, path, preview }) =>
 		path && IMAGE_ATTACHMENT_PATH.test(path) ? [{ path, name: file.name, src: preview }] : []);
 	const controlsDisabled = Boolean(disabled || submitting);
-	const hasDraft = hasText || staged;
+	const hasDraft = hasText || staged || contextReferences.length > 0;
 	const savingQueuedEdit = Boolean(editingQueuedTurnId);
 	const acceptedMutationWaiting = Boolean(
 		composerMutation.accepted &&
@@ -1117,7 +1126,7 @@ export const ChatComposer = memo(function ChatComposer({
 		body = proseBesideImages(currentText.trim(), attachedPaths);
 		const hasAttachments = settledAttachments.length > 0 || visibleRetainedAttachments.length > 0;
 		const canSubmitNow =
-			(body.length > 0 || hasAttachments || Boolean(recoveringDelivery)) &&
+			(body.length > 0 || hasAttachments || contextReferences.length > 0 || Boolean(recoveringDelivery)) &&
 			(!busy || savingQueuedEdit || recoveringDelivery?.state === "accepted") &&
 			!disabled && !steerPending && !savingQueuedEditPending &&
 			!composerMutation.pending &&
@@ -1135,7 +1144,7 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 		const shouldSteer = Boolean(forceSteer && !savingQueuedEdit);
-		const message = withAttachmentReferences(body, attachedPaths);
+		const message = withAttachmentReferences(body, attachedPaths) || (contextReferences.length > 0 ? `Use the attached ${contextReferences.length} chat excerpt(s) as context` : "");
 		// Ordinary delivery reserves its exact draft before these staged reads await.
 		// Queue editors use their existing owner/revision CAS before mutation.
 		const attachmentScope = queuedDraftScope ?? draftScope;
@@ -1254,6 +1263,7 @@ export const ChatComposer = memo(function ChatComposer({
 						}]
 					: [],
 			),
+			excerpts: recoveringDelivery?.excerpts ?? contextReferences,
 			requestText,
 			clientMessageId: recoveringDelivery?.clientMessageId ?? crypto.randomUUID(),
 		});
@@ -1308,11 +1318,19 @@ export const ChatComposer = memo(function ChatComposer({
 					return;
 				}
 			} else {
-				await onSend(
-					delivery.requestText,
-					sendNativeImages && nativePayloads.length > 0 ? nativePayloads : undefined,
-					delivery.clientMessageId,
-				);
+				const deliveryAttachments =
+					sendNativeImages && nativePayloads.length > 0 ? nativePayloads : undefined;
+				if (delivery.excerpts?.length) {
+					await onSend(
+						delivery.requestText,
+						deliveryAttachments,
+						delivery.clientMessageId,
+						undefined,
+						delivery.excerpts,
+					);
+				} else {
+					await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId);
+				}
 			}
 			acceptAndClearDurableDelivery(delivery, mutationToken);
 			mutationFinished = true;
@@ -1616,6 +1634,22 @@ export const ChatComposer = memo(function ChatComposer({
 							);
 						})}
 					</ul>
+				) : null}
+				{contextReferences.length > 0 ? (
+					<ChatAnnotationSummary
+						annotations={contextReferences}
+						onSelect={onSelectAnnotation}
+						disabled={controlsDisabled || draftMutationPending}
+						onRemove={(excerpt) => {
+							if (!draftScope || submitInFlight.current || !excerpt.id) return;
+							const result = writeChatExcerptReferences(
+								draftScope,
+								contextReferences.filter((item) => item.id !== excerpt.id),
+							);
+							composerRevision.current = result.draft.composer.revision;
+							setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed");
+						}}
+					/>
 				) : null}
 
 				<ComposerEditor

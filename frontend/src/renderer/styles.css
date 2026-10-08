@@ -6103,3 +6103,15 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	padding-inline: var(--space-3) 0;
 	border-top: 0;
 }
+
+::highlight(chat-annotation) {
+	background-color: #6b728040;
+	color: inherit;
+}
+
+.chat-annotation-target {
+	background-color: #6b72801f;
+	outline: 2px solid #6b7280;
+	outline-offset: 4px;
+	border-radius: 10px;
+}

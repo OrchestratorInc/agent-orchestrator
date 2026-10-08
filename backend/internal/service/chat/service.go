@@ -27,6 +27,18 @@ var ErrNoController = errors.New("no live chat controller for session")
 // fact later, but callers must route from the persisted mode they read now.
 var ErrNotChatMode = errors.New("session is not in chat mode")
 
+var (
+	// ErrExcerptInvalid reports malformed or unauthorized excerpt references.
+	ErrExcerptInvalid = errors.New("chat excerpt is invalid")
+	// ErrExcerptStale reports excerpt references whose source changed or disappeared.
+	ErrExcerptStale = errors.New("chat excerpt is stale")
+)
+
+const (
+	maxExcerptReferences = 8
+	maxExcerptTextBytes  = 24 * 1024
+)
+
 // SessionReader is the session-fact surface the service needs. It reads the
 // persisted mode rather than trusting the caller, so a client cannot talk its way
 // into the wrong dispatch path.
@@ -1125,6 +1137,16 @@ func (s *Service) Send(
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
+	if msg.ClientMessageID != "" && len(msg.Excerpts) > 0 {
+		if controller, controllerErr := s.Controller(id); controllerErr == nil {
+			if existing, found, lookupErr := controller.store.ConversationMessageByClientID(ctx, controller.conversation.ID, msg.ClientMessageID); lookupErr != nil {
+				return domain.ConversationTurn{}, fmt.Errorf("read message delivery: %w", lookupErr)
+			} else if found {
+				msg.ClientPayloadHash = existing.ClientPayloadHash
+				return controller.Send(ctx, msg)
+			}
+		}
+	}
 	msg.ClientPayloadHash, err = clientPayloadHash(msg)
 	if err != nil {
 		return domain.ConversationTurn{}, err
@@ -1152,7 +1174,11 @@ func (s *Service) Send(
 				var release func()
 				controller, release, err = s.workingController(ctx, id)
 				if err == nil {
-					turn, err = controller.Send(ctx, msg)
+					if hydrateErr := hydrateExcerptReferences(ctx, controller, &msg); hydrateErr != nil {
+						err = hydrateErr
+					} else {
+						turn, err = controller.Send(ctx, msg)
+					}
 					release()
 				}
 			}
@@ -1165,7 +1191,11 @@ func (s *Service) Send(
 		var release func()
 		controller, release, err = s.workingController(ctx, id)
 		if err == nil {
-			turn, err = controller.Send(ctx, msg)
+			if hydrateErr := hydrateExcerptReferences(ctx, controller, &msg); hydrateErr != nil {
+				err = hydrateErr
+			} else {
+				turn, err = controller.Send(ctx, msg)
+			}
 			release()
 		}
 	}
@@ -1194,7 +1224,90 @@ func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwn
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
+	// A crash-safe retry may arrive after its source message changed. Once this
+	// client id is already durable, the controller's existing idempotency path is
+	// authoritative and must not be blocked by re-validating old selection text.
+	if msg.ClientMessageID != "" && len(msg.Excerpts) > 0 {
+		if existing, found, lookupErr := controller.store.ConversationMessageByClientID(
+			ctx, controller.conversation.ID, msg.ClientMessageID,
+		); lookupErr != nil {
+			return domain.ConversationTurn{}, fmt.Errorf("read message delivery: %w", lookupErr)
+		} else if found {
+			msg.ClientPayloadHash = existing.ClientPayloadHash
+			return controller.Send(ctx, msg)
+		}
+	}
+	if err := hydrateExcerptReferences(ctx, controller, &msg); err != nil {
+		return domain.ConversationTurn{}, err
+	}
 	return controller.Send(ctx, msg)
+}
+
+func hydrateExcerptReferences(ctx context.Context, controller *Controller, msg *ports.ChatUserMessage) error {
+	if len(msg.Excerpts) == 0 {
+		return nil
+	}
+	if len(msg.Excerpts) > maxExcerptReferences {
+		return fmt.Errorf("%w: at most %d excerpts may be attached", ErrExcerptInvalid, maxExcerptReferences)
+	}
+	messages, err := controller.store.ConversationMessages(ctx, controller.conversation.ID)
+	if err != nil {
+		return fmt.Errorf("read excerpt transcript: %w", err)
+	}
+	total := 0
+	for _, excerpt := range msg.Excerpts {
+		text := strings.TrimSpace(excerpt.Text)
+		if excerpt.ConversationID != controller.conversation.ID || excerpt.MessageID == "" || text == "" || excerpt.Revision < 0 {
+			return fmt.Errorf("%w: source conversation, message, revision, and text are required", ErrExcerptInvalid)
+		}
+		total += len(text)
+		if total > maxExcerptTextBytes {
+			return fmt.Errorf("%w: attached excerpts exceed %d bytes", ErrExcerptInvalid, maxExcerptTextBytes)
+		}
+		var source domain.ConversationMessage
+		found := false
+		for _, candidate := range messages {
+			if candidate.ID == excerpt.MessageID {
+				source, found = candidate, true
+				break
+			}
+		}
+		if !found || source.Revision != excerpt.Revision || source.Streaming || source.TurnID == "" || !sourceContainsExcerptSelection(source, text) || (source.Role != domain.MessageRoleUser && source.Role != domain.MessageRoleAssistant) {
+			return fmt.Errorf("%w: source message changed or no longer contains the selection; reselect it", ErrExcerptStale)
+		}
+		turn, err := controller.store.TurnByID(ctx, source.TurnID)
+		if err != nil || turn.ConversationID != controller.conversation.ID || turn.State != domain.TurnStateCompleted || turn.RolledBackAt != nil {
+			return fmt.Errorf("%w: source turn is not complete", ErrExcerptStale)
+		}
+		var userText, assistantText string
+		for _, candidate := range messages {
+			if candidate.TurnID != source.TurnID || candidate.Streaming {
+				continue
+			}
+			switch candidate.Role {
+			case domain.MessageRoleUser:
+				if userText != "" {
+					userText += "\n\n"
+				}
+				userText += candidate.Text
+			case domain.MessageRoleAssistant:
+				if assistantText != "" {
+					assistantText += "\n\n"
+				}
+				assistantText += candidate.Text
+			}
+		}
+		if userText == "" || assistantText == "" {
+			return fmt.Errorf("%w: source turn has no complete user and assistant messages", ErrExcerptStale)
+		}
+		msg.Content = append(msg.Content, ports.ChatContent{
+			Type: "excerpt", URI: ports.ChatExcerptResourceURIPrefix + source.ID,
+			Name: fmt.Sprintf("%s message", source.Role), MIMEType: "text/plain", Text: text,
+			Excerpt: &ports.ChatExcerptContext{Reference: excerpt, SelectedText: text, UserMessage: userText, AssistantMessage: assistantText},
+		})
+	}
+	msg.Excerpts = nil
+	return nil
 }
 
 // Resolve answers a pending approval.

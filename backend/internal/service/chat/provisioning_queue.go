@@ -58,6 +58,17 @@ func (s *Service) queueWithoutController(
 		}
 		deliveryContent = string(encoded)
 	}
+	if len(msg.Excerpts) > 0 {
+		queuedContent := append([]ports.ChatContent(nil), msg.Content...)
+		for _, excerpt := range msg.Excerpts {
+			queuedContent = append(queuedContent, ports.ChatContent{Type: "excerpt", Excerpt: &ports.ChatExcerptContext{Reference: excerpt}})
+		}
+		encoded, marshalErr := json.Marshal(queuedContent)
+		if marshalErr != nil {
+			return domain.ConversationTurn{}, fmt.Errorf("encode queued excerpts: %w", marshalErr)
+		}
+		deliveryContent = string(encoded)
+	}
 	// The generation is empty on purpose: no controller has claimed this turn.
 	// Drain selects by conversation, so the controller that starts next owns it.
 	created, err := s.store.AppendUserMessage(ctx, conversation.ID, record.ID, "", domain.ConversationMessage{

@@ -168,6 +168,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSetChatViewRequest":                        "SetChatViewRequest",
 	"ControllersConversationImageContentRequest":           "ConversationImageContentRequest",
 	"ControllersConversationResourceContentRequest":        "ConversationResourceContentRequest",
+	"ControllersConversationExcerptReferenceRequest":       "ConversationExcerptReferenceRequest",
 	"ControllersSendConversationMessageResponse":           "SendConversationMessageResponse",
 	"ControllersEditConversationMessageRequest":            "EditConversationMessageRequest",
 	"ControllersEditQueuedConversationMessageRequest":      "EditQueuedConversationMessageRequest",

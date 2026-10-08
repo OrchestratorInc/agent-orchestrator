@@ -1195,6 +1195,31 @@ describe("ChatWorkspace timeline", () => {
 		expect(selection?.isCollapsed).toBe(false);
 	});
 
+	it("adds the selected excerpt through a compact neutral action without clearing selection on mouse down", () => {
+		render(<ChatWorkspace snapshot={chatFixtureSettled} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		const source = log.querySelector("[data-chat-message-id] [data-chat-message-body]")!;
+		const range = document.createRange();
+		range.selectNodeContents(source);
+		const selectedText = range.toString().trim();
+		const selection = window.getSelection()!;
+		selection.removeAllRanges();
+		selection.addRange(range);
+		vi.spyOn(Range.prototype, "getClientRects").mockReturnValue([new DOMRect(40, 150, 100, 20)] as unknown as DOMRectList);
+		vi.spyOn(log, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 500));
+		fireEvent.mouseUp(log);
+		const button = screen.getByRole("button", { name: "Add to chat" });
+		expect(button).toHaveClass("shrink-0", "whitespace-nowrap", "hover:bg-interactive-hover");
+		expect(button.parentElement).toHaveClass("bg-card", "border-border", "rounded-lg", "w-max");
+		fireEvent.mouseDown(button);
+		expect(selection.toString().trim()).toBe(selectedText);
+		fireEvent.click(button);
+		expect(screen.getByRole("button", { name: "1 annotation" })).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "1 annotation" }));
+		expect(screen.getByRole("button", { name: selectedText })).toBeInTheDocument();
+		selection.removeAllRanges();
+	});
+
 	function withUserInput(status: "pending" | "completed") {
 		const snapshot = structuredClone(chatFixture);
 		snapshot.turns[0] = { ...snapshot.turns[0], state: "running" };

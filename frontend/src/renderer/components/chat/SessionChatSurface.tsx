@@ -561,8 +561,18 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				loadingOlder={isLoadingOlder}
 				onLoadOlder={loadOlder}
 				busy={commands.busy}
-				onSend={(text, attachments, clientMessageId) =>
-					commands.send({ text, attachments, clientMessageId })}
+				onSend={(text, attachments, clientMessageId, excerpts) =>
+					commands.send({
+						text,
+						attachments,
+						clientMessageId,
+						excerpts: excerpts?.map((excerpt) => ({
+							conversationId: excerpt.conversationId,
+							messageId: excerpt.messageId,
+							revision: excerpt.revision,
+							text: excerpt.text,
+						})),
+					})}
 				commandError={commands.error}
 				onDecide={commands.resolve}
 				onResolveInput={commands.resolveInput}

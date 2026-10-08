@@ -2422,9 +2422,19 @@ type SendConversationMessageRequest struct {
 	Text string `json:"text"`
 	// ClientMessageID makes delivery idempotent. A retry carrying the same value
 	// must not produce a second provider turn.
-	ClientMessageID string                               `json:"clientMessageId,omitempty"`
-	Attachments     []ConversationImageContentRequest    `json:"attachments,omitempty"`
-	Resources       []ConversationResourceContentRequest `json:"resources,omitempty"`
+	ClientMessageID string                                `json:"clientMessageId,omitempty"`
+	Attachments     []ConversationImageContentRequest     `json:"attachments,omitempty"`
+	Resources       []ConversationResourceContentRequest  `json:"resources,omitempty"`
+	Excerpts        []ConversationExcerptReferenceRequest `json:"excerpts,omitempty"`
+}
+
+// ConversationExcerptReferenceRequest attaches verified selected transcript
+// text to the next message.
+type ConversationExcerptReferenceRequest struct {
+	ConversationID string `json:"conversationId"`
+	MessageID      string `json:"messageId"`
+	Revision       int64  `json:"revision"`
+	Text           string `json:"text"`
 }
 
 // ConversationImageContentRequest is a native raster image prompt block.
@@ -2524,6 +2534,13 @@ type ConversationContentSummaryResponse struct {
 	MIMEType string `json:"mimeType,omitempty"`
 	URI      string `json:"uri,omitempty"`
 	Name     string `json:"name,omitempty"`
+	// Text is exposed only for verified chat excerpts, so the timeline can show
+	// what the user referred to without exposing internal resource URIs.
+	Text string `json:"text,omitempty"`
+	// SourceMessageID and SourceRevision let the renderer navigate back to the
+	// verified transcript message without exposing the internal excerpt URI.
+	SourceMessageID string `json:"sourceMessageId,omitempty"`
+	SourceRevision  int64  `json:"sourceRevision,omitempty"`
 }
 
 // EditConversationMessageResponse identifies the newly selected branch and its

@@ -780,7 +780,7 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	if req.Text == "" && len(req.Attachments) == 0 && len(req.Resources) == 0 {
+	if req.Text == "" && len(req.Attachments) == 0 && len(req.Resources) == 0 && len(req.Excerpts) == 0 {
 		// There is no keystroke concept in Chat mode: an empty body is a client
 		// bug, not a way to nudge the agent.
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
@@ -796,11 +796,23 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 	}
 	text := req.Text
 	if text == "" {
-		text = fmt.Sprintf("Attached %d item(s) for context", len(content))
+		if len(req.Excerpts) > 0 {
+			text = fmt.Sprintf("Use the attached %d chat excerpt(s) as context", len(req.Excerpts))
+		} else {
+			text = fmt.Sprintf("Attached %d item(s) for context", len(content))
+		}
+	}
+	excerpts := make([]ports.ChatExcerptReference, 0, len(req.Excerpts))
+	for _, excerpt := range req.Excerpts {
+		excerpts = append(excerpts, ports.ChatExcerptReference{
+			ConversationID: excerpt.ConversationID, MessageID: excerpt.MessageID,
+			Revision: excerpt.Revision, Text: excerpt.Text,
+		})
 	}
 	turn, err := c.Svc.Send(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), ports.ChatUserMessage{
 		Text:            text,
 		Content:         content,
+		Excerpts:        excerpts,
 		ClientMessageID: req.ClientMessageID,
 		Origin:          domain.MessageOriginHuman,
 	})
@@ -983,6 +995,14 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_CONTROLLER_NOT_READY",
 			"the agent controller for this session is not running", nil)
+
+	case errors.Is(err, chatsvc.ErrExcerptInvalid):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"CHAT_EXCERPT_INVALID", err.Error(), nil)
+
+	case errors.Is(err, chatsvc.ErrExcerptStale):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_EXCERPT_STALE", err.Error(), nil)
 
 	case errors.Is(err, chatsvc.ErrControllerHandoff):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
@@ -1237,9 +1257,27 @@ func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationC
 		if name == "" && block.Type != "image" && block.Type != "resource" && block.Type != "resource_link" {
 			name = block.Type
 		}
-		summaries = append(summaries, ConversationContentSummaryResponse{
-			Type: block.Type, MIMEType: block.MIMEType, URI: block.URI, Name: name,
-		})
+		summary := ConversationContentSummaryResponse{Type: block.Type, MIMEType: block.MIMEType, Name: name}
+		if block.Type == "excerpt" {
+			// Excerpts written by current versions carry verified structured
+			// context. Older durable messages only have the excerpt resource URI
+			// and selected text; keep those navigable without exposing the
+			// internal URI in the public content summary.
+			summary.Name = "Chat excerpt"
+			if block.Excerpt != nil {
+				summary.Text = block.Excerpt.SelectedText
+				summary.SourceMessageID = block.Excerpt.Reference.MessageID
+				summary.SourceRevision = block.Excerpt.Reference.Revision
+			} else {
+				summary.Text = block.Text
+				if strings.HasPrefix(block.URI, ports.ChatExcerptResourceURIPrefix) {
+					summary.SourceMessageID = strings.TrimPrefix(block.URI, ports.ChatExcerptResourceURIPrefix)
+				}
+			}
+		} else {
+			summary.URI = block.URI
+		}
+		summaries = append(summaries, summary)
 	}
 	return summaries, true
 }
