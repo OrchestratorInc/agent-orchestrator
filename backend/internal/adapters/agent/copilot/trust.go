@@ -60,9 +60,10 @@ func ensureCopilotFolderTrusted(configPath, workspacePath string) error {
 	header, body := splitCopilotConfigHeader(data)
 	config := map[string]json.RawMessage{}
 	if len(bytes.TrimSpace(body)) > 0 {
-		if err := json.Unmarshal(body, &config); err != nil {
-			// Never rewrite a config AO cannot round-trip; Copilot then just
-			// asks for folder trust interactively.
+		// Never rewrite a config AO cannot round-trip; Copilot then just asks
+		// for folder trust interactively. A top-level null decodes without
+		// error but leaves config nil, so it is rejected the same way.
+		if err := json.Unmarshal(body, &config); err != nil || config == nil {
 			return nil
 		}
 	}

@@ -54,17 +54,26 @@ func TestEnsureCopilotFolderTrustedPreservesHeaderAndKeysIdempotently(t *testing
 	}
 }
 
-func TestEnsureCopilotFolderTrustedLeavesUnparseableConfigAlone(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "config.json")
-	original := "{not json"
-	if err := os.WriteFile(configPath, []byte(original), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureCopilotFolderTrusted(configPath, t.TempDir()); err != nil {
-		t.Fatalf("ensureCopilotFolderTrusted: %v", err)
-	}
-	if data, _ := os.ReadFile(configPath); string(data) != original {
-		t.Fatalf("config rewritten to %q, want untouched", data)
+func TestEnsureCopilotFolderTrustedLeavesUnsupportedConfigAlone(t *testing.T) {
+	for name, original := range map[string]string{
+		"unparseable":         "{not json",
+		"null":                "null",
+		"null after header":   "// This file is managed automatically.\nnull\n",
+		"array":               "[]",
+		"non-array trust key": `{"trustedFolders": "/existing"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(configPath, []byte(original), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := ensureCopilotFolderTrusted(configPath, t.TempDir()); err != nil {
+				t.Fatalf("ensureCopilotFolderTrusted: %v", err)
+			}
+			if data, _ := os.ReadFile(configPath); string(data) != original {
+				t.Fatalf("config rewritten to %q, want untouched", data)
+			}
+		})
 	}
 }
 
