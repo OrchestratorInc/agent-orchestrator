@@ -79,16 +79,17 @@ func kimiLoginPlan() Plan {
 }
 
 // piLoginPlan opens Pi's TUI and injects /login automatically; Pi has no
-// login subcommand. The ready markers are Pi's startup onboarding line and the
-// footer's empty model slot, which an unauthenticated Pi shows even with
-// quietStartup. Pi keeps text typed during its brief startup tail in the
-// editor, and the runtime's pause before Enter covers that window.
+// login subcommand. The primary ready marker is the footer's context stat: a
+// fresh Pi session always renders "0.0%/<window>" there, with or without a
+// selected model and even with quietStartup, which drops the onboarding line
+// kept as a second marker. Pi keeps text typed during its brief startup tail
+// in the editor, and the runtime's pause before Enter covers that window.
 func piLoginPlan() Plan {
 	p := plan("pi", ActionLogin, "Log in to Pi", []string{"pi"}, "Pi opens its login picker automatically", "https://github.com/earendil-works/pi")
 	p.initialInput = "/login"
 	p.initialInputReadyStates = []shellterm.InitialInputReadyState{
+		{Text: "0.0%/"},
 		{Text: "Pi can explain its own features"},
-		{Text: "no-model"},
 	}
 	return p
 }

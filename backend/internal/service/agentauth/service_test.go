@@ -129,8 +129,8 @@ func TestStartPiInjectsLoginAutomatically(t *testing.T) {
 		Title:        "Log in to Pi",
 		InitialInput: "/login",
 		InitialInputReadyStates: []shellterm.InitialInputReadyState{
+			{Text: "0.0%/"},
 			{Text: "Pi can explain its own features"},
-			{Text: "no-model"},
 		},
 	}
 	if !reflect.DeepEqual(opener.input, wantInput) {
