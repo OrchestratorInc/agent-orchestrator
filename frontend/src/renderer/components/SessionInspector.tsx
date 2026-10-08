@@ -1538,8 +1538,14 @@ type SortableTimelineEvent = InspectorTimelineEvent & { sortTime: number };
 const TIMELINE_COMMIT_LIMIT = 5;
 
 function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: SessionPRSummary[]; session: WorkspaceSession }) {
+	// Keyed on the daemon's commit count, not the shared history query that every
+	// file edit invalidates, so only a new commit refetches.
+	const commitCount = session.branchState?.commits ?? 0;
 	const history = useQuery({
-		...sessionWorkspaceHistoryQueryOptions(session.id, undefined, hostId),
+		queryKey: ["session-activity-commits", hostId ?? "", session.id, commitCount],
+		queryFn: sessionWorkspaceHistoryQueryOptions(session.id, undefined, hostId).queryFn,
+		staleTime: Infinity,
+		placeholderData: (previous) => previous,
 		enabled: !session.cloud && session.kind !== "orchestrator",
 	});
 	const events: SortableTimelineEvent[] = [];

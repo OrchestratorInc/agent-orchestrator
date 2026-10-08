@@ -295,7 +295,7 @@ type SessionRecord struct {
 	ProvisionSteps []SessionProvisionStep `json:"provisionSteps,omitempty"`
 	// BranchState is what the daemon last observed about the session branch:
 	// its commits on top of the base and whether they reached the remote. The
-	// branch observer writes it only when a fact changes; nil until the first
+	// branch-state reconcile writes it only when a fact changes; nil until the first
 	// observation, and a failed git read keeps the last known value.
 	BranchState *SessionBranchState `json:"branchState,omitempty"`
 }

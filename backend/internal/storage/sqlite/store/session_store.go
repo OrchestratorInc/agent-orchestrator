@@ -229,7 +229,7 @@ func (s *Store) SetSessionProvisionSteps(
 	return nil
 }
 
-// SetSessionBranchState records the branch observer's latest facts. It writes
+// SetSessionBranchState records the branch-state reconcile's latest facts. It writes
 // only its own column, so a stale session read cannot replay other fields.
 func (s *Store) SetSessionBranchState(ctx context.Context, id domain.SessionID, state domain.SessionBranchState) (bool, error) {
 	raw, err := json.Marshal(state)

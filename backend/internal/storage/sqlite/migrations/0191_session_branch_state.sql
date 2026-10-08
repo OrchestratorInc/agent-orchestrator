@@ -1,6 +1,6 @@
 -- +goose Up
 -- The daemon records the session branch's commit and push facts as JSON. The
--- branch observer rewrites it only when a fact changes; the trigger fires on it
+-- branch-state reconcile rewrites it only when a fact changes; the trigger fires on it
 -- so open sessions refetch instead of polling git.
 ALTER TABLE sessions ADD COLUMN branch_state TEXT NOT NULL DEFAULT '';
 

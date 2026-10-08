@@ -1425,7 +1425,7 @@ type SetSessionBranchStateParams struct {
 	ID          domain.SessionID
 }
 
-// Narrow write for the branch observer: it names only branch_state, so a
+// Narrow write for the branch-state reconcile: it names only branch_state, so a
 // stale read can never replay other session columns. updated_at is left
 // alone because an observed git fact is not user-visible recency.
 func (q *Queries) SetSessionBranchState(ctx context.Context, arg SetSessionBranchStateParams) (int64, error) {

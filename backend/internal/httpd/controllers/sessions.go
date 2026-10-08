@@ -1149,24 +1149,22 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 				return
 			}
 			flusher.Flush()
-			// The same watch sees commits and pushes, so refresh the persisted
-			// branch facts too; their change streams to every client as
-			// session_updated.
+			if manifest, refreshErr := c.Svc.RefreshWorkspaceManifest(r.Context(), sessionID(r)); refreshErr == nil {
+				payload.Kind = "version"
+				payload.WorkspaceVersion = manifest.WorkspaceVersion
+				payload.Refreshing = false
+				data, _ = json.Marshal(payload)
+				if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
+					return
+				}
+				flusher.Flush()
+			}
+			// The same watch sees commits and pushes. Branch facts refresh after
+			// the file list so a commit never delays it, and their change
+			// streams to every client as session_updated.
 			if reconciler, ok := c.Svc.(branchStateReconciler); ok {
 				_ = reconciler.ReconcileSessionBranchState(r.Context(), sessionID(r))
 			}
-			manifest, refreshErr := c.Svc.RefreshWorkspaceManifest(r.Context(), sessionID(r))
-			if refreshErr != nil {
-				continue
-			}
-			payload.Kind = "version"
-			payload.WorkspaceVersion = manifest.WorkspaceVersion
-			payload.Refreshing = false
-			data, _ = json.Marshal(payload)
-			if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
-				return
-			}
-			flusher.Flush()
 		case <-keepAlive.C:
 			if _, err := fmt.Fprint(w, "event: heartbeat\ndata: {}\n\n"); err != nil {
 				return

@@ -406,7 +406,7 @@ UPDATE sessions SET
 WHERE id = sqlc.arg(id);
 
 -- name: SetSessionBranchState :execrows
--- Narrow write for the branch observer: it names only branch_state, so a
+-- Narrow write for the branch-state reconcile: it names only branch_state, so a
 -- stale read can never replay other session columns. updated_at is left
 -- alone because an observed git fact is not user-visible recency.
 UPDATE sessions SET
