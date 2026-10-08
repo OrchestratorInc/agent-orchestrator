@@ -4,8 +4,8 @@ import type { TFunction } from "i18next";
 import { cn } from "../lib/utils";
 import { parseSessionLink } from "../lib/session-links";
 import { getSessionStatusDotView, getSessionStatusView } from "../lib/session-presentation";
-import { prCardPresentation, sessionPRDisplaySummaries } from "../lib/pr-display";
-import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
+import { prCanMerge, prCardPresentation, sessionPRDisplaySummaries, type PRDisplayTone } from "../lib/pr-display";
+import { useSessionLinkSource } from "../lib/use-session-link-navigation";
 import type { WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { HoverCardContent } from "./ui/hover-card";
@@ -49,9 +49,18 @@ function UnavailableCard() {
 	const { t } = useTranslation();
 	return (
 		<HoverCardContent collisionPadding={8} sideOffset={6} className="max-h-48 overflow-y-auto p-3">
-			<div role="status" className="space-y-1">
-				<p className="text-[13px] font-medium text-foreground">{t("session.statusUnavailable")}</p>
-				<p className="text-[11px] leading-4 text-muted-foreground">{t("session.notFound")}</p>
+			<p role="status" className="text-sm font-medium text-foreground">{t("session.statusUnavailable")}</p>
+		</HoverCardContent>
+	);
+}
+
+function ErrorCard() {
+	const { t } = useTranslation();
+	return (
+		<HoverCardContent collisionPadding={8} sideOffset={6} className="max-h-48 overflow-y-auto p-3">
+			<div role="alert" className="space-y-1">
+				<p className="text-sm font-medium text-foreground">{t("session.statusUnavailable")}</p>
+				<p className="text-xs leading-4 text-muted-foreground">{t("shell.couldNotLoadSessions")}</p>
 			</div>
 		</HoverCardContent>
 	);
@@ -62,10 +71,23 @@ function statusDot(session: WorkspaceSession) {
 	return cn("size-1.5 shrink-0 rounded-full", dot.className, dot.breathe && "animate-status-pulse");
 }
 
-function compactPRLabel(pr: ReturnType<typeof sessionPRDisplaySummaries>[number], t: TFunction): string {
+function compactPRStatus(
+	pr: ReturnType<typeof sessionPRDisplaySummaries>[number],
+	t: TFunction,
+): { label: string; tone: PRDisplayTone } {
 	const primary = prCardPresentation(pr).primary;
-	if (primary.tone === "success" || primary.key === "lifecycle") return primary.label;
-	return t("pr.merge.blocked");
+	if (pr.state === "merged" || pr.state === "closed" || pr.state === "draft") return primary;
+	if (prCanMerge(pr)) return { label: t("pr.card.readyToMerge"), tone: "success" };
+	const blocked = pr.ci.state === "failing"
+		|| pr.mergeability.state === "conflicting"
+		|| pr.mergeability.state === "blocked"
+		|| pr.mergeability.state === "unstable"
+		|| pr.review.decision === "changes_requested"
+		|| pr.review.decision === "review_required"
+		|| pr.review.hasUnresolvedHumanComments;
+	return blocked
+		? { label: t("pr.merge.blocked"), tone: primary.tone }
+		: { label: t("pr.card.open"), tone: "neutral" };
 }
 
 function SessionCardBody({ session }: { session: WorkspaceSession }) {
@@ -80,29 +102,29 @@ function SessionCardBody({ session }: { session: WorkspaceSession }) {
 				<AgentAvatar provider={session.provider} className="size-7 shrink-0" />
 				<div className="min-w-0 flex-1">
 					<div className="flex min-w-0 items-baseline gap-1.5">
-						<p className="min-w-0 truncate text-[13px] font-semibold text-foreground">{session.title}</p>
-						<span className="shrink-0 font-mono text-[10px] text-muted-foreground">#{session.id.slice(-3)}</span>
+						<p className="min-w-0 truncate text-sm font-semibold text-foreground">{session.title}</p>
+						<span className="shrink-0 font-mono text-xs text-muted-foreground">#{session.id.slice(-3)}</span>
 					</div>
-					<p className="mt-0.5 truncate text-[11px] text-muted-foreground">{session.workspaceName}</p>
+					<p className="mt-0.5 truncate text-xs text-muted-foreground">{session.workspaceName}</p>
 				</div>
 			</div>
 			<div className="flex items-center gap-1.5 text-xs">
 				<span aria-hidden="true" className={statusDot(session)} />
 				<span className="min-w-0 truncate font-medium text-popover-foreground">{status}</span>
-				<span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{relativeTime(session.updatedAt, t)}</span>
+				<span className="ml-auto shrink-0 text-xs text-muted-foreground">{relativeTime(session.updatedAt, t)}</span>
 			</div>
 			{prs.length > 0 && (
 				<div className="border-t border-border pt-2">
-					<p className="text-[10px] font-semibold text-muted-foreground">{prs.length} {t("pr.short")}{prs.length === 1 ? "" : "s"}</p>
+					<p className="text-xs font-semibold text-muted-foreground">{t("pr.count", { count: prs.length })}</p>
 					<div className="mt-1.5 space-y-1.5">
 						{prs.map((pr) => {
-							const presentation = prCardPresentation(pr);
-							const tone = prToneClasses[presentation.primary.tone];
+							const status = compactPRStatus(pr, t);
+							const tone = prToneClasses[status.tone];
 							return (
-								<div key={`${pr.url}-${pr.number}`} className="flex min-h-5 items-center gap-1.5 text-[10px]">
+								<div key={`${pr.url}-${pr.number}`} className="flex min-h-5 items-center gap-1.5 text-xs">
 									<span className="font-mono font-semibold text-popover-foreground">{t("pr.short")} #{pr.number}</span>
 									<span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", tone.dot)} />
-									<span className={cn("truncate", tone.text)}>{compactPRLabel(pr, t)}</span>
+									<span className={cn("truncate", tone.text)}>{status.label}</span>
 								</div>
 							);
 						})}
@@ -113,16 +135,25 @@ function SessionCardBody({ session }: { session: WorkspaceSession }) {
 	);
 }
 
-export function SessionLinkPreviewCard({ href }: { href: string }) {
+export function SessionLinkPreviewCard({
+	href,
+	sourceHostId,
+	sourceKind,
+}: {
+	href: string;
+	sourceHostId?: string;
+	sourceKind?: "cloud";
+}) {
 	const target = parseSessionLink(href);
-	const workspaceQuery = useWorkspaceQuery();
-	if (workspaceQuery.isLoading || !workspaceQuery.data) return <LoadingCard />;
-	if (!target) return <UnavailableCard />;
-	const workspace = workspaceQuery.data.find((candidate) => candidate.id === target.projectId);
-	const session = workspace?.sessions.find((candidate) => candidate.id === target.sessionId);
-	return session ? (
+	const source = useSessionLinkSource(sourceHostId, sourceKind);
+	const workspace = target ? source.workspaces.find((candidate) => candidate.id === target.projectId) : undefined;
+	const session = workspace?.sessions.find((candidate) => candidate.id === target?.sessionId);
+	if (session) return (
 		<HoverCardContent collisionPadding={8} sideOffset={6} className="max-h-48 overflow-y-auto p-3">
 			<SessionCardBody session={session} />
 		</HoverCardContent>
-	) : <UnavailableCard />;
+	);
+	if (source.isLoading) return <LoadingCard />;
+	if (source.isError) return <ErrorCard />;
+	return <UnavailableCard />;
 }

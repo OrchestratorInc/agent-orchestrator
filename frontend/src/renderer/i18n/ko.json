@@ -957,6 +957,8 @@
 	"pr.section.ci": "CI",
 	"pr.section.merge": "병합",
 	"pr.section.review": "리뷰",
+	"pr.count_one": "PR {{count}}개",
+	"pr.count_other": "PR {{count}}개",
 	"pr.short": "PR",
 	"pr.state.closed": "닫힘",
 	"pr.state.draft": "초안",

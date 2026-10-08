@@ -939,6 +939,8 @@
 	"pr.section.ci": "CI",
 	"pr.section.merge": "合并",
 	"pr.section.review": "评审",
+	"pr.count_one": "{{count}} 个 PR",
+	"pr.count_other": "{{count}} 个 PR",
 	"pr.short": "PR",
 	"pr.state.closed": "已关闭",
 	"pr.state.draft": "草稿",

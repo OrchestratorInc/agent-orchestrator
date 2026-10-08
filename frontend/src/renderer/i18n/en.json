@@ -940,6 +940,8 @@
 	"pr.section.ci": "CI",
 	"pr.section.merge": "Merge",
 	"pr.section.review": "Review",
+	"pr.count_one": "{{count}} PR",
+	"pr.count_other": "{{count}} PRs",
 	"pr.short": "PR",
 	"pr.state.closed": "closed",
 	"pr.state.draft": "draft",

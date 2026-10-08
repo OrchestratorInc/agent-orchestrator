@@ -957,6 +957,8 @@
 	"pr.section.ci": "CI",
 	"pr.section.merge": "マージ",
 	"pr.section.review": "レビュー",
+	"pr.count_one": "PR {{count}} 件",
+	"pr.count_other": "PR {{count}} 件",
 	"pr.short": "PR",
 	"pr.state.closed": "クローズ",
 	"pr.state.draft": "下書き",
