@@ -57,7 +57,7 @@
 		"@types/ws": "^8.18.1",
 		"@vitejs/plugin-react": "^6.0.2",
 		"app-builder-lib": "^26.15.3",
-		"electron": "^33.0.0",
+		"electron": "^44.7.0",
 		"jsdom": "^29.1.1",
 		"openapi-typescript": "^7.13.0",
 		"playwright": "^1.60.0",
@@ -135,8 +135,5 @@
 	"optionalDependencies": {
 		"electron-installer-debian": "^3.2.0",
 		"electron-installer-redhat": "^3.4.0"
-	},
-	"allowScripts": {
-		"electron@33.4.11": true
 	}
 }
