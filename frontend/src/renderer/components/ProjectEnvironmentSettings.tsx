@@ -105,6 +105,8 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 			error: mutation.error instanceof Error ? mutation.error.message : undefined,
 		});
 	}, [dirty, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt]);
+	const showEmpty = rows.length === 0 && activeTab === "variables";
+	const showFooter = rows.length > 0 || dirty;
 	const update = (next: Row[]) => { setRows(next); setError(null); setSavedAt(false); setImportedCount(null); };
 	const importPasted = () => {
 		const parsed = parsePastedEnv(pasteText);
@@ -144,18 +146,23 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		mutation.mutate(env);
 	};
 	return <form id="project-settings-form" className="project-settings-form flex min-h-full flex-col gap-(--size-settings-section-inner-gap)" onSubmit={(event) => { event.preventDefault(); save(); }}>
-		<p className="text-sm leading-5 text-settings-muted">{t("settings.project.environmentHint")}</p>
-		{activeTab === "variables" ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
-			{rows.length > 0 ? rows.map((row, index) => <div className="settings-row-bar gap-2" key={index}>
+		{showEmpty ? null : <p className="text-sm leading-5 text-settings-muted">{t("settings.project.environmentHint")}</p>}
+		{showEmpty ? <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
+			<KeyRound aria-hidden="true" className="mb-3 size-5 text-settings-muted" />
+			<h3 className="text-base font-medium leading-6 text-foreground">{t("settings.project.environmentEmptyTitle")}</h3>
+			<p className="mt-2 max-w-xs text-sm leading-6 text-settings-muted">{t("settings.project.environmentEmptyHint")}</p>
+			<div className="mt-6 flex items-center justify-center gap-2">
+				<Button onClick={() => { setActiveTab("paste"); setError(null); }} type="button" variant="outline"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
+				<Button onClick={() => update([...rows, { name: "", value: "", visible: false }])} type="button"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
+			</div>
+			<p className="mt-6 max-w-md text-xs leading-5 text-settings-muted">{t("settings.project.environmentHint")}</p>
+		</div> : activeTab === "variables" ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
+			{rows.map((row, index) => <div className="settings-row-bar gap-2" key={index}>
 				<input aria-label={`${t("settings.project.envName")} ${index + 1}`} className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1" placeholder={t("settings.project.envName")} value={row.name} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} />
 				<input aria-label={`${t("settings.project.envValue")} ${index + 1}`} autoComplete="off" className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1" placeholder={t("settings.project.envValue")} type={row.visible ? "text" : "password"} value={row.value} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />
 				<Button aria-label={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} className="size-7 shrink-0 p-0 text-settings-muted hover:text-foreground" onClick={() => update(rows.map((item, i) => i === index ? { ...item, visible: !item.visible } : item))} size="icon-sm" title={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} type="button" variant="ghost">{row.visible ? <EyeOff className="size-3.5" aria-hidden="true" /> : <Eye className="size-3.5" aria-hidden="true" />}</Button>
 				<Button aria-label={t("settings.project.removeVariable", { name: row.name || index + 1 })} className="size-7 shrink-0 p-0 text-settings-muted hover:text-destructive" onClick={() => update(rows.filter((_, i) => i !== index))} size="icon-sm" title={t("settings.project.removeVariable", { name: row.name || index + 1 })} type="button" variant="ghost"><Trash2 className="size-3.5" aria-hidden="true" /></Button>
-			</div>) : <div className="flex flex-col items-center px-6 py-10 text-center">
-				<KeyRound aria-hidden="true" className="mb-3 size-5 text-settings-muted" />
-				<p className="text-sm font-medium text-settings-label">{t("settings.project.environmentEmptyTitle")}</p>
-				<p className="mt-1 max-w-sm text-sm text-settings-muted">{t("settings.project.environmentEmptyHint")}</p>
-			</div>}
+			</div>)}
 			<div className="flex items-center justify-end gap-2 pt-2">
 				<Button onClick={() => { setActiveTab("paste"); setError(null); }} type="button" variant="outline"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
 				<Button onClick={() => update([...rows, { name: "", value: "", visible: false }])} type="button"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
@@ -171,9 +178,9 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		{importedCount !== null && <p role="status" className="text-sm text-settings-muted">{t("settings.project.envImported", { count: importedCount })}</p>}
 		{error && <p role="alert" className="text-sm text-error">{error}</p>}
 		{mutation.isError && <p role="alert" className="text-sm text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
-		<div className="sticky bottom-0 z-chrome mt-auto flex items-center justify-between gap-3 border-t border-border bg-(--color-bg-primary) py-3">
+		{showFooter && <div className="sticky bottom-0 z-chrome mt-auto flex items-center justify-between gap-3 border-t border-border bg-(--color-bg-primary) py-3">
 			<span aria-live="polite" className="min-w-0 truncate text-xs text-settings-muted">{dirty ? t("settings.project.unsavedChanges") : savedAt ? t("settings.project.saved") : ""}</span>
 			<Button disabled={!dirty || mutation.isPending} type="submit">{t("settings.project.saveChanges")}</Button>
-		</div>
+		</div>}
 	</form>;
 }
