@@ -14408,6 +14408,8 @@ components:
       type: object
     SessionArtifact:
       properties:
+        inlineUrl:
+          type: string
         kind:
           enum:
           - html

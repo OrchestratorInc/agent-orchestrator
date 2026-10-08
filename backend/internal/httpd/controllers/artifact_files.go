@@ -46,7 +46,15 @@ func (c *SessionsController) artifactFile(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
-	file, info, clean, err := previewutil.OpenWorkspaceFile(sess.Metadata.ArtifactDir, asset)
+	serveArtifactFile(w, r, renderContentSecurityPolicy, sess.Metadata.ArtifactDir, asset)
+}
+
+// serveArtifactFile serves asset from the artifact directory root in the
+// sandbox csp names: a page with the theme bootstrap, anything else as it is.
+// Only regular files inside root are served: os.Root refuses ".." and
+// symlinks that leave it.
+func serveArtifactFile(w http.ResponseWriter, r *http.Request, csp, root, asset string) {
+	file, info, clean, err := previewutil.OpenWorkspaceFile(root, asset)
 	if err != nil {
 		writeArtifactFileNotFound(w, r)
 		return
@@ -66,7 +74,7 @@ func (c *SessionsController) artifactFile(w http.ResponseWriter, r *http.Request
 		tag = renderpage.Version + "-" + tag
 		etag = pageTag(r, tag)
 	}
-	if notModified(w, r, etag) {
+	if notModified(w, r, csp, etag) {
 		_ = file.Close()
 		return
 	}
@@ -82,14 +90,14 @@ func (c *SessionsController) artifactFile(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if isPage {
-		serveSandboxedPage(w, r, data, tag)
+		serveSandboxedPage(w, r, csp, data, tag)
 		return
 	}
 	contentType := mime.TypeByExtension(ext)
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	serveSandboxed(w, r, data, contentType, tag)
+	serveSandboxed(w, r, csp, data, contentType, tag)
 }
 
 func writeArtifactFileNotFound(w http.ResponseWriter, r *http.Request) {

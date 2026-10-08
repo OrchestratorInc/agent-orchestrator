@@ -390,6 +390,10 @@ type SessionArtifactView struct {
 	// one. Set for every kind, unlike PreviewURL (html only, meant for
 	// Browser navigation rather than a raw fetch).
 	RawURL string `json:"rawUrl,omitempty"`
+	// InlineURL frames this page inside the chat thread, from its own origin:
+	// its files load same-origin there, but the daemon refuses that origin, so
+	// unlike PreviewURL the page cannot call the daemon. HTML only.
+	InlineURL string `json:"inlineUrl,omitempty"`
 }
 
 // ListSessionsResponse is the body of GET /api/v1/sessions.

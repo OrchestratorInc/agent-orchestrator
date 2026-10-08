@@ -32,6 +32,12 @@ const (
 	// render opened top-level cannot call the daemon. No popups, no modals,
 	// no top navigation.
 	renderContentSecurityPolicy = "sandbox allow-scripts allow-forms"
+	// An HTML artifact framed inline keeps a real origin of its own, the
+	// ao-inline-artifact.<session>.localhost host, so its module scripts, fetch
+	// of sibling files and fonts load same-origin. That origin is not the app's,
+	// and corsMiddleware refuses it everywhere but its own host, so the page
+	// still cannot call the daemon.
+	inlineArtifactContentSecurityPolicy = "sandbox allow-scripts allow-forms allow-same-origin"
 	// A terminal session has no thread to show a page in; point the agent at
 	// the command that does work there.
 	renderNeedsChatMessage = "ao render works only in chat sessions; in a terminal session, open the file with ao preview <file>"
@@ -170,7 +176,7 @@ func (c *ConversationsController) renderFile(w http.ResponseWriter, r *http.Requ
 	// A stored render never changes, so its id and the bootstrap version name
 	// the served page, and a revalidation is answered without reading it. An
 	// id unfit for a header is left to the store, which refuses it.
-	if renderTagID.MatchString(renderID) && notModified(w, r, pageTag(r, renderpage.Version+"-"+renderID)) {
+	if renderTagID.MatchString(renderID) && notModified(w, r, renderContentSecurityPolicy, pageTag(r, renderpage.Version+"-"+renderID)) {
 		return
 	}
 	file, _, err := c.Renders.OpenRender(r.Context(), sessionID(r), renderID)
@@ -184,7 +190,7 @@ func (c *ConversationsController) renderFile(w http.ResponseWriter, r *http.Requ
 		envelope.WriteError(w, r, fmt.Errorf("read render: %w", err))
 		return
 	}
-	serveSandboxedPage(w, r, stored, renderpage.Version+"-"+renderID)
+	serveSandboxedPage(w, r, renderContentSecurityPolicy, stored, renderpage.Version+"-"+renderID)
 }
 
 // renderTagID is a render id fit to put in an ETag.
@@ -203,19 +209,19 @@ func pageTag(r *http.Request, tag string) string {
 // with ?source=1 the page as the agent wrote it, for reading: plain text,
 // without the bootstrap. tag names the stored page and the bootstrap version,
 // since the bootstrap is added as the page is served.
-func serveSandboxedPage(w http.ResponseWriter, r *http.Request, page []byte, tag string) {
+func serveSandboxedPage(w http.ResponseWriter, r *http.Request, csp string, page []byte, tag string) {
 	if r.URL.Query().Get("source") == "1" {
-		serveSandboxed(w, r, page, "text/plain; charset=utf-8", pageTag(r, tag))
+		serveSandboxed(w, r, csp, page, "text/plain; charset=utf-8", pageTag(r, tag))
 		return
 	}
-	serveSandboxed(w, r, renderpage.Document(page), "text/html; charset=utf-8", tag)
+	serveSandboxed(w, r, csp, renderpage.Document(page), "text/html; charset=utf-8", tag)
 }
 
 // setSandboxHeaders sets what every sandboxed response carries, 304s included:
-// the render sandbox (renderContentSecurityPolicy), no sniffing, no referrer,
-// revalidation on every load, and the ETag.
-func setSandboxHeaders(h http.Header, etag string) {
-	h.Set("Content-Security-Policy", renderContentSecurityPolicy)
+// the sandbox CSP, no sniffing, no referrer, revalidation on every load, and
+// the ETag.
+func setSandboxHeaders(h http.Header, csp, etag string) {
+	h.Set("Content-Security-Policy", csp)
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("Cache-Control", "private, no-cache")
@@ -224,11 +230,11 @@ func setSandboxHeaders(h http.Header, etag string) {
 
 // notModified answers 304 when the request already holds etag, so a frame
 // that revalidates on every load costs no file read.
-func notModified(w http.ResponseWriter, r *http.Request, etag string) bool {
+func notModified(w http.ResponseWriter, r *http.Request, csp, etag string) bool {
 	quoted := `"` + etag + `"`
 	for _, candidate := range strings.Split(r.Header.Get("If-None-Match"), ",") {
 		if candidate = strings.TrimPrefix(strings.TrimSpace(candidate), "W/"); candidate == quoted || candidate == "*" {
-			setSandboxHeaders(w.Header(), etag)
+			setSandboxHeaders(w.Header(), csp, etag)
 			w.WriteHeader(http.StatusNotModified)
 			return true
 		}
@@ -236,9 +242,9 @@ func notModified(w http.ResponseWriter, r *http.Request, etag string) bool {
 	return false
 }
 
-// serveSandboxed serves body in the render sandbox with setSandboxHeaders.
-func serveSandboxed(w http.ResponseWriter, r *http.Request, body []byte, contentType, etag string) {
-	setSandboxHeaders(w.Header(), etag)
+// serveSandboxed serves body in the sandbox csp names, with setSandboxHeaders.
+func serveSandboxed(w http.ResponseWriter, r *http.Request, csp string, body []byte, contentType, etag string) {
+	setSandboxHeaders(w.Header(), csp, etag)
 	w.Header().Set("Content-Type", contentType)
 	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(body))
 }

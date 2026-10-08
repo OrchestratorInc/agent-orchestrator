@@ -4963,6 +4963,7 @@ export interface components {
             recent: components["schemas"]["SessionStepResponse"][];
         };
         SessionArtifact: {
+            inlineUrl?: string;
             /** @enum {string} */
             kind: "html" | "markdown" | "file";
             name: string;
