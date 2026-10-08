@@ -159,6 +159,51 @@ func TestRenderCheckWritesTheScreenshotAndPrintsConsole(t *testing.T) {
 	}
 }
 
+// The check, fix, check-again loop reuses one --out path; a symlink or a
+// directory at that path is never replaced.
+func TestRenderCheckReplacesItsEarlierScreenshot(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "aa-47")
+	cfg := setConfigEnv(t)
+	srv, _ := renderServer(t, http.StatusOK,
+		`{"screenshot":{"mimeType":"image/png","data":"iVBORw0KGgo=","width":390,"height":412},"contentHeight":412,"consoleMessages":[]}`)
+	writeRunFileFor(t, cfg, srv)
+	dir := t.TempDir()
+	out := filepath.Join(dir, "check.png")
+	if err := os.WriteFile(out, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check := func(target string) error {
+		_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+			"render", "--check", writePage(t, []byte("<p>chart</p>")), "--out", target)
+		return err
+	}
+	for range 2 {
+		if err := check(out); err != nil {
+			t.Fatalf("render --check over an earlier screenshot: %v", err)
+		}
+	}
+	if png, _ := os.ReadFile(out); string(png) != string(pngSignature) {
+		t.Fatalf("screenshot = %q, want the new PNG", png)
+	}
+	secret := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(secret, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.png")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := check(link); err == nil {
+		t.Fatal("render --check replaced a symlink")
+	}
+	if kept, _ := os.ReadFile(secret); string(kept) != "keep" {
+		t.Fatalf("symlink target = %q, want it untouched", kept)
+	}
+	if err := check(dir); err == nil {
+		t.Fatal("render --check replaced a directory")
+	}
+}
+
 func TestRenderWithoutTitleOrCheckDoesNotCallTheDaemon(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "aa-47")
 	cfg := setConfigEnv(t)

@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -215,11 +217,14 @@ func (c *commandContext) checkRender(cmd *cobra.Command, file string, width int,
 	if out == "" {
 		out = filepath.Join(os.TempDir(), fmt.Sprintf("ao-render-check-%d.png", time.Now().UnixNano()))
 	}
-	shot := map[string]any{"data": resp.Screenshot.Data, "width": resp.Screenshot.Width, "height": resp.Screenshot.Height}
-	if err := writeBrowserScreenshot(cmd, shot, out, false, false); err != nil {
+	saved, err := writeRenderCheckScreenshot(resp.Screenshot.Data, out)
+	if err != nil {
 		return err
 	}
 	w := cmd.OutOrStdout()
+	if _, err := fmt.Fprintf(w, "Saved %s (%dx%d)\n", saved, resp.Screenshot.Width, resp.Screenshot.Height); err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintf(w, "Content height: %d px at width %d.\n", resp.ContentHeight, width); err != nil {
 		return err
 	}
@@ -237,4 +242,43 @@ func (c *commandContext) checkRender(cmd *cobra.Command, file string, width int,
 	}
 	_, err = fmt.Fprintln(w, browserUntrustedText(strings.Join(lines, "\n")))
 	return err
+}
+
+// writeRenderCheckScreenshot writes the check's PNG to target and returns its
+// absolute path. Unlike `ao browser screenshot`, it replaces an earlier file at
+// target, so the check, fix, check-again loop can reuse one --out path. Only a
+// regular file is replaced, never a symlink or a directory, and the new file
+// lands with one rename.
+func writeRenderCheckScreenshot(encoded, target string) (string, error) {
+	if encoded == "" {
+		return "", errors.New("render check returned an empty screenshot")
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", fmt.Errorf("decode render check screenshot: %w", err)
+	}
+	abs, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	if info, err := os.Lstat(abs); err == nil && !info.Mode().IsRegular() {
+		return "", fmt.Errorf("refusing to replace %s: it is not a regular file", abs)
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(abs), ".ao-render-check-*.png")
+	if err != nil {
+		return "", err
+	}
+	_, writeErr := tmp.Write(data)
+	closeErr := tmp.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		_ = os.Remove(tmp.Name())
+		return "", err
+	}
+	if err := os.Rename(tmp.Name(), abs); err != nil {
+		_ = os.Remove(tmp.Name())
+		return "", err
+	}
+	return abs, nil
 }
