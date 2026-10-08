@@ -99,8 +99,8 @@ export function CloudProjectCoderSettings({ project }: { project: CloudCpProject
 			{templateId !== "" ? (
 				templateName ? (
 					<span className="settings-row-value flex min-w-0 items-baseline justify-end gap-2" title={templateId}>
-						<span className="truncate">{templateName}</span>
-						<span className="truncate font-mono text-xs text-settings-muted" data-testid="coder-template-id">{templateId}</span>
+						<span className="shrink-0">{templateName}</span>
+						<span className="min-w-0 truncate font-mono text-xs text-settings-muted" data-testid="coder-template-id">{templateId}</span>
 					</span>
 				) : (
 					<span className="settings-row-value font-mono" title={templateId}>{templatesLoading ? "…" : templateId}</span>
