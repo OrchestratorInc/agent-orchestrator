@@ -406,27 +406,6 @@ describe("SessionInterfaceTransitionNotice", () => {
 		expect(announcement).toHaveTextContent("Could not dismiss this message. Try again.");
 	});
 
-	it("offers an explicit discard action when drain preserves a draft", () => {
-		const onSwitchWithInterrupt = vi.fn();
-		render(
-			<SessionInterfaceTransitionNotice
-				transition={{
-					...transition("failed"),
-					errorCode: "DRAIN_DRAFT_PRESENT",
-					errorDetail: "AO found unsent text and left the source untouched.",
-				}}
-				onDismiss={vi.fn()}
-				onSwitchWithInterrupt={onSwitchWithInterrupt}
-			/>,
-		);
-
-		const action = screen.getByRole("button", {
-			name: "Discard draft and switch",
-		});
-		fireEvent.click(action);
-		expect(onSwitchWithInterrupt).toHaveBeenCalledOnce();
-	});
-
 	it("offers an explicit cancellation action when a provider decision blocks drain", () => {
 		const onSwitchWithInterrupt = vi.fn();
 		render(
@@ -483,7 +462,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 		);
 
 		expect(screen.queryByRole("button", { name: "Stop now and switch" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Discard draft and switch" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Cancel request and switch" })).not.toBeInTheDocument();
 	});
 
 	it("does not offer a destructive retry when terminal quiescence is unverified", () => {

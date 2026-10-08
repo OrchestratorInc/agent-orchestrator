@@ -123,7 +123,19 @@ type Service struct {
 	checkAt                  time.Time
 	checkErr                 error
 	refreshPullRequestStatus func(context.Context, domain.PullRequestRef, domain.PullRequestRefreshContext) (domain.PullRequest, error)
+	// webhookWorkers is how many deliveries Run processes concurrently; zero
+	// means defaultWebhookWorkers.
+	webhookWorkers int
 }
+
+const (
+	// defaultWebhookWorkers drains the queue concurrently. Claims lease rows
+	// with SKIP LOCKED and keep installation events in receipt order, so
+	// workers never share a delivery or reorder routing changes.
+	defaultWebhookWorkers = 8
+	// webhookIdlePoll is how long a worker waits after finding the queue empty.
+	webhookIdlePoll = time.Second
+)
 
 func (s *Service) Check(ctx context.Context) error {
 	s.checkMu.Lock()
@@ -949,10 +961,45 @@ func validGitHubCloneIdentity(cloneURL, fullName string) bool {
 	return strings.EqualFold(path, expected)
 }
 
+// repositoryTracker reports whether AO tracks a repository for any
+// organization routed through an installation.
+type repositoryTracker interface {
+	GitHubRepositoryTracked(ctx context.Context, githubInstallationID, githubRepositoryID int64) (bool, error)
+}
+
+// isSCMWebhookEvent reports the repository events that only refresh pull
+// requests AO already tracks.
+func isSCMWebhookEvent(event string) bool {
+	switch event {
+	case "pull_request", "check_suite", "check_run", "pull_request_review",
+		"pull_request_review_comment", "pull_request_review_thread", "status", "push":
+		return true
+	}
+	return false
+}
+
+// EnqueueVerifiedWebhook queues a verified delivery. An installation granted
+// "All repositories" sends events for every repository, but SCM events can only
+// change AO state for a repository it tracks, so events for any other
+// repository are dropped here (reported as not inserted) instead of queueing
+// behind the ones that matter. Installation events always queue, and a failed
+// tracking lookup queues the event rather than risk losing it.
 func (s *Service) EnqueueVerifiedWebhook(
 	ctx context.Context,
 	delivery domain.GitHubWebhookDelivery,
 ) (bool, error) {
+	if isSCMWebhookEvent(delivery.Event) &&
+		delivery.GitHubInstallationID > 0 && delivery.GitHubRepositoryID > 0 {
+		if tracker, ok := s.store.(repositoryTracker); ok {
+			tracked, err := tracker.GitHubRepositoryTracked(ctx, delivery.GitHubInstallationID, delivery.GitHubRepositoryID)
+			if err != nil {
+				s.logger.Warn("check GitHub webhook repository; queueing anyway",
+					"delivery_id", delivery.DeliveryID, "event", delivery.Event, "error", err)
+			} else if !tracked {
+				return false, nil
+			}
+		}
+	}
 	hash := HashState(string(delivery.Payload))
 	return s.store.InsertGitHubWebhook(ctx, delivery, hash)
 }
@@ -961,19 +1008,40 @@ func (s *Service) VerifyWebhook(payload []byte, signature string) bool {
 	return VerifyWebhook(s.webhookSecret, payload, signature)
 }
 
+// Run processes queued webhooks until ctx is canceled, with several workers
+// that each drain the queue back to back and only pause once it is empty.
 func (s *Service) Run(ctx context.Context) {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	workers := s.webhookWorkers
+	if workers <= 0 {
+		workers = defaultWebhookWorkers
+	}
+	var group sync.WaitGroup
+	for range workers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			s.runWebhookWorker(ctx)
+		}()
+	}
+	group.Wait()
+}
+
+func (s *Service) runWebhookWorker(ctx context.Context) {
 	for {
-		if err := s.processNext(ctx); err != nil &&
-			!errors.Is(err, postgres.ErrNotFound) &&
-			!errors.Is(err, context.Canceled) {
+		err := s.processNext(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, postgres.ErrNotFound) && !errors.Is(err, context.Canceled) {
 			s.logger.Error("process GitHub webhook", "error", err)
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-time.After(webhookIdlePoll):
 		}
 	}
 }

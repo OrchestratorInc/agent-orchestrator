@@ -4182,3 +4182,61 @@ func TestReconnectMissingHostNeverLaunchesProvider(t *testing.T) {
 		t.Fatalf("error=%v", err)
 	}
 }
+
+// A provider that never persisted the stored session reports it missing on
+// reload. Only a caller that proved the conversation never started may then
+// start fresh; every other reload failure keeps its existing error.
+func TestACPDriverResumeStartsFreshOnlyForMissingSessionWhenAllowed(t *testing.T) {
+	notFound := &acpsdk.RequestError{Code: -32002, Message: "Resource not found: provider-session-1"}
+	tests := []struct {
+		name           string
+		loadErr        error
+		freshIfMissing bool
+		wantFresh      bool
+	}{
+		{name: "missing and allowed", loadErr: notFound, freshIfMissing: true, wantFresh: true},
+		{name: "missing without proof", loadErr: notFound},
+		{name: "provider failure with proof", loadErr: errors.New("transcript replay failed"), freshIfMissing: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agent := &fakeAgent{
+				capabilities: &acpsdk.AgentCapabilities{LoadSession: true},
+				failLoadFrom: 1,
+				failLoadErr:  tt.loadErr,
+			}
+			driver := New(Config{
+				Harness:      domain.HarnessClaudeCode,
+				Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+				Probe:        func(context.Context) error { return nil },
+				Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			driver.useTestProcess(fakeSpawn(agent))
+
+			conv, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+				ProviderConversationID: "provider-session-1",
+				WorkspacePath:          t.TempDir(),
+				FreshIfMissing:         tt.freshIfMissing,
+			})
+			if !tt.wantFresh {
+				if !errors.Is(err, ports.ErrChatResumeFailed) {
+					t.Fatalf("Resume error = %v, want ErrChatResumeFailed", err)
+				}
+				agent.mu.Lock()
+				newCwd := agent.newParams.Cwd
+				agent.mu.Unlock()
+				if newCwd != "" {
+					t.Fatal("a reload failure without proof started a fresh provider session")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			defer func() { _ = conv.Close() }()
+			if got := conv.ProviderConversationID(); got != "claude-session-1" {
+				t.Fatalf("provider conversation = %q, want the fresh session", got)
+			}
+		})
+	}
+}

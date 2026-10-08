@@ -65,6 +65,8 @@ export type ComposerEditorHandle = {
 	clear(): void;
 	setText(text: string): void;
 	insertToken(trigger: ComposerTrigger, value: string): void;
+	/** Inserts a file reference chip at the caret (or the end) that sends `wire`. */
+	insertReference(path: string, display: string, wire: string): void;
 	/**
 	 * Hold the caret's place for images still being staged. Returns a reservation
 	 * for fillImages, so the chips land where the user pasted, not wherever the
@@ -239,6 +241,16 @@ function $createComposerTokenNode(kind: TokenKind, value: string): ComposerToken
 	const slash = value.lastIndexOf("/");
 	const display = kind === "skill" ? wire : slash >= 0 ? value.slice(slash + 1) : value;
 	return new ComposerTokenNode(kind, value, display, wire);
+}
+
+function $insertComposerReference(path: string, display: string, wire: string): void {
+	let selection = $getSelection();
+	if (!$isRangeSelection(selection)) {
+		$getRoot().selectEnd();
+		selection = $getSelection();
+	}
+	if (!$isRangeSelection(selection)) return;
+	selection.insertNodes([new ComposerTokenNode("file", path, display, wire), $createTextNode(" ")]);
 }
 
 function $serializeComposer(): string {
@@ -431,6 +443,11 @@ const EditorBridge = forwardRef<
 			insertToken: (trigger, value) => {
 				editor.update(() => {
 					$insertComposerToken(trigger, value);
+				}, { discrete: true });
+			},
+			insertReference: (path, display, wire) => {
+				editor.update(() => {
+					$insertComposerReference(path, display, wire);
 				}, { discrete: true });
 			},
 			reserveImages: () => {

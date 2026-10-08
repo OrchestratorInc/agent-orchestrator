@@ -127,6 +127,50 @@ func TestRequestLoggerSuppressesOnlySagaOwnedSentryCapture(t *testing.T) {
 	}
 }
 
+func TestRequestLoggerIncludesBrowserFailureMetadata(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	sink := &captureSink{}
+	handler := requestLogger(log, sink)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		envelope.SetTelemetryField(r, "browser_command", "snapshot")
+		envelope.WriteError(w, r, apierr.Unavailable("BROWSER_RUNTIME_RECONNECTING", "retry shortly"))
+	}))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/browser/commands", nil))
+
+	if len(sink.events) != 1 {
+		t.Fatalf("telemetry events = %#v, want one event", sink.events)
+	}
+	payload := sink.events[0].Payload
+	if got := payload["browser_command"]; got != "snapshot" {
+		t.Fatalf("payload.browser_command = %#v, want snapshot", got)
+	}
+	if got := payload["runtime_link_state"]; got != "reconnecting" {
+		t.Fatalf("payload.runtime_link_state = %#v, want reconnecting", got)
+	}
+}
+
+func TestRequestLoggerPreservesObservedDisconnectedStateOnTimeout(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	sink := &captureSink{}
+	handler := requestLogger(log, sink)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		envelope.SetTelemetryField(r, "browser_command", "snapshot")
+		envelope.SetTelemetryField(r, "runtime_link_state", "disconnected")
+		envelope.WriteError(w, r, apierr.Unavailable("BROWSER_COMMAND_TIMEOUT", "timed out"))
+	}))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/browser/commands", nil))
+	if len(sink.events) != 1 {
+		t.Fatalf("telemetry events = %#v, want one event", sink.events)
+	}
+	if got := sink.events[0].Payload["runtime_link_state"]; got != "disconnected" {
+		t.Fatalf("runtime_link_state = %#v, want disconnected", got)
+	}
+}
+
 type captureSink struct {
 	events []ports.TelemetryEvent
 }

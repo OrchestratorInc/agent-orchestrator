@@ -136,7 +136,7 @@ func TestImportedIdleHistoryDoesNotRestartUntilResume(t *testing.T) {
 		t.Fatalf("not native adoption: %v", result)
 	}
 	cfg := launcher.started[len(launcher.started)-1]
-	if cfg.ProviderConversationID != "thread-1" || cfg.HistoryMode != ports.ChatHistoryRequired || cfg.Env["CLAUDE_CONFIG_DIR"] != "/original-provider-home" {
+	if cfg.ProviderConversationID != "thread-1" || cfg.HistoryMode != ports.ChatHistoryRequired || cfg.FreshIfProviderConversationMissing || cfg.Env["CLAUDE_CONFIG_DIR"] != "/original-provider-home" {
 		t.Fatalf("native identity lost: %#v", cfg)
 	}
 	if len(launcher.turns) != 0 || len(launcher.queued) != 0 {

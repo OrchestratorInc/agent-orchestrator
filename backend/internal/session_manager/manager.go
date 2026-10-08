@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -353,6 +355,7 @@ type Store interface {
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
+	ListChatHibernationCandidates(ctx context.Context) ([]domain.SessionID, error)
 	// DeleteSession removes a session row only if it is still in seed state
 	// (no workspace, runtime handle, agent session id, or prompt; not
 	// terminated). Returns deleted=true when removal happened; deleted=false
@@ -463,15 +466,18 @@ type Manager struct {
 	codexOperationGate             ports.CodexOperationGate
 	startupBackgroundReconcileDone chan struct{}
 	startupBackgroundReconcileOnce sync.Once
-	statusRecoveryMu               sync.RWMutex
-	statusRecoveryFailed           bool
-	statusRecoveryRevision         uint64
-	statusRecoveries               map[domain.SessionID]statusRecovery
-	statusVerificationLimit        time.Duration
-	agentOpMu                      sync.Mutex
-	agentOperations                map[domain.SessionID]agentOperationKind
-	interfaceRecoveryMu            sync.Mutex
-	deferredInterfaceRecovery      map[domain.SessionID]string
+	// A cold Chat resume must not launch a new persistent host while startup's
+	// orphan-host sweep is using its earlier snapshot of sleeping sessions.
+	persistentHostReconcileDone <-chan struct{}
+	statusRecoveryMu            sync.RWMutex
+	statusRecoveryFailed        bool
+	statusRecoveryRevision      uint64
+	statusRecoveries            map[domain.SessionID]statusRecovery
+	statusVerificationLimit     time.Duration
+	agentOpMu                   sync.Mutex
+	agentOperations             map[domain.SessionID]agentOperationKind
+	interfaceRecoveryMu         sync.Mutex
+	deferredInterfaceRecovery   map[domain.SessionID]string
 	// switchDecisionInput opens a narrow human-only terminal lane while the
 	// source is blocked on permission during a mandatory switch.
 	switchDecisionInput map[domain.SessionID]domain.AgentSwitchID
@@ -615,6 +621,13 @@ func (m *Manager) SetTerminalInputGate(gate TerminalInputGate) {
 // SetAgentReadiness completes daemon wiring before request handling begins.
 func (m *Manager) SetAgentReadiness(provider ports.AgentReadinessProvider) {
 	m.agentReadiness = provider
+}
+
+// SetPersistentHostReconcileDone fences cold Chat resumes until startup has
+// finished reaping hosts for sessions that were already hibernated on disk.
+// Daemon wiring installs the channel before opening the HTTP listener.
+func (m *Manager) SetPersistentHostReconcileDone(done <-chan struct{}) {
+	m.persistentHostReconcileDone = done
 }
 
 func (m *Manager) beginTerminalInputDrain(rec domain.SessionRecord) (lastInputAt time.Time, release func()) {
@@ -1530,6 +1543,13 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if validateClaudeModel && selected == nil {
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
 	}
+	if selected != nil && len(selected.Efforts) == 0 && cfg.Harness == domain.HarnessClaudeCode {
+		// A family alias ("opus") carries no capabilities of its own; the CLI
+		// resolves it to the family's newest model, which the picker shows.
+		if concrete := newestClaudeFamilyModel(catalog.Models, modelID); concrete != nil {
+			selected = concrete
+		}
+	}
 	if modelChangedWithoutExplicitEffort {
 		if selected == nil || !containsString(selected.Efforts, base.Effort) {
 			resolved.Effort = ""
@@ -1545,6 +1565,76 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
 	}
 	return resolved, nil
+}
+
+var (
+	claudeFamilyAliases = []string{"fable", "opus", "sonnet", "haiku"}
+	claudeVersionNumber = regexp.MustCompile(`\d+`)
+	claudeVersionNoise  = regexp.MustCompile(`\(.*?\)|\[.*?\]`)
+)
+
+// newestClaudeFamilyModel returns the newest concrete catalog model of the
+// family a bare alias such as "opus" or "opus[1m]" names, or nil when alias is
+// not a family alias or the catalog has no such model.
+func newestClaudeFamilyModel(models []ports.AgentModelInfo, alias string) *ports.AgentModelInfo {
+	family := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(alias), "[1m]"))
+	if !containsString(claudeFamilyAliases, family) {
+		return nil
+	}
+	var best *ports.AgentModelInfo
+	var bestVersion []int
+	for i := range models {
+		if len(models[i].Efforts) == 0 {
+			continue
+		}
+		version := claudeFamilyVersion(models[i], family)
+		if version == nil {
+			continue
+		}
+		if best == nil || compareVersions(version, bestVersion) > 0 {
+			best, bestVersion = &models[i], version
+		}
+	}
+	return best
+}
+
+// claudeFamilyVersion reads major.minor from a model's label or ID, or nil when
+// the model is not in the family. Snapshot dates and "v1:0" suffixes are longer
+// than two digits or beyond the second number, so they are ignored.
+func claudeFamilyVersion(model ports.AgentModelInfo, family string) []int {
+	for _, text := range []string{model.Label, model.ID} {
+		lower := claudeVersionNoise.ReplaceAllString(strings.ToLower(text), "")
+		if !strings.Contains(lower, family) {
+			continue
+		}
+		var version []int
+		for _, part := range claudeVersionNumber.FindAllString(lower, -1) {
+			if len(part) <= 2 && len(version) < 2 {
+				n, _ := strconv.Atoi(part)
+				version = append(version, n)
+			}
+		}
+		if len(version) > 0 {
+			return version
+		}
+	}
+	return nil
+}
+
+func compareVersions(a, b []int) int {
+	for i := 0; i < len(a) || i < len(b); i++ {
+		var x, y int
+		if i < len(a) {
+			x = a[i]
+		}
+		if i < len(b) {
+			y = b[i]
+		}
+		if x != y {
+			return x - y
+		}
+	}
+	return 0
 }
 
 func containsString(values []string, value string) bool {
@@ -2757,11 +2847,95 @@ func (m *Manager) recordAgentExited(ctx context.Context, rec domain.SessionRecor
 	return m.lcm.ApplyActivitySignal(ctx, rec.ID, signal)
 }
 
+// HibernateIdleChats releases eligible Chat provider processes. The chat
+// service rechecks turn completion and controller quiescence under its send lock.
+func (m *Manager) HibernateIdleChats(ctx context.Context) error {
+	ids, err := m.store.ListChatHibernationCandidates(ctx)
+	if err != nil {
+		return fmt.Errorf("list chats for hibernation: %w", err)
+	}
+	var errs []error
+	for _, id := range ids {
+		err := m.hibernateEligibleChat(ctx, id)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("hibernate chat %s: %w", id, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (m *Manager) hibernateEligibleChat(ctx context.Context, id domain.SessionID) error {
+	hibernator, ok := m.chat.(interface {
+		HibernateChat(context.Context, domain.SessionID) (bool, error)
+	})
+	if !ok {
+		return nil
+	}
+	operationCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := m.beginAgentOperation(operationCtx, id, agentOperationHibernate); err != nil {
+		if errors.Is(err, errAgentOperationInProgress) {
+			return nil
+		}
+		return err
+	}
+	defer m.endAgentOperation(id, agentOperationHibernate)
+	active, err := m.hasActiveInterfaceTransition(operationCtx, id)
+	if err != nil || active {
+		return err
+	}
+	_, err = hibernator.HibernateChat(operationCtx, id)
+	return err
+}
+
+// WakeHibernatedChat waits for an in-flight hibernation or wake, then resumes
+// the native provider conversation when there is no live Chat controller. This
+// also retries a failed wake after its durable marker was cleared.
+func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		m.agentOpMu.Lock()
+		operation := m.agentOperations[id]
+		m.agentOpMu.Unlock()
+		if operation == agentOperationHibernate || operation == agentOperationResume {
+			select {
+			case <-waitCtx.Done():
+				return waitCtx.Err()
+			case <-ticker.C:
+				continue
+			}
+		}
+		rec, found, err := m.store.GetSession(ctx, id)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return ErrNotFound
+		}
+		if rec.HibernatedAt == nil && m.chat != nil && m.chat.HasLiveChatController(id) {
+			return nil
+		}
+		_, err = m.ResumeAgentWithMode(ctx, id)
+		if errors.Is(err, ErrResumeInProgress) {
+			m.agentOpMu.Lock()
+			operation = m.agentOperations[id]
+			m.agentOpMu.Unlock()
+			if operation == agentOperationHibernate || operation == agentOperationResume {
+				continue
+			}
+		}
+		return err
+	}
+}
+
 // ResumeAgentWithMode replaces an exited agent inside its still-live session.
 // Unlike RestoreWithMode, it preserves the existing worktree and terminal
 // identity and never changes the durable terminated flag as an intermediate
 // step.
-func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
+func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (result RestoreResult, err error) {
 	if err := m.beginAgentResume(ctx, id); err != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
 	}
@@ -2782,6 +2956,13 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 	}
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrNotFound)
+	}
+	if rec.HibernatedAt != nil && m.persistentHostReconcileDone != nil {
+		select {
+		case <-m.persistentHostReconcileDone:
+		case <-ctx.Done():
+			return RestoreResult{}, fmt.Errorf("resume agent %s: wait for persistent host reconciliation: %w", id, ctx.Err())
+		}
 	}
 	m.asyncChatSpawnsMu.Lock()
 	_, starting := m.asyncChatSpawns[id]
@@ -2812,7 +2993,7 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 		}
 		return result, err
 	}
-	if m.SessionStatusReadiness(rec) == "unavailable" {
+	if rec.HibernatedAt == nil && m.SessionStatusReadiness(rec) == "unavailable" {
 		m.beginStatusRecovery(id)
 		recoveryCtx, cancel := context.WithTimeout(ctx, m.statusVerificationLimit)
 		defer cancel()
@@ -2836,6 +3017,35 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 		// existing durable-exited precondition.
 		if mode != domain.SessionModeChat || m.chat == nil {
 			return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrAgentNotExited)
+		}
+	}
+	if rec.HibernatedAt != nil {
+		store, ok := m.store.(interface {
+			SetSessionHibernated(context.Context, domain.SessionID, int64, *time.Time) (bool, error)
+		})
+		if !ok {
+			return RestoreResult{}, fmt.Errorf("resume agent %s: hibernation store unavailable", id)
+		}
+		// A failed launch stays stopped. Keep its native identity for the existing
+		// Resume action instead of hiding the failure behind a sleep marker.
+		for range 3 {
+			if rec.HibernatedAt == nil {
+				break
+			}
+			_, clearErr := store.SetSessionHibernated(ctx, id, rec.Revision, nil)
+			if clearErr != nil {
+				return RestoreResult{}, fmt.Errorf("resume agent %s: clear hibernation: %w", id, clearErr)
+			}
+			rec, err = m.getRecord(ctx, id)
+			if err != nil {
+				return RestoreResult{}, err
+			}
+			if rec.IsTerminated {
+				return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrTerminated)
+			}
+		}
+		if rec.HibernatedAt != nil {
+			return RestoreResult{}, fmt.Errorf("resume agent %s: hibernation state changed: %w", id, ErrResumeInProgress)
 		}
 	}
 	return m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec, false, false)
@@ -3268,7 +3478,7 @@ func (m *Manager) saveAndTeardownOne(ctx context.Context, rec domain.SessionReco
 // worktree, preserving conversation identity when recovery fails. Startup uses
 // checkSessionHealth instead so missing agents stay stopped.
 func (m *Manager) reconcileLive(ctx context.Context, rec domain.SessionRecord) error {
-	if rec.NeedsImportResume() {
+	if rec.NeedsImportResume() || rec.HibernatedAt != nil {
 		return nil
 	}
 	project, err := m.loadProject(ctx, rec.ProjectID)
@@ -3575,7 +3785,7 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	candidates := make([]domain.SessionRecord, 0, len(recs))
 	ids := make([]domain.SessionID, 0, len(recs))
 	for _, rec := range recs {
-		if rec.IsTerminated || rec.IsTaskPreparation || rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
+		if rec.IsTerminated || rec.IsTaskPreparation || rec.HibernatedAt != nil || rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
 			continue
 		}
 		candidates = append(candidates, rec)

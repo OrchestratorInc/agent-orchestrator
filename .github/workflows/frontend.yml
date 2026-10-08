@@ -59,6 +59,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
+          # Match the source-build runtime in bootstrap-self-hosted.sh.
+          node-version: 22.23.2
+      - name: Check self-hosted npm lockfile compatibility
+        run: npm ci --ignore-scripts --dry-run --no-audit --no-fund
+
+      - uses: actions/setup-node@v4
+        with:
           node-version: 24
           cache: npm
           cache-dependency-path: |

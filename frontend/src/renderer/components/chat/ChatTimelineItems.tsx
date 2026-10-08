@@ -125,14 +125,17 @@ function originReportPreview(text: string): string {
 	return `${preview.trimEnd()}…`;
 }
 
-/** Smooth baseline, with adaptive catch-up when provider chunks outrun playback. */
-const STREAM_BASE_CHARACTERS_PER_SECOND = 58;
-const STREAM_TARGET_BACKLOG_CHARACTERS = 72;
-const STREAM_MAX_CHARACTERS_PER_SECOND = 720;
+/**
+ * Each update reveals the share of the backlog that decays over STREAM_SETTLE_MS, so
+ * bursts of provider text spread across the gap before the next one instead of landing
+ * at once. Updates are capped at ~30 Hz: every one re-parses the message's markdown.
+ */
+const STREAM_SETTLE_MS = 140;
+const STREAM_MIN_FRAME_MS = 32;
 const STREAM_MAX_FRAME_DELTA_MS = 100;
-// Snapshot delivery already coalesces provider output. Smooth short gaps without
-// adding another perceptible playback delay on top of the transport cadence.
-const STREAM_MAX_DISPLAY_LAG_MS = 50;
+// No frame for this long means the tab was occluded or throttled: nobody watched the
+// animation, so show the current text instead of replaying it.
+const STREAM_STALL_MS = 1000;
 const STREAM_GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function streamGraphemes(text: string): string[] {
@@ -166,7 +169,6 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 	const messageIdRef = useRef(message.id);
 	const frameRef = useRef<number | undefined>(undefined);
 	const lastFrameAtRef = useRef<number | undefined>(undefined);
-	const fractionalCharactersRef = useRef(0);
 	const [reducedMotion, setReducedMotion] = useState(
 		() => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
 	);
@@ -184,62 +186,47 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 			frameRef.current = undefined;
 		}
 		lastFrameAtRef.current = undefined;
-		fractionalCharactersRef.current = 0;
 	}, []);
 
 	const scheduleDrain = useCallback(() => {
 		if (frameRef.current !== undefined) return;
-		const drainStartedAt = performance.now();
+		const scheduledAt = performance.now();
 
 		const tick = (now: number) => {
 			frameRef.current = undefined;
-			const previousFrameAt = lastFrameAtRef.current ?? now;
-			lastFrameAtRef.current = now;
-			const backlog = targetGraphemesRef.current.length - visibleGraphemeCountRef.current;
+			const target = targetGraphemesRef.current;
+			const currentCount = visibleGraphemeCountRef.current;
+			const backlog = target.length - currentCount;
 			if (backlog <= 0) {
-				fractionalCharactersRef.current = 0;
+				lastFrameAtRef.current = undefined;
 				return;
 			}
 
-			// New snapshots share this drain's deadline. Use real elapsed time so a
-			// background tab catches up even if it has not received its first frame.
-			if (now - drainStartedAt >= STREAM_MAX_DISPLAY_LAG_MS) {
+			if (document.hidden || now - (lastFrameAtRef.current ?? scheduledAt) > STREAM_STALL_MS) {
 				visibleRef.current = targetRef.current;
-				visibleGraphemeCountRef.current = targetGraphemesRef.current.length;
+				visibleGraphemeCountRef.current = target.length;
 				setVisibleText(targetRef.current);
 				cancelDrain();
 				return;
 			}
 
-			// Keep a small, intentional buffer for smoothness. As it grows, increase
-			// throughput instead of letting a long response fall further behind.
-			const catchup = Math.max(0, backlog - STREAM_TARGET_BACKLOG_CHARACTERS);
-			const charactersPerSecond = Math.min(
-				STREAM_MAX_CHARACTERS_PER_SECOND,
-				STREAM_BASE_CHARACTERS_PER_SECOND + catchup * 2,
-			);
-			const elapsedMs = Math.min(STREAM_MAX_FRAME_DELTA_MS, Math.max(0, now - previousFrameAt));
-			fractionalCharactersRef.current += charactersPerSecond * elapsedMs / 1000;
-			const count = Math.floor(fractionalCharactersRef.current);
-			if (count < 1) {
+			const previousFrameAt = lastFrameAtRef.current;
+			if (previousFrameAt !== undefined && now - previousFrameAt < STREAM_MIN_FRAME_MS) {
 				frameRef.current = window.requestAnimationFrame(tick);
 				return;
 			}
-			fractionalCharactersRef.current -= count;
-			const currentCount = visibleGraphemeCountRef.current;
-			const target = targetGraphemesRef.current;
+			lastFrameAtRef.current = now;
+			const elapsedMs = Math.min(STREAM_MAX_FRAME_DELTA_MS, previousFrameAt === undefined ? STREAM_MIN_FRAME_MS : now - previousFrameAt);
+			const count = Math.ceil(backlog * (1 - Math.exp(-elapsedMs / STREAM_SETTLE_MS)));
 			const nextCount = Math.min(target.length, currentCount + count);
 			const next = visibleRef.current + target.slice(currentCount, nextCount).join("");
 			visibleRef.current = next;
 			visibleGraphemeCountRef.current = nextCount;
 			setVisibleText(next);
-			if (visibleGraphemeCountRef.current < targetGraphemesRef.current.length) {
-				frameRef.current = window.requestAnimationFrame(tick);
-			}
+			if (nextCount < target.length) frameRef.current = window.requestAnimationFrame(tick);
+			else lastFrameAtRef.current = undefined;
 		};
 
-		lastFrameAtRef.current = undefined;
-		fractionalCharactersRef.current = 0;
 		frameRef.current = window.requestAnimationFrame(tick);
 	}, [cancelDrain]);
 
@@ -310,7 +297,7 @@ function TwoRowTimelineMarker({
 }) {
 	return (
 		<div className="flex min-w-0 flex-col gap-1 py-1">
-			<div className={cn("flex min-w-0 items-baseline gap-2 text-[11px]", tone)}>
+			<div className={cn("flex min-w-0 items-baseline gap-2 text-xs", tone)}>
 				<span className="shrink-0">{message}</span>
 				{detail ? (
 					<span
@@ -373,7 +360,7 @@ export function TurnOutcome({
 	const action = retry ? (
 		<>
 			{retry.error ? (
-				<span role="alert" className="max-w-[50%] text-pretty text-right text-[10px] leading-tight text-destructive">
+				<span role="alert" className="max-w-[50%] text-pretty text-right text-xs leading-tight text-destructive">
 					{retry.error}
 				</span>
 			) : null}
@@ -384,7 +371,7 @@ export function TurnOutcome({
 				aria-label="Retry this turn"
 				title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
 				data-testid="retry-turn"
-				className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50"
+				className="shrink-0 rounded px-1.5 py-0.5 text-xs text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50"
 			>
 				{retry.pending ? "Retrying…" : "Retry"}
 			</button>
@@ -662,7 +649,7 @@ export function HumanMessage({
 				<div className="mt-1 flex h-7 items-center gap-1">
 					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
 						<span
-							className="shrink-0 px-0.5 text-[11px] tabular-nums text-muted-foreground/75"
+							className="shrink-0 px-0.5 text-caption tabular-nums text-muted-foreground/75"
 							aria-label={`Sent ${formatMessageTimestamp(message.createdAt)}`}
 						>
 							{formatMessageTimestamp(message.createdAt)}
@@ -700,7 +687,7 @@ export function HumanMessage({
 				</div>
 			)}
 			{queued ? (
-				<div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+				<div className="flex items-center gap-2 text-xs text-muted-foreground">
 					<span>Queued · sends when the agent finishes</span>
 				</div>
 			) : null}
@@ -762,7 +749,7 @@ function AutomationMessageFrame({
 }) {
 	return (
 		<div className="cursor-chat-origin-message rounded-md border border-border border-l-2 border-l-logo-accent/60 px-3.5 py-2.5">
-			<div className="mb-1.5 flex min-w-0 items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+			<div className="mb-1.5 flex min-w-0 items-center gap-2 text-xs font-medium text-muted-foreground">
 				<CircleAlert aria-hidden="true" className="size-3.5 shrink-0 text-logo-accent" />
 				<span className="min-w-0 truncate">{label}</span>
 				<span className="ml-auto shrink-0 font-normal tabular-nums">{formatTime(createdAt)}</span>
@@ -778,7 +765,7 @@ function AutomationExpandButton({ expanded, onClick }: { expanded: boolean; onCl
 			type="button"
 			onClick={onClick}
 			aria-expanded={expanded}
-			className="mt-2 flex items-center gap-1 text-[11px] font-medium text-logo-accent transition-colors hover:text-markdown-link-hover"
+			className="mt-2 flex items-center gap-1 text-xs font-medium text-logo-accent transition-colors hover:text-markdown-link-hover"
 		>
 			<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform", expanded && "rotate-90")} />
 			{expanded ? "Hide report" : "Show full report"}
@@ -796,7 +783,7 @@ function BrowserAnnotationOrigin({
 	const count = annotations.items.length;
 	return (
 		<div className="cursor-chat-origin-message rounded-md border border-border border-l-2 border-l-logo-accent/60 px-3.5 py-2.5">
-			<div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+			<div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
 				<MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-logo-accent" />
 				<span>Browser feedback</span>
 				<span className="ml-auto shrink-0 font-normal tabular-nums">{formatTime(message.createdAt)}</span>
@@ -807,7 +794,7 @@ function BrowserAnnotationOrigin({
 			<div className="mt-2 space-y-1.5">
 				{annotations.items.map((item) => (
 					<div key={item.number} className="flex min-w-0 items-start gap-2 text-xs text-muted-foreground">
-						<span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-logo-accent text-[10px] font-semibold text-white">
+						<span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-logo-accent text-micro font-semibold text-white">
 							{item.number}
 						</span>
 						<div className="min-w-0">
@@ -824,7 +811,7 @@ function BrowserAnnotationOrigin({
 				))}
 			</div>
 			{annotations.screenshotCount > 0 ? (
-				<p className="mt-2 text-[11px] text-muted-foreground">
+				<p className="mt-2 text-xs text-muted-foreground">
 					{annotations.screenshotCount} reference screenshot{annotations.screenshotCount === 1 ? "" : "s"}
 				</p>
 			) : null}
@@ -893,7 +880,7 @@ export function AssistantMessage({
 						</Tooltip>
 					) : null}
 					<span
-						className="w-auto shrink-0 px-1 text-[11px] tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
+						className="w-auto shrink-0 px-1 text-caption tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
 						aria-label={`Sent ${formatMessageTimestamp(message.createdAt)}`}
 					>
 						{formatMessageTimestamp(message.createdAt)}
@@ -990,7 +977,7 @@ function DeliveryNote({ state }: { state: DeliveryState }) {
 	return (
 		<span
 			className={cn(
-				"text-[11px] leading-none",
+				"text-caption leading-none",
 				state === "uncertain" || state === "failed" ? "text-warning" : "text-muted-foreground",
 			)}
 		>
@@ -1125,7 +1112,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				className={cn(
 					compactSummary
 						? ACTIVITY_SUMMARY_BUTTON_CLASS
-						: "flex min-h-[35px] w-full min-w-0 select-none items-center gap-[9px] px-[11px] py-2 text-left text-[11px]",
+						: "flex min-h-[35px] w-full min-w-0 select-none items-center gap-[9px] px-[11px] py-2 text-left text-xs",
 					"activity-row-toggle",
 					hasBody && !compactSummary && "hover:text-foreground",
 					!hasBody && "cursor-default",
@@ -1138,22 +1125,22 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 							"w-[15px] shrink-0 text-center",
 							activity.status === "failed" ? "text-destructive" : "text-muted-foreground/70",
 						)}
-						size={13}
+						size={14}
 					/>
 				)}
 				{singleEdit ? (
-					<span className="flex min-w-0 items-center gap-1 text-[11.5px] font-normal">
+					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
 						<span className="shrink-0 text-muted-foreground">
 							{fileChangeVerb(singleEdit.status ?? "modified")}
 						</span>
 						<FileLocationLabel path={singleEdit.path} oldPath={singleEdit.oldPath} />
 						{singleEdit.additions > 0 ? (
-							<span className="shrink-0 font-mono text-[10px] tabular-nums text-success">
+							<span className="shrink-0 font-mono text-micro tabular-nums text-success">
 								+{singleEdit.additions}
 						</span>
 						) : null}
 						{singleEdit.deletions > 0 ? (
-							<span className="shrink-0 font-mono text-[10px] tabular-nums text-destructive">
+							<span className="shrink-0 font-mono text-micro tabular-nums text-destructive">
 								&minus;{singleEdit.deletions}
 							</span>
 						) : null}
@@ -1162,7 +1149,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 					<strong
 						className={cn(
 							compactSummary
-								? "activity-row-label shrink-0 text-[11.5px] font-normal text-muted-foreground group-hover/activity:text-foreground"
+								? "activity-row-label shrink-0 text-xs font-normal text-muted-foreground group-hover/activity:text-foreground"
 								: "min-w-0 truncate font-medium",
 							!compactSummary &&
 								(activity.status === "failed" ? "text-destructive" : "text-foreground"),
@@ -1174,7 +1161,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				)}
 				{path && !singleEdit ? (
 					<span
-						className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-muted-foreground group-hover/activity:text-foreground"
+						className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground group-hover/activity:text-foreground"
 						title={path}
 					>
 						{path}
@@ -1225,12 +1212,12 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 							// Said explicitly rather than implied by the label: "Ran command"
 							// alone never tells the reader what ran, and the collapsed row
 							// deliberately keeps only the category.
-							<pre className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-[10.5px] leading-relaxed text-foreground">
+							<pre className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
 								{detail.command}
 							</pre>
 						) : null}
 						{!isFileChange && (detail?.reason || detail?.text) ? (
-							<p className="whitespace-pre-wrap px-1 text-[11px] leading-relaxed text-muted-foreground">
+							<p className="whitespace-pre-wrap px-1 text-caption leading-relaxed text-muted-foreground">
 								{detail.reason ?? detail.text}
 							</p>
 						) : null}
@@ -1268,16 +1255,16 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 				<div className="flex min-w-0 items-start gap-2 border-b border-border/60 px-3 py-2">
 					<span
 						aria-hidden="true"
-						className="shrink-0 select-none pt-px font-mono text-[11px] leading-relaxed text-muted-foreground/70"
+						className="shrink-0 select-none pt-px font-mono text-caption leading-relaxed text-muted-foreground/70"
 					>
 						&gt;_
 					</span>
 					<div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-						<span className="min-w-0 break-words text-[12px] leading-relaxed text-foreground/90">
+						<span className="min-w-0 break-words text-xs leading-relaxed text-foreground/90">
 							{reason}
 						</span>
 						{binary ? (
-							<span className="shrink-0 font-mono text-[10.5px] text-muted-foreground/55">
+							<span className="shrink-0 font-mono text-caption text-muted-foreground/55">
 								{binary}
 							</span>
 						) : null}
@@ -1288,7 +1275,7 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 			{command ? (
 				<pre
 					className={cn(
-						"cursor-chat-explore-command overflow-x-auto px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground/85",
+						"cursor-chat-explore-command overflow-x-auto px-3 py-2 font-mono text-caption leading-relaxed text-foreground/85",
 						(detail?.output || detail?.terminalInput) && "border-b border-border/60",
 					)}
 				>
@@ -1326,15 +1313,15 @@ function TerminalInput({ text, truncated }: { text: string; truncated?: boolean 
 	const shown = useMemo(() => caretNotation(text), [text]);
 	return (
 		<div className="flex flex-col gap-1">
-			<span className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground/70">
+			<span className="flex items-center gap-1.5 text-caption text-muted-foreground/70">
 				<Keyboard aria-hidden="true" className="size-3" />
 				Agent typed
 			</span>
-			<pre className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-[10.5px] leading-relaxed text-accent">
+			<pre className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-accent">
 				{shown}
 			</pre>
 			{truncated ? (
-				<p className="text-[10px] text-muted-foreground/70">
+				<p className="text-micro text-muted-foreground/70">
 					AO stopped recording keystrokes at its cap; more were sent.
 				</p>
 			) : null}
@@ -1394,14 +1381,14 @@ function CommandOutput({
 				className={cn(
 					"scrollbar-none max-h-64 overflow-auto font-mono leading-relaxed text-muted-foreground",
 					embedded
-						? "cursor-chat-explore-output px-3 py-2 text-[11px]"
-						: "border border-border bg-background px-2.5 py-2 text-[10.5px]",
+						? "cursor-chat-explore-output px-3 py-2 text-caption"
+						: "border border-border bg-background px-2.5 py-2 text-caption",
 				)}
 			>
 				{output}
 			</pre>
 			{detail?.outputTruncated ? (
-				<p className="text-[10px] leading-relaxed text-warning">
+				<p className="text-xs leading-relaxed text-warning">
 					This command printed more than AO stores, so the output above stops early. Open a shell in
 					the worktree to see the rest.
 				</p>
@@ -1481,7 +1468,7 @@ function ActivityState({
 		const additions = files.reduce((sum, file) => sum + file.additions, 0);
 		const deletions = files.reduce((sum, file) => sum + file.deletions, 0);
 		return (
-			<span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
+			<span className="shrink-0 font-mono text-micro tabular-nums text-muted-foreground/70">
 				<span className="text-success">+{additions}</span>{" "}
 				<span className="text-destructive">&minus;{deletions}</span>
 			</span>
@@ -1491,7 +1478,7 @@ function ActivityState({
 		return (
 			<span
 				className={cn(
-					"shrink-0 font-mono text-[10px] tabular-nums",
+					"shrink-0 font-mono text-micro tabular-nums",
 					isNonzeroCommandExit(activity) ? "text-muted-foreground/70" : "text-destructive",
 				)}
 			>
@@ -1501,14 +1488,14 @@ function ActivityState({
 	}
 	if (status === "recovered") {
 		return (
-			<span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">
+			<span className="shrink-0 font-mono text-micro text-muted-foreground/70">
 				outcome unknown
 			</span>
 		);
 	}
 	if (status === "cancelled") {
 		return (
-			<span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">
+			<span className="shrink-0 font-mono text-micro text-muted-foreground/70">
 				stopped
 			</span>
 		);
@@ -1557,14 +1544,14 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
 	const line = (
 		<>
 			<span className="sr-only">{status.label}</span>
-			<span className="shrink-0 text-[11.5px] text-muted-foreground">
+			<span className="shrink-0 text-xs text-muted-foreground">
 				{fileChangeVerb(file.status ?? "modified")}
 			</span>
 			<FileLocationLabel path={file.path} oldPath={file.oldPath} />
-			<span className="shrink-0 font-mono text-[10px] tabular-nums text-success">
+			<span className="shrink-0 font-mono text-micro tabular-nums text-success">
 				+{file.additions}
 			</span>
-			<span className="shrink-0 font-mono text-[10px] tabular-nums text-destructive">
+			<span className="shrink-0 font-mono text-micro tabular-nums text-destructive">
 				&minus;{file.deletions}
 			</span>
 		</>
@@ -1635,7 +1622,7 @@ function Patch({ patch, truncated }: { patch: string; truncated?: boolean }) {
 			<div className="mb-1 mt-0.5 overflow-hidden bg-background">
 			<ToolDiffCode text={patch} />
 			{truncated ? (
-				<p className="border-t border-border px-2.5 py-1.5 text-[10px] leading-relaxed text-warning">
+				<p className="border-t border-border px-2.5 py-1.5 text-xs leading-relaxed text-warning">
 					This patch is longer than AO stores, so it stops early. The whole change is in the
 					worktree and in the turn&rsquo;s diff.
 				</p>
@@ -1672,7 +1659,7 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
 			<Brain aria-hidden="true" className="mt-[3px] size-3.5 shrink-0 text-muted-foreground/70" />
 			<div className="min-w-0 flex-1">
 				<div className="flex items-center gap-2">
-					<span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground/70">
+					<span className="text-caption text-muted-foreground/70">
 						{streaming ? "Thinking" : "Thought"}
 					</span>
 					{streaming ? (
@@ -1684,7 +1671,7 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
 				</div>
 				<ChatMarkdown text={text} streaming={streaming} muted />
 				{activity.detail?.textTruncated ? (
-					<p className="mt-1 text-[10px] text-muted-foreground/70">
+					<p className="mt-1 text-micro text-muted-foreground/70">
 						This summary is longer than AO stores, so it stops early.
 					</p>
 				) : null}
@@ -1737,14 +1724,14 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 			>
 				<strong
 					className={cn(
-						"activity-row-label shrink-0 text-[11.5px] font-normal",
+						"activity-row-label shrink-0 text-xs font-normal",
 						failed ? "text-destructive" : "text-muted-foreground",
 					)}
 				>
 					<span>{tool}</span>
 				</strong>
 				{sourceLabel ? (
-					<span className="min-w-0 flex-1 truncate text-[10.5px] text-muted-foreground group-hover/activity:text-foreground">
+					<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground group-hover/activity:text-foreground">
 						{sourceLabel}
 					</span>
 				) : null}
@@ -1754,11 +1741,11 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 						className="size-3 shrink-0 animate-spin text-muted-foreground/60"
 					/>
 				) : failed ? (
-					<span className="shrink-0 text-[10px] text-destructive">failed</span>
+					<span className="shrink-0 text-xs text-destructive">failed</span>
 				) : activity.status === "recovered" ? (
-					<span className="shrink-0 text-[10px] text-muted-foreground/70">outcome unknown</span>
+					<span className="shrink-0 text-xs text-muted-foreground/70">outcome unknown</span>
 				) : activity.status === "cancelled" ? (
-					<span className="shrink-0 text-[10px] text-muted-foreground/70">stopped</span>
+					<span className="shrink-0 text-xs text-muted-foreground/70">stopped</span>
 				) : hasBody ? (
 					<ChevronRight
 						aria-hidden="true"
@@ -1778,7 +1765,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 					>
 						<div className="flex flex-col gap-2 pb-2.5">
 					{detail?.error ? (
-						<p className="border border-destructive/30 bg-background px-2.5 py-1.5 text-[10.5px] leading-relaxed text-destructive">
+						<p className="border border-destructive/30 bg-background px-2.5 py-1.5 text-xs leading-relaxed text-destructive">
 							{detail.error}
 						</p>
 					) : null}
@@ -1791,10 +1778,10 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 					{detail?.content !== undefined ? <ToolContent value={detail.content} /> : null}
 					{detail?.progress ? (
 						<div className="flex flex-col gap-1">
-							<span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground/70">
+							<span className="text-caption text-muted-foreground/70">
 								Progress
 							</span>
-							<pre className="scrollbar-none max-h-40 overflow-auto border border-border bg-background px-2.5 py-1.5 font-mono text-[10.5px] leading-relaxed text-muted-foreground">
+							<pre className="scrollbar-none max-h-40 overflow-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-muted-foreground">
 								{detail.progress}
 							</pre>
 						</div>
@@ -1813,7 +1800,7 @@ function ToolContent({ value }: { value: unknown }) {
 		if (looksLikeUnifiedDiff(text)) return <ToolDiffCode text={text} />;
 		return (
 			<pre className="chat-code max-h-64 overflow-auto whitespace-pre rounded-lg border border-border bg-background px-2.5 py-1.5">
-				<code className="block whitespace-pre font-mono text-[10.5px] leading-relaxed text-muted-foreground">
+				<code className="block whitespace-pre font-mono text-caption leading-relaxed text-muted-foreground">
 					{ text }
 				</code>
 			</pre>
@@ -1822,7 +1809,7 @@ function ToolContent({ value }: { value: unknown }) {
 	const truncated = truncationNote(value);
 	return (
 		<pre className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
-			<code className="font-mono text-[10.5px] leading-[1.55] text-foreground">
+			<code className="font-mono text-caption leading-[1.55] text-foreground">
 				{truncated ?? formatJson(value)}
 			</code>
 		</pre>
@@ -1845,7 +1832,7 @@ function looksLikeUnifiedDiff(text: string): boolean {
 
 function ToolDiffCode({ text }: { text: string }) {
 	return (
-		<div className="chat-code max-h-64 overflow-auto rounded-lg border border-border bg-background px-0 py-1 font-mono text-[10.5px] leading-[1.55]">
+		<div className="chat-code max-h-64 overflow-auto rounded-lg border border-border bg-background px-0 py-1 font-mono text-caption leading-[1.55]">
 			{ text.split("\n").map((line, index) => {
 				const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "context";
 				const marker = kind === "add" ? "+" : kind === "del" ? "-" : " ";
@@ -1903,16 +1890,16 @@ function JsonPayload({ label, value }: { label: string; value: unknown }) {
 
 	return (
 		<div className="flex flex-col gap-1">
-			<span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground/70">
+			<span className="text-caption text-muted-foreground/70">
 				{label}
 			</span>
 			{capped ? (
-				<p className="border border-border bg-background px-2.5 py-1.5 text-[10.5px] leading-relaxed text-muted-foreground">
+				<p className="border border-border bg-background px-2.5 py-1.5 text-caption leading-relaxed text-muted-foreground">
 					{capped}
 				</p>
 			) : (
 				<pre className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
-					<code className="font-mono text-[10.5px] leading-[1.55] text-foreground">
+					<code className="font-mono text-caption leading-[1.55] text-foreground">
 						<HighlightedCode code={text} language="json" />
 					</code>
 				</pre>
@@ -1989,7 +1976,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
 				className={cn(
-					"activity-row-toggle flex min-h-[35px] w-full select-none items-center gap-[9px] px-[11px] py-2 text-left text-[11px]",
+					"activity-row-toggle flex min-h-[35px] w-full select-none items-center gap-[9px] px-[11px] py-2 text-left text-xs",
 					hasBody && "hover:text-foreground",
 					!hasBody && "cursor-default",
 				)}
@@ -2000,13 +1987,13 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 						"w-[15px] shrink-0 text-center",
 						denied ? "text-destructive" : "text-muted-foreground/70",
 					)}
-					size={13}
+					size={14}
 				/>
 				<strong className="shrink-0 font-medium text-foreground">
 					{denied ? "Auto-declined" : "Auto-approved"}
 				</strong>
 				<span
-					className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-muted-foreground"
+					className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground"
 					title={activity.summary}
 				>
 					<ActivityTitle text={shortenPaths(activity.summary)} />
@@ -2014,7 +2001,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 				{detail?.riskLevel ? (
 					<span
 						className={cn(
-							"shrink-0 text-[10px] uppercase tracking-[0.06em]",
+							"shrink-0 text-xs",
 							RISK_TONE[detail.riskLevel.toLowerCase()] ?? "text-muted-foreground",
 						)}
 						title={`Risk assessed as ${detail.riskLevel}`}
@@ -2037,17 +2024,17 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 				<div className="flex flex-col gap-2 px-[11px] pb-2.5">
 					{/* Said in full rather than implied by the label: "auto-approved" alone
 					    leaves it ambiguous whether the user set something up that did this. */}
-					<p className="text-[11px] leading-relaxed text-muted-foreground">
+					<p className="text-xs leading-relaxed text-muted-foreground">
 						{denied
 							? "The agent asked to do this and the provider declined on your behalf. You were not asked."
 							: "The agent asked to do this and the provider allowed it on your behalf. You were not asked."}
 					</p>
 					{detail?.rationale ? (
-						<p className="rounded border border-border bg-background px-2.5 py-1.5 text-[11px] leading-relaxed text-foreground">
+						<p className="rounded border border-border bg-background px-2.5 py-1.5 text-xs leading-relaxed text-foreground">
 							{detail.rationale}
 						</p>
 					) : null}
-					<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-[10.5px] leading-relaxed">
+					<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-caption leading-relaxed">
 						{detail?.command ? (
 							<>
 								<dt className="text-muted-foreground/70">command</dt>
@@ -2114,7 +2101,7 @@ function RerouteRow({ activity }: { activity: ConversationActivity }) {
 		<div className="flex items-start gap-2.5 rounded-md border border-border bg-surface/60 px-3 py-2">
 			<Shuffle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
 			<div className="flex min-w-0 flex-col gap-0.5">
-				<span className="text-[11px] text-foreground">
+				<span className="text-xs text-foreground">
 					Answered by{" "}
 					<strong className="font-medium">{detail?.toModel ?? "another model"}</strong>
 					{detail?.fromModel ? (
@@ -2125,7 +2112,7 @@ function RerouteRow({ activity }: { activity: ConversationActivity }) {
 					) : null}
 				</span>
 				{detail?.reason ? (
-					<span className="text-[10.5px] leading-snug text-muted-foreground">{detail.reason}</span>
+					<span className="text-xs leading-snug text-muted-foreground">{detail.reason}</span>
 				) : null}
 			</div>
 		</div>
@@ -2150,7 +2137,7 @@ function ErrorActivityRow({ activity }: { activity: ConversationActivity }) {
 	const actionUrl = String(activity.detail?.actionUrl ?? "").trim();
 	const standaloneActionUrl = actionUrl && !detail?.includes(actionUrl) ? actionUrl : undefined;
 	return (
-		<div className="flex min-w-0 max-w-full items-baseline overflow-hidden py-0.5 text-[11.5px] leading-snug text-muted-foreground">
+		<div className="flex min-w-0 max-w-full items-baseline overflow-hidden py-0.5 text-xs leading-snug text-muted-foreground">
 			<span className="wrap-anywhere min-w-0 whitespace-pre-wrap">
 				<span>{linkifiedProviderErrorText(headline)}</span>
 				{detail ? (
@@ -2306,11 +2293,11 @@ function ReauthRow({ activity }: { activity: ConversationActivity }) {
 		<div className="flex items-start gap-2.5 rounded-md border border-destructive/40 bg-surface px-3 py-2">
 			<KeyRound aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-destructive" />
 			<div className="flex min-w-0 flex-col gap-0.5">
-				<strong className="text-[11px] font-medium text-destructive">
+				<strong className="text-xs font-medium text-destructive">
 					The provider asked you to sign in again
 				</strong>
 				{activity.detail?.reason ? (
-					<span className="text-[10.5px] leading-snug text-muted-foreground">
+					<span className="text-xs leading-snug text-muted-foreground">
 						{activity.detail.reason}
 					</span>
 				) : null}
@@ -2425,7 +2412,7 @@ export function SteerMessage({
 					/>
 				</div>
 			)}
-			<span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+			<span className="flex items-center gap-1 text-xs text-muted-foreground">
 				<CornerDownRight aria-hidden="true" className="size-3" />
 				Steered into the running turn
 			</span>
@@ -2525,11 +2512,11 @@ export function ApprovalCard({
 			}}
 		>
 			<div className="flex flex-col">
-				<p className="whitespace-pre-wrap text-[13.5px] leading-[1.4] text-foreground/90">
+				<p className="whitespace-pre-wrap text-sm leading-[1.4] text-foreground/90">
 					{detail?.reason ?? approvalPrompt(subjectKind)}
 				</p>
 
-				<pre className="mt-2 scrollbar-none max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-background/45 px-2.5 py-1.5 font-mono text-[12px] leading-[1.45] text-muted-foreground">
+				<pre className="mt-2 scrollbar-none max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-background/45 px-2.5 py-1.5 font-mono text-xs leading-[1.45] text-muted-foreground">
 					{detail?.rawCommand ?? command}
 				</pre>
 
@@ -2543,7 +2530,7 @@ export function ApprovalCard({
 						>
 							{approvalDecisionLabel(denyDecision, subjectKind)}
 							{denyDecision === rejectOnceDecision ? (
-								<kbd className="rounded-full bg-foreground/10 px-1.5 py-0.5 font-sans text-[10.5px] leading-none text-muted-foreground">
+								<kbd className="rounded-full bg-foreground/10 px-1.5 py-0.5 font-sans text-caption leading-none text-muted-foreground">
 									Esc
 								</kbd>
 							) : null}
@@ -2608,7 +2595,7 @@ export function ApprovalCard({
 						</button>
 					))}
 					{decisions.length === 0 ? (
-						<p className="text-[11px] text-warning">
+						<p className="text-xs text-warning">
 							The agent offered no decisions AO can present. Open diagnostics.
 						</p>
 					) : null}
@@ -2691,7 +2678,7 @@ function ResolvedApprovalRow({
 	const title = detail?.cwd ? `${command}\n${detail.cwd}` : command;
 
 	return (
-		<div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-md border border-border/80 bg-surface/45 px-2.5 py-1.5 text-[11.5px] text-muted-foreground">
+		<div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-md border border-border/80 bg-surface/45 px-2.5 py-1.5 text-xs text-muted-foreground">
 			<strong className="shrink-0 font-medium text-foreground">{outcome.label}</strong>
 			<span className="min-w-0 truncate text-right font-mono" title={title}>
 				{command}
@@ -2793,7 +2780,7 @@ export function TurnChangedFiles({
 	return (
 		<div className="overflow-hidden rounded-lg bg-surface">
 			<div className="flex items-center gap-2 px-3 py-2">
-				<span className="shrink-0 text-[11px] text-muted-foreground">
+				<span className="shrink-0 text-xs text-muted-foreground">
 					{diff.files.length === 1 ? "1 File Changed" : `${diff.files.length} Files Changed`}
 				</span>
 				{live ? (
@@ -2807,7 +2794,7 @@ export function TurnChangedFiles({
 					<button
 						type="button"
 						onClick={onReview}
-						className="shrink-0 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+						className="shrink-0 text-xs text-muted-foreground transition-colors hover:text-foreground"
 					>
 						Review
 					</button>
@@ -2831,23 +2818,23 @@ export function TurnChangedFiles({
 							<span className="sr-only">{status.label}</span>
 							<FileIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
 							<span
-								className="min-w-0 flex-1 truncate text-[12px] text-foreground/80"
+								className="min-w-0 flex-1 truncate text-xs text-foreground/80"
 								title=""
 							>
 								{fileBasename(file.path)}
 							</span>
 							{file.additions > 0 ? (
-								<span className="shrink-0 font-mono text-[11px] tabular-nums text-success">
+								<span className="shrink-0 font-mono text-caption tabular-nums text-success">
 									+{file.additions}
 								</span>
 							) : null}
 							{file.deletions > 0 ? (
-								<span className="shrink-0 font-mono text-[11px] tabular-nums text-destructive">
+								<span className="shrink-0 font-mono text-caption tabular-nums text-destructive">
 									&minus;{file.deletions}
 								</span>
 							) : null}
 							{file.additions === 0 && file.deletions === 0 ? (
-								<span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/50">
+								<span className="shrink-0 font-mono text-caption tabular-nums text-muted-foreground/50">
 									0
 								</span>
 							) : null}
@@ -2868,7 +2855,7 @@ export function TurnChangedFiles({
 											{body}
 										</button>
 									</TooltipTrigger>
-									<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-[11px] font-normal">
+									<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-caption font-normal">
 										{location}
 									</TooltipContent>
 								</Tooltip>
@@ -2881,20 +2868,20 @@ export function TurnChangedFiles({
 										oldPath={file.oldPath}
 										locationPath={tooltipPath}
 										locationOldPath={tooltipOldPath}
-										className="min-w-0 flex-1 truncate text-[12px] text-foreground/80"
+										className="min-w-0 flex-1 truncate text-xs text-foreground/80"
 									/>
 									{file.additions > 0 ? (
-										<span className="shrink-0 font-mono text-[11px] tabular-nums text-success">
+										<span className="shrink-0 font-mono text-caption tabular-nums text-success">
 											+{file.additions}
 										</span>
 									) : null}
 									{file.deletions > 0 ? (
-										<span className="shrink-0 font-mono text-[11px] tabular-nums text-destructive">
+										<span className="shrink-0 font-mono text-caption tabular-nums text-destructive">
 											&minus;{file.deletions}
 										</span>
 									) : null}
 									{file.additions === 0 && file.deletions === 0 ? (
-										<span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/50">
+										<span className="shrink-0 font-mono text-caption tabular-nums text-muted-foreground/50">
 											0
 										</span>
 									) : null}
@@ -2910,14 +2897,14 @@ export function TurnChangedFiles({
 					type="button"
 					onClick={() => setExpanded((prev) => !prev)}
 					aria-expanded={expanded}
-					className="flex w-full items-center gap-1.5 px-3 pb-2 text-left text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+					className="flex w-full items-center gap-1.5 px-3 pb-2 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
 				>
 					{expanded ? "Show less" : `Show ${hidden} more`}
 				</button>
 			) : null}
 
 			{diff.truncated ? (
-				<p className="px-3 pb-2 text-[10px] leading-relaxed text-warning">
+				<p className="px-3 pb-2 text-xs leading-relaxed text-warning">
 					This turn changed more files than AO lists here.
 					{onReview ? " Use Review for the whole change." : " Open the Files tab for the whole change."}
 				</p>
@@ -2953,7 +2940,7 @@ function FileLocationLabel({
 				    path tooltip below appears — otherwise hover shows the basename. */}
 				<span
 					className={cn(
-						"min-w-0 truncate text-[11.5px] text-foreground/65 outline-none",
+						"min-w-0 truncate text-xs text-foreground/65 outline-none",
 						className,
 					)}
 					title=""
@@ -2961,7 +2948,7 @@ function FileLocationLabel({
 					{fileBasename(path)}
 				</span>
 			</TooltipTrigger>
-			<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-[11px] font-normal">
+			<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-caption font-normal">
 				{location}
 			</TooltipContent>
 		</Tooltip>

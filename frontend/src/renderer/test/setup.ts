@@ -184,6 +184,8 @@ if (typeof window !== "undefined") {
 		},
 		browser: {
 			nativeCompositionEnabled: true,
+			reconnectRuntime: async () => undefined,
+			getRuntimeState: async () => ({ connected: false }),
 			ensure: async (sessionId: string) => ({
 				viewId: `test:${sessionId}`,
 				url: "",
@@ -288,6 +290,7 @@ if (typeof window !== "undefined") {
 			onPageFocus: () => () => undefined,
 			onTabsState: () => () => undefined,
 			onAgentActivity: () => () => undefined,
+			onRuntimeState: () => () => undefined,
 			onDevToolsState: () => () => undefined,
 			onProfileState: () => () => undefined,
 			onProfileManage: () => () => undefined,
@@ -358,6 +361,9 @@ if (typeof window !== "undefined") {
 		},
 		remotes: {
 			list: async () => [],
+			importAccountHost: async () => undefined,
+			pruneAccountHosts: async () => undefined,
+			issueAccountToken: async () => "",
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,

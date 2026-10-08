@@ -48,16 +48,16 @@ export const ReauthBanner = memo(function ReauthBanner({
 					Provider authentication needs attention
 				</strong>
 				{!reasonInTimeline ? (
-					<p className="text-[11px] leading-relaxed text-foreground">
+					<p className="text-xs leading-relaxed text-foreground">
 						{account.reauthReason ??
 							"The provider rejected this session's credentials."}
 					</p>
 				) : null}
-				<p className="text-[11px] leading-relaxed text-muted-foreground">
+				<p className="text-xs leading-relaxed text-muted-foreground">
 					{command ? (
 						<>
 							Run{" "}
-							<code className="rounded bg-background px-1 py-0.5 font-mono text-[10.5px] text-foreground">
+							<code className="rounded bg-background px-1 py-0.5 font-mono text-xs text-foreground">
 								{command}
 							</code>{" "}
 							in a terminal if needed. This chat may need to reconnect before it can use updated credentials.
@@ -138,9 +138,9 @@ export const ThreadStateBanner = memo(function ThreadStateBanner({
 			<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning" />
 			<div className="flex min-w-0 flex-col gap-0.5">
 				<strong className="text-xs font-medium text-warning">{copy.title}</strong>
-				<span className="text-[11px] leading-snug text-muted-foreground">{copy.body}</span>
+				<span className="text-xs leading-snug text-muted-foreground">{copy.body}</span>
 				{threadState.waitingOn?.length ? (
-					<span className="text-[11px] leading-snug text-muted-foreground">
+					<span className="text-xs leading-snug text-muted-foreground">
 						Waiting on: {threadState.waitingOn.join(", ")}
 					</span>
 				) : null}
@@ -226,7 +226,7 @@ export const McpServerBanner = memo(function McpServerBanner({
 		<div
 			role={phase === "shown" ? "status" : undefined}
 			className={cn(
-				"pointer-events-none absolute left-1/2 z-10 flex w-max max-w-full -translate-x-1/2 items-center gap-1.5 rounded-md bg-background px-2 py-0.5 text-[11px] text-muted-foreground transition-opacity duration-200 ease-out motion-reduce:transition-none",
+				"pointer-events-none absolute left-1/2 z-10 flex w-max max-w-full -translate-x-1/2 items-center gap-1.5 rounded-md bg-background px-2 py-0.5 text-xs text-muted-foreground transition-opacity duration-200 ease-out motion-reduce:transition-none",
 				placement === "below" ? "top-full mt-1.5" : "bottom-full mb-1.5",
 				phase === "fading" && "opacity-0",
 			)}

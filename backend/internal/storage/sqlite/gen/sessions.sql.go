@@ -176,7 +176,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts, import_source
+    claude_activity_facts, codex_activity_facts, hibernated_at, import_source
 FROM sessions WHERE id = ?
 `
 
@@ -246,6 +246,7 @@ type GetSessionRow struct {
 	AutomationLaunchCompleted        bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
+	HibernatedAt                     sql.NullTime
 	ImportSource                     string
 }
 
@@ -318,6 +319,7 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.AutomationLaunchCompleted,
 		&i.ClaudeActivityFacts,
 		&i.CodexActivityFacts,
+		&i.HibernatedAt,
 		&i.ImportSource,
 	)
 	return i, err
@@ -338,7 +340,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts, import_source
+    claude_activity_facts, codex_activity_facts, hibernated_at, import_source
 FROM sessions WHERE automation_run_id = ?
 `
 
@@ -408,6 +410,7 @@ type GetSessionByAutomationRunIDRow struct {
 	AutomationLaunchCompleted        bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
+	HibernatedAt                     sql.NullTime
 	ImportSource                     string
 }
 
@@ -480,6 +483,7 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.AutomationLaunchCompleted,
 		&i.ClaudeActivityFacts,
 		&i.CodexActivityFacts,
+		&i.HibernatedAt,
 		&i.ImportSource,
 	)
 	return i, err
@@ -662,7 +666,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts, import_source
+    claude_activity_facts, codex_activity_facts, hibernated_at, import_source
 FROM sessions ORDER BY project_id, num
 `
 
@@ -732,6 +736,7 @@ type ListAllSessionsRow struct {
 	AutomationLaunchCompleted        bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
+	HibernatedAt                     sql.NullTime
 	ImportSource                     string
 }
 
@@ -810,11 +815,45 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.AutomationLaunchCompleted,
 			&i.ClaudeActivityFacts,
 			&i.CodexActivityFacts,
+			&i.HibernatedAt,
 			&i.ImportSource,
 		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChatHibernationCandidates = `-- name: ListChatHibernationCandidates :many
+SELECT id FROM sessions
+WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
+    AND kind <> 'orchestrator'
+    AND provision_state IN ('', 'ready') AND hibernated_at IS NULL
+    AND activity_state = 'idle' AND activity_last_at IS NOT NULL
+    AND trim(provider_conversation_id) <> ''
+ORDER BY id
+`
+
+func (q *Queries) ListChatHibernationCandidates(ctx context.Context) ([]domain.SessionID, error) {
+	rows, err := q.db.QueryContext(ctx, listChatHibernationCandidates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []domain.SessionID{}
+	for rows.Next() {
+		var id domain.SessionID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -840,7 +879,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts, import_source
+    claude_activity_facts, codex_activity_facts, hibernated_at, import_source
 FROM sessions WHERE project_id IS ? ORDER BY num
 `
 
@@ -910,6 +949,7 @@ type ListSessionsByProjectRow struct {
 	AutomationLaunchCompleted        bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
+	HibernatedAt                     sql.NullTime
 	ImportSource                     string
 }
 
@@ -988,6 +1028,7 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.AutomationLaunchCompleted,
 			&i.ClaudeActivityFacts,
 			&i.CodexActivityFacts,
+			&i.HibernatedAt,
 			&i.ImportSource,
 		); err != nil {
 			return nil, err
@@ -1210,6 +1251,30 @@ func (q *Queries) RenameSessionIfDisplayName(ctx context.Context, arg RenameSess
 	return result.RowsAffected()
 }
 
+const replaceUnpersistedChatProvider = `-- name: ReplaceUnpersistedChatProvider :execrows
+UPDATE sessions SET
+    provider_conversation_id = ?1
+WHERE id = ?2
+  AND session_mode = 'chat'
+  AND provider_conversation_id = ?3
+`
+
+type ReplaceUnpersistedChatProviderParams struct {
+	ProviderConversationID         string
+	ID                             domain.SessionID
+	ExpectedProviderConversationID string
+}
+
+// Move a Chat from a provider id the provider never persisted to the fresh id
+// it started instead. Guarded on the old id so a newer owner is never replaced.
+func (q *Queries) ReplaceUnpersistedChatProvider(ctx context.Context, arg ReplaceUnpersistedChatProviderParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, replaceUnpersistedChatProvider, arg.ProviderConversationID, arg.ID, arg.ExpectedProviderConversationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const restoreSessionControllerEpoch = `-- name: RestoreSessionControllerEpoch :execrows
 UPDATE sessions
 SET session_mode = ?1,
@@ -1341,6 +1406,28 @@ type SetSessionAutoReviewParams struct {
 
 func (q *Queries) SetSessionAutoReview(ctx context.Context, arg SetSessionAutoReviewParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSessionAutoReview, arg.AutoReviewEnabled, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSessionHibernated = `-- name: SetSessionHibernated :execrows
+UPDATE sessions
+SET hibernated_at = ?1
+WHERE id = ?2 AND revision = ?3
+`
+
+type SetSessionHibernatedParams struct {
+	HibernatedAt     sql.NullTime
+	ID               domain.SessionID
+	ExpectedRevision int64
+}
+
+// Revision fencing keeps an idle decision from overwriting a later send,
+// controller change, or lifecycle write. Generic updates leave this fact alone.
+func (q *Queries) SetSessionHibernated(ctx context.Context, arg SetSessionHibernatedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionHibernated, arg.HibernatedAt, arg.ID, arg.ExpectedRevision)
 	if err != nil {
 		return 0, err
 	}
