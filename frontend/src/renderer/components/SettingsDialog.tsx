@@ -296,7 +296,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (event.key !== "Escape") return;
 			const target = event.target instanceof Element ? event.target : null;
-			// An in-place edit (a profile rename) takes Escape to cancel itself.
+			// In-place edits (a profile rename) and login flows (terminal, cloud login panel) take Escape themselves.
 			if (target?.closest("[data-settings-inline-edit]")) return;
 			// Open menus, listboxes, and dialogs take Escape to dismiss themselves.
 			if (document.querySelector('[role="menu"], [role="listbox"], [role="dialog"], [data-radix-popper-content-wrapper]')) return;
