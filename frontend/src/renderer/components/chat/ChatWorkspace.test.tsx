@@ -2452,6 +2452,31 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("tooltip")).not.toHaveTextContent("Automatic compaction completed");
 	});
 
+	it("fades the welcome heading out in place on the first send instead of popping it off", () => {
+		vi.useFakeTimers();
+		try {
+			const snapshot = idleSnapshot(chatFixtureEmpty);
+			const view = render(<ChatWorkspace snapshot={snapshot} />);
+			expect(screen.getAllByText("What do you want to work on?")).toHaveLength(1);
+
+			const localEchos = [{ clientMessageId: "first", text: "hello", createdAt: "2026-09-09T00:00:00Z" }];
+			view.rerender(<ChatWorkspace snapshot={snapshot} localEchos={localEchos} />);
+
+			// The real heading is gone, a hidden copy fades where it stood, and then it is removed.
+			expect(screen.queryByRole("heading", { name: "What do you want to work on?" })).not.toBeInTheDocument();
+			const leaving = screen.getByText("What do you want to work on?");
+			expect(leaving).toHaveAttribute("aria-hidden", "true");
+			expect(leaving).toHaveClass("chat-welcome-leaving");
+
+			act(() => {
+				vi.advanceTimersByTime(200);
+			});
+			expect(screen.queryByText("What do you want to work on?")).not.toBeInTheDocument();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("centers an empty-chat welcome heading above a realistic starter prompt", () => {
 		const random = vi.spyOn(Math, "random").mockReturnValue(0);
 		render(<ChatWorkspace snapshot={chatFixtureEmpty} />);

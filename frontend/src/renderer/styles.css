@@ -2985,6 +2985,20 @@ html.sidebar-reordering * {
 	border-color: color-mix(in srgb, var(--color-border-strong) 85%, transparent);
 }
 
+/* Opacity only, so the fade stays on the compositor. */
+.chat-welcome-leaving {
+	animation: chat-welcome-out 150ms ease-out both;
+}
+
+@keyframes chat-welcome-out {
+	from {
+		opacity: 1;
+	}
+	to {
+		opacity: 0;
+	}
+}
+
 .chat-human-message-enter {
 	animation: chat-human-message-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
@@ -2992,7 +3006,7 @@ html.sidebar-reordering * {
 @keyframes chat-human-message-in {
 	from {
 		opacity: 0;
-		transform: translateY(-16px);
+		transform: translateY(16px);
 	}
 	to {
 		opacity: 1;
@@ -3195,6 +3209,10 @@ html.sidebar-reordering * {
 	}
 
 	.chat-human-message-enter {
+		animation: none;
+	}
+
+	.chat-welcome-leaving {
 		animation: none;
 	}
 }

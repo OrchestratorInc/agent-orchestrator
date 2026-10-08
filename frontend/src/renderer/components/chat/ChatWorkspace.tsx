@@ -1366,6 +1366,12 @@ function ChatWorkspaceContent({
 		() => EMPTY_CHAT_PLACEHOLDERS[Math.floor(Math.random() * EMPTY_CHAT_PLACEHOLDERS.length)],
 	);
 	const composerDockRef = useRef<HTMLDivElement>(null);
+	// The composer itself, not the dock: the dock also holds the welcome heading, which
+	// disappears on the first send, and sliding from the dock's top would make the
+	// composer jump up by the heading's height before it moved.
+	const composerBoxRef = useRef<HTMLDivElement>(null);
+	const wasConversationEmpty = useRef(conversationEmpty);
+	const [welcomeLeaving, setWelcomeLeaving] = useState(false);
 	const composerCenteredTopRef = useRef<number | null>(null);
 	const composerFlipDyRef = useRef<number | null>(null);
 	const composerSessionRef = useRef(uiSessionId);
@@ -1384,8 +1390,9 @@ function ChatWorkspaceContent({
 			dock.removeAttribute("data-composer-motion");
 		}
 
+		const composerTop = () => (composerBoxRef.current ?? dock).getBoundingClientRect().top;
 		if (conversationEmpty) {
-			composerCenteredTopRef.current = dock.getBoundingClientRect().top;
+			composerCenteredTopRef.current = composerTop();
 			composerFlipDyRef.current = null;
 			return;
 		}
@@ -1393,7 +1400,7 @@ function ChatWorkspaceContent({
 		// Capture the centered→docked delta once. Keep it across Strict Mode's
 		// setup→cleanup→setup so the docking motion still plays.
 		if (composerFlipDyRef.current == null && composerCenteredTopRef.current != null) {
-			composerFlipDyRef.current = composerCenteredTopRef.current - dock.getBoundingClientRect().top;
+			composerFlipDyRef.current = composerCenteredTopRef.current - composerTop();
 			composerCenteredTopRef.current = null;
 		}
 
@@ -1423,6 +1430,20 @@ function ChatWorkspaceContent({
 			dock.removeEventListener("transitionend", onEnd);
 		};
 	}, [conversationEmpty, uiSessionId]);
+
+	// The welcome heading fades out where it stood instead of vanishing, so the first
+	// send does not pop it off the screen.
+	useLayoutEffect(() => {
+		const leaving = wasConversationEmpty.current && !conversationEmpty;
+		wasConversationEmpty.current = conversationEmpty;
+		if (!leaving) {
+			if (conversationEmpty) setWelcomeLeaving(false);
+			return;
+		}
+		setWelcomeLeaving(true);
+		const timer = window.setTimeout(() => setWelcomeLeaving(false), WELCOME_FADE_MS);
+		return () => window.clearTimeout(timer);
+	}, [conversationEmpty]);
 
 	return (
 		<section
@@ -1599,7 +1620,15 @@ function ChatWorkspaceContent({
 										{t("chat.welcome.heading")}
 									</h1>
 								) : null}
-								<div className="relative">
+								<div ref={composerBoxRef} className="relative">
+									{welcomeLeaving ? (
+										<h1
+											aria-hidden="true"
+											className="chat-welcome-leaving pointer-events-none absolute inset-x-0 bottom-full mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl"
+										>
+											{t("chat.welcome.heading")}
+										</h1>
+									) : null}
 									<McpServerBanner
 										key={draftScopeKey}
 										sessionId={uiSessionId}
@@ -2165,6 +2194,8 @@ function ControllerBanner({
  * an unbounded history in every snapshot response.
  */
 const CHAT_VIRTUALIZE_THRESHOLD = 20;
+/** How long the welcome heading takes to fade out on the first send. */
+const WELCOME_FADE_MS = 150;
 /** Opening a chat snaps to the end for this long while rows measure and history arrives. */
 const INITIAL_SNAP_MS = 1000;
 /** Wheel, key and touch intent pause the follow this long so the resulting scroll decides. */
