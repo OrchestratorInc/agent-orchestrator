@@ -49,6 +49,15 @@ describe("telemetry sanitizers", () => {
 		});
 	});
 
+	it("allows only the closed onboarding step vocabulary", async () => {
+		for (const event of ["ao.onboarding.step_viewed", "ao.onboarding.step_completed", "ao.onboarding.step_abandoned"]) {
+			expect(await sanitizeRendererProperties(event, { step: "github_auth", email: "a@b.co", path: "/Users/x" })).toEqual({
+				step: "github_auth",
+			});
+			expect(await sanitizeRendererProperties(event, { step: "/Users/x/secret" })).toEqual({});
+		}
+	});
+
 	it("exports the session management summary under the v2 name", () => {
 		expect(postHogEventName("ao.renderer.session_management_summary")).toBe(
 			"ao.v2.renderer.session_management_summary",
@@ -59,7 +68,7 @@ describe("telemetry sanitizers", () => {
 		const config = buildPostHogConfig("ins_stable-install-id");
 
 		expect(config.persistence).toBe("memory");
-		expect(config.person_profiles).toBe("never");
+		expect(config.person_profiles).toBe("identified_only");
 		expect(config.autocapture).toBe(false);
 		expect(config.capture_performance).toBe(false);
 		expect(config.disable_session_recording).toBe(true);
@@ -234,7 +243,7 @@ describe("telemetry sanitizers", () => {
 			disable_surveys: true,
 		});
 		try {
-			const captured = client.capture("ao.app.active", { channel: "renderer" });
+			const captured = client.capture("ao.app.active", withTelemetryContext({ channel: "renderer" }));
 
 			expect(captured?.properties).toMatchObject({
 				distinct_id: "ins_stable-install-id",
@@ -250,6 +259,39 @@ describe("telemetry sanitizers", () => {
 				queue._clearFlushTimeout();
 			}
 		}
+	});
+
+	it("identify aliases the install id into the WorkOS user and sets email once as a person property", () => {
+		const events: { event: string; properties: Record<string, unknown>; $set?: Record<string, unknown> }[] = [];
+		const client = new PostHog();
+		client.init("phc_test", {
+			...buildPostHogConfig("ins_stable-install-id"),
+			advanced_disable_flags: true,
+			disable_session_recording: true,
+			disable_surveys: true,
+			// Observe what would be sent; nothing leaves the test.
+			before_send: (event) => {
+				if (event) events.push(event as never);
+				return null;
+			},
+		});
+		client.identify("user_01H", { email: "dev@example.com", ao_cloud_user_id: "user_01H", github_login: "octocat" });
+		expect(client.get_distinct_id()).toBe("user_01H");
+		const identify = events.find((e) => e.event === "$identify");
+		expect(identify).toBeTruthy();
+		expect(identify!.properties.$anon_distinct_id).toBe("ins_stable-install-id");
+		expect(identify!.properties.distinct_id ?? client.get_distinct_id()).toBe("user_01H");
+		expect(identify!.$set ?? identify!.properties.$set).toEqual({
+			email: "dev@example.com",
+			ao_cloud_user_id: "user_01H",
+			github_login: "octocat",
+		});
+
+		// After identify, ordinary events carry the user and never the email.
+		client.capture("ao.renderer.support_opened", withTelemetryContext({}));
+		const after = events.find((e) => e.event === "ao.renderer.support_opened");
+		expect(after?.properties).toMatchObject({ distinct_id: "user_01H", $is_identified: true });
+		expect(JSON.stringify(after)).not.toContain("dev@example.com");
 	});
 
 	it("builds stable AO version context for PostHog events", () => {
@@ -274,7 +316,7 @@ describe("telemetry sanitizers", () => {
 		expect(postHogEventName("ao.session.spawned")).toBe("ao.session.spawned");
 	});
 
-	it("forces renderer events to stay anonymous in PostHog", () => {
+	it("forces renderer events to stay anonymous until an AO Cloud sign-in", () => {
 		expect(withTelemetryContext({ $process_person_profile: true })).toMatchObject({
 			$process_person_profile: false,
 		});

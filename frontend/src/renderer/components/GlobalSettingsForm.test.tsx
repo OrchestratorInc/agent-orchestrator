@@ -9,6 +9,7 @@ import { useSoundNotificationsStore } from "../stores/sound-notifications-store"
 import { useTerminalShellStore } from "../stores/terminal-shell-store";
 import { useUiStore } from "../stores/ui-store";
 import { useTelemetryPolicyStore } from "../stores/telemetry-policy-store";
+import { useAnalyticsOptOutStore } from "../stores/analytics-opt-out-store";
 import { TooltipProvider } from "./ui/tooltip";
 
 const { harnessSettingsSectionMock } = vi.hoisted(() => ({ harnessSettingsSectionMock: vi.fn() }));
@@ -45,6 +46,8 @@ const {
 	getTelemetryPolicy,
 	setTelemetryEvents,
 	onTelemetryPolicy,
+	getAnalyticsOptOut,
+	setAnalyticsOptOut,
 	isWindowsPlatform,
 } = vi.hoisted(() => ({
 	getUpdate: vi.fn(),
@@ -74,6 +77,8 @@ const {
 	getTelemetryPolicy: vi.fn().mockResolvedValue(undefined),
 	setTelemetryEvents: vi.fn(),
 	onTelemetryPolicy: vi.fn(),
+	getAnalyticsOptOut: vi.fn(),
+	setAnalyticsOptOut: vi.fn(),
 	isWindowsPlatform: vi.fn(() => true),
 }));
 
@@ -116,7 +121,7 @@ vi.mock("../lib/bridge", () => ({
 			onStatus: updOnStatus,
 		},
 		featureBuilds: { list: featListBuilds, getActive: featGetActive },
-		telemetry: { getPolicy: getTelemetryPolicy, setEventsEnabled: setTelemetryEvents, onPolicy: onTelemetryPolicy, getBootstrap: vi.fn(), capture: vi.fn() },
+		telemetry: { getPolicy: getTelemetryPolicy, setEventsEnabled: setTelemetryEvents, onPolicy: onTelemetryPolicy, getBootstrap: vi.fn(), capture: vi.fn(), getAnalyticsOptOut, setAnalyticsOptOut },
 	},
 }));
 
@@ -196,6 +201,8 @@ beforeEach(async () => {
 	getTelemetryPolicy.mockResolvedValue({ eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true });
 	setTelemetryEvents.mockResolvedValue({ eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true });
 	onTelemetryPolicy.mockReturnValue(() => undefined);
+	getAnalyticsOptOut.mockResolvedValue(false);
+	setAnalyticsOptOut.mockImplementation(async (optedOut: boolean) => optedOut);
 	// Locale defaults to English so existing copy assertions stay green.
 	await appI18n.changeLanguage("en");
 	useLocaleStore.setState({ locale: "en", loaded: false, saving: false, saveError: false });
@@ -208,6 +215,7 @@ beforeEach(async () => {
 	});
 	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false });
 	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
+	useAnalyticsOptOutStore.setState({ optedOut: false, loaded: false, saving: false, saveError: false });
 	document.documentElement.lang = "en";
 });
 
@@ -333,6 +341,22 @@ describe("GlobalSettingsForm", () => {
 		const user = userEvent.setup(); renderForm();
 		await user.click(await screen.findByRole("switch", { name: "Share error events" }));
 		expect(await screen.findByText("Telemetry is off locally. Daemon cleanup is still pending.")).toBeInTheDocument();
+	});
+
+	it("opts out of PostHog usage analytics from the Privacy section, independent of error events", async () => {
+		const user = userEvent.setup();
+		renderForm();
+		const toggle = await screen.findByRole("switch", { name: "Share usage analytics" });
+		await waitFor(() => expect(toggle).toBeEnabled());
+		expect(toggle).toBeChecked();
+		expect(screen.getByText(/your email, AO Cloud user ID and GitHub username are attached/)).toBeInTheDocument();
+
+		await user.click(toggle);
+
+		await waitFor(() => expect(setAnalyticsOptOut).toHaveBeenCalledWith(true));
+		await waitFor(() => expect(toggle).not.toBeChecked());
+		// The error-event policy is a separate control and was not touched.
+		expect(setTelemetryEvents).not.toHaveBeenCalled();
 	});
 
 	it("names the platform restriction instead of claiming cleanup keeps retrying", async () => {

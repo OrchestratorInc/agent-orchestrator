@@ -5,6 +5,7 @@ import type { TerminalSessionState } from "../hooks/useTerminalSession";
 import { useCloseShellTerminal } from "../hooks/useShellTerminals";
 import { useGitHubAuthAutoLoginOffered, useGitHubAuthRequirement, useGitHubAuthTerminal, useStartGitHubAuthTerminal, useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import { aoBridge } from "../lib/bridge";
+import { useOnboardingStep } from "../lib/onboarding-telemetry";
 import { useShellMaybe } from "../lib/shell-context";
 import { useResolvedTheme, useUiStore } from "../stores/ui-store";
 import { TerminalPane } from "./TerminalPane";
@@ -76,6 +77,7 @@ export function GitHubOnboardingNotice() {
 		startLogin.mutate();
 	}, [auth, autoLogin.markOffered, autoLogin.offered, gh?.satisfied, startLogin.isPending, startLogin.mutate, terminal]);
 
+	useOnboardingStep("github_auth", Boolean(auth && !auth.satisfied));
 	if (!auth || auth.satisfied) return null;
 
 	const openLogin = () => {
