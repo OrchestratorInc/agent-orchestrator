@@ -42,3 +42,23 @@ type EventSink interface {
 	Emit(ctx context.Context, ev TelemetryEvent)
 	Close(ctx context.Context) error
 }
+
+// TelemetryIdentity is who the remote telemetry stream is attributed to. The
+// user fields are only ever filled from an explicit AO Cloud sign-in or the
+// operator's authenticated GitHub account, never from git config, and are
+// empty once the user has opted out.
+type TelemetryIdentity struct {
+	InstallID   string
+	CloudUserID string
+	GitHubLogin string
+	OptedOut    bool
+}
+
+// TelemetryIdentityStore holds the live telemetry identity for the daemon.
+type TelemetryIdentityStore interface {
+	Snapshot() TelemetryIdentity
+	// SetCloudUserID records the signed-in AO Cloud user ("" on sign-out).
+	// It reports false when the id is not a plausible WorkOS user id.
+	SetCloudUserID(id string) bool
+	SetGitHubLogin(login string)
+}

@@ -16,7 +16,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -228,10 +227,14 @@ type PostHogSink struct {
 	distinctID   string
 	defaultAgent string
 	tenure       *tenureTracker
-	// personProfileSet flips true the first time an event carries the operator's
-	// GitHub handle, so the identified person `$set` is sent once per process
-	// rather than on every spawn. See properties().
-	personProfileSet atomic.Bool
+	// ident carries the opt-out switch and the signed-in user attributes. Nil
+	// (zero-value sinks in tests) behaves as anonymous and opted in.
+	ident *Identity
+	// setKey is the last identity the identified person `$set` was sent for, so
+	// it goes out once per identity change rather than on every event. See
+	// properties().
+	setMu  sync.Mutex
+	setKey string
 	// appVersion stamps app_version/ao_version on every exported event. Empty
 	// leaves the properties off entirely rather than reporting a misleading
 	// "unknown" that would show up as a real version in release breakdowns.
@@ -262,15 +265,17 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
-	distinctID, err := loadOrCreateInstallID(dataDir)
+	ident, err := NewIdentity(dataDir)
 	if err != nil {
 		return nil, err
 	}
+	distinctID := ident.installID
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &PostHogSink{
 		apiKey:       apiKey,
 		host:         strings.TrimRight(host, "/"),
 		distinctID:   distinctID,
+		ident:        ident,
 		defaultAgent: safeAgentSlug(defaultAgent),
 		tenure:       newTenureTracker(dataDir, time.Now),
 		client:       client,
@@ -285,8 +290,17 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 	return s, nil
 }
 
-// Emit enqueues an event for best-effort export.
+// Identity returns the live identity (install ID, signed-in user, opt-out).
+func (s *PostHogSink) Identity() *Identity { return s.ident }
+
+func (s *PostHogSink) optedOut() bool { return s.ident != nil && s.ident.OptedOut() }
+
+// Emit enqueues an event for best-effort export. An opted-out install exports
+// nothing, so the stream stops the moment the user flips the switch.
 func (s *PostHogSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
+	if s.optedOut() {
+		return
+	}
 	s.queueMu.RLock()
 	if s.closed {
 		s.queueMu.RUnlock()
@@ -334,6 +348,10 @@ func (s *PostHogSink) Close(ctx context.Context) error {
 func (s *PostHogSink) loop() {
 	defer s.wg.Done()
 	for ev := range s.ch {
+		// Re-check: the user may have opted out while this event was queued.
+		if s.optedOut() {
+			continue
+		}
 		s.send(s.ctx, ev)
 	}
 }
@@ -475,17 +493,55 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 	for k, v := range sanitizeRemotePayload(ev.Name, ev.Payload) {
 		props[k] = v
 	}
-	// Mirror the handle into a person property once per process; it is stable, so
-	// re-sending $set on every spawn would only multiply identified-event cost
-	// (see $process_person_profile above) against the 200 spawns/day the limiter
-	// allows. github_actor still rides every spawn as an event property, so
-	// activity breakdowns stay complete.
-	if actor, ok := props["github_actor"]; ok && s.personProfileSet.CompareAndSwap(false, true) {
-		props["$set"] = map[string]any{"github_actor": actor}
-		props["$unset"] = stalePersonProperties
+	s.stampIdentity(props)
+	return props
+}
+
+// stampIdentity attaches who this install is to an event. The GitHub login and
+// AO Cloud user ID ride every event as event properties; the person profile is
+// only processed (billed as identified) once there is a login to mirror or a
+// signed-in user to link, and the person `$set` is resent only when either
+// changes, so a busy daemon does not multiply identified-event cost. Email is
+// deliberately absent: it is set once by the signed-in desktop at identify time.
+func (s *PostHogSink) stampIdentity(props map[string]any) {
+	var uid string
+	if s.ident != nil {
+		snap := s.ident.Snapshot()
+		uid = snap.CloudUserID
+		if _, ok := props["github_actor"]; !ok && snap.GitHubLogin != "" {
+			props["github_actor"] = snap.GitHubLogin
+		}
+	}
+	actor, _ := props["github_actor"].(string)
+	if uid != "" {
+		props["ao_cloud_user_id"] = uid
+		// Linked to the person that the desktop identify() merged this install
+		// into; without it the daemon's events would not join that profile.
 		props["$process_person_profile"] = true
 	}
-	return props
+	if actor == "" && uid == "" {
+		return
+	}
+	key := actor + "|" + uid
+	s.setMu.Lock()
+	changed := key != s.setKey
+	s.setKey = key
+	s.setMu.Unlock()
+	if !changed {
+		return
+	}
+	set := map[string]any{}
+	if actor != "" {
+		// github_actor is the long-standing person property; github_login is the
+		// name the desktop identify() uses. Same value, kept in step.
+		set["github_actor"], set["github_login"] = actor, actor
+	}
+	if uid != "" {
+		set["ao_cloud_user_id"] = uid
+	}
+	props["$set"] = set
+	props["$unset"] = stalePersonProperties
+	props["$process_person_profile"] = true
 }
 
 var stalePersonProperties = []string{"ao_version", "app_version", "build_mode", "platform", "surface"}

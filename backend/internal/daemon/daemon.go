@@ -269,7 +269,7 @@ func Run() error {
 
 	telemetryCfg := cfg
 	telemetryCfg.Telemetry.Events = policyCoordinator.EventsEnabled()
-	telemetrySink := newTelemetrySink(telemetryCfg, store, log)
+	telemetrySink, telemetryIdentity := newTelemetrySink(telemetryCfg, store, log)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
 	// Daemon Sentry: captures genuine 5xx/panics with their Go stack. Gated on
 	// Initialize the transport once so a later policy opt-in works without a
@@ -293,11 +293,20 @@ func Run() error {
 			"agent": cfg.Agent,
 		},
 	})
+	if fresh, ok := telemetryIdentity.(interface{ FreshInstall() bool }); ok && fresh.FreshInstall() {
+		telemetrySink.Emit(context.Background(), ports.TelemetryEvent{
+			Name:       "ao.app.installed",
+			Source:     "daemon",
+			OccurredAt: time.Now().UTC(),
+			Level:      ports.TelemetryLevelInfo,
+		})
+	}
 
 	// signal.NotifyContext cancels ctx on SIGINT/SIGTERM, which drives the
 	// graceful shutdown inside Server.Run and stops the background goroutines.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	startGitHubLoginResolver(ctx, telemetryCfg, telemetryIdentity, log)
 	policyCoordinator.StartWatcher(ctx)
 	defer func() { _ = policyCoordinator.CloseAndDrain(context.Background()) }()
 	// Constructing the synchronous sender performs no I/O. The hard production
@@ -933,6 +942,7 @@ func Run() error {
 		SessionMemory:      memoryReader,
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,
+		TelemetryIdentity:  telemetryIdentity,
 		Mobile:             mc,
 		DevImport: devimportsvc.New(devimportsvc.Deps{
 			Store:         store,

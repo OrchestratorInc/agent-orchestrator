@@ -81,6 +81,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	mountControl(r, control)
 	mountAgentSwitchPolicyControl(r, control.AgentSwitchPolicy)
 	mountTelemetry(r, cfg, deps.Telemetry)
+	mountTelemetryIdentity(r, deps.TelemetryIdentity)
 	mountMobile(r, deps.Mobile)
 	mountMobileDevices(r, &controllers.MobileDevicesController{Registry: deps.DeviceRoster, Presence: deps.DeviceLive})
 	api.Register(r)
@@ -373,6 +374,38 @@ func mountTelemetry(r chi.Router, cfg config.Config, sink ports.EventSink) {
 			},
 		})
 		w.WriteHeader(http.StatusAccepted)
+	})
+}
+
+type telemetryIdentityRequest struct {
+	CloudUserID string `json:"cloudUserId"`
+}
+
+// mountTelemetryIdentity lets the desktop app (Electron main, which sends no
+// Origin) tell the daemon which AO Cloud user is signed in; "" signs out. Only
+// the opaque user ID crosses: the email goes straight to PostHog from the
+// desktop at identify time and never touches the daemon.
+func mountTelemetryIdentity(r chi.Router, ident ports.TelemetryIdentityStore) {
+	if ident == nil {
+		return
+	}
+	r.Post("/internal/telemetry/identity", func(w http.ResponseWriter, req *http.Request) {
+		if !localControlRequest(req) {
+			envelope.WriteJSON(w, http.StatusForbidden, map[string]any{"status": "forbidden", "service": daemonmeta.ServiceName})
+			return
+		}
+		var body telemetryIdentityRequest
+		dec := json.NewDecoder(http.MaxBytesReader(w, req.Body, 1024))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&body); err != nil {
+			envelope.WriteAPIError(w, req, http.StatusBadRequest, "bad_request", "INVALID_JSON", "request body must be valid JSON", nil)
+			return
+		}
+		if !ident.SetCloudUserID(body.CloudUserID) {
+			envelope.WriteAPIError(w, req, http.StatusBadRequest, "bad_request", "INVALID_CLOUD_USER_ID", "cloudUserId is not a valid user id", nil)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 }
 

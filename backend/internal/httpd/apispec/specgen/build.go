@@ -633,6 +633,7 @@ func operations() []operation {
 	ops = append(ops, systemOperations()...)
 	ops = append(ops, identityOperations()...)
 	ops = append(ops, endpointsOperations()...)
+	ops = append(ops, telemetryIdentityOperations()...)
 	ops = append(ops, linkPreviewOperations()...)
 	return ops
 }
@@ -685,6 +686,21 @@ func endpointsOperations() []operation {
 			summary: "List the ways this daemon can currently be reached",
 			resps: []respUnit{
 				{http.StatusOK, controllers.EndpointsResponse{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+	}
+}
+
+// telemetryIdentityOperations declares the phone's telemetry identity sync.
+// Authenticated and outside /api/v1/mobile for the same reason as endpoints.
+func telemetryIdentityOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/telemetry/identity", id: "getTelemetryIdentity", tag: "identity",
+			summary: "Report the desktop telemetry identity and opt-out so a paired phone can adopt it",
+			resps: []respUnit{
+				{http.StatusOK, controllers.TelemetryIdentityResponse{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
