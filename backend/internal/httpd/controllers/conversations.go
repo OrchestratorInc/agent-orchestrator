@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -1151,7 +1152,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			RequestedAt:     turn.RequestedAt.UTC().Format(time.RFC3339),
 			StartedAt:       optionalTimestamp(turn.StartedAt),
 			CompletedAt:     optionalTimestamp(turn.CompletedAt),
-			Diff:            turnDiffPayload(turn.Diff),
+			Diff:            turnDiffPayload(turn.Diff, s.WorkspacePath),
 			Plan:            turnPlanPayload(turn.Plan),
 			RolledBack:      turn.RolledBackAt != nil,
 		})
@@ -1278,7 +1279,12 @@ func rateLimitsPayload(limits *domain.ConversationRateLimits) *ConversationRateL
 }
 
 // turnDiffPayload maps a turn's changed-file summary onto the wire shape.
-func turnDiffPayload(diff *domain.ConversationTurnDiff) *ConversationTurnDiffResponse {
+//
+// Some providers report absolute paths, and an agent can write outside its
+// workspace (its own memory notes, a temp file). The Files API only opens
+// workspace-relative paths, so each file says which one it is rather than
+// leaving a client to guess from the path's shape.
+func turnDiffPayload(diff *domain.ConversationTurnDiff, workspacePath string) *ConversationTurnDiffResponse {
 	if diff == nil {
 		return nil
 	}
@@ -1287,15 +1293,35 @@ func turnDiffPayload(diff *domain.ConversationTurnDiff) *ConversationTurnDiffRes
 		Files:     make([]ConversationDiffFileResponse, 0, len(diff.Files)),
 	}
 	for _, file := range diff.Files {
+		rel, outside := workspaceDiffPath(file.Path, workspacePath)
 		out.Files = append(out.Files, ConversationDiffFileResponse{
-			Path:      file.Path,
-			Additions: file.Additions,
-			Deletions: file.Deletions,
-			Status:    file.Status,
-			OldPath:   file.OldPath,
+			Path:             file.Path,
+			Additions:        file.Additions,
+			Deletions:        file.Deletions,
+			Status:           file.Status,
+			OldPath:          file.OldPath,
+			WorkspacePath:    rel,
+			OutsideWorkspace: outside,
 		})
 	}
 	return out
+}
+
+// workspaceDiffPath places an absolute diff path relative to the workspace root.
+// A relative path is the provider's own workspace-relative form and is left to
+// the client; so is every path when the root is unknown.
+func workspaceDiffPath(path, workspacePath string) (rel string, outside bool) {
+	if workspacePath == "" || !filepath.IsAbs(path) {
+		return "", false
+	}
+	rel, err := filepath.Rel(filepath.Clean(workspacePath), filepath.Clean(path))
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", true
+	}
+	if rel == "." {
+		return "", false
+	}
+	return filepath.ToSlash(rel), false
 }
 
 // turnPlanPayload maps a turn's plan onto the wire shape. A nil plan stays nil: the

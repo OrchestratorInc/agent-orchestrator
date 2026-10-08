@@ -601,6 +601,48 @@ func TestSnapshotExposesTurnDiff(t *testing.T) {
 	}
 }
 
+// An agent can write outside its workspace (Claude Code's memory notes). The
+// Files API only opens workspace-relative paths, so each absolute path ships
+// either its workspace-relative form or the fact that it is outside.
+func TestSnapshotPlacesAbsoluteTurnDiffPathsInWorkspace(t *testing.T) {
+	workspace := "/home/ao/.ao/data/worktrees/standalone/sessions/standalone-9"
+	outside := "/home/ao/.claude/projects/-home-ao--ao-data-worktrees-standalone-sessions-standalone-9/memory/note.md"
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		SessionID:     domain.SessionID("standalone-9"),
+		Mode:          domain.SessionModeChat,
+		WorkspacePath: workspace + "/",
+		Turns: []domain.ConversationTurn{{
+			ID: "turn-1", State: domain.TurnStateCompleted, RequestedAt: time.Now().UTC(),
+			Diff: &domain.ConversationTurnDiff{Files: []domain.ConversationDiffFile{
+				{Path: workspace + "/docs/plan.md", Additions: 1, Status: "added"},
+				{Path: outside, Additions: 12, Status: "added"},
+				{Path: workspace + "-sibling/x.md", Additions: 1, Status: "added"},
+				{Path: "src/a.ts", Additions: 1, Status: "modified"},
+			}},
+		}},
+	})
+
+	files := body["turns"].([]any)[0].(map[string]any)["diff"].(map[string]any)["files"].([]any)
+	if len(files) != 4 {
+		t.Fatalf("files = %#v", files)
+	}
+	inside, out, sibling, relative := files[0].(map[string]any), files[1].(map[string]any), files[2].(map[string]any), files[3].(map[string]any)
+	if inside["path"] != workspace+"/docs/plan.md" || inside["workspacePath"] != "docs/plan.md" || inside["outsideWorkspace"] != nil {
+		t.Errorf("inside file = %#v", inside)
+	}
+	if out["path"] != outside || out["outsideWorkspace"] != true || out["workspacePath"] != nil {
+		t.Errorf("outside file = %#v", out)
+	}
+	// A shared name prefix is not containment.
+	if sibling["outsideWorkspace"] != true {
+		t.Errorf("sibling-directory file = %#v", sibling)
+	}
+	// A provider's relative path is already the client's to resolve.
+	if relative["workspacePath"] != nil || relative["outsideWorkspace"] != nil {
+		t.Errorf("relative file = %#v", relative)
+	}
+}
+
 // A turn the provider never reported a diff for must not claim an empty diff.
 // "Changed nothing" and "this agent does not report diffs" are different answers.
 func TestSnapshotOmitsAbsentTurnDiff(t *testing.T) {

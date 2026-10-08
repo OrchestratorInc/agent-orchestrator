@@ -11252,6 +11252,8 @@ components:
           type: integer
         oldPath:
           type: string
+        outsideWorkspace:
+          type: boolean
         path:
           type: string
         rolledBack:
@@ -11262,6 +11264,8 @@ components:
           - modified
           - deleted
           - renamed
+          type: string
+        workspacePath:
           type: string
       required:
       - path

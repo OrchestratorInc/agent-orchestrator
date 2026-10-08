@@ -2810,7 +2810,7 @@ export function TurnChangedFiles({
 					const tooltipOldPath = file.oldPath
 						? resolveTurnFilePath(file.oldPath, pathHints)
 						: undefined;
-					const openPath = turnFileOpenPath(file.path, pathHints);
+					const openPath = file.workspacePath ?? turnFileOpenPath(file.path, pathHints);
 					const location = fileLocationLabel(tooltipPath, tooltipOldPath);
 
 					const body = (
@@ -2843,12 +2843,31 @@ export function TurnChangedFiles({
 
 					return (
 						<li key={`${file.status}-${file.oldPath ?? ""}-${file.path}`}>
-							{onOpenFile ? (
+							{onOpenFile && file.outsideWorkspace ? (
+								// Files only opens workspace paths. Offering the click would open
+								// a tab that can never load, so the row stays readable but inert.
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<button
 											type="button"
-											onClick={() => onOpenFile(tooltipPath)}
+											aria-disabled="true"
+											aria-label={`${fileBasename(file.path)} is outside this session's workspace`}
+											className="flex w-full cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-left"
+										>
+											{body}
+										</button>
+									</TooltipTrigger>
+									<TooltipContent side="top" className="max-w-[min(28rem,90vw)] text-caption font-normal">
+										<span className="block font-mono">{location}</span>
+										<span className="block text-muted-foreground">Outside this session's workspace</span>
+									</TooltipContent>
+								</Tooltip>
+							) : onOpenFile ? (
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<button
+											type="button"
+											onClick={() => onOpenFile(file.workspacePath ?? tooltipPath)}
 											aria-label={`Open ${openPath} in Files`}
 											className={rowClass}
 										>
