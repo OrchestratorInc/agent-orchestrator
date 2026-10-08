@@ -24,6 +24,33 @@ describe("BrowserDownloadsList", () => {
 		expect(screen.getByRole("button", { name: "Show report.txt in File Explorer" }).querySelector(".lucide-folder-open")).toBeInTheDocument();
 	});
 
+	it("asks before downloading a blocked file and lets it be dismissed", async () => {
+		const onAction = vi.fn();
+		render(
+			<BrowserDownloadsList
+				downloads={[{
+					id: "download-1",
+					fileName: "v1.54.0.zip",
+					source: "proxy.golang.org",
+					receivedBytes: 0,
+					totalBytes: 0,
+					status: "blocked",
+					active: false,
+					startedAt: 1,
+					updatedAt: 1,
+				}]}
+				onAction={onAction}
+			/>,
+		);
+
+		expect(screen.getByText("Blocked · from proxy.golang.org")).toBeInTheDocument();
+		expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Download v1.54.0.zip" }));
+		expect(onAction).toHaveBeenCalledWith("download-1", "allow");
+		await userEvent.click(screen.getByRole("button", { name: "Dismiss v1.54.0.zip" }));
+		expect(onAction).toHaveBeenCalledWith("download-1", "remove");
+	});
+
 	it("shows a nonfatal destination error even when there is no history", () => {
 		render(
 			<BrowserDownloadsList

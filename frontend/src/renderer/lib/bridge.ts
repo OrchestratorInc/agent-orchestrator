@@ -41,6 +41,8 @@ export const aoBridge: AoBridge =
 			onFontSizeShortcut: () => () => undefined,
 		},
 		window: {
+			getZoomFactor: async () => 1,
+			onZoomFactor: () => () => undefined,
 			isMaximized: async () => false,
 			onMaximized: () => () => undefined,
 			isFullScreen: async () => false,
@@ -94,6 +96,8 @@ export const aoBridge: AoBridge =
 		},
 		browser: {
 			nativeCompositionEnabled: false,
+			reconnectRuntime: async () => undefined,
+			getRuntimeState: async () => ({ connected: false }),
 			ensure: async (sessionId: string) => ({
 				viewId: `preview:${sessionId}`,
 				url: "",
@@ -155,6 +159,30 @@ export const aoBridge: AoBridge =
 				canGoForward: false,
 				isLoading: false,
 			}),
+			getFindState: async (viewId: string) => ({
+				viewId,
+				tabId: "t1",
+				query: "",
+				activeMatchOrdinal: 0,
+				matches: 0,
+				finalUpdate: true,
+			}),
+			findInPage: async ({ viewId, query }) => ({
+				viewId,
+				tabId: "t1",
+				query,
+				activeMatchOrdinal: 0,
+				matches: 0,
+				finalUpdate: true,
+			}),
+			stopFindInPage: async ({ viewId }) => ({
+				viewId,
+				tabId: "t1",
+				query: "",
+				activeMatchOrdinal: 0,
+				matches: 0,
+				finalUpdate: true,
+			}),
 			captureScreenshot: async () => {
 				throw new Error("Desktop app is required to take a browser screenshot.");
 			},
@@ -174,7 +202,9 @@ export const aoBridge: AoBridge =
 			notifyPanelUsed: () => undefined,
 			notifyPanelBlur: () => undefined,
 			onFocusLocation: () => () => undefined,
+			onFindOpen: () => () => undefined,
 			onReopenClosedTab: () => () => undefined,
+			onClosePanel: () => () => undefined,
 			devtools: async ({ viewId, operation }) => ({
 				viewId,
 				open: operation !== "close",
@@ -186,9 +216,11 @@ export const aoBridge: AoBridge =
 			discardAnnotations: async () => undefined,
 			annotationAction: async () => undefined,
 			onNavState: () => () => undefined,
+			onFindState: () => () => undefined,
 			onPageFocus: () => () => undefined,
 			onTabsState: () => () => undefined,
 			onAgentActivity: () => () => undefined,
+			onRuntimeState: () => () => undefined,
 			onDevToolsState: () => () => undefined,
 			onProfileState: () => () => undefined,
 			onProfileManage: () => () => undefined,
@@ -262,11 +294,16 @@ export const aoBridge: AoBridge =
 		// which is the truth there.
 		remotes: {
 			list: async () => [],
+			importAccountHost: async () => undefined,
+			pruneAccountHosts: async () => undefined,
+			issueAccountToken: async () => { throw new Error("remote hosts need the desktop app"); },
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,
-			probe: async () => "offline" as const,
-			request: async () => ({ status: 0, body: null }),
+			connect: async () => { throw new Error("remote hosts need the desktop app"); },
+			disconnect: async () => undefined,
+			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
+			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 		},
 		cloud: {
 			getSession: async () => null,

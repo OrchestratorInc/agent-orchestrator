@@ -35,7 +35,12 @@ func conversationTestServer(t *testing.T, service *fakeConversationService) *htt
 // JSON a client actually parses is what is checked.
 
 type fakeConversationService struct {
+	viewID            string
+	viewActive        bool
+	viewSessionID     domain.SessionID
+	viewCalls         int
 	snapshot          chatsvc.Snapshot
+	sendErr           error
 	skills            []ports.ChatSkill
 	skillErr          error
 	configOptions     []ports.ChatConfigOption
@@ -59,6 +64,53 @@ type fakeConversationService struct {
 	reviewInterrupted bool
 }
 
+func (f *fakeConversationService) SetChatView(_ context.Context, sessionID domain.SessionID, viewID string, active bool) error {
+	f.viewSessionID = sessionID
+	f.viewID = viewID
+	f.viewActive = active
+	f.viewCalls++
+	return nil
+}
+
+func TestChatViewRouteValidatesAndForwardsLease(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	for _, tc := range []struct {
+		body       string
+		status     int
+		code       string
+		wantActive bool
+	}{
+		{body: `{"viewId":"","active":true}`, status: http.StatusBadRequest},
+		{body: `{"viewId":"viewer-1"}`, status: http.StatusBadRequest, code: "CHAT_VIEW_ACTIVE_INVALID"},
+		{body: `{"viewId":"viewer-1","active":null}`, status: http.StatusBadRequest, code: "CHAT_VIEW_ACTIVE_INVALID"},
+		{body: `{"viewId":"viewer-1","active":true}`, status: http.StatusNoContent, wantActive: true},
+		{body: `{"viewId":"viewer-1","active":false}`, status: http.StatusNoContent},
+	} {
+		resp, err := http.Post(server.URL+"/api/v1/sessions/p1-1/chat-view", "application/json", bytes.NewBufferString(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != tc.status {
+			t.Fatalf("POST %s status = %d, want %d", tc.body, resp.StatusCode, tc.status)
+		}
+		if tc.code != "" && !bytes.Contains(body, []byte(`"code":"`+tc.code+`"`)) {
+			t.Fatalf("POST %s body = %s, want code %s", tc.body, body, tc.code)
+		}
+		if tc.status == http.StatusNoContent && service.viewActive != tc.wantActive {
+			t.Fatalf("POST %s active = %v, want %v", tc.body, service.viewActive, tc.wantActive)
+		}
+	}
+	if service.viewCalls != 2 || service.viewSessionID != "p1-1" || service.viewID != "viewer-1" || service.viewActive {
+		t.Fatalf("forwarded view = %+v", service)
+	}
+}
+
 func (f *fakeConversationService) EditMessage(context.Context, domain.SessionID, string, ports.ChatUserMessage) (chatsvc.EditMessageResult, error) {
 	return chatsvc.EditMessageResult{}, nil
 }
@@ -73,7 +125,7 @@ func (f *fakeConversationService) Snapshot(context.Context, domain.SessionID) (c
 
 func (f *fakeConversationService) Send(_ context.Context, _ domain.SessionID, message ports.ChatUserMessage) (domain.ConversationTurn, error) {
 	f.sent = message
-	return domain.ConversationTurn{ID: "turn-1", State: domain.TurnStateRunning}, nil
+	return domain.ConversationTurn{ID: "turn-1", State: domain.TurnStateRunning}, f.sendErr
 }
 
 func (f *fakeConversationService) Resolve(_ context.Context, _ domain.SessionID, requestID string, decision ports.ChatDecision) error {
@@ -113,6 +165,15 @@ func (f *fakeConversationService) ResolveInputForOwner(_ context.Context, owner 
 func (f *fakeConversationService) InterruptForOwner(_ context.Context, owner domain.ConversationOwner) error {
 	f.reviewOwner, f.reviewInterrupted = owner, true
 	return f.reviewErr
+}
+
+func (f *fakeConversationService) ModelsForOwner(ctx context.Context, owner domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error) {
+	f.reviewOwner = owner
+	return f.Models(ctx, "")
+}
+func (f *fakeConversationService) SetTurnSettingsForOwner(_ context.Context, owner domain.ConversationOwner, settings domain.ConversationSettings) (domain.ConversationSettings, error) {
+	f.reviewOwner = owner
+	return settings, nil
 }
 
 func (f *fakeConversationService) Models(context.Context, domain.SessionID) ([]ports.ChatModel, domain.ConversationSettings, error) {
@@ -188,6 +249,26 @@ func conversationSnapshotBody(t *testing.T, snapshot chatsvc.Snapshot) map[strin
 		t.Fatalf("decode: %v", err)
 	}
 	return decoded
+}
+
+func TestConversationSnapshotCarriesTheSendersClientMessageID(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		Conversation: domain.ConversationRecord{ID: "conversation-1"},
+		SessionID:    domain.SessionID("p1-1"),
+		Messages: []domain.ConversationMessage{
+			{ID: "sent", TurnID: "t1", Sequence: 1, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "hi", ClientMessageID: "client-key-1", CreatedAt: now},
+			{ID: "reply", TurnID: "t1", Sequence: 2, Role: domain.MessageRoleAssistant, Origin: domain.MessageOriginProvider, Text: "hello", CreatedAt: now},
+		},
+	})
+
+	messages := body["messages"].([]any)
+	if got := messages[0].(map[string]any)["clientMessageId"]; got != "client-key-1" {
+		t.Fatalf("user message clientMessageId = %#v, want client-key-1: the renderer matches its optimistic echo on it", got)
+	}
+	if _, exists := messages[1].(map[string]any)["clientMessageId"]; exists {
+		t.Fatalf("a message with no sender key must omit clientMessageId, got %#v", messages[1])
+	}
 }
 
 func TestConversationSnapshotExposesSafeEditContentAndBranchMetadata(t *testing.T) {
@@ -337,6 +418,21 @@ func TestSendConversationPreservesNativeImageAndResourceContent(t *testing.T) {
 	}
 	if service.sent.Content[0].Type != "image" || service.sent.Content[1].Type != "resource_link" || service.sent.Content[2].Type != "resource" {
 		t.Fatalf("content = %#v", service.sent.Content)
+	}
+}
+
+func TestSendConversationMapsChangedClientMessageToConflict(t *testing.T) {
+	service := &fakeConversationService{sendErr: domain.ErrClientMessageConflict}
+	server := conversationTestServer(t, service)
+	body, status, _ := doRequest(t, server, http.MethodPost,
+		"/api/v1/sessions/p1-1/conversation/messages",
+		`{"text":"changed work","clientMessageId":"same-id"}`)
+	var response struct {
+		Code string `json:"code"`
+	}
+	mustJSON(t, body, &response)
+	if status != http.StatusConflict || response.Code != "CHAT_MESSAGE_IDEMPOTENCY_CONFLICT" {
+		t.Fatalf("status=%d code=%q, want 409/CHAT_MESSAGE_IDEMPOTENCY_CONFLICT", status, response.Code)
 	}
 }
 

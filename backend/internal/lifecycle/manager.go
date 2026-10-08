@@ -28,6 +28,12 @@ type sessionStore interface {
 	// write. It returns false when a concurrent lifecycle/agent-switch boundary
 	// made the reducer's previously read session stale.
 	UpdateSessionFromActivitySignal(ctx context.Context, rec domain.SessionRecord, expectedRevision int64) (bool, error)
+	// UpdateSessionArtifactOutput is a narrow write touching only
+	// artifact_dir and session_output_type. ReconcileSessionOutputType uses
+	// it instead of a read-modify-write UpdateSession so a stale in-memory
+	// read can never replay is_terminated, activity, runtime identity, or
+	// preview state backwards over a newer concurrent write.
+	UpdateSessionArtifactOutput(ctx context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error)
 	// ListSessions returns every session in a project. The dispatcher reads it
 	// to resolve the current orchestrator at delivery time.
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
@@ -172,6 +178,13 @@ func WithTelemetry(sink ports.EventSink) Option {
 	return func(m *Manager) { m.telemetry = sink }
 }
 
+// WithDataDir supplies AO's data directory so ReconcileSessionOutputType can
+// derive a session's artifact directory when its stored value is empty (a
+// row created before that column existed).
+func WithDataDir(dir string) Option {
+	return func(m *Manager) { m.dataDir = dir }
+}
+
 // WithContainerReaper wires the container leg of #2652: MarkTerminated will
 // force-remove the terminated session's ao.session-labeled Docker containers,
 // unless the project opts out via ProjectConfig.ContainerReap.Disabled.
@@ -221,6 +234,10 @@ func WithUrgentNudgeGate(pred func(domain.AgentHarness) bool) Option {
 // It also owns agent nudges caused by PR observations, including merge-conflict, CI-failure, and review-feedback prompts.
 type Manager struct {
 	store sessionStore
+	// reconcileMu serializes ReconcileSessionOutputType calls so an older scan
+	// can never persist over a newer one. It is separate from mu, so a slow
+	// artifact walk never blocks lifecycle mutations.
+	reconcileMu sync.Mutex
 	// guard is the shared pane-write primitive every reaction nudge goes
 	// through (see sessionguard). Nil when no messenger was wired: reaction
 	// nudges become no-ops but the reducer still runs.
@@ -238,6 +255,9 @@ type Manager struct {
 	projects         projectConfigLoader
 	operationGateMu  sync.RWMutex
 	operationGate    sessionOperationGate
+	// dataDir backs ReconcileSessionOutputType's artifact-dir fallback for
+	// sessions rows created before session_output_type/artifact_dir existed.
+	dataDir string
 
 	mu        sync.Mutex
 	window    time.Duration
@@ -247,6 +267,9 @@ type Manager struct {
 	// flights tracks, per session, the in-flight tool executions and the
 	// pending permission dialog's identity (see toolFlight). Guarded by mu.
 	flights map[domain.SessionID]*toolFlight
+	// steps is each session's recent tool calls for the memory window, from
+	// tool-use hooks (see steps.go). Guarded by mu.
+	steps map[domain.SessionID][]domain.SessionStep
 	// pendingLaunches closes the small ordering gap between starting a supervised
 	// process and durably recording its generation in MarkSpawned. A hook from
 	// that exact generation waits on ready instead of being discarded as stale.
@@ -280,6 +303,7 @@ func New(store sessionStore, messenger ports.AgentMessenger, opts ...Option) *Ma
 		clock:                       clock,
 		react:                       newReactionState(),
 		flights:                     map[domain.SessionID]*toolFlight{},
+		steps:                       map[domain.SessionID][]domain.SessionStep{},
 		pendingLaunches:             map[domain.SessionID]pendingLaunch{},
 		steerActive:                 func(domain.AgentHarness) bool { return false },
 		startupSignalGatesInput:     func(domain.AgentHarness) bool { return false },
@@ -493,6 +517,7 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		// (later observations return early on cur.IsTerminated). Runs under
 		// m.mu — mutate holds it across this callback.
 		delete(m.flights, id)
+		delete(m.steps, id)
 		terminated = true
 		return next, true
 	})
@@ -521,7 +546,8 @@ const maxActivitySignalProjectionRetries = 3
 func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error {
 	// Subagent answers, including prompt suggestions, are not root-conversation
 	// facts. Their usage is collected independently from lifecycle metadata.
-	if s.Event == "subagent-stop" {
+	s.SubagentID = strings.TrimSpace(s.SubagentID)
+	if s.Event == "subagent-stop" && s.SubagentID == "" {
 		return nil
 	}
 	s.AgentSessionID = strings.TrimSpace(s.AgentSessionID)
@@ -532,6 +558,15 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 	s.ControllerGeneration = strings.TrimSpace(s.ControllerGeneration)
 	s.ProviderTurnID = strings.TrimSpace(s.ProviderTurnID)
 	s.SubmissionID = strings.TrimSpace(s.SubmissionID)
+	if s.SubagentID != "" {
+		// Child hook identity and transcript are not the root conversation's
+		// resumable identity or history checkpoint.
+		s.AgentSessionID = ""
+		s.TranscriptPath = ""
+		s.LatestUserPrompt = ""
+		s.LatestAssistantUpdate = ""
+		s.ProviderTurnID = ""
+	}
 	if !s.ConversationCheckpointOrigin.Valid() {
 		s.ConversationCheckpointOrigin = domain.ConversationCheckpointOriginUnknown
 	}
@@ -577,7 +612,7 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 			}
 		}
 	}
-	if !s.Valid && s.AgentSessionID == "" && s.LatestUserPrompt == "" && s.LatestAssistantUpdate == "" && s.TranscriptPath == "" {
+	if !s.Valid && s.SubagentID == "" && s.AgentSessionID == "" && s.LatestUserPrompt == "" && s.LatestAssistantUpdate == "" && s.TranscriptPath == "" {
 		return nil
 	}
 	if s.LaunchID != "" {
@@ -618,6 +653,7 @@ retryProjection:
 	now := m.clock()
 	if rec.IsTerminated {
 		delete(m.flights, id)
+		delete(m.steps, id)
 		m.mu.Unlock()
 		return nil
 	}
@@ -850,10 +886,24 @@ retryProjection:
 	// An explicit prompt submission is proof that an agent was relaunched in the
 	// preserved shell. Other same-generation callbacks may have been delayed
 	// behind the process-exit report and cannot resurrect an exited workload.
-	if rec.Activity.State == domain.ActivityExited && s.Valid && s.State != domain.ActivityExited &&
+	if rec.Activity.State == domain.ActivityExited && (s.Valid || s.SubagentID != "") && s.State != domain.ActivityExited &&
 		(s.State != domain.ActivityActive || s.Event != "user-prompt-submit") && !currentChatController {
 		m.mu.Unlock()
 		return nil
+	}
+	s, subagentFacts, err := reduceSubagentActivity(rec, s, now)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	storedSubagentFacts := ""
+	switch rec.Harness {
+	case domain.HarnessClaudeCode:
+		storedSubagentFacts = rec.Metadata.ClaudeActivityFacts
+		checkpoint.ClaudeActivityFacts = subagentFacts
+	case domain.HarnessCodex:
+		storedSubagentFacts = rec.Metadata.CodexActivityFacts
+		checkpoint.CodexActivityFacts = subagentFacts
 	}
 	// Event-tagged signals fold through the session's tool-flight state first:
 	// they may be suppressed (state write skipped) by the blocked-precedence
@@ -874,7 +924,7 @@ retryProjection:
 		(s.AgentSessionID != "" && s.Timestamp.After(rec.Metadata.NativeIdentityObservedAt)) ||
 		(s.AgentSessionID != "" && rec.Metadata.AgentSessionIDLaunchID != s.LaunchID) ||
 		(s.TranscriptPath != "" && rec.Metadata.NativeTranscriptPath != s.TranscriptPath) ||
-		checkpointChanged
+		checkpointChanged || subagentFacts != storedSubagentFacts
 	toolFlightBeforeProjection := cloneToolFlight(m.flights[id])
 	if s.Valid {
 		s = m.applyToolPrecedenceLocked(id, rec.Activity.State, s)
@@ -883,12 +933,18 @@ retryProjection:
 		m.mu.Unlock()
 		return nil
 	}
+	// Every fence has accepted the signal, so its tool step may land. A
+	// projection that loses its revision race puts the steps back below, and
+	// the retry records the step again against the fresh row.
+	stepsBeforeProjection := m.stepsSnapshotLocked(id)
+	m.recordStepLocked(id, s, now)
 	project := func(next domain.SessionRecord) (applied, retry bool, err error) {
 		applied, err = m.store.UpdateSessionFromActivitySignal(ctx, next, observedRevision)
 		if applied {
 			return applied, false, err
 		}
 		m.restoreToolFlightLocked(id, toolFlightBeforeProjection)
+		m.restoreStepsLocked(id, stepsBeforeProjection)
 		if err != nil {
 			return false, false, err
 		}
@@ -1684,6 +1740,9 @@ func (m *Manager) changeControllerEpoch(
 	next.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}
 	next.UpdatedAt = now
 	delete(m.flights, id)
+	// The old runtime's open step never gets its post-hook; left in place it
+	// would show as the new controller's current tool.
+	delete(m.steps, id)
 	resolutions := needsInputResolutions(previous, next, now)
 	waitingEvents := m.waitingInputEvents(
 		next, previous.Activity.State, previous.Activity.LastActivityAt, now,
@@ -1792,6 +1851,7 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 				cur.IsTerminated = true
 				cur.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: now}
 				delete(m.flights, id) // runs under m.mu (mutate holds it)
+				delete(m.steps, id)
 				outcome = terminationApplied
 				return cur, true
 			}

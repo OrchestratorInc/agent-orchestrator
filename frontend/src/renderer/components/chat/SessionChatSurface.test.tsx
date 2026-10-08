@@ -122,6 +122,7 @@ vi.mock("./ChatWorkspace", async () => {
 			onLinkOpen,
 			onRememberPermissions,
 			onChooseSettings,
+			configOptionError,
 			snapshot,
 			shellTarget,
 		}: {
@@ -132,6 +133,7 @@ vi.mock("./ChatWorkspace", async () => {
 			onLinkOpen?: (url: string) => void;
 			onRememberPermissions?: unknown;
 			onChooseSettings?: unknown;
+			configOptionError?: string;
 			snapshot: { sessionId?: string };
 			shellTarget?: { handleId: string };
 		}) => {
@@ -150,6 +152,7 @@ vi.mock("./ChatWorkspace", async () => {
 					{snapshot.sessionId ? <div>Rendered {snapshot.sessionId}</div> : null}
 					<div data-testid="remember-available">{String(Boolean(onRememberPermissions))}</div>
 					<div data-testid="turn-settings-available">{String(Boolean(onChooseSettings))}</div>
+					<div data-testid="config-option-error">{configOptionError}</div>
 					{headerActions}
 					{sessionTabAction}
 					<button type="button" onClick={() => onLinkOpen?.(LINK)}>
@@ -819,8 +822,8 @@ describe("SessionChatSurface link routing", () => {
 		);
 
 		await waitFor(() => {
-			expect(clearCatalogsMock).toHaveBeenCalledWith(queryClient, session.id);
-			expect(invalidateCatalogsMock).toHaveBeenCalledWith(queryClient, session.id);
+			expect(clearCatalogsMock).toHaveBeenCalledWith(queryClient, session.id, undefined);
+			expect(invalidateCatalogsMock).toHaveBeenCalledWith(queryClient, session.id, undefined);
 		});
 		expect(catalogObserverState.enabled).toContain(false);
 		await waitFor(() => expect(catalogObserverState.enabled.at(-1)).toBe(true));
@@ -1088,18 +1091,25 @@ describe("SessionChatSurface link routing", () => {
 
 
 describe("controller catalogs during an interface handoff", () => {
+	it("hides a stale catalog error while a hibernated controller is offline", () => {
+		configState.error = "the agent controller for this session is not running";
+		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "hibernated" } };
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		expect(screen.getByTestId("config-option-error")).toBeEmptyDOMElement();
+	});
+
 	it.each(["stopped", "connecting", "ready"] as const)("waits through handoff with a %s snapshot, then loads catalogs", (state) => {
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state } };
 		const client = new QueryClient();
 		const { rerender } = render(<Wrapper client={client}><SessionChatSurface session={session} controllerTransitioning /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false);
+			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
 		}
 
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "ready" } };
 		rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, true);
+			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
 		}
 	});
 
@@ -1107,7 +1117,7 @@ describe("controller catalogs during an interface handoff", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "stopped" } };
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false);
+			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
 		}
 	});
 });

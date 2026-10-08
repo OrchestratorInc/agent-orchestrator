@@ -3,6 +3,7 @@ package prstatus
 import (
 	"context"
 	"errors"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"io"
 	"log/slog"
 	"testing"
@@ -44,6 +45,14 @@ func (s *scannerStore) RetryPullRequestRefresh(_ context.Context, job domain.Pul
 	return s.retryErr
 }
 
+func (s *scannerStore) AutomaticReviewSession(context.Context, string, string) (string, string, bool, error) {
+	return "", "", false, nil
+}
+
+func (s *scannerStore) ApplyPullRequestAutomation(context.Context, domain.PullRequest) error {
+	return nil
+}
+
 type scannerRefreshCall struct {
 	ref     domain.PullRequestRef
 	refresh domain.PullRequestRefreshContext
@@ -57,6 +66,10 @@ type scannerGitHub struct {
 func (g *scannerGitHub) RefreshPullRequestStatus(_ context.Context, ref domain.PullRequestRef, refresh domain.PullRequestRefreshContext) (domain.PullRequest, error) {
 	g.calls = append(g.calls, scannerRefreshCall{ref: ref, refresh: refresh})
 	return domain.PullRequest{}, g.err
+}
+
+func (g *scannerGitHub) TriggerAutomaticReview(context.Context, string, string, string, domain.PullRequest) (domain.ReviewRun, bool, error) {
+	return domain.ReviewRun{}, false, nil
 }
 
 func testScannerOptions(now time.Time) Options {
@@ -171,5 +184,55 @@ func TestRepeatedScansDoNotRefreshHealthyPullRequests(t *testing.T) {
 	}
 	if store.claims != 2 || len(github.calls) != 0 {
 		t.Fatalf("claims = %d, GitHub calls = %+v", store.claims, github.calls)
+	}
+}
+
+type automaticReviewStore struct {
+	*scannerStore
+	enabled bool
+}
+
+func (s automaticReviewStore) AutomaticReviewSession(context.Context, string, string) (string, string, bool, error) {
+	return "session-1", "codex", s.enabled, nil
+}
+
+func (s automaticReviewStore) ApplyPullRequestAutomation(context.Context, domain.PullRequest) error {
+	return nil
+}
+
+type automaticReviewGitHub struct {
+	triggered int
+}
+
+func (g *automaticReviewGitHub) RefreshPullRequestStatus(context.Context, domain.PullRequestRef, domain.PullRequestRefreshContext) (domain.PullRequest, error) {
+	return domain.PullRequest{ID: "pr-1", OrgID: "org-1", HeadSHA: "abc", State: contract.PRStateOpen}, nil
+}
+
+func (g *automaticReviewGitHub) TriggerAutomaticReview(context.Context, string, string, string, domain.PullRequest) (domain.ReviewRun, bool, error) {
+	g.triggered++
+	return domain.ReviewRun{}, true, nil
+}
+
+func TestScanOnceTriggersEnabledAutomaticReview(t *testing.T) {
+	github := &automaticReviewGitHub{}
+	store := automaticReviewStore{scannerStore: &scannerStore{jobs: []domain.PullRequestRefreshJob{{Ref: domain.PullRequestRef{ID: "pr-1", OrgID: "org-1"}}}}, enabled: true}
+	scanner := New(store, github, Options{})
+	if err := scanner.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if github.triggered != 1 {
+		t.Fatalf("automatic review triggers = %d, want 1", github.triggered)
+	}
+}
+
+func TestScanOnceSkipsDisabledAutomaticReview(t *testing.T) {
+	github := &automaticReviewGitHub{}
+	store := automaticReviewStore{scannerStore: &scannerStore{jobs: []domain.PullRequestRefreshJob{{Ref: domain.PullRequestRef{ID: "pr-1", OrgID: "org-1"}}}}}
+	scanner := New(store, github, Options{})
+	if err := scanner.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if github.triggered != 0 {
+		t.Fatalf("automatic review triggers = %d, want 0", github.triggered)
 	}
 }

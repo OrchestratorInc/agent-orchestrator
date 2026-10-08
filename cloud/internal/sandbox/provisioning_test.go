@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
@@ -158,7 +159,7 @@ func TestSessionPlanForProviderWithCoderOptions(t *testing.T) {
 	}
 
 	// nil options => default template, no size/startup params (unchanged behavior).
-	plan, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, nil)
+	plan, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +178,7 @@ func TestSessionPlanForProviderWithCoderOptions(t *testing.T) {
 	// rich parameters on.
 	plan, err = defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, &CoderSessionOptions{
 		TemplateID: chosenTemplate, Size: "large", StartupScript: "make dev",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +195,7 @@ func TestSessionPlanForProviderWithCoderOptions(t *testing.T) {
 
 	// Size without a chosen template is ignored: the default template does not
 	// declare it, so we must not send it (Coder would reject the build).
-	plan, err = defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, &CoderSessionOptions{Size: "large"})
+	plan, err = defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, &CoderSessionOptions{Size: "large"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,5 +227,94 @@ func TestDecodeCoderSessionProfileRejectsIncompleteContract(t *testing.T) {
 		if _, err := DecodeCoderSessionProfile(raw); err == nil {
 			t.Errorf("profile %d unexpectedly decoded: %s", index, raw)
 		}
+	}
+}
+
+// A per-organization override replaces the deployment-default Coder connection's
+// non-secret fields in the stamped session profile, while a nil override leaves
+// the deployment default untouched.
+func TestSessionPlanForProviderWithCoderOverride(t *testing.T) {
+	t.Parallel()
+	const (
+		deployTemplate = "2a2e262c-b31c-4202-946d-a19ad45d1fd2"
+		orgTemplate    = "3b3f373d-c42d-5313-a57e-b2abe56e2fe3"
+	)
+	defaults := ProvisioningDefaults{
+		Provider: ProviderCoder,
+		Release:  "test",
+		Coder: CoderConfig{
+			BaseURL: "https://coder.example.com", Owner: "deploy-owner", TemplateID: deployTemplate,
+			AgentName: "deploy-dev", DurableRoot: "/persistent/ao", WorkerTokenTTL: time.Minute,
+		},
+	}
+
+	plan, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, nil, &CoderDeploymentOverride{
+		BaseURL: "https://org-coder.example.com", Owner: "org-owner", TemplateID: orgTemplate,
+		AgentName: "org-dev", Parameters: map[string]string{"region": "eu"}, DurableRoot: "/srv/org",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := DecodeCoderSessionProfile(plan.ResourceProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.BaseURL != "https://org-coder.example.com" || profile.Owner != "org-owner" ||
+		profile.TemplateID != orgTemplate || profile.AgentName != "org-dev" ||
+		profile.DurableRoot != "/srv/org" || profile.Parameters["region"] != "eu" {
+		t.Fatalf("override not applied: %+v", profile)
+	}
+
+	// A nil override keeps the deployment default.
+	plan, err = defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err = DecodeCoderSessionProfile(plan.ResourceProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.BaseURL != "https://coder.example.com" || profile.Owner != "deploy-owner" ||
+		profile.TemplateID != deployTemplate {
+		t.Fatalf("nil override disturbed the deployment default: %+v", profile)
+	}
+}
+
+// A bring-your-own-Coder org carries no default template (it is chosen per
+// project). The per-project pick supplies the template; with neither the org nor
+// the project supplying one, the plan fails with ErrCoderTemplateRequired so the
+// edge can tell the user to choose a template.
+func TestSessionPlanForProviderWithCoderTemplatelessOverride(t *testing.T) {
+	t.Parallel()
+	const projectTemplate = "3b3f373d-c42d-5313-a57e-b2abe56e2fe3"
+	// A bring-your-own-only deployment may leave the deployment default unset.
+	defaults := ProvisioningDefaults{Provider: ProviderCoder, Release: "test"}
+	templateless := &CoderDeploymentOverride{
+		BaseURL: "https://org-coder.example.com", Owner: "org-owner",
+		DurableRoot: "/srv/org",
+	}
+
+	// Project supplies the template.
+	plan, err := defaults.SessionPlanForProviderWithCoder(
+		"codex", ProviderCoder, &CoderSessionOptions{TemplateID: projectTemplate}, templateless,
+	)
+	if err != nil {
+		t.Fatalf("project-supplied template: %v", err)
+	}
+	profile, err := DecodeCoderSessionProfile(plan.ResourceProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.TemplateID != projectTemplate || profile.Owner != "org-owner" {
+		t.Fatalf("project template not applied over templateless org: %+v", profile)
+	}
+
+	// No template anywhere => a clear, user-fixable error.
+	if _, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, nil, templateless); !errors.Is(err, ErrCoderTemplateRequired) {
+		t.Fatalf("templateless session error = %v, want ErrCoderTemplateRequired", err)
+	}
+	// An options object that carries only size (no template) still resolves nothing.
+	if _, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, &CoderSessionOptions{Size: "large"}, templateless); !errors.Is(err, ErrCoderTemplateRequired) {
+		t.Fatalf("size-only templateless session error = %v, want ErrCoderTemplateRequired", err)
 	}
 }

@@ -72,6 +72,9 @@ type Plan struct {
 	// state, instead of waiting for the user to trigger terminalInput.
 	initialInput            string
 	initialInputReadyStates []shellterm.InitialInputReadyState
+	// sendInitialInputOnReadyTimeout delivers initialInput even when no ready
+	// state appears in time, for harnesses whose input is safe once started.
+	sendInitialInputOnReadyTimeout bool
 	// prepareWorkspace, when set, runs reviewed harness-specific setup against
 	// the plan's stable auth workspace before the terminal launches (for
 	// example pre-recording workspace trust so a first-run dialog cannot
@@ -171,10 +174,11 @@ func (s *Service) Start(ctx context.Context, agentID string) (StartResult, error
 		argv = append([]string{self, plan.launcher, "--executable", plan.command[0]}, plan.launcherArgs...)
 	}
 	input := shellterm.OpenCommandTerminalInput{
-		Argv:                    argv,
-		Title:                   plan.title,
-		InitialInput:            plan.initialInput,
-		InitialInputReadyStates: plan.initialInputReadyStates,
+		Argv:                           argv,
+		Title:                          plan.title,
+		InitialInput:                   plan.initialInput,
+		InitialInputReadyStates:        plan.initialInputReadyStates,
+		SendInitialInputOnReadyTimeout: plan.sendInitialInputOnReadyTimeout,
 	}
 	if plan.prepareWorkspace != nil {
 		workingDir, err := s.prepareAuthWorkspace(ctx, plan)

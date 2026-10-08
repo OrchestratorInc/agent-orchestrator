@@ -396,12 +396,137 @@ func TestAccountRecoveryClearsPersistentReauthenticationState(t *testing.T) {
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return s.Conversation.Account != nil && s.Conversation.Account.ReauthRequiredAt != nil
 	})
-	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventAccountChanged, Account: &ports.ChatAccount{ReauthRecovered: true}})
+	h.advance(time.Second)
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "recovery"},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "recovery", TurnState: domain.TurnStateCompleted},
+	)
 	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return s.Conversation.Account != nil && s.Conversation.Account.ReauthRequiredAt == nil
 	})
-	if snapshot.Conversation.Account.ReauthReason != "" {
-		t.Fatalf("reauth reason = %q, want cleared", snapshot.Conversation.Account.ReauthReason)
+	account := snapshot.Conversation.Account
+	if account.ReauthReason != "" || account.AuthenticationState != "authenticated" || account.AuthVerifiedAt == nil {
+		t.Fatalf("recovered account = %+v", account)
+	}
+	if account.LastAuthFailureReason != "expired" || account.LastAuthFailureAt == nil || countActivities(snapshot, domain.ActivityKindSystem) != 1 {
+		t.Fatalf("recovery lost failure history: %+v", snapshot)
+	}
+}
+
+// A repeated auth mode is an account refresh, not a credential change. Its
+// timestamp must not fence off a completed recovery when a persisted demand is
+// reconciled later on the read path.
+func TestAccountRefreshPreservesAuthenticationRecoveryEvidence(t *testing.T) {
+	h := newHarness(t)
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventAccountChanged, Account: &ports.ChatAccount{
+		AuthMode: "chatgpt", PlanLabel: "pro", ReauthRequired: true, ReauthReason: "expired",
+	}})
+	failed := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return s.Conversation.Account != nil && s.Conversation.Account.ReauthRequiredAt != nil
+	}).Conversation.Account
+	if failed.AuthChangedAt == nil {
+		t.Fatal("initial auth mode did not establish a cutoff")
+	}
+	h.advance(time.Second)
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "recovery"},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "recovery", TurnState: domain.TurnStateCompleted},
+	)
+	recovered := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return s.Conversation.Account.ReauthRequiredAt == nil
+	}).Conversation.Account
+	h.advance(time.Second)
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventAccountChanged, Account: &ports.ChatAccount{
+		AuthMode: "chatgpt", PlanLabel: "team",
+	}})
+	refreshed := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return s.Conversation.Account.PlanLabel == "team"
+	}).Conversation.Account
+	if refreshed.AuthChangedAt == nil || !refreshed.AuthChangedAt.Equal(*failed.AuthChangedAt) {
+		t.Fatalf("unchanged mode moved the recovery cutoff: before=%v after=%v", failed.AuthChangedAt, refreshed.AuthChangedAt)
+	}
+	if refreshed.AuthVerifiedAt == nil || !refreshed.AuthVerifiedAt.Equal(*recovered.AuthVerifiedAt) || refreshed.AuthenticationState != "authenticated" {
+		t.Fatalf("account refresh lost verified authentication: %+v", refreshed)
+	}
+	// Model the outstanding demand in a persisted projection awaiting lazy
+	// reconciliation, retaining the later account refresh's cutoff and plan.
+	refreshed.ReauthRequiredAt = failed.ReauthRequiredAt
+	refreshed.ReauthReason = failed.ReauthReason
+	refreshed.AuthenticationState = "required"
+	refreshed.AuthVerifiedAt = nil
+	if err := h.st.RecordAccount(context.Background(), h.ctrl.ConversationID(), *refreshed, h.now()); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := h.st.LoadConversationSnapshotPage(context.Background(), h.ctrl.ConversationID(), 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := snapshot.Conversation.Account
+	if account.ReauthRequiredAt != nil || account.AuthenticationState != "authenticated" || account.PlanLabel != "team" || account.LastAuthFailureReason != "expired" {
+		t.Fatalf("late account refresh prevented persisted recovery: %+v", account)
+	}
+	// A real mode change still invalidates earlier verification and establishes
+	// a new barrier that excludes that recovery turn.
+	h.advance(time.Second)
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventAccountChanged, Account: &ports.ChatAccount{
+		AuthMode: "apikey", PlanLabel: "api",
+	}})
+	changed := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return s.Conversation.Account.AuthMode == "apikey"
+	}).Conversation.Account
+	if changed.AuthChangedAt == nil || !changed.AuthChangedAt.After(*recovered.AuthVerifiedAt) || changed.AuthVerifiedAt != nil || changed.AuthenticationState != "unknown" {
+		t.Fatalf("changed auth mode retained stale verification: %+v", changed)
+	}
+}
+
+func TestAuthenticationRecoveryRejectsOldAndUnverifiedSuccess(t *testing.T) {
+	h := newHarness(t)
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "old"})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Turns) == 1 })
+	h.advance(time.Second)
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventError, Err: ports.ErrChatAuthRequired})
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return s.Conversation.Account != nil && s.Conversation.Account.ReauthRequiredAt != nil
+	})
+	failureID := snapshot.Conversation.Account.AuthFailureID
+	h.advance(time.Second)
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "old", TurnState: domain.TurnStateCompleted},
+		ports.ChatEvent{Kind: ports.ChatEventAccountChanged, Account: &ports.ChatAccount{ReauthRecovered: true}},
+		ports.ChatEvent{Kind: ports.ChatEventAccountChanged, Account: &ports.ChatAccount{PlanLabel: "new-plan"}},
+	)
+	snapshot = h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return s.Conversation.Account.PlanLabel == "new-plan"
+	})
+	if snapshot.Conversation.Account.AuthFailureID != failureID || snapshot.Conversation.Account.ReauthRequiredAt == nil {
+		t.Fatalf("old success/partial report cleared failure: %+v", snapshot.Conversation.Account)
+	}
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "child", ProviderConversationID: "child-thread"},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "child", ProviderConversationID: "child-thread", TurnState: domain.TurnStateCompleted},
+		ports.ChatEvent{Kind: ports.ChatEventThreadState, ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusIdle}},
+	)
+	snapshot = h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return s.Conversation.ThreadState != nil })
+	if snapshot.Conversation.Account.ReauthRequiredAt == nil {
+		t.Fatal("child-thread success cleared root authentication failure")
+	}
+}
+
+func TestNewAuthenticationFailureAfterRecoveryHasNewIdentity(t *testing.T) {
+	h := newHarness(t)
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventError, Err: ports.ErrChatAuthRequired})
+	s := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return s.Conversation.Account != nil })
+	firstID := s.Conversation.Account.AuthFailureID
+	h.advance(time.Second)
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "ok"},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "ok", TurnState: domain.TurnStateCompleted},
+	)
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return s.Conversation.Account.ReauthRequiredAt == nil })
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventError, Err: ports.ErrChatAuthRequired})
+	s = h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return s.Conversation.Account.ReauthRequiredAt != nil })
+	if s.Conversation.Account.AuthFailureID == firstID || s.Conversation.Account.AuthenticationState != "required" {
+		t.Fatalf("new failure = %+v", s.Conversation.Account)
 	}
 }
 

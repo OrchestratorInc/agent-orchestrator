@@ -285,7 +285,7 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 	}
 }
 
-func TestResumeReconnectsInitializedHostWithoutNativeResume(t *testing.T) {
+func TestReconnectAdoptsInitializedHostWithoutNativeResume(t *testing.T) {
 	d, srv := newTestDriver(t)
 	prepareCalls := 0
 	proc, err := d.spawn(context.Background(), "codex", "/tmp/ws", nil)
@@ -293,13 +293,16 @@ func TestResumeReconnectsInitializedHostWithoutNativeResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.persistent = true
-	d.connectHost = func(context.Context, persistenthost.Config) (*persistenthost.Transport, error) {
+	d.connectHost = func(_ context.Context, cfg persistenthost.Config) (*persistenthost.Transport, error) {
+		if !cfg.ReconnectOnly {
+			t.Fatal("startup reconnect allowed a provider launch")
+		}
 		return &persistenthost.Transport{
 			Stdin: proc.stdin, Stdout: proc.stdout, Reconnected: true, NextRequestID: 41,
 		}, nil
 	}
 
-	conv, err := d.Resume(context.Background(), ports.ChatResumeConfig{
+	conv, err := d.Reconnect(context.Background(), ports.ChatResumeConfig{
 		SessionID: "ao-reconnect", ProviderConversationID: "thread-survived",
 		DataDir: t.TempDir(), WorkspacePath: "/tmp/ws",
 		PrepareEnv: func(context.Context) (map[string]string, error) {
@@ -329,6 +332,67 @@ func TestResumeReconnectsInitializedHostWithoutNativeResume(t *testing.T) {
 	request := srv.awaitFrame(func(f frame) bool { return f.Method == "model/list" })
 	if request.ID == nil || string(*request.ID) != "42" {
 		t.Fatalf("first request id after reconnect = %v, want 42", request.ID)
+	}
+}
+
+func TestCodexHibernateStopsAppServerAndNativeResumesThread(t *testing.T) {
+	d, firstServer := newTestDriver(t)
+	workspace := t.TempDir()
+	first, err := d.Start(context.Background(), ports.ChatStartConfig{
+		SessionID: "hibernate-codex", WorkspacePath: workspace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := first.ProviderConversationID()
+	if _, err := first.SendTurn(context.Background(), ports.ChatUserMessage{Text: "first turn"}); err != nil {
+		t.Fatal(err)
+	}
+	firstServer.push(`{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`)
+	firstServer.push(`{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed","items":[]}}}`)
+	if completed := nextEvent(t, first.Events(), ports.ChatEventTurnCompleted); completed.TurnState != domain.TurnStateCompleted {
+		t.Fatalf("first turn state = %q", completed.TurnState)
+	}
+	stopped := false
+	provider := first.(*conversation)
+	provider.proc.terminate = func() error {
+		stopped = true
+		return provider.proc.stop()
+	}
+	if err := first.(ports.ChatProviderHibernator).Hibernate(); err != nil {
+		t.Fatal(err)
+	}
+	if !stopped {
+		t.Fatal("hibernate detached the controller but left app-server alive")
+	}
+
+	replacement, server := newTestDriver(t)
+	server.reply("turn/start", `{"turn":{"id":"turn-2","status":"inProgress","items":[]}}`)
+	resumed, err := replacement.Resume(context.Background(), ports.ChatResumeConfig{
+		SessionID: "hibernate-codex", WorkspacePath: workspace, ProviderConversationID: threadID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resumed.Close() }()
+	if resumed.ProviderConversationID() != threadID || !server.sentMethod("thread/resume") {
+		t.Fatal("replacement app-server did not resume the same Codex thread")
+	}
+	second, err := resumed.SendTurn(context.Background(), ports.ChatUserMessage{Text: "second turn", ClientMessageID: "after-hibernate"})
+	if err != nil || second.ProviderTurnID != "turn-2" {
+		t.Fatalf("second turn = %+v, %v", second, err)
+	}
+	request := server.awaitFrame(func(f frame) bool { return f.Method == "turn/start" })
+	var params struct {
+		ThreadID            string `json:"threadId"`
+		ClientUserMessageID string `json:"clientUserMessageId"`
+	}
+	if err := json.Unmarshal(request.Params, &params); err != nil {
+		t.Fatal(err)
+	}
+	if params.ThreadID != threadID || params.ClientUserMessageID != "after-hibernate" || server.sentMethod("thread/start") {
+		t.Fatalf("second turn targeted %q with key %q; fresh thread started=%v",
+			params.ThreadID, params.ClientUserMessageID, server.sentMethod("thread/start"))
 	}
 }
 
@@ -1095,7 +1159,7 @@ func TestReadOnlyTurnCannotOverrideSandbox(t *testing.T) {
 	params := map[string]any{}
 	applyTurnSettings(params, ports.ChatTurnSettings{Approval: ports.PermissionModeAuto}, true)
 	if params["approvalPolicy"] != "never" || params["approvalsReviewer"] != "user" ||
-		!reflect.DeepEqual(params["sandboxPolicy"], map[string]any{"type": "readOnly"}) {
+		!reflect.DeepEqual(params["sandboxPolicy"], map[string]any{"type": "readOnly", "networkAccess": true}) {
 		t.Fatalf("read-only turn settings = %#v", params)
 	}
 }
@@ -1576,5 +1640,19 @@ func TestEnvSliceWithNoOverlayStillInheritsTheEnvironment(t *testing.T) {
 	}
 	if !sawHome {
 		t.Error("an empty overlay produced an environment with no HOME")
+	}
+}
+
+func TestReconnectMissingHostNeverLaunchesProvider(t *testing.T) {
+	driver := New(fakePlugin{binErr: errors.New("provider installation is unavailable")}, nil)
+	_, err := driver.Reconnect(context.Background(), ports.ChatResumeConfig{
+		SessionID: "stopped", ProviderConversationID: "thread", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
+		PrepareEnv: func(context.Context) (map[string]string, error) {
+			t.Fatal("health check rotated launch credentials")
+			return nil, nil
+		},
+	})
+	if !errors.Is(err, ports.ErrChatHostNotRunning) {
+		t.Fatalf("error=%v", err)
 	}
 }

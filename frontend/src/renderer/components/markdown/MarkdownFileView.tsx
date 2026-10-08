@@ -66,22 +66,27 @@ const REHYPE_PLUGINS: PluggableList = [
 
 export function MarkdownFileView({
 	sessionId,
+	hostId,
 	filePath,
 	content,
 	truncated,
 	version,
+	artifactOrigin,
 }: {
 	sessionId: string;
+	hostId?: string;
 	filePath: string;
 	content: string;
 	/** The daemon capped the file it sent; what renders below is a prefix of it. */
 	truncated: boolean;
 	/** The file detail's load timestamp, for cache-busting relative images. */
 	version: number;
+	/** Origin serving the artifact directory, for artifact markdown images. */
+	artifactOrigin?: string;
 }) {
 	const { t } = useTranslation();
 	const bodyRef = useRef<HTMLDivElement>(null);
-	const contextValue = useMemo(() => ({ sessionId, filePath, version }), [sessionId, filePath, version]);
+	const contextValue = useMemo(() => ({ sessionId, hostId, filePath, version, artifactOrigin }), [sessionId, hostId, filePath, version, artifactOrigin]);
 
 	// Heading slugs are unique per rendered file, not per document, and the Files
 	// tab expands many files at once — two open READMEs both containing

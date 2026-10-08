@@ -151,6 +151,13 @@ export interface CloudCpListQuery {
 // Projects (`resource_handlers.go`)
 // ---------------------------------------------------------------------------
 
+import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer } from "../../../../../packages/cloud-client/src/types";
+
+export type CloudCpProjectAgentConfig = ProjectAgentConfig;
+export type CloudCpProjectRoleConfig = ProjectRoleConfig;
+export type CloudCpProjectReviewer = ProjectReviewer;
+export type CloudCpProjectSettingsRequest = ProjectSettingsInput;
+
 export interface CloudCpProject {
 	id: string;
 	orgId: string;
@@ -158,7 +165,7 @@ export interface CloudCpProject {
 	repositoryUrl: string;
 	defaultBranch: string;
 	githubRepositoryId?: string;
-	config: Record<string, unknown>;
+	config: ProjectConfig;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -240,6 +247,7 @@ export interface CloudCpCreateSessionRequest {
 	 * omitted uses the harness default.
 	 */
 	model?: string;
+	reasoningEffort?: string;
 	deniedCommands?: string[];
 	sandboxProviderConnectionId?: string;
 	/**
@@ -272,12 +280,71 @@ export interface CloudCpCoderTemplatesResponse {
 	templates: CloudCpCoderTemplate[];
 }
 
+/**
+ * GET /orgs/{orgId}/coder-config — an org's bring-your-own-Coder connection.
+ * Non-secret fields only: the stored API token is never echoed back, surfaced
+ * here solely as `tokenSet`.
+ */
+export interface CloudCpOrgCoderConfig {
+	/** Coder deployment base URL or IP (http or https). */
+	baseUrl: string;
+	/**
+	 * Coder owner/username new workspaces are created under. The control plane
+	 * derives it from the API token on save, so it is always present once stored.
+	 */
+	owner?: string;
+	/**
+	 * Default Coder template id (a UUID) new workspaces use. Optional: a
+	 * bring-your-own org leaves it empty and picks the template per project.
+	 */
+	defaultTemplateId?: string;
+	/** Optional agent name the sandbox connects through. */
+	agentName?: string;
+	/**
+	 * Optional PrivateLink VPC endpoint service name (the
+	 * `coder_endpoint_service_name` Terraform output), set only when the Coder lives
+	 * in a private VPC. AO ops provisions the VPC endpoint from it.
+	 */
+	endpointServiceName?: string;
+	/** Optional AWS region for the PrivateLink endpoint (e.g. eu-north-1). */
+	region?: string;
+	/** True when an API token is stored. The token itself is never returned. */
+	tokenSet: boolean;
+}
+
+export interface CloudCpOrgCoderConfigResponse {
+	/** The stored config, or null when the org has none configured yet. */
+	coderConfig: CloudCpOrgCoderConfig | null;
+}
+
+/**
+ * PUT /orgs/{orgId}/coder-config. The slimmed form sends only `baseUrl` and
+ * `token`; the control plane derives the workspace owner from the token and the
+ * template is chosen per project, so `owner` and `defaultTemplateId` are optional.
+ */
+export interface CloudCpPutOrgCoderConfigRequest {
+	baseUrl: string;
+	/** Raw Coder API token; stored encrypted and never echoed back. Omit to keep the existing token. */
+	token?: string;
+	/** Optional: derived from the token when omitted. */
+	owner?: string;
+	/** Optional: the template is chosen per project, not at the org level. */
+	defaultTemplateId?: string;
+	agentName?: string;
+	/** Optional PrivateLink VPC endpoint service name; omit for a directly reachable Coder. */
+	endpointServiceName?: string;
+	/** Optional AWS region for the PrivateLink endpoint. */
+	region?: string;
+}
+
 export interface CloudCpSession {
 	id: string;
 	orgId: string;
 	projectId: string;
 	kind: string;
 	harness: string;
+	reviewerHarness?: string;
+	autoReviewEnabled?: boolean;
 	displayName: string;
 	branch: string;
 	mode: string;
@@ -347,6 +414,8 @@ export interface CloudCpInterfaceTransitionStatusResponse {
 export interface CloudCpStartInterfaceTransitionRequest {
 	targetMode: CloudCpInterfaceMode;
 	policy: "drain" | "interrupt";
+	model?: string;
+	reasoningEffort?: string;
 }
 
 export interface CloudCpStartInterfaceTransitionResponse {
@@ -365,6 +434,14 @@ export interface CloudCpAcknowledgeInterfaceTransitionNoticeResponse {
 
 export interface CloudCpSessionResponse {
 	session: CloudCpSession;
+}
+
+export interface CloudCpUpdateSessionPreferencesRequest {
+	reviewerHarness?: string;
+	autoReviewEnabled?: boolean;
+	autoInjectCI?: boolean;
+	autoInjectReview?: boolean;
+	terminateOnPrMerge?: boolean;
 }
 
 export interface CloudCpSessionListResponse {
@@ -588,7 +665,10 @@ export interface CloudCpSessionChildrenResponse {
 	page: CloudCpPageInfo;
 }
 
-/** Detailed PR data used by the shared local/cloud inspector UI. */
+// ---------------------------------------------------------------------------
+// Pull requests and AO reviews (`pull_request_handlers.go`)
+// ---------------------------------------------------------------------------
+
 export interface CloudCpPullRequestSummary {
 	url: string;
 	htmlUrl?: string;
@@ -660,6 +740,58 @@ export interface CloudCpSessionPullRequestsResponse {
 	pullRequests: CloudCpPullRequestSummary[];
 }
 
+export type CloudCpAOReviewRunStatus = "running" | "complete" | "delivered" | "failed" | "cancelled";
+export type CloudCpAOReviewVerdict = "" | "approved" | "changes_requested";
+export type CloudCpAOReviewState = "needs_review" | "running" | "up_to_date" | "changes_requested" | "ineligible";
+
+export interface CloudCpAOReviewRun {
+	id: string;
+	reviewId: string;
+	sessionId: string;
+	batchId: string;
+	harness: string;
+	triggerSource: "manual" | "auto";
+	pullRequestUrl: string;
+	targetSha: string;
+	status: CloudCpAOReviewRunStatus;
+	verdict: CloudCpAOReviewVerdict;
+	body: string;
+	providerReviewId: string;
+	reviewerTerminalId?: string;
+	createdAt: string;
+	deliveredAt?: string;
+	autoInjectReview: boolean;
+}
+
+export interface CloudCpPRReviewState {
+	pullRequestUrl: string;
+	pullRequestNumber: number;
+	title: string;
+	targetSha: string;
+	status: CloudCpAOReviewState;
+	latestRun?: CloudCpAOReviewRun;
+	previousRun?: CloudCpAOReviewRun;
+}
+
+export interface CloudCpSessionReviewState {
+	sessionId: string;
+	reviewerHandleId?: string;
+	reviewerHarness?: string;
+	availableReviewerHarnesses: string[];
+	reviews: CloudCpPRReviewState[];
+	runs: CloudCpAOReviewRun[];
+}
+
+export interface CloudCpHarnessStatus {
+	harness: "claude-code" | "codex" | "cursor";
+	status: "missing" | "ready" | "failed";
+	version?: string;
+	error?: string;
+}
+
+export interface CloudCpHarnessInspectResponse {
+	harnesses: CloudCpHarnessStatus[];
+}
 export interface CloudCpListSessionsQuery extends CloudCpListQuery {
 	/** Restrict the listing to one project. */
 	projectId?: string;
@@ -711,6 +843,9 @@ export interface CloudCpSendMessageRequest {
 }
 
 export interface CloudCpChatModelsResponse {
+	modes?: string[];
+	model?: string;
+	reasoningEffort?: string;
 	models: Array<{
 		id: string;
 		displayName: string;
@@ -767,6 +902,8 @@ export type CloudCpTerminalKind = "workspace" | "agent";
 /** POST /orgs/{orgId}/sessions/{sessionId}/terminal-ticket */
 export interface CloudCpTerminalTicketRequest {
 	kind: CloudCpTerminalKind;
+	/** Optional exact terminal surface, used for a dedicated reviewer terminal. */
+	terminalId?: string;
 }
 
 export interface CloudCpTerminalTicketResponse {

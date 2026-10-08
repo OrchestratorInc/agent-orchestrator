@@ -9,6 +9,8 @@ import * as Updates from "expo-updates";
 import { Children, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { ApiError, pingServer } from "../lib/api";
+import { loadAccount, signInToAccount, signOutOfAccount, type Account } from "../lib/account";
+import { clearAccountHosts, ignoreAccountHost, syncAccountHosts } from "../lib/accountHosts";
 import { formatVersionLine, type BuildInfo } from "../lib/appInfo";
 import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../lib/bugReport";
 import { isConfigured, type ServerConfig } from "../lib/config";
@@ -17,6 +19,7 @@ import { describeDesktopStatus } from "../lib/desktopStatus";
 import { discordFeatureRequestURL } from "../lib/discord";
 import { forgetServer } from "../lib/disconnect";
 import { haptics } from "../lib/haptics";
+import { activeHost, loadHosts, type Host as PairedHost } from "../lib/hosts";
 import { toggleLayoutGrid, useLayoutGrid } from "../lib/layoutGrid";
 import { checkStore, openOrStartUpdate } from "../lib/inAppUpdates";
 import { describePrompt } from "../lib/storeUpdate";
@@ -58,15 +61,53 @@ export default function SettingsScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
-	// The store's config, not a second copy read from storage: that copy went
-	// stale whenever the store moved on (a failed disconnect, a re-race), and
-	// it knew nothing about whether the desktop was actually answering.
-	const { config, configured: paired, reloadConfig } = useApp();
+	const { config, configured, selectedHostName, switchHost, reloadConfig } = useApp();
 	const scrollRef = useRef<ScrollView>(null);
+	const [pairedHosts, setPairedHosts] = useState<PairedHost[]>([]);
+	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
+	const [switchingHostId, setSwitchingHostId] = useState<string | null>(null);
+	const [loaded, setLoaded] = useState(false);
+	const [account, setAccount] = useState<Account | null>(null);
+	const [accountBusy, setAccountBusy] = useState(false);
+	const [accountLoading, setAccountLoading] = useState(true);
 
-	// Null only until the store's first resolve. Waiting keeps the pairing-
-	// dependent rows (Disconnect above all) from popping in after first paint.
-	if (!config) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	useFocusEffect(useCallback(() => {
+		let current = true;
+		void loadAccount().then((value) => { if (current) setAccount(value); }).catch(() => {
+			if (current) setAccount(null);
+		}).finally(() => { if (current) setAccountLoading(false); });
+		return () => { current = false; };
+	}, []));
+
+	useFocusEffect(useCallback(() => {
+		let current = true;
+		void Promise.all([loadHosts(), activeHost()]).then(([hosts, active]) => {
+			if (!current) return;
+			setPairedHosts(hosts);
+			setSelectedHostId(active?.id ?? null);
+			setLoaded(true);
+		});
+		return () => { current = false; };
+	}, []));
+
+	async function selectHost(id: string) {
+		if (id === selectedHostId || switchingHostId !== null) return;
+		setSwitchingHostId(id);
+		try {
+			await switchHost(id);
+			setSelectedHostId(id);
+		} catch {
+			Alert.alert("Could not change default machine", "Try again from Settings.");
+		} finally {
+			setSwitchingHostId(null);
+		}
+	}
+
+	if (!loaded) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+
+	const paired = pairedHosts.length > 0 || configured || selectedHostName !== null;
+	const selectedHost = pairedHosts.find((host) => host.id === selectedHostId);
+	const selectedConfigReady = !!config && isConfigured(config) && (!selectedHost || config.hostId === selectedHost.id);
 	return (
 		<View style={styles.screen} collapsable={false}>
 			<View style={styles.header}>
@@ -81,10 +122,50 @@ export default function SettingsScreen() {
 				contentContainerStyle={styles.content}
 				keyboardShouldPersistTaps="handled"
 			>
-				<SettingsSection title="Desktop" footer={paired ? `${config.host}:${config.httpPort}` : "Pair this phone with AO on your computer."}>
+				<SettingsSection title="Machines" footer={selectedHost?.name ?? selectedHostName ?? (paired && config ? `${config.host}:${config.httpPort}` : "Pair this phone with an AO machine.")}>
 					<SettingsCard>
 						<DesktopStatusRow />
-						<ConnectionTestRow />
+						<ConnectionTestRow paired={paired} selectedHostId={selectedHostId} />
+						<CardRow icon="plus" label={paired ? "Pair another machine" : "Pair a machine"} onPress={() => router.navigate("/pair")} />
+						{pairedHosts.map((host) => (
+							<MachineRow
+								key={host.id}
+								host={host}
+								selected={host.id === selectedHostId}
+								loading={switchingHostId === host.id}
+								onSelect={() => { void selectHost(host.id); }}
+								onEdit={() => router.push({ pathname: "/sheets/connect", params: { hostId: host.id } })}
+							/>
+						))}
+						{selectedHost && !selectedConfigReady ? (
+							<CardRow icon="refresh-cw" label="Retry selected machine" onPress={() => { void reloadConfig(); }} />
+						) : null}
+					</SettingsCard>
+				</SettingsSection>
+
+				<SettingsSection title="Account" footer="Paired machines sync across signed-in devices.">
+					<SettingsCard>
+						<CardRow icon="user" label={account ? "AO Cloud" : "Sign in to AO Cloud"} value={account?.email} loading={accountLoading || accountBusy} onPress={account ? undefined : () => {
+							setAccountBusy(true);
+							void signInToAccount().then(async (value) => {
+								if (!value) return;
+								setAccount(value);
+								await syncAccountHosts(value);
+								setPairedHosts(await loadHosts());
+								await reloadConfig();
+							}).catch((error: unknown) => {
+								Alert.alert("Could not sign in", error instanceof Error ? error.message : "Try again.");
+							}).finally(() => setAccountBusy(false));
+						}} />
+						{account ? <CardRow icon="log-out" label="Sign out" onPress={() => {
+							setAccountBusy(true);
+							void signOutOfAccount().then(async () => {
+								await clearAccountHosts();
+								setAccount(null);
+								setPairedHosts(await loadHosts());
+								await reloadConfig();
+							}).catch(() => Alert.alert("Could not sign out", "Try again.")).finally(() => setAccountBusy(false));
+						}} disabled={accountBusy} /> : null}
 					</SettingsCard>
 				</SettingsSection>
 
@@ -114,35 +195,44 @@ export default function SettingsScreen() {
 					</SettingsCard>
 				</SettingsSection>
 
-				{/* Keyed on the saved pairing, not the live connection: an offline
-				    desktop is exactly when people want to forget it. */}
 				{paired ? (
-					<DisconnectRow
-						onForget={async () => {
-							let failed = false;
-							try {
-								await forgetServer();
-							} catch {
-								failed = true;
-							}
-							// Always re-resolve, so the screen reflects whatever
-							// forgetServer managed to clear before it threw. Null when
-							// storage could not be read either.
-							let remaining: ServerConfig | null = null;
-							try {
-								remaining = await reloadConfig();
-							} catch {}
-							// Only a pairing that survived is worth retrying; if it is
-							// gone this row is too, and the leftovers are best-effort.
-							// Unknown counts as survived when the forget itself failed.
-							if (failed && (remaining === null || isConfigured(remaining))) {
-								haptics.error();
-								Alert.alert("Couldn't disconnect", "This desktop's saved connection couldn't be removed. Try again.");
-								return;
-							}
+				<DisconnectRow
+					machineName={selectedHost?.name}
+					onForget={async () => {
+						let failed = false;
+						if (account && selectedHostId) {
+							try { await ignoreAccountHost(account.id, selectedHostId); }
+							catch { failed = true; }
+						}
+						if (failed) {
+							Alert.alert("Couldn't disconnect", "This machine could not be hidden from account sync. Try again.");
+							return;
+						}
+						try { await forgetServer(); } catch { failed = true; }
+						try { await reloadConfig(); } catch {}
+						let remaining: PairedHost[];
+						try { remaining = await loadHosts(); }
+						catch {
+							haptics.error();
+							Alert.alert("Couldn't disconnect", "The saved machines couldn't be read. Try again.");
+							return;
+						}
+						const stillPaired = selectedHostId !== null
+							? remaining.some((host) => host.id === selectedHostId)
+							: remaining.length > 0;
+						if (failed && stillPaired) {
+							haptics.error();
+							Alert.alert("Couldn't disconnect", "This machine's saved connection couldn't be removed. Try again.");
+							return;
+						}
+						if (remaining.length === 0) {
 							router.replace("/onboarding");
-						}}
-					/>
+						} else {
+							setPairedHosts(remaining);
+							setSelectedHostId((await activeHost())?.id ?? null);
+						}
+					}}
+				/>
 				) : null}
 				<VersionFooter />
 			</ScrollView>
@@ -239,10 +329,33 @@ function CardRow({
 	return <Pressable disabled={disabled || loading} onPress={() => { haptics.tap(); onPress(); }} style={({ pressed }) => [styles.row, pressed && styles.rowPressed, disabled && styles.disabled]}>{content}</Pressable>;
 }
 
+function MachineRow({ host, selected, loading, onSelect, onEdit }: {
+	host: PairedHost;
+	selected: boolean;
+	loading: boolean;
+	onSelect(): void;
+	onEdit(): void;
+}) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+
+	return <View style={styles.row}>
+		<Feather name="server" size={17} color={t.textSecondary} style={styles.rowIcon} />
+		<Pressable accessibilityRole="button" accessibilityLabel={selected ? `${host.name}, default machine` : `Make ${host.name} default`} disabled={selected || loading} onPress={() => { haptics.tap(); onSelect(); }} style={styles.machineSelect}>
+			<Text style={styles.rowLabel} numberOfLines={1}>{host.name}</Text>
+			{loading ? <ActivityIndicator size="small" color={t.textTertiary} /> : <Text style={styles.rowValue}>{selected ? "Default" : "Make default"}</Text>}
+		</Pressable>
+		<Pressable accessibilityRole="button" accessibilityLabel={`Edit connection for ${host.name}`} onPress={() => { haptics.tap(); onEdit(); }} style={styles.machineAction}>
+			<Feather name="edit-2" size={17} color={t.textSecondary} />
+		</Pressable>
+	</View>;
+}
+
 function DesktopStatusRow() {
 	const t = useTheme();
 	const router = useRouter();
-	const { config, configured, connection, error, errorStatus, activeEndpoints } = useApp();
+	const { config, configured, selectedHostName, connection, error, errorStatus, activeEndpoints, loading } = useApp();
+	const paired = configured || selectedHostName !== null;
 	// Only a poll that actually failed is a failure. Before the first tick lands
 	// errorStatus is null too, which on its own would read as unreachable. Same
 	// gate as the board, which only shows its failure copy behind `error`.
@@ -252,13 +365,13 @@ function DesktopStatusRow() {
 	const failure =
 		classified === "unreachable" && tunnelMayHaveRotated(activeEndpoints, config?.endpointKind, connection === "open")
 			? "tunnel-rotated"
-			: classified;
-	const status = describeDesktopStatus({ configured, connection, failure });
+			: classified ?? (paired && !config && !loading ? "unreachable" : null);
+	const status = describeDesktopStatus({ configured: paired, connection, failure });
 	const color = status.tone === "ok" ? t.green : status.tone === "error" ? t.red : undefined;
 	return (
 		<CardRow
 			icon="monitor"
-			label="Connected desktop"
+			label="Selected machine"
 			value={status.label}
 			valueColor={color}
 			onPress={() => router.navigate("/pair")}
@@ -266,13 +379,13 @@ function DesktopStatusRow() {
 	);
 }
 
-function ConnectionTestRow() {
+function ConnectionTestRow({ paired, selectedHostId }: { paired: boolean; selectedHostId: string | null }) {
 	const t = useTheme();
-	const { config, configured: paired, reloadConfig, refresh } = useApp();
+	const { config, reloadConfig, refresh } = useApp();
 	const [testing, setTesting] = useState(false);
 	const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
-	useEffect(() => setResult(null), [config?.host, config?.httpPort]);
+	useEffect(() => setResult(null), [config?.host, config?.httpPort, selectedHostId]);
 
 	async function test() {
 		setTesting(true);
@@ -285,6 +398,7 @@ function ConnectionTestRow() {
 		let rejected = false;
 		try {
 			target = await reloadConfig({ refreshEndpoints: false });
+			if (!target) throw new Error("No verified connection to the selected machine");
 			await pingServer(target);
 			haptics.success();
 			setResult({ ok: true, msg: "Connected" });
@@ -392,9 +506,16 @@ function NotificationsRow() {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const { config, connection } = useApp();
-	const [status, setStatus] = useState<PushStatus | null>(null);
+	const [snapshot, setSnapshot] = useState<{ config: ServerConfig | null; status: PushStatus } | null>(null);
+	const status = snapshot?.config === config ? snapshot.status : null;
+	const refreshId = useRef(0);
 	const [busy, setBusy] = useState(false);
-	const refresh = useCallback(() => { getPushStatus().then(setStatus).catch(() => {}); }, []);
+	const refresh = useCallback(() => {
+		const id = ++refreshId.current;
+		getPushStatus(config).then((status) => {
+			if (id === refreshId.current) setSnapshot({ config, status });
+		}).catch(() => {});
+	}, [config]);
 
 	useFocusEffect(useCallback(() => refresh(), [refresh]));
 	useEffect(() => refresh(), [connection, refresh]);
@@ -411,7 +532,7 @@ function NotificationsRow() {
 		setBusy(true);
 		try {
 			if (!next) {
-				await unregisterFromPush();
+				await unregisterFromPush(config);
 				haptics.tap();
 			} else if (config) {
 				const registered = await registerForPush(config, { ask: true });
@@ -600,15 +721,15 @@ function FeatureRequestRow() {
 	);
 }
 
-function DisconnectRow({ onForget }: { onForget: () => Promise<void> }) {
+function DisconnectRow({ machineName, onForget }: { machineName?: string; onForget: () => Promise<void> }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const [forgetting, setForgetting] = useState(false);
 	function confirmForget() {
-		Alert.alert("Disconnect from desktop?", "This phone will stop receiving notifications and its saved connection will be removed.", [
+		Alert.alert(machineName ? `Forget ${machineName}?` : "Disconnect from machine?", "This phone will stop receiving notifications from this machine and remove its saved connection.", [
 			{ text: "Cancel", style: "cancel" },
 			{
-				text: "Disconnect",
+				text: machineName ? "Forget" : "Disconnect",
 				style: "destructive",
 				onPress: async () => {
 					setForgetting(true);
@@ -624,7 +745,7 @@ function DisconnectRow({ onForget }: { onForget: () => Promise<void> }) {
 			style={({ pressed }) => [styles.disconnect, pressed && styles.rowPressed]}
 		>
 			{forgetting ? <ActivityIndicator color={t.red} /> : <Feather name="log-out" size={17} color={t.red} />}
-			<Text style={styles.disconnectText}>{forgetting ? "Disconnecting…" : "Disconnect from desktop"}</Text>
+			<Text style={styles.disconnectText}>{forgetting ? "Disconnecting…" : machineName ? `Forget ${machineName}` : "Disconnect from machine"}</Text>
 		</Pressable>
 	);
 }
@@ -664,6 +785,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	rowIcon: { fontFamily: "Geist_400Regular", width: 26, textAlign: "center" },
 	rowLabel: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600", flex: 1 },
 	rowValue: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, maxWidth: "42%" },
+	machineSelect: { flex: 1, minWidth: 0, minHeight: 52, flexDirection: "row", alignItems: "center", gap: space.sm },
+	machineAction: { width: 44, minHeight: 44, alignItems: "center", justifyContent: "center" },
 	appearancePicker: { width: 124, height: 38, alignItems: "flex-end", justifyContent: "center" },
 	disabled: { opacity: 0.45 },
 	disconnect: { minHeight: 52, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, borderRadius: 16, borderCurve: "continuous" },

@@ -7,6 +7,7 @@ import { CreateProjectFlow, type CloneProjectInput, type CreateProjectInput } fr
 import { useUiStore } from "../stores/ui-store";
 import { ShellProvider, type ShellContextValue } from "../lib/shell-context";
 import { TooltipProvider } from "./ui/tooltip";
+import { CloudCpError } from "../lib/cloud-cp";
 
 const bridgeMocks = vi.hoisted(() => ({
 	checkAncestorRepo: vi.fn(),
@@ -53,8 +54,20 @@ vi.mock("../lib/api-client", () => ({
 	apiClient: {
 		POST: apiMocks.POST,
 	},
+	apiErrorCode: (error: unknown) =>
+		typeof error === "object" && error !== null && "code" in error ? error.code : undefined,
 	apiErrorMessage: apiMocks.apiErrorMessage,
 }));
+
+const hostMocks = vi.hoisted(() => ({
+	aGet: vi.fn(), aPost: vi.fn(), bGet: vi.fn(), bPost: vi.fn(),
+}));
+vi.mock("../lib/host-clients", () => {
+	const client = (hostId: string) => hostId === "host-a"
+		? { GET: hostMocks.aGet, POST: hostMocks.aPost }
+		: { GET: hostMocks.bGet, POST: hostMocks.bPost };
+	return { clientForHost: client, clientForSessionHost: client };
+});
 
 const githubDaemonMocks = vi.hoisted(() => ({
 	getGitHubStatus: vi.fn().mockResolvedValue({ connected: false }),
@@ -77,6 +90,8 @@ const cloudMocks = vi.hoisted(() => ({
 	coderAvailable: false,
 	// Whether the control plane's default sandbox provider is coder.
 	coderDefault: false,
+	// Coder templates the picker lists (empty = deployment offers none / unreachable).
+	coderTemplates: [] as { id: string; name: string; displayName?: string; description?: string; parameters?: string[] }[],
 	sessionStatus: "unauthenticated",
 	createProject: vi.fn(),
 	listUserProviderConnections: vi.fn(),
@@ -88,6 +103,7 @@ const cloudMocks = vi.hoisted(() => ({
 	syncGitHubInstallation: vi.fn(),
 	listGitHubRepositories: vi.fn(),
 	createGitHubProject: vi.fn(),
+	listProjects: vi.fn(),
 	signIn: vi.fn(),
 }));
 
@@ -101,7 +117,7 @@ vi.mock("../hooks/useCloudSandboxProviders", () => ({
 }));
 
 vi.mock("../hooks/useCoderTemplates", () => ({
-	useCoderTemplates: () => ({ templates: [], isLoading: false }),
+	useCoderTemplates: () => ({ templates: cloudMocks.coderTemplates, isLoading: false, isError: false }),
 }));
 
 vi.mock("../hooks/useCloudGate", () => ({
@@ -131,6 +147,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 			syncGitHubInstallation: cloudMocks.syncGitHubInstallation,
 			listGitHubRepositories: cloudMocks.listGitHubRepositories,
 			createGitHubProject: cloudMocks.createGitHubProject,
+			listProjects: cloudMocks.listProjects,
 		},
 		ready: cloudMocks.cloudEnabled && cloudMocks.sessionStatus === "authenticated",
 		baseUrl: "https://cp.example.com",
@@ -319,10 +336,13 @@ beforeEach(() => {
 	bridgeMocks.connectProviderAuth.mockReset().mockRejectedValue(new Error("No browser auth flow for github in tests"));
 	bridgeMocks.openExternal.mockReset().mockResolvedValue(undefined);
 	apiMocks.POST.mockReset();
+	hostMocks.aGet.mockReset(); hostMocks.aPost.mockReset();
+	hostMocks.bGet.mockReset(); hostMocks.bPost.mockReset();
 	apiMocks.apiErrorMessage.mockClear();
 	cloudMocks.cloudEnabled = false;
 	cloudMocks.coderAvailable = false;
 	cloudMocks.coderDefault = false;
+	cloudMocks.coderTemplates = [];
 	cloudMocks.sessionStatus = "unauthenticated";
 	cloudMocks.createProject.mockReset();
 	// The user's personal connections: a logged-in Claude Code harness, and no
@@ -357,6 +377,92 @@ beforeEach(() => {
 	cloudMocks.signIn.mockReset();
 	window.localStorage.clear();
 	useUiStore.setState({ globalToast: null, globalToasts: [] });
+});
+
+describe("CreateProjectFlow remote host", () => {
+	it("switches the shared picker back to this computer", async () => {
+		const user = userEvent.setup();
+		const onSelectHost = vi.fn();
+		renderChooseFlow({
+			initialOpen: true,
+			hostId: "host-a",
+			hostLabel: "Host A",
+			remoteHosts: [{ hostId: "host-a", label: "Host A", url: "https://a.test", status: "connected" }],
+			onSelectHost,
+		});
+		await user.click(screen.getByRole("combobox", { name: "Machine" }));
+		await user.click(screen.getByRole("option", { name: "This computer" }));
+		expect(onSelectHost).toHaveBeenCalledWith(undefined);
+	});
+
+	it("shows safe Git clone guidance from a failed host clone", async () => {
+		const user = userEvent.setup();
+		hostMocks.aPost.mockResolvedValueOnce({
+			error: {
+				code: "GIT_CLONE_FAILED",
+				message: "fatal: Authentication failed for https://user:secret@github.com/acme/private.git",
+			},
+		});
+		renderChooseFlow({ hostId: "host-a", hostLabel: "Host A", connected: true });
+
+		await openSource(user, "Clone from Git");
+		fireEvent.click(await screen.findByText("Continue clone"));
+
+		await waitFor(() => expect(useUiStore.getState().globalToast?.body).toBe(
+			"Could not clone this repository. Check the URL, your Git credentials, and your network connection.",
+		));
+		expect(useUiStore.getState().globalToast?.body).not.toContain("secret");
+	});
+
+	it("uses the shared source picker, host folder picker, and agent sheet without dismissing between steps", async () => {
+		const user = userEvent.setup();
+		const onDismiss = vi.fn();
+		const onCreateProject = vi.fn().mockResolvedValue(undefined);
+		hostMocks.aGet.mockResolvedValue({ data: { path: "/srv/todo-app", parent: "/srv", entries: [], truncated: false } });
+		hostMocks.aPost.mockResolvedValue({ data: projectValidation("/srv/todo-app") });
+		render(<QueryClientProvider client={new QueryClient()}><CreateProjectFlow
+			mode="choose" initialOpen hostId="host-a" hostLabel="Host A" connected
+			onCreateProject={onCreateProject} onInitializeProject={noop.onInitializeProject} onDismiss={onDismiss}
+		/></QueryClientProvider>);
+		await user.click(screen.getByRole("button", { name: "Import an existing project" }));
+		expect(await screen.findByRole("dialog", { name: "Choose a folder on Host A" })).toBeInTheDocument();
+		await user.click(await screen.findByRole("button", { name: "Use this folder" }));
+		await waitFor(() => expect(hostMocks.aPost).toHaveBeenCalledWith("/api/v1/imports/validate", {
+			body: { importKind: "project", path: "/srv/todo-app" },
+		}));
+		expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-path", "/srv/todo-app");
+		expect(onDismiss).not.toHaveBeenCalled();
+		await user.click(screen.getByRole("button", { name: "Submit agents" }));
+		await waitFor(() => expect(onCreateProject).toHaveBeenCalledWith({
+			path: "/srv/todo-app", asWorkspace: false, workerAgent: "codex", orchestratorAgent: "codex",
+		}));
+		expect(apiMocks.POST).not.toHaveBeenCalled();
+		expect(bridgeMocks.chooseDirectory).not.toHaveBeenCalled();
+	});
+
+	it("prepares a clone on the selected host and passes its token to project registration", async () => {
+		const user = userEvent.setup();
+		const onCreateProject = vi.fn().mockResolvedValue(undefined);
+		hostMocks.bPost.mockImplementation(async (path: string) => path === "/api/v1/projects/clone/prepare"
+			? { data: { path: "/repo/empty-repository", preparationId: "prepared-b" } }
+			: { data: projectValidation("/repo/empty-repository") });
+		render(<QueryClientProvider client={new QueryClient()}><CreateProjectFlow
+			mode="choose" initialOpen hostId="host-b" hostLabel="Host B" connected
+			onCreateProject={onCreateProject} onInitializeProject={noop.onInitializeProject}
+		/></QueryClientProvider>);
+		expect(screen.getByText("Use a project already on Host B")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Clone from Git" }));
+		await user.click(await screen.findByRole("button", { name: "Continue clone" }));
+		expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-path", "/repo/empty-repository");
+		await user.click(screen.getByRole("button", { name: "Submit agents" }));
+		await waitFor(() => expect(onCreateProject).toHaveBeenCalledWith({
+			path: "/repo/empty-repository", clonePreparationId: "prepared-b", workerAgent: "codex", orchestratorAgent: "codex",
+		}));
+		expect(hostMocks.bPost).toHaveBeenCalledWith("/api/v1/projects/clone/prepare", {
+			body: { remoteUrl: "file:///source/empty-repository.git", destinationParent: "/repo" },
+		});
+		expect(apiMocks.POST).not.toHaveBeenCalled();
+	});
 });
 
 describe("CreateProjectFlow droppedPath", () => {
@@ -1721,6 +1827,199 @@ describe("CreateProjectFlow project import validation", () => {
 		await waitFor(() => expect(openProject).toHaveBeenCalledWith("cp-app-1"));
 	});
 
+	it("opens the existing project when the repository already has one, with no conflict error", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		cloudMocks.listGitHubInstallations.mockResolvedValue({
+			installations: [
+				{
+					id: "inst-1",
+					githubInstallationId: "100",
+					accountLogin: "acme",
+					accountType: "Organization",
+					status: "active",
+					repositorySelection: "all",
+					syncStatus: "ready",
+					createdAt: "",
+					updatedAt: "",
+				},
+			],
+		});
+		cloudMocks.listGitHubRepositories.mockResolvedValue({
+			items: [
+				{
+					githubRepositoryId: "555",
+					name: "private-repo",
+					fullName: "acme/private-repo",
+					htmlUrl: "https://github.com/acme/private-repo",
+					defaultBranch: "main",
+					visibility: "private",
+					isPrivate: true,
+					isArchived: false,
+					access: "write",
+					grantedAt: "",
+				},
+			],
+			page: { hasMore: false },
+		});
+		// The control plane rejects a second project for a repository that already
+		// has one, with the typed `project_repository_exists` conflict.
+		cloudMocks.createGitHubProject.mockRejectedValue(
+			new CloudCpError("a project already exists for this repository in this organization", {
+				status: 409,
+				code: "project_repository_exists",
+			}),
+		);
+		// The project that already exists is discoverable by its GitHub repo id.
+		cloudMocks.listProjects.mockResolvedValue({
+			items: [
+				{
+					id: "cp-existing",
+					orgId: "org-1",
+					displayName: "private-repo",
+					repositoryUrl: "https://github.com/acme/private-repo",
+					defaultBranch: "main",
+					githubRepositoryId: "555",
+					config: {},
+					createdAt: "",
+					updatedAt: "",
+				},
+			],
+			page: { hasMore: false },
+		});
+		const user = userEvent.setup();
+		const openProject = vi.fn();
+		render(
+			<ShellProvider value={{ openProject } as unknown as ShellContextValue}>
+				<CreateProjectFlow embedded mode="choose" {...noop} />
+			</ShellProvider>,
+			{ wrapper: CloudTestProviders },
+		);
+
+		await user.click(screen.getByRole("button", { name: "New cloud project" }));
+		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
+		await user.click(await screen.findByRole("option", { name: /acme\/private-repo/ }));
+		await user.click(await screen.findByRole("button", { name: "Create" }));
+
+		// Rather than surface the conflict as an error, the flow opens the project
+		// that already backs this repository.
+		await waitFor(() =>
+			expect(cloudMocks.listProjects).toHaveBeenCalledWith("org-1", expect.objectContaining({ limit: 100 })),
+		);
+		await waitFor(() => expect(openProject).toHaveBeenCalledWith("cp-existing"));
+		expect(screen.queryByText(/already exists/i)).not.toBeInTheDocument();
+		expect(screen.queryByText(/conflicts with an existing record/i)).not.toBeInTheDocument();
+	});
+
+	it("resolves the conflicting project by exact repo path, not a substring of a sibling", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		cloudMocks.listGitHubInstallations.mockResolvedValue({
+			installations: [
+				{
+					id: "inst-1",
+					githubInstallationId: "100",
+					accountLogin: "acme",
+					accountType: "Organization",
+					status: "active",
+					repositorySelection: "all",
+					syncStatus: "ready",
+					createdAt: "",
+					updatedAt: "",
+				},
+			],
+		});
+		cloudMocks.listGitHubRepositories.mockResolvedValue({
+			items: [
+				{
+					githubRepositoryId: "555",
+					name: "private-repo",
+					fullName: "acme/private-repo",
+					htmlUrl: "https://github.com/acme/private-repo",
+					defaultBranch: "main",
+					visibility: "private",
+					isPrivate: true,
+					isArchived: false,
+					access: "write",
+					grantedAt: "",
+				},
+			],
+			page: { hasMore: false },
+		});
+		cloudMocks.createGitHubProject.mockRejectedValue(
+			new CloudCpError("a project already exists for this repository in this organization", {
+				status: 409,
+				code: "project_repository_exists",
+			}),
+		);
+		// Legacy projects (no stored githubRepositoryId) must be matched by their
+		// exact owner/name path. A sibling whose name is a superstring is listed
+		// first to prove the match is not a loose substring.
+		cloudMocks.listProjects.mockResolvedValue({
+			items: [
+				{
+					id: "cp-sibling",
+					orgId: "org-1",
+					displayName: "private-repo-two",
+					repositoryUrl: "https://github.com/acme/private-repo-two",
+					defaultBranch: "main",
+					config: {},
+					createdAt: "",
+					updatedAt: "",
+				},
+				{
+					id: "cp-existing",
+					orgId: "org-1",
+					displayName: "private-repo",
+					repositoryUrl: "https://github.com/acme/private-repo.git",
+					defaultBranch: "main",
+					config: {},
+					createdAt: "",
+					updatedAt: "",
+				},
+			],
+			page: { hasMore: false },
+		});
+		const user = userEvent.setup();
+		const openProject = vi.fn();
+		render(
+			<ShellProvider value={{ openProject } as unknown as ShellContextValue}>
+				<CreateProjectFlow embedded mode="choose" {...noop} />
+			</ShellProvider>,
+			{ wrapper: CloudTestProviders },
+		);
+
+		await user.click(screen.getByRole("button", { name: "New cloud project" }));
+		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
+		await user.click(await screen.findByRole("option", { name: /acme\/private-repo/ }));
+		await user.click(await screen.findByRole("button", { name: "Create" }));
+
+		await waitFor(() => expect(openProject).toHaveBeenCalledWith("cp-existing"));
+		expect(openProject).not.toHaveBeenCalledWith("cp-sibling");
+	});
+
+	it("offers GitHub reconnection after repositories are connected", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		cloudMocks.listGitHubInstallations.mockResolvedValue({ installations: [{
+			id: "inst-1", githubInstallationId: "100", accountLogin: "acme", accountType: "Organization",
+			status: "active", repositorySelection: "all", syncStatus: "ready", createdAt: "", updatedAt: "",
+		}] });
+		cloudMocks.listGitHubRepositories.mockResolvedValue({
+			items: [{ githubRepositoryId: "repo-1", name: "app", fullName: "acme/app", htmlUrl: "https://github.com/acme/app",
+				defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, isDisabled: false }],
+			page: { hasMore: false },
+		});
+		cloudMocks.startGitHubInstallation.mockResolvedValue({ installationUrl: "https://github.com/apps/ao/installations/new", expiresAt: "" });
+		const user = userEvent.setup();
+		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
+		await user.click(screen.getByRole("button", { name: "New cloud project" }));
+		const reconnect = await screen.findByRole("button", { name: "Reconnect GitHub" });
+		await user.click(reconnect);
+		await waitFor(() => expect(cloudMocks.startGitHubInstallation).toHaveBeenCalledWith("org-1", expect.anything()));
+		await waitFor(() => expect(bridgeMocks.openExternal).toHaveBeenCalledWith("https://github.com/apps/ao/installations/new"));
+	});
+
 	it("shows repositories from every GitHub App page in the picker", async () => {
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";
@@ -2103,6 +2402,48 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(screen.getByRole("button", { name: "Create" }));
 		await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
 		expect(cloudMocks.createGitHubProject.mock.calls[0][1].config).not.toHaveProperty("coder");
+	});
+
+	it("requires choosing a coder template before the project can be created", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		cloudMocks.coderAvailable = true;
+		cloudMocks.coderDefault = true;
+		cloudMocks.coderTemplates = [
+			{ id: "tpl-11x", name: "dev-kit", displayName: "11x dev-kit", description: "", parameters: [] },
+		];
+		cloudMocks.listGitHubInstallations.mockResolvedValue({
+			installations: [{
+				id: "inst-1", githubInstallationId: "100", accountLogin: "acme", accountType: "Organization",
+				status: "active", repositorySelection: "all", syncStatus: "ready", createdAt: "", updatedAt: "",
+			}],
+		});
+		cloudMocks.listGitHubRepositories.mockResolvedValue({
+			items: [{
+				githubRepositoryId: "555", name: "app", fullName: "acme/app", htmlUrl: "https://github.com/acme/app",
+				defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, access: "write", grantedAt: "",
+			}],
+			page: { hasMore: false },
+		});
+		cloudMocks.createGitHubProject.mockResolvedValue({ project: { id: "cp-1" } });
+		const user = userEvent.setup();
+		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
+
+		await user.click(screen.getByRole("button", { name: "New cloud project" }));
+		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
+		await user.click(await screen.findByRole("option", { name: /acme\/app/ }));
+
+		// A ready harness fills the agent fields, but create stays blocked until a
+		// template is chosen (there is no implicit organization default).
+		await screen.findByLabelText("Worker agent");
+		expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+
+		await user.click(screen.getByRole("combobox", { name: "Template" }));
+		await user.click(await screen.findByRole("option", { name: "11x dev-kit" }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
+		await user.click(screen.getByRole("button", { name: "Create" }));
+		await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
+		expect(cloudMocks.createGitHubProject.mock.calls[0][1].config.coder.templateId).toBe("tpl-11x");
 	});
 
 	it("does not offer additional coder session repositories", async () => {

@@ -10,10 +10,58 @@ import (
 	"strings"
 )
 
+// HostOptions are the optional pty-host behaviours chosen at spawn.
+type HostOptions struct {
+	// StartOnAttach starts the process at its first client's grid (deferredPTY).
+	StartOnAttach bool
+	// LazySurface builds the rendered surface only when it is first read.
+	LazySurface bool
+}
+
 // hostSpawner starts a detached pty-host for the session and returns its
 // loopback address ("127.0.0.1:PORT") and OS pid once it prints READY.
 // Injectable for tests: replace this field on Options before calling New.
-type hostSpawner func(ctx context.Context, sessionID, cwd string, argv []string, env map[string]string) (addr string, pid int, err error)
+type hostSpawner func(ctx context.Context, sessionID, cwd string, argv []string, env map[string]string, opts HostOptions) (addr string, pid int, err error)
+
+// Optional leading pty-host arguments. Session ids never contain "=", so they
+// cannot be mistaken for the positional session id; a host spawned without
+// them, for example by an older daemon, behaves as before.
+const (
+	startOnAttachArg = "--start=attach"
+	lazySurfaceArg   = "--surface=lazy"
+)
+
+// ptyHostArgs builds the pty-host subcommand argv:
+// pty-host [--start=attach] [--surface=lazy] <sessionID> <cwd> <shellCmd> <shellArgs...>
+func ptyHostArgs(sessionID, cwd string, argv []string, opts HostOptions) []string {
+	args := []string{"pty-host"}
+	if opts.StartOnAttach {
+		args = append(args, startOnAttachArg)
+	}
+	if opts.LazySurface {
+		args = append(args, lazySurfaceArg)
+	}
+	args = append(args, sessionID, cwd)
+	return append(args, argv...)
+}
+
+// splitHostOptionArgs consumes the optional leading option arguments from the
+// pty-host argv (everything after the subcommand name).
+func splitHostOptionArgs(args []string) (HostOptions, []string) {
+	var opts HostOptions
+	for len(args) > 0 {
+		switch args[0] {
+		case startOnAttachArg:
+			opts.StartOnAttach = true
+		case lazySurfaceArg:
+			opts.LazySurface = true
+		default:
+			return opts, args
+		}
+		args = args[1:]
+	}
+	return opts, args
+}
 
 // cleanupStartedHostFailure preserves evidence of a child that may still own
 // the session. A successful kill proves the failed spawn left no runtime;

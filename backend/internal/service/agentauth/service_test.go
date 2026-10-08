@@ -84,33 +84,106 @@ func TestStartOpensDevinNativeLogin(t *testing.T) {
 func TestStartOpensResolvedPlanAndReturnsSafeTerminal(t *testing.T) {
 	t.Parallel()
 
-	terminal := shellterm.ShellTerminal{HandleID: "shellterm-123", Title: "Log in to Pi"}
+	terminal := shellterm.ShellTerminal{HandleID: "shellterm-123", Title: "Log in to Droid"}
 	opener := &recordingTerminalOpener{terminal: terminal}
-	svc := New(foundExecutable("pi"), opener)
+	svc := New(foundExecutable("droid"), opener)
 
-	got, err := svc.Start(context.Background(), "pi")
+	got, err := svc.Start(context.Background(), "droid")
 	if err != nil {
-		t.Fatalf("Start(pi): %v", err)
+		t.Fatalf("Start(droid): %v", err)
 	}
 	if opener.calls != 1 {
 		t.Fatalf("OpenCommandTerminal calls = %d, want 1", opener.calls)
 	}
 	wantInput := shellterm.OpenCommandTerminalInput{
-		Argv:  []string{"/test/bin/pi"},
-		Title: "Log in to Pi",
+		Argv:  []string{"/test/bin/droid"},
+		Title: "Log in to Droid",
 	}
 	if !reflect.DeepEqual(opener.input, wantInput) {
 		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, wantInput)
 	}
-	if got.AgentID != "pi" || got.Action != ActionLogin || got.Guidance != "Select Open login after Pi finishes starting" || got.TerminalInput != "/login\r" || got.Terminal != terminal {
-		t.Fatalf("Start(pi) = %#v, want display-safe Pi result with terminal %#v", got, terminal)
+	if got.AgentID != "droid" || got.Action != ActionLogin || got.Guidance != "Select Open login after Droid finishes starting" || got.TerminalInput != "/login\r" || got.Terminal != terminal {
+		t.Fatalf("Start(droid) = %#v, want display-safe Droid result with terminal %#v", got, terminal)
 	}
 	data, err := json.Marshal(got)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(data), "argv") || strings.Contains(string(data), "initialInput") {
-		t.Fatalf("Start(pi) serialized trusted terminal input: %s", data)
+		t.Fatalf("Start(droid) serialized trusted terminal input: %s", data)
+	}
+}
+
+func TestStartPiInjectsLoginAutomatically(t *testing.T) {
+	t.Parallel()
+
+	opener := &recordingTerminalOpener{}
+	svc := New(foundExecutable("pi"), opener)
+
+	got, err := svc.Start(context.Background(), "pi")
+	if err != nil {
+		t.Fatalf("Start(pi): %v", err)
+	}
+	wantInput := shellterm.OpenCommandTerminalInput{
+		Argv:         []string{"/test/bin/pi"},
+		Title:        "Log in to Pi",
+		InitialInput: "/login",
+		InitialInputReadyStates: []shellterm.InitialInputReadyState{
+			{Text: "0.0%/"},
+			{Text: "Pi can explain its own features"},
+		},
+		SendInitialInputOnReadyTimeout: true,
+	}
+	if !reflect.DeepEqual(opener.input, wantInput) {
+		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, wantInput)
+	}
+	if got.TerminalInput != "" {
+		t.Fatalf("Start(pi) terminal input = %q, want none so the login is not held behind a button", got.TerminalInput)
+	}
+}
+
+// Screens captured from Pi 0.85.1 in an AO auth terminal (120 columns), so the
+// reviewed markers are checked against what Pi actually renders.
+const (
+	piDefaultStartupScreen = ` pi v0.85.1
+ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+
+────────────────────────────────────────────────────────────────────────────────
+~\.ao\data\auth-workspace\shellterm-a15141f25c4872b3
+0.0%/262k (auto)                                         (moonshotai) kimi-k2.6 • medium`
+	piQuietStartupWithModelScreen = `────────────────────────────────────────────────────────────────────────────────
+~\.ao\data\auth-workspace\shellterm-a86fe63f7a8f957d
+0.0%/1.0M (auto)                                       (zai-coding-cn) glm-5.3 • high`
+	piQuietStartupWithoutModelScreen = `────────────────────────────────────────────────────────────────────────────────
+~\.ao\data\auth-workspace\shellterm-0c1d2e3f4a5b6c7d
+0.0%/0 (auto)                                                                   no-model`
+	piStillLoadingScreen = ` pi v0.85.1
+ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more`
+)
+
+func TestPiReadyStatesMatchRenderedPiScreens(t *testing.T) {
+	t.Parallel()
+
+	readyStates := planByAgentID["pi"].initialInputReadyStates
+	for _, tc := range []struct {
+		name   string
+		screen string
+		ready  bool
+	}{
+		{name: "default startup", screen: piDefaultStartupScreen, ready: true},
+		{name: "quietStartup with a selected model", screen: piQuietStartupWithModelScreen, ready: true},
+		{name: "quietStartup without a model", screen: piQuietStartupWithoutModelScreen, ready: true},
+		{name: "before the footer renders", screen: piStillLoadingScreen, ready: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shellterm.MatchInitialInputReadyState(tc.screen, readyStates)
+			if (got != nil) != tc.ready {
+				t.Fatalf("MatchInitialInputReadyState = %#v, want ready %v", got, tc.ready)
+			}
+		})
 	}
 }
 

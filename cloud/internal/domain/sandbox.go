@@ -124,6 +124,7 @@ type WorkerLaunch struct {
 	ProjectID      string
 	ProjectName    string
 	ProjectConfig  json.RawMessage
+	AgentConfig    json.RawMessage
 	Kind           string
 	Harness        string
 	DisplayName    string
@@ -137,6 +138,8 @@ type WorkerLaunch struct {
 	ParentSessionID string
 	Mode            string
 	Model           string
+	ReasoningEffort string
+	SelectionAt     time.Time
 	DeniedCommands  []string
 	RepositoryURL   string
 	DefaultBranch   string
