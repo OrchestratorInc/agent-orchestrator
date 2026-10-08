@@ -274,9 +274,9 @@ describe("global board first launch", () => {
 
 		expect(await screen.findByText("Add a project")).toBeInTheDocument();
 		expect(screen.getByText("Choose how you want to add code to Agent Orchestrator")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Clone from Git" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Import a workspace folder" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Import an existing project" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Clone a repo" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Open a workspace" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Open a local folder" })).toBeInTheDocument();
 		expect(columnCount()).toBe(0);
 		// The welcome carries its own orientation — no dangling "Board" header.
 		expect(screen.queryByText("Board")).not.toBeInTheDocument();
@@ -412,7 +412,7 @@ describe("global board first launch", () => {
 		chooseDirectoryMock.mockResolvedValue(null);
 		renderBoard(<SessionsBoard />);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Import an existing project" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Open a local folder" }));
 		expect(chooseDirectoryMock).toHaveBeenCalledTimes(1);
 		expect(chooseDirectoryMock).toHaveBeenCalledWith("Choose a project repository");
 	});
@@ -422,7 +422,7 @@ describe("global board first launch", () => {
 		chooseDirectoryMock.mockResolvedValue(null);
 		renderBoard(<SessionsBoard />);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Import a workspace folder" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Open a workspace" }));
 		expect(chooseDirectoryMock).toHaveBeenCalledTimes(1);
 		expect(chooseDirectoryMock).toHaveBeenCalledWith("Choose a workspace folder");
 	});
@@ -432,7 +432,7 @@ describe("global board first launch", () => {
 		chooseDirectoryMock.mockRejectedValue(new Error("dialog unavailable"));
 		renderBoard(<SessionsBoard />);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Import an existing project" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Open a local folder" }));
 		const messages = await screen.findAllByText("dialog unavailable");
 		expect(messages.some((el) => !el.classList.contains("sr-only"))).toBe(true);
 	});
