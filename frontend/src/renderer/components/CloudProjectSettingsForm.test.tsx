@@ -94,7 +94,7 @@ describe("Cloud project settings", () => {
 		expect(await screen.findByRole("button", { name: `${label} agent` })).toBeDisabled();
 		const model = await screen.findByRole("button", { name: `${label} model` });
 		// An unset model names the agent's real default instead of a placeholder.
-		await waitFor(() => expect(model).toHaveTextContent("Local default"));
+		await waitFor(() => expect(model).toHaveTextContent("Local default · High"));
 		expect(model).not.toHaveTextContent("Agent default");
 		expect(model).toBeEnabled();
 		expect(screen.getByRole("button", { name: `${label} approval` })).toBeEnabled();
@@ -109,7 +109,7 @@ describe("Cloud project settings", () => {
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "other-model", effort: "low", permissions: "bypass-permissions" })));
 		view.unmount();
 		mount();
-		expect(await screen.findByRole("button", { name: `${label} model` })).toHaveTextContent("Other model");
+		expect(await screen.findByRole("button", { name: `${label} model` })).toHaveTextContent("Other model · Low");
 		expect(screen.getByRole("button", { name: `${label} approval` })).toHaveTextContent("Bypass permissions");
 		expect(screen.getByRole("button", { name: `${label} agent` })).toBeDisabled();
 	});
@@ -135,7 +135,7 @@ describe("Cloud project settings", () => {
 		const reviewer = await screen.findByRole("button", { name: "Reviewer agent" });
 		expect(reviewer).toHaveTextContent("Codex");
 		expect(reviewer).toBeDisabled();
-		await waitFor(() => expect(screen.getByRole("button", { name: "Reviewer model" })).toHaveTextContent("worker-model"));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Reviewer model" })).toHaveTextContent("worker-model · Max"));
 		await choose("Reviewer approval", "Bypass permissions");
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
 			config: { reviewers: [{ harness: "codex", agentConfig: { model: "worker-model", mode: "", effort: "max", permissions: "bypass-permissions" } }] },

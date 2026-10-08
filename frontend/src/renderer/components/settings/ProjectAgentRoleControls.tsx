@@ -114,7 +114,7 @@ export function AgentModelField({
 
 	const models = (catalog?.models ?? []).map((item) => ({
 		...item,
-		label: agentModelDisplayLabel(agentId, item.label),
+		label: item.id === "auto" ? t("settings.models.autoRouteLabel") : agentModelDisplayLabel(agentId, item.label),
 		...(supportedEfforts ? { efforts: item.efforts ? item.efforts.filter((value) => supportedEfforts.includes(value)) : [...supportedEfforts] } : {}),
 		...(!followCatalogDefaults ? { isDefault: false, defaultEffort: undefined } : {}),
 	}));
@@ -161,7 +161,7 @@ export function AgentModelField({
 						triggerClassName="w-fit bg-[var(--color-bg-settings-trigger)] text-[var(--color-text-settings-trigger)] hover:bg-[var(--color-bg-settings-trigger-hover)] data-[state=open]:bg-[var(--color-bg-settings-trigger-hover)]"
 						compact
 						recentScope={agentId}
-						showEffortInTrigger={false}
+						menuAlign="start"
 						tuning={{
 							effort,
 							effortsWithoutModel: supportedEfforts,

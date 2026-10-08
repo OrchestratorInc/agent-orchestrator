@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, EyeOff, FileCode2, KeyRound, Plus, Trash2 } from "lucide-react";
+import { Eye, EyeOff, FileCode2, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
@@ -148,14 +148,11 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 	return <form id="project-settings-form" className="project-settings-form flex min-h-full flex-col gap-(--size-settings-section-inner-gap)" onSubmit={(event) => { event.preventDefault(); save(); }}>
 		{showEmpty ? null : <p className="text-sm leading-5 text-settings-muted">{t("settings.project.environmentHint")}</p>}
 		{showEmpty ? <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
-			<KeyRound aria-hidden="true" className="mb-3 size-5 text-settings-muted" />
-			<h3 className="text-base font-medium leading-6 text-foreground">{t("settings.project.environmentEmptyTitle")}</h3>
-			<p className="mt-2 max-w-xs text-sm leading-6 text-settings-muted">{t("settings.project.environmentEmptyHint")}</p>
-			<div className="mt-6 flex items-center justify-center gap-2">
+			<div className="flex items-center justify-center gap-2">
 				<Button onClick={() => { setActiveTab("paste"); setError(null); }} type="button" variant="outline"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
 				<Button onClick={() => update([...rows, { name: "", value: "", visible: false }])} type="button"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
 			</div>
-			<p className="mt-6 max-w-md text-xs leading-5 text-settings-muted">{t("settings.project.environmentHint")}</p>
+			<p className="mt-4 max-w-xs text-sm leading-6 text-settings-muted">{t("settings.project.environmentEmptyHint")}</p>
 		</div> : activeTab === "variables" ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
 			{rows.map((row, index) => <div className="settings-row-bar gap-2" key={index}>
 				<input aria-label={`${t("settings.project.envName")} ${index + 1}`} className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1" placeholder={t("settings.project.envName")} value={row.name} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} />
