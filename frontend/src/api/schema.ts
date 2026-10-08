@@ -2928,6 +2928,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/github-auth/device": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report the current GitHub device sign-in attempt */
+        get: operations["getGitHubDeviceLogin"];
+        put?: never;
+        /** Start the GitHub CLI device sign-in and return its one-time code */
+        post: operations["startGitHubDeviceLogin"];
+        /** Cancel the in-flight GitHub device sign-in */
+        delete: operations["cancelGitHubDeviceLogin"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system/github-auth/terminal": {
         parameters: {
             query?: never;
@@ -5390,6 +5409,21 @@ export interface components {
             ready: boolean;
             /** @description Individual checks in stable order for the selected probe. */
             requirements: components["schemas"]["SystemRequirement"][];
+        };
+        SystemcheckGitHubDeviceLogin: {
+            /** @description Why the sign-in failed, when it did. */
+            error?: string;
+            /** @description Identifier of the current sign-in attempt. */
+            id?: string;
+            /**
+             * @description Where the sign-in stands.
+             * @enum {string}
+             */
+            state: "idle" | "starting" | "awaiting_approval" | "succeeded" | "failed" | "cancelled";
+            /** @description One-time code the person enters on GitHub. */
+            userCode?: string;
+            /** @description GitHub page where the code is entered. */
+            verificationUrl?: string;
         };
         TrackerIntakeConfig: {
             assignee?: string;
@@ -16895,6 +16929,129 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemRequirement"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getGitHubDeviceLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemcheckGitHubDeviceLogin"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    startGitHubDeviceLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemcheckGitHubDeviceLogin"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    cancelGitHubDeviceLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemcheckGitHubDeviceLogin"];
                 };
             };
             /** @description Internal Server Error */

@@ -8956,6 +8956,85 @@ paths:
       summary: Check advisory GitHub CLI authentication without blocking startup
       tags:
       - system
+  /api/v1/system/github-auth/device:
+    delete:
+      operationId: cancelGitHubDeviceLogin
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemcheckGitHubDeviceLogin'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Cancel the in-flight GitHub device sign-in
+      tags:
+      - system
+    get:
+      operationId: getGitHubDeviceLogin
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemcheckGitHubDeviceLogin'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Report the current GitHub device sign-in attempt
+      tags:
+      - system
+    post:
+      operationId: startGitHubDeviceLogin
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemcheckGitHubDeviceLogin'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Start the GitHub CLI device sign-in and return its one-time code
+      tags:
+      - system
   /api/v1/system/github-auth/terminal:
     post:
       operationId: openGitHubAuthTerminal
@@ -15411,6 +15490,33 @@ components:
       required:
       - ready
       - requirements
+      type: object
+    SystemcheckGitHubDeviceLogin:
+      properties:
+        error:
+          description: Why the sign-in failed, when it did.
+          type: string
+        id:
+          description: Identifier of the current sign-in attempt.
+          type: string
+        state:
+          description: Where the sign-in stands.
+          enum:
+          - idle
+          - starting
+          - awaiting_approval
+          - succeeded
+          - failed
+          - cancelled
+          type: string
+        userCode:
+          description: One-time code the person enters on GitHub.
+          type: string
+        verificationUrl:
+          description: GitHub page where the code is entered.
+          type: string
+      required:
+      - state
       type: object
     TrackerIntakeConfig:
       properties:

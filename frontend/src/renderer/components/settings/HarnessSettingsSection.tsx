@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, Copy, Download, KeyRound, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
+import { BookOpen, Check, Copy, Download, KeyRound, LoaderCircle, Search, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -13,7 +13,6 @@ import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useSt
 import { agentModelsQueryPrefix } from "../../hooks/useAgentModelsQuery";
 import { fetchSessionMemory, formatCPU, formatMemory, sessionMemoryQueryOptions } from "../../hooks/useSessionMemory";
 import { closeShellTerminal, shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../hooks/useShellTerminals";
-import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentLabel, AGENT_OPTIONS, type AgentId } from "../../lib/agent-options";
 import { CLOUD_AGENT_PROVIDERS, isCloudHarnessConnected } from "../../lib/cloud-agents";
 import { useCloudCp } from "../../hooks/useCloudCp";
@@ -24,15 +23,12 @@ import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPa
 import { SettingsRow } from "./SettingsRow";
 import { apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
-import { baseUrlForHost, clientForSessionHost, labelForHost } from "../../lib/host-clients";
+import { clientForSessionHost, labelForHost } from "../../lib/host-clients";
 import { useConnectedHosts } from "../../hooks/useHostConnection";
 import { LOCAL_HOST } from "../../lib/hosts";
-import { createTerminalMux, muxUrlFromApiBase } from "../../lib/terminal-mux";
 import { cn } from "../../lib/utils";
-import { useShellMaybe } from "../../lib/shell-context";
-import { useResolvedTheme } from "../../stores/ui-store";
 import { AgentAvatar } from "../AgentAvatar";
-import { TerminalPane } from "../TerminalPane";
+import { AuthTerminalPanel, type AuthWorkflow } from "../AuthTerminalPanel";
 import { Button } from "../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { useCloudGate } from "../../hooks/useCloudGate";
@@ -69,16 +65,7 @@ const INSTALL_STATE_RANK = {
 	unknown: 1,
 	not_installed: 2,
 } as const;
-type AuthTerminalWorkflow = {
-	agentId: AgentId;
-	action: string;
-	terminal: components["schemas"]["ShellTerminalResponse"];
-	guidance: string;
-	terminalInput?: string;
-	phase: "running" | "verifying" | "unauthorized" | "unverified" | "closing" | "cleanup_failed" | "timed_out";
-	reason?: string;
-	startedAt: number;
-};
+type AuthTerminalWorkflow = AuthWorkflow<AgentId>;
 
 async function closeAuthTerminal(handleId: string, hostId?: string): Promise<void> {
 	try {
@@ -838,7 +825,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 										) : null}
 										{rowAuthWorkflow ? (
 											<div className="basis-full pl-10">
-												<HarnessAuthTerminalPanel
+												<AuthTerminalPanel
 													workflow={rowAuthWorkflow}
 													hostId={hostId}
 													onClose={() => void closeAuth(rowAuthWorkflow)}
@@ -929,74 +916,6 @@ function CloudGitHubPatRow() {
 					</Button>
 				</div>
 			) : null}
-		</div>
-	);
-}
-
-function HarnessAuthTerminalPanel({ workflow, hostId, onClose, onRetry, onTerminalState }: {
-	workflow: AuthTerminalWorkflow;
-	hostId?: string;
-	onClose: () => void;
-	onRetry: () => void;
-	onTerminalState: (state: TerminalSessionState) => void;
-}) {
-	const { t } = useTranslation();
-	const theme = useResolvedTheme();
-	const shell = useShellMaybe();
-	const createMux = useCallback(() => {
-		const base = hostId && baseUrlForHost(hostId);
-		if (!base) throw new Error("Remote host disconnected");
-		return createTerminalMux(muxUrlFromApiBase(base));
-	}, [hostId]);
-	const panelRef = useRef<HTMLDivElement>(null);
-	const inputRequestIdRef = useRef(0);
-	const activeInputRequestIdRef = useRef<number | null>(null);
-	const [terminalState, setTerminalState] = useState<TerminalSessionState>("connecting");
-	const [inputRequest, setInputRequest] = useState<{ id: number; data: string }>();
-	const [commandPending, setCommandPending] = useState(false);
-	const [commandSent, setCommandSent] = useState(false);
-	const handlerRef = useRef(onTerminalState);
-	handlerRef.current = onTerminalState;
-	const handleTerminalState = useCallback((state: TerminalSessionState) => {
-		setTerminalState(state);
-		handlerRef.current(state);
-	}, []);
-	useEffect(() => {
-		panelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-	}, [workflow.terminal.handleId]);
-	// While the login runs, the terminal speaks for itself. Guidance is shown only
-	// when it tells the user to act outside the terminal (the Open login button).
-	const status = workflow.phase === "running"
-		? workflow.terminalInput ? workflow.guidance : ""
-		: workflow.phase === "verifying" ? t("settings.harness.checkingLogin")
-			: workflow.phase === "closing" ? t("settings.harness.authClosing")
-				: workflow.reason ?? t("settings.harness.loginUnknown");
-	const retryable = workflow.phase === "unauthorized" || workflow.phase === "unverified" || workflow.phase === "timed_out" || workflow.phase === "cleanup_failed";
-	const openAuthAction = () => {
-		if (!workflow.terminalInput || terminalState !== "attached" || commandPending || commandSent) return;
-		inputRequestIdRef.current += 1;
-		activeInputRequestIdRef.current = inputRequestIdRef.current;
-		setCommandPending(true);
-		setInputRequest({ id: inputRequestIdRef.current, data: workflow.terminalInput });
-	};
-	const handleInputRequestResult = useCallback((id: number, accepted: boolean) => {
-		if (activeInputRequestIdRef.current !== id) return;
-		activeInputRequestIdRef.current = null;
-		setInputRequest(undefined);
-		setCommandPending(false);
-		if (accepted) setCommandSent(true);
-	}, []);
-	return (
-		<div ref={panelRef} className="mt-1 scroll-my-3 overflow-hidden rounded-md border border-(--color-border-settings-input) bg-terminal" data-testid="harness-auth-terminal">
-			<div className="flex min-h-10 items-center justify-between gap-3 border-b border-(--color-border-settings-input) bg-surface/90 px-3 py-2">
-				<div className="min-w-0"><p className="truncate text-xs font-medium text-settings-label">{workflow.terminal.title}</p>{status ? <p className="truncate text-[11px] text-settings-muted" aria-live="polite" role="status">{status}</p> : null}</div>
-				<div className="flex shrink-0 items-center gap-2">
-					{workflow.terminalInput && workflow.phase === "running" ? <Button type="button" size="sm" variant="outline" disabled={terminalState !== "attached" || commandPending || commandSent} onClick={openAuthAction}>{commandSent ? <Check aria-hidden="true" /> : <LogIn aria-hidden="true" />}{workflow.action === "setup" ? commandSent ? t("settings.harness.setupOpened") : t("settings.harness.openSetup") : commandSent ? t("settings.harness.loginOpened") : t("settings.harness.openLogin")}</Button> : null}
-					<button type="button" aria-label={t("settings.close")} className="grid size-7 place-items-center rounded text-settings-muted hover:bg-interactive-hover" disabled={workflow.phase === "closing" || workflow.phase === "verifying"} onClick={onClose}><X className="size-4" aria-hidden="true" /></button>
-				</div>
-			</div>
-			<div className="h-[300px] min-h-0"><TerminalPane createMux={hostId ? createMux : undefined} daemonReady={hostId ? true : shell ? shell.daemonStatus.state === "ready" : true} focusRequested={workflow.phase === "running" && terminalState === "attached"} fontSize={12} inputRequest={inputRequest} onInputRequestResult={handleInputRequestResult} onTerminalStateChange={handleTerminalState} terminalTarget={{ kind: "shell", handleId: workflow.terminal.handleId, generation: workflow.terminal.createdAt, title: workflow.terminal.title }} theme={theme} /></div>
-			{retryable ? <div className="flex items-center justify-end border-t border-(--color-border-settings-input) bg-surface/90 px-3 py-2"><Button type="button" size="sm" variant="outline" onClick={workflow.phase === "cleanup_failed" ? onClose : onRetry}>{workflow.phase === "cleanup_failed" ? t("settings.harness.retry") : workflow.action === "setup" ? t("settings.harness.setup") : t("settings.harness.login")}</Button></div> : null}
 		</div>
 	);
 }
