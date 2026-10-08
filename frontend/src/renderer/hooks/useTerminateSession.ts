@@ -174,9 +174,9 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 	});
 }
 
-function workspaceCleanupError(session: WorkspaceSession | undefined, t: ReturnType<typeof useTranslation>["t"]) {
-	if (session?.workspaceCleanup === "failed") return t("shell.workspaceCleanupFailed");
-	if (session?.workspaceCleanup === "preserved_dirty") return t("shell.workspaceCleanupDirty");
+function workspaceCleanupErrorKey(session: WorkspaceSession | undefined): "shell.workspaceCleanupFailed" | "shell.workspaceCleanupDirty" | null {
+	if (session?.workspaceCleanup === "failed") return "shell.workspaceCleanupFailed";
+	if (session?.workspaceCleanup === "preserved_dirty") return "shell.workspaceCleanupDirty";
 	return null;
 }
 
@@ -191,10 +191,11 @@ export function useTerminateSessionState(sessionId: string, hostId?: string) {
 	// Observe existing board data; this does not start another network request.
 	const data = useCachedWorkspaces(hostId);
 	const session = data?.flatMap((workspace) => workspace.sessions).find((session) => session.id === sessionId);
+	const errorKey = workspaceCleanupErrorKey(session);
 	const summary = summarizeBySession(useTerminateSessionMutations()).find(({ session }) =>
 		session.id === sessionId && session.hostId === hostId);
 	return {
-		error: workspaceCleanupError(session, t) ??
+		error: (errorKey ? t(errorKey) : null) ??
 			(!summary?.isPending && summary?.latest.status === "error" && summary.latest.error instanceof Error
 				? summary.latest.error.message : null),
 		isPending: summary?.isPending === true || session?.workspaceCleanup === "pending",
@@ -213,7 +214,8 @@ export function useProjectTerminateSessionStates(workspaceId: string | undefined
 			isPending, session, cleanupPending: false,
 		}));
 	for (const session of sessions) {
-		const error = workspaceCleanupError(session, t);
+		const errorKey = workspaceCleanupErrorKey(session);
+		const error = errorKey ? t(errorKey) : null;
 		const cleanupPending = session.workspaceCleanup === "pending";
 		if (!error && !cleanupPending) continue;
 		const previous = states.findIndex((state) => state.session.id === session.id);
