@@ -86,6 +86,7 @@ import { cn } from "../lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog } from "./SessionArchiveDialog";
 import { SessionDeliveryCard } from "./SessionDeliveryCard";
+import { sessionDeliveryQueryKey } from "../hooks/useSessionDelivery";
 import { ReviewerSelect } from "./ReviewerSelect";
 import { agentLabel } from "../lib/agent-options";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
@@ -385,7 +386,7 @@ const SummaryView = memo(function SummaryView({
 	const query = useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud ? session.autoInjectCI === true : false, hostId);
 	const linkedPRs = query.data?.linkedPrs ?? [];
 	const deliveryQuery = useQuery({
-		queryKey: hostId ? ["session-delivery", hostId, session.id] : ["session-delivery", session.id],
+		queryKey: sessionDeliveryQueryKey(session.id, hostId),
 		enabled: !session.cloud,
 		queryFn: async () => {
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/files", { params: { path: { sessionId: session.id } } });

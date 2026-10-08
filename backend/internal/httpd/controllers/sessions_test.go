@@ -3402,6 +3402,29 @@ func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_AdvanceDelivery(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.deliveryResult = sessionsvc.DeliveryActionResult{
+		Committed: true, Pushed: true,
+		PullRequest: &sessionsvc.DeliveryPullRequest{URL: "https://github.com/acme/widget/pull/42", Number: 42},
+		Delivery:    sessionsvc.DeliveryStatus{State: sessionsvc.DeliveryStateSynchronized, WorkspaceVersion: "v2"},
+	}
+	srv := newSessionTestServer(t, svc)
+	body, status, headers := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/delivery", `{"action":"commit_and_publish_pr","expectedWorkspaceVersion":"v1","commitMessage":"feat: card"}`)
+	assertJSON(t, headers)
+	if status != http.StatusOK {
+		t.Fatalf("POST delivery = %d, want 200; body=%s", status, body)
+	}
+	if svc.deliveryInput.Action != sessionsvc.DeliveryActionCommitAndPublish || svc.deliveryInput.ExpectedWorkspaceVersion != "v1" || svc.deliveryInput.CommitMessage != "feat: card" {
+		t.Fatalf("delivery input = %#v", svc.deliveryInput)
+	}
+	var got controllers.AdvanceDeliveryResponse
+	mustJSON(t, body, &got)
+	if !got.Committed || !got.Pushed || got.PullRequest == nil || got.PullRequest.Number != 42 || got.Delivery.State != sessionsvc.DeliveryStateSynchronized {
+		t.Fatalf("response = %#v", got)
+	}
+}
+
 func TestSessionsAPI_GetWorkspaceManifestOmitsUnchangedInventory(t *testing.T) {
 	svc := newFakeSessionService()
 	svc.workspaceFiles = sessionsvc.WorkspaceFiles{

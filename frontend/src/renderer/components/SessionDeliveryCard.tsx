@@ -52,7 +52,7 @@ export function DeliveryCardView({ delivery, error, onAdvance, onOpenFiles, pend
 	);
 }
 
-export function SessionDeliveryCard({ delivery, onOpenFiles, sessionId }: { delivery: DeliveryStatus; onOpenFiles?: () => void; sessionId: string }) {
-	const mutation = useSessionDelivery(sessionId);
+export function SessionDeliveryCard({ delivery, hostId, onOpenFiles, sessionId }: { delivery: DeliveryStatus; hostId?: string; onOpenFiles?: () => void; sessionId: string }) {
+	const mutation = useSessionDelivery(sessionId, hostId);
 	return <DeliveryCardView delivery={delivery} error={mutation.error instanceof Error ? mutation.error.message : undefined} onAdvance={(commitMessage) => mutation.mutate({ action: delivery.action!, expectedWorkspaceVersion: delivery.workspaceVersion, commitMessage })} onOpenFiles={onOpenFiles} pending={mutation.isPending} />;
 }
