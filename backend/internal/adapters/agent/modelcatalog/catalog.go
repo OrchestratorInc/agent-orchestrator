@@ -125,7 +125,7 @@ var commandSpecs = map[string]commandSpec{
 	"droid":       {args: []string{"exec", "--help"}, parser: parseDroidHelpModels},
 	"crush":       {args: []string{"models"}, parser: parseIDLines},
 	"fx":          {args: []string{"models", "--json"}, parser: parseFXModels},
-	"mimo-code":   {args: []string{"models"}, parser: parseIDLines},
+	"mimo-code":   {args: []string{"models"}, parser: parseMiMoModels},
 }
 
 // Base returns the picker behavior AO can provide without executing a CLI.
@@ -873,6 +873,19 @@ func parseIDLines(output []byte) ([]ports.AgentModelInfo, error) {
 			continue
 		}
 		id := strings.Trim(fields[0], "`\"'[](),:")
+		models = append(models, ports.AgentModelInfo{ID: id, Label: id})
+	}
+	return normalize(models), nil
+}
+
+func parseMiMoModels(output []byte) ([]ports.AgentModelInfo, error) {
+	text := ansiPattern.ReplaceAllString(string(output), "")
+	var models []ports.AgentModelInfo
+	for _, line := range strings.Split(text, "\n") {
+		id, _, found := strings.Cut(strings.TrimSpace(line), " — ")
+		if !found || !strings.Contains(id, "/") || !looksLikeModelID(id) {
+			continue
+		}
 		models = append(models, ports.AgentModelInfo{ID: id, Label: id})
 	}
 	return normalize(models), nil

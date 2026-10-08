@@ -256,6 +256,16 @@ func TestMiMoCodeDiscoveryUsesNativeModelsCommand(t *testing.T) {
 	}
 }
 
+func TestParseMiMoModelsAcceptsInlineDetails(t *testing.T) {
+	got, err := parseMiMoModels([]byte("mimo/mimo-auto — window 1M, compacts at 900K\nxiaomi/mimo-v2.5 — window 1.05M\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "mimo/mimo-auto" || got[1].ID != "xiaomi/mimo-v2.5" {
+		t.Fatalf("models = %#v", got)
+	}
+}
+
 func TestAiderUsesDocumentedDiscoveryCommand(t *testing.T) {
 	spec := commandSpecs["aider"]
 	want := []string{"--no-check-update", "--no-git", "--no-gitignore", "--no-analytics", "--list-models", "."}
