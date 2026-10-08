@@ -340,6 +340,7 @@ export const ChatComposer = memo(function ChatComposer({
 		string | null
 	>(null);
 	const [submitting, setSubmitting] = useState(false);
+	const [optimisticSend, setOptimisticSend] = useState(false);
 	const [durableDelivery, setDurableDelivery] = useState<ChatComposerDelivery | undefined>(() =>
 		draftScope
 			? readChatSessionDraft(draftScope).composer.delivery
@@ -507,7 +508,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
 
 	const staged = fileAttachments.attachments.length > 0 || visibleRetainedAttachments.length > 0;
-	const stripAttachments = [...visibleRetainedAttachments, ...fileAttachments.attachments].map((file) => {
+	const stripAttachments = (optimisticSend ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
 		const preview = file.dataUrl ?? (path && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
@@ -561,7 +562,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const canSteerDraft = Boolean(canSteer && onSteer) && !savingQueuedEdit;
 	const steersDraft = modifierHeld && canSteerDraft;
 	const showsSteer = steersDraft && !durableDelivery && !queuedEditRecovery;
-	const sendActionLabel = translateDraft(durableDelivery
+	const sendActionLabel = translateDraft(durableDelivery && !submitting
 		? durableDelivery.state === "accepted"
 			? "chat.draft.clearMessage"
 			: "chat.draft.retryMessage"
@@ -694,7 +695,14 @@ export const ChatComposer = memo(function ChatComposer({
 			composerRevision.current = result.draft.composer.revision;
 			setTextDraftPersistenceError(null);
 			setDeliveryRecoveryNotice(null);
-			if (!result.cleared) return false;
+			if (!result.cleared) {
+				for (const attachment of fileAttachments.getAttachments()) {
+					if (!result.draft.composer.attachments.some((kept) => kept.id === attachment.id)) {
+						fileAttachments.remove(attachment.id);
+					}
+				}
+				return false;
+			}
 			clearEditorView();
 			fileAttachments.clear();
 			return true;
@@ -709,7 +717,13 @@ export const ChatComposer = memo(function ChatComposer({
 				fileAttachments.clear();
 				return true;
 			}
-			const result = clearAcceptedChatComposer(draftScope, acceptedRevision);
+			const saved = composerRevision.current !== acceptedRevision
+				? writeChatComposerText(draftScope, textRef.current)
+				: undefined;
+			const result: DraftClearResult = saved?.ok === false
+				? { ok: false, cleared: false, draft: saved.draft }
+				: clearAcceptedChatComposer(draftScope, acceptedRevision, undefined,
+					fileAttachments.getAttachments().map((attachment) => attachment.id));
 			// A successful durable clear can synchronously trigger a replacement
 			// surface before React applies the acceptance receipt. Release the route
 			// boundary first so cleared UI never exposes stale unsafe-draft state.
@@ -899,6 +913,8 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [clearEditorView, editingQueuedTurnId]);
 
 	const onEditorChange = useCallback((snapshot: ComposerEditorSnapshot) => {
+		// Changing Lexical's editability can publish the optimistic visual clear.
+		if (optimisticSend && !snapshot.text && !textRef.current) return;
 		textRef.current = snapshot.text;
 		onQueuedDraftChange?.(snapshot.text);
 		if (draftScope) {
@@ -907,7 +923,7 @@ export const ChatComposer = memo(function ChatComposer({
 			// A disabled Lexical editor can still publish an internal state update
 			// while its editability changes. It must not erase the recovery notice
 			// for a durable delivery that still owns this exact composer revision.
-			if (!result.draft.composer.delivery) {
+			if (!result.ok || !result.draft.composer.delivery) {
 				setTextDraftPersistenceError(
 					result.ok
 						? null
@@ -938,7 +954,7 @@ export const ChatComposer = memo(function ChatComposer({
 			dismissedKeyRef.current = null;
 			setDismissedKey(null);
 		}
-	}, [draftScope, onQueuedDraftChange]);
+	}, [draftScope, onQueuedDraftChange, optimisticSend]);
 
 	const pick = useCallback((value: string) => {
 		const currentTrigger = triggerRef.current;
@@ -1171,7 +1187,10 @@ export const ChatComposer = memo(function ChatComposer({
 			// the daemon round-trip completes. Attachments retain the retry path.
 			const clearForLocalEcho = !shouldSteer && !savingQueuedEdit && nativePayloads.length === 0;
 			try {
-				if (clearForLocalEcho) clearEditorView();
+				if (clearForLocalEcho) {
+					clearEditorView();
+					setOptimisticSend(true);
+				}
 				if (shouldSteer && onSteer) {
 					const outcome = nativePayloads.length > 0
 						? await onSteer(message, nativePayloads)
@@ -1193,7 +1212,7 @@ export const ChatComposer = memo(function ChatComposer({
 				if (!clearForLocalEcho) clearEditorView();
 				fileAttachments.clear();
 			} catch (error) {
-				if (clearForLocalEcho) {
+				if (clearForLocalEcho && !textRef.current) {
 					textRef.current = currentText;
 					hasTextRef.current = currentText.trim().length > 0;
 					setHasText(hasTextRef.current);
@@ -1207,6 +1226,7 @@ export const ChatComposer = memo(function ChatComposer({
 						: "chat.draft.sendFailed",
 				);
 			} finally {
+				setOptimisticSend(false);
 				setSubmitting(false);
 			}
 			return;
@@ -1242,7 +1262,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const delivery = prepared.mutation;
 		synchronouslyClearedDeliveryRevision.current = undefined;
 		setDeliveryUncertain(false);
-		composerRevision.current = prepared.draft.composer.revision;
+		if (!prepared.recovered) composerRevision.current = prepared.draft.composer.revision;
 		setDurableDelivery(delivery);
 		setTextDraftPersistenceError(null);
 		setDeliveryRecoveryNotice(
@@ -1284,6 +1304,10 @@ export const ChatComposer = memo(function ChatComposer({
 					return;
 				}
 			} else {
+				if (!prepared.recovered) {
+					clearEditorView();
+					setOptimisticSend(true);
+				}
 				await onSend(
 					delivery.requestText,
 					sendNativeImages && nativePayloads.length > 0 ? nativePayloads : undefined,
@@ -1295,6 +1319,12 @@ export const ChatComposer = memo(function ChatComposer({
 			setDismissedKey(null);
 			setHighlighted(0);
 		} catch (error) {
+			if (delivery.kind === "send" && !textRef.current) {
+				textRef.current = currentText;
+				hasTextRef.current = currentText.trim().length > 0;
+				setHasText(hasTextRef.current);
+				editor.current?.setText(currentText);
+			}
 			// Refusal of a retry says nothing about a previous attempt whose response
 			// was lost. Only an initial, definitively unaccepted send can be edited.
 			if (
@@ -1318,6 +1348,7 @@ export const ChatComposer = memo(function ChatComposer({
 					: "chat.draft.sendUncertain",
 			);
 		} finally {
+			setOptimisticSend(false);
 			if (!mutationFinished) cancelChatComposerMutation(draftScope, mutationToken);
 			setSubmitting(false);
 		}
@@ -1597,7 +1628,7 @@ export const ChatComposer = memo(function ChatComposer({
 				<ComposerEditor
 					ref={editor}
 					images={composerImages}
-					disabled={controlsDisabled || queuedEditRecovery || draftMutationPending}
+					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
 					label="Message the agent"
 					placeholder={
 						disabledPlaceholder ?? (disabled

@@ -606,6 +606,25 @@ describe("Chat draft storage", () => {
 		});
 	});
 
+	it("removes sent attachments while preserving the next draft and its new attachments", () => {
+		const storage = new MemoryStorage();
+		const sent = { id: "sent", path: ".ao/attachments/sent.png", name: "sent.png", mimeType: "image/png", bytes: 4 };
+		const next = { ...sent, id: "next", path: ".ao/attachments/next.png" };
+		const prepared = prepareChatComposerDelivery("session-next-attachments", {
+			kind: "send", composerText: "submitted", attachments: [sent],
+			requestText: "submitted", clientMessageId: "sent-1",
+		}, storage);
+		if (!prepared.ok) throw new Error("Failed to prepare test delivery");
+		writeChatComposerText("session-next-attachments", "next draft", storage);
+		writeChatAttachments("session-next-attachments", [sent, next], storage);
+		expect(clearAcceptedChatComposer("session-next-attachments", prepared.mutation.revision, storage, [sent.id]))
+			.toMatchObject({ ok: true, cleared: false });
+		expect(readChatSessionDraft("session-next-attachments", storage).composer).toMatchObject({
+			text: "next draft", attachments: [next],
+		});
+		expect(readChatSessionDraft("session-next-attachments", storage).composer.delivery).toBeUndefined();
+	});
+
 	it("clears only the accepted delivery journal when a later composer revision exists", () => {
 		const storage = new MemoryStorage();
 		const prepared = prepareChatComposerDelivery(

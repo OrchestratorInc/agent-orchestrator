@@ -1352,11 +1352,13 @@ export function clearAcceptedChatInlineEdit(
  * Clear the composer accepted by the daemon only if it is still the same
  * revision. A keystroke or attachment change that happened while send awaited
  * acceptance must remain both on screen and in durable storage.
+ * Sent attachments belong to the accepted message, even if the next text is newer.
  */
 export function clearAcceptedChatComposer(
 	scope: ChatDraftScopeInput,
 	acceptedRevision: number,
 	storage: DraftStorage | undefined = rendererStorage(),
+	acceptedAttachmentIds: readonly string[] = [],
 ): DraftClearResult {
 	const loaded = loadChatSessionDraft(scope, storage);
 	const current = loaded.draft;
@@ -1370,7 +1372,7 @@ export function clearAcceptedChatComposer(
 			composer: {
 				revision: current.composer.revision,
 				text: current.composer.text,
-				attachments: current.composer.attachments,
+				attachments: current.composer.attachments.filter((attachment) => !acceptedAttachmentIds.includes(attachment.id)),
 			},
 		};
 		const result = persistDraftProven(next, storage);
