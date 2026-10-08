@@ -1159,18 +1159,32 @@ export function Sidebar({
 					</span>
 				)}
 				{settingsPage ? (
-					<button
-						className={FOOTER_NAV_BUTTON_CLASS}
-						disabled={settingsPage.cueBusy}
-						onClick={settingsPage.close}
-						type="button"
-					>
-						<NavRowHighlight />
-						<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
-							<ArrowLeft aria-hidden="true" />
-							<span className="tracking-tight">{t("settings.back")}</span>
-						</span>
-					</button>
+					<>
+						<UpdateStatusRow
+							availableDismissed={updateDismissal.dismissed}
+							onDismissAvailable={updateDismissal.dismiss}
+							status={updateStatus}
+							tabIndex={isCollapsed ? -1 : 0}
+						/>
+						<UpdateInstallSlide
+							availableDismissed={updateDismissal.dismissed}
+							onRequestInstall={openUpdateInstallPrompt}
+							status={updateStatus}
+							tabIndex={isCollapsed ? -1 : 0}
+						/>
+						<button
+							className={FOOTER_NAV_BUTTON_CLASS}
+							disabled={settingsPage.cueBusy}
+							onClick={settingsPage.close}
+							type="button"
+						>
+							<NavRowHighlight />
+							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+								<ArrowLeft aria-hidden="true" />
+								<span className="tracking-tight">{t("settings.back")}</span>
+							</span>
+						</button>
+					</>
 				) : (
 				<>
 				<div
