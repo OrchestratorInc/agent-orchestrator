@@ -331,6 +331,9 @@ export interface ChatWorkspaceProps {
 	hasOlder?: boolean;
 	loadingOlder?: boolean;
 	onLoadOlder?: () => void;
+	/** The surface's onSend forwards transcript excerpts. Without it, "Add to
+	 * chat" is hidden so a selection cannot be cleared from the draft unsent. */
+	excerptsEnabled?: boolean;
 	onSend?: (
 		text: string,
 		attachments?: { mimeType: string; data: string }[],
@@ -588,6 +591,7 @@ function ChatWorkspaceContent({
 	hasOlder,
 	loadingOlder,
 	onLoadOlder,
+	excerptsEnabled = false,
 	onSend,
 	onDecide,
 	onResolveInput,
@@ -1599,6 +1603,7 @@ function ChatWorkspaceContent({
 									hasOlder={hasOlder}
 									loadingOlder={loadingOlder}
 									onLoadOlder={onLoadOlder}
+									excerptsEnabled={excerptsEnabled}
 									onDecide={onDecide}
 									busy={busy}
 									onRollback={rollbackTarget}
@@ -2227,6 +2232,7 @@ function Timeline({
 	hasOlder,
 	loadingOlder,
 	onLoadOlder,
+	excerptsEnabled,
 	onDecide,
 	busy,
 	onRollback,
@@ -2255,6 +2261,7 @@ function Timeline({
 	hasOlder?: boolean;
 	loadingOlder?: boolean;
 	onLoadOlder?: () => void;
+	excerptsEnabled?: boolean;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	busy?: boolean;
 	onRollback?: (turnId: string) => void;
@@ -2412,7 +2419,7 @@ function Timeline({
 
 	const captureTranscriptSelection = useCallback(() => {
 		const selection = window.getSelection();
-		if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+		if (!excerptsEnabled || !selection || selection.isCollapsed || selection.rangeCount === 0) {
 			setSelectionAction(null);
 			return;
 		}
@@ -2455,11 +2462,18 @@ function Timeline({
 			},
 			range: selection.getRangeAt(0).cloneRange(),
 		});
-	}, [snapshot.conversationId]);
+	}, [excerptsEnabled, snapshot.conversationId]);
 
 	const addSelectionToChat = useCallback(async () => {
 		if (!selectionAction) return;
-		const current = readChatSessionDraft(draftScope).composer.excerpts ?? [];
+		const composer = readChatSessionDraft(draftScope).composer;
+		// A pending delivery is cleared by revision on acceptance. Changing the
+		// draft now would keep the sent text and excerpts for a second send.
+		if (composer.delivery) {
+			setSelectionAction(null);
+			return;
+		}
+		const current = composer.excerpts ?? [];
 		const duplicate = current.some(
 			(item) =>
 				item.messageId === selectionAction.excerpt.messageId &&

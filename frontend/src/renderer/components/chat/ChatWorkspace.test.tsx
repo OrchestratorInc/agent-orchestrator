@@ -1196,7 +1196,7 @@ describe("ChatWorkspace timeline", () => {
 	});
 
 	it("adds the selected excerpt through a compact neutral action without clearing selection on mouse down", () => {
-		render(<ChatWorkspace snapshot={chatFixtureSettled} />);
+		render(<ChatWorkspace snapshot={chatFixtureSettled} excerptsEnabled />);
 		const log = screen.getByRole("log", { name: "Conversation" });
 		const source = log.querySelector("[data-chat-message-id] [data-chat-message-body]")!;
 		const range = document.createRange();
@@ -1217,6 +1217,19 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("button", { name: "1 annotation" })).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "1 annotation" }));
 		expect(screen.getByRole("button", { name: selectedText })).toBeInTheDocument();
+		selection.removeAllRanges();
+	});
+
+	it("hides Add to chat on surfaces whose send does not forward excerpts", () => {
+		render(<ChatWorkspace snapshot={chatFixtureSettled} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		const range = document.createRange();
+		range.selectNodeContents(log.querySelector("[data-chat-message-id] [data-chat-message-body]")!);
+		const selection = window.getSelection()!;
+		selection.removeAllRanges();
+		selection.addRange(range);
+		fireEvent.mouseUp(log);
+		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
 		selection.removeAllRanges();
 	});
 

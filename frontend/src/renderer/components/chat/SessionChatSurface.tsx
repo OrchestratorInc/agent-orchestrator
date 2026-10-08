@@ -561,6 +561,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				loadingOlder={isLoadingOlder}
 				onLoadOlder={loadOlder}
 				busy={commands.busy}
+				excerptsEnabled
 				onSend={(text, attachments, clientMessageId, excerpts) =>
 					commands.send({
 						text,
