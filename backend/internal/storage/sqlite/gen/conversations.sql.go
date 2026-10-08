@@ -1262,6 +1262,58 @@ func (q *Queries) InterruptRolledBackQueuedTurns(ctx context.Context, arg Interr
 	return err
 }
 
+const latestVisibleUserTurnSettled = `-- name: LatestVisibleUserTurnSettled :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = ?2
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+), latest_user AS (
+    SELECT turn.handled_by_session_id, turn.state, turn.completed_at
+    FROM conversation_messages AS message
+    JOIN active_path AS path ON path.branch_id = message.branch_id
+    LEFT JOIN conversation_turns AS turn ON turn.id = message.turn_id
+    WHERE message.conversation_id = ?2
+      AND message.role = 'user'
+      AND (path.max_sequence IS NULL OR message.sequence <= path.max_sequence)
+      AND (message.turn_id IS NULL OR turn.id IS NULL OR (
+          turn.rolled_back_at IS NULL AND turn.promoted_to_turn_id IS NULL AND turn.state <> 'cancelled'
+      ))
+    ORDER BY message.sequence DESC
+    LIMIT 1
+)
+SELECT EXISTS (
+    SELECT 1 FROM latest_user
+    WHERE handled_by_session_id = ?1
+      AND completed_at IS NOT NULL
+      AND state IN ('completed', 'failed', 'interrupted', 'recovered')
+)
+`
+
+type LatestVisibleUserTurnSettledParams struct {
+	SessionID      domain.SessionID
+	ConversationID string
+}
+
+// Hibernation only needs the latest visible user prompt's outcome. Match the
+// active-branch and discarded-turn filters used by SelectConversationMessages
+// without loading the entire conversation timeline.
+func (q *Queries) LatestVisibleUserTurnSettled(ctx context.Context, arg LatestVisibleUserTurnSettledParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, latestVisibleUserTurnSettled, arg.SessionID, arg.ConversationID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listVisibleRunningTurnsForConversation = `-- name: ListVisibleRunningTurnsForConversation :many
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)

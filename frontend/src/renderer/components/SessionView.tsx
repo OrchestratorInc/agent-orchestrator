@@ -62,6 +62,7 @@ import {
 	useWorkspaceSession,
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
+import { subscribeChatReveal } from "../lib/chat-context-bus";
 import { cloudLifecycleStage } from "../lib/cloud-lifecycle";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
@@ -726,7 +727,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	// Shell terminals opened inside a session live beside its pane as extra tabs,
 	// scoped to the session on screen so each session has its own shell set.
-	const allShellTerminals = useShellTerminals(hostId).data ?? [];
+	const shellTerminalsQuery = useShellTerminals(hostId);
+	const allShellTerminals = shellTerminalsQuery.data ?? [];
 	const shellTerminals = useMemo(
 		() => allShellTerminals.filter((shell) => shell.sessionId === sessionId),
 		[allShellTerminals, sessionId],
@@ -929,6 +931,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
 		}));
 	}, [setActiveShellTerminal, uiSessionId]);
+	// "Ask in chat" from a file tab brings the session's Chat surface forward.
+	useEffect(() => subscribeChatReveal(uiSessionId, selectSessionTerminal), [selectSessionTerminal, uiSessionId]);
 	const selectReviewerTerminal = useCallback((target: ReviewerTerminalTarget) => {
 		setReviewerChatId(null);
 		setActiveShellTerminal(null);
@@ -1256,6 +1260,58 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		session !== undefined &&
 		renderedSessionMode === "chat" &&
 		(chatTargetKind === "worker" || chatTargetKind === "reviewer" || chatTargetKind === "shell");
+	const chatViewActive =
+		session?.mode === "chat" &&
+		!session.cloud &&
+		(hostId ? Boolean(remoteBase) : daemonStatus.state === "ready") &&
+		routedTerminalTarget.kind === "worker" &&
+		(!activeShellTerminalHandleId ||
+			(shellTerminalsQuery.data !== undefined &&
+				!shellTerminals.some((shell) => shell.handleId === activeShellTerminalHandleId))) &&
+		!reviewerChatId &&
+		!fileTabs.activePath;
+	useEffect(() => {
+		if (!chatViewActive) return;
+		const viewId = crypto.randomUUID();
+		let left = false;
+		let refreshed = false;
+		let pending = Promise.resolve();
+		const setViewActive = async (active: boolean) => {
+			try {
+				const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/chat-view", {
+					params: { path: { sessionId } },
+					body: { viewId, active },
+				});
+				if (error) throw error;
+				// Remote conversations already refresh every two seconds.
+				if (active && !left && !refreshed && !hostId) {
+					refreshed = true;
+					void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
+					void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+				}
+			} finally {
+				// Release a late registration too; leaving must not wait on wake.
+				if (active && left) void setViewActive(false).catch(() => {});
+			}
+		};
+		const renewView = () => {
+			pending = pending.catch(() => {}).then(() => {
+				return left ? undefined : setViewActive(true);
+			});
+			return pending;
+		};
+		const refreshAfterWakeError = () => {
+			if (left || hostId) return;
+			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
+		};
+		void renewView().catch(refreshAfterWakeError);
+		const renewal = window.setInterval(() => { void renewView().catch(refreshAfterWakeError); }, 10_000);
+		return () => {
+			left = true;
+			window.clearInterval(renewal);
+			void setViewActive(false).catch(() => {});
+		};
+	}, [chatViewActive, hostId, queryClient, sessionId]);
 	const {
 		agentSwitch: handoffAgentSwitch,
 		switchControlPresentation: handoffControlPresentation,

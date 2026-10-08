@@ -85,6 +85,9 @@ func (m *Manager) ensureChatController(ctx context.Context, id domain.SessionID,
 // waiting_input and exited sessions are also cold when they have no unfinished
 // durable work. Unknown/legacy activity stays conservative.
 func (m *Manager) chatNeedsStartupRestore(ctx context.Context, rec domain.SessionRecord) (bool, error) {
+	if rec.Kind == domain.KindOrchestrator {
+		return true, nil // Preserve the always-awake coordination boundary.
+	}
 	if rec.Metadata.WorkspacePath == "" || rec.Metadata.ProviderConversationID == "" {
 		return true, nil // Let ordinary recovery handle interrupted/legacy spawns.
 	}

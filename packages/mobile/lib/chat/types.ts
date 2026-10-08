@@ -1,6 +1,6 @@
 import type { SessionMode } from "../api";
 
-export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped" | "cold";
+export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped" | "hibernated" | "cold";
 export type TurnState = "queued" | "running" | "completed" | "interrupted" | "failed";
 export type ActivityStatus = "running" | "completed" | "failed" | "cancelled" | "pending" | "resolved";
 export type ActivityKind =

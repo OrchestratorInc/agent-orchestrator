@@ -338,7 +338,7 @@ export interface ChatWorkspaceProps {
 	) => Promise<unknown> | void;
 	onInterrupt?: () => void;
 	commandError?: string;
-	onResumeAgent?: () => void;
+	onResumeAgent?: () => void | Promise<unknown>;
 	resumingAgent?: boolean;
 	resumeError?: string;
 	onOpenShell?: () => void;
@@ -656,6 +656,14 @@ function ChatWorkspaceContent({
 		[assetBaseUrl],
 	);
 	const turn = activeTurn(snapshot);
+	// The primary Chat view wakes a sleeping provider in the background. Its
+	// marker clears before the new controller is ready, so an intermediate
+	// "stopped" snapshot is still part of that wake, not a crashed agent.
+	const wakingFromHibernate = useRef(snapshot.controller.state === "hibernated");
+	if (snapshot.controller.state === "hibernated") wakingFromHibernate.current = true;
+	if (snapshot.controller.state === "ready" || snapshot.controller.state === "busy") wakingFromHibernate.current = false;
+	if (snapshot.controller.state === "stopped" && !resumingAgent) wakingFromHibernate.current = false;
+	const suppressStopped = wakingFromHibernate.current && snapshot.controller.state === "stopped";
 	const startupState =
 		session?.provisionState === "provisioning" || session?.provisionState === "failed"
 			? session.provisionState
@@ -823,6 +831,16 @@ function ChatWorkspaceContent({
 		});
 	}, [auxiliaryTabOrder, availableTabKeys, onAuxiliaryTabOrderChange, uiSessionId]);
 	const queuedMessages = useQueuedMessages(snapshot, openingTurnId);
+	const backgroundWakeQueuedTurnIds = useMemo(
+		() => new Set(
+			(localEchos ?? [])
+				.filter((echo) => echo.backgroundWake && echo.turnId)
+				.map((echo) => echo.turnId as string)
+				.filter((turnId) => snapshot.turns.some((turn) => turn.id === turnId && turn.state === "queued")),
+		),
+		[localEchos, snapshot.turns],
+	);
+	const visibleQueuedMessages = queuedMessages.filter((message) => !backgroundWakeQueuedTurnIds.has(message.turnId));
 	const stablePromoteQueuedTurn = useStableCallback(onPromoteQueuedTurn);
 	const stableCancelQueuedTurn = useStableCallback(onCancelQueuedTurn);
 	const [queueEdit, setQueueEdit] = useState<ChatDraftQueuedEdit | undefined>(
@@ -1166,7 +1184,10 @@ function ChatWorkspaceContent({
 
 	// Keep the rollback affordance mounted while a new turn runs; disable it until
 	// the daemon can safely accept it so the action row never shifts.
-	const rollbackTarget = onRollback && !newWorkDisabled ? (id: string) => setConfirming(id) : undefined;
+	const rollbackTarget =
+		onRollback && !newWorkDisabled && snapshot.controller.state !== "hibernated"
+			? (id: string) => setConfirming(id)
+			: undefined;
 	const discarded = snapshot.turns.filter((t) => t.rolledBack).length;
 
 	const brokenServers = useMemo(() => brokenMcpServers(snapshot), [snapshot]);
@@ -1270,9 +1291,9 @@ function ChatWorkspaceContent({
 		Boolean(onSteer) && can(snapshot, "steer") && turn?.state === "running";
 	const composerQueuedDock = useMemo(
 		() =>
-			queuedMessages.length > 0 ? (
+			visibleQueuedMessages.length > 0 ? (
 				<QueuedMessageDock
-					messages={queuedMessages}
+					messages={visibleQueuedMessages}
 					editingTurnId={queueEdit?.turnId}
 					disabled={Boolean(queueEdit?.clientMessageId)}
 					canSteer={canSteerQueuedMessage}
@@ -1299,7 +1320,7 @@ function ChatWorkspaceContent({
 			promoteQueuedTurnPendingTurnId,
 			queueEdit?.clientMessageId,
 			queueEdit?.turnId,
-			queuedMessages,
+			visibleQueuedMessages,
 		],
 	);
 	const composerDraftSeed = useMemo(
@@ -1489,6 +1510,7 @@ function ChatWorkspaceContent({
 						controller={snapshot.controller}
 						provisionState={session?.provisionState}
 						transitioning={controllerTransitioning || agentResuming}
+						automaticWakePending={suppressStopped}
 						onResume={newWorkDisabled ? undefined : onResumeAgent}
 						resuming={resumingAgent}
 						resumeError={resumeError}
@@ -1584,7 +1606,7 @@ function ChatWorkspaceContent({
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
-										disabled={(snapshot.controller.state === "stopped" || controllerTransitioning || agentResuming || newWorkDisabled) && !queueEdit?.clientMessageId}
+										disabled={((snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
 										// Switch/reconnect status is the topbar spinner beside ⋮ — not composer text.
 										disabledPlaceholder={
 											controllerTransitioning || newWorkDisabled
@@ -1613,7 +1635,7 @@ function ChatWorkspaceContent({
 										sendPending={sendPending || agentResuming}
 										steerPending={steerPending}
 										steerRefusal={steerRefusal}
-										onCompact={newWorkDisabled ? undefined : onCompact}
+										onCompact={newWorkDisabled || snapshot.controller.state === "hibernated" ? undefined : onCompact}
 										compacting={compacting}
 										compactUnavailable={compactUnavailable}
 										compactBlocked={Boolean(turn)}
@@ -1974,13 +1996,14 @@ function ChatHeader({
 }
 
 /**
- * Controller health. A stopped or recovering controller is announced, because a
- * silent surface is indistinguishable from an agent that is simply thinking.
+ * Controller health and hibernation. A silent surface is indistinguishable from
+ * an agent that is simply thinking.
  */
 function ControllerBanner({
 	controller,
 	provisionState,
 	transitioning,
+	automaticWakePending,
 	onResume,
 	resuming,
 	resumeError,
@@ -1991,21 +2014,26 @@ function ControllerBanner({
 	controller: { state: ControllerState; error?: string };
 	provisionState?: WorkspaceSession["provisionState"];
 	transitioning?: boolean;
-	onResume?: () => void;
+	automaticWakePending?: boolean;
+	onResume?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
 }) {
-	// A session that is starting, or failed to start, has no controller yet. The
-	// setup checklist in the timeline explains that state and offers Retry.
+	// Startup failures use the checklist's Retry action.
 	if (provisionState === "provisioning" || provisionState === "failed") return null;
+	const waking = Boolean(resuming && controller.state === "stopped");
+	const resumeClick = () => {
+		void Promise.resolve().then(() => onResume?.()).catch(() => {});
+	};
+
 	// The transition coordinator intentionally stops one controller before it
 	// starts the other. The top-bar handoff state already explains that interval;
 	// presenting its intermediate snapshot as a crash produces a red false alarm.
-	if (transitioning && controller.state === "stopped") return null;
-	if (controller.state === "ready" || controller.state === "busy") return null;
+	if (controller.state === "ready" || controller.state === "busy" || controller.state === "hibernated") return null;
+	if (controller.state === "stopped" && (transitioning || automaticWakePending)) return null;
 
 	const copy: Partial<Record<ControllerState, { title: string; tone: string }>> = {
 		connecting: {
@@ -2017,20 +2045,21 @@ function ControllerBanner({
 			tone: "text-warning",
 		},
 		stopped: {
-			title: "The agent controller stopped",
-			tone: "text-destructive",
+			title: waking ? "Waking agent…" : "The agent controller stopped",
+			tone: waking ? "text-muted-foreground" : "text-destructive",
 		},
 	};
 	const shown = copy[controller.state];
 	if (!shown) return null;
+	const loading = controller.state === "connecting" || waking;
 
 	return (
 		<div
-			role={controller.state === "stopped" ? "alert" : "status"}
+			role={controller.state === "stopped" && !waking ? "alert" : "status"}
 			aria-atomic="true"
 			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
 		>
-			{controller.state === "connecting" ? (
+			{loading ? (
 				<Loader2
 					aria-hidden="true"
 					className="mt-0.5 size-3.5 shrink-0 animate-spin text-muted-foreground"
@@ -2040,10 +2069,12 @@ function ControllerBanner({
 			)}
 			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<strong className={cn("text-xs font-medium", shown.tone)}>{shown.title}</strong>
-				{controller.error ? (
+				{controller.state === "stopped" && waking ? (
+					<span className="text-xs leading-snug text-muted-foreground">Restoring the agent. You can keep typing.</span>
+				) : controller.error ? (
 					<span className="text-xs leading-snug text-muted-foreground">{controller.error}</span>
 				) : null}
-				{controller.state === "stopped" ? (
+				{controller.state === "stopped" && !waking ? (
 					<>
 						<span className="text-xs leading-snug text-muted-foreground">
 							History is kept. Resume the agent or open a shell in the same worktree.
@@ -2059,7 +2090,7 @@ function ControllerBanner({
 									type="button"
 									size="sm"
 									variant="outline"
-									onClick={onResume}
+									onClick={resumeClick}
 									disabled={resuming}
 								>
 									{resuming ? "Resuming…" : "Resume agent"}
@@ -2760,6 +2791,12 @@ function Timeline({
 		if (added.size > 0) setNewHumanMessageIds(added);
 	}, [items, snapshot.latestSequence]);
 	const localItems = useMemo(() => {
+		const backgroundQueuedTurnIds = new Set(
+			localEchos
+				.filter((echo) => echo.backgroundWake && echo.turnId)
+				.map((echo) => echo.turnId as string)
+				.filter((turnId) => snapshot.turns.some((turn) => turn.id === turnId && turn.state === "queued")),
+		);
 		return localEchos
 			.filter(
 				(echo) =>
@@ -2768,7 +2805,7 @@ function Timeline({
 							item.kind === "message" &&
 							item.role === "user" &&
 							item.origin === "human" &&
-							((echo.turnId && item.turnId === echo.turnId) ||
+							((echo.turnId && item.turnId === echo.turnId && !backgroundQueuedTurnIds.has(echo.turnId)) ||
 								(!echo.turnId && item.text === echo.text && item.createdAt >= echo.createdAt)),
 					),
 			)
@@ -2782,11 +2819,29 @@ function Timeline({
 				origin: "human",
 				text: echo.text,
 				streaming: false,
-				delivery: echo.turnId ? "accepted" : "sending",
+				delivery: echo.backgroundWake || echo.turnId ? "accepted" : "sending",
 				createdAt: echo.createdAt,
 			}));
-	}, [items, localEchos, snapshot.latestSequence]);
-	const timelineItems = useStableList([...items, ...localItems], itemKey, sameContent);
+	}, [items, localEchos, snapshot.latestSequence, snapshot.turns]);
+	const backgroundQueuedTurnIds = useMemo(
+		() => new Set(
+			localEchos
+				.filter((echo) => echo.backgroundWake && echo.turnId)
+				.map((echo) => echo.turnId as string)
+				.filter((turnId) => snapshot.turns.some((turn) => turn.id === turnId && turn.state === "queued")),
+		),
+		[localEchos, snapshot.turns],
+	);
+	const timelineItems = useStableList(
+		[
+			...items.filter(
+				(item) => !(item.kind === "message" && item.role === "user" && item.turnId && backgroundQueuedTurnIds.has(item.turnId)),
+			),
+			...localItems,
+		],
+		itemKey,
+		sameContent,
+	);
 	const previousEchoIds = useRef<ReadonlySet<string>>(new Set(localEchos.map((echo) => echo.clientMessageId)));
 	useLayoutEffect(() => {
 		const ids = new Set(localEchos.map((echo) => echo.clientMessageId));

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -22,6 +23,10 @@ func TestIdleChatStartupDoesNotStartProviderProcesses(t *testing.T) {
 	binDir := t.TempDir()
 	calls := filepath.Join(t.TempDir(), "app-server-starts")
 	workspaceRoot := t.TempDir()
+	workspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Account/catalog probes can also invoke app-server at startup. Count only
 	// children launched in these sessions' workspaces, as the Chat driver does.
 	shim := "#!/bin/sh\nif [ \"$1\" = app-server ]; then\n  case \"$PWD\" in\n    \"$AO_COLD_WORKSPACE_ROOT\"/*) printf 'started\\n' >> \"$AO_COLD_PROVIDER_CALLS\" ;;\n  esac\n  exit 1\nfi\nprintf 'codex-cli 0.100.0\\n'\n"
@@ -33,6 +38,24 @@ func TestIdleChatStartupDoesNotStartProviderProcesses(t *testing.T) {
 	t.Setenv("AO_CODEX_BIN", bin)
 	t.Setenv("AO_COLD_PROVIDER_CALLS", calls)
 	t.Setenv("AO_COLD_WORKSPACE_ROOT", workspaceRoot)
+	// Prove the counter observes a provider launched in a session workspace.
+	// This also catches macOS's /var -> /private/var path alias before asserting
+	// that startup launches none.
+	probe := exec.Command(bin, "app-server") //nolint:gosec // Test-owned shim.
+	// The shim matches children of the workspace root, including this probe.
+	probe.Dir = filepath.Join(workspaceRoot, "probe")
+	if err := os.Mkdir(probe.Dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := probe.Run(); err == nil {
+		t.Fatal("provider shim should reject startup")
+	}
+	if data, err := os.ReadFile(calls); err != nil || string(data) != "started\n" {
+		t.Fatalf("provider process counter missed its positive control: %q err=%v", data, err)
+	}
+	if err := os.Remove(calls); err != nil {
+		t.Fatal(err)
+	}
 	st, err := sqlite.Open(dataDir)
 	if err != nil {
 		t.Fatal(err)

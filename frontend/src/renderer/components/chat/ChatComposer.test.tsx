@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { Activity, Profiler } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatComposer } from "./ChatComposer";
+import { sendReferenceToChat } from "../../lib/chat-context-bus";
 import { attachmentURL } from "./messageAttachments";
 import { getApiBaseUrl } from "../../lib/api-client";
 import { TooltipProvider } from "../ui/tooltip";
@@ -344,6 +345,32 @@ describe("send keys", () => {
 		pending.resolve();
 	});
 
+	it("takes an Ask-in-chat code reference as a chip and sends its code with the question", async () => {
+		const sessionId = "composer-ask-in-chat-reference";
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
+		const field = screen.getByLabelText("Message the agent");
+
+		act(() => {
+			expect(sendReferenceToChat(sessionId, {
+				path: "src/retry.ts",
+				display: "retry.ts#L3-L4",
+				wire: "\n[src/retry.ts#L3-L4]\n```diff\n+await retry();\n```\n",
+			})).toBe(true);
+		});
+		await waitFor(() => expect(within(field).getByText("retry.ts#L3-L4")).toBeInTheDocument());
+		await typeInComposer(field, "why twice?");
+		fireEvent.keyDown(field, { key: "Enter" });
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		const sent = onSend.mock.calls[0][0] as string;
+		expect(sent).toContain("[src/retry.ts#L3-L4]");
+		expect(sent).toContain("+await retry();");
+		expect(sent).toContain("why twice?");
+		// Another session's composer never receives it.
+		expect(sendReferenceToChat("some-other-session", { path: "x", display: "x", wire: "x" })).toBe(false);
+	});
+
 	it.each([false, true])("keeps the composer editable after a successful live send (queued: %s)", async (willQueue) => {
 		const sessionId = `composer-live-send-acceptance-${willQueue}`;
 		const pending = deferred<void>();
@@ -368,10 +395,14 @@ describe("send keys", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
-	it.each(["CHAT_CONTROLLER_NOT_READY", "validation_error"])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code) => {
+	it.each([
+		["CHAT_CONTROLLER_NOT_READY", "Request was rejected"],
+		["validation_error", "Request was rejected"],
+		["CHAT_RESUME_FAILED", "The provider could not reopen the saved conversation"],
+	])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code, message) => {
 		const sessionId = `composer-first-send-refused-${code}`;
 		const onSend = vi.fn()
-			.mockRejectedValueOnce({ code, message: "Request was rejected" })
+			.mockRejectedValueOnce({ code, message })
 			.mockResolvedValue(undefined);
 		const first = render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
 		const field = screen.getByLabelText("Message the agent");
@@ -379,7 +410,7 @@ describe("send keys", () => {
 		fireEvent.keyDown(field, { key: "Enter" });
 		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
-		expect(screen.getByRole("alert")).toHaveTextContent("Request was rejected");
+		expect(screen.getByRole("alert")).toHaveTextContent(message);
 		expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined();
 		first.unmount();
 		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
@@ -1444,6 +1475,15 @@ describe("attachments", () => {
 		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
 	});
 
+	it("shows image-only pastes once in the attachment strip", async () => {
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png", ".ao/attachments/attachment-b.png"]);
+		const { field } = renderComposer({ onStageAttachments: stage });
+		fireEvent.paste(field, { clipboardData: clipboardData([png("a.png"), png("b.png")]) });
+		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
+		expect(field.querySelector('[data-composer-token="image"]')).toBeNull();
+		expect(field.textContent).toBe("");
+	});
+
 	it("places a pasted image inline at the caret and drops it with its attachment", async () => {
 		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png"]);
 		const { onSend, field } = renderComposer({ onStageAttachments: stage });
@@ -1534,8 +1574,8 @@ describe("attachments", () => {
 		]);
 		await waitFor(() =>
 			expect(onSend).toHaveBeenCalledWith(
-				// The inline chip pasted at the caret names the same path in the prose.
-				".ao/attachments/attachment-ab12cd34ef.png what is wrong here\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-ab12cd34ef.png",
+				// Pasting into an empty draft names the image only in the attachment block.
+				"what is wrong here\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-ab12cd34ef.png",
 			),
 		);
 		// Consumed, so the next message does not silently resend them.
@@ -1680,7 +1720,7 @@ describe("attachments", () => {
 		await userEvent.keyboard("{Enter}");
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("attachments were kept");
-		expect(field.textContent).toBe("Image 1 inspect this");
+		expect(field.textContent).toBe("inspect this");
 		expect(screen.getAllByRole("listitem")).toHaveLength(1);
 
 		await userEvent.keyboard("{Enter}");

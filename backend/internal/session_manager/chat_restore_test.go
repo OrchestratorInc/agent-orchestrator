@@ -163,6 +163,32 @@ func TestStartupIdleChatSessionsStayCold(t *testing.T) {
 	}
 }
 
+func TestStartupColdStatePreservesHibernationIntent(t *testing.T) {
+	m, svc, st, driver, rec := lazyChatFixture(t)
+	ctx := context.Background()
+	at := time.Now()
+	changed, err := st.SetSessionHibernated(ctx, rec.ID, rec.Revision, &at)
+	if err != nil || !changed {
+		t.Fatalf("set hibernation intent: changed=%v err=%v", changed, err)
+	}
+	if err := m.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, read := range []func() (chatsvc.Snapshot, error){
+		func() (chatsvc.Snapshot, error) { return svc.Snapshot(ctx, rec.ID) },
+		func() (chatsvc.Snapshot, error) { return svc.SnapshotPage(ctx, rec.ID, 0, 50) },
+	} {
+		snapshot, err := read()
+		if err != nil || snapshot.Controller != ports.ChatControllerHibernated {
+			t.Fatalf("hibernated snapshot=%s err=%v", snapshot.Controller, err)
+		}
+	}
+	current, found, err := st.GetSession(ctx, rec.ID)
+	if err != nil || !found || current.HibernatedAt == nil || driver.resumes.Load() != 0 {
+		t.Fatalf("startup consumed hibernation intent: session=%+v resumes=%d err=%v", current, driver.resumes.Load(), err)
+	}
+}
+
 func TestStartupChatRestoresContinuityOnly(t *testing.T) {
 	for _, state := range []domain.ActivityState{domain.ActivityActive, domain.ActivityBlocked, domain.ActivityWaitingInput, domain.ActivityExited} {
 		t.Run(string(state), func(t *testing.T) {
@@ -182,6 +208,21 @@ func TestStartupChatRestoresContinuityOnly(t *testing.T) {
 				t.Fatal("startup continuity launched a replacement instead of reconnecting")
 			}
 		})
+	}
+}
+
+func TestStartupChatPreservesAwakeOrchestrator(t *testing.T) {
+	m, svc, st, driver, rec := lazyChatFixture(t)
+	rec.Kind = domain.KindOrchestrator
+	ctx := context.Background()
+	if err := st.UpdateSession(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !svc.HasLiveChatController(rec.ID) || driver.resumes.Load() != 1 {
+		t.Fatalf("orchestrator lost continuity: resumes=%d live=%v", driver.resumes.Load(), svc.HasLiveChatController(rec.ID))
 	}
 }
 
@@ -444,6 +485,19 @@ func TestLazyChatResumeFailurePreservesIdentityAndCanRetry(t *testing.T) {
 	}
 	if driver.resumes.Load() != 2 {
 		t.Fatalf("retry resumes = %d", driver.resumes.Load())
+	}
+}
+
+func TestLazyChatSuccessfulRestoreWithoutControllerIsRetryable(t *testing.T) {
+	_, svc, _, _, rec := lazyChatFixture(t)
+	var attempts atomic.Int64
+	svc.SetControllerRestorer(func(context.Context, domain.SessionID) error {
+		attempts.Add(1)
+		return nil // The provider stopped before delivery could be admitted.
+	})
+	_, err := svc.Send(context.Background(), rec.ID, ports.ChatUserMessage{Text: "continue", ClientMessageID: "stopped-restore"})
+	if !errors.Is(err, ports.ErrChatControllerRestore) || attempts.Load() != 1 {
+		t.Fatalf("stopped restoration must be retryable once: attempts=%d err=%v", attempts.Load(), err)
 	}
 }
 

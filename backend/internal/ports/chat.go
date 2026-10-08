@@ -931,6 +931,7 @@ const (
 	ChatControllerReady      ChatControllerState = "ready"
 	ChatControllerBusy       ChatControllerState = "busy"
 	ChatControllerRecovering ChatControllerState = "recovering"
+	ChatControllerHibernated ChatControllerState = "hibernated"
 	ChatControllerStopped    ChatControllerState = "stopped"
 	// Cold sessions retain their durable conversation and restore on first input.
 	ChatControllerCold ChatControllerState = "cold"
@@ -1122,6 +1123,15 @@ type ChatProviderPreserver interface {
 // destruction must do more than detach the controller.
 type ChatProviderTerminator interface {
 	Terminate() error
+}
+
+// ChatProviderHibernator stops the controller and provider process while
+// retaining the native conversation for a later Resume.
+type ChatProviderHibernator interface {
+	// CanHibernate checks provider-owned work that can outlive a settled turn.
+	// An error must leave the provider running.
+	CanHibernate(ctx context.Context) (bool, error)
+	Hibernate() error
 }
 
 // ChatLiveReconnector identifies attachment to the same initialized provider

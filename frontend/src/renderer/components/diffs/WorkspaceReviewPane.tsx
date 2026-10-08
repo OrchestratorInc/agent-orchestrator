@@ -29,10 +29,13 @@ import { SettingsMenuTrigger } from "../settings/SettingsMenuTrigger";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { formatTimeTerse } from "../../lib/format-time";
+import { useAskInChat } from "../../lib/chat-context-bus";
 import { sessionUiKey } from "../../lib/hosts";
 import { AO_PIERRE_FILES_REVIEW_CSS, AO_PIERRE_SURFACE_CSS } from "./pierreTheme";
 import { ImageDiffView, isWorkspaceImagePath } from "../ImageDiffView";
 import { REVIEW_CONTEXT_LINES, diffContentVersion, endsAtLastHunk, hydratedCopy, patchIdentity, stableFileDiff } from "./trailingContext";
+import { SelectionAskButton } from "./SelectionAskButton";
+import { codeReference, useCodeSelection } from "./useCodeSelection";
 import { usePersistentGutterUtility } from "./usePersistentGutterUtility";
 
 const parsedPatchCache = new Map<string, { patch: string; files: FileDiffMetadata[] }>();
@@ -320,6 +323,15 @@ export function WorkspaceReviewPane({
 	}, [batches, patchQueries]);
 
 	const summaryById = useMemo(() => new Map(files.map((file) => [`${reviewSelectionKey}:${file.path}`, file])), [files, reviewSelectionKey]);
+	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
+	// session has a Chat composer; each file's header carries its item id.
+	const askInChat = useAskInChat(sessionId, hostId);
+	const codeSelection = useCodeSelection(reviewRef, (selection) => {
+		// Pierre portals the custom header into this host's light DOM; the selected
+		// code is in its shadow root. Search this host to keep the file lookup local.
+		const file = summaryById.get(selection.host.querySelector("[data-review-item-id]")?.getAttribute("data-review-item-id") ?? "");
+		if (file) askInChat?.(codeReference(file.path, selection, true));
+	}, askInChat !== undefined);
 
 	const loadDiffFiles = useCallback(
 		async (metadata: FileDiffMetadata) => {
@@ -638,7 +650,8 @@ export function WorkspaceReviewPane({
 							const fileAnnotationActive = annotation.target?.surface !== "focused" && annotation.target?.path === file.path && annotation.target.side === "file";
 							return (
 								<Popover onOpenChange={(open) => { if (!open) annotation.cancel(); }} open={fileAnnotationActive}>
-									<div className="relative bg-background">
+									{/* Lets a code selection in this file's surface find its item. */}
+									<div className="relative bg-background" data-review-item-id={item.id}>
 										{/* The whole row toggles the file (the chevron just rotates);
 										    name + stats on the left, every action grouped on the right
 										    with "viewed" pinned to the far edge. */}
@@ -766,6 +779,7 @@ export function WorkspaceReviewPane({
 						style={{ height: "100%" }}
 					/>
 				) : null}
+				<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
 				{files.filter((file) => file.binary || !metadataByPath.has(file.path)).map((file) => {
 					const deferred = isDeferredByDefault(file) && !loadedDeferredPaths.has(file.path);
 					const serverDeferredReason = serverDeferredByPath.get(file.path);

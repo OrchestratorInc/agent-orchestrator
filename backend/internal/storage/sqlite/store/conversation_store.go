@@ -923,6 +923,19 @@ func (s *Store) HasConversationTurns(ctx context.Context, conversationID string)
 	return hasTurns, nil
 }
 
+// LatestVisibleUserTurnSettled checks the current branch's latest user prompt
+// without loading the full conversation history.
+func (s *Store) LatestVisibleUserTurnSettled(ctx context.Context, conversationID string, sessionID domain.SessionID) (bool, error) {
+	settled, err := s.qr.LatestVisibleUserTurnSettled(ctx, gen.LatestVisibleUserTurnSettledParams{
+		ConversationID: conversationID,
+		SessionID:      sessionID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("check latest user turn for %s: %w", conversationID, err)
+	}
+	return settled, nil
+}
+
 // AppendUserMessage records an inbound message and the turn it opens.
 //
 // Idempotent on clientMessageID: a retried send returns the message and turn that
@@ -987,7 +1000,7 @@ func (s *Store) appendUserMessage(
 		if readErr != nil {
 			return false, fmt.Errorf("check queued session %s: %w", session, readErr)
 		}
-		if record.IsTerminated || !record.ProvisionState.IsProvisioning() {
+		if record.IsTerminated || (!record.ProvisionState.IsProvisioning() && !record.HibernatedAt.Valid) {
 			return false, domain.ErrSessionNotProvisioning
 		}
 	}

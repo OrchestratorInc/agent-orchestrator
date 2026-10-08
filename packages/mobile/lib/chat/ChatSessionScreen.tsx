@@ -334,7 +334,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			snapshot: current,
 			models: catalog.models,
 			options: catalog.configOptions,
-			disabled: current.controller.state === "stopped" || current.controller.state === "cold" || conversation.pendingActions.includes("settings") || conversation.pendingActions.includes("config"),
+			disabled: current.controller.state === "stopped" || current.controller.state === "cold" || current.controller.state === "hibernated" || conversation.pendingActions.includes("settings") || conversation.pendingActions.includes("config"),
 			error: catalogError,
 			onSettings: conversation.chooseSettings,
 			onOption: conversation.setConfigOption,

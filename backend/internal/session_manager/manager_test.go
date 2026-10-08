@@ -57,10 +57,12 @@ type fakeStore struct {
 	getProjectErr                      error
 	getSessionErr                      error
 	updateSessionErr                   error
-	deletePrepErr                      error
+	hibernationCASConflicts            int
 	updateBrowserCapabilityVerifierErr error
-	createClientRequestErr             error
-	promoteTaskErr                     error
+	deletePrepErr                      error
+
+	createClientRequestErr error
+	promoteTaskErr         error
 	// agentSwitchStore is wired only by agent-switch tests so fakeLCM can model
 	// Lifecycle Manager's atomic ownership-boundary commands.
 	agentSwitchStore any
@@ -148,6 +150,22 @@ func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) e
 	}
 	f.sessions[rec.ID] = rec
 	return nil
+}
+func (f *fakeStore) SetSessionHibernated(_ context.Context, id domain.SessionID, revision int64, at *time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok || rec.Revision != revision || rec.IsTerminated {
+		return false, nil
+	}
+	if f.hibernationCASConflicts > 0 {
+		f.hibernationCASConflicts--
+		rec.Revision++
+		f.sessions[id] = rec
+		return false, nil
+	}
+	rec.HibernatedAt = at
+	rec.Revision++
+	f.sessions[id] = rec
+	return true, nil
 }
 func (f *fakeStore) UpdateSessionArtifactOutput(_ context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error) {
 	if f.updateSessionErr != nil {
@@ -314,6 +332,19 @@ func (f *fakeStore) ListAllSessions(context.Context) ([]domain.SessionRecord, er
 		out = append(out, r)
 	}
 	return out, nil
+}
+func (f *fakeStore) ListChatHibernationCandidates(ctx context.Context) ([]domain.SessionID, error) {
+	records, err := f.ListAllSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var ids []domain.SessionID
+	for _, rec := range records {
+		if rec.EligibleForChatHibernation() {
+			ids = append(ids, rec.ID)
+		}
+	}
+	return ids, nil
 }
 func (f *fakeStore) DeleteSession(_ context.Context, id domain.SessionID) (bool, error) {
 	if f.deleteErr != nil {

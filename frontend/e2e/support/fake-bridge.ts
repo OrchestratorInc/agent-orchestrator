@@ -155,6 +155,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					signalAgentSwitchVisibility: () => false,
 				},
 				browser: {
+					reconnectRuntime: async () => undefined,
+					getRuntimeState: async () => ({ connected: false }),
 					nativeCompositionEnabled: true,
 					ensure: async (sessionId: string) => navState(`preview:${sessionId}`),
 					setBounds: () => undefined,
@@ -243,6 +245,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onFindState: unsubscribe,
 					onTabsState: unsubscribe,
 					onAgentActivity: unsubscribe,
+					onRuntimeState: unsubscribe,
 					onDevToolsState: unsubscribe,
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
@@ -760,6 +763,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					signalAgentSwitchVisibility: () => false,
 				},
 				browser: {
+					reconnectRuntime: async () => undefined,
+					getRuntimeState: async () => ({ connected: false }),
 					nativeCompositionEnabled: true,
 					ensure: async (sessionId: string) => navState(`preview:${sessionId}`),
 					setBounds: () => undefined,
@@ -849,6 +854,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onFindState: unsubscribe,
 					onTabsState: unsubscribe,
 					onAgentActivity: unsubscribe,
+					onRuntimeState: unsubscribe,
 					onDevToolsState: unsubscribe,
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
