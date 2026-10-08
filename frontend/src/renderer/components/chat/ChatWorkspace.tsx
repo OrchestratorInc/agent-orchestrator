@@ -1505,18 +1505,6 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					<ControllerBanner
-						controller={snapshot.controller}
-						provisionState={session?.provisionState}
-						transitioning={controllerTransitioning || agentResuming}
-						automaticWakePending={suppressStopped}
-						onResume={newWorkDisabled ? undefined : onResumeAgent}
-						resuming={resumingAgent}
-						resumeError={resumeError}
-						onOpenShell={onOpenShell}
-						openingShell={openingShell}
-						shellError={shellError}
-					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center")}
@@ -1567,6 +1555,19 @@ function ChatWorkspaceContent({
 										{t("chat.welcome.heading")}
 									</h1>
 								) : null}
+								<ControllerBanner
+									controller={snapshot.controller}
+									provisionState={session?.provisionState}
+									needsResume={session?.needsResume}
+									automaticWakePending={suppressStopped}
+									transitioning={controllerTransitioning || agentResuming}
+									onResume={newWorkDisabled ? undefined : onResumeAgent}
+									resuming={resumingAgent}
+									resumeError={resumeError}
+									onOpenShell={onOpenShell}
+									openingShell={openingShell}
+									shellError={shellError}
+								/>
 								<div className="relative">
 									<McpServerBanner
 										key={draftScopeKey}
@@ -2001,6 +2002,7 @@ function ChatHeader({
 function ControllerBanner({
 	controller,
 	provisionState,
+	needsResume,
 	transitioning,
 	automaticWakePending,
 	onResume,
@@ -2012,6 +2014,7 @@ function ControllerBanner({
 }: {
 	controller: { state: ControllerState; error?: string };
 	provisionState?: WorkspaceSession["provisionState"];
+	needsResume?: boolean;
 	transitioning?: boolean;
 	automaticWakePending?: boolean;
 	onResume?: () => void | Promise<unknown>;
@@ -2034,6 +2037,7 @@ function ControllerBanner({
 	if (controller.state === "ready" || controller.state === "busy" || controller.state === "hibernated") return null;
 	if (controller.state === "stopped" && (transitioning || automaticWakePending)) return null;
 
+	const openElsewhere = resumeError?.toLowerCase().includes("this is open elsewhere") ?? false;
 	const copy: Partial<Record<ControllerState, { title: string; tone: string }>> = {
 		connecting: {
 			title: "Connecting to the agent…",
@@ -2044,8 +2048,8 @@ function ControllerBanner({
 			tone: "text-warning",
 		},
 		stopped: {
-			title: waking ? "Waking agent…" : "The agent controller stopped",
-			tone: waking ? "text-muted-foreground" : "text-destructive",
+			title: waking ? "Waking agent…" : openElsewhere ? "This is open elsewhere" : needsResume ? "Could not connect to the agent" : "The agent controller stopped",
+			tone: waking || needsResume ? "text-muted-foreground" : "text-destructive",
 		},
 	};
 	const shown = copy[controller.state];
@@ -2056,7 +2060,7 @@ function ControllerBanner({
 		<div
 			role={controller.state === "stopped" && !waking ? "alert" : "status"}
 			aria-atomic="true"
-			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
+			className="flex shrink-0 items-start gap-2.5 rounded-lg border border-border bg-surface px-4 py-2.5"
 		>
 			{loading ? (
 				<Loader2
@@ -2076,40 +2080,42 @@ function ControllerBanner({
 				{controller.state === "stopped" && !waking ? (
 					<>
 						<span className="text-xs leading-snug text-muted-foreground">
-							History is kept. Resume the agent or open a shell in the same worktree.
+							{openElsewhere ? "Close it there to continue here." : needsResume ? "Retry to continue this conversation." : "History is kept. Resume the agent or open a shell in the same worktree."}
 						</span>
-						{resumeError || shellError ? (
+						{!openElsewhere && (resumeError || shellError) ? (
 							<span className="text-xs leading-snug text-destructive">
 								{resumeError ?? shellError}
 							</span>
 						) : null}
-						<div className="mt-1.5 flex flex-wrap gap-2">
-							{onResume ? (
-								<Button
-									type="button"
-									size="sm"
-									variant="outline"
-									onClick={resumeClick}
-									disabled={resuming}
-								>
-									{resuming ? "Resuming…" : "Resume agent"}
-								</Button>
-							) : null}
-							{onOpenShell ? (
-								<Button
-									type="button"
-									size="sm"
-									variant="ghost"
-									onClick={onOpenShell}
-									disabled={openingShell}
-								>
-									{openingShell ? "Opening shell…" : "Open shell"}
-								</Button>
-							) : null}
-						</div>
 					</>
 				) : null}
 			</div>
+			{controller.state === "stopped" && !waking ? (
+				<div className="flex shrink-0 flex-wrap justify-end gap-2 self-center">
+					{onResume ? (
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							onClick={resumeClick}
+							disabled={resuming}
+						>
+							{resuming ? "Resuming…" : resumeError || needsResume ? "Retry" : "Resume agent"}
+						</Button>
+					) : null}
+					{onOpenShell && !needsResume ? (
+						<Button
+							type="button"
+							size="sm"
+							variant="ghost"
+							onClick={onOpenShell}
+							disabled={openingShell}
+						>
+							{openingShell ? "Opening shell…" : "Open shell"}
+						</Button>
+					) : null}
+				</div>
+			) : null}
 		</div>
 	);
 }

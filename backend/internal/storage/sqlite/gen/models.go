@@ -688,6 +688,7 @@ type Session struct {
 	SessionOutputType                string
 	LatestInteractionAt              sql.NullTime
 	HibernatedAt                     sql.NullTime
+	ImportSource                     string
 }
 
 type SessionCleanupFact struct {
@@ -699,6 +700,14 @@ type SessionCleanupFact struct {
 	LastAttemptAt        sql.NullTime
 	NextAttemptAt        sql.NullTime
 	FailureCode          string
+}
+
+type SessionImportMessage struct {
+	SessionID string
+	Sequence  int64
+	Role      string
+	Text      string
+	CreatedAt time.Time
 }
 
 type SessionInterfaceTransition struct {

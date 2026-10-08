@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
+
 	jsonschema "github.com/swaggest/jsonschema-go"
 	openapi "github.com/swaggest/openapi-go"
 	"github.com/swaggest/openapi-go/openapi31"
@@ -153,7 +155,9 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // schemaNames is the exhaustive default→clean mapping for every type reflected
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
-var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+//
+//nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+var schemaNames = map[string]string{
 	"ControllersSettingsResponse":                          "SettingsResponse",
 	"ControllersDesktopWorkspaceLocationResponse":          "DesktopWorkspaceLocationResponse",
 	"ControllersUpdateSessionInterfaceRequest":             "UpdateSessionInterfaceRequest",
@@ -462,8 +466,13 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSubmitReviewItem":      "SubmitReviewItem",
 	"ControllersSubmitReviewInput":     "SubmitReviewInput",
 	// domain review entities
-	"DomainReviewRun":     "ReviewRun",
-	"ReviewPRReviewState": "PRReviewState",
+	"DomainReviewRun":                  "ReviewRun",
+	"ReviewPRReviewState":              "PRReviewState",
+	"SessionimportCandidate":           "SessionImportCandidate",
+	"SessionimportPreview":             "SessionImportPreview",
+	"SessionimportResult":              "SessionImportResult",
+	"ControllersSessionImportRequest":  "SessionImportRequest",
+	"ControllersSessionImportResponse": "SessionImportResponse",
 	// httpd/controllers: import wire envelopes
 	"ControllersImportStatusResponse": "ImportStatusResponse",
 	"ControllersImportRunResponse":    "ImportRunResponse",
@@ -1769,6 +1778,9 @@ func mobileDeviceOperations() []operation {
 // the routes ImportController.Register mounts (enforced by the parity test).
 func importOperations() []operation {
 	return []operation{
+		{method: http.MethodGet, path: "/api/v1/session-import", id: "scanSessionImport", tag: "import", summary: "Preview readable local Claude Code and Codex histories for existing projects or Standalone", resps: []respUnit{{http.StatusOK, sessionimport.Preview{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}},
+		{method: http.MethodPost, path: "/api/v1/session-import", id: "importSelectedSessions", tag: "import", summary: "Import selected histories as idle AO sessions without starting providers", reqBody: controllers.SessionImportRequest{}, resps: []respUnit{{http.StatusOK, controllers.SessionImportResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}},
+
 		{
 			method: http.MethodGet, path: "/api/v1/import", id: "getImportStatus", tag: "import",
 			summary: "Check whether a legacy AO install is available to import",

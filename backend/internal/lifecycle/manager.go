@@ -1955,6 +1955,10 @@ func sameActivity(a, b domain.Activity) bool {
 }
 
 func mergeMetadata(base, in domain.SessionMetadata) domain.SessionMetadata {
+	if in.ImportSource != nil {
+		source := *in.ImportSource
+		base.ImportSource = &source
+	}
 	set := func(dst *string, v string) {
 		if v != "" {
 			*dst = v

@@ -138,6 +138,7 @@ function toWorkspaceSession(
 		})),
 		isTerminated: session.isTerminated,
 		chatProviderPreserved: session.chatProviderPreserved,
+ needsResume: session.needsResume,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
 		autoInjectCI: session.autoInjectCI ?? true,

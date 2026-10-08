@@ -6,6 +6,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/devimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
@@ -3187,4 +3189,14 @@ type MuteDeviceRequest struct {
 // routes.
 type InstallIDParam struct {
 	InstallID string `path:"installId" description:"The device's stable install id."`
+}
+
+// SessionImportRequest carries opaque handles returned by the local preview.
+type SessionImportRequest struct {
+	IDs []string `json:"ids" minItems:"1" maxItems:"500"`
+}
+
+// SessionImportResponse retains an outcome for every selected history.
+type SessionImportResponse struct {
+	Results []sessionimport.Result `json:"results"`
 }
