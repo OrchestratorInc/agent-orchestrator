@@ -132,12 +132,58 @@ func TestStartPiInjectsLoginAutomatically(t *testing.T) {
 			{Text: "0.0%/"},
 			{Text: "Pi can explain its own features"},
 		},
+		SendInitialInputOnReadyTimeout: true,
 	}
 	if !reflect.DeepEqual(opener.input, wantInput) {
 		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, wantInput)
 	}
 	if got.TerminalInput != "" {
 		t.Fatalf("Start(pi) terminal input = %q, want none so the login is not held behind a button", got.TerminalInput)
+	}
+}
+
+// Screens captured from Pi 0.85.1 in an AO auth terminal (120 columns), so the
+// reviewed markers are checked against what Pi actually renders.
+const (
+	piDefaultStartupScreen = ` pi v0.85.1
+ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+
+────────────────────────────────────────────────────────────────────────────────
+~\.ao\data\auth-workspace\shellterm-a15141f25c4872b3
+0.0%/262k (auto)                                         (moonshotai) kimi-k2.6 • medium`
+	piQuietStartupWithModelScreen = `────────────────────────────────────────────────────────────────────────────────
+~\.ao\data\auth-workspace\shellterm-a86fe63f7a8f957d
+0.0%/1.0M (auto)                                       (zai-coding-cn) glm-5.3 • high`
+	piQuietStartupWithoutModelScreen = `────────────────────────────────────────────────────────────────────────────────
+~\.ao\data\auth-workspace\shellterm-0c1d2e3f4a5b6c7d
+0.0%/0 (auto)                                                                   no-model`
+	piStillLoadingScreen = ` pi v0.85.1
+ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more`
+)
+
+func TestPiReadyStatesMatchRenderedPiScreens(t *testing.T) {
+	t.Parallel()
+
+	readyStates := planByAgentID["pi"].initialInputReadyStates
+	for _, tc := range []struct {
+		name   string
+		screen string
+		ready  bool
+	}{
+		{name: "default startup", screen: piDefaultStartupScreen, ready: true},
+		{name: "quietStartup with a selected model", screen: piQuietStartupWithModelScreen, ready: true},
+		{name: "quietStartup without a model", screen: piQuietStartupWithoutModelScreen, ready: true},
+		{name: "before the footer renders", screen: piStillLoadingScreen, ready: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shellterm.MatchInitialInputReadyState(tc.screen, readyStates)
+			if (got != nil) != tc.ready {
+				t.Fatalf("MatchInitialInputReadyState = %#v, want ready %v", got, tc.ready)
+			}
+		})
 	}
 }
 

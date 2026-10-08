@@ -83,7 +83,9 @@ func kimiLoginPlan() Plan {
 // fresh Pi session always renders "0.0%/<window>" there, with or without a
 // selected model and even with quietStartup, which drops the onboarding line
 // kept as a second marker. Pi keeps text typed during its brief startup tail
-// in the editor, and the runtime's pause before Enter covers that window.
+// in the editor, and the runtime's pause before Enter covers that window. If a
+// future Pi renders neither marker, /login is still sent when the ready wait
+// expires: by then Pi is at its prompt, where /login is always valid.
 func piLoginPlan() Plan {
 	p := plan("pi", ActionLogin, "Log in to Pi", []string{"pi"}, "Pi opens its login picker automatically", "https://github.com/earendil-works/pi")
 	p.initialInput = "/login"
@@ -91,6 +93,7 @@ func piLoginPlan() Plan {
 		{Text: "0.0%/"},
 		{Text: "Pi can explain its own features"},
 	}
+	p.sendInitialInputOnReadyTimeout = true
 	return p
 }
 
