@@ -16,11 +16,14 @@ import {
 import { usePierreFileHighlightReady } from "../hooks/usePierreFileHighlight";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
+import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { rememberedFileDisplayMode, useUiStore, type FileDisplayMode } from "../stores/ui-store";
 import { statusLabel, statusTone } from "../lib/workspace-file-status";
 import {
 	canSplitCompare,
+	cancelFileAnnotations,
 	FileAnnotationComposer,
+	FileAnnotationSendBar,
 	PanelMessage,
 	ReviewDiffBody,
 	RetryButton,
@@ -33,13 +36,14 @@ import { AO_PIERRE_FILES_REVIEW_CSS } from "./diffs/pierreTheme";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { MarkdownFileView } from "./markdown/MarkdownFileView";
+import { MarkdownEditor } from "./MarkdownEditor";
 
 // Edit-mode Cancel/Save sit beside icon-sm toolbar buttons; keep them the same
 // height with small text and icons so they do not dwarf the toolbar.
 const EDIT_ACTION_CLASS = "h-6 gap-1 px-2 text-xs";
 
 export type FileViewMode = FileDisplayMode;
-export type FileOpenOptions = { commitSha?: string; editing?: boolean; mode?: FileViewMode; scope?: WorkspaceDiffScope };
+export type FileOpenOptions = { commitSha?: string; editing?: boolean; line?: number; mode?: FileViewMode; scope?: WorkspaceDiffScope };
 
 const DEFAULT_FILES_SOURCE: FilesSource = { kind: "workspace" };
 
@@ -53,10 +57,13 @@ function canRenderMarkdown(path: string, detail: WorkspaceFileDetail): boolean {
 export function FileContentPane({
 	annotation,
 	initialEditing = false,
+	initialLine,
 	initialMode = "diff",
 	initialRequestKey = 0,
 	commitSha,
 	onDirtyChange,
+	onInitialLineConsumed,
+	onContentReady,
 	path,
 	previousPath,
 	rememberDisplayMode = false,
@@ -68,10 +75,13 @@ export function FileContentPane({
 }: {
 	annotation: FileAnnotationModel;
 	initialEditing?: boolean;
+	initialLine?: number;
 	initialMode?: FileViewMode;
 	initialRequestKey?: number;
 	commitSha?: string;
 	onDirtyChange?: (dirty: boolean) => void;
+	onInitialLineConsumed?: (requestKey: number) => void;
+	onContentReady?: () => void;
 	path: string | null;
 	previousPath?: string;
 	/** Restore the display mode picked in the toolbar when this pane remounts (centre file tabs). */
@@ -105,10 +115,21 @@ export function FileContentPane({
 	// an active native text selection.
 	const [selectionOrMenuActive, setSelectionOrMenuActive] = useState(false);
 	const query = useQuery({
-		...sessionSourceFileQueryOptions(sessionId, source, path ?? "", t("files.error.loadWorkspaceFile"), scope, commitSha, previousPath, hostId),
+		...sessionSourceFileQueryOptions(sessionId, source, path ?? "", t(source.kind === "artifact" ? "files.error.loadArtifact" : "files.error.loadWorkspaceFile"), scope, commitSha, previousPath, hostId),
 		enabled: Boolean(path) && !selectionOrMenuActive,
 	});
 	const hasUnsavedChanges = Boolean(editing && query.data && draft !== query.data.content);
+	useEffect(() => {
+		if (path) markFileViewerPerformance("file-selected");
+	}, [path]);
+	useEffect(() => {
+		if (!query.data) return;
+		markFileViewerPerformance("file-header-painted");
+		markFileViewerPerformance("file-content-painted");
+	}, [query.data]);
+	useEffect(() => {
+		if (query.data && sourceHighlightReady) onContentReady?.();
+	}, [onContentReady, query.data, sourceHighlightReady]);
 	useEffect(() => {
 		setMode(restoredMode());
 		setEditing(initialEditing);
@@ -144,6 +165,7 @@ export function FileContentPane({
 				predicate: ({ queryKey }) => queryKey[1] === (hostId ?? sessionId)
 					&& (!hostId || queryKey[2] === sessionId) && [
 					"session-workspace-files",
+					"session-workspace-history",
 					"session-workspace-tree",
 					"session-workspace-search",
 					"session-workspace-file-revision",
@@ -205,22 +227,29 @@ export function FileContentPane({
 		(detail.status === "unmodified" && mode === "diff") || (mode === "rendered" && !renderedAvailable)
 			? "file"
 			: mode;
-	const fileView = sourceHighlightReady ? (
+	// Binary image previews do not use Pierre's syntax highlighter. Do not let a
+	// lazy grammar load (or an unsupported image extension) keep the image stuck
+	// behind the generic file-loading state.
+	const fileView = sourceHighlightReady || Boolean(detail.imageMediaType) ? (
 		<CompleteFileView
 			annotation={annotation}
 			detail={detail}
 			editing={editing && effectiveMode === "file"}
+			revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined}
 			onEditChange={setDraft}
+			onContentReady={onContentReady}
+			onRevealLineConsumed={onInitialLineConsumed}
 			scope={scope}
 			sessionId={sessionId}
 			commitSha={commitSha}
 			hostId={hostId}
 			source={source}
+			markdownEditing={editing && renderedAvailable}
 		/>
 	) : <PanelMessage>{t("files.loading")}</PanelMessage>;
 	const beginEditing = () => {
 		setMode("file");
-		annotation.cancel();
+		cancelFileAnnotations(annotation, (target) => target.surface !== "review" && target.path === detail.path);
 		setDraft(detail.content);
 		setSaveError("");
 		setEditing(true);
@@ -237,10 +266,10 @@ export function FileContentPane({
 			data-testid="unsaved-file-indicator"
 		/>
 	) : null;
-	const wholeFileAnnotationActive = annotation.target?.surface !== "review"
-		&& annotation.target?.path === detail.path
-		&& annotation.target.side === "file"
-		&& annotation.target.line == null;
+	const wholeFileAnnotationTarget = annotation.targets.find((target) => target.surface !== "review"
+		&& target.path === detail.path
+		&& target.side === "file"
+		&& target.line == null);
 	const compactModeButton = (mode: FileViewMode, label: string, icon: React.ReactNode) => (
 		<Tooltip key={mode}>
 			<TooltipTrigger asChild>
@@ -331,7 +360,7 @@ export function FileContentPane({
 	const toolbarNode = (
 		<>
 			{compactTabs}
-			{wholeFileAnnotationActive ? <FileAnnotationComposer annotation={annotation} /> : null}
+			{wholeFileAnnotationTarget ? <FileAnnotationComposer annotation={annotation} target={wholeFileAnnotationTarget} /> : null}
 		</>
 	);
 
@@ -376,12 +405,13 @@ export function FileContentPane({
 						hideFileHeader
 					/>
 				) : effectiveMode === "rendered" && renderedAvailable ? (
-					<MarkdownFileView content={detail.content} filePath={path} hostId={hostId} sessionId={sessionId} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
+					<MarkdownFileView content={detail.content} filePath={path} hostId={hostId} sessionId={sessionId} artifactOrigin={artifactOriginOf(source)} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
 				) : (
 					fileView
 				)}
 				</EditProvider>
 				{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}
+				<FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" />
 			</div>
 		);
 	}
@@ -390,19 +420,34 @@ export function FileContentPane({
 			{toolbarNode}
 			<EditProvider createEditor={createReviewEditor}>
 			{effectiveMode === "rendered" && renderedAvailable ? (
-				<MarkdownFileView content={detail.content} filePath={path} hostId={hostId} sessionId={sessionId} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
+				<MarkdownFileView content={detail.content} filePath={path} hostId={hostId} sessionId={sessionId} artifactOrigin={artifactOriginOf(source)} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
 			) : fileView}
 			</EditProvider>
 			{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}
+			<FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" />
 		</div>
 	);
 }
 
-function CompleteFileView({ annotation, commitSha, detail, editing, onEditChange, scope, sessionId, hostId, source }: { annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; onEditChange: (content: string) => void; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource }) {
+function artifactOriginOf(source: FilesSource): string | undefined {
+	if (source.kind !== "artifact" || !source.rawUrl) return undefined;
+	try {
+		return new URL(source.rawUrl).origin;
+	} catch {
+		return undefined;
+	}
+}
+
+function CompleteFileView({ annotation, commitSha, detail, editing, markdownEditing = false, onContentReady, onEditChange, onRevealLineConsumed, revealLine, scope, sessionId, hostId, source }: { annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; markdownEditing?: boolean; onContentReady?: () => void; onEditChange: (content: string) => void; onRevealLineConsumed?: (requestKey: number) => void; revealLine?: { line: number; requestKey: number }; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource }) {
 	const { t } = useTranslation();
 	const revision = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ commitSha, path: detail.path, scope, sessionId, hostId, side: detail.deleted ? "before" : "after", source, workspaceVersion: detail.workspaceVersion }),
-		enabled: detail.deleted || detail.contentTruncated,
+		// Images are streamed from the blob endpoint by ReadOnlyFileView. A
+		// truncated binary image must not go through the text revision endpoint:
+		// that request carries an expected workspace snapshot and can lose a race
+		// with the file watcher, leaving the center tab stuck on a stale-snapshot
+		// error even though the current image is available.
+		enabled: source.kind !== "artifact" && (detail.deleted || detail.contentTruncated) && !detail.imageMediaType,
 	});
 	if (revision.isPending && revision.isFetching) return <PanelMessage>{t("files.loading")}</PanelMessage>;
 	if (revision.error) return <PanelMessage>{revision.error.message}</PanelMessage>;
@@ -420,7 +465,10 @@ function CompleteFileView({ annotation, commitSha, detail, editing, onEditChange
 					size: revision.data.size,
 				}}
 				editing={editing}
+				onContentReady={onContentReady}
 				onEditChange={onEditChange}
+				onRevealLineConsumed={onRevealLineConsumed}
+				revealLine={revealLine}
 				sessionId={sessionId}
 				hostId={hostId}
 				side={detail.deleted ? "before" : "after"}
@@ -428,5 +476,6 @@ function CompleteFileView({ annotation, commitSha, detail, editing, onEditChange
 			/>
 		);
 	}
-	return <ReadOnlyFileView annotation={annotation} detail={detail} editing={editing} onEditChange={onEditChange} scope={scope} sessionId={sessionId} hostId={hostId} />;
+	if (markdownEditing) return <MarkdownEditor filePath={detail.path} onChange={onEditChange} value={detail.content} />;
+	return <ReadOnlyFileView annotation={annotation} detail={detail} editing={editing} onContentReady={onContentReady} onEditChange={onEditChange} onRevealLineConsumed={onRevealLineConsumed} revealLine={revealLine} scope={scope} sessionId={sessionId} hostId={hostId} />;
 }

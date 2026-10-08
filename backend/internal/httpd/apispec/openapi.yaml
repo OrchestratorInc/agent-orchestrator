@@ -1315,6 +1315,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Gateway Timeout
       summary: Execute a target-scoped command in a session's desktop browser
       tags:
       - browser
@@ -3523,6 +3529,25 @@ paths:
       summary: Unpair this phone from the daemon, removing it from the roster
       tags:
       - push
+  /api/v1/remote-host/account-token:
+    post:
+      operationId: issueRemoteHostAccountToken
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersRemoteHostAccountTokenResponse'
+          description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+      summary: Issue a host-scoped account credential using the pairing password
+      tags:
+      - mobile
   /api/v1/reports:
     get:
       operationId: listReports
@@ -3896,6 +3921,108 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Send a message to a Chat reviewer
+      tags:
+      - conversations
+  /api/v1/reviews/{reviewId}/conversation/models:
+    get:
+      operationId: listReviewerConversationModels
+      parameters:
+      - description: Reviewer conversation identifier.
+        in: path
+        name: reviewId
+        required: true
+        schema:
+          description: Reviewer conversation identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationModelsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the models offered for a Chat reviewer
+      tags:
+      - conversations
+  /api/v1/reviews/{reviewId}/conversation/settings:
+    patch:
+      operationId: setReviewerConversationSettings
+      parameters:
+      - description: Reviewer conversation identifier.
+        in: path
+        name: reviewId
+        required: true
+        schema:
+          description: Reviewer conversation identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationTurnSettingsPayload'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationTurnSettingsPayload'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Select model and effort for the reviewer's next Chat turn
       tags:
       - conversations
   /api/v1/reviews/{reviewSessionID}/activity:
@@ -4532,6 +4659,59 @@ paths:
       summary: Enable or disable automatic review for a session
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/chat-view:
+    post:
+      operationId: setSessionChatView
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetChatViewRequest'
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Keep a viewed chat awake or release its view lease
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/conversation:
     get:
       operationId: getSessionConversation
@@ -6826,6 +7006,25 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      - description: File root to serve from. Defaults to the session workspace; artifact
+          selects the session artifact directory.
+        in: query
+        name: source
+        schema:
+          description: File root to serve from. Defaults to the session workspace;
+            artifact selects the session artifact directory.
+          enum:
+          - workspace
+          - artifact
+          type: string
+      - description: When true, serve Markdown files as raw source instead of rendering
+          them to HTML for Browser preview.
+        in: query
+        name: raw
+        schema:
+          description: When true, serve Markdown files as raw source instead of rendering
+            them to HTML for Browser preview.
+          type: boolean
       responses:
         "200":
           content:
@@ -6851,7 +7050,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Serve a static browser preview file from a session workspace
+      summary: Serve a static browser preview file from a session workspace or artifact
+        directory
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/preview/server:
@@ -7378,7 +7578,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Kill a worker's reviewer terminal session
+      summary: Archive a worker's reviewer and hide its surface while retaining history
       tags:
       - reviews
   /api/v1/sessions/{sessionId}/reviews/rerequest:
@@ -8204,6 +8404,85 @@ paths:
       summary: List files in a session workspace with git change status
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/workspace/history:
+    get:
+      operationId: getSessionWorkspaceHistory
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHistoryResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get lazy commit and upstream metadata for a workspace review
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/workspace/manifest:
+    get:
+      operationId: getSessionWorkspaceManifest
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceManifestResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get the compact changed-file manifest for the initial workspace review
+        paint
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/workspace/search:
     get:
       operationId: searchSessionWorkspaceFiles
@@ -8381,6 +8660,43 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Read the daemon-owned user preferences
+      tags:
+      - settings
+  /api/v1/settings/chat-hibernation:
+    patch:
+      operationId: updateChatHibernation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateChatHibernationRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Turn idle Chat hibernation on or off for this machine
       tags:
       - settings
   /api/v1/settings/cloud-offering:
@@ -8825,6 +9141,31 @@ paths:
       summary: Cancel an unclaimed speculative task worktree
       tags:
       - projects
+  /api/v1/usage/memory/pressure:
+    get:
+      operationId: getMemoryPressure
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryPressureResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the machine's memory-pressure verdict without sampling any process
+      tags:
+      - usage
   /api/v1/usage/sessions:
     get:
       operationId: listCompactSessionUsage
@@ -8894,6 +9235,38 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Get detailed token and estimated cost usage for one session
+      tags:
+      - usage
+  /api/v1/usage/sessions/memory:
+    get:
+      operationId: listSessionMemory
+      parameters:
+      - description: Optional project id filter for dashboard cards.
+        in: query
+        name: projectId
+        schema:
+          description: Optional project id filter for dashboard cards.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSessionMemoryResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List resident memory of each live session's runtime process tree
       tags:
       - usage
 components:
@@ -9201,6 +9574,11 @@ components:
           type: boolean
         label:
           type: string
+        lastUsedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         provider:
           type: string
       required:
@@ -9408,6 +9786,34 @@ components:
           $ref: '#/components/schemas/AgentSwitch'
       required:
       - switch
+      type: object
+    AppMemoryResponse:
+      properties:
+        cpuMeasured:
+          description: 'False when there was no earlier sample to measure against:
+            cpuPercent is unknown, not zero.'
+          type: boolean
+        cpuPercent:
+          format: double
+          minimum: 0
+          type: number
+        own:
+          $ref: '#/components/schemas/SessionMemoryResponse'
+        processCount:
+          minimum: 0
+          type: integer
+        reviewers:
+          items:
+            $ref: '#/components/schemas/ControllersReviewerMemoryResponse'
+          type: array
+        rssBytes:
+          minimum: 0
+          type: integer
+      required:
+      - rssBytes
+      - processCount
+      - cpuPercent
+      - cpuMeasured
       type: object
     AttachmentInput:
       properties:
@@ -10299,6 +10705,16 @@ components:
       - active
       - hasBattery
       type: object
+    ControllersRemoteHostAccountTokenResponse:
+      properties:
+        hostId:
+          type: string
+        token:
+          type: string
+      required:
+      - hostId
+      - token
+      type: object
     ControllersRequestRereviewRequest:
       properties:
         pullRequestUrl:
@@ -10337,6 +10753,24 @@ components:
       required:
       - ok
       type: object
+    ControllersReviewerMemoryResponse:
+      properties:
+        harness:
+          type: string
+        memory:
+          $ref: '#/components/schemas/SessionMemoryResponse'
+        reviewId:
+          type: string
+        sessionId:
+          description: The worker session this reviewer reviews, not the reviewer's
+            own identity.
+          type: string
+      required:
+      - reviewId
+      - sessionId
+      - harness
+      - memory
+      type: object
     ControllersSecurePairingStatus:
       properties:
         active:
@@ -10365,6 +10799,10 @@ components:
           $ref: '#/components/schemas/AgentSwitch'
         activity:
           $ref: '#/components/schemas/DomainActivity'
+        artifactFiles:
+          items:
+            $ref: '#/components/schemas/SessionArtifact'
+          type: array
         autoInjectCI:
           type: boolean
         autoInjectReview:
@@ -10407,6 +10845,11 @@ components:
           type: string
         harness:
           type: string
+        hibernatedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         id:
           type: string
         isPinned:
@@ -10425,6 +10868,14 @@ components:
           type: string
         kind:
           type: string
+        lastEventAt:
+          format: date-time
+          type: string
+        lastInteractionAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         lastUserMessageAt:
           format: date-time
           type:
@@ -10436,6 +10887,13 @@ components:
           - tui
           type: string
         model:
+          type: string
+        outputType:
+          enum:
+          - none
+          - pr
+          - artifact
+          - pr_artifact
           type: string
         pinnedAt:
           format: date-time
@@ -10457,6 +10915,10 @@ components:
           - ready
           - failed
           type: string
+        provisionSteps:
+          items:
+            $ref: '#/components/schemas/SessionProvisionStep'
+          type: array
         prs:
           items:
             $ref: '#/components/schemas/SessionPRFacts'
@@ -10543,6 +11005,7 @@ components:
       - terminateOnPrMerge
       - autoInjectReview
       - autoInjectCI
+      - outputType
       - createdAt
       - updatedAt
       - isPinned
@@ -10551,6 +11014,7 @@ components:
       - status
       - kanbanColumn
       - displayStatus
+      - lastEventAt
       - prs
       type: object
     ControllersSetKeepAwakeRequest:
@@ -10585,7 +11049,25 @@ components:
       type: object
     ConversationAccountPayload:
       properties:
+        authFailureId:
+          type: string
         authMode:
+          type: string
+        authVerifiedAt:
+          type:
+          - "null"
+          - string
+        authenticationState:
+          enum:
+          - unknown
+          - required
+          - authenticated
+          type: string
+        lastAuthFailureAt:
+          type:
+          - "null"
+          - string
+        lastAuthFailureReason:
           type: string
         planLabel:
           type: string
@@ -10842,6 +11324,12 @@ components:
           - user
           - assistant
           type: string
+        senderDisplayName:
+          type: string
+        senderProjectId:
+          type: string
+        senderSessionId:
+          type: string
         sequence:
           format: int64
           type: integer
@@ -11032,6 +11520,7 @@ components:
           - ready
           - busy
           - recovering
+          - hibernated
           - stopped
           type: string
         conversationId:
@@ -11289,10 +11778,6 @@ components:
             when saving agent cues.
           maxLength: 4096
           type: string
-        description:
-          description: Optional human note about the cue, at most 240 bytes.
-          maxLength: 240
-          type: string
         name:
           description: Short cue name, unique within the project. Trimmed; must be
             non-empty and at most 64 bytes.
@@ -11325,8 +11810,6 @@ components:
         createdAt:
           format: date-time
           type: string
-        description:
-          type: string
         id:
           type: string
         name:
@@ -11344,7 +11827,6 @@ components:
       - id
       - projectId
       - name
-      - description
       - type
       - createdAt
       - updatedAt
@@ -12308,6 +12790,10 @@ components:
       type: object
     ListReviewsResponse:
       properties:
+        activeReviewers:
+          items:
+            $ref: '#/components/schemas/DomainReviewerSurface'
+          type: array
         reviewerActivityState:
           enum:
           - active
@@ -12334,6 +12820,20 @@ components:
       - reviewerHandleId
       - reviews
       - runs
+      - activeReviewers
+      type: object
+    ListSessionMemoryResponse:
+      properties:
+        app:
+          $ref: '#/components/schemas/AppMemoryResponse'
+        sessions:
+          items:
+            $ref: '#/components/schemas/SessionMemoryResponse'
+          type: array
+        system:
+          $ref: '#/components/schemas/SystemMemoryResponse'
+      required:
+      - sessions
       type: object
     ListSessionPRsResponse:
       properties:
@@ -12479,6 +12979,22 @@ components:
           type: string
       required:
       - status
+      type: object
+    MemoryPressureResponse:
+      properties:
+        pressureRaw:
+          format: double
+          minimum: 0
+          type: number
+        pressureSource:
+          enum:
+          - psi
+          - available_pct
+          - memorystatus
+          type: string
+      required:
+      - pressureRaw
+      - pressureSource
       type: object
     MergePRRequest:
       properties:
@@ -12735,6 +13251,17 @@ components:
           description: 'Windows shell selector: auto, git-bash, pwsh, powershell,
             cmd, or a custom executable path. Ignored on macOS and Linux.'
           type: string
+        startOnAttach:
+          description: Start the shell when the requesting client attaches with its
+            terminal grid instead of immediately, so the shell starts at the size
+            that client shows. Only for clients that attach as a sized viewer; omitted
+            starts the shell immediately at the default grid.
+          type: boolean
+        title:
+          description: Tab title for the new shell, for a client that already shows
+            its tab. Trimmed; omitted or empty numbers it after the existing shells
+            (Terminal N).
+          type: string
       type: object
     OrchestratorResponse:
       properties:
@@ -12927,6 +13454,8 @@ components:
           $ref: '#/components/schemas/TrackerIntakeConfig'
         worker:
           $ref: '#/components/schemas/RoleOverride'
+        workersRequestReview:
+          type: boolean
       type: object
     ProjectGetResponse:
       properties:
@@ -13342,6 +13871,7 @@ components:
         triggerSource:
           enum:
           - manual
+          - agent
           - auto
           type: string
         verdict:
@@ -13450,6 +13980,8 @@ components:
           maxLength: 4096
           minLength: 1
           type: string
+        senderSessionId:
+          type: string
         userAuthored:
           type: boolean
       required:
@@ -13467,6 +13999,46 @@ components:
       - ok
       - sessionId
       - message
+      type: object
+    SessionActivityResponse:
+      properties:
+        current:
+          $ref: '#/components/schemas/SessionStepResponse'
+        recent:
+          items:
+            $ref: '#/components/schemas/SessionStepResponse'
+          type: array
+      required:
+      - recent
+      type: object
+    SessionArtifact:
+      properties:
+        kind:
+          enum:
+          - html
+          - markdown
+          - file
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        previewUrl:
+          type: string
+        rawUrl:
+          type: string
+        size:
+          format: int64
+          type: integer
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - path
+      - name
+      - kind
+      - size
+      - updatedAt
       type: object
     SessionInterfaceTransition:
       properties:
@@ -13557,6 +14129,64 @@ components:
       required:
       - supported
       - targetMode
+      type: object
+    SessionMemoryProcessResponse:
+      properties:
+        command:
+          type: string
+        cpuPercent:
+          description: Share of one core used since the previous sample; zero on the
+            first.
+          format: double
+          minimum: 0
+          type: number
+        pid:
+          type: integer
+        ppid:
+          type: integer
+        rssBytes:
+          minimum: 0
+          type: integer
+      required:
+      - pid
+      - ppid
+      - rssBytes
+      - cpuPercent
+      - command
+      type: object
+    SessionMemoryResponse:
+      properties:
+        activity:
+          $ref: '#/components/schemas/SessionActivityResponse'
+        cpuPercent:
+          description: Share of one core the whole tree used since the previous sample;
+            zero on the first.
+          format: double
+          minimum: 0
+          type: number
+        processCount:
+          minimum: 0
+          type: integer
+        processes:
+          items:
+            $ref: '#/components/schemas/SessionMemoryProcessResponse'
+          type: array
+        rssBytes:
+          description: Resident set size summed over the runtime process tree.
+          minimum: 0
+          type: integer
+        sampledAt:
+          format: date-time
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - rssBytes
+      - processCount
+      - cpuPercent
+      - sampledAt
+      - processes
       type: object
     SessionPRCISummary:
       properties:
@@ -13896,12 +14526,61 @@ components:
       required:
       - sessionId
       type: object
+    SessionProvisionStep:
+      properties:
+        endedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          enum:
+          - fetch
+          - worktree
+          - setup
+          - agent
+          type: string
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        status:
+          enum:
+          - pending
+          - running
+          - done
+          type: string
+      required:
+      - id
+      - status
+      type: object
     SessionResponse:
       properties:
         session:
           $ref: '#/components/schemas/ControllersSessionView'
       required:
       - session
+      type: object
+    SessionStepResponse:
+      properties:
+        endedAt:
+          description: Absent while the tool is still running.
+          format: date-time
+          type:
+          - "null"
+          - string
+        failed:
+          type: boolean
+        startedAt:
+          format: date-time
+          type: string
+        tool:
+          type: string
+      required:
+      - tool
+      - startedAt
+      - failed
       type: object
     SessionUsageResponse:
       properties:
@@ -13958,6 +14637,14 @@ components:
         providerTurnId:
           description: Native main-turn identity reported by the hook, when supported.
           type: string
+        runningSubagentIds:
+          description: Running Claude subagent ids observed in a parent Stop hook;
+            empty means none, absent means no snapshot.
+          items:
+            type: string
+          type:
+          - "null"
+          - array
         state:
           description: Agent activity state reported by an agent hook. Optional for
             metadata-only hooks.
@@ -13967,6 +14654,9 @@ components:
           - waiting_input
           - blocked
           - exited
+          type: string
+        subagentId:
+          description: Native child agent id for this hook event.
           type: string
         submissionId:
           description: AO prompt-hook context correlation UUID, when supported.
@@ -13998,6 +14688,16 @@ components:
       - ok
       - sessionId
       - state
+      type: object
+    SetChatViewRequest:
+      properties:
+        active:
+          type: boolean
+        viewId:
+          type: string
+      required:
+      - viewId
+      - active
       type: object
     SetConversationConfigOptionRequest:
       properties:
@@ -14191,6 +14891,8 @@ components:
           items:
             type: string
           type: array
+        chatHibernationEnabled:
+          type: boolean
         client:
           type: string
         cloudControlPlaneUrl:
@@ -14214,6 +14916,7 @@ components:
       - client
       - localEnabled
       - cloudOffering
+      - chatHibernationEnabled
       - cloudEnabled
       - cloudControlPlaneUrl
       - trackerIntakeEnabled
@@ -14495,6 +15198,8 @@ components:
           type: string
         recoverOnly:
           type: boolean
+        senderSessionId:
+          type: string
         text:
           type: string
       required:
@@ -14607,6 +15312,60 @@ components:
       required:
       - targetHarness
       type: object
+    SystemMemoryResponse:
+      properties:
+        availableBytes:
+          description: What the kernel would hand out without swapping (MemAvailable).
+          minimum: 0
+          type: integer
+        cpuCount:
+          minimum: 0
+          type: integer
+        cpuMeasured:
+          type: boolean
+        cpuPercent:
+          format: double
+          minimum: 0
+          type: number
+        load1:
+          format: double
+          type: number
+        pressureRaw:
+          format: double
+          minimum: 0
+          type: number
+        pressureSource:
+          enum:
+          - psi
+          - available_pct
+          - memorystatus
+          type: string
+        swapBytesPerSec:
+          format: double
+          minimum: 0
+          type: number
+        swapTotalBytes:
+          minimum: 0
+          type: integer
+        swapUsedBytes:
+          minimum: 0
+          type: integer
+        totalBytes:
+          minimum: 0
+          type: integer
+      required:
+      - totalBytes
+      - availableBytes
+      - swapTotalBytes
+      - swapUsedBytes
+      - swapBytesPerSec
+      - cpuCount
+      - load1
+      - cpuPercent
+      - cpuMeasured
+      - pressureRaw
+      - pressureSource
+      type: object
     SystemRequirement:
       properties:
         detail:
@@ -14671,6 +15430,10 @@ components:
       properties:
         agentConfig:
           $ref: '#/components/schemas/AgentConfig'
+        enableAutoInject:
+          description: Turn on the worker session's review auto-inject once a pass
+            has started, so the reviewer's PR review comments reach the worker.
+          type: boolean
         harness:
           enum:
           - claude-code
@@ -14696,9 +15459,40 @@ components:
           - cline
           - autohand
           type: string
+        interfaceMode:
+          enum:
+          - chat
+          - tui
+          type: string
+        prUrl:
+          description: Restrict the pass to this pull request, attaching it to the
+            session first if AO does not track it yet (never from another active session).
+            Omit to review every eligible PR on the session.
+          type: string
+        rejectReviewedHead:
+          description: Return 409 instead of reusing when every open PR head is already
+            being reviewed or already has a review.
+          type: boolean
+        rerun:
+          description: Start a fresh pass for already-reviewed current heads; a different
+            reviewer may run alongside one that is still running. A person's rerun
+            reuses an active pass from the same reviewer; an agent's rerun returns
+            409 REVIEW_ALREADY_RUNNING instead.
+          type: boolean
+        source:
+          description: 'Who requested the pass: manual (a person, the default) or
+            agent (an AO session through the CLI).'
+          enum:
+          - manual
+          - agent
+          type: string
       type: object
     TriggerReviewResponse:
       properties:
+        autoInjectEnabled:
+          description: True when this request turned the worker session's review auto-inject
+            on.
+          type: boolean
         created:
           description: True when a new review pass was started; false when an existing
             run for the same commit was reused.
@@ -14720,6 +15514,7 @@ components:
       - reviews
       - runs
       - created
+      - autoInjectEnabled
       type: object
     UnregisterPushDeviceResponse:
       properties:
@@ -14768,6 +15563,15 @@ components:
           type:
           - "null"
           - string
+      type: object
+    UpdateChatHibernationRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
       type: object
     UpdateProjectSettingsInput:
       properties:
@@ -15254,6 +16058,72 @@ components:
       - binary
       - editable
       - fileFingerprint
+      type: object
+    WorkspaceHistoryResponse:
+      properties:
+        ahead:
+          type:
+          - "null"
+          - integer
+        behind:
+          type:
+          - "null"
+          - integer
+        commits:
+          items:
+            $ref: '#/components/schemas/WorkspaceCommitSummary'
+          type: array
+        commitsTruncated:
+          type: boolean
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - commits
+      type: object
+    WorkspaceManifestResponse:
+      properties:
+        compareBaseRef:
+          type: string
+        compareBaseSha:
+          type: string
+        compareMode:
+          enum:
+          - base
+          - head_fallback
+          type: string
+        degraded:
+          type: boolean
+        degradedCode:
+          type: string
+        files:
+          items:
+            $ref: '#/components/schemas/WorkspaceFileSummary'
+          type: array
+        refreshing:
+          type: boolean
+        sections:
+          $ref: '#/components/schemas/WorkspaceFileSections'
+        sessionId:
+          type: string
+        stale:
+          type: boolean
+        summary:
+          $ref: '#/components/schemas/WorkspaceSummary'
+        truncated:
+          type: boolean
+        workspaceVersion:
+          type: string
+      required:
+      - sessionId
+      - workspaceVersion
+      - files
+      - sections
+      - summary
+      - truncated
+      - stale
+      - refreshing
+      - degraded
       type: object
     WorkspaceRepo:
       properties:

@@ -70,8 +70,8 @@ describe("remoteHosts flag", () => {
 		useUiStore.setState({ remoteHosts: false });
 	});
 
-	it("is off until the user turns it on", async () => {
-		expect((await bootStore()).getState().remoteHosts).toBe(false);
+	it("is on by default behind developer mode", async () => {
+		expect((await bootStore()).getState().remoteHosts).toBe(true);
 	});
 
 	it("persists the switch so the choice survives a restart", () => {
@@ -84,6 +84,11 @@ describe("remoteHosts flag", () => {
 	it("reads a stored choice back at startup", async () => {
 		window.localStorage.setItem("ao.remoteHosts", "true");
 		expect((await bootStore()).getState().remoteHosts).toBe(true);
+	});
+
+	it("honors an explicit opt-out", async () => {
+		window.localStorage.setItem("ao.remoteHosts", "false");
+		expect((await bootStore()).getState().remoteHosts).toBe(false);
 	});
 });
 
@@ -166,5 +171,32 @@ describe("file display modes", () => {
 		useUiStore.getState().setFilesChangedOnly("sess-1", false);
 		useUiStore.getState().setFileDisplayMode("sess-1", "README.md", "rendered", 1);
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesChangedOnly).toBe(false);
+	});
+});
+
+describe("workspace file open requests", () => {
+	beforeEach(() => {
+		useUiStore.setState({ workspaceFileOpenRequest: null });
+	});
+
+	it("increments its nonce even when the same file is requested twice", () => {
+		useUiStore.getState().requestWorkspaceFileOpen("session-1", "src/App.tsx", "host-a");
+		const first = useUiStore.getState().workspaceFileOpenRequest;
+		useUiStore.getState().requestWorkspaceFileOpen("session-1", "src/App.tsx", "host-a");
+		const second = useUiStore.getState().workspaceFileOpenRequest;
+
+		expect(first).toMatchObject({ sessionId: "session-1", hostId: "host-a", path: "src/App.tsx" });
+		expect(second?.nonce).toBe((first?.nonce ?? 0) + 1);
+	});
+
+	it("clears only the matching request generation", () => {
+		useUiStore.getState().requestWorkspaceFileOpen("session-1", "old.ts");
+		const oldNonce = useUiStore.getState().workspaceFileOpenRequest!.nonce;
+		useUiStore.getState().requestWorkspaceFileOpen("session-1", "new.ts");
+		useUiStore.getState().clearWorkspaceFileOpenRequest(oldNonce);
+		expect(useUiStore.getState().workspaceFileOpenRequest?.path).toBe("new.ts");
+
+		useUiStore.getState().clearWorkspaceFileOpenRequest(oldNonce + 1);
+		expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
 	});
 });

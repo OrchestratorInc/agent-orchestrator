@@ -85,6 +85,7 @@ type createSessionRequest struct {
 	// id, e.g. "anthropic/claude-opus-4-8" for opencode). Optional: empty uses
 	// the harness default.
 	Model                       string   `json:"model,omitempty"`
+	ReasoningEffort             string   `json:"reasoningEffort,omitempty"`
 	DeniedCommands              []string `json:"deniedCommands,omitempty"`
 	SandboxProviderConnectionID string   `json:"sandboxProviderConnectionId,omitempty"`
 	// Provider selects which configured sandbox provider runs this session. It
@@ -309,6 +310,12 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		s.writeProjectStoreError(w, r, err)
 		return
 	}
+	s.logger.Info(
+		"project created",
+		"org_id", orgID,
+		"user_id", principalFrom(r).UserID,
+		"project_id", project.ID,
+	)
 	writeJSON(w, http.StatusCreated, map[string]any{"project": toProjectResponse(project)})
 }
 
@@ -448,34 +455,25 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-	if store, ok := s.store.(providerConnectionStore); ok {
-		connections, err := store.ListProviderConnections(
-			r.Context(), principalFrom(r), orgID,
+	userStore, ok := s.store.(userProviderCredentialStore)
+	if !ok {
+		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Personal coding-agent credentials are unavailable.")
+		return
+	}
+	available, err := userStore.UserAgentCredentialAvailable(
+		r.Context(), principalFrom(r).UserID, request.Harness,
+	)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	if !available {
+		writeError(
+			w, r, http.StatusUnprocessableEntity,
+			"agent_provider_required",
+			"Connect and validate your personal coding-agent credential before creating a session.",
 		)
-		if err != nil {
-			s.writeStoreError(w, r, err)
-			return
-		}
-		available := agentConnectionAvailable(connections, request.Harness)
-		if !available {
-			if userStore, ok := s.store.(userProviderCredentialStore); ok {
-				available, err = userStore.UserAgentCredentialAvailable(
-					r.Context(), principalFrom(r).UserID, request.Harness,
-				)
-				if err != nil {
-					s.writeStoreError(w, r, err)
-					return
-				}
-			}
-		}
-		if !available {
-			writeError(
-				w, r, http.StatusUnprocessableEntity,
-				"agent_provider_required",
-				"Connect and validate the selected coding-agent provider before creating a session.",
-			)
-			return
-		}
+		return
 	}
 	// A top-level worker created for a project that already has an active
 	// orchestrator is auto-linked to it: the orchestrator then sees, drives, and
@@ -590,6 +588,22 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	// a later config change cannot disturb a session already in flight.
 	plan, err := s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts, coderOverride)
 	if err != nil {
+		// A bring-your-own-Coder org with no org-default template must pick one per
+		// project; that is user-fixable, so surface it as a clear 422 rather than a
+		// deployment-misconfiguration 500.
+		if errors.Is(err, sandbox.ErrCoderTemplateRequired) {
+			s.logger.Warn(
+				"session create rejected: coder template required",
+				"org_id", orgID,
+				"user_id", principalFrom(r).UserID,
+				"project_id", request.ProjectID,
+			)
+			writeError(
+				w, r, http.StatusUnprocessableEntity, "coder_template_required",
+				"Choose a Coder template for this project before starting a session.",
+			)
+			return
+		}
 		s.logger.Error("resolve sandbox provisioning plan", "error", err, "request_id", requestID(r))
 		writeError(
 			w, r, http.StatusInternalServerError, "internal_error",
@@ -611,6 +625,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			Prompt:              request.Prompt,
 			Mode:                request.Mode,
 			Model:               request.Model,
+			ReasoningEffort:     request.ReasoningEffort,
 			DeniedCommands:      request.DeniedCommands,
 			Provider:            plan.Provider,
 			SandboxConnectionID: request.SandboxProviderConnectionID,
@@ -624,6 +639,15 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	s.logger.Info(
+		"session created",
+		"org_id", orgID,
+		"user_id", principalFrom(r).UserID,
+		"project_id", request.ProjectID,
+		"session_id", session.ID,
+		"provider", plan.Provider,
+		"harness", request.Harness,
+	)
 	writeJSON(w, http.StatusCreated, map[string]any{"session": toSessionResponse(session, nil)})
 }
 
@@ -1096,6 +1120,9 @@ func validProjectUpdate(request updateProjectRequest) bool {
 }
 
 func validSessionInput(request createSessionRequest) bool {
+	if validateChatTurnSettings("", request.ReasoningEffort, "", "") != nil {
+		return false
+	}
 	if requireUUID(request.ProjectID, "projectId") != nil ||
 		(request.Kind != "worker" && request.Kind != "orchestrator") ||
 		(request.Mode != "read-only" && request.Mode != "standard" && request.Mode != "trusted") ||

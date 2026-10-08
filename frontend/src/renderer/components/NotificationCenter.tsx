@@ -47,6 +47,7 @@ import {
 import { useUiStore } from "../stores/ui-store";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { captureRendererEvent } from "../lib/telemetry";
+import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { cn } from "../lib/utils";
 import { TopbarButton } from "./TopbarButton";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
@@ -70,6 +71,7 @@ function useNotificationTargetNavigation() {
 		(notification: NotificationDTO, hostId: HostId = LOCAL_HOST) => {
 			const sessionId = notification.target.sessionId || notification.sessionId;
 			if (!sessionId) return;
+			recordManualWorkerOpen(sessionId);
 			void captureRendererEvent("ao.renderer.notification_opened", { target: "session" });
 			navigateToSession(notification.projectId, sessionId, hostId);
 		},
@@ -537,6 +539,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	// Cloud sessions live in the same workspace tree as local ones, keyed by
 	// their cloud project, so they open through the same session route.
 	const openCloudSession = useCallback((projectId: string, sessionId: string) => {
+		recordManualWorkerOpen(sessionId);
 		void captureRendererEvent("ao.renderer.notification_opened", { target: "session" });
 		navigateToSession(projectId, sessionId);
 	}, [navigateToSession]);

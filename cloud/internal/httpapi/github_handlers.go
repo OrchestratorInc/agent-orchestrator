@@ -502,6 +502,13 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 		s.writeProjectStoreError(w, r, err)
 		return
 	}
+	s.logger.Info(
+		"github project created",
+		"org_id", orgID,
+		"user_id", principalFrom(r).UserID,
+		"project_id", project.ID,
+		"github_repository_id", githubRepositoryID,
+	)
 	writeJSON(w, http.StatusCreated, map[string]any{"project": toProjectResponse(project)})
 }
 

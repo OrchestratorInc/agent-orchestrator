@@ -10,6 +10,7 @@ import {
 	conversationQueryKey,
 } from "./useConversation";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 
 export type SwitchAgentHarness = components["schemas"]["SwitchAgentRequest"]["targetHarness"];
 
@@ -90,6 +91,7 @@ export function useSwitchAgent() {
 	return useMutation({
 		mutationKey: switchAgentMutationKey,
 		mutationFn: async ({ session, targetHarness, model, idempotencyKey }: SwitchAgentInput) => {
+			recordDirectWorkerInteraction(session.id, "lifecycle", session.kind, session.hostId);
 			const body: {
 				targetHarness: SwitchAgentHarness;
 				model?: string;

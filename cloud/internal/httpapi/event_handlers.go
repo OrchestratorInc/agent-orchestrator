@@ -34,20 +34,24 @@ func validateSendMessageRequest(request sendMessageRequest) error {
 	if strings.TrimSpace(request.Text) == "" || len(request.Text) > 65536 {
 		return errors.New("Message text must be between 1 and 65536 bytes.")
 	}
-	if request.Model != "" && !chatModelIDPattern.MatchString(request.Model) {
+	return validateChatTurnSettings(request.Model, request.ReasoningEffort, request.Mode, request.ApprovalMode)
+}
+
+func validateChatTurnSettings(model, effort, mode, approvalMode string) error {
+	if model != "" && !chatModelIDPattern.MatchString(model) {
 		return errors.New("The model selection is invalid.")
 	}
-	switch request.ReasoningEffort {
-	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+	switch effort {
+	case "", "default", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
 	default:
 		return errors.New("The reasoning effort selection is invalid.")
 	}
-	switch request.Mode {
+	switch mode {
 	case "", "read-only", "standard", "trusted":
 	default:
 		return errors.New("The mode selection is invalid.")
 	}
-	switch request.ApprovalMode {
+	switch approvalMode {
 	case "", "default", "accept-edits", "auto", "bypass-permissions":
 	default:
 		return errors.New("The approval mode selection is invalid.")

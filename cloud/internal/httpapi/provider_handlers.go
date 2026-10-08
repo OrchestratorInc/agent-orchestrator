@@ -51,20 +51,6 @@ type userProviderCredentialStore interface {
 	UserAgentCredentialAvailable(context.Context, string, string) (bool, error)
 }
 
-func agentConnectionAvailable(
-	connections []domain.ProviderConnection,
-	provider string,
-) bool {
-	for _, connection := range connections {
-		if connection.Provider == provider &&
-			connection.Label == defaultAgentConnectionLabel &&
-			connection.ValidationState == "valid" {
-			return true
-		}
-	}
-	return false
-}
-
 type secretEncrypter interface {
 	Encrypt([]byte, string) ([]byte, []byte, error)
 }
@@ -215,6 +201,13 @@ func (s *Server) putAgentConnection(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	s.logger.Info(
+		"provider connection saved",
+		"org_id", orgID,
+		"user_id", principalFrom(r).UserID,
+		"provider", agent,
+		"connection_id", connection.ID,
+	)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"providerConnection": toProviderConnectionResponse(connection),
 	})

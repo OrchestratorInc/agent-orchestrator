@@ -29,6 +29,59 @@ type outputSequenceControl struct {
 	output chan int64
 }
 
+type terminalFrameControl struct {
+	supervisorControlStub
+	output chan []byte
+}
+
+func (s *terminalFrameControl) PublishTerminalOutput(_ context.Context, _ string, _ int64, data []byte) error {
+	s.output <- append([]byte(nil), data...)
+	return nil
+}
+
+func TestReopenedAgentTerminalClearsPreviousDisplay(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		kind  string
+		next  int64
+		clear bool
+	}{
+		{"first agent startup", "agent", 1, false},
+		{"agent after interface switch", "agent", 41, true},
+		{"workspace shell", "workspace", 41, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			control := &terminalFrameControl{output: make(chan []byte, 32)}
+			supervisor := &Supervisor{
+				Control: control, Workspace: t.TempDir(), Shell: "/bin/sh",
+				terminals: make(map[string]*terminalProcess),
+			}
+			supervisor.AgentCommand = workerexec.Command{Path: "/bin/sh", Args: []string{"-c", "printf ready; cat"}, Dir: supervisor.Workspace}
+			defer supervisor.closeAllTerminals()
+			id := "00000000-0000-0000-0000-000000000040"
+			if err := supervisor.openTerminal(ctx, worker.TerminalCommand{TerminalID: id, Kind: test.kind, NextOutputSequence: test.next}); err != nil {
+				t.Fatal(err)
+			}
+			if test.kind == "workspace" {
+				if err := supervisor.writeTerminal(worker.TerminalCommand{TerminalID: id, Data: []byte("printf ready\n")}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			select {
+			case data := <-control.output:
+				cleared := strings.HasPrefix(string(data), "\x1b[3J\x1b[H\x1b[2J")
+				if cleared != test.clear {
+					t.Fatalf("first output = %q; clear previous display = %v, want %v", data, cleared, test.clear)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("terminal produced no output")
+			}
+		})
+	}
+}
+
 func (s *outputSequenceControl) PublishTerminalOutput(_ context.Context, _ string, sequence int64, _ []byte) error {
 	s.output <- sequence
 	return nil
@@ -166,19 +219,23 @@ func TestChatToTerminalContinuesReopenedTerminalOutputSequence(t *testing.T) {
 }
 
 func TestRefreshAgentCommandUsesLatestConversationID(t *testing.T) {
-	var gotID string
+	var gotID, gotModel, gotEffort string
 	supervisor := &Supervisor{
 		AgentCommand: workerexec.Command{Path: "stale-codex"},
-		AgentCommandFactory: func(_ context.Context, nativeConversationID string) (workerexec.Command, error) {
+		AgentCommandFactory: func(_ context.Context, nativeConversationID, model, effort string) (workerexec.Command, error) {
 			gotID = nativeConversationID
+			gotModel, gotEffort = model, effort
 			return workerexec.Command{Path: "codex", Args: []string{"resume", nativeConversationID}}, nil
 		},
 	}
-	if err := supervisor.refreshAgentCommand(context.Background(), "native-chat"); err != nil {
+	if err := supervisor.refreshAgentCommand(context.Background(), "native-chat", "pending-model", "high"); err != nil {
 		t.Fatalf("refresh agent command: %v", err)
 	}
 	if gotID != "native-chat" {
 		t.Fatalf("factory native conversation id = %q, want native-chat", gotID)
+	}
+	if gotModel != "pending-model" || gotEffort != "high" {
+		t.Fatalf("factory pending selection = %q/%q", gotModel, gotEffort)
 	}
 	if supervisor.AgentCommand.Path != "codex" {
 		t.Fatalf("refreshed command path = %q, want codex", supervisor.AgentCommand.Path)
@@ -199,7 +256,7 @@ func TestStartInterfaceKeepsBootstrapCommandWithoutConversation(t *testing.T) {
 			Args: []string{"-c", "sleep 30"},
 			Dir:  workspace,
 		},
-		AgentCommandFactory: func(context.Context, string) (workerexec.Command, error) {
+		AgentCommandFactory: func(context.Context, string, string, string) (workerexec.Command, error) {
 			called = true
 			return workerexec.Command{Path: "unexpected"}, nil
 		},
@@ -399,6 +456,46 @@ func TestForwardTurnLeavesQueueToChatController(t *testing.T) {
 	}
 	if control.claimTurnCalls != 0 {
 		t.Fatalf("expected Chat controller to own the queue, got %d claims", control.claimTurnCalls)
+	}
+}
+
+func TestForwardTurnSubmitsQueuedReportAfterPaste(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	control := &supervisorControlStub{turn: &worker.Turn{ID: "report-turn", Attempt: 1, Prompt: "[from worker] report"}}
+	supervisor := &Supervisor{
+		Control: control, AgentTerminalID: "agent-1", agentStarted: true,
+		terminals: map[string]*terminalProcess{"agent-1": {pty: writer}},
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := supervisor.forwardTurn(context.Background())
+		done <- err
+	}()
+	if err := reader.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	first := make([]byte, 64)
+	n, err := reader.Read(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(first[:n]); got != "[from worker] report" {
+		t.Fatalf("queued report paste = %q", got)
+	}
+	second := make([]byte, 1)
+	if _, err := io.ReadFull(reader, second); err != nil {
+		t.Fatal(err)
+	}
+	if string(second) != "\r" {
+		t.Fatalf("queued report submit = %q", second)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -956,6 +1053,28 @@ func TestWorkspaceReviewDispatchHandlesEveryOperation(t *testing.T) {
 				t.Fatalf("completed=%T failure=%q", control.completed, control.failureCode)
 			}
 		})
+	}
+}
+
+func TestWorkspaceCheckoutDispatchRequestsRetry(t *testing.T) {
+	repo := newGitWorkspace(t)
+	workspace, err := openWorkspace(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workspace.Close()
+	control := &reviewDispatchControl{}
+	calls := 0
+	supervisor := &Supervisor{
+		Control:         control,
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestCheckout: func() error { calls++; return nil },
+	}
+	supervisor.handle(context.Background(), workspace, &worker.TransportRequest{
+		ID: "checkout-request", Attempt: 1, Kind: "workspace.checkout",
+	})
+	if calls != 1 || control.failureCode != "" {
+		t.Fatalf("checkout calls=%d failure=%q", calls, control.failureCode)
 	}
 }
 

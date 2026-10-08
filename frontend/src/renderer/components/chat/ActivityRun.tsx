@@ -23,11 +23,29 @@ import {
 } from "./activity-command";
 import { fileChangeFiles, type ConversationActivity } from "../../types/conversation";
 
-export function ActivityRun({ activities }: { activities: ConversationActivity[] }) {
+export function ActivityRun({
+	activities,
+	disclosureKey,
+	disclosureOverrides,
+	onDisclosureChange,
+}: {
+	activities: ConversationActivity[];
+	disclosureKey?: string;
+	disclosureOverrides?: Readonly<Record<string, boolean>>;
+	onDisclosureChange?: (key: string, open: boolean) => void;
+}) {
 	// null until someone decides, so a run holding a command that is printing right
 	// now can open itself and close again once everything settles. A click pins the
 	// choice either way.
-	const [override, setOverride] = useState<boolean | null>(null);
+	const [localOverride, setLocalOverride] = useState<boolean | null>(null);
+	const override = disclosureKey && disclosureOverrides
+		? disclosureOverrides[disclosureKey] ?? null
+		: localOverride;
+	const updateOverride = (key: string, open: boolean) => {
+		if (disclosureKey && onDisclosureChange) onDisclosureChange(key, open);
+		else setLocalOverride(open);
+	};
+	const overrides = disclosureOverrides ?? {};
 	const reducedMotion = useReducedMotion();
 	const running = activities.some((a) => a.status === "running");
 	const nonzeroExits = activities.filter(isNonzeroCommandExit).length;
@@ -72,30 +90,30 @@ export function ActivityRun({ activities }: { activities: ConversationActivity[]
 		>
 			<button
 				type="button"
-				onClick={() => setOverride(!open)}
+				onClick={() => updateOverride(disclosureKey ?? "", !open)}
 				aria-expanded={open}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-run-toggle")}
 			>
-				<span className="activity-summary-label text-[11.5px] text-muted-foreground">
+				<span className="activity-summary-label text-xs text-muted-foreground">
 					<ActivityTransition value={summary} inline>{summary}</ActivityTransition>
 				</span>
 				{nonzeroExits > 0 ? (
-					<span className="text-[11px] text-muted-foreground/70">
+					<span className="text-caption text-muted-foreground/70">
 						{nonzeroExits} exited
 					</span>
 				) : null}
 				{failed > 0 ? (
-					<span className="text-[11px] text-destructive">
+					<span className="text-xs text-destructive">
 						{failed} failed
 					</span>
 				) : null}
 				{cancelled > 0 ? (
-					<span className="text-[11px] text-muted-foreground/70">
+					<span className="text-caption text-muted-foreground/70">
 						{cancelled} stopped
 					</span>
 				) : null}
 				{diffTotals.additions > 0 || diffTotals.deletions > 0 ? (
-					<span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
+					<span className="shrink-0 font-mono text-micro tabular-nums text-muted-foreground/70">
 						{diffTotals.additions > 0 ? (
 							<span className="text-success">+{diffTotals.additions}</span>
 						) : null}
@@ -139,7 +157,14 @@ export function ActivityRun({ activities }: { activities: ConversationActivity[]
 										);
 								  })
 								: subgroups.map((group) => (
-										<ActivitySubgroup key={group.key} activities={group.activities} nodesByActivityID={nodesByActivityID} />
+										<ActivitySubgroup
+											key={group.activities.map((activity) => activity.id).join(":")}
+											disclosureKey={disclosureKey ? `${disclosureKey}:sub:${group.activities.map((activity) => activity.id).join(":")}` : undefined}
+											disclosureOverrides={overrides}
+											onDisclosureChange={updateOverride}
+											activities={group.activities}
+											nodesByActivityID={nodesByActivityID}
+										/>
 								  ))}
 						</div>
 					</motion.div>
@@ -173,16 +198,28 @@ function activityGroupKey(activity: ConversationActivity): string {
 function ActivitySubgroup({
 	activities,
 	nodesByActivityID,
+	disclosureKey,
+	disclosureOverrides,
+	onDisclosureChange,
 }: {
 	activities: ConversationActivity[];
 	nodesByActivityID: ReadonlyMap<string, ActivityNode>;
+	disclosureKey?: string;
+	disclosureOverrides: Readonly<Record<string, boolean>>;
+	onDisclosureChange?: (key: string, open: boolean) => void;
 }) {
-	const [override, setOverride] = useState<boolean | null>(null);
+	const [localOverride, setLocalOverride] = useState<boolean | null>(null);
 	const reducedMotion = useReducedMotion();
 	const streamingOutput = activities.some((activity) =>
 		activity.status === "running" && Boolean(activity.detail?.output),
 	);
-	const open = override ?? streamingOutput;
+	const open = disclosureKey
+		? disclosureOverrides[disclosureKey] ?? streamingOutput
+		: localOverride ?? streamingOutput;
+	const updateOverride = (next: boolean) => {
+		if (disclosureKey && onDisclosureChange) onDisclosureChange(disclosureKey, next);
+		else setLocalOverride(next);
+	};
 	const hasNestedAgent = activities.some((activity) =>
 		nodesByActivityID.get(activity.id)?.children.length,
 	);
@@ -206,11 +243,11 @@ function ActivitySubgroup({
 		<div className="activity-subgroup">
 			<button
 				type="button"
-				onClick={() => setOverride(!open)}
+				onClick={() => updateOverride(!open)}
 				aria-expanded={open}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-subgroup-toggle")}
 			>
-				<span className="activity-summary-label text-[11px] text-muted-foreground">
+				<span className="activity-summary-label text-xs text-muted-foreground">
 					<ActivityTransition value={summarizeSubgroup(activities)} inline>
 						{summarizeSubgroup(activities)}
 					</ActivityTransition>
@@ -288,7 +325,7 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 				onClick={() => setOpen((current) => !current)}
 				aria-label={`Subagent ${count} ${count === 1 ? "step" : "steps"}`}
 				aria-expanded={open}
-				className="activity-row-toggle flex min-h-8 w-full select-none items-center gap-2 text-left text-[11px] text-muted-foreground outline-none hover:text-foreground focus-visible:outline-none"
+				className="activity-row-toggle flex min-h-8 w-full select-none items-center gap-2 text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:outline-none"
 			>
 				<span className="font-medium text-foreground/80">Subagent</span>
 				<span>{count} {count === 1 ? "step" : "steps"}</span>

@@ -59,6 +59,7 @@ type Store interface {
 	ConversationEditAnchor(ctx context.Context, conversationID, replacedTurnID string) (domain.ConversationEditAnchor, error)
 	RepairIncompleteConversationEdit(ctx context.Context, sessionID domain.SessionID, conversationID string, now time.Time) (domain.ConversationBranch, bool, error)
 	CreateAndActivateConversationBranch(ctx context.Context, sessionID domain.SessionID, branch domain.ConversationBranch, generation string, now time.Time) error
+	CreateAndActivateReviewConversationBranch(ctx context.Context, reviewID string, branch domain.ConversationBranch, generation string, now time.Time) error
 	ActivateConversationBranch(ctx context.Context, sessionID domain.SessionID, conversationID, branchID, providerConversationID, generation string, now time.Time) error
 	UpdateConversationBranchReplacement(ctx context.Context, branchID, replacementTurnID string) error
 
@@ -78,6 +79,7 @@ type Store interface {
 	SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error
 	SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error
 	CleanupOwnedControllerWork(ctx context.Context, session domain.SessionID, conversationID, generation string, now time.Time) (bool, error)
+	CleanupOwnedReviewControllerWork(ctx context.Context, reviewID, conversationID, generation string, now time.Time) (bool, error)
 	ListVisibleRunningTurnProviderIDs(ctx context.Context, conversationID string) ([]string, error)
 
 	SetConversationSettings(ctx context.Context, conversationID string, settings domain.ConversationSettings, now time.Time) error
@@ -136,7 +138,9 @@ type Store interface {
 	// Latest-wins provider state that belongs to the conversation rather than to a
 	// turn. Each write replaces the last.
 	RecordModelReroute(ctx context.Context, conversationID string, reroute domain.ConversationModelReroute) error
+	ConversationAccount(ctx context.Context, conversationID string) (*domain.ConversationAccount, error)
 	RecordAccount(ctx context.Context, conversationID string, account domain.ConversationAccount, now time.Time) error
+	ReconcileConversationAuthentication(ctx context.Context, conversationID, generation, providerTurnID string, now time.Time) (*domain.ConversationAccount, error)
 	RecordThreadState(ctx context.Context, conversationID string, state domain.ConversationThreadState) error
 	RecordMCPServers(ctx context.Context, conversationID string, servers []domain.ConversationMCPServer) error
 
@@ -148,6 +152,7 @@ type Store interface {
 	FailPendingInputs(ctx context.Context, conversationID string, now time.Time) error
 
 	ProjectProviderEvent(ctx context.Context, conversationID string, session domain.SessionID, generation, providerEventID, method, payloadJSON string, now time.Time, project func(context.Context) error) (bool, error)
+	ProjectReviewProviderEvent(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation, providerEventID, method, payloadJSON string, now time.Time, project func(context.Context) error) (bool, error)
 }
 
 // ActivityRecorder feeds derived session status.
@@ -176,6 +181,7 @@ const (
 	controllerHandoffInterfaceDrain
 	controllerHandoffInterfaceInterrupt
 	controllerHandoffIdleBranch
+	controllerHandoffHibernate
 )
 
 func interfaceHandoff(policy domain.SessionInterfaceTransitionPolicy) controllerHandoff {
@@ -222,6 +228,10 @@ type Controller struct {
 	// Eager providers can emit turn/started before SendTurn returns with the
 	// provider id; that event must bind this row instead of adopting a duplicate.
 	dispatchingTurnID string
+	// A compact request can be accepted before its provider turn starts.
+	compactionPending bool
+	// Provider calls keep automatic hibernation out without blocking explicit Kill.
+	operations int
 	// ackedTurnID is the turn the PROVIDER has confirmed it started, which lags
 	// pendingTurnID by the round trip between turn/start returning and the
 	// turn-started notification arriving. Interrupt needs the distinction: a
@@ -251,7 +261,6 @@ type Controller struct {
 	// auth mode and plan but never a credential demand, a thread-status report says
 	// nothing about archiving, and MCP servers are announced one at a time. Writing
 	// each report straight through would make every field blank the one before it.
-	account     domain.ConversationAccount
 	threadState domain.ConversationThreadState
 	// usage is merged in memory because providers may split context occupancy and
 	// cumulative accounting across separate events. Writing either half as a full
@@ -272,6 +281,17 @@ type Controller struct {
 	stopped  chan struct{}
 	once     sync.Once
 	closeErr error
+}
+
+func (c *Controller) beginOperation() func() {
+	c.mu.Lock()
+	c.operations++
+	c.mu.Unlock()
+	return func() {
+		c.mu.Lock()
+		c.operations--
+		c.mu.Unlock()
+	}
 }
 
 // ErrNoActiveTurn reports an interrupt with nothing to cancel.
@@ -344,12 +364,6 @@ func newController(
 		mcpServers:             map[string]domain.ConversationMCPServer{},
 		mcpServerSeenRevision:  map[string]uint64{},
 		stopped:                make(chan struct{}),
-	}
-	// Seeded from the durable row so a reconnect merges onto what is already known
-	// rather than starting from blank and reporting a conversation as having no
-	// account until the provider next mentions one.
-	if conversation.Account != nil {
-		c.account = *conversation.Account
 	}
 	if conversation.ThreadState != nil {
 		c.threadState = *conversation.ThreadState
@@ -806,7 +820,8 @@ func (p nativeHistoryCheckpoint) mismatches(
 
 func nativeHistoryCoordinationMessage(text string) bool {
 	text = strings.TrimSpace(text)
-	return strings.HasPrefix(text, "<ao-handoff-request") ||
+	_, coordination := domain.CoordinationDeliveryID(text)
+	return coordination || strings.HasPrefix(text, "<ao-handoff-request") ||
 		strings.HasPrefix(text, "AO transferred the previous agent's context in hidden system instructions.")
 }
 
@@ -1408,7 +1423,11 @@ func (c *Controller) sendLocked(
 		ClientMessageID:     msg.ClientMessageID,
 		ClientPayloadHash:   msg.ClientPayloadHash,
 		DeliveryContentJSON: deliveryContent,
+		SenderSessionID:     msg.SenderSessionID,
+		SenderProjectID:     msg.SenderProjectID,
+		SenderDisplayName:   msg.SenderDisplayName,
 		AuthoredByUser:      msg.AuthoredByUser,
+		InteractionAt:       msg.InteractionAt,
 	}
 
 	var (
@@ -1668,7 +1687,7 @@ func (c *Controller) mergeUsage(update ports.ChatUsage) domain.ConversationUsage
 func (c *Controller) busy() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.pendingTurnID != ""
+	return c.pendingTurnID != "" || c.compactionPending
 }
 
 // dispatch hands a recorded turn to the provider. Callers must hold sendMu.
@@ -2125,11 +2144,8 @@ var ErrCompactionWhileBusy = errors.New("cannot compact while a turn is in fligh
 // arriving in between would start a turn that the compaction then destroys — the
 // exact outcome the check exists to prevent.
 //
-// The lock is released as soon as the provider accepts. The compaction itself runs
-// as a provider turn for the next ten seconds or so, and holding sendMu across that
-// would make the whole conversation unresponsive; the provider's own single-turn
-// rule is what keeps a send from landing mid-compaction, and a send that arrives
-// then queues behind the compaction turn like any other.
+// The lock is released as soon as the provider accepts. Until its turn-started
+// event commits, compactionPending keeps sends queued and idle hibernation out.
 func (c *Controller) Compact(ctx context.Context) (ports.ChatCompactionResult, error) {
 	compactor, ok := c.conv.(ports.ChatCompactor)
 	if !ok || !c.Capabilities().Has(ports.ChatCapabilityCompaction) {
@@ -2145,7 +2161,16 @@ func (c *Controller) Compact(ctx context.Context) (ports.ChatCompactionResult, e
 	if c.busy() {
 		return ports.ChatCompactionResult{}, ErrCompactionWhileBusy
 	}
-	return compactor.Compact(ctx)
+	c.mu.Lock()
+	c.compactionPending = true
+	c.mu.Unlock()
+	result, err := compactor.Compact(ctx)
+	if err != nil {
+		c.mu.Lock()
+		c.compactionPending = false
+		c.mu.Unlock()
+	}
+	return result, err
 }
 
 // turnAckWait bounds how long Interrupt waits for the provider to acknowledge a
@@ -2535,15 +2560,15 @@ func (c *Controller) project() {
 
 	for event := range c.conv.Events() {
 		c.mu.Lock()
-		preserveProvider := c.preserveProviderOnStop
+		preserveWork := c.preserveProviderOnStop || c.handoff == controllerHandoffHibernate
 		c.mu.Unlock()
-		if preserveProvider && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped {
+		if preserveWork && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped {
 			continue
 		}
 		// A lifecycle event and a concurrent Send must agree on whether the root
 		// conversation is busy. Holding the same lock Send/dispatch use closes the
 		// window between the durable projection and the in-memory ownership update.
-		lifecycle := event.Kind == ports.ChatEventTurnStarted || event.Kind == ports.ChatEventTurnCompleted
+		lifecycle := event.Kind == ports.ChatEventTurnStarted || event.Kind == ports.ChatEventTurnCompleted || event.Kind == ports.ChatEventCompacted
 		if lifecycle {
 			c.sendMu.Lock()
 		}
@@ -2589,8 +2614,11 @@ func (c *Controller) project() {
 	c.state = ports.ChatControllerStopped
 	suppressStoppedActivity := c.suppressStoppedActivity
 	preserveProvider := c.preserveProviderOnStop
+	hibernating := c.handoff == controllerHandoffHibernate
 	c.mu.Unlock()
-	if preserveProvider {
+	// Hibernate admitted no running work, but Send can append an optimistic
+	// message during shutdown. Keep that queue for the replacement controller.
+	if preserveProvider || hibernating {
 		return
 	}
 
@@ -2612,11 +2640,18 @@ func (c *Controller) project() {
 	if !suppressStoppedActivity {
 		c.reportActivity(ctx, domain.ActivityExited, "chat.controller.stopped", now)
 	}
-	if _, err := c.store.CleanupOwnedControllerWork(
-		ctx, c.sessionID, c.conversation.ID, c.generation, now,
-	); err != nil {
+	if err := c.cleanupOwnedControllerWork(ctx, now); err != nil {
 		c.log.Error("failed to clean up stopped controller work", "session", c.sessionID, "error", err)
 	}
+}
+
+func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Time) error {
+	if c.reviewID != "" {
+		_, err := c.store.CleanupOwnedReviewControllerWork(ctx, c.reviewID, c.conversation.ID, c.generation, now)
+		return err
+	}
+	_, err := c.store.CleanupOwnedControllerWork(ctx, c.sessionID, c.conversation.ID, c.generation, now)
+	return err
 }
 
 // projectEvent archives one normalized provider event and applies its durable
@@ -2672,9 +2707,15 @@ func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (b
 	if err != nil {
 		return false, false, fmt.Errorf("encode provider event archive: %w", err)
 	}
-	projected, err := c.store.ProjectProviderEvent(ctx, c.conversation.ID, c.sessionID,
-		c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(),
-		func(txCtx context.Context) error { return c.apply(txCtx, event) })
+	project := func(txCtx context.Context) error { return c.apply(txCtx, event) }
+	var projected bool
+	if c.reviewID != "" {
+		projected, err = c.store.ProjectReviewProviderEvent(ctx, c.conversation.ID, c.sessionID,
+			c.reviewID, c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
+	} else {
+		projected, err = c.store.ProjectProviderEvent(ctx, c.conversation.ID, c.sessionID,
+			c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
+	}
 	if err != nil || !projected {
 		return projected, false, err
 	}
@@ -2703,13 +2744,15 @@ func (c *Controller) applyCommittedTurnLifecycle(event ports.ChatEvent) bool {
 			return false
 		}
 		c.pendingTurnID = event.ProviderTurnID
+		c.compactionPending = false
 		c.ackedTurnID = event.ProviderTurnID
 		c.state = ports.ChatControllerBusy
 		return true
 	case ports.ChatEventTurnCompleted:
-		if c.pendingTurnID != event.ProviderTurnID {
+		if c.pendingTurnID != event.ProviderTurnID && (!c.compactionPending || c.pendingTurnID != "") {
 			return false
 		}
+		c.compactionPending = false
 		c.pendingTurnID = ""
 		c.dispatchingTurnID = ""
 		if c.ackedTurnID == event.ProviderTurnID {
@@ -2786,6 +2829,10 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			}, now); err != nil {
 				return err
 			}
+		} else if state == domain.TurnStateCompleted && event.Err == nil && event.ProviderTurnID != "" &&
+			(event.ProviderConversationID == "" || event.ProviderConversationID == c.conv.ProviderConversationID()) {
+			_, err := c.store.ReconcileConversationAuthentication(ctx, c.conversation.ID, c.generation, event.ProviderTurnID, now)
+			return err
 		}
 		return nil
 
@@ -3091,9 +3138,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 
 	case ports.ChatEventControllerState:
 		if event.ControllerState == ports.ChatControllerStopped {
-			_, err := c.store.CleanupOwnedControllerWork(
-				ctx, c.sessionID, c.conversation.ID, c.generation, now)
-			return err
+			return c.cleanupOwnedControllerWork(ctx, now)
 		}
 		return nil
 
@@ -3163,6 +3208,20 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		c.reportActivity(ctx, domain.ActivityWaitingInput, "chat.input.requested", now)
 	case ports.ChatEventInputResolved:
 		c.reportInteractionResolved(ctx, "chat.input.resolved", now)
+	case ports.ChatEventCompacted:
+		if event.ProviderConversationID != "" && event.ProviderConversationID != c.conv.ProviderConversationID() {
+			return
+		}
+		c.mu.Lock()
+		settled := c.compactionPending && c.pendingTurnID == ""
+		if settled {
+			c.compactionPending = false
+			c.state = ports.ChatControllerReady
+		}
+		c.mu.Unlock()
+		if settled {
+			_ = c.drainLocked(ctx, true)
+		}
 	case ports.ChatEventControllerState:
 		// Volatile state moves only after the provider event and all of its durable
 		// cleanup committed. Otherwise a rollback can say "stopped" in memory while
@@ -3276,13 +3335,10 @@ func (c *Controller) applyAccount(
 	update ports.ChatAccount,
 	now time.Time,
 ) error {
-	if update.ReauthRecovered {
-		c.mu.Lock()
-		reauthPending := c.account.ReauthRequiredAt != nil
-		c.mu.Unlock()
-		if !reauthPending {
-			return nil
-		}
+	// Uncorrelated account reports cannot establish recovery. Successful turn
+	// completion is projected separately with its provider identity and fence.
+	if update.ReauthRecovered && !update.ReauthRequired && update.AuthMode == "" && update.PlanLabel == "" {
+		return nil
 	}
 	if err := c.recordAccount(ctx, update, now); err != nil {
 		return err
@@ -3316,24 +3372,38 @@ func (c *Controller) recordAccount(
 	update ports.ChatAccount,
 	now time.Time,
 ) error {
-	c.mu.Lock()
-	if update.AuthMode != "" {
-		c.account.AuthMode = update.AuthMode
+	// Read the durable projection in the event transaction. Snapshot reconciliation
+	// may have recovered it since this controller's last account report.
+	previous, err := c.store.ConversationAccount(ctx, c.conversation.ID)
+	if err != nil {
+		return err
+	}
+	account := domain.ConversationAccount{AuthenticationState: "unknown"}
+	if previous != nil {
+		account = *previous
+	}
+	if update.AuthMode != "" && account.AuthMode != update.AuthMode {
+		account.AuthChangedAt = &now
+		if account.AuthMode != "" && account.AuthMode != update.AuthMode {
+			account.AuthVerifiedAt = nil
+			if account.ReauthRequiredAt == nil {
+				account.AuthenticationState = "unknown"
+			}
+		}
+		account.AuthMode = update.AuthMode
 	}
 	if update.PlanLabel != "" {
-		c.account.PlanLabel = update.PlanLabel
+		account.PlanLabel = update.PlanLabel
 	}
 	if update.ReauthRequired {
-		at := now
-		c.account.ReauthRequiredAt = &at
-		c.account.ReauthReason = update.ReauthReason
-	} else if update.ReauthRecovered {
-		c.account.ReauthRequiredAt = nil
-		c.account.ReauthReason = ""
+		account.AuthenticationState = "required"
+		account.ReauthRequiredAt = &now
+		account.ReauthReason = update.ReauthReason
+		account.LastAuthFailureAt = &now
+		account.LastAuthFailureReason = update.ReauthReason
+		account.AuthFailureID = c.newID()
+		account.AuthVerifiedAt = nil
 	}
-	account := c.account
-	c.mu.Unlock()
-
 	return c.store.RecordAccount(ctx, c.conversation.ID, account, now)
 }
 

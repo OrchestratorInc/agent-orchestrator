@@ -11,6 +11,7 @@ import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { toReviewerHarnessId } from "../lib/reviewer-harnesses";
 import { captureRendererEvent } from "../lib/telemetry";
 import { agentSwitchVisibility } from "../lib/agent-switch-visibility";
+import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
 import { requestRemoteHostsRefresh } from "./useRemoteHosts";
@@ -20,6 +21,7 @@ import {
 	type AgentSwitchSummary,
 	type PRState,
 	type PullRequestFacts,
+	type SessionArtifact,
 	toAgentProvider,
 	toKanbanColumn,
 	toProjectKind,
@@ -74,6 +76,18 @@ function toPullRequestFacts(pr: components["schemas"]["SessionPRFacts"]): PullRe
 	};
 }
 
+function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): SessionArtifact {
+	return {
+		kind: artifact.kind,
+		name: artifact.name,
+		path: artifact.path,
+		previewUrl: artifact.previewUrl,
+		rawUrl: artifact.rawUrl,
+		size: artifact.size,
+		updatedAt: artifact.updatedAt,
+	};
+}
+
 function toWorkspaceSession(
 	session: components["schemas"]["ControllersSessionView"],
 	project: Pick<WorkspaceSummary, "id" | "name">,
@@ -116,6 +130,12 @@ function toWorkspaceSession(
 		statusReadiness,
 		provisionState: session.provisionState,
 		provisionError: session.provisionError || undefined,
+		provisionSteps: session.provisionSteps?.map((step) => ({
+			id: step.id,
+			status: step.status,
+			startedAt: step.startedAt ?? undefined,
+			endedAt: step.endedAt ?? undefined,
+		})),
 		isTerminated: session.isTerminated,
 		chatProviderPreserved: session.chatProviderPreserved,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
@@ -124,6 +144,7 @@ function toWorkspaceSession(
 		createdAt: session.createdAt,
 		updatedAt: session.updatedAt,
 		lastUserMessageAt: session.lastUserMessageAt ?? undefined,
+		lastInteractionAt: session.lastInteractionAt ?? undefined,
 		activity,
 		activeAgentSwitch: session.activeAgentSwitch ? toAgentSwitchSummary(session.activeAgentSwitch) : undefined,
 		previewUrl: session.previewUrl,
@@ -131,6 +152,8 @@ function toWorkspaceSession(
 		isPinned: session.isPinned ?? false,
 		pinnedAt: session.pinnedAt ?? undefined,
 		prs: (session.prs ?? []).map(toPullRequestFacts),
+		outputType: session.outputType,
+		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }
 
@@ -198,6 +221,14 @@ function toLocalWorkspaceSession(
 		scmStatus,
 		kanbanColumn,
 		displayStatus: session.displayStatus || undefined,
+		provisionState: session.provisionState,
+		provisionError: session.provisionError || undefined,
+		provisionSteps: session.provisionSteps?.map((step) => ({
+			id: step.id,
+			status: step.status,
+			startedAt: step.startedAt ?? undefined,
+			endedAt: step.endedAt ?? undefined,
+		})),
 		isTerminated: session.isTerminated,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
@@ -205,6 +236,7 @@ function toLocalWorkspaceSession(
 		createdAt: session.createdAt,
 		updatedAt: session.updatedAt,
 		lastUserMessageAt: session.lastUserMessageAt ?? undefined,
+		lastInteractionAt: session.lastInteractionAt ?? undefined,
 		activity,
 		activeAgentSwitch: session.activeAgentSwitch ? toAgentSwitchSummary(session.activeAgentSwitch) : undefined,
 		previewUrl: session.previewUrl,
@@ -212,6 +244,8 @@ function toLocalWorkspaceSession(
 		isPinned: session.isPinned ?? false,
 		pinnedAt: session.pinnedAt ?? undefined,
 		prs: (session.prs ?? []).map(toPullRequestFacts),
+		outputType: session.outputType,
+		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }
 
@@ -292,7 +326,13 @@ async function fetchRemoteSessions(hostId: string) {
 		recheckRemoteHost(hostId, response.status);
 		throw error;
 	}
-	return data?.sessions ?? [];
+	return Promise.all((data?.sessions ?? []).map(async (session) => ({
+		...session,
+		artifactFiles: await Promise.all((session.artifactFiles ?? []).map(async (artifact) => ({
+			...artifact,
+			rawUrl: artifact.rawUrl ? await aoBridge.remotes.previewUrl(hostId, session.id, artifact.rawUrl) : undefined,
+		}))),
+	})));
 }
 
 function toRemoteWorkspaces(

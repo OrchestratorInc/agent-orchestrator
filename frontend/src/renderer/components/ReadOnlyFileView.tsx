@@ -1,14 +1,17 @@
-import { useId, useRef } from "react";
+import { useCallback, useEffect, useId, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { type FileContents, type LineAnnotation } from "@pierre/diffs";
 import { File } from "@pierre/diffs/react";
 import { getApiBaseUrl } from "../lib/api-client";
+import { useAskInChat } from "../lib/chat-context-bus";
 import { useHostConnection } from "../hooks/useHostConnection";
 import { sessionUiKey } from "../lib/hosts";
 import type { WorkspaceDiffScope, WorkspaceFileDetail } from "../hooks/useSessionWorkspaceFiles";
 import { useUiStore } from "../stores/ui-store";
 import { FileAnnotationComposer, LineFeedbackButtonControl, PanelMessage, type FileAnnotationModel } from "./WorkspaceDiffView";
 import { AO_PIERRE_SURFACE_CSS } from "./diffs/pierreTheme";
+import { SelectionAskButton } from "./diffs/SelectionAskButton";
+import { codeReference, useCodeSelection } from "./diffs/useCodeSelection";
 import { usePersistentGutterUtility } from "./diffs/usePersistentGutterUtility";
 
 function formatBytes(bytes: number): string {
@@ -31,7 +34,10 @@ export function ReadOnlyFileView({
 	annotation,
 	detail,
 	editing = false,
+	onContentReady,
 	onEditChange,
+	onRevealLineConsumed,
+	revealLine,
 	scope = "combined",
 	sessionId,
 	hostId,
@@ -40,7 +46,10 @@ export function ReadOnlyFileView({
 	annotation: FileAnnotationModel;
 	detail: WorkspaceFileDetail;
 	editing?: boolean;
+	onContentReady?: () => void;
 	onEditChange?: (content: string) => void;
+	onRevealLineConsumed?: (requestKey: number) => void;
+	revealLine?: { line: number; requestKey: number };
 	scope?: WorkspaceDiffScope;
 	sessionId: string;
 	hostId?: string;
@@ -50,8 +59,38 @@ export function ReadOnlyFileView({
 	const { baseUrl: remoteBaseUrl } = useHostConnection(hostId);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const pendingRevealRef = useRef(revealLine);
+	const consumedRevealRequestKeysRef = useRef(new Set<number>());
 	const editorInstanceId = useId();
 	const gutterHover = usePersistentGutterUtility(containerRef);
+	const revealRequestedLine = useCallback(() => {
+		const target = pendingRevealRef.current;
+		if (!target) return;
+		if (consumedRevealRequestKeysRef.current.has(target.requestKey)) {
+			pendingRevealRef.current = undefined;
+			return;
+		}
+		const diffsContainer = containerRef.current?.querySelector("diffs-container");
+		const line = diffsContainer?.shadowRoot?.querySelector<HTMLElement>(`[data-line="${target.line}"]`);
+		if (!line) return;
+		line.scrollIntoView({ block: "center" });
+		consumedRevealRequestKeysRef.current.add(target.requestKey);
+		pendingRevealRef.current = undefined;
+		onRevealLineConsumed?.(target.requestKey);
+	}, [onRevealLineConsumed]);
+	useEffect(() => {
+		if (!revealLine || consumedRevealRequestKeysRef.current.has(revealLine.requestKey)) {
+			pendingRevealRef.current = undefined;
+			return;
+		}
+		pendingRevealRef.current = revealLine;
+		const frame = requestAnimationFrame(revealRequestedLine);
+		return () => cancelAnimationFrame(frame);
+	}, [revealLine?.line, revealLine?.requestKey, revealRequestedLine]);
+	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
+	// session has a Chat composer; in edit mode a selection belongs to the editor.
+	const askInChat = useAskInChat(sessionId, hostId);
+	const codeSelection = useCodeSelection(containerRef, (selection) => askInChat?.(codeReference(detail.path, selection, false)), askInChat !== undefined && !editing);
 	if (detail.binary) {
 		if (detail.imageMediaType) {
 			return (
@@ -69,11 +108,9 @@ export function ReadOnlyFileView({
 	if (detail.contentTruncated) {
 		return <PanelMessage>{t("files.explorer.tooLarge", { size: formatBytes(detail.size) })}</PanelMessage>;
 	}
-	const activeLine = annotation.target?.surface !== "review" && annotation.target?.path === detail.path && annotation.target.side === "file"
-		? annotation.target.line
-		: undefined;
-	const lineAnnotations: LineAnnotation<"feedback">[] | undefined = activeLine != null
-		? [{ lineNumber: activeLine, metadata: "feedback" }]
+	const activeTargets = annotation.targets.filter((target) => target.surface !== "review" && target.path === detail.path && target.side === "file" && target.line != null);
+	const lineAnnotations: LineAnnotation<"feedback">[] | undefined = activeTargets.length > 0
+		? activeTargets.map((target) => ({ lineNumber: target.line as number, metadata: "feedback" }))
 		: undefined;
 	const file: FileContents = {
 		name: detail.path,
@@ -118,7 +155,11 @@ export function ReadOnlyFileView({
 					disableFileHeader: true,
 					enableGutterUtility: true,
 					lineHoverHighlight: "line",
-					onPostRender: gutterHover.restoreAfterRender,
+					onPostRender: () => {
+						gutterHover.restoreAfterRender();
+						onContentReady?.();
+						revealRequestedLine();
+					},
 					overflow: "wrap",
 					theme: { dark: "github-dark", light: "github-light" },
 					themeType: resolvedTheme,
@@ -126,7 +167,10 @@ export function ReadOnlyFileView({
 					tokenizeMaxLineLength: 2_000,
 					unsafeCSS: AO_PIERRE_SURFACE_CSS,
 				}}
-				renderAnnotation={() => <FileAnnotationComposer annotation={annotation} />}
+				renderAnnotation={(line) => {
+					const target = activeTargets.find((open) => open.line === line.lineNumber);
+					return target ? <FileAnnotationComposer annotation={annotation} target={target} /> : null;
+				}}
 				onEditChange={(event) => onEditChange?.(event.file.contents)}
 				onEditComplete={() => "reject"}
 				renderGutterUtility={(getHoveredLine) => (
@@ -136,6 +180,7 @@ export function ReadOnlyFileView({
 					}} />
 				)}
 			/>
+			<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
 		</div>
 	);
 }
