@@ -10,6 +10,7 @@ import type { TerminalMux } from "../lib/terminal-mux";
 import type { TerminalTarget } from "../types/terminal";
 import type { WorkspaceSession } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
+import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import {
 	cloudTerminalKind,
 	TerminalCacheProvider,
@@ -611,6 +612,25 @@ describe("TerminalPane replay cover", () => {
 			await waitFor(() => expect(onContentReady).toHaveBeenLastCalledWith(true));
 		} finally {
 			view.restore();
+		}
+	});
+
+	it("shows the cloud startup failure instead of Connecting after sandbox termination", () => {
+		useTerminalResetStore.setState({ reconnecting: { "sess-orch": true } });
+		const view = renderPane({
+			...orchestrator,
+			terminalHandleId: "term-1",
+			cloud: {
+				orgId: "org-1", desiredState: "running", observedState: "terminated",
+				runtimeError: "The session's worker never started within 10m0s and has been stopped.",
+			},
+		});
+		try {
+			expect(screen.getByTestId("terminal-cloud-failure")).toHaveTextContent("worker never started within 10m0s");
+			expect(screen.queryByTestId("terminal-connecting-cover")).not.toBeInTheDocument();
+		} finally {
+			view.restore();
+			useTerminalResetStore.setState({ reconnecting: {} });
 		}
 	});
 
