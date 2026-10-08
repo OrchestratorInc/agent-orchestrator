@@ -10,11 +10,11 @@ import { useUiStore } from "../stores/ui-store";
 import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
-	get: vi.fn(), patch: vi.fn(), localGet: vi.fn(), connections: vi.fn(), ready: true,
+	get: vi.fn(), patch: vi.fn(), localGet: vi.fn(), connections: vi.fn(), me: vi.fn(), ready: true,
 	templates: [] as Array<{ id: string; name: string; displayName: string }>,
 	orgCoderConfig: null as { baseUrl: string; templateId?: string } | null,
 }));
-vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { getProject: mocks.get, updateProjectSettings: mocks.patch, listUserProviderConnections: mocks.connections }, ready: mocks.ready, baseUrl: "https://cloud.test" }) }));
+vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { getProject: mocks.get, updateProjectSettings: mocks.patch, listUserProviderConnections: mocks.connections, me: mocks.me }, ready: mocks.ready, baseUrl: "https://cloud.test" }) }));
 vi.mock("../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true }) }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"], cloudProjectsQueryKey: ["cloud-projects"], useWorkspaceQuery: () => ({ data: [] }),
@@ -43,6 +43,8 @@ beforeEach(() => {
 	mocks.localGet.mockReset();
 	mocks.connections.mockReset();
 	mocks.connections.mockResolvedValue({ providerConnections: [] });
+	mocks.me.mockReset();
+	mocks.me.mockResolvedValue({ sandboxProviders: { available: ["nodeops"], default: "nodeops" } });
 	mocks.localGet.mockImplementation(async (_path: string, options: { params: { path: { agent: string } } }) => ({ data: {
 		agent: options.params.path.agent, selectionMode: "catalog", allowCustom: true,
 		models: ["worker-model", "orchestrator-model", "reviewer-model", "review-codex"].map((id) => ({ id, label: id, efforts: ["low", "high", "max"] })),
@@ -71,7 +73,9 @@ beforeEach(() => {
 			if (!agent) throw new Error("Role agent is required");
 			return { agent, agentConfig: { ...previous?.agentConfig, ...update.agentConfig } };
 		};
-		project = { ...project, ...(patch.displayName ? { displayName: patch.displayName } : {}), ...(patch.defaultBranch ? { defaultBranch: patch.defaultBranch } : {}), config: { ...project.config, ...patch.config, worker: mergeRole("worker"), orchestrator: mergeRole("orchestrator") } };
+		const coder = patch.config?.coder ? { ...(project.config.coder as object | undefined), ...patch.config.coder } : project.config.coder;
+		project = { ...project, ...(patch.displayName ? { displayName: patch.displayName } : {}), ...(patch.defaultBranch ? { defaultBranch: patch.defaultBranch } : {}), config: { ...project.config, ...patch.config, coder, worker: mergeRole("worker"), orchestrator: mergeRole("orchestrator") } };
+		if (project.config.coder === undefined) delete project.config.coder;
 		for (const role of ["worker", "orchestrator"] as const) if (project.config[role] === undefined) delete project.config[role];
 		return { project };
 	});
@@ -264,8 +268,18 @@ describe("Cloud project Coder template", () => {
 	it("shows the project's Coder template and size", () => {
 		renderCoder({ coder: { templateId: "tpl-1", size: "medium" } });
 		expect(screen.getByText("Azure Linux")).toBeInTheDocument();
+		// The id stays available, secondary to the name.
+		expect(screen.getByTestId("coder-template-id")).toHaveTextContent("tpl-1");
+		expect(screen.getByText("Azure Linux").parentElement).toHaveAttribute("title", "tpl-1");
 		expect(screen.getByText("medium")).toBeInTheDocument();
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("falls back to the template id when the template list doesn't have it", () => {
+		mocks.templates = [];
+		renderCoder({ coder: { templateId: "4b1f0c3e-0000-4000-8000-000000000001" } });
+		expect(screen.getByText("4b1f0c3e-0000-4000-8000-000000000001")).toBeInTheDocument();
+		expect(screen.queryByTestId("coder-template-id")).not.toBeInTheDocument();
 	});
 
 	it("flags a template-less project when the org's own Coder has no default template", () => {
@@ -291,5 +305,47 @@ describe("Cloud project Coder template", () => {
 		mocks.templates = [{ id: "preserve", name: "preserve", displayName: "Preserved template" }];
 		mount("general");
 		expect(await screen.findByText("Preserved template")).toBeInTheDocument();
+	});
+
+	it("edits the workspace name prefix through the settings patch, only when it changes", async () => {
+		project.config.coder = { templateId: "tpl-1" };
+		mount("general");
+		await userEvent.click(await screen.findByRole("button", { name: "Edit Workspace name prefix" }));
+		expect(screen.getByText("Applies to new sessions. Workspaces are named <prefix>-<id>; empty uses ao.")).toBeInTheDocument();
+		const prefix = screen.getByRole("textbox", { name: "Workspace name prefix" });
+		await userEvent.type(prefix, "acme");
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { coder: { workspaceNamePrefix: "acme" } } }));
+		expect(mocks.patch).toHaveBeenCalledTimes(1);
+		expect(project.config.coder).toEqual({ templateId: "tpl-1", workspaceNamePrefix: "acme" });
+	});
+
+	it("clears the workspace name prefix back to the default", async () => {
+		project.config.coder = { templateId: "tpl-1", workspaceNamePrefix: "team" };
+		mount("general");
+		await userEvent.click(await screen.findByRole("button", { name: "Edit Workspace name prefix" }));
+		await userEvent.clear(screen.getByRole("textbox", { name: "Workspace name prefix" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { coder: { workspaceNamePrefix: "" } } }));
+	});
+
+	it("never sends an invalid workspace name prefix", async () => {
+		project.config.coder = { templateId: "tpl-1" };
+		mount("general");
+		await userEvent.click(await screen.findByRole("button", { name: "Edit Workspace name prefix" }));
+		await userEvent.type(screen.getByRole("textbox", { name: "Workspace name prefix" }), "Team--");
+		expect(await screen.findByRole("alert")).toHaveTextContent("Use up to 20 lowercase letters, numbers, or hyphens");
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 800)); });
+		expect(mocks.patch).not.toHaveBeenCalled();
+	});
+
+	it("shows the workspace name prefix only for a Coder project", async () => {
+		renderCoder();
+		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
+		expect(screen.queryByRole("button", { name: "Edit Workspace name prefix" })).not.toBeInTheDocument();
+	});
+
+	it("shows the workspace name prefix when new sessions run on Coder", async () => {
+		mocks.me.mockResolvedValue({ sandboxProviders: { available: ["coder"], default: "coder" } });
+		renderCoder();
+		expect(await screen.findByRole("button", { name: "Edit Workspace name prefix" })).toBeInTheDocument();
 	});
 });
