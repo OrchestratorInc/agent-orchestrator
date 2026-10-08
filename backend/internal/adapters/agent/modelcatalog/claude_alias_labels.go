@@ -80,8 +80,8 @@ func claudeFamilyVersion(item ports.AgentModelInfo) (string, []int) {
 		if !strings.Contains(label, family) && !strings.Contains(id, family) {
 			continue
 		}
-		if label != id && strings.Contains(label, family) {
-			if match := claudeDisplayVersionPattern.FindString(label[strings.Index(label, family):]); match != "" {
+		if _, afterFamily, found := strings.Cut(label, family); found && label != id {
+			if match := claudeDisplayVersionPattern.FindString(family + afterFamily); match != "" {
 				return family, parseVersion(strings.Split(match, "."))
 			}
 		}
