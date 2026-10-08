@@ -235,6 +235,9 @@ jobs:
         # would otherwise replay test results from an earlier run.
         run: go test -race -count=1 ./...
 
+      - name: Test Expat security backport
+        run: docker build --target expat-build --file Dockerfile .
+
   lint:
     runs-on: ubuntu-latest
     steps:
