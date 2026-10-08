@@ -1147,3 +1147,27 @@ func TestWorkspaceReviewDispatchMapsStaleSnapshot(t *testing.T) {
 		t.Fatalf("completed=%T failure=%q", control.completed, control.failureCode)
 	}
 }
+
+// Workspace terminals must land in a shell that interprets arrow-key CSI
+// sequences. /bin/sh on Debian is dash, which echoes them back raw ("^[[A"),
+// so Up/Down look like dropped escape bytes instead of history navigation.
+func TestWorkspaceShellPrefersArrowKeyCapableShell(t *testing.T) {
+	cases := []struct {
+		name    string
+		hasBash bool
+		want    string
+	}{
+		{name: "image ships bash", hasBash: true, want: "/bin/bash"},
+		{name: "posix-only image", hasBash: false, want: "/bin/sh"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := workspaceShell(func(path string) bool {
+				return tc.hasBash && path == "/bin/bash"
+			})
+			if got != tc.want {
+				t.Fatalf("workspaceShell() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
