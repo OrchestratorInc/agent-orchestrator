@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2, Play, MessageSquare, Pencil, Plus, TerminalSquare, Trash2, X } from "lucide-react";
+import { Loader2, MessageSquare, Pencil, Plus, TerminalSquare, Trash2, X } from "lucide-react";
 import { apiErrorMessage } from "../lib/api-client";
 import { useUiStore } from "../stores/ui-store";
 import {
@@ -208,13 +208,11 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 		if (cues.length === 0) {
 			return (
 				<div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
-					<Play aria-hidden="true" className="mb-3 size-5 text-settings-muted" />
-					<h3 className="text-base font-medium leading-6 text-foreground">{t("cues.empty")}</h3>
-					<p className="mt-2 max-w-xs text-sm leading-6 text-settings-muted">{t("cues.settingsDescription")}</p>
-					<Button type="button" className="mt-6" disabled={busy} onClick={openNew}>
+					<Button type="button" disabled={busy} onClick={openNew}>
 						<Plus aria-hidden="true" />
 						{t("cues.newCue")}
 					</Button>
+					<p className="mt-4 max-w-xs text-sm leading-6 text-settings-muted">{t("cues.settingsDescription")}</p>
 				</div>
 			);
 		}
