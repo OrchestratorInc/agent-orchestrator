@@ -93,7 +93,7 @@ function ShellLayoutWithSettings() {
  * drafts, and terminal survive) and is only hidden behind the settings page.
  */
 function ShellOutlet() {
-	const settingsOpen = useUiStore((state) => state.settingsModal !== null);
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	return (
 		<>
 			<div className={cn("flex min-h-0 flex-1 flex-col", settingsOpen && "hidden")}>
@@ -166,7 +166,7 @@ const ShellCenter = memo(function ShellCenter({
 	// an extra strip there would displace session tabs from the native controls.
 	// Windows already owns a separate WindowTitlebar.
 	const draggableSessionFrame = isSessionRoute && isLinux;
-	const settingsOpen = useUiStore((state) => state.settingsModal !== null);
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	if (hideShellTopbar) {
 		return selfFramedCenterPanel ? (
 			<Outlet />
@@ -229,7 +229,7 @@ function ShellLayout() {
 	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
-	const settingsOpen = useUiStore((state) => state.settingsModal !== null);
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const sidebarHasLayout = useUiStore(sidebarOccupiesLayout);
 	// The drag strip above the sidebar must be exactly as wide as the sidebar.
 	// `--ao-sidebar-w` only reaches the strip if it already exists when the

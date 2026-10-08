@@ -127,7 +127,7 @@ describe("SettingsDialog", () => {
 		renderSettingsDialog();
 
 		await userEvent.click(await screen.findByRole("button", { name: "Start pending save" }));
-		const closeButton = screen.getByRole("button", { name: "Back" });
+		const closeButton = screen.getByRole("button", { name: "Close settings" });
 		await userEvent.click(closeButton);
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
 

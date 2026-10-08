@@ -127,7 +127,7 @@ export function CreateProjectAgentSheet({
 }: CreateProjectAgentSheetProps) {
 	const { t } = useTranslation();
 	// Settings opens as a page in the center pane; step aside so it is not hidden behind this modal.
-	const settingsOpen = useUiStore((state) => state.settingsModal !== null);
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const [isExiting, setIsExiting] = useState(false);
 	const contentOpen = open || isExiting;
 	const displayedAction = useRef(action);

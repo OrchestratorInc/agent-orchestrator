@@ -89,7 +89,7 @@ describe("Settings recovery modal integration", () => {
 		await screen.findByRole("button", { name: "Edit Project name" });
 		expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
 
-		await userEvent.click(screen.getByRole("button", { name: "Back" }));
+		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
 		await waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 		expect(put).not.toHaveBeenCalled();
 	});
@@ -104,7 +104,7 @@ describe("Settings recovery modal integration", () => {
 		await userEvent.type(name, "Renamed project");
 
 		if (dismiss === "Escape") await userEvent.keyboard("{Escape}");
-		else await userEvent.click(screen.getByRole("button", { name: "Back" }));
+		else await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
 
 		await waitFor(() => expect(put).toHaveBeenCalledWith(
 			"/api/v1/projects/{id}",
@@ -121,7 +121,7 @@ describe("Settings recovery modal integration", () => {
 		const name = screen.getByRole("textbox", { name: "Project name" });
 		await userEvent.clear(name);
 		await userEvent.type(name, "Renamed project");
-		await userEvent.click(screen.getByRole("button", { name: "Back" }));
+		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("Save rejected");
 		expect(name).toHaveValue("Renamed project");
@@ -218,7 +218,7 @@ describe("Settings recovery modal integration", () => {
 		await openAgentManagement("Worker agent");
 		await screen.findByRole("textbox", { name: "Search harnesses" });
 
-		expect(form).toBeInTheDocument();
+		expect(form).not.toBeNull();
 		if (dismiss === "Escape") await userEvent.keyboard("{Escape}");
 		else await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
@@ -228,7 +228,7 @@ describe("Settings recovery modal integration", () => {
 		await userEvent.click(screen.getByRole("button", { name: "General" }));
 		expect(await screen.findByRole("button", { name: "Edit Project name" })).toHaveTextContent("Unsaved project name");
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
-		await userEvent.click(screen.getByRole("button", { name: "Back" }));
+		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
 		await waitFor(() => expect(put).toHaveBeenCalledWith(
 			"/api/v1/projects/{id}",
 			expect.objectContaining({ body: expect.objectContaining({ displayName: "Unsaved project name" }) }),

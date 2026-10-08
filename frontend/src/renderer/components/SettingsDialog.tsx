@@ -1,4 +1,6 @@
-import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, type LucideIcon } from "lucide-react";
+import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, X, type LucideIcon } from "lucide-react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -16,6 +18,8 @@ import { topbarHeaderClass } from "./TopbarButton";
 import { topbarDragStyle, useTopbarPaddingLeft } from "./ShellTopbar";
 import { type GlobalSettingsSection, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
+import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
+import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
@@ -287,7 +291,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 	const globalModal = settingsModal?.scope === "global" ? settingsModal : null;
 	const projectLayer = useSettingsLayer(projectModal);
 	const globalLayer = useSettingsLayer(globalModal);
-	const active = globalModal ? globalLayer : projectModal ? projectLayer : null;
+	// Global settings is a page in the shell; project settings stays a modal.
+	const active = globalModal ? globalLayer : null;
 	const activeRef = useRef(active);
 	activeRef.current = active;
 	const isOpen = active !== null;
@@ -307,8 +312,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 		return () => document.removeEventListener("keydown", onKeyDown, true);
 	}, [isOpen]);
 	return (
-		<SettingsPageContext.Provider value={active ? { active, layers: [projectModal ? projectLayer : null, globalModal ? globalLayer : null].filter((layer) => layer !== null) } : null}>
+		<SettingsPageContext.Provider value={active ? { active, layers: [globalLayer] } : null}>
 			{children}
+			{projectModal && <ProjectSettingsModal key={projectLayer.bodyKey} layer={projectLayer} covered={globalModal !== null} />}
 		</SettingsPageContext.Provider>
 	);
 }
@@ -350,9 +356,10 @@ export function SettingsPane() {
 }
 
 /** Save progress / failure for the project form, shown under the section list. */
-export function SettingsSaveStatus() {
+export function SettingsSaveStatus({ layer: layerProp }: { layer?: SettingsLayerState }) {
 	const { t } = useTranslation();
-	const layer = useSettingsPage();
+	const pageLayer = useSettingsPage();
+	const layer = layerProp ?? pageLayer;
 	if (!layer?.showSaveStatus) return null;
 	const { projectSaveState, activeProjectSection, remoteHostId } = layer;
 	return (
@@ -371,5 +378,92 @@ export function SettingsSaveStatus() {
 				</p>
 			)}
 		</div>
+	);
+}
+
+type SettingsLayerState = ReturnType<typeof useSettingsLayer>;
+
+/** Project settings: a dialog over the shell, sharing the page's section list and body. */
+function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; covered: boolean }) {
+	const { t } = useTranslation();
+	const contentRef = useRef<HTMLDivElement>(null);
+	const closeButtonRef = useRef<HTMLButtonElement>(null);
+	// The body renders into a detached host so it stays mounted (and keeps its draft)
+	// while recovery settings cover the dialog, then is re-attached when it returns.
+	const [bodyHost] = useState(() => document.createElement("div"));
+	useEffect(() => { bodyHost.className = "flex min-h-0 flex-1 flex-col"; }, [bodyHost]);
+	return (
+		<>
+		{createPortal(layer.body(), bodyHost)}
+		<Dialog.Root open={!covered} onOpenChange={(open) => { if (!open) layer.close(); }}>
+			<Dialog.Portal>
+				<Dialog.Overlay
+					className="dialog-overlay z-[calc(var(--z-overlay)-1)] animate-overlay-in motion-reduce:animate-none"
+					data-testid="settings-dialog-overlay"
+					onWheel={(event) => event.preventDefault()}
+				/>
+				<Dialog.Content
+					aria-modal="true"
+					className={cn(
+						settingsDialogSurfaceClass,
+						"fixed left-1/2 top-1/2 z-overlay h-[min(40rem,calc(100vh-3rem))] w-(--size-settings-dialog-wide) max-h-none -translate-x-1/2 -translate-y-1/2 origin-center overflow-hidden p-0 animate-modal-in motion-reduce:animate-none sm:rounded-lg",
+					)}
+					onOpenAutoFocus={(event) => { event.preventDefault(); closeButtonRef.current?.focus({ preventScroll: true }); }}
+					onEscapeKeyDown={(event) => {
+						const target = event.target instanceof Element ? event.target : null;
+						// In-place edits and login flows take Escape themselves.
+						if (target?.closest("[data-settings-inline-edit]")) {
+							event.preventDefault();
+							return;
+						}
+						if (contentRef.current?.contains(event.target as Node)) return;
+						const activeElement = document.activeElement instanceof Element ? document.activeElement : null;
+						const nestedPopup = [target, activeElement].some((element) => element?.closest('[role="menu"], [role="listbox"], [data-radix-popper-content-wrapper]'));
+						if (nestedPopup) event.preventDefault();
+					}}
+					ref={contentRef}
+				>
+					<div className="flex h-full min-h-0">
+						<aside className="flex w-48 shrink-0 flex-col border-r border-(--color-border-settings-dialog-header) bg-card">
+							<p className="px-3 pb-1 pt-1.5 text-2xs font-medium tracking-normal text-muted-foreground/60">{t("shell.projectSettings")}</p>
+							<nav aria-label={t("settings.navSectionsAria")} className="flex flex-col gap-0.5 p-2 pt-0">
+								{layer.navItems.map(({ id, label, icon: Icon, active, disabled, onSelect }) => (
+									<button
+										aria-current={active ? "page" : undefined}
+										className={cn(
+											NAV_ROW_HIGHLIGHT_HOST_CLASS,
+											"flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm font-medium text-muted-foreground transition-none focus:outline-none focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50",
+										)}
+										data-active={active}
+										disabled={disabled}
+										key={id}
+										onClick={onSelect}
+										type="button"
+									>
+										<NavRowHighlight active={active} disabled={disabled} />
+										<Icon aria-hidden="true" className="relative z-[1] size-icon-md shrink-0" />
+										<span className="relative z-[1] min-w-0 flex-1 truncate">{label}</span>
+									</button>
+								))}
+							</nav>
+							<div className="mt-auto"><SettingsSaveStatus layer={layer} /></div>
+						</aside>
+						<div className="flex min-w-0 flex-1 flex-col bg-card">
+							<DialogHeader className={cn(settingsDialogHeaderClass, "flex h-auto shrink-0 flex-row items-center justify-between border-b-0 px-(--size-modal-padding) py-3")}>
+								<Dialog.Title className="settings-dialog-title">{layer.title}{layer.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}</Dialog.Title>
+								<Dialog.Description className="sr-only">{t("settings.project.dialogDescription")}</Dialog.Description>
+								<button aria-label={t("settings.close")} className="settings-close-button" disabled={layer.cueBusy} onClick={layer.close} ref={closeButtonRef} type="button">
+									<X aria-hidden="true" className="size-4" />
+								</button>
+							</DialogHeader>
+							<div aria-busy={!layer.isBodyReady} className={cn(settingsDialogBodyClass, "settings-dialog-body flex-1 px-(--size-modal-padding) pt-0")}>
+								<div className="flex min-h-0 flex-1 flex-col" ref={(node) => { if (node && bodyHost.parentElement !== node) node.appendChild(bodyHost); }} />
+							</div>
+						</div>
+					</div>
+				</Dialog.Content>
+			</Dialog.Portal>
+		</Dialog.Root>
+		</>
 	);
 }
