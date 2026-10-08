@@ -26,8 +26,10 @@ const cloudCpClientMock = vi.hoisted(() => ({
 	listChatEvents: vi.fn(),
 	getSession: vi.fn(),
 	getSessionReviewState: cloudReviewGetMock,
+	retrySessionStartup: vi.fn(),
 }));
 const cloudResumeMock = cloudCpClientMock.resumeSession;
+const cloudRetryStartupMock = cloudCpClientMock.retrySessionStartup;
 const cloudGetSessionMock = cloudCpClientMock.getSession;
 const getCloudSessionMock = cloudCpClientMock.getSession;
 const listSessionEventsMock = cloudCpClientMock.listChatEvents;
@@ -961,6 +963,8 @@ describe("SessionView", () => {
 		closeShellTerminalMock.mockReset();
 		cloudResumeMock.mockReset();
 		cloudResumeMock.mockResolvedValue({ session: {} });
+		cloudRetryStartupMock.mockReset();
+		cloudRetryStartupMock.mockResolvedValue({ session: {} });
 		cloudReviewGetMock.mockReset();
 		cloudReviewGetMock.mockResolvedValue({ sessionId: "sess-2", reviews: [], runs: [] });
 		cloudGetSessionMock.mockReset();
@@ -1804,6 +1808,78 @@ describe("SessionView", () => {
 		};
 		render(<SessionView sessionId="sess-2" />);
 		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+	});
+
+	describe("cloud startup errors", () => {
+		const startupError = {
+			code: "workspace_not_ready",
+			message: "Your Coder workspace wasn't ready after 20 minutes.",
+			at: "2026-10-08T00:00:00Z",
+		};
+		function failedCloudSession(cloud: Partial<NonNullable<WorkspaceSession["cloud"]>>) {
+			const session = workerSession("sess-2");
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "terminated", ...cloud };
+			return session;
+		}
+
+		it("replaces the pane with the server's reason and retries startup once AO gives up", async () => {
+			failedCloudSession({ runtimeState: "terminated", startupError });
+			const view = render(<SessionView sessionId="sess-2" />);
+			const invalidate = vi.spyOn(view.client, "invalidateQueries");
+
+			const errorState = screen.getByTestId("cloud-session-startup-error");
+			expect(within(errorState).getByRole("heading", { name: "This session couldn't start" })).toBeInTheDocument();
+			expect(errorState).toHaveTextContent(startupError.message);
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+			// The topbar stays usable above the error state.
+			expect(screen.getByTestId("session-topbar-host").contains(errorState)).toBe(false);
+
+			fireEvent.click(within(errorState).getByRole("button", { name: "Retry" }));
+			await waitFor(() => expect(cloudRetryStartupMock).toHaveBeenCalledWith("cloud-org", "sess-2"));
+			await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-sessions"] }));
+		});
+
+		it("keeps a transiently failed runtime on the loader with its startup reason", () => {
+			// "failed" is retried by the reconciler with backoff, so it is not final.
+			failedCloudSession({ runtimeState: "failed", observedState: "failed", startupError });
+			render(<SessionView sessionId="sess-2" />);
+			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+			expect(screen.getByTestId("cloud-session-startup-note")).toHaveTextContent(startupError.message);
+			expect(screen.queryByTestId("cloud-session-startup-error")).not.toBeInTheDocument();
+		});
+
+		it("keeps the loader with a still-retrying note while AO keeps trying", () => {
+			failedCloudSession({ runtimeState: "bootstrapping", observedState: "bootstrapping", startupError });
+			render(<SessionView sessionId="sess-2" />);
+			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+			expect(screen.getByTestId("cloud-session-startup-note")).toHaveTextContent(
+				`${startupError.message} AO is still retrying.`,
+			);
+			expect(screen.queryByTestId("cloud-session-startup-error")).not.toBeInTheDocument();
+		});
+
+		it("never leaves an ended cloud session blank without a startup reason", () => {
+			failedCloudSession({ runtimeState: "terminated", runtimeError: "sandbox was deleted" });
+			render(<SessionView sessionId="sess-2" />);
+			const errorState = screen.getByTestId("cloud-session-startup-error");
+			expect(within(errorState).getByRole("heading", { name: "This session isn't running" })).toBeInTheDocument();
+			expect(errorState).toHaveTextContent("sandbox was deleted");
+			expect(within(errorState).queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+		});
+
+		it("falls back to a generic message when the runtime reports no error", () => {
+			failedCloudSession({ runtimeState: "terminated" });
+			render(<SessionView sessionId="sess-2" />);
+			expect(screen.getByTestId("cloud-session-startup-error")).toHaveTextContent("Its cloud workspace is no longer running.");
+		});
+
+		it("shows startup progress instead of a blank pane while a failed runtime is retried", () => {
+			failedCloudSession({ runtimeState: "failed", observedState: "failed" });
+			render(<SessionView sessionId="sess-2" />);
+			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+			expect(screen.queryByTestId("cloud-session-startup-error")).not.toBeInTheDocument();
+		});
 	});
 
 	it("activates a new terminal opened while a file tab is selected", async () => {

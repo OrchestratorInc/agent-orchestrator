@@ -117,7 +117,7 @@ func newSandboxReconciler(
 	if !buildsProvider {
 		return nil, nil
 	}
-	workerBinary, workerHelperBinary, err := loadWorkerBinaries(cfg)
+	workerBinary, workerHelperBinary, workerBuilds, err := loadWorkerBinaries(cfg, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -167,6 +167,7 @@ func newSandboxReconciler(
 		TerminalStreamEnabled:  cfg.TerminalStreamEnabled,
 		WorkerBinary:           workerBinary,
 		WorkerHelperBinary:     workerHelperBinary,
+		WorkerBuilds:           workerBuilds,
 		Interval:               cfg.ReconcileInterval,
 		StartupTimeout:         cfg.SandboxStartupTimeout,
 		HeartbeatTimeout:       cfg.WorkerHeartbeatTimeout,
@@ -181,7 +182,17 @@ func newSandboxReconciler(
 // Docker-only deployments bake the worker into their image and need neither.
 // Both the reconciler (to advertise the expected hashes) and the API server (to
 // serve the content-addressed self-update endpoint) read the same bytes.
-func loadWorkerBinaries(cfg config.Config) (workerBinary, workerHelperBinary []byte, err error) {
+//
+// The configured paths hold the linux/amd64 build every provider installs. The
+// control-plane image also ships a linux/arm64 build beside them
+// (<path>-linux-arm64) for Coder workspaces on arm64 hosts; it is optional so a
+// deployment without it keeps working, with arm64 workspaces reported as
+// unsupported.
+func loadWorkerBinaries(cfg config.Config, logger *slog.Logger) (
+	workerBinary, workerHelperBinary []byte,
+	builds map[string]sandbox.WorkerBuild,
+	err error,
+) {
 	needs := false
 	for _, provider := range cfg.AvailableSandboxProviders {
 		if provider == sandbox.ProviderNodeOps || provider == sandbox.ProviderCoder {
@@ -189,23 +200,44 @@ func loadWorkerBinaries(cfg config.Config) (workerBinary, workerHelperBinary []b
 		}
 	}
 	if !needs {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
-	workerBinary, err = os.ReadFile(cfg.WorkerBinaryPath)
+	workerBinary, err = readRequiredBinary(cfg.WorkerBinaryPath, "worker")
 	if err != nil {
-		return nil, nil, fmt.Errorf("read worker binary %s: %w", cfg.WorkerBinaryPath, err)
+		return nil, nil, nil, err
 	}
-	if len(workerBinary) == 0 {
-		return nil, nil, fmt.Errorf("worker binary %s is empty", cfg.WorkerBinaryPath)
-	}
-	workerHelperBinary, err = os.ReadFile(cfg.WorkerHelperBinaryPath)
+	workerHelperBinary, err = readRequiredBinary(cfg.WorkerHelperBinaryPath, "worker helper")
 	if err != nil {
-		return nil, nil, fmt.Errorf("read worker helper binary %s: %w", cfg.WorkerHelperBinaryPath, err)
+		return nil, nil, nil, err
 	}
-	if len(workerHelperBinary) == 0 {
-		return nil, nil, fmt.Errorf("worker helper binary %s is empty", cfg.WorkerHelperBinaryPath)
+	builds = map[string]sandbox.WorkerBuild{}
+	arm64Worker, workerErr := readRequiredBinary(cfg.WorkerBinaryPath+"-linux-arm64", "arm64 worker")
+	arm64Helper, helperErr := readRequiredBinary(cfg.WorkerHelperBinaryPath+"-linux-arm64", "arm64 worker helper")
+	if workerErr == nil && helperErr == nil {
+		builds[sandbox.ArchARM64] = sandbox.WorkerBuild{Binary: arm64Worker, HelperBinary: arm64Helper}
+	} else if logger != nil {
+		logger.Warn("arm64 worker build unavailable; arm64 Coder workspaces will be reported as unsupported",
+			"worker_error", errorString(workerErr), "helper_error", errorString(helperErr))
 	}
-	return workerBinary, workerHelperBinary, nil
+	return workerBinary, workerHelperBinary, builds, nil
+}
+
+func readRequiredBinary(path, name string) ([]byte, error) {
+	binary, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s binary %s: %w", name, path, err)
+	}
+	if len(binary) == 0 {
+		return nil, fmt.Errorf("%s binary %s is empty", name, path)
+	}
+	return binary, nil
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func main() {
@@ -380,7 +412,7 @@ func run(logger *slog.Logger) error {
 	// The API server serves the content-addressed worker binaries so a worker
 	// with a stale baked copy can self-update; it reads the same startup build
 	// whose hashes the reconciler advertises.
-	apiWorkerBinary, apiWorkerHelperBinary, err := loadWorkerBinaries(cfg)
+	apiWorkerBinary, apiWorkerHelperBinary, apiWorkerBuilds, err := loadWorkerBinaries(cfg, nil)
 	if err != nil {
 		return err
 	}
@@ -419,6 +451,7 @@ func run(logger *slog.Logger) error {
 		WorkerTokenTTL:            cfg.WorkerTokenTTL(),
 		WorkerBinary:              apiWorkerBinary,
 		WorkerHelperBinary:        apiWorkerHelperBinary,
+		WorkerBuilds:              apiWorkerBuilds,
 		MaxSandboxes:              cfg.MaxSandboxesPerOrg,
 		Environment:               cfg.Environment,
 		Release:                   cfg.Release,

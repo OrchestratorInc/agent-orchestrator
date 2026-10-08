@@ -453,6 +453,9 @@ export function toCloudWorkspaceSession(
 			sandboxProvider: session.sandboxProvider,
 			desiredState: session.desiredState,
 			observedState: session.observedState,
+			runtimeState: session.runtimeState,
+			runtimeError: session.runtimeError,
+			startupError: session.startupError,
 		},
 	};
 }
