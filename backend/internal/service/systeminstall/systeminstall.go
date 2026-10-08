@@ -185,6 +185,10 @@ type Plan struct {
 	Method              string
 	DocsURL             string
 	ExpectedDestination string
+	// Remove lists program files a vendor's documented uninstall deletes, for
+	// vendors with no uninstall command. AO removes them itself instead of
+	// running Command; user settings and history are never listed.
+	Remove []string
 }
 
 // AgentPlan is the display-safe plan returned to the settings page. Command is
@@ -677,6 +681,9 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		if baseline != nil && baseline.path != "" {
 			plan = targetInstalledCopy(plan, target, baseline.path)
 		}
+		if len(plan.Remove) > 0 {
+			plan = s.confirmVendorRemoval(plan, target, baseline)
+		}
 	}
 	if operation == AgentOperationUpdate && expected != "" {
 		if baseline == nil {
@@ -1044,7 +1051,9 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		"NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false",
 	}
 	var runErr error
-	if plan.Script != nil {
+	if len(plan.Remove) > 0 {
+		runErr = removeProgramFiles(plan.Remove, out)
+	} else if plan.Script != nil {
 		if s.installScripts == nil {
 			runErr = errors.New("remote installer runner is not configured")
 		} else {
@@ -1233,6 +1242,9 @@ func (s *Service) resolvePlan(target Target) Plan {
 }
 
 func displayCommand(plan Plan) string {
+	if len(plan.Remove) > 0 {
+		return "remove " + strings.Join(plan.Remove, " ")
+	}
 	if plan.Script != nil {
 		return fmt.Sprintf("%s <downloaded from %s>", strings.Join(plan.Script.Interpreter, " "), plan.Script.URL)
 	}

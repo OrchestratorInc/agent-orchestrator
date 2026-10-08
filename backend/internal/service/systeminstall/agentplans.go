@@ -3,6 +3,7 @@ package systeminstall
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 
@@ -405,6 +406,9 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		case "official-installer":
 			if command, ok := vendorUninstallCommands[plan.Target]; ok {
 				plan.Command = slices.Clone(command)
+			} else if home, err := os.UserHomeDir(); err == nil && vendorRemovalPaths(plan.Target, home, s.goos, "") != nil {
+				plan.Command = nil
+				plan.Remove = vendorRemovalPaths(plan.Target, home, s.goos, "")
 			} else {
 				plan.Unsupported = true
 				plan.Command = nil
