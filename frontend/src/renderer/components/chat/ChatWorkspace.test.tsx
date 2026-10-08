@@ -1845,7 +1845,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(onChooseSettings).not.toHaveBeenCalled();
 	});
 
-	it("shimmers the entire centered composer until the orchestrator is ready", () => {
+	it("shimmers the entire centered composer until the orchestrator is ready", async () => {
 		const view = render(
 			<ChatWorkspace
 				sessionRole="orchestrator"
@@ -1858,12 +1858,12 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByTestId("session-startup")).not.toBeInTheDocument();
 		expect(screen.getByText("What do you want to work on?")).toBeInTheDocument();
 		const composer = screen.getByLabelText("Message the agent");
-		const placeholder = screen.getByText("Starting your orchestrator");
+		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
 		view.rerender(<ChatWorkspace sessionRole="orchestrator" snapshot={chatFixtureEmpty} session={{ ...chatSession, kind: "orchestrator", provisionState: "ready" }} />);
 		expect(screen.getByLabelText("Message the agent")).toBe(composer);
 		expect(composer.closest("form")).not.toHaveAttribute("data-starting");
-		expect(screen.getByText("Ask anything about this project")).toBe(placeholder);
+		expect(await screen.findByText("Ask anything about this project")).toBeInTheDocument();
 	});
 
 	it.each([
