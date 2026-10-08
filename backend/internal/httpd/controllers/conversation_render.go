@@ -3,12 +3,12 @@ package controllers
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -166,7 +166,14 @@ func (c *ConversationsController) renderFile(w http.ResponseWriter, r *http.Requ
 		apispec.NotImplemented(w, r, "GET", renderFilePath)
 		return
 	}
-	file, _, err := c.Renders.OpenRender(r.Context(), sessionID(r), chi.URLParam(r, "renderId"))
+	renderID := chi.URLParam(r, "renderId")
+	// A stored render never changes, so its id and the bootstrap version name
+	// the served page, and a revalidation is answered without reading it. An
+	// id unfit for a header is left to the store, which refuses it.
+	if renderTagID.MatchString(renderID) && notModified(w, r, pageTag(r, renderpage.Version+"-"+renderID)) {
+		return
+	}
+	file, _, err := c.Renders.OpenRender(r.Context(), sessionID(r), renderID)
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "RENDER_NOT_FOUND", "render not found", nil)
 		return
@@ -177,38 +184,61 @@ func (c *ConversationsController) renderFile(w http.ResponseWriter, r *http.Requ
 		envelope.WriteError(w, r, fmt.Errorf("read render: %w", err))
 		return
 	}
-	serveSandboxedPage(w, r, stored)
+	serveSandboxedPage(w, r, stored, renderpage.Version+"-"+renderID)
 }
 
-// serveSandboxedPage serves an agent's HTML page with the theme bootstrap.
-// ?source=1 is the page as the agent wrote it, for reading: plain text,
-// without the bootstrap, under a tag the document's can never match.
-func serveSandboxedPage(w http.ResponseWriter, r *http.Request, page []byte) {
-	// The page gets the bootstrap as it is served, so a daemon upgrade
-	// changes the document; the ETag names both parts.
-	etag := renderpage.Version + "-" + contentTag(page)
+// renderTagID is a render id fit to put in an ETag.
+var renderTagID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,200}$`)
+
+// pageTag is the ETag of the response serveSandboxedPage sends for tag:
+// ?source=1 is a different body, so it has a tag the page's can never match.
+func pageTag(r *http.Request, tag string) string {
 	if r.URL.Query().Get("source") == "1" {
-		serveSandboxed(w, r, page, "text/plain; charset=utf-8", "src-"+etag)
+		return "src-" + tag
+	}
+	return tag
+}
+
+// serveSandboxedPage serves an agent's HTML page with the theme bootstrap, or
+// with ?source=1 the page as the agent wrote it, for reading: plain text,
+// without the bootstrap. tag names the stored page and the bootstrap version,
+// since the bootstrap is added as the page is served.
+func serveSandboxedPage(w http.ResponseWriter, r *http.Request, page []byte, tag string) {
+	if r.URL.Query().Get("source") == "1" {
+		serveSandboxed(w, r, page, "text/plain; charset=utf-8", pageTag(r, tag))
 		return
 	}
-	serveSandboxed(w, r, renderpage.Document(page), "text/html; charset=utf-8", etag)
+	serveSandboxed(w, r, renderpage.Document(page), "text/html; charset=utf-8", tag)
 }
 
-// serveSandboxed serves body in the render sandbox (renderContentSecurityPolicy),
-// unsniffed, sent without a referrer, and revalidated on every load.
-func serveSandboxed(w http.ResponseWriter, r *http.Request, body []byte, contentType, etag string) {
-	h := w.Header()
+// setSandboxHeaders sets what every sandboxed response carries, 304s included:
+// the render sandbox (renderContentSecurityPolicy), no sniffing, no referrer,
+// revalidation on every load, and the ETag.
+func setSandboxHeaders(h http.Header, etag string) {
 	h.Set("Content-Security-Policy", renderContentSecurityPolicy)
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("Cache-Control", "private, no-cache")
-	h.Set("Content-Type", contentType)
 	h.Set("ETag", `"`+etag+`"`)
-	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(body))
 }
 
-// contentTag names content by the first 64 bits of its SHA-256.
-func contentTag(content []byte) string {
-	sum := sha256.Sum256(content)
-	return hex.EncodeToString(sum[:])[:16]
+// notModified answers 304 when the request already holds etag, so a frame
+// that revalidates on every load costs no file read.
+func notModified(w http.ResponseWriter, r *http.Request, etag string) bool {
+	quoted := `"` + etag + `"`
+	for _, candidate := range strings.Split(r.Header.Get("If-None-Match"), ",") {
+		if candidate = strings.TrimPrefix(strings.TrimSpace(candidate), "W/"); candidate == quoted || candidate == "*" {
+			setSandboxHeaders(w.Header(), etag)
+			w.WriteHeader(http.StatusNotModified)
+			return true
+		}
+	}
+	return false
+}
+
+// serveSandboxed serves body in the render sandbox with setSandboxHeaders.
+func serveSandboxed(w http.ResponseWriter, r *http.Request, body []byte, contentType, etag string) {
+	setSandboxHeaders(w.Header(), etag)
+	w.Header().Set("Content-Type", contentType)
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(body))
 }

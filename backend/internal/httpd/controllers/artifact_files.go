@@ -15,6 +15,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
+	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 )
 
 const artifactFilePath = "/api/v1/sessions/{sessionId}/artifact-files/*"
@@ -55,6 +56,20 @@ func (c *SessionsController) artifactFile(w http.ResponseWriter, r *http.Request
 		writeArtifactFileNotFound(w, r)
 		return
 	}
+	// An artifact can change, so its tag is its size and modification time
+	// (and, for a page, the bootstrap version), known before any read.
+	ext := strings.ToLower(path.Ext(clean))
+	isPage := ext == ".html" || ext == ".htm"
+	tag := fmt.Sprintf("%d-%d", info.Size(), info.ModTime().UnixNano())
+	etag := tag
+	if isPage {
+		tag = renderpage.Version + "-" + tag
+		etag = pageTag(r, tag)
+	}
+	if notModified(w, r, etag) {
+		_ = file.Close()
+		return
+	}
 	// Capped again in the read: the file can grow after the stat.
 	data, err := io.ReadAll(io.LimitReader(file, attachmentstore.MaxFileBytes+1))
 	_ = file.Close()
@@ -66,16 +81,15 @@ func (c *SessionsController) artifactFile(w http.ResponseWriter, r *http.Request
 		writeArtifactFileNotFound(w, r)
 		return
 	}
-	ext := strings.ToLower(path.Ext(clean))
-	if ext == ".html" || ext == ".htm" {
-		serveSandboxedPage(w, r, data)
+	if isPage {
+		serveSandboxedPage(w, r, data, tag)
 		return
 	}
 	contentType := mime.TypeByExtension(ext)
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	serveSandboxed(w, r, data, contentType, contentTag(data))
+	serveSandboxed(w, r, data, contentType, tag)
 }
 
 func writeArtifactFileNotFound(w http.ResponseWriter, r *http.Request) {

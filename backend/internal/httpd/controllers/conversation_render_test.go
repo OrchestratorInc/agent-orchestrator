@@ -84,11 +84,16 @@ func TestRenderRouteServesTheStoredPageSandboxed(t *testing.T) {
 			t.Errorf("%s = %q, want %q", header, got, want)
 		}
 	}
-	// The ETag names both the bootstrap and the stored page, so a daemon
-	// upgrade or a different page never revalidates to a stale document.
+	// A stored render never changes, so the ETag names the bootstrap and the
+	// render: a daemon upgrade revalidates, and nothing else needs to.
 	etag := resp.Header.Get("ETag")
-	if want := `"` + renderpage.Version + "-"; !strings.HasPrefix(etag, want) || len(etag) != len(want)+16+1 {
-		t.Fatalf("ETag = %q, want %s<16 hex>\"", etag, want)
+	if want := `"` + renderpage.Version + `-r1"`; etag != want {
+		t.Fatalf("ETag = %q, want %s", etag, want)
+	}
+	// A revalidation never reads the file: it is answered, with the sandbox
+	// headers, even once the file is gone.
+	if err := store.RemoveRender(context.Background(), "proj-1", "r1"); err != nil {
+		t.Fatal(err)
 	}
 	revalidate, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/sessions/proj-1/renders/r1", nil)
 	revalidate.Header.Set("If-None-Match", etag)
@@ -97,8 +102,8 @@ func TestRenderRouteServesTheStoredPageSandboxed(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = notModified.Body.Close()
-	if notModified.StatusCode != http.StatusNotModified {
-		t.Fatalf("If-None-Match: %s = %d, want 304", etag, notModified.StatusCode)
+	if notModified.StatusCode != http.StatusNotModified || notModified.Header.Get("Content-Security-Policy") != "sandbox allow-scripts allow-forms" {
+		t.Fatalf("If-None-Match: %s = %d (CSP %q), want 304 with the sandbox", etag, notModified.StatusCode, notModified.Header.Get("Content-Security-Policy"))
 	}
 
 	// The page's own scripts run with an opaque origin; the daemon refuses it,

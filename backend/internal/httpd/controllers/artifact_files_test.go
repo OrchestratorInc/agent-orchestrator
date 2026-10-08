@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -75,10 +76,11 @@ func TestArtifactFileRouteServesAPageSandboxedWithTheBootstrap(t *testing.T) {
 		t.Fatalf("status=%d body=%.200q", resp.StatusCode, body)
 	}
 	wantSandboxHeaders(t, resp, "text/html; charset=utf-8")
-	// As for renders, the ETag names the bootstrap and the page.
+	// The ETag names the bootstrap and the file's size and modification time,
+	// all known before the file is read.
 	etag := resp.Header.Get("ETag")
-	if want := `"` + renderpage.Version + "-"; !strings.HasPrefix(etag, want) || len(etag) != len(want)+16+1 {
-		t.Fatalf("ETag = %q, want %s<16 hex>\"", etag, want)
+	if want := `"` + renderpage.Version + "-" + strconv.Itoa(len("<p>report</p>")) + "-"; !strings.HasPrefix(etag, want) {
+		t.Fatalf("ETag = %q, want %s<mtime>\"", etag, want)
 	}
 	if again, _ := getArtifactFile(t, srv, "report/index.html", etag); again.StatusCode != http.StatusNotModified {
 		t.Fatalf("If-None-Match: %s = %d, want 304", etag, again.StatusCode)
@@ -106,8 +108,8 @@ func TestArtifactFileRouteServesTheFilesNextToAPage(t *testing.T) {
 	}
 	wantSandboxHeaders(t, resp, "image/png")
 	etag := resp.Header.Get("ETag")
-	if len(etag) != 16+2 || strings.Contains(etag, renderpage.Version) {
-		t.Fatalf("ETag = %q, want the content hash alone", etag)
+	if !strings.HasPrefix(etag, `"6-`) || strings.Contains(etag, renderpage.Version) {
+		t.Fatalf("ETag = %q, want the file's size and modification time alone", etag)
 	}
 	if again, _ := getArtifactFile(t, srv, "report/chart%20%281%29.png", etag); again.StatusCode != http.StatusNotModified {
 		t.Fatalf("If-None-Match: %s = %d, want 304", etag, again.StatusCode)
