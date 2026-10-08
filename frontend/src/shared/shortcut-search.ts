@@ -26,7 +26,7 @@ export type ShortcutSearchContext = {
 // chords; the word forms cover users typing "cmd", "command", "option", etc.
 const MODIFIER_ALIASES: Record<"ctrl" | "meta" | "alt" | "shift", readonly string[]> = {
 	ctrl: ["ctrl", "control"],
-	meta: ["cmd", "command", "⌘", "meta", "super", "win"],
+	meta: ["cmd", "command", "⌘", "meta", "meta-key", "super", "win"],
 	alt: ["alt", "option", "⌥"],
 	shift: ["shift"],
 };

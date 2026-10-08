@@ -63,7 +63,7 @@ describe("shortcutMatchesSearch", () => {
 	});
 
 	it("matches modifier aliases on macOS", () => {
-		for (const query of ["cmd b", "command b", "cmd+b", "meta b", "super b", "⌘"]) {
+		for (const query of ["cmd b", "command b", "cmd+b", "meta b", "meta-key b", "super b", "win b", "⌘"]) {
 			expect(matches("toggle-sidebar", query, { isMac: true })).toBe(true);
 		}
 	});
@@ -84,6 +84,7 @@ describe("shortcutMatchesSearch", () => {
 	it("accepts spaced key queries in place of the + separator", () => {
 		expect(matches("new-session", "ctrl shift n")).toBe(true);
 		expect(matches("new-session", "ctrl+shift+n")).toBe(true);
+		expect(matches("new-session", "control shift n")).toBe(true);
 	});
 
 	it("requires every whitespace-separated token to match (AND)", () => {
