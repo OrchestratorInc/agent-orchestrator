@@ -104,7 +104,7 @@
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
 		"cmdk": "^1.1.1",
-		"dompurify": "3.4.14",
+		"dompurify": "3.4.16",
 		"electron-updater": "^6.8.9",
 		"github-markdown-css": "^5.9.0",
 		"i18next": "^26.3.6",
@@ -138,5 +138,9 @@
 	},
 	"allowScripts": {
 		"electron@33.4.11": true
+	},
+	"overrides": {
+		"js-yaml": "^4.3.2",
+		"katex": "^0.18.2"
 	}
 }
