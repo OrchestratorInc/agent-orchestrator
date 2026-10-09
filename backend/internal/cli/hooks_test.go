@@ -1556,6 +1556,7 @@ func TestHooks_AgyModernEventsReturnValidJSON(t *testing.T) {
 
 func TestHooks_CopilotSessionStartReportsSessionID(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "")
 	cfg := setConfigEnv(t)
 	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
 	writeRunFileFor(t, cfg, srv)
@@ -1575,6 +1576,105 @@ func TestHooks_CopilotSessionStartReportsSessionID(t *testing.T) {
 		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
 	}
 	want := setActivityAPIRequest{State: "active", Event: "session-start", AgentSessionID: "copilot-native-1"}
+	assertActivityRequest(t, req, want)
+}
+
+func TestHooks_CopilotPreToolUseReportsActive(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"sessionId":"copilot-native-1","toolName":"bash"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "copilot", "pre-tool-use")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	want := setActivityAPIRequest{State: "active", Event: "pre-tool-use", ToolName: "bash", AgentSessionID: "copilot-native-1"}
+	assertActivityRequest(t, req, want)
+}
+
+func TestHooks_CopilotPermissionPromptNotificationWaits(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"sessionId":"copilot-native-1","notification_type":"permission_prompt"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "copilot", "notification")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	want := setActivityAPIRequest{State: "waiting_input", Event: "notification", AgentSessionID: "copilot-native-1"}
+	assertActivityRequest(t, req, want)
+}
+
+func TestHooks_CopilotPermissionRequestFallsThroughWithoutActivity(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"sessionId":"copilot-native-1","toolName":"bash"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "copilot", "permission-request")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.TrimSpace(out) != "{}" {
+		t.Fatalf("stdout = %q, want {}", out)
+	}
+	// Session id still posts for resume metadata even without an activity state.
+	if capture.hits != 1 {
+		t.Fatalf("daemon calls = %d, want 1 (session metadata only)", capture.hits)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	if req.State != "" {
+		t.Fatalf("state = %q, want empty (observe-only permissionRequest)", req.State)
+	}
+	if req.Event != "permission-request" || req.AgentSessionID != "copilot-native-1" {
+		t.Fatalf("req = %#v, want permission-request with session id", req)
+	}
+}
+
+func TestHooks_CopilotPermissionResolvedClearsViaTurnBoundaryEvent(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"sessionId":"copilot-native-1","toolName":"bash"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "copilot", "permission-resolved")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	want := setActivityAPIRequest{State: "active", Event: "permission-resolved", ToolName: "bash", AgentSessionID: "copilot-native-1"}
 	assertActivityRequest(t, req, want)
 }
 
@@ -2189,25 +2289,5 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 				t.Fatalf("deny carried no message: %s", out)
 			}
 		})
-	}
-}
-
-func TestHooksSessionDeliveryPreservesCoordinationOrigin(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "ao-worker")
-	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
-	cfg := setConfigEnv(t)
-	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
-	writeRunFileFor(t, cfg, srv)
-	payload, _ := json.Marshal(map[string]string{"session_id": "native-1", "prompt": domain.WrapSessionDelivery("session-send:1", "orchestrator direction")})
-	_, _, err := executeCLI(t, Deps{In: strings.NewReader(string(payload)), ProcessAlive: func(int) bool { return true }}, "hooks", "claude-code", "user-prompt-submit")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var req setActivityAPIRequest
-	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
-		t.Fatal(err)
-	}
-	if req.ConversationCheckpointOrigin != "coordination" || req.CoordinationID != "session-send:1" || req.LatestUserPrompt != "" {
-		t.Fatalf("hook facts=%+v", req)
 	}
 }

@@ -66,23 +66,29 @@ type copilotHookSpec struct {
 }
 
 // copilotManagedHooks is the source of truth for the hooks AO installs. The AO
-// sub-command names (session-start, user-prompt-submit, permission-request,
-// stop) are exactly what DeriveActivityState in activity.go switches on.
+// sub-command names are exactly what DeriveActivityState in activity.go
+// switches on.
 //
-// Native event names use Copilot's camelCase form, taken verbatim from
-// https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-hooks
-// (sessionStart, sessionEnd, userPromptSubmitted, preToolUse, postToolUse,
-// errorOccurred, agentStop). Copilot does not document a "permissionRequest"
-// event — the closest signal that AO's permission-request sub-command can
-// piggyback on is preToolUse, which fires before any tool invocation, including
-// the ones that would otherwise prompt the user for approval. This is a
-// many-to-one collapse: every preToolUse currently produces ActivityWaitingInput
-// via the permission-request sub-command. agentStop is the per-turn completion
-// signal and maps to the "stop" sub-command (turn end → idle).
+// Native event names use Copilot's camelCase form from the hooks reference:
+// https://docs.github.com/en/copilot/reference/hooks-reference
+//
+// Activity mapping (B1 / issue #6280):
+//   - preToolUse → pre-tool-use (active): ordinary tool traffic, not approval.
+//   - permissionRequest → permission-request: no activity; CLI writes {} so
+//     Copilot falls through to its native Yes/No (hook fires before auto-allow).
+//   - notification → notification: waiting_input only for permission_prompt /
+//     elicitation_dialog.
+//   - postToolUse / postToolUseFailure → permission-resolved (active): clears
+//     sticky waiting_input via the turn-boundary path.
+//   - agentStop → stop (idle).
 var copilotManagedHooks = []copilotHookSpec{
 	{Event: "sessionStart", Command: "session-start"},
 	{Event: "userPromptSubmitted", Command: "user-prompt-submit"},
-	{Event: "preToolUse", Command: "permission-request"},
+	{Event: "preToolUse", Command: "pre-tool-use"},
+	{Event: "permissionRequest", Command: "permission-request"},
+	{Event: "notification", Command: "notification"},
+	{Event: "postToolUse", Command: "permission-resolved"},
+	{Event: "postToolUseFailure", Command: "permission-resolved"},
 	{Event: "agentStop", Command: "stop"},
 }
 
@@ -131,15 +137,18 @@ func installCopilotHooks(workspacePath string) error {
 	}
 	for _, spec := range copilotManagedHooks {
 		command := copilotHookCommandPrefix + spec.Command
-		if copilotHookCommandExists(file.Hooks[spec.Event], command) {
-			continue
+		// Drop stale AO commands on this event (e.g. legacy preToolUse →
+		// permission-request) so a re-install cannot leave two AO callbacks.
+		kept := removeStaleCopilotManagedHooks(file.Hooks[spec.Event], command)
+		if !copilotHookCommandExists(kept, command) {
+			kept = append(kept, copilotHookEntry{
+				Type:       "command",
+				Bash:       command,
+				Powershell: command,
+				TimeoutSec: copilotHookTimeoutSec,
+			})
 		}
-		file.Hooks[spec.Event] = append(file.Hooks[spec.Event], copilotHookEntry{
-			Type:       "command",
-			Bash:       command,
-			Powershell: command,
-			TimeoutSec: copilotHookTimeoutSec,
-		})
+		file.Hooks[spec.Event] = kept
 	}
 
 	if err := writeCopilotHooks(hooksPath, file); err != nil {
@@ -149,6 +158,22 @@ func installCopilotHooks(workspacePath string) error {
 		return fmt.Errorf("gitignore: %w", err)
 	}
 	return nil
+}
+
+// removeStaleCopilotManagedHooks keeps user hooks and the desired AO command,
+// dropping any other AO-owned entry on the same event.
+func removeStaleCopilotManagedHooks(entries []copilotHookEntry, keepCommand string) []copilotHookEntry {
+	kept := make([]copilotHookEntry, 0, len(entries))
+	for _, entry := range entries {
+		if !isCopilotManagedHook(entry) {
+			kept = append(kept, entry)
+			continue
+		}
+		if entry.Bash == keepCommand || entry.Powershell == keepCommand {
+			kept = append(kept, entry)
+		}
+	}
+	return kept
 }
 
 func installCopilotAgent(workspacePath, sessionID, inlinePrompt, promptFile string) error {

@@ -986,29 +986,77 @@ func TestHookMethodsRequireWorkspacePath(t *testing.T) {
 	}
 }
 
+func TestInstallCopilotHooksReplacesLegacyPreToolUsePermissionMapping(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "copilot"}
+	workspace := t.TempDir()
+	hooksPath := copilotHooksPath(workspace)
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"version":1,"hooks":{"preToolUse":[{"type":"command","bash":"ao hooks copilot permission-request","powershell":"ao hooks copilot permission-request","timeoutSec":30}]}}`
+	if err := os.WriteFile(hooksPath, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "sess-1", WorkspacePath: workspace}
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file copilotHookFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		t.Fatal(err)
+	}
+	if count := countCopilotHookCommand(file.Hooks["preToolUse"], copilotHookCommandPrefix+"permission-request"); count != 0 {
+		t.Fatalf("legacy preToolUse permission-request still present: %#v", file.Hooks["preToolUse"])
+	}
+	if count := countCopilotHookCommand(file.Hooks["preToolUse"], copilotHookCommandPrefix+"pre-tool-use"); count != 1 {
+		t.Fatalf("pre-tool-use count = %d, want 1 in %#v", count, file.Hooks["preToolUse"])
+	}
+	if count := countCopilotHookCommand(file.Hooks["notification"], copilotHookCommandPrefix+"notification"); count != 1 {
+		t.Fatalf("notification hook missing: %#v", file.Hooks["notification"])
+	}
+}
+
 // TestCopilotManagedHooksUseDocumentedEventNames pins the JSON keys AO writes
 // into .github/hooks/ao.json to the camelCase names Copilot CLI documents
-// (https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-hooks).
+// (https://docs.github.com/en/copilot/reference/hooks-reference).
 // Drifting back to lowercase-dashed or any other casing silently disables the
 // hooks, so this is a tripwire for that class of regression.
 func TestCopilotManagedHooksUseDocumentedEventNames(t *testing.T) {
-	wantEventByCommand := map[string]string{
-		"session-start":      "sessionStart",
-		"user-prompt-submit": "userPromptSubmitted",
-		"permission-request": "preToolUse",
-		"stop":               "agentStop",
+	wantEvents := map[string]string{
+		"session-start":       "sessionStart",
+		"user-prompt-submit":  "userPromptSubmitted",
+		"pre-tool-use":        "preToolUse",
+		"permission-request":  "permissionRequest",
+		"notification":        "notification",
+		"permission-resolved": "postToolUse", // also postToolUseFailure; checked below
+		"stop":                "agentStop",
 	}
-	if len(copilotManagedHooks) != len(wantEventByCommand) {
-		t.Fatalf("copilotManagedHooks length = %d, want %d", len(copilotManagedHooks), len(wantEventByCommand))
-	}
+	seenPermissionResolved := 0
 	for _, spec := range copilotManagedHooks {
-		want, ok := wantEventByCommand[spec.Command]
+		if spec.Command == "permission-resolved" {
+			seenPermissionResolved++
+			if spec.Event != "postToolUse" && spec.Event != "postToolUseFailure" {
+				t.Fatalf("permission-resolved event = %q, want postToolUse or postToolUseFailure", spec.Event)
+			}
+			continue
+		}
+		want, ok := wantEvents[spec.Command]
 		if !ok {
 			t.Fatalf("unexpected AO sub-command %q in copilotManagedHooks", spec.Command)
 		}
 		if spec.Event != want {
-			t.Fatalf("command %q event = %q, want %q (Copilot CLI documented camelCase)", spec.Command, spec.Event, want)
+			t.Fatalf("command %q event = %q, want %q (Copilot hooks reference camelCase)", spec.Command, spec.Event, want)
 		}
+	}
+	if seenPermissionResolved != 2 {
+		t.Fatalf("permission-resolved bindings = %d, want 2 (postToolUse + postToolUseFailure)", seenPermissionResolved)
+	}
+	if len(copilotManagedHooks) != 8 {
+		t.Fatalf("copilotManagedHooks length = %d, want 8", len(copilotManagedHooks))
 	}
 }
 

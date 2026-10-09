@@ -105,17 +105,27 @@ const (
 func activityMeta(payload []byte) (toolName, toolUseID string) {
 	payload = normalizeHookPayload(payload)
 	var p struct {
-		ToolName  string `json:"tool_name"`
-		ToolUseID string `json:"tool_use_id"`
+		ToolName       string `json:"tool_name"`
+		ToolNameCamel  string `json:"toolName"`
+		ToolUseID      string `json:"tool_use_id"`
+		ToolUseIDCamel string `json:"toolUseId"`
 	}
 	_ = json.Unmarshal(payload, &p)
-	if len(p.ToolName) > maxActivityMetaLen {
-		p.ToolName = ""
+	name := p.ToolName
+	if name == "" {
+		name = p.ToolNameCamel
 	}
-	if len(p.ToolUseID) > maxActivityMetaLen {
-		p.ToolUseID = ""
+	id := p.ToolUseID
+	if id == "" {
+		id = p.ToolUseIDCamel
 	}
-	return p.ToolName, p.ToolUseID
+	if len(name) > maxActivityMetaLen {
+		name = ""
+	}
+	if len(id) > maxActivityMetaLen {
+		id = ""
+	}
+	return name, id
 }
 
 // claudeSubagentFacts keeps native child identity separate from the resumable
@@ -424,7 +434,7 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 			origin = domain.ConversationCheckpointOriginCoordination
 		}
 	}
-	coordinationID, _ := domain.CoordinationDeliveryID(observedPrompt)
+	coordinationID, _ := domain.ReportDeliveryID(observedPrompt)
 	return hookConversationSnapshot{
 		ProviderTurnID:        turnID,
 		LatestUserPrompt:      capHookText(userPrompt, maxHookInteractionLen),
@@ -446,7 +456,7 @@ func firstHookValue(values ...string) string {
 
 func isAOCoordinationMessage(value string) bool {
 	value = strings.TrimSpace(value)
-	_, reportDelivery := domain.CoordinationDeliveryID(value)
+	_, reportDelivery := domain.ReportDeliveryID(value)
 	return reportDelivery || strings.HasPrefix(value, "<ao-handoff-request") ||
 		strings.HasPrefix(value, "AO transferred the previous agent's context in hidden system instructions.")
 }
@@ -566,6 +576,12 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	if isAgyModernHookEvent(agent, event) {
 		// AGY requires every modern hook handler to return a JSON object, even
 		// when the command is running outside an AO-managed session.
+		_, _ = fmt.Fprintln(c.deps.Out, "{}")
+	}
+	if isCopilotPermissionRequestHook(agent, event) {
+		// Copilot permissionRequest falls through to native Yes/No when stdout
+		// is empty or {}. Emit {} so we never own the gate (auto-allow still
+		// runs). Exit 0: a non-zero exit is treated as deny.
 		_, _ = fmt.Fprintln(c.deps.Out, "{}")
 	}
 	reviewSessionID := strings.TrimSpace(os.Getenv("AO_REVIEW_SESSION_ID"))
@@ -698,7 +714,7 @@ func hookSemanticAcceptanceFacts(event string, payload []byte) hookConversationS
 	if json.Unmarshal(payload, &p) != nil {
 		return hookConversationSnapshot{}
 	}
-	id, ok := domain.CoordinationDeliveryID(p.Prompt)
+	id, ok := domain.ReportDeliveryID(p.Prompt)
 	if !ok {
 		return hookConversationSnapshot{}
 	}
@@ -781,6 +797,10 @@ func isAgyModernHookEvent(agent, event string) bool {
 	default:
 		return false
 	}
+}
+
+func isCopilotPermissionRequestHook(agent, event string) bool {
+	return domain.AgentHarness(agent) == domain.HarnessCopilot && event == "permission-request"
 }
 
 func (c *commandContext) runReviewHook(ctx context.Context, agent, event, reviewSessionID string) error {

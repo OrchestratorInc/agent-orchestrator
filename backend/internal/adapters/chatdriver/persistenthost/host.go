@@ -223,9 +223,21 @@ func readDescriptor(dataDir, sessionID string) (Descriptor, error) {
 	if err != nil {
 		return Descriptor{}, err
 	}
-	b, err := os.ReadFile(path) //nolint:gosec // AO-owned path derived from validated session id.
-	if err != nil {
-		return Descriptor{}, err
+	// Windows CI occasionally sees ERROR_SHARING_VIOLATION on host.json while
+	// the host is still rewriting or releasing the file during shutdown. Retry
+	// only that transient busy window; missing files and decode errors fail
+	// immediately.
+	var b []byte
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		b, err = os.ReadFile(path) //nolint:gosec // AO-owned path derived from validated session id.
+		if err == nil {
+			break
+		}
+		if errors.Is(err, os.ErrNotExist) || !isTransientHostFileBusy(err) || time.Now().After(deadline) {
+			return Descriptor{}, err
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	var d Descriptor
 	if err := json.Unmarshal(b, &d); err != nil {
