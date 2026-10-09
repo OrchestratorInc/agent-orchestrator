@@ -132,7 +132,6 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				invalidate(["session-scm-summary", hostId]);
 				invalidate(["session-reviews", hostId]);
 				invalidate(["session-usage", hostId]);
-				invalidate(["session-usage", "detail", hostId]);
 				invalidate(["remote-session-agent-switches", hostId]);
 				invalidate(["session-interface-transition", hostId]);
 				invalidate(["agent-readiness", hostId]);
