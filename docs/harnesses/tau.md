@@ -10,7 +10,7 @@ AO writes a workspace-local observer with an ownership sentinel, refuses to over
 
 The observer reports native `session_start`, `agent_start`, canonical user `message_end`, `agent_settled`, and quit-only `session_shutdown`. Accepted user messages provide semantic prompt acceptance. `agent_settled` follows persistence and retry reconciliation; earlier `agent_end` is not treated as idle. The process supervisor supplies exit detection when shutdown hooks do not run.
 
-Restore requires the exact 32-character lowercase hexadecimal native session ID and passes `--session <id>`. It never chooses the latest session. Cancellation sends Escape without Enter, including cancellation during controller handoffs. Model discovery parses Tau's local provider TSV into exact `provider/model` IDs. No Chat, reviewer, or native handoff-history capability is advertised.
+Restore requires the exact 32-character lowercase hexadecimal native session ID and passes `--session <id>`. It never chooses the latest session. Before restoring, AO reads `tau sessions` and requires that the exact ID belongs to the same directory as the AO workspace (including symlink aliases); missing, ambiguous, or mismatched metadata fails restore. Cancellation sends Escape without Enter, including cancellation during controller handoffs. Model discovery parses Tau's local provider TSV into exact `provider/model` IDs. No Chat, reviewer, or native handoff-history capability is advertised.
 
 ## Source evidence and validation limits
 
