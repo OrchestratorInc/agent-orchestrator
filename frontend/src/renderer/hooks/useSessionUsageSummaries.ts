@@ -3,6 +3,7 @@ import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST } from "../lib/hosts";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 
 export type SessionUsageSummary = components["schemas"]["CompactSessionUsageResponse"];
 
@@ -31,14 +32,41 @@ export function sessionUsageQueryOptions(projectId?: string, hostId?: string) {
 	};
 }
 
-// Warms each board's usage once the shell knows its projects, so a board's
-// first frame already has cost badges. Fire-and-forget: usage is supplementary
-// and must never hold navigation, and a cached entry is not refetched here
-// (event invalidation and the mounted query keep it current).
-export function warmSessionUsageSummaries(queryClient: QueryClient, projectIds: readonly string[]): void {
-	for (const projectId of projectIds) {
-		void queryClient.ensureQueryData({ ...sessionUsageQueryOptions(projectId), retry: false }).catch(() => undefined);
+// Warms every board's usage before it is opened, so a board's first frame
+// already has its cost badges. One host-wide request per host is split into
+// each project's board cache using the sessions the workspace list already
+// knows. Never awaited by navigation: usage is supplementary. Boards that
+// already have data are left alone (event invalidation and the mounted query
+// keep them current), and a failed warm-up is not retried here; the board's
+// own query fetches normally when it opens.
+export async function warmSessionUsageSummaries(
+	queryClient: QueryClient,
+	workspaces: readonly WorkspaceSummary[],
+): Promise<void> {
+	const coldByHost = new Map<string | undefined, WorkspaceSummary[]>();
+	for (const workspace of workspaces) {
+		if (workspace.id === STANDALONE_WORKSPACE_ID) continue;
+		if (queryClient.getQueryData(sessionUsageQueryKey(workspace.id, workspace.hostId)) !== undefined) continue;
+		coldByHost.set(workspace.hostId, [...(coldByHost.get(workspace.hostId) ?? []), workspace]);
 	}
+	await Promise.all([...coldByHost].map(async ([hostId, cold]) => {
+		const hostOptions = sessionUsageQueryOptions(undefined, hostId);
+		let summaries: SessionUsageSummary[];
+		try {
+			summaries = await queryClient.fetchQuery({ ...hostOptions, retry: false });
+		} catch {
+			return;
+		}
+		const updatedAt = queryClient.getQueryState(hostOptions.queryKey)?.dataUpdatedAt;
+		const bySession = new Map(summaries.map((summary) => [summary.sessionId, summary] as const));
+		for (const workspace of cold) {
+			const key = sessionUsageQueryKey(workspace.id, hostId);
+			// A board that opened mid-warm-up has fresher data of its own.
+			if (queryClient.getQueryData(key) !== undefined) continue;
+			const projectSummaries = workspace.sessions.flatMap((session) => bySession.get(session.id) ?? []);
+			queryClient.setQueryData(key, projectSummaries, { updatedAt });
+		}
+	}));
 }
 
 // Module-level so the Map keeps its identity between renders.

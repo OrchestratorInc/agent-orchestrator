@@ -76,10 +76,7 @@ export const Route = createFileRoute("/_shell")({
 		await refreshDaemonStatus().catch(() => undefined);
 		if (!usesPreviewWorkspaceData && !hasTrustedApiBaseUrl()) return;
 		const workspaces = await context.queryClient.fetchQuery({ ...workspaceQueryOptions, staleTime: 0 });
-		warmSessionUsageSummaries(
-			context.queryClient,
-			workspaces.filter((workspace) => workspace.id !== STANDALONE_WORKSPACE_ID).map((workspace) => workspace.id),
-		);
+		void warmSessionUsageSummaries(context.queryClient, workspaces);
 		return workspaces;
 	},
 	component: ShellLayout,
@@ -193,11 +190,21 @@ function ShellLayout() {
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
 	const { hosts: remoteHosts, refresh: refreshRemoteHosts } = useRemoteHosts();
-	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds } = useRemoteWorkspaces();
+	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds, loadedSessionHostIds: remoteSessionHostIds } = useRemoteWorkspaces();
 	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
 	useEffect(() => {
 		if (failedRemoteHostKey) void refreshRemoteHosts();
 	}, [failedRemoteHostKey, refreshRemoteHosts]);
+	// Remote boards get the same pre-open usage warm-up the _shell loader gives
+	// local ones, once a host's sessions are known (they map usage to projects).
+	// Keyed on the project set so streamed session updates do not re-run it.
+	const warmableRemoteWorkspaces = remoteWorkspaces.filter((workspace) => workspace.hostId && remoteSessionHostIds.includes(workspace.hostId));
+	const warmableRemoteWorkspacesRef = useRef(warmableRemoteWorkspaces);
+	warmableRemoteWorkspacesRef.current = warmableRemoteWorkspaces;
+	const warmableRemoteProjectKey = warmableRemoteWorkspaces.map((workspace) => sessionUiKey(workspace.id, workspace.hostId)).join("\0");
+	useEffect(() => {
+		if (warmableRemoteProjectKey) void warmSessionUsageSummaries(queryClient, warmableRemoteWorkspacesRef.current);
+	}, [queryClient, warmableRemoteProjectKey]);
 	// Global shortcut listeners need the latest workspace list, but recreating
 	// those subscriptions for every streamed activity update is avoidable.
 	const workspacesRef = useRef(workspaces);
