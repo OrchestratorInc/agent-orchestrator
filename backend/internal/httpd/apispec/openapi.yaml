@@ -4306,6 +4306,63 @@ paths:
       summary: Report an agent activity-state signal for a session
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/activity/codewhale:
+    post:
+      operationId: setCodewhaleSessionActivity
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodewhaleLifecycleWebhookRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetActivityResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Record a Codewhale lifecycle outbox event
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/agent-switches:
     get:
       operationId: listSessionAgentSwitches
@@ -9648,6 +9705,11 @@ components:
           type: string
         warning:
           type: string
+        warningCode:
+          enum:
+          - auth_required
+          - auth_expired
+          type: string
       required:
       - agentId
       - selectionMode
@@ -10167,6 +10229,59 @@ components:
       required:
       - remoteUrl
       - destinationParent
+      type: object
+    CodewhaleLifecycleEvent:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        event:
+          type: string
+        item_id:
+          type:
+          - "null"
+          - string
+        kind:
+          enum:
+          - session.started
+          - turn.started
+          - turn.completed
+          - turn.failed
+          - turn.interrupted
+          - turn.stalled
+          - session.ended
+          - subagent.spawned
+          - subagent.completed
+          type: string
+        payload: {}
+        schema_version:
+          type: integer
+        seq:
+          minimum: 0
+          type: integer
+        thread_id:
+          type: string
+        timestamp:
+          format: date-time
+          type: string
+        turn_id:
+          type: string
+      required:
+      - schema_version
+      - seq
+      - event
+      - kind
+      - thread_id
+      type: object
+    CodewhaleLifecycleWebhookRequest:
+      properties:
+        at:
+          format: date-time
+          type: string
+        event:
+          $ref: '#/components/schemas/CodewhaleLifecycleEvent'
+      required:
+      - event
       type: object
     CodexAccountCapabilitiesResponse:
       properties:
@@ -10997,6 +11112,14 @@ components:
         updatedAt:
           format: date-time
           type: string
+        workspaceCleanup:
+          enum:
+          - pending
+          - removed
+          - preserved_dirty
+          - failed
+          - not_applicable
+          type: string
       required:
       - id
       - kind
@@ -11239,6 +11362,13 @@ components:
           type: string
         name:
           type: string
+        sourceMessageId:
+          type: string
+        sourceRevision:
+          format: int64
+          type: integer
+        text:
+          type: string
         type:
           type: string
         uri:
@@ -11270,6 +11400,23 @@ components:
       - additions
       - deletions
       - status
+      type: object
+    ConversationExcerptReferenceRequest:
+      properties:
+        conversationId:
+          type: string
+        messageId:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        text:
+          type: string
+      required:
+      - conversationId
+      - messageId
+      - revision
+      - text
       type: object
     ConversationImageContentRequest:
       properties:
@@ -11893,8 +12040,10 @@ components:
           - prime-agent
           - autohand
           - unreal-agent
+          - codewhale
           - mimo-code
           - deepseek-harness
+          - openhands
           - fake
           type: string
         approvalMode:
@@ -12531,8 +12680,10 @@ components:
           - omp
           - fx
           - unreal-agent
+          - codewhale
           - mimo-code
           - deepseek-harness
+          - openhands
           - cloudflared
           type: string
         updatedAt:
@@ -12596,6 +12747,8 @@ components:
       type: object
     KillSessionResponse:
       properties:
+        cleanupPending:
+          type: boolean
         freed:
           type: boolean
         ok:
@@ -13444,6 +13597,10 @@ components:
           items:
             type: string
           type: array
+        preRemove:
+          items:
+            type: string
+          type: array
         reviewers:
           items:
             $ref: '#/components/schemas/DomainReviewerConfig'
@@ -13947,6 +14104,10 @@ components:
           type: array
         clientMessageId:
           type: string
+        excerpts:
+          items:
+            $ref: '#/components/schemas/ConversationExcerptReferenceRequest'
+          type: array
         resources:
           items:
             $ref: '#/components/schemas/ConversationResourceContentRequest'
@@ -15050,8 +15211,10 @@ components:
           - prime-agent
           - autohand
           - unreal-agent
+          - codewhale
           - mimo-code
           - deepseek-harness
+          - openhands
           type: string
         issueId:
           type: string

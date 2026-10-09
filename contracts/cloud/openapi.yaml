@@ -617,6 +617,33 @@ paths:
                 $ref: "#/components/schemas/WorkerOKResponse"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/startup-retry:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: retrySessionStartup
+      tags: [Sessions]
+      description: >-
+        Retries a session whose worker never started (its startupError explains
+        why). The startup window, repair count and startup error are reset and
+        the worker bootstrap runs again against the existing sandbox; a
+        bring-your-own workspace is never recreated. Returns 409
+        startup_retry_unavailable when the worker has already checked in or the
+        session is not meant to be running.
+      responses:
+        "202":
+          description: The retry was accepted for asynchronous processing.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session]
+                properties:
+                  session:
+                    $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/children:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -2482,6 +2509,50 @@ components:
         autoReview:
           type: boolean
           description: Defaults to enabled when absent. Independent of session autoInjectReview feedback delivery.
+        coder:
+          $ref: "#/components/schemas/ProjectCoderConfig"
+    ProjectCoderConfig:
+      type: object
+      additionalProperties: false
+      description: Coder dev-kit settings inherited by every Coder session of the project.
+      properties:
+        templateId:
+          type: string
+          format: uuid
+          description: Coder template; absent uses the organization or deployment default.
+        size:
+          type: string
+          enum: [small, medium, large]
+        startupScript:
+          type: string
+          maxLength: 65536
+        extraRepos:
+          type: array
+          maxItems: 10
+          items:
+            $ref: "#/components/schemas/ProjectCoderRepository"
+        workspaceNamePrefix:
+          $ref: "#/components/schemas/CoderWorkspaceNamePrefix"
+    ProjectCoderRepository:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          pattern: "^https://"
+        branch:
+          type: string
+    CoderWorkspaceNamePrefix:
+      type: string
+      maxLength: 20
+      pattern: '^([a-z]([a-z0-9]|-[a-z0-9])*)?$'
+      description: >-
+        Names new Coder workspaces <prefix>-<short session id> (at most 32
+        characters). Lowercase letters, digits and single hyphens, starting with
+        a letter and not ending with a hyphen. Empty keeps the default ao-<id>;
+        existing sessions keep their workspace.
     ProjectSettingsConfigPatch:
       type: object
       additionalProperties: false
@@ -2508,6 +2579,13 @@ components:
             $ref: "#/components/schemas/ProjectReviewer"
         autoReview:
           type: boolean
+        coder:
+          type: object
+          additionalProperties: false
+          description: Only the workspace name prefix is editable after the project is created.
+          properties:
+            workspaceNamePrefix:
+              $ref: "#/components/schemas/CoderWorkspaceNamePrefix"
     ProjectSettingsInput:
       type: object
       additionalProperties: false
@@ -2579,6 +2657,8 @@ components:
         config:
           type: object
           additionalProperties: true
+        coder:
+          $ref: "#/components/schemas/ProjectCoderConfig"
     UpdateProjectInput:
       type: object
       additionalProperties: false
@@ -3860,6 +3940,8 @@ components:
           type: string
         runtimeError:
           type: string
+        startupError:
+          $ref: "#/components/schemas/SessionStartupError"
         activeTurn:
           $ref: "#/components/schemas/Turn"
         isTerminated:
@@ -3868,6 +3950,29 @@ components:
           type: string
           format: date-time
         updatedAt:
+          type: string
+          format: date-time
+    SessionStartupError:
+      type: object
+      additionalProperties: false
+      required: [code, message, at]
+      description: >-
+        The latest user-facing reason the session's sandbox has not started.
+        Present until the worker first checks in or the user retries. While
+        runtimeState is "terminated" AO has stopped retrying; otherwise it is
+        still trying in the background.
+      properties:
+        code:
+          type: string
+          description: >-
+            Stable reason code: workspace_not_ready, terminal_unavailable,
+            unsupported_architecture, durable_root_unavailable,
+            worker_never_started, or bootstrap_failed. Clients must tolerate
+            codes added later.
+        message:
+          type: string
+          description: Human-readable explanation suitable for display as-is.
+        at:
           type: string
           format: date-time
     CreateSessionInput:

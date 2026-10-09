@@ -83,7 +83,7 @@ function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): 
 	};
 }
 
-function toWorkspaceSession(
+export function toWorkspaceSession(
 	session: components["schemas"]["ControllersSessionView"],
 	project: Pick<WorkspaceSummary, "id" | "name">,
 ): WorkspaceSession {
@@ -132,6 +132,7 @@ function toWorkspaceSession(
 		})),
 		branchState: session.branchState,
 		isTerminated: session.isTerminated,
+		workspaceCleanup: session.workspaceCleanup,
 		chatProviderPreserved: session.chatProviderPreserved,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
@@ -234,6 +235,7 @@ function toLocalWorkspaceSession(
 		})),
 		branchState: session.branchState,
 		isTerminated: session.isTerminated,
+		workspaceCleanup: session.workspaceCleanup,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
 		autoInjectCI: session.autoInjectCI ?? true,
@@ -453,11 +455,14 @@ export function toCloudWorkspaceSession(
 			sandboxProvider: session.sandboxProvider,
 			desiredState: session.desiredState,
 			observedState: session.observedState,
+			runtimeState: session.runtimeState,
+			runtimeError: session.runtimeError,
+			startupError: session.startupError,
 		},
 	};
 }
 
-function toCloudWorkspace(project: CloudCpProject, sessions: CloudCpSession[], orgId: string): WorkspaceSummary {
+export function toCloudWorkspace(project: CloudCpProject, sessions: CloudCpSession[], orgId: string): WorkspaceSummary {
 	return {
 		id: project.id,
 		cloudOrgId: orgId,
@@ -474,6 +479,7 @@ function toCloudWorkspace(project: CloudCpProject, sessions: CloudCpSession[], o
 type WorkspaceSubscriptionOptions = {
 	subscribed?: boolean;
 	enabled?: boolean;
+	includeCloud?: boolean;
 };
 
 export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}) {
@@ -582,14 +588,17 @@ export function useCloudSessionQuery(
 
 export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const local = useQuery({ ...workspaceQueryOptions, subscribed: options.subscribed, enabled: options.enabled });
-	const cloud = useCloudProjectsQuery(options);
-	const cloudSessions = useCloudSessionsQuery(options);
+	const includeCloud = options.includeCloud !== false;
+	const cloudOptions = { ...options, enabled: includeCloud && options.enabled !== false };
+	const cloud = useCloudProjectsQuery(cloudOptions);
+	const cloudSessions = useCloudSessionsQuery(cloudOptions);
 	const { org, ready } = useCloudOrg();
 	const orgId = org?.id;
 	const localData = local.data;
 	const cloudData = cloud.data;
 	const cloudSessionData = cloudSessions.data;
 	const data = useMemo(() => {
+		if (!includeCloud) return localData;
 		// Local stays authoritative for loading/error semantics: cloud items only
 		// render once the local list exists, and never replace it.
 		if (localData === undefined) return localData;
@@ -603,7 +612,7 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 			...localData,
 			...cloudData.map((project) => toCloudWorkspace(project, sessions, orgId)),
 		]);
-	}, [localData, cloudData, cloudSessionData, orgId, ready]);
+	}, [localData, cloudData, cloudSessionData, includeCloud, orgId, ready]);
 	return { ...local, data };
 }
 

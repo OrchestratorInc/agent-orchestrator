@@ -1,3 +1,4 @@
+import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
@@ -51,6 +52,7 @@ import { useConnectedHosts } from "../hooks/useHostConnection";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { useShellMaybe } from "../lib/shell-context";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
+import { ProjectTerminationFeedback } from "./ShellTopbar";
 import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useDiagnosticsEnabled, usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
 import { AppMemoryIndicator, toSessionFacts, useHasAppMemory } from "./SessionMemoryPanel";
@@ -223,6 +225,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 
 	const actions = projectId && (!hostId || connected) ? (
 		<>
+			<ProjectTerminationFeedback projectId={projectId} hostId={hostId} />
 			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
 			{boardOwnsNotificationCenter ? (
 				<>
@@ -233,6 +236,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	) : boardOwnsNotificationCenter ? (
 		<NotificationCenter />
 	) : undefined;
+
+	if (projectId && (isProvisioning || projectActions.isSpawning)) {
+		return <OrchestratorStartingChat />;
+	}
 
 	return (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="board" data-host-id={hostId} data-project-id={projectId}>

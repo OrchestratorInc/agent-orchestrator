@@ -374,10 +374,16 @@ function getShellWebContents(): WebContents | null {
 	return windowComposition?.shellWebContents ?? null;
 }
 
+// Renderer-resolved sidebar colour. The shell root is transparent while a live
+// browser page shows, so the native window background must match it or the
+// gutters around the panels render in the fallback colour.
+let rendererWindowBackground: string | null = null;
+
 function syncNativeWindowBackground(): void {
 	if (!windowComposition || !mainWindow || mainWindow.isDestroyed()) return;
 	mainWindow.setBackgroundColor(
-		nativeTheme.shouldUseDarkColors ? NATIVE_WINDOW_BACKGROUND_DARK : NATIVE_WINDOW_BACKGROUND_LIGHT,
+		rendererWindowBackground ??
+			(nativeTheme.shouldUseDarkColors ? NATIVE_WINDOW_BACKGROUND_DARK : NATIVE_WINDOW_BACKGROUND_LIGHT),
 	);
 }
 
@@ -2039,6 +2045,13 @@ ipcMain.handle("window:isMaximized", () => mainWindow?.isMaximized() ?? false);
 ipcMain.handle("theme:set", (_event, preference: "light" | "dark" | "system") => {
 	if (preference === "light" || preference === "dark" || preference === "system") {
 		nativeTheme.themeSource = preference;
+		syncNativeWindowBackground();
+	}
+});
+
+ipcMain.handle("theme:set-window-background", (_event, color: unknown) => {
+	if (typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color)) {
+		rendererWindowBackground = color;
 		syncNativeWindowBackground();
 	}
 });

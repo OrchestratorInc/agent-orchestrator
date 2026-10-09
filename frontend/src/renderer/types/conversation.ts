@@ -152,6 +152,9 @@ export interface ConversationContentSummary {
 	mimeType?: string;
 	uri?: string;
 	name?: string;
+	text?: string;
+	sourceMessageId?: string;
+	sourceRevision?: number;
 }
 
 export interface QueuedMessageEditOptions {

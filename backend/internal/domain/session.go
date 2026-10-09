@@ -424,6 +424,8 @@ func (r SessionRecord) ControllerOwner() SessionControllerOwner {
 // persisted.
 type Session struct {
 	SessionRecord
+	// WorkspaceCleanup is a durable teardown fact for the current generation.
+	WorkspaceCleanup WorkspaceDisposition `json:"workspaceCleanup,omitempty" enum:"pending,removed,preserved_dirty,failed,not_applicable"`
 	// StatusReadiness describes startup verification, never a persisted status.
 	// Clients must withhold activity labels until ready; unavailable permits retry.
 	StatusReadiness string `json:"statusReadiness" enum:"checking,ready,unavailable"`

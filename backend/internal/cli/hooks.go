@@ -842,8 +842,19 @@ func validLaunchID(value string) string {
 	return value
 }
 
+// openHandsContextHookOutput is OpenHands' hook result shape: it reads
+// additionalContext from the top level and ignores hookSpecificOutput.
+type openHandsContextHookOutput struct {
+	AdditionalContext string `json:"additionalContext"`
+}
+
 func shouldEmitSessionStartContext(agent, event string) bool {
 	if agent == "gemini" {
+		return event == "user-prompt-submit"
+	}
+	if agent == string(domain.HarnessOpenHands) {
+		// OpenHands ignores SessionStart hook output and has no system-prompt
+		// flag; UserPromptSubmit context is appended to each user message.
 		return event == "user-prompt-submit"
 	}
 	if event != "session-start" {
@@ -872,12 +883,18 @@ func (c *commandContext) emitSessionStartContext(agent, event, sessionID string)
 	if prompt == "" {
 		return
 	}
-	var out sessionStartHookOutput
-	out.HookSpecificOutput.HookEventName = "SessionStart"
-	if agent == "gemini" {
-		out.HookSpecificOutput.HookEventName = "BeforeAgent"
+	var out any
+	if agent == string(domain.HarnessOpenHands) {
+		out = openHandsContextHookOutput{AdditionalContext: prompt}
+	} else {
+		var start sessionStartHookOutput
+		start.HookSpecificOutput.HookEventName = "SessionStart"
+		if agent == "gemini" {
+			start.HookSpecificOutput.HookEventName = "BeforeAgent"
+		}
+		start.HookSpecificOutput.AdditionalContext = prompt
+		out = start
 	}
-	out.HookSpecificOutput.AdditionalContext = prompt
 	if err := json.NewEncoder(c.deps.Out).Encode(out); err != nil {
 		c.reportHookFailure(agent, event, sessionID, fmt.Errorf("write session-start context: %w", err))
 	}

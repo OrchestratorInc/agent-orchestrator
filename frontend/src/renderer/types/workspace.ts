@@ -104,6 +104,7 @@ export type SessionProvisionStep = {
 export type SessionBranchState = { commits: number; remoteBranch?: string; unpushed: number };
 
 export type WorkspaceSession = {
+	workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
 	id: string;
 	/** Installation ID of the daemon that owns this session; absent for local and Cloud. */
 	hostId?: string;
@@ -238,6 +239,11 @@ export type WorkspaceSession = {
 		sandboxProvider?: string;
 		desiredState?: string;
 		observedState?: string;
+		/** Sandbox runtime state; "terminated" means AO stopped retrying startup. */
+		runtimeState?: string;
+		runtimeError?: string;
+		/** Why the worker has not started; cleared once it connects. */
+		startupError?: { code: string; message: string; at: string };
 	};
 };
 
