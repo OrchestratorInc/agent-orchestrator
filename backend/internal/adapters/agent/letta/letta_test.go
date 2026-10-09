@@ -80,14 +80,19 @@ func TestNativeIdentityAndActivity(t *testing.T) {
 			t.Fatalf("accepted %s as %q", raw, got)
 		}
 	}
-	for event, want := range map[string]domain.ActivityState{"user-prompt-submit": domain.ActivityActive, "pre-tool-use": domain.ActivityActive, "post-tool-use": domain.ActivityActive, "post-tool-use-failure": domain.ActivityActive, "permission-request": domain.ActivityBlocked, "stop": domain.ActivityIdle} {
+	for event, want := range map[string]domain.ActivityState{"pre-tool-use": domain.ActivityActive, "post-tool-use": domain.ActivityActive, "post-tool-use-failure": domain.ActivityActive} {
 		got, ok := DeriveActivityState(event, payload)
 		if !ok || got != want {
 			t.Fatalf("%s = %q, %v", event, got, ok)
 		}
 	}
-	if _, ok := DeriveActivityState("session-start", payload); ok {
-		t.Fatal("startup manufactured settled activity")
+	for _, event := range []string{"session-start", "user-prompt-submit", "permission-request", "stop"} {
+		if _, ok := DeriveActivityState(event, payload); ok {
+			t.Fatalf("%s manufactured settled activity", event)
+		}
+	}
+	if _, ok := any(New()).(ports.SemanticMessageAcceptanceSignaler); ok {
+		t.Fatal("pre-submit hook cannot establish semantic acceptance")
 	}
 }
 

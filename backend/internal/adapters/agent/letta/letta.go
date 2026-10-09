@@ -1,6 +1,6 @@
-// Package letta integrates Letta Code's interactive CLI (v0.34.9).
-// AO instructions arrive through a quiet UserPromptSubmit hook, preserving
-// Letta's own system prompt and project instructions on both start and restore.
+// Package letta retains the withdrawn Letta Code v0.34.9 prototype.
+// This release lacks the private context and lifecycle contracts required
+// for a production integration; see docs/harnesses/letta-code.md.
 package letta
 
 import (
@@ -17,8 +17,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// InspectedVersion and InspectedCommit identify the released source contract.
+// InspectedVersion identifies the released source contract.
 const InspectedVersion = "0.34.9"
+
+// InspectedCommit identifies the exact released source revision.
 const InspectedCommit = "cbf9026030c74e60432c246aec2bb0ec08fd49bc"
 
 var binarySpec = binaryutil.BinarySpec{
@@ -158,12 +160,8 @@ func (p *Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 	return ports.AgentExitDetectionSupervisor
 }
 
-// EmitsSubmitActivity reports Letta's native prompt-submit hook.
-func (p *Plugin) EmitsSubmitActivity() bool { return true }
-
 // InterruptInput cancels a Letta turn; Ctrl+C clears a draft or exits instead.
 func (p *Plugin) InterruptInput() string { return "\x1b" }
 
-// EmitsSemanticMessageAcceptance reports opaque coordination IDs from native
-// UserPromptSubmit. It does not claim transcript replay or Chat support.
-func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
+// UserPromptSubmit precedes later blocking hooks and pending approvals, so
+// this prototype deliberately provides no semantic acceptance capability.

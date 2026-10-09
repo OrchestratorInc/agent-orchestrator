@@ -2264,7 +2264,7 @@ func TestHooksSessionDeliveryPreservesCoordinationOrigin(t *testing.T) {
 	}
 }
 
-func TestHooksLettaQuietPromptContextAndNativeConversation(t *testing.T) {
+func TestHooksLettaDoesNotExposeContextOrClaimAcceptance(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-letta-1")
 	cfg := setConfigEnv(t)
 	dir := filepath.Join(cfg.dataDir, "prompts", "ao-letta-1")
@@ -2276,18 +2276,22 @@ func TestHooksLettaQuietPromptContextAndNativeConversation(t *testing.T) {
 	}
 	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
 	writeRunFileFor(t, cfg, srv)
-	out, _, err := executeCLI(t, Deps{In: strings.NewReader(`{"session_id":"wrong-transient-id","conversation_id":"conv-native-1","agent_id":"agent-1","prompt":"--help as task data"}`), ProcessAlive: func(int) bool { return true }}, "hooks", "letta-code", "user-prompt-submit")
+	payload, err := json.Marshal(map[string]string{"session_id": "wrong-transient-id", "conversation_id": "conv-native-1", "agent_id": "agent-1", "prompt": domain.WrapSessionDelivery("session-send:letta", "task")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "PRIVATE-LETTA-STANDING-INSTRUCTIONS\n" {
-		t.Fatalf("native hook context = %q", out)
+	out, _, err := executeCLI(t, Deps{In: strings.NewReader(string(payload)), ProcessAlive: func(int) bool { return true }}, "hooks", "letta-code", "user-prompt-submit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "" {
+		t.Fatalf("unsafe native hook context = %q", out)
 	}
 	var request setActivityAPIRequest
 	if err := json.Unmarshal([]byte(capture.body), &request); err != nil {
 		t.Fatal(err)
 	}
-	if request.AgentSessionID != "conv-native-1" || request.State != "active" || request.LatestUserPrompt != "" {
+	if request.AgentSessionID != "conv-native-1" || request.State != "" || request.LatestUserPrompt != "" || request.CoordinationID != "" || request.ConversationCheckpointOrigin != "" {
 		t.Fatalf("activity request = %#v", request)
 	}
 	if strings.Contains(capture.body, "PRIVATE-LETTA") {

@@ -45,16 +45,13 @@ func (p *Plugin) AreHooksInstalled(ctx context.Context, workspace string) (bool,
 	return hooks.AreInstalled(ctx, workspace)
 }
 
-// DeriveActivityState maps actual turn/approval events. SessionStart captures
-// identity only: initialization is not evidence that an agent turn has settled.
+// DeriveActivityState retains only tool-processing observations. Prompt,
+// permission and Stop hooks cannot establish acceptance or settled activity
+// in the inspected release: later native hooks and mods may change the outcome.
 func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	switch event {
-	case "user-prompt-submit", "pre-tool-use", "post-tool-use", "post-tool-use-failure":
+	case "pre-tool-use", "post-tool-use", "post-tool-use-failure":
 		return domain.ActivityActive, true
-	case "permission-request":
-		return domain.ActivityBlocked, true
-	case "stop":
-		return domain.ActivityIdle, true
 	default:
 		return "", false
 	}

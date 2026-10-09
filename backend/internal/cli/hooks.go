@@ -656,7 +656,7 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		conversation = hookConversationFacts(domain.AgentHarness(agent), event, payload)
 	case domain.HarnessOpenCode, domain.HarnessGrok, domain.HarnessKilocode,
 		domain.HarnessOMP, domain.HarnessPi,
-		domain.HarnessAmp, domain.HarnessPrimeAgent, domain.HarnessLettaCode:
+		domain.HarnessAmp, domain.HarnessPrimeAgent:
 		conversation = hookSemanticAcceptanceFacts(event, payload)
 	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/activity"
@@ -862,7 +862,7 @@ type openHandsContextHookOutput struct {
 }
 
 func shouldEmitSessionStartContext(agent, event string) bool {
-	if agent == "gemini" || agent == string(domain.HarnessLettaCode) {
+	if agent == "gemini" {
 		return event == "user-prompt-submit"
 	}
 	if agent == string(domain.HarnessOpenHands) {
@@ -894,12 +894,6 @@ func (c *commandContext) emitSessionStartContext(agent, event, sessionID string)
 	}
 	prompt := strings.TrimSpace(string(data))
 	if prompt == "" {
-		return
-	}
-	if agent == string(domain.HarnessLettaCode) {
-		if _, err := fmt.Fprintln(c.deps.Out, prompt); err != nil {
-			c.reportHookFailure(agent, event, sessionID, err)
-		}
 		return
 	}
 	var out any

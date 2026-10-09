@@ -1,68 +1,44 @@
-# Letta Code terminal harness
+# Letta Code prototype withdrawn
 
-Node.js 22.19 or later is required. AO runs the `letta` CLI from `@letta-ai/letta-code@0.34.9`. The inspected
-release is [`v0.34.9`](https://github.com/letta-ai/letta-code/releases/tag/v0.34.9),
-commit `cbf9026030c74e60432c246aec2bb0ec08fd49bc`.
+PR #6492 is withdrawn after independent source review. Letta Code v0.34.9
+(commit `cbf9026030c74e60432c246aec2bb0ec08fd49bc`) does not provide the private
+instruction and lifecycle boundaries this prototype claimed. This branch must
+not be merged as a production integration.
 
-Use Settings → Agents → Letta Code to install and open the native setup UI.
-Letta supports local model providers and Letta Cloud; Cloud stores agent memory
-and conversations remotely. A new AO session creates a dedicated Letta agent
-and conversation. AO does not delete those provider records when a worker is
-terminated. Configure your provider in Letta before spawning an AO worker.
+Four release-specific blockers were found:
 
-The adapter is terminal-only. Chat, interface switching, reviewers, reasoning
-settings and AO tool allow/deny overrides are not advertised. Model choices
-come from `letta model list`; custom models must first be configured in Letta.
-Credential environment variables are reported as **configured**, never verified.
-Cloud keychain login and other native credentials remain **unknown** to AO's
-local auth check; Letta validates them during native setup and actual requests.
+1. **Private context can become visible.** UserPromptSubmit stdout is accumulated
+   across hooks. If a later hook blocks, the TUI prints all accumulated feedback,
+   including the earlier AO instructions. `quiet: true` suppresses executor
+   logging, not this transcript path. See `src/hooks/executor.ts:429` and
+   `src/cli/app/use-submit-handler.ts:662` in the pinned source.
+2. **Prompt acceptance is premature.** UserPromptSubmit runs before subsequent
+   blocking hooks and the pending-approval guard. It cannot acknowledge that an
+   AO message reached the model. See `src/cli/app/use-submit-handler.ts:652-712`.
+3. **Stop does not establish idle.** Another Stop hook can veto completion, and a
+   later turn_end mod can request continuation. See
+   `src/cli/app/use-conversation-loop.ts:1490-1582`.
+4. **Permission activity cannot be reliably cleared.** PermissionRequest omits
+   tool_call_id; native permission checking happens before PreToolUse for client
+   tools. AO cannot reliably correlate the later tool observation with the
+   blocked request. See `src/hooks/index.ts:179` and `src/tools/manager.ts:2192`.
 
-| AO behavior | Native contract |
-| --- | --- |
-| Fresh session | `--new-agent --new` avoids existing project history and the non-unique `default` conversation |
-| Initial task | Delivered through the terminal after actual composer text appears; leading dashes never enter argv |
-| Standing instructions | Raw stdout from a `quiet: true` UserPromptSubmit hook, wrapped by Letta as hidden system-reminder context on every turn |
-| Default permissions | Explicit `--permission-mode standard`; Letta itself defaults to unrestricted |
-| Accept edits | `--permission-mode acceptEdits` |
-| Bypass permissions | `--permission-mode unrestricted` |
-| Auto permissions | Rejected; no distinct native policy is claimed |
-| Restore | Only `--conversation conv-…`; absent or invalid IDs fail; native missing history exits with an error |
-| Turn cancellation | Escape, sent as raw terminal input without Enter; process termination uses AO’s supervisor |
-| Activity | Submit and tool hooks → active; PermissionRequest → blocked; Stop → idle; supervisor → process exit |
+Unsafe raw instruction output and the unsupported submit, semantic-acceptance,
+permission-blocked and Stop-idle signals were removed before closing the PR.
+The remaining branch is an unmerged prototype, not a supported harness.
 
-AO merges its hooks into `.letta/settings.local.json`, preserves unrelated
-settings and hooks, and installs the sibling `.gitignore`. Global configuration,
-project AGENTS.md and provider system prompts remain native-owned. Hook output
-must be quiet: Letta otherwise prints successful stdout, including context, in
-the terminal. The hook timeout is milliseconds in this release. PermissionRequest observation
-exits 1 deliberately: Letta interprets exit 0 as approval and exit 2 as denial.
-The adapter observes the request while leaving the native decision with the user.
+Native mods were considered as an alternative. The inspected release loads
+mods from global/agent directories; overriding LETTA_MODS_DIR replaces native
+user-global discovery. turn_start remains cancellable by later mods, turn_end
+still permits continuations, and llm_start exists only on the local backend.
+No bounded implementation preserving native defaults and covering local plus
+Cloud backends was established. A later integration needs a proven replacement
+contract rather than re-enabling these hooks.
 
-Startup readiness is required for this harness. Missing markers, a startup
-selection dialog, a changed/customized composer, or an expired wait budget
-causes spawn delivery to fail instead of typing a task into an unrelated prompt.
-The normal permission footer and fresh-conversation hint text are the inspected
-markers. A heavily customized Letta statusline may require adjusting these
-markers in a future adapter revision.
+[Inspected upstream source](https://github.com/letta-ai/letta-code/tree/cbf9026030c74e60432c246aec2bb0ec08fd49bc).
 
-## Source evidence
-
-All links below are pinned to the inspected release commit:
-
-- [CLI flags and parser](https://github.com/letta-ai/letta-code/blob/cbf9026030c74e60432c246aec2bb0ec08fd49bc/src/cli/args.ts)
-- [Fresh and exact conversation startup](https://github.com/letta-ai/letta-code/blob/cbf9026030c74e60432c246aec2bb0ec08fd49bc/src/index.ts)
-- [Awaited hook context and visible user text separation](https://github.com/letta-ai/letta-code/blob/cbf9026030c74e60432c246aec2bb0ec08fd49bc/src/cli/app/use-submit-handler.ts)
-- [Quiet hook execution and raw UserPromptSubmit stdout](https://github.com/letta-ai/letta-code/blob/cbf9026030c74e60432c246aec2bb0ec08fd49bc/src/hooks/executor.ts)
-- [Hook payload fields](https://github.com/letta-ai/letta-code/blob/cbf9026030c74e60432c246aec2bb0ec08fd49bc/src/hooks/types.ts)
-- [Permission semantics](https://github.com/letta-ai/letta-code/blob/cbf9026030c74e60432c246aec2bb0ec08fd49bc/src/permissions/mode.ts)
-- [Composer rendering](https://github.com/letta-ai/letta-code/blob/cbf9026030c74e60432c246aec2bb0ec08fd49bc/src/cli/components/InputRich.tsx)
-- [Native JSON model catalog](https://github.com/letta-ai/letta-code/blob/cbf9026030c74e60432c246aec2bb0ec08fd49bc/src/cli/subcommands/model.ts)
-
-## Verification status
-
-This integration was written from released source inspection. Local tests,
-builds, lints, type checks, installations and provider probes were deliberately
-not executed at the user's request. Unit and integration tests are committed
-for PR CI. Live hidden-context, provider authorization, terminal cancellation,
-kill/restore continuity and cross-platform executable conformance are **NOT_RUN**;
-a successful source review or CI unit suite is not evidence for those live gates.
+Remote CI on the first revision found a missing exported-constant comment and
+an outdated install-plan count; both source issues were corrected. Local tests,
+builds, lint, typechecks, installs and provider probes were not run at the user's
+request. Live lifecycle, authorization and private-context conformance remain
+**NOT_RUN**. No CI result substitutes for those live gates.
