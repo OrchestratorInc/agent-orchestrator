@@ -46,6 +46,14 @@ This example uses `bypass-permissions`, which lets provider tools act without th
 
 The `--config-json` flag takes a JSON string, not a file, and `set-config` replaces the whole project configuration. Preserve existing setup, rules, reviewers, and intake settings. See [Projects: update from the CLI](/configuration/projects#update-from-the-cli) for CLI limitations and safer alternatives.
 
+## Set a default model for a harness
+
+Open **Settings → Harnesses**, choose a harness, and open **Models**. Choose a default model and, where the harness supports it, reasoning effort, then select **Save defaults**. **Reset default** followed by **Save defaults** removes the preference.
+
+These preferences belong to the selected computer and apply to future sessions, including CLI spawns. A project's model or effort setting takes priority, and an explicit choice for a task takes priority over the project. A saved effort applies only to its saved model. Cloud VM tasks use their own settings.
+
+The Models tab also shows each model's context window in tokens and supported text/image inputs when the harness catalog reports them. Missing metadata appears as **Unknown**.
+
 ## Start an orchestrator or worker
 
 The desktop provides dedicated new-session and orchestrator flows. From the CLI:

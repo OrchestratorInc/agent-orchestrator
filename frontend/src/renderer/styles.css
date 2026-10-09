@@ -803,6 +803,12 @@ button.settings-row-bar {
 	padding-inline: 0;
 }
 
+/* An expanded harness remains one row; keep its header aligned with its peers. */
+.settings-dialog-body .harness-row-expanded {
+	margin-inline: calc(-1 * var(--space-3));
+	padding-inline: var(--space-3);
+}
+
 /* Match the open row layout used by the main Settings pages. */
 .project-settings-form > section,
 .project-settings-form > fieldset > section {

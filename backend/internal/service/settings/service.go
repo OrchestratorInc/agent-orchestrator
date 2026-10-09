@@ -7,9 +7,13 @@ package settings
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -21,10 +25,12 @@ type Store interface {
 	GetAppSettings(ctx context.Context) (Snapshot, error)
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode, now time.Time) error
 	SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error
+	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error
 }
 
 // Snapshot is the current preference set.
 type Snapshot struct {
+	HarnessDefaults    map[string]domain.HarnessDefault
 	DefaultSessionMode domain.SessionMode
 	// CloudOffering is the user's cloud toggle (Settings, Developer Mode).
 	CloudOffering          bool
@@ -175,4 +181,34 @@ func (s *Service) ChatHarnesses(candidates []domain.AgentHarness) []domain.Agent
 		}
 	}
 	return out
+}
+
+// ErrInvalidHarnessDefault marks invalid preference input at the API boundary.
+var ErrInvalidHarnessDefault = errors.New("invalid harness default")
+
+// HarnessDefault supplies the preference for a new session. An unavailable
+// preference store falls back to the harness's own behavior, as interface does.
+func (s *Service) HarnessDefault(ctx context.Context, agent domain.AgentHarness) domain.HarnessDefault {
+	snapshot, err := s.store.GetAppSettings(ctx)
+	if err != nil {
+		return domain.HarnessDefault{}
+	}
+	return snapshot.HarnessDefaults[string(agent)]
+}
+
+// SetHarnessDefault changes only future sessions and only the selected harness.
+func (s *Service) SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault) (Snapshot, error) {
+	value.Model, value.Effort = strings.TrimSpace(value.Model), strings.TrimSpace(value.Effort)
+	if !slices.Contains(domain.AllHarnesses, agent) || len(value.Model) > 256 || len(value.Effort) > 32 ||
+		strings.ContainsFunc(value.Model+value.Effort, unicode.IsControl) || (value.Model == "" && value.Effort != "") {
+		return Snapshot{}, ErrInvalidHarnessDefault
+	}
+	// Only these adapters currently accept AO's effort setting.
+	if value.Effort != "" && agent != domain.HarnessCodex && agent != domain.HarnessClaudeCode {
+		return Snapshot{}, fmt.Errorf("%w: this harness does not accept reasoning effort", ErrInvalidHarnessDefault)
+	}
+	if err := s.store.SetHarnessDefault(ctx, agent, value, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.Get(ctx)
 }

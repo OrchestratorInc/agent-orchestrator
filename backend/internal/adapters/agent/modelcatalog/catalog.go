@@ -574,6 +574,7 @@ func discoverCodexCatalog(ctx context.Context, request ports.AgentModelDiscovery
 		normalized = append(normalized, ports.AgentModelInfo{
 			ID: id, Label: label, Provider: provider, IsDefault: item.Default,
 			Efforts: append([]string(nil), item.Efforts...), DefaultEffort: item.DefaultEffort,
+			Inputs: modelInputs(item.Inputs),
 		})
 	}
 	if len(normalized) == 0 {
@@ -1043,11 +1044,21 @@ func parseSectionModels(output, startMarker, stopMarker string) ([]ports.AgentMo
 }
 
 func parsePiModels(output []byte) ([]ports.AgentModelInfo, error) {
+	contextColumn := -1
 	output = []byte(ansiPattern.ReplaceAllString(string(output), ""))
 	var models []ports.AgentModelInfo
 	for _, line := range strings.Split(string(output), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 2 || strings.EqualFold(fields[0], "provider") {
+		if len(fields) >= 2 && strings.EqualFold(fields[0], "provider") {
+			contextColumn = -1
+			for i, field := range fields {
+				if strings.EqualFold(field, "context") {
+					contextColumn = i
+				}
+			}
+			continue
+		}
+		if len(fields) < 2 {
 			continue
 		}
 		provider := strings.TrimSpace(fields[0])
@@ -1056,7 +1067,11 @@ func parsePiModels(output []byte) ([]ports.AgentModelInfo, error) {
 			continue
 		}
 		id := provider + "/" + modelID
-		models = append(models, ports.AgentModelInfo{ID: id, Label: modelID, Provider: provider})
+		item := ports.AgentModelInfo{ID: id, Label: modelID, Provider: provider}
+		if contextColumn >= 0 && contextColumn < len(fields) {
+			item.ContextWindow = catalogTokenCount(fields[contextColumn])
+		}
+		models = append(models, item)
 	}
 	return normalize(models), nil
 }
@@ -1127,10 +1142,12 @@ func parseJSONModels(output []byte) ([]ports.AgentModelInfo, error) {
 					label = id
 				}
 				models = append(models, ports.AgentModelInfo{
-					ID:        id,
-					Label:     label,
-					Provider:  firstString(node, "provider", "providerId", "provider_id"),
-					IsDefault: firstBool(node, "isDefault", "is_default", "default"),
+					ID:            id,
+					Label:         label,
+					Provider:      firstString(node, "provider", "providerId", "provider_id"),
+					IsDefault:     firstBool(node, "isDefault", "is_default", "default"),
+					ContextWindow: catalogContextWindow(node),
+					Inputs:        catalogInputs(node),
 				})
 			}
 			for key, child := range node {
@@ -1143,10 +1160,12 @@ func parseJSONModels(output []byte) ([]ports.AgentModelInfo, error) {
 									label = alias
 								}
 								models = append(models, ports.AgentModelInfo{
-									ID:        strings.TrimSpace(alias),
-									Label:     label,
-									Provider:  firstString(modelNode, "provider", "providerId", "provider_id"),
-									IsDefault: firstBool(modelNode, "isDefault", "is_default", "default"),
+									ID:            strings.TrimSpace(alias),
+									Label:         label,
+									Provider:      firstString(modelNode, "provider", "providerId", "provider_id"),
+									IsDefault:     firstBool(modelNode, "isDefault", "is_default", "default"),
+									ContextWindow: catalogContextWindow(modelNode),
+									Inputs:        catalogInputs(modelNode),
 								})
 								continue
 							}
@@ -1214,6 +1233,12 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 			}
 			if previous.Provider == "" {
 				previous.Provider = item.Provider
+			}
+			if previous.ContextWindow == 0 {
+				previous.ContextWindow = item.ContextWindow
+			}
+			if len(previous.Inputs) == 0 {
+				previous.Inputs = item.Inputs
 			}
 			previous.IsDefault = previous.IsDefault || item.IsDefault
 			byID[item.ID] = previous

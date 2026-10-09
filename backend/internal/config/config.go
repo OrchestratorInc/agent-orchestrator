@@ -149,6 +149,10 @@ type Config struct {
 	AllowedOrigins []string
 	// Telemetry controls local/remote telemetry sinks.
 	Telemetry TelemetryConfig
+	// HarnessUpdateChecks lets the daemon compare installed harnesses with their
+	// release sources over the network. AO_HARNESS_UPDATE_CHECKS=off disables
+	// it for offline or policy-restricted machines.
+	HarnessUpdateChecks bool
 	// StartupWorkingDirectory is the daemon process cwd before startup
 	// normalizes it. The desktop uses this to identify dev daemons after the
 	// process cwd is moved to the stable data dir.
@@ -223,7 +227,8 @@ func Load() (Config, error) {
 			Remote:      TelemetryRemoteOff,
 			PostHogHost: DefaultTelemetryPostHogHost,
 		},
-		LocalOffering: true,
+		LocalOffering:       true,
+		HarnessUpdateChecks: true,
 	}
 
 	if raw := os.Getenv("AO_PORT"); raw != "" {
@@ -285,6 +290,13 @@ func Load() (Config, error) {
 		cfg.AllowedOrigins = origins
 	}
 
+	if raw, present := os.LookupEnv("AO_HARNESS_UPDATE_CHECKS"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_HARNESS_UPDATE_CHECKS", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.HarnessUpdateChecks = v
+	}
 	if raw, present := os.LookupEnv("AO_TELEMETRY_EVENTS"); present && strings.TrimSpace(raw) != "" {
 		v, err := parseToggleEnv("AO_TELEMETRY_EVENTS", raw)
 		if err != nil {

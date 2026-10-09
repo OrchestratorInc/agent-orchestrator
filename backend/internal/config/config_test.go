@@ -11,7 +11,7 @@ import (
 func TestLoadDefaults(t *testing.T) {
 	// Clear every recognised var so we observe pure defaults regardless of the
 	// surrounding environment.
-	for _, k := range []string{"AO_PORT", "AO_REQUEST_TIMEOUT", "AO_SHUTDOWN_TIMEOUT", "AO_RUN_FILE", "AO_DATA_DIR", "AO_AGENT", "AO_ALLOWED_ORIGINS", "AO_TELEMETRY_EVENTS", "AO_TELEMETRY_METRICS", "AO_TELEMETRY_REMOTE", "AO_TELEMETRY_POSTHOG_KEY", "AO_TELEMETRY_POSTHOG_HOST", "AO_TELEMETRY_DISABLED_EVENTS", "AO_TELEMETRY_APP_VERSION"} {
+	for _, k := range []string{"AO_PORT", "AO_REQUEST_TIMEOUT", "AO_SHUTDOWN_TIMEOUT", "AO_RUN_FILE", "AO_DATA_DIR", "AO_AGENT", "AO_ALLOWED_ORIGINS", "AO_TELEMETRY_EVENTS", "AO_TELEMETRY_METRICS", "AO_TELEMETRY_REMOTE", "AO_TELEMETRY_POSTHOG_KEY", "AO_TELEMETRY_POSTHOG_HOST", "AO_TELEMETRY_DISABLED_EVENTS", "AO_TELEMETRY_APP_VERSION", "AO_HARNESS_UPDATE_CHECKS"} {
 		t.Setenv(k, "")
 	}
 
@@ -524,5 +524,24 @@ func TestLoadTrackerIntakeRejectsGarbage(t *testing.T) {
 	t.Setenv("AO_TRACKER_INTAKE", "maybe")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() = nil error, want error for malformed AO_TRACKER_INTAKE")
+	}
+}
+
+func TestLoadHarnessUpdateChecksToggle(t *testing.T) {
+	t.Setenv("AO_HARNESS_UPDATE_CHECKS", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.HarnessUpdateChecks {
+		t.Fatal("harness update checks are off by default")
+	}
+	t.Setenv("AO_HARNESS_UPDATE_CHECKS", "off")
+	if cfg, err = Load(); err != nil || cfg.HarnessUpdateChecks {
+		t.Fatalf("AO_HARNESS_UPDATE_CHECKS=off: checks=%t err=%v", cfg.HarnessUpdateChecks, err)
+	}
+	t.Setenv("AO_HARNESS_UPDATE_CHECKS", "sometimes")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid AO_HARNESS_UPDATE_CHECKS value was accepted")
 	}
 }

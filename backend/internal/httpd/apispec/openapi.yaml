@@ -151,7 +151,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Start an asynchronous install for one fixed agent harness
+      summary: Start an asynchronous install, update, or uninstall for one fixed agent
+        harness
+      tags:
+      - agents
+  /api/v1/agents/{agent}/logout:
+    post:
+      operationId: logoutAgent
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartAgentAuthResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Open the fixed native logout flow for one agent
       tags:
       - agents
   /api/v1/agents/{agent}/models:
@@ -304,6 +344,53 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Ensure launch-fresh readiness for one agent adapter
+      tags:
+      - agents
+  /api/v1/agents/{agent}/update-advisory:
+    get:
+      operationId: getAgentUpdateAdvisory
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - description: Re-probe the installed binary, ownership and latest release instead
+          of reusing cached advisory evidence.
+        in: query
+        name: refresh
+        schema:
+          description: Re-probe the installed binary, ownership and latest release
+            instead of reusing cached advisory evidence.
+          type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentUpdateAdvisory'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Compare an installed harness version with its known package source
       tags:
       - agents
   /api/v1/agents/{agent}/verify:
@@ -8736,6 +8823,51 @@ paths:
       summary: Turn the cloud offering on or off for this machine
       tags:
       - settings
+  /api/v1/settings/harness-defaults/{agent}:
+    patch:
+      operationId: updateHarnessDefault
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateHarnessDefaultRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Choose the default model and effort for new sessions using one harness
+      tags:
+      - settings
   /api/v1/settings/session-interface:
     patch:
       operationId: updateSessionInterface
@@ -9354,6 +9486,8 @@ components:
           - terminal
           - documentation
           type: string
+        logoutCommand:
+          type: string
         reason:
           type: string
       required:
@@ -9476,12 +9610,26 @@ components:
           type: string
         reinstallReason:
           type: string
+        uninstallAvailable:
+          type: boolean
+        uninstallCommand:
+          type: string
+        uninstallReason:
+          type: string
+        updateAvailable:
+          type: boolean
+        updateCommand:
+          type: string
+        updateReason:
+          type: string
       required:
       - id
       - label
       - available
       - recommended
       - reinstallAvailable
+      - updateAvailable
+      - uninstallAvailable
       type: object
     AgentInstallPlan:
       properties:
@@ -9507,6 +9655,8 @@ components:
           type: string
         reason:
           type: string
+        uninstallGuide:
+          $ref: '#/components/schemas/AgentUninstallGuide'
       required:
       - agentId
       - available
@@ -9562,6 +9712,9 @@ components:
       type: object
     AgentModelInfo:
       properties:
+        contextWindow:
+          format: int64
+          type: integer
         defaultEffort:
           type: string
         efforts:
@@ -9570,6 +9723,10 @@ components:
           type: array
         id:
           type: string
+        inputs:
+          items:
+            type: string
+          type: array
         isDefault:
           type: boolean
         label:
@@ -9791,6 +9948,61 @@ components:
           $ref: '#/components/schemas/AgentSwitch'
       required:
       - switch
+      type: object
+    AgentUninstallGuide:
+      properties:
+        command:
+          description: Vendor uninstall command for this install.
+          type: string
+        docsUrl:
+          description: Vendor page with uninstall instructions.
+          type: string
+        documented:
+          description: Whether the vendor documents these steps.
+          type: boolean
+        editsShellProfile:
+          description: Whether the installer added a PATH line to the shell profile.
+          type: boolean
+        programPaths:
+          description: Program files and directories to remove.
+          items:
+            type: string
+          type: array
+        userDataPaths:
+          description: Optional settings, sign-in and history paths.
+          items:
+            type: string
+          type: array
+      required:
+      - programPaths
+      - editsShellProfile
+      - documented
+      type: object
+    AgentUpdateAdvisory:
+      properties:
+        agentId:
+          type: string
+        binaryPath:
+          type: string
+        checkedAt:
+          format: date-time
+          type: string
+        currentVersion:
+          type: string
+        latestVersion:
+          type: string
+        maintenanceMethod:
+          type: string
+        reason:
+          type: string
+        source:
+          type: string
+        status:
+          type: string
+      required:
+      - agentId
+      - status
+      - checkedAt
       type: object
     AppMemoryResponse:
       properties:
@@ -12370,6 +12582,15 @@ components:
       required:
       - repoPath
       - approvedActions
+      type: object
+    HarnessDefault:
+      properties:
+        effort:
+          maxLength: 32
+          type: string
+        model:
+          maxLength: 256
+          type: string
       type: object
     IdentityResponse:
       properties:
@@ -14957,6 +15178,10 @@ components:
           - chat
           - tui
           type: string
+        harnessDefaults:
+          additionalProperties:
+            $ref: '#/components/schemas/HarnessDefault'
+          type: object
         localEnabled:
           type: boolean
         trackerIntakeEnabled:
@@ -15170,6 +15395,10 @@ components:
       type: object
     StartAgentInstallRequest:
       properties:
+        expectedVersion:
+          description: For updates, the available version explicitly approved by the
+            user. Used only as a verification floor, never as a command argument.
+          type: string
         method:
           description: Server-issued installation method id. Omit to use the recommended
             viable method.
@@ -15179,6 +15408,8 @@ components:
           enum:
           - install
           - reinstall
+          - update
+          - uninstall
           type: string
       type: object
     StartCodexAccountSwitchRequest:
@@ -15624,6 +15855,19 @@ components:
           - boolean
       required:
       - enabled
+      type: object
+    UpdateHarnessDefaultRequest:
+      properties:
+        effort:
+          maxLength: 32
+          type: string
+        model:
+          maxLength: 256
+          type:
+          - "null"
+          - string
+      required:
+      - model
       type: object
     UpdateProjectSettingsInput:
       properties:

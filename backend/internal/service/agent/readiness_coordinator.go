@@ -629,8 +629,10 @@ func (c *readinessCoordinator) Invalidate(agentID string, invalidation readiness
 	entry.nextRetryAt = time.Time{}
 }
 
-func (c *readinessCoordinator) Warm() {
+func (c *readinessCoordinator) Warm() <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		// Warm installation through the process-free capability first. Goose's
 		// normal resolver validates identity by running --help, so startup must
 		// not accidentally turn this background cache fill into an execution
@@ -642,6 +644,7 @@ func (c *readinessCoordinator) Warm() {
 		// inconclusive auth observation until an explicit normal refresh.
 		_, _ = c.ensureMode(c.ctx, nil, domain.AgentReadinessPurposeDisplay, readinessInvalidateAuthentication, false)
 	}()
+	return done
 }
 
 func (c *readinessCoordinator) normalizeIDs(ids []string) ([]string, error) {

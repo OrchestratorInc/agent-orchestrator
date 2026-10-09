@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
@@ -71,32 +71,45 @@ export function useEnsureAgentReadiness({
 	enabled = true,
 	purpose = "display",
 	hostId,
+	retryOnError = false,
 }: {
 	agentIds?: string[];
 	enabled?: boolean;
 	purpose?: AgentReadinessPurpose;
 	hostId?: string;
-} = {}): void {
+	retryOnError?: boolean;
+} = {}): boolean {
 	const queryClient = useQueryClient();
 	const agentIDsKey = [...new Set(agentIds.filter(Boolean))].sort().join("\u0000");
 	const normalizedIDs = useMemo(
 		() => (agentIDsKey === "" ? [] : agentIDsKey.split("\u0000")),
 		[agentIDsKey],
 	);
+	// A completion belongs to this exact request, never a previous host or
+	// enabled period. Cached installation data alone cannot open this gate.
+	const request = useMemo(() => ({}), [enabled, hostId, normalizedIDs, purpose, queryClient, retryOnError]);
+	const [completedRequest, setCompletedRequest] = useState<object | null>(null);
 
 	useEffect(() => {
 		if (!enabled) return;
 		let active = true;
-		void ensureAgentReadiness(normalizedIDs, purpose, hostId)
+		let retryTimer: ReturnType<typeof setTimeout> | undefined;
+		setCompletedRequest(null);
+		const ensure = () => void ensureAgentReadiness(normalizedIDs, purpose, hostId)
 			.then((next) => {
-				if (active) cacheAgentReadiness(queryClient, next, hostId);
+				if (!active) return;
+				cacheAgentReadiness(queryClient, next, hostId);
+				setCompletedRequest(request);
 			})
 			.catch(() => {
-				// Opportunistic: cached readiness remains useful and native launch is
-				// still the authoritative validation path.
+				// Keep cached display data, but never report a failed check as done.
+				if (active && retryOnError) retryTimer = setTimeout(ensure, 30_000);
 			});
+		ensure();
 		return () => {
 			active = false;
+			clearTimeout(retryTimer);
 		};
-	}, [enabled, hostId, normalizedIDs, purpose, queryClient]);
+	}, [enabled, hostId, normalizedIDs, purpose, queryClient, request, retryOnError]);
+	return enabled && completedRequest === request;
 }

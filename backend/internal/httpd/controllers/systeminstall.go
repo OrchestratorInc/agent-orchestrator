@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -17,11 +18,12 @@ import (
 // against the fixed systeminstall.Target allowlist.
 type Installer interface {
 	Start(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
-	StartAgentOperation(ctx context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation) (systeminstall.Job, error)
+	StartAgentOperation(ctx context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation, expectedVersion ...string) (systeminstall.Job, error)
 	Status(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
 	AgentPlans(ctx context.Context) ([]systeminstall.AgentPlan, error)
 	AgentJobs(ctx context.Context) ([]systeminstall.Job, error)
 	Verify(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
+	UpdateAdvisory(ctx context.Context, target systeminstall.Target, refresh ...bool) (systeminstall.UpdateAdvisory, error)
 }
 
 // SystemInstallController owns the system prerequisite and agent harness install routes.
@@ -35,9 +37,36 @@ func (c *SystemInstallController) Register(r chi.Router) {
 	r.Get("/system/install/{target}", c.status)
 	r.Get("/agents/installers", c.agentPlans)
 	r.Get("/agents/install-jobs", c.agentJobs)
+	r.Get("/agents/{agent}/update-advisory", c.updateAdvisory)
 	r.Post("/agents/{agent}/install", c.startAgent)
 	r.Get("/agents/{agent}/install", c.agentStatus)
 	r.Post("/agents/{agent}/verify", c.verifyAgent)
+}
+
+func (c *SystemInstallController) updateAdvisory(w http.ResponseWriter, r *http.Request) {
+	if c.Installer == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/agents/{agent}/update-advisory")
+		return
+	}
+	target, ok := parseAgentInstallTarget(w, r)
+	if !ok {
+		return
+	}
+	refresh := false
+	if raw := r.URL.Query().Get("refresh"); raw != "" {
+		var err error
+		refresh, err = strconv.ParseBool(raw)
+		if err != nil {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_QUERY", "refresh must be true or false", nil)
+			return
+		}
+	}
+	advisory, err := c.Installer.UpdateAdvisory(r.Context(), target, refresh)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, advisory)
 }
 
 func (c *SystemInstallController) agentPlans(w http.ResponseWriter, r *http.Request) {
@@ -71,11 +100,11 @@ func (c *SystemInstallController) startAgent(w http.ResponseWriter, r *http.Requ
 	if operation == "" {
 		operation = systeminstall.AgentOperationInstall
 	}
-	if operation != systeminstall.AgentOperationInstall && operation != systeminstall.AgentOperationReinstall {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_INSTALL_OPERATION", "operation must be install or reinstall", nil)
+	if operation != systeminstall.AgentOperationInstall && operation != systeminstall.AgentOperationReinstall && operation != systeminstall.AgentOperationUpdate && operation != systeminstall.AgentOperationUninstall {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_INSTALL_OPERATION", "operation must be install, reinstall, update, or uninstall", nil)
 		return
 	}
-	job, err := c.Installer.StartAgentOperation(r.Context(), target, request.Method, operation)
+	job, err := c.Installer.StartAgentOperation(r.Context(), target, request.Method, operation, request.ExpectedVersion)
 	if err != nil {
 		if writeAgentInstallError(w, r, err) {
 			return
@@ -121,11 +150,17 @@ func (c *SystemInstallController) verifyAgent(w http.ResponseWriter, r *http.Req
 
 func writeAgentInstallError(w http.ResponseWriter, r *http.Request, err error) bool {
 	switch {
+	case errors.Is(err, systeminstall.ErrUpdateVersion):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_UPDATE_VERSION", "expectedVersion must be a supported version and may only be used for updates", nil)
+		return true
 	case errors.Is(err, systeminstall.ErrInstallMethod):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INSTALL_METHOD_UNAVAILABLE", "the selected install method is unavailable", nil)
 		return true
+	case errors.Is(err, systeminstall.ErrInstallOwner):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "INSTALL_OWNER_UNCONFIRMED", "AO could not confirm this method installed the harness it runs; update or remove it with the tool that installed it", nil)
+		return true
 	case errors.Is(err, systeminstall.ErrHarnessActive):
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "HARNESS_ACTIVE", "end active Droid sessions before installing or reinstalling Droid", nil)
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "HARNESS_ACTIVE", "end active sessions for this harness before changing its installation", nil)
 		return true
 	case errors.Is(err, systeminstall.ErrInstallActive):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "INSTALL_ACTIVE", "an install or verification job is already active for this harness", nil)

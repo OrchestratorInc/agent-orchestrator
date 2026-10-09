@@ -1,0 +1,43 @@
+name: Harness release feeds
+
+# Queries every vendor feed and package registry the harness update advisory
+# reads. Vendors change these endpoints without notice and the unit tests only
+# see fakes, so a daily live run surfaces a broken feed before users see an
+# "unknown" update status.
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "backend/internal/service/systeminstall/official_versions.go"
+      - "backend/internal/service/systeminstall/manager_versions.go"
+      - "backend/internal/service/systeminstall/update_version.go"
+      - "backend/internal/service/systeminstall/agentplans.go"
+      - "backend/internal/service/systeminstall/release_feeds_live_test.go"
+      - ".github/workflows/harness-release-feeds.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  live-feeds:
+    # Forks inherit the schedule but nobody watches their runs.
+    if: github.event_name != 'schedule' || !github.event.repository.fork
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Query live release feeds
+        env:
+          AO_LIVE_HARNESS_FEEDS: "1"
+        run: go test -count=1 -run '^TestLiveHarnessReleaseFeeds$' -v ./internal/service/systeminstall

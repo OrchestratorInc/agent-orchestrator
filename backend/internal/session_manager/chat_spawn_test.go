@@ -1777,3 +1777,7 @@ func (l *deadlineConsumingChatLauncher) QueueChatPrompt(_ context.Context, _ dom
 func (l *deadlineConsumingChatLauncher) DrainChatQueue(_ context.Context, _ domain.SessionID) error {
 	return nil
 }
+
+func (d fixedSessionModeDefaults) HarnessDefault(context.Context, domain.AgentHarness) domain.HarnessDefault {
+	return domain.HarnessDefault{}
+}

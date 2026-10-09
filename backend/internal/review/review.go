@@ -81,8 +81,14 @@ type Projects interface {
 	GetProject(ctx stdctx.Context, id string) (domain.ProjectRecord, bool, error)
 }
 
+// HarnessDefaults supplies the daemon-owned model preference for new reviews.
+type HarnessDefaults interface {
+	HarnessDefault(ctx stdctx.Context, agent domain.AgentHarness) domain.HarnessDefault
+}
+
 // Deps wires the engine.
 type Deps struct {
+	Defaults HarnessDefaults
 	Store    Store
 	Sessions Sessions
 	PRs      PRs
@@ -98,6 +104,7 @@ type Deps struct {
 
 // Engine is the core code-review engine.
 type Engine struct {
+	defaults HarnessDefaults
 	store    Store
 	sessions Sessions
 	prs      PRs
@@ -129,6 +136,7 @@ func New(d Deps) *Engine {
 	}
 	return &Engine{
 		store:        d.Store,
+		defaults:     d.Defaults,
 		sessions:     d.Sessions,
 		prs:          d.PRs,
 		projects:     d.Projects,
@@ -366,6 +374,9 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	} else if !overrideConfig.IsZero() {
 		config = mergeReviewerAgentConfig(config, overrideConfig)
 		hasConfigOverride = config != resolvedConfig
+	}
+	if e.defaults != nil {
+		config = e.defaults.HarnessDefault(ctx, domain.AgentHarness(harness)).Apply(config)
 	}
 	reviewRows, err := e.store.ListReviewsBySession(ctx, workerID)
 	if err != nil {

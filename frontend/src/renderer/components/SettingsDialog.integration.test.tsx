@@ -153,7 +153,7 @@ describe("Settings recovery modal integration", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "Agents" }));
 		const trigger = await screen.findByLabelText("Worker agent");
 		await openAgentManagement("Worker agent");
-		await screen.findByRole("textbox", { name: "Search harnesses" });
+		await screen.findByRole("tab", { name: "Account" });
 
 		act(() => client.setQueryData(agentReadinessQueryKey, {
 			agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")],
@@ -179,6 +179,7 @@ describe("Settings recovery modal integration", () => {
 		requireCodexLogin(client);
 		await openAgentManagement("Worker agent");
 
+		await userEvent.click(await screen.findByRole("button", { name: "All harnesses" }));
 		const search = await screen.findByRole("textbox", { name: "Search harnesses" });
 		await userEvent.type(search, "Claude");
 		expect(search).toHaveValue("Claude");
@@ -195,7 +196,7 @@ describe("Settings recovery modal integration", () => {
 		requireCodexLogin();
 		renderDialogs("new-task");
 		await openAgentManagement("Agent");
-		await screen.findByRole("textbox", { name: "Search harnesses" });
+		await screen.findByRole("tab", { name: "Account" });
 		await userEvent.keyboard("{Escape}");
 
 		expect(await screen.findByRole("textbox", { name: "Task" })).toBeInTheDocument();
@@ -216,7 +217,7 @@ describe("Settings recovery modal integration", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
 		const form = document.getElementById("project-settings-form");
 		await openAgentManagement("Worker agent");
-		await screen.findByRole("textbox", { name: "Search harnesses" });
+		await screen.findByRole("tab", { name: "Account" });
 
 		expect(form).not.toBeNull();
 		if (dismiss === "Escape") await userEvent.keyboard("{Escape}");

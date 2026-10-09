@@ -357,3 +357,52 @@ func (o *recordingTerminalOpener) OpenCommandTerminal(_ context.Context, in shel
 	o.input = in
 	return o.terminal, nil
 }
+
+func TestLogoutUsesAdapterExecutableAndNeverLoginLauncher(t *testing.T) {
+	for _, tc := range []struct {
+		agent string
+		args  []string
+	}{
+		{"claude-code", []string{"auth", "logout"}},
+		{"codex", []string{"logout"}},
+		{"cursor", []string{"logout"}},
+		{"opencode", []string{"auth", "logout"}},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			opener := &recordingTerminalOpener{terminal: shellterm.ShellTerminal{HandleID: "logout-terminal"}}
+			resolver := managedExecutableResolver{agentID: tc.agent, path: "/managed/agent"}
+			svc := NewWithAgentResolver(nil, resolver, opener, "")
+			result, err := svc.Logout(context.Background(), tc.agent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := append([]string{"/managed/agent"}, tc.args...)
+			if !reflect.DeepEqual(opener.input.Argv, want) {
+				t.Fatalf("argv = %v, want %v", opener.input.Argv, want)
+			}
+			if result.Action != "logout" || result.Terminal.HandleID != "logout-terminal" || result.TerminalInput != "" || opener.input.InitialInput != "" {
+				t.Fatalf("unexpected logout: %+v, input %+v", result, opener.input)
+			}
+		})
+	}
+}
+
+func TestLogoutRejectsUnknownUnsupportedAndMissingExecutable(t *testing.T) {
+	for _, tc := range []struct{ agent, code string }{
+		{"not-a-harness", "AGENT_AUTH_TARGET_UNKNOWN"},
+		{"aider", "AGENT_LOGOUT_UNSUPPORTED"},
+		{"codex", "AGENT_AUTH_UNAVAILABLE"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			opener := &recordingTerminalOpener{}
+			_, err := New(foundExecutables(nil), opener).Logout(context.Background(), tc.agent)
+			var apiErr *apierr.Error
+			if !errors.As(err, &apiErr) || apiErr.Code != tc.code {
+				t.Fatalf("error = %v, want %s", err, tc.code)
+			}
+			if opener.calls != 0 {
+				t.Fatal("rejected logout opened a terminal")
+			}
+		})
+	}
+}

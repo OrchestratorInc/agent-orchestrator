@@ -48,8 +48,25 @@ export interface paths {
         /** Get the current or last install job for one agent harness */
         get: operations["getAgentInstallStatus"];
         put?: never;
-        /** Start an asynchronous install for one fixed agent harness */
+        /** Start an asynchronous install, update, or uninstall for one fixed agent harness */
         post: operations["startAgentInstall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent}/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Open the fixed native logout flow for one agent */
+        post: operations["logoutAgent"];
         delete?: never;
         options?: never;
         head?: never;
@@ -101,6 +118,23 @@ export interface paths {
         put?: never;
         /** Ensure launch-fresh readiness for one agent adapter */
         post: operations["probeAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent}/update-advisory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Compare an installed harness version with its known package source */
+        get: operations["getAgentUpdateAdvisory"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2858,6 +2892,23 @@ export interface paths {
         patch: operations["updateCloudOffering"];
         trace?: never;
     };
+    "/api/v1/settings/harness-defaults/{agent}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Choose the default model and effort for new sessions using one harness */
+        patch: operations["updateHarnessDefault"];
+        trace?: never;
+    };
     "/api/v1/settings/session-interface": {
         parameters: {
             query?: never;
@@ -3105,6 +3156,7 @@ export interface components {
             guidance?: string;
             /** @enum {string} */
             launchMode: "terminal" | "documentation";
+            logoutCommand?: string;
             reason?: string;
         };
         AgentAuthenticationObservation: {
@@ -3156,6 +3208,12 @@ export interface components {
             reinstallAvailable: boolean;
             reinstallCommand?: string;
             reinstallReason?: string;
+            uninstallAvailable: boolean;
+            uninstallCommand?: string;
+            uninstallReason?: string;
+            updateAvailable: boolean;
+            updateCommand?: string;
+            updateReason?: string;
         };
         AgentInstallPlan: {
             agentId: string;
@@ -3168,6 +3226,7 @@ export interface components {
             methods: components["schemas"]["AgentInstallMethod"][];
             notice?: string;
             reason?: string;
+            uninstallGuide?: components["schemas"]["AgentUninstallGuide"];
         };
         AgentInstallationObservation: {
             /** Format: date-time */
@@ -3185,9 +3244,12 @@ export interface components {
             agents: components["schemas"]["AgentInstallPlan"][];
         };
         AgentModelInfo: {
+            /** Format: int64 */
+            contextWindow?: number;
             defaultEffort?: string;
             efforts?: string[];
             id: string;
+            inputs?: string[];
             isDefault?: boolean;
             label: string;
             /** Format: date-time */
@@ -3262,6 +3324,32 @@ export interface components {
         };
         AgentSwitchResponse: {
             switch: components["schemas"]["AgentSwitch"];
+        };
+        AgentUninstallGuide: {
+            /** @description Vendor uninstall command for this install. */
+            command?: string;
+            /** @description Vendor page with uninstall instructions. */
+            docsUrl?: string;
+            /** @description Whether the vendor documents these steps. */
+            documented: boolean;
+            /** @description Whether the installer added a PATH line to the shell profile. */
+            editsShellProfile: boolean;
+            /** @description Program files and directories to remove. */
+            programPaths: string[];
+            /** @description Optional settings, sign-in and history paths. */
+            userDataPaths?: string[];
+        };
+        AgentUpdateAdvisory: {
+            agentId: string;
+            binaryPath?: string;
+            /** Format: date-time */
+            checkedAt: string;
+            currentVersion?: string;
+            latestVersion?: string;
+            maintenanceMethod?: string;
+            reason?: string;
+            source?: string;
+            status: string;
         };
         AppMemoryResponse: {
             /** @description False when there was no earlier sample to measure against: cpuPercent is unknown, not zero. */
@@ -4209,6 +4297,10 @@ export interface components {
             initialCommitMessage?: string;
             remoteUrl?: string;
             repoPath: string;
+        };
+        HarnessDefault: {
+            effort?: string;
+            model?: string;
         };
         IdentityResponse: {
             apiVersion: number;
@@ -5213,6 +5305,9 @@ export interface components {
             cloudOffering: boolean;
             /** @enum {string} */
             defaultSessionMode: "chat" | "tui";
+            harnessDefaults?: {
+                [key: string]: components["schemas"]["HarnessDefault"];
+            };
             localEnabled: boolean;
             trackerIntakeEnabled: boolean;
         };
@@ -5281,13 +5376,15 @@ export interface components {
             terminalInput?: string;
         };
         StartAgentInstallRequest: {
+            /** @description For updates, the available version explicitly approved by the user. Used only as a verification floor, never as a command argument. */
+            expectedVersion?: string;
             /** @description Server-issued installation method id. Omit to use the recommended viable method. */
             method?: string;
             /**
              * @description Requested operation. Defaults to install for older clients.
              * @enum {string}
              */
-            operation?: "install" | "reinstall";
+            operation?: "install" | "reinstall" | "update" | "uninstall";
         };
         StartCodexAccountSwitchRequest: {
             /** @deprecated */
@@ -5466,6 +5563,10 @@ export interface components {
         };
         UpdateChatHibernationRequest: {
             enabled: null | boolean;
+        };
+        UpdateHarnessDefaultRequest: {
+            effort?: string;
+            model: null | string;
         };
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];
@@ -5881,6 +5982,56 @@ export interface operations {
             };
         };
     };
+    logoutAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartAgentAuthResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getAgentModels: {
         parameters: {
             query?: {
@@ -6026,6 +6177,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProbeAgentResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getAgentUpdateAdvisory: {
+        parameters: {
+            query?: {
+                /** @description Re-probe the installed binary, ownership and latest release instead of reusing cached advisory evidence. */
+                refresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentUpdateAdvisory"];
                 };
             };
             /** @description Bad Request */
@@ -16590,6 +16794,60 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ControllersUpdateCloudOfferingRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateHarnessDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateHarnessDefaultRequest"];
             };
         };
         responses: {

@@ -656,10 +656,11 @@ func Run() error {
 		privateNPMPrefixes[systeminstall.TargetOpencodeV2] = prefix
 	}
 	systemInstall := systeminstall.NewWithDeps(hostCommands, hostCommands, systeminstall.Deps{
-		JobStore:           store,
-		Verifier:           systeminstall.NewVerifier(agents, hostCommands),
-		Sessions:           store,
-		PrivateNPMPrefixes: privateNPMPrefixes,
+		JobStore:            store,
+		Verifier:            systeminstall.NewVerifier(agents, hostCommands),
+		Sessions:            store,
+		DisableUpdateChecks: !cfg.HarnessUpdateChecks,
+		PrivateNPMPrefixes:  privateNPMPrefixes,
 	})
 	if err := systemInstall.Recover(ctx); err != nil {
 		stop()
@@ -1023,7 +1024,12 @@ func Run() error {
 		// lazily Ensure on demand. Kick it here, after the listener is live, so its
 		// bounded subprocess probes no longer contend with the synchronous
 		// migration and fencing reconcile that gate the port bind.
-		agentSvc.WarmReadiness()
+		readinessDone := agentSvc.WarmReadiness()
+		if cfg.HarnessUpdateChecks {
+			go warmInstalledHarnessUpdates(ctx, readinessDone, agentSvc.CachedReadiness, func(ctx context.Context, target systeminstall.Target) (systeminstall.UpdateAdvisory, error) {
+				return systemInstall.UpdateAdvisory(ctx, target)
+			}, log)
+		}
 		done := make(chan struct{})
 		startupReconcileDone = done
 		go func() {

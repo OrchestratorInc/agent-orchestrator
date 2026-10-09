@@ -115,6 +115,12 @@ func (s sessionListerStub) ListAllSessions(context.Context) ([]domain.SessionRec
 	return s.sessions, s.err
 }
 
+type sessionListerFunc func(context.Context) ([]domain.SessionRecord, error)
+
+func (f sessionListerFunc) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error) {
+	return f(ctx)
+}
+
 type commandRunnerFunc func(context.Context, []string, io.Writer, io.Writer) error
 
 func (f commandRunnerFunc) Run(ctx context.Context, argv []string, stdout, stderr io.Writer) error {
@@ -1119,14 +1125,14 @@ func TestTerminalPersistenceFailureOverridesStaleActiveDurableJob(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if job.Status != StatusFailed || !strings.Contains(job.Error, "persist terminal install state") {
+	if job.Status != StatusFailed || !strings.Contains(job.Error, "persist terminal operation state") {
 		t.Fatalf("Status returned stale durable job: %+v", job)
 	}
 	jobs, err := s.AgentJobs(context.Background())
 	if err != nil {
 		t.Fatalf("AgentJobs: %v", err)
 	}
-	if len(jobs) != 1 || jobs[0].Status != StatusFailed || !strings.Contains(jobs[0].Error, "persist terminal install state") {
+	if len(jobs) != 1 || jobs[0].Status != StatusFailed || !strings.Contains(jobs[0].Error, "persist terminal operation state") {
 		t.Fatalf("AgentJobs returned stale durable jobs: %+v", jobs)
 	}
 }
@@ -1171,6 +1177,169 @@ func TestDroidInstallAllowsTerminatedSessionAndOtherHarnesses(t *testing.T) {
 				t.Fatalf("StartAgent: %v", err)
 			}
 		})
+	}
+}
+
+func TestHarnessLaunchGateBlocksCodexMaintenanceBeforeSessionEnumeration(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	sessionCalls := 0
+	s.sessions = sessionListerFunc(func(context.Context) ([]domain.SessionRecord, error) {
+		sessionCalls++
+		return nil, nil
+	})
+	release, ok := s.TryBeginHarnessUse(domain.HarnessCodex)
+	if !ok {
+		t.Fatal("Codex launch lease was unexpectedly rejected")
+	}
+	defer release()
+
+	for _, operation := range []AgentOperation{AgentOperationReinstall, AgentOperationUpdate, AgentOperationUninstall} {
+		method := "npm"
+		if _, err := s.StartAgentOperation(context.Background(), TargetCodex, method, operation); !errors.Is(err, ErrHarnessActive) {
+			t.Fatalf("%s error = %v, want ErrHarnessActive", operation, err)
+		}
+	}
+	if sessionCalls != 0 {
+		t.Fatalf("session enumeration calls = %d, want 0 before acquiring maintenance gate", sessionCalls)
+	}
+}
+
+func TestHarnessMaintenanceGateBlocksCodexLaunchThroughWorkerLifetime(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
+	started := make(chan struct{})
+	releaseCommand := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(releaseCommand) }) }
+	defer unblock()
+	s.commands = commandRunnerFunc(func(ctx context.Context, _ []string, _, _ io.Writer) error {
+		close(started)
+		select {
+		case <-releaseCommand:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/verified/codex", Output: "codex 2.0.0"}, nil
+	})
+
+	if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate); err != nil {
+		t.Fatalf("StartAgentOperation: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("maintenance worker did not start")
+	}
+	if release, ok := s.TryBeginHarnessUse(domain.HarnessCodex); ok {
+		release()
+		t.Fatal("Codex launch acquired the gate while maintenance worker was running")
+	}
+	unblock()
+	s.workers.Wait()
+	waitForStatus(t, s, TargetCodex, StatusSucceeded)
+	if release, ok := s.TryBeginHarnessUse(domain.HarnessCodex); !ok {
+		t.Fatal("Codex launch remained blocked after maintenance completed")
+	} else {
+		release()
+	}
+}
+
+func TestHarnessMaintenanceSeesSessionCreatedBeforeLaunchGateRelease(t *testing.T) {
+	s := newTestService("darwin")
+	release, ok := s.TryBeginHarnessUse(domain.HarnessCodex)
+	if !ok {
+		t.Fatal("Codex launch lease was unexpectedly rejected")
+	}
+	s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex}}}
+	release()
+
+	if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate); !errors.Is(err, ErrHarnessActive) {
+		t.Fatalf("StartAgentOperation error = %v, want ErrHarnessActive", err)
+	}
+}
+
+func TestUpdatePinsRequestedVersionEvenWithoutCachedAdvisory(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
+	s.commands = commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error { return nil })
+	probes := 0
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		probes++
+		version := "1.2.3"
+		if probes > 1 {
+			version = "1.2.4"
+		}
+		return VerifyResult{ResolvedPath: "/verified/codex", Output: "codex " + version}, nil
+	})
+	if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate, "1.3.0"); err != nil {
+		t.Fatal(err)
+	}
+	s.workers.Wait()
+	waitForStatus(t, s, TargetCodex, StatusFailed)
+	job, err := s.Status(context.Background(), TargetCodex)
+	if err != nil || !strings.Contains(job.Error, "requested version 1.3.0") {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+}
+
+func TestUpdateRejectsInvalidRequestedVersion(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	for _, operation := range []AgentOperation{AgentOperationUpdate, AgentOperationInstall} {
+		if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", operation, "not-a-version"); !errors.Is(err, ErrUpdateVersion) {
+			t.Fatalf("operation=%s err=%v", operation, err)
+		}
+	}
+}
+
+func TestHarnessMaintenanceAllowsTerminatedAndOtherHarnessSessions(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		sessions []domain.SessionRecord
+	}{
+		{name: "terminated Codex", sessions: []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex, IsTerminated: true}}},
+		{name: "active Claude", sessions: []domain.SessionRecord{{ID: "claude-1", Harness: domain.HarnessClaudeCode}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestService("darwin", "npm")
+			s.sessions = sessionListerStub{sessions: tt.sessions}
+			s.commands = commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error { return errors.New("stop after guard") })
+
+			if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate); err != nil {
+				t.Fatalf("StartAgentOperation: %v", err)
+			}
+			waitForStatus(t, s, TargetCodex, StatusFailed)
+		})
+	}
+}
+
+func TestHarnessGatesAllowDifferentHarnessesConcurrently(t *testing.T) {
+	s := newTestService("darwin")
+	releaseCodex, ok := s.TryBeginHarnessUse(domain.HarnessCodex)
+	if !ok {
+		t.Fatal("Codex launch lease was unexpectedly rejected")
+	}
+	defer releaseCodex()
+
+	releaseClaude, ok := s.TryBeginHarnessUse(domain.HarnessClaudeCode)
+	if !ok {
+		t.Fatal("Claude launch should not share the Codex gate")
+	}
+	releaseClaude()
+}
+
+func TestHarnessDroidGateBehaviorRemainsProtected(t *testing.T) {
+	s := newTestService("darwin", "brew")
+	release, ok := s.TryBeginHarnessUse(domain.HarnessDroid)
+	if !ok {
+		t.Fatal("Droid launch lease was unexpectedly rejected")
+	}
+	defer release()
+
+	if _, err := s.StartAgent(context.Background(), TargetDroid, "homebrew"); !errors.Is(err, ErrHarnessActive) {
+		t.Fatalf("Droid install error = %v, want ErrHarnessActive", err)
 	}
 }
 
@@ -1266,5 +1435,151 @@ func TestResolveMatchesServicePlan(t *testing.T) {
 	}
 	if unknown := Resolve("linux", lookPath, Target("nope")); !unknown.Unsupported {
 		t.Fatal("Resolve of an unknown target must be Unsupported")
+	}
+}
+
+func TestVendorInstallerUpdateUsesHarnessSelfUpdateCommand(t *testing.T) {
+	s := newTestService("darwin", "bash", "sh")
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for target, want := range map[Target][]string{
+		TargetClaudeCode: {"claude", "update"},
+		TargetCodex:      {"codex", "update"},
+		TargetOpencode:   {"opencode", "upgrade", "--method", "curl"},
+		TargetGoose:      {"goose", "update"},
+		TargetKimchi:     {"kimchi", "update", "self", "--force"},
+		TargetOMP:        {"omp", "update"},
+		TargetAutohand:   {"autohand", "update"},
+		TargetCursor:     {"cursor-agent", "update"},
+		TargetAmp:        {"amp", "update", "--porcelain"},
+		TargetGrok:       {"grok", "update"},
+		TargetKimi:       {"kimi", "upgrade"},
+		TargetDroid:      {"droid", "update"},
+		TargetQwen:       {"qwen", "update"},
+		TargetFX:         {"fx", "upgrade"},
+	} {
+		plan, err := planner.resolveAgentMethod(target, "official-installer", AgentOperationUpdate)
+		if err != nil {
+			t.Fatalf("%s: %v", target, err)
+		}
+		if !slices.Equal(plan.Command, want) || plan.Script != nil {
+			t.Fatalf("%s update = %v script=%v, want %v", target, plan.Command, plan.Script, want)
+		}
+	}
+	if _, err := planner.resolveAgentMethod(TargetMuse, "official-installer", AgentOperationUpdate); !errors.Is(err, ErrInstallMethod) {
+		t.Fatalf("Muse update error = %v, want ErrInstallMethod for a vendor without a self-update command", err)
+	}
+}
+
+func TestOpenCodeVendorUpdatePinsAdvisoryRelease(t *testing.T) {
+	s := newTestService("darwin", "bash")
+	s.updateAdvisories = map[Target]UpdateAdvisory{TargetOpencode: {AgentID: string(TargetOpencode), Status: UpdateStatusBehindLatest, CurrentVersion: "1.18.34", LatestVersion: "1.18.35", CheckedAt: time.Now()}}
+	version := "1.18.34"
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/Users/test/.opencode/bin/opencode", Output: version}, nil
+	})
+	var ran []string
+	s.commands = commandRunnerFunc(func(_ context.Context, argv []string, _, _ io.Writer) error {
+		ran = argv
+		version = "1.18.35"
+		return nil
+	})
+	if _, err := s.StartAgentOperation(context.Background(), TargetOpencode, "official-installer", AgentOperationUpdate); err != nil {
+		t.Fatal(err)
+	}
+	s.workers.Wait()
+	waitForStatus(t, s, TargetOpencode, StatusSucceeded)
+	if want := []string{"/Users/test/.opencode/bin/opencode", "upgrade", "1.18.35", "--method", "curl"}; !slices.Equal(ran, want) {
+		t.Fatalf("ran %v, want %v", ran, want)
+	}
+}
+
+func TestAiderUpdatesThroughUVThatItsInstallerUses(t *testing.T) {
+	s := newTestService("darwin", "sh", "uv")
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.resolveAgentMethod(TargetAider, "uv", AgentOperationUpdate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"uv", "tool", "upgrade", "aider-chat"}; !slices.Equal(plan.Command, want) {
+		t.Fatalf("Aider update = %v, want %v", plan.Command, want)
+	}
+	// The installer's binary lives in uv's tool layout, which the official
+	// method can never own; uv is the method that can update it.
+	if s.methodOwnsBinary(context.Background(), Plan{Method: "official-installer"}, "/Users/test/.local/share/uv/tools/aider-chat/bin/aider") {
+		t.Fatal("official installer claimed Aider's uv-managed binary")
+	}
+}
+
+func TestKimiListsHomebrewFormulaOnMacOS(t *testing.T) {
+	s := newTestService("darwin", "bash", "brew")
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans := planner.agentMethodPlans(TargetKimi, AgentOperationInstall)
+	if len(plans) != 2 || plans[0].Method != "official-installer" || plans[1].Method != "homebrew" || plans[1].Package != "kimi-code" || plans[1].PackageCask {
+		t.Fatalf("Kimi plans = %+v, want official installer then the kimi-code formula", plans)
+	}
+	update, err := planner.resolveAgentMethod(TargetKimi, "homebrew", AgentOperationUpdate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"brew", "upgrade", "kimi-code"}; !slices.Equal(update.Command, want) {
+		t.Fatalf("Kimi brew update = %v, want %v", update.Command, want)
+	}
+}
+
+func TestOpenCodeVendorUpdatePinsApprovedReleaseOverAdvisory(t *testing.T) {
+	s := newTestService("darwin", "bash")
+	s.updateAdvisories = map[Target]UpdateAdvisory{TargetOpencode: {AgentID: string(TargetOpencode), Status: UpdateStatusBehindLatest, CurrentVersion: "1.18.34", LatestVersion: "1.18.36", CheckedAt: time.Now()}}
+	version := "1.18.34"
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/Users/test/.opencode/bin/opencode", Output: version}, nil
+	})
+	var ran []string
+	s.commands = commandRunnerFunc(func(_ context.Context, argv []string, _, _ io.Writer) error {
+		ran = argv
+		version = "1.18.35"
+		return nil
+	})
+	if _, err := s.StartAgentOperation(context.Background(), TargetOpencode, "official-installer", AgentOperationUpdate, "1.18.35"); err != nil {
+		t.Fatal(err)
+	}
+	s.workers.Wait()
+	if want := []string{"/Users/test/.opencode/bin/opencode", "upgrade", "1.18.35", "--method", "curl"}; !slices.Equal(ran, want) {
+		t.Fatalf("ran %v, want the approved release %v", ran, want)
+	}
+}
+
+func TestVendorInstallerUninstallKeepsUserData(t *testing.T) {
+	s := newTestService("darwin", "bash", "sh")
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for target, want := range map[Target][]string{
+		TargetOpencode: {"opencode", "uninstall", "--keep-config", "--keep-data", "--force"},
+		TargetDevin:    {"devin", "uninstall", "--force"},
+	} {
+		plan, err := planner.resolveAgentMethod(target, "official-installer", AgentOperationUninstall)
+		if err != nil {
+			t.Fatalf("%s: %v", target, err)
+		}
+		if !slices.Equal(plan.Command, want) {
+			t.Fatalf("%s uninstall = %v, want %v", target, plan.Command, want)
+		}
+		if got := targetInstalledCopy(plan, target, "/opt/"+string(target)); got.Command[0] != "/opt/"+string(target) {
+			t.Fatalf("%s uninstall runs %q, not the binary sessions run", target, got.Command[0])
+		}
+	}
+	plans := planner.agentMethodPlans(TargetGrok, AgentOperationUninstall)
+	if len(plans) != 1 || !plans[0].Unsupported || !strings.Contains(plans[0].Reason, "uninstall guide") {
+		t.Fatalf("Grok uninstall = %+v, want an unsupported plan pointing to the vendor guide", plans)
 	}
 }

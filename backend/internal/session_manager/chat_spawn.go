@@ -361,6 +361,7 @@ func (m *Manager) sendChat(ctx context.Context, id domain.SessionID, message, cl
 // SessionModeDefaults supplies the daemon-owned default session interface.
 type SessionModeDefaults interface {
 	DefaultSessionMode(ctx context.Context) domain.SessionMode
+	HarnessDefault(ctx context.Context, agent domain.AgentHarness) domain.HarnessDefault
 }
 
 // resolveSessionMode applies the precedence for a spawn:
