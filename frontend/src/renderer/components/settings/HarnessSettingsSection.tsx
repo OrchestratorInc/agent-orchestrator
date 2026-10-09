@@ -862,8 +862,9 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const jobFailed = job?.status === "failed" || job?.status === "unsupported" || job?.status === "interrupted";
 		const failed = jobFailed || Boolean(actionError);
 		const readinessAgent = readinessAgents.get(agentId);
-		const incompatibleVersionReason = readinessAgent?.installation.reasonCode === "install_incompatible_version"
-			? readinessAgent.installation.reason : undefined;
+		const availableMethodsLabel = availableMethods.length > 0
+			? new Intl.ListFormat(i18n.resolvedLanguage ?? "en", { style: "short", type: "conjunction" }).format(availableMethods.map((method) => method.label))
+			: undefined;
 		// Unknown inventory is not proof that installing is safe. Preserve the
 		// existing cached-readiness fallback when fetching the snapshot fails.
 		const installationPending = !agents.error && (agents.isPending || readinessAgent?.installation.state === "unknown");
@@ -876,7 +877,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const needsLogin = needsAuthentication(agentId);
 		const showUpdate = updateAvailable && !authPlans.isPending && !authPlans.isError;
 		const hasDiagnostics = Boolean(job && jobFailed && (job.error || job.output || job.method || job.expectedDestination));
-		const authSummary = authStatus === "configured" ? t("settings.harness.configured")
+		const authSummary = authStatus === "configured" ? t("settings.harness.loggedIn")
 			: authStatus === "authorized" ? t(isSetupAction ? "settings.harness.configured" : "settings.harness.loggedIn")
 			: authStatus === "not_applicable" || (!authPlans.isPending && (!authPlan || authPlan.action === "instructions")) ? t("settings.harness.installed")
 			: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))
@@ -894,11 +895,11 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const statusLabel = isInstalled ? rowError ?? (authBusy ? authProgress : authSummary)
 			: installationPending ? t("settings.harness.installationUnknown")
 			: job?.status === "interrupted" ? t("settings.harness.interrupted")
-			: rowError ?? incompatibleVersionReason ?? (!installMethod ? plan?.reason ?? t("settings.harness.manualRequired") : "");
+			: rowError ?? (installMethod && availableMethodsLabel ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : plan?.reason ?? t("settings.harness.manualRequired"));
 		// Why a harness is not installed (or cannot be), without repeating the error alert.
 		const installNote = isInstalled || installationPending ? undefined
 			: job?.status === "interrupted" ? t("settings.harness.interrupted")
-			: incompatibleVersionReason ?? (!installMethod ? plan?.reason ?? t("settings.harness.manualRequired") : undefined);
+			: installMethod && availableMethodsLabel ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : plan?.reason ?? t("settings.harness.manualRequired");
 		const versionText = currentVersion ? versionLabel(currentVersion) : t("settings.harness.versionUnavailable");
 		const versionUnverified = advisoryQuery?.isError || job?.status === "verifying" || (currentOperation === "update" && (busy || failed));
 		const updatedAt = lastUpdatedAt[agentId];

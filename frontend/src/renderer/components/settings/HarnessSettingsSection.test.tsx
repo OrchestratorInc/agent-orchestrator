@@ -997,7 +997,7 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
 	});
 
-	it("shows configured MiMo Code without asking for login again", async () => {
+	it("shows configured MiMo Code as connected and offers to log in again", async () => {
 		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: configured } as never;
@@ -1008,9 +1008,10 @@ describe("HarnessSettingsSection", () => {
 		});
 		renderSection();
 		const row = await findAgentRow("mimo-code");
-		expect(await within(row).findByText("Configured")).toBeInTheDocument();
-		expect(within(row).queryByRole("button", { name: "Configured" })).toBeNull();
+		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "Log in again" })).toBeEnabled();
 	});
 
 	it("offers fx installation while readiness refreshes automatically", async () => {
@@ -1384,9 +1385,10 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-mimo" } },
 		}));
-		expect(await within(row).findByText("Configured")).toBeInTheDocument();
-		expect(within(row).queryByRole("button", { name: "Configured" })).toBeNull();
+		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "Log in again" })).toBeEnabled();
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
 
@@ -1624,7 +1626,7 @@ describe("HarnessSettingsSection", () => {
 		}));
 	});
 
-	it("shows an incompatible OpenCode version reason and keeps installation available", async () => {
+	it("treats a separate OpenCode major as ordinarily not installed", async () => {
 		const reason = 'OpenCode 2 requires OpenCode 2, but "/usr/local/bin/opencode" reports OpenCode 1 (1.18.33); select the matching harness or put OpenCode 2 on PATH';
 		const mismatch = agentReadiness("opencode-v2", "OpenCode 2", {
 			installation: "not_installed",
@@ -1656,8 +1658,9 @@ describe("HarnessSettingsSection", () => {
 
 		renderSection();
 		const row = await findAgentRow("opencode-v2");
-		expect(await within(row).findByText(reason)).toBeInTheDocument();
 		const install = await within(row).findByRole("button", { name: "Install" });
+		expect(row).toHaveTextContent("Available via npm");
+		expect(row).not.toHaveTextContent(reason);
 		expect(row).not.toHaveTextContent("Installation status unknown");
 		expect(install).toBeEnabled();
 
