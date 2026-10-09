@@ -39,4 +39,4 @@ jobs:
         working-directory: backend
         env:
           AO_NEOVATE_BINARY: ${{ runner.temp }}/neovate/node_modules/.bin/neovate
-        run: go test -race -count=1 -timeout=5m -run '^TestReleasedNeovateTUIConformance$' ./internal/adapters/agent/neovate
+        run: go test -race -count=1 -timeout=5m -run '^TestReleasedNeovate' -v ./internal/adapters/agent/neovate

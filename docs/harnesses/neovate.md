@@ -32,8 +32,12 @@ are reinstalled on restore so changed standing instructions take effect.
 
 ## Identity and restore
 
-The accepted-user-prompt hook records Neovate's native eight-character session
-ID, workspace and transcript path. Resume requires the recorded ID and a
+The native user-prompt hook stages the expected task; the subsequent provider
+resolution hook confirms a newly persisted native user row before reporting
+acceptance and recording the eight-character session ID, workspace and
+transcript path. Startup, a displayed composer, and a pre-write callback do not
+count as accepted input. Missing model configuration blocks the task with an
+actionable error. Resume requires the recorded ID and a
 nonempty native conversation whose message IDs and structure are intact.
 Missing, corrupt, foreign or mismatched history returns an error instead of
 silently starting a new conversation. The native plugin repeats the check at
@@ -79,7 +83,7 @@ The model picker reads explicit global and project Neovate configuration:
 selected model fields and configured `provider.<name>.models` entries. Neovate
 has no model-list command. AO does not invent a model catalog, and arbitrary
 custom names must first be configured in Neovate. With no explicit entries,
-Neovate's own default model remains usable.
+select a model in Neovate or provide an explicit AO model override.
 
 No reusable licensed upstream logo was identified in the pinned release; the
 existing product avatar fallback is used.

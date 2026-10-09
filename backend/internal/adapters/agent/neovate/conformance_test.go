@@ -88,12 +88,7 @@ func TestReleasedNeovateTUIConformance(t *testing.T) {
 	}
 	writeTestFile(t, filepath.Join(home, ".neovate", "config.json"), string(data))
 	writeTestFile(t, filepath.Join(workspace, "AGENTS.md"), "AO_PROJECT_RULE_PRESERVED")
-	hookLog := filepath.Join(home, "hooks.jsonl")
-	stub := filepath.Join(home, "bin", "ao")
-	writeTestFile(t, stub, "#!/usr/bin/env node\nconst fs=require('fs'); fs.appendFileSync(process.env.AO_TEST_HOOK_LOG, JSON.stringify({event:process.argv[4],payload:JSON.parse(fs.readFileSync(0,'utf8'))})+'\\n');\n")
-	if err := os.Chmod(stub, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	hookLog, stub := installConformanceHookRecorder(t, home)
 	env := []string{"HOME=" + home, "USERPROFILE=" + home, "PATH=" + filepath.Dir(stub) + string(os.PathListSeparator) + os.Getenv("PATH"), "TERM=xterm-256color", "LANG=C.UTF-8", "NEOVATE_SELF_UPDATE=none", "AO_RUNTIME_LAUNCH_ID=launch-neovate-conformance", "AO_TEST_HOOK_LOG=" + hookLog}
 	plugin := &Plugin{resolvedBinary: binary}
 	install := func(prompt string) {
@@ -171,13 +166,18 @@ func TestReleasedNeovateTUIConformance(t *testing.T) {
 	}
 	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
 		var entry struct {
-			Payload struct {
+			Event     string `json:"event"`
+			Persisted bool   `json:"persisted"`
+			Payload   struct {
 				SessionID string `json:"session_id"`
 				LaunchID  string `json:"launch_id"`
 			} `json:"payload"`
 		}
 		if err := json.Unmarshal(line, &entry); err != nil {
 			t.Fatal(err)
+		}
+		if entry.Event == "user-prompt-submit" && !entry.Persisted {
+			t.Fatalf("premature native acceptance: %s", line)
 		}
 		if entry.Payload.SessionID != marker.NativeID || entry.Payload.LaunchID != "launch-neovate-conformance" {
 			t.Fatalf("hook identity changed: %s", line)
@@ -315,5 +315,100 @@ func sendConformanceInput(t *testing.T, process *conformanceTUI, prompt string) 
 	time.Sleep(200 * time.Millisecond)
 	if _, err := process.terminal.WriteString("\r"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func installConformanceHookRecorder(t *testing.T, home string) (string, string) {
+	t.Helper()
+	hookLog, stub := filepath.Join(home, "hooks.jsonl"), filepath.Join(home, "bin", "ao")
+	writeTestFile(t, stub, `#!/usr/bin/env node
+const fs = require('fs');
+const event = process.argv[4];
+const payload = JSON.parse(fs.readFileSync(0, 'utf8'));
+let persisted = false;
+if (event === 'user-prompt-submit' && payload.transcript_path) {
+  const rows = fs.readFileSync(payload.transcript_path, 'utf8').split('\n').filter(Boolean).map(JSON.parse);
+  persisted = rows.some(row => row.type === 'message' && row.role === 'user' && row.uuid === payload.native_message_id && row.sessionId === payload.session_id);
+}
+fs.appendFileSync(process.env.AO_TEST_HOOK_LOG, JSON.stringify({event, payload, persisted}) + '\n');
+`)
+	if err := os.Chmod(stub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return hookLog, stub
+}
+
+// Failed model setup and errors before the native JSONL append must not produce
+// durable semantic acceptance merely because the process or composer exists.
+func TestReleasedNeovateRejectsUnacceptedTasks(t *testing.T) {
+	binary := os.Getenv("AO_NEOVATE_BINARY")
+	if binary == "" {
+		t.Skip("set AO_NEOVATE_BINARY to the released Neovate executable")
+	}
+	for _, tc := range []struct {
+		name, model, errorText string
+		failContext            bool
+	}{
+		{name: "missing-model", errorText: "model configuration is required"},
+		{name: "invalid-model", model: "no-such-provider/no-such-model", errorText: "Provider no-such-provider not found"},
+		{name: "context-failure", model: "ao/test", failContext: true, errorText: "AO_CONTEXT_ABORT"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace, home := t.TempDir(), t.TempDir()
+			hookLog, stub := installConformanceHookRecorder(t, home)
+			requests := make(chan struct{}, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				select {
+				case requests <- struct{}{}:
+				default:
+				}
+				http.Error(w, "unexpected model request", http.StatusInternalServerError)
+			}))
+			t.Cleanup(server.Close)
+			config := map[string]any{"autoUpdate": false, "checkpoints": false, "provider": map[string]any{"ao": map[string]any{"apiFormat": "openai", "options": map[string]string{"apiKey": "local-test-only", "baseURL": server.URL + "/v1"}, "models": map[string]any{"test": map[string]any{"limit": map[string]int{"context": 128000, "output": 1024}}}}}}
+			if tc.model != "" {
+				config["model"] = tc.model
+			}
+			if tc.failContext {
+				path := filepath.Join(home, "context-failure.mjs")
+				writeTestFile(t, path, `export default {name:'ao-test-context-failure',context(){throw new Error('AO_CONTEXT_ABORT');}};`)
+				config["plugins"] = []string{path}
+			}
+			data, err := json.Marshal(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeTestFile(t, filepath.Join(home, ".neovate", "config.json"), string(data))
+			plugin := &Plugin{resolvedBinary: binary}
+			if err := plugin.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace, SessionID: "ao-session", SystemPrompt: "AO_HIDDEN_NEGATIVE_CASE"}); err != nil {
+				t.Fatal(err)
+			}
+			argv, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{WorkspacePath: workspace, SessionID: "ao-session", Prompt: "AO_UNACCEPTED_TASK"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			env := []string{"HOME=" + home, "USERPROFILE=" + home, "PATH=" + filepath.Dir(stub) + string(os.PathListSeparator) + os.Getenv("PATH"), "TERM=xterm-256color", "LANG=C.UTF-8", "NEOVATE_SELF_UPDATE=none", "AO_TEST_HOOK_LOG=" + hookLog}
+			process := startConformanceTUI(t, workspace, env, argv)
+			deadline := time.Now().Add(30 * time.Second)
+			for !strings.Contains(process.output(), tc.errorText) && time.Now().Before(deadline) {
+				time.Sleep(25 * time.Millisecond)
+			}
+			if !strings.Contains(process.output(), tc.errorText) {
+				t.Fatalf("missing native error %q\n%s", tc.errorText, process.output())
+			}
+			process.stop()
+			data, _ = os.ReadFile(hookLog)
+			if strings.Contains(string(data), `"event":"user-prompt-submit"`) {
+				t.Fatalf("failed task was reported accepted: %s", data)
+			}
+			if _, err := os.Stat(pluginPath(workspace, "ao-session") + ".session.json"); !os.IsNotExist(err) {
+				t.Fatalf("failed task acquired native binding: %v", err)
+			}
+			select {
+			case <-requests:
+				t.Fatal("unaccepted task reached model provider")
+			default:
+			}
+		})
 	}
 }
