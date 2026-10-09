@@ -65,6 +65,13 @@ var uninstallGuides = map[Target]uninstallGuideSpec{
 		},
 		editsShellProfile: true,
 	},
+	// OpenCode 2's installer writes opencode into the same ~/.opencode/bin as
+	// OpenCode 1, plus an opencode2 shim; it names no settings directories.
+	TargetOpencodeV2: {
+		unix:              uninstallGuidePlatform{program: []string{"~/.opencode/bin/opencode", "~/.opencode/bin/opencode2"}},
+		windows:           uninstallGuidePlatform{program: []string{`%USERPROFILE%\.opencode\bin\opencode.exe`, `%USERPROFILE%\.opencode\bin\opencode2.cmd`}},
+		editsShellProfile: true,
+	},
 	TargetAmp: {
 		unix: uninstallGuidePlatform{
 			program:  []string{"~/.amp/bin", "~/.amp/amp-install-version.txt", "~/.amp/signing-key.pub", "~/.local/bin/amp"},
