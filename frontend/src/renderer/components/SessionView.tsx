@@ -40,7 +40,7 @@ import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
 import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
-import { ShellTopbar } from "./ShellTopbar";
+import { SessionTopbarActions } from "./SessionTopbarActions";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TopbarButton } from "./TopbarButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -1515,7 +1515,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					canShare={session.cloud.orgId === cloudOrgId}
 				/>
 			) : null}
-			<ShellTopbar embedded />
+			<SessionTopbarActions />
 		</div>
 	);
 	const sessionTabActionWide = false;

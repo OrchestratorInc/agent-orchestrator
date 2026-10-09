@@ -258,10 +258,9 @@ const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() =
 });
 
 // The terminal and inspector body pull in xterm/SSE machinery irrelevant to
-// the split under test. (ShellTopbar is shell-owned on Win/Linux; when the
-// platform hides the shell topbar, SessionView mounts it in-panel.)
-vi.mock("./ShellTopbar", () => ({
-	ShellTopbar: ({
+// the split under test.
+vi.mock("./SessionTopbarActions", () => ({
+	SessionTopbarActions: ({
 		sessionAction,
 		compactActions,
 	}: {

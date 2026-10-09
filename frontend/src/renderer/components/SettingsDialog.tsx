@@ -20,7 +20,7 @@ import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } fr
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
-import { topbarDragStyle } from "./ShellTopbar";
+import { PageTopbar } from "./PageTopbar";
 import { useAppShortcut } from "../hooks/useAppShortcut";
 import { type GlobalSettingsSection, type HarnessDiagnosticsRequest, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
@@ -436,16 +436,22 @@ export function SettingsPane() {
 	if (!page) return null;
 	const layer = page.active;
 	return (
-		<div className="relative flex min-h-0 flex-1 flex-col" data-testid="settings-page">
-			{/* Transparent toolbar-height strip laid over the scroller: keeps the macOS
-			  * window-drag region while content scrolls up under it to the panel edge.
-			  * The body's top padding clears it (and the fixed titlebar controls that
-			  * sit over the panel when the sidebar is closed) at rest. Controls that
-			  * scroll beneath it are no-drag (styles.css). The strip itself never takes
-			  * pointer events (the native drag region does not need them), so a click
-			  * there reaches the control under it, and it stops short of the scrollbar
-			  * so the top of the track can still be grabbed. */}
-			<div aria-hidden="true" className="pointer-events-none absolute left-0 right-2 top-0 z-10 h-toolbar" style={topbarDragStyle} />
+		<div className="flex min-h-0 flex-1 flex-col" data-testid="settings-page">
+			<PageTopbar
+				lead={
+					<h1 className="text-brand flex min-w-0 items-center gap-2 font-medium leading-none tracking-tight">
+						<span className="text-muted-foreground">{layer.rootLabel}</span>
+						<span aria-hidden="true" className="text-muted-foreground/50">/</span>
+						<span className="min-w-0 truncate text-foreground">{layer.title}</span>
+						{layer.remoteHostId && <span className="truncate text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}
+					</h1>
+				}
+				actions={
+					<button aria-label={t("settings.close")} className="settings-close-button shrink-0" disabled={layer.cueBusy} onClick={layer.close} type="button">
+						<X aria-hidden="true" className="size-4" />
+					</button>
+				}
+			/>
 			{/* A covered project layer stays mounted so its draft survives recovery settings above it. */}
 			{page.layers.map((entry) => (
 				// `relative` makes the scroller the containing block for absolutely

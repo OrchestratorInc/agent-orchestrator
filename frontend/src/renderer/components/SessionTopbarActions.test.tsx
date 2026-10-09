@@ -8,13 +8,14 @@ import {
 	CLOUD_PROJECT_KIND,
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
-	type SessionActivityState,
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { ShellTopbar, TopbarArchiveButton } from "./ShellTopbar";
+import { SessionTopbarActions, TopbarArchiveButton } from "./SessionTopbarActions";
 import { TooltipProvider } from "./ui/tooltip";
 import { appShortcutBus } from "../test/app-shortcut-bus";
+import { ProjectBoardActions } from "./ProjectBoardActions";
+import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 
@@ -135,14 +136,13 @@ function sessionWith(overrides: Partial<WorkspaceSession> = {}): WorkspaceSessio
 	};
 }
 
-function renderTopbar(session: WorkspaceSession, embedded = false, sessionAction?: ReactNode) {
-	return renderTopbarSessions([session], session.id, embedded, sessionAction);
+function renderTopbar(session: WorkspaceSession, sessionAction?: ReactNode) {
+	return renderTopbarSessions([session], session.id, sessionAction);
 }
 
 function renderTopbarSessions(
 	sessions: WorkspaceSession[],
 	sessionId: string,
-	embedded = false,
 	sessionAction?: ReactNode,
 	projectKind: WorkspaceSummary["kind"] = "single_repo",
 ) {
@@ -164,12 +164,45 @@ function renderTopbarSessions(
 	const topbar = () => (
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
-				<ShellTopbar embedded={embedded} sessionAction={sessionAction} />
+				<SessionTopbarActions sessionAction={sessionAction} />
 			</TooltipProvider>
 		</QueryClientProvider>
 	);
 	const result = render(topbar());
 	return { ...result, queryClient, rerenderTopbar: () => result.rerender(topbar()) };
+}
+
+// The board header renders ProjectBoardActions; drive them through the same
+// orchestrator hook the board uses so the activity and resume paths stay covered.
+function BoardActionsHarness({ workspace }: { workspace: WorkspaceSummary }) {
+	const actions = useProjectOrchestratorAction({
+		projectId: workspace.id,
+		project: workspace,
+		orchestrator: workspace.sessions.find((candidate) => candidate.kind === "orchestrator"),
+		source: "board",
+	});
+	return <ProjectBoardActions actions={actions} placement="header" />;
+}
+
+function renderBoardActions(sessions: WorkspaceSession[]) {
+	const workspace: WorkspaceSummary = {
+		id: sessions[0].workspaceId,
+		name: sessions[0].workspaceName,
+		path: "/repo/my-app",
+		orchestratorAgent: "claude-code",
+		kind: "single_repo",
+		sessions,
+	};
+	useWorkspaceQueryMock.mockReturnValue({ data: [workspace], isError: false, isLoading: false, isSuccess: true });
+	const queryClient = new QueryClient();
+	queryClient.setQueryData(["workspaces"], [workspace]);
+	return render(
+		<QueryClientProvider client={queryClient}>
+			<TooltipProvider>
+				<BoardActionsHarness workspace={workspace} />
+			</TooltipProvider>
+		</QueryClientProvider>,
+	);
 }
 
 function renderKill(session: WorkspaceSession = worker, orchestratorId?: string) {
@@ -223,7 +256,7 @@ describe("optimistic orchestrator topbar", () => {
 		useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false, isSuccess: true });
 		render(
 			<QueryClientProvider client={new QueryClient()}>
-				<TooltipProvider><ShellTopbar embedded startingOrchestrator /></TooltipProvider>
+				<TooltipProvider><SessionTopbarActions startingOrchestrator /></TooltipProvider>
 			</QueryClientProvider>,
 		);
 		expect(screen.getByRole("button", { name: "New task" })).toBeDisabled();
@@ -232,82 +265,12 @@ describe("optimistic orchestrator topbar", () => {
 	});
 });
 
-describe("ShellTopbar route identity", () => {
-	it("identifies the Automations route instead of presenting it as the board", () => {
-		locationMock.pathname = "/automations";
-		render(
-			<QueryClientProvider client={new QueryClient()}>
-				<TooltipProvider>
-					<ShellTopbar />
-				</TooltipProvider>
-			</QueryClientProvider>,
-		);
-
-		const identity = screen.getByTestId("automations-topbar-label");
-		expect(identity).toHaveTextContent("Automations");
-		expect(screen.queryByTestId("board-topbar-label")).not.toBeInTheDocument();
-	});
-});
-
-describe("ShellTopbar Artifacts identity", () => {
-	it("identifies the Artifacts route instead of presenting it as the board", () => {
-		locationMock.pathname = "/artifacts";
-		render(
-			<QueryClientProvider client={new QueryClient()}>
-				<TooltipProvider>
-					<ShellTopbar />
-				</TooltipProvider>
-			</QueryClientProvider>,
-		);
-
-		expect(screen.getByTestId("artifacts-topbar-label")).toHaveTextContent("Artifacts");
-		expect(screen.queryByTestId("board-topbar-label")).not.toBeInTheDocument();
-	});
-});
-
-describe("ShellTopbar status pill", () => {
-	it("matches the session action edge inset to the toolbar spacing", () => {
-		renderTopbar(sessionWith());
-
-		const header = screen.getByTestId("workspace-topbar-actions").closest("header");
-		expect(header).toHaveClass("pr-2");
-		expect(header).not.toHaveClass("pr-4");
-	});
-
-	it("shows the worker session name and activity in the full topbar identity", () => {
-		renderTopbar(sessionWith());
-
-		const identity = screen.getByTestId("session-topbar-identity");
-		expect(identity.textContent).toContain("do the thing");
-		expect(identity.textContent).toContain("Working");
-		expect(identity.textContent).not.toContain("ao/sess-1");
-		expect(identity.querySelector(".workspace-topbar__identity-separator")).not.toBeNull();
-	});
-
-	it("shows project identity and activity without redundant Orchestrator text", () => {
-		renderTopbar(
-			sessionWith({
-				...orchestrator,
-				activity: { state: "idle", lastActivityAt: "2026-06-10T00:00:00Z" },
-			}),
-		);
-
-		const identity = screen.getByTestId("session-topbar-identity");
-		expect(identity.textContent).toContain("my-app");
-		expect(identity.textContent).toContain("Idle");
-		expect(identity.textContent).not.toContain("Orchestrator");
-		expect(identity.querySelector(".lucide-folder")).not.toBeNull();
-	});
-
+describe("SessionTopbarActions embedded actions", () => {
 	// The branch belongs to detail surfaces, not the top bar: an orchestrator's
-	// identity stays the project crumb plus its activity, with its own controls
-	// intact (#3874, regressed by the badge #4252 added beside these actions).
-	it("keeps the worktree branch out of the orchestrator identity and actions", () => {
+	// actions stay intact (#3874, regressed by the badge #4252 added beside these actions).
+	it("keeps the worktree branch out of the orchestrator actions", () => {
 		renderTopbar(sessionWith({ ...orchestrator, branch: "ao/orch-root" }));
 
-		const identity = screen.getByTestId("session-topbar-identity");
-		expect(identity.textContent).toContain("my-app");
-		expect(identity.textContent).toContain("Working");
 		expect(screen.queryByText("ao/orch-root")).toBeNull();
 		expect(screen.getByRole("button", { name: "Open Kanban" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "New task" })).toBeInTheDocument();
@@ -316,7 +279,6 @@ describe("ShellTopbar status pill", () => {
 	it("renders only session actions when embedded in the terminal bar", () => {
 		renderTopbar(
 			sessionWith(),
-			true,
 			<>
 				<button type="button">New terminal</button>
 				<button type="button">Session option</button>
@@ -338,13 +300,13 @@ describe("ShellTopbar status pill", () => {
 
 	it("uses the same embedded actions for a remote session, routed to its host", async () => {
 		paramsMock.hostId = "box-a";
-		const view = renderTopbarSessions([{ ...worker, hostId: "box-a" }, { ...orchestrator, hostId: "box-a" }], worker.id, true);
+		const view = renderTopbarSessions([{ ...worker, hostId: "box-a" }, { ...orchestrator, hostId: "box-a" }], worker.id);
 		expect(screen.getByRole("button", { name: "Archive session" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /open in.*editor/i })).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/host/$hostId/project/$projectId/session/$sessionId", params: { hostId: "box-a", projectId: "proj-1", sessionId: "orch-1" } });
 		view.unmount();
-		renderTopbarSessions([{ ...orchestrator, hostId: "box-a" }], orchestrator.id, true);
+		renderTopbarSessions([{ ...orchestrator, hostId: "box-a" }], orchestrator.id);
 		await userEvent.click(screen.getByRole("button", { name: "New task" }));
 		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: "proj-1", hostId: "box-a" });
 	});
@@ -353,7 +315,7 @@ describe("ShellTopbar status pill", () => {
 		render(
 			<QueryClientProvider client={new QueryClient()}>
 				<TooltipProvider>
-					<ShellTopbar compactActions embedded sessionAction={<button type="button">New terminal</button>} />
+					<SessionTopbarActions compactActions sessionAction={<button type="button">New terminal</button>} />
 				</TooltipProvider>
 			</QueryClientProvider>,
 		);
@@ -361,62 +323,19 @@ describe("ShellTopbar status pill", () => {
 		expect(screen.getByTestId("workspace-topbar-actions")).toHaveAttribute("data-compact-actions", "true");
 	});
 
-	it.each([
-		["active", "Working"],
-		["idle", "Idle"],
-		["waiting_input", "Input Needed"],
-		["exited", "Exited"],
-	] as const)("renders %s activity as %s", (state: SessionActivityState, label) => {
-		renderTopbar(sessionWith({ activity: { state, lastActivityAt: "2026-06-10T00:00:00Z" } }));
-
-		expect(screen.getByText(label)).toBeInTheDocument();
-	});
-
-	it.each([
-		["ci_failed", "idle", "Idle", "CI failed"],
-		["mergeable", "active", "Working", "Ready"],
-		["merged", "exited", "Exited", "Done"],
-		["changes_requested", "waiting_input", "Input Needed", "Needs input"],
-	] as const)("ignores derived %s topbar status in favor of activity", (status, state, label, hidden) => {
-		renderTopbar(
-			sessionWith({
-				status,
-				activity: { state, lastActivityAt: "2026-06-10T00:00:00Z" },
-			}),
-		);
-
-		expect(screen.getByText(label)).toBeInTheDocument();
-		expect(screen.queryByText(hidden)).not.toBeInTheDocument();
-	});
-
-	it("uses a compact unknown state when activity is missing or unknown", () => {
-		const first = renderTopbar(sessionWith({ activity: undefined }));
-		expect(screen.getByText("Unknown")).toBeInTheDocument();
-
-		first.unmount();
-		renderTopbar(sessionWith({ activity: { state: "unknown", lastActivityAt: "" } }));
-		expect(screen.getByText("Unknown")).toBeInTheDocument();
-	});
-
-	it("does not synthesize branch text for branchless sessions", () => {
-		renderTopbar(sessionWith({ branch: undefined }));
-
-		expect(screen.queryByText("session/sess-1")).not.toBeInTheDocument();
-		expect(screen.getByText("Working")).toBeInTheDocument();
-	});
 });
 
-describe("ShellTopbar orchestrator actions", () => {
+describe("SessionTopbarActions orchestrator actions", () => {
 	it.each([CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, "unknown"] as const)(
 		"hides the session cue runner for %s projects", (kind) => {
-			renderTopbarSessions([sessionWith()], "sess-1", false, undefined, kind as WorkspaceSummary["kind"]);
+			renderTopbarSessions([sessionWith()], "sess-1", undefined, kind as WorkspaceSummary["kind"]);
 			expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
 		},
 	);
 
 	it.each(["single_repo", "multi_repo", CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, "unknown"] as const)(
 		"hides the board cue runner for %s projects", (kind) => {
-			renderTopbarSessions([orchestrator], "", false, undefined, kind as WorkspaceSummary["kind"]);
+			renderTopbarSessions([orchestrator], "", undefined, kind as WorkspaceSummary["kind"]);
 			expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
 		},
 	);
@@ -440,27 +359,16 @@ describe("ShellTopbar orchestrator actions", () => {
 		expect(screen.getByRole("button", { name: "Run a cue" })).toBeDisabled();
 	});
 
-	it("owns the responsive action container on the full board topbar", () => {
-		renderTopbarSessions([orchestrator], "");
-
-		const actions = screen.getByTestId("workspace-topbar-actions");
-		expect(actions.closest("header")).toHaveClass("workspace-topbar-container");
-		expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
-	});
-
 	it.each([
 		["active", "Working", "bg-status-working", true],
 		["waiting_input", "Input Needed", "bg-status-needs-you", false],
 	] as const)("shows %s orchestrator activity on the project board", (state, label, tone, pulses) => {
-		renderTopbarSessions(
-			[
-				{
-					...orchestrator,
-					activity: { state, lastActivityAt: "2026-06-10T00:00:00Z" },
-				},
-			],
-			"",
-		);
+		renderBoardActions([
+			{
+				...orchestrator,
+				activity: { state, lastActivityAt: "2026-06-10T00:00:00Z" },
+			},
+		]);
 
 		const button = screen.getByRole("button", { name: `Orchestrator, ${label}` });
 		const indicator = button.querySelector("span.size-dot-sm") as HTMLElement;
@@ -477,7 +385,7 @@ describe("ShellTopbar orchestrator actions", () => {
 			activity: { state: "exited", lastActivityAt: "2026-06-10T00:00:00Z" },
 			status: "exited",
 		} satisfies WorkspaceSession;
-		renderTopbarSessions([worker, exitedOrchestrator], "");
+		renderBoardActions([worker, exitedOrchestrator]);
 
 		await userEvent.click(screen.getByRole("button", { name: "Orchestrator, Exited" }));
 
@@ -486,7 +394,7 @@ describe("ShellTopbar orchestrator actions", () => {
 	});
 
 	it("shows a clear Kanban button on embedded orchestrator sessions", async () => {
-		renderTopbar(orchestrator, true);
+		renderTopbar(orchestrator);
 
 		const kanbanButton = screen.getByRole("button", { name: "Open Kanban" });
 		expect(kanbanButton).toHaveTextContent("Open Kanban");
@@ -531,7 +439,7 @@ describe("ShellTopbar orchestrator actions", () => {
 		render(
 			<QueryClientProvider client={new QueryClient()}>
 				<TooltipProvider>
-					<ShellTopbar />
+					<SessionTopbarActions />
 				</TooltipProvider>
 			</QueryClientProvider>,
 		);
@@ -589,7 +497,6 @@ describe("ShellTopbar orchestrator actions", () => {
 				}),
 			],
 			"sess-1",
-			false,
 			undefined,
 			STANDALONE_PROJECT_KIND,
 		);
@@ -611,7 +518,7 @@ describe("ShellTopbar orchestrator actions", () => {
 	});
 });
 
-describe("ShellTopbar inspector state", () => {
+describe("SessionTopbarActions inspector state", () => {
 	it("reserves space for orchestrator controls without duplicating notifications", () => {
 		const view = renderTopbarSessions([orchestrator], orchestrator.id);
 		const reserve = screen.getByTestId("session-pinned-actions-reserve");
@@ -663,7 +570,7 @@ describe("ShellTopbar inspector state", () => {
 	});
 });
 
-describe("ShellTopbar open-in-editor control", () => {
+describe("SessionTopbarActions open-in-editor control", () => {
 	it("shows the open-in-editor control for a local session", async () => {
 		renderTopbarSessions([worker], "sess-1");
 
@@ -676,7 +583,7 @@ describe("ShellTopbar open-in-editor control", () => {
 		// "Unknown session" and surface that raw local-daemon error in the
 		// topbar (see issue #4570). Hiding the control for kind === CLOUD_PROJECT_KIND
 		// avoids the query entirely.
-		renderTopbarSessions([worker], "sess-1", false, undefined, CLOUD_PROJECT_KIND);
+		renderTopbarSessions([worker], "sess-1", undefined, CLOUD_PROJECT_KIND);
 
 		await waitFor(() => {
 			expect(screen.queryByRole("button", { name: "Open in Cursor" })).not.toBeInTheDocument();

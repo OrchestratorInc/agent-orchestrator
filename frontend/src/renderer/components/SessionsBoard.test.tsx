@@ -26,7 +26,6 @@ const {
 	postMock,
 	patchMock,
 	workspaceQueryMock,
-	boardActionsInPanelMock,
 } = vi.hoisted(() => ({
 	appMemoryMock: vi.fn(),
 	sessionMemoryMock: vi.fn(),
@@ -35,10 +34,8 @@ const {
 	postMock: vi.fn(),
 	patchMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
-	boardActionsInPanelMock: vi.fn(() => false),
 }));
 
-vi.mock("./ShellTopbar", async (importOriginal) => ({ ...(await importOriginal<typeof import("./ShellTopbar")>()), ShellTopbar: () => null }));
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
@@ -60,6 +57,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	},
 }));
 
+vi.mock("./SessionTopbarActions", async (importOriginal) => ({ ...(await importOriginal<typeof import("./SessionTopbarActions")>()), SessionTopbarActions: () => null }));
 
 vi.mock("../hooks/useSessionMemory", async (importOriginal) => {
 	const { pressureState } = await import("@aoagents/product-ui");
@@ -113,7 +111,6 @@ vi.mock("../lib/platform", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../lib/platform")>();
 	return {
 		...actual,
-		usesBoardActionsInPanel: () => boardActionsInPanelMock(),
 		isLinuxPlatform: () => false,
 	};
 });
@@ -157,7 +154,6 @@ beforeEach(() => {
 	appMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	sessionMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	window.localStorage.removeItem("ao.board.archive.layout");
-	boardActionsInPanelMock.mockReset().mockReturnValue(false);
 });
 
 describe("SessionsBoard", () => {
@@ -286,7 +282,6 @@ describe("SessionsBoard", () => {
 	});
 
 	it.each(["single_repo", "multi_repo", "cloud", "standalone", undefined] as const)("hides the cue runner for %s projects", (kind) => {
-		boardActionsInPanelMock.mockReturnValue(true);
 		workspaceQueryMock.mockReturnValue({
 			data: [{ ...workspaceWithSessions([]), kind }],
 			isError: false,
@@ -356,7 +351,6 @@ describe("SessionsBoard", () => {
 	});
 
 	it("shows the Board identity and compact actions in the in-panel board chrome", () => {
-		boardActionsInPanelMock.mockReturnValue(true);
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				{
@@ -401,7 +395,6 @@ describe("SessionsBoard", () => {
 		["active", "Working", "bg-status-working", true],
 		["idle", "Idle", "bg-status-idle", false],
 	] as const)("shows %s orchestrator activity in the in-panel board toolbar", (state, label, tone, pulses) => {
-		boardActionsInPanelMock.mockReturnValue(true);
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				{
@@ -441,7 +434,6 @@ describe("SessionsBoard", () => {
 	});
 
 	it("shows the Board crumb on the root board when actions live in the panel", () => {
-		boardActionsInPanelMock.mockReturnValue(true);
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				{
@@ -1629,7 +1621,8 @@ describe("SessionsBoard", () => {
 
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-		expect(await screen.findByRole("alert")).toHaveTextContent("Failed to terminate session (500)");
+		const alerts = await screen.findAllByRole("alert");
+		expect(alerts.some((alert) => alert.textContent?.includes("Failed to terminate session (500)"))).toBe(true);
 		expect(screen.getByRole("button", { name: "Archive merged worker" })).toBeEnabled();
 	});
 

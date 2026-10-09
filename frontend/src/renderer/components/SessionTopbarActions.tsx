@@ -1,137 +1,76 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
-import { Archive, CalendarClock, File, Folder, LayoutDashboard, Plus } from "lucide-react";
+import { useNavigate, useParams } from "@tanstack/react-router";
+import { Archive, LayoutDashboard, Plus } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { NotificationCenter } from "./NotificationCenter";
-import { ProjectBoardActions } from "./ProjectBoardActions";
-import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import {
-	CLOUD_PROJECT_KIND,
 	isOrchestratorSession,
 	resolveNextNavigationAfterSessionKill,
 	sessionIsActive,
 	sessionCueTargetAvailable,
+	CLOUD_PROJECT_KIND,
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
 	toProjectKind,
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { useWorkspaceQuery, useWorkspaceScope, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { useWorkspaceScope, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { sessionUiKey } from "../lib/hosts";
-import { labelForHost } from "../lib/host-clients";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
-import { archivedStandaloneSessions } from "../lib/standalone-archive";
 import {
 	clearTerminateSessionState,
 	useProjectTerminateSessionStates,
 	useTerminateSession,
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
-import { inspectorIsOpen, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
+import { inspectorIsOpen, useUiStore } from "../stores/ui-store";
 import { OrchestratorIcon } from "./icons";
-import { getAgentActivityView } from "../lib/session-presentation";
-import { isLinuxPlatform, isMacPlatform, usesBoardActionsInPanel } from "../lib/platform";
-import { cn } from "../lib/utils";
-import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
-import { StatusPill } from "./StatusPill";
 import { CoderWorkspaceTopbarButton } from "./CoderWorkspaceLinkButton";
-import { TopbarActionError, TopbarButton, topbarHeaderClass, topbarProjectLabelClass } from "./TopbarButton";
+import { useSessionShortcut } from "../hooks/useAppShortcut";
+import { isMacPlatform } from "../lib/platform";
+import { TopbarActionError, TopbarButton } from "./TopbarButton";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { TopbarOpenEditorButton } from "./TopbarOpenEditorButton";
-import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { CueRunMenu } from "./chat/CueRunMenu";
 import { SessionOwnerTag } from "./SessionOwnerTag";
 
-const isMac = isMacPlatform();
-export const topbarDragStyle = isMac ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined;
-const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
+const noDragStyle = isMacPlatform() ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
-// The one app topbar (.dashboard-app-header). On Win/Linux the shell mounts it
-// inside the framed center panel; when the platform hides the shell topbar
-// (macOS), SessionView mounts the same component in-panel so Kill / Orchestrator
-// / inspector stay available. The variant is derived from the route, not props:
-// a sessionId in the URL swaps the lead to the session identity (orchestrator
-// crumb + mode badge, or worker branch + status pill) and the actions to
-// board/orchestrator + inspector controls (orchestrators open the Kanban board;
-// workers open their orchestrator); otherwise it's the dashboard crumb plus the
-// Orchestrator launcher when a project is in scope. Embedded mode contributes
-// only session actions to the terminal bar; other routes retain this full bar.
-// Pixel equivalents of the CSS custom properties used for titlebar clearance.
-// --size-titlebar-cluster-left (72) + --size-titlebar-cluster-width (3×28+2×4=92)
-// + --size-titlebar-content-gap (12) = 176; minus --size-center-panel-inset-mac (6) = 170.
-// Fullscreen: --space-2 (8) + 92 + 12 = 112.
-// Linux: --size-titlebar-cluster-left-linux (6) + 92 + 12 = 110; minus
-// --size-center-panel-inline-inset (16) because the framed panel keeps that gutter.
-const PADDING_DEFAULT = 18; // 1.125rem
-const PADDING_CLEARANCE = 170;
-const PADDING_CLEARANCE_FULLSCREEN = 112;
-// Off-canvas the Linux cluster shifts right to clear the framed panel border, so
-// measure the reserve from that inset, relative to the panel's own left edge:
-// --size-titlebar-cluster-left-linux-panel (26) + --size-titlebar-cluster-width
-// (92) + --size-titlebar-content-gap (12) - --size-center-panel-inline-inset (16).
-const PADDING_CLEARANCE_LINUX = 114;
-
-/** Left padding of the app topbar, widened while the sidebar is closed so the lead clears the window controls. */
-export function useTopbarPaddingLeft(embedded = false) {
-	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
-	const isFullScreen = useWindowFullScreen();
-	const mac = isMacPlatform();
-	const linux = isLinuxPlatform();
-	return !embedded && !isSidebarOpen && mac
-			? isFullScreen
-				? PADDING_CLEARANCE_FULLSCREEN
-				: PADDING_CLEARANCE
-			: !embedded && !isSidebarOpen && linux
-				? PADDING_CLEARANCE_LINUX
-				: PADDING_DEFAULT;
-}
-
-export function ShellTopbar({
-	embedded = false,
+// The action cluster a session's tab strip hosts: open-in-editor, cues, archive,
+// and the orchestrator / board / new-task launchers. The page frame itself is
+// SessionTabsTopbar (PageTopbar.tsx); this renders only the actions, so it has
+// no frame of its own. Orchestrators open the Kanban board and workers open
+// their orchestrator.
+export function SessionTopbarActions({
 	sessionAction,
 	compactActions = false,
 	startingOrchestrator = false,
 }: {
-	embedded?: boolean;
 	sessionAction?: ReactNode;
 	compactActions?: boolean;
 	startingOrchestrator?: boolean;
 } = {}) {
 	const { t } = useTranslation();
-	const location = useLocation();
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
 	const hostId = params.hostId;
 	const currentSessionId = startingOrchestrator ? undefined : params.sessionId;
-	const boardActionsInPanel = usesBoardActionsInPanel();
-	const paddingLeft = useTopbarPaddingLeft(embedded);
 	const workspaceQuery = useWorkspaceScope(params.projectId, params.sessionId, hostId);
 	const workspaceScope = workspaceQuery.data;
 	const session = startingOrchestrator ? undefined : workspaceScope?.session;
-	const isSessionRoute = startingOrchestrator || Boolean(params.sessionId);
-	const isAutomationsRoute = location.pathname === "/automations";
-	const isArtifactsRoute = location.pathname === "/artifacts";
-	const isStandaloneBoardRoute = location.pathname === "/sessions" || location.pathname === "/sessions/";
 	const isOrchestrator = startingOrchestrator || (session ? isOrchestratorSession(session) : false);
 	const isInspectorOpen = useUiStore((state) =>
 		currentSessionId ? inspectorIsOpen(state.inspectorSessions, sessionUiKey(currentSessionId, hostId)) : false,
 	);
-	// Project in scope: the session's workspace wins over the route param so the
-	// cross-project /sessions/$sessionId route still resolves a crumb. A
-	// projectId that no longer resolves (stale route after the project was
-	// removed, or data still loading) shows an empty crumb — never the raw
-	// route slug. "Board" is the root-board crumb only.
+	// The session's workspace wins over the route param so the cross-project
+	// /sessions/$sessionId route still resolves its project.
 	const projectId = session?.workspaceId ?? params.projectId;
-	const isProjectBoardRoute = !isSessionRoute && Boolean(projectId);
-	const isRootBoardRoute = !isSessionRoute && !isProjectBoardRoute && !isAutomationsRoute && !isArtifactsRoute && !isStandaloneBoardRoute;
 	const project = workspaceScope?.project;
 	const supportsLocalCues = Boolean(!hostId && project && toProjectKind(project.kind));
-	const projectLabel = project?.name ?? session?.workspaceName ?? (projectId ? "" : t("shell.board"));
 	const orchestrator = workspaceScope?.orchestrator;
 	const supportsProjectActions = project?.kind !== STANDALONE_PROJECT_KIND && projectId !== STANDALONE_WORKSPACE_ID;
 	const projectActions = useProjectOrchestratorAction({
@@ -150,86 +89,19 @@ export function ShellTopbar({
 		if (!supportsProjectActions || startingOrchestrator) return;
 		openOrchestrator();
 	});
-	const { showProjectEmpty } = useBoardPresentation({
-		projectId,
-		isSuccess: workspaceQuery.isSuccess,
-		isError: workspaceQuery.isError,
-		hasProjects: Boolean(project),
-		hasWorkerSessions: workspaceScope?.hasWorkerSessions ?? false,
-	});
 	const orchestratorTooltip = isProjectRestarting ? t("shell.restarting") : isSpawning
 		? t("shell.spawning") : orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestrator");
 
 	const openBoard = () => void navigate(projectId ? projectNavigateTarget(projectId, hostId) : { to: "/" });
 
 	return (
-		<header
-			className={
-				embedded ? "contents" : cn(topbarHeaderClass, "workspace-topbar-container", isSessionRoute && "pr-2")
-			}
-			style={embedded ? undefined : { ...topbarDragStyle, paddingLeft }}
-		>
-			{!embedded ? (
-				<div className="flex min-w-0 items-center gap-3">
-				{isSessionRoute && session ? (
-					<div className="flex min-w-0 items-center gap-2.5" data-testid="session-topbar-identity">
-						<SessionOwnerTag session={session} />
-						{isOrchestrator ? (
-							<span className={cn(topbarProjectLabelClass, "inline-flex min-w-0 items-center gap-1.5")}>
-								<Folder aria-hidden="true" className="size-icon-md shrink-0 text-muted-foreground" />
-								<span className="max-w-content-max truncate">{projectLabel}</span>
-							</span>
-						) : (
-							<span className={cn(topbarProjectLabelClass, "max-w-content-max truncate")}>{session.title}</span>
-						)}
-						<span aria-hidden="true" className="workspace-topbar__identity-separator" />
-						<SessionStatusPill session={session} />
-					</div>
-				) : isAutomationsRoute ? (
-					<div className="inline-flex min-w-0 items-center gap-1.5" data-testid="automations-topbar-label">
-						<span className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}>
-							<CalendarClock aria-hidden="true" className="size-icon-md" />
-							{t("automations.title")}
-						</span>
-					</div>
-				) : isArtifactsRoute ? (
-					<div className="inline-flex min-w-0 items-center gap-1.5" data-testid="artifacts-topbar-label">
-						<span className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}>
-							<File aria-hidden="true" className="size-icon-md" />
-							{t("artifacts.title")}
-						</span>
-					</div>
-				) : (isProjectBoardRoute && boardActionsInPanel) ||
-				  (isMac && isRootBoardRoute && boardActionsInPanel) ||
-				  (isStandaloneBoardRoute && boardActionsInPanel) ? null : (
-					<div className="inline-flex min-w-0 items-center gap-1.5" data-testid="board-topbar-label">
-						{isStandaloneBoardRoute ? (
-							<StandaloneArchiveTopbarLabel />
-						) : (
-							<span className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}>
-								<LayoutDashboard aria-hidden="true" className="size-icon-md" />
-								{t("shell.board")}
-								{hostId ? <span className="truncate text-muted-foreground">· {labelForHost(hostId) ?? hostId}</span> : null}
-							</span>
-						)}
-					</div>
-				)}
-				</div>
-			) : null}
-
-			{!embedded ? <div className="min-w-0 flex-1" /> : null}
-
+		<div className="contents">
 			<div
 				className="workspace-topbar-actions flex shrink-0 items-center"
 				data-compact-actions={compactActions ? "true" : "false"}
 				data-testid="workspace-topbar-actions"
 			>
-				{isProjectBoardRoute || isOrchestrator ? <ProjectTerminationFeedback projectId={projectId} hostId={hostId} /> : null}
-				{!boardActionsInPanel && isProjectBoardRoute ? (
-					<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={project?.kind === CLOUD_PROJECT_KIND} style={noDragStyle} />
-				) : null}
-				{isSessionRoute ? (
-					<>
+				{isOrchestrator ? <ProjectTerminationFeedback projectId={projectId} hostId={hostId} /> : null}
 						{isOrchestrator ? (
 							<>
 								{sessionAction ? (
@@ -367,54 +239,16 @@ export function ShellTopbar({
 								<TooltipContent side="bottom">{orchestratorTooltip}</TooltipContent>
 							</Tooltip>
 						) : null}
-					</>
-				) : null}
-				{isSessionRoute ? (
-					/* The pinned controls are owned by SessionView so they stay at the
-					   window's right edge. Reserve their width only when the rail is closed. */
-					startingOrchestrator ? null : <div
-						className="session-pinned-actions-reserve"
-						data-state={isInspectorOpen ? "collapsed" : "expanded"}
-						data-testid="session-pinned-actions-reserve"
-						aria-hidden="true"
-					/>
-				) : (
-					<>
-						{!boardActionsInPanel && isStandaloneBoardRoute ? (
-							<StandaloneArchiveTopbarNewAgent style={noDragStyle} />
-						) : null}
-						<NotificationCenter style={noDragStyle} />
-					</>
-				)}
+				{/* The pinned controls are owned by SessionView so they stay at the
+				    window's right edge. Reserve their width only when the rail is closed. */}
+				{startingOrchestrator ? null : <div
+					className="session-pinned-actions-reserve"
+					data-state={isInspectorOpen ? "collapsed" : "expanded"}
+					data-testid="session-pinned-actions-reserve"
+					aria-hidden="true"
+				/>}
 			</div>
-		</header>
-	);
-}
-
-function StandaloneArchiveTopbarLabel() {
-	const { t } = useTranslation();
-	const count = archivedStandaloneSessions(useWorkspaceQuery().data ?? []).length;
-	return (
-		<span className={topbarProjectLabelClass} data-testid="standalone-archive-title">
-			{t("standalone.archive.heading", { count })}
-		</span>
-	);
-}
-
-function StandaloneArchiveTopbarNewAgent({ style }: { style?: React.CSSProperties }) {
-	const { t } = useTranslation();
-	const requestNewTask = useUiStore((state) => state.requestNewTask);
-	return (
-		<TopbarButton
-			className="topbar-control--labeled"
-			onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
-			style={style}
-			type="button"
-			variant="primary"
-		>
-			<Plus className="size-icon-md" aria-hidden="true" />
-			{t("standalone.archive.newAgent")}
-		</TopbarButton>
+		</div>
 	);
 }
 
@@ -509,12 +343,5 @@ export function ProjectTerminationFeedback({ projectId, hostId }: { projectId: s
 				),
 			)}
 		</div>
-	);
-}
-function SessionStatusPill({ session }: { session: WorkspaceSession }) {
-	const { t } = useTranslation();
-	const { label, tone, breathe } = getAgentActivityView(session.activity, t);
-	return (
-		<StatusPill label={label} tone={tone} breathe={breathe} leading="none" className="px-2 py-1 text-micro" />
 	);
 }
