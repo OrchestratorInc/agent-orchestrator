@@ -233,7 +233,14 @@ type Service struct {
 	// placement with the same latency claiming a PR always had. Nil in
 	// service tests that construct Service directly; ClaimPR degrades to
 	// relying on the poller in that case.
-	outputTypeReconciler outputTypeReconciler
+	outputTypeReconciler   outputTypeReconciler
+	cardTitleGenerator     func(context.Context, domain.SessionRecord) (string, error)
+}
+
+// SetCardTitleGenerator wires detached configured-model title generation after
+// daemon construction has assembled the chat and session services.
+func (s *Service) SetCardTitleGenerator(generate func(context.Context, domain.SessionRecord) (string, error)) {
+	s.cardTitleGenerator = generate
 }
 
 // SetChatProviderPreserver wires the live Chat lifetime observation after both
@@ -388,6 +395,22 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.Session{}, 0, 0, apiErr
 	}
 	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds())
+	provisionalTitle := rec.DisplayName == "" || rec.DisplayName == domain.TitleCaseSessionTitle(rec.Metadata.Prompt) || rec.DisplayName == strings.TrimSpace(rec.Metadata.Prompt)
+	if s.cardTitleGenerator != nil && provisionalTitle && rec.Kind == domain.KindWorker && strings.TrimSpace(rec.Metadata.Prompt) != "" {
+		record := rec
+		work := func() {
+			if title, titleErr := s.cardTitleGenerator(s.backgroundContext, record); titleErr == nil && strings.TrimSpace(title) != "" {
+				_, _ = s.store.RenameSessionIfDisplayName(
+					s.backgroundContext, record.ID, record.DisplayName, title, s.now(),
+				)
+			}
+		}
+		if s.runBackground != nil {
+			s.runBackground(work)
+		} else {
+			go work()
+		}
+	}
 	if firstSession {
 		s.emitFirstSessionSpawned(ctx, rec, project)
 	}
@@ -1261,6 +1284,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		SCMStatus:        deriveSCMStatus(prs),
 		KanbanColumn:     presentation.Column,
 		DisplayStatus:    presentation.DisplayStatus,
+		Summary:          deriveSummary(rec, prs, presentation.DisplayStatus),
 		TerminalHandleID: rec.Metadata.RuntimeHandleID,
 		ArtifactFiles:    artifactFiles,
 		PRs:              prs,

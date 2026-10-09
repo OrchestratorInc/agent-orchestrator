@@ -208,6 +208,9 @@ type Controller struct {
 	now                    Clock
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
+	onAssistantMessage     func(context.Context, domain.SessionID, string)
+	onCardSummary          func(context.Context, domain.SessionID, string)
+	onCardTitle            func(context.Context, domain.SessionID, string)
 
 	// sendMu serializes command dispatch so only one operation mutates the
 	// provider conversation at a time.
@@ -361,6 +364,9 @@ func newController(
 	now Clock,
 	onAccountChanged func(domain.SessionID, string, domain.AgentHarness),
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation),
+	onAssistantMessage func(context.Context, domain.SessionID, string),
+	onCardSummary func(context.Context, domain.SessionID, string),
+	onCardTitle func(context.Context, domain.SessionID, string),
 ) *Controller {
 	c := &Controller{
 		sessionID:              sessionID,
@@ -376,6 +382,9 @@ func newController(
 		now:                    now,
 		onAccountChanged:       onAccountChanged,
 		onCodexCapacityChanged: onCodexCapacityChanged,
+		onAssistantMessage:     onAssistantMessage,
+		onCardSummary:          onCardSummary,
+		onCardTitle:            onCardTitle,
 		state:                  ports.ChatControllerReady,
 		settings:               conversation.Settings,
 		mcpServers:             map[string]domain.ConversationMCPServer{},
@@ -3309,9 +3318,101 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 // archive/projection transaction. Lifecycle writes touch the sessions table and
 // draining may call the provider, so either one inside the store transaction
 // would hold the single writer connection across another subsystem.
+// extractAOSummaryFromDetail parses the JSON detail of a ChatEventActivityStarted
+// event and returns the summary text if the command is `ao summary "..."`.
+// This lets the card update without an HTTP round-trip to the daemon, which is
+// blocked from sandboxed worker environments.
+func extractAOSummaryFromDetail(detail []byte) string {
+	var d struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal(detail, &d) != nil || d.Command == "" {
+		return ""
+	}
+	return extractAOSummary(d.Command)
+}
+
+func extractAOTitleFromDetail(detail []byte) string {
+	var d struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal(detail, &d) != nil || d.Command == "" {
+		return ""
+	}
+	return extractAOTitle(d.Command)
+}
+
+func extractAOTitle(commandInput string) string {
+	cmd := strings.TrimSpace(commandInput)
+	if !strings.HasPrefix(cmd, "ao title ") {
+		return ""
+	}
+	text := strings.TrimSpace(strings.TrimPrefix(cmd, "ao title "))
+	if len(text) >= 2 && (text[0] == '"' && text[len(text)-1] == '"' || text[0] == '\'' && text[len(text)-1] == '\'') {
+		text = text[1 : len(text)-1]
+	}
+	text = strings.TrimSpace(text)
+	if text == "" || len(text) > 100 {
+		return ""
+	}
+	return text
+}
+
+func extractAOSummary(commandInput string) string {
+	cmd := strings.TrimSpace(commandInput)
+	if !strings.HasPrefix(cmd, "ao summary ") {
+		return ""
+	}
+	text := strings.TrimSpace(strings.TrimPrefix(cmd, "ao summary "))
+	if len(text) >= 2 && (text[0] == '"' && text[len(text)-1] == '"' || text[0] == '\'' && text[len(text)-1] == '\'') {
+		text = text[1 : len(text)-1]
+	}
+	text = strings.TrimSpace(text)
+	if text == "" || len(text) > 200 {
+		return ""
+	}
+	return text
+}
+
 func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, primaryTurn bool) {
 	now := c.now()
 	switch event.Kind {
+	case ports.ChatEventMessageDelta:
+		// Streamed assistant prose is the earliest signal for a new task. Feed
+		// the latest fragment into the debounced card editor so the card becomes
+		// specific while the agent is still planning, rather than waiting for a
+		// full turn to settle.
+		if c.reviewID == "" && c.onAssistantMessage != nil && strings.TrimSpace(event.Delta) != "" {
+			c.onAssistantMessage(ctx, c.sessionID, event.Delta)
+		}
+	case ports.ChatEventMessageCompleted:
+		if c.reviewID == "" && c.onAssistantMessage != nil && strings.TrimSpace(event.Text) != "" {
+			c.onAssistantMessage(ctx, c.sessionID, event.Text)
+		}
+	case ports.ChatEventCommandInput:
+		if c.reviewID == "" && c.onAssistantMessage != nil && strings.TrimSpace(event.Delta) != "" {
+			c.onAssistantMessage(ctx, c.sessionID, event.Delta)
+		}
+	case ports.ChatEventReasoningDelta, ports.ChatEventCommandOutputDelta, ports.ChatEventActivityText:
+		if c.reviewID == "" && c.onAssistantMessage != nil && strings.TrimSpace(event.Delta) != "" {
+			c.onAssistantMessage(ctx, c.sessionID, event.Delta)
+		}
+	case ports.ChatEventActivityStarted:
+		if c.reviewID == "" && len(event.Detail) > 0 {
+			if c.onCardSummary != nil {
+				if text := extractAOSummaryFromDetail(event.Detail); text != "" {
+					c.onCardSummary(ctx, c.sessionID, text)
+				}
+			}
+			if c.onCardTitle != nil {
+				if text := extractAOTitleFromDetail(event.Detail); text != "" {
+					c.onCardTitle(ctx, c.sessionID, text)
+				}
+			}
+		}
+		if c.reviewID == "" && c.onAssistantMessage != nil && strings.TrimSpace(event.Summary) != "" {
+			c.onAssistantMessage(ctx, c.sessionID, "The agent is currently "+strings.TrimSpace(event.Summary))
+		}
 	case ports.ChatEventTurnStarted:
 		if primaryTurn {
 			c.reportActivity(ctx, domain.ActivityActive, "chat.turn.started", now)

@@ -161,6 +161,11 @@ export type WorkspaceSession = {
 	 * {@link status} already produced.
 	 */
 	displayStatus?: string;
+	/**
+	 * Human-readable card summary generated from agent activity, or derived from
+	 * lifecycle and PR facts before a live summary is available.
+	 */
+	summary?: string;
 	statusReadiness?: "checking" | "ready" | "unavailable";
 	/**
 	 * How far this session's start-up got. A Chat spawn answers as soon as the
@@ -389,11 +394,14 @@ export function workerSessions(sessions: WorkspaceSession[]): WorkspaceSession[]
 	return sessions.filter((s) => !isOrchestratorSession(s));
 }
 
-/** Worker sessions ordered by the user's latest message (else creation), newest first. */
+/** Worker sessions ordered by active-first, then by the user's latest message (else creation), newest first. */
 export function sortedWorkerSessions(sessions: WorkspaceSession[]): WorkspaceSession[] {
-	return workerSessions(sessions).sort((a, b) =>
-		sessionRecentlyMessagedNewer(b, a) ? 1 : sessionRecentlyMessagedNewer(a, b) ? -1 : 0,
-	);
+	return workerSessions(sessions).sort((a, b) => {
+		const aActive = sessionIsActive(a) ? 1 : 0;
+		const bActive = sessionIsActive(b) ? 1 : 0;
+		if (aActive !== bActive) return bActive - aActive;
+		return sessionRecentlyMessagedNewer(b, a) ? 1 : sessionRecentlyMessagedNewer(a, b) ? -1 : 0;
+	});
 }
 
 export function sessionIsActive(session: WorkspaceSession): boolean {

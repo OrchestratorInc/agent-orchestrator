@@ -323,6 +323,45 @@ Use `+"`ao report`"+` to persist meaningful progress for the active project orch
 - Saving a local artifact or attaching its reference to an AO report is not external publishing authorization. Publish externally only within the user-authorized scope.
 - Do not narrate routine commands. Report meaningful transitions, decisions, blockers, outputs, and completion. Outputs do not imply completion, and `+"`--done`"+` does not terminate the session.
 
+## Card Title
+
+Run `+"`ao title \"<title>\"`"+` to set the display name on your kanban card. This is the bold heading the human sees — keep it 3 to 7 words in Title Case, under 100 characters.
+
+**Rules:**
+1. Run `+"`ao title`"+` **immediately after receiving your task** — before your first tool call. This is a **blocking obligation**: if it fails, retry before continuing.
+2. Derive the title from the task brief. Do not copy the user's prompt verbatim — distill it into a concise label. Examples: \"Fix Mobile Login Button\", \"Redesign Landing Page\", \"Add Unit Tests For API\".
+3. Run it only once. Do not update the title as work progresses — the summary handles ongoing status.
+
+## Card Summary
+
+Run `+"`ao summary \"<text>\"`"+` to set the one-line summary shown on your kanban card. This is how the human tracks what you are doing — treat it as a **required checkpoint**, not optional metadata. Keep it under 200 characters, specific, and honest.
+
+**Rules:**
+1. `+"`ao summary`"+` is a **blocking obligation**. If the call fails (daemon unreachable, network error, any non-zero exit), retry it before doing any further work. Do not silently continue.
+2. Send a summary at **every phase boundary** — not just at start and end. A phase boundary is any moment your focus shifts: after inspecting the repo, after choosing a direction, after implementing, after verifying. If you are uncertain whether to send one, send one.
+3. The human glances at the board to know what you are doing. A stale summary is worse than a verbose one.
+
+**When to run it:**
+- **Immediately on task receipt** — before your first tool call. This is the most important one.
+- **After inspecting the codebase** — say what you found and what direction you are taking.
+- **When starting implementation** — say what you are building or changing.
+- **After meaningful results** — say what happened (tests pass, build succeeds, found a bug).
+- **Always before you finish** — switch to past tense so the card shows what you accomplished.
+
+**Examples — user asks: \"help me redesign my website\"**
+1. Immediately: `+"`ao summary \"Inspecting the existing site and creating a redesign branch\"`"+`
+2. After inspection: `+"`ao summary \"Found a Next.js portfolio; shaping an editorial redesign\"`"+`
+3. During implementation: `+"`ao summary \"Implementing new hero, navigation, and responsive layout\"`"+`
+4. After implementation: `+"`ao summary \"Redesign implemented; running type checks and live verification\"`"+`
+5. Before finishing: `+"`ao summary \"Redesigned homepage and verified the live preview\"`"+`
+
+**Examples — user asks: \"go through the repo and find issues\"**
+1. Immediately: `+"`ao summary \"Scanning repo structure and reading key modules\"`"+`
+2. After initial scan: `+"`ao summary \"Found 3 critical bugs in the frontend app\"`"+`
+3. Before finishing: `+"`ao summary \"Identified 5 issues: 2 security, 2 correctness, 1 perf\"`"+`
+
+Do not use generic phrases like \"Working on the task\" or \"Reviewing code\". While working, use present tense. Before finishing, always switch to past tense.
+
 ## In-App Session Links
 
 - When referring the human or orchestrator to an AO session in Chat or the AO terminal, include a clickable canonical link: `+"`ao://sessions/{project-id}/{session-id}`"+`.

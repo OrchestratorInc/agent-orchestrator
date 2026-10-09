@@ -489,6 +489,18 @@ func Run() error {
 					"sessionID", sessionID, "model", model, "error", err)
 			}
 		},
+		OnAssistantMessage: nil,
+		OnCardSummary: func(ctx context.Context, sessionID domain.SessionID, summary string) {
+			value := domain.CardSummaryMetadataPrefix + summary
+			if _, err := store.UpdateSessionCardSummary(ctx, sessionID, value, time.Now().UTC()); err != nil {
+				log.Warn("update card summary from event stream failed", "sessionID", sessionID, "error", err)
+			}
+		},
+		OnCardTitle: func(ctx context.Context, sessionID domain.SessionID, title string) {
+			if _, err := store.RenameSession(ctx, sessionID, title, time.Now().UTC()); err != nil {
+				log.Warn("update card title from event stream failed", "sessionID", sessionID, "error", err)
+			}
+		},
 	})
 	chatSvc.SetRenderCheck(renderViaDesktop(browserBroker, "__render-check"))
 	chatSvc.SetRenderMeasure(renderViaDesktop(browserBroker, "__render-measure"))
@@ -578,6 +590,15 @@ func Run() error {
 		}
 		return fmt.Errorf("wire session service: %w", err)
 	}
+	// Direct TUI spawns do not pass through DelegateTask's orchestrator title
+	// refinement. Generate their title through the same configured harness/model
+	// in a detached read-only conversation.
+	sessionSvc.SetCardTitleGenerator(func(titleCtx context.Context, rec domain.SessionRecord) (string, error) {
+		return chatSvc.GenerateCardTitleWithConfig(titleCtx, rec.Harness, ports.ChatStartConfig{
+			SessionID: rec.ID, DataDir: cfg.DataDir, WorkspacePath: rec.Metadata.WorkspacePath,
+			Model: rec.Metadata.Model, Permissions: ports.PermissionModeAuto,
+		}, rec.Metadata.Prompt)
+	})
 	sessionSvc.SetChatProviderPreserver(chatSvc.PreservesProviderOnRestart)
 	memoryReader := usagesvc.NewMemoryReader(usagesvc.MemoryReaderDeps{
 		Store: store, Runtime: runtimeAdapter, Reviewers: store, CacheTTL: 2 * time.Second,
@@ -928,6 +949,8 @@ func Run() error {
 		Reviews:            reviewSvc,
 		Notifications:      notifier,
 		Reports:            reportSvc,
+		SummaryStore:       store,
+		TitleStore:         store,
 		NotificationStream: notificationHub,
 		Push:               pushRegistry,
 		Presence:           presenceTracker,

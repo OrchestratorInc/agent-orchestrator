@@ -9282,6 +9282,37 @@ paths:
       summary: Rename a standalone shell terminal tab
       tags:
       - shellTerminals
+  /api/v1/summary:
+    post:
+      operationId: updateCardSummary
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersUpdateSummaryRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersUpdateSummaryResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: Update the kanban card summary for a session
+      tags:
+      - sessions
   /api/v1/system/github-auth:
     get:
       operationId: getGitHubAuthRequirement
@@ -11397,6 +11428,8 @@ components:
           - ready
           - unavailable
           type: string
+        summary:
+          type: string
         terminalGeneration:
           type: string
         terminalHandleId:
@@ -11465,6 +11498,25 @@ components:
           - boolean
       required:
       - enabled
+      type: object
+    ControllersUpdateSummaryRequest:
+      properties:
+        sessionId:
+          type: string
+        summary:
+          maxLength: 200
+          minLength: 1
+          type: string
+      required:
+      - sessionId
+      - summary
+      type: object
+    ControllersUpdateSummaryResponse:
+      properties:
+        ok:
+          type: boolean
+      required:
+      - ok
       type: object
     ConversationAccountPayload:
       properties:
