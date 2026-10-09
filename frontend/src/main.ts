@@ -161,6 +161,7 @@ import { sameBrowserRuntimeIdentity, type BrowserRuntimeIdentity } from "./main/
 import { connectSupervisor, type SupervisorLinkHandle } from "./main/supervisor-link";
 import { connectBrowserRuntime, type BrowserRuntimeLinkHandle } from "./main/browser-runtime-link";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
+import { planDaemonAutoRestart, daemonExitWasUngraceful } from "./main/daemon-auto-restart";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import {
@@ -305,6 +306,13 @@ let pendingFolderPath: string | null = null;
 let daemonProcess: ChildProcess | null = null;
 let daemonStoppingProcess: ChildProcess | null = null;
 let daemonRestartAfterExitProcess: ChildProcess | null = null;
+// Auto-restart state for an app-owned daemon that exits unexpectedly while the
+// app is still running: the sliding window of recent unexpected exits, the
+// pending respawn timer, and the PID of the child that crash scheduled it (so a
+// successor daemon's run-file is never mistaken for our crash).
+let daemonAutoRestartExits: number[] = [];
+let daemonAutoRestartTimer: ReturnType<typeof setTimeout> | null = null;
+let daemonAutoRestartPid: number | null = null;
 let daemonStartPromise: Promise<DaemonStatus> | null = null;
 let daemonStartEpoch = 0;
 let daemonStatus: DaemonStatus = { state: "stopped" };
@@ -1910,6 +1918,26 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 			exitCode: code,
 			signal,
 		});
+		// The daemon died on its own while the app is still running. Respawn it
+		// (bounded, with backoff) — but only when this child's own crash marker
+		// survived: a removed run-file is a deliberate stop (`ao stop`, self-stop),
+		// and a run-file naming a different PID is a successor daemon we must not
+		// fight. See daemonExitWasUngraceful.
+		const exitedPid = child.pid ?? null;
+		void readRunFileState().then((runFile) => {
+			if (browserQuitRequested || daemonProcess) return;
+			if (
+				daemonExitWasUngraceful({
+					runFilePresent: runFile.present,
+					runFilePid: runFile.pid,
+					childPid: exitedPid,
+					code,
+					signal,
+				})
+			) {
+				scheduleDaemonAutoRestart(exitedPid);
+			}
+		});
 	});
 
 	return daemonStatus;
@@ -1928,12 +1956,67 @@ function killDaemon(child: ChildProcess): void {
 	}
 }
 
+// Read the daemon liveness run-file to learn which PID it currently names.
+// `present` is false when the file is absent or unreadable; `pid` is null when
+// it is present but malformed.
+async function readRunFileState(): Promise<{ present: boolean; pid: number | null }> {
+	const rfp = runFilePath();
+	if (rfp === null) return { present: false, pid: null };
+	try {
+		return { present: true, pid: parseRunFile(await readFile(rfp, "utf8"))?.pid ?? null };
+	} catch {
+		return { present: false, pid: null };
+	}
+}
+
+// Cancel a pending auto-restart and forget the recent-exit window. Called when
+// the user (or the app) deliberately changes daemon state, so a stale respawn
+// cannot race an explicit stop/restart or fire during shutdown.
+function cancelDaemonAutoRestart(): void {
+	if (daemonAutoRestartTimer !== null) {
+		clearTimeout(daemonAutoRestartTimer);
+		daemonAutoRestartTimer = null;
+	}
+	daemonAutoRestartPid = null;
+	daemonAutoRestartExits = [];
+}
+
+// Respawn `crashedPid` after an unexpected exit, bounded by the sliding window
+// with capped backoff. Before spawning, re-read the run-file: if it is gone (an
+// explicit cleanup, e.g. `ao stop`) or names a different daemon (a successor
+// took over), stand down instead of fighting it.
+function scheduleDaemonAutoRestart(crashedPid: number | null): void {
+	if (browserQuitRequested || daemonAutoRestartTimer !== null) return;
+	const { plan, recentExits } = planDaemonAutoRestart(daemonAutoRestartExits, Date.now());
+	daemonAutoRestartExits = recentExits;
+	if (plan.action === "give_up") return;
+	daemonAutoRestartPid = crashedPid;
+	daemonAutoRestartTimer = setTimeout(() => {
+		daemonAutoRestartTimer = null;
+		const expectedPid = daemonAutoRestartPid;
+		daemonAutoRestartPid = null;
+		// A manual start/stop or app quit may have landed while we waited.
+		if (daemonProcess || browserQuitRequested) return;
+		void readRunFileState().then(async (runFile) => {
+			if (!runFile.present || expectedPid === null || runFile.pid !== expectedPid) return;
+			if (daemonProcess || browserQuitRequested) return;
+			// The marker is known-stale (it names our dead child). Remove it so the
+			// spawn path cannot mistake a reused PID from it for a live daemon.
+			const rfp = runFilePath();
+			if (rfp !== null) await rm(rfp, { force: true }).catch(() => undefined);
+			if (daemonProcess || browserQuitRequested) return;
+			void startDaemonForRestart();
+		});
+	}, plan.delayMs);
+}
+
 function stopDaemon(): DaemonStatus {
 	daemonStartEpoch += 1;
 	daemonStartPromise = null;
 	// An explicit stop (or a newer restart request) cancels any deferred restart
 	// left waiting for a previously slow child to exit.
 	daemonRestartAfterExitProcess = null;
+	cancelDaemonAutoRestart();
 	if (!daemonProcess) {
 		setDaemonStatus({ state: "stopped" });
 		return daemonStatus;
@@ -1970,6 +2053,8 @@ async function startDaemonForRestart(): Promise<DaemonStatus> {
 }
 
 async function restartDaemon(): Promise<DaemonStatus> {
+	// A manual restart supersedes any pending automatic respawn.
+	cancelDaemonAutoRestart();
 	const child = daemonProcess;
 	if (!child) return startDaemonForRestart();
 
@@ -3000,6 +3085,9 @@ app.on("before-quit", (event) => {
 		return;
 	}
 	browserQuitRequested = true;
+	// Never respawn the daemon while the app is shutting down; the daemon's own
+	// link-EOF self-stop (or the orphan-cleanup kill below) handles teardown.
+	cancelDaemonAutoRestart();
 	disposeBrowserRuntimeLink();
 	trayLifecycle.dispose();
 	trayController = null;
