@@ -44,7 +44,7 @@ var plans = []Plan{
 	plan("autohand", ActionLogin, "Log in to Autohand", []string{"autohand", "login"}, "Native Autohand account sign-in", "https://docs.autohand.ai/working-with-autohand-code/cli-reference"),
 	plan("kimchi", ActionLogin, "Log in to Kimchi", []string{"kimchi", "login"}, "Native browser login flow", "https://docs.kimchi.dev/docs/service-keys"),
 	terminalInputPlan("prime-agent", ActionLogin, "Log in to Prime Agent", []string{"prime-agent"}, "/login\r", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md"),
-	terminalInputPlan("omp", ActionLogin, "Log in to OMP", []string{"omp"}, "/login\r", "Select Open login after OMP finishes starting", "https://github.com/can1357/oh-my-pi"),
+	ompLoginPlan(),
 	plan("fx", ActionLogin, "Log in to fx", []string{"fx", "login"}, "Select Vercel, Codex, or Grok in fx's native login flow", "https://fx.sh/docs"),
 	// DeepSeek Harness has no login subcommand — credentials are records in its
 	// own store (~/.dsh/.credentials.yaml) — but the web profile serves the
@@ -93,6 +93,18 @@ func piLoginPlan() Plan {
 		{Text: "0.0%/"},
 		{Text: "Pi can explain its own features"},
 	}
+	p.sendInitialInputOnReadyTimeout = true
+	return p
+}
+
+// ompLoginPlan opens OMP's TUI and injects /login after startup. OMP does not
+// expose a separate login subcommand; waiting for its banner keeps the command
+// out of the startup buffer, while the timeout fallback handles versions whose
+// banner text has changed.
+func ompLoginPlan() Plan {
+	p := plan("omp", ActionLogin, "Log in to OMP", []string{"omp"}, "OMP opens its login picker automatically", "https://github.com/can1357/oh-my-pi")
+	p.initialInput = "/login"
+	p.initialInputReadyStates = []shellterm.InitialInputReadyState{{Text: "oh-my-pi"}}
 	p.sendInitialInputOnReadyTimeout = true
 	return p
 }

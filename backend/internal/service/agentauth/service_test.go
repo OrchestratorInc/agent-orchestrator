@@ -142,6 +142,33 @@ func TestStartPiInjectsLoginAutomatically(t *testing.T) {
 	}
 }
 
+func TestStartOMPInjectsLoginAutomatically(t *testing.T) {
+	t.Parallel()
+
+	opener := &recordingTerminalOpener{}
+	svc := New(foundExecutable("omp"), opener)
+
+	got, err := svc.Start(context.Background(), "omp")
+	if err != nil {
+		t.Fatalf("Start(omp): %v", err)
+	}
+	wantInput := shellterm.OpenCommandTerminalInput{
+		Argv:         []string{"/test/bin/omp"},
+		Title:        "Log in to OMP",
+		InitialInput: "/login",
+		InitialInputReadyStates: []shellterm.InitialInputReadyState{
+			{Text: "oh-my-pi"},
+		},
+		SendInitialInputOnReadyTimeout: true,
+	}
+	if !reflect.DeepEqual(opener.input, wantInput) {
+		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, wantInput)
+	}
+	if got.TerminalInput != "" {
+		t.Fatalf("Start(omp) terminal input = %q, want none so the login is not held behind a button", got.TerminalInput)
+	}
+}
+
 // Screens captured from Pi 0.85.1 in an AO auth terminal (120 columns), so the
 // reviewed markers are checked against what Pi actually renders.
 const (
