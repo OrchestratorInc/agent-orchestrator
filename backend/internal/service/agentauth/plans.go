@@ -101,13 +101,15 @@ func piLoginPlan() Plan {
 // copilotLoginPlan opens Copilot's TUI and injects /login so its native
 // account picker (GitHub.com, GitHub Enterprise Cloud, or Microsoft Entra) is
 // offered; the bare `copilot login` subcommand jumps straight into the
-// GitHub.com browser flow. The input is sent once the composer footer renders.
+// GitHub.com browser flow. The input is sent once the composer footer renders,
+// or after the bounded ready wait when slow hooks delay that footer.
 // Copilot's "Confirm folder trust" dialog would swallow that input in AO's
 // private auth workspace, so the folder is recorded as trusted first.
 func copilotLoginPlan() Plan {
 	p := plan("copilot", ActionLogin, "Log in to GitHub Copilot", []string{"copilot"}, "Copilot opens its account picker automatically", "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli")
 	p.initialInput = "/login"
 	p.initialInputReadyStates = []shellterm.InitialInputReadyState{{Text: "/ commands"}}
+	p.sendInitialInputOnReadyTimeout = true
 	p.prepareWorkspace = copilot.EnsureWorkspaceTrusted
 	return p
 }

@@ -305,6 +305,9 @@ func TestStartPreparesCopilotAuthWorkspaceWithSeededTrust(t *testing.T) {
 	if got := opener.input.InitialInputReadyStates; !reflect.DeepEqual(got, []shellterm.InitialInputReadyState{{Text: "/ commands"}}) {
 		t.Fatalf("initial input ready states = %#v, want Copilot composer footer", got)
 	}
+	if !opener.input.SendInitialInputOnReadyTimeout {
+		t.Fatal("Copilot login does not fall back to /login after a slow startup")
+	}
 	data, err := os.ReadFile(filepath.Join(home, ".copilot", "config.json"))
 	if err != nil {
 		t.Fatalf("read copilot config: %v", err)
