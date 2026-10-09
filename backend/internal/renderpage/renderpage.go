@@ -59,18 +59,32 @@ var Version = func() string {
 	return hex.EncodeToString(sum[:])[:12]
 }()
 
-const themeStyleOpen = `<style id="ao-theme">`
+const (
+	themeStyleOpen = `<style id="ao-theme">`
+	// viewportMeta is the viewport AO adds to a page with none. Renders stored
+	// before the bootstrap moved to serve time have it ahead of their block.
+	viewportMeta = `<meta name="viewport" content="width=device-width, initial-scale=1">`
+)
 
 // Document is the page the render route serves for stored bytes. Renders are
 // stored raw, but ones published before the bootstrap moved to serve time
-// carry an earlier copy. That block is always AO's own and contiguous: it
-// starts at the theme style and ends at the first </script>, because the
-// bootstrap never contains one. It is replaced by the current bootstrap.
+// carry an earlier copy. That block is AO's own and contiguous: it starts
+// with the theme style right after the doctype (and AO's viewport meta),
+// where it was injected, and ends at the first </script>, because the
+// bootstrap never contains one. It is replaced by the current bootstrap. The
+// same markup anywhere else is the agent's, and stays.
 func Document(stored []byte) []byte {
 	page := string(stored)
-	if start := strings.Index(page, themeStyleOpen); start >= 0 {
-		if end := strings.Index(page[start:], "</script>"); end >= 0 {
-			page = page[:start] + page[start+end+len("</script>"):]
+	at := 0
+	if loc := leadingDoctype.FindStringIndex(page); loc != nil {
+		at = loc[1]
+	}
+	if strings.HasPrefix(page[at:], viewportMeta) {
+		at += len(viewportMeta)
+	}
+	if strings.HasPrefix(page[at:], themeStyleOpen) {
+		if end := strings.Index(page[at:], "</script>"); end >= 0 {
+			page = page[:at] + page[at+end+len("</script>"):]
 		}
 	}
 	return []byte(inject(page))
@@ -90,7 +104,7 @@ func inject(page string) string {
 	b.WriteString(`<style>` + baseCSS + `</style>`)
 	b.WriteString(`<script>` + bootstrapJS + `</script>`)
 	if !pageViewport.MatchString(page) {
-		b.WriteString(`<meta name="viewport" content="width=device-width, initial-scale=1">`)
+		b.WriteString(viewportMeta)
 	}
 	if loc := leadingDoctype.FindStringIndex(page); loc != nil {
 		return page[:loc[1]] + b.String() + page[loc[1]:]

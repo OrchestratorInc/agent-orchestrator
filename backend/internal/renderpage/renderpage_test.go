@@ -88,6 +88,17 @@ func TestDocumentReplacesAnEarlierBootstrap(t *testing.T) {
 	}
 }
 
+// Only the block right after the doctype is AO's; the same markup later in the
+// page is the agent's own (a page about renders, say), and stays.
+func TestDocumentKeepsTheThemeMarkupInThePagesOwnContent(t *testing.T) {
+	page := "<!doctype html><p>Before</p><pre>&lt;style id=\"ao-theme\"&gt;</pre>" +
+		`<script>const t = '<style id="ao-theme">';</script><p>After</p><script>draw()</script>`
+	got := string(Document([]byte(page)))
+	if !strings.HasSuffix(got, page[len("<!doctype html>"):]) {
+		t.Fatalf("page content changed: %.400q", got)
+	}
+}
+
 func TestDocumentIsIdempotent(t *testing.T) {
 	for _, page := range []string{
 		"<p>x</p>",

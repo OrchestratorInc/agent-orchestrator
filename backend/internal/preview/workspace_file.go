@@ -6,6 +6,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // CleanWorkspacePath normalizes a browser/workspace path without discarding
@@ -41,20 +42,14 @@ func OpenWorkspaceFile(workspacePath, assetPath string) (*os.File, fs.FileInfo, 
 	}
 	defer func() { _ = root.Close() }()
 
-	// Stat first: opening a FIFO blocks until a writer appears.
-	info, err := root.Stat(filepath.FromSlash(clean))
+	// O_NONBLOCK: opening a FIFO would otherwise block until a writer appears,
+	// and the path can be swapped for one at any time. A regular file's reads
+	// ignore it. What was opened is checked on the open file.
+	file, err := root.OpenFile(filepath.FromSlash(clean), os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, nil, "", err
 	}
-	if !info.Mode().IsRegular() {
-		return nil, nil, "", fs.ErrNotExist
-	}
-	file, err := root.Open(filepath.FromSlash(clean))
-	if err != nil {
-		return nil, nil, "", err
-	}
-	// Checked again on the open file: the path can be swapped after the stat.
-	info, err = file.Stat()
+	info, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
 		return nil, nil, "", err

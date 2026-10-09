@@ -5873,7 +5873,6 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 		"Ordinary progress updates, concise final answers, and validation summaries can stay in chat or AO report notes",
 		"working material, not deliverables",
 		"does not authorize external publishing",
-		"it does not belong in the workspace at all. In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory.",
 	} {
 		if !strings.Contains(sp, want) {
 			t.Fatalf("system prompt missing artifact boundary %q", want)
@@ -5881,6 +5880,18 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	}
 	if strings.Contains(sp, "naturally document-shaped") {
 		t.Fatal("system prompt must not require files for ordinary summaries")
+	}
+	// Only a chat session has a thread to show a page in.
+	const inThread = "it does not belong in the workspace at all. In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory."
+	if strings.Contains(sp, "html_render") {
+		t.Fatalf("terminal session prompt names html_render:\n%s", sp)
+	}
+	chatPrompt, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", true)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt chat: %v", err)
+	}
+	if !strings.Contains(chatPrompt, inThread) {
+		t.Fatalf("chat session prompt missing %q", inThread)
 	}
 }
 
