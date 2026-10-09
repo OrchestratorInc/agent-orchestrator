@@ -144,13 +144,6 @@ describe("optimistic composer drafts", () => {
 		expect(readChatSessionDraft("invalid-snapshot", storage).composer.delivery).toBeUndefined();
 	});
 
-	it("keeps steering on its existing editable-draft contract", () => {
-		const storage = new MemoryStorage();
-		const prepared = prepareChatComposerDelivery("steer", { ...input, kind: "steer" }, storage);
-		expect(prepared.draft.composer).toMatchObject({ text: input.composerText, attachments: [sent] });
-		expect(prepared.draft.composer.delivery?.draft).toBeUndefined();
-	});
-
 	it("keeps excerpt sends recoverable for editing after a definitive refusal", () => {
 		const storage = new MemoryStorage();
 		const excerpts = [{
@@ -818,6 +811,7 @@ describe("Chat draft storage", () => {
 			"session-refused-later-composer",
 			{
 				kind: "steer",
+				optimistic: true,
 				composerText: "submitted steer",
 				attachments: [],
 				requestText: "submitted steer",
@@ -826,6 +820,8 @@ describe("Chat draft storage", () => {
 			storage,
 		);
 		expect(prepared.ok).toBe(true);
+		expect(prepared.draft.composer).toMatchObject({ text: "submitted steer", attachments: [] });
+		expect(prepared.draft.composer.delivery?.draft).toBeUndefined();
 		writeChatComposerText("session-refused-later-composer", "newer unsent draft", storage);
 
 		expect(

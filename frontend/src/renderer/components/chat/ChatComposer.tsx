@@ -1264,9 +1264,7 @@ export const ChatComposer = memo(function ChatComposer({
 			// the daemon round-trip completes. Attachments retain the retry path.
 			const clearForLocalEcho = !shouldSteer && !savingQueuedEdit && nativePayloads.length === 0;
 			try {
-				if (clearForLocalEcho) {
-					clearEditorView();
-				}
+				if (clearForLocalEcho) clearEditorView();
 				if (shouldSteer && onSteer) {
 					const outcome = nativePayloads.length > 0
 						? await onSteer(message, nativePayloads)

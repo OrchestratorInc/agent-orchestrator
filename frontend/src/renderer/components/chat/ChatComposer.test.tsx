@@ -370,9 +370,10 @@ describe("send keys", () => {
 		expect(field.textContent).toBe("do not lose this task");
 	});
 
-	it("clears a plain-text draft as soon as the local send acknowledgement starts", async () => {
-		const pending = deferred<void>();
-		const onSend = vi.fn().mockReturnValue(pending.promise);
+	it("clears and locks a memory-only draft during delivery and restores it after rejection", async () => {
+		let rejectSend!: (error: unknown) => void;
+		const pending = new Promise<void>((_resolve, reject) => { rejectSend = reject; });
+		const onSend = vi.fn().mockReturnValue(pending);
 		render(<ChatComposer onSend={onSend} />);
 		const field = screen.getByLabelText("Message the agent") as HTMLElement;
 
@@ -381,7 +382,11 @@ describe("send keys", () => {
 
 		expect(onSend).toHaveBeenCalledWith("show this immediately");
 		expect(field).toHaveTextContent("");
-		pending.resolve();
+		expect(field).toHaveAttribute("contenteditable", "false");
+		await act(async () => rejectSend({ code: "CHAT_RESUME_FAILED", message: "Could not resume" }));
+		expect(field).toHaveTextContent("show this immediately");
+		expect(field).toHaveAttribute("contenteditable", "true");
+		expect(screen.getByRole("alert")).toHaveTextContent("Your draft was kept");
 	});
 
 	it("hides an excerpt draft while its send is in flight and shows it again if the send fails", async () => {
@@ -460,7 +465,7 @@ describe("send keys", () => {
 		expect(sendReferenceToChat("some-other-session", { path: "x", display: "x", wire: "x" })).toBe(false);
 	});
 
-	it.each([false, true])("clears the composer during delivery and preserves the next draft (queued: %s)", async (willQueue) => {
+	it.each([false, true])("clears the composer during delivery and preserves a repeated next draft (queued: %s)", async (willQueue) => {
 		const sessionId = `composer-live-send-acceptance-${willQueue}`;
 		const pending = deferred<void>();
 		const onSend = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(undefined);
@@ -473,41 +478,21 @@ describe("send keys", () => {
 		expect(field.textContent).toBe("");
 		expect(field).not.toHaveClass("invisible");
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
-		await typeInComposer(field, "send a second message");
+		await typeInComposer(field, "send this once");
 		await act(async () => pending.resolve());
 		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
-		expect(field).toHaveTextContent("send a second message");
+		expect(field).toHaveTextContent("send this once");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("send this once");
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		expect(field).toHaveAttribute("contenteditable", "true");
 		expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined();
 
 		fireEvent.keyDown(field, { key: "Enter" });
 		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+		expect(onSend.mock.calls[1][0]).toBe("send this once");
+		expect(onSend.mock.calls[1][2]).not.toBe(onSend.mock.calls[0][2]);
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-	});
-
-	it("retries the original request after a failed send without replacing the next draft", async () => {
-		const sessionId = "composer-optimistic-failed-send";
-		let rejectSend!: (error: Error) => void;
-		const onSend = vi.fn().mockImplementationOnce(() => new Promise<void>((_, reject) => {
-			rejectSend = reject;
-		})).mockResolvedValue(undefined);
-		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
-		const field = screen.getByLabelText("Message the agent");
-		await typeInComposer(field, "original request");
-		fireEvent.keyDown(field, { key: "Enter" });
-		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
-		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
-		await typeInComposer(field, "next draft");
-		await act(async () => rejectSend(new Error("response lost")));
-		expect(field).toHaveTextContent("next draft");
-		expect(screen.getByRole("alert")).toHaveTextContent("Message delivery wasn’t confirmed");
-		await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
-		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
-		expect(onSend.mock.calls[1]).toEqual(onSend.mock.calls[0]);
-		expect(field).toHaveTextContent("next draft");
-		expect(readChatSessionDraft(sessionId).composer.text).toBe("next draft");
 	});
 
 	it("keeps the next draft when its storage write fails before acceptance", async () => {
@@ -770,8 +755,8 @@ describe("send keys", () => {
 		await waitFor(() => expect(getChatDraftBoundaries(sessionId)).toEqual([]));
 	});
 
-	it("reconciles an accepted delivery without clearing or blocking a later draft revision", async () => {
-		const sessionId = "composer-later-revision";
+	it.each([false, true])("preserves a newer draft when an old surface accepts before replacement mount: %s", async (acceptBeforeMount) => {
+		const sessionId = `composer-later-revision-${acceptBeforeMount}`;
 		let acceptSend!: () => void;
 		const onSend = vi.fn(
 			() =>
@@ -784,17 +769,21 @@ describe("send keys", () => {
 		await typeInComposer(firstField, "submitted revision");
 		fireEvent.keyDown(firstField, { key: "Enter" });
 		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		await typeInComposer(firstField, "draft before leaving");
 		first.unmount();
 		writeChatComposerText(sessionId, "later revision");
+		if (acceptBeforeMount) await act(async () => acceptSend());
 
 		render(<ChatComposer onSend={onSend} draftSessionId={sessionId} />);
 		const restored = screen.getByLabelText("Message the agent");
 		expect(restored).toHaveTextContent("later revision");
 		expect(restored).toHaveAttribute("contenteditable", "true");
 
-		await act(async () => acceptSend());
+		if (!acceptBeforeMount) await act(async () => acceptSend());
 		await waitFor(() => expect(restored).toHaveAttribute("contenteditable", "true"));
 		expect(restored).toHaveTextContent("later revision");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("later revision");
+		expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined();
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		await waitFor(() => expect(getChatDraftBoundary(sessionId)).toBeUndefined());
 	});
@@ -2358,7 +2347,7 @@ it("shows restored composer recovery notices and actions in the selected languag
 	}
 });
 
-it("reserves a restored image draft before asynchronous native-byte reads", async () => {
+it("reserves a restored image send across remount and preserves typing during native-byte reads", async () => {
 	const sessionId = "composer-reserve-before-native-read";
 	writeChatComposerText(sessionId, "inspect restored image");
 	writeChatAttachments(sessionId, [{ id: "restored-image", name: "restored.png", mimeType: "image/png", bytes: 4, path: ".ao/attachments/restored.png" }]);
@@ -2369,19 +2358,28 @@ it("reserves a restored image draft before asynchronous native-byte reads", asyn
 	try {
 		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
 		await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+		expect(onSend).not.toHaveBeenCalled();
 		const delivery = readChatSessionDraft(sessionId).composer.delivery;
 		expect(delivery).toMatchObject({ state: "dispatching", nativeImages: true, clientMessageId: expect.any(String) });
 		view.unmount();
 		view = render(<ChatComposer onSend={onSend} draftSessionId={sessionId} nativeImages />);
-		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("contenteditable", "true");
+		const field = screen.getByLabelText("Message the agent");
+		expect(field.textContent).toBe("");
+		expect(field).toHaveAttribute("contenteditable", "true");
 		expect(getChatDraftBoundaries(sessionId)).toEqual([]);
+		await typeInComposer(field, "next draft during image read");
 		const response = new Response();
 		vi.spyOn(response, "blob").mockResolvedValue(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }));
 		await act(async () => { pending.resolve(response); });
 		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
-		expect(onSend.mock.calls[0]?.[2]).toBe(delivery?.clientMessageId);
-		expect(onSend.mock.calls[0]?.[1]).toEqual([{ mimeType: "image/png", data: "iVBORw==" }]);
-		await waitFor(() => expect(screen.getByLabelText("Message the agent").textContent).toBe(""));
+		expect(onSend).toHaveBeenCalledWith(
+			"inspect restored image\n\nAttached files (read these files in the workspace):\n- .ao/attachments/restored.png",
+			[{ mimeType: "image/png", data: "iVBORw==" }],
+			delivery?.clientMessageId,
+		);
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(field).toHaveTextContent("next draft during image read");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("next draft during image read");
 	} finally {
 		view.unmount();
 		fetch.mockRestore();
