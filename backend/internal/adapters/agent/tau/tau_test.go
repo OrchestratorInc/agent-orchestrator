@@ -119,3 +119,31 @@ func TestCancellationAndContexts(t *testing.T) {
 		t.Fatalf("hooks cancellation = %v", err)
 	}
 }
+
+func TestToolRestrictionsAreRejectedOnLaunchAndRestore(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		allowed, denied []string
+	}{
+		{name: "allow", allowed: []string{"Read"}},
+		{name: "deny", denied: []string{"Bash"}},
+		{name: "both", allowed: []string{"Read"}, denied: []string{"Bash"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := fixturePlugin()
+			p.run = func(context.Context, string, ...string) ([]byte, error) {
+				t.Fatal("unsupported policy reached provider probe")
+				return nil, nil
+			}
+			workspace := t.TempDir()
+			_, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{WorkspacePath: workspace, Permissions: ports.PermissionModeBypassPermissions, AllowedTools: tc.allowed, DisallowedTools: tc.denied})
+			if err == nil || !strings.Contains(err.Error(), "tool allow/deny restrictions") {
+				t.Fatalf("launch restriction error = %v", err)
+			}
+			_, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "8bc1a3fbba2142bcb406fe4a4b6fe21b"}}, Permissions: ports.PermissionModeBypassPermissions, AllowedTools: tc.allowed, DisallowedTools: tc.denied})
+			if ok || err == nil || !strings.Contains(err.Error(), "tool allow/deny restrictions") {
+				t.Fatalf("restore restriction = %v, %v", ok, err)
+			}
+		})
+	}
+}
