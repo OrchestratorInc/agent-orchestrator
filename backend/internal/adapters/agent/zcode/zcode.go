@@ -115,7 +115,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 
-	if err := p.prepareHookTrust(ctx, binary, cfg.WorkspacePath); err != nil {
+	if err := p.prepareHookTrust(ctx, binary, cfg.WorkspacePath, cfg.Env); err != nil {
 		return nil, err
 	}
 	return cmd, nil
@@ -186,10 +186,10 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if validate == nil {
 		validate = validateNativeRestore
 	}
-	if err := validate(ctx, cfg.Session.WorkspacePath, agentSessionID, nil); err != nil {
+	if err := validate(ctx, cfg.Session.WorkspacePath, agentSessionID, cfg.Env); err != nil {
 		return nil, false, err
 	}
-	if err := p.prepareHookTrust(ctx, binary, cfg.Session.WorkspacePath); err != nil {
+	if err := p.prepareHookTrust(ctx, binary, cfg.Session.WorkspacePath, cfg.Env); err != nil {
 		return nil, false, err
 	}
 	cmd = append(cmd, "--resume", agentSessionID)

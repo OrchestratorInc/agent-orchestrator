@@ -182,7 +182,7 @@ func aoHookDigests(status trustStatus, workspace string) ([]string, error) {
 	return pending, nil
 }
 
-func (p *Plugin) prepareHookTrust(ctx context.Context, binary, workspace string) error {
+func (p *Plugin) prepareHookTrust(ctx context.Context, binary, workspace string, env map[string]string) error {
 	if strings.TrimSpace(workspace) == "" {
 		return nil
 	}
@@ -195,6 +195,11 @@ func (p *Plugin) prepareHookTrust(ctx context.Context, binary, workspace string)
 	run := func(args ...string) (trustStatus, error) {
 		command := aoprocess.CommandContext(ctx, binary, args...)
 		command.Dir = absolute
+		command.Env = os.Environ()
+		for key, value := range env {
+			command.Env = append(command.Env, key+"="+value)
+		}
+		command.WaitDelay = 2 * time.Second
 		output, err := command.Output()
 		if err != nil {
 			return trustStatus{}, fmt.Errorf("zcode: native hook trust command failed: %w", err)
