@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -293,6 +294,8 @@ func (d *Driver) openNewSession(
 	if d.cfg.EncodeProviderConversationID != nil {
 		conv.setReportedProviderConversationID(d.cfg.EncodeProviderConversationID(string(resp.SessionId)))
 	}
+	conv.setReattachRequest(d.sessionReattachRequest(
+		init, launchCfg, string(resp.SessionId), cfg.AdditionalDirectories, cfg.MCPServers))
 	settingsStarted := time.Now()
 	err = conv.applyTurnSettings(ctx, settings)
 	d.logStartStage(launchCfg.SessionID, "initial_settings", settingsStarted, err)
@@ -401,6 +404,8 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		)
 		conv.setReportedProviderConversationID(reportedProviderConversationID)
 		conv.initialPermission = ports.PermissionMode(live.InitialPermissions)
+		conv.setReattachRequest(d.sessionReattachRequest(
+			init, launchCfg, cfg.ProviderConversationID, cfg.AdditionalDirectories, cfg.MCPServers))
 		return conv, nil
 	}
 	if !supportsSessionRestore(init) {
@@ -474,6 +479,8 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		conv.legacyWire.modelState(), modes,
 	)
 	conv.setReportedProviderConversationID(reportedProviderConversationID)
+	conv.setReattachRequest(d.sessionReattachRequest(
+		init, launchCfg, cfg.ProviderConversationID, cfg.AdditionalDirectories, cfg.MCPServers))
 	if err := conv.applyTurnSettings(ctx, ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions}); err != nil {
 		if !errors.Is(err, ErrACPSetterUnsupported) {
 			conv.discard()
@@ -752,6 +759,71 @@ func isACPResourceNotFound(err error) bool {
 func isACPMethodNotFound(err error) bool {
 	var requestErr *acpsdk.RequestError
 	return errors.As(err, &requestErr) && requestErr.Code == -32601
+}
+
+// isACPSessionNotFound reports whether the agent no longer knows the session AO
+// addressed. ACP reserves -32002 for a missing resource; claude-agent-acp throws
+// a plain "Session not found", which its SDK wraps as -32603 with that text in
+// the error data.
+func isACPSessionNotFound(err error) bool {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) {
+		return false
+	}
+	if requestErr.Code == -32002 {
+		return true
+	}
+	if requestErr.Code != -32603 {
+		return false
+	}
+	data, _ := requestErr.Data.(map[string]any)
+	for _, key := range []string{"details", "error"} {
+		if text, ok := data[key].(string); ok && strings.EqualFold(strings.TrimSpace(text), "Session not found") {
+			return true
+		}
+	}
+	return false
+}
+
+// sessionReattachRequest builds the session/resume request a conversation uses
+// to recover sessionID when the agent forgets it. It returns nil when the agent
+// cannot resume or the launch context cannot be expressed to it.
+func (d *Driver) sessionReattachRequest(
+	init acpsdk.InitializeResponse,
+	launchCfg LaunchConfig,
+	sessionID string,
+	additionalDirectories []string,
+	mcpConfigs []ports.ChatMCPServerConfig,
+) *acpsdk.ResumeSessionRequest {
+	if init.AgentCapabilities.SessionCapabilities.Resume == nil {
+		return nil
+	}
+	additional, err := normalizeAdditionalDirectories(launchCfg.WorkspacePath, additionalDirectories,
+		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil)
+	if err != nil {
+		return nil
+	}
+	mcpServers, err := normalizeMCPServers(mcpConfigs, init.AgentCapabilities.McpCapabilities)
+	if err != nil {
+		return nil
+	}
+	meta := map[string]any(nil)
+	if d.cfg.SessionMeta != nil {
+		meta = d.cfg.SessionMeta(launchCfg)
+	}
+	return &acpsdk.ResumeSessionRequest{
+		Meta:                  meta,
+		SessionId:             acpsdk.SessionId(sessionID),
+		Cwd:                   launchCfg.WorkspacePath,
+		AdditionalDirectories: additional,
+		McpServers:            mcpServers,
+	}
+}
+
+func (c *conversation) setReattachRequest(request *acpsdk.ResumeSessionRequest) {
+	c.mu.Lock()
+	c.reattachRequest = request
+	c.mu.Unlock()
 }
 
 // isACPInternalError reports whether err is a JSON-RPC -32603 "Internal error"
