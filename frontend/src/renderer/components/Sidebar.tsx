@@ -1460,8 +1460,13 @@ const ProjectItem = memo(function ProjectItem({
 			if (canResumeOrchestrator && workspace.kind !== "cloud") {
 				setIsSpawning(true);
 				try {
-					await resumeOrchestrator(orchestrator.id);
+					// Start the resume, then open the chat while it runs; its
+					// composer shows the startup shimmer in the meantime.
+					const resume = resumeOrchestrator(orchestrator.id);
+					selection.goSession(workspace.id, orchestrator.id);
+					await resume;
 					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+					return;
 				} catch (err) {
 					console.error("Failed to resume orchestrator:", err);
 					showGlobalToast(

@@ -738,7 +738,7 @@ describe("Sidebar", () => {
 		expect(spawnMock).not.toHaveBeenCalled();
 	});
 
-	it("does not open an exited orchestrator when resume fails", async () => {
+	it("opens an exited orchestrator at once and reports a failed resume", async () => {
 		const user = userEvent.setup();
 		const error = new Error("resume request failed");
 		useUiStore.getState().clearGlobalToast();
@@ -748,8 +748,11 @@ describe("Sidebar", () => {
 
 		await user.click(screen.getByRole("button", { name: "Open Project One orchestrator" }));
 
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "proj-1-orch" },
+		});
 		await waitFor(() => expect(console.error).toHaveBeenCalledWith("Failed to resume orchestrator:", error));
-		expect(navigateMock).not.toHaveBeenCalled();
 		expect(useUiStore.getState().globalToast).toMatchObject({
 			title: "Resume agent",
 			body: "resume request failed",
