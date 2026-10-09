@@ -17,7 +17,13 @@ type lifecycleStore struct {
 	acceptedPause bool
 	acceptCalls   int
 	observations  []string
+	lastErrors    []string
+	failures      []string
+	startupErrors []startupErrorRecord
+	repairs       int
 }
+
+type startupErrorRecord struct{ code, message string }
 
 func (s *lifecycleStore) ClaimSandboxes(context.Context, string, int, time.Duration) ([]domain.Sandbox, error) {
 	return nil, nil
@@ -25,15 +31,17 @@ func (s *lifecycleStore) ClaimSandboxes(context.Context, string, int, time.Durat
 func (s *lifecycleStore) RenewSandboxClaim(context.Context, string, string, string, time.Duration) error {
 	return nil
 }
-func (s *lifecycleStore) UpdateSandboxObservation(_ context.Context, _, _, _, _, state, _ string, _ time.Time) error {
+func (s *lifecycleStore) UpdateSandboxObservation(_ context.Context, _, _, _, _, state, lastError string, _ time.Time) error {
 	s.observations = append(s.observations, state)
+	s.lastErrors = append(s.lastErrors, lastError)
 	return nil
 }
 func (s *lifecycleStore) AcceptSandboxProviderPause(context.Context, string, string, string, string, time.Time) (bool, error) {
 	s.acceptCalls++
 	return s.acceptedPause, nil
 }
-func (s *lifecycleStore) RecordSandboxFailure(context.Context, string, string, string, string, string) error {
+func (s *lifecycleStore) RecordSandboxFailure(_ context.Context, _, _, _, _, lastError string) error {
+	s.failures = append(s.failures, lastError)
 	return nil
 }
 func (s *lifecycleStore) ReleaseSandboxClaim(context.Context, string, string, string, time.Time) error {
@@ -55,7 +63,12 @@ func (s *lifecycleStore) DisconnectSessionWorkers(context.Context, string, strin
 	return nil
 }
 func (s *lifecycleStore) RecordSandboxStartupRepair(context.Context, string, string, string) (int, error) {
-	return 0, nil
+	s.repairs++
+	return s.repairs, nil
+}
+func (s *lifecycleStore) RecordSandboxStartupError(_ context.Context, _, _, _, code, message string) error {
+	s.startupErrors = append(s.startupErrors, startupErrorRecord{code: code, message: message})
+	return nil
 }
 
 type lifecycleProvider struct {
@@ -229,6 +242,46 @@ func TestIdleWorkDoesNotExtendCoderDeadline(t *testing.T) {
 	}
 	if len(provider.extensions) != 0 {
 		t.Fatalf("extensions = %v, want none", provider.extensions)
+	}
+}
+
+func testReconcilerKeepWarm(store Store, provider sandbox.Provider) *Reconciler {
+	return New(store, lifecycleResolver{provider: provider}, Options{
+		KeepWarm: true,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+}
+
+// With keep-warm on, an idle session (no active turn, KeepAlive false) must still
+// get its Coder deadline extended so the workspace never auto-stops for idleness —
+// the opposite of TestIdleWorkDoesNotExtendCoderDeadline above.
+func TestKeepWarmExtendsIdleCoderDeadline(t *testing.T) {
+	deadline := time.Now().Add(time.Minute)
+	store := &lifecycleStore{}
+	provider := &lifecycleProvider{environment: sandbox.Environment{
+		ID: "workspace-1", State: sandbox.StateRunning, Deadline: &deadline,
+	}}
+	if err := testReconcilerKeepWarm(store, provider).reconcileSandbox(context.Background(), runningRecord(false)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(provider.extensions) != 1 {
+		t.Fatalf("extensions = %v, want one (keep-warm extends even when idle)", provider.extensions)
+	}
+}
+
+// With keep-warm on, a provider external-idle stop must be refused and the box
+// restored — an idle cloud session stays up like a local one — the opposite of
+// TestCoderAutostopBecomesPausedWithoutRestart above.
+func TestKeepWarmRestoresIdleStoppedCoderWorkspace(t *testing.T) {
+	store := &lifecycleStore{acceptedPause: true}
+	provider := &lifecycleProvider{environment: sandbox.Environment{
+		ID: "workspace-1", State: sandbox.StateStopped, StopCause: sandbox.StopCauseExternalIdle,
+	}}
+	if err := testReconcilerKeepWarm(store, provider).reconcileSandbox(context.Background(), runningRecord(false)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if store.acceptCalls != 0 || provider.starts != 1 {
+		t.Fatalf("accept calls = %d, starts = %d; want 0, 1 (keep-warm restores, never accepts idle stop)", store.acceptCalls, provider.starts)
 	}
 }
 

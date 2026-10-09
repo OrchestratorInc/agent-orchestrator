@@ -217,13 +217,52 @@ func TestDiscoveryWithoutASignInCheckNeverProbes(t *testing.T) {
 	}
 }
 
-func TestOpenCodeDiscoveryUsesStableModelsCommand(t *testing.T) {
+func TestOpenCodeDiscoveryUsesStableModelsCommandForEachMajor(t *testing.T) {
 	// Must be the bare `models` subcommand. `--pure` is a global flag some
 	// opencode builds reject ("Unrecognized flag: --pure"), which would empty the
-	// picker; the stable contract is `opencode models` with no rejectable flag.
-	spec := commandSpecs["opencode"]
-	if len(spec.args) != 1 || spec.args[0] != "models" {
-		t.Fatalf("opencode discovery args = %q, want [models]", spec.args)
+	// picker; the stable contract for both verified majors is `opencode models`
+	// with no rejectable flag.
+	for _, agentID := range []string{"opencode", "opencode-v2"} {
+		spec, ok := commandSpecs[agentID]
+		if !ok {
+			t.Errorf("%s has no discovery command", agentID)
+			continue
+		}
+		if len(spec.args) != 1 || spec.args[0] != "models" {
+			t.Errorf("%s discovery args = %q, want [models]", agentID, spec.args)
+		}
+		models, err := spec.parser([]byte("anthropic/claude-sonnet-4-6\nopenai/gpt-5.4\n"))
+		if err != nil || len(models) != 2 || models[0].ID != "anthropic/claude-sonnet-4-6" || models[1].ID != "openai/gpt-5.4" {
+			t.Errorf("%s parsed models = %#v, %v", agentID, models, err)
+		}
+		base := Base(agentID)
+		if !base.AllowCustom || base.CustomModelEntry != ports.CustomModelEntryDirect {
+			t.Errorf("%s custom model policy = (%v, %q), want direct", agentID, base.AllowCustom, base.CustomModelEntry)
+		}
+	}
+}
+
+func TestMiMoCodeDiscoveryUsesNativeModelsCommand(t *testing.T) {
+	spec, ok := commandSpecs["mimo-code"]
+	if !ok {
+		t.Fatal("mimo-code has no discovery command")
+	}
+	if !reflect.DeepEqual(spec.args, []string{"models"}) {
+		t.Fatalf("mimo-code discovery args = %q, want [models]", spec.args)
+	}
+	base := Base("mimo-code")
+	if !base.AllowCustom || base.CustomModelEntry != ports.CustomModelEntryDirect {
+		t.Fatalf("mimo-code custom model policy = (%v, %q), want direct", base.AllowCustom, base.CustomModelEntry)
+	}
+}
+
+func TestParseMiMoModelsAcceptsInlineDetails(t *testing.T) {
+	got, err := parseMiMoModels([]byte("mimo/mimo-auto — window 1M, compacts at 900K\nxiaomi/mimo-v2.5 — window 1.05M\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "mimo/mimo-auto" || got[1].ID != "xiaomi/mimo-v2.5" {
+		t.Fatalf("models = %#v", got)
 	}
 }
 
@@ -475,7 +514,7 @@ func TestCustomModelEntryPolicy(t *testing.T) {
 		{agent: "goose", wantEntryMode: "direct", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "auggie", wantEntryMode: "none", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "continue", wantEntryMode: "configured", wantSelection: ports.ModelSelectionCatalog},
-		{agent: "devin", wantEntryMode: "none", wantSelection: ports.ModelSelectionCatalog},
+		{agent: "devin", wantEntryMode: "direct", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "omp", wantEntryMode: "none", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "cline", wantEntryMode: "configured", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "kiro", wantEntryMode: "none", wantSelection: ports.ModelSelectionCatalog},
@@ -600,7 +639,7 @@ func TestCodexDiscoveryListsNewestModelsFirst(t *testing.T) {
 }
 
 func TestClineDiscoveryUsesACPModelOptions(t *testing.T) {
-	discoverer := Discoverer{ClineOptions: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+	discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{"cline": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
 		return []ports.ChatConfigOption{
 			{
 				ID: "model", Name: "Model", Category: "model", Type: ports.ChatConfigOptionSelect,
@@ -612,7 +651,7 @@ func TestClineDiscoveryUsesACPModelOptions(t *testing.T) {
 			},
 			{ID: "mode", Name: "Mode", Category: "mode", Type: ports.ChatConfigOptionSelect},
 		}, nil
-	}}
+	}}}
 	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "cline", Binary: "/bin/cline"})
 	if err != nil {
 		t.Fatal(err)
@@ -623,6 +662,39 @@ func TestClineDiscoveryUsesACPModelOptions(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Models, want) || got.Source != "acp" {
 		t.Fatalf("catalog = %#v, want models %#v from ACP", got, want)
+	}
+}
+
+func TestDevinDiscoveryUsesACPModelOptions(t *testing.T) {
+	discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{"devin": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+		return []ports.ChatConfigOption{
+			{
+				ID: "permissionMode", Name: "Permission Mode", Type: ports.ChatConfigOptionSelect,
+				Choices: []ports.ChatConfigOptionChoice{{Value: "accept-edits", Name: "Code"}},
+			},
+			{
+				ID: "model", Name: "Model", Category: "model", Type: ports.ChatConfigOptionSelect,
+				Current: ports.ChatConfigOptionValue{Select: "swe-1-6-slow"},
+				Choices: []ports.ChatConfigOptionChoice{
+					{Value: "swe-1-6-slow", Name: "SWE-1.6 Slow"},
+					{Value: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6"},
+				},
+			},
+		}, nil
+	}}}
+	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "devin", Binary: "devin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ports.AgentModelInfo{
+		{ID: "swe-1-6-slow", Label: "SWE-1.6 Slow", IsDefault: true},
+		{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6"},
+	}
+	if !reflect.DeepEqual(got.Models, want) || got.Source != "acp" {
+		t.Fatalf("catalog = %#v, want models %#v from ACP", got, want)
+	}
+	if got.SelectionMode != ports.ModelSelectionCatalog || got.CustomModelEntry != ports.CustomModelEntryDirect {
+		t.Fatalf("selectionMode = %q, customModelEntry = %q; want a catalog that still accepts direct entry", got.SelectionMode, got.CustomModelEntry)
 	}
 }
 
@@ -1033,5 +1105,62 @@ func TestCatalogFingerprintKeepsTheExecutableOnlyValueForConfiglessAgents(t *tes
 	got := CatalogFingerprint(context.Background(), "codex", "codex", dir, nil)
 	if want := BinaryVersion(context.Background(), "codex"); got != want {
 		t.Fatalf("fingerprint = %q, want the executable fingerprint %q", got, want)
+	}
+}
+
+// TestACPOnlyHarnessReportsDiscoveryFailure guards the difference between the
+// ACP harnesses. Cline keeps configured provider selections, so an ACP
+// failure falls back to those. DeepSeek Harness and Devin have no second
+// source, and the generic path answers with an empty catalog and no error —
+// which the caller stores as a successful discovery, parking the picker until
+// the next calendar day and skipping the retry ladder. The error has to
+// survive instead.
+func TestACPOnlyHarnessReportsDiscoveryFailure(t *testing.T) {
+	boom := errors.New("workspace path must be absolute")
+	for _, agentID := range []string{"deepseek-harness", "devin"} {
+		t.Run(agentID, func(t *testing.T) {
+			discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{
+				agentID: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+					return nil, boom
+				},
+			}}
+			_, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+				AgentID: agentID, Binary: "/bin/agent",
+			})
+			if err == nil {
+				t.Fatal("an ACP-only harness swallowed its discovery failure; the caller will cache an empty catalog as success")
+			}
+			if !errors.Is(err, boom) {
+				t.Fatalf("err = %v, want it to wrap %v", err, boom)
+			}
+		})
+	}
+}
+
+// TestCatalogFingerprintTracksTheDeepSeekProfile pins the invalidation the ACP
+// catalog depends on: the models come from a live `dsh --profile acp` session,
+// so a profile edit — a model route changed in the web setup flow — must not
+// leave the day's cached choices in place.
+func TestCatalogFingerprintTracksTheDeepSeekProfile(t *testing.T) {
+	home := t.TempDir()
+	profile := filepath.Join(home, "profiles", "acp")
+	if err := os.MkdirAll(profile, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(profile, "cordis.patch.yml")
+	if err := os.WriteFile(manifest, []byte("llm:\n  route: deepseek-v4-flash\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"DSH_HOME": home}
+
+	first := CatalogFingerprint(context.Background(), "deepseek-harness", "", "", env)
+	if first == "" {
+		t.Fatal("fingerprint is empty for a present profile")
+	}
+	if err := os.WriteFile(manifest, []byte("llm:\n  route: deepseek-v4-pro\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if second := CatalogFingerprint(context.Background(), "deepseek-harness", "", "", env); second == first {
+		t.Fatalf("fingerprint unchanged (%q) after the profile's model route changed", second)
 	}
 }

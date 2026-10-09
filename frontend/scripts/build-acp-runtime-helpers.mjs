@@ -1,5 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 
 const ROOT_BUILD_TOOLS = ["corepack", "corepack.cmd", "npm", "npm.cmd", "npx", "npx.cmd"];
 const BIN_BUILD_TOOLS = ["corepack", "npm", "npx"];
@@ -128,6 +128,29 @@ export function patchClaudeContextUsage(adapterPath) {
 	return true;
 }
 
+// Reuse the pinned bridge's native task registry. Ending its process loses the
+// task monitor even when a background shell's process group survives.
+export function patchClaudeHibernationCheck(adapterPath) {
+	const source = readFileSync(adapterPath, "utf8");
+	const method = '"_ao/session/can_hibernate"';
+	if (source.includes(method)) return false;
+	const marker = ".onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params))";
+	if (!source.includes(marker) || !source.includes("session.liveBackgroundTasks.set(message.task_id")) {
+		throw new Error("claude-agent-acp no longer matches AO's native-task hibernation check");
+	}
+	const registration = `.onRequest(${method}, { parse: params => params }, (ctx) => {
+            const id = ctx.params?.sessionId;
+            const session = typeof id === "string" && Object.hasOwn(agent.sessions, id) ? agent.sessions[id] : undefined;
+            if (!session || session.queryClosed || !(session.liveBackgroundTasks instanceof Map)) {
+                throw RequestError.invalidParams(undefined, "Live Claude session unavailable.");
+            }
+            return { canHibernate: !Array.from(session.liveBackgroundTasks.values()).some(task => !task.endedPerLevel) };
+        })
+        `;
+	writeFileSync(adapterPath, source.replace(marker, registration + marker));
+	return true;
+}
+
 export function pruneNodeDistribution(nodeRoot) {
 	// The Unix archives expose npm/corepack as bin/ symlinks into lib/. Remove
 	// the entry points before their targets so packagers never see dangling
@@ -150,4 +173,23 @@ function removeFile(path) {
 	} catch (error) {
 		if (error?.code !== "ENOENT") throw error;
 	}
+}
+
+export function archiveExtraction(
+	archivePath,
+	workDir,
+	{ platform = process.platform, systemRoot = process.env.SystemRoot } = {},
+) {
+	// Windows ships bsdtar as System32\tar.exe and it reads zip. PowerShell's
+	// Expand-Archive is the obvious alternative but is bound by MAX_PATH: with
+	// LongPathsEnabled=0 and a deep checkout, Node's bundled npm tree exceeds
+	// 260 characters and extraction fails without a non-zero exit, so the build
+	// only discovers it later, as a missing directory. bsdtar handles the same
+	// archive at the same depth.
+	if (platform === "win32") {
+		if (!systemRoot) throw new Error("SystemRoot is required for Windows archive extraction");
+		// Git Bash can put GNU tar ahead of System32 on PATH.
+		return { command: win32.join(systemRoot, "System32", "tar.exe"), args: ["-xf", archivePath, "-C", workDir] };
+	}
+	return { command: "tar", args: ["-xzf", archivePath, "-C", workDir] };
 }

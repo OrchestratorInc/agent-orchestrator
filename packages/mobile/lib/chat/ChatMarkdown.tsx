@@ -7,6 +7,7 @@ import { openGitHub } from "../openGitHub";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { HighlightedCodeText } from "./HighlightedCodeText";
+import { allowsUnderscoreEmphasis } from "./inlineEmphasis";
 import { parseBlocks } from "./markdownBlocks";
 import { iconSize, microLabel, prose, radius, space, type } from "../tokens";
 
@@ -59,7 +60,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 							{block.items.map((item, itemIndex) => (
 								<View key={itemIndex} style={styles.listRow}>
 									<Text style={styles.marker}>{item.checked !== undefined ? (item.checked ? "☑" : "☐") : block.ordered ? `${itemIndex + 1}.` : "•"}</Text>
-									<Text style={[styles.body, item.checked && styles.taskDone]}>{inline(item.text, styles)}</Text>
+									<Text style={[styles.body, styles.listBody, item.checked && styles.taskDone]}>{inline(item.text, styles)}</Text>
 								</View>
 							))}
 						</View>
@@ -147,7 +148,9 @@ function inline(text: string, styles: ReturnType<typeof makeStyles>): ReactNode[
 	let match: RegExpExecArray | null;
 	while ((match = pattern.exec(text))) {
 		if (match.index > at) nodes.push(text.slice(at, match.index));
-		if ((match[2] && match[3]) || match[4] || match[11]) {
+		if ((match[7] || match[10]) && !allowsUnderscoreEmphasis(text, match.index, pattern.lastIndex)) {
+			nodes.push(match[0]);
+		} else if ((match[2] && match[3]) || match[4] || match[11]) {
 			const url = match[3] ?? match[4] ?? match[11];
 			const label = match[2] ?? url;
 			nodes.push(<MarkdownLink key={`${match.index}-link`} url={url} label={label} style={styles.link} />);
@@ -179,8 +182,11 @@ const makeStyles = (t: Theme) =>
 		inlineCode: { color: t.accent, fontFamily: t.fontMono, fontSize: type.subheadline.fontSize, backgroundColor: t.bgSubtle },
 		list: { gap: space.xxs },
 		listRow: { flexDirection: "row", alignItems: "flex-start", gap: space.sm, paddingRight: space.xxs },
+		// Text defaults to no shrinking inside a row on Android, so numbered list
+		// items with inline code or links can render past the right edge.
+		listBody: { flex: 1, minWidth: 0 },
 		// The marker sits on the same line as prose, so it borrows prose leading.
-		marker: { fontFamily: "Geist_400Regular", width: 20, color: t.textTertiary, fontSize: type.subheadline.fontSize, lineHeight: prose.lineHeight, textAlign: "right" },
+		marker: { fontFamily: "Geist_400Regular", width: 20, flexShrink: 0, color: t.textTertiary, fontSize: type.subheadline.fontSize, lineHeight: prose.lineHeight, textAlign: "right" },
 		taskDone: { color: t.textTertiary, textDecorationLine: "line-through" },
 		quote: { borderLeftWidth: 2, borderLeftColor: t.borderStrong, paddingLeft: 12 },
 		quoteText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: prose.lineHeight, fontStyle: "italic" },

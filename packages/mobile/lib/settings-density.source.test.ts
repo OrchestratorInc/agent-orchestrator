@@ -13,8 +13,10 @@ describe("settings screen density", () => {
 		expect(source).not.toMatch(/\bloadConfig\(\)/);
 	});
 
-	it("gives the native Appearance menu enough room for System on one line", () => {
-		expect(source).toContain("<Host style={{ width: 124, height: 38 }}");
+	it("keeps the Appearance slot wide while trailing-aligning the native menu", () => {
+		expect(source).toContain("<View style={styles.appearancePicker}>");
+		expect(source).toContain('<Host matchContents={{ horizontal: true }} style={{ height: 38 }}');
+		expect(source).toMatch(/appearancePicker:\s*\{[^}]*width:\s*124[^}]*alignItems:\s*"flex-end"/s);
 	});
 
 	it("uses the compact sizing rhythm shared by the Workers UI", () => {

@@ -86,7 +86,10 @@ type Sandbox struct {
 	// short user-interaction lease. It is never stored as display state.
 	KeepAlive bool
 	LastError string
-	UpdatedAt time.Time
+	// StartupErrorCode is the code of the latest user-facing startup error, or
+	// empty when none is recorded (see RecordSandboxStartupError).
+	StartupErrorCode string
+	UpdatedAt        time.Time
 }
 
 // SandboxLifecycle is the small intent/observation projection returned by an
@@ -124,18 +127,22 @@ type WorkerLaunch struct {
 	ProjectID      string
 	ProjectName    string
 	ProjectConfig  json.RawMessage
+	AgentConfig    json.RawMessage
 	Kind           string
 	Harness        string
 	DisplayName    string
 	Branch         string
 	Prompt         string
 	AgentSessionID string
+	Interface      SessionInterface
 	// ParentSessionID is the orchestrator that spawned this session, empty for
 	// top-level sessions. It gates the worker:report scope and the report
 	// guidance in the worker prompt.
 	ParentSessionID string
 	Mode            string
 	Model           string
+	ReasoningEffort string
+	SelectionAt     time.Time
 	DeniedCommands  []string
 	RepositoryURL   string
 	DefaultBranch   string

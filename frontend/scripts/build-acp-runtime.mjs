@@ -12,9 +12,11 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import {
+	archiveExtraction,
 	createWorkDirectory,
 	npmInvocation,
 	patchClaudeContextUsage,
+	patchClaudeHibernationCheck,
 	patchClaudeRetryDetails,
 	pruneNodeDistribution,
 	runtimeSourceFiles,
@@ -83,6 +85,7 @@ const npm = npmInvocation(["ci", "--omit=dev", "--omit=optional", "--ignore-scri
 run(npm.command, npm.args, { cwd: outDir });
 patchClaudeRetryDetails(claudeAdapter);
 patchClaudeContextUsage(claudeAdapter);
+patchClaudeHibernationCheck(claudeAdapter);
 
 // The Claude Agent SDK declares platform-native Claude executables as optional
 // dependencies. --omit=optional excludes them; this removal is defense-in-depth.
@@ -117,18 +120,8 @@ try {
 
 	const archivePath = join(workDir, archiveName);
 	writeFileSync(archivePath, archive);
-	if (process.platform === "win32") {
-		const escapedArchive = archivePath.replaceAll("'", "''");
-		const escapedDestination = workDir.replaceAll("'", "''");
-		run("powershell.exe", [
-			"-NoProfile",
-			"-NonInteractive",
-			"-Command",
-			`Expand-Archive -LiteralPath '${escapedArchive}' -DestinationPath '${escapedDestination}' -Force`,
-		]);
-	} else {
-		run("tar", ["-xzf", archivePath, "-C", workDir]);
-	}
+	const extraction = archiveExtraction(archivePath, workDir);
+	run(extraction.command, extraction.args);
 	const extracted = join(workDir, basename(archiveName, `.${extension}`));
 	const nodeOut = join(outDir, "node");
 	if (!existsSync(extracted)) throw new Error(`Node archive did not contain ${extracted}`);

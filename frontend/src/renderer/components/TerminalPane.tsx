@@ -24,6 +24,7 @@ import {
 	type TerminalSessionState,
 } from "../hooks/useTerminalSession";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
+import { useSessionLinkNavigation } from "../lib/use-session-link-navigation";
 import { getApiBaseUrl } from "../lib/api-client";
 import {
 	createTerminalMux,
@@ -33,7 +34,7 @@ import {
 	type TerminalMuxPool,
 } from "../lib/terminal-mux";
 import { cn } from "../lib/utils";
-import { useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useShellTerminals } from "../hooks/useShellTerminals";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -45,6 +46,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type TerminalPaneProps = {
 	session?: WorkspaceSession;
+	terminalGeneration?: string;
 	theme: Theme;
 	daemonReady: boolean;
 	terminalTarget?: TerminalTarget;
@@ -60,6 +62,8 @@ type TerminalPaneProps = {
 	focusRequested?: boolean;
 	/** Observe attachment state without taking ownership of the terminal lifecycle. */
 	onTerminalStateChange?: (state: TerminalSessionState) => void;
+	/** Cloud agent screen has painted nonblank terminal content. */
+	onTerminalContentReadyChange?: (ready: boolean) => void;
 	/** One-shot input initiated by an explicit UI action. */
 	inputRequest?: { id: number; data: string };
 	/** Reports whether the active attachment accepted a one-shot input request. */
@@ -95,6 +99,8 @@ type TerminalCacheController = {
 	activate: (descriptor: TerminalCacheDescriptor, props: TerminalPaneProps, slot: HTMLDivElement) => void;
 	deactivate: (cacheKey: string, slot: HTMLDivElement) => void;
 	update: (cacheKey: string, props: TerminalPaneProps) => void;
+	/** The stable transport factory for a pane: the control plane for Cloud, else the local daemon pool. */
+	resolveCreateMux: (session?: WorkspaceSession, terminalTarget?: TerminalTarget) => () => TerminalMux;
 };
 
 const TerminalCacheContext = createContext<TerminalCacheController | null>(null);
@@ -128,6 +134,7 @@ function terminalPropsMatch(left: TerminalPaneProps, right: TerminalPaneProps): 
 		left.inputDisabled === right.inputDisabled &&
 		left.focusRequested === right.focusRequested &&
 		left.onTerminalStateChange === right.onTerminalStateChange &&
+		left.onTerminalContentReadyChange === right.onTerminalContentReadyChange &&
 		left.inputRequest === right.inputRequest &&
 		left.onInputRequestResult === right.onInputRequestResult &&
 		left.createMux === right.createMux &&
@@ -138,6 +145,7 @@ function terminalPropsMatch(left: TerminalPaneProps, right: TerminalPaneProps): 
 function cacheDescriptor(
 	session: WorkspaceSession | undefined,
 	terminalTarget: TerminalTarget | undefined,
+	terminalGeneration?: string,
 ): TerminalCacheDescriptor | null {
 	if (terminalTarget?.kind === "shell") {
 		if (!terminalTargetBelongsToSession(terminalTarget, session?.id)) return null;
@@ -158,7 +166,7 @@ function cacheDescriptor(
 	const handleId = session?.terminalHandleId;
 	if (!session?.id || !handleId) return null;
 	const ownerKey = `session:${session.id}:worker`;
-	const generation = session.terminalGeneration ?? "";
+	const generation = terminalGeneration ?? session.terminalGeneration ?? "";
 	// The reset nonce discriminates a restored session (same id, new worker epoch,
 	// dead old terminal) from the live one: folding it into the cache key alone
 	// makes restore mount a brand-new entry (which re-mints against the new epoch)
@@ -267,6 +275,10 @@ function CachedTerminalPortal({
 		// Fit and scroll after the host is visible. This retains the cache's
 		// settled viewport behavior without putting a blank frame in front of it.
 		void terminal.prepareForActivation();
+		// Returning to a tab is a focus handoff: the terminal was blurred when it
+		// was parked, so ask it to take the caret back (issue #6140). The guard
+		// inside keeps this from stealing focus from dialogs or other controls.
+		terminal.requestActivationFocus();
 	}, [
 		active,
 		entry,
@@ -332,7 +344,11 @@ export function TerminalCacheProvider({
 			const cloud = paneSession?.cloud;
 			if (!cloud) return muxPool.acquire;
 			const kind = cloudTerminalKind(terminalTarget);
-			const identity = terminalTarget?.kind === "shell" ? terminalTarget.handleId : "agent";
+			// A reviewer shares the agent mux kind but is its own terminal: key it by
+			// handle so it never reuses the agent's or an earlier review's factory.
+			const identity = terminalTarget?.kind === "shell"
+				? terminalTarget.handleId
+				: terminalTarget?.kind === "reviewer" ? `reviewer:${terminalTarget.handleId}` : "agent";
 			// Include the reset nonce so a restored session (new worker epoch) gets a
 			// brand-new factory closure — and therefore a fresh cursor at 0 — instead
 			// of the cached one whose cursor still points at the dead epoch's replay
@@ -343,6 +359,7 @@ export function TerminalCacheProvider({
 			if (cached) return cached;
 			const sessionId = paneSession.id;
 			const orgId = cloud.orgId;
+			const reviewerTerminalID = terminalTarget?.kind === "reviewer" ? terminalTarget.handleId : undefined;
 			// One replay cursor per pane, shared across every mux the hook rebuilds
 			// on reconnect (the factory closure captures it and is itself cached
 			// per factoryKey). A rebuilt mux resumes from the last sequence it
@@ -354,6 +371,7 @@ export function TerminalCacheProvider({
 				createCloudTerminalMux({
 					wsBaseUrl: `${cloudCpRef.current.baseUrl.replace(/^http/i, "ws").replace(/\/+$/, "")}/api/cloud/v1`,
 					kind,
+					terminalId: reviewerTerminalID,
 					cursor,
 					// Both kinds open their socket directly; the CP's find-or-create
 					// OpenTerminal + starting/ready messages drive readiness. There is
@@ -364,6 +382,7 @@ export function TerminalCacheProvider({
 					mintTicket: async (ticketKind) => {
 						const response = await cloudCpRef.current.client.createTerminalTicket(orgId, sessionId, {
 							kind: ticketKind,
+							...(reviewerTerminalID ? { terminalId: reviewerTerminalID } : {}),
 						});
 						return response.ticket;
 					},
@@ -536,6 +555,10 @@ export function TerminalCacheProvider({
 				removeEntry(entry.cacheKey);
 				continue;
 			}
+			if (entry.kind === "worker" && session?.cloud && session.mode === "chat") {
+				removeEntry(entry.cacheKey);
+				continue;
+			}
 			if (entry.kind === "worker" && session) {
 				const sessionGen = session.terminalGeneration ?? "";
 				const entryGen = entry.generation ?? "";
@@ -615,8 +638,8 @@ export function TerminalCacheProvider({
 	);
 
 	const controller = useMemo<TerminalCacheController>(
-		() => ({ activate, deactivate, update }),
-		[activate, deactivate, update],
+		() => ({ activate, deactivate, update, resolveCreateMux }),
+		[activate, deactivate, update, resolveCreateMux],
 	);
 
 	return (
@@ -670,6 +693,7 @@ function CachedTerminalSlot({
 
 export function TerminalPane({
 	session,
+	terminalGeneration,
 	theme,
 	daemonReady,
 	terminalTarget: requestedTerminalTarget,
@@ -680,8 +704,10 @@ export function TerminalPane({
 	inputDisabled,
 	focusRequested,
 	onTerminalStateChange,
+	onTerminalContentReadyChange,
 	inputRequest,
 	onInputRequestResult,
+	createMux,
 }: TerminalPaneProps) {
 	const { t } = useTranslation();
 	const terminalTarget =
@@ -780,13 +806,24 @@ export function TerminalPane({
 		inputDisabled,
 		focusRequested,
 		onTerminalStateChange,
+		onTerminalContentReadyChange,
 		inputRequest,
 		onInputRequestResult,
+		createMux,
 	};
-	const descriptor = cacheDescriptor(session, terminalTarget);
-	if (cache && descriptor) {
+	const descriptor = cacheDescriptor(session, terminalTarget, terminalGeneration);
+	// The retained cache validates shells against the local daemon's shell list.
+	// A caller-owned transport may belong to another host.
+	if (cache && descriptor && !createMux) {
 		return <CachedTerminalSlot descriptor={descriptor} props={props} />;
 	}
+	// Reviewers mount fresh rather than through the cache, but a Cloud reviewer
+	// still runs in the sandbox: dial it through the control plane by its
+	// terminal ID. Without this it would reach the local daemon, which has no
+	// such terminal and reports it finished.
+	const attachedCreateMux = createMux ?? (cache && session?.cloud && terminalTarget.kind === "reviewer"
+		? cache.resolveCreateMux(session, terminalTarget)
+		: undefined);
 
 	return (
 		<AttachedTerminal
@@ -801,8 +838,10 @@ export function TerminalPane({
 			onToggleFullscreen={onToggleFullscreen}
 			focusRequested={focusRequested}
 			onTerminalStateChange={onTerminalStateChange}
+			onTerminalContentReadyChange={onTerminalContentReadyChange}
 			inputRequest={inputRequest}
 			onInputRequestResult={onInputRequestResult}
+			createMux={attachedCreateMux}
 			terminalTarget={terminalTarget}
 		/>
 	);
@@ -923,10 +962,10 @@ function reviewerPreviewLines(session: WorkspaceSession | undefined): string[] {
 // Agents whose full-screen TUI keeps its own transcript and scrolls it only by
 // keyboard, ignoring SGR wheel reports. The terminal routes the wheel to
 // PageUp/PageDown for these (see XtermTerminal's paneScrollsByKeyboard).
-// kilocode is a fork of opencode and shares its TUI surface; grok also uses a
-// full-screen keyboard-scroll TUI, so both scroll the same way. Muse Code uses
+// kilocode and MiMo Code share opencode's TUI lineage; grok also uses a
+// full-screen keyboard-scroll TUI, so all scroll the same way. Muse Code uses
 // the normal terminal buffer instead and must keep the SGR -> tmux scroll path.
-const KEYBOARD_SCROLL_PROVIDERS = new Set(["opencode", "kilocode", "grok"]);
+const KEYBOARD_SCROLL_PROVIDERS = new Set(["opencode", "opencode-v2", "kilocode", "grok", "mimo-code"]);
 
 // Whether the given provider's TUI is one of the keyboard-scroll agents above.
 export function providerScrollsByKeyboard(provider?: string): boolean {
@@ -963,6 +1002,7 @@ function AttachedTerminal({
 	inputDisabled,
 	focusRequested,
 	onTerminalStateChange,
+	onTerminalContentReadyChange,
 	inputRequest,
 	onInputRequestResult,
 	createMux,
@@ -985,6 +1025,7 @@ function AttachedTerminal({
 	// cache retains this component across route switches; a replacement handle
 	// gets a new component rather than inheriting stale screen/input state.
 	const [terminal, setTerminal] = useState<AttachableTerminal | null>(null);
+	const [hasVisibleContent, setHasVisibleContent] = useState(false);
 	const lastInputRequestIdRef = useRef<number | null>(null);
 	const [initFailed, setInitFailed] = useState(false);
 	const [isRestoring, setIsRestoring] = useState(false);
@@ -1002,6 +1043,10 @@ function AttachedTerminal({
 		waitForInitialOutput: Boolean(attachSession?.cloud),
 		createMux,
 		daemonReady,
+		exitNotice:
+			terminalTarget?.kind === "reviewer"
+				? "\r\n\x1b[2m[reviewer terminal finished]\x1b[0m"
+				: undefined,
 		inputDisabled,
 		isVisible,
 		shellTerminalHandleId,
@@ -1009,6 +1054,21 @@ function AttachedTerminal({
 	useEffect(() => {
 		onTerminalStateChange?.(state);
 	}, [onTerminalStateChange, state]);
+	const cloudReviewExitAwaitingStatus = Boolean(
+		state === "exited" &&
+			session?.cloud &&
+			terminalTarget?.kind === "reviewer" &&
+			(!terminalTarget.reviewStatus ||
+				terminalTarget.reviewStatus === "running" ||
+				terminalTarget.reviewStatus === "complete"),
+	);
+	useEffect(() => {
+		if (!cloudReviewExitAwaitingStatus) return;
+		// A successful Cloud reviewer submits its result immediately before the
+		// dedicated PTY closes. Refresh the durable run state now so the transport
+		// exit is not mistaken for a failed review while the normal poll catches up.
+		void queryClient.invalidateQueries({ queryKey: ["cloud-session-reviews"] });
+	}, [cloudReviewExitAwaitingStatus, queryClient]);
 	// The immediate reconnecting signal a restore/resume sets (terminal-reset
 	// store). Reactive so the "Connecting…" surface shows the instant restore is
 	// clicked, before the polled runtimeConnected catches up; cleared once the
@@ -1062,13 +1122,25 @@ function AttachedTerminal({
 			current = false;
 		};
 	}, [replayPaintPending, replaySettled, terminal]);
+	useEffect(() => {
+		if (!attachSession?.cloud) return;
+		onTerminalContentReadyChange?.(
+			(hasAttached && replaySettled && !replayPaintPending && hasVisibleContent)
+			|| state === "error" || state === "exited" || initFailed,
+		);
+	}, [attachSession?.cloud, hasAttached, hasVisibleContent, initFailed, onTerminalContentReadyChange, replayPaintPending, replaySettled, state]);
 	const handleId = shellTerminalHandleId ?? attachSession?.terminalHandleId;
 	const handleRetry = useCallback(() => {
 		// Re-attach from scratch: resets the connect-failure counter and starts a
 		// fresh connection attempt once the user has fixed their network policy.
 		if (terminal) attach(terminal);
 	}, [attach, terminal]);
-	const provider = terminalTarget?.kind === "reviewer" ? terminalTarget.harness : session?.provider;
+	const provider =
+		terminalTarget?.kind === "reviewer"
+			? terminalTarget.harness
+			: terminalTarget?.kind === "shell"
+				? undefined
+				: session?.provider;
 	const isSessionActive = session ? sessionIsActive(session) : false;
 	// A standalone shell is never restorable: there is no session row to restore.
 	const canRestoreSession =
@@ -1095,12 +1167,13 @@ function AttachedTerminal({
 		}
 	}, [initFailed, onFatal, onTerminalStateChange]);
 	const handleLinkOpen = useSessionBrowserLink(session);
+	const handleSessionLinkOpen = useSessionLinkNavigation(session?.hostId);
 	const restoreSession = useCallback(async () => {
 		if (!session?.id || !canRestoreSession || isRestoring) return;
 		setIsRestoring(true);
 		setRestoreError(undefined);
 		try {
-			const result = await restoreSessionById(session.id);
+			const result = await restoreSessionById(session.id, session.hostId);
 			if (result.status === "not_resumable") {
 				setRestoreUnavailable(true);
 				return;
@@ -1113,7 +1186,7 @@ function AttachedTerminal({
 		} finally {
 			setIsRestoring(false);
 		}
-	}, [canRestoreSession, isRestoring, restoreSessionById, session?.id, t]);
+	}, [canRestoreSession, isRestoring, restoreSessionById, session?.hostId, session?.id, t]);
 
 	useEffect(() => {
 		if (!terminal) return;
@@ -1183,7 +1256,7 @@ function AttachedTerminal({
 	const isBoxComingUp = Boolean(session?.cloud) && isReconnecting;
 	// The single connecting state for a cloud terminal: ONE opaque centered
 	// "Connecting" cover from first connect (or a restore box coming up) until the
-	// pane has been fully revealed once (attached AND its replay painted). It is
+	// pane has been fully revealed once (attached, replay painted, content visible). It is
 	// LATCHED on that first reveal so a later transient reconnect (hasAttached
 	// briefly flips back to false) never flashes the cover back over an
 	// already-visible terminal. The latch resets when the terminal identity
@@ -1202,7 +1275,7 @@ function AttachedTerminal({
 		cloudRevealedIdentityRef.current = cloudTerminalIdentity;
 		cloudRevealedRef.current = false;
 	}
-	if (hasAttached && replaySettled && !replayPaintPending) cloudRevealedRef.current = true;
+	if (hasAttached && replaySettled && !replayPaintPending && hasVisibleContent) cloudRevealedRef.current = true;
 	// Also when the agent exited but its pane survived on a keep-alive: the mux
 	// never reports "exited" there, so without this the strip — and the resume
 	// action on it — stays hidden in exactly the state that needs it (#3875).
@@ -1214,7 +1287,7 @@ function AttachedTerminal({
 		!showEmptyState &&
 		!showEndedStatePreview &&
 		!cloudRevealedRef.current;
-	const showEndedState = showEndedStatePreview && !isBoxComingUp;
+	const showEndedState = showEndedStatePreview && !isBoxComingUp && !session?.cloud;
 	const emptyStateTitle = session ? t("terminal.startingSession") : "Agent Orchestrator";
 	const emptyStateMessage = session
 		? session.kind === "orchestrator"
@@ -1234,6 +1307,7 @@ function AttachedTerminal({
 					variant={
 						terminalTarget?.kind === "reviewer" ? "reviewer" : terminalTarget?.kind === "shell" ? "shell" : "session"
 					}
+					reviewStatus={terminalTarget?.kind === "reviewer" ? terminalTarget.reviewStatus : undefined}
 				/>
 			)}
 			{/* Keep a small gutter where terminal output starts, but let xterm use the
@@ -1250,7 +1324,9 @@ function AttachedTerminal({
 					onChangeFontSize={onChangeFontSize}
 					onError={handleInitError}
 					onLinkOpen={handleLinkOpen}
+					onSessionLinkOpen={handleSessionLinkOpen}
 					onReady={handleReady}
+					onVisibleContent={attachSession?.cloud ? () => setHasVisibleContent(true) : undefined}
 					onToggleFullscreen={onToggleFullscreen}
 					onVisibleSize={syncVisibleSize}
 					paneScrollsByKeyboard={providerScrollsByKeyboard(provider)}
@@ -1289,7 +1365,7 @@ function AttachedTerminal({
 					session={session}
 					onOpenChange={setRestoreUnavailable}
 					onRecreated={async () => {
-						await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+						await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
 					}}
 				/>
 			)}
@@ -1342,13 +1418,17 @@ type TerminalEndedStripProps = {
 	error?: string;
 	isRestoring: boolean;
 	onRestore: () => void;
+	reviewStatus?: "running" | "complete" | "delivered" | "failed" | "cancelled";
 	session?: WorkspaceSession;
 	variant: "reviewer" | "session" | "shell";
 };
 
-function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, session, variant }: TerminalEndedStripProps) {
+function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewStatus, session, variant }: TerminalEndedStripProps) {
 	const { t } = useTranslation();
-	const message = canRestore
+	const reviewDelivered = variant === "reviewer" && reviewStatus === "delivered";
+	const message = reviewDelivered
+		? t("terminal.reviewerCompleted")
+		: canRestore
 		? t("terminal.restoreToContinue")
 		: variant === "reviewer"
 			? t("terminal.reviewerEnded")
@@ -1361,7 +1441,7 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, session
 			<div className="flex min-h-control-board items-center gap-3">
 				<div className="min-w-0 flex-1">
 					<div className="font-mono text-caption font-medium uppercase tracking-wide-md text-muted-foreground">
-						{t("terminal.ended")}
+						{reviewDelivered ? t("terminal.reviewCompleted") : t("terminal.ended")}
 					</div>
 					<div className="mt-0.5 truncate text-xs text-muted-foreground">{message}</div>
 				</div>

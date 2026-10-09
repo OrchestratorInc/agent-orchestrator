@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -53,6 +55,9 @@ type coderConfigInput struct {
 	// ExtraRepos are additional repositories every session of the project clones
 	// alongside the primary repo.
 	ExtraRepos []createSessionRepo `json:"extraRepos,omitempty"`
+	// WorkspaceNamePrefix names the project's Coder workspaces
+	// <prefix>-<short session id>; empty keeps ao-<id>.
+	WorkspaceNamePrefix string `json:"workspaceNamePrefix,omitempty"`
 }
 
 type updateProjectRequest struct {
@@ -83,6 +88,7 @@ type createSessionRequest struct {
 	// id, e.g. "anthropic/claude-opus-4-8" for opencode). Optional: empty uses
 	// the harness default.
 	Model                       string   `json:"model,omitempty"`
+	ReasoningEffort             string   `json:"reasoningEffort,omitempty"`
 	DeniedCommands              []string `json:"deniedCommands,omitempty"`
 	SandboxProviderConnectionID string   `json:"sandboxProviderConnectionId,omitempty"`
 	// Provider selects which configured sandbox provider runs this session. It
@@ -96,25 +102,37 @@ type createSessionRepo struct {
 	Branch string `json:"branch,omitempty"`
 }
 
+type sessionStartupError struct {
+	Code    string    `json:"code"`
+	Message string    `json:"message"`
+	At      time.Time `json:"at"`
+}
+
 type sessionResponse struct {
-	ID                 string                   `json:"id"`
-	OrgID              string                   `json:"orgId"`
-	ProjectID          string                   `json:"projectId"`
-	Kind               string                   `json:"kind"`
-	Harness            string                   `json:"harness"`
-	DisplayName        string                   `json:"displayName"`
-	Branch             string                   `json:"branch"`
-	Mode               string                   `json:"mode"`
-	Model              string                   `json:"model,omitempty"`
-	DeniedCommands     []string                 `json:"deniedCommands"`
-	ActivityState      string                   `json:"activityState"`
-	Status             string                   `json:"status"`
-	RuntimeConnected   bool                     `json:"runtimeConnected"`
-	SandboxProvider    string                   `json:"sandboxProvider,omitempty"`
-	DesiredState       string                   `json:"desiredState,omitempty"`
-	ObservedState      string                   `json:"observedState,omitempty"`
-	RuntimeState       string                   `json:"runtimeState,omitempty"`
-	RuntimeError       string                   `json:"runtimeError,omitempty"`
+	ID                string   `json:"id"`
+	OrgID             string   `json:"orgId"`
+	ProjectID         string   `json:"projectId"`
+	Kind              string   `json:"kind"`
+	Harness           string   `json:"harness"`
+	ReviewerHarness   string   `json:"reviewerHarness,omitempty"`
+	AutoReviewEnabled bool     `json:"autoReviewEnabled"`
+	DisplayName       string   `json:"displayName"`
+	Branch            string   `json:"branch"`
+	Mode              string   `json:"mode"`
+	Model             string   `json:"model,omitempty"`
+	DeniedCommands    []string `json:"deniedCommands"`
+	InterfaceMode     string   `json:"interfaceMode"`
+	ActivityState     string   `json:"activityState"`
+	Status            string   `json:"status"`
+	RuntimeConnected  bool     `json:"runtimeConnected"`
+	SandboxProvider   string   `json:"sandboxProvider,omitempty"`
+	DesiredState      string   `json:"desiredState,omitempty"`
+	ObservedState     string   `json:"observedState,omitempty"`
+	RuntimeState      string   `json:"runtimeState,omitempty"`
+	RuntimeError      string   `json:"runtimeError,omitempty"`
+	// StartupError is the latest user-facing reason the session's sandbox has
+	// not started; absent once the worker checks in.
+	StartupError       *sessionStartupError     `json:"startupError,omitempty"`
 	IsTerminated       bool                     `json:"isTerminated"`
 	AutoInjectCI       bool                     `json:"autoInjectCI"`
 	AutoInjectReview   bool                     `json:"autoInjectReview"`
@@ -172,6 +190,35 @@ func toSessionChildResponse(
 	}
 }
 
+// writeProjectStoreError renders a project-creation store error, turning the
+// active-repository uniqueness conflict into a clear, specific message that
+// names the repository instead of the generic "resource conflicts" 409. Every
+// other error class is delegated to the shared store-error mapper unchanged.
+func (s *Server) writeProjectStoreError(w http.ResponseWriter, r *http.Request, err error) {
+	var repoConflict *postgres.ProjectRepositoryConflictError
+	if errors.As(err, &repoConflict) {
+		writeError(
+			w, r, http.StatusConflict, "project_repository_exists",
+			projectRepositoryConflictMessage(repoConflict.RepositoryURL),
+		)
+		return
+	}
+	s.writeStoreError(w, r, err)
+}
+
+// projectRepositoryConflictMessage explains that the workspace already has a
+// project for this repository, naming the repository (owner/name) when the URL
+// is known so the user can find and reuse or delete the existing project.
+func projectRepositoryConflictMessage(repositoryURL string) string {
+	if owner, repo, ok := parseGitHubRepo(repositoryURL); ok {
+		return fmt.Sprintf(
+			"You already have a project for %s/%s in this workspace. Open that project, or delete it before creating another for the same repository.",
+			owner, repo,
+		)
+	}
+	return "You already have a project for this repository in this workspace. Open that project, or delete it before creating another for the same repository."
+}
+
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 	if requireUUID(orgID, "orgId") != nil {
@@ -201,6 +248,10 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	config, err := json.Marshal(request.Config)
 	if err != nil {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
+		return
+	}
+	if err := validateProjectCoderConfig(config); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
 	// Store the coder dev-kit config (template + size/startup + extra repos)
@@ -274,9 +325,15 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		},
 	)
 	if err != nil {
-		s.writeStoreError(w, r, err)
+		s.writeProjectStoreError(w, r, err)
 		return
 	}
+	s.logger.Info(
+		"project created",
+		"org_id", orgID,
+		"user_id", principalFrom(r).UserID,
+		"project_id", project.ID,
+	)
 	writeJSON(w, http.StatusCreated, map[string]any{"project": toProjectResponse(project)})
 }
 
@@ -416,34 +473,25 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-	if store, ok := s.store.(providerConnectionStore); ok {
-		connections, err := store.ListProviderConnections(
-			r.Context(), principalFrom(r), orgID,
+	userStore, ok := s.store.(userProviderCredentialStore)
+	if !ok {
+		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Personal coding-agent credentials are unavailable.")
+		return
+	}
+	available, err := userStore.UserAgentCredentialAvailable(
+		r.Context(), principalFrom(r).UserID, request.Harness,
+	)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	if !available {
+		writeError(
+			w, r, http.StatusUnprocessableEntity,
+			"agent_provider_required",
+			"Connect and validate your personal coding-agent credential before creating a session.",
 		)
-		if err != nil {
-			s.writeStoreError(w, r, err)
-			return
-		}
-		available := agentConnectionAvailable(connections, request.Harness)
-		if !available {
-			if userStore, ok := s.store.(userProviderCredentialStore); ok {
-				available, err = userStore.UserAgentCredentialAvailable(
-					r.Context(), principalFrom(r).UserID, request.Harness,
-				)
-				if err != nil {
-					s.writeStoreError(w, r, err)
-					return
-				}
-			}
-		}
-		if !available {
-			writeError(
-				w, r, http.StatusUnprocessableEntity,
-				"agent_provider_required",
-				"Connect and validate the selected coding-agent provider before creating a session.",
-			)
-			return
-		}
+		return
 	}
 	// A top-level worker created for a project that already has an active
 	// orchestrator is auto-linked to it: the orchestrator then sees, drives, and
@@ -502,6 +550,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		effectiveProvider = s.sandboxProvider
 	}
 	var coderOpts *sandbox.CoderSessionOptions
+	var coderOverride *sandbox.CoderDeploymentOverride
 	if effectiveProvider == sandbox.ProviderCoder {
 		project, projectErr := s.store.GetProject(r.Context(), principalFrom(r), orgID, request.ProjectID)
 		if projectErr != nil {
@@ -510,17 +559,72 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		}
 		if cfg, ok := domain.DecodeProjectCoderConfig(project.Config); ok {
 			coderOpts = &sandbox.CoderSessionOptions{
-				TemplateID:    cfg.TemplateID,
-				Size:          cfg.Size,
-				StartupScript: cfg.StartupScript,
+				TemplateID:          cfg.TemplateID,
+				Size:                cfg.Size,
+				StartupScript:       cfg.StartupScript,
+				WorkspaceNamePrefix: cfg.WorkspaceNamePrefix,
+			}
+		}
+		// A bring-your-own-Coder organization points its coder sessions at its own
+		// Coder deployment. When one is configured, bind the session to that
+		// connection (so the row carries provider_connection_id and the resolver
+		// decrypts the org's token) and stamp the org's non-secret coder fields
+		// into the plan in place of the deployment default. With no org connection
+		// the deployment default is kept — existing deployment-level coder is
+		// untouched.
+		if pcStore, ok := s.store.(providerConnectionStore); ok {
+			connections, connErr := pcStore.ListProviderConnections(r.Context(), principalFrom(r), orgID)
+			if connErr != nil {
+				s.writeStoreError(w, r, connErr)
+				return
+			}
+			for _, connection := range connections {
+				if connection.Provider != sandbox.ProviderCoder ||
+					connection.Label != defaultAgentConnectionLabel {
+					continue
+				}
+				cfg, decodeErr := domain.DecodeOrgCoderConfig(connection.Config)
+				if decodeErr != nil {
+					s.logger.Error("decode organization coder config", "error", decodeErr, "request_id", requestID(r))
+					writeError(w, r, http.StatusInternalServerError, "internal_error", "The organization's Coder configuration is invalid.")
+					return
+				}
+				request.SandboxProviderConnectionID = connection.ID
+				coderOverride = &sandbox.CoderDeploymentOverride{
+					BaseURL:                   cfg.BaseURL,
+					Owner:                     cfg.Owner,
+					TemplateID:                cfg.TemplateID,
+					AgentName:                 cfg.AgentName,
+					Parameters:                cfg.Parameters,
+					DurableRoot:               cfg.DurableRoot,
+					RequireMountedDurableRoot: cfg.RequireMountedDurableRoot,
+					StartupTimeoutSeconds:     cfg.StartupTimeoutSeconds,
+				}
+				break
 			}
 		}
 	}
 	// The plan is resolved once, here, and stamped onto the sandbox row. The
 	// reconciler reads it back from the row rather than from configuration, so
 	// a later config change cannot disturb a session already in flight.
-	plan, err := s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts)
+	plan, err := s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts, coderOverride)
 	if err != nil {
+		// A bring-your-own-Coder org with no org-default template must pick one per
+		// project; that is user-fixable, so surface it as a clear 422 rather than a
+		// deployment-misconfiguration 500.
+		if errors.Is(err, sandbox.ErrCoderTemplateRequired) {
+			s.logger.Warn(
+				"session create rejected: coder template required",
+				"org_id", orgID,
+				"user_id", principalFrom(r).UserID,
+				"project_id", request.ProjectID,
+			)
+			writeError(
+				w, r, http.StatusUnprocessableEntity, "coder_template_required",
+				"Choose a Coder template for this project before starting a session.",
+			)
+			return
+		}
 		s.logger.Error("resolve sandbox provisioning plan", "error", err, "request_id", requestID(r))
 		writeError(
 			w, r, http.StatusInternalServerError, "internal_error",
@@ -542,6 +646,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			Prompt:              request.Prompt,
 			Mode:                request.Mode,
 			Model:               request.Model,
+			ReasoningEffort:     request.ReasoningEffort,
 			DeniedCommands:      request.DeniedCommands,
 			Provider:            plan.Provider,
 			SandboxConnectionID: request.SandboxProviderConnectionID,
@@ -555,6 +660,15 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	s.logger.Info(
+		"session created",
+		"org_id", orgID,
+		"user_id", principalFrom(r).UserID,
+		"project_id", request.ProjectID,
+		"session_id", session.ID,
+		"provider", plan.Provider,
+		"harness", request.Harness,
+	)
 	writeJSON(w, http.StatusCreated, map[string]any{"session": toSessionResponse(session, nil)})
 }
 
@@ -622,6 +736,44 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 // resumeSession records one explicit user intent and lets the reconciler own
 // every slow provider/worker transition. The response is the accepted intent,
 // not a claim that the workspace is connected yet.
+// sessionStartupRetryStore re-arms startup for a session whose worker never
+// started. Optional so test stores need not implement it.
+type sessionStartupRetryStore interface {
+	RetrySessionStartup(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
+}
+
+// retrySessionStartup lets a user retry a session whose sandbox never started
+// (the startup ceiling parked it, or a bootstrap failed) without deleting it:
+// the reconciler re-runs the worker bootstrap against the existing compute.
+func (s *Server) retrySessionStartup(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgId")
+	sessionID := chi.URLParam(r, "sessionId")
+	if requireUUID(orgID, "orgId") != nil || requireUUID(sessionID, "sessionId") != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId and sessionId must be UUIDs.")
+		return
+	}
+	store, ok := s.store.(sessionStartupRetryStore)
+	if !ok {
+		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Retrying session startup is unavailable.")
+		return
+	}
+	if err := store.RetrySessionStartup(r.Context(), principalFrom(r), orgID, sessionID); err != nil {
+		if errors.Is(err, postgres.ErrConflict) {
+			writeError(w, r, http.StatusConflict, "startup_retry_unavailable",
+				"This session is not waiting on a failed startup, so there is nothing to retry.")
+			return
+		}
+		s.writeStoreError(w, r, err)
+		return
+	}
+	session, err := s.store.GetSession(r.Context(), principalFrom(r), orgID, sessionID)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"session": toSessionResponse(session, nil)})
+}
+
 func (s *Server) resumeSession(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 	sessionID := chi.URLParam(r, "sessionId")
@@ -897,6 +1049,16 @@ func (s *Server) sanitizeCoderConfig(ctx context.Context, cfg domain.ProjectCode
 	return cfg
 }
 
+// validateProjectCoderConfig rejects a free-form project config whose coder
+// settings carry a workspace name prefix Coder would refuse: every session of
+// the project would otherwise fail to provision.
+func validateProjectCoderConfig(config json.RawMessage) error {
+	if cfg, ok := domain.DecodeProjectCoderConfig(config); ok {
+		return domain.ValidateCoderWorkspaceNamePrefix(cfg.WorkspaceNamePrefix)
+	}
+	return nil
+}
+
 func parseCoderConfigInput(in *coderConfigInput) (domain.ProjectCoderConfig, error) {
 	cfg := domain.ProjectCoderConfig{}
 	if id := strings.TrimSpace(in.TemplateID); id != "" {
@@ -938,6 +1100,10 @@ func parseCoderConfigInput(in *coderConfigInput) (domain.ProjectCoderConfig, err
 	}
 	if len(repos) > 0 {
 		cfg.ExtraRepos = repos
+	}
+	cfg.WorkspaceNamePrefix = strings.TrimSpace(in.WorkspaceNamePrefix)
+	if err := domain.ValidateCoderWorkspaceNamePrefix(cfg.WorkspaceNamePrefix); err != nil {
+		return domain.ProjectCoderConfig{}, err
 	}
 	return cfg, nil
 }
@@ -1027,6 +1193,9 @@ func validProjectUpdate(request updateProjectRequest) bool {
 }
 
 func validSessionInput(request createSessionRequest) bool {
+	if validateChatTurnSettings("", request.ReasoningEffort, "", "") != nil {
+		return false
+	}
 	if requireUUID(request.ProjectID, "projectId") != nil ||
 		(request.Kind != "worker" && request.Kind != "orchestrator") ||
 		(request.Mode != "read-only" && request.Mode != "standard" && request.Mode != "trusted") ||
@@ -1074,17 +1243,28 @@ func toProjectResponse(project domain.Project) projectResponse {
 // facts, used to derive PR-lifecycle status (pr_open, ci_failed, ...) —
 // pass nil only for a session that provably has none yet (just created).
 func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionResponse {
+	var startupError *sessionStartupError
+	if session.StartupErrorCode != "" && session.StartupErrorAt != nil {
+		startupError = &sessionStartupError{
+			Code:    session.StartupErrorCode,
+			Message: session.StartupErrorMessage,
+			At:      session.StartupErrorAt.UTC(),
+		}
+	}
 	return sessionResponse{
 		ID:                 session.ID,
 		OrgID:              session.OrgID,
 		ProjectID:          session.ProjectID,
 		Kind:               session.Kind,
 		Harness:            session.Harness,
+		ReviewerHarness:    session.ReviewerHarness,
+		AutoReviewEnabled:  session.AutoReviewEnabled,
 		DisplayName:        session.DisplayName,
 		Branch:             session.Branch,
 		Mode:               session.Mode,
 		Model:              session.Model,
 		DeniedCommands:     nonNilStrings(session.DeniedCommands),
+		InterfaceMode:      string(session.Interface.Normalized()),
 		ActivityState:      string(session.ActivityState),
 		Status:             string(session.Status(time.Now().UTC(), prs)),
 		RuntimeConnected:   session.RuntimeConnected,
@@ -1093,6 +1273,7 @@ func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionRe
 		ObservedState:      session.ObservedState,
 		RuntimeState:       session.RuntimeState,
 		RuntimeError:       session.RuntimeError,
+		StartupError:       startupError,
 		IsTerminated:       session.IsTerminated,
 		AutoInjectCI:       session.AutoInjectCI,
 		AutoInjectReview:   session.AutoInjectReview,

@@ -18,6 +18,7 @@ import copilotLogo from "../assets/agents/copilot.svg";
 import crushLogo from "../assets/agents/crush.png";
 import cursorLogo from "../assets/agents/cursor.svg";
 import devinLogo from "../assets/agents/devin.png";
+import deepseekHarnessLogo from "../assets/agents/deepseek-harness.svg";
 import droidLogo from "../assets/agents/droid.png";
 import fxLogo from "../assets/agents/fx.svg";
 import geminiLogo from "../assets/agents/gemini.svg";
@@ -28,6 +29,7 @@ import kimiLogo from "../assets/agents/kimi.png";
 import kimchiLogo from "../assets/agents/kimchi.svg";
 import kiroLogo from "../assets/agents/kiro.png";
 import museLogo from "../assets/agents/muse.png";
+import mimoCodeLogo from "../assets/agents/mimo-code.svg";
 import ompLogo from "../assets/agents/omp.png";
 import opencodeLogo from "../assets/agents/opencode.svg";
 import piLogo from "../assets/agents/pi.png";
@@ -45,6 +47,7 @@ const LOGOS: AgentLogoSources = {
 	claude: claudeLogo,
 	cursor: cursorLogo,
 	opencode: opencodeLogo,
+	"opencode-v2": opencodeLogo,
 	copilot: copilotLogo,
 	aider: aiderLogo,
 	grok: grokLogo,
@@ -71,6 +74,8 @@ const LOGOS: AgentLogoSources = {
 	auggie: auggieLogo,
 	autohand: autohandLogo,
 	"unreal-agent": unrealAgentLogo,
+	"mimo-code": mimoCodeLogo,
+	"deepseek-harness": deepseekHarnessLogo,
 };
 
 /**

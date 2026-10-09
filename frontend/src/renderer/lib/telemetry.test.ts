@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PostHog } from "posthog-js/dist/module.full.no-external";
 import {
+	automationPromptLengthBucket,
 	buildPostHogConfig,
 	buildTelemetryContext,
 	isDeniedEvent,
@@ -31,6 +32,30 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 describe("telemetry sanitizers", () => {
+	it("allows only the fixed session management summary schema", async () => {
+		const safe = await sanitizeRendererProperties("ao.renderer.session_management_summary", {
+			measurement_schema_version: 1,
+			window_id: "123e4567-e89b-12d3-a456-426614174000",
+			worker_active_seconds: 42,
+			manual_worker_open_count: 3,
+			flush_reason: "interval",
+			session_id: "must-not-leave",
+		});
+		expect(safe).toEqual({
+			measurement_schema_version: 1,
+			window_id: "123e4567-e89b-12d3-a456-426614174000",
+			worker_active_seconds: 42,
+			manual_worker_open_count: 3,
+			flush_reason: "interval",
+		});
+	});
+
+	it("exports the session management summary under the v2 name", () => {
+		expect(postHogEventName("ao.renderer.session_management_summary")).toBe(
+			"ao.v2.renderer.session_management_summary",
+		);
+	});
+
 	it("isolates anonymous AO installation identity from persisted PostHog person state", () => {
 		const config = buildPostHogConfig("ins_stable-install-id");
 
@@ -262,6 +287,45 @@ describe("telemetry sanitizers", () => {
 		expect(routeSurface("/projects/demo")).toBe("project_board");
 		expect(routeSurface("/projects/demo/settings")).toBe("project_settings");
 		expect(routeSurface("/projects/demo/sessions/demo-1")).toBe("session_detail");
+		expect(routeSurface("/automations")).toBe("automations");
+		expect(routeSurface("/automations/demo-automation")).toBe("automations");
+	});
+
+	it("keeps automation funnel events free of prompt text and raw ids", async () => {
+		const props = await sanitizeRendererProperties("ao.renderer.automation_create_succeeded", {
+			project_id: "demo-project",
+			schedule_preset: "weekly",
+			prompt_length_bucket: "m",
+			prompt: "review the nightly CI failures in acme/private-repo",
+			display_name: "Nightly CI triage",
+		});
+
+		expect(Object.keys(props).sort()).toEqual(["project_id_hash", "prompt_length_bucket", "schedule_preset"]);
+		expect(props.schedule_preset).toBe("weekly");
+		expect(props.prompt_length_bucket).toBe("m");
+		expect(props.project_id_hash).toMatch(/^[0-9a-f]{64}$/);
+	});
+
+	it("drops automation funnel values outside the closed vocabularies", async () => {
+		expect(
+			await sanitizeRendererProperties("ao.renderer.automation_create_requested", {
+				schedule_preset: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9",
+				prompt_length_bucket: "4096",
+			}),
+		).toEqual({});
+		expect(await sanitizeRendererProperties("ao.renderer.automation_create_opened", { project_id: "demo-project" })).toEqual({});
+	});
+
+	it("bands prompt length in the bytes the daemon counts", () => {
+		expect(automationPromptLengthBucket("")).toBe("xs");
+		expect(automationPromptLengthBucket("a".repeat(80))).toBe("xs");
+		expect(automationPromptLengthBucket("a".repeat(81))).toBe("s");
+		expect(automationPromptLengthBucket("a".repeat(240))).toBe("s");
+		expect(automationPromptLengthBucket("a".repeat(800))).toBe("m");
+		expect(automationPromptLengthBucket("a".repeat(2000))).toBe("l");
+		expect(automationPromptLengthBucket("a".repeat(2001))).toBe("xl");
+		// Three bytes per character, so 27 of them outrank 27 ASCII ones.
+		expect(automationPromptLengthBucket("每天检查持续集成失败并提交修复".repeat(2))).toBe("s");
 	});
 
 	it("hashes renderer ids and drops raw route identifiers", async () => {

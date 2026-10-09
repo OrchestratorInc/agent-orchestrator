@@ -743,8 +743,8 @@ VALUES ('codewhale-project-1', 'codewhale-project', 1, 'codewhale', ?, ?, ?);
 	if _, err := db.Exec(`DELETE FROM sessions WHERE id = 'codewhale-project-1'`); err != nil {
 		t.Fatal(err)
 	}
-	if err := goose.DownTo(db, "migrations", 164); err != nil {
-		t.Fatalf("down migration 165: %v", err)
+	if err := goose.DownTo(db, "migrations", 191); err != nil {
+		t.Fatalf("down migration 192: %v", err)
 	}
 	if _, err := db.Exec(`
 INSERT INTO sessions (id, project_id, num, harness, activity_last_at, created_at, updated_at)

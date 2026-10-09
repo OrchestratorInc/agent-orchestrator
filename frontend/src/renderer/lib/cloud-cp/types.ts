@@ -151,6 +151,22 @@ export interface CloudCpListQuery {
 // Projects (`resource_handlers.go`)
 // ---------------------------------------------------------------------------
 
+import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer } from "../../../../../packages/cloud-client/src/types";
+
+export type CloudCpProjectAgentConfig = ProjectAgentConfig;
+export type CloudCpProjectRoleConfig = ProjectRoleConfig;
+export type CloudCpProjectReviewer = ProjectReviewer;
+/**
+ * PATCH /orgs/{orgId}/projects/{projectId}/settings. `config.coder` accepts
+ * only `workspaceNamePrefix` (an empty string returns to the default `ao`);
+ * the rest of a project's coder config is fixed at creation.
+ */
+export type CloudCpProjectSettingsRequest = ProjectSettingsInput & {
+	config?: NonNullable<ProjectSettingsInput["config"]> & {
+		coder?: { workspaceNamePrefix: string };
+	};
+};
+
 export interface CloudCpProject {
 	id: string;
 	orgId: string;
@@ -158,7 +174,7 @@ export interface CloudCpProject {
 	repositoryUrl: string;
 	defaultBranch: string;
 	githubRepositoryId?: string;
-	config: Record<string, unknown>;
+	config: ProjectConfig;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -189,6 +205,12 @@ export interface CloudCpProjectCoderConfig {
 	startupScript?: string;
 	/** Additional repositories every session of the project clones alongside the primary repo. */
 	extraRepos?: CloudCpSessionRepo[];
+	/**
+	 * Prefix for the project's new Coder workspace names (`<prefix>-<short id>`).
+	 * Empty/absent keeps the default `ao`. Must match `^[a-z][a-z0-9-]{0,19}$`
+	 * without a trailing `-` or a `--` run.
+	 */
+	workspaceNamePrefix?: string;
 }
 
 /** PATCH /orgs/{orgId}/projects/{projectId} */
@@ -221,6 +243,7 @@ export interface CloudCpProjectDeletedResponse {
 export type CloudCpSessionKind = "worker" | "orchestrator";
 
 export type CloudCpSessionMode = "read-only" | "standard" | "trusted";
+export type CloudCpInterfaceMode = "tui" | "chat";
 
 /** POST /orgs/{orgId}/sessions (requires an Idempotency-Key header). */
 export interface CloudCpCreateSessionRequest {
@@ -239,6 +262,7 @@ export interface CloudCpCreateSessionRequest {
 	 * omitted uses the harness default.
 	 */
 	model?: string;
+	reasoningEffort?: string;
 	deniedCommands?: string[];
 	sandboxProviderConnectionId?: string;
 	/**
@@ -271,15 +295,75 @@ export interface CloudCpCoderTemplatesResponse {
 	templates: CloudCpCoderTemplate[];
 }
 
+/**
+ * GET /orgs/{orgId}/coder-config — an org's bring-your-own-Coder connection.
+ * Non-secret fields only: the stored API token is never echoed back, surfaced
+ * here solely as `tokenSet`.
+ */
+export interface CloudCpOrgCoderConfig {
+	/** Coder deployment base URL or IP (http or https). */
+	baseUrl: string;
+	/**
+	 * Coder owner/username new workspaces are created under. The control plane
+	 * derives it from the API token on save, so it is always present once stored.
+	 */
+	owner?: string;
+	/**
+	 * Default Coder template id (a UUID) new workspaces use. Optional: a
+	 * bring-your-own org leaves it empty and picks the template per project.
+	 */
+	defaultTemplateId?: string;
+	/** Optional agent name the sandbox connects through. */
+	agentName?: string;
+	/**
+	 * Optional PrivateLink VPC endpoint service name (the
+	 * `coder_endpoint_service_name` Terraform output), set only when the Coder lives
+	 * in a private VPC. AO ops provisions the VPC endpoint from it.
+	 */
+	endpointServiceName?: string;
+	/** Optional AWS region for the PrivateLink endpoint (e.g. eu-north-1). */
+	region?: string;
+	/** True when an API token is stored. The token itself is never returned. */
+	tokenSet: boolean;
+}
+
+export interface CloudCpOrgCoderConfigResponse {
+	/** The stored config, or null when the org has none configured yet. */
+	coderConfig: CloudCpOrgCoderConfig | null;
+}
+
+/**
+ * PUT /orgs/{orgId}/coder-config. The slimmed form sends only `baseUrl` and
+ * `token`; the control plane derives the workspace owner from the token and the
+ * template is chosen per project, so `owner` and `defaultTemplateId` are optional.
+ */
+export interface CloudCpPutOrgCoderConfigRequest {
+	baseUrl: string;
+	/** Raw Coder API token; stored encrypted and never echoed back. Omit to keep the existing token. */
+	token?: string;
+	/** Optional: derived from the token when omitted. */
+	owner?: string;
+	/** Optional: the template is chosen per project, not at the org level. */
+	defaultTemplateId?: string;
+	agentName?: string;
+	/** Optional PrivateLink VPC endpoint service name; omit for a directly reachable Coder. */
+	endpointServiceName?: string;
+	/** Optional AWS region for the PrivateLink endpoint. */
+	region?: string;
+}
+
 export interface CloudCpSession {
 	id: string;
 	orgId: string;
 	projectId: string;
 	kind: string;
 	harness: string;
+	reviewerHarness?: string;
+	autoReviewEnabled?: boolean;
 	displayName: string;
 	branch: string;
 	mode: string;
+	interfaceMode: CloudCpInterfaceMode;
 	deniedCommands: string[];
 	activityState: string;
 	status: string;
@@ -289,6 +373,12 @@ export interface CloudCpSession {
 	observedState?: string;
 	runtimeState?: string;
 	runtimeError?: string;
+	/**
+	 * Why the session's worker has not started yet. Set while AO is retrying
+	 * startup and kept once it gives up (`runtimeState === "terminated"`);
+	 * cleared once the worker connects. `message` is user-facing text.
+	 */
+	startupError?: CloudCpSessionStartupError;
 	isTerminated: boolean;
 	autoInjectCI?: boolean;
 	autoInjectReview?: boolean;
@@ -306,8 +396,90 @@ export interface CloudCpSession {
 	updatedAt: string;
 }
 
+/**
+ * A cloud session's startup failure. Known codes: workspace_not_ready,
+ * terminal_unavailable, unsupported_architecture, durable_root_unavailable,
+ * worker_never_started, bootstrap_failed; treat any other code generically.
+ */
+export interface CloudCpSessionStartupError {
+	code: string;
+	message: string;
+	/** RFC 3339 time the failure was recorded. */
+	at: string;
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/startup-retry responds 202. */
+export interface CloudCpRetrySessionStartupResponse {
+	session: CloudCpSession;
+}
+
+export interface CloudCpInterfaceTransition {
+	id: string;
+	/** Mirrors the durable Cloud coordinator state machine. */
+	phase:
+		| "requested"
+		| "preflighting"
+		| "draining"
+		| "source_stopping"
+		| "source_stopped"
+		| "target_starting"
+		| "activating"
+		| "completed"
+		| "failed"
+		| "cancelled"
+		| "recovery_required";
+	policy: "drain" | "interrupt";
+	sessionId: string;
+	sourceMode: CloudCpInterfaceMode;
+	targetMode: CloudCpInterfaceMode;
+	nativeConversationId?: string;
+	errorCode?: string;
+	errorDetail?: string;
+	noticeAcknowledgedAt?: string;
+	createdAt: string;
+	updatedAt: string;
+	completedAt?: string;
+}
+
+export interface CloudCpInterfaceTransitionStatusResponse {
+	supported: boolean;
+	targetMode: CloudCpInterfaceMode;
+	reasonCode?: string;
+	reason?: string;
+	transition?: CloudCpInterfaceTransition;
+}
+
+export interface CloudCpStartInterfaceTransitionRequest {
+	targetMode: CloudCpInterfaceMode;
+	policy: "drain" | "interrupt";
+	model?: string;
+	reasoningEffort?: string;
+}
+
+export interface CloudCpStartInterfaceTransitionResponse {
+	transition: CloudCpInterfaceTransition;
+}
+
+/** DELETE /orgs/{orgId}/sessions/{sessionId}/interface-transition */
+export interface CloudCpCancelInterfaceTransitionResponse {
+	ok: boolean;
+}
+
+/** PUT /orgs/{orgId}/sessions/{sessionId}/interface-transition/{transitionId}/notice-acknowledgement */
+export interface CloudCpAcknowledgeInterfaceTransitionNoticeResponse {
+	ok: boolean;
+}
+
 export interface CloudCpSessionResponse {
 	session: CloudCpSession;
+}
+
+export interface CloudCpUpdateSessionPreferencesRequest {
+	reviewerHarness?: string;
+	autoReviewEnabled?: boolean;
+	autoInjectCI?: boolean;
+	autoInjectReview?: boolean;
+	terminateOnPrMerge?: boolean;
 }
 
 export interface CloudCpSessionListResponse {
@@ -531,7 +703,10 @@ export interface CloudCpSessionChildrenResponse {
 	page: CloudCpPageInfo;
 }
 
-/** Detailed PR data used by the shared local/cloud inspector UI. */
+// ---------------------------------------------------------------------------
+// Pull requests and AO reviews (`pull_request_handlers.go`)
+// ---------------------------------------------------------------------------
+
 export interface CloudCpPullRequestSummary {
 	url: string;
 	htmlUrl?: string;
@@ -603,6 +778,58 @@ export interface CloudCpSessionPullRequestsResponse {
 	pullRequests: CloudCpPullRequestSummary[];
 }
 
+export type CloudCpAOReviewRunStatus = "running" | "complete" | "delivered" | "failed" | "cancelled";
+export type CloudCpAOReviewVerdict = "" | "approved" | "changes_requested";
+export type CloudCpAOReviewState = "needs_review" | "running" | "up_to_date" | "changes_requested" | "ineligible";
+
+export interface CloudCpAOReviewRun {
+	id: string;
+	reviewId: string;
+	sessionId: string;
+	batchId: string;
+	harness: string;
+	triggerSource: "manual" | "auto";
+	pullRequestUrl: string;
+	targetSha: string;
+	status: CloudCpAOReviewRunStatus;
+	verdict: CloudCpAOReviewVerdict;
+	body: string;
+	providerReviewId: string;
+	reviewerTerminalId?: string;
+	createdAt: string;
+	deliveredAt?: string;
+	autoInjectReview: boolean;
+}
+
+export interface CloudCpPRReviewState {
+	pullRequestUrl: string;
+	pullRequestNumber: number;
+	title: string;
+	targetSha: string;
+	status: CloudCpAOReviewState;
+	latestRun?: CloudCpAOReviewRun;
+	previousRun?: CloudCpAOReviewRun;
+}
+
+export interface CloudCpSessionReviewState {
+	sessionId: string;
+	reviewerHandleId?: string;
+	reviewerHarness?: string;
+	availableReviewerHarnesses: string[];
+	reviews: CloudCpPRReviewState[];
+	runs: CloudCpAOReviewRun[];
+}
+
+export interface CloudCpHarnessStatus {
+	harness: "claude-code" | "codex" | "cursor";
+	status: "missing" | "ready" | "failed";
+	version?: string;
+	error?: string;
+}
+
+export interface CloudCpHarnessInspectResponse {
+	harnesses: CloudCpHarnessStatus[];
+}
 export interface CloudCpListSessionsQuery extends CloudCpListQuery {
 	/** Restrict the listing to one project. */
 	projectId?: string;
@@ -646,6 +873,25 @@ export interface CloudCpRestoreSessionResponse {
 export interface CloudCpSendMessageRequest {
 	/** 1-65536 bytes. */
 	text: string;
+	model?: string;
+	reasoningEffort?: string;
+	/** Per-turn permission mode, capped by the session and share grant. */
+	mode?: "read-only" | "standard" | "trusted";
+	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+}
+
+export interface CloudCpChatModelsResponse {
+	modes?: string[];
+	model?: string;
+	reasoningEffort?: string;
+	models: Array<{
+		id: string;
+		displayName: string;
+		description?: string;
+		default: boolean;
+		efforts?: string[];
+		defaultEffort?: string;
+	}>;
 }
 
 export interface CloudCpClientEvent {
@@ -664,6 +910,11 @@ export interface CloudCpSendMessageResponse {
 /** POST /orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/cancel responds 202. */
 export interface CloudCpCancelTurnResponse {
 	ok: boolean;
+}
+
+/** POST steering response; guidance for the active turn was accepted. */
+export interface CloudCpSteerTurnResponse {
+	event: CloudCpClientEvent;
 }
 
 export interface CloudCpChatEventsQuery {
@@ -689,6 +940,8 @@ export type CloudCpTerminalKind = "workspace" | "agent";
 /** POST /orgs/{orgId}/sessions/{sessionId}/terminal-ticket */
 export interface CloudCpTerminalTicketRequest {
 	kind: CloudCpTerminalKind;
+	/** Optional exact terminal surface, used for a dedicated reviewer terminal. */
+	terminalId?: string;
 }
 
 export interface CloudCpTerminalTicketResponse {
@@ -719,7 +972,7 @@ export interface CloudCpPutAgentConnectionRequest {
 	secret: string;
 }
 
-/** PUT /orgs/{orgId}/provider-connections/github-pat */
+/** PUT /me/github-pat */
 export interface CloudCpPutGitHubPATRequest {
 	/** Raw GitHub personal access token; stored encrypted and never echoed. */
 	secret: string;
@@ -745,12 +998,12 @@ export interface CloudCpProviderConnection {
 	updatedAt: string;
 }
 
-/** GET /orgs/{orgId}/provider-connections */
+/** GET /me/providers */
 export interface CloudCpProviderConnectionsResponse {
 	providerConnections: CloudCpProviderConnection[];
 }
 
-/** PUT /orgs/{orgId}/provider-connections/agents/{agent} */
+/** PUT /me/providers/{agent}, PUT /me/github-pat */
 export interface CloudCpProviderConnectionResponse {
 	providerConnection: CloudCpProviderConnection;
 }

@@ -57,10 +57,11 @@ type Store interface {
 	CreateSession(context.Context, domain.Principal, string, string, int, domain.CreateSession) (domain.Session, error)
 	ListSessions(context.Context, domain.Principal, string, string, *domain.Cursor, int) ([]domain.Session, bool, error)
 	GetSession(context.Context, domain.Principal, string, string) (domain.Session, error)
+	CheckSessionWriteAccess(context.Context, domain.Principal, string, string) error
 	SetCloudSessionAutoInjectCI(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SetCloudSessionAutoInjectReview(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SetCloudSessionTerminateOnPRMerge(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
-	SendMessage(context.Context, domain.Principal, string, string, string, string) (domain.ClientEvent, error)
+	SendMessage(context.Context, domain.Principal, string, string, string, string, domain.ChatTurnSettings) (domain.ClientEvent, error)
 	ListClientEvents(context.Context, domain.Principal, string, string, int64, int) ([]domain.ClientEvent, bool, error)
 	SetSandboxDesiredState(ctx context.Context, principal domain.Principal, orgID, sessionID, desiredState string) error
 	TerminateSession(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
@@ -71,14 +72,22 @@ type Store interface {
 	WorkerLaunchSpec(context.Context, string, string) (domain.WorkerLaunch, error)
 	RegisterWorkerBootstrap(ctx context.Context, orgID, sessionID, workerID, version string, epoch int64, capabilities []string) error
 	WorkerConnectionCurrent(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (bool, error)
+	WorkerAgentSessionID(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (string, error)
 	MarkWorkerSeen(ctx context.Context, orgID, sessionID, workerID, version string, epoch int64, capabilities []string) error
 	SetWorkerActivity(ctx context.Context, orgID, sessionID, workerID string, epoch int64, activity worker.ActivityEvent) error
 	AppendSessionEvent(ctx context.Context, orgID, sessionID, eventType string, payload json.RawMessage) (domain.ClientEvent, error)
+	AppendInteractiveConversationFacts(context.Context, string, string, string, string, string, string) error
 	RecordPullRequestOpened(ctx context.Context, orgID string, pr domain.PullRequest, deliveryID string) error
 	ClaimWorkerTurn(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (domain.WorkerTurn, bool, error)
 	RequestTurnCancellation(ctx context.Context, principal domain.Principal, orgID, sessionID, turnID string) error
+	SteerTurn(context.Context, domain.Principal, string, string, string, string, string) (domain.ClientEvent, error)
+	CreateWorkerChatApproval(context.Context, string, string, string, int64, worker.ChatApproval) error
+	WorkerChatApprovalDecision(context.Context, string, string, string, int64, string, int, string) (string, error)
+	DecideChatApproval(context.Context, domain.Principal, string, string, string, string) error
 	WorkerTurnCancellationRequested(ctx context.Context, orgID, sessionID, workerID, turnID string, epoch int64, attempt int) (bool, error)
-	AppendWorkerTurnOutput(ctx context.Context, orgID, sessionID, workerID, turnID string, epoch int64, attempt int, stream, text string) error
+	AppendWorkerTurnOutput(ctx context.Context, orgID, sessionID, workerID, turnID string, epoch int64, attempt int, stream, text, itemID string) error
+	AppendWorkerTurnActivity(ctx context.Context, orgID, sessionID, workerID, turnID string, epoch int64, attempt int, activity worker.ChatActivity) error
+	AppendWorkerTurnCapabilities(context.Context, string, string, string, string, int64, int, bool) error
 	FinishWorkerTurn(ctx context.Context, orgID, sessionID, workerID, turnID string, epoch int64, attempt int, outcome, errorMessage string) (bool, error)
 	WorkerAgentCredential(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (domain.WorkerCredential, error)
 	ListOrchestratorChildren(context.Context, string, string, bool, *domain.Cursor, int) ([]domain.Session, bool, error)
@@ -93,8 +102,8 @@ type Store interface {
 	ClaimWorkerRequest(context.Context, string, string, string, int64, time.Duration) (domain.WorkerRequest, bool, error)
 	CompleteWorkerRequest(context.Context, string, string, string, string, int64, int, json.RawMessage) error
 	FailWorkerRequest(context.Context, string, string, string, string, int64, int, string, string) error
-	IssueTerminalTicket(context.Context, domain.Principal, string, string, string, time.Duration) (string, []string, error)
-	OpenTerminal(context.Context, string, string, time.Duration) (domain.TerminalSession, error)
+	IssueTerminalTicket(context.Context, domain.Principal, string, string, string, string, time.Duration) (string, []string, error)
+	OpenTerminal(context.Context, string, string, string, time.Duration) (domain.TerminalSession, error)
 	RefreshTerminalInteraction(context.Context, domain.TerminalSession, time.Duration) error
 	QueueTerminalInput(context.Context, domain.TerminalSession, string, []byte) error
 	QueueTerminalResize(context.Context, domain.TerminalSession, uint16, uint16) error
@@ -102,10 +111,11 @@ type Store interface {
 	AppendTerminalOutput(context.Context, string, string, string, string, int64, []byte) (int64, error)
 	AppendTerminalOutputAt(context.Context, string, string, string, string, int64, int64, []byte) (int64, error)
 	ClaimTerminalInput(context.Context, string, string, string, int64, string, time.Duration) (domain.WorkerRequest, bool, error)
-	MarkTerminalExited(context.Context, string, string, string, string, int64, int) error
+	MarkTerminalExited(context.Context, string, string, string, string, int64, int, bool) error
 	EnsureWorkerAgentTerminal(context.Context, string, string, string, int64, time.Duration) (domain.TerminalSession, error)
 	ListTerminalOutput(context.Context, domain.TerminalSession, int64, int) ([]domain.TerminalOutput, string, error)
 	ListPullRequestsBySession(context.Context, domain.Principal, string, string) ([]domain.PullRequest, error)
+	GitHubInstallationForRepository(context.Context, string, string) (int64, int64, error)
 	PullRequestForMerge(context.Context, domain.Principal, string, string, int, string) (domain.PullRequest, error)
 	PullRequestSnapshot(context.Context, string, string) (domain.PullRequestSnapshot, error)
 	ListReviewRunsBySession(context.Context, domain.Principal, string, string) ([]domain.ReviewRunPullRequest, error)
@@ -120,6 +130,11 @@ type Store interface {
 	RedeemProjectShareLink(context.Context, domain.Principal, string, string) (domain.SharedProject, error)
 	ListSharedProjects(context.Context, domain.Principal) ([]domain.SharedProject, error)
 	ListSharedProjectSessions(context.Context, domain.Principal, string, string) ([]domain.Session, error)
+	StartSessionInterfaceTransition(context.Context, domain.Principal, string, string, domain.SessionInterface, domain.SessionInterface, domain.SessionInterfaceTransitionPolicy, string, ...domain.ChatTurnSettings) (domain.SessionInterfaceTransition, error)
+	GetActiveSessionInterfaceTransition(context.Context, domain.Principal, string, string) (domain.SessionInterfaceTransition, bool, error)
+	GetLatestRelevantSessionInterfaceTransition(context.Context, domain.Principal, string, string) (domain.SessionInterfaceTransition, bool, error)
+	AdvanceSessionInterfaceTransition(context.Context, domain.Principal, string, string, domain.SessionInterfaceTransitionPhase, domain.SessionInterfaceTransitionPhase, string, string, string) error
+	AcknowledgeSessionInterfaceTransitionNotice(context.Context, domain.Principal, string, string, string) error
 	AcceptNotificationEvent(context.Context, string, string, string, int64, domain.AgentNotificationEvent) (domain.NotificationAcceptance, error)
 	ListNotifications(context.Context, domain.Principal, string, domain.NotificationFilter) (domain.NotificationPage, error)
 	ListNotificationEvents(context.Context, domain.Principal, string, int64, int) ([]domain.NotificationEvent, bool, error)
@@ -137,6 +152,7 @@ type WorkerTokens interface {
 type CheckoutBroker interface {
 	IssueCheckoutGrant(context.Context, string, string) (githubapp.CheckoutGrant, error)
 	IssuePushGrant(context.Context, string, string) (githubapp.CheckoutGrant, error)
+	IssuePushGrantForRepo(context.Context, string, string, string) (githubapp.CheckoutGrant, error)
 	RaisePullRequest(context.Context, string, string, domain.RaisePullRequest) (domain.PullRequest, error)
 	ClaimPullRequest(context.Context, string, string, string) (domain.PullRequest, error)
 	SubmitReview(context.Context, string, string, string, domain.SubmitReviewResult) (domain.ReviewRun, error)
@@ -174,6 +190,7 @@ type Server struct {
 	drain                   chan struct{}
 	logger                  *slog.Logger
 	github                  *githubapp.Service
+	reviewService           *githubapp.Service
 	checkoutBroker          CheckoutBroker
 	patWrites               *githubapp.PATWriteService
 	brokerAuthToken         string
@@ -204,18 +221,22 @@ type Options struct {
 	AvailableSandboxProviders []string
 	CapabilityGatedProviders  []string
 	// CoderTemplates lists templates available from the configured Coder provider.
-	CoderTemplates          CoderTemplateLister
-	Provisioning            sandbox.ProvisioningDefaults
-	WorkerTokens            WorkerTokens
-	WorkerTokenTTL          time.Duration
-	WorkerBinary            []byte
-	WorkerHelperBinary      []byte
+	CoderTemplates     CoderTemplateLister
+	Provisioning       sandbox.ProvisioningDefaults
+	WorkerTokens       WorkerTokens
+	WorkerTokenTTL     time.Duration
+	WorkerBinary       []byte
+	WorkerHelperBinary []byte
+	// WorkerBuilds are additional architectures' worker/helper binaries served
+	// from the same content-addressed self-update route.
+	WorkerBuilds            map[string]sandbox.WorkerBuild
 	WorkerRequestTimeout    time.Duration
 	MaxSandboxes            int
 	Environment             string
 	Release                 string
 	Logger                  *slog.Logger
 	GitHub                  *githubapp.Service
+	ReviewService           *githubapp.Service
 	CheckoutBroker          CheckoutBroker
 	PATWrites               *githubapp.PATWriteService
 	BrokerAuthToken         string
@@ -297,6 +318,7 @@ func New(options Options) *Server {
 		drain:                     make(chan struct{}),
 		logger:                    logger,
 		github:                    options.GitHub,
+		reviewService:             options.ReviewService,
 		checkoutBroker:            options.CheckoutBroker,
 		patWrites:                 options.PATWrites,
 		brokerAuthToken:           options.BrokerAuthToken,
@@ -312,7 +334,11 @@ func New(options Options) *Server {
 		notificationWake:          options.NotificationWake,
 		notificationWaiters:       newNotificationWaiters(),
 	}
-	server.workerBinariesBySHA = indexWorkerBinaries(options.WorkerBinary, options.WorkerHelperBinary)
+	workerBinaries := [][]byte{options.WorkerBinary, options.WorkerHelperBinary}
+	for _, build := range options.WorkerBuilds {
+		workerBinaries = append(workerBinaries, build.Binary, build.HelperBinary)
+	}
+	server.workerBinariesBySHA = indexWorkerBinaries(workerBinaries...)
 	if server.credentialValidator == nil {
 		server.credentialValidator = newAgentCredentialValidator(nil)
 	}
@@ -321,6 +347,9 @@ func New(options Options) *Server {
 	}
 	if server.checkoutBroker == nil && options.GitHub != nil {
 		server.checkoutBroker = options.GitHub
+	}
+	if server.reviewService == nil && options.GitHub != nil {
+		server.reviewService = options.GitHub
 	}
 	server.provisioning.Provider = sandboxProvider
 	if server.provisioning.Release == "" {
@@ -332,6 +361,9 @@ func New(options Options) *Server {
 	router.Get("/healthz", server.health)
 	router.Get("/readyz", server.ready)
 	router.Get("/github/healthz", server.githubHealth)
+	// Public HTTPS bounce page for the desktop sign-in flow: WorkOS redirects the
+	// browser here, and it hands the OAuth result off to the ao-app:// deep link.
+	router.Get("/app/auth/return", server.appAuthReturn)
 	if server.github != nil {
 		router.Get("/api/cloud/v1/github/install/setup", server.githubSetupCallback)
 		router.Get("/api/cloud/v1/github/oauth/callback", server.githubOAuthCallback)
@@ -354,10 +386,14 @@ func New(options Options) *Server {
 		router.Post("/api/cloud/v1/control/github/scratch-projects", server.createEnvironmentScratchProject)
 	}
 	router.Route("/api/cloud/v1", func(router chi.Router) {
+		router.Post("/remote-hosts/{hostId}/address", server.updateRemoteHostAddress)
 		router.Post("/auth/local/register", server.registerLocal)
 		router.Post("/auth/local/login", server.loginLocal)
 		router.With(server.authenticate).Post("/auth/local/logout", server.logoutLocal)
 		router.With(server.authenticate).Get("/me", server.me)
+		router.With(server.authenticate).Get("/me/hosts", server.listRemoteHosts)
+		router.With(server.authenticate).Put("/me/hosts/{hostId}", server.putRemoteHost)
+		router.With(server.authenticate).Delete("/me/hosts/{hostId}", server.deleteRemoteHost)
 		router.With(server.authenticate).Post("/orgs", server.createOrganization)
 		router.With(server.authenticate).Get("/invitations", server.listMyInvitations)
 		router.With(server.authenticate).Get("/me/providers", server.listUserProviderConnections)
@@ -390,9 +426,13 @@ func New(options Options) *Server {
 			// ticket for a sandbox it is already registered on.
 			router.Get("/worker/reconnect", server.workerReconnect)
 			router.Post("/worker/events", server.workerEvent)
+			router.Get("/worker/session", server.workerSession)
 			router.Post("/worker/notification-events", server.workerNotificationEvent)
 			router.Post("/worker/turns/claim", server.workerClaimTurn)
 			router.Get("/worker/turns/{turnId}/cancellation", server.workerTurnCancellation)
+			router.Post("/worker/turns/{turnId}/approvals", server.workerCreateChatApproval)
+			router.Post("/worker/turns/{turnId}/capabilities", server.workerTurnCapabilities)
+			router.Get("/worker/turns/{turnId}/approvals/{requestId}", server.workerChatApprovalDecision)
 			router.Post("/worker/turns/{turnId}/complete", server.workerCompleteTurn)
 			router.Post("/worker/turns/{turnId}/fail", server.workerFailTurn)
 			router.Get("/worker/credential", server.workerCredential)
@@ -401,6 +441,8 @@ func New(options Options) *Server {
 			router.Post("/worker/github-token", server.workerGitHubToken)
 			router.Post("/worker/pull-requests", server.workerRaisePullRequest)
 			router.Post("/worker/pull-requests/claim", server.workerClaimPullRequest)
+			router.Post("/worker/pull-requests/refs", server.workerReportGitRefs)
+			router.Post("/worker/reviews/trigger", server.workerTriggerReviews)
 			router.Post("/worker/reviews/{reviewRunId}/submit", server.workerSubmitReview)
 			router.Get("/worker/children", server.listWorkerChildren)
 			router.Post("/worker/children", server.createWorkerChild)
@@ -440,6 +482,8 @@ func New(options Options) *Server {
 			router.Patch("/notifications/{notificationId}", server.markNotificationRead)
 			router.Post("/notifications/read-all", server.markAllNotificationsRead)
 			router.Post("/projects", server.createProject)
+			router.Get("/projects/{projectId}", server.getProject)
+			router.Patch("/projects/{projectId}/settings", server.updateProjectSettings)
 			router.Patch("/projects/{projectId}", server.updateProject)
 			router.Delete("/projects/{projectId}", server.deleteProject)
 			router.Get("/projects/{projectId}/shares", server.listProjectShareLinks)
@@ -453,20 +497,28 @@ func New(options Options) *Server {
 			router.Put("/provider-connections/agents/{agent}", server.putAgentConnection)
 			router.Delete("/provider-connections/agents/{agent}", server.deleteAgentConnection)
 			router.Post("/provider-connections/agents/{agent}/promote", server.promoteAgentConnection)
+			router.Get("/coder-config", server.getOrgCoderConfig)
+			router.Put("/coder-config", server.putOrgCoderConfig)
+			router.Delete("/coder-config", server.deleteOrgCoderConfig)
 			router.Get("/sessions", server.listSessions)
 			router.Post("/sessions", server.createSession)
 			router.Get("/sandbox/coder/templates", server.listCoderTemplates)
 			router.Get("/sessions/{sessionId}", server.getSession)
+			router.Patch("/sessions/{sessionId}/preferences", server.updateSessionPreferences)
 			router.Patch("/sessions/{sessionId}/auto-inject-ci", server.setCloudSessionAutoInjectCI)
 			router.Patch("/sessions/{sessionId}/auto-inject-review", server.setCloudSessionAutoInjectReview)
 			router.Patch("/sessions/{sessionId}/merge-policy", server.setCloudSessionMergePolicy)
 			router.Post("/sessions/wake", server.wakePausedSessions)
 			router.Post("/sessions/{sessionId}/resume", server.resumeSession)
+			router.Post("/sessions/{sessionId}/startup-retry", server.retrySessionStartup)
 			router.Post("/sessions/{sessionId}/restore", server.restoreSession)
 			router.Get("/sessions/{sessionId}/children", server.listSessionChildren)
 			router.Delete("/sessions/{sessionId}", server.deleteSession)
 			router.Post("/sessions/{sessionId}/messages", server.sendMessage)
+			router.Get("/sessions/{sessionId}/chat-models", server.getChatModels)
 			router.Post("/sessions/{sessionId}/turns/{turnId}/cancel", server.cancelTurn)
+			router.Post("/sessions/{sessionId}/turns/{turnId}/steer", server.steerTurn)
+			router.Post("/sessions/{sessionId}/approvals/{requestId}/decide", server.decideChatApproval)
 			router.Get("/sessions/{sessionId}/chat-events", server.replayClientEvents)
 			router.Get("/sessions/{sessionId}/events", server.streamClientEvents)
 			router.Post("/sessions/{sessionId}/terminal-ticket", server.createTerminalTicket)
@@ -475,6 +527,7 @@ func New(options Options) *Server {
 				router.MethodFunc(method, "/sessions/{sessionId}/browser/{origin}/*", server.proxyBrowser)
 			}
 			router.Get("/sessions/{sessionId}/workspace/files", server.listWorkspaceFiles)
+			router.Post("/sessions/{sessionId}/workspace/checkout", server.requestWorkspaceCheckout)
 			router.Get("/sessions/{sessionId}/workspace/file", server.readWorkspaceFile)
 			router.Get("/sessions/{sessionId}/workspace/file/diff", server.readWorkspaceDiffFile)
 			router.Put("/sessions/{sessionId}/workspace/file", server.writeWorkspaceFile)
@@ -489,6 +542,15 @@ func New(options Options) *Server {
 			router.Get("/sessions/{sessionId}/pull-requests", server.listSessionPullRequests)
 			router.Post("/sessions/{sessionId}/pull-requests/{number}/merge", server.mergeSessionPullRequest)
 			router.Get("/sessions/{sessionId}/reviews", server.getSessionReviewState)
+			router.Post("/sessions/{sessionId}/reviews/trigger", server.triggerSessionReviews)
+			router.Post("/sessions/{sessionId}/reviews/cancel", server.cancelSessionReviews)
+			router.Post("/sessions/{sessionId}/reviews/{reviewRunId}/send", server.sendReviewToWorker)
+			router.Get("/sessions/{sessionId}/reviewer-harnesses", server.inspectSessionReviewerHarnesses)
+			router.Post("/sessions/{sessionId}/reviewer-harnesses/{harness}/install", server.installSessionReviewerHarness)
+			router.Get("/sessions/{sessionId}/interface-transition", server.getSessionInterfaceTransition)
+			router.Post("/sessions/{sessionId}/interface-transition", server.startSessionInterfaceTransition)
+			router.Delete("/sessions/{sessionId}/interface-transition", server.cancelSessionInterfaceTransition)
+			router.Put("/sessions/{sessionId}/interface-transition/{transitionId}/notice-acknowledgement", server.acknowledgeSessionInterfaceTransitionNotice)
 			router.Get("/members", server.listOrgMembers)
 			router.Patch("/members/{userId}", server.updateOrgMemberRole)
 			router.Get("/invitations", server.listOrgInvitations)
@@ -587,23 +649,20 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 		case "/api/cloud/v1/worker/transport/claim", "/api/cloud/v1/worker/turns/claim":
 			level = slog.LevelDebug
 		}
-		s.logger.Log(
-			r.Context(),
-			level,
-			"HTTP request complete",
-			"method",
-			r.Method,
-			"route",
-			route,
-			"status",
-			status,
-			"duration_ms",
-			time.Since(started).Milliseconds(),
-			"request_id",
-			requestID(r),
-			"release",
-			s.release,
-		)
+		attrs := []any{
+			"method", r.Method,
+			"route", route,
+			"status", status,
+			"duration_ms", time.Since(started).Milliseconds(),
+			"request_id", requestID(r),
+			"release", s.release,
+		}
+		// Stamp the URL-scoped organization so the access log is greppable by
+		// tenant for fast RCA (empty on non-org routes like worker/health).
+		if orgID := chi.URLParam(r, "orgId"); orgID != "" {
+			attrs = append(attrs, "org_id", orgID)
+		}
+		s.logger.Log(r.Context(), level, "HTTP request complete", attrs...)
 	})
 }
 

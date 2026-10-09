@@ -23,7 +23,7 @@ describe("describeDesktopStatus", () => {
 	// The reported bug: a desktop that stopped answering still read "Paired".
 	it("never calls an unreachable desktop paired", () => {
 		expect(describeDesktopStatus({ configured: true, connection: "closed", failure: "unreachable" })).toEqual({
-			label: "Offline",
+			label: "Unreachable",
 			tone: "error",
 		});
 	});
@@ -37,12 +37,12 @@ describe("describeDesktopStatus", () => {
 		});
 	});
 
-	it("names the cause when the desktop answered with a rejection", () => {
+	it("names the cause when the machine answered with a rejection", () => {
 		const label = (failure: Parameters<typeof describeDesktopStatus>[0]["failure"]) =>
 			describeDesktopStatus({ configured: true, connection: "closed", failure }).label;
 		expect(label("auth")).toBe("Password rejected");
 		expect(label("rate-limited")).toBe("Locked out");
-		expect(label("server-error")).toBe("Desktop error");
+		expect(label("server-error")).toBe("Machine error");
 		expect(label("tunnel-rotated")).toBe("Address changed");
 	});
 });

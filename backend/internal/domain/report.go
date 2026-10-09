@@ -3,7 +3,6 @@ package domain
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -21,11 +20,15 @@ func WrapReportDelivery(id, message string) string {
 // Delivery ids are generated internally and deliberately restricted so a
 // malformed prompt cannot manufacture markup or an unbounded correlation key.
 func ReportDeliveryID(message string) (string, bool) {
+	return deliveryID(message, reportDeliveryPrefix)
+}
+
+func deliveryID(message, prefix string) (string, bool) {
 	message = strings.TrimSpace(message)
-	if !strings.HasPrefix(message, reportDeliveryPrefix) {
+	if !strings.HasPrefix(message, prefix) {
 		return "", false
 	}
-	rest := strings.TrimPrefix(message, reportDeliveryPrefix)
+	rest := strings.TrimPrefix(message, prefix)
 	end := strings.Index(rest, `">`)
 	if end <= 0 || end > 128 {
 		return "", false
@@ -189,30 +192,25 @@ func ValidateReportContent(state ReportState, note, message string, outputs []Re
 		if !output.Kind.Valid() || strings.TrimSpace(output.Reference) == "" {
 			return ErrInvalidReport
 		}
-		if (output.Kind == ReportOutputPRCreated || output.Kind == ReportOutputPRReviewed) && !IsGitHubPullRequestURL(output.Reference) {
-			return ErrInvalidReport
+		if output.Kind == ReportOutputPRCreated || output.Kind == ReportOutputPRReviewed {
+			if _, err := ParseChangeRequestURL(output.Reference); err != nil {
+				return ErrInvalidReport
+			}
 		}
 	}
 	return nil
 }
 
-// IsGitHubPullRequestURL reports whether raw is an HTTP(S) github.com PR URL.
-func IsGitHubPullRequestURL(raw string) bool {
-	if strings.TrimSpace(raw) != raw {
-		return false
+// WrapSessionDelivery preserves AO session-origin direction as coordination in
+// terminal prompt hooks, without labeling it as a human prompt or worker report.
+func WrapSessionDelivery(id, message string) string {
+	return fmt.Sprintf("<ao-session-delivery id=%q>\n%s\n</ao-session-delivery>", id, message)
+}
+
+// CoordinationDeliveryID recognizes both durable reports and session sends.
+func CoordinationDeliveryID(message string) (string, bool) {
+	if id, ok := ReportDeliveryID(message); ok {
+		return id, true
 	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || !strings.EqualFold(u.Hostname(), "github.com") || u.Port() != "" || u.User != nil {
-		return false
-	}
-	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(parts) != 4 || parts[0] == "" || parts[1] == "" || parts[2] != "pull" || parts[3] == "" {
-		return false
-	}
-	for _, c := range parts[3] {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
+	return deliveryID(message, `<ao-session-delivery id="`)
 }

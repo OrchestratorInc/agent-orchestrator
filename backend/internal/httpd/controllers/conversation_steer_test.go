@@ -242,13 +242,13 @@ func TestSteerOrSendRouteReturnsAtomicOutcome(t *testing.T) {
 		},
 	}
 	status, body, _ := postSteerOrSend(t, svc, map[string]any{
-		"text": "correct it", "clientMessageId": "atomic-1",
+		"text": "correct it", "clientMessageId": "atomic-1", "senderSessionId": "worker-1",
 	})
 	if status != http.StatusAccepted || body["outcome"] != "steered" || body["providerTurnId"] != "provider-turn-1" {
 		t.Fatalf("status=%d body=%v", status, body)
 	}
 	if len(svc.atomicSeen) != 1 || svc.atomicSeen[0].ClientMessageID != "atomic-1" ||
-		len(svc.recoverOnly) != 1 || svc.recoverOnly[0] {
+		len(svc.recoverOnly) != 1 || svc.recoverOnly[0] || svc.atomicSeen[0].SenderSessionID != "worker-1" {
 		t.Fatalf("atomic request = %+v recoverOnly=%v", svc.atomicSeen, svc.recoverOnly)
 	}
 }

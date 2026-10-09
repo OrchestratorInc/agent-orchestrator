@@ -13,9 +13,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	archiveExtraction,
 	createWorkDirectory,
 	npmInvocation,
 	patchClaudeContextUsage,
+	patchClaudeHibernationCheck,
 	patchClaudeRetryDetails,
 	pruneNodeDistribution,
 	runtimeSourceFiles,
@@ -107,6 +109,50 @@ describe("patchClaudeRetryDetails", () => {
 		expect(patched).toContain("message.retry_delay_ms / 1000");
 		expect(patched).toContain("Trying again in ${retryDelay}.");
 		expect(patched).toContain("details: retryDetails");
+	});
+});
+
+describe("patchClaudeHibernationCheck", () => {
+	it("keeps live native tasks awake and allows sleep after they settle", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, `
+			// session.liveBackgroundTasks.set(message.task_id
+			connection.onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params));
+		`);
+		expect(patchClaudeHibernationCheck(adapterPath)).toBe(true);
+		expect(patchClaudeHibernationCheck(adapterPath)).toBe(false);
+		const handlers = new Map();
+		const connection = { onRequest: (method, parser, handler) => {
+			expect(typeof parser.parse).toBe("function");
+			expect(typeof handler).toBe("function");
+			handlers.set(method, (ctx) => handler({ params: parser.parse(ctx.params) }));
+			return connection;
+		} };
+		const tasks = new Map();
+		const agent = { sessions: { native: { liveBackgroundTasks: tasks } } };
+		new Function("connection", "agent", "GOAL_CONTROL_METHOD", "parseGoalRequest", "RequestError", readFileSync(adapterPath, "utf8"))(
+			connection, agent, "goal", params => params, { invalidParams: () => new Error("invalid session") },
+		);
+		const check = handlers.get("_ao/session/can_hibernate");
+		const ctx = { params: { sessionId: "native" } };
+		expect(check(ctx)).toEqual({ canHibernate: true });
+		tasks.set("server", { isSubagent: false });
+		expect(check(ctx)).toEqual({ canHibernate: false });
+		tasks.delete("server");
+		expect(check(ctx)).toEqual({ canHibernate: true });
+		tasks.set("ended", { isSubagent: true, endedPerLevel: "ended" });
+		expect(check(ctx)).toEqual({ canHibernate: true });
+		for (const sessionId of [undefined, "missing", "__proto__"]) {
+			expect(() => check({ params: { sessionId } })).toThrow("invalid session");
+		}
+		agent.sessions.native.queryClosed = true;
+		expect(() => check(ctx)).toThrow("invalid session");
+	});
+
+	it("fails packaging if the pinned native task registry changes", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, "// incompatible adapter");
+		expect(() => patchClaudeHibernationCheck(adapterPath)).toThrow("native-task hibernation check");
 	});
 });
 
@@ -218,3 +264,34 @@ function temporaryDirectory() {
 	temporaryDirectories.push(directory);
 	return directory;
 }
+
+describe("archiveExtraction", () => {
+	// Extraction must not go through PowerShell's Expand-Archive: it is bound by
+	// MAX_PATH, and with LongPathsEnabled=0 a deep checkout pushes Node's bundled
+	// npm tree past 260 characters, where it fails while still exiting zero.
+	it("uses bsdtar for the Windows zip", () => {
+		expect(archiveExtraction("C:\\w\\node.zip", "C:\\w", {
+			platform: "win32",
+			systemRoot: "C:\\Windows",
+		})).toEqual({
+			command: "C:\\Windows\\System32\\tar.exe",
+			args: ["-xf", "C:\\w\\node.zip", "-C", "C:\\w"],
+		});
+	});
+
+	it("keeps gzip handling on the other platforms", () => {
+		for (const platform of ["darwin", "linux"]) {
+			expect(archiveExtraction("/w/node.tar.gz", "/w", { platform })).toEqual({
+				command: "tar",
+				args: ["-xzf", "/w/node.tar.gz", "-C", "/w"],
+			});
+		}
+	});
+
+	it("never shells out to a command interpreter", () => {
+		for (const platform of ["win32", "darwin", "linux"]) {
+			const { command } = archiveExtraction("/w/a", "/w", { platform, systemRoot: "C:\\Windows" });
+			expect(command).not.toMatch(/powershell|cmd\.exe|\bsh\b/i);
+		}
+	});
+});

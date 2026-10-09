@@ -101,12 +101,18 @@ describe("Android native compatibility boundaries", () => {
 	// top one answered a swipe down.
 	it("shows Spawn's choices inside Spawn's own sheet", () => {
 		const android = source("./spawn-composer-controls.android.tsx");
+		const icons = source("./icons.tsx");
 		expect(android).toContain("OptionList");
 		expect(android).not.toMatch(/\bModal\b/);
 		expect(android).not.toContain("@expo/ui/community/bottom-sheet");
 		expect(android).not.toContain("Picker");
 		expect(android).not.toContain("@expo/ui");
 		expect(android).toContain("AgentLogo");
+		expect(android).toContain("option.sectionBreakBefore && styles.optionSectionBreak");
+		expect(android).toContain('icon={selectedProject?.icon ?? "folder"}');
+		expect(android).toContain('option.icon ? <Feather name={option.icon}');
+		expect(icons).toContain('import MessageSquarePlus from "lucide-react-native/icons/message-square-plus";');
+		expect(icons).toContain('"message-square-plus": MessageSquarePlus');
 	});
 
 	it("uses a rounded native Android attachment chooser instead of the square popup menu", () => {
@@ -220,6 +226,15 @@ describe("Android native compatibility boundaries", () => {
 		const layout = source("../app/_layout.tsx");
 		expect(layout).toContain('name === "sheets/conversation-actions" && Platform.OS === "android"');
 		expect(layout).toContain("sheetAllowedDetents: [0.6]");
+	});
+
+	it("keeps Android review actions at the 60% detent with a visible native drag handle", () => {
+		const layout = source("../app/_layout.tsx");
+		const actions = source("../app/sheets/review-actions.tsx");
+		expect(layout).toContain('{ name: "sheets/review-actions", detents: [0.6, 0.95] }');
+		expect(layout).toContain("sheetInitialDetentIndex: 0");
+		expect(layout).toContain("sheetGrabberVisible: true");
+		expect(actions).toMatch(/<ScrollView[^>]*nestedScrollEnabled/);
 	});
 
 	it("does not register the built-in Android sound as a missing custom asset", () => {

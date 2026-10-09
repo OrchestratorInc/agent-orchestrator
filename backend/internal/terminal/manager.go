@@ -442,12 +442,7 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 			c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgOpened})
 		},
 		func(data []byte) {
-			c.enqueue(serverMsg{
-				Ch:   chTerminal,
-				ID:   id,
-				Type: msgData,
-				Data: base64.StdEncoding.EncodeToString(data),
-			})
+			c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgData, raw: data})
 		},
 		func() {
 			// Clear the connection's entry for this id before sending exited so
@@ -543,10 +538,29 @@ func newOutQueue() *outQueue {
 	return &outQueue{wake: make(chan struct{}, 1), room: make(chan struct{}, 1)}
 }
 
+// maxMergedData bounds one merged data frame.
+const maxMergedData = 256 << 10
+
 func (q *outQueue) push(msg serverMsg) {
 	q.mu.Lock()
+	// PTY output arrives in many small reads. Output queued behind the writer
+	// for the same terminal joins the frame before it, so a burst is sent as a
+	// few messages instead of thousands of tiny ones (each costing an envelope,
+	// a base64 pass and a renderer write).
+	if n := len(q.frames); n > 0 && msg.raw != nil {
+		if last := &q.frames[n-1]; last.raw != nil && last.Ch == msg.Ch && last.ID == msg.ID &&
+			last.Type == msg.Type && len(last.raw)+len(msg.raw) <= maxMergedData {
+			last.raw = append(last.raw, msg.raw...)
+			q.bytes += len(msg.raw)
+			q.mu.Unlock()
+			return
+		}
+	}
+	if msg.raw != nil {
+		msg.raw = append([]byte(nil), msg.raw...)
+	}
 	q.frames = append(q.frames, msg)
-	q.bytes += len(msg.Data)
+	q.bytes += len(msg.Data) + len(msg.raw)
 	q.mu.Unlock()
 	select {
 	case q.wake <- struct{}{}:
@@ -565,6 +579,12 @@ func (q *outQueue) drain() []serverMsg {
 	frames := q.frames
 	q.frames, q.bytes = nil, 0
 	q.mu.Unlock()
+	for i := range frames {
+		if frames[i].raw != nil {
+			frames[i].Data = base64.StdEncoding.EncodeToString(frames[i].raw)
+			frames[i].raw = nil
+		}
+	}
 	select {
 	case q.room <- struct{}{}:
 	default:

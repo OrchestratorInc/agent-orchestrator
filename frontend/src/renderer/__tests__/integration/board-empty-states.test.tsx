@@ -36,6 +36,7 @@ vi.mock("../../lib/platform", async (importOriginal) => ({
 }));
 
 vi.mock("../../lib/spawn-orchestrator", () => ({
+	isChatPreflightCode: (code?: string) => code === "CHAT_DRIVER_UNAVAILABLE",
 	isChatPreflightError: (error: unknown) =>
 		error instanceof Error && (error as Error & { code?: string }).code === "CHAT_DRIVER_UNAVAILABLE",
 	spawnOrchestrator: spawnOrchestratorMock,
@@ -46,6 +47,8 @@ vi.mock("../../lib/api-client", () => ({
 	apiErrorCode: () => undefined,
 	apiErrorMessage: (e: unknown) => (e instanceof Error ? e.message : "error"),
 	hasTrustedApiBaseUrl: () => true,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => () => undefined,
 }));
 
 vi.mock("../../components/TerminalPane", () => ({
@@ -57,7 +60,15 @@ vi.mock("../../components/TerminalPane", () => ({
 
 vi.mock("../../lib/bridge", () => ({
 	aoBridge: {
-		app: { chooseDirectory: chooseDirectoryMock, openExternal: vi.fn() },
+		app: {
+			chooseDirectory: chooseDirectoryMock,
+			openExternal: vi.fn(),
+			// The starting orchestrator's chat mounts ChatWorkspace in place of the board.
+			onCloseShellTerminalShortcut: () => () => undefined,
+			setCloseShellTerminalShortcutEnabled: vi.fn(),
+			onPreviousTabShortcut: () => () => undefined,
+			onNextTabShortcut: () => () => undefined,
+		},
 		clipboard: { writeText: clipboardWriteMock },
 		// CreateProjectFlow reads the cloud session (Local | Cloud gating);
 		// signed-out keeps these tests on the local-only flow.
@@ -179,6 +190,7 @@ function renderBoard(ui: ReactNode) {
 		cloneProject: cloneProjectMock,
 		createProject: createProjectMock,
 		initializeProjectRepository: initializeProjectRepositoryMock,
+		openRemoteProjectSettings: vi.fn(),
 	};
 	return render(
 		<QueryClientProvider client={lastQueryClient}>
@@ -242,6 +254,7 @@ describe("global board first launch", () => {
 			cloneProject: cloneProjectMock,
 			createProject: createProjectMock,
 			initializeProjectRepository: initializeProjectRepositoryMock,
+			openRemoteProjectSettings: vi.fn(),
 		};
 		render(
 			<QueryClientProvider client={lastQueryClient}>
@@ -261,9 +274,9 @@ describe("global board first launch", () => {
 
 		expect(await screen.findByText("Add a project")).toBeInTheDocument();
 		expect(screen.getByText("Choose how you want to add code to Agent Orchestrator")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Clone from Git" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Import a workspace folder" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Import an existing project" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Clone a repo" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Open a workspace" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Open a local folder" })).toBeInTheDocument();
 		expect(columnCount()).toBe(0);
 		// The welcome carries its own orientation — no dangling "Board" header.
 		expect(screen.queryByText("Board")).not.toBeInTheDocument();
@@ -399,7 +412,7 @@ describe("global board first launch", () => {
 		chooseDirectoryMock.mockResolvedValue(null);
 		renderBoard(<SessionsBoard />);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Import an existing project" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Open a local folder" }));
 		expect(chooseDirectoryMock).toHaveBeenCalledTimes(1);
 		expect(chooseDirectoryMock).toHaveBeenCalledWith("Choose a project repository");
 	});
@@ -409,7 +422,7 @@ describe("global board first launch", () => {
 		chooseDirectoryMock.mockResolvedValue(null);
 		renderBoard(<SessionsBoard />);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Import a workspace folder" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Open a workspace" }));
 		expect(chooseDirectoryMock).toHaveBeenCalledTimes(1);
 		expect(chooseDirectoryMock).toHaveBeenCalledWith("Choose a workspace folder");
 	});
@@ -419,7 +432,7 @@ describe("global board first launch", () => {
 		chooseDirectoryMock.mockRejectedValue(new Error("dialog unavailable"));
 		renderBoard(<SessionsBoard />);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Import an existing project" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Open a local folder" }));
 		const messages = await screen.findAllByText("dialog unavailable");
 		expect(messages.some((el) => !el.classList.contains("sr-only"))).toBe(true);
 	});
@@ -442,6 +455,7 @@ describe("global board first launch", () => {
 			cloneProject: cloneProjectMock,
 			createProject: createProjectMock,
 			initializeProjectRepository: initializeProjectRepositoryMock,
+			openRemoteProjectSettings: vi.fn(),
 		};
 		render(
 			<QueryClientProvider client={lastQueryClient}>
@@ -527,17 +541,18 @@ describe("project board with no sessions", () => {
 		expect(screen.getByText(/branch is already checked out/)).toBeInTheDocument();
 	});
 
-	it("shows a provisioning banner and gates actions while the orchestrator starts in the background", async () => {
+	it("shows the starting orchestrator chat in place of the board while it starts in the background", async () => {
 		respondWith([project], []);
 		useUiStore.getState().setProjectProvisioning("proj-1", true);
 		renderBoard(<SessionsBoard projectId="proj-1" />);
 
-		expect(await screen.findByRole("status")).toHaveTextContent(/Setting up the project/);
-		for (const button of screen.getAllByRole("button", { name: "Spawn Orchestrator" })) {
-			expect(button).toBeDisabled();
-		}
-		useUiStore.getState().setProjectProvisioning("proj-1", false);
-		await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+		expect(await screen.findByLabelText("Message the agent")).toBeInTheDocument();
+		expect(screen.getByLabelText("Message the agent").closest("form")).toHaveAttribute("data-starting", "true");
+		expect(screen.queryByTestId("board")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Spawn Orchestrator" })).not.toBeInTheDocument();
+		act(() => useUiStore.getState().setProjectProvisioning("proj-1", false));
+		expect(await screen.findByTestId("project-board-empty")).toBeInTheDocument();
+		expect(screen.queryByLabelText("Message the agent")).not.toBeInTheDocument();
 	});
 
 	it("clears the project creation startup error when retrying orchestrator spawn", async () => {
@@ -683,7 +698,7 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		expect(headerTask).toHaveClass("topbar-control--secondary");
 	});
 
-	it("shares pending state and Terminal UI recovery after either copy starts a request", async () => {
+	it("shows the starting chat while a request is pending, then restores the board with Terminal UI recovery", async () => {
 		respondWith([project], []);
 		let rejectSpawn!: (error: Error) => void;
 		spawnOrchestratorMock.mockImplementationOnce(() => new Promise<string>((_resolve, reject) => { rejectSpawn = reject; }));
@@ -694,13 +709,19 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		expect(buttons).toHaveLength(2);
 		act(() => { buttons[0].click(); buttons[1].click(); });
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledTimes(1));
-		for (const button of buttons) {
-			expect(button).toBeDisabled();
-			expect(button).toHaveAttribute("aria-busy", "true");
+		expect(await screen.findByLabelText("Message the agent")).toBeInTheDocument();
+		if (inPanel) {
+			// The header actions live inside the board, so they leave with it.
+			expect(screen.queryByRole("button", { name: "Spawn Orchestrator" })).not.toBeInTheDocument();
+		} else {
+			// Only the topbar's copy outlives the board; it shares the pending state.
+			const headerButton = screen.getByRole("button", { name: "Spawn Orchestrator" });
+			expect(headerButton).toBeDisabled();
+			expect(headerButton).toHaveAttribute("aria-busy", "true");
 		}
 		act(() => rejectSpawn(Object.assign(new Error("Chat driver unavailable"), { code: "CHAT_DRIVER_UNAVAILABLE" })));
 		expect(await screen.findByText("Chat driver unavailable")).toBeInTheDocument();
-		for (const button of buttons) expect(button).toBeEnabled();
+		for (const button of screen.getAllByRole("button", { name: "Spawn Orchestrator" })) expect(button).toBeEnabled();
 		await userEvent.click(await screen.findByRole("button", { name: "Create as Terminal UI" }));
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledTimes(2));
 		expect(spawnOrchestratorMock).toHaveBeenLastCalledWith("proj-1", "board", false, "tui");
@@ -720,6 +741,7 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		await screen.findByTestId("project-board-empty");
 		await userEvent.click(screen.getAllByRole("button", { name: "Spawn Orchestrator" })[0]);
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledTimes(1));
+		expect(await screen.findByLabelText("Message the agent")).toBeInTheDocument();
 		view.rerender(<QueryClientProvider client={lastQueryClient!}><ShellProvider value={lastShell!}>{board("proj-2")}</ShellProvider></QueryClientProvider>);
 		await waitFor(() => {
 			for (const button of screen.getAllByRole("button", { name: "Spawn Orchestrator" })) expect(button).toBeEnabled();

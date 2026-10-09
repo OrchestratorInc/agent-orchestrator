@@ -11,6 +11,17 @@ import {
 } from "../src/index.js";
 
 describe("CloudClient", () => {
+  it("loads normalized project settings and preserves PATCH omissions", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ project: { id: "project" } }));
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+    await client.getProject("org/1", "project/1");
+    await client.updateProjectSettings("org/1", "project/1", { config: { reviewers: [{ harness: "claude-code", agentConfig: { model: "review-model", effort: "high", permissions: "auto" } }] } });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/projects/project%2F1");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/projects/project%2F1/settings");
+    expect(fetchMock.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({ config: { reviewers: [{ harness: "claude-code", agentConfig: { model: "review-model", effort: "high", permissions: "auto" } }] } }));
+    await client.updateProjectSettings("org/1", "project/1", { config: { worker: null, orchestrator: null } });
+    expect(fetchMock.mock.calls[2]?.[1]?.body).toBe('{"config":{"worker":null,"orchestrator":null}}');
+  });
   it("loads the authenticated account and organization memberships", async () => {
     const account = {
       user: {
@@ -72,6 +83,25 @@ describe("CloudClient", () => {
       "https://cloud.example.com/api/cloud/v1/orgs/4165753c-c6ad-4ac2-8f12-e0cbb24d9750/sessions/a9dc6493-bd04-4c03-bb45-55733ed83784",
     );
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("DELETE");
+  });
+
+  it("retries a session whose startup failed", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse({ session: { id: "session one" } }, 202),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await client.retrySessionStartup("org one", "session one");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/org%20one/sessions/session%20one/startup-retry",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
   });
 
   it("updates editable project settings on the project resource", async () => {
@@ -417,6 +447,7 @@ describe("CloudClient", () => {
     } satisfies PullRequestSummary;
     const reviewState = {
       sessionId: "session one?",
+      availableReviewerHarnesses: ["codex"],
       reviews: [
         {
           pullRequestUrl: pullRequest.url,
@@ -631,6 +662,95 @@ describe("CloudClient", () => {
     });
   });
 
+	it("queues a stored review for delivery to the worker", async () => {
+		const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+			jsonResponse({
+				event: {
+					sessionId: "session",
+					sequence: 2,
+					type: "chat.user_message",
+					payload: { text: "review" },
+					createdAt: "2026-09-20T00:00:00Z",
+				},
+			}),
+		);
+		const client = createCloudClient({
+			baseUrl: "https://cloud.example.com",
+			getAccessToken: () => "access-token",
+			fetch: fetchMock as typeof fetch,
+		});
+
+		await client.sendSessionReviewToWorker("tenant", "session", "run/1", {
+			idempotencyKey: "review-command-1",
+		});
+
+		expect(requestHeaders(fetchMock, 0).get("Idempotency-Key")).toBe("review-command-1");
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/reviews/run%2F1/send",
+			expect.objectContaining({ method: "POST" }),
+		);
+	});
+
+  it("sends the selected model, effort, mode, and approval mode with a chat message", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse({
+          event: {
+            sessionId: "session",
+            sequence: 1,
+            type: "chat.user_message",
+            payload: { text: "Ship it" },
+            createdAt: "2026-08-09T00:00:00Z",
+          },
+        }),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await client.sendMessage(
+      "tenant",
+      "session",
+      {
+        text: "Ship it", model: "gpt-5.6-codex", reasoningEffort: "high",
+        mode: "standard", approvalMode: "accept-edits",
+      },
+      { idempotencyKey: "message-command-2" },
+    );
+
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({
+        text: "Ship it", model: "gpt-5.6-codex", reasoningEffort: "high",
+        mode: "standard", approvalMode: "accept-edits",
+      }),
+    );
+  });
+
+  it("loads chat model choices for a session", async () => {
+    const catalog = {
+      models: [{
+        id: "gpt-5.6-codex",
+        displayName: "Codex",
+        default: true,
+        efforts: ["high"],
+        defaultEffort: "high",
+      }],
+    };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(catalog));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.listChatModels("tenant", "session")).resolves.toEqual(catalog);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/chat-models",
+    );
+  });
+
   it("streams replayed SSE events from an explicit cursor", async () => {
     const abort = new AbortController();
     const encoder = new TextEncoder();
@@ -811,6 +931,50 @@ describe("CloudClient", () => {
     expect(requestHeaders(fetchMock, 0).get("Idempotency-Key")).toBe(
       "cancel-turn-1",
     );
+  });
+
+  it("steers an active turn through the public client", async () => {
+    const event = {
+      sessionId: "session", sequence: 2, type: "chat.turn_steered",
+      payload: { text: "Use the existing parser" }, createdAt: "2026-08-09T00:00:00Z",
+    };
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => jsonResponse({ event }, 202));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.steerTurn("tenant", "session", "turn one", "Use the existing parser", {
+      idempotencyKey: "steer-one",
+    })).resolves.toEqual({ event });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/turns/turn%20one/steer",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ text: "Use the existing parser" }));
+    expect(requestHeaders(fetchMock, 0).get("Idempotency-Key")).toBe("steer-one");
+  });
+
+  it("submits an approval decision through the public client", async () => {
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => jsonResponse({ ok: true }, 202));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.decideChatApproval("tenant", "session", "request one", "approve"))
+      .resolves.toEqual({ ok: true });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/approvals/request%20one/decide",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ decisionId: "approve" }));
   });
 });
 

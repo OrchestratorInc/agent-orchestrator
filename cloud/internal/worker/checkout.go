@@ -277,20 +277,83 @@ func ConfigureWorkerGit(
 	helper := fmt.Sprintf(`#!/bin/sh
 set -eu
 [ "${1:-}" = "get" ] || exit 0
+# git supplies the request as protocol/host/path lines on stdin (path is
+# included because credential.useHttpPath is true). Read them so the token can
+# be scoped to the exact repository being fetched or pushed — the primary
+# checkout or a declared extra dev-kit repository. Any parse miss leaves
+# repo_query empty and the control plane issues the broad multi-repository
+# grant, so this never narrows a request it cannot classify.
+req_host=""
+req_path=""
+while IFS='=' read -r key value; do
+  [ -n "$key" ] || break
+  case "$key" in
+    host) req_host="$value" ;;
+    path) req_path="$value" ;;
+  esac
+done
+# Only ever hand the GitHub installation token to github.com. This helper is
+# registered unscoped and credential.useHttpPath makes git invoke it for EVERY
+# host, so without this gate a sandbox git operation against a non-github remote
+# (which the coding agent can add) would be handed the installation token. exit 0
+# returns no credential, so git falls through rather than leaking it.
+[ "$req_host" = "github.com" ] || exit 0
+repo_query=""
+if [ -n "$req_path" ]; then
+  repo="${req_path%%.git}"
+  repo="${repo#/}"
+  # Only a real owner/repo (exactly two segments) is forwarded; a single-segment
+  # or multi-segment path leaves repo_query empty → the broad multi-repository
+  # grant, never a bogus scoped request.
+  case "$repo" in
+    */*)
+      owner="${repo%%%%/*}"
+      name="${repo#*/}"
+      case "$name" in */*) name="" ;; esac
+      if [ -n "$owner" ] && [ -n "$name" ]; then
+        repo_query="?repo=${owner}/${name}"
+      fi
+      ;;
+  esac
+fi
 worker_token="$(tr -d '\r\n' < %s)"
+token_url=%s
 response="$(curl -fsS --connect-timeout 10 --max-time 30 -X POST \
   -H "Authorization: Worker ${worker_token}" \
   -H "X-AO-Session-ID: %s" \
-  %s)"
-github_token="$(printf '%%s' "$response" | jq -er '.token | select(type == "string" and length > 0)')"
+  "${token_url}${repo_query}")"
+# jq is not on every workspace image (BYO templates), so parse the token with
+# sed when it is missing. GitHub tokens are [A-Za-z0-9_], so the pattern is exact.
+ao_extract_token() {
+  if command -v jq >/dev/null 2>&1; then
+    printf '%%s' "$1" | jq -er '.token | select(type == "string" and length > 0)'
+    return
+  fi
+  token="$(printf '%%s' "$1" | tr -d '\r\n' | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_.-]*\)".*/\1/p')"
+  [ -n "$token" ] || { echo "AO could not read the GitHub token response" >&2; return 1; }
+  printf '%%s\n' "$token"
+}
+github_token="$(ao_extract_token "$response")"
 printf 'username=x-access-token\npassword=%%s\n' "$github_token"
-`, shellQuote(filepath.Join(dataDir, "worker-token")), sessionID,
-		shellQuote(strings.TrimRight(publicURL, "/")+"/api/cloud/v1/worker/github-token"))
+`, shellQuote(filepath.Join(dataDir, "worker-token")),
+		shellQuote(strings.TrimRight(publicURL, "/")+"/api/cloud/v1/worker/github-token"),
+		sessionID)
 	if err := os.WriteFile(helperPath, []byte(helper), 0o700); err != nil {
 		return fmt.Errorf("write worker Git credential helper: %w", err)
 	}
 	githubWrapper := fmt.Sprintf(`#!/bin/sh
 set -eu
+# jq is not on every workspace image (BYO templates), so parse the token with
+# sed when it is missing. GitHub tokens are [A-Za-z0-9_], so the pattern is exact.
+ao_extract_token() {
+  if command -v jq >/dev/null 2>&1; then
+    printf '%%s' "$1" | jq -er '.token | select(type == "string" and length > 0)'
+    return
+  fi
+  token="$(printf '%%s' "$1" | tr -d '\r\n' | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_.-]*\)".*/\1/p')"
+  [ -n "$token" ] || { echo "AO could not read the GitHub token response" >&2; return 1; }
+  printf '%%s\n' "$token"
+}
 real_gh="${AO_GH_REAL_BINARY:-}"
 if [ -z "$real_gh" ]; then
   for candidate in /usr/local/bin/gh /usr/bin/gh; do
@@ -314,7 +377,7 @@ else
     -H "Authorization: Worker ${worker_token}" \
     -H "X-AO-Session-ID: %s" \
     %s)"
-  github_token="$(printf '%%s' "$response" | jq -er '.token | select(type == "string" and length > 0)')"
+  github_token="$(ao_extract_token "$response")"
 fi
 if [ "${1:-}" = "pr" ] && [ "${2:-}" = "create" ]; then
   set +e

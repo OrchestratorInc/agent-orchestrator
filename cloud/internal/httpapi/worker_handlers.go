@@ -15,6 +15,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/roleprompt"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -81,6 +82,7 @@ var workerEventTypes = map[string]struct{}{
 	"agent.ready":          {},
 	"worker.ready":         {},
 	"chat.assistant_delta": {},
+	"chat.activity":        {},
 }
 
 const (
@@ -235,6 +237,12 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 // launchContextFrom projects a stored launch spec onto the wire type shared by
 // bootstrap and reconnect.
 func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error) {
+	var agentConfig domain.ProjectAgentConfig
+	if len(launch.AgentConfig) > 0 {
+		if err := json.Unmarshal(launch.AgentConfig, &agentConfig); err != nil {
+			return worker.LaunchContext{}, err
+		}
+	}
 	agentRules, orchestratorRules, err := projectRoleRules(launch.ProjectConfig)
 	if err != nil {
 		return worker.LaunchContext{}, err
@@ -274,9 +282,13 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 		Branch:          launch.Branch,
 		Prompt:          launch.Prompt,
 		AgentSessionID:  launch.AgentSessionID,
+		Interface:       string(launch.Interface),
 		ParentSessionID: launch.ParentSessionID,
 		Mode:            launch.Mode,
 		Model:           launch.Model,
+		AgentConfig:     agentConfig,
+		ReasoningEffort: launch.ReasoningEffort,
+		SelectionAt:     launch.SelectionAt,
 		DeniedCommands:  launch.DeniedCommands,
 		RepositoryURL:   launch.RepositoryURL,
 		DefaultBranch:   launch.DefaultBranch,
@@ -537,7 +549,23 @@ func (s *Server) workerGitHubToken(w http.ResponseWriter, r *http.Request) {
 	// projects the App cannot serve (no installation / not App-connected / a remote
 	// broker that cannot push).
 	if s.checkoutBroker != nil {
-		grant, err := s.checkoutBroker.IssuePushGrant(r.Context(), claims.OrgID, claims.SessionID)
+		// git invokes the credential helper with credential.useHttpPath=true, so
+		// it can name the exact repository it is fetching or pushing. When it does,
+		// mint an App token scoped to that repository (primary or a declared extra
+		// the App is installed on); an App-uninstalled extra returns ErrForbidden
+		// here and falls through to the PAT, giving the same App-first/PAT-fallback
+		// precedence per repository. Without a repository (older helpers, the gh
+		// CLI wrapper), fall back to the broad multi-repository push grant.
+		repo := workerRequestedRepository(r)
+		var (
+			grant githubapp.CheckoutGrant
+			err   error
+		)
+		if repo != "" {
+			grant, err = s.checkoutBroker.IssuePushGrantForRepo(r.Context(), claims.OrgID, claims.SessionID, repo)
+		} else {
+			grant, err = s.checkoutBroker.IssuePushGrant(r.Context(), claims.OrgID, claims.SessionID)
+		}
 		if err == nil && grant.Token != "" && grant.ExpiresAt.After(time.Now()) {
 			writeJSON(w, http.StatusOK, worker.GitHubTokenResponse{Token: grant.Token, ExpiresAt: grant.ExpiresAt})
 			return
@@ -567,6 +595,28 @@ func (s *Server) workerGitHubToken(w http.ResponseWriter, r *http.Request) {
 	writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "GitHub credentials are not available.")
 }
 
+// workerRequestedRepository extracts the "owner/repo" the git credential helper
+// named via the ?repo= query parameter (git supplies host+path because the
+// helper runs with credential.useHttpPath=true). It returns "" for a missing or
+// malformed value, so the caller falls back to the broad multi-repository push
+// grant rather than failing — the repository hint only ever narrows the grant's
+// scope, it is never a hard requirement.
+func workerRequestedRepository(r *http.Request) string {
+	raw := strings.TrimSpace(r.URL.Query().Get("repo"))
+	if raw == "" {
+		return ""
+	}
+	raw = strings.TrimSuffix(strings.Trim(raw, "/"), ".git")
+	owner, repo, ok := strings.Cut(raw, "/")
+	if !ok ||
+		owner == "" || repo == "" ||
+		strings.ContainsAny(owner, "/ \t") ||
+		strings.ContainsAny(repo, "/ \t") {
+		return ""
+	}
+	return owner + "/" + repo
+}
+
 func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	claims := workerFrom(r)
@@ -574,7 +624,7 @@ func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:git scope is required.")
 		return
 	}
-	if s.checkoutBroker == nil {
+	if s.checkoutBroker == nil && s.patWrites == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Raising a pull request is not available.")
 		return
 	}
@@ -611,12 +661,17 @@ func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) 
 		pr  domain.PullRequest
 		err error
 	)
-	pr, err = s.checkoutBroker.RaisePullRequest(r.Context(), claims.OrgID, claims.SessionID, raiseInput)
-	if err != nil {
+	if s.checkoutBroker != nil {
+		pr, err = s.checkoutBroker.RaisePullRequest(r.Context(), claims.OrgID, claims.SessionID, raiseInput)
+	}
+	if err != nil || s.checkoutBroker == nil {
 		if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
 			pr, err = s.patWrites.RaisePullRequest(
 				r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, raiseInput,
 			)
+		} else if s.checkoutBroker == nil {
+			writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Raising a pull request is not available.")
+			return
 		}
 	}
 	if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
@@ -654,7 +709,7 @@ func (s *Server) workerClaimPullRequest(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:git scope is required.")
 		return
 	}
-	if s.checkoutBroker == nil {
+	if s.checkoutBroker == nil && s.patWrites == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Pull request tracking is not available.")
 		return
 	}
@@ -668,18 +723,30 @@ func (s *Server) workerClaimPullRequest(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, http.StatusBadRequest, "INVALID_PULL_REQUEST", "A pull request number or URL is required.")
 		return
 	}
-	// PAT-first, mirroring workerRaisePullRequest: a configured PAT can claim
-	// (fetch + record) a PR even where the checkout broker is read-only.
+	// Prefer the GitHub App (checkout broker) to claim, falling back to the user's
+	// PAT only when the broker cannot complete it — the same App-first/PAT-fallback
+	// precedence as workerRaisePullRequest / the credential-grant endpoints. A
+	// PAT-first order here let a cached-valid-but-rotted PAT (validation_state is a
+	// cached snapshot) shadow a healthy App installation and fail every claim with
+	// "The pull request could not be tracked" (GitHub 401) even though the App can
+	// track it — the same class of bug the raise/merge/token paths avoid by being
+	// App-first. The App token is minted fresh per request and never goes stale.
 	var (
 		pr  domain.PullRequest
 		err error
 	)
-	if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
-		pr, err = s.patWrites.ClaimPullRequest(
-			r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, input.Reference,
-		)
-	} else {
+	if s.checkoutBroker != nil {
 		pr, err = s.checkoutBroker.ClaimPullRequest(r.Context(), claims.OrgID, claims.SessionID, input.Reference)
+	}
+	if err != nil || s.checkoutBroker == nil {
+		if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
+			pr, err = s.patWrites.ClaimPullRequest(
+				r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, input.Reference,
+			)
+		} else if s.checkoutBroker == nil {
+			writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Pull request tracking is not available.")
+			return
+		}
 	}
 	if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
 		writeError(w, r, http.StatusForbidden, "PULL_REQUEST_NOT_AUTHORIZED", "This session does not have an active repository grant.")
@@ -701,6 +768,66 @@ func (s *Server) workerClaimPullRequest(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+func (s *Server) workerReportGitRefs(w http.ResponseWriter, r *http.Request) {
+	claims := workerFrom(r)
+	if !worker.HasScope(claims, "worker:git") {
+		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:git scope is required.")
+		return
+	}
+	var input worker.ReportGitRefsRequest
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if len(input.Refs) > 128 {
+		writeError(w, r, http.StatusBadRequest, "INVALID_GIT_REFS", "Too many branch heads.")
+		return
+	}
+	refs := make([]domain.WorkerGitRef, 0, len(input.Refs))
+	seen := make(map[string]struct{}, len(input.Refs))
+	for _, ref := range input.Refs {
+		branch := strings.TrimSpace(ref.Branch)
+		if branch == "" || len(branch) > 255 || len(ref.SHA) != 40 || strings.ContainsAny(branch, "\x00\r\n") {
+			writeError(w, r, http.StatusBadRequest, "INVALID_GIT_REFS", "Invalid branch head.")
+			return
+		}
+		if _, err := hex.DecodeString(ref.SHA); err != nil {
+			writeError(w, r, http.StatusBadRequest, "INVALID_GIT_REFS", "Invalid branch head.")
+			return
+		}
+		if _, exists := seen[branch]; exists {
+			writeError(w, r, http.StatusBadRequest, "INVALID_GIT_REFS", "Duplicate branch head.")
+			return
+		}
+		seen[branch] = struct{}{}
+		refs = append(refs, domain.WorkerGitRef{Branch: branch, SHA: ref.SHA})
+	}
+	store, ok := s.store.(interface {
+		WorkerGitHubCheckoutContext(context.Context, string, string) (domain.GitHubCheckoutContext, error)
+		ReplaceWorkerGitRefs(context.Context, string, string, int64, []domain.WorkerGitRef) error
+	})
+	if !ok || s.github == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "SCM_UNAVAILABLE", "Pull request tracking is not available.")
+		return
+	}
+	checkout, err := store.WorkerGitHubCheckoutContext(r.Context(), claims.OrgID, claims.SessionID)
+	if err != nil || checkout.GitHubRepositoryID <= 0 {
+		writeError(w, r, http.StatusForbidden, "REPOSITORY_NOT_AUTHORIZED", "This session has no active repository grant.")
+		return
+	}
+	if err := store.ReplaceWorkerGitRefs(r.Context(), claims.OrgID, claims.SessionID, checkout.GitHubRepositoryID, refs); err != nil {
+		s.logger.Error("record worker branch heads", "error", err)
+		writeError(w, r, http.StatusInternalServerError, "GIT_REFS_FAILED", "Branch heads could not be recorded.")
+		return
+	}
+	if err := s.github.ReconcileWorkerGitRefs(r.Context(), claims.OrgID, checkout.GitHubRepositoryID, refs); err != nil {
+		s.logger.Error("reconcile worker branch heads with webhooks", "error", err)
+		writeError(w, r, http.StatusBadGateway, "PR_RECONCILE_FAILED", "Pull request webhooks could not be reconciled.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // The GitHub App webhook can be delivered to a different environment from the
 // worker that opened the PR. Record the bell notification at the worker write
 // boundary so it does not depend on webhook routing.
@@ -719,7 +846,7 @@ func (s *Server) workerSubmitReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:git scope is required.")
 		return
 	}
-	if s.checkoutBroker == nil {
+	if s.checkoutBroker == nil && s.patWrites == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Submitting a review is not available.")
 		return
 	}
@@ -733,10 +860,19 @@ func (s *Server) workerSubmitReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	run, err := s.checkoutBroker.SubmitReview(r.Context(), claims.OrgID, claims.SessionID, reviewRunID, domain.SubmitReviewResult{
-		Verdict: contract.AOReviewVerdict(strings.TrimSpace(input.Verdict)),
-		Body:    input.Body,
-	})
+	result := domain.SubmitReviewResult{Verdict: contract.AOReviewVerdict(strings.TrimSpace(input.Verdict)), Body: input.Body}
+	var (
+		run domain.ReviewRun
+		err error
+	)
+	if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
+		run, err = s.patWrites.SubmitReview(r.Context(), claims.OrgID, claims.SessionID, reviewRunID, grant.Token, result)
+	} else if s.checkoutBroker != nil {
+		run, err = s.checkoutBroker.SubmitReview(r.Context(), claims.OrgID, claims.SessionID, reviewRunID, result)
+	} else {
+		writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Submitting a review is not available.")
+		return
+	}
 	if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
 		writeError(w, r, http.StatusForbidden, "REVIEW_NOT_AUTHORIZED", "This session may not submit a verdict for this review.")
 		return
@@ -837,6 +973,11 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			s.writeWorkerStoreError(w, r, err)
 			return
 		}
+		if err := s.store.AppendInteractiveConversationFacts(r.Context(), claims.OrgID, claims.SessionID,
+			activity.Event, activity.SourceInterface, activity.LatestUserPrompt, activity.LatestAssistantUpdate); err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
 		s.appendSessionProjectionEvent(
 			r.Context(), claims.OrgID, claims.SessionID, input.Type, activity,
 		)
@@ -854,6 +995,20 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.store.AppendSessionEvent(
 			r.Context(), claims.OrgID, claims.SessionID, input.Type, input.Payload,
 		); err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
+	case "chat.activity":
+		var output worker.OutputEvent
+		if err := json.Unmarshal(input.Payload, &output); err != nil ||
+			requireUUID(output.TurnID, "turnId") != nil || output.Attempt <= 0 ||
+			output.Activity == nil || output.Activity.ID == "" || len(output.Activity.ID) > 256 ||
+			len(input.Payload) > maxWorkerOutput+maxWorkerControlBody {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The chat activity payload is invalid.")
+			return
+		}
+		if err := s.store.AppendWorkerTurnActivity(r.Context(), claims.OrgID, claims.SessionID,
+			claims.WorkerID, output.TurnID, claims.Epoch, output.Attempt, *output.Activity); err != nil {
 			s.writeWorkerStoreError(w, r, err)
 			return
 		}
@@ -878,6 +1033,7 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			output.Attempt,
 			output.Stream,
 			output.Text,
+			output.ItemID,
 		); err != nil {
 			s.writeWorkerStoreError(w, r, err)
 			return
@@ -917,7 +1073,10 @@ func (s *Server) workerClaimTurn(w http.ResponseWriter, r *http.Request) {
 		response.Turn = &worker.Turn{
 			ID:              turn.ID,
 			Prompt:          turn.Prompt,
+			Model:           turn.Model,
+			ReasoningEffort: turn.ReasoningEffort,
 			Mode:            turn.Mode,
+			ApprovalMode:    turn.ApprovalMode,
 			DeniedCommands:  turn.DeniedCommands,
 			Harness:         turn.Harness,
 			Attempt:         turn.Attempt,
@@ -1025,6 +1184,10 @@ func (s *Server) workerFinishTurn(w http.ResponseWriter, r *http.Request, outcom
 	})
 }
 
+type workerReviewCredentialStore interface {
+	WorkerReviewCredential(context.Context, string, string, string, int64, string) (domain.WorkerCredential, error)
+}
+
 func (s *Server) workerCredential(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	claims := workerFrom(r)
@@ -1036,9 +1199,31 @@ func (s *Server) workerCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "CREDENTIALS_UNAVAILABLE", "Coding-agent credentials are unavailable.")
 		return
 	}
-	credential, err := s.store.WorkerAgentCredential(
-		r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch,
-	)
+	// A worker redeems only its own session's harness credential, or the
+	// snapshotted harness of a running review it owns. There is deliberately no
+	// arbitrary-provider selector: the worker token is readable by the agent, so
+	// one would let a compromised session pull every connected credential.
+	if r.URL.Query().Has("provider") {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "provider is not supported.")
+		return
+	}
+	reviewRunID := r.URL.Query().Get("reviewRunId")
+	var credential domain.WorkerCredential
+	var err error
+	if reviewRunID != "" {
+		if requireUUID(reviewRunID, "reviewRunId") != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "reviewRunId must be a UUID.")
+			return
+		}
+		store, ok := s.store.(workerReviewCredentialStore)
+		if !ok {
+			writeError(w, r, http.StatusNotImplemented, "not_implemented", "Reviewer credentials are unavailable.")
+			return
+		}
+		credential, err = store.WorkerReviewCredential(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch, reviewRunID)
+	} else {
+		credential, err = s.store.WorkerAgentCredential(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
+	}
 	if err != nil {
 		s.writeWorkerStoreError(w, r, err)
 		return
