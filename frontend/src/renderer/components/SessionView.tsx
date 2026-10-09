@@ -1,5 +1,5 @@
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe2, PanelRight, Plus } from "lucide-react";
+import { Globe2, Loader2, PanelRight, Plus } from "lucide-react";
 import { useBlocker } from "@tanstack/react-router";
 import { motion } from "motion/react";
 import {
@@ -359,25 +359,14 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 	);
 }
 
-function InterfaceSwitchLoader({ target, stage }: { target: "chat" | "tui"; stage: number }) {
-	const { t } = useTranslation();
+function CloudInterfaceSwitchLoader({ target }: { target: "chat" | "tui" }) {
 	const label = `Switching to ${target === "chat" ? "Chat UI" : "Terminal UI"}`;
-	const steps = useMemo(() => target === "chat"
-		? [
-			t("session.interfaceSwitch.toChat.save", { defaultValue: "Saving the terminal session" }),
-			t("session.interfaceSwitch.toChat.stop", { defaultValue: "Stopping the terminal agent" }),
-			t("session.interfaceSwitch.toChat.start", { defaultValue: "Starting the chat agent" }),
-			t("session.interfaceSwitch.toChat.restore", { defaultValue: "Restoring your conversation" }),
-		]
-		: [
-			t("session.interfaceSwitch.toTerminal.save", { defaultValue: "Saving your conversation" }),
-			t("session.interfaceSwitch.toTerminal.stop", { defaultValue: "Stopping the chat agent" }),
-			t("session.interfaceSwitch.toTerminal.start", { defaultValue: "Starting the terminal" }),
-			t("session.interfaceSwitch.toTerminal.open", { defaultValue: "Opening the terminal" }),
-		], [t, target]);
 	return (
-		<div className="absolute inset-0 z-chrome grid place-items-center bg-background" data-testid="interface-switch-loader-screen">
-			<MultiStepLoader ariaLabel={label} activeIndex={Math.min(stage, steps.length - 1)} steps={steps} />
+		<div className="absolute inset-0 z-chrome grid place-items-center bg-background" data-testid="cloud-interface-switch-loader-screen">
+			<div role="status" aria-live="polite" aria-label={label} className="flex flex-col items-center gap-3 text-muted-foreground">
+				<Loader2 aria-hidden="true" className="size-6 animate-spin" />
+				<span className="text-sm">{label}</span>
+			</div>
 		</div>
 	);
 }
@@ -2116,8 +2105,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					<NotificationCenter style={noDragStyle} />
 				</div>
 			) : null}
-			{interfaceUi.switchLoader
-				? <InterfaceSwitchLoader target={interfaceUi.target} stage={interfaceUi.switchStage} />
+			{interfaceUi.cloudLoader
+				? <CloudInterfaceSwitchLoader target={interfaceUi.target} />
 				: showLifecycleLoader || showCompletedLoader
 					? <CloudSessionLifecycleLoader
 						key={`${sessionId}:${cloudReconnecting && !workspaceRestarting ? "terminal" : "startup"}`}

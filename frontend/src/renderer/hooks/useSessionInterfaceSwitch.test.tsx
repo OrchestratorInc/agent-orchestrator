@@ -110,7 +110,7 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		};
 		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...cloudSession, mode: "chat", status: "working" }, { orgId: "org-1" }));
 		expect(mocks.context).toHaveBeenCalledWith("session-1", { orgId: "org-1" });
-		expect(result.current.switchLoader).toBe(false);
+		expect(result.current.cloudLoader).toBe(false);
 		expect(result.current.controllerTransitioning).toBe(false);
 		expect(result.current.newWorkDisabled).toBe(true);
 		expect(result.current.inlineStatus).not.toBeNull();
