@@ -859,6 +859,9 @@ export async function initTelemetry(): Promise<boolean> {
 		if (!bootstrap) return false;
 		disabledEventMatchers = bootstrap.disabledEvents ?? [];
 		const channel = releaseChannelFrom(await readUpdateSettingsForTelemetry());
+		// The user may have opted out while the awaits above were pending; applyAnalyticsOptOut
+		// could only set the flag then, so honor it before any client exists.
+		if (analyticsOptedOut) return false;
 		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel);
 		posthog.init(POSTHOG_KEY, buildPostHogConfig(bootstrap.distinctId));
 		// A previous launch's opt-out is remembered by the SDK; the AO marker is the

@@ -520,6 +520,7 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 	if (nextStatus.state !== "ready") disposeBrowserRuntimeLink();
 	daemonStatus = nextStatus;
 	if (nextStatus.state === "ready") void telemetryIdentity.flush();
+	else telemetryIdentity.invalidate();
 	getShellWebContents()?.send("daemon:status", daemonStatus);
 	if (nextStatus.state === "ready" && browserViewHost) {
 		establishBrowserRuntimeLink();

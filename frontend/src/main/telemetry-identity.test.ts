@@ -55,6 +55,18 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 		expect(fetcher).toHaveBeenCalledTimes(1);
 	});
 
+	it("replays the user to a restarted daemon, even on the same port", async () => {
+		const { ctl, fetcher } = await controller();
+		await ctl.setCloudUser("user_1");
+		await ctl.flush(); // ready again, nothing changed: no replay
+		expect(fetcher).toHaveBeenCalledTimes(1);
+
+		ctl.invalidate(); // daemon left ready (restart)
+		await ctl.flush(); // same origin comes back
+		expect(fetcher).toHaveBeenCalledTimes(2);
+		expect(JSON.parse((fetcher.mock.calls[1] as unknown as [string, RequestInit])[1].body as string)).toEqual({ cloudUserId: "user_1" });
+	});
+
 	it("refuses a non-loopback origin", async () => {
 		const { ctl, fetcher } = await controller(undefined, "http://example.com:4010");
 		await ctl.setCloudUser("user_1");

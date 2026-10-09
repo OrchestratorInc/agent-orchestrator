@@ -14,6 +14,7 @@ export interface MobileTelemetryClient {
 	register(properties: Record<string, unknown>): void | Promise<void>;
 	identify(distinctId: string): void;
 	reset(): void;
+	unregister(property: string): void | Promise<void>;
 	optOut(): void | Promise<void>;
 	optIn(): void | Promise<void>;
 }
@@ -53,6 +54,12 @@ export type MobileTelemetryOptions = {
 	onOptOutChange?: (optedOut: boolean) => void;
 	/** Start opted out (restored from storage). */
 	optedOut?: boolean;
+	/**
+	 * Drop every capture until setOptedOut() is called with the saved preference.
+	 * The runtime sets this because the preference loads asynchronously and a
+	 * previously opted-out phone must not send in that gap.
+	 */
+	awaitPreference?: boolean;
 };
 
 export function createMobileTelemetry(
@@ -66,20 +73,32 @@ export function createMobileTelemetry(
 	const denied = new Set(options.disabledEvents ?? []);
 	const allow = options.allow ?? (() => true);
 	let optedOut = options.optedOut ?? false;
+	let blocked = options.awaitPreference ?? false;
 	let identified = false;
 	let adoptedId: string | null = null;
+	let adoptedKey: string | null = null;
 
 	const setOptedOut = (next: boolean): void => {
-		if (next === optedOut) return;
+		blocked = false;
+		if (next === optedOut) {
+			// First load of a saved opt-out: the SDK has not been told yet.
+			if (next && options.awaitPreference) {
+				client.reset();
+				void client.optOut();
+			}
+			return;
+		}
 		optedOut = next;
 		options.onOptOutChange?.(next);
 		if (next) {
-			void client.optOut();
 			// Drops the distinct id and every super property, so nothing of the
-			// adopted identity survives in the SDK.
+			// adopted identity survives in the SDK. reset() also clears the SDK's own
+			// opt-out flag, so optOut() must come after it.
 			client.reset();
+			void client.optOut();
 			identified = false;
 			adoptedId = null;
+			adoptedKey = null;
 			return;
 		}
 		void client.optIn();
@@ -89,7 +108,7 @@ export function createMobileTelemetry(
 	const capture = (event: MobileEventName, properties?: Record<string, unknown>): void => {
 		// Fail closed on the event name: an event not in the allowlist is never
 		// sent, so a typo cannot ship a bare untracked event.
-		if (optedOut) return;
+		if (blocked || optedOut) return;
 		if (!(event in MOBILE_ALLOWLIST)) return;
 		// Build-time kill switch, mirroring the desktop denylist.
 		if (denied.has(event)) return;
@@ -106,16 +125,26 @@ export function createMobileTelemetry(
 
 	const adoptDesktopIdentity = (identity: DesktopTelemetryIdentity): void => {
 		setOptedOut(identity.optedOut);
-		if (optedOut || !identity.distinctId || adoptedId === identity.distinctId) return;
-		adoptedId = identity.distinctId;
+		if (optedOut || !identity.distinctId) return;
+		const key = JSON.stringify([identity.distinctId, identity.cloudUserId, identity.githubLogin]);
+		if (key === adoptedKey) return;
+		adoptedKey = key;
 		identified = true;
-		// Same distinct id as the desktop (and its daemon), so the phone's events
-		// land on the person the desktop already identified.
-		client.identify(identity.distinctId);
-		void client.register({
-			...(identity.githubLogin ? { github_actor: identity.githubLogin } : {}),
-			...(identity.cloudUserId ? { ao_cloud_user_id: identity.cloudUserId } : {}),
-		});
+		if (adoptedId !== identity.distinctId) {
+			adoptedId = identity.distinctId;
+			// Same distinct id as the desktop (and its daemon), so the phone's events
+			// land on the person the desktop already identified.
+			client.identify(identity.distinctId);
+		}
+		// Registered properties merge in the SDK, so a property the new identity
+		// lacks (signed out, or a desktop with no GitHub login) must be removed.
+		const props: Record<string, string> = {};
+		if (identity.githubLogin) props.github_actor = identity.githubLogin;
+		if (identity.cloudUserId) props.ao_cloud_user_id = identity.cloudUserId;
+		for (const name of ["github_actor", "ao_cloud_user_id"]) {
+			if (!(name in props)) void client.unregister(name);
+		}
+		if (Object.keys(props).length > 0) void client.register(props);
 	};
 
 	return {

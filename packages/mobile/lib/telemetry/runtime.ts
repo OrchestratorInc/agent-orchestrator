@@ -14,8 +14,8 @@ import {
 } from "./config";
 import { MOBILE_EVENTS } from "./events";
 import { checkRateLimit, mergeRateState, type RateLimitState } from "./rateLimit";
-import { createMobileTelemetry, type DesktopTelemetryIdentity, type MobileTelemetry } from "./telemetry";
-import type { ServerConfig } from "../config";
+import { createDesktopIdentitySync } from "./identitySync";
+import { createMobileTelemetry, type MobileTelemetry } from "./telemetry";
 
 // The one file that touches the SDK and the native runtime. Everything else in
 // telemetry/ is pure and unit-tested; this wires the real PostHog client and is
@@ -97,6 +97,8 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 	telemetry = createMobileTelemetry(client, context, {
 		disabledEvents: MOBILE_DISABLED_EVENTS,
 		allow: allowEvent,
+		// Nothing is captured until loadMobileOptOut() has read the saved preference.
+		awaitPreference: true,
 		onOptOutChange: (optedOut) => {
 			void (optedOut
 				? AsyncStorage.setItem(OPT_OUT_STORAGE_KEY, "1")
@@ -111,28 +113,21 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 // paired desktop that is opted in lifts it.
 const OPT_OUT_STORAGE_KEY = "ao.telemetry.optedOut";
 
-/** Restores the persisted opt-out. Awaited before the first heartbeat. */
+/** Restores the persisted opt-out and releases capture. Awaited before the first heartbeat. */
 export async function loadMobileOptOut(): Promise<void> {
+	let stored = false;
 	try {
-		if ((await AsyncStorage.getItem(OPT_OUT_STORAGE_KEY)) === "1") telemetry?.setOptedOut(true);
+		stored = (await AsyncStorage.getItem(OPT_OUT_STORAGE_KEY)) === "1";
 	} catch {
 		/* unreadable storage: stay opted in rather than guess */
 	}
+	telemetry?.setOptedOut(stored);
 }
 
-/**
- * Adopts the identity and opt-out of the connected desktops. Any desktop that
- * has opted out wins; otherwise the first one that reports an identity is used.
- * ponytail: first connected desktop wins when several are paired.
- */
-export async function syncDesktopTelemetryIdentity(configs: ServerConfig[]): Promise<void> {
-	if (!telemetry || configs.length === 0) return;
-	const results = await Promise.all(configs.map((cfg) => getTelemetryIdentity(cfg).catch(() => null)));
-	const reported = results.filter((r): r is DesktopTelemetryIdentity => r !== null);
-	const optedOut = reported.find((r) => r.optedOut);
-	const next = optedOut ?? reported.find((r) => r.distinctId);
-	if (next) telemetry.adoptDesktopIdentity(next);
-}
+/** Adopts the identity and opt-out of the connected desktops (see identitySync.ts). */
+export const syncDesktopTelemetryIdentity = createDesktopIdentitySync(getTelemetryIdentity, (identity) =>
+	telemetry?.adoptDesktopIdentity(identity),
+);
 
 /** The capture facade, or null before init. Call sites no-op when null. */
 export function mobileTelemetry(): MobileTelemetry | null {

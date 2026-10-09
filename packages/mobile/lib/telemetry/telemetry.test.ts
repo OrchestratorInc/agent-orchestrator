@@ -12,6 +12,7 @@ function fakeClient() {
 		register: (props) => void registered.push(props),
 		identify: (id) => void calls.push(`identify:${id}`),
 		reset: () => void calls.push("reset"),
+		unregister: (name) => void calls.push(`unregister:${name}`),
 		optOut: () => void calls.push("optOut"),
 		optIn: () => void calls.push("optIn"),
 	};
@@ -107,7 +108,7 @@ describe("createMobileTelemetry", () => {
 			const t = createMobileTelemetry(client, {});
 			t.adoptDesktopIdentity({ distinctId: "user_01H", cloudUserId: "user_01H", githubLogin: "octocat", optedOut: false });
 			t.adoptDesktopIdentity({ distinctId: "user_01H", cloudUserId: "user_01H", githubLogin: "octocat", optedOut: false });
-			expect(calls).toEqual(["identify:user_01H"]);
+			expect(calls.filter((c) => !c.startsWith("unregister"))).toEqual(["identify:user_01H"]);
 			expect(registered.at(-1)).toEqual({ github_actor: "octocat", ao_cloud_user_id: "user_01H" });
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
 			expect(captures[0].props).not.toHaveProperty("$process_person_profile");
@@ -132,13 +133,58 @@ describe("createMobileTelemetry", () => {
 			t.adoptDesktopIdentity({ optedOut: true });
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
 			expect(captures).toEqual([]);
-			expect(calls).toEqual(["identify:ins_abc", "optOut", "reset"]);
+			expect(calls.filter((c) => !c.startsWith("unregister"))).toEqual(["identify:ins_abc", "reset", "optOut"]);
 
 			t.adoptDesktopIdentity({ distinctId: "ins_abc", optedOut: false });
-			expect(calls.slice(3)).toEqual(["optIn", "identify:ins_abc"]);
+			expect(calls.filter((c) => !c.startsWith("unregister")).slice(3)).toEqual(["optIn", "identify:ins_abc"]);
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
 			expect(captures).toHaveLength(1);
 			expect(persisted).toEqual([true, false]);
+		});
+
+		it("drops everything until the saved preference loads, then re-applies a saved opt-out to the SDK", () => {
+			const { client, captures, calls } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { awaitPreference: true });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toEqual([]);
+
+			t.setOptedOut(true);
+			// reset() clears the SDK's own opt-out flag, so optOut() must follow it.
+			expect(calls).toEqual(["reset", "optOut"]);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toEqual([]);
+		});
+
+		it("releases capture when the saved preference is opted in", () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { awaitPreference: true });
+			t.setOptedOut(false);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toHaveLength(1);
+		});
+
+		it("removes the previous identity properties when the new identity lacks them", () => {
+			const { client, calls, registered } = fakeClient();
+			const t = createMobileTelemetry(client, {});
+			t.adoptDesktopIdentity({ distinctId: "user_01H", cloudUserId: "user_01H", githubLogin: "octocat", optedOut: false });
+			calls.length = 0;
+			// Signed out: install id only, no user id, GitHub login still known.
+			t.adoptDesktopIdentity({ distinctId: "ins_abc", githubLogin: "octocat", optedOut: false });
+			expect(calls).toContain("unregister:ao_cloud_user_id");
+			expect(calls).not.toContain("unregister:github_actor");
+			expect(registered.at(-1)).toEqual({ github_actor: "octocat" });
+			// A desktop with no GitHub login at all clears the old handle too.
+			calls.length = 0;
+			t.adoptDesktopIdentity({ distinctId: "ins_def", optedOut: false });
+			expect(calls).toEqual(expect.arrayContaining(["unregister:github_actor", "unregister:ao_cloud_user_id"]));
+		});
+
+		it("re-registers when only the GitHub login changes for the same distinct id", () => {
+			const { client, registered } = fakeClient();
+			const t = createMobileTelemetry(client, {});
+			t.adoptDesktopIdentity({ distinctId: "ins_abc", optedOut: false });
+			t.adoptDesktopIdentity({ distinctId: "ins_abc", githubLogin: "octocat", optedOut: false });
+			expect(registered.at(-1)).toEqual({ github_actor: "octocat" });
 		});
 
 		it("restores a persisted opt-out before anything is sent", async () => {

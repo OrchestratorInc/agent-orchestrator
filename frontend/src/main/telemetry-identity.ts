@@ -50,6 +50,15 @@ export class TelemetryIdentityController {
 		await this.flush();
 	}
 
+	/**
+	 * Marks the daemon's copy stale. Called whenever the daemon leaves `ready`: a
+	 * restarted daemon (even on the same port) starts with an empty identity, so
+	 * the next ready transition must replay the signed-in user.
+	 */
+	invalidate(): void {
+		this.pushed = false;
+	}
+
 	/** Retries the hand-off; called when the daemon becomes ready. */
 	async flush(): Promise<void> {
 		if (this.pushed) return;
