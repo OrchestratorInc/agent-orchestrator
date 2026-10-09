@@ -31,7 +31,7 @@ func TestManifest(t *testing.T) {
 }
 
 func TestGetConfigSpecReportsMode(t *testing.T) {
-	// zcode 0.16.5 exposes no --model launch flag (the model is pinned in
+	// zcode 3.14.3 exposes no --model launch flag (the model is pinned in
 	// ZCode's own config), so the adapter exposes the --mode permission
 	// modes instead.
 	spec, err := (&Plugin{}).GetConfigSpec(context.Background())
@@ -65,13 +65,8 @@ func TestPromptReadinessHints(t *testing.T) {
 	if hints.InitialDelay != 750*time.Millisecond || hints.PollInterval != 200*time.Millisecond || hints.Timeout != 10*time.Second || hints.Lines != 80 {
 		t.Fatalf("hints = %#v", hints)
 	}
-	if !reflect.DeepEqual(hints.Patterns, []string{
-		"Ask a task about this workspace",
-		"/help commands",
-		"Type a prompt",
-		" Input ",
-	}) {
-		t.Fatalf("patterns = %#v, want both TUI generations' composer strings", hints.Patterns)
+	if !hints.RequireReady || !reflect.DeepEqual(hints.Patterns, []string{"Type a prompt", "输入提示词"}) || !reflect.DeepEqual(hints.BlockedPatterns, []string{"No available models.", "没有可用模型"}) {
+		t.Fatalf("unguarded composer readiness: %#v", hints)
 	}
 }
 
@@ -194,7 +189,7 @@ func assertNoPromptFlag(t *testing.T, cmd []string) {
 }
 
 func TestGetRestoreCommand(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "zcode"}
+	plugin := &Plugin{resolvedBinary: "zcode", validateRestore: func(context.Context, string, string, map[string]string) error { return nil }}
 	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Session: ports.SessionRef{
 			Metadata: map[string]string{
@@ -227,7 +222,7 @@ func TestGetRestoreCommandMapsPermissionModes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plugin := &Plugin{resolvedBinary: "zcode"}
+			plugin := &Plugin{resolvedBinary: "zcode", validateRestore: func(context.Context, string, string, map[string]string) error { return nil }}
 			cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 				Session: ports.SessionRef{
 					Metadata: map[string]string{
@@ -250,7 +245,7 @@ func TestGetRestoreCommandMapsPermissionModes(t *testing.T) {
 }
 
 func TestGetRestoreCommandForwardsDisallowedTools(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "zcode"}
+	plugin := &Plugin{resolvedBinary: "zcode", validateRestore: func(context.Context, string, string, map[string]string) error { return nil }}
 	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Session: ports.SessionRef{
 			Metadata: map[string]string{
@@ -282,7 +277,7 @@ func TestGetRestoreCommandNoID(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plugin := &Plugin{resolvedBinary: "zcode"}
+			plugin := &Plugin{resolvedBinary: "zcode", validateRestore: func(context.Context, string, string, map[string]string) error { return nil }}
 			cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 				Session: tt.ref,
 			})
@@ -300,7 +295,7 @@ func TestGetRestoreCommandNoID(t *testing.T) {
 }
 
 func TestGetRestoreCommandRejectsCommaInToolRule(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "zcode"}
+	plugin := &Plugin{resolvedBinary: "zcode", validateRestore: func(context.Context, string, string, map[string]string) error { return nil }}
 	_, _, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Session: ports.SessionRef{
 			Metadata: map[string]string{

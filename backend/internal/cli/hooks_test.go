@@ -2301,7 +2301,7 @@ func TestHooks_ZCodeUserPromptSubmitInjectsInstructions(t *testing.T) {
 	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
 		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
 	}
-	want := setActivityAPIRequest{State: "active", Event: "user-prompt-submit", AgentSessionID: "sess_zcode-1", LatestUserPrompt: "fix the bug", ConversationCheckpointOrigin: domain.ConversationCheckpointOriginHuman}
+	want := setActivityAPIRequest{Event: "user-prompt-submit", AgentSessionID: "sess_zcode-1"}
 	assertActivityRequest(t, req, want)
 }
 
@@ -2310,10 +2310,10 @@ func TestHooks_ZCodeSessionStartAndStopEmitNoOutput(t *testing.T) {
 		event string
 		state string
 	}{
-		{"session-start", "active"},
+		{"session-start", ""},
 		// Any stdout on Stop is parsed as a decision; ZCode must be left
 		// free to stop.
-		{"stop", "idle"},
+		{"stop", ""},
 	} {
 		t.Run(tc.event, func(t *testing.T) {
 			t.Setenv("AO_SESSION_ID", "ao-7")
@@ -2337,5 +2337,25 @@ func TestHooks_ZCodeSessionStartAndStopEmitNoOutput(t *testing.T) {
 			}
 			assertActivityRequest(t, req, setActivityAPIRequest{State: tc.state, Event: tc.event, AgentSessionID: "sess_zcode-1"})
 		})
+	}
+}
+
+func TestHooksZCodeDoesNotAcknowledgeBeforeNativeHookVeto(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-zcode")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	prompt := domain.WrapReportDelivery("report-batch:zcode", "worker finished")
+	payload := `{"session_id":"sess_zcode-1","prompt":` + mustJSONString(t, prompt) + `}`
+	_, _, err := executeCLI(t, Deps{In: strings.NewReader(payload), ProcessAlive: func(int) bool { return true }}, "hooks", "zcode", "user-prompt-submit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.CoordinationID != "" || req.ConversationCheckpointOrigin != "" || req.LatestUserPrompt != "" {
+		t.Fatalf("native acknowledgement = %+v", req)
 	}
 }

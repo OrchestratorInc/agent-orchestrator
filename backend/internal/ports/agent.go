@@ -447,15 +447,17 @@ type WaitingTerminalActivityDetector interface {
 // PromptReadinessHints describes when an after-start prompt should be sent.
 // Empty patterns mean "send immediately" unless the adapter also implements
 // TerminalActivityDetector, in which case AO waits for an authoritative idle
-// detection. A non-positive timeout always preserves immediate delivery.
+// detection. Without RequireReady, a non-positive timeout preserves immediate delivery.
 type PromptReadinessHints struct {
 	// RequireReady refuses delivery when startup markers are absent or the wait budget expires.
 	RequireReady bool
 	InitialDelay time.Duration
 	Patterns     []string
-	PollInterval time.Duration
-	Timeout      time.Duration
-	Lines        int
+	// BlockedPatterns refuse delivery even if a composer is also visible.
+	BlockedPatterns []string
+	PollInterval    time.Duration
+	Timeout         time.Duration
+	Lines           int
 }
 
 // AgentResolver maps a session's harness onto the Agent adapter that drives it,

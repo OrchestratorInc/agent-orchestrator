@@ -9,8 +9,8 @@
 // turn and exit, and a bare positional argument is parsed as a subcommand.
 //
 // Permission handling maps AO's permission modes onto `--mode`
-// (build|edit|plan|yolo). The default omits the flag so ZCode uses its own
-// config (interactive default: build). Restore resumes a persisted session
+// (build|edit|plan|yolo). The default explicitly selects build so a saved yolo
+// configuration cannot broaden AO permissions. Restore resumes a persisted session
 // with `--resume <sessionId>`.
 //
 // AO installs workspace hooks under .zcode/config.json and grants only their
@@ -41,8 +41,7 @@ var zcodeBinarySpec = binaryutil.BinarySpec{
 	// ZCode is distributed by Z.ai (official open repo github.com/zai-org/ZCode:
 	// CLI release package + desktop app; no official npm package). It is a
 	// Node-based binary, so version-manager shims (nvm/Volta/fnm) and the
-	// Node-managed home paths remain valid resolution targets — including the
-	// community zcode-app-cli shim, which launches the same official runtime.
+	// Node-managed home paths remain valid resolution targets for a manually installed official CLI.
 	UnixHomePaths: binaryutil.NodeManagedUnixHomePaths("zcode"),
 	NodeManaged:   true,
 	WinPaths: []binaryutil.WinPath{
@@ -54,8 +53,9 @@ var zcodeBinarySpec = binaryutil.BinarySpec{
 // Plugin is the ZCode agent adapter.
 type Plugin struct {
 	agentbase.Base
-	binaryMu       sync.Mutex
-	resolvedBinary string
+	binaryMu        sync.Mutex
+	resolvedBinary  string
+	validateRestore func(context.Context, string, string, map[string]string) error
 }
 
 // New returns a ready-to-register ZCode adapter.
@@ -107,9 +107,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if len(cfg.AllowedTools) != 0 {
 		return nil, fmt.Errorf("zcode: tool allowlists are unsupported")
 	}
-	if err := p.prepareHookTrust(ctx, binary, cfg.WorkspacePath); err != nil {
-		return nil, err
-	}
 	cmd = []string{binary}
 	if err := appendModeFlags(&cmd, cfg.Permissions, cfg.Config.Mode); err != nil {
 		return nil, err
@@ -118,6 +115,9 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 
+	if err := p.prepareHookTrust(ctx, binary, cfg.WorkspacePath); err != nil {
+		return nil, err
+	}
 	return cmd, nil
 }
 
@@ -130,33 +130,21 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchCo
 	return ports.PromptDeliveryAfterStart, nil
 }
 
-// PromptReadinessHints waits for ZCode's composer before AO injects the
-// worker's first task. Patterns are any-match terminal lines covering both
-// shipped TUI generations (verified against the official source,
-// github.com/zai-org/ZCode, apps/zcode-cli/packages/tui + i18n locales):
-// the 0.16.x TUI renders the "Ask a task about this workspace" welcome
-// banner (empty sessions only) and the "/help commands" footer; the 3.14.x
-// i18n TUI renders the " Input " pane title and the "Type a prompt"
-// placeholder (the title becomes a mode label when a --mode is active, so
-// both must be listed). Timeout falls back to delivery so a changed or
-// localized string cannot permanently block spawning.
+// PromptReadinessHints requires the current native composer and rejects the
+// model-configuration screen, which renders an identical composer underneath.
 func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.PromptReadinessHints{
 			RequireReady: true}, err
 	}
 	return ports.PromptReadinessHints{
-		RequireReady: true,
-		InitialDelay: 750 * time.Millisecond,
-		Patterns: []string{
-			"Ask a task about this workspace",
-			"/help commands",
-			"Type a prompt",
-			" Input ",
-		},
-		PollInterval: 200 * time.Millisecond,
-		Timeout:      10 * time.Second,
-		Lines:        80,
+		RequireReady:    true,
+		InitialDelay:    750 * time.Millisecond,
+		Patterns:        []string{"Type a prompt", "输入提示词"},
+		BlockedPatterns: []string{"No available models.", "没有可用模型"},
+		PollInterval:    200 * time.Millisecond,
+		Timeout:         10 * time.Second,
+		Lines:           80,
 	}, nil
 }
 
@@ -186,15 +174,22 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 
-	if err := p.prepareHookTrust(ctx, binary, cfg.Session.WorkspacePath); err != nil {
-		return nil, false, err
-	}
 	cmd = make([]string, 0, 4)
 	cmd = append(cmd, binary)
 	if err := appendModeFlags(&cmd, cfg.Permissions, cfg.Config.Mode); err != nil {
 		return nil, false, err
 	}
 	if err := appendDisallowedTools(&cmd, cfg.DisallowedTools); err != nil {
+		return nil, false, err
+	}
+	validate := p.validateRestore
+	if validate == nil {
+		validate = validateNativeRestore
+	}
+	if err := validate(ctx, cfg.Session.WorkspacePath, agentSessionID, nil); err != nil {
+		return nil, false, err
+	}
+	if err := p.prepareHookTrust(ctx, binary, cfg.Session.WorkspacePath); err != nil {
 		return nil, false, err
 	}
 	cmd = append(cmd, "--resume", agentSessionID)
@@ -286,9 +281,8 @@ func appendDisallowedTools(cmd *[]string, disallowed []string) error {
 // or arms ZCode's exit confirmation; Escape is its turn-cancellation key.
 func (p *Plugin) InterruptInput() string { return "\x1b" }
 
-// EmitsSemanticMessageAcceptance uses the native UserPromptSubmit callback to
-// acknowledge an AO coordination token after it reaches the provider's input.
-func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
+// UserPromptSubmit precedes other native hook vetoes, so it cannot acknowledge
+// coordination delivery. AO leaves semantic acceptance unsupported.
 
 // ExitDetectionMode leaves process exit detection to the runtime supervisor.
 func (p *Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
