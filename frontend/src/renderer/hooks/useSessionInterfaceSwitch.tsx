@@ -256,10 +256,14 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	// finishes the handoff behind it. Only a running turn that has to drain keeps
 	// the old surface (and its cancel action), and a failed switch falls back to
 	// the committed mode.
+	const reportedWork = conversationWork.owner === owner ? conversationWork : undefined;
 	const sourceBusy = Boolean(session && (
 		session.status === "working" || session.status === "needs_input" ||
 		session.activity?.state === "active" || session.activity?.state === "waiting_input" ||
-		session.activity?.state === "blocked"
+		session.activity?.state === "blocked" ||
+		(session.mode === "chat" && reportedWork && (
+			reportedWork.controllerBusy || reportedWork.hasRunningTurn || reportedWork.queuedTurnCount > 0
+		))
 	));
 	const localDrainWaiting = sourceBusy && Boolean(
 		(interfaceSwitch.starting && interfaceSwitch.startingPolicy === "drain") ||
