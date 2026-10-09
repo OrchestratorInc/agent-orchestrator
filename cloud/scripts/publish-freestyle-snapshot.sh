@@ -220,6 +220,15 @@ for link in /usr/local/bin/*; do
 done
 rm -rf /usr/local/nvm /etc/profile.d/nvm.sh'
 
+# Freestyle-only addition to the NodeOps toolchain: dtach lets the worker keep
+# the coding agent (and everything it started) alive across the worker restart
+# a wake from pause performs. Without it the worker launches the agent directly,
+# as on NodeOps.
+freestyle_extras='set -e
+apt-get update
+apt-get install --yes --no-install-recommends dtach
+dtach --help >/dev/null 2>&1 || command -v dtach'
+
 bake_worker="set -e
 curl --fail --location --silent --show-error -o /usr/local/bin/ao-worker '$worker_url'
 echo '$worker_sha  /usr/local/bin/ao-worker' | sha256sum -c -
@@ -283,12 +292,14 @@ bake_harness() {
 		log "[$harness] harness step $index"
 		vm_step "$vm" "$step" "[$harness] harness step $index" || die "[$harness] harness step $index failed"
 	done < <(run_steps "$layer")
+	vm_step "$vm" "$freestyle_extras" "[$harness] freestyle extras" || die "[$harness] freestyle extras failed"
 	vm_step "$vm" "$bake_worker" "[$harness] worker bake" || die "[$harness] worker bake failed"
 	vm_exec "$vm" "$finalize" || die "[$harness] finalize failed"
 	# Run each binary once so its pages sit in the memory the snapshot captures:
 	# the first launch in a session then reads them from memory, not disk.
 	# The toolchain must be the NodeOps one: Node from /usr/bin, not a leftover.
 	vm_exec "$vm" "set -e; test \"\$(command -v node)\" = /usr/bin/node; node --version | grep -q '^v22\\.'
+command -v dtach >/dev/null
 $check; git --version >/dev/null; gh --version >/dev/null; cat /usr/local/bin/ao-worker /usr/local/bin/ao >/dev/null" ||
 		die "[$harness] harness check failed"
 

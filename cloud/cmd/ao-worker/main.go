@@ -267,10 +267,13 @@ func run(logger *slog.Logger) error {
 			return nil
 		},
 		InitialInterface: committedInterface,
-		AgentSessionID:   bootstrap.Launch.AgentSessionID,
-		SelectedModel:    bootstrap.Launch.Model,
-		SelectedEffort:   bootstrap.Launch.ReasoningEffort,
-		SelectionAt:      bootstrap.Launch.SelectionAt,
+		// Set by providers that restore a paused VM's memory (Freestyle): the
+		// agent then survives the worker restart a wake performs.
+		PersistAgent:   os.Getenv("AO_WORKER_PERSIST_AGENT") == "1",
+		AgentSessionID: bootstrap.Launch.AgentSessionID,
+		SelectedModel:  bootstrap.Launch.Model,
+		SelectedEffort: bootstrap.Launch.ReasoningEffort,
+		SelectionAt:    bootstrap.Launch.SelectionAt,
 	}
 	transportSupervisor.ProjectReviewCommand = func(ctx context.Context, input worker.TerminalCommand) (workerexec.Command, error) {
 		launch, err := reviewerLaunch(bootstrap.Launch, input)
@@ -292,6 +295,11 @@ func run(logger *slog.Logger) error {
 		command.Env["AO_SESSION_ID"] = bootstrap.SessionID
 		command.Env[worker.ReviewTerminalEnv] = "1"
 		return command, nil
+	}
+	// A worker starting in Chat must not leave a TUI agent from an interrupted
+	// handoff running beside the Chat runner; end it before anything starts.
+	if committedInterface == workertransport.InterfaceChat {
+		transportSupervisor.StopPersistentAgent()
 	}
 	// Real-time terminal streaming (duplex predictive echo) rides the same
 	// worker transport; wire it before Run when the sandbox opts in. Preserved

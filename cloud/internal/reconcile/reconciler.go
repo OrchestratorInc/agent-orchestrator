@@ -870,6 +870,16 @@ func (r *Reconciler) superviseRunning(
 	if record.ObservedState == domain.SandboxObservedRestoring {
 		return r.refreshRestoredWorker(ctx, record, environment, provider)
 	}
+	// Running compute for a sandbox last observed paused means it came back
+	// without passing through restore here: the provider reported it running
+	// before the restore branch could act (Freestyle can report a VM running
+	// while it is still restoring it), or something else resumed it. The pause
+	// retired the worker's connection, so whatever worker the sandbox holds is
+	// fenced and cannot reconnect. Launch a fresh one now, exactly as a restore
+	// would, instead of waiting out the startup deadline with no worker.
+	if record.ObservedState == domain.SandboxObservedStopped {
+		return r.refreshRestoredWorker(ctx, record, environment, provider)
+	}
 
 	startupExpired := (record.ObservedState == domain.SandboxObservedProvisioning ||
 		record.ObservedState == domain.SandboxObservedBootstrapping) &&

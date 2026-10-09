@@ -806,3 +806,33 @@ func TestProvisionAdoptsSandboxOnDuplicateConflict(t *testing.T) {
 		t.Fatalf("observations = %v, want adoption as provisioning", got)
 	}
 }
+
+// A sandbox last observed paused whose compute is already running (the
+// provider reported it running before the restore branch acted) must get a
+// fresh worker at once: the pause fenced the old one, and without a relaunch
+// the session waits out the whole startup deadline with no worker.
+func TestPausedSandboxFoundRunningRelaunchesWorker(t *testing.T) {
+	store := &lifecycleStore{}
+	provider := &byoProvider{lifecycleProvider: lifecycleProvider{environment: sandbox.Environment{
+		ID: "vm-1", State: sandbox.StateRunning,
+	}}}
+	seen := time.Now().Add(-10 * time.Second)
+	record := domain.Sandbox{
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
+		ProviderEnvironmentID: "vm-1",
+		DesiredState:          domain.SandboxDesiredRunning,
+		ObservedState:         domain.SandboxObservedStopped,
+		WorkerLastSeenAt:      &seen,
+		ResourceProfile:       json.RawMessage(`{"provider":"freestyle","freestyle":{"snapshot":"snap-1"}}`),
+		UpdatedAt:             seen,
+	}
+	if err := byoReconciler(store, provider).reconcileSandbox(context.Background(), record); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(provider.bootstraps) != 1 {
+		t.Fatalf("bootstraps = %d, want a fresh worker launched now", len(provider.bootstraps))
+	}
+	if got := store.observations; len(got) != 1 || got[0] != domain.SandboxObservedBootstrapping {
+		t.Fatalf("observations = %v, want [%s]", got, domain.SandboxObservedBootstrapping)
+	}
+}

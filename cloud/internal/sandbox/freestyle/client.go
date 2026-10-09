@@ -291,8 +291,14 @@ func (c *Client) BootstrapWorker(
 	// the destination; "|| true" tolerates the normal first-boot no-match.
 	script.WriteString("{ pkill -f " + shellQuote("^"+destination+"( |$)") + " || true; }; ")
 	// Repair issues a new one-time ticket, so pass this bootstrap's environment
-	// rather than anything stored at creation.
-	command := launchEnvironment(bootstrap.Environment) + shellQuote(destination)
+	// rather than anything stored at creation. Freestyle restores a paused VM's
+	// memory, so the agent is kept alive across the worker restart a wake does.
+	environment := make(map[string]string, len(bootstrap.Environment)+1)
+	for key, value := range bootstrap.Environment {
+		environment[key] = value
+	}
+	environment["AO_WORKER_PERSIST_AGENT"] = "1"
+	command := launchEnvironment(environment) + shellQuote(destination)
 	if user := strings.TrimSpace(bootstrap.User); user != "" {
 		quotedUser := shellQuote(user)
 		script.WriteString("id -u " + quotedUser + " >/dev/null 2>&1 || " +

@@ -462,6 +462,16 @@ func agentTerminalExitVerdict(ctx context.Context, tx pgx.Tx, orgID, sessionID s
 				  AND review_terminal_run.review_terminal_id = latest.id
 			)
 			  )
+			  -- Only the newest worker's own agent terminal can prove the agent
+			  -- exited. A replacement worker (a wake, a repair) registers a newer
+			  -- epoch and closes the old epoch's terminals before it has opened
+			  -- its own; that gap means "starting", not "exited", and answering
+			  -- exited there strands the browser behind TERMINAL_SESSION_EXITED.
+			  AND terminal.worker_epoch >= COALESCE((
+				SELECT MAX(connection.epoch) FROM ao_worker_connections connection
+				WHERE connection.org_id = session.org_id
+				  AND connection.session_id = session.id
+			  ), 0)
 		), EXISTS (
 			SELECT 1 FROM ao_interface_transitions transition
 			WHERE transition.org_id = session.org_id
