@@ -279,13 +279,13 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	cmd := aoprocess.CommandContext(probeCtx, binary, "auth", "list", "--standalone", "--format", "json")
-	dataHome, err := DataHome(probeCtx)
+	dataHome, err := DataHome(ctx)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	cmd := aoprocess.CommandContext(probeCtx, binary, "auth", "list", "--standalone", "--format", "json")
 	cmd.Env = append(os.Environ(), "XDG_DATA_HOME="+dataHome)
 	cmd.WaitDelay = 100 * time.Millisecond
 	out, err := cmd.Output()

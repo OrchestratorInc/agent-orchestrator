@@ -20,6 +20,7 @@ const (
 	defaultLaunchReadinessTTL   = 30 * time.Second
 	defaultInstallCheckTimeout  = 2 * time.Second
 	opencodeInstallCheckTimeout = 12 * time.Second
+	opencodeV2MigrationTimeout  = 30 * time.Minute
 	defaultAuthCheckTimeout     = 10 * time.Second
 	defaultReadinessWorkers     = 4
 )
@@ -566,7 +567,12 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	if !ok {
 		return successfulAuthentication(attempted, domain.AgentAuthenticationUnknown, domain.AgentReadinessReasonAuthCheckUnsupported, "Authentication checks are not supported for this harness."), false
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, c.authTimeout)
+	timeout := c.authTimeout
+	if timeout == defaultAuthCheckTimeout && item.Harness == domain.HarnessOpenCodeV2 {
+		// First-use migration needs its own budget; the adapter bounds its auth CLI separately.
+		timeout = opencodeV2MigrationTimeout
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, timeout)
 	defer cancel()
 	status, err := checker.AuthStatus(ctx)
 	if err != nil {

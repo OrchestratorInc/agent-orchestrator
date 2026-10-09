@@ -2,8 +2,10 @@ package opencodev2
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -319,6 +322,78 @@ func TestV2AuthStatusUsesPrivateServerAndConnections(t *testing.T) {
 				t.Fatalf("auth=%q %v, want %q", status, err, tc.want)
 			}
 		})
+	}
+}
+
+func TestV2AuthStatusAllowsMigrationBeyondCommandTimeout(t *testing.T) {
+	parent := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", parent)
+	t.Setenv("HOME", t.TempDir())
+	legacy := filepath.Join(parent, "opencode")
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(legacy, "opencode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, statement := range []string{"CREATE TABLE sessions (id TEXT PRIMARY KEY)", "BEGIN EXCLUSIVE"} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { _, _ = db.Exec("ROLLBACK") }()
+	binary := fakeBinary(t, "2.0.0")
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 2.0.0; exit; fi\n" +
+		"[ \"$*\" = 'auth list --standalone --format json' ] || exit 99\n" +
+		"printf '%s\\n' '[{\"connections\":[{\"type\":\"credential\"}]}]'\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		status, err := New().AuthStatus(ctx)
+		if err == nil && status != ports.AgentAuthStatusAuthorized {
+			err = fmt.Errorf("auth status = %q, want authorized", status)
+		}
+		done <- err
+	}()
+	for {
+		staging, _ := filepath.Glob(filepath.Join(parent, "opencode-v2-home", ".opencode-migration-*"))
+		if len(staging) > 0 {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("auth returned before migration started: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		default:
+		}
+		time.Sleep(time.Millisecond)
+	}
+	timer := time.NewTimer(3200 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		t.Fatalf("auth returned before the legacy database was released: %v", err)
+	case <-timer.C:
+	}
+	if _, err := db.Exec("ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
 	}
 }
 
