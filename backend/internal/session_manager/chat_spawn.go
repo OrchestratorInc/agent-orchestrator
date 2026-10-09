@@ -212,10 +212,14 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		controllerCommitted bool
 		completionErr       error
 	)
-	mcpServers, err := m.testingMCPServers(ctx, id, false, false)
+	mcpServers, testingWorkspace, err := m.testingMCPServers(ctx, id, false, false)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
 		return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, err)
+	}
+	workspacePath := in.workspace.Path
+	if testingWorkspace != "" {
+		workspacePath = testingWorkspace
 	}
 	_, err = m.chat.StartChat(ctx, ChatStart{
 		SessionID:               id,
@@ -223,7 +227,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		Kind:                    in.cfg.Kind,
 		Harness:                 in.cfg.Harness,
 		DataDir:                 m.dataDir,
-		WorkspacePath:           in.workspace.Path,
+		WorkspacePath:           workspacePath,
 		Env:                     env,
 		Model:                   agentConfig.Model,
 		Effort:                  agentConfig.Effort,
@@ -488,9 +492,13 @@ func (m *Manager) resumeChatController(
 	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var completionErr error
-	mcpServers, err := m.testingMCPServers(ctx, rec.ID, !reconnectOnly, reconnectOnly)
+	mcpServers, testingWorkspace, err := m.testingMCPServers(ctx, rec.ID, !reconnectOnly, reconnectOnly)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: testing profile: %w", operation, rec.ID, err)
+	}
+	workspacePath := ws.Path
+	if testingWorkspace != "" {
+		workspacePath = testingWorkspace
 	}
 	_, err = m.chat.StartChat(ctx, ChatStart{
 		ReconnectOnly:           reconnectOnly,
@@ -499,7 +507,7 @@ func (m *Manager) resumeChatController(
 		Kind:                    rec.Kind,
 		Harness:                 rec.Harness,
 		DataDir:                 m.dataDir,
-		WorkspacePath:           ws.Path,
+		WorkspacePath:           workspacePath,
 		Env:                     env,
 		Model:                   agentConfig.Model,
 		Effort:                  agentConfig.Effort,

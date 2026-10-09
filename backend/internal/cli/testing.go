@@ -85,7 +85,7 @@ func newTestingStartCommand(ctx *commandContext) *cobra.Command {
 		Use: "start", Short: "Create a test run and start its investigator attempt", Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			for _, flag := range []struct{ name, value string }{
-				{"project", project}, {"issue-file", issueFile}, {"commit", commit}, {"recipe", recipe}, {"prompt-file", promptFile},
+				{"project", project}, {"issue-file", issueFile}, {"commit", commit}, {"recipe", recipe},
 			} {
 				if strings.TrimSpace(flag.value) == "" {
 					return usageError{fmt.Errorf("--%s is required", flag.name)}
@@ -102,9 +102,12 @@ func newTestingStartCommand(ctx *commandContext) *cobra.Command {
 			if err != nil {
 				return usageError{fmt.Errorf("issue snapshot: %w", err)}
 			}
-			prompt, err := readTestingTextFile(promptFile, 64<<10)
-			if err != nil {
-				return usageError{fmt.Errorf("worker prompt: %w", err)}
+			prompt := "Investigate the supplied issue or pull request."
+			if promptFile != "" {
+				prompt, err = readTestingTextFile(promptFile, 64<<10)
+				if err != nil {
+					return usageError{fmt.Errorf("worker prompt: %w", err)}
+				}
 			}
 			var run testingRunDTO
 			if err := ctx.postJSON(cmd.Context(), "testing/runs", testingRunCreateDTO{
@@ -136,7 +139,7 @@ func newTestingStartCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().StringVar(&issueURL, "issue-url", "", "Issue URL")
 	cmd.Flags().StringVar(&commit, "commit", "", "Commit SHA under test")
 	cmd.Flags().StringVar(&recipe, "recipe", "local-ao", "Configured testing recipe ID")
-	cmd.Flags().StringVar(&promptFile, "prompt-file", "", "File containing the investigator prompt, up to 64 KiB")
+	cmd.Flags().StringVar(&promptFile, "prompt-file", "", "Optional investigator instructions, up to 64 KiB; the testing skill is always loaded")
 	cmd.Flags().StringVar(&agent, "agent", "", "Investigator agent harness, defaults to project configuration")
 	cmd.Flags().StringVar(&model, "model", "", "Investigator model, defaults to project configuration")
 	cmd.Flags().StringVar(&effort, "effort", "", "Investigator effort, validated by the selected provider")

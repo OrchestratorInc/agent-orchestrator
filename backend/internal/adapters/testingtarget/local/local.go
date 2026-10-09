@@ -71,6 +71,7 @@ type Adapter struct {
 }
 
 var _ ports.TestingTargetEnvironment = (*Adapter)(nil)
+var _ ports.TestingTargetWorkerContext = (*Adapter)(nil)
 
 // New uses macOS process/window observations and the existing loopback API.
 func New() *Adapter {
@@ -165,6 +166,13 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 	a.mu.Unlock()
 	s.mu.Lock()
 	s.env = targetEnv(os.Environ(), s, recipe.VisualMarker, recipe.RealProviders)
+	if err := writeTargetCLI(s); err != nil {
+		s.stopped = true
+		_ = log.Close()
+		s.log = nil
+		s.mu.Unlock()
+		return s.target, fmt.Errorf("prepare target CLI: %w", err)
+	}
 	pid, err := a.ops.start(electronPath(frontend), frontend, s.env, log)
 	if err != nil {
 		s.stopped = true
@@ -380,6 +388,41 @@ func (a *Adapter) Probe(ctx context.Context, target domain.TestTargetIdentity) e
 		return errors.New("target has stopped")
 	}
 	return a.probe(ctx, s)
+}
+
+// WorkerContext resolves only this live target's paths. The wrapper uses the
+// target binary and clears supervisor/session AO settings before each command.
+func (a *Adapter) WorkerContext(ctx context.Context, target domain.TestTargetIdentity) (ports.TestingWorkerContext, error) {
+	s, err := a.find(target)
+	if err != nil {
+		return ports.TestingWorkerContext{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped || s.closing {
+		return ports.TestingWorkerContext{}, errors.New("target has stopped")
+	}
+	if err := a.probe(ctx, s); err != nil {
+		return ports.TestingWorkerContext{}, err
+	}
+	return ports.TestingWorkerContext{CheckoutPath: filepath.Dir(s.frontend), CLIPath: filepath.Join(s.root, "target-ao"), RunFilePath: filepath.Join(s.root, "running.json"), DataDir: s.target.DataDir}, nil
+}
+
+func writeTargetCLI(s *launch) error {
+	script := fmt.Sprintf(`#!/usr/bin/env python3
+import os
+import sys
+
+env = {key: value for key, value in os.environ.items()
+       if not key.startswith("AO_") and key not in
+       ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "NODE_OPTIONS", "ELECTRON_RUN_AS_NODE", "ELECTRON_ENABLE_LOGGING")}
+env["AO_RUN_FILE"] = %q
+env["AO_DATA_DIR"] = %q
+os.chdir(%q)
+executable = %q
+os.execve(executable, [executable, *sys.argv[1:]], env)
+`, filepath.Join(s.root, "running.json"), s.target.DataDir, filepath.Dir(s.frontend), filepath.Join(s.frontend, "daemon", "ao"))
+	return os.WriteFile(filepath.Join(s.root, "target-ao"), []byte(script), 0o700)
 }
 
 func (a *Adapter) probe(ctx context.Context, s *launch) error {

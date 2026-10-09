@@ -21,6 +21,19 @@ type TestingTargetEnvironment interface {
 	QueryDaemon(ctx context.Context, target domain.TestTargetIdentity, request domain.TestDaemonQueryRequest) (domain.TestDaemonQueryResult, error)
 }
 
+// TestingTargetWorkerContext supplies the target's checkout and CLI to a tester.
+type TestingTargetWorkerContext interface {
+	WorkerContext(ctx context.Context, target domain.TestTargetIdentity) (TestingWorkerContext, error)
+}
+
+// TestingWorkerContext contains adapter-resolved paths, never worker input.
+type TestingWorkerContext struct {
+	CheckoutPath string
+	CLIPath      string
+	RunFilePath  string
+	DataDir      string
+}
+
 // TestingTargetSpec is daemon-resolved launch input. StateRoot must be beneath
 // ~/.ao/dev/agentic-target, and CheckoutPath must be an isolated test checkout.
 // Adapters strip all inherited AO_* variables before applying their own env.

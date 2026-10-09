@@ -45,6 +45,9 @@ type WorkerLaunchRequest struct {
 	AttemptID domain.TestAttemptID
 	Prompt    string
 	IssueJSON string // quoted issue data, not worker instructions
+	IssueURL  string
+	CommitSHA string
+	Context   ports.TestingWorkerContext
 	Prepare   func(context.Context, domain.SessionID) (WorkerBinding, error)
 }
 
@@ -53,6 +56,7 @@ type WorkerBinding struct {
 	Link       domain.TestToolProfileLink
 	Attempt    domain.TestAttemptRecord
 	Capability string `json:"-"`
+	Context    ports.TestingWorkerContext
 }
 
 // Clock makes deadline enforcement testable without sleeps or agent turns.

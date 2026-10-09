@@ -36,13 +36,19 @@ func TestTestingStartUsesDaemonContract(t *testing.T) {
 		timeout  int
 		issueURL string
 		json     bool
+		noPrompt bool
 	}{
 		{name: "defaults", recipe: "local-ao", timeout: 1800},
+		{name: "without handwritten prompt", recipe: "local-ao", timeout: 1800, noPrompt: true},
 		{name: "explicit", extra: []string{"--agent", "claude-code", "--model", "claude-opus-5-5", "--effort", "medium", "--recipe", "configured-recipe", "--timeout", "90", "--issue-url", "https://github.com/org/repo/issues/1", "--json"}, harness: "claude-code", model: "claude-opus-5-5", effort: "medium", recipe: "configured-recipe", timeout: 90, issueURL: "https://github.com/org/repo/issues/1", json: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := setConfigEnv(t)
-			args := append(testingStartArgs(t), tc.extra...)
+			args := testingStartArgs(t)
+			if tc.noPrompt {
+				args = args[:len(args)-2]
+			}
+			args = append(args, tc.extra...)
 			var calls []string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
@@ -71,7 +77,11 @@ func TestTestingStartUsesDaemonContract(t *testing.T) {
 					if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 						t.Error(err)
 					}
-					want := map[string]any{"workerPrompt": "Investigate the issue\n", "timeoutSeconds": float64(tc.timeout)}
+					prompt := "Investigate the issue\n"
+					if tc.noPrompt {
+						prompt = "Investigate the supplied issue or pull request."
+					}
+					want := map[string]any{"workerPrompt": prompt, "timeoutSeconds": float64(tc.timeout)}
 					if tc.harness != "" {
 						want["harness"] = tc.harness
 					}
@@ -196,7 +206,7 @@ func TestTestingManagementUsage(t *testing.T) {
 		{"testing", "mcp", "extra"}, {"testing", "mcp", "--target", "supervisor"},
 	}
 	for _, extra := range [][]string{
-		{"--project", ""}, {"--commit", ""}, {"--recipe", ""}, {"--issue-file", ""}, {"--prompt-file", ""},
+		{"--project", ""}, {"--commit", ""}, {"--recipe", ""}, {"--issue-file", ""},
 		{"--timeout", "0"}, {"--timeout", "7201"}, {"--timeout", "abc"}, {"--target", "supervisor"},
 	} {
 		cases = append(cases, append(append([]string{}, base...), extra...))

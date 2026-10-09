@@ -123,6 +123,12 @@ func (p *fakeProviders) ReadLogs(_ context.Context, _ domain.TestTargetIdentity,
 func (p *fakeProviders) QueryDaemon(_ context.Context, _ domain.TestTargetIdentity, r domain.TestDaemonQueryRequest) (domain.TestDaemonQueryResult, error) {
 	return domain.TestDaemonQueryResult{Resource: r.Resource, Data: json.RawMessage(`{"sessions":[]}`)}, nil
 }
+func (p *fakeProviders) WorkerContext(ctx context.Context, target domain.TestTargetIdentity) (ports.TestingWorkerContext, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	root := filepath.Dir(target.DataDir)
+	return ports.TestingWorkerContext{CheckoutPath: p.launchSpecs[len(p.launchSpecs)-1].CheckoutPath, CLIPath: filepath.Join(root, "target-ao"), RunFilePath: filepath.Join(root, "running.json"), DataDir: target.DataDir}, ctx.Err()
+}
 func (p *fakeProviders) BindWindow(_ context.Context, target domain.TestTargetIdentity) (domain.TestTargetIdentity, error) {
 	target.WindowID = "window"
 	if p.bindWrong {
@@ -319,6 +325,28 @@ func (f *fixture) wait(t *testing.T) {
 	defer cancel()
 	if err := f.svc.WaitCleanup(ctx, f.start.AttemptID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStartSuppliesTargetContextAndSource(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.svc.Cancel(context.Background(), f.start.AttemptID); err != nil {
+		t.Fatal(err)
+	}
+	f.wait(t)
+	run, err := f.svc.CreateRun(context.Background(), CreateRunInput{
+		ProjectID: "ao", IssueURL: "https://github.com/org/repo/pull/1", IssueSnapshot: "PR summary", CommitSHA: "pr-head", RecipeID: "native", Requester: "maintainer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.start, err = f.svc.StartAttempt(context.Background(), run.ID, StartAttemptInput{WorkerPrompt: "Inspect the supplied PR"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := f.worker.request
+	if request.CommitSHA != run.CommitSHA || request.IssueURL != run.IssueURL || request.Context.CheckoutPath != f.dir || request.Context != f.worker.binding.Context || !strings.HasPrefix(request.Prompt, "Inspect the supplied PR\n") || !strings.Contains(request.Prompt, `"PR summary"`) {
+		t.Fatalf("investigator context missing: %+v", request)
 	}
 }
 
