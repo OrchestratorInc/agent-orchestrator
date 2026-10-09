@@ -428,7 +428,7 @@ export const ChatComposer = memo(function ChatComposer({
 			const sentAttachments = readChatSessionDraft(draftScope).composer.delivery?.draft?.attachments;
 			const result = writeChatAttachments(draftScope, descriptors.filter((attachment) =>
 				!sentAttachments?.some((sent) => sent.id === attachment.id)));
-			composerRevision.current = result.draft.composer.revision;
+			if (result.ok) composerRevision.current = result.draft.composer.revision;
 			setAttachmentDraftPersistenceError(
 				result.ok
 					? null
@@ -699,28 +699,28 @@ export const ChatComposer = memo(function ChatComposer({
 				);
 				return false;
 			}
-			composerRevision.current = result.draft.composer.revision;
-			setTextDraftPersistenceError(null);
+			if (!unsavedText.current) composerRevision.current = result.draft.composer.revision;
+			setTextDraftPersistenceError(unsavedText.current ? "chat.draft.saveFailed" : null);
 			setDeliveryRecoveryNotice(null);
-			if (!result.cleared) {
+			// A receipt from the old surface must not clear this surface's unsaved draft.
+			if (!unsavedText.current && !result.cleared) {
 				textRef.current = result.draft.composer.text;
 				hasTextRef.current = textRef.current.trim().length > 0;
 				setHasText(hasTextRef.current);
-				editor.current?.setText(textRef.current);
-				if (result.draft.composer.attachments.length === 0) {
-					fileAttachments.clear();
-					return false;
-				}
+				if (editor.current?.getSnapshot().text !== textRef.current) editor.current?.setText(textRef.current);
+			} else if (!unsavedText.current && editor.current?.getSnapshot().text !== "") {
+				clearEditorView();
+			}
+			if (result.draft.composer.attachments.length === 0) {
+				fileAttachments.clear();
+			} else {
 				for (const attachment of fileAttachments.getAttachments()) {
 					if (!result.draft.composer.attachments.some((kept) => kept.id === attachment.id)) {
 						fileAttachments.remove(attachment.id);
 					}
 				}
-				return false;
 			}
-			clearEditorView();
-			fileAttachments.clear();
-			return true;
+			return result.cleared && !unsavedText.current;
 		},
 		[clearEditorView, fileAttachments],
 	);
@@ -735,7 +735,7 @@ export const ChatComposer = memo(function ChatComposer({
 			const saved = unsavedText.current
 				? writeChatComposerText(draftScope, unsavedText.current.text, undefined, unsavedText.current.revision)
 				: undefined;
-			if (saved?.ok) unsavedText.current = undefined;
+			if (saved?.ok && saved.draft.composer.text === unsavedText.current?.text) unsavedText.current = undefined;
 			const result: DraftClearResult = saved?.ok === false
 				? { ok: false, cleared: false, draft: saved.draft }
 				: clearAcceptedChatComposer(draftScope, acceptedRevision, undefined,
@@ -860,7 +860,7 @@ export const ChatComposer = memo(function ChatComposer({
 		textRef.current = committedSeedText;
 		hasTextRef.current = committedSeedText.trim().length > 0;
 		setHasText(hasTextRef.current);
-		editor.current?.setText(committedSeedText);
+		if (editor.current?.getSnapshot().text !== committedSeedText) editor.current?.setText(committedSeedText);
 		dismissedKeyRef.current = null;
 		setDismissedKey(null);
 		highlightedRef.current = 0;
@@ -874,7 +874,7 @@ export const ChatComposer = memo(function ChatComposer({
 		// changes the accepted-send revision during mount.
 		if (draftScope && draftSeed) {
 			const result = writeChatComposerText(draftScope, committedSeedText);
-			composerRevision.current = result.draft.composer.revision;
+			if (result.ok) composerRevision.current = result.draft.composer.revision;
 			setTextDraftPersistenceError(
 				result.ok
 					? null
@@ -945,8 +945,8 @@ export const ChatComposer = memo(function ChatComposer({
 		onQueuedDraftChange?.(snapshot.text);
 		if (draftScope && snapshot.text !== previousText) {
 			const result = writeChatComposerText(draftScope, snapshot.text);
-			composerRevision.current = result.draft.composer.revision;
-			unsavedText.current = result.ok ? undefined : { text: snapshot.text, revision: result.draft.composer.revision - 1 };
+			if (result.ok) composerRevision.current = result.draft.composer.revision;
+			unsavedText.current = result.ok ? undefined : { text: snapshot.text, revision: composerRevision.current };
 			// A disabled Lexical editor can still publish an internal state update
 			// while its editability changes. It must not erase the recovery notice
 			// for a durable delivery that still owns this exact composer revision.
@@ -1293,7 +1293,10 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!prepared.recovered && delivery.draft) clearEditorView();
 		synchronouslyClearedDeliveryRevision.current = undefined;
 		setDeliveryUncertain(false);
-		if (!prepared.recovered) composerRevision.current = prepared.draft.composer.revision;
+		if (!prepared.recovered) {
+			composerRevision.current = prepared.draft.composer.revision;
+			unsavedText.current = undefined;
+		}
 		setDurableDelivery(delivery);
 		setTextDraftPersistenceError(null);
 		setDeliveryRecoveryNotice(

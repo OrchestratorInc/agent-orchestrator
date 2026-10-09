@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { CONTROLLED_TEXT_INSERTION_COMMAND, HISTORY_PUSH_TAG, type LexicalEditor, REDO_COMMAND, UNDO_COMMAND } from "lexical";
 import { describe, expect, it, vi } from "vitest";
 import { readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../../lib/chat-drafts";
-import { typeInLexicalEditor } from "../../test/lexical";
+import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { TooltipProvider } from "../ui/tooltip";
 import { ChatComposer } from "./ChatComposer";
 
@@ -110,6 +111,113 @@ describe("optimistic message delivery", () => {
 		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
 		expect(replacement).toHaveTextContent("next draft after returning");
 		expect(readChatSessionDraft(sessionId).composer.text).toBe("next draft after returning");
+		expect(pending.onSend).toHaveBeenCalledOnce();
+	});
+
+	it("keeps an unsaved next draft and its warning when a remounted Chat accepts the original message", async () => {
+		const sessionId = "optimistic-remount-accepted-unsaved-next-draft";
+		const pending = pendingSend();
+		const original = renderComposer(sessionId, pending.onSend);
+		await startSend(pending.onSend, "original request");
+		original.unmount();
+		renderComposer(sessionId, pending.onSend);
+		const field = screen.getByLabelText("Message the agent");
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		const storage = window.localStorage;
+		const write = storage.setItem.bind(storage);
+		let failWrite = true;
+		const setItem = vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
+			if (failWrite && JSON.parse(value).composer?.text === "unsaved next draft") {
+				throw new DOMException("full", "QuotaExceededError");
+			}
+			write(key, value);
+		});
+		try {
+			await typeInLexicalEditor(field, "unsaved next draft");
+			expect(screen.getByRole("alert")).toHaveTextContent("couldn’t be saved");
+
+			await act(async () => pending.resolve());
+
+			expect(field).toHaveTextContent("unsaved next draft");
+			expect(screen.getByRole("alert")).toHaveTextContent("couldn’t be saved");
+			expect(pending.onSend).toHaveBeenCalledOnce();
+			failWrite = false;
+			fireEvent.keyDown(field, { key: "Enter" });
+			await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
+			expect(pending.onSend.mock.calls[1][0]).toBe("unsaved next draft");
+			await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+			expect(field.textContent).toBe("");
+			expect(readChatSessionDraft(sessionId).composer.text).toBe("");
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+			expect(pending.onSend.mock.calls.filter(([text]) => text === "original request")).toHaveLength(1);
+		} finally {
+			setItem.mockRestore();
+		}
+	});
+
+	it("persists the next draft after storage reads recover before the original message is accepted", async () => {
+		const sessionId = "optimistic-accepted-next-draft-read-failure";
+		const pending = pendingSend();
+		renderComposer(sessionId, pending.onSend);
+		const field = await startSend(pending.onSend, "original request");
+		const getItem = vi.spyOn(window.localStorage, "getItem").mockImplementation(() => {
+			throw new DOMException("temporarily unreadable", "SecurityError");
+		});
+		try {
+			await typeInLexicalEditor(field, "next draft during read failure");
+			expect(screen.getByRole("alert")).toHaveTextContent("couldn’t be saved");
+		} finally {
+			getItem.mockRestore();
+		}
+
+		await act(async () => pending.resolve());
+
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(field).toHaveTextContent("next draft during read failure");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("next draft during read failure");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(pending.onSend).toHaveBeenCalledOnce();
+	});
+
+	it("preserves the next draft caret and undo history when the original message is accepted", async () => {
+		const sessionId = "optimistic-accepted-next-draft-caret";
+		const pending = pendingSend();
+		renderComposer(sessionId, pending.onSend);
+		const field = await startSend(pending.onSend, "original request");
+		await typeInLexicalEditor(field, "draft B");
+		await placeLexicalCaret(field, 2);
+		const editor = (field as HTMLElement & { __lexicalEditor: LexicalEditor }).__lexicalEditor;
+
+		await act(async () => pending.resolve());
+		await act(async () => {
+			editor.update(() => {
+				editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "Z");
+			}, { discrete: true, tag: HISTORY_PUSH_TAG });
+		});
+
+		expect(field).toHaveTextContent("drZaft B");
+		await act(async () => { editor.dispatchCommand(UNDO_COMMAND, undefined); });
+		expect(field).toHaveTextContent("draft B");
+		await act(async () => { editor.dispatchCommand(UNDO_COMMAND, undefined); });
+		expect(field.textContent).toBe("");
+		expect(pending.onSend).toHaveBeenCalledOnce();
+	});
+
+	it("keeps redo history for a next draft undone to empty before the original message is accepted", async () => {
+		const sessionId = "optimistic-accepted-empty-next-draft-history";
+		const pending = pendingSend();
+		renderComposer(sessionId, pending.onSend);
+		const field = await startSend(pending.onSend, "original request");
+		await typeInLexicalEditor(field, "draft B");
+		const editor = (field as HTMLElement & { __lexicalEditor: LexicalEditor }).__lexicalEditor;
+		await act(async () => { editor.dispatchCommand(UNDO_COMMAND, undefined); });
+		expect(field.textContent).toBe("");
+
+		await act(async () => pending.resolve());
+		await act(async () => { editor.dispatchCommand(REDO_COMMAND, undefined); });
+
+		expect(field).toHaveTextContent("draft B");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("draft B");
 		expect(pending.onSend).toHaveBeenCalledOnce();
 	});
 

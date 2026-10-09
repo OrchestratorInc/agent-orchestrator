@@ -1851,10 +1851,6 @@ describe("attachments", () => {
 		render(<ChatComposer onSend={onSend} draftSessionId={sessionId} />);
 		const field = screen.getByLabelText("Message the agent");
 		await typeInComposer(field, "accepted message");
-		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
-		await waitFor(() => expect(getChatDraftBoundaries(sessionId)).toEqual([]));
-
 		let boundariesWhenCleared: readonly string[] | undefined;
 		const observer = new MutationObserver(() => {
 			if (composerWireText(field) === "") {
@@ -1863,6 +1859,9 @@ describe("attachments", () => {
 		});
 		observer.observe(field, { childList: true, characterData: true, subtree: true });
 		try {
+			await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+			await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+			await waitFor(() => expect(boundariesWhenCleared).toEqual([]));
 			await act(async () => acceptSend());
 			await waitFor(() => expect(composerWireText(field)).toBe(""));
 			expect({
