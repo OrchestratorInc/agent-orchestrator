@@ -23,6 +23,7 @@ const shellMocks = vi.hoisted(() => {
 		workspaces: [] as WorkspaceSummary[],
 		remoteWorkspaces: [] as WorkspaceSummary[],
 		remoteFailedHostIds: [] as string[],
+		remoteSessionHostIds: [] as string[],
 		removeRemoteProject: undefined as ((hostId: string, projectId: string) => Promise<void>) | undefined,
 		configureRemoteProject: undefined as ((hostId: string, projectId: string) => void) | undefined,
 		workspaceQuery: {
@@ -108,6 +109,7 @@ const shellMocks = vi.hoisted(() => {
 			setQueryData: vi.fn(),
 		},
 		remoteDelete: vi.fn(),
+		warmSessionUsageSummaries: vi.fn(async () => undefined),
 		listRemoteHosts: vi.fn(async () => []),
 		state,
 	};
@@ -164,12 +166,17 @@ vi.mock("../lib/bridge", () => ({
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => shellMocks.state.workspaceQuery,
-	useRemoteWorkspaces: () => ({ data: shellMocks.state.remoteWorkspaces, failedHostIds: shellMocks.state.remoteFailedHostIds, loadedProjectHostIds: [] }),
+	useRemoteWorkspaces: () => ({ data: shellMocks.state.remoteWorkspaces, failedHostIds: shellMocks.state.remoteFailedHostIds, loadedProjectHostIds: [], loadedSessionHostIds: shellMocks.state.remoteSessionHostIds }),
 	useWorkspaceTraySessions: () => ({ data: [] }),
 	workspaceQueryKey: ["workspaces"],
 	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
 	workspaceQueryOptions: {},
 	toWorkspaceSession: (session: { id: string }, project: { id: string; name: string }) => ({ ...session, workspaceId: project.id, workspaceName: project.name }),
+}));
+
+vi.mock("../hooks/useSessionUsageSummaries", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useSessionUsageSummaries")>()),
+	warmSessionUsageSummaries: shellMocks.warmSessionUsageSummaries,
 }));
 
 vi.mock("../lib/host-clients", () => ({
@@ -398,6 +405,8 @@ beforeEach(() => {
 	shellMocks.state.workspaces = workspaces;
 	shellMocks.state.remoteWorkspaces = [];
 	shellMocks.state.remoteFailedHostIds = [];
+	shellMocks.state.remoteSessionHostIds = [];
+	shellMocks.warmSessionUsageSummaries.mockClear();
 	shellMocks.listRemoteHosts.mockClear();
 	shellMocks.state.removeRemoteProject = undefined;
 	shellMocks.state.configureRemoteProject = undefined;
@@ -453,6 +462,57 @@ describe("shell workspace startup", () => {
 
 		act(() => shellMocks.state.configureRemoteProject?.("box-b", "shared"));
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "shared", hostId: "box-b" });
+	});
+
+	it("warms local boards' usage from the shell loader without waiting for it", async () => {
+		const workspaces = [{ id: "reverb", sessions: [] }] as unknown as WorkspaceSummary[];
+		const queryClient = { fetchQuery: vi.fn(async () => workspaces) };
+		shellMocks.warmSessionUsageSummaries.mockReturnValueOnce(new Promise(() => undefined));
+		const loader = (Route.options as unknown as { loader: (input: { context: { queryClient: unknown } }) => Promise<unknown> }).loader;
+
+		await expect(loader({ context: { queryClient } })).resolves.toBe(workspaces);
+		expect(shellMocks.warmSessionUsageSummaries).toHaveBeenCalledWith(queryClient, workspaces);
+	});
+
+	it("warms local boards' usage when the daemon becomes ready after the loader ran", async () => {
+		// The loader returned early: the daemon was still starting, so nothing
+		// was warmed and the workspace list has not loaded yet.
+		shellMocks.state.daemonStatus = { state: "starting" };
+		shellMocks.state.workspaceQuery = { data: [], dataUpdatedAt: 0, isError: false, isSuccess: false };
+		const view = await renderShell();
+		expect(shellMocks.warmSessionUsageSummaries).not.toHaveBeenCalled();
+
+		const reverb = { id: "reverb", sessions: [{ id: "reverb-1" }] } as WorkspaceSummary;
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
+		shellMocks.state.workspaceQuery = { data: [reverb], dataUpdatedAt: 1, isError: false, isSuccess: true };
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+
+		await waitFor(() => expect(shellMocks.warmSessionUsageSummaries).toHaveBeenCalledWith(shellMocks.queryClient, [reverb]));
+	});
+
+	it("warms remote boards' usage once each host's sessions are known", async () => {
+		const boxA = { hostId: "box-a", id: "project-a", sessions: [{ id: "a-1" }] } as WorkspaceSummary;
+		const boxB = { hostId: "box-b", id: "project-b", sessions: [] } as unknown as WorkspaceSummary;
+		shellMocks.state.workspaceQuery = { data: [], dataUpdatedAt: 0, isError: false, isSuccess: true };
+		shellMocks.state.remoteWorkspaces = [boxA, boxB];
+		shellMocks.state.remoteSessionHostIds = ["box-a"];
+		const view = await renderShell();
+
+		await waitFor(() => expect(shellMocks.warmSessionUsageSummaries).toHaveBeenCalledWith(shellMocks.queryClient, [boxA]));
+
+		// A streamed session update on the same projects does not warm again.
+		shellMocks.state.remoteWorkspaces = [{ ...boxA, sessions: [{ id: "a-1" }, { id: "a-2" }] } as WorkspaceSummary, boxB];
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		expect(shellMocks.warmSessionUsageSummaries).toHaveBeenCalledOnce();
+
+		// Box B's sessions arriving makes its boards warmable.
+		shellMocks.state.remoteSessionHostIds = ["box-a", "box-b"];
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		await waitFor(() => expect(shellMocks.warmSessionUsageSummaries).toHaveBeenCalledTimes(2));
+		expect(shellMocks.warmSessionUsageSummaries).toHaveBeenLastCalledWith(
+			shellMocks.queryClient,
+			[expect.objectContaining({ id: "project-a" }), boxB],
+		);
 	});
 
 	it("leaves a remote session only when removing its project on the same host", async () => {

@@ -63,6 +63,7 @@ import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchest
 import type { components } from "../../api/schema";
 import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { warmSessionUsageSummaries } from "../hooks/useSessionUsageSummaries";
 import { clientForHost } from "../lib/host-clients";
 import { useCloudSession } from "../lib/cloud-session";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
@@ -77,7 +78,9 @@ export const Route = createFileRoute("/_shell")({
 	loader: async ({ context }) => {
 		await refreshDaemonStatus().catch(() => undefined);
 		if (!usesPreviewWorkspaceData && !hasTrustedApiBaseUrl()) return;
-		return context.queryClient.fetchQuery({ ...workspaceQueryOptions, staleTime: 0 });
+		const workspaces = await context.queryClient.fetchQuery({ ...workspaceQueryOptions, staleTime: 0 });
+		void warmSessionUsageSummaries(context.queryClient, workspaces);
+		return workspaces;
 	},
 	component: ShellLayoutWithSettings,
 });
@@ -218,11 +221,27 @@ function ShellLayout() {
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
 	const { hosts: remoteHosts, refresh: refreshRemoteHosts } = useRemoteHosts();
-	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds } = useRemoteWorkspaces();
+	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds, loadedSessionHostIds: remoteSessionHostIds } = useRemoteWorkspaces();
 	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
 	useEffect(() => {
 		if (failedRemoteHostKey) void refreshRemoteHosts();
 	}, [failedRemoteHostKey, refreshRemoteHosts]);
+	// Warm every board's usage whenever its host's project list (with sessions,
+	// which map usage to projects) becomes known. The _shell loader warms local
+	// boards earlier on a normal launch; this also covers a daemon that becomes
+	// ready after the loader ran, recovery fetches, new projects, and remote
+	// hosts. Keyed on the project set so streamed session updates do not re-run
+	// it; overlapping warm-ups share one in-flight request.
+	const warmableWorkspaces = [
+		...(workspaceQuery.isSuccess ? workspaces : []),
+		...remoteWorkspaces.filter((workspace) => workspace.hostId && remoteSessionHostIds.includes(workspace.hostId)),
+	];
+	const warmableWorkspacesRef = useRef(warmableWorkspaces);
+	warmableWorkspacesRef.current = warmableWorkspaces;
+	const warmableProjectKey = warmableWorkspaces.map((workspace) => sessionUiKey(workspace.id, workspace.hostId)).join("\0");
+	useEffect(() => {
+		if (warmableProjectKey) void warmSessionUsageSummaries(queryClient, warmableWorkspacesRef.current);
+	}, [queryClient, warmableProjectKey]);
 	// Global shortcut listeners need the latest workspace list, but recreating
 	// those subscriptions for every streamed activity update is avoidable.
 	const workspacesRef = useRef(workspaces);
