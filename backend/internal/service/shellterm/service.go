@@ -544,10 +544,10 @@ func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.Ru
 		output, err := s.runtime.GetOutput(ctx, handle, initialInputOutputLines)
 		if err == nil {
 			ready := MatchInitialInputReadyState(output, readyStates)
-			if ready == nil {
-				if styled, ok := s.runtime.(ports.StyledTerminalOutputReader); ok {
-					if rendered, styledErr := styled.GetStyledOutput(ctx, handle, initialInputOutputLines); styledErr == nil {
-						ready = MatchInitialInputReadyState(terminalui.PlainTerminalText(rendered), readyStates)
+			if styled, ok := s.runtime.(ports.StyledTerminalOutputReader); ok {
+				if rendered, styledErr := styled.GetStyledOutput(ctx, handle, initialInputOutputLines); styledErr == nil {
+					if renderedReady := MatchInitialInputReadyState(terminalui.PlainTerminalText(rendered), readyStates); renderedReady != nil {
+						ready = renderedReady
 					}
 				}
 			}
