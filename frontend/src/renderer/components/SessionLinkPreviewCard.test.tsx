@@ -1,11 +1,16 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../i18n";
 import type { SessionLinkSource } from "../lib/use-session-link-navigation";
 import type { PullRequestFacts, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { SessionLinkPreviewCard } from "./SessionLinkPreviewCard";
 
-const mocks = vi.hoisted(() => ({ source: vi.fn() }));
+const mocks = vi.hoisted(() => ({ restore: vi.fn(), source: vi.fn() }));
+
+vi.mock("../hooks/useRestoreSession", () => ({
+	useRestoreSession: () => mocks.restore,
+}));
 
 vi.mock("../lib/use-session-link-navigation", () => ({
 	useSessionLinkSource: (...args: unknown[]) => mocks.source(...args),
@@ -60,6 +65,8 @@ function source(overrides: Partial<SessionLinkSource> = {}): SessionLinkSource {
 
 describe("SessionLinkPreviewCard", () => {
 	beforeEach(() => {
+		mocks.restore.mockReset();
+		mocks.restore.mockResolvedValue({ status: "success" });
 		mocks.source.mockReset();
 		mocks.source.mockReturnValue(source());
 	});
@@ -118,6 +125,30 @@ describe("SessionLinkPreviewCard", () => {
 		expect(screen.getByText("PR #3").parentElement).toHaveTextContent("Ready to merge");
 		expect(screen.getByText("PR #4").parentElement).toHaveTextContent(/merged/i);
 		expect(container.innerHTML).not.toContain("text-[");
+	});
+
+	it("replaces terminated session details with a remote aware resume action", async () => {
+		const terminated = session({ isTerminated: true, status: "terminated", prs: [pr(1)] });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(terminated)] }));
+
+		render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" sourceHostId="box-a" />);
+
+		expect(screen.getByRole("status", { name: "Agent terminated" })).toBeInTheDocument();
+		expect(screen.queryByText("Implement worker link previews")).not.toBeInTheDocument();
+		expect(screen.queryByText("1 PR")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Resume agent" }));
+		expect(mocks.restore).toHaveBeenCalledWith("worker-367", "box-a");
+	});
+
+	it("shows restore failures inside the terminated card", async () => {
+		const terminated = session({ isTerminated: true, status: "terminated" });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(terminated)] }));
+		mocks.restore.mockResolvedValue({ status: "not_resumable", message: "No saved session is available." });
+
+		render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" />);
+		await userEvent.click(screen.getByRole("button", { name: "Resume agent" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("No saved session is available.");
 	});
 
 	it("localizes the PR count instead of adding an English suffix", () => {

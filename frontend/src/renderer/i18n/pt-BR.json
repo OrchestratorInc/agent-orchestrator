@@ -53,6 +53,7 @@
 	"agentSelector.needsSetup": "Requer configuração",
 	"session.statusChecking": "Verificando…",
 	"session.statusUnavailable": "Não foi possível verificar",
+	"session.agentTerminated": "Agente encerrado",
 	"activity.active": "Em andamento",
 	"activity.blocked": "Aguardando decisão",
 	"activity.exited": "Encerrado",

@@ -53,6 +53,7 @@
 	"agentSelector.needsSetup": "설정 필요",
 	"session.statusChecking": "확인 중…",
 	"session.statusUnavailable": "확인할 수 없음",
+	"session.agentTerminated": "에이전트 종료됨",
 	"activity.active": "작업 중",
 	"activity.blocked": "결정 대기",
 	"activity.exited": "종료됨",

@@ -53,6 +53,7 @@
 	"agentSelector.needsSetup": "Needs setup",
 	"session.statusChecking": "Checking…",
 	"session.statusUnavailable": "Unable to verify",
+	"session.agentTerminated": "Agent terminated",
 	"activity.active": "Working",
 	"activity.blocked": "Awaiting Decision",
 	"activity.exited": "Exited",

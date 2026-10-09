@@ -53,6 +53,7 @@
 	"agentSelector.needsSetup": "需要设置",
 	"session.statusChecking": "正在检查…",
 	"session.statusUnavailable": "无法验证",
+	"session.agentTerminated": "代理已终止",
 	"activity.active": "工作中",
 	"activity.blocked": "等待决策",
 	"activity.exited": "已退出",

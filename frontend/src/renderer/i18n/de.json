@@ -53,6 +53,7 @@
 	"agentSelector.needsSetup": "Einrichtung erforderlich",
 	"session.statusChecking": "Wird geprüft…",
 	"session.statusUnavailable": "Status nicht überprüfbar",
+	"session.agentTerminated": "Agent beendet",
 	"activity.active": "In Arbeit",
 	"activity.blocked": "Entscheidung ausstehend",
 	"activity.exited": "Beendet",

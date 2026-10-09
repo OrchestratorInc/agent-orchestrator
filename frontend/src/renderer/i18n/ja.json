@@ -53,6 +53,7 @@
 	"agentSelector.needsSetup": "設定が必要",
 	"session.statusChecking": "確認中…",
 	"session.statusUnavailable": "確認できません",
+	"session.agentTerminated": "エージェントは終了しました",
 	"activity.active": "作業中",
 	"activity.blocked": "判断待ち",
 	"activity.exited": "終了済み",
