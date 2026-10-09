@@ -2162,6 +2162,7 @@
 	"settings.harness.searchPlaceholder": "Search harnesses…",
 	"settings.harness.showDiagnostics": "Show diagnostics",
 	"settings.harness.setup": "Set up",
+	"settings.harness.viewDocumentation": "Dokumentation anzeigen",
 	"settings.harness.startFailed": "Could not start the installation.",
 	"settings.harness.verifyFailed": "{{agent}} finished installing, but AO could not find its executable.",
 	"settings.harness.verifyAgain": "Verify again",

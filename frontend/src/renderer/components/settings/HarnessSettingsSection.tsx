@@ -701,6 +701,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 							&& (agents.isPending || readinessAgent?.installation.state === "unknown");
 						const authPlan = agentAuthPlans.get(agentId);
 						const isSetupAction = authPlan?.action === "setup";
+						const isDocumentationAction = isSetupAction && authPlan?.launchMode === "documentation";
 						const authState = authStates[agentId];
 						const authStatus = readinessAgent?.authentication.state;
 						const connectedCredential = authStatus === "authorized" || authStatus === "configured";
@@ -746,7 +747,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 								{!connectedCredential ? (
 									<Button data-harness-primary-action="" data-terminal-focus-handoff="true" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} size="sm" onClick={() => void startAuth(agentId)}>
 										{authState?.pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-										{authState?.pending ? t("settings.harness.loggingIn") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
+										{authState?.pending ? t("settings.harness.loggingIn") : isDocumentationAction ? t("settings.harness.viewDocumentation") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
 									</Button>
 								) : null}
 							</>

@@ -28,7 +28,7 @@ Provider-specific keys are `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, and
 auth file understood by Unreal; `ollama` needs a model but no API key.
 
 Harness Settings classifies a missing provider credential as **Not set up** and
-offers **Set up**, which opens this provider guide. A locally present API key or
+offers **View documentation**, which opens this provider guide. A locally present API key or
 Codex auth file is **Configured**, not verified: Unreal has no non-interactive
 provider probe that can prove the credential works without starting a model
 request. There is no single Unreal login command because authentication belongs
