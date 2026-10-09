@@ -3161,7 +3161,6 @@ html.sidebar-reordering * {
 @keyframes chat-transcript-reveal {
 	from {
 		opacity: 0;
-		transform: translateY(6px);
 	}
 }
 
