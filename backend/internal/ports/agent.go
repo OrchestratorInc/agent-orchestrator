@@ -582,6 +582,8 @@ const (
 
 // LaunchConfig carries inputs needed to build a new agent launch command.
 type LaunchConfig struct {
+	// Env contains runtime overrides for adapter preflight commands.
+	Env         map[string]string
 	Config      AgentConfig
 	DataDir     string
 	IssueID     string
@@ -621,6 +623,8 @@ type WorkspaceHookConfig struct {
 
 // RestoreConfig carries inputs needed to continue an existing native agent session.
 type RestoreConfig struct {
+	// Env contains runtime overrides for native identity and restore probes.
+	Env             map[string]string
 	Config          AgentConfig
 	DataDir         string
 	Kind            domain.SessionKind
