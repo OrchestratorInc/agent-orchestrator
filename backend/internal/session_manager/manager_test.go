@@ -5724,6 +5724,34 @@ func TestSpawnWorker_PromptFileFailureBlocksFileOnlyHarness(t *testing.T) {
 	}
 }
 
+func TestSpawnWorker_PromptFileFailureBlocksCommandCode(t *testing.T) {
+	st := newFakeStore()
+	agent := &recordingAgent{}
+	dataDir := blockedDataDir(t)
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{
+		Runtime:   &fakeRuntime{},
+		Agents:    singleAgent{agent: agent},
+		Workspace: &fakeWorkspace{},
+		Store:     st,
+		Messenger: &fakeMessenger{},
+		Lifecycle: &fakeLCM{store: st},
+		DataDir:   dataDir,
+		LookPath:  lookPath,
+	})
+
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCommandCode, Prompt: "do it"})
+	if err == nil {
+		t.Fatal("Spawn succeeded, want prompt-file error for Command Code")
+	}
+	if !strings.Contains(err.Error(), "system prompt file") {
+		t.Fatalf("Spawn err = %v, want system prompt file error", err)
+	}
+	if _, ok := st.sessions["mer-1"]; ok {
+		t.Fatal("seed row still exists after prompt-file failure")
+	}
+}
+
 func TestSpawnWorker_SkipsTerminatedOrchestratorContact(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
@@ -5787,8 +5815,22 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
 		}
 	}
-	if words := len(strings.Fields(m.aoSkillPointer())); words > 220 {
-		t.Fatalf("always-on AO skill pointer grew to %d words; keep details in routed command guides:\n%s", words, m.aoSkillPointer())
+	// This orchestrator runs in a terminal, where the html tools and ao render
+	// do not exist, so its prompt does not send it looking for them.
+	if strings.Contains(systemPrompt, "## Showing pages in chat") {
+		t.Fatalf("terminal session prompt names the chat-only html tools:\n%s", systemPrompt)
+	}
+	chatPointer := m.aoSkillPointer(true)
+	for _, want := range []string{
+		"When a chart, table, diagram, or mockup is clearer than text, call `html_preview`, then `html_render`. If you cannot see them, search your tools for them. If you find nothing, read `",
+		"` and use `ao render`. Do not use a built-in visualize skill.",
+	} {
+		if !strings.Contains(chatPointer, want) {
+			t.Fatalf("chat pointer missing %q:\n%s", want, chatPointer)
+		}
+	}
+	if words := len(strings.Fields(chatPointer)); words > 260 {
+		t.Fatalf("always-on AO skill pointer grew to %d words; keep details in routed command guides:\n%s", words, chatPointer)
 	}
 	if strings.Contains(agent.lastLaunch.Prompt, "You are the human-facing orchestrator") {
 		t.Fatalf("coordinator role must not be in the user prompt:\n%s", agent.lastLaunch.Prompt)
@@ -5915,7 +5957,7 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 			lookPath := func(string) (string, error) { return "/bin/true", nil }
 			m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
-			sp, err := m.buildSystemPrompt(ctx, tc.kind, "mer", "mer-1")
+			sp, err := m.buildSystemPrompt(ctx, tc.kind, "mer", "mer-1", false)
 			if err != nil {
 				t.Fatalf("buildSystemPrompt: %v", err)
 			}
@@ -5967,7 +6009,7 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 		LookPath:  lookPath,
 	})
 
-	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7")
+	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", false)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -5989,6 +6031,18 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	}
 	if strings.Contains(sp, "naturally document-shaped") {
 		t.Fatal("system prompt must not require files for ordinary summaries")
+	}
+	// Only a chat session has a thread to show a page in.
+	const inThread = "it does not belong in the workspace at all. In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory."
+	if strings.Contains(sp, "html_render") {
+		t.Fatalf("terminal session prompt names html_render:\n%s", sp)
+	}
+	chatPrompt, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", true)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt chat: %v", err)
+	}
+	if !strings.Contains(chatPrompt, inThread) {
+		t.Fatalf("chat session prompt missing %q", inThread)
 	}
 }
 
@@ -11243,5 +11297,23 @@ func TestOrchestratorWorkspaceBranchCollision(t *testing.T) {
 				t.Fatalf("existing work changed: %q, %v", content, err)
 			}
 		})
+	}
+}
+
+func TestSpawn_RequiredComposerTimeoutNeverDeliversPrompt(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &fakeRuntime{outputs: []string{"Sign in to continue"}}
+	msg := &fakeMessenger{}
+	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: readinessAgent{
+		afterStartAgent: afterStartAgent{recordingAgent: &recordingAgent{}},
+		hints:           ports.PromptReadinessHints{RequireReady: true, Patterns: []string{`Try "debug this error"`}, PollInterval: time.Millisecond, Timeout: time.Millisecond},
+	}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: msg, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+	_, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "--help is task data"})
+	if err == nil {
+		t.Fatal("missing required composer did not fail spawn")
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("typed task into startup dialog: %#v", msg.msgs)
 	}
 }

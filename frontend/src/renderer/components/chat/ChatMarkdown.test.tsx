@@ -7,6 +7,14 @@ import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
 import { ActivityTitle, ChatLinkProvider, ChatMarkdown } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
 
+const sessionPreview = vi.hoisted(() => vi.fn());
+vi.mock("../SessionLinkPreviewCard", () => ({
+	SessionLinkPreviewCard: (props: unknown) => {
+		sessionPreview(props);
+		return <div data-testid="session-link-preview" />;
+	},
+}));
+
 // Mermaid needs real SVG layout APIs jsdom lacks; pin the routing boundary and
 // let MermaidBlock.test.tsx own the block's states.
 vi.mock("../../lib/mermaid-diagram", () => ({
@@ -230,6 +238,26 @@ describe("ChatMarkdown", () => {
 		expect(onLinkOpen).not.toHaveBeenCalled();
 		expect(openExternal).not.toHaveBeenCalled();
 		openExternal.mockRestore();
+	});
+
+	it("scopes a session preview to the chat source", async () => {
+		sessionPreview.mockClear();
+		render(
+			<ChatLinkProvider
+				onSessionLinkOpen={vi.fn()}
+				sessionLinkHostId="box-a"
+			>
+				<ChatMarkdown text="[Worker](ao://sessions/project/session)" />
+			</ChatLinkProvider>,
+		);
+
+		fireEvent.pointerOver(screen.getByRole("link"), { pointerType: "mouse" });
+		await waitFor(() => expect(screen.getByTestId("session-link-preview")).toBeInTheDocument());
+		expect(sessionPreview).toHaveBeenCalledWith({
+			href: "ao://sessions/project/session",
+			sourceHostId: "box-a",
+			sourceKind: undefined,
+		});
 	});
 
 	it("renders remote workspace paths as text while keeping external links working", async () => {

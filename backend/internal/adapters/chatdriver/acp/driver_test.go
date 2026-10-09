@@ -2578,6 +2578,105 @@ func TestACPDriverExtractsCommandFromExecuteToolInput(t *testing.T) {
 	}
 }
 
+// A tool row's detail is rewritten on every update and carried by every
+// snapshot, so an html_render page and an html_preview screenshot are not
+// stored whole.
+func TestACPToolDetailCapsInputAndDropsImageData(t *testing.T) {
+	page := map[string]any{"html": strings.Repeat("<p>x</p>", 2000), "title": "Turns"}
+	shot := strings.Repeat("iVBORw0KGgo", 400)
+	tool := &toolState{
+		id: "mcp-1", kind: acpsdk.ToolKindOther, status: acpsdk.ToolCallStatusCompleted, rawInput: page,
+		content: []acpsdk.ToolCallContent{
+			acpsdk.ToolContent(acpsdk.ImageBlock(shot, "image/png")),
+			acpsdk.ToolContent(acpsdk.TextBlock(`{"width":720}`)),
+		},
+		rawOutput: []any{
+			map[string]any{"type": "image", "data": shot, "mimeType": "image/png"},
+			map[string]any{"type": "text", "text": `{"width":720}`},
+		},
+	}
+	event := (&conversation{}).toolEvent("turn-1", tool, true)
+	approval := approvalToolDetail(acpsdk.ToolCallUpdate{RawInput: page}, domain.ActivityKindMCPTool)
+
+	for name, raw := range map[string][]byte{"tool": event.Detail, "approval": approval} {
+		if strings.Contains(string(raw), `\u003cp\u003ex\u003c/p\u003e`) || strings.Contains(string(raw), shot) {
+			t.Fatalf("%s detail stored the page or the screenshot: %.300s", name, raw)
+		}
+		var detail struct {
+			Input map[string]any `json:"input"`
+		}
+		if err := json.Unmarshal(raw, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if detail.Input["truncated"] != true {
+			t.Fatalf("%s input = %v, want the truncation marker", name, detail.Input)
+		}
+	}
+	var detail struct {
+		Content []json.RawMessage `json:"content"`
+		Output  string            `json:"output"`
+	}
+	if err := json.Unmarshal(event.Detail, &detail); err != nil {
+		t.Fatal(err)
+	}
+	stub := fmt.Sprintf(`{"bytes":%d,"mimeType":"image/png","type":"image"}`, len(shot))
+	if len(detail.Content) != 2 || string(detail.Content[0]) != `{"content":`+stub+`,"type":"content"}` ||
+		string(detail.Content[1]) != `{"content":{"text":"{\"width\":720}","type":"text"},"type":"content"}` {
+		t.Fatalf("content = %s", detail.Content)
+	}
+	if want := `[` + stub + `,{"text":"{\"width\":720}","type":"text"}]`; detail.Output != want {
+		t.Fatalf("output = %s\nwant     %s", detail.Output, want)
+	}
+}
+
+// claude-agent-acp passes an MCP image result through as rawOutput in the
+// Anthropic shape, with the base64 under source.data.
+func TestACPToolDetailDropsAnthropicImageData(t *testing.T) {
+	shot := strings.Repeat("iVBORw0KGgo", 400)
+	tool := &toolState{
+		id: "mcp-2", kind: acpsdk.ToolKindOther, status: acpsdk.ToolCallStatusCompleted,
+		rawOutput: []any{
+			map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": shot}},
+			map[string]any{"type": "text", "text": "ok"},
+		},
+	}
+	event := (&conversation{}).toolEvent("turn-1", tool, true)
+	if strings.Contains(string(event.Detail), shot) {
+		t.Fatalf("detail stored the screenshot: %.300s", event.Detail)
+	}
+	var detail struct {
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal(event.Detail, &detail); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf(`[{"bytes":%d,"mimeType":"image/png","type":"image"},{"text":"ok","type":"text"}]`, len(shot))
+	if detail.Output != want {
+		t.Fatalf("output = %s\nwant     %s", detail.Output, want)
+	}
+}
+
+func TestACPToolDetailKeepsReadContentAndSmallInput(t *testing.T) {
+	file := strings.Repeat("line of a file\n", 2000)
+	tool := &toolState{
+		id: "read-1", kind: acpsdk.ToolKindRead, status: acpsdk.ToolCallStatusCompleted,
+		rawInput: map[string]any{"file_path": "/repo/main.go"},
+		content:  []acpsdk.ToolCallContent{acpsdk.ToolContent(acpsdk.TextBlock(file))},
+	}
+	var detail struct {
+		Input   map[string]any           `json:"input"`
+		Content []acpsdk.ToolCallContent `json:"content"`
+	}
+	if err := json.Unmarshal((&conversation{}).toolEvent("turn-1", tool, true).Detail, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Input["file_path"] != "/repo/main.go" || len(detail.Content) != 1 ||
+		detail.Content[0].Content == nil || detail.Content[0].Content.Content.Text == nil ||
+		detail.Content[0].Content.Content.Text.Text != file {
+		t.Fatalf("read detail changed: input=%v content=%+v", detail.Input, detail.Content)
+	}
+}
+
 func TestRawCommandFromInput(t *testing.T) {
 	tests := []struct {
 		name string

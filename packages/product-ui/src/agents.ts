@@ -33,9 +33,10 @@ export const AGENT_OPTIONS = [
 	"codewhale",
 	"fx",
 	"unreal-agent",
-	"mimo-code",
+"mimo-code",
 	"deepseek-harness",
 	"openhands",
+	"command-code",
 	"zcode",
 ] as const;
 
@@ -80,9 +81,10 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	codewhale: "Codewhale",
 	fx: "fx",
 	"unreal-agent": "Unreal Agent",
-	"mimo-code": "MiMo Code",
+"mimo-code": "MiMo Code",
 	"deepseek-harness": "DeepSeek",
 	openhands: "OpenHands",
+	"command-code": "Command Code",
 	zcode: "ZCode",
 };
 

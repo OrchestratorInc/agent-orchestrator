@@ -59,7 +59,7 @@ func zcodeCredentialsAuthStatus() ports.AgentAuthStatus {
 	if time.Now().After(time.Unix(exp, 0)) {
 		return ports.AgentAuthStatusUnauthorized
 	}
-	return ports.AgentAuthStatusAuthorized
+	return ports.AgentAuthStatusConfigured
 }
 
 // jwtExpiry decodes the unverified exp claim of a JWT. It returns ok=false

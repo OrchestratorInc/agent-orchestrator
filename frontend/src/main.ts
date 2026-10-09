@@ -6,6 +6,7 @@ import { consumeUpdateRelaunchFlag } from "./main/update-relaunch-flag";
 import {
 	app,
 	BaseWindow,
+	BrowserWindow,
 	clipboard,
 	dialog,
 	ipcMain,
@@ -14,6 +15,7 @@ import {
 	net,
 	nativeImage,
 	Notification as ElectronNotification,
+	powerMonitor,
 	protocol,
 	shell,
 	session,
@@ -48,6 +50,9 @@ import { readKeybindingOverrides, writeKeybindingOverrides } from "./main/keybin
 import { readEditorSettings, writeEditorPreference } from "./main/editor-settings";
 import { createEditorHandoff } from "./main/editor-handoff";
 import { launchCommand } from "./main/launch-command";
+import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
+import { agentPageRequestAllowed } from "./main/render-frame-network";
+import { isAgentPageUrl } from "./shared/agent-page-url";
 import {
 	decideRelocation,
 	inspectInstalledBundle,
@@ -86,6 +91,7 @@ import {
 } from "./shared/shortcuts";
 import { createTrayController, type TrayController } from "./main/tray";
 import { createTrayLifecycle, isTrayEnabled } from "./main/tray-lifecycle";
+import { createDesktopQuitController } from "./main/desktop-quit";
 import {
 	TRAY_RENDERER_READY_CHANNEL,
 	TRAY_SET_ATTENTION_STATE_CHANNEL,
@@ -160,6 +166,7 @@ import { AgentBrowserRuntime } from "./main/agent-browser-runtime";
 import { sameBrowserRuntimeIdentity, type BrowserRuntimeIdentity } from "./main/browser-runtime-identity";
 import { connectSupervisor, type SupervisorLinkHandle } from "./main/supervisor-link";
 import { connectBrowserRuntime, type BrowserRuntimeLinkHandle } from "./main/browser-runtime-link";
+import { checkRender, measureRender } from "./main/render-check";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
@@ -318,6 +325,19 @@ let browserQuitCleanupPromise: Promise<void> | null = null;
 let browserCleanupComplete = false;
 let browserQuitRequested = false;
 let createWindowPromise: Promise<void> | null = null;
+const desktopQuit = createDesktopQuitController({
+	platform: process.platform,
+	hasTray: () => trayController !== null && !browserQuitRequested,
+	isUpdateRestartRequested,
+	closeWindow: () => {
+		if (mainWindow) mainWindow.close();
+		else if (createWindowPromise) {
+			void createWindowPromise.then(() => mainWindow?.close())
+				.catch((error) => console.error("failed to close pending main window:", error));
+		}
+	},
+	quit: () => app.quit(),
+});
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
 let browserRuntimeLinkIdentity: BrowserRuntimeIdentity | null = null;
 let keybindingOverrides: KeybindingOverrides = {};
@@ -713,6 +733,50 @@ async function createWindowInternal(): Promise<void> {
 		if (url !== shellWebContents.getURL()) {
 			event.preventDefault();
 		}
+	});
+
+	shellWebContents.on("will-frame-navigate", (event) => {
+		if (event.isMainFrame || !event.frame) return;
+		// The app moving its own frame (to the daemon's new port, or to an
+		// artifact's inline origin) is not the page navigating away.
+		const app = shellWebContents.mainFrame;
+		if (event.initiator?.processId === app.processId && event.initiator.routingId === app.routingId) return;
+		if (blocksRenderFrameNavigation(event.frame.url, event.url)) event.preventDefault();
+	});
+
+	// Agent pages framed in the chat (renders, HTML artifacts) stay off this
+	// computer and its network, as the render check's window does: they may
+	// load public addresses and their own files. A request is judged by the
+	// nearest agent page around its frame; the app's own pass untouched. Pages
+	// cannot start workers (their CSP has worker-src 'none'), whose requests
+	// carry no frame.
+	const blockedPageHosts = new Set<string>();
+	shellWebContents.session.webRequest.onBeforeRequest((details, callback) => {
+		// Loading an agent page into a frame is always allowed: the page's own
+		// CSP sandboxes it, and it is judged by its own rule from then on.
+		if (details.resourceType === "subFrame" && isAgentPageUrl(details.url)) return callback({});
+		let pageUrl: string | undefined;
+		try {
+			for (let frame = details.frame; frame && !pageUrl; frame = frame.parent) {
+				if (isAgentPageUrl(frame.url)) pageUrl = frame.url;
+			}
+		} catch {
+			// The frame went away mid-request; nothing of its page is left to load.
+		}
+		if (!pageUrl) return callback({});
+		void agentPageRequestAllowed(details.url, pageUrl).then(
+			(allowed) => {
+				if (!allowed) {
+					const host = URL.canParse(details.url) ? new URL(details.url).host : details.url.slice(0, 80);
+					if (blockedPageHosts.size < 100 && !blockedPageHosts.has(host)) {
+						blockedPageHosts.add(host);
+						console.warn(`AO: blocked an agent page request to ${host}`);
+					}
+				}
+				callback({ cancel: !allowed });
+			},
+			() => callback({ cancel: true }),
+		);
 	});
 
 	shellWebContents.on("will-prevent-unload", (event) => {
@@ -1276,7 +1340,7 @@ function daemonIdentityError(launch: DaemonLaunchSpec, probe: DaemonProbe): stri
 /**
  * Establish (or re-establish) the OS-native liveness link to the daemon's
  * supervisor socket. Holding this connection keeps the daemon alive: when
- * Electron exits for any reason (Cmd+Q, crash, SIGKILL), the OS closes the fd
+ * Electron exits completely (tray quit, crash, SIGKILL), the OS closes the fd
  * and the daemon detects EOF, then self-stops after its ~5s grace period.
  *
  * Called unconditionally on the spawn path (we always own that daemon).
@@ -1338,6 +1402,15 @@ function establishBrowserRuntimeLink(): void {
 	browserRuntimeLink = connectBrowserRuntime(address, {
 		token,
 		execute: (command, signal) => {
+			// A render check or measure uses its own hidden offscreen window,
+			// never the main window or the session's Browser panel, so it does
+			// not need (or disturb) the view host.
+			if (command.action === "__render-check") {
+				return checkRender({ BrowserWindow }, command.args ?? {}, signal);
+			}
+			if (command.action === "__render-measure") {
+				return measureRender({ BrowserWindow }, command.args ?? {}, signal);
+			}
 			const host = browserViewHost;
 			if (!host) {
 				throw Object.assign(new Error("Browser target owner is unavailable"), {
@@ -2468,7 +2541,7 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 // already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
 	app.relaunch();
-	app.quit();
+	desktopQuit.quitCompletely();
 });
 
 // Whether THIS boot is a post-update relaunch, so the startup loader can show
@@ -2944,14 +3017,20 @@ app.whenReady().then(async () => {
 		: { ...DEFAULT_UI_SETTINGS };
 	soundNotificationsEnabled = initialUiSettings.soundNotificationsEnabled;
 	terminalShellPreference = initialUiSettings.terminalShell;
-	if (isTrayEnabled(process.platform, app.isPackaged, app.getVersion())) {
+	if (browserQuitRequested) return;
+	if (isTrayEnabled(process.platform)) {
 		trayController = createTrayController({
 			focusWindow: focusMainWindow,
 			openSession: trayLifecycle.openSession,
+			quitCompletely: desktopQuit.quitCompletely,
 			locale: initialUiSettings.locale,
 		});
 	}
+	if (process.platform === "darwin") {
+		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());
+	}
 	await createWindow();
+	if (browserQuitRequested) return;
 	void startDaemon();
 	initAutoUpdates();
 
@@ -2979,14 +3058,15 @@ app.whenReady().then(async () => {
 
 // Daemon teardown is now handled via the OS-native supervisor socket: the daemon
 // self-stops ~5s after the last client (this process) drops its connection.
-// The supervisorLink fd is NOT explicitly closed on quit; the OS closes it when
-// the process exits for any reason (Cmd+Q, crash, SIGKILL). Sessions survive.
+// Ordinary macOS Quit closes only the window. Full exit drops the supervisor
+// socket, stopping the app-owned daemon after its grace period. Sessions survive.
 setUpdateRestartFailureHandler(() => {
 	if (!browserQuitRequested) focusMainWindow();
 });
 
 let updateQuitDeadlineArmed = false;
 app.on("before-quit", (event) => {
+	if (desktopQuit.handleBeforeQuit(event)) return;
 	if (chatDraftRisks.length > 0 && !chatDraftQuitConfirmed) {
 		event.preventDefault();
 		if (confirmUnsafeChatDraftLeave(
@@ -2996,6 +3076,8 @@ app.on("before-quit", (event) => {
 		)) {
 			chatDraftQuitConfirmed = true;
 			app.quit();
+		} else {
+			desktopQuit.cancelQuit();
 		}
 		return;
 	}

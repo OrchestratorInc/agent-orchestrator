@@ -38,7 +38,7 @@ func testJWT(t *testing.T, exp int64) string {
 	return enc.EncodeToString(header) + "." + enc.EncodeToString(claims) + ".sig"
 }
 
-func TestAuthStatusAuthorizedWithUnexpiredToken(t *testing.T) {
+func TestAuthStatusConfiguredWithUnexpiredToken(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	writeZcodeCredentials(t, home, `{"oauth:zai:access_token": "`+testJWT(t, time.Now().Add(time.Hour).Unix())+`"}`)
@@ -47,7 +47,7 @@ func TestAuthStatusAuthorizedWithUnexpiredToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if status != ports.AgentAuthStatusAuthorized {
+	if status != ports.AgentAuthStatusConfigured {
 		t.Fatalf("status = %q, want authorized", status)
 	}
 }

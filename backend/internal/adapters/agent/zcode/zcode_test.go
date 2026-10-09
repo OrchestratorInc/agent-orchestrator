@@ -81,7 +81,7 @@ func TestGetLaunchCommand(t *testing.T) {
 		permissions ports.PermissionMode
 		want        []string
 	}{
-		{"default omits mode flag", ports.PermissionModeDefault, []string{"zcode"}},
+		{"default forces build", ports.PermissionModeDefault, []string{"zcode", "--mode", "build"}},
 		{"accept edits maps to edit", ports.PermissionModeAcceptEdits, []string{"zcode", "--mode", "edit"}},
 		{"auto maps to build", ports.PermissionModeAuto, []string{"zcode", "--mode", "build"}},
 		{"bypass permissions maps to yolo", ports.PermissionModeBypassPermissions, []string{"zcode", "--mode", "yolo"}},
@@ -148,7 +148,7 @@ func TestGetLaunchCommandForwardsDisallowedTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	want := []string{"zcode", "--disallowed-tools", "Bash(git-push*),WebFetch"}
+	want := []string{"zcode", "--mode", "build", "--disallowed-tools", "Bash(git-push*),WebFetch"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -177,7 +177,7 @@ func TestGetLaunchCommandDoesNotPassLeadingDashPromptAsSubcommand(t *testing.T) 
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	want := []string{"zcode"}
+	want := []string{"zcode", "--mode", "build"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -265,7 +265,7 @@ func TestGetRestoreCommandForwardsDisallowedTools(t *testing.T) {
 	if !ok {
 		t.Fatal("ok=false, want true")
 	}
-	want := []string{"zcode", "--disallowed-tools", "WebFetch", "--resume", "sess_abc123"}
+	want := []string{"zcode", "--mode", "build", "--disallowed-tools", "WebFetch", "--resume", "sess_abc123"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -368,5 +368,21 @@ func TestGetAgentHooksIsNoOp(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("GetAgentHooks: %v", err)
+	}
+}
+
+func TestLaunchRejectsUnsupportedToolAllowlist(t *testing.T) {
+	p := &Plugin{resolvedBinary: "zcode"}
+	if _, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{AllowedTools: []string{"Read"}}); err == nil {
+		t.Fatal("tool allowlist silently ignored")
+	}
+}
+func TestRestoreRejectsInvalidNativeID(t *testing.T) {
+	p := &Plugin{resolvedBinary: "zcode"}
+	for _, id := range []string{"--continue", "../other", "sess_a\nother"} {
+		_, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}})
+		if err == nil || ok {
+			t.Fatalf("invalid native ID %q accepted", id)
+		}
 	}
 }

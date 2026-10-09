@@ -9,7 +9,9 @@
 # path. --init keeps process accounting clean for any short-lived child.
 
 # ---- stage 1: build the binary (the "release" a user would download) ----
-FROM golang:1.27.1-bookworm AS build
+ARG GO_IMAGE=golang:1.27.1-bookworm
+ARG RUNTIME_IMAGE=debian:bookworm-slim
+FROM ${GO_IMAGE} AS build
 WORKDIR /src
 
 # Cache modules first.
@@ -27,7 +29,7 @@ RUN cd backend && CGO_ENABLED=0 go build -trimpath \
       -o /out/ao ./cmd/ao
 
 # ---- stage 2: a clean machine with NO Go toolchain, just like an end user ----
-FROM debian:bookworm-slim AS run
+FROM ${RUNTIME_IMAGE} AS run
 
 # Runtime deps a fresh user would need: git is required by `ao doctor`; curl
 # drives the HTTP-level guard checks; ca-certificates for good measure. Zellij is

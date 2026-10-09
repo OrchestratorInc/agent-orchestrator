@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, type ReactNode } from "react";
+import { InspectorSection } from "@aoagents/product-ui";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
@@ -51,6 +52,7 @@ export function SessionBranchSummary({
 	openPRNumber,
 	pullRequests,
 	session,
+	title,
 }: {
 	hostId?: string;
 	onOpenFiles: () => void;
@@ -58,6 +60,7 @@ export function SessionBranchSummary({
 	openPRNumber?: number;
 	pullRequests: ReactNode;
 	session: WorkspaceSession;
+	title: string;
 }) {
 	const { t } = useTranslation();
 	const key = sessionUiKey(session.id, hostId);
@@ -118,7 +121,8 @@ export function SessionBranchSummary({
 		return () => clearTimeout(timer);
 	}, [clearPending, key, pending]);
 
-	if (!showGit) return pullRequests ?? null;
+	const cards = pullRequests ? <div className="flex flex-col gap-2 pb-3 last:pb-0">{pullRequests}</div> : null;
+	if (!showGit) return cards ? <InspectorSection surface={false} title={title}>{cards}</InspectorSection> : null;
 
 	const commitsRow = commitsRowView(facts, t);
 	const hasWork = facts.uncommitted.length > 0 || commitsRow !== null;
@@ -145,42 +149,44 @@ export function SessionBranchSummary({
 	}
 
 	return (
-		<section aria-label={t("inspector.branch")} className="mb-4" data-testid="inspector-branch">
-			{session.branch ? <BranchLine base={facts.base} branch={session.branch} /> : null}
-			{pullRequests}
-			{facts.uncommitted.length > 0 ? (
-				<GitStatusRow
-					additions={sum(facts.uncommitted, "additions")}
-					deletions={sum(facts.uncommitted, "deletions")}
-					icon={<Pencil aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
-					label={t("inspector.git.uncommittedFiles", { count: facts.uncommitted.length })}
-					onClick={onOpenFiles}
-				/>
-			) : null}
-			{commitsRow ? (
-				<GitStatusRow
-					additions={sum(facts.committed, "additions")}
-					deletions={sum(facts.committed, "deletions")}
-					icon={<GitCommitHorizontal aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
-					label={commitsRow.label}
-					note={commitsRow.note}
-					noteTone={commitsRow.noteTone}
-					onClick={onOpenFiles}
-				/>
-			) : null}
-			{action ? <div className="mt-2">{action}</div> : null}
-			{sendError ? (
-				<p className="mt-1.5 text-2xs leading-normal text-error" role="status">
-					{sendError}
-				</p>
-			) : null}
-		</section>
+		<InspectorSection surface={false} title={title}>
+			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
+				{session.branch ? <BranchLine base={facts.base} branch={session.branch} /> : null}
+				{cards}
+				{facts.uncommitted.length > 0 ? (
+					<GitStatusRow
+						additions={sum(facts.uncommitted, "additions")}
+						deletions={sum(facts.uncommitted, "deletions")}
+						icon={<Pencil aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
+						label={t("inspector.git.uncommittedFiles", { count: facts.uncommitted.length })}
+						onClick={onOpenFiles}
+					/>
+				) : null}
+				{commitsRow ? (
+					<GitStatusRow
+						additions={sum(facts.committed, "additions")}
+						deletions={sum(facts.committed, "deletions")}
+						icon={<GitCommitHorizontal aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
+						label={commitsRow.label}
+						note={commitsRow.note}
+						noteTone={commitsRow.noteTone}
+						onClick={onOpenFiles}
+					/>
+				) : null}
+				{action ? <div className={hasWork ? "mt-3" : undefined}>{action}</div> : null}
+				{sendError ? (
+					<p className="mt-1.5 text-xs leading-normal text-error" role="status">
+						{sendError}
+					</p>
+				) : null}
+			</section>
+		</InspectorSection>
 	);
 }
 
 function BranchLine({ base, branch }: { base?: string; branch: string }) {
 	return (
-		<div className="flex min-w-0 items-center gap-1.5 px-0.5 pb-2 font-mono text-xs text-muted-foreground">
+		<div className="flex min-w-0 items-center gap-1.5 pb-3 font-mono last:pb-0 text-xs text-muted-foreground">
 			<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />
 			<span className="min-w-0 truncate" title={branch}>
 				{branch}
@@ -209,12 +215,12 @@ function GitStatusRow({
 }) {
 	return (
 		<button
-			className="flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+			className="-mx-1.5 flex min-h-8 items-center gap-2 rounded-md px-1.5 text-left text-sm transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 			onClick={onClick}
 			type="button"
 		>
 			{icon}
-			<span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+			<span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-sm">
 				<span className="truncate">{label}</span>
 				{note ? (
 					<span className={noteTone === "warn" ? "shrink-0 text-xs text-status-in-review" : "shrink-0 text-xs text-passive"}>{note}</span>

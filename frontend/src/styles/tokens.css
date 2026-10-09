@@ -511,6 +511,7 @@
 	--leading-settings-mobile-hint: 14px;
 	--leading-settings-mobile-warning: 15px;
 	--size-settings-action-height: 38px;
+	--size-composer-toolbar-height: var(--size-control-form);
 	--radius-settings-action: 16px;
 	--radius-settings-dialog-lg: 24px;
 	--shadow-settings-dialog: var(--elevation-xl);

@@ -2108,7 +2108,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsZCode := !strings.Contains(schema, "'zcode'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsZCode {
+	needsCommandCode := !strings.Contains(schema, "'command-code'")
+	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsZCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2215,8 +2216,15 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsCodewhale {
 		repairs = append(repairs, replacement{"'fake'))", "'codewhale', 'fake'))"})
 	}
+	if needsCommandCode {
+		// Migration 0194 rewrites the constraint by anchoring on the retained
+		// 'fake' fixture harness, for the same reason as DeepSeek above. A
+		// database that skipped an earlier harness migration reaches this repair
+		// without Command Code, so anchor there instead of enumerating shapes.
+		repairs = append(repairs, replacement{"'fake'))", "'command-code', 'fake'))"})
+	}
 	if needsZCode {
-		// Same shape as the DeepSeek repair: migration 0194 rewrites the known
+		// Same shape as the DeepSeek repair: migration 0198 rewrites the known
 		// variants by exact string, and any database that missed it still ends
 		// with the 'fake' fixture harness to anchor on.
 		repairs = append(repairs, replacement{"'fake'))", "'zcode', 'fake'))"})
@@ -2269,6 +2277,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'openhands'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing OpenHands and did not match known pre-OpenHands schema")
+	}
+	if !strings.Contains(schema, "'command-code'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Command Code and did not match known pre-Command-Code schema")
 	}
 	return nil
 }

@@ -1362,7 +1362,7 @@ func (m *Manager) prepareTargetActivation(ctx context.Context, store ports.Agent
 			return preparedTargetActivation{}, ErrTargetAgentUnauthorized
 		}
 	}
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat)
 	if err != nil {
 		return preparedTargetActivation{}, fmt.Errorf("system prompt: %w", err)
 	}
@@ -1888,13 +1888,9 @@ func (m *Manager) interruptTimedOutSourceHandoff(ctx context.Context, rec domain
 	if handle.ID == "" {
 		return ErrIncompleteHandle
 	}
-	interrupter, ok := m.runtime.(runtimeInterrupter)
-	if !ok {
-		return fmt.Errorf("runtime cannot interrupt an expired source handoff")
-	}
 	interruptCtx, cancel := context.WithTimeout(ctx, switchHandoffInterruptWait)
 	defer cancel()
-	if err := interrupter.Interrupt(interruptCtx, handle); err != nil {
+	if err := m.interruptTerminal(interruptCtx, rec); err != nil {
 		return err
 	}
 

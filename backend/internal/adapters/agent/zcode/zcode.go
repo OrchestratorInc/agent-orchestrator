@@ -13,22 +13,16 @@
 // config (interactive default: build). Restore resumes a persisted session
 // with `--resume <sessionId>`.
 //
-// ZCode's hook, skill, and plugin configuration lives in the user-global
-// ~/.zcode/cli/config.json — including provider credentials. ZCode does
-// support workspace-scoped hook files (<workspace>/zcode.json or
-// <workspace>/.zcode/config.json), but it gates them behind an interactive
-// workspace-hook trust review that an orchestrator cannot complete
-// unattended. AO therefore installs no hooks; session metadata is only
-// surfaced when it already exists under the normalized keys.
-//
-// Model selection is pinned in ZCode's own config (model.main); zcode 0.16.5
-// exposes no --model launch flag. Users can still pin the permission mode
-// per session through the mode config field, which maps onto `--mode`.
+// AO installs workspace hooks under .zcode/config.json and grants only their
+// exact native declaration digests. UserPromptSubmit supplies hidden additive
+// standing instructions; lifecycle callbacks capture the native session ID.
+// Model selection stays in ZCode's own model.main configuration.
 package zcode
 
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -110,6 +104,12 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 
+	if len(cfg.AllowedTools) != 0 {
+		return nil, fmt.Errorf("zcode: tool allowlists are unsupported")
+	}
+	if err := p.prepareHookTrust(ctx, binary, cfg.WorkspacePath); err != nil {
+		return nil, err
+	}
 	cmd = []string{binary}
 	if err := appendModeFlags(&cmd, cfg.Permissions, cfg.Config.Mode); err != nil {
 		return nil, err
@@ -142,9 +142,11 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchCo
 // localized string cannot permanently block spawning.
 func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
-		return ports.PromptReadinessHints{}, err
+		return ports.PromptReadinessHints{
+			RequireReady: true}, err
 	}
 	return ports.PromptReadinessHints{
+		RequireReady: true,
 		InitialDelay: 750 * time.Millisecond,
 		Patterns: []string{
 			"Ask a task about this workspace",
@@ -172,12 +174,21 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if agentSessionID == "" {
 		return nil, false, nil
 	}
+	if !nativeIDPattern.MatchString(agentSessionID) {
+		return nil, false, fmt.Errorf("zcode: invalid native session ID")
+	}
+	if len(cfg.AllowedTools) != 0 {
+		return nil, false, fmt.Errorf("zcode: tool allowlists are unsupported")
+	}
 
 	binary, err := p.zcodeBinary(ctx)
 	if err != nil {
 		return nil, false, err
 	}
 
+	if err := p.prepareHookTrust(ctx, binary, cfg.Session.WorkspacePath); err != nil {
+		return nil, false, err
+	}
 	cmd = make([]string, 0, 4)
 	cmd = append(cmd, binary)
 	if err := appendModeFlags(&cmd, cfg.Permissions, cfg.Config.Mode); err != nil {
@@ -191,9 +202,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 }
 
 // SessionInfo reads hook-derived metadata under AO's normalized keys ("title",
-// "summary", "agentSessionId"). Zcode has no AO-managed hook installation (its
-// hook config is user-global), so these appear only when something else — for
-// example a manually wired `ao hooks zcode` command — persisted them.
+// "summary", "agentSessionId"). ZCode reports these through the AO-managed workspace hooks.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -226,9 +235,9 @@ func (p *Plugin) zcodeBinary(ctx context.Context) (string, error) {
 // appendModeFlags maps AO permission modes onto zcode's --mode values. An
 // explicit per-session mode config (build|edit|plan|yolo) wins; otherwise the
 // permission mode is mapped — acceptEdits→edit, auto→build (zcode's internal
-// "auto" mode is reserved but unimplemented), bypassPermissions→yolo. With
-// neither, no flag is emitted so ZCode's own config governs (interactive
-// default: build).
+// "auto" mode is reserved but unimplemented), bypassPermissions→yolo. With neither, build is explicit so a saved yolo setting cannot broaden AO permissions.
+var nativeIDPattern = regexp.MustCompile(`^sess_[A-Za-z0-9._-]+$`)
+
 func appendModeFlags(cmd *[]string, permissions ports.PermissionMode, configMode string) error {
 	if mode := strings.TrimSpace(configMode); mode != "" {
 		// ZCode's own vocabulary — a config written by another path must
@@ -244,7 +253,7 @@ func appendModeFlags(cmd *[]string, permissions ports.PermissionMode, configMode
 	}
 	switch ports.NormalizePermissionMode(permissions) {
 	case ports.PermissionModeDefault:
-		// No flag: defer to ZCode's own config.
+		*cmd = append(*cmd, "--mode", "build") // Do not inherit a saved yolo mode.
 	case ports.PermissionModeAcceptEdits:
 		*cmd = append(*cmd, "--mode", "edit")
 	case ports.PermissionModeAuto:
@@ -271,4 +280,17 @@ func appendDisallowedTools(cmd *[]string, disallowed []string) error {
 		*cmd = append(*cmd, "--disallowed-tools", strings.Join(disallowed, ","))
 	}
 	return nil
+}
+
+// InterruptInput cancels a running native turn. Ctrl+C only clears the draft
+// or arms ZCode's exit confirmation; Escape is its turn-cancellation key.
+func (p *Plugin) InterruptInput() string { return "\x1b" }
+
+// EmitsSemanticMessageAcceptance uses the native UserPromptSubmit callback to
+// acknowledge an AO coordination token after it reaches the provider's input.
+func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
+
+// ExitDetectionMode leaves process exit detection to the runtime supervisor.
+func (p *Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
+	return ports.AgentExitDetectionSupervisor
 }

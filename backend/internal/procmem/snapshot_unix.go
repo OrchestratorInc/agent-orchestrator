@@ -5,11 +5,12 @@ package procmem
 import (
 	"context"
 	"fmt"
-	"os/exec"
+
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 func execRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).Output()
+	return aoprocess.CommandContext(ctx, name, args...).Output()
 }
 
 // Snapshot reads the current process table by shelling out to `ps`. A nil

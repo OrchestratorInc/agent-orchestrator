@@ -1099,16 +1099,11 @@ button.settings-row-bar {
 }
 
 .composer-run-controls {
-	display: grid;
+	display: flex;
 	min-width: 0;
-	grid-template-columns: minmax(max-content, 1fr) minmax(0, 1fr);
 	align-items: center;
+	justify-content: flex-start;
 	column-gap: var(--space-2);
-}
-
-.composer-run-controls-with-effort {
-	/* Agent and model share free room; effort keeps enough width for its selected label. */
-	grid-template-columns: minmax(max-content, 1fr) minmax(0, 1fr) minmax(max-content, 0.5fr);
 }
 
 .composer-toolbar-slot {
@@ -1116,7 +1111,7 @@ button.settings-row-bar {
 }
 
 .composer-toolbar .composer-toolbar-option {
-	height: var(--size-settings-action-height);
+	height: var(--size-composer-toolbar-height);
 	/* Same mix formula as the settings-modal dropdown trigger, but anchored to
 	   --card (an opaque color) instead of --color-bg-settings-row. */
 	border-radius: var(--radius-md) !important;

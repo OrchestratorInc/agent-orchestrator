@@ -31,6 +31,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
@@ -405,9 +406,12 @@ func Run() error {
 	// loudly instead of silently becoming a TUI session.
 	var sessMgr sessionLifecycle
 	chatSvc := chatsvc.New(chatsvc.Options{
-		Store:              store,
-		Sessions:           store,
-		HibernationEnabled: settingsSvc.ChatHibernationEnabled,
+		Store:               store,
+		Sessions:            store,
+		Renders:             attachmentstore.New(cfg.DataDir),
+		DataDir:             cfg.DataDir,
+		ReconcileOutputType: lcStack.LCM.ReconcileSessionOutputType,
+		HibernationEnabled:  settingsSvc.ChatHibernationEnabled,
 		StopProviderHost: func(ctx context.Context, id domain.SessionID) error {
 			return persistenthost.Shutdown(ctx, cfg.DataDir, string(id))
 		},
@@ -486,6 +490,8 @@ func Run() error {
 			}
 		},
 	})
+	chatSvc.SetRenderCheck(renderViaDesktop(browserBroker, "__render-check"))
+	chatSvc.SetRenderMeasure(renderViaDesktop(browserBroker, "__render-measure"))
 
 	codexModelDriver := codexappserver.New(codexagent.New(), log)
 	modelDiscoverer := modelcatalog.Discoverer{
@@ -632,7 +638,7 @@ func Run() error {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
 	}
 	var reportCoordinator *reportsvc.Coordinator
-	reportSvc := reportsvc.New(reportsvc.Deps{Store: store, OnCreated: func(domain.ReportRecord) {
+	reportSvc := reportsvc.New(reportsvc.Deps{Store: store, Artifacts: chatSvc, OnCreated: func(domain.ReportRecord) {
 		if reportCoordinator != nil {
 			reportCoordinator.Wake()
 		}

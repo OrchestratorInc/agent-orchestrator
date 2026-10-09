@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import type { WorkspaceSession } from "../../types/workspace";
@@ -345,6 +346,7 @@ export function CloudSessionChatSurface({
 	}) => void;
 }) {
 	const cloud = session.cloud;
+	const openSessionLink = useSessionLinkNavigation(undefined, "cloud");
 	const { client, ready } = useCloudCp();
 	const queryClient = useQueryClient();
 	const settingsKey = `cloud-chat-settings:${cloud?.orgId ?? ""}:${session.id}:${session.provider}`;
@@ -507,6 +509,7 @@ export function CloudSessionChatSurface({
 	return (
 		<ChatWorkspace
 			snapshot={snapshot}
+			onSessionLinkOpen={openSessionLink}
 			models={modelsQuery.data?.models ?? []}
 			configOptions={planOptions}
 			onChooseConfigOption={planOptions ? (id, choice) => {

@@ -698,6 +698,7 @@ func newEditHarnessWithOptions(
 		Harness: domain.HarnessCodex, WorkspacePath: workspace,
 		Env:          map[string]string{"AO_EDIT_TEST": "yes", "AO_BROWSER_CAPABILITY": "stale"},
 		SystemPrompt: "preserved prompt", PrepareControllerEnv: prepare,
+		MCPServers: []ports.ChatMCPServerConfig{{Name: "ao", Type: "stdio", Command: "/opt/ao/bin/ao", Args: []string{"mcp"}}},
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -1762,6 +1763,11 @@ func TestEditMessageForksBeforeMiddlePromptAndReusesStoredContent(t *testing.T) 
 		resumes[0].SystemPrompt != "preserved prompt" || resumes[0].ProviderScopeID == "" ||
 		len(starts) != 1 || resumes[0].ProviderScopeID != starts[0].ProviderScopeID {
 		t.Fatalf("resume config = %#v", resumes)
+	}
+	// The forked thread keeps the session's tool servers, such as AO's own ao server.
+	if got := resumes[0].MCPServers; len(got) != 1 || got[0].Name != "ao" || got[0].Command != "/opt/ao/bin/ao" ||
+		len(got[0].Args) != 1 || got[0].Args[0] != "mcp" {
+		t.Fatalf("fork resume MCPServers = %+v, want the start's ao server", got)
 	}
 	branch, err := h.st.ConversationBranch(ctx, h.ctrl.ConversationID(), result.ActiveBranchID)
 	if err != nil || branch.ProviderScopeID == "" || branch.ProviderScopeID != resumes[0].ProviderScopeID || !branch.ProviderIDsScoped || !resumes[0].ProviderIDsScoped {

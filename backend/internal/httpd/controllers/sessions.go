@@ -209,6 +209,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/preview/server", c.startPreviewServer)
 	r.Delete("/sessions/{sessionId}/preview/server", c.stopPreviewServer)
 	r.Get("/sessions/{sessionId}/preview/files/*", c.previewFile)
+	r.Get("/sessions/{sessionId}/artifact-files/*", c.artifactFile)
 	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		r.Method(method, "/sessions/{sessionId}/preview/app/*", http.HandlerFunc(c.previewApp))
 	}
@@ -600,6 +601,31 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 	proxy.ServeHTTP(w, r)
 }
 
+// inlineArtifactOrigin serves the session's artifact directory on its inline
+// origin, the one the chat thread frames an HTML artifact from: the request
+// path is the artifact path, files only, read-only, in the inline sandbox.
+func (c *SessionsController) inlineArtifactOrigin(w http.ResponseWriter, r *http.Request, id domain.SessionID) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		envelope.WriteAPIError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "METHOD_NOT_ALLOWED",
+			r.Method+" not allowed on an artifact origin", nil)
+		return
+	}
+	if c.Svc == nil {
+		writeArtifactFileNotFound(w, r)
+		return
+	}
+	// The session read fills in the default artifact directory for a row
+	// stored without one.
+	sess, err := c.Svc.Get(r.Context(), id)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	asset := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+	serveArtifactFile(w, r, inlineArtifactContentSecurityPolicy, sess.Metadata.ArtifactDir, asset)
+}
+
 func isPreviewLoopback(host string) bool {
 	if strings.EqualFold(host, "localhost") {
 		return true
@@ -617,6 +643,10 @@ func isPreviewLoopback(host string) bool {
 // /assets/app.css maps to dist/assets/app.css. This mirrors a production static
 // server and fixes root-relative URLs without rewriting user-generated files.
 func (c *SessionsController) PreviewOrigin(w http.ResponseWriter, r *http.Request) bool {
+	if id, ok := previewutil.SessionIDFromInlineArtifactHost(r.Host); ok {
+		c.inlineArtifactOrigin(w, r, id)
+		return true
+	}
 	id, artifactOrigin := previewutil.SessionIDFromArtifactHost(r.Host)
 	if !artifactOrigin {
 		var ok bool
@@ -2667,6 +2697,7 @@ func sessionArtifactFiles(r *http.Request, s domain.Session) []SessionArtifactVi
 		}
 		if artifact.Kind == domain.SessionArtifactHTML {
 			view.PreviewURL, _ = previewutil.ArtifactFileURL("http://"+r.Host, s.ID, artifact.Path)
+			view.InlineURL, _ = previewutil.InlineArtifactFileURL("http://"+r.Host, s.ID, artifact.Path)
 		}
 		out = append(out, view)
 	}

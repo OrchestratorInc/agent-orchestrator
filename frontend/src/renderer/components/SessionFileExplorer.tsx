@@ -310,7 +310,7 @@ export function SessionFileExplorer({
 			    the split draws its divider on the content below instead.
 			    The trailing actions sit 4px from the right edge with 4px gaps, the same
 			    as the pinned top-bar buttons above them and the review rows below. */}
-			<header className={floatingHeader ? "absolute right-0 top-0 z-10 flex items-center gap-1 pr-1 pt-1" : "flex shrink-0 items-center gap-1 pb-3 pl-3 pr-1 pt-1"}>
+			<header className={floatingHeader ? "absolute right-0 top-0 z-10 flex items-center gap-1 pr-1 pt-1" : "flex shrink-0 items-center gap-1 pb-3 pl-3 pr-1 pt-2"}>
 				{/* One dropdown for "what am I reviewing", laid out like a VCS review
 				    picker: working scopes at the top, then Commits › and Branch ›
 				    flyouts (Branch = Workspace or a PR). */}
