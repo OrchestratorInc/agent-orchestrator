@@ -353,7 +353,7 @@ func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, c
 // retryFailedChatSpawn reuses the published session and durable turn queue.
 // Queueing the opening brief again would send the user's task twice.
 func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRecord, releaseHarness func()) (RestoreResult, bool, error) {
-	if rec.Kind != domain.KindWorker || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat || m.chat == nil {
+	if (rec.Kind != domain.KindWorker && rec.Kind != domain.KindOrchestrator) || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat || m.chat == nil {
 		return RestoreResult{}, false, fmt.Errorf("retry start %s: %w", rec.ID, ports.ErrChatUnsupported)
 	}
 	if m.chat.HasLiveChatController(rec.ID) {

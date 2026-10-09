@@ -3265,6 +3265,67 @@ func TestStaleControllerEventsDoNotReachTheTimeline(t *testing.T) {
 
 /* ---- tests ------------------------------------------------------------- */
 
+func TestSendVerifiesExcerptAndFallsBackToTextForProvider(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	seed, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "seed", ClientMessageID: "excerpt-seed", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatalf("send seed: %v", err)
+	}
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: seed.ProviderTurnID},
+		ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: seed.ProviderTurnID,
+			ProviderItemID: "excerpt-source", Delta: "Keep this exact sentence."},
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: seed.ProviderTurnID,
+			ProviderItemID: "excerpt-source", Text: "Keep this exact sentence."},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: seed.ProviderTurnID,
+			TurnState: domain.TurnStateCompleted},
+	)
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Messages) == 2 && len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateCompleted
+	})
+	source := snapshot.Messages[1]
+
+	_, err = h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "Use it", ClientMessageID: "excerpt-followup", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: source.ID,
+			Revision: source.Revision, Text: "exact sentence",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("send with excerpt: %v", err)
+	}
+	sent := h.conv.sentMessages()
+	if len(sent) != 2 || !strings.Contains(sent[1].Text, "Referenced chat excerpt") ||
+		!strings.Contains(sent[1].Text, "exact sentence") || len(sent[1].Content) != 0 {
+		t.Fatalf("provider delivery = %#v", sent)
+	}
+	duplicate, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "Use it", ClientMessageID: "excerpt-followup", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: source.ID,
+			Revision: source.Revision + 1, Text: "no longer relevant to the accepted retry",
+		}},
+	})
+	if err != nil || duplicate.ID != "" {
+		t.Fatalf("idempotent excerpt retry = (%+v, %v), want duplicate success", duplicate, err)
+	}
+
+	_, err = h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "stale", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: source.ID,
+			Revision: source.Revision + 1, Text: "exact sentence",
+		}},
+	})
+	if !errors.Is(err, chatsvc.ErrExcerptStale) {
+		t.Fatalf("stale excerpt error = %v, want ErrExcerptStale", err)
+	}
+}
+
 func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 	h := newHarness(t)
 	turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{

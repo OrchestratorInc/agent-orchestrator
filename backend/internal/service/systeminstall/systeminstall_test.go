@@ -163,12 +163,20 @@ func newTestService(goos string, found ...string) *Service {
 		installCapabilities: installCapabilitiesStub{
 			prefix: "/Users/test/.npm", writable: true,
 		},
+		pathWritable:       pathWritableProbeFunc(func(context.Context, string) (bool, error) { return true, nil }),
+		privateNPMPrefixes: map[Target]string{TargetOpencodeV2: "/Users/test/.local/share/opencode-v2-home/npm"},
 		commands: testCommandRunner(func(ctx context.Context, argv []string) *exec.Cmd {
 			return exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // test-only, deterministic argv
 		}),
 		goos:           goos,
 		installTimeout: 2 * time.Second,
 	}
+}
+
+type pathWritableProbeFunc func(context.Context, string) (bool, error)
+
+func (f pathWritableProbeFunc) PathWritable(ctx context.Context, path string) (bool, error) {
+	return f(ctx, path)
 }
 
 func TestPlanFor(t *testing.T) {

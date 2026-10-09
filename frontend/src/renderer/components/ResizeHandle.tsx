@@ -1,164 +1,22 @@
 /**
- * Shared sidebar/inspector resize hit-strip + grip.
+ * Shared sidebar/inspector resize hit-strip.
  *
- * DO NOT regress these design contracts (home-page-ui / shell polish):
- * - Grip is a fixed, hover/active-only pill on the CENTER-PANE border (sidebar:
- *   sidebar-container right edge ≈ center surface left; inspector: panel
- *   `border-l`). Not inset into the panel, not a CSS `::after`, not always-visible.
- * - Height is 80vh, vertically centered — not full inset-y / not titlebar-tall.
- * - useResizable is the ONLY width integrator. This handle only paints the grip
- *   on the live border — never a second drag/clamp state machine.
- * - Callers MUST pass `getBorderElement` (scoped to their panel), not global
- *   document.querySelector, so nested/preview shells cannot pick the wrong node.
- * - Ancestor refs attach after descendant layout effects — getters live in refs and
- *   we re-bind observers once the border node appears (inspector close/reopen).
- * - Drag follow is scoped to *this* handle (not every `is-resizing-x` peer).
+ * - On hover only, a thin line is drawn over the panel edge, fading out at the top and
+ *   bottom, with a short opacity fade in/out; not painted on click/drag, not always-visible.
+ * - The strip is centered on the sidebar/inspector boundary, and the line starts at that
+ *   center and runs toward the center pane, so it covers the center surface's 1px border
+ *   on both sides (the inspector's outer half is clipped by its `overflow-hidden`).
+ * - useResizable is the ONLY width integrator; this strip just forwards pointer events.
  */
-import { useLayoutEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 
 type ResizeHandleProps = React.HTMLAttributes<HTMLDivElement> & {
 	side: "left" | "right";
-	/** Panel/surface whose border the grip sits on. */
-	getBorderElement: () => HTMLElement | null;
-	/** Extra nodes to ResizeObserver (gap, container, etc.). */
-	getObserveElements?: () => ReadonlyArray<HTMLElement | null>;
 };
 
-function borderCenterX(el: HTMLElement, edge: "left" | "right"): number {
-	const rect = el.getBoundingClientRect();
-	const style = getComputedStyle(el);
-	if (edge === "left") {
-		return rect.left + (Number.parseFloat(style.borderLeftWidth) || 1) / 2;
-	}
-	return rect.right - (Number.parseFloat(style.borderRightWidth) || 1) / 2;
-}
-
-export function ResizeHandle({
-	className,
-	side,
-	getBorderElement,
-	getObserveElements,
-	onPointerDown,
-	...props
-}: ResizeHandleProps) {
-	const hitRef = useRef<HTMLDivElement>(null);
-	const gripRef = useRef<HTMLSpanElement>(null);
-	const getBorderElementRef = useRef(getBorderElement);
-	const getObserveElementsRef = useRef(getObserveElements);
-	const draggingRef = useRef(false);
-	getBorderElementRef.current = getBorderElement;
-	getObserveElementsRef.current = getObserveElements;
-	// Sidebar handle paints on the panel's right edge; inspector on its left.
-	const borderEdge: "left" | "right" = side === "right" ? "right" : "left";
-
-	useLayoutEffect(() => {
-		const hit = hitRef.current;
-		if (!hit) return;
-
-		const place = (x: number | null) => {
-			const grip = gripRef.current;
-			if (!grip) return;
-			grip.style.display = x === null ? "none" : "";
-			if (x !== null) grip.style.left = `${x}px`;
-		};
-
-		const sync = () => {
-			const hitRect = hit.getBoundingClientRect();
-			if (hitRect.width < 1 || hitRect.height < 1 || getComputedStyle(hit).display === "none") {
-				place(null);
-				return;
-			}
-			const el = getBorderElementRef.current();
-			place(el ? borderCenterX(el, borderEdge) : null);
-		};
-
-		// ResizeObserver follows the painted border after layout and before paint.
-		// Reading it on every pointermove forced layout after each width write.
-		const endLocalDrag = () => {
-			draggingRef.current = false;
-			sync();
-		};
-		const onBodyClass = () => {
-			if (!document.body.classList.contains("is-resizing-x")) endLocalDrag();
-		};
-
-		const observed = new Set<Element>();
-		const ro = new ResizeObserver(sync);
-		const observe = (el: Element | null | undefined) => {
-			if (!el || observed.has(el)) return;
-			observed.add(el);
-			ro.observe(el);
-		};
-		const refreshObserved = () => {
-			observe(hit);
-			if (hit.parentElement) observe(hit.parentElement);
-			for (const el of getObserveElementsRef.current?.() ?? []) observe(el);
-			observe(getBorderElementRef.current());
-		};
-
-		// During drag ResizeObserver owns sync; the style observer must not
-		// force layout between the width write and the browser layout pass.
-		let borderMoTarget: HTMLElement | null = null;
-		const mo = new MutationObserver(() => {
-			if (draggingRef.current) return;
-			refreshObserved();
-			const border = getBorderElementRef.current();
-			if (border !== borderMoTarget) bindBorderMo();
-			sync();
-		});
-		const bindBorderMo = () => {
-			const border = getBorderElementRef.current();
-			mo.disconnect();
-			borderMoTarget = border;
-			mo.observe(hit, { attributes: true, attributeFilter: ["class", "hidden"] });
-			if (border) {
-				mo.observe(border, {
-					attributes: true,
-					attributeFilter: ["data-state", "hidden", "class", "style"],
-				});
-			}
-		};
-
-		refreshObserved();
-		bindBorderMo();
-		sync();
-
-		// Ancestor refs attach after this descendant layout effect — retry until
-		// the border node exists (inspector mount / close+reopen).
-		let borderPollRaf = 0;
-		let borderPollAttempts = 0;
-		const pollForBorder = () => {
-			borderPollRaf = 0;
-			refreshObserved();
-			bindBorderMo();
-			sync();
-			if (!getBorderElementRef.current() && borderPollAttempts++ < 120) {
-				borderPollRaf = requestAnimationFrame(pollForBorder);
-			}
-		};
-		if (!getBorderElementRef.current()) {
-			borderPollRaf = requestAnimationFrame(pollForBorder);
-		}
-
-		const bodyMo = new MutationObserver(onBodyClass);
-		bodyMo.observe(document.body, { attributes: true, attributeFilter: ["class"] });
-		onBodyClass();
-
-		window.addEventListener("resize", sync);
-		return () => {
-			if (borderPollRaf) cancelAnimationFrame(borderPollRaf);
-			ro.disconnect();
-			mo.disconnect();
-			bodyMo.disconnect();
-			endLocalDrag();
-			window.removeEventListener("resize", sync);
-		};
-	}, [borderEdge]);
-
+export function ResizeHandle({ className, side, ...props }: ResizeHandleProps) {
 	return (
 		<div
-			ref={hitRef}
 			data-side={side}
 			data-slot="resize-handle"
 			data-testid="resize-handle"
@@ -168,21 +26,12 @@ export function ResizeHandle({
 				side === "left" && "left-[calc(-1*var(--size-resize-handle-offset))]",
 				className,
 			)}
-			onPointerDown={(event) => {
-				// Mark local drag before useResizable adds `is-resizing-x`.
-				draggingRef.current = true;
-				onPointerDown?.(event);
-			}}
 			{...props}
 		>
 			<span
-				ref={gripRef}
 				aria-hidden="true"
-				data-resize-grip=""
-				// Fixed + 80vh + hover opacity only. Do not restore always-on / inset-y /
-				// ::after grips — those were rejected for this shell polish.
-				className="pointer-events-none fixed z-[6] h-[80vh] w-0.5 rounded-full bg-foreground/20 opacity-0 transition-opacity duration-fast group-hover/resize:opacity-100 group-active/resize:opacity-100 motion-reduce:transition-none"
-				style={{ display: "none", top: "50%", transform: "translate(-50%, -50%)" }}
+				data-resize-line=""
+				className="pointer-events-none absolute inset-y-0 left-1/2 w-0.5 bg-gradient-to-b from-transparent via-foreground/30 to-transparent opacity-0 transition-opacity duration-fast group-hover/resize:opacity-100 motion-reduce:transition-none"
 			/>
 		</div>
 	);

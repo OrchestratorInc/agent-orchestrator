@@ -26,6 +26,7 @@ import {
 	subscribeChatDraftRuntime,
 	writeChatAttachments,
 	writeChatComposerText,
+	writeChatExcerptReferences,
 	writeChatInlineEdit,
 	type DraftStorage,
 	type ChatDraftScope,
@@ -149,9 +150,62 @@ describe("optimistic composer drafts", () => {
 		expect(prepared.draft.composer).toMatchObject({ text: input.composerText, attachments: [sent] });
 		expect(prepared.draft.composer.delivery?.draft).toBeUndefined();
 	});
+
+	it("keeps excerpt sends recoverable for editing after a definitive refusal", () => {
+		const storage = new MemoryStorage();
+		const excerpts = [{
+			id: "excerpt-1", conversationId: "conversation-1", messageId: "message-1",
+			revision: 2, text: "selected context", role: "assistant" as const,
+		}];
+		const prepared = prepareChatComposerDelivery("excerpt-refusal", { ...input, excerpts }, storage);
+		if (!prepared.ok) throw new Error("Failed to prepare test delivery");
+		expect(prepared.draft.composer).toMatchObject({
+			revision: prepared.mutation.revision, text: input.composerText,
+			attachments: [sent], excerpts,
+		});
+		expect(prepared.mutation.draft).toBeUndefined();
+		expect(prepared.mutation.excerpts).toEqual(excerpts);
+
+		expect(clearRejectedChatComposerDelivery("excerpt-refusal", input.clientMessageId, prepared.mutation.revision, storage).ok).toBe(true);
+		const restored = readChatSessionDraft("excerpt-refusal", storage).composer;
+		expect(restored).toMatchObject({ text: input.composerText, attachments: [sent], excerpts });
+		expect(restored.delivery).toBeUndefined();
+	});
 });
 
 describe("Chat draft storage", () => {
+	it("persists transcript excerpts and journals the exact references for retry", () => {
+		const storage = new MemoryStorage();
+		const scope: ChatDraftScope = { sessionId: "excerpt-session", incarnation: "excerpt-session" };
+		const excerpts = [{
+			id: "excerpt-1",
+			conversationId: "conversation-1",
+			messageId: "message-1",
+			revision: 2,
+			text: "selected context",
+			role: "assistant" as const,
+		}];
+
+		expect(writeChatExcerptReferences(scope, excerpts, storage).ok).toBe(true);
+		expect(readChatSessionDraft(scope, storage).composer.excerpts).toEqual(excerpts);
+		const prepared = prepareChatComposerDelivery(scope, {
+			kind: "send",
+			composerText: "follow up",
+			attachments: [],
+			excerpts,
+			requestText: "follow up",
+			clientMessageId: "delivery-1",
+		}, storage);
+		expect(prepared.ok).toBe(true);
+		if (!prepared.ok) return;
+		expect(prepared.mutation.excerpts).toEqual(excerpts);
+		expect(clearAcceptedChatComposer(scope, prepared.mutation.revision, storage)).toMatchObject({
+			ok: true,
+			cleared: true,
+		});
+		expect(readChatSessionDraft(scope, storage).composer.excerpts ?? []).toEqual([]);
+	});
+
 	it("lets authoritative recreation purge once while every late obsolete callback fails closed", () => {
 		const storage = new MemoryStorage();
 		const first: ChatDraftScope = {

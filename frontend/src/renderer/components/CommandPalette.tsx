@@ -424,7 +424,7 @@ export function CommandPalette() {
 					void navigate({ to: target.to, params: target.params });
 					break;
 				case "/projects/$projectId/settings":
-					useUiStore.getState().openProjectSettings(target.params.projectId);
+					useUiStore.getState().openProjectSettings(target.params.projectId, { cloudOrgId: workspaces.find((workspace) => workspace.id === target.params.projectId)?.cloudOrgId });
 					break;
 				case "/projects/$projectId/sessions/$sessionId":
 				case "/host/$hostId/project/$projectId/session/$sessionId":
@@ -433,7 +433,7 @@ export function CommandPalette() {
 					break;
 			}
 		},
-		[navigate],
+		[navigate, workspaces],
 	);
 
 	const sessionRoute = useCallback(

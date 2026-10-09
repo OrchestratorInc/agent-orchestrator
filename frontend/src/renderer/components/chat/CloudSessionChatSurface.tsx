@@ -4,6 +4,7 @@ import { useCloudCp } from "../../hooks/useCloudCp";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, TurnSettings } from "../../types/conversation";
+import type { TerminalTarget } from "../../types/terminal";
 import type { WorkspaceSession } from "../../types/workspace";
 import { ChatWorkspace } from "./ChatWorkspace";
 
@@ -304,10 +305,28 @@ export function CloudSessionChatSurface({
 	controllerTransitioning,
 	newWorkDisabled,
 	onConversationWorkChange,
+	reviewerTerminal,
+	onOpenReviewerTerminal,
+	reviewerTarget,
+	onSelectChat,
+	daemonReady,
+	theme,
+	auxiliaryTabOrder,
+	onAuxiliaryTabOrderChange,
 }: {
 	session: WorkspaceSession;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
+	/** The Cloud reviewer terminal, shown as its own tab beside the chat as in local sessions. */
+	reviewerTerminal?: { handleId: string; harness: string };
+	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
+	/** The selected reviewer pane, if any. */
+	reviewerTarget?: Extract<TerminalTarget, { kind: "reviewer" }>;
+	onSelectChat?: () => void;
+	daemonReady?: boolean;
+	theme?: "light" | "dark";
+	auxiliaryTabOrder?: string[];
+	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	onOpenFiles?: () => void;
 	onOpenFile?: (path: string) => void;
 	controllerTransitioning?: boolean;
@@ -528,6 +547,14 @@ export function CloudSessionChatSurface({
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}
 			sessionTitle={session.title}
+			reviewerTerminal={reviewerTerminal}
+			onOpenReviewerTerminal={onOpenReviewerTerminal}
+			reviewerTarget={reviewerTarget}
+			onSelectChat={onSelectChat}
+			daemonReady={daemonReady}
+			theme={theme}
+			auxiliaryTabOrder={auxiliaryTabOrder}
+			onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange}
 		/>
 	);
 }

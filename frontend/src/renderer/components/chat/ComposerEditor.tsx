@@ -34,6 +34,7 @@ import {
 	useEffect,
 	useImperativeHandle,
 	useRef,
+	useState,
 	type ClipboardEvent,
 	type JSX,
 	type KeyboardEvent,
@@ -527,10 +528,36 @@ const EditorBridge = forwardRef<
 	return null;
 });
 
+/**
+ * Fades a changing placeholder (the orchestrator's start-up steps) out, swaps
+ * the text, and fades it back in. Fast on purpose. The first text mounts
+ * directly.
+ */
+const PLACEHOLDER_FADE_MS = 80;
+
+function FadingPlaceholder({ text }: { text: string }) {
+	const [shown, setShown] = useState(text);
+	useEffect(() => {
+		if (text === shown) return;
+		const timer = setTimeout(() => setShown(text), PLACEHOLDER_FADE_MS);
+		return () => clearTimeout(timer);
+	}, [text, shown]);
+	return (
+		<span
+			className="transition-opacity ease-out motion-reduce:transition-none"
+			style={{ opacity: text === shown ? 1 : 0, transitionDuration: `${PLACEHOLDER_FADE_MS}ms` }}
+		>
+			{shown}
+		</span>
+	);
+}
+
 export const ComposerEditor = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		/** Hides the text while a send is in flight; the draft is still held for recovery. */
+		concealed?: boolean;
 		label: string;
 		placeholder: string;
 		menuOpen: boolean;
@@ -547,6 +574,7 @@ export const ComposerEditor = forwardRef<
 >(function ComposerEditor(
 	{
 		disabled,
+		concealed,
 		label,
 		placeholder,
 		menuOpen,
@@ -581,7 +609,7 @@ export const ComposerEditor = forwardRef<
 	const placeholderNode = useCallback(
 		() => (
 			<div className="pointer-events-none absolute inset-x-0 top-0 py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground">
-				{placeholder}
+				<FadingPlaceholder text={placeholder} />
 			</div>
 		),
 		[placeholder],
@@ -616,12 +644,13 @@ export const ComposerEditor = forwardRef<
 							}}
 							className={cn(
 								"chat-composer-scrollbar max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 pl-[7px] pr-0 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-background",
-								disabled && "opacity-50",
+								concealed ? "invisible" : disabled && "opacity-50",
 							)}
 						/>
 					}
 					ErrorBoundary={LexicalErrorBoundary}
 				/>
+				{concealed ? <div aria-hidden="true">{placeholderNode()}</div> : null}
 				<HistoryPlugin />
 				<EditorBridge
 					ref={ref}

@@ -9648,6 +9648,11 @@ components:
           type: string
         warning:
           type: string
+        warningCode:
+          enum:
+          - auth_required
+          - auth_expired
+          type: string
       required:
       - agentId
       - selectionMode
@@ -10811,6 +10816,8 @@ components:
           type: boolean
         branch:
           type: string
+        branchState:
+          $ref: '#/components/schemas/SessionBranchState'
         chatProviderPreserved:
           type: boolean
         createdAt:
@@ -11237,6 +11244,13 @@ components:
           type: string
         name:
           type: string
+        sourceMessageId:
+          type: string
+        sourceRevision:
+          format: int64
+          type: integer
+        text:
+          type: string
         type:
           type: string
         uri:
@@ -11269,6 +11283,23 @@ components:
       - deletions
       - status
       type: object
+    ConversationExcerptReferenceRequest:
+      properties:
+        conversationId:
+          type: string
+        messageId:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        text:
+          type: string
+      required:
+      - conversationId
+      - messageId
+      - revision
+      - text
+      type: object
     ConversationImageContentRequest:
       properties:
         data:
@@ -11295,6 +11326,8 @@ components:
       type: object
     ConversationMessageResponse:
       properties:
+        clientMessageId:
+          type: string
         content:
           items:
             $ref: '#/components/schemas/ConversationContentSummaryResponse'
@@ -11891,6 +11924,7 @@ components:
           - unreal-agent
           - mimo-code
           - deepseek-harness
+          - openhands
           - fake
           type: string
         approvalMode:
@@ -12529,6 +12563,7 @@ components:
           - unreal-agent
           - mimo-code
           - deepseek-harness
+          - openhands
           - cloudflared
           type: string
         updatedAt:
@@ -13943,6 +13978,10 @@ components:
           type: array
         clientMessageId:
           type: string
+        excerpts:
+          items:
+            $ref: '#/components/schemas/ConversationExcerptReferenceRequest'
+          type: array
         resources:
           items:
             $ref: '#/components/schemas/ConversationResourceContentRequest'
@@ -14039,6 +14078,18 @@ components:
       - kind
       - size
       - updatedAt
+      type: object
+    SessionBranchState:
+      properties:
+        commits:
+          type: integer
+        remoteBranch:
+          type: string
+        unpushed:
+          type: integer
+      required:
+      - commits
+      - unpushed
       type: object
     SessionInterfaceTransition:
       properties:
@@ -15036,6 +15087,7 @@ components:
           - unreal-agent
           - mimo-code
           - deepseek-harness
+          - openhands
           type: string
         issueId:
           type: string

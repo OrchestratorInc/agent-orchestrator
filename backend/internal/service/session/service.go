@@ -208,6 +208,10 @@ type Service struct {
 	// independently spawn its own git subprocesses for identical work.
 	workspaceGroup singleflight.Group
 	manifestGroup  singleflight.Group
+	// branchStateMu serializes branch-state reconciles and guards branchTips,
+	// each session's last reconciled branch, remote, and base tips.
+	branchStateMu sync.Mutex
+	branchTips    map[domain.SessionID]string
 	// signalCapable reports whether a harness has a hook pipeline that can
 	// deliver activity signals at all. Only capable harnesses are eligible for
 	// the no_signal downgrade: a hook-less harness staying silent forever is
@@ -311,6 +315,7 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.Session{}, 0, 0, apierr.Invalid("STANDALONE_WORKER_REQUIRED", "Standalone sessions must be workers", nil)
 	}
 	if cfg.Kind == domain.KindOrchestrator {
+		cfg.Async = true
 		unlock := s.lockOrchestratorProject(cfg.ProjectID)
 		defer unlock()
 
@@ -594,6 +599,7 @@ func (s *Service) SpawnOrchestrator(
 	sess, _, _, err := s.spawn(ctx, ports.SpawnConfig{
 		ProjectID:     projectID,
 		Kind:          domain.KindOrchestrator,
+		Async:         true,
 		RequestedMode: mode,
 		AgentConfig: ports.AgentConfig{
 			Permissions: approval,
@@ -1389,6 +1395,13 @@ func mapSessionError(err error) error {
 			})
 		}
 		return apierr.Conflict("SESSION_MODE_UNSUPPORTED", err.Error(), nil)
+	case errors.Is(err, ports.ErrChatRecoveryInconclusive):
+		// Checked before the envelope's transient mapping: a recovery that cannot
+		// safely take over a still-running provider fails the same way on every
+		// retry, often with a deadline in the chain, so it is not "momentarily
+		// unavailable".
+		return apierr.Conflict("CHAT_RECOVERY_INCONCLUSIVE",
+			"AO could not safely reconnect to the session's still-running chat process: "+err.Error(), nil)
 	case errors.Is(err, ports.ErrChatDriverUnavailable):
 		return apierr.Conflict("CHAT_DRIVER_UNAVAILABLE", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatDriverIncompatible):

@@ -100,6 +100,9 @@ export type SessionProvisionStep = {
 	endedAt?: string;
 };
 
+/** The daemon's observed branch facts. `unpushed` equals `commits` until the branch reaches its remote. */
+export type SessionBranchState = { commits: number; remoteBranch?: string; unpushed: number };
+
 export type WorkspaceSession = {
 	id: string;
 	/** Installation ID of the daemon that owns this session; absent for local and Cloud. */
@@ -169,6 +172,8 @@ export type WorkspaceSession = {
 	 * "running" on a failed session is the step that failed.
 	 */
 	provisionSteps?: SessionProvisionStep[];
+	/** The daemon's observed branch facts: commits on top of the base and whether they reached the remote. */
+	branchState?: SessionBranchState;
 	/** Durable runtime fact from the daemon; independent of the derived SCM-aware status. */
 	isTerminated?: boolean;
 	/** Whether the cloud worker has a current control-plane connection. */
@@ -233,6 +238,11 @@ export type WorkspaceSession = {
 		sandboxProvider?: string;
 		desiredState?: string;
 		observedState?: string;
+		/** Sandbox runtime state; "terminated" means AO stopped retrying startup. */
+		runtimeState?: string;
+		runtimeError?: string;
+		/** Why the worker has not started; cleared once it connects. */
+		startupError?: { code: string; message: string; at: string };
 	};
 };
 
@@ -408,6 +418,7 @@ export type { AttentionZone } from "../lib/session-presentation";
 
 export type WorkspaceSummary = {
 	id: string;
+	cloudOrgId?: string;
 	/** Installation ID of the daemon that owns this project; absent for local and Cloud. */
 	hostId?: string;
 	name: string;
