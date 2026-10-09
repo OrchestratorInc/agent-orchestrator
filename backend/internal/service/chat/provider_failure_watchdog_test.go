@@ -759,6 +759,236 @@ func TestLiveReconnectRetriesDurableHostTerminationAfterRestart(t *testing.T) {
 	_ = firstProvider.Close()
 }
 
+func TestPeriodicRecoveryAfterReconnectOnlyStartupResumesFreshProvider(t *testing.T) {
+	st := openStore(t)
+	liveBase := newFakeConversation()
+	live := &liveTerminatingConversation{terminatingConversation: &terminatingConversation{fakeConversation: liveBase}}
+	freshBase := newFakeConversation()
+	freshBase.turnSeq = 100
+	driver := &reconnectOnlyWatchdogDriver{
+		live:  live,
+		fresh: []ports.ChatConversation{&nativeHistoryConversation{fakeConversation: freshBase}},
+	}
+	h := &harness{
+		st:       st,
+		conv:     liveBase,
+		activity: &recordingActivity{},
+		clock:    time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC),
+	}
+	var ids atomic.Int32
+	h.svc = chatsvc.New(chatsvc.Options{
+		Store: st, Reader: fullSnapshotReader(st), Sessions: st,
+		Drivers: fakeRegistry{driver: driver}, Activity: h.activity,
+		Log: slog.New(slog.DiscardHandler),
+		NewID: func() string {
+			return fmt.Sprintf("reconnect-only-watchdog-%d", ids.Add(1))
+		},
+		Now: h.now,
+	})
+	// Startup health adopts the surviving host in reconnect-only mode, and that
+	// launch configuration is what periodic recovery later reuses.
+	controller, err := h.svc.Start(context.Background(), chatsvc.StartConfig{
+		ReconnectOnly: true, SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex,
+		WorkspacePath: t.TempDir(), ProviderConversationID: liveBase.ProviderConversationID(),
+	})
+	if err != nil {
+		t.Fatalf("reconnect-only Start: %v", err)
+	}
+	h.ctrl = controller
+	t.Cleanup(func() { _ = h.svc.Stop(context.Background(), testSession) })
+
+	turn, err := h.ctrl.Send(context.Background(), ports.ChatUserMessage{Text: "finish the adopted task"})
+	if err != nil {
+		t.Fatalf("Send on adopted host: %v", err)
+	}
+	liveBase.emit(
+		ports.ChatEvent{
+			Kind: ports.ChatEventTurnStarted, ProviderEventID: "reconnect-only-turn-started",
+			ProviderTurnID: turn.ProviderTurnID, ProviderConversationID: liveBase.ProviderConversationID(),
+		},
+		ports.ChatEvent{
+			Kind: ports.ChatEventActivityStarted, ProviderEventID: "reconnect-only-provider-failure",
+			ProviderTurnID: turn.ProviderTurnID, ProviderItemID: "reconnect-only-provider-failure",
+			ActivityKind: domain.ActivityKindSystem, ActivityStatus: domain.ActivityStatusRunning,
+			Summary: "Reconnecting to Claude, attempt 10 of 10",
+			Detail:  []byte(`{"event":"provider.failure"}`),
+		},
+	)
+	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
+		return len(snapshot.Turns) == 1 && snapshot.Turns[0].State == domain.TurnStateRunning &&
+			len(snapshot.Activities) == 1
+	})
+	h.advance(chatsvc.StaleProviderFailureTimeout + time.Second)
+
+	if err := h.svc.RecoverStaleProviderFailure(context.Background(), testSession, h.now()); err != nil {
+		t.Fatalf("RecoverStaleProviderFailure after reconnect-only startup: %v", err)
+	}
+	if !live.terminated.Load() {
+		t.Fatal("periodic recovery did not terminate the adopted stale host")
+	}
+	if got := driver.reconnectCalls.Load(); got != 1 {
+		t.Fatalf("reconnect calls = %d, want only the startup adoption", got)
+	}
+	if got := driver.resumeCalls.Load(); got != 1 {
+		t.Fatalf("fresh resume calls = %d, want 1 replacement provider", got)
+	}
+	next, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{Text: "start after replacement"})
+	if err != nil {
+		t.Fatalf("Send after periodic recovery: %v", err)
+	}
+	if next.State != domain.TurnStateRunning {
+		t.Fatalf("next turn state = %q, want %q", next.State, domain.TurnStateRunning)
+	}
+	if got := freshBase.sentTexts(); len(got) != 1 || got[0] != "start after replacement" {
+		t.Fatalf("replacement provider sends = %#v, want next prompt", got)
+	}
+}
+
+func TestReconnectOnlyStartupRetiresPendingHostWithoutStartingProvider(t *testing.T) {
+	terminateFailure := errors.New("injected host termination failure")
+	firstProvider := &failingPeriodicTermination{
+		terminatingConversation: &terminatingConversation{fakeConversation: newFakeConversation()},
+		err:                     terminateFailure,
+	}
+	h := newHarnessWithConversation(t, firstProvider)
+	// Release the abandoned first controller even when an assertion fails, so the
+	// harness cleanup does not wait on a provider the simulated crash left open.
+	t.Cleanup(func() { _ = firstProvider.Close() })
+	root, err := h.ctrl.Send(context.Background(), ports.ChatUserMessage{Text: "keep working"})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	firstProvider.emit(
+		ports.ChatEvent{
+			Kind: ports.ChatEventTurnStarted, ProviderEventID: "startup-retire-turn-started",
+			ProviderTurnID: root.ProviderTurnID, ProviderConversationID: firstProvider.ProviderConversationID(),
+		},
+		ports.ChatEvent{
+			Kind: ports.ChatEventActivityStarted, ProviderEventID: "startup-retire-provider-failure",
+			ProviderTurnID: root.ProviderTurnID, ProviderItemID: "startup-retire-provider-failure",
+			ActivityKind: domain.ActivityKindSystem, ActivityStatus: domain.ActivityStatusRunning,
+			Summary: "Reconnecting to Claude, attempt 10 of 10",
+			Detail:  []byte(`{"event":"provider.failure"}`),
+		},
+	)
+	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
+		return len(snapshot.Turns) == 1 && snapshot.Turns[0].State == domain.TurnStateRunning &&
+			len(snapshot.Activities) == 1
+	})
+	h.advance(chatsvc.StaleProviderFailureTimeout + time.Second)
+	if err := h.svc.RecoverStaleProviderFailure(context.Background(), testSession, h.now()); !errors.Is(err, terminateFailure) {
+		t.Fatalf("periodic recovery error = %v, want injected termination failure", err)
+	}
+	pending, err := h.st.ProviderHostTerminationPending(
+		context.Background(), h.ctrl.ConversationID(), testSession)
+	if err != nil || !pending {
+		t.Fatalf("termination pending after failed termination = %v, err=%v; want true", pending, err)
+	}
+
+	retryHost := &watchdogRejectingLiveConversation{
+		terminatingConversation: &terminatingConversation{fakeConversation: newFakeConversation()},
+	}
+	freshBase := newFakeConversation()
+	freshBase.turnSeq = 100
+	driver := &reconnectOnlyWatchdogDriver{
+		live:  retryHost,
+		fresh: []ports.ChatConversation{&nativeHistoryConversation{fakeConversation: freshBase}},
+	}
+	var ids atomic.Int32
+	restarted := chatsvc.New(chatsvc.Options{
+		Store: h.st, Reader: fullSnapshotReader(h.st), Sessions: h.st,
+		Drivers: fakeRegistry{driver: driver}, Activity: lifecycle.New(h.st, nil),
+		Log: slog.New(slog.DiscardHandler),
+		NewID: func() string {
+			return fmt.Sprintf("startup-retire-generation-%d", ids.Add(1))
+		},
+		Now: h.now,
+	})
+	t.Cleanup(func() { restarted.StopAll(context.Background()) })
+	startConfig := chatsvc.StartConfig{
+		SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex,
+		WorkspacePath: t.TempDir(), ProviderConversationID: firstProvider.ProviderConversationID(),
+	}
+
+	// Startup observation must never create a provider: it retires the stale host
+	// it adopted and reports that no host is running.
+	observe := startConfig
+	observe.ReconnectOnly = true
+	if _, err := restarted.Start(context.Background(), observe); !errors.Is(err, ports.ErrChatHostNotRunning) {
+		t.Fatalf("reconnect-only Start error = %v, want %v", err, ports.ErrChatHostNotRunning)
+	}
+	if !retryHost.terminated.Load() {
+		t.Fatal("reconnect-only startup did not retire the pending stale host")
+	}
+	if got := retryHost.activationCalls.Load(); got != 0 {
+		t.Fatalf("pending host was activated %d times, want 0", got)
+	}
+	if got := driver.resumeCalls.Load(); got != 0 {
+		t.Fatalf("reconnect-only startup created %d providers, want 0", got)
+	}
+	pending, err = h.st.ProviderHostTerminationPending(
+		context.Background(), h.ctrl.ConversationID(), testSession)
+	if err != nil || pending {
+		t.Fatalf("termination pending after reconnect-only retirement = %v, err=%v; want false", pending, err)
+	}
+
+	// Opening the session afterwards is an ordinary resume into a fresh provider.
+	if _, err := restarted.Start(context.Background(), startConfig); err != nil {
+		t.Fatalf("ordinary Start after reconnect-only retirement: %v", err)
+	}
+	if got := driver.resumeCalls.Load(); got != 1 {
+		t.Fatalf("fresh resume calls = %d, want 1", got)
+	}
+	next, err := restarted.Send(context.Background(), testSession, ports.ChatUserMessage{Text: "continue after startup"})
+	if err != nil {
+		t.Fatalf("Send after reconnect-only retirement: %v", err)
+	}
+	if next.State != domain.TurnStateRunning {
+		t.Fatalf("next turn after startup = %q, want %q", next.State, domain.TurnStateRunning)
+	}
+	if got := freshBase.sentTexts(); len(got) != 1 || got[0] != "continue after startup" {
+		t.Fatalf("fresh provider sends after startup = %#v, want next prompt", got)
+	}
+}
+
+type liveTerminatingConversation struct{ *terminatingConversation }
+
+func (*liveTerminatingConversation) ReconnectedLive() bool { return true }
+
+// reconnectOnlyWatchdogDriver models startup observation: Reconnect attaches the
+// one surviving host, and only Resume may create a provider process.
+type reconnectOnlyWatchdogDriver struct {
+	live           ports.ChatConversation
+	fresh          []ports.ChatConversation
+	reconnectCalls atomic.Int32
+	resumeCalls    atomic.Int32
+}
+
+func (*reconnectOnlyWatchdogDriver) Harness() domain.AgentHarness { return domain.HarnessCodex }
+
+func (*reconnectOnlyWatchdogDriver) Probe(context.Context) (ports.ChatCapabilities, error) {
+	return productionCaps(), nil
+}
+
+func (*reconnectOnlyWatchdogDriver) Start(context.Context, ports.ChatStartConfig) (ports.ChatConversation, error) {
+	return nil, errors.New("reconnect-only watchdog driver does not start a new conversation")
+}
+
+func (d *reconnectOnlyWatchdogDriver) Reconnect(context.Context, ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	if d.reconnectCalls.Add(1) > 1 {
+		return nil, ports.ErrChatHostNotRunning
+	}
+	return d.live, nil
+}
+
+func (d *reconnectOnlyWatchdogDriver) Resume(context.Context, ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	index := int(d.resumeCalls.Add(1)) - 1
+	if index >= len(d.fresh) {
+		return nil, fmt.Errorf("unexpected fresh resume %d", index+1)
+	}
+	return d.fresh[index], nil
+}
+
 type watchdogRejectingLiveConversation struct {
 	*terminatingConversation
 	activationCalls atomic.Int32

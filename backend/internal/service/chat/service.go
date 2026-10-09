@@ -917,6 +917,11 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		if err := s.store.ClearProviderHostTerminationPending(ctx, conversation.ID, cfg.SessionID); err != nil {
 			return nil, fmt.Errorf("clear pending provider host termination: %w", err)
 		}
+		if cfg.ReconnectOnly {
+			// Startup observation never creates a provider. The stale host is gone
+			// and its turns are settled, so the next ordinary resume starts fresh.
+			return nil, fmt.Errorf("retire stale live provider: %w", ports.ErrChatHostNotRunning)
+		}
 		conv, err = driver.Resume(ctx, resumeConfig)
 		if err != nil {
 			return nil, fmt.Errorf("resume provider after stale live turn: %w", err)
@@ -1221,6 +1226,10 @@ func (s *Service) RecoverStaleProviderFailure(
 	// session ownership are unchanged here; Start's generation claim is the
 	// durable publication boundary for this internal replacement.
 	cfg.ProviderConversationID = providerConversationID
+	cfg.FreshIfProviderConversationMissing = false
+	// The stale host was just retired; a fresh provider process must replace it
+	// even when this controller was first adopted by startup reconnection.
+	cfg.ReconnectOnly = false
 	cfg.ProviderHandoff = nil
 	cfg.ProviderScopeID = ""
 	cfg.ControllerGeneration = ""
