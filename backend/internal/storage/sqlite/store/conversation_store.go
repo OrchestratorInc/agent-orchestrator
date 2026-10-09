@@ -1136,6 +1136,19 @@ func (s *Store) ConversationMessageByClientID(
 	return messageToDomain(row), true, nil
 }
 
+// ConversationMessages returns the durable transcript in sequence order.
+func (s *Store) ConversationMessages(ctx context.Context, conversationID string) ([]domain.ConversationMessage, error) {
+	rows, err := s.qr.SelectConversationMessages(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	messages := make([]domain.ConversationMessage, 0, len(rows))
+	for _, row := range rows {
+		messages = append(messages, messageToDomain(row))
+	}
+	return messages, nil
+}
+
 // AdoptProviderTurn records a turn the provider started that AO never dispatched.
 //
 // A compaction runs as its own provider turn, and so does work the provider

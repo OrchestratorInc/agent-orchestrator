@@ -30,6 +30,7 @@ import kiroLogo from "../assets/agents/kiro.png";
 import museLogo from "../assets/agents/muse.png";
 import mimoCodeLogo from "../assets/agents/mimo-code.svg";
 import ompLogo from "../assets/agents/omp.png";
+import openhandsLogo from "../assets/agents/openhands.svg";
 import opencodeLogo from "../assets/agents/opencode.svg";
 import piLogo from "../assets/agents/pi.png";
 import primeAgentLogo from "../assets/agents/prime-agent.png";
@@ -60,6 +61,7 @@ const LOGOS: AgentLogoSources = {
 	kimi: kimiLogo,
 	muse: museLogo,
 	omp: ompLogo,
+	openhands: openhandsLogo,
 	kiro: kiroLogo,
 	kilocode: kilocodeLogo,
 	vibe: vibeLogo,

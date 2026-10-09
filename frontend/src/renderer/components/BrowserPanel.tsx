@@ -678,7 +678,7 @@ export function BrowserPanelView({
 	const knownDownloadIds = useRef<Set<string> | null>(null);
 	const observedInitialDownloads = useRef(false);
 	const hasActiveDownload = browserDownloads.downloads.some(
-		(download) => download.status === "progressing" || download.status === "paused",
+		(download) => download.status === "progressing" || download.status === "paused" || download.status === "blocked",
 	);
 	useEffect(() => {
 		if (!browserDownloads.initialized) return;

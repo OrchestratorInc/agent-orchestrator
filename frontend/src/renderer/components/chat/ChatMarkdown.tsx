@@ -31,6 +31,7 @@ import {
 	Fragment,
 	memo,
 	useContext,
+	useEffect,
 	useMemo,
 	useState,
 	type MouseEvent as ReactMouseEvent,
@@ -43,6 +44,7 @@ import { cn } from "../../lib/utils";
 import { isLoopbackHostname } from "../../lib/loopback";
 import { canonicalLanguage } from "../../lib/code-highlight";
 import { fenceOf } from "../../lib/markdown-fence";
+import { EMOJI_GRAPHEME, rehypeStreamFade } from "../../lib/rehype-stream-fade";
 import { findSessionLinks, isSessionLink, remarkSessionLinks } from "../../lib/session-links";
 import {
 	isPotentialWorkspaceFileLink,
@@ -79,6 +81,12 @@ export const ActivityTitle = memo(function ActivityTitle({ text }: { text: strin
 
 /** GitHub-flavoured markdown: tables, strikethrough, task lists, autolinks. */
 const PLUGINS = [remarkGfm, remarkSessionLinks];
+const STREAMING_REHYPE = [rehypeStreamFade];
+// Reduced motion gets plain text, not a span per character that never animates.
+const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+// How long a settled reply keeps its fade spans, so the last characters (and the final
+// flush of buffered text) finish fading in before they are dropped.
+const FADE_SHED_MS = 450;
 
 /**
  * Whether the prose is still arriving, for the fences inside it.
@@ -161,6 +169,16 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	className?: string;
 	safeOrigin?: boolean;
 }) {
+	// Replies opened from history mount settled and never wrap; live ones keep the fade a
+	// beat past the end of the stream.
+	const [fading, setFading] = useState(streaming);
+	if (streaming && !fading) setFading(true);
+	useEffect(() => {
+		if (streaming) return;
+		const timer = setTimeout(() => setFading(false), FADE_SHED_MS);
+		return () => clearTimeout(timer);
+	}, [streaming]);
+
 	return (
 		<StreamingProse.Provider value={streaming}>
 			<SafeOriginContent.Provider value={safeOrigin}>
@@ -171,7 +189,12 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 					className,
 				)}
 			>
-				<Markdown remarkPlugins={PLUGINS} components={COMPONENTS} urlTransform={chatUrlTransform}>
+				<Markdown
+					remarkPlugins={PLUGINS}
+					rehypePlugins={fading && !prefersReducedMotion() ? STREAMING_REHYPE : undefined}
+					components={COMPONENTS}
+					urlTransform={chatUrlTransform}
+				>
 					{text}
 				</Markdown>
 			</div>
@@ -245,7 +268,6 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 	);
 }
 
-const EMOJI_GRAPHEME = /\p{Extended_Pictographic}|\p{Regional_Indicator}|[#*0-9]\uFE0F?\u20E3/u;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function compactEmoji(children: ReactNode): ReactNode {

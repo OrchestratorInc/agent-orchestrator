@@ -38,16 +38,31 @@ export type ActiveFileAnnotationTarget = FileAnnotationTarget & {
 };
 export type FileAnnotationStatus = "idle" | "sending" | "sent" | "error";
 export type FileAnnotationModel = {
-	target: ActiveFileAnnotationTarget | null;
-	draft: string;
+	/** Every open comment box, oldest first. They can sit on several lines and files at once. */
+	targets: ActiveFileAnnotationTarget[];
+	/** State of the send in progress or just finished, whichever comments it covers. */
 	status: FileAnnotationStatus;
+	/** The same, for one box: idle unless the send covers that comment. */
+	statusFor: (target: ActiveFileAnnotationTarget) => FileAnnotationStatus;
 	error: string;
+	/** Opens a box on `target`, or closes the one already open there. */
 	begin: (target: ActiveFileAnnotationTarget) => void;
-	setDraft: (draft: string) => void;
-	cancel: () => void;
-	/** Sends `text` (the composer's local draft) or, if omitted, the model's draft. */
-	submit: (text?: string) => Promise<void>;
+	draftFor: (target: ActiveFileAnnotationTarget) => string;
+	setDraft: (target: ActiveFileAnnotationTarget, draft: string) => void;
+	/** Closes the box on `target`, or every box when no target is given. */
+	cancel: (target?: ActiveFileAnnotationTarget) => void;
+	/** Sends the comment on `target` (`text` is that box's local draft), or every written comment when no target is given. */
+	submit: (target?: ActiveFileAnnotationTarget, text?: string) => Promise<void>;
 };
+
+/** Closes every open box that `match` picks out, leaving comments elsewhere alone. */
+export function cancelFileAnnotations(annotation: FileAnnotationModel, match: (target: ActiveFileAnnotationTarget) => boolean): void {
+	for (const target of annotation.targets.filter(match)) annotation.cancel(target);
+}
+
+export function fileAnnotationKey(target: ActiveFileAnnotationTarget): string {
+	return [target.surface ?? "", target.scope ?? "", target.side, target.line ?? "", target.path].join("\u0000");
+}
 
 // Split (old | new) view only means something when both sides have content to
 // compare. Added files have nothing on the old side; deleted files have
@@ -379,7 +394,7 @@ function DiffRowContentInner({ annotation, index, path, previousPath, row, runs,
 				data-row-index={index}
 			>
 				<LineFeedbackButton
-					active={isAnnotationRow(annotation.target, path, index)}
+					active={rowAnnotationTargets(annotation.targets, path, index).length > 0}
 					onClick={() => annotation.begin(lineAnnotationTarget(path, previousPath, row, index))}
 					t={t}
 					target={lineAnnotationTarget(path, previousPath, row, index)}
@@ -400,7 +415,9 @@ function DiffRowContentInner({ annotation, index, path, previousPath, row, runs,
 					{renderDiffRuns(runs, row.kind === "add")}
 				</span>
 			</div>
-			{isAnnotationRow(annotation.target, path, index) ? <FileAnnotationComposer annotation={annotation} /> : null}
+			{rowAnnotationTargets(annotation.targets, path, index).map((target) => (
+				<FileAnnotationComposer annotation={annotation} key={fileAnnotationKey(target)} target={target} />
+			))}
 		</div>
 	);
 }
@@ -408,8 +425,8 @@ function DiffRowContentInner({ annotation, index, path, previousPath, row, runs,
 // `annotation` is a fresh object on every SessionFilesView render (its draft
 // text, send status, etc. all live there), so a plain memo would never skip
 // a re-render — every row would see a "changed" prop on every keystroke
-// anywhere in the panel, on top of every scroll tick. Only a row that IS or
-// WAS the active annotation target actually needs to re-render when
+// anywhere in the panel, on top of every scroll tick. Only a row that HAS or
+// HAD an open annotation box actually needs to re-render when
 // `annotation` changes; every other row only cares about `row`/`index`/
 // `path`/`previousPath`/`wrap`, which are stable across scroll-driven
 // re-renders. This is what actually lets scrolling skip re-running the
@@ -426,8 +443,8 @@ const DiffRowContent = memo(DiffRowContentInner, (prev, next) => {
 	) {
 		return false;
 	}
-	const prevActive = isAnnotationRow(prev.annotation.target, prev.path, prev.index);
-	const nextActive = isAnnotationRow(next.annotation.target, next.path, next.index);
+	const prevActive = rowAnnotationTargets(prev.annotation.targets, prev.path, prev.index).length > 0;
+	const nextActive = rowAnnotationTargets(next.annotation.targets, next.path, next.index).length > 0;
 	return !prevActive && !nextActive;
 });
 
@@ -523,10 +540,11 @@ function SplitDiff({
 								t={t}
 							/>
 						</div>
-						{(splitRow.leftIndex !== null && isAnnotationRow(annotation.target, path, splitRow.leftIndex)) ||
-						(splitRow.rightIndex !== null && isAnnotationRow(annotation.target, path, splitRow.rightIndex)) ? (
-							<FileAnnotationComposer annotation={annotation} />
-						) : null}
+						{[splitRow.leftIndex, splitRow.leftIndex === splitRow.rightIndex ? null : splitRow.rightIndex].flatMap((rowIndex) =>
+							rowIndex === null ? [] : rowAnnotationTargets(annotation.targets, path, rowIndex),
+						).map((target) => (
+							<FileAnnotationComposer annotation={annotation} key={fileAnnotationKey(target)} target={target} />
+						))}
 					</div>
 				),
 			)}
@@ -568,7 +586,7 @@ function SplitSide({
 		>
 			{target ? (
 				<LineFeedbackButton
-					active={isAnnotationRow(annotation.target, path, rowIndex)}
+					active={rowAnnotationTargets(annotation.targets, path, rowIndex).some((open) => open.side === side)}
 					onClick={() => annotation.begin(target)}
 					t={t}
 					target={target}
@@ -603,8 +621,8 @@ function lineAnnotationTarget(
 	};
 }
 
-function isAnnotationRow(target: ActiveFileAnnotationTarget | null, path: string, rowIndex: number): boolean {
-	return target?.surface !== "review" && target?.path === path && target.side !== "file" && target.rowIndex === rowIndex;
+function rowAnnotationTargets(targets: ActiveFileAnnotationTarget[], path: string, rowIndex: number): ActiveFileAnnotationTarget[] {
+	return targets.filter((target) => target.surface !== "review" && target.path === path && target.side !== "file" && target.rowIndex === rowIndex);
 }
 
 // `t` comes from the caller (which already holds one useTranslation()
@@ -672,24 +690,28 @@ export function LineFeedbackButtonControl({
 // adds a line, as the hint says), Esc cancels.
 const COMPOSER_MAX_HEIGHT_PX = 160;
 
-export function FileAnnotationComposer({ annotation }: { annotation: FileAnnotationModel }) {
+export function FileAnnotationComposer({ annotation, target }: { annotation: FileAnnotationModel; target: ActiveFileAnnotationTarget }) {
 	const { t } = useTranslation();
-	const target = annotation.target;
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	// Typing stays local to the box, so the diffs that read the shared model
-	// don't re-render per keystroke; the model hears the text on send, or when
-	// the box goes away (a virtualized row can unmount and remount it).
-	const [text, setText] = useState(annotation.draft);
+	// don't re-render per keystroke; the model hears the text on send, when the
+	// box loses focus (so a comment started elsewhere, or a send from another
+	// box, sees it), or when the box goes away (a virtualized row can unmount
+	// and remount it).
+	const [text, setText] = useState(() => annotation.draftFor(target));
 	const textRef = useRef(text);
 	textRef.current = text;
-	const setModelDraftRef = useRef(annotation.setDraft);
-	setModelDraftRef.current = annotation.setDraft;
-	useEffect(() => () => setModelDraftRef.current(textRef.current), []);
+	const saveDraftRef = useRef(() => annotation.setDraft(target, textRef.current));
+	saveDraftRef.current = () => annotation.setDraft(target, textRef.current);
+	useEffect(() => () => saveDraftRef.current(), []);
+	// Only the newest box takes focus, so an older one scrolling back into view
+	// doesn't pull the caret away from the comment being written.
+	const newest = annotation.targets[annotation.targets.length - 1] === target;
 	useEffect(() => {
-		if (!target) return;
+		if (!newest) return;
 		const frame = window.requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
 		return () => window.cancelAnimationFrame(frame);
-	}, [target]);
+	}, [newest, target]);
 	const fitHeight = useCallback(() => {
 		const textarea = textareaRef.current;
 		if (!textarea) return;
@@ -713,17 +735,25 @@ export function FileAnnotationComposer({ annotation }: { annotation: FileAnnotat
 		observer.observe(textarea);
 		return () => observer.disconnect();
 	}, [fitHeight, target]);
-	if (!target) return null;
 	const side = target.side === "file" ? "" : t(target.side === "old" ? "files.oldSide" : "files.newSide");
 	const targetLabel =
 		target.side === "file"
 			? t("files.fileFeedbackTarget", { file: target.path })
 			: t("files.lineFeedbackTarget", { file: target.path, line: target.line, side });
-	const sending = annotation.status === "sending";
-	const sent = annotation.status === "sent";
+	const status = annotation.statusFor(target);
+	const sending = status === "sending";
+	const sent = status === "sent";
 	const submit = () => {
 		if (!text.trim() || sending || sent) return;
-		void annotation.submit(text);
+		void annotation.submit(target, text);
+	};
+	// The button sends this box; the shortcut sends every written comment, so
+	// a review with several boxes open goes out in one keystroke.
+	const writtenCount = annotation.targets.filter((open) => (open === target ? text : annotation.draftFor(open)).trim()).length;
+	const submitAll = () => {
+		if (sending || sent) return;
+		annotation.setDraft(target, text);
+		void annotation.submit();
 	};
 
 	return (
@@ -744,14 +774,21 @@ export function FileAnnotationComposer({ annotation }: { annotation: FileAnnotat
 						text ? "overflow-y-auto" : "overflow-hidden",
 					)}
 					disabled={sending || sent}
-					onChange={(event) => setText(event.target.value)}
+					onBlur={() => annotation.setDraft(target, text)}
+					onChange={(event) => {
+						const next = event.target.value;
+						setText(next);
+						// The review bar counts written comments, so tell the model when
+						// this box starts or stops having text, not on every keystroke.
+						if (Boolean(next.trim()) !== Boolean(text.trim())) annotation.setDraft(target, next);
+					}}
 					onKeyDown={(event) => {
 						if (event.key === "Escape") {
 							event.preventDefault();
-							annotation.cancel();
+							annotation.cancel(target);
 						} else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
 							event.preventDefault();
-							submit();
+							submitAll();
 						}
 					}}
 					placeholder={t("files.feedbackPlaceholder")}
@@ -760,18 +797,18 @@ export function FileAnnotationComposer({ annotation }: { annotation: FileAnnotat
 					title={targetLabel}
 					value={text}
 				/>
-				{annotation.status === "error" ? (
+				{status === "error" ? (
 					<p className="pt-1 text-xs text-error" role="alert">
 						{annotation.error}
 					</p>
 				) : null}
 				<div className="mt-1 flex items-center justify-end gap-1">
 					{/* Truncates rather than squeezing the buttons in a narrow split column. */}
-					<span className="mr-auto min-w-0 truncate text-caption text-passive">{t("files.feedbackShortcut")}</span>
+					<span className="mr-auto min-w-0 truncate text-caption text-passive">{writtenCount > 1 ? t("files.feedbackShortcutAll") : t("files.feedbackShortcut")}</span>
 					<Button
 						className="px-2 text-xs text-muted-foreground hover:text-foreground"
 						disabled={sending}
-						onClick={annotation.cancel}
+						onClick={() => annotation.cancel(target)}
 						size="sm"
 						type="button"
 						variant="ghost"
@@ -791,6 +828,32 @@ export function FileAnnotationComposer({ annotation }: { annotation: FileAnnotat
 					</Button>
 				</div>
 			</form>
+		</div>
+	);
+}
+
+// Each box sends its own comment; once several are written, this bar sends
+// or drops them all together. `surface` keeps it to the pane that holds
+// comments; the send covers every pane's.
+export function FileAnnotationSendBar({ annotation, className, surface }: { annotation: FileAnnotationModel; className?: string; surface: "focused" | "review" }) {
+	const { t } = useTranslation();
+	const written = annotation.targets.filter((target) => annotation.draftFor(target).trim());
+	const here = written.some((target) => (surface === "review" ? target.surface !== "focused" : target.surface !== "review"));
+	if (!here || written.length < 2) return null;
+	const sending = annotation.status === "sending";
+	const sent = annotation.status === "sent";
+	return (
+		<div className={cn("flex min-h-9 shrink-0 items-center gap-1 border-t border-border bg-background px-3 py-1 font-sans", className)} data-testid="file-feedback-bar">
+			<span className="mr-auto min-w-0 truncate text-xs text-muted-foreground" role="status">
+				{annotation.status === "error" ? <span className="text-error">{annotation.error}</span> : sent ? t("files.feedbackSent") : null}
+			</span>
+			<Button className="px-2 text-xs text-muted-foreground hover:bg-error/10 hover:text-error focus-visible:text-error active:bg-error/15 dark:hover:bg-error/10" disabled={sending || sent} onClick={() => annotation.cancel()} size="sm" type="button" variant="ghost">
+				{t("files.discardFeedback")}
+			</Button>
+			<Button className="px-2 text-xs" disabled={sending || sent} onClick={() => void annotation.submit()} size="sm" type="button" variant="primary">
+				{sending ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : sent ? <Check aria-hidden="true" /> : <SendIcon aria-hidden="true" />}
+				{t("files.sendAllFeedback", { count: written.length })}
+			</Button>
 		</div>
 	);
 }

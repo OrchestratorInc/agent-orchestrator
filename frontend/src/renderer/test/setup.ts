@@ -141,6 +141,7 @@ if (typeof window !== "undefined") {
 		theme: {
 			set: async () => undefined,
 			persistTerminal: async () => undefined,
+			setWindowBackground: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
@@ -275,6 +276,7 @@ if (typeof window !== "undefined") {
 			onFocusLocation: () => () => undefined,
 			onFindOpen: () => () => undefined,
 			onReopenClosedTab: () => () => undefined,
+			onClosePanel: () => () => undefined,
 			devtools: async ({ viewId, operation }) => ({
 				viewId,
 				open: operation !== "close",
@@ -361,6 +363,9 @@ if (typeof window !== "undefined") {
 		},
 		remotes: {
 			list: async () => [],
+			importAccountHost: async () => undefined,
+			pruneAccountHosts: async () => undefined,
+			issueAccountToken: async () => "",
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,

@@ -375,16 +375,42 @@ type ChatMCPServerConfig struct {
 // ChatInternalReplayResourceURI is reserved for AO's reconstructed edit context.
 const ChatInternalReplayResourceURI = "ao://conversation/edit-replay"
 
+// ChatExcerptResourceURIPrefix identifies AO-verified transcript excerpts. The
+// daemon resolves these from durable messages; clients never supply the resource
+// text directly.
+const ChatExcerptResourceURIPrefix = "ao://conversation-excerpt/"
+
+// ChatExcerptReference points at selected text in one durable transcript
+// message. Revision makes stale selections fail closed when streaming updates
+// replace the source text before the user sends their draft.
+type ChatExcerptReference struct {
+	ConversationID string `json:"conversationId"`
+	MessageID      string `json:"messageId"`
+	Revision       int64  `json:"revision"`
+	Text           string `json:"text"`
+}
+
+// ChatExcerptContext is the server-verified context delivered for one selected
+// transcript range. The paired turn is retained so a short selection can be
+// understood without relying on hidden provider history.
+type ChatExcerptContext struct {
+	Reference        ChatExcerptReference `json:"reference"`
+	SelectedText     string               `json:"selectedText"`
+	UserMessage      string               `json:"userMessage"`
+	AssistantMessage string               `json:"assistantMessage"`
+}
+
 // ChatContent is structured prompt context. Text remains on ChatUserMessage so
 // the durable transcript has an ordinary readable message; these blocks enrich
 // what the provider receives without leaking protocol DTOs above the adapter.
 type ChatContent struct {
-	Type     string `json:"type"`
-	Data     string `json:"data,omitempty"`
-	MIMEType string `json:"mimeType,omitempty"`
-	URI      string `json:"uri,omitempty"`
-	Name     string `json:"name,omitempty"`
-	Text     string `json:"text,omitempty"`
+	Type     string              `json:"type"`
+	Data     string              `json:"data,omitempty"`
+	MIMEType string              `json:"mimeType,omitempty"`
+	URI      string              `json:"uri,omitempty"`
+	Name     string              `json:"name,omitempty"`
+	Text     string              `json:"text,omitempty"`
+	Excerpt  *ChatExcerptContext `json:"excerpt,omitempty"`
 	// Internal distinguishes AO-owned prompt context from a user attachment.
 	// Public request DTOs never expose this bit; it is durable so edit/retry and
 	// snapshot reconstruction can hide only content AO actually synthesized.
@@ -420,6 +446,8 @@ type ChatUserMessage struct {
 	// ClientPayloadHash identifies the original request before AO adds reports
 	// or other server-owned context. It is internal, never supplied by a client.
 	ClientPayloadHash string
+	// Excerpts are verified transcript selections attached to this user message.
+	Excerpts []ChatExcerptReference
 	// Origin records the timeline attribution and delivery source. Automation
 	// shares the queue with the user and can never resolve an approval.
 	Origin domain.MessageOrigin

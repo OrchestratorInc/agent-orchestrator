@@ -43,7 +43,10 @@ export function BrowserDownloadsList({
 				const active = download.active ?? (
 					download.status === "progressing" || download.status === "paused" || resumableInterrupted
 				);
-				const terminalStatus = download.status === "completed"
+				const blocked = download.status === "blocked";
+				const terminalStatus = blocked
+					? t(download.source ? "browser.downloads.blockedFrom" : "browser.downloads.blocked", { source: download.source })
+					: download.status === "completed"
 					? t("browser.downloads.completed")
 					: download.status === "cancelled"
 						? t("browser.downloads.cancelled")
@@ -52,7 +55,7 @@ export function BrowserDownloadsList({
 					<div className={cn("min-w-0 border-b border-border py-2.5 last:border-b-0", compact && "px-3")} key={download.id}>
 						<div className="flex min-w-0 items-center gap-2">
 							<div className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-								{download.status === "cancelled" || download.status === "interrupted"
+								{blocked || download.status === "cancelled" || download.status === "interrupted"
 									? <Ban aria-hidden="true" className="size-4" />
 									: <FolderOpen aria-hidden="true" className="size-4" />}
 							</div>
@@ -70,7 +73,9 @@ export function BrowserDownloadsList({
 								</p>
 							</div>
 							<div className="flex shrink-0 items-center gap-0.5">
-								{download.status === "progressing" ? (
+								{blocked ? (
+									<Button aria-label={t("browser.downloads.allow", { file: download.fileName })} onClick={() => onAction(download.id, "allow")} size="sm" type="button" variant="outline">{t("browser.downloads.allowAction")}</Button>
+								) : download.status === "progressing" ? (
 									<Button aria-label={t("browser.downloads.pause", { file: download.fileName })} onClick={() => onAction(download.id, "pause")} size="icon-sm" type="button" variant="ghost"><Pause aria-hidden="true" className="size-3.5" /></Button>
 								) : download.status === "paused" || resumableInterrupted ? (
 									<Button aria-label={t("browser.downloads.resume", { file: download.fileName })} onClick={() => onAction(download.id, "resume")} size="icon-sm" type="button" variant="ghost"><Play aria-hidden="true" className="size-3.5" /></Button>
@@ -81,13 +86,13 @@ export function BrowserDownloadsList({
 									</>
 								) : null}
 								<Button
-									aria-label={t(active ? "browser.downloads.cancel" : "browser.downloads.remove", { file: download.fileName })}
+									aria-label={t(active ? "browser.downloads.cancel" : blocked ? "browser.downloads.dismiss" : "browser.downloads.remove", { file: download.fileName })}
 									onClick={() => onAction(download.id, active ? "cancel" : "remove")}
 									size="icon-sm"
 									type="button"
 									variant="ghost"
 								>
-									{active ? <X aria-hidden="true" className="size-3.5" /> : <Trash2 aria-hidden="true" className="size-3.5" />}
+									{active || blocked ? <X aria-hidden="true" className="size-3.5" /> : <Trash2 aria-hidden="true" className="size-3.5" />}
 								</Button>
 							</div>
 						</div>

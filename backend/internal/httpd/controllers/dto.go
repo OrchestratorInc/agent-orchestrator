@@ -412,7 +412,7 @@ type SpawnSessionRequest struct {
 	ParentSessionID domain.SessionID       `json:"parentSessionId,omitempty"`
 	TrackerProvider domain.TrackerProvider `json:"trackerProvider,omitempty" enum:"github,gitlab"`
 	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator"`
-	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,mimo-code,deepseek-harness"`
+	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,mimo-code,deepseek-harness,openhands"`
 	Branch          string                 `json:"branch,omitempty"`
 	// Mode picks the conversation controller: chat talks to the agent over a
 	// structured connection, tui opens the agent's native terminal interface.
@@ -1052,7 +1052,7 @@ type DelegateTaskRequest struct {
 	ClientRequestID string              `json:"clientRequestId,omitempty" maxLength:"128"`
 	ProjectID       domain.ProjectID    `json:"projectId"`
 	Brief           string              `json:"brief" maxLength:"16384"`
-	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,mimo-code,deepseek-harness,fake"`
+	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,mimo-code,deepseek-harness,openhands,fake"`
 	Model           string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
@@ -2426,9 +2426,19 @@ type SendConversationMessageRequest struct {
 	Text string `json:"text"`
 	// ClientMessageID makes delivery idempotent. A retry carrying the same value
 	// must not produce a second provider turn.
-	ClientMessageID string                               `json:"clientMessageId,omitempty"`
-	Attachments     []ConversationImageContentRequest    `json:"attachments,omitempty"`
-	Resources       []ConversationResourceContentRequest `json:"resources,omitempty"`
+	ClientMessageID string                                `json:"clientMessageId,omitempty"`
+	Attachments     []ConversationImageContentRequest     `json:"attachments,omitempty"`
+	Resources       []ConversationResourceContentRequest  `json:"resources,omitempty"`
+	Excerpts        []ConversationExcerptReferenceRequest `json:"excerpts,omitempty"`
+}
+
+// ConversationExcerptReferenceRequest attaches verified selected transcript
+// text to the next message.
+type ConversationExcerptReferenceRequest struct {
+	ConversationID string `json:"conversationId"`
+	MessageID      string `json:"messageId"`
+	Revision       int64  `json:"revision"`
+	Text           string `json:"text"`
 }
 
 // ConversationImageContentRequest is a native raster image prompt block.
@@ -2528,6 +2538,13 @@ type ConversationContentSummaryResponse struct {
 	MIMEType string `json:"mimeType,omitempty"`
 	URI      string `json:"uri,omitempty"`
 	Name     string `json:"name,omitempty"`
+	// Text is exposed only for verified chat excerpts, so the timeline can show
+	// what the user referred to without exposing internal resource URIs.
+	Text string `json:"text,omitempty"`
+	// SourceMessageID and SourceRevision let the renderer navigate back to the
+	// verified transcript message without exposing the internal excerpt URI.
+	SourceMessageID string `json:"sourceMessageId,omitempty"`
+	SourceRevision  int64  `json:"sourceRevision,omitempty"`
 }
 
 // EditConversationMessageResponse identifies the newly selected branch and its
@@ -2767,7 +2784,10 @@ type ConversationMessageResponse struct {
 	SenderSessionID   string                               `json:"senderSessionId,omitempty"`
 	SenderProjectID   string                               `json:"senderProjectId,omitempty"`
 	SenderDisplayName string                               `json:"senderDisplayName,omitempty"`
-	EditAvailable     bool                                 `json:"editAvailable"`
+	// ClientMessageID echoes the sender's idempotency key so a client can match its
+	// local echo to this row without comparing text or clocks.
+	ClientMessageID string `json:"clientMessageId,omitempty"`
+	EditAvailable   bool   `json:"editAvailable"`
 	// Streaming is true while more deltas are expected for this message.
 	Streaming bool   `json:"streaming"`
 	CreatedAt string `json:"createdAt"`

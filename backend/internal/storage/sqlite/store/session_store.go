@@ -229,6 +229,25 @@ func (s *Store) SetSessionProvisionSteps(
 	return nil
 }
 
+// SetSessionBranchState records the branch-state reconcile's latest facts. It writes
+// only its own column, so a stale session read cannot replay other fields.
+func (s *Store) SetSessionBranchState(ctx context.Context, id domain.SessionID, state domain.SessionBranchState) (bool, error) {
+	raw, err := json.Marshal(state)
+	if err != nil {
+		return false, fmt.Errorf("encode branch state for %s: %w", id, err)
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.SetSessionBranchState(ctx, gen.SetSessionBranchStateParams{
+		BranchState: string(raw),
+		ID:          id,
+	})
+	if err != nil {
+		return false, fmt.Errorf("set branch state for %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
 // PromoteTaskPreparation makes a hidden speculative row visible without
 // touching workspace facts that may be published by the preparation goroutine.
 func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error) {
@@ -863,6 +882,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		ProvisionState:    row.ProvisionState.WithDefault(),
 		ProvisionError:    row.ProvisionError,
 		ProvisionSteps:    decodeProvisionSteps(row.ProvisionSteps),
+		BranchState:       decodeBranchState(row.BranchState),
 		IsTaskPreparation: row.IsTaskPreparation,
 	}
 }
@@ -879,6 +899,19 @@ func decodeProvisionSteps(raw string) []domain.SessionProvisionStep {
 		return nil
 	}
 	return steps
+}
+
+// decodeBranchState reads the observed branch facts. A missing or malformed
+// value reads as not yet observed, never as a branch with no commits.
+func decodeBranchState(raw string) *domain.SessionBranchState {
+	if raw == "" {
+		return nil
+	}
+	var state domain.SessionBranchState
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		return nil
+	}
+	return &state
 }
 
 func getSessionRowToRecord(row gen.GetSessionRow) domain.SessionRecord {

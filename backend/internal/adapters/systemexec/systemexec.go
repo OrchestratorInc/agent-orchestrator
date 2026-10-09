@@ -29,12 +29,19 @@ var (
 	_ ports.InstallCommandRunner   = Adapter{}
 	_ ports.InstallScriptRunner    = Adapter{}
 	_ ports.InstallCapabilityProbe = Adapter{}
+	_ ports.PathWritableProbe      = Adapter{}
 )
 
 // New creates a host adapter whose installer scratch space stays inside AO's
 // configured data directory.
 func New(dataDir string) Adapter {
 	return newAdapter(dataDir, http.DefaultClient)
+}
+
+// PathWritable reports whether path can be created or written by the current
+// daemon user without changing the filesystem when the probe completes.
+func (Adapter) PathWritable(ctx context.Context, path string) (bool, error) {
+	return pathWritable(ctx, path)
 }
 
 func newAdapter(dataDir string, client *http.Client) Adapter {
@@ -88,7 +95,8 @@ func (Adapter) Probe(ctx context.Context) (ports.InstallCapabilities, error) {
 	snapshot.NPM = ports.NPMInstallCapabilities{
 		NodeVersion: nodeVersion, NPMVersion: npmVersion, GlobalPrefix: npmPrefix,
 	}
-	snapshot.NPM.Err = errors.Join(nodeErr, npmVersionErr, npmPrefixErr)
+	snapshot.NPM.RuntimeErr = errors.Join(nodeErr, npmVersionErr)
+	snapshot.NPM.Err = errors.Join(snapshot.NPM.RuntimeErr, npmPrefixErr)
 	if snapshot.NPM.Err == nil {
 		writable, err := pathWritable(ctx, npmPrefix)
 		if err != nil {

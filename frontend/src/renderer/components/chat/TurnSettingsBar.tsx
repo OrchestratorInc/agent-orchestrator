@@ -869,6 +869,9 @@ function ConfigModelChoices({
 					/>
 					{claude?.other.length && !selectedIsOther ? (
 						<OptionMenuItem
+							// The composer focuses its editor on any click that bubbles out of the portal,
+							// which would pull focus out of the menu and close it.
+							onClick={(event) => event.stopPropagation()}
 							onSelect={(event) => {
 								event.preventDefault();
 								setOtherOpen((open) => !open);
@@ -1145,6 +1148,10 @@ function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 				choice === implicit ? { ...choice, name: label } : choice,
 			),
 		};
+	}
+	// A model picker lists models only; the agent's own choice is not a row of its own.
+	if (isModelOption(mapped) && mapped.currentValue !== implicit.value) {
+		return { ...mapped, choices: mapped.choices.filter((choice) => choice !== implicit) };
 	}
 	return {
 		...mapped,

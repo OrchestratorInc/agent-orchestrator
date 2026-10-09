@@ -936,8 +936,13 @@ func (s *Store) CreateGitHubProject(
 	orgID, idempotencyKey string,
 	input domain.CreateGitHubProject,
 ) (domain.Project, error) {
+	config, err := domain.NormalizeProjectConfig(input.Config)
+	if err != nil {
+		return domain.Project{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	input.Config = config
 	var project domain.Project
-	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		payload, err := json.Marshal(input)
 		if err != nil {
 			return err
@@ -1255,6 +1260,54 @@ func (s *Store) RetryGitHubWebhook(
 // organizations, a webhook delivery must fan out to each one; the caller
 // iterates the returned routes. It returns ErrNotFound when no organization
 // routes the installation.
+// GitHubRepositoryTracked reports whether any organization routed through the
+// installation tracks the repository: a project on it, a recorded pull
+// request in it, or worker branch refs reported for it. SCM webhooks for any
+// other repository cannot change AO state, so the receiver drops them instead
+// of queueing them. An installation with no routes tracks nothing.
+func (s *Store) GitHubRepositoryTracked(
+	ctx context.Context,
+	githubInstallationID, githubRepositoryID int64,
+) (bool, error) {
+	routes, err := s.GitHubInstallationRoutes(ctx, githubInstallationID)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, route := range routes {
+		var tracked bool
+		err := s.withOrg(ctx, route.OrgID, func(tx pgx.Tx) error {
+			return tx.QueryRow(
+				ctx,
+				`SELECT EXISTS (
+					SELECT 1 FROM ao_projects
+					WHERE org_id = $1 AND github_repository_id = $2
+				) OR EXISTS (
+					SELECT 1 FROM ao_worker_git_refs
+					WHERE org_id = $1 AND github_repository_id = $2
+				) OR EXISTS (
+					SELECT 1
+					FROM ao_pull_requests pull_request
+					JOIN ao_github_repositories repository
+					  ON lower(repository.full_name) = lower(pull_request.repository)
+					WHERE pull_request.org_id = $1
+					  AND repository.github_repository_id = $2
+				)`,
+				route.OrgID, githubRepositoryID,
+			).Scan(&tracked)
+		})
+		if err != nil {
+			return false, err
+		}
+		if tracked {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (s *Store) GitHubInstallationRoutes(
 	ctx context.Context,
 	githubInstallationID int64,

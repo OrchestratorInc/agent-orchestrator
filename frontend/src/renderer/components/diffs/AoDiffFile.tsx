@@ -80,9 +80,9 @@ export function AoDiffFile({
 	const gutterHover = usePersistentGutterUtility(containerRef);
 	const metadata = useMemo(() => cachedMetadata(detail), [detail]);
 	const rows = useMemo(() => parseUnifiedDiff(detail.diff), [detail.diff]);
-	const activeTarget = annotation.target?.surface !== "review" && annotation.target?.path === detail.path && annotation.target.side !== "file" ? annotation.target : null;
-	const lineAnnotations: DiffLineAnnotation<"feedback">[] | undefined = activeTarget?.line != null
-		? [{ lineNumber: activeTarget.line, side: activeTarget.side === "old" ? "deletions" : "additions", metadata: "feedback" }]
+	const activeTargets = annotation.targets.filter((target) => target.surface !== "review" && target.path === detail.path && target.side !== "file" && target.line != null);
+	const lineAnnotations: DiffLineAnnotation<"feedback">[] | undefined = activeTargets.length > 0
+		? activeTargets.map((target) => ({ lineNumber: target.line as number, side: target.side === "old" ? "deletions" : "additions", metadata: "feedback" }))
 		: undefined;
 
 	useEffect(() => {
@@ -189,7 +189,10 @@ export function AoDiffFile({
 					tokenizeMaxLineLength: 2_000,
 					unsafeCSS: AO_PIERRE_SURFACE_CSS + extraCSS,
 				}}
-				renderAnnotation={() => <FileAnnotationComposer annotation={annotation} />}
+				renderAnnotation={(line) => {
+					const target = activeTargets.find((open) => open.line === line.lineNumber && (open.side === "old" ? "deletions" : "additions") === line.side);
+					return target ? <FileAnnotationComposer annotation={annotation} target={target} /> : null;
+				}}
 				renderGutterUtility={(getHoveredLine) => (
 					<LineFeedbackButtonControl
 						gutter

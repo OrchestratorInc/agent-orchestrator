@@ -1102,6 +1102,7 @@ type PullRequestReview struct {
 	ID          int64     `json:"id"`
 	User        User      `json:"user"`
 	State       string    `json:"state"`
+	Body        string    `json:"body"`
 	SubmittedAt time.Time `json:"submitted_at"`
 }
 
@@ -1125,6 +1126,36 @@ func (c *Client) ListPullRequestReviews(
 		return nil, err
 	}
 	return reviews, nil
+}
+
+// FindPullRequestReviewByMarker scans every available page before a retry
+// decides whether an earlier, response-lost POST reached GitHub. Exhausting
+// the scan without a definitive result fails closed: it must not post again.
+func (c *Client) FindPullRequestReviewByMarker(
+	ctx context.Context, token, owner, repo string, number int, marker string,
+) (int64, error) {
+	if owner == "" || repo == "" || number <= 0 || marker == "" {
+		return 0, errors.New("pull request review identity and marker are required")
+	}
+	const pageSize = 100
+	const maxPages = 100
+	for page := 1; page <= maxPages; page++ {
+		var reviews []PullRequestReview
+		path := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) +
+			"/pulls/" + strconv.Itoa(number) + "/reviews?per_page=100&page=" + strconv.Itoa(page)
+		if err := c.userJSON(ctx, token, http.MethodGet, path, nil, &reviews); err != nil {
+			return 0, err
+		}
+		for _, review := range reviews {
+			if strings.Contains(review.Body, marker) && review.ID > 0 {
+				return review.ID, nil
+			}
+		}
+		if len(reviews) < pageSize {
+			return 0, nil
+		}
+	}
+	return 0, errors.New("pull request review history exceeded reconciliation limit")
 }
 
 // pullRequestReviewResponse is the subset of GitHub's create-review response
