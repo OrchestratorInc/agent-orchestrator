@@ -500,7 +500,7 @@ func run(logger *slog.Logger) error {
 		if checkoutBroker != nil {
 			grants = checkoutBroker
 		}
-		apiOptions.ProjectSnapshots = projectsnapshot.New(projectsnapshot.Config{
+		projectSnapshots := projectsnapshot.New(projectsnapshot.Config{
 			Provider: sandbox.ProviderFreestyle,
 			VMs: freestyle.New(freestyle.Config{
 				BaseURL: cfg.FreestyleBaseURL,
@@ -512,6 +512,8 @@ func run(logger *slog.Logger) error {
 			AllowAnonymous: cfg.AllowAnonymousCheckout,
 			Logger:         logger,
 		})
+		apiOptions.ProjectSnapshots = projectSnapshots
+		go projectSnapshots.RunCollector(ctx)
 	}
 	api := httpapi.New(apiOptions)
 	go notificationProcessor.Run(ctx)

@@ -216,16 +216,20 @@ func DecodeProjectCoderConfig(config json.RawMessage) (cfg ProjectCoderConfig, o
 	return *envelope.Coder, true
 }
 
-// ProjectSandboxSnapshot is a prepared VM snapshot for one project and harness:
-// the harness snapshot (BaseSnapshotID) with the project's repository cloned.
-type ProjectSandboxSnapshot struct {
-	OrgID          string
-	ProjectID      string
-	Provider       string
-	Harness        string
-	SnapshotID     string
-	BaseSnapshotID string
-	CreatedAt      time.Time
+// RepositorySandboxSnapshot is a prepared VM snapshot for one repository and
+// harness: the harness snapshot (BaseSnapshotID) with the repository cloned.
+// It is shared by every project in the organization on that repository and
+// outlives them. RepositoryIdentity is the GitHub owner/name it was cloned
+// from, which a session's repository must still match to use it.
+type RepositorySandboxSnapshot struct {
+	OrgID              string
+	RepositoryKey      string
+	RepositoryIdentity string
+	Provider           string
+	Harness            string
+	SnapshotID         string
+	BaseSnapshotID     string
+	CreatedAt          time.Time
 }
 
 // DecodeProjectSandboxProvider returns the sandbox provider a project was set up

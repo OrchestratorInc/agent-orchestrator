@@ -55,6 +55,7 @@ type stubAutolinkStore struct {
 	captured       domain.CreateSession
 	created        bool
 	projectConfig  json.RawMessage
+	repositoryURL  string
 }
 
 func (s *stubAutolinkStore) ProjectActiveOrchestrator(
@@ -66,7 +67,7 @@ func (s *stubAutolinkStore) ProjectActiveOrchestrator(
 func (s *stubAutolinkStore) GetProject(
 	_ context.Context, _ domain.Principal, _, projectID string,
 ) (domain.Project, error) {
-	return domain.Project{ID: projectID, Config: s.projectConfig}, nil
+	return domain.Project{ID: projectID, Config: s.projectConfig, RepositoryURL: s.repositoryURL}, nil
 }
 
 func (s *stubAutolinkStore) UserAgentCredentialAvailable(
@@ -260,7 +261,7 @@ func freestyleServer(store Store, snapshots ProjectSnapshotter) *Server {
 // exists, and every Freestyle session keeps that snapshot fresh.
 func TestCreateSessionBootsFromTheProjectSnapshot(t *testing.T) {
 	t.Parallel()
-	store := &stubAutolinkStore{}
+	store := &stubAutolinkStore{repositoryURL: "https://github.com/acme/repo"}
 	snapshots := &fakeProjectSnapshots{snapshotID: "sh-project"}
 	srv := freestyleServer(store, snapshots)
 
@@ -274,8 +275,28 @@ func TestCreateSessionBootsFromTheProjectSnapshot(t *testing.T) {
 	if got != "sh-project" {
 		t.Fatalf("session boots from %q, want the project snapshot", got)
 	}
-	if len(snapshots.ensured) != 1 || snapshots.ensured[0].SessionID == "" || snapshots.ensured[0].BaseSnapshotID != "sh-harness" {
-		t.Fatalf("Ensure calls = %+v; want one, keyed to the new session and the harness snapshot", snapshots.ensured)
+	if len(snapshots.ensured) != 1 || snapshots.ensured[0].SessionID == "" || snapshots.ensured[0].BaseSnapshotID != "sh-harness" ||
+		snapshots.ensured[0].RepositoryKey != "url:acme/repo" {
+		t.Fatalf("Ensure calls = %+v; want one, keyed to the new session, the repository and the harness snapshot", snapshots.ensured)
+	}
+}
+
+// A project whose repository is not on GitHub cannot be keyed to a snapshot,
+// so its sessions boot from the harness snapshot and none is built.
+func TestCreateSessionWithoutAGitHubRepositorySkipsTheProjectSnapshot(t *testing.T) {
+	t.Parallel()
+	store := &stubAutolinkStore{}
+	snapshots := &fakeProjectSnapshots{snapshotID: "sh-project"}
+	srv := freestyleServer(store, snapshots)
+
+	rec := httptest.NewRecorder()
+	srv.createSession(rec, createSessionRequestHTTP(t, "orchestrator", sandbox.ProviderFreestyle))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	if got := sandbox.FreestyleSnapshot(sandbox.Plan{ResourceProfile: store.captured.ResourceProfile}); got != "sh-harness" || len(snapshots.ensured) != 0 {
+		t.Fatalf("boots from %q with %d builds; want the harness snapshot and no build", got, len(snapshots.ensured))
 	}
 }
 

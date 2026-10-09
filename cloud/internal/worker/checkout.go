@@ -651,6 +651,12 @@ func withAskpass(token string, operation func(map[string]string) error) error {
 	})
 }
 
+// GitHubRepositoryIdentity returns the lower-case owner/name a GitHub URL
+// names: the identity the checkout's origin is validated against.
+func GitHubRepositoryIdentity(raw string) (string, error) {
+	return githubRepositoryIdentity(raw)
+}
+
 func githubRepositoryIdentity(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	var path string

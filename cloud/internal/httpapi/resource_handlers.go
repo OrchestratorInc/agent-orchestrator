@@ -649,14 +649,8 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	// build; otherwise from the harness snapshot, and a build starts below.
 	var projectSnapshot *projectsnapshot.Request
 	if s.projectSnapshots != nil {
-		if base := sandbox.FreestyleSnapshot(plan); base != "" {
-			snapshotRequest := projectsnapshot.Request{
-				OrgID:          orgID,
-				ProjectID:      request.ProjectID,
-				Harness:        request.Harness,
-				BaseSnapshotID: base,
-				RepositoryURL:  project.RepositoryURL,
-			}
+		base := sandbox.FreestyleSnapshot(plan)
+		if snapshotRequest, ok := projectsnapshot.NewRequest(orgID, project, request.Harness, base); ok && base != "" {
 			if snapshotID, ok := s.projectSnapshots.Lookup(r.Context(), snapshotRequest); ok {
 				if prepared, rewriteErr := sandbox.WithFreestyleSnapshot(plan, snapshotID); rewriteErr == nil {
 					plan = prepared

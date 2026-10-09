@@ -65,29 +65,58 @@ func (f *fakeVMs) DeleteSnapshot(_ context.Context, id string) error {
 
 type fakeStore struct {
 	mu       sync.Mutex
-	existing *domain.ProjectSandboxSnapshot
-	replaced []domain.ProjectSandboxSnapshot
+	existing *domain.RepositorySandboxSnapshot
+	replaced []domain.RepositorySandboxSnapshot
+	used     int
+	idle     []string
+	cutoff   time.Time
 }
 
-func (f *fakeStore) ProjectSandboxSnapshot(context.Context, string, string, string, string) (domain.ProjectSandboxSnapshot, bool, error) {
+func (f *fakeStore) lookup(orgID, repositoryKey, harness string) (domain.RepositorySandboxSnapshot, bool) {
+	if f.existing == nil || f.existing.OrgID != orgID ||
+		f.existing.RepositoryKey != repositoryKey || f.existing.Harness != harness {
+		return domain.RepositorySandboxSnapshot{}, false
+	}
+	return *f.existing, true
+}
+
+func (f *fakeStore) UseRepositorySandboxSnapshot(_ context.Context, orgID, repositoryKey, _, harness string) (domain.RepositorySandboxSnapshot, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.existing == nil {
-		return domain.ProjectSandboxSnapshot{}, false, nil
+	snapshot, ok := f.lookup(orgID, repositoryKey, harness)
+	if ok {
+		f.used++
 	}
-	return *f.existing, true, nil
+	return snapshot, ok, nil
 }
 
-func (f *fakeStore) ReplaceProjectSandboxSnapshot(_ context.Context, snapshot domain.ProjectSandboxSnapshot) (string, error) {
+func (f *fakeStore) RepositorySandboxSnapshot(_ context.Context, orgID, repositoryKey, _, harness string) (domain.RepositorySandboxSnapshot, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	snapshot, ok := f.lookup(orgID, repositoryKey, harness)
+	return snapshot, ok, nil
+}
+
+func (f *fakeStore) ReplaceRepositorySandboxSnapshot(_ context.Context, snapshot domain.RepositorySandboxSnapshot) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	previous := ""
 	if f.existing != nil {
 		previous = f.existing.SnapshotID
 	}
+	snapshot.CreatedAt = time.Now() // the store stamps now()
 	f.replaced = append(f.replaced, snapshot)
 	f.existing = &snapshot
 	return previous, nil
+}
+
+func (f *fakeStore) DeleteIdleRepositorySandboxSnapshots(_ context.Context, _ string, cutoff time.Time) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cutoff = cutoff
+	idle := f.idle
+	f.idle = nil
+	return idle, nil
 }
 
 type fakeGrants struct{ token string }
@@ -96,10 +125,26 @@ func (f fakeGrants) IssueCheckoutGrant(context.Context, string, string) (githuba
 	return githubapp.CheckoutGrant{CloneURL: "https://github.com/acme/repo.git", Token: f.token, ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 
+var repositoryID = int64(4242)
+
+func project(id string) domain.Project {
+	return domain.Project{ID: id, RepositoryURL: "https://github.com/Acme/Repo.git", GitHubRepositoryID: &repositoryID}
+}
+
 func request() Request {
-	return Request{
-		OrgID: "org", ProjectID: "11111111-2222-3333-4444-555555555555", SessionID: "session",
-		Harness: "claude-code", BaseSnapshotID: "sh-base", RepositoryURL: "https://github.com/acme/repo",
+	r, ok := NewRequest("org", project("11111111-2222-3333-4444-555555555555"), "claude-code", "sh-base")
+	if !ok {
+		panic("request")
+	}
+	r.SessionID = "session"
+	return r
+}
+
+// recorded is a snapshot already built for request().
+func recorded(id, base string, createdAt time.Time) *domain.RepositorySandboxSnapshot {
+	return &domain.RepositorySandboxSnapshot{
+		OrgID: "org", RepositoryKey: "github:4242", RepositoryIdentity: "acme/repo",
+		Harness: "claude-code", SnapshotID: id, BaseSnapshotID: base, CreatedAt: createdAt,
 	}
 }
 
@@ -162,9 +207,7 @@ func TestEnsureBuildsAndRecordsASnapshot(t *testing.T) {
 
 func TestEnsureReplacesAStaleSnapshotAndDeletesTheOldOne(t *testing.T) {
 	vms := &fakeVMs{}
-	store := &fakeStore{existing: &domain.ProjectSandboxSnapshot{
-		SnapshotID: "sh-old", BaseSnapshotID: "sh-base", CreatedAt: time.Now().Add(-48 * time.Hour),
-	}}
+	store := &fakeStore{existing: recorded("sh-old", "sh-base", time.Now().Add(-48*time.Hour))}
 	builder := newTestBuilder(vms, store)
 	builder.Ensure(request())
 	waitIdle(t, builder)
@@ -176,9 +219,7 @@ func TestEnsureReplacesAStaleSnapshotAndDeletesTheOldOne(t *testing.T) {
 
 func TestEnsureSkipsAFreshSnapshot(t *testing.T) {
 	vms := &fakeVMs{}
-	store := &fakeStore{existing: &domain.ProjectSandboxSnapshot{
-		SnapshotID: "sh-fresh", BaseSnapshotID: "sh-base", CreatedAt: time.Now(),
-	}}
+	store := &fakeStore{existing: recorded("sh-fresh", "sh-base", time.Now())}
 	builder := newTestBuilder(vms, store)
 	builder.Ensure(request())
 	waitIdle(t, builder)
@@ -190,9 +231,7 @@ func TestEnsureSkipsAFreshSnapshot(t *testing.T) {
 
 func TestEnsureRebuildsWhenTheHarnessSnapshotChanged(t *testing.T) {
 	vms := &fakeVMs{}
-	store := &fakeStore{existing: &domain.ProjectSandboxSnapshot{
-		SnapshotID: "sh-fresh", BaseSnapshotID: "sh-older-base", CreatedAt: time.Now(),
-	}}
+	store := &fakeStore{existing: recorded("sh-fresh", "sh-older-base", time.Now())}
 	builder := newTestBuilder(vms, store)
 	builder.Ensure(request())
 	waitIdle(t, builder)
@@ -217,9 +256,7 @@ func TestFailedBuildStillDeletesTheBuilderVM(t *testing.T) {
 }
 
 func TestLookupOnlyReturnsASnapshotBuiltOnTheCurrentHarness(t *testing.T) {
-	store := &fakeStore{existing: &domain.ProjectSandboxSnapshot{
-		SnapshotID: "sh-project", BaseSnapshotID: "sh-base", CreatedAt: time.Now(),
-	}}
+	store := &fakeStore{existing: recorded("sh-project", "sh-base", time.Now())}
 	builder := newTestBuilder(&fakeVMs{}, store)
 
 	if id, ok := builder.Lookup(context.Background(), request()); !ok || id != "sh-project" {
@@ -229,5 +266,75 @@ func TestLookupOnlyReturnsASnapshotBuiltOnTheCurrentHarness(t *testing.T) {
 	changed.BaseSnapshotID = "sh-newer-base"
 	if _, ok := builder.Lookup(context.Background(), changed); ok {
 		t.Fatal("used a project snapshot built on an outdated harness snapshot")
+	}
+}
+
+func TestNewRequestKeysByRepositoryID(t *testing.T) {
+	r := request()
+	if r.RepositoryKey != "github:4242" || r.RepositoryIdentity != "acme/repo" {
+		t.Fatalf("request = %+v", r)
+	}
+	anonymous := project("p")
+	anonymous.GitHubRepositoryID = nil
+	if r, ok := NewRequest("org", anonymous, "codex", "sh-base"); !ok || r.RepositoryKey != "url:acme/repo" {
+		t.Fatalf("anonymous request = %+v, %v; want keyed by owner/name", r, ok)
+	}
+	notGitHub := project("p")
+	notGitHub.RepositoryURL = "https://gitlab.com/acme/repo"
+	if _, ok := NewRequest("org", notGitHub, "codex", "sh-base"); ok {
+		t.Fatal("a non-GitHub repository got a snapshot request")
+	}
+}
+
+// A project deleted and added again gets a new id but the same repository, so
+// its first session boots warm from the snapshot the old project built.
+func TestAReAddedProjectUsesTheRepositorysSnapshot(t *testing.T) {
+	vms, store := &fakeVMs{}, &fakeStore{}
+	builder := newTestBuilder(vms, store)
+	builder.Ensure(request())
+	waitIdle(t, builder)
+
+	readded, _ := NewRequest("org", project("99999999-8888-7777-6666-555555555555"), "claude-code", "sh-base")
+	if id, ok := builder.Lookup(context.Background(), readded); !ok || id != "sh-new" {
+		t.Fatalf("Lookup = %q, %v; want the snapshot built for the old project", id, ok)
+	}
+	builder.Ensure(readded)
+	waitIdle(t, builder)
+	if len(vms.created) != 1 {
+		t.Fatalf("rebuilt for the re-added project: %d builds", len(vms.created))
+	}
+}
+
+// The worker refuses a checkout whose origin is not the session's repository,
+// so a snapshot cloned before a rename is rebuilt, never booted.
+func TestARenamedRepositoryRebuildsInsteadOfBootingTheOldClone(t *testing.T) {
+	vms := &fakeVMs{}
+	store := &fakeStore{existing: recorded("sh-old-name", "sh-base", time.Now())}
+	builder := newTestBuilder(vms, store)
+	renamed := project("p")
+	renamed.RepositoryURL = "https://github.com/acme/new-name"
+	r, _ := NewRequest("org", renamed, "claude-code", "sh-base")
+	if _, ok := builder.Lookup(context.Background(), r); ok {
+		t.Fatal("booted a snapshot cloned under the old repository name")
+	}
+	builder.Ensure(r)
+	waitIdle(t, builder)
+	if len(store.replaced) != 1 || store.replaced[0].RepositoryIdentity != "acme/new-name" {
+		t.Fatalf("recorded %+v, want a rebuild under the new name", store.replaced)
+	}
+}
+
+func TestCollectDeletesIdleSnapshotsAtTheProvider(t *testing.T) {
+	vms := &fakeVMs{}
+	store := &fakeStore{idle: []string{"sh-idle-1", "sh-idle-2"}}
+	builder := newTestBuilder(vms, store)
+	now := time.Now()
+	builder.now = func() time.Time { return now }
+	builder.Collect(context.Background())
+	if len(vms.deletedSnapshots) != 2 {
+		t.Fatalf("deleted %v, want both idle snapshots", vms.deletedSnapshots)
+	}
+	if !store.cutoff.Equal(now.Add(-IdleRetention)) {
+		t.Fatalf("cutoff = %v, want %v", store.cutoff, now.Add(-IdleRetention))
 	}
 }
