@@ -179,6 +179,77 @@ describe("optimistic message delivery", () => {
 		expect(pending.onSend).toHaveBeenCalledOnce();
 	});
 
+	it("preserves a saved next draft when draft reads fail as the original message is accepted", async () => {
+		const sessionId = "optimistic-accepted-saved-next-draft-read-failure";
+		const draftKey = `ao.chat.draft:${encodeURIComponent(sessionId)}`;
+		const pending = pendingSend();
+		expect(writeChatComposerText(sessionId, "restored original request").ok).toBe(true);
+		renderComposer(sessionId, pending.onSend);
+		const field = screen.getByLabelText("Message the agent");
+		expect(field).toHaveTextContent("restored original request");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(pending.onSend).toHaveBeenCalledOnce());
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		await typeInLexicalEditor(field, "saved next draft");
+		expect(field).toHaveTextContent("saved next draft");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("saved next draft");
+		const read = window.localStorage.getItem.bind(window.localStorage);
+		const getItem = vi.spyOn(window.localStorage, "getItem").mockImplementation((key) => {
+			if (key === draftKey) throw new DOMException("temporarily unreadable", "SecurityError");
+			return read(key);
+		});
+		try {
+			await act(async () => pending.resolve());
+
+			expect.soft(field).toHaveTextContent("saved next draft");
+			expect(JSON.parse(read(draftKey)!).composer.text).toBe("saved next draft");
+			expect(screen.getByRole("alert")).toHaveTextContent("acceptance couldn’t be recorded");
+		} finally {
+			getItem.mockRestore();
+		}
+		await userEvent.click(await screen.findByRole("button", { name: "Retry message safely" }));
+		await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
+		expect(pending.onSend.mock.calls[1]).toEqual(pending.onSend.mock.calls[0]);
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(field).toHaveTextContent("saved next draft");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("saved next draft");
+	});
+
+	it.each(["selected", "dismissed"] as const)("preserves a %s skill menu when the original message is accepted", async (menuState) => {
+		const sessionId = `optimistic-accepted-next-draft-skill-${menuState}`;
+		const pending = pendingSend();
+		render(
+			<TooltipProvider>
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} skills={[
+					{ name: "alpha", displayName: "alpha", description: "first skill", source: "user" },
+					{ name: "beta", displayName: "beta", description: "second skill", source: "user" },
+				]} />
+			</TooltipProvider>,
+		);
+		const field = await startSend(pending.onSend, "original request");
+		await typeInLexicalEditor(field, "/");
+		fireEvent.keyDown(field, { key: menuState === "selected" ? "ArrowDown" : "Escape" });
+		if (menuState === "selected") {
+			expect(screen.getByRole("option", { name: /\/beta/ })).toHaveAttribute("aria-selected", "true");
+		} else {
+			expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+		}
+
+		await act(async () => pending.resolve());
+
+		if (menuState === "selected") {
+			expect.soft(screen.getByRole("option", { name: /\/beta/ })).toHaveAttribute("aria-selected", "true");
+			await userEvent.keyboard("{Enter}");
+			expect(field.querySelector('[data-composer-token="skill"]')).toHaveTextContent("/beta");
+			expect(pending.onSend).toHaveBeenCalledOnce();
+		} else {
+			expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+			await userEvent.keyboard("{Tab}");
+			expect(field.textContent).toBe("/");
+			expect(pending.onSend).toHaveBeenCalledOnce();
+		}
+	});
+
 	it("preserves the next draft caret and undo history when the original message is accepted", async () => {
 		const sessionId = "optimistic-accepted-next-draft-caret";
 		const pending = pendingSend();

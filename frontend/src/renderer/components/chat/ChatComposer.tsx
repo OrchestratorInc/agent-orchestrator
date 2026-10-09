@@ -830,7 +830,9 @@ export const ChatComposer = memo(function ChatComposer({
 		// turn the runtime snapshot into an ABA that resurrects accepted text or staged
 		// attachment descriptors.
 		if (unsavedText.current || (composerMutation.pending && restoredSeedKey.current !== undefined)) return;
-		const committedDraft = draftScope ? readChatSessionDraft(draftScope) : undefined;
+		const loadedDraft = draftScope ? loadChatSessionDraft(draftScope) : undefined;
+		if (loadedDraft?.ok === false) return;
+		const committedDraft = loadedDraft?.draft;
 		// Keep this surface's native bytes for retry; only a new surface needs descriptors.
 		if (committedDraft && (!committedDraft.composer.delivery?.draft || restoredSeedKey.current === undefined)) {
 			fileAttachments.reconcilePersistedAttachments(
@@ -860,11 +862,13 @@ export const ChatComposer = memo(function ChatComposer({
 		textRef.current = committedSeedText;
 		hasTextRef.current = committedSeedText.trim().length > 0;
 		setHasText(hasTextRef.current);
-		if (editor.current?.getSnapshot().text !== committedSeedText) editor.current?.setText(committedSeedText);
-		dismissedKeyRef.current = null;
-		setDismissedKey(null);
-		highlightedRef.current = 0;
-		setHighlighted(0);
+		if (editor.current?.getSnapshot().text !== committedSeedText) {
+			editor.current?.setText(committedSeedText);
+			dismissedKeyRef.current = null;
+			setDismissedKey(null);
+			highlightedRef.current = 0;
+			setHighlighted(0);
+		}
 		if (draftSeed) {
 			setSendError(null);
 			setSteerOutcomeNotice(null);
@@ -1346,8 +1350,6 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			acceptAndClearDurableDelivery(delivery, mutationToken);
 			mutationFinished = true;
-			setDismissedKey(null);
-			setHighlighted(0);
 		} catch (error) {
 			if (delivery.kind === "send" && !textRef.current) {
 				textRef.current = delivery.draft?.text ?? currentText;
