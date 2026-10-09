@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1787,35 +1788,49 @@ func TestIsChildAlivePreservesProbeFailures(t *testing.T) {
 
 func TestSendMessageChunksAndSendsEnter(t *testing.T) {
 	r, fr := newTestRuntime(5) // chunkSize=5
-	// "hello世界": hello=5 bytes, 世=3 bytes, 界=3 bytes => 3 sends + 1 Enter
+	// "hello世界": hello=5 bytes, 世=3 bytes, 界=3 bytes => 3 staged chunks,
+	// one bracketed paste, then Enter.
 	if err := r.SendMessage(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, "hello世界"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
-	if len(fr.calls) != 4 {
-		t.Fatalf("calls = %d, want 4 (3 chunks + Enter)", len(fr.calls))
+	if len(fr.calls) != 5 {
+		t.Fatalf("calls = %d, want 5 (3 chunks + paste + Enter)", len(fr.calls))
 	}
-	if got, want := fr.calls[0].args, sendKeysLiteralArgs("sess-1", "hello"); !reflect.DeepEqual(got, want) {
-		t.Fatalf("chunk 1 args = %#v, want %#v", got, want)
+	buffer := fr.calls[0].args[2]
+	if !strings.HasPrefix(buffer, "ao-send-sess-1-") {
+		t.Fatalf("buffer name = %q, want ao-send-sess-1-<n>", buffer)
 	}
-	if got, want := fr.calls[1].args, sendKeysLiteralArgs("sess-1", "世"); !reflect.DeepEqual(got, want) {
-		t.Fatalf("chunk 2 args = %#v, want %#v", got, want)
-	}
-	if got, want := fr.calls[2].args, sendKeysLiteralArgs("sess-1", "界"); !reflect.DeepEqual(got, want) {
-		t.Fatalf("chunk 3 args = %#v, want %#v", got, want)
-	}
-	if got, want := fr.calls[3].args, sendEnterArgs("sess-1"); !reflect.DeepEqual(got, want) {
-		t.Fatalf("Enter args = %#v, want %#v", got, want)
+	for i, want := range [][]string{
+		setBufferArgs(buffer, "hello", false),
+		setBufferArgs(buffer, "世", true),
+		setBufferArgs(buffer, "界", true),
+		pasteBufferArgs(buffer, "sess-1"),
+		sendEnterArgs("sess-1"),
+	} {
+		if got := fr.calls[i].args; !reflect.DeepEqual(got, want) {
+			t.Fatalf("call %d args = %#v, want %#v", i, got, want)
+		}
 	}
 }
 
-func TestSendMessageUsesLiteralFlag(t *testing.T) {
+// TestSendMessageUsesBracketedPaste pins the #3626 fix: the text reaches the
+// pane through paste-buffer -p (bracketed when the app asked for it) and -r
+// (newlines stay LF), never as typed keystrokes that a TUI's paste-burst
+// heuristic can merge with the trailing Enter.
+func TestSendMessageUsesBracketedPaste(t *testing.T) {
 	r, fr := newTestRuntime(0)
-	if err := r.SendMessage(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, "Enter"); err != nil {
+	if err := r.SendMessage(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, "line one\nEnter"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
-	// First call must use -l so "Enter" is sent literally, not as a key binding.
-	if fr.calls[0].args[3] != "-l" {
-		t.Fatalf("send-keys args[3] = %q, want -l", fr.calls[0].args[3])
+	if countCalls(fr, "send-keys") != 1 {
+		t.Fatalf("send-keys calls = %d, want 1 (the Enter only)", countCalls(fr, "send-keys"))
+	}
+	if got, want := fr.calls[0].args[len(fr.calls[0].args)-2:], []string{"--", "line one\nEnter"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("set-buffer data args = %#v, want %#v", got, want)
+	}
+	paste := fr.calls[1].args
+	if paste[0] != "paste-buffer" || !slices.Contains(paste, "-p") || !slices.Contains(paste, "-r") || !slices.Contains(paste, "-d") {
+		t.Fatalf("paste args = %#v, want paste-buffer -p -r -d", paste)
 	}
 }
 
@@ -1847,11 +1862,11 @@ func TestSendMessageDelaysBeforeEnter(t *testing.T) {
 	if dt := time.Since(start); dt < r.enterDelay {
 		t.Fatalf("SendMessage took %s, want >= %s pre-Enter pause", dt, r.enterDelay)
 	}
-	// Non-empty message still ends with the literal chunks then Enter.
-	if len(fr.calls) != 2 {
-		t.Fatalf("calls = %d, want 2 (chunk + Enter)", len(fr.calls))
+	// Non-empty message still ends with the staged paste then Enter.
+	if len(fr.calls) != 3 {
+		t.Fatalf("calls = %d, want 3 (set-buffer + paste + Enter)", len(fr.calls))
 	}
-	if got, want := fr.calls[1].args, sendEnterArgs("sess-1"); !reflect.DeepEqual(got, want) {
+	if got, want := fr.calls[2].args, sendEnterArgs("sess-1"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Enter args = %#v, want %#v", got, want)
 	}
 
@@ -1865,7 +1880,7 @@ func TestSendMessageDelaysBeforeEnter(t *testing.T) {
 	if dt := time.Since(start); dt > 50*time.Millisecond {
 		t.Fatalf("nudge SendMessage took %s; want no pause for empty message", dt)
 	}
-	// Empty message is Enter-only: no send-keys -l call, just Enter.
+	// Empty message is Enter-only: no paste, just Enter.
 	if len(frNudge.calls) != 1 {
 		t.Fatalf("nudge calls = %d, want 1 (Enter only)", len(frNudge.calls))
 	}
@@ -1875,7 +1890,7 @@ func TestSendMessageDelaysBeforeEnter(t *testing.T) {
 }
 
 // TestSendMessageEnterSurvivesCallerCancel pins the detached-Enter contract:
-// once the chunks are pasted, a caller cancellation landing in the pre-Enter
+// once the text is pasted, a caller cancellation landing in the pre-Enter
 // pause must NOT abandon the send — the pasted draft would sit unsubmitted and
 // a retried send would double-paste. The pause and Enter run on a context
 // detached from the caller's, so SendMessage completes (chunks then Enter).
@@ -1892,60 +1907,38 @@ func TestSendMessageEnterSurvivesCallerCancel(t *testing.T) {
 	if err := r.SendMessage(ctx, ports.RuntimeHandle{ID: "sess-1"}, "hello"); err != nil {
 		t.Fatalf("SendMessage cancelled mid-pause: %v (Enter must run detached)", err)
 	}
-	if len(fr.calls) != 2 {
-		t.Fatalf("calls = %d, want 2 (chunk + Enter despite the caller cancel after the paste)", len(fr.calls))
-	}
-	if got, want := fr.calls[1].args, sendEnterArgs("sess-1"); !reflect.DeepEqual(got, want) {
-		t.Fatalf("Enter args = %#v, want %#v", got, want)
-	}
-}
-
-func TestSendMessageRemainingChunksSurviveCallerCancel(t *testing.T) {
-	r, fr := newTestRuntime(5)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	secondChunkStarted := make(chan struct{})
-	callerCancelled := make(chan struct{})
-	go func() {
-		<-secondChunkStarted
-		cancel()
-		close(callerCancelled)
-	}()
-	fr.hook = func(runCtx context.Context, call int) error {
-		if call != 2 {
-			return nil
-		}
-		close(secondChunkStarted)
-		<-callerCancelled
-		return runCtx.Err()
-	}
-
-	if err := r.SendMessage(ctx, ports.RuntimeHandle{ID: "sess-1"}, "helloworld"); err != nil {
-		t.Fatalf("SendMessage cancelled after first chunk: %v", err)
-	}
-	if ctx.Err() != context.Canceled {
-		t.Fatalf("caller context error = %v, want context.Canceled", ctx.Err())
-	}
 	if len(fr.calls) != 3 {
-		t.Fatalf("calls = %d, want 3 (two chunks + Enter)", len(fr.calls))
-	}
-	if got, want := fr.calls[1].args, sendKeysLiteralArgs("sess-1", "world"); !reflect.DeepEqual(got, want) {
-		t.Fatalf("chunk 2 args = %#v, want %#v", got, want)
+		t.Fatalf("calls = %d, want 3 (set-buffer + paste + Enter despite the caller cancel after the paste)", len(fr.calls))
 	}
 	if got, want := fr.calls[2].args, sendEnterArgs("sess-1"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Enter args = %#v, want %#v", got, want)
 	}
 }
 
-func TestSendMessageCompletionBudgetScalesWithChunks(t *testing.T) {
-	const commandTimeout = 5 * time.Second
-	const enterDelay = 300 * time.Millisecond
-	if got, want := sendCompletionBudget(1, commandTimeout, enterDelay), 5*time.Second+enterDelay; got != want {
-		t.Fatalf("single-chunk completion budget = %s, want %s", got, want)
+// TestSendMessageCancelWhileStagingStrandsNothing: chunks are staged in a
+// tmux buffer, not the pane, so a caller cancel mid-staging aborts cleanly —
+// no paste, no Enter, and the partial buffer is deleted.
+func TestSendMessageCancelWhileStagingStrandsNothing(t *testing.T) {
+	r, fr := newTestRuntime(5)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fr.hook = func(runCtx context.Context, call int) error {
+		if call == 2 {
+			cancel()
+			return runCtx.Err()
+		}
+		return nil
 	}
-	if got, want := sendCompletionBudget(4, commandTimeout, enterDelay), 20*time.Second+enterDelay; got != want {
-		t.Fatalf("four-chunk completion budget = %s, want %s", got, want)
+
+	err := r.SendMessage(ctx, ports.RuntimeHandle{ID: "sess-1"}, "helloworld")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("SendMessage error = %v, want context.Canceled", err)
+	}
+	if countCalls(fr, "paste-buffer") != 0 || countCalls(fr, "send-keys") != 0 {
+		t.Fatalf("calls = %#v, want no paste and no Enter after a staging cancel", fr.calls)
+	}
+	if got, want := fr.calls[len(fr.calls)-1].args, deleteBufferArgs(fr.calls[0].args[2]); !reflect.DeepEqual(got, want) {
+		t.Fatalf("last call = %#v, want %#v", got, want)
 	}
 }
 
@@ -1961,8 +1954,8 @@ func TestSendMessageCancellationBeforeFirstChunkAborts(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("SendMessage error = %v, want context.Canceled", err)
 	}
-	if len(fr.calls) != 1 {
-		t.Fatalf("calls = %d, want 1 (first chunk attempt only)", len(fr.calls))
+	if len(fr.calls) != 2 || fr.calls[1].args[0] != "delete-buffer" {
+		t.Fatalf("calls = %#v, want first chunk attempt then delete-buffer", fr.calls)
 	}
 }
 

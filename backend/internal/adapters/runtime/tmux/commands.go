@@ -148,6 +148,30 @@ func sendKeysLiteralArgs(id, chunk string) []string {
 	return []string{"send-keys", "-t", id, "-l", chunk}
 }
 
+// setBufferArgs builds args for `tmux set-buffer -b <name> [-a] -- <chunk>`,
+// staging message text in a named paste buffer (-a appends later chunks).
+func setBufferArgs(name, chunk string, appendChunk bool) []string {
+	args := []string{"set-buffer", "-b", name}
+	if appendChunk {
+		args = append(args, "-a")
+	}
+	return append(args, "--", chunk)
+}
+
+// pasteBufferArgs builds args for `tmux paste-buffer -p -r -d -b <name> -t <id>`.
+// -p wraps the text in bracketed-paste markers when (and only when) the pane's
+// app enabled bracketed paste, so a TUI sees one paste instead of a keystroke
+// burst. -r keeps newlines as LF (the bytes send-keys -l used to type), and -d
+// deletes the buffer afterwards.
+func pasteBufferArgs(name, id string) []string {
+	return []string{"paste-buffer", "-p", "-r", "-d", "-b", name, "-t", id}
+}
+
+// deleteBufferArgs builds args for `tmux delete-buffer -b <name>`.
+func deleteBufferArgs(name string) []string {
+	return []string{"delete-buffer", "-b", name}
+}
+
 // sendEnterArgs builds args for `tmux send-keys -t <id> Enter` to submit the
 // queued input.
 func sendEnterArgs(id string) []string {
