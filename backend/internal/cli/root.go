@@ -96,6 +96,11 @@ type Deps struct {
 	CommandOutputInDir    func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
 	RunInteractiveCommand func(ctx context.Context, name, dir string, args []string, stdin io.Reader, stdout, stderr io.Writer) error
 	ReadSecret            func(io.Reader) ([]byte, error)
+	// ResolveCodexBinary resolves the codex executable the way a spawn does.
+	// It is distinct from LookPath on purpose: on Windows `codex` on PATH is the
+	// npm shim, and running a .cmd through cmd.exe corrupts the complex `-c`
+	// argv the doctor canary probes, producing a false rejection (#6443).
+	ResolveCodexBinary func(ctx context.Context) (string, error)
 	// DoctorGitHubRESTBase lets tests point the doctor GitHub token probe at
 	// httptest without mutating package-global state.
 	DoctorGitHubRESTBase string
@@ -131,6 +136,7 @@ func DefaultDeps() Deps {
 		CommandOutputInDir:    commandOutputInDir,
 		RunInteractiveCommand: runInteractiveCommand,
 		ReadSecret:            readSecret,
+		ResolveCodexBinary:    codex.ResolveCodexBinary,
 		DoctorGitHubRESTBase:  defaultDoctorGitHubRESTBase,
 		DoctorGitLabRESTBase:  defaultDoctorGitLabRESTBase,
 		OpenAIRESTBase:        defaultOpenAIRESTBase,
@@ -204,6 +210,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.ReadSecret == nil {
 		d.ReadSecret = def.ReadSecret
+	}
+	if d.ResolveCodexBinary == nil {
+		d.ResolveCodexBinary = def.ResolveCodexBinary
 	}
 	if d.DoctorGitHubRESTBase == "" {
 		d.DoctorGitHubRESTBase = def.DoctorGitHubRESTBase
