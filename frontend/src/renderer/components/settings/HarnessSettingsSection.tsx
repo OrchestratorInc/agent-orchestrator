@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, Copy, KeyRound, LoaderCircle, LogIn, Search, Trash2, TriangleAlert, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BookOpen, Check, ChevronLeft, ChevronRight, Copy, KeyRound, LoaderCircle, LogIn, RefreshCw, Search, Trash2, TriangleAlert, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
 import {
@@ -10,7 +10,7 @@ import {
 	useAgentReadinessQuery,
 } from "../../hooks/useAgentReadinessQuery";
 import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../hooks/useAgentAuth";
-import { agentModelsQueryPrefix } from "../../hooks/useAgentModelsQuery";
+import { agentModelsQueryOptions, agentModelsQueryPrefix, refreshAgentModels } from "../../hooks/useAgentModelsQuery";
 import { fetchSessionMemory, formatCPU, formatMemory, sessionMemoryQueryOptions } from "../../hooks/useSessionMemory";
 import { closeShellTerminal, shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../hooks/useShellTerminals";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
@@ -20,6 +20,7 @@ import { useCloudCp } from "../../hooks/useCloudCp";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
 import { providerConnectionsQueryKey, useProviderConnections } from "../../hooks/useProviderConnections";
 import { GitHubTokenField } from "../onboarding/GitHubTokenField";
+import { HarnessUninstallGuide } from "./HarnessUninstallGuide";
 import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPanel";
 import { SettingsRow } from "./SettingsRow";
 import { apiErrorCode, apiErrorMessage } from "../../lib/api-client";
@@ -35,7 +36,7 @@ import { AgentAvatar } from "../AgentAvatar";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
-import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { useCloudGate } from "../../hooks/useCloudGate";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
@@ -182,24 +183,27 @@ export function HarnessSettingsSection({
 	const [selectedHostId, setSelectedHostId] = useState(hostId ?? LOCAL_HOST);
 	useEffect(() => setSelectedHostId(hostId ?? LOCAL_HOST), [hostId]);
 	const remoteOffline = selectedHostId !== LOCAL_HOST && !connected.includes(selectedHostId);
+	// An open harness page replaces the list, so its search and filters step aside.
+	const [detailOpen, setDetailOpen] = useState(false);
+	const showToolbar = cloudView || !detailOpen;
 	return <SettingsSection title={t("settings.harness")} titleHidden={titleHidden} sectionId="harness">
-		<div className="sticky top-0 z-10 flex items-center gap-2 bg-card pb-2">
+		{showToolbar ? <div className="sticky top-0 z-10 flex items-center gap-2 bg-card pb-2">
 			<label className="flex h-9! min-w-0 flex-1 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3">
 				<Search aria-hidden="true" className="size-4 shrink-0 text-settings-muted" />
 				<span className="sr-only">{t("settings.harness.search")}</span>
 				<input aria-label={t("settings.harness.search")} className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted" placeholder={t("settings.harness.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
 			</label>
 			{cloudEnabled ? <Tabs value={cloudView ? "cloud" : "local"} onValueChange={(value) => setView(value as HarnessView)}><TabsList aria-label={t("settings.harness.viewLabel")}><TabsTrigger value="local">{t("settings.harness.viewLocal")}</TabsTrigger><TabsTrigger value="cloud">{t("settings.harness.viewCloud")}</TabsTrigger></TabsList></Tabs> : null}
-		</div>
-		{!cloudView && (connected.length > 0 || remoteOffline) ? <SettingsOptionMenu
+		</div> : null}
+		{showToolbar && !cloudView && (connected.length > 0 || remoteOffline) ? <SettingsOptionMenu
 				aria-label={t("remote.host")}
 				value={selectedHostId}
 				options={[{ value: LOCAL_HOST, label: t("settings.harness.thisComputer") }, ...connected.map((id) => ({ value: id, label: labelForHost(id) ?? id })), ...(remoteOffline ? [{ value: selectedHostId, label: t("remote.hostLabel", { hostId: selectedHostId }) }] : [])]}
 				onChange={setSelectedHostId}
 				triggerClassName="w-fit max-w-full"
 			/> : null}
-		{!cloudView && selectedHostId !== LOCAL_HOST && !remoteOffline ? <p className="text-xs text-muted-foreground">{t("settings.harness.remoteBrowserAuthNote")}</p> : null}
-		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} search={search} /> : remoteOffline ? <p className="text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} search={search} />}
+		{showToolbar && !cloudView && selectedHostId !== LOCAL_HOST && !remoteOffline ? <p className="text-xs text-muted-foreground">{t("settings.harness.remoteBrowserAuthNote")}</p> : null}
+		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} search={search} /> : remoteOffline ? <p className="text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} search={search} onDetailChange={setDetailOpen} />}
 	</SettingsSection>;
 }
 
@@ -264,7 +268,7 @@ function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: string; 
 	</>;
 }
 
-function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: string; hostId?: string; search: string }) {
+function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange }: { focusAgentId?: string; hostId?: string; search: string; onDetailChange?: (open: boolean) => void }) {
 	const { i18n, t } = useTranslation();
 	const queryClient = useQueryClient();
 	const client = clientForSessionHost(hostId);
@@ -292,11 +296,31 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 	const pendingActions = useRef(new Set<AgentId>());
 	const authChecksInFlight = useRef(new Map<AgentId, Promise<AgentAuthProbeResult | undefined>>());
 	const [pendingAgentIds, setPendingAgentIds] = useState<Set<AgentId>>(new Set());
-	const rowsRef = useRef<HTMLDivElement>(null);
+	const detailRef = useRef<HTMLDivElement>(null);
 	const focusHandledRef = useRef(false);
+	const focusPrimaryActionRef = useRef(false);
 	const highlightTimerRef = useRef<number | null>(null);
 	const [highlightedAgentId, setHighlightedAgentId] = useState<AgentId | null>(null);
-	const [expandedAgentId, setExpandedAgentId] = useState<AgentId | null>(null);
+	// The list opens one harness at a time; its page has Account, Models and Health tabs.
+	const [selectedAgentId, setSelectedAgentId] = useState<AgentId | null>(null);
+	const [detailTab, setDetailTab] = useState<HarnessDetailTab>("account");
+	const selectedAgentRef = useRef<AgentId | null>(null);
+	selectedAgentRef.current = selectedAgentId;
+	const openDetail = (agentId: AgentId, tab: HarnessDetailTab = "account") => {
+		selectedAgentRef.current = agentId;
+		setSelectedAgentId(agentId);
+		setDetailTab(tab);
+	};
+	const closeDetail = () => {
+		selectedAgentRef.current = null;
+		setSelectedAgentId(null);
+	};
+	// Errors and login terminals for a harness live on its Account tab. Show
+	// them unless the user is looking at a different harness.
+	const revealAgent = (agentId: AgentId) => {
+		if (selectedAgentRef.current !== null && selectedAgentRef.current !== agentId) return;
+		openDetail(agentId);
+	};
 	const [operationRequest, setOperationRequest] = useState<OperationRequest | null>(null);
 	// Operation identity is local to jobs started here; restored jobs use neutral copy.
 	const [operationAttempts, setOperationAttempts] = useState<Partial<Record<AgentId, { operation: AgentOperation; startedAt?: string }>>>({});
@@ -418,17 +442,27 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 	useEffect(() => {
 		if (focusHandledRef.current || !targetAgentId) return;
 		if (agents.isPending || installers.isPending || jobs.isPending || authPlans.isPending) return;
-		const row = Array.from(rowsRef.current?.querySelectorAll<HTMLElement>("[data-agent]") ?? [])
-			.find((candidate) => candidate.dataset.agent === targetAgentId);
-		if (!row) return;
-
 		focusHandledRef.current = true;
-		row.scrollIntoView({ behavior: "smooth", block: "center" });
-		const primaryAction = row.querySelector<HTMLElement>("[data-harness-primary-action]:not(:disabled)");
-		(primaryAction ?? row).focus({ preventScroll: true });
+		focusPrimaryActionRef.current = true;
+		openDetail(targetAgentId);
 		setHighlightedAgentId(targetAgentId);
 		highlightTimerRef.current = window.setTimeout(() => setHighlightedAgentId(null), FOCUS_HIGHLIGHT_MS);
 	}, [agents.isPending, authPlans.isPending, installers.isPending, jobs.isPending, targetAgentId]);
+
+	useEffect(() => {
+		if (!focusPrimaryActionRef.current || !selectedAgentId) return;
+		const detail = detailRef.current;
+		if (!detail) return;
+		focusPrimaryActionRef.current = false;
+		detail.scrollIntoView?.({ behavior: "smooth", block: "start" });
+		const primaryAction = detail.querySelector<HTMLElement>("[data-harness-primary-action]:not(:disabled)");
+		(primaryAction ?? detail.querySelector<HTMLElement>("[role=tab][data-state=active]"))?.focus({ preventScroll: true });
+	}, [selectedAgentId]);
+
+	useEffect(() => {
+		onDetailChange?.(selectedAgentId !== null);
+	}, [onDetailChange, selectedAgentId]);
+	useEffect(() => () => onDetailChange?.(false), [onDetailChange]);
 
 	useEffect(() => () => {
 		if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
@@ -462,7 +496,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 			if ((job.status === "failed" || job.status === "unsupported" || job.status === "interrupted")
 				&& expandedFailures.current.get(agentId) !== attempt.startedAt) {
 				expandedFailures.current.set(agentId, attempt.startedAt);
-				if (!authWorkflowRef.current || authWorkflowRef.current.agentId === agentId) setExpandedAgentId(agentId);
+				if (!authWorkflowRef.current || authWorkflowRef.current.agentId === agentId) revealAgent(agentId);
 			}
 			if (job.status !== "succeeded") continue;
 			if (attempt.operation === "update") {
@@ -513,7 +547,6 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 			|| !supportsOperation(plans.get(agentId)?.methods.find((candidate) => candidate.id === method), operation))) return false;
 		if (operation === "update" && (needsAuthentication(agentId) || authPlans.isPending || authPlans.isError)) return false;
 		if (!beginAction(agentId)) return false;
-		setExpandedAgentId((current) => current === agentId ? null : current);
 		setOperationAttempts((current) => ({ ...current, [agentId]: { operation } }));
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
 		try {
@@ -533,7 +566,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 			});
 			if (error || !data) {
 				setActionErrors((current) => ({ ...current, [agentId]: apiErrorMessage(error, t(operation === "uninstall" ? "settings.harness.uninstallFailed" : operation === "update" ? "settings.harness.updateFailed" : "settings.harness.startFailed")) }));
-				setExpandedAgentId(agentId);
+				revealAgent(agentId);
 				return false;
 			}
 			setOperationAttempts((current) => ({ ...current, [agentId]: { operation, startedAt: data.startedAt } }));
@@ -542,7 +575,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 			return true;
 		} catch (error) {
 			setActionErrors((current) => ({ ...current, [agentId]: error instanceof Error ? error.message : t("settings.harness.startFailed") }));
-			setExpandedAgentId(agentId);
+			revealAgent(agentId);
 			return false;
 		} finally {
 			endAction(agentId);
@@ -630,7 +663,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 			};
 			authWorkflowRef.current = workflow;
 			setAuthWorkflow(workflow);
-			setExpandedAgentId(agentId);
+			revealAgent(agentId);
 			void queryClient.invalidateQueries({ queryKey: shellKey });
 		} catch (error) {
 			if (mountedRef.current) updateAuthState(agentId, { error: error instanceof Error ? error.message : t("settings.harness.authFailed") });
@@ -767,6 +800,285 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 		};
 	}, [hostId]);
 
+	const describe = (agentId: AgentId) => {
+		const plan = plans.get(agentId);
+		const job = jobMap.get(agentId);
+		const isInstalled = installed.has(agentId);
+		const availableMethods = plan?.methods.filter((method) => method.available) ?? [];
+		const installMethod = availableMethods.find((method) => method.recommended) ?? availableMethods[0];
+		const methodId = operationMethodId(agentId);
+		const maintenanceMethod = plan?.methods.find((method) => method.id === methodId);
+		const canUpdate = supportsOperation(maintenanceMethod, "update");
+		const canUninstall = supportsOperation(maintenanceMethod, "uninstall");
+		// A harness with no installable method (built into AO, or an installer
+		// that must run interactively here) explains itself; ownership is not the question.
+		const manualOnly = Boolean(plan?.methods.length) && plan!.methods.every((method) => method.id === "manual");
+		const ownershipReason = !methodId ? (manualOnly && plan?.reason ? plan.reason : t("settings.harness.ownershipUnknown")) : undefined;
+		const updateReason = ownershipReason || maintenanceMethod?.updateReason || maintenanceMethod?.reason || t("settings.harness.updateUnsupported");
+		const uninstallReason = ownershipReason || maintenanceMethod?.uninstallReason || maintenanceMethod?.reason || t("settings.harness.uninstallUnsupported");
+		const advisoryQuery = advisoryMap.get(agentId);
+		const advisory = advisoryQuery?.data;
+		const updateUnknown = advisoryQuery?.isError || !hasDefinitiveUpdateStatus(advisory);
+		// A failed background fetch is not a new observation. Keep the last
+		// action; the click-time probe still verifies target and ownership.
+		const updateAvailable = hasConfirmedHarnessUpdate(advisory);
+		const currentVersion = advisory?.currentVersion?.trim();
+		const pending = pendingAgentIds.has(agentId);
+		const active = isActive(job);
+		const busy = pending || active;
+		const actionError = actionErrors[agentId];
+		const attempt = operationAttempts[agentId];
+		const currentOperation = attempt && (pending || actionError || attempt.startedAt === job?.startedAt) ? attempt.operation : undefined;
+		const jobFailed = job?.status === "failed" || job?.status === "unsupported" || job?.status === "interrupted";
+		const failed = jobFailed || Boolean(actionError);
+		const readinessAgent = readinessAgents.get(agentId);
+		const incompatibleVersionReason = readinessAgent?.installation.reasonCode === "install_incompatible_version"
+			? readinessAgent.installation.reason : undefined;
+		// Unknown inventory is not proof that installing is safe. Preserve the
+		// existing cached-readiness fallback when fetching the snapshot fails.
+		const installationPending = !agents.error && (agents.isPending || readinessAgent?.installation.state === "unknown");
+		const authPlan = agentAuthPlans.get(agentId);
+		const isSetupAction = authPlan?.action === "setup";
+		const authState = authStates[agentId];
+		const authStatus = readinessAgent?.authentication.state;
+		const rowAuthWorkflow = authWorkflow?.agentId === agentId ? authWorkflow : null;
+		const authBusy = Boolean(rowAuthWorkflow || authState?.pending);
+		const needsLogin = needsAuthentication(agentId);
+		const showUpdate = updateAvailable && !authPlans.isPending && !authPlans.isError;
+		const hasDiagnostics = Boolean(job && jobFailed && (job.error || job.output || job.method || job.expectedDestination));
+		const authSummary = authStatus === "configured" ? t("settings.harness.configured")
+			: authStatus === "authorized" ? t(isSetupAction ? "settings.harness.configured" : "settings.harness.loggedIn")
+			: authStatus === "not_applicable" || (!authPlans.isPending && (!authPlan || authPlan.action === "instructions")) ? t("settings.harness.installed")
+			: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))
+			: authStatus === "unauthorized" ? t(isSetupAction ? "settings.harness.notConfigured" : "settings.harness.loginRequired")
+			: t(isSetupAction ? "settings.harness.configurationUnknown" : "settings.harness.loginUnknown");
+		const progressLabel = job?.status === "verifying" ? t("settings.harness.verifying")
+			: currentOperation === "update" ? t("settings.harness.updating")
+			: currentOperation === "uninstall" ? t("settings.harness.uninstalling")
+			: currentOperation === "install" ? t("settings.harness.installing") : t("settings.harness.working");
+		const rowError = actionError ?? authState?.error ?? (jobFailed ? job?.error ?? t("settings.harness.installFailed") : undefined);
+		const authProgress = rowAuthWorkflow?.phase === "verifying" ? t("settings.harness.checkingLogin")
+			: rowAuthWorkflow?.phase === "closing" ? t("settings.harness.authClosing")
+			: rowAuthWorkflow && rowAuthWorkflow.phase !== "running" ? rowAuthWorkflow.reason ?? t("settings.harness.loginUnknown")
+			: t("settings.harness.loginInProgress");
+		const statusLabel = isInstalled ? rowError ?? (authBusy ? authProgress : authSummary)
+			: installationPending ? t("settings.harness.installationUnknown")
+			: job?.status === "interrupted" ? t("settings.harness.interrupted")
+			: rowError ?? incompatibleVersionReason ?? (!installMethod ? plan?.reason ?? t("settings.harness.manualRequired") : "");
+		// Why a harness is not installed (or cannot be), without repeating the error alert.
+		const installNote = isInstalled || installationPending ? undefined
+			: job?.status === "interrupted" ? t("settings.harness.interrupted")
+			: incompatibleVersionReason ?? (!installMethod ? plan?.reason ?? t("settings.harness.manualRequired") : undefined);
+		const versionText = currentVersion ? versionLabel(currentVersion) : t("settings.harness.versionUnavailable");
+		const versionUnverified = advisoryQuery?.isError || job?.status === "verifying" || (currentOperation === "update" && (busy || failed));
+		const updatedAt = lastUpdatedAt[agentId];
+		const actionClass = "h-8 min-w-20 px-3 focus-visible:ring-2 focus-visible:ring-ring";
+		const progressAction = <span role="status"><Button type="button" size="sm" variant="outline" className={actionClass} disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{progressLabel}</Button></span>;
+		const authBusyAction = <Button type="button" size="sm" className={actionClass} disabled>
+			{rowAuthWorkflow && !["running", "verifying", "closing"].includes(rowAuthWorkflow.phase) ? null : <LoaderCircle className="animate-spin" aria-hidden="true" />}
+			{rowAuthWorkflow?.phase === "verifying" ? t("settings.harness.checkingLogin") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
+		</Button>;
+		// Install, update and login each own one row in the Account tab. While a
+		// job or login runs, the row that started it shows progress instead.
+		const installationAction = busy ? progressAction
+			: authBusy ? null
+			: !isInstalled ? (
+				!installationPending && installMethod ? <Button type="button" data-harness-primary-action="" size="sm" className={actionClass} onClick={() => void startAgentOperation(agentId, installMethod.id, "install")}>
+					{failed ? t("settings.harness.retryInstall") : t("settings.harness.install")}
+				</Button> : !installationPending && plan?.command ? <Button type="button" size="sm" variant="outline" className={actionClass} onClick={() => void copyText(agentId, plan.command!)}>
+					{copiedAgent === agentId ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{t(copiedAgent === agentId ? "settings.harness.copied" : "settings.harness.copyCommand")}
+				</Button> : null
+			) : showUpdate && !needsLogin ? (
+				canUpdate ? <Button type="button" data-harness-primary-action="" size="sm" className={actionClass} onClick={() => requestInstalledOperation(agentId, "update")}>
+					{t(failed && currentOperation === "update" ? "settings.harness.retryUpdate" : "settings.harness.update")}
+				</Button> : plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="sm" variant="outline" className={actionClass} title={updateReason} onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button> : null
+			) : null;
+		const canRelogin = Boolean(authPlan?.available && authPlan.action !== "instructions" && (authStatus === "authorized" || authStatus === "configured"));
+		const accountAction = authBusy ? authBusyAction
+			: busy ? null
+			: needsLogin ? <Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="sm" className={actionClass} disabled={!authPlan?.available || Boolean(authWorkflow)} onClick={() => void startAuth(agentId)}>
+				{t(isSetupAction ? "settings.harness.setup" : authState?.error ? "settings.harness.retryLogin" : "settings.harness.login")}
+			</Button>
+			: canRelogin ? <Button type="button" data-terminal-focus-handoff="true" size="sm" variant="outline" className={actionClass} disabled={Boolean(authWorkflow)} onClick={() => void startAuth(agentId)}>
+				{t(isSetupAction ? "settings.harness.openSetup" : "settings.harness.loginAgain")}
+			</Button> : null;
+		const identityText = <>
+			<span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+				<span className="text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</span>
+				{isInstalled ? <span className="break-all font-mono text-[11px] text-settings-muted" title={t(versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")}>{versionText}{versionUnverified && currentVersion ? ` · ${t("settings.harness.unverified")}` : ""}</span> : null}
+			</span>
+			{statusLabel || (isInstalled && updateAvailable) ? <span className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 text-xs text-settings-muted">
+				{statusLabel ? <span className={cn("break-words", Boolean(rowError) && "text-error")}>{statusLabel}</span> : null}
+				{isInstalled && updateAvailable ? <>
+					{statusLabel ? <span aria-hidden="true">·</span> : null}
+					<span className="font-medium text-settings-accent">{t("settings.harness.versionAvailable", { version: versionLabel(advisory!.latestVersion!) })}</span>
+				</> : null}
+			</span> : null}
+		</>;
+		return {
+			agentId, plan, job, isInstalled, methodId, maintenanceMethod, canUpdate, canUninstall, manualOnly, updateReason, uninstallReason,
+			advisoryQuery, advisory, updateUnknown, updateAvailable, currentVersion, busy, failed, jobFailed, currentOperation, readinessAgent,
+			authPlan, authStatus, authSummary, rowAuthWorkflow, authBusy, showUpdate, hasDiagnostics, rowError, versionText, versionUnverified,
+			updatedAt, installationAction, accountAction, identityText, progressLabel, installationPending, installNote,
+		};
+	};
+	type HarnessDetails = ReturnType<typeof describe>;
+
+	const formatTimestamp = (value?: string | null) => {
+		if (!value || !Number.isFinite(Date.parse(value))) return undefined;
+		const date = new Date(value);
+		return <time dateTime={value} title={date.toLocaleString(i18n.resolvedLanguage)}>{date.toLocaleString(i18n.resolvedLanguage, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</time>;
+	};
+
+	const diagnosticsPanel = (details: HarnessDetails) => {
+		const { agentId, job } = details;
+		if (!details.hasDiagnostics) return null;
+		return <div className="space-y-2">
+			<Button type="button" aria-expanded={expandedDiagnostics[agentId] === true} size="sm" variant="ghost" onClick={() => setExpandedDiagnostics((current) => ({ ...current, [agentId]: !current[agentId] }))}>
+				{t(expandedDiagnostics[agentId] ? "settings.harness.hideDiagnostics" : "settings.harness.showDiagnostics")}
+			</Button>
+			{expandedDiagnostics[agentId] ? <div className="rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) p-3 text-xs text-settings-muted">
+				{job?.method ? <p><span className="font-medium text-settings-label">{t("settings.harness.method")}:</span> {job.method}</p> : null}
+				{job?.expectedDestination ? <p className="break-all"><span className="font-medium text-settings-label">{t("settings.harness.expectedDestination")}:</span> {job.expectedDestination}</p> : null}
+				{job?.error ? <p className="mt-2 whitespace-pre-wrap text-error">{job.error}</p> : null}
+				{job?.output ? <pre className="settings-thin-scrollbar mt-2 max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words font-mono">{job.output}</pre> : null}
+				<Button type="button" className="mt-2" size="sm" variant="outline" onClick={() => job && void copyDiagnostics(agentId, job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
+			</div> : null}
+		</div>;
+	};
+
+	const accountTab = (details: HarnessDetails) => {
+		const { agentId, plan, isInstalled, authPlan, rowAuthWorkflow, authBusy } = details;
+		const methodLabel = details.maintenanceMethod?.label;
+		const showAccount = isInstalled;
+		return <div className="flex flex-col gap-5">
+			<HarnessDetailGroup title={t("settings.harness.installation")}>
+				<HarnessDetailRow
+					label={isInstalled ? t(details.versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")
+						: details.installationPending ? t("settings.harness.installationUnknown") : t("settings.harness.notInstalled")}
+					description={isInstalled ? (methodLabel ? t("settings.harness.installedWith", { method: methodLabel }) : undefined) : details.installNote}
+				>
+					{isInstalled ? <span className="break-all font-mono text-xs text-settings-label">{details.versionText}{details.versionUnverified && details.currentVersion ? ` · ${t("settings.harness.unverified")}` : ""}</span> : null}
+					{isInstalled && details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-settings-accent">{t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}</span> : null}
+					{isInstalled && !details.updateUnknown && !details.updateAvailable && !details.busy ? <span className="text-xs text-settings-muted">{t("settings.harness.latest")}</span> : null}
+					{details.installationAction}
+				</HarnessDetailRow>
+				{isInstalled && details.updatedAt ? <HarnessDetailRow label={t("settings.harness.lastUpdated")}>
+					<span className="text-xs text-settings-label">{formatTimestamp(details.updatedAt)}</span>
+				</HarnessDetailRow> : null}
+			</HarnessDetailGroup>
+			{isInstalled && details.showUpdate && !details.canUpdate && details.updateReason !== details.uninstallReason ? <p className="-mt-3 text-xs text-settings-muted">{details.updateReason}</p> : null}
+			{isInstalled && details.updateUnknown && !details.advisoryQuery?.isPending && !details.manualOnly ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.updateCheckUnavailable")}</p> : null}
+
+			{showAccount || rowAuthWorkflow ? <HarnessDetailGroup title={t("settings.harness.account")}>
+				<HarnessDetailRow label={authBusy && rowAuthWorkflow ? t("settings.harness.loginInProgress") : details.authSummary}>
+					{details.accountAction}
+				</HarnessDetailRow>
+			</HarnessDetailGroup> : null}
+			{authPlan?.action === "instructions" && authPlan.documentationUrl ? <div><Button type="button" size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}><BookOpen aria-hidden="true" />{t("settings.harness.instructions")}</Button></div> : null}
+			{rowAuthWorkflow ? <HarnessAuthTerminalPanel
+				workflow={rowAuthWorkflow}
+				hostId={hostId}
+				onClose={() => void closeAuth(rowAuthWorkflow)}
+				onRetry={() => void closeAuth(rowAuthWorkflow).then((closed) => { if (closed) void startAuth(agentId); })}
+				onTerminalState={(state) => {
+					if (state === "exited" && authWorkflowRef.current?.phase === "running") void finishAuth(rowAuthWorkflow);
+				}}
+			/> : null}
+
+			{details.rowError && !operationRequest ? <p role="alert" className="text-xs text-error">{details.rowError}</p> : null}
+			{details.jobFailed && !authBusy ? <div><Button type="button" size="sm" variant="outline" disabled={details.busy} onClick={() => void verifyInstall(agentId)}>{t("settings.harness.verifyAgain")}</Button></div> : null}
+			{diagnosticsPanel(details)}
+
+			{isInstalled && !authBusy && !details.busy ? <HarnessDetailGroup title={t("settings.harness.dangerZone")}>
+				<HarnessDetailRow
+					label={t("settings.harness.uninstallAgent", { agent: agentLabel(agentId) })}
+					description={details.canUninstall && methodLabel ? t("settings.harness.uninstallWith", { method: methodLabel }) : undefined}
+				>
+					<Button type="button" size="sm" variant="outline" className="h-8 border-error/40 px-3 text-error hover:border-error/60 hover:bg-error/10 hover:text-error focus-visible:ring-2 focus-visible:ring-error" disabled={!details.canUninstall} aria-describedby={!details.canUninstall ? `harness-uninstall-reason-${agentId}` : undefined} onClick={() => requestInstalledOperation(agentId, "uninstall")}>
+						<Trash2 aria-hidden="true" />{t(details.failed && details.currentOperation === "uninstall" ? "settings.harness.retryUninstall" : "settings.harness.uninstall")}
+					</Button>
+				</HarnessDetailRow>
+			</HarnessDetailGroup> : null}
+			{isInstalled && !authBusy && !details.busy && !details.canUninstall ? (plan?.uninstallGuide && (!details.methodId || details.methodId === "official-installer")
+				? <div id={`harness-uninstall-reason-${agentId}`} className="-mt-3"><HarnessUninstallGuide agent={agentLabel(agentId)} guide={plan.uninstallGuide} fallbackDocsUrl={plan.documentationUrl} /></div>
+				: <p id={`harness-uninstall-reason-${agentId}`} className="-mt-3 text-xs text-settings-muted">{details.uninstallReason}</p>) : null}
+		</div>;
+	};
+
+	const healthText = (details: HarnessDetails) => {
+		const { agentId, readinessAgent, advisory } = details;
+		return [
+			`${agentLabel(agentId)} health`,
+			`Installation: ${readinessAgent?.installation.state ?? "unknown"}${readinessAgent?.installation.checkedAt ? ` (checked ${readinessAgent.installation.checkedAt})` : ""}`,
+			readinessAgent?.installation.reason ? `Installation reason: ${readinessAgent.installation.reason}` : "",
+			`Authentication: ${readinessAgent?.authentication.state ?? "unknown"}`,
+			readinessAgent?.authentication.reason ? `Authentication reason: ${readinessAgent.authentication.reason}` : "",
+			`Installed version: ${details.currentVersion ?? "unknown"}`,
+			`Latest version: ${advisory?.latestVersion ?? "unknown"}`,
+			advisory?.status ? `Update status: ${advisory.status}${advisory.reason ? ` (${advisory.reason})` : ""}` : "",
+			`Maintenance method: ${details.methodId || "unverified"}`,
+		].filter(Boolean).join("\n");
+	};
+
+	const healthTab = (details: HarnessDetails) => {
+		const { agentId, readinessAgent, advisory, isInstalled } = details;
+		const installation = readinessAgent?.installation;
+		const installState: { tone: HarnessTone; label: string } = installation?.state === "installed" ? { tone: "ok", label: t("settings.harness.installed") }
+			: installation?.state === "not_installed" ? { tone: "off", label: t("settings.harness.notInstalled") }
+			: { tone: "off", label: t("settings.harness.installationUnknown") };
+		const authState = details.authStatus === "authorized" || details.authStatus === "configured" || details.authStatus === "not_applicable" ? "ok"
+			: details.authStatus === "unauthorized" ? "error" : "off";
+		const checking = agents.isFetching || Boolean(details.advisoryQuery?.isFetching);
+		const notChecked = <span className="text-xs text-settings-muted">{t("settings.harness.health.notChecked")}</span>;
+		return <div className="flex flex-col gap-5">
+			<HarnessDetailGroup title={t("settings.harness.health.status")}>
+				<HarnessDetailRow label={t("settings.harness.installation")} description={installation?.state !== "installed" ? installation?.reason || undefined : undefined}>
+					<HarnessStateText tone={installState.tone}>{installState.label}</HarnessStateText>
+				</HarnessDetailRow>
+				<HarnessDetailRow label={t("settings.harness.health.authentication")} description={authState === "error" ? readinessAgent?.authentication.reason || undefined : undefined}>
+					<HarnessStateText tone={isInstalled ? authState : "off"}>{isInstalled ? details.authSummary : t("settings.harness.health.notChecked")}</HarnessStateText>
+				</HarnessDetailRow>
+				<HarnessDetailRow label={t("settings.harness.health.lastChecked")}>
+					{formatTimestamp(installation?.checkedAt) ? <span className="text-xs text-settings-label">{formatTimestamp(installation?.checkedAt)}{installation?.freshness === "stale" ? ` · ${t("settings.harness.health.stale")}` : ""}</span> : notChecked}
+				</HarnessDetailRow>
+			</HarnessDetailGroup>
+			<HarnessDetailGroup title={t("settings.harness.health.details")}>
+				<HarnessDetailRow label={t(details.versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")}>
+					{isInstalled && details.currentVersion ? <span className="break-all font-mono text-xs text-settings-label">{details.versionText}</span> : notChecked}
+				</HarnessDetailRow>
+				<HarnessDetailRow label={t("settings.harness.health.latestVersion")}>
+					{advisory?.latestVersion ? <span className="break-all font-mono text-xs text-settings-label">{versionLabel(advisory.latestVersion)}</span> : notChecked}
+					{details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-settings-accent">{t("settings.harness.updateAvailable")}</span> : null}
+				</HarnessDetailRow>
+				<HarnessDetailRow label={t("settings.harness.installMethod")}>
+					<span className="text-xs text-settings-label">{details.maintenanceMethod?.label ?? (isInstalled ? t("settings.harness.health.notVerified") : "—")}</span>
+				</HarnessDetailRow>
+				<HarnessDetailRow label={t("settings.harness.health.updateChecked")}>
+					{formatTimestamp(advisory?.checkedAt) ? <span className="text-xs text-settings-label">{formatTimestamp(advisory?.checkedAt)}</span> : notChecked}
+				</HarnessDetailRow>
+				{details.job?.expectedDestination ? <HarnessDetailRow label={t("settings.harness.expectedDestination")}>
+					<span className="min-w-0 break-all font-mono text-xs text-settings-label">{details.job.expectedDestination}</span>
+				</HarnessDetailRow> : null}
+			</HarnessDetailGroup>
+			<div className="flex flex-wrap gap-2">
+				<Button type="button" size="sm" variant="outline" disabled={checking || details.busy} onClick={() => refreshInstalledAgent(agentId)}>
+					{checking ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
+					{t(checking ? "settings.harness.health.checking" : "settings.harness.health.checkAgain")}
+				</Button>
+				<Button type="button" size="sm" variant="ghost" onClick={() => void (async () => {
+					const machine = await machineText(queryClient, hostId ? client : undefined);
+					await copyText(agentId, [healthText(details), machine].filter(Boolean).join("\n\n"));
+				})()}>
+					{copiedAgent === agentId ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{t(copiedAgent === agentId ? "settings.harness.copied" : "settings.harness.copyDiagnostics")}
+				</Button>
+			</div>
+			<p className="-mt-2 text-xs text-settings-muted">{t("settings.harness.health.hint")}</p>
+		</div>;
+	};
+
+	const selectedDetails = selectedAgentId ? describe(selectedAgentId) : null;
+
 	return (
 		<>
 			{installers.error || authPlans.error || agents.error || jobs.error ? (
@@ -776,200 +1088,177 @@ function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: 
 				</div>
 			) : null}
 
-			<div className="settings-grouped-rows flex w-full flex-col" ref={rowsRef}>
-			{rows.map((agentId) => {
-				const plan = plans.get(agentId);
-				const job = jobMap.get(agentId);
-				const isInstalled = installed.has(agentId);
-				const availableMethods = plan?.methods.filter((method) => method.available) ?? [];
-				const installMethod = availableMethods.find((method) => method.recommended) ?? availableMethods[0];
-				const methodId = operationMethodId(agentId);
-				const maintenanceMethod = plan?.methods.find((method) => method.id === methodId);
-				const canUpdate = supportsOperation(maintenanceMethod, "update");
-				const canUninstall = supportsOperation(maintenanceMethod, "uninstall");
-				// A harness with no installable method (built into AO, or an installer
-				// that must run interactively here) explains itself; ownership is not the question.
-				const manualOnly = Boolean(plan?.methods.length) && plan!.methods.every((method) => method.id === "manual");
-				const ownershipReason = !methodId ? (manualOnly && plan?.reason ? plan.reason : t("settings.harness.ownershipUnknown")) : undefined;
-				const updateReason = ownershipReason || maintenanceMethod?.updateReason || maintenanceMethod?.reason || t("settings.harness.updateUnsupported");
-				const uninstallReason = ownershipReason || maintenanceMethod?.uninstallReason || maintenanceMethod?.reason || t("settings.harness.uninstallUnsupported");
-				const advisoryQuery = advisoryMap.get(agentId);
-				const advisory = advisoryQuery?.data;
-				const updateUnknown = advisoryQuery?.isError || !hasDefinitiveUpdateStatus(advisory);
-				// A failed background fetch is not a new observation. Keep the last
-				// action; the click-time probe still verifies target and ownership.
-				const updateAvailable = hasConfirmedHarnessUpdate(advisory);
-				const currentVersion = advisory?.currentVersion?.trim();
-				const pending = pendingAgentIds.has(agentId);
-				const active = isActive(job);
-				const busy = pending || active;
-				const actionError = actionErrors[agentId];
-				const attempt = operationAttempts[agentId];
-				const currentOperation = attempt && (pending || actionError || attempt.startedAt === job?.startedAt) ? attempt.operation : undefined;
-				const jobFailed = job?.status === "failed" || job?.status === "unsupported" || job?.status === "interrupted";
-				const failed = jobFailed || Boolean(actionError);
-				const isExpanded = expandedAgentId === agentId && !busy;
-				const readinessAgent = readinessAgents.get(agentId);
-				const incompatibleVersionReason = readinessAgent?.installation.reasonCode === "install_incompatible_version"
-					? readinessAgent.installation.reason : undefined;
-				// Unknown inventory is not proof that installing is safe. Preserve the
-				// existing cached-readiness fallback when fetching the snapshot fails.
-				const installationPending = !agents.error && (agents.isPending || readinessAgent?.installation.state === "unknown");
-				const authPlan = agentAuthPlans.get(agentId);
-				const isSetupAction = authPlan?.action === "setup";
-				const authState = authStates[agentId];
-				const authStatus = readinessAgent?.authentication.state;
-				const rowAuthWorkflow = authWorkflow?.agentId === agentId ? authWorkflow : null;
-				const authBusy = Boolean(rowAuthWorkflow || authState?.pending);
-				const needsLogin = needsAuthentication(agentId);
-				const showUpdate = updateAvailable;
-				const hasDiagnostics = Boolean(job && jobFailed && (job.error || job.output || job.method || job.expectedDestination));
-				const authSummary = authStatus === "configured" ? t("settings.harness.configured")
-					: authStatus === "authorized" ? t(isSetupAction ? "settings.harness.configured" : "settings.harness.loggedIn")
-					: authStatus === "not_applicable" || (!authPlans.isPending && (!authPlan || authPlan.action === "instructions")) ? t("settings.harness.installed")
-					: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))
-					: authStatus === "unauthorized" ? t(isSetupAction ? "settings.harness.notConfigured" : "settings.harness.loginRequired")
-					: t(isSetupAction ? "settings.harness.configurationUnknown" : "settings.harness.loginUnknown");
-				const progressLabel = job?.status === "verifying" ? t("settings.harness.verifying")
-					: currentOperation === "update" ? t("settings.harness.updating")
-					: currentOperation === "uninstall" ? t("settings.harness.uninstalling")
-					: currentOperation === "install" ? t("settings.harness.installing") : t("settings.harness.working");
-				const rowError = actionError ?? authState?.error ?? (jobFailed ? job?.error ?? t("settings.harness.installFailed") : undefined);
-				const authProgress = rowAuthWorkflow?.phase === "verifying" ? t("settings.harness.checkingLogin")
-					: rowAuthWorkflow?.phase === "closing" ? t("settings.harness.authClosing")
-					: rowAuthWorkflow && rowAuthWorkflow.phase !== "running" ? rowAuthWorkflow.reason ?? t("settings.harness.loginUnknown")
-					: t("settings.harness.loginInProgress");
-				const statusLabel = isInstalled ? rowError ?? (authBusy ? authProgress : authSummary)
-					: installationPending ? t("settings.harness.installationUnknown")
-					: job?.status === "interrupted" ? t("settings.harness.interrupted")
-					: rowError ?? incompatibleVersionReason ?? (!installMethod ? plan?.reason ?? t("settings.harness.manualRequired") : "");
-				const versionText = currentVersion ? versionLabel(currentVersion) : t("settings.harness.versionUnavailable");
-				const versionUnverified = advisoryQuery?.isError || job?.status === "verifying" || (currentOperation === "update" && (busy || failed));
-				const updatedAt = lastUpdatedAt[agentId];
-				const actionClass = "h-8 min-w-20 px-3 focus-visible:ring-2 focus-visible:ring-ring";
-				const primaryAction = busy ? (
-					<span role="status"><Button type="button" size="sm" variant="outline" className={actionClass} disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{progressLabel}</Button></span>
-				) : authBusy ? (
-					<Button type="button" size="sm" className={actionClass} disabled>
-						{rowAuthWorkflow && !["running", "verifying", "closing"].includes(rowAuthWorkflow.phase) ? null : <LoaderCircle className="animate-spin" aria-hidden="true" />}
-						{rowAuthWorkflow?.phase === "verifying" ? t("settings.harness.checkingLogin") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
-					</Button>
-				) : !isInstalled ? (
-					!installationPending && installMethod ? <Button type="button" data-harness-primary-action="" size="sm" className={actionClass} onClick={() => void startAgentOperation(agentId, installMethod.id, "install")}>
-						{failed ? t("settings.harness.retryInstall") : t("settings.harness.install")}
-					</Button> : !installationPending && plan?.command ? <Button type="button" size="sm" variant="outline" className={actionClass} onClick={() => void copyText(agentId, plan.command!)}>
-						{copiedAgent === agentId ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{t(copiedAgent === agentId ? "settings.harness.copied" : "settings.harness.copyCommand")}
-					</Button> : null
-				) : needsLogin ? (
-					<Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="sm" className={actionClass} disabled={!authPlan?.available || Boolean(authWorkflow)} onClick={() => void startAuth(agentId)}>
-						{t(isSetupAction ? "settings.harness.setup" : authState?.error ? "settings.harness.retryLogin" : "settings.harness.login")}
-					</Button>
-				) : showUpdate && !authPlans.isPending && !authPlans.isError ? (
-					canUpdate ? <Button type="button" data-harness-primary-action="" size="sm" className={actionClass} onClick={() => requestInstalledOperation(agentId, "update")}>
-						{t(failed && currentOperation === "update" ? "settings.harness.retryUpdate" : "settings.harness.update")}
-					</Button> : plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="sm" variant="outline" className={actionClass} title={updateReason} onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button> : null
-				) : null;
-				const identity = <>
-					<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
-					<span className="min-w-0 flex-1 text-left">
-						<span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-							<span className="text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</span>
-							{isInstalled ? <span className="break-all font-mono text-[11px] text-settings-muted" title={t(versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")}>{versionText}{versionUnverified && currentVersion ? ` · ${t("settings.harness.unverified")}` : ""}</span> : null}
-						</span>
-						{statusLabel || (isInstalled && updateAvailable) ? <span className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 text-xs text-settings-muted">
-							{statusLabel ? <span className={cn("break-words", Boolean(rowError) && "text-error")}>{statusLabel}</span> : null}
-							{isInstalled && updateAvailable ? <>
-								{statusLabel ? <span aria-hidden="true">·</span> : null}
-								<span className="font-medium text-settings-accent">{t("settings.harness.versionAvailable", { version: versionLabel(advisory!.latestVersion!) })}</span>
-							</> : null}
-						</span> : null}
-					</span>
-				</>;
-				const diagnostics = hasDiagnostics ? <div className="space-y-2">
-					<Button type="button" aria-expanded={expandedDiagnostics[agentId] === true} size="sm" variant="ghost" onClick={() => setExpandedDiagnostics((current) => ({ ...current, [agentId]: !current[agentId] }))}>
-						{t(expandedDiagnostics[agentId] ? "settings.harness.hideDiagnostics" : "settings.harness.showDiagnostics")}
-					</Button>
-					{expandedDiagnostics[agentId] ? <div className="rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) p-3 text-xs text-settings-muted">
-						{job?.method ? <p><span className="font-medium text-settings-label">{t("settings.harness.method")}:</span> {job.method}</p> : null}
-						{job?.expectedDestination ? <p className="break-all"><span className="font-medium text-settings-label">{t("settings.harness.expectedDestination")}:</span> {job.expectedDestination}</p> : null}
-						{job?.error ? <p className="mt-2 whitespace-pre-wrap text-error">{job.error}</p> : null}
-						{job?.output ? <pre className="settings-thin-scrollbar mt-2 max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words font-mono">{job.output}</pre> : null}
-						<Button type="button" className="mt-2" size="sm" variant="outline" onClick={() => job && void copyDiagnostics(agentId, job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
-					</div> : null}
-				</div> : null;
-				return <div
-					aria-labelledby={`harness-agent-${agentId}`}
-					className={cn("settings-row-bar min-h-14 flex-wrap gap-3 transition-[background-color,box-shadow] duration-200", isExpanded && "harness-row-expanded", highlightedAgentId === agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
-					data-agent={agentId}
-					data-focus-highlighted={highlightedAgentId === agentId ? "" : undefined}
-					key={agentId}
-					tabIndex={-1}
+			{selectedDetails ? (
+				<div
+					className="flex w-full flex-col gap-4"
+					data-agent={selectedDetails.agentId}
+					data-focus-highlighted={highlightedAgentId === selectedDetails.agentId ? "" : undefined}
+					ref={detailRef}
 				>
-					{isInstalled ? <button
-						type="button"
-						className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-						aria-label={t(isExpanded ? "settings.harness.collapseOptions" : "settings.harness.expandOptions", { agent: agentLabel(agentId) })}
-						aria-expanded={isExpanded}
-						aria-controls={`harness-options-${agentId}`}
-						disabled={busy}
-						onClick={() => setExpandedAgentId(isExpanded ? null : agentId)}
-					>{identity}</button> : <div className="flex min-w-0 flex-1 items-center gap-3">{identity}</div>}
-					{primaryAction}
-					{isInstalled || rowAuthWorkflow ? <div id={`harness-options-${agentId}`} hidden={!isExpanded} className={cn("basis-full space-y-3 pl-10", !isExpanded && "hidden")}>
-						{!authBusy ? <>
-							<div className="flex flex-wrap items-center gap-x-5 gap-y-3">
-								<dl className="flex min-w-0 flex-1 flex-wrap items-start gap-x-6 gap-y-2 text-xs">
-									<div><dt className="text-settings-muted">{t(versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")}</dt><dd className="mt-1 break-all font-mono text-settings-label">{versionText}{versionUnverified && currentVersion ? ` · ${t("settings.harness.unverified")}` : ""}</dd></div>
-									<div><dt className="text-settings-muted">{t("settings.harness.lastUpdated")}</dt><dd className="mt-1 text-settings-label">
-										{updatedAt ? <time dateTime={updatedAt} title={new Date(updatedAt).toLocaleString(i18n.resolvedLanguage)}>{new Date(updatedAt).toLocaleDateString(i18n.resolvedLanguage, { day: "numeric", month: "short", year: "numeric" })}</time> : t("settings.harness.notRecorded")}
-									</dd></div>
-								</dl>
-								<Button type="button" size="sm" variant="outline" className="h-8 border-error/40 px-3 text-error hover:border-error/60 hover:bg-error/10 hover:text-error focus-visible:ring-2 focus-visible:ring-error" disabled={!canUninstall} aria-describedby={!canUninstall ? `harness-uninstall-reason-${agentId}` : undefined} onClick={() => requestInstalledOperation(agentId, "uninstall")}>
-									<Trash2 aria-hidden="true" />{t(failed && currentOperation === "uninstall" ? "settings.harness.retryUninstall" : "settings.harness.uninstall")}
-								</Button>
-							</div>
-							{!canUninstall ? <p id={`harness-uninstall-reason-${agentId}`} className="text-xs text-settings-muted">{uninstallReason}</p> : null}
-							{showUpdate && !canUpdate && updateReason !== uninstallReason ? <p className="text-xs text-settings-muted">{updateReason}</p> : null}
-							{updateUnknown && !advisoryQuery?.isPending && !manualOnly ? <p className="text-xs text-settings-muted">{t("settings.harness.updateCheckUnavailable")}</p> : null}
-						</> : null}
-						{rowError && !operationRequest ? <p role="alert" className="text-xs text-error">{rowError}</p> : null}
-						{jobFailed && !authBusy ? <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void verifyInstall(agentId)}>{t("settings.harness.verifyAgain")}</Button> : null}
-						{authPlan?.action === "instructions" && authPlan.documentationUrl ? <Button type="button" size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}><BookOpen aria-hidden="true" />{t("settings.harness.instructions")}</Button> : null}
-						{diagnostics}
-						{rowAuthWorkflow ? <HarnessAuthTerminalPanel
-							workflow={rowAuthWorkflow}
-							hostId={hostId}
-							onClose={() => void closeAuth(rowAuthWorkflow)}
-							onRetry={() => void closeAuth(rowAuthWorkflow).then((closed) => { if (closed) void startAuth(agentId); })}
-							onTerminalState={(state) => {
-								if (state === "exited" && authWorkflowRef.current?.phase === "running") void finishAuth(rowAuthWorkflow);
-							}}
-						/> : null}
-					</div> : failed ? <div className="basis-full space-y-2 pl-10">
-						<Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void verifyInstall(agentId)}>{t("settings.harness.verifyAgain")}</Button>
-						{diagnostics}
-					</div> : null}
-				</div>;
-			})}
-				{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
-			</div>
-		<ConfirmDialog
-			open={operationRequest !== null}
-			title={t("settings.harness.uninstallConfirmTitle", { agent: operationRequest ? agentLabel(operationRequest.agentId) : "" })}
-			description={null}
-			confirmLabel={t("settings.harness.uninstall")}
-			destructive
-			busy={requestBusy}
-			confirmDisabled={!canConfirmOperation}
-			error={operationRequest ? actionErrors[operationRequest.agentId] : null}
-			onConfirm={() => {
-				if (!operationRequest || !canConfirmOperation) return;
-				void startAgentOperation(operationRequest.agentId, operationRequest.method, "uninstall").then((started) => { if (started) setOperationRequest(null); });
-			}}
-			onOpenChange={(open) => { if (!open && !requestBusy) setOperationRequest(null); }}
-		/>
+					<div>
+						<Button type="button" size="sm" variant="ghost" className="-ml-2 h-7 gap-1 px-2 text-settings-muted" onClick={closeDetail}>
+							<ChevronLeft aria-hidden="true" />{t("settings.harness.allHarnesses")}
+						</Button>
+					</div>
+					<div
+						className={cn("-mx-2 flex items-center gap-3 rounded-lg px-2 py-1 transition-[background-color,box-shadow] duration-200", highlightedAgentId === selectedDetails.agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
+					>
+						<AgentAvatar className="size-8 shrink-0" decorative provider={selectedDetails.agentId} />
+						<span className="min-w-0 flex-1 text-base font-semibold text-settings-label" id={`harness-agent-${selectedDetails.agentId}`}>{agentLabel(selectedDetails.agentId)}</span>
+					</div>
+					<Tabs value={detailTab} onValueChange={(value) => setDetailTab(value as HarnessDetailTab)}>
+						<TabsList aria-label={t("settings.harness.detailTabs", { agent: agentLabel(selectedDetails.agentId) })}>
+							<TabsTrigger value="account">{t("settings.harness.tabAccount")}</TabsTrigger>
+							<TabsTrigger value="models">{t("settings.harness.tabModels")}</TabsTrigger>
+							<TabsTrigger value="health">{t("settings.harness.tabHealth")}</TabsTrigger>
+						</TabsList>
+						<TabsContent value="account" className="pt-4">{accountTab(selectedDetails)}</TabsContent>
+						<TabsContent value="models" className="pt-4">
+							<HarnessModelsPanel
+								agentId={selectedDetails.agentId}
+								hostId={hostId}
+								installed={selectedDetails.isInstalled}
+								needsLogin={needsAuthentication(selectedDetails.agentId)}
+								onOpenAccount={() => setDetailTab("account")}
+							/>
+						</TabsContent>
+						<TabsContent value="health" className="pt-4">{healthTab(selectedDetails)}</TabsContent>
+					</Tabs>
+				</div>
+			) : (
+				<div className="settings-grouped-rows flex w-full flex-col">
+					{rows.map((agentId) => {
+						const details = describe(agentId);
+						return <button
+							type="button"
+							aria-label={t("settings.harness.openDetails", { agent: agentLabel(agentId) })}
+							className="settings-row-bar min-h-14 w-full gap-3 text-left outline-none hover:bg-(--color-bg-settings-row-hover) focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+							data-agent={agentId}
+							key={agentId}
+							onClick={() => openDetail(agentId)}
+						>
+							<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
+							<span className="min-w-0 flex-1">{details.identityText}</span>
+							{details.busy ? <span role="status" className="flex shrink-0 items-center gap-1.5 text-xs text-settings-muted"><LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />{details.progressLabel}</span>
+								: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" aria-hidden="true" /> : null}
+							<ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />
+						</button>;
+					})}
+					{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
+				</div>
+			)}
+			<ConfirmDialog
+				open={operationRequest !== null}
+				title={t("settings.harness.uninstallConfirmTitle", { agent: operationRequest ? agentLabel(operationRequest.agentId) : "" })}
+				description={null}
+				confirmLabel={t("settings.harness.uninstall")}
+				destructive
+				busy={requestBusy}
+				confirmDisabled={!canConfirmOperation}
+				error={operationRequest ? actionErrors[operationRequest.agentId] : null}
+				onConfirm={() => {
+					if (!operationRequest || !canConfirmOperation) return;
+					void startAgentOperation(operationRequest.agentId, operationRequest.method, "uninstall").then((started) => { if (started) setOperationRequest(null); });
+				}}
+				onOpenChange={(open) => { if (!open && !requestBusy) setOperationRequest(null); }}
+			/>
 		</>
 	);
+}
+
+type HarnessDetailTab = "account" | "models" | "health";
+type HarnessTone = "ok" | "error" | "off";
+
+function HarnessDetailGroup({ title, children }: { title: string; children: ReactNode }) {
+	return <section className="flex flex-col gap-1.5">
+		<h3 className="text-xs font-medium leading-4 text-settings-muted">{title}</h3>
+		<div className="settings-grouped-rows flex w-full flex-col">{children}</div>
+	</section>;
+}
+
+function HarnessDetailRow({ label, description, children }: { label: string; description?: string; children?: ReactNode }) {
+	return <div className="settings-row-bar min-h-12 flex-wrap gap-x-4 gap-y-1">
+		<span className="min-w-0 flex-1">
+			<span className="block text-sm leading-5 text-settings-label">{label}</span>
+			{description ? <span className="mt-0.5 block text-pretty text-xs leading-4 text-settings-muted">{description}</span> : null}
+		</span>
+		<span className="flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">{children}</span>
+	</div>;
+}
+
+function HarnessStateText({ tone, children }: { tone: HarnessTone; children: ReactNode }) {
+	return <span className="inline-flex items-center gap-2 text-xs text-settings-label">
+		<span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", tone === "ok" ? "bg-success" : tone === "error" ? "bg-error" : "bg-settings-muted/50")} />
+		{children}
+	</span>;
+}
+
+/** Read-only view of the models a harness reports. Defaults stay per project and per task. */
+function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAccount }: {
+	agentId: AgentId;
+	hostId?: string;
+	installed: boolean;
+	needsLogin: boolean;
+	onOpenAccount: () => void;
+}) {
+	const { i18n, t } = useTranslation();
+	const queryClient = useQueryClient();
+	const options = agentModelsQueryOptions(agentId, "", hostId);
+	const catalog = useQuery({ ...options, enabled: installed && !needsLogin });
+	const [refreshing, setRefreshing] = useState(false);
+	const [refreshError, setRefreshError] = useState<string | null>(null);
+	const agent = agentLabel(agentId);
+	if (!installed || needsLogin) {
+		return <div className="flex flex-col items-center gap-3 px-3 py-8 text-center">
+			<p className="text-sm text-settings-muted">{t(installed ? "settings.harness.models.needsLogin" : "settings.harness.models.notInstalled", { agent })}</p>
+			<Button type="button" size="sm" variant="outline" onClick={onOpenAccount}>{t("settings.harness.tabAccount")}</Button>
+		</div>;
+	}
+	const refresh = async () => {
+		setRefreshing(true);
+		setRefreshError(null);
+		try {
+			queryClient.setQueryData(options.queryKey, await refreshAgentModels(agentId, "", hostId));
+		} catch (error) {
+			setRefreshError(error instanceof Error ? error.message : t("settings.harness.models.loadFailed"));
+		} finally {
+			setRefreshing(false);
+		}
+	};
+	const data = catalog.data;
+	const updated = data?.lastSuccessAt ?? data?.fetchedAt;
+	const busy = refreshing || data?.refreshState === "refreshing" || data?.refreshState === "queued";
+	const error = refreshError ?? (catalog.error instanceof Error ? catalog.error.message : undefined) ?? data?.refreshError;
+	return <div className="flex flex-col gap-3">
+		<div className="flex items-center justify-between gap-3">
+			<h3 className="text-xs font-medium leading-4 text-settings-muted">{t("settings.harness.models.title")}</h3>
+			<span className="flex items-center gap-2 text-xs text-settings-muted">
+				{updated && Number.isFinite(Date.parse(updated)) ? <span>{t("settings.harness.models.updated", { time: new Date(updated).toLocaleString(i18n.resolvedLanguage, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) })}</span> : null}
+				<Button type="button" size="sm" variant="ghost" className="h-7 px-2" disabled={busy || catalog.isPending} onClick={() => void refresh()}>
+					{busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
+					{t(busy ? "settings.harness.models.refreshing" : "settings.harness.models.refresh")}
+				</Button>
+			</span>
+		</div>
+		{error ? <p role="alert" className="text-xs text-error">{error}</p> : null}
+		{catalog.isPending ? <p className="flex items-center gap-2 px-3 py-6 text-sm text-settings-muted"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("settings.harness.models.loading")}</p>
+			: !data?.models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.models.empty")}</p>
+			: <ul className="settings-grouped-rows flex w-full flex-col" aria-label={t("settings.harness.models.title")}>
+				{data.models.map((model) => <li key={model.id} className="settings-row-bar min-h-12 gap-4">
+					<span className="min-w-0 flex-1">
+						<span className="flex flex-wrap items-center gap-2 text-sm leading-5 text-settings-label">
+							{model.label}
+							{model.isDefault ? <span className="rounded-sm bg-(--color-bg-settings-input) px-1.5 py-0.5 text-[11px] text-settings-muted">{t("settings.harness.models.default")}</span> : null}
+						</span>
+						{model.label !== model.id ? <span className="block break-all font-mono text-[11px] text-settings-muted">{model.id}</span> : null}
+					</span>
+					<span className="shrink-0 text-right text-xs text-settings-muted">
+						{model.efforts?.length ? t("settings.harness.models.efforts", { levels: model.efforts.join(" · ") }) : t("settings.harness.models.noEffort")}
+					</span>
+				</li>)}
+			</ul>}
+		<p className="text-xs text-settings-muted">{t("settings.harness.models.hint")}</p>
+	</div>;
 }
 
 /**
