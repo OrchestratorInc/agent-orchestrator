@@ -13,6 +13,12 @@ auto to `auto`, and bypass-permissions to Codewhale's explicit `--yolo` mode.
 Model overrides are passed through `--model`, and the picker is populated from
 `codewhale models --json`.
 
+Auth readiness reads `codewhale auth status` for the active provider's
+credential source and reports a present credential as `configured`. It then
+runs `codewhale doctor --probe-api`, Codewhale's own live authenticated
+connectivity check, and reports `authorized` only when that check passes; an
+offline, rejected, or errored probe keeps the `configured` result.
+
 AO places its private standing instructions in the ignored, AO-owned workspace
 rule `.codewhale/rules/ao-agent-orchestrator.md`. It refuses to overwrite a
 foreign file at that path. The instructions are never sent as a user message.
