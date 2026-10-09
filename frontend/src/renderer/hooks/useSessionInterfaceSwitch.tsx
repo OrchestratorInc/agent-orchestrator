@@ -68,6 +68,21 @@ type ChatLeaveLock = {
 	needsReconciliation?: boolean;
 };
 
+/** Which of the four switch-screen steps an active handoff phase is on. */
+function switchStageForPhase(phase: Transition["phase"] | undefined): number {
+	switch (phase) {
+		case "source_stopping":
+		case "source_stopped":
+			return 1;
+		case "target_starting":
+			return 2;
+		case "activating":
+			return 3;
+		default:
+			return 0;
+	}
+}
+
 function chatLeaveTransitionMatches(lock: ChatLeaveLock, transition: Transition | undefined): transition is Transition {
 	return Boolean(
 		transition &&
@@ -238,10 +253,20 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		(interfaceSwitch.transition?.policy === "drain" &&
 			["requested", "preflighting", "draining"].includes(interfaceSwitch.transition.phase))
 	));
-	const cloudLoader = Boolean(isCloud && !cloudDrainWaiting && (
+	// Waiting for the agent to finish its turn keeps the old surface (and its
+	// cancel action) visible; every later phase is the switch itself.
+	const drainWaiting = Boolean(
+		(interfaceSwitch.starting && interfaceSwitch.startingPolicy === "drain") ||
+		(interfaceSwitch.transition?.policy === "drain" &&
+			["requested", "preflighting", "draining"].includes(interfaceSwitch.transition.phase)),
+	);
+	// The switch screen covers the session the moment a switch is requested, so
+	// the handoff reads as instant while the daemon finishes the work behind it.
+	const switchLoader = Boolean(!drainWaiting && (
 		interfaceSwitch.starting || activeTransition || interfaceSwitch.settling ||
 		(interfaceSwitch.transition?.phase === "completed" && session?.mode !== interfaceSwitch.transition.targetMode)
 	));
+	const switchStage = activeTransition ? switchStageForPhase(interfaceSwitch.transition?.phase) : interfaceSwitch.starting ? 0 : 3;
 	const hasNotice = interfaceTransitionHasUnacknowledgedNotice(interfaceSwitch.transition) &&
 		!(isCloud && session?.mode === "tui" &&
 			interfaceSwitch.transition?.errorCode === "SOURCE_DRAIN_FAILED" &&
@@ -453,7 +478,8 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	return {
 		activeTransition,
 		agentInputDisabled: Boolean((interfaceSwitch.starting || activeTransition) && !cloudDrainWaiting && session?.mode === "tui"),
-		cloudLoader,
+		switchLoader,
+		switchStage,
 		confirmUnsafeDraftLeave,
 		controllerTransitioning,
 		dialogs,

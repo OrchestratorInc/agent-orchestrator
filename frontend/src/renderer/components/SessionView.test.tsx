@@ -2503,13 +2503,27 @@ describe("SessionView", () => {
 		};
 
 		render(<SessionView sessionId="sess-1" />);
-		const loader = screen.getByTestId("cloud-interface-switch-loader-screen");
+		const loader = screen.getByTestId("interface-switch-loader-screen");
 		expect(loader).toBeInTheDocument();
 		expect(within(loader).getByRole("status", { name: label })).toBeInTheDocument();
 		expect(loader).not.toHaveTextContent("Stopping controller");
-		expect(loader.querySelector(".lucide-loader-circle.animate-spin")).not.toBeNull();
-		expect(loader.querySelector("[data-testid='multi-step-loader']")).toBeNull();
-		expect(loader.querySelector(".text-success")).toBeNull();
+		expect(loader.querySelector(".lucide-loader-circle.animate-spin")).toBeNull();
+		expect(within(loader).getByTestId("multi-step-loader-step")).toHaveTextContent(
+			targetMode === "chat" ? "Stopping the terminal agent" : "Stopping the chat agent",
+		);
+	});
+
+	it.each([
+		["tui", "chat", "Saving the terminal session"],
+		["chat", "tui", "Saving your conversation"],
+	] as const)("covers a local %s session with the switch checklist as soon as the switch to %s starts", (mode, targetMode, firstStep) => {
+		const session = workerSession("sess-1");
+		session.mode = mode;
+		interfaceTransitionState.status = { supported: true, targetMode };
+		interfaceTransitionState.starting = true;
+		render(<SessionView sessionId="sess-1" />);
+		const loader = screen.getByTestId("interface-switch-loader-screen");
+		expect(within(loader).getByTestId("multi-step-loader-step")).toHaveTextContent(firstStep);
 	});
 
 	it.each([
@@ -2530,7 +2544,7 @@ describe("SessionView", () => {
 		};
 
 		const view = render(<SessionView sessionId="sess-1" />);
-		expect(screen.queryByTestId("cloud-interface-switch-loader-screen")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("interface-switch-loader-screen")).not.toBeInTheDocument();
 		expect(screen.getByRole("status", { name: label })).toBeInTheDocument();
 		if (mode === "tui") {
 			expect(screen.getByTestId("terminal-center")).toHaveAttribute("data-agent-input-disabled", "false");
@@ -2540,7 +2554,7 @@ describe("SessionView", () => {
 
 		interfaceTransitionState.status.transition!.phase = "source_stopping";
 		view.rerender(<SessionView sessionId="sess-1" />);
-		expect(screen.getByTestId("cloud-interface-switch-loader-screen")).toBeInTheDocument();
+		expect(screen.getByTestId("interface-switch-loader-screen")).toBeInTheDocument();
 	});
 
 	it("shows the compact wait spinner while a Cloud drain request is pending", () => {
@@ -2551,7 +2565,7 @@ describe("SessionView", () => {
 		interfaceTransitionState.starting = true;
 		interfaceTransitionState.startingPolicy = "drain";
 		render(<SessionView sessionId="sess-1" />);
-		expect(screen.queryByTestId("cloud-interface-switch-loader-screen")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("interface-switch-loader-screen")).not.toBeInTheDocument();
 		expect(screen.getByTestId("terminal-center")).toHaveAttribute("data-agent-input-disabled", "false");
 		expect(screen.getByRole("button", { name: "Switch to chat UI" }).querySelector(".animate-spin")).not.toBeNull();
 	});
@@ -2563,9 +2577,9 @@ describe("SessionView", () => {
 		interfaceTransitionState.status = { supported: true, targetMode: "chat" };
 		interfaceTransitionState.starting = true;
 		render(<SessionView sessionId="sess-1" />);
-		const loader = screen.getByTestId("cloud-interface-switch-loader-screen");
+		const loader = screen.getByTestId("interface-switch-loader-screen");
 		expect(within(loader).getByRole("status", { name: "Switching to Chat UI" })).toBeInTheDocument();
-		expect(loader.querySelector(".lucide-loader-circle.animate-spin")).not.toBeNull();
+		expect(within(loader).getByTestId("multi-step-loader-step")).toHaveTextContent("Saving the terminal session");
 	});
 
 	it("keeps the Cloud switch loader over the stopped terminal until the session mode catches up", () => {
@@ -2581,10 +2595,10 @@ describe("SessionView", () => {
 			},
 		};
 		const view = render(<SessionView sessionId="sess-1" />);
-		expect(screen.getByTestId("cloud-interface-switch-loader-screen")).toBeInTheDocument();
+		expect(screen.getByTestId("interface-switch-loader-screen")).toBeInTheDocument();
 		session.mode = "chat";
 		view.rerender(<SessionView sessionId="sess-1" />);
-		expect(screen.queryByTestId("cloud-interface-switch-loader-screen")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("interface-switch-loader-screen")).not.toBeInTheDocument();
 	});
 
 	it("hides interface switching when the Cloud offering is disabled", () => {
