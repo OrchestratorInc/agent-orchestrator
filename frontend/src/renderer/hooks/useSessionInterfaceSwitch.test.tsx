@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	resetStartError: vi.fn(),
 	context: vi.fn(),
 	status: undefined as SessionInterfaceTransitionStatus | undefined,
+	settling: false,
 }));
 
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ client: { getSession: mocks.getSession } }) }));
@@ -30,7 +31,7 @@ vi.mock("./useSessionInterfaceTransition", async (importOriginal) => ({
 			start: mocks.start,
 			starting: false,
 			startingPolicy: undefined,
-			settling: false,
+			settling: mocks.settling,
 			startError: undefined,
 			resetStartError: mocks.resetStartError,
 			cancel: vi.fn(),
@@ -72,6 +73,7 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		mocks.resetStartError.mockReset();
 		mocks.context.mockReset();
 		mocks.status = { supported: true, targetMode: "chat" };
+		mocks.settling = false;
 	});
 
 	it.each(["codex", "claude-code", "cursor"] as const)("preserves %s model and effort when leaving Cloud Chat", async (provider) => {
@@ -90,6 +92,29 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 			targetMode: "tui", policy: "drain", historyPolicy: "strict",
 			model: "selected-model", reasoningEffort: "high",
 		}));
+	});
+
+	it("does not treat a handoff that finished before the view opened as a switch in progress", () => {
+		mocks.settling = true;
+		mocks.status = {
+			supported: true,
+			targetMode: "tui",
+			transition: {
+				id: "finished-earlier",
+				sessionId: "session-1",
+				sourceMode: "tui",
+				targetMode: "chat",
+				policy: "drain",
+				historyPolicy: "strict",
+				phase: "completed",
+				createdAt: "2026-10-01T00:00:00Z",
+				updatedAt: "2026-10-01T00:00:01Z",
+			},
+		};
+		const { cloud: _cloud, ...localSession } = cloudSession;
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, mode: "chat" }));
+		expect(result.current.optimisticTarget).toBeUndefined();
+		expect(result.current.controllerTransitioning).toBe(false);
 	});
 
 	it("keeps source Chat visible while a Cloud drain waits and scopes transition to its org", () => {

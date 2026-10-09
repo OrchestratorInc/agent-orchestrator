@@ -234,6 +234,15 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	}, [confirmedDraftDiscard, interfaceSwitch.transition, owner]);
 
 	const activeTransition = interfaceTransitionIsActive(interfaceSwitch.transition);
+	// A handoff that was already finished when this view opened is history, not a
+	// switch in progress; only one seen running (or started here) may settle. This
+	// keeps plain navigation from replaying the switch animations.
+	const liveTransitions = useRef(new Map<string, boolean>());
+	const liveKey = interfaceSwitch.transition?.id ? `${owner}:${interfaceSwitch.transition.id}` : "";
+	if (liveKey && !liveTransitions.current.has(liveKey)) {
+		liveTransitions.current.set(liveKey, activeTransition || interfaceSwitch.starting);
+	}
+	const settling = Boolean(liveKey && liveTransitions.current.get(liveKey) && interfaceSwitch.settling);
 	const cloudDrainWaiting = Boolean(isCloud && (
 		(interfaceSwitch.starting && interfaceSwitch.startingPolicy === "drain") ||
 		(interfaceSwitch.transition?.policy === "drain" &&
@@ -262,7 +271,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		? undefined
 		: pendingTarget ?? (interfaceSwitch.starting
 			? interfaceSwitch.startingTarget
-			: activeTransition || (interfaceSwitch.settling && interfaceSwitch.transition?.phase === "completed")
+			: activeTransition || (settling && interfaceSwitch.transition?.phase === "completed")
 				? interfaceSwitch.transition?.targetMode
 				: undefined);
 	const hasNotice = interfaceTransitionHasUnacknowledgedNotice(interfaceSwitch.transition) &&
@@ -277,13 +286,13 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		(interfaceSwitch.transition?.targetMode === "tui" &&
 			((activeTransition && !cloudDrainWaiting) || interfaceSwitch.transition.phase === "completed")) ||
 		(interfaceSwitch.transition?.targetMode === "chat" &&
-			(activeTransition || interfaceSwitch.settling))
+			(activeTransition || settling))
 	));
 	const target = (activeTransition ? interfaceSwitch.transition?.targetMode : interfaceSwitch.status?.targetMode)
 		?? (session?.mode === "chat" ? "tui" : "chat");
 	const newWorkDisabled = Boolean(session?.mode === "chat" && (
 		(interfaceSwitch.starting && target === "tui") ||
-		(interfaceSwitch.transition?.targetMode === "tui" && (activeTransition || interfaceSwitch.settling))
+		(interfaceSwitch.transition?.targetMode === "tui" && (activeTransition || settling))
 	));
 	const dialogOpen = Boolean(dialogScope && session && dialogScope.owner === owner && dialogScope.targetMode === target);
 	useEffect(() => setDialogScope(undefined), [owner, target]);
