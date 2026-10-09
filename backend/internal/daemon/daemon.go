@@ -10,12 +10,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -179,6 +177,10 @@ func enqueueAgentSwitchWorkerShutdownTimeout(
 // Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
 // graceful shutdown through the HTTP server and background workers.
 func Run() error {
+	return withDaemonContext(run)
+}
+
+func run(ctx context.Context, stop context.CancelFunc) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -229,7 +231,7 @@ func Run() error {
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
-	defer func() { _ = store.Close() }()
+	defer shutdownStep(cfg.ShutdownTimeout, log, "sqlite store", func(context.Context) error { return store.Close() })
 	if _, err := store.RequeueClaimedReports(context.Background()); err != nil {
 		return fmt.Errorf("recover report delivery claims: %w", err)
 	}
@@ -271,7 +273,7 @@ func Run() error {
 	telemetryCfg := cfg
 	telemetryCfg.Telemetry.Events = policyCoordinator.EventsEnabled()
 	telemetrySink := newTelemetrySink(telemetryCfg, store, log)
-	defer func() { _ = telemetrySink.Close(context.Background()) }()
+	defer shutdownStep(cfg.ShutdownTimeout, log, "telemetry", telemetrySink.Close)
 	// Daemon Sentry: captures genuine 5xx/panics with their Go stack. Gated on
 	// Initialize the transport once so a later policy opt-in works without a
 	// daemon restart. The policy gate remains fail-closed and is checked before
@@ -295,12 +297,12 @@ func Run() error {
 		},
 	})
 
-	// signal.NotifyContext cancels ctx on SIGINT/SIGTERM, which drives the
-	// graceful shutdown inside Server.Run and stops the background goroutines.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	policyCoordinator.StartWatcher(ctx)
-	defer func() { _ = policyCoordinator.CloseAndDrain(context.Background()) }()
+	defer func() {
+		stop()
+		shutdownStep(cfg.ShutdownTimeout, log, "agent switch reporting policy", policyCoordinator.CloseAndDrain)
+	}()
 	// Constructing the synchronous sender performs no I/O. The hard production
 	// gate keeps this dormant until the separate privacy and destination release
 	// gates are approved; each call remains guarded by durable consent below.
@@ -315,6 +317,7 @@ func Run() error {
 	if agentSwitchDispatcher != nil {
 		agentSwitchDispatcher.Start(ctx)
 		defer func() {
+			stop()
 			stopContext, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 			defer cancel()
 			if stopErr := agentSwitchDispatcher.Stop(stopContext); stopErr != nil {
@@ -335,7 +338,10 @@ func Run() error {
 	runtimeAdapter := runtimeselect.New(log, cfg.RunFilePath)
 	managedPreview := previewserver.New(log, cfg.DataDir)
 	termMgr := terminal.NewManager(runtimeAdapter, cdcPipe.Broadcaster, log)
-	defer termMgr.Close()
+	defer shutdownStep(cfg.ShutdownTimeout, log, "terminal manager", func(context.Context) error {
+		termMgr.Close()
+		return nil
+	})
 
 	// The agent messenger sends validated user input to the session's live
 	// runtime pane. Keep this path small until durable inbox semantics are needed.
@@ -369,9 +375,7 @@ func Run() error {
 	agents, err := buildAgentResolver(defaultAgent, log)
 	if err != nil {
 		stop()
-		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
-			log.Error("cdc pipeline shutdown", "err", cdcErr)
-		}
+		shutdownStep(cfg.ShutdownTimeout, log, "cdc pipeline", func(context.Context) error { return cdcPipe.Stop() })
 		return fmt.Errorf("wire agent resolver: %w", err)
 	}
 
@@ -538,10 +542,11 @@ func Run() error {
 	codexHome, err := codexPlugin.NativeSessionConfigDir(ctx, nil)
 	if err != nil {
 		stop()
-		lcStack.Stop()
-		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
-			log.Error("cdc pipeline shutdown", "err", cdcErr)
-		}
+		shutdownStep(cfg.ShutdownTimeout, log, "lifecycle", func(context.Context) error {
+			lcStack.Stop()
+			return nil
+		})
+		shutdownStep(cfg.ShutdownTimeout, log, "cdc pipeline", func(context.Context) error { return cdcPipe.Stop() })
 		return fmt.Errorf("resolve device-global Codex home: %w", err)
 	}
 	codexOperationGate := codexops.NewGate()
@@ -566,12 +571,25 @@ func Run() error {
 	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
 	if err != nil {
 		stop()
-		lcStack.Stop()
-		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
-			log.Error("cdc pipeline shutdown", "err", cdcErr)
-		}
+		shutdownStep(cfg.ShutdownTimeout, log, "lifecycle", func(context.Context) error {
+			lcStack.Stop()
+			return nil
+		})
+		shutdownStep(cfg.ShutdownTimeout, log, "cdc pipeline", func(context.Context) error { return cdcPipe.Stop() })
 		return fmt.Errorf("wire session service: %w", err)
 	}
+	testingDeps, err := configuredTestingProviders(cfg)
+	if err != nil {
+		return fmt.Errorf("wire testing providers: %w", err)
+	}
+	testingDeps.Log = log
+	testingSvc := wireTestingService(cfg, store, wiredSessMgr, testingDeps)
+	defer func() {
+		stop()
+		if err := testingSvc.Close(); err != nil {
+			log.Error("testing shutdown cleanup", "err", err)
+		}
+	}()
 	sessionSvc.SetChatProviderPreserver(chatSvc.PreservesProviderOnRestart)
 	memoryReader := usagesvc.NewMemoryReader(usagesvc.MemoryReaderDeps{
 		Store: store, Runtime: runtimeAdapter, Reviewers: store, CacheTTL: 2 * time.Second,
@@ -645,7 +663,10 @@ func Run() error {
 	reportDeliveryDone := reportCoordinator.Start(ctx)
 	defer func() {
 		stop()
-		<-reportDeliveryDone
+		shutdownStep(cfg.ShutdownTimeout, log, "report delivery", func(context.Context) error {
+			<-reportDeliveryDone
+			return nil
+		})
 	}()
 	lcStack.trackerDone = startTrackerIntake(ctx, cfg, store, sessionSvc, tracker, log)
 
@@ -663,10 +684,11 @@ func Run() error {
 	})
 	if err := systemInstall.Recover(ctx); err != nil {
 		stop()
-		lcStack.Stop()
-		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
-			log.Error("cdc pipeline shutdown", "err", cdcErr)
-		}
+		shutdownStep(cfg.ShutdownTimeout, log, "lifecycle", func(context.Context) error {
+			lcStack.Stop()
+			return nil
+		})
+		shutdownStep(cfg.ShutdownTimeout, log, "cdc pipeline", func(context.Context) error { return cdcPipe.Stop() })
 		return fmt.Errorf("recover harness install jobs: %w", err)
 	}
 	sessMgr.SetHarnessUseGate(systemInstall)
@@ -723,7 +745,10 @@ func Run() error {
 		}
 		defer func() {
 			stop()
-			usagePricing.Wait()
+			shutdownStep(cfg.ShutdownTimeout, log, "usage pricing", func(context.Context) error {
+				usagePricing.Wait()
+				return nil
+			})
 		}()
 	}
 	if roots, rootsErr := usagesvc.DefaultSourceRoots(ctx, cfg.DataDir); rootsErr != nil {
@@ -809,11 +834,15 @@ func Run() error {
 	// restoration follows in the background after the listener is live.
 	if reconcileErr := sessMgr.ReconcileStartupSafety(ctx); reconcileErr != nil {
 		stop()
-		managedPreview.Close()
-		lcStack.Stop()
-		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
-			log.Error("cdc pipeline shutdown", "err", cdcErr)
-		}
+		shutdownStep(cfg.ShutdownTimeout, log, "managed preview", func(context.Context) error {
+			managedPreview.Close()
+			return nil
+		})
+		shutdownStep(cfg.ShutdownTimeout, log, "lifecycle", func(context.Context) error {
+			lcStack.Stop()
+			return nil
+		})
+		shutdownStep(cfg.ShutdownTimeout, log, "cdc pipeline", func(context.Context) error { return cdcPipe.Stop() })
 		return fmt.Errorf("reconcile sessions on boot: %w", reconcileErr)
 	}
 	agentSvc.WarmCodexAccounts()
@@ -908,6 +937,7 @@ func Run() error {
 	}
 
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
+		Testing:            testingSvc,
 		Projects:           projectSvc,
 		HostID:             hostIdentity.HostID,
 		Endpoints:          bs,
@@ -961,10 +991,11 @@ func Run() error {
 	})
 	if err != nil {
 		stop()
-		lcStack.Stop()
-		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
-			log.Error("cdc pipeline shutdown", "err", cdcErr)
-		}
+		shutdownStep(cfg.ShutdownTimeout, log, "lifecycle", func(context.Context) error {
+			lcStack.Stop()
+			return nil
+		})
+		shutdownStep(cfg.ShutdownTimeout, log, "cdc pipeline", func(context.Context) error { return cdcPipe.Stop() })
 		return err
 	}
 	previewDone := preview.NewPoller(store, sessionSvc, "http://"+srv.Addr().String(), preview.PollerConfig{Logger: log}).Start(ctx)
@@ -1083,6 +1114,11 @@ func Run() error {
 	// via defer) avoids the LIFO trap where a Stop() that blocks on ctx-cancel
 	// runs before the cancel: a non-signal exit path would hang otherwise.
 	stop()
+	// Testing owns ephemeral targets and recorders. Finish their evidence and
+	// stop the private desktop driver before waiting on other shutdown workers.
+	if err := testingSvc.Close(); err != nil {
+		log.Error("testing shutdown cleanup", "err", err)
+	}
 	if agentSwitchDispatcher != nil {
 		dispatcherStopContext, dispatcherStopCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		if err := agentSwitchDispatcher.Stop(dispatcherStopContext); err != nil {
@@ -1096,7 +1132,10 @@ func Run() error {
 	}
 	installStopCancel()
 	if startupReconcileDone != nil {
-		<-startupReconcileDone
+		shutdownStep(cfg.ShutdownTimeout, log, "startup reconciliation", func(context.Context) error {
+			<-startupReconcileDone
+			return nil
+		})
 	}
 	backgroundStopCtx, backgroundStopCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	if err := sessMgr.WaitBackgroundWorkers(backgroundStopCtx); err != nil {
@@ -1120,8 +1159,14 @@ func Run() error {
 		log.Error("Codex account switch worker shutdown", "err", err)
 	}
 	codexSwitchCancel()
-	managedPreview.Close()
-	<-previewDone
+	shutdownStep(cfg.ShutdownTimeout, log, "managed preview", func(context.Context) error {
+		managedPreview.Close()
+		return nil
+	})
+	shutdownStep(cfg.ShutdownTimeout, log, "preview poller", func(context.Context) error {
+		<-previewDone
+		return nil
+	})
 	// Detach chat controllers before stopping the lifecycle stack. Persistent
 	// provider hosts deliberately survive this daemon and preserve in-flight
 	// turns; the replacement daemon reconnects to the same initialized stream and
@@ -1131,12 +1176,21 @@ func Run() error {
 	chatSvc.StopAll(chatStopCtx)
 	chatCancel()
 	if usageDone != nil {
-		<-usageDone
+		shutdownStep(cfg.ShutdownTimeout, log, "usage pipeline", func(context.Context) error {
+			<-usageDone
+			return nil
+		})
 	}
 	if usagePricing != nil {
-		usagePricing.Wait()
+		shutdownStep(cfg.ShutdownTimeout, log, "usage pricing", func(context.Context) error {
+			usagePricing.Wait()
+			return nil
+		})
 	}
-	lcStack.Stop()
+	shutdownStep(cfg.ShutdownTimeout, log, "lifecycle", func(context.Context) error {
+		lcStack.Stop()
+		return nil
+	})
 	// Tear the tailnet proxy down before the listener it fronts. `tailscale
 	// serve --bg` state lives in tailscaled and outlives this process, so
 	// leaving it would keep publishing a local port that no longer has the
@@ -1154,9 +1208,7 @@ func Run() error {
 	if err := lan.Stop(lanStopCtx); err != nil {
 		log.Error("mobile LAN listener shutdown", "err", err)
 	}
-	if err := cdcPipe.Stop(); err != nil {
-		log.Error("cdc pipeline shutdown", "err", err)
-	}
+	shutdownStep(cfg.ShutdownTimeout, log, "cdc pipeline", func(context.Context) error { return cdcPipe.Stop() })
 	return runErr
 }
 
