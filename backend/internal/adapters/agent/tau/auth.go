@@ -47,7 +47,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	output, err := p.probe(ctx, binary, "providers")
+	output, err := p.probe(ctx, binary, nil, "providers")
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}

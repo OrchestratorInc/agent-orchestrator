@@ -17,7 +17,7 @@ func TestProviderCredentialsAreNotAuthorization(t *testing.T) {
 		{"missing", ports.AgentAuthStatusUnknown},
 	} {
 		p := fixturePlugin()
-		p.run = func(context.Context, string, ...string) ([]byte, error) {
+		p.run = func(context.Context, string, map[string]string, ...string) ([]byte, error) {
 			return []byte("*\topenai\topenai\tgpt-test\tgpt-test,gpt-other\tOPENAI_API_KEY\t" + tt.credential + "\thttps://example.invalid\t60s\tretries=2\tretry_delay=1s\n"), nil
 		}
 		got, err := p.AuthStatus(context.Background())

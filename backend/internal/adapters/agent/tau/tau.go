@@ -27,7 +27,7 @@ const managedSentinel = "agent-orchestrator: managed tau integration"
 var nativeIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 var versionPattern = regexp.MustCompile(`(?m)^tau ([0-9]+\.[0-9]+\.[0-9]+)\s*$`)
 
-type commandRunner func(context.Context, string, ...string) ([]byte, error)
+type commandRunner func(context.Context, string, map[string]string, ...string) ([]byte, error)
 
 // Plugin preserves the user's provider settings and native session store.
 type Plugin struct {
@@ -78,7 +78,7 @@ func (*Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (
 
 // GetLaunchCommand starts a new foreground native TUI session.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
-	cmd, err := p.command(ctx, cfg.WorkspacePath, cfg.Config, cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.AllowedTools, cfg.DisallowedTools)
+	cmd, err := p.command(ctx, cfg.WorkspacePath, cfg.Config, cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.AllowedTools, cfg.DisallowedTools, cfg.Env)
 	if err != nil {
 		return nil, err
 	}
@@ -100,11 +100,11 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if !nativeIDPattern.MatchString(id) {
 		return nil, false, fmt.Errorf("tau: invalid native session ID")
 	}
-	cmd, err := p.command(ctx, cfg.Session.WorkspacePath, cfg.Config, cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.AllowedTools, cfg.DisallowedTools)
+	cmd, err := p.command(ctx, cfg.Session.WorkspacePath, cfg.Config, cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.AllowedTools, cfg.DisallowedTools, cfg.Env)
 	if err != nil {
 		return nil, false, err
 	}
-	if err := p.validateRestoreWorkspace(ctx, cmd[0], id, cfg.Session.WorkspacePath); err != nil {
+	if err := p.validateRestoreWorkspace(ctx, cmd[0], id, cfg.Session.WorkspacePath, cfg.Env); err != nil {
 		return nil, false, err
 	}
 	return append(cmd, "--session", id), true, nil
@@ -112,8 +112,8 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 
 // Tau restores its stored cwd even when --cwd is supplied. Check the native
 // metadata through its local CLI before allowing that session to own AO's pane.
-func (p *Plugin) validateRestoreWorkspace(ctx context.Context, binary, id, workspace string) error {
-	output, err := p.probe(ctx, binary, "sessions")
+func (p *Plugin) validateRestoreWorkspace(ctx context.Context, binary, id, workspace string, env map[string]string) error {
+	output, err := p.probe(ctx, binary, env, "sessions")
 	if err != nil {
 		return fmt.Errorf("tau: read native session metadata: %w", err)
 	}
@@ -146,7 +146,7 @@ func (p *Plugin) validateRestoreWorkspace(ctx context.Context, binary, id, works
 	return nil
 }
 
-func (p *Plugin) command(ctx context.Context, workspace string, cfg ports.AgentConfig, permissions ports.PermissionMode, prompt, promptFile string, allowed, denied []string) ([]string, error) {
+func (p *Plugin) command(ctx context.Context, workspace string, cfg ports.AgentConfig, permissions ports.PermissionMode, prompt, promptFile string, allowed, denied []string, env map[string]string) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func (p *Plugin) command(ctx context.Context, workspace string, cfg ports.AgentC
 	if err != nil {
 		return nil, err
 	}
-	out, err := p.probe(ctx, binary, "--version")
+	out, err := p.probe(ctx, binary, env, "--version")
 	if err != nil {
 		return nil, fmt.Errorf("tau: version probe: %w", err)
 	}
@@ -225,13 +225,17 @@ func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return path, err
 }
 
-func (p *Plugin) probe(ctx context.Context, binary string, args ...string) ([]byte, error) {
+func (p *Plugin) probe(ctx context.Context, binary string, env map[string]string, args ...string) ([]byte, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if p.run != nil {
-		return p.run(probeCtx, binary, args...)
+		return p.run(probeCtx, binary, env, args...)
 	}
 	cmd := aoprocess.CommandContext(probeCtx, binary, args...)
+	cmd.Env = os.Environ()
+	for key, value := range env {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
 	cmd.WaitDelay = 2 * time.Second
 	return cmd.Output()
 }
