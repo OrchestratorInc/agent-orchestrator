@@ -714,7 +714,7 @@ function TerminalBootStatus({ subject }: { subject: string }) {
 	const step = Math.min(Math.floor(tick / 15), BOOT_STATUS_STEPS.length - 1);
 	return (
 		<div className="flex items-center gap-2.5 text-terminal-dim" role="status" aria-live="polite">
-			<span aria-hidden="true" className="inline-block w-[1ch] text-center text-terminal">{BOOT_SPINNER_FRAMES[tick % BOOT_SPINNER_FRAMES.length]}</span>
+			<span aria-hidden="true" className="inline-block w-[1ch] shrink-0 text-center font-mono">{BOOT_SPINNER_FRAMES[tick % BOOT_SPINNER_FRAMES.length]}</span>
 			<span>{BOOT_STATUS_STEPS[step].replace("{subject}", subject)}</span>
 		</div>
 	);

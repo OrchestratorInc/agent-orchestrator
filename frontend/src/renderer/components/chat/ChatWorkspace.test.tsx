@@ -2023,6 +2023,17 @@ describe("ChatWorkspace timeline", () => {
 		expect(placement).toHaveClass("justify-end");
 	});
 
+	it("fades the transcript in only when messages load during an interface switch", () => {
+		const loaded = { ...chatFixtureEmpty, items: [humanMessage("hello")] };
+		const navigation = render(<ChatWorkspace snapshot={chatFixtureEmpty} />);
+		navigation.rerender(<ChatWorkspace snapshot={loaded} />);
+		expect(document.querySelector(".chat-transcript-reveal")).toBeNull();
+		navigation.unmount();
+		const arrival = render(<ChatWorkspace snapshot={chatFixtureEmpty} session={chatSession} controllerTransitioning />);
+		arrival.rerender(<ChatWorkspace snapshot={loaded} session={chatSession} controllerTransitioning />);
+		expect(document.querySelector(".chat-transcript-reveal")).not.toBeNull();
+	});
+
 	it("centers the composer while arriving in a chat with no messages yet", () => {
 		render(
 			<ChatWorkspace

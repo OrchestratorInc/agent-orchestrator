@@ -578,6 +578,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				auxiliaryTabOrder={auxiliaryTabOrder}
 				onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange}
 				controllerTransitioning={controllerTransitioning}
+				loadingQuietly={optimisticChat && !optimisticArrival}
 				agentResuming={agentResuming}
 				hasOlder={hasOlder}
 				loadingOlder={isLoadingOlder}

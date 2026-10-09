@@ -625,6 +625,7 @@ describe("TerminalPane empty states", () => {
 		const view = renderPane(orchestrator);
 		try {
 			expect(screen.getByRole("status")).toHaveTextContent("Preparing the orchestrator");
+			console.log("HTMLDUMP", screen.getByRole("status").outerHTML);
 			expect(screen.queryByText(/worker terminal/i)).not.toBeInTheDocument();
 		} finally {
 			view.restore();

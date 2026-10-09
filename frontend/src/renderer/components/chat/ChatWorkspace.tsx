@@ -311,6 +311,8 @@ export interface ChatWorkspaceProps {
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** Suppress a transient stopped snapshot while a mode handoff installs Chat. */
 	controllerTransitioning?: boolean;
+	/** The conversation is still being read on a plain open or navigation; hold the composer without the startup shimmer. */
+	loadingQuietly?: boolean;
 	/**
 	 * A stopped agent is being resumed after the chat opened. Unlike a mode
 	 * handoff, the history is final, so it stays readable; only sending waits.
@@ -572,6 +574,7 @@ function ChatWorkspaceContent({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
+	loadingQuietly,
 	agentResuming = false,
 	startingSteps,
 	settingsReady = true,
@@ -1385,7 +1388,7 @@ function ChatWorkspaceContent({
 	// at the bottom and stays there for the rest of the session.
 	const orchestratorStarting = sessionRole === "orchestrator" && startupState !== "failed" && (
 		startupState === "provisioning" || agentResuming ||
-		snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"
+		(!loadingQuietly && (snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"))
 	);
 	const currentSetupStep = provisionSteps?.find((step) => step.status === "running")?.id;
 	const setupPlaceholder = currentSetupStep === "fetch" ? "Getting the latest code"
@@ -1663,6 +1666,7 @@ function ChatWorkspaceContent({
 									rollbackDisabled={Boolean(turn || rollbackPending || newWorkDisabled)}
 									localEchos={localEchos}
 									startup={sessionRole === "orchestrator" ? undefined : startup}
+									arriving={arrivingInChat}
 								/>
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
@@ -1727,7 +1731,7 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat}
-										disabled={(orchestratorStarting || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorStarting || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											arrivingInChat
 												? arrivingPlaceholder
@@ -2312,6 +2316,7 @@ function Timeline({
 	rollbackDisabled = false,
 	localEchos = [],
 	startup,
+	arriving = false,
 }: {
 	annotationNavigationRef: MutableRefObject<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>;
 	snapshot: ConversationSnapshot;
@@ -2342,10 +2347,13 @@ function Timeline({
 	localEchos?: ConversationLocalEcho[];
 	/** A session that is starting, or failed to start, and its setup checklist. */
 	startup?: ComponentProps<typeof SessionStartup> & { openingTurnId?: string };
+	/** An interface switch is bringing this conversation in; only then does the transcript fade in. */
+	arriving?: boolean;
 }) {
 	const hasTranscript = snapshot.items.length > 0;
-	const startedEmpty = useRef(!hasTranscript);
-	const revealTranscript = startedEmpty.current && hasTranscript;
+	const arrivedEmpty = useRef(false);
+	if (arriving && !hasTranscript) arrivedEmpty.current = true;
+	const revealTranscript = arrivedEmpty.current && hasTranscript;
 	const translateDraft = useChatDraftTranslation();
 	const uiSessionId = draftScope.sessionId;
 	const scroller = useRef<HTMLDivElement>(null);
