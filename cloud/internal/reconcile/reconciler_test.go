@@ -700,3 +700,109 @@ func TestWokenPassDoesNotWaitForABusyTickerPass(t *testing.T) {
 		t.Fatalf("claim #%d, want the woken pass (#3)", n)
 	}
 }
+
+// resumingProvider reports running as soon as it is started, as a Freestyle
+// VM does once its memory is restored.
+type resumingProvider struct{ lifecycleProvider }
+
+func (p *resumingProvider) Start(ctx context.Context, id sandbox.ID) error {
+	p.environment.State = sandbox.StateRunning
+	return p.lifecycleProvider.Start(ctx, id)
+}
+
+func (p *resumingProvider) Resume(ctx context.Context, id sandbox.ID) error {
+	return p.Start(ctx, id)
+}
+
+func TestFreestyleRestoreRefreshesWorkerInSamePass(t *testing.T) {
+	store := &lifecycleStore{}
+	provider := &resumingProvider{lifecycleProvider{environment: sandbox.Environment{
+		ID: "vm-1", State: sandbox.StatePaused,
+	}}}
+	record := runningRecord(false)
+	record.Provider = sandbox.ProviderFreestyle
+	record.ObservedState = domain.SandboxObservedStopped
+	if err := testReconciler(store, provider).reconcileSandbox(context.Background(), record); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if provider.starts != 1 {
+		t.Fatalf("starts = %d, want 1", provider.starts)
+	}
+	// Without the inline wait the pass would end in "restoring" and the worker
+	// refresh would wait for a later pass.
+	if got := store.observations; len(got) != 1 || got[0] != domain.SandboxObservedBootstrapping {
+		t.Fatalf("observations = %v, want [%s]", got, domain.SandboxObservedBootstrapping)
+	}
+}
+
+func TestCoderRestoreKeepsTickDrivenRefresh(t *testing.T) {
+	store := &lifecycleStore{}
+	provider := &resumingProvider{lifecycleProvider{environment: sandbox.Environment{
+		ID: "workspace-1", State: sandbox.StateStopped,
+	}}}
+	if err := testReconciler(store, provider).reconcileSandbox(context.Background(), runningRecord(false)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := store.observations; len(got) != 1 || got[0] != domain.SandboxObservedRestoring {
+		t.Fatalf("observations = %v, want [%s]", got, domain.SandboxObservedRestoring)
+	}
+}
+
+// uniqueProvider rejects a second Create for the same session, as Freestyle
+// does for a taken slug, and counts the lookups the reconciler makes.
+type uniqueProvider struct {
+	lifecycleProvider
+	exists  bool
+	lookups int
+	creates int
+}
+
+func (p *uniqueProvider) CreateRejectsDuplicates() {}
+
+func (p *uniqueProvider) Create(context.Context, sandbox.Spec) (sandbox.Environment, error) {
+	p.creates++
+	if p.exists {
+		return sandbox.Environment{}, sandbox.ErrAlreadyExists
+	}
+	return p.environment, nil
+}
+
+func (p *uniqueProvider) FindBySession(context.Context, string) (sandbox.Environment, bool, error) {
+	p.lookups++
+	return p.environment, p.exists, nil
+}
+
+func provisionRecord() domain.Sandbox {
+	return domain.Sandbox{
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
+		DesiredState:  domain.SandboxDesiredRunning,
+		ObservedState: domain.SandboxObservedRequested,
+	}
+}
+
+func TestProvisionSkipsLookupForDuplicateRejectingProvider(t *testing.T) {
+	store := &lifecycleStore{}
+	provider := &uniqueProvider{lifecycleProvider: lifecycleProvider{environment: sandbox.Environment{
+		ID: "vm-1", State: sandbox.StateRunning,
+	}}}
+	_ = testReconciler(store, provider).provision(context.Background(), provisionRecord(), provider)
+	if provider.lookups != 0 || provider.creates != 1 {
+		t.Fatalf("lookups = %d, creates = %d; want 0, 1", provider.lookups, provider.creates)
+	}
+}
+
+func TestProvisionAdoptsSandboxOnDuplicateConflict(t *testing.T) {
+	store := &lifecycleStore{}
+	provider := &uniqueProvider{exists: true, lifecycleProvider: lifecycleProvider{environment: sandbox.Environment{
+		ID: "vm-1", State: sandbox.StateRunning,
+	}}}
+	if err := testReconciler(store, provider).provision(context.Background(), provisionRecord(), provider); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if provider.lookups != 1 {
+		t.Fatalf("lookups = %d, want 1 after the conflict", provider.lookups)
+	}
+	if got := store.observations; len(got) != 1 || got[0] != domain.SandboxObservedProvisioning {
+		t.Fatalf("observations = %v, want adoption as provisioning", got)
+	}
+}

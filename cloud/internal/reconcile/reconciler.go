@@ -687,6 +687,16 @@ func (r *Reconciler) reconcileSandbox(ctx context.Context, record domain.Sandbox
 			}
 			return r.fail(ctx, record, err)
 		}
+		// A Freestyle resume restores memory in place in about a second. Wait
+		// for it inside this claim, as provision does for a new VM, so the
+		// worker refresh runs the moment the sandbox is up instead of after a
+		// full requeue. Providers whose restore takes minutes (Coder) keep the
+		// tick-driven path rather than holding the pass.
+		if record.Provider == sandbox.ProviderFreestyle {
+			if resumed, ok := r.awaitRunning(ctx, provider, environment); ok {
+				return r.refreshRestoredWorker(ctx, record, resumed, provider)
+			}
+		}
 		// A NodeOps resume retains the sandbox filesystem, including the
 		// previously uploaded worker binary. Keep the distinct restoring state
 		// until the provider confirms it is running, so that next probe can
@@ -1227,13 +1237,17 @@ func (r *Reconciler) provision(
 	provider sandbox.Provider,
 ) error {
 	// Dedupe guard: a reconciler that crashed between Create and the durable
-	// write must adopt the sandbox it already made, never create a second.
-	existing, found, err := provider.FindBySession(ctx, record.SessionID)
-	if err != nil {
-		return r.fail(ctx, record, err)
-	}
-	if found {
-		return r.observe(ctx, record, string(existing.ID), domain.SandboxObservedProvisioning, "", time.Second)
+	// write must adopt the sandbox it already made, never create a second. A
+	// provider that rejects a duplicate Create is probed only on that conflict.
+	_, rejectsDuplicates := provider.(sandbox.DuplicateRejectingCreator)
+	if !rejectsDuplicates {
+		existing, found, err := provider.FindBySession(ctx, record.SessionID)
+		if err != nil {
+			return r.fail(ctx, record, err)
+		}
+		if found {
+			return r.observe(ctx, record, string(existing.ID), domain.SandboxObservedProvisioning, "", time.Second)
+		}
 	}
 
 	spec, err := r.workerSpec(ctx, record)
@@ -1252,6 +1266,16 @@ func (r *Reconciler) provision(
 	startedAt := time.Now()
 	environment, err := provider.Create(ctx, spec)
 	if err != nil {
+		if errors.Is(err, sandbox.ErrAlreadyExists) {
+			existing, found, findErr := provider.FindBySession(ctx, record.SessionID)
+			if findErr != nil {
+				return r.fail(ctx, record, findErr)
+			}
+			if found {
+				return r.observe(ctx, record, string(existing.ID), domain.SandboxObservedProvisioning, "", time.Second)
+			}
+			return r.fail(ctx, record, err)
+		}
 		if errors.Is(err, sandbox.ErrAtCapacity) {
 			r.log.Info("provider at capacity; will retry",
 				"session_id", record.SessionID, "provider", record.Provider)
@@ -1278,16 +1302,8 @@ func (r *Reconciler) provision(
 	// running) first. A provider slower than the budget falls back to the
 	// supervise-on-running path unchanged.
 	if bootstrapper, ok := provider.(sandbox.Bootstrapper); ok && len(r.options.WorkerBinary) > 0 {
-		deadline := time.Now().Add(inlineRunningWait)
-		for environment.State != sandbox.StateRunning && time.Now().Before(deadline) && ctx.Err() == nil {
-			time.Sleep(inlineRunningPoll)
-			refreshed, err := provider.Get(ctx, sandbox.ID(environment.ID))
-			if err != nil {
-				break
-			}
-			environment = refreshed
-		}
-		if environment.State == sandbox.StateRunning {
+		if running, ok := r.awaitRunning(ctx, provider, environment); ok {
+			environment = running
 			r.log.Info("bootstrapping worker in freshly provisioned sandbox",
 				"session_id", record.SessionID,
 				"provider", record.Provider,
@@ -1310,6 +1326,32 @@ func (r *Reconciler) provision(
 		}
 	}
 	return r.observe(ctx, record, string(environment.ID), domain.SandboxObservedProvisioning, "", 2*time.Second)
+}
+
+// awaitRunning polls the provider until the sandbox reports running, for at
+// most inlineRunningWait, so the caller can act on it within the same claim. It
+// reports false when the sandbox is still not running (or a probe fails); the
+// caller then falls back to tick-driven supervision.
+func (r *Reconciler) awaitRunning(
+	ctx context.Context,
+	provider sandbox.Provider,
+	environment sandbox.Environment,
+) (sandbox.Environment, bool) {
+	deadline := time.Now().Add(inlineRunningWait)
+	// Probe at once: a provider whose start call returns once the VM is up
+	// (Freestyle) is already running, and should not pay a poll interval.
+	for first := true; environment.State != sandbox.StateRunning &&
+		time.Now().Before(deadline) && ctx.Err() == nil; first = false {
+		if !first {
+			time.Sleep(inlineRunningPoll)
+		}
+		refreshed, err := provider.Get(ctx, environment.ID)
+		if err != nil {
+			return environment, false
+		}
+		environment = refreshed
+	}
+	return environment, environment.State == sandbox.StateRunning
 }
 
 func (r *Reconciler) recreate(

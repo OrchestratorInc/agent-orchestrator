@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from lib.deployment import (
     CODER_SECRET_ENV,
+    FREESTYLE_SECRET_ENV,
     NODEOPS_SECRET_ENV,
     WORKER_SECRET_ENV,
     build_task_definition,
@@ -86,6 +87,28 @@ def coder_settings():
             "parameters_json": '{"instance_type":"t3.medium"}',
             "durable_root": "/home/coder",
             "worker_token_ttl": "15m",
+        },
+        hosted_settings()[1],
+    )
+
+
+def freestyle_secret_overrides(environment="staging"):
+    return secret_environment(
+        f"arn:secret:ao-cloud/{environment}/freestyle", FREESTYLE_SECRET_ENV
+    ) | secret_environment(
+        f"arn:secret:ao-cloud/{environment}/worker", WORKER_SECRET_ENV
+    )
+
+
+def freestyle_settings():
+    return (
+        {
+            "api_key": "freestyle-secret",
+            "default_snapshot": "snap-claude",
+            "worker_token_ttl": "15m",
+            "snapshot_by_harness": (
+                '{"claude-code":"snap-claude","codex":"snap-codex","cursor":"snap-cursor"}'
+            ),
         },
         hosted_settings()[1],
     )
@@ -468,7 +491,101 @@ class TaskDefinitionTests(unittest.TestCase):
             resolve_sandbox_providers("nodeops", ["nodeops", "bogus"])
 
 
+class FreestyleTaskDefinitionTests(unittest.TestCase):
+    def test_renders_freestyle_secrets_and_snapshot_map(self):
+        payload = build_task_definition(
+            task_source("staging"),
+            family="ao-cloud-staging-api",
+            container_name="control-plane",
+            image=CONTROL_IMAGE,
+            release="rel",
+            environment="staging",
+            log_group="/ao-cloud/staging/control-plane",
+            region="eu-north-1",
+            worker_image=WORKER_IMAGE,
+            sandbox_provider="freestyle",
+            sandbox_providers=["nodeops", "freestyle"],
+            environment_overrides={
+                "AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS": '{"codex":"snap-codex"}'
+            },
+            secret_overrides=multi_provider_secret_overrides("staging")
+            | freestyle_secret_overrides("staging"),
+        )
+        container = payload["containerDefinitions"][0]
+        environment = {item["name"]: item["value"] for item in container["environment"]}
+        secrets = {item["name"] for item in container["secrets"]}
+        self.assertEqual(environment["AO_CLOUD_SANDBOX_PROVIDER"], "freestyle")
+        self.assertEqual(environment["AO_CLOUD_SANDBOX_PROVIDERS"], "nodeops,freestyle")
+        self.assertIn("AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS", environment)
+        self.assertTrue(set(FREESTYLE_SECRET_ENV) <= secrets)
+        self.assertTrue(set(NODEOPS_SECRET_ENV) <= secrets)
+
+    def test_prunes_freestyle_settings_when_not_served(self):
+        source = task_source("staging")
+        container = source["taskDefinition"]["containerDefinitions"][0]
+        container["environment"].append(
+            {"name": "AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS", "value": "{}"}
+        )
+        container["secrets"].append(
+            {
+                "name": "AO_CLOUD_FREESTYLE_API_KEY",
+                "valueFrom": "arn:secret:ao-cloud/staging/freestyle:api_key::",
+            }
+        )
+        payload = build_task_definition(
+            source,
+            family="ao-cloud-staging-api",
+            container_name="control-plane",
+            image=CONTROL_IMAGE,
+            release="rel",
+            environment="staging",
+            log_group="/ao-cloud/staging/control-plane",
+            region="eu-north-1",
+            worker_image=WORKER_IMAGE,
+            secret_overrides=hosted_secret_overrides("staging"),
+        )
+        rendered = payload["containerDefinitions"][0]
+        names = {item["name"] for item in rendered["environment"]} | {
+            item["name"] for item in rendered["secrets"]
+        }
+        self.assertNotIn("AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS", names)
+        self.assertNotIn("AO_CLOUD_FREESTYLE_API_KEY", names)
+
+    def test_rejects_freestyle_auto_pause_override(self):
+        with self.assertRaisesRegex(ValueError, "auto-pause"):
+            build_task_definition(
+                task_source("staging"),
+                family="ao-cloud-staging-api",
+                container_name="control-plane",
+                image=CONTROL_IMAGE,
+                release="rel",
+                environment="staging",
+                log_group="/ao-cloud/staging/control-plane",
+                region="eu-north-1",
+                worker_image=WORKER_IMAGE,
+                sandbox_provider="freestyle",
+                environment_overrides={"AO_CLOUD_FREESTYLE_AUTO_PAUSE_SECONDS": "300"},
+                secret_overrides=freestyle_secret_overrides("staging"),
+            )
+
+
 class HostedSettingsTests(unittest.TestCase):
+    def test_accepts_freestyle_settings(self):
+        freestyle, worker = freestyle_settings()
+        validate_hosted_settings(freestyle, worker, provider="freestyle")
+
+    def test_rejects_freestyle_without_every_harness_snapshot(self):
+        freestyle, worker = freestyle_settings()
+        freestyle["snapshot_by_harness"] = '{"claude-code":"snap-claude"}'
+        with self.assertRaisesRegex(ValueError, "codex, cursor"):
+            validate_hosted_settings(freestyle, worker, provider="freestyle")
+
+    def test_rejects_freestyle_auto_pause_setting(self):
+        freestyle, worker = freestyle_settings()
+        freestyle["auto_pause_seconds"] = "300"
+        with self.assertRaisesRegex(ValueError, "auto-pause"):
+            validate_hosted_settings(freestyle, worker, provider="freestyle")
+
     def test_accepts_complete_environment_scoped_settings(self):
         nodeops, worker = hosted_settings()
         validate_hosted_settings(nodeops, worker)

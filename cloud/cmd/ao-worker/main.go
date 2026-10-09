@@ -163,12 +163,16 @@ func run(logger *slog.Logger) error {
 	}
 	// Heartbeat before waiting out the first interval. Bootstrap registration is
 	// not a check-in, so a repaired worker can otherwise be replaced again
-	// before the control plane ever observes it.
-	if renewed, err := client.heartbeat(ctx); err != nil {
-		logger.Warn("first heartbeat failed", "error", err)
-	} else if err := client.setToken(renewed); err != nil {
-		return err
-	}
+	// before the control plane ever observes it. It runs beside the rest of
+	// startup: worker tokens are signed and a renewal does not revoke the one in
+	// use, so nothing below has to wait a control-plane round trip for it.
+	go func() {
+		if renewed, err := client.heartbeat(ctx); err != nil {
+			logger.Warn("first heartbeat failed", "error", err)
+		} else if err := client.setToken(renewed); err != nil {
+			logger.Warn("persist renewed worker token", "error", err)
+		}
+	}()
 	var agentCommandFactory workertransport.AgentCommandFactory
 	pullRequestSocketPath := filepath.Join(dataDir, "ao-pull-request.sock")
 	reviewSocketPath := filepath.Join(dataDir, "ao-review.sock")
@@ -1194,6 +1198,10 @@ func (c *client) setToken(token string) error {
 	if token == "" {
 		return errors.New("control plane returned an empty worker token")
 	}
+	// Held across the file write: the first heartbeat runs beside startup, so
+	// two renewals may persist at once and would otherwise share the temp file.
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.tokenFile != "" {
 		temporary := c.tokenFile + ".tmp"
 		if err := os.WriteFile(temporary, []byte(token), 0o600); err != nil {
@@ -1204,8 +1212,6 @@ func (c *client) setToken(token string) error {
 			return fmt.Errorf("replace rotating worker credential: %w", err)
 		}
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.token = token
 	return nil
 }

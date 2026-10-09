@@ -16,6 +16,7 @@ ROLLBACK_ALARM="${AO_CLOUD_PRODUCTION_ROLLBACK_ALARM:-ao-cloud-production-target
 RUNTIME_DATABASE_USER="${AO_CLOUD_RUNTIME_DATABASE_USER:-ao_cloud_app}"
 NODEOPS_SECRET_ID="${AO_CLOUD_NODEOPS_SECRET_ID:-ao-cloud/production/nodeops}"
 CODER_SECRET_ID="${AO_CLOUD_CODER_SECRET_ID:-ao-cloud/production/coder}"
+FREESTYLE_SECRET_ID="${AO_CLOUD_FREESTYLE_SECRET_ID:-ao-cloud/production/freestyle}"
 WORKER_SECRET_ID="${AO_CLOUD_WORKER_SECRET_ID:-ao-cloud/production/worker}"
 
 AWS_OPTIONS=(--region "$REGION")
@@ -80,8 +81,8 @@ print(environment["AO_CLOUD_SANDBOX_PROVIDER"])
 PY
 )"
 SANDBOX_PROVIDER="${AO_CLOUD_SANDBOX_PROVIDER:-$staging_provider}"
-if [[ "$SANDBOX_PROVIDER" != "nodeops" && "$SANDBOX_PROVIDER" != "coder" ]]; then
-	echo "AO_CLOUD_SANDBOX_PROVIDER must be nodeops or coder." >&2
+if [[ "$SANDBOX_PROVIDER" != "nodeops" && "$SANDBOX_PROVIDER" != "coder" && "$SANDBOX_PROVIDER" != "freestyle" ]]; then
+	echo "AO_CLOUD_SANDBOX_PROVIDER must be nodeops, coder, or freestyle." >&2
 	exit 1
 fi
 if [[ "$SANDBOX_PROVIDER" != "$staging_provider" ]]; then
@@ -108,8 +109,8 @@ PY
 PROVIDERS="${AO_CLOUD_SANDBOX_PROVIDERS:-$staging_providers}"
 IFS=',' read -ra _providers_list <<<"$PROVIDERS"
 for _provider in "${_providers_list[@]}"; do
-	if [[ "$_provider" != "nodeops" && "$_provider" != "coder" ]]; then
-		echo "AO_CLOUD_SANDBOX_PROVIDERS entries must each be nodeops or coder, got: $_provider" >&2
+	if [[ "$_provider" != "nodeops" && "$_provider" != "coder" && "$_provider" != "freestyle" ]]; then
+		echo "AO_CLOUD_SANDBOX_PROVIDERS entries must each be nodeops, coder, or freestyle, got: $_provider" >&2
 		exit 1
 	fi
 done
@@ -269,7 +270,41 @@ if providers_has coder; then
 		--worker <(printf '%s' "$worker_settings")
 	unset coder_settings
 fi
+if providers_has freestyle; then
+	freestyle_secret_arn="$(secret_arn "$FREESTYLE_SECRET_ID")"
+	freestyle_settings="$(
+		aws_cli secretsmanager get-secret-value \
+			--secret-id "$FREESTYLE_SECRET_ID" \
+			--query SecretString \
+			--output text
+	)"
+	./scripts/validate-hosted-settings.py \
+		--freestyle <(printf '%s' "$freestyle_settings") \
+		--worker <(printf '%s' "$worker_settings")
+	# Snapshot ids are not credentials; plaintext keeps a malformed optional key
+	# from blocking container start, as for NodeOps rootfs_by_harness.
+	snapshot_by_harness="$(jq -r '.snapshot_by_harness' <<<"$freestyle_settings")"
+	unset freestyle_settings
+fi
 unset worker_settings
+
+# Freestyle boots sessions from snapshots with ao-worker baked in, so a release
+# that changes the worker must rebake them; otherwise every new session first
+# downloads the current worker from the control plane. Bake from the exact
+# control-plane digest, record the new snapshot ids in the Freestyle secret, and
+# give this release's task those ids directly.
+if providers_has freestyle; then
+	snapshot_by_harness="$(
+		AWS_PROFILE="${AWS_PROFILE:-}" \
+			AWS_REGION="$REGION" \
+			AO_CLOUD_CP_IMAGE="$control_image" \
+			AO_CLOUD_FREESTYLE_SECRET_ID="$FREESTYLE_SECRET_ID" \
+			AO_CLOUD_FREESTYLE_UPDATE_SECRET=1 \
+			./scripts/publish-freestyle-snapshot.sh | tail -n 1
+	)"
+	jq -e 'type == "object"' <<<"$snapshot_by_harness" >/dev/null ||
+		{ echo "Freestyle snapshot bake did not return a snapshot map." >&2; exit 1; }
+fi
 
 aws_cli iam get-role --role-name ao-cloud-production-execution-role >/dev/null
 aws_cli iam get-role --role-name ao-cloud-production-task-role >/dev/null
@@ -341,6 +376,14 @@ register_api_task() {
 			--set-secret "AO_CLOUD_NODEOPS_SSH_KEY_PATH=${nodeops_secret_arn}:ssh_key_path::"
 			--set-secret "AO_CLOUD_NODEOPS_REGION=${nodeops_secret_arn}:region::"
 			--set-secret "AO_CLOUD_NODEOPS_WORKER_TOKEN_TTL=${nodeops_secret_arn}:worker_token_ttl::"
+		)
+	fi
+	if providers_has freestyle; then
+		render_args+=(
+			--set-environment "AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS=${snapshot_by_harness}"
+			--set-secret "AO_CLOUD_FREESTYLE_API_KEY=${freestyle_secret_arn}:api_key::"
+			--set-secret "AO_CLOUD_FREESTYLE_DEFAULT_SNAPSHOT=${freestyle_secret_arn}:default_snapshot::"
+			--set-secret "AO_CLOUD_FREESTYLE_WORKER_TOKEN_TTL=${freestyle_secret_arn}:worker_token_ttl::"
 		)
 	fi
 	payload="$(printf '%s' "$source" | ./scripts/render-task-definition.py "${render_args[@]}")"

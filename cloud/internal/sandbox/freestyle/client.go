@@ -41,6 +41,10 @@ const (
 	// bootstrapTimeout bounds the launch exec; the launch backgrounds the worker
 	// so the command itself returns in well under a second.
 	bootstrapTimeout = 60 * time.Second
+	// recreateDeleteWait bounds how long Recreate waits for the old VM to be
+	// gone before creating its replacement under the same slug.
+	recreateDeleteWait = 30 * time.Second
+	recreateDeletePoll = 250 * time.Millisecond
 )
 
 // HTTPError is a non-2xx response from the Freestyle API. The API key is only
@@ -69,7 +73,14 @@ type Client struct {
 var (
 	_ sandbox.Provider     = (*Client)(nil)
 	_ sandbox.Bootstrapper = (*Client)(nil)
+	_ sandbox.Recreator    = (*Client)(nil)
+
+	_ sandbox.DuplicateRejectingCreator = (*Client)(nil)
 )
+
+// CreateRejectsDuplicates reports that Create fails with ErrAlreadyExists when
+// the session's slug is taken: Freestyle answers 409 for a slug in use.
+func (c *Client) CreateRejectsDuplicates() {}
 
 // Config configures a Freestyle client.
 type Config struct {
@@ -158,6 +169,11 @@ func (c *Client) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Environ
 	}
 	var view vmView
 	if err := c.do(ctx, http.MethodPost, "/v5/vms", body, &view); err != nil {
+		var httpErr *HTTPError
+		if body.Slug != "" && errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusConflict &&
+			strings.Contains(httpErr.Body, "slug") {
+			return sandbox.Environment{}, fmt.Errorf("%w: %s", sandbox.ErrAlreadyExists, body.Slug)
+		}
 		return sandbox.Environment{}, err
 	}
 	return toEnvironment(view), nil
@@ -213,6 +229,35 @@ func (c *Client) Delete(ctx context.Context, id sandbox.ID) error {
 	return err
 }
 
+// Recreate replaces a VM that cannot be restored with a fresh one from the
+// session's snapshot. A session's VM is found again by its slug, so the old VM
+// must be gone before the replacement can take the slug. Like a NodeOps
+// recreate, uncommitted work on the old VM is lost.
+func (c *Client) Recreate(ctx context.Context, id sandbox.ID, spec sandbox.Spec) (sandbox.Environment, error) {
+	if err := c.Delete(ctx, id); err != nil {
+		return sandbox.Environment{}, err
+	}
+	deadline := time.Now().Add(recreateDeleteWait)
+	for {
+		_, err := c.Get(ctx, id)
+		if errors.Is(err, sandbox.ErrNotFound) {
+			break
+		}
+		if err != nil {
+			return sandbox.Environment{}, err
+		}
+		if !time.Now().Before(deadline) {
+			return sandbox.Environment{}, fmt.Errorf("freestyle: VM %s still exists %s after its delete", id, recreateDeleteWait)
+		}
+		select {
+		case <-ctx.Done():
+			return sandbox.Environment{}, ctx.Err()
+		case <-time.After(recreateDeletePoll):
+		}
+	}
+	return c.Create(ctx, spec)
+}
+
 type execRequest struct {
 	Command   string            `json:"command"`
 	LinuxUser string            `json:"linuxUser,omitempty"`
@@ -253,7 +298,12 @@ func (c *Client) BootstrapWorker(
 		script.WriteString("id -u " + quotedUser + " >/dev/null 2>&1 || " +
 			"useradd --create-home --home-dir /workspace/.ao/home --shell /bin/bash " +
 			quotedUser + "; ")
-		script.WriteString("mkdir -p /workspace; chown -R " + quotedUser + ":" + quotedUser + " /workspace; ")
+		// The snapshot bake and the project-snapshot clone already leave
+		// /workspace owned by the worker user. A recursive chown over a cloned
+		// repository costs seconds on every boot, so run it only when the
+		// ownership is actually wrong (a snapshot from an older bake).
+		script.WriteString("mkdir -p /workspace; [ \"$(stat -c %U /workspace)\" = " + quotedUser +
+			" ] || chown -R " + quotedUser + ":" + quotedUser + " /workspace; ")
 		command = "runuser --user " + quotedUser + " -- " + command
 	}
 	script.WriteString("setsid nohup " + command + " >> /var/log/ao-worker.log 2>&1 < /dev/null & ")

@@ -17,6 +17,7 @@ SANDBOX_PROVIDER="${AO_CLOUD_SANDBOX_PROVIDER:-nodeops}"
 PROVIDERS="${AO_CLOUD_SANDBOX_PROVIDERS:-$SANDBOX_PROVIDER}"
 NODEOPS_SECRET_ID="${AO_CLOUD_NODEOPS_SECRET_ID:-ao-cloud/staging/nodeops}"
 CODER_SECRET_ID="${AO_CLOUD_CODER_SECRET_ID:-ao-cloud/staging/coder}"
+FREESTYLE_SECRET_ID="${AO_CLOUD_FREESTYLE_SECRET_ID:-ao-cloud/staging/freestyle}"
 WORKER_SECRET_ID="${AO_CLOUD_WORKER_SECRET_ID:-ao-cloud/staging/worker}"
 HEAD_SHA="$(git rev-parse HEAD)"
 RELEASE="${1:-$HEAD_SHA}"
@@ -63,14 +64,14 @@ if [[ ! "$RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,199}$ ]]; then
 	echo "Release must be a Git SHA or release tag." >&2
 	exit 1
 fi
-if [[ "$SANDBOX_PROVIDER" != "nodeops" && "$SANDBOX_PROVIDER" != "coder" ]]; then
-	echo "AO_CLOUD_SANDBOX_PROVIDER must be nodeops or coder." >&2
+if [[ "$SANDBOX_PROVIDER" != "nodeops" && "$SANDBOX_PROVIDER" != "coder" && "$SANDBOX_PROVIDER" != "freestyle" ]]; then
+	echo "AO_CLOUD_SANDBOX_PROVIDER must be nodeops, coder, or freestyle." >&2
 	exit 1
 fi
 IFS=',' read -ra _providers_list <<<"$PROVIDERS"
 for _provider in "${_providers_list[@]}"; do
-	if [[ "$_provider" != "nodeops" && "$_provider" != "coder" ]]; then
-		echo "AO_CLOUD_SANDBOX_PROVIDERS entries must each be nodeops or coder, got: $_provider" >&2
+	if [[ "$_provider" != "nodeops" && "$_provider" != "coder" && "$_provider" != "freestyle" ]]; then
+		echo "AO_CLOUD_SANDBOX_PROVIDERS entries must each be nodeops, coder, or freestyle, got: $_provider" >&2
 		exit 1
 	fi
 done
@@ -137,6 +138,22 @@ if providers_has coder; then
 		--coder <(printf '%s' "$coder_settings") \
 		--worker <(printf '%s' "$worker_settings")
 	unset coder_settings
+fi
+if providers_has freestyle; then
+	freestyle_secret_arn="$(secret_arn "$FREESTYLE_SECRET_ID")"
+	freestyle_settings="$(
+		aws_cli secretsmanager get-secret-value \
+			--secret-id "$FREESTYLE_SECRET_ID" \
+			--query SecretString \
+			--output text
+	)"
+	./scripts/validate-hosted-settings.py \
+		--freestyle <(printf '%s' "$freestyle_settings") \
+		--worker <(printf '%s' "$worker_settings")
+	# Snapshot ids are not credentials; plaintext keeps a malformed optional key
+	# from blocking container start, as for NodeOps rootfs_by_harness.
+	snapshot_by_harness="$(jq -r '.snapshot_by_harness' <<<"$freestyle_settings")"
+	unset freestyle_settings
 fi
 unset worker_settings
 
@@ -252,6 +269,24 @@ if providers_has coder; then
 		./scripts/publish-coder-workspace.sh
 fi
 
+# Freestyle boots sessions from snapshots with ao-worker baked in, so a release
+# that changes the worker must rebake them; otherwise every new session first
+# downloads the current worker from the control plane. Bake from the exact
+# control-plane digest, record the new snapshot ids in the Freestyle secret, and
+# give this release's task those ids directly.
+if providers_has freestyle; then
+	snapshot_by_harness="$(
+		AWS_PROFILE="${AWS_PROFILE:-}" \
+			AWS_REGION="$REGION" \
+			AO_CLOUD_CP_IMAGE="$control_image" \
+			AO_CLOUD_FREESTYLE_SECRET_ID="$FREESTYLE_SECRET_ID" \
+			AO_CLOUD_FREESTYLE_UPDATE_SECRET=1 \
+			./scripts/publish-freestyle-snapshot.sh | tail -n 1
+	)"
+	jq -e 'type == "object"' <<<"$snapshot_by_harness" >/dev/null ||
+		{ echo "Freestyle snapshot bake did not return a snapshot map." >&2; exit 1; }
+fi
+
 register_task_definition() {
 	local family="$1"
 	local container_name="$2"
@@ -308,6 +343,14 @@ register_task_definition() {
 				--set-secret "AO_CLOUD_NODEOPS_SSH_KEY_PATH=${nodeops_secret_arn}:ssh_key_path::"
 				--set-secret "AO_CLOUD_NODEOPS_REGION=${nodeops_secret_arn}:region::"
 				--set-secret "AO_CLOUD_NODEOPS_WORKER_TOKEN_TTL=${nodeops_secret_arn}:worker_token_ttl::"
+			)
+		fi
+		if providers_has freestyle; then
+			render_args+=(
+				--set-environment "AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS=${snapshot_by_harness}"
+				--set-secret "AO_CLOUD_FREESTYLE_API_KEY=${freestyle_secret_arn}:api_key::"
+				--set-secret "AO_CLOUD_FREESTYLE_DEFAULT_SNAPSHOT=${freestyle_secret_arn}:default_snapshot::"
+				--set-secret "AO_CLOUD_FREESTYLE_WORKER_TOKEN_TTL=${freestyle_secret_arn}:worker_token_ttl::"
 			)
 		fi
 	else
