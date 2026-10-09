@@ -23,23 +23,21 @@ export function sessionUsageQueryOptions(projectId?: string, hostId?: string) {
 		queryKey: sessionUsageQueryKey(projectId, hostId),
 		queryFn: () => fetchSessionUsageSummaries(projectId, hostId),
 		retry: 1,
+		// Keep summaries across board visits: a collected entry would make every
+		// later visit paint its cards before their cost again.
+		gcTime: Number.POSITIVE_INFINITY,
 		...(hostId ? { refetchInterval: 15_000 } : {}),
 		select: summariesById,
 	};
 }
 
-// Board route loaders prime the same cache that SessionsBoard observes. Keep
-// failures non-blocking: usage is supplementary, so an unavailable summary
-// endpoint must not prevent the Kanban itself from opening.
-export async function preloadSessionUsageSummaries(
-	queryClient: QueryClient,
-	projectId?: string,
-	hostId?: string,
-): Promise<void> {
-	try {
-		await queryClient.ensureQueryData({ ...sessionUsageQueryOptions(projectId, hostId), retry: false });
-	} catch {
-		// The mounted query retains its existing retry/error behavior.
+// Warms each board's usage once the shell knows its projects, so a board's
+// first frame already has cost badges. Fire-and-forget: usage is supplementary
+// and must never hold navigation, and a cached entry is not refetched here
+// (event invalidation and the mounted query keep it current).
+export function warmSessionUsageSummaries(queryClient: QueryClient, projectIds: readonly string[]): void {
+	for (const projectId of projectIds) {
+		void queryClient.ensureQueryData({ ...sessionUsageQueryOptions(projectId), retry: false }).catch(() => undefined);
 	}
 }
 

@@ -10,10 +10,10 @@ vi.mock("../lib/api-client", () => ({
 import { sessionUsageDetailQueryKey } from "./useSessionUsage";
 import {
 	fetchSessionUsageSummaries,
-	preloadSessionUsageSummaries,
 	sessionUsageQueryKey,
 	sessionUsageQueryRoot,
 	sessionUsageQueryOptions,
+	warmSessionUsageSummaries,
 } from "./useSessionUsageSummaries";
 
 describe("session usage summaries", () => {
@@ -31,7 +31,7 @@ describe("session usage summaries", () => {
 		expect(sessionUsageQueryOptions("reverb")).not.toHaveProperty("refetchInterval");
 	});
 
-	it("primes the project-scoped cache before the board mounts", async () => {
+	it("warms each project's board cache without blocking the caller", async () => {
 		const summary = {
 			estimatedCost: null,
 			incomplete: false,
@@ -39,21 +39,40 @@ describe("session usage summaries", () => {
 			sessionId: "reverb-61",
 			totalTokens: 42,
 		};
-		getMock.mockResolvedValueOnce({ data: { sessions: [summary] } });
-		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		getMock.mockResolvedValueOnce({ data: { sessions: [summary] } }).mockResolvedValueOnce({ data: { sessions: [] } });
+		const queryClient = new QueryClient();
 
-		await preloadSessionUsageSummaries(queryClient, "reverb");
+		expect(warmSessionUsageSummaries(queryClient, ["reverb", "landing"])).toBeUndefined();
 
+		await vi.waitFor(() => expect(queryClient.getQueryData(sessionUsageQueryKey("landing"))).toEqual([]));
 		expect(queryClient.getQueryData(sessionUsageQueryKey("reverb"))).toEqual([summary]);
-		expect(getMock).toHaveBeenCalledOnce();
+		expect(getMock).toHaveBeenCalledWith("/api/v1/usage/sessions", { params: { query: { projectId: "reverb" } } });
+		expect(getMock).toHaveBeenCalledWith("/api/v1/usage/sessions", { params: { query: { projectId: "landing" } } });
 	});
 
-	it("does not retry or block the board when usage preloading fails", async () => {
+	it("leaves an already cached board alone", async () => {
+		const queryClient = new QueryClient();
+		queryClient.setQueryData(sessionUsageQueryKey("reverb"), []);
+
+		warmSessionUsageSummaries(queryClient, ["reverb"]);
+		await Promise.resolve();
+
+		expect(getMock).not.toHaveBeenCalled();
+	});
+
+	it("tries a failed warm-up once and leaves the board query to retry", async () => {
 		getMock.mockRejectedValue(new Error("usage unavailable"));
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
 
-		await expect(preloadSessionUsageSummaries(queryClient, "reverb")).resolves.toBeUndefined();
+		warmSessionUsageSummaries(queryClient, ["reverb"]);
+
+		await vi.waitFor(() => expect(queryClient.getQueryState(sessionUsageQueryKey("reverb"))?.status).toBe("error"));
 		expect(getMock).toHaveBeenCalledOnce();
+		expect(sessionUsageQueryOptions("reverb").retry).toBe(1);
+	});
+
+	it("keeps summaries cached after the board unmounts", () => {
+		expect(sessionUsageQueryOptions("reverb").gcTime).toBe(Number.POSITIVE_INFINITY);
 	});
 
 	// The detail query lives in useSessionUsage.ts and must stay beneath this

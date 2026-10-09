@@ -61,6 +61,7 @@ import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchest
 import type { components } from "../../api/schema";
 import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { warmSessionUsageSummaries } from "../hooks/useSessionUsageSummaries";
 import { clientForHost } from "../lib/host-clients";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
@@ -74,7 +75,12 @@ export const Route = createFileRoute("/_shell")({
 	loader: async ({ context }) => {
 		await refreshDaemonStatus().catch(() => undefined);
 		if (!usesPreviewWorkspaceData && !hasTrustedApiBaseUrl()) return;
-		return context.queryClient.fetchQuery({ ...workspaceQueryOptions, staleTime: 0 });
+		const workspaces = await context.queryClient.fetchQuery({ ...workspaceQueryOptions, staleTime: 0 });
+		warmSessionUsageSummaries(
+			context.queryClient,
+			workspaces.filter((workspace) => workspace.id !== STANDALONE_WORKSPACE_ID).map((workspace) => workspace.id),
+		);
+		return workspaces;
 	},
 	component: ShellLayout,
 });
