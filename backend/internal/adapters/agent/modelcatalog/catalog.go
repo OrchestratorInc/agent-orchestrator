@@ -524,8 +524,8 @@ func Discover(ctx context.Context, agentID, binary, workingDir string, env map[s
 	return base, nil
 }
 
-var codewhaleResolvedModelPattern = regexp.MustCompile(`(?mi)^resolved:\s*([^\s]+)`)
-var codewhaleResolvedProviderPattern = regexp.MustCompile(`(?mi)^provider:\s*([^\s]+)`)
+var codewhaleResolvedModelPattern = regexp.MustCompile(`(?mi)^resolved:\s*(\S+)`)
+var codewhaleResolvedProviderPattern = regexp.MustCompile(`(?mi)^provider:\s*(\S+)`)
 
 // markCodewhaleResolvedDefault marks Codewhale's runtime-effective model as
 // the catalog default by asking `codewhale model resolve`, which reads the
