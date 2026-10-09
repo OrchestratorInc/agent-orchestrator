@@ -47,7 +47,7 @@ func newSideWorkflow(t *testing.T, mode string, harnesses ...domain.AgentHarness
 	changed := &changedExcerptStore{Store: st, mode: mode}
 	var ids atomic.Int64
 	svc := chatsvc.New(chatsvc.Options{Store: changed, Reader: fullSnapshotReader(st), Sessions: st, Drivers: fakeRegistry{driver: driver}, AppRunID: "workflow", NewID: func() string { return fmt.Sprintf("workflow-%d", ids.Add(1)) }})
-	ctrl, err := svc.Start(ctx, chatsvc.StartConfig{SessionID: testSession, ProjectID: testProject, Harness: harnessType, WorkspacePath: t.TempDir(), Model: "initial", Effort: "low", Permissions: "default", SystemPrompt: "Frozen instructions"})
+	ctrl, err := svc.Start(ctx, chatsvc.StartConfig{SessionID: testSession, ProjectID: testProject, Harness: harnessType, WorkspacePath: t.TempDir(), Model: "initial", Effort: "low", Permissions: "default", SystemPrompt: "Frozen instructions", MCPServers: []ports.ChatMCPServerConfig{{Name: "exploration", Type: "stdio", Command: "test-mcp"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,49 +217,54 @@ func TestSideStaleQueuedExcerptsAllowLaterQuestions(t *testing.T) {
 }
 
 func TestSideFreshAndReconstructedContext(t *testing.T) {
-	for _, completed := range []bool{false, true} {
-		t.Run(fmt.Sprint(completed), func(t *testing.T) {
-			h := newSideWorkflow(t, "", domain.HarnessClaudeCode)
-			if completed {
-				h.source(t)
+	for _, harnessType := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessOpenCode} {
+		t.Run(string(harnessType), func(t *testing.T) {
+			for _, completed := range []bool{false, true} {
+				t.Run(fmt.Sprint(completed), func(t *testing.T) {
+					h := newSideWorkflow(t, "", harnessType)
+					if completed {
+						h.source(t)
+					}
+					_, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{Text: "running must be excluded", ClientMessageID: "running"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					side := h.side(t, "context", true)
+					want := "fresh"
+					if completed {
+						want = "reconstructed"
+					}
+					if side.ContextMode != want {
+						t.Fatalf("mode=%s want=%s", side.ContextMode, want)
+					}
+					h.driver.mu.Lock()
+					cfg := h.driver.configs[0]
+					h.driver.mu.Unlock()
+					if cfg.SessionID == testSession || !strings.HasPrefix(cfg.SystemPrompt, "Frozen instructions") || !strings.Contains(cfg.SystemPrompt, "Side conversation boundary.") || cfg.Model != "initial" || cfg.Effort != "low" || cfg.Permissions != "default" {
+						t.Fatalf("config not inherited: %+v", cfg)
+					}
+					msg := ports.ChatUserMessage{Text: "  Explain it.  ", ClientMessageID: "question", Content: []ports.ChatContent{{Type: "resource_link", URI: "/workspace/note.txt", Name: "note.txt"}}}
+					turn, err := h.svc.SendSideQuestion(context.Background(), testSession, side.ID, msg)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if turn.Text != msg.Text {
+						t.Fatalf("wording changed: %q", turn.Text)
+					}
+					h.awaitSide(t, side.ID, func(domain.SideSnapshot) bool { return h.provider(0).sendCallCount() == 1 })
+					delivered := h.provider(0).sentTexts()[0]
+					if strings.Contains(delivered, "running must be excluded") {
+						t.Fatal("running context leaked")
+					}
+					if completed && (!strings.Contains(delivered, "Recorded visible main-chat history") || !strings.Contains(delivered, "Selected source text.")) {
+						t.Fatalf("reconstructed context missing: %s", delivered)
+					}
+					if !strings.Contains(delivered, "/workspace/note.txt") {
+						t.Fatal("attachment missing from provider context")
+					}
+				})
 			}
-			_, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{Text: "running must be excluded", ClientMessageID: "running"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			side := h.side(t, "context", true)
-			want := "fresh"
-			if completed {
-				want = "reconstructed"
-			}
-			if side.ContextMode != want {
-				t.Fatalf("mode=%s want=%s", side.ContextMode, want)
-			}
-			h.driver.mu.Lock()
-			cfg := h.driver.configs[0]
-			h.driver.mu.Unlock()
-			if cfg.SessionID == testSession || !strings.HasPrefix(cfg.SystemPrompt, "Frozen instructions") || !strings.Contains(cfg.SystemPrompt, "Side conversation boundary.") || cfg.Model != "initial" || cfg.Effort != "low" || cfg.Permissions != "default" {
-				t.Fatalf("config not inherited: %+v", cfg)
-			}
-			msg := ports.ChatUserMessage{Text: "  Explain it.  ", ClientMessageID: "question", Content: []ports.ChatContent{{Type: "resource_link", URI: "/workspace/note.txt", Name: "note.txt"}}}
-			turn, err := h.svc.SendSideQuestion(context.Background(), testSession, side.ID, msg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if turn.Text != msg.Text {
-				t.Fatalf("wording changed: %q", turn.Text)
-			}
-			h.awaitSide(t, side.ID, func(domain.SideSnapshot) bool { return h.provider(0).sendCallCount() == 1 })
-			delivered := h.provider(0).sentTexts()[0]
-			if strings.Contains(delivered, "running must be excluded") {
-				t.Fatal("running context leaked")
-			}
-			if completed && (!strings.Contains(delivered, "Recorded visible main-chat history") || !strings.Contains(delivered, "Selected source text.")) {
-				t.Fatalf("reconstructed context missing: %s", delivered)
-			}
-			if !strings.Contains(delivered, "/workspace/note.txt") {
-				t.Fatal("attachment missing from provider context")
-			}
+
 		})
 	}
 }
@@ -366,43 +371,48 @@ func TestSideSnapshotDuringFirstDeliveryDoesNotRequireRecreation(t *testing.T) {
 }
 
 func TestSideLaterMainExcerptDoesNotMoveFrozenFork(t *testing.T) {
-	h := newSideWorkflow(t, "", domain.HarnessClaudeCode)
-	h.source(t)
-	side := h.side(t, "frozen", true)
-	ctx := context.Background()
-	completeMain := func(key string) ports.ChatExcerptReference {
-		t.Helper()
-		turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "question-" + key, ClientMessageID: key})
-		if err != nil {
-			t.Fatal(err)
-		}
-		h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: turn.ProviderTurnID, ProviderItemID: key, Text: "answer-" + key}, ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID, TurnState: domain.TurnStateCompleted})
-		snap := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-			for _, v := range s.Turns {
-				if v.ID == turn.ID {
-					return v.State == domain.TurnStateCompleted
+	for _, harnessType := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessOpenCode} {
+		t.Run(string(harnessType), func(t *testing.T) {
+			h := newSideWorkflow(t, "", harnessType)
+			h.source(t)
+			side := h.side(t, "frozen", true)
+			ctx := context.Background()
+			completeMain := func(key string) ports.ChatExcerptReference {
+				t.Helper()
+				turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "question-" + key, ClientMessageID: key})
+				if err != nil {
+					t.Fatal(err)
 				}
+				h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: turn.ProviderTurnID, ProviderItemID: key, Text: "answer-" + key}, ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+				snap := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+					for _, v := range s.Turns {
+						if v.ID == turn.ID {
+							return v.State == domain.TurnStateCompleted
+						}
+					}
+					return false
+				})
+				for _, msg := range snap.Messages {
+					if msg.TurnID == turn.ID && msg.Role == domain.MessageRoleAssistant {
+						return ports.ChatExcerptReference{ConversationID: h.ctrl.ConversationID(), MessageID: msg.ID, Revision: msg.Revision, Text: "answer-" + key}
+					}
+				}
+				t.Fatal("missing source")
+				return ports.ChatExcerptReference{}
 			}
-			return false
+			ref := completeMain("B")
+			completeMain("C")
+			_, err := h.svc.SendSideQuestion(ctx, testSession, side.ID, ports.ChatUserMessage{Text: "Explain this", ClientMessageID: "with-B", Excerpts: []ports.ChatExcerptReference{ref}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			snap := h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool { return h.provider(0).sendCallCount() == 1 })
+			text := h.provider(0).sentTexts()[0]
+			if snap.Side.AnchorTurnID != side.AnchorTurnID || !strings.Contains(text, "Selected source text") || !strings.Contains(text, "answer-B") || strings.Contains(text, "answer-C") || strings.Contains(text, "question-C") {
+				t.Fatalf("fork moved or context leaked: anchor=%s text=%s", snap.Side.AnchorTurnID, text)
+			}
+
 		})
-		for _, msg := range snap.Messages {
-			if msg.TurnID == turn.ID && msg.Role == domain.MessageRoleAssistant {
-				return ports.ChatExcerptReference{ConversationID: h.ctrl.ConversationID(), MessageID: msg.ID, Revision: msg.Revision, Text: "answer-" + key}
-			}
-		}
-		t.Fatal("missing source")
-		return ports.ChatExcerptReference{}
-	}
-	ref := completeMain("B")
-	completeMain("C")
-	_, err := h.svc.SendSideQuestion(ctx, testSession, side.ID, ports.ChatUserMessage{Text: "Explain this", ClientMessageID: "with-B", Excerpts: []ports.ChatExcerptReference{ref}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	snap := h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool { return h.provider(0).sendCallCount() == 1 })
-	text := h.provider(0).sentTexts()[0]
-	if snap.Side.AnchorTurnID != side.AnchorTurnID || !strings.Contains(text, "Selected source text") || !strings.Contains(text, "answer-B") || strings.Contains(text, "answer-C") || strings.Contains(text, "question-C") {
-		t.Fatalf("fork moved or context leaked: anchor=%s text=%s", snap.Side.AnchorTurnID, text)
 	}
 }
 
@@ -491,13 +501,13 @@ func TestSideCreationFromOlderExcerptUsesLatestCompletedAnchor(t *testing.T) {
 	h.driver.mu.Lock()
 	cfg := h.driver.configs[0]
 	h.driver.mu.Unlock()
-	if !cfg.SidePolicy || cfg.ReadOnly || cfg.Permissions != "default" || cfg.WorkspacePath == "" || cfg.Env["AO_SIDE_CONVERSATION_ID"] != side.ID {
+	if cfg.ReadOnly || cfg.Permissions != "default" || cfg.WorkspacePath == "" || len(cfg.MCPServers) != 1 || cfg.MCPServers[0].Name != "exploration" || cfg.Env["AO_SIDE_CONVERSATION_ID"] != side.ID {
 		t.Fatalf("side launch policy: %+v", cfg)
 	}
 }
 
 func TestSideBoundaryDeliveryOrderAndTranscriptWording(t *testing.T) {
-	for _, harnessType := range []domain.AgentHarness{domain.HarnessCodex, domain.HarnessClaudeCode} {
+	for _, harnessType := range []domain.AgentHarness{domain.HarnessCodex, domain.HarnessClaudeCode, domain.HarnessOpenCode} {
 		t.Run(string(harnessType), func(t *testing.T) {
 			h := newSideWorkflow(t, "", harnessType)
 			ref := h.source(t)
@@ -515,7 +525,7 @@ func TestSideBoundaryDeliveryOrderAndTranscriptWording(t *testing.T) {
 			if boundary < 0 || request < boundary || strings.Index(text, "Reference 1 source turn") < request || !strings.Contains(text, question) {
 				t.Fatal(text)
 			}
-			if harnessType == domain.HarnessClaudeCode && strings.Index(text, "Selected source text.") > boundary {
+			if harnessType != domain.HarnessCodex && strings.Index(text, "Selected source text.") > boundary {
 				t.Fatal("boundary precedes inherited history")
 			}
 			for _, msg := range snap.Messages {
@@ -538,6 +548,27 @@ func TestSideBoundaryDeliveryOrderAndTranscriptWording(t *testing.T) {
 			h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool { return h.provider(0).sendCallCount() == 2 })
 			if got := h.provider(0).sentTexts()[1]; got != "next question" {
 				t.Fatalf("boundary repeated: %s", got)
+			}
+		})
+	}
+}
+
+func TestSideProvidersInheritMCPAndPermissionsWithoutDispatch(t *testing.T) {
+	for _, harnessType := range []domain.AgentHarness{domain.HarnessCodex, domain.HarnessClaudeCode, domain.HarnessOpenCode} {
+		t.Run(string(harnessType), func(t *testing.T) {
+			h := newSideWorkflow(t, "", harnessType)
+			side := h.side(t, "tools", true)
+			h.driver.mu.Lock()
+			cfg := h.driver.configs[0]
+			h.driver.mu.Unlock()
+			if cfg.ReadOnly || cfg.Permissions != "default" || len(cfg.MCPServers) != 1 || cfg.MCPServers[0].Command != "test-mcp" {
+				t.Fatalf("permissions or MCP configuration changed: %+v", cfg)
+			}
+			if cfg.ProviderScopeID != side.ID || !cfg.ProviderIDsScoped || cfg.Env["AO_SIDE_CONVERSATION_ID"] != side.ID || cfg.Env["AO_SESSION_ID"] == string(testSession) {
+				t.Fatalf("provider ownership not isolated: %+v", cfg)
+			}
+			if side.ContextMode != "fresh" || h.provider(0).sendCallCount() != 0 {
+				t.Fatal("empty side dispatched inherited work")
 			}
 		})
 	}

@@ -277,16 +277,8 @@ func MissingCapabilitiesForPermissions(caps ChatCapabilities, permissions Permis
 }
 
 // ChatStartConfig is what a driver needs to open a new provider conversation.
-// ChatSidePolicyDriver explicitly supports disabling all provider delegation.
-// Drivers without this contract cannot open side conversations.
-type ChatSidePolicyDriver interface {
-	ValidateSidePolicy(context.Context, ChatStartConfig) error
-}
-
 type ChatStartConfig struct {
-	// SidePolicy disables delegation without changing filesystem permissions.
-	SidePolicy bool
-	SessionID  domain.SessionID
+	SessionID domain.SessionID
 	// DataDir is AO's state root. Provider bindings may write process-scoped
 	// configuration beneath it, but must never use the worktree or an OS-default
 	// application-data directory for AO-owned state.
@@ -334,7 +326,6 @@ type ChatStartConfig struct {
 
 // ChatResumeConfig reattaches to a provider conversation after a restart.
 type ChatResumeConfig struct {
-	SidePolicy bool
 	// ReconnectOnly forbids launching a replacement provider during a health check.
 	ReconnectOnly bool
 	// See ChatStartConfig.ProviderIDsScoped.

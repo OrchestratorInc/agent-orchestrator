@@ -77,3 +77,16 @@ func TestSideBoundaryIncludesAuthorizationAndDelegationRules(t *testing.T) {
 		}
 	}
 }
+
+func TestSideProviderEligibilityLimitsSupportedHarnesses(t *testing.T) {
+	for _, harness := range domain.AllHarnesses {
+		err := validateSideProvider(harness)
+		supported := harness == domain.HarnessCodex || harness == domain.HarnessClaudeCode || harness == domain.HarnessOpenCode
+		if supported && err != nil {
+			t.Fatalf("%s: %v", harness, err)
+		}
+		if !supported && !errors.Is(err, ErrSideProviderUnsupported) {
+			t.Fatalf("%s: %v", harness, err)
+		}
+	}
+}

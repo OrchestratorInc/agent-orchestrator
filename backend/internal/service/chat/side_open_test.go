@@ -28,10 +28,6 @@ type connectedSideForkDriver struct {
 	sources []string
 }
 
-func (d *connectedSideForkDriver) ValidateSidePolicy(context.Context, ports.ChatStartConfig) error {
-	return nil
-}
-
 func (d *connectedSideForkDriver) ForkIntoHost(_ context.Context, source, anchor string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
