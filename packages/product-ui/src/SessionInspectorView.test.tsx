@@ -7,7 +7,6 @@ import {
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
-  InspectorActivityTimelineView,
   InspectorPullRequestCardView,
   InspectorReviewsView,
   SessionInspectorShellView,
@@ -171,8 +170,6 @@ describe("portable inspector presentations", () => {
   it("places execution context before pull request details", () => {
     render(
       <SessionInspectorSummaryView
-        activity={<div>activity</div>}
-        activityTitle="Activity"
         context={<div data-testid="execution-context">context</div>}
         pullRequestCards={<div>pull request</div>}
         pullRequestTitle="Pull request"
@@ -186,13 +183,10 @@ describe("portable inspector presentations", () => {
 
   it("omits the PR/artifacts section entirely when no title is given", () => {
     render(
-      <SessionInspectorSummaryView
-        activity={<div>activity</div>}
-        activityTitle="Activity"
-      />,
+      <SessionInspectorSummaryView />,
     );
 
-    expect(screen.queryAllByTestId("inspector-section")).toHaveLength(1);
+    expect(screen.queryAllByTestId("inspector-section")).toHaveLength(0);
   });
 
   it("renders PR facts and host-owned actions from a neutral view model", () => {
@@ -235,33 +229,6 @@ describe("portable inspector presentations", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Ready to merge")).toHaveClass("text-success");
     expect(screen.getByRole("button", { name: "Merge" })).toBeInTheDocument();
-  });
-
-  it("renders timeline events with current-state marker treatment", () => {
-    render(
-      <InspectorActivityTimelineView
-        events={[
-          {
-            content: <span>Working</span>,
-            markerBreathe: true,
-            markerTone: "#60a5fa",
-            timestamp: null,
-            tone: "now",
-          },
-          {
-            content: <span>Created workspace</span>,
-            timestamp: "2h ago",
-            tone: "neutral",
-          },
-        ]}
-      />,
-    );
-    const events = screen.getAllByTestId("inspector-timeline-event");
-    expect(events).toHaveLength(2);
-    expect(events[0].querySelector(".animate-status-pulse")).toHaveStyle({
-      background: "#60a5fa",
-    });
-    expect(screen.getByText("2h ago")).toHaveClass("font-mono", "text-passive");
   });
 
   it("owns grouped review disclosure while the host supplies markdown and assets", () => {

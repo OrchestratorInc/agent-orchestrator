@@ -1220,286 +1220,21 @@ describe("SessionInspector Artifacts section", () => {
   });
 });
 
-describe("SessionInspector usage", () => {
-	const canonicalTotals = {
-		inputTokens: 1200,
-		cachedInputTokens: 1000,
-		uncachedInputTokens: 200,
-		outputTokens: 300,
-		processedTokens: 1500,
-	};
-
-	const tokenTotals = (estimatedCost: unknown) => ({ ...canonicalTotals, estimatedCost });
-
-	function mockUsage(estimatedCost: unknown, harnesses?: unknown[]) {
-		const totals = tokenTotals(estimatedCost);
-		getMock.mockImplementation(async (path: string) => {
-			if (path === "/api/v1/usage/sessions/{sessionId}") {
-				return {
-					data: {
-						sessionId: "sess-1",
-						incomplete: false,
-						totals,
-						harnesses: harnesses ?? [
-							{
-								harness: "codex",
-								totals,
-								models: [
-									{ modelId: "gpt-5.5", totals },
-									{ modelId: "gpt-5.5-mini", totals },
-								],
-							},
-						],
-					},
-					error: undefined,
-				};
-			}
-			return { data: undefined };
-		});
-	}
-
-	it("shows detailed token statistics only when Developer Mode is enabled", async () => {
+describe("SessionInspector removed sections", () => {
+	it("shows neither Activity nor Usage & Cost, even in Developer Mode", () => {
 		useUiStore.getState().setDeveloperMode(true);
-		mockUsage(null);
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-		expect(await screen.findByText("Usage & cost")).toBeInTheDocument();
-		expect(screen.getByText("Tokens processed")).toBeInTheDocument();
-		expect(screen.getByLabelText("1,500 tokens processed")).toBeInTheDocument();
-		expect(screen.getByText("Estimated cost").parentElement?.nextElementSibling).toHaveTextContent("Unavailable");
-		expect(screen.queryByText("Coming soon")).not.toBeInTheDocument();
-		const metrics = screen.getAllByTestId("session-usage-metrics")[0];
-		expect(within(metrics).getAllByRole("term").map((term) => term.textContent)).toEqual([
-			"Fresh Input", "Cache Reads", "Output", "Cache Hit Rate",
-		]);
-		expect(within(metrics).getByLabelText("Cache Reads: 1,000 tokens")).toHaveTextContent("1K");
-		expect(within(metrics).getByLabelText("83.3% cache hit rate (cache reads / total input)")).toHaveTextContent("83.3%");
-		expect(within(metrics).queryByText("Cached Output")).not.toBeInTheDocument();
-		expect(screen.queryByText("Cache write tokens")).not.toBeInTheDocument();
-		expect(screen.queryByText("Reasoning (included in output)")).not.toBeInTheDocument();
-		const agentAttribution = screen.getByText("Codex").parentElement;
-		expect(agentAttribution?.querySelector("img")).toBeInTheDocument();
-		const agentDisclosure = screen.getByRole("button", { name: "Codex usage details" });
-		await userEvent.click(agentDisclosure);
-		const details = screen.getByRole("region", { name: "Codex usage peek" });
-		expect(within(details).getByRole("button", { name: "GPT 5.5 usage details" })).toBeInTheDocument();
-		expect(within(details).getByRole("button", { name: "GPT 5.5 Mini usage details" })).toBeInTheDocument();
-		expect(within(details).queryByText("2 models")).not.toBeInTheDocument();
-		expect(within(details).queryByText("Processed")).not.toBeInTheDocument();
-		expect(within(details).queryByText("Cost")).not.toBeInTheDocument();
-	});
-
-	it("shows icon disclosures without repeated metrics when multiple agents contributed", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		const totals = { ...canonicalTotals, estimatedCost: null };
-		mockUsage(null, [
-			{ harness: "codex", totals, models: [{ modelId: "gpt-5.5", totals }] },
-			{ harness: "claude-code", totals, models: [{ modelId: "claude-haiku-4-5-20251001", totals }] },
-		]);
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-		const codexDisclosure = await screen.findByRole("button", { name: "Codex usage details" });
-		expect(codexDisclosure.querySelector("img")).toBeInTheDocument();
-
-		await userEvent.click(codexDisclosure);
-		const details = screen.getByRole("region", { name: "Codex usage peek" });
-		expect(within(details).getByRole("button", { name: "GPT 5.5 usage details" })).toBeInTheDocument();
-		expect(within(details).queryByText("1 model")).not.toBeInTheDocument();
-		expect(within(details).queryByText("Processed")).not.toBeInTheDocument();
-		expect(within(details).queryByText("Cost")).not.toBeInTheDocument();
-		expect(within(details).queryByText("Fresh Input")).not.toBeInTheDocument();
-
-		await userEvent.click(screen.getByRole("button", { name: "Claude usage details" }));
-		const claudeDetails = screen.getByRole("region", { name: "Claude usage peek" });
-		const haikuDisclosure = within(claudeDetails).getByRole("button", { name: "Haiku 4.5 usage details" });
-		expect(within(haikuDisclosure).getByText("Haiku 4.5")).toHaveAttribute(
-			"title",
-			"claude-haiku-4-5-20251001",
+		renderWithQuery(
+			<SessionInspector
+				session={session([pr(7, "open")], {
+					status: "working",
+					activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" },
+				})}
+			/>,
 		);
-	});
 
-	it("renders complete costs and provider/model attribution", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		const completeCost = {
-			cachedInputNanos: 100_000_000,
-			coverage: "complete",
-			inputNanos: 540_000_000,
-			outputNanos: 600_000_000,
-			providerAttribution: "observed",
-			totalNanos: 1_240_000_000,
-		};
-		mockUsage(completeCost, [
-			{
-				harness: "claude-code",
-				totals: tokenTotals(completeCost),
-				models: [
-					{
-						modelId: "claude-sonnet-4",
-						totals: tokenTotals({ ...completeCost, totalNanos: 600_000_000 }),
-					},
-				],
-			},
-		]);
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-
-		const section = (await screen.findByText("Usage & cost")).closest(
-			"[data-testid='inspector-section']",
-		) as HTMLElement;
-		// The value carries no coverage qualifier, and the disclosure beside the
-		// heading explains the estimate without claiming it is billing.
-		expect(within(section).getAllByText("$1.24").length).toBeGreaterThan(0);
-		expect(section).not.toHaveTextContent(/[≈≥]\$/);
-		// The row already sits under its agent, so the billing provider is not
-		// repeated in the model name.
-		expect(within(section).getByText("Sonnet 4")).toBeInTheDocument();
-		expect(section).not.toHaveTextContent("anthropic ·");
-
-		await userEvent.hover(within(section).getByRole("button", { name: "About estimated cost" }));
-		const tooltip = await screen.findByRole("tooltip");
-		expect(tooltip).toHaveTextContent(/published API list prices/);
-		expect(tooltip).not.toHaveTextContent(/could not be priced/);
-	});
-
-	it("explains when the displayed price uses an inferred billing provider", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		mockUsage({
-			cachedInputNanos: 100_000_000,
-			coverage: "complete",
-			inputNanos: 540_000_000,
-			outputNanos: 600_000_000,
-			providerAttribution: "inferred",
-			totalNanos: 1_240_000_000,
-		});
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-
-		const section = (await screen.findByText("Usage & cost")).closest(
-			"[data-testid='inspector-section']",
-		) as HTMLElement;
-		expect(within(section).getAllByText("$1.24").length).toBeGreaterThan(0);
-
-		await userEvent.hover(within(section).getByRole("button", { name: "About estimated cost" }));
-		const tooltip = await screen.findByRole("tooltip");
-		expect(tooltip).toHaveTextContent(/Billing provider not confirmed/);
-		expect(tooltip).toHaveTextContent(/inferred from the model/);
-		expect(tooltip).toHaveTextContent(/Actual charges may differ/);
-	});
-
-	it("explains when an aggregate mixes detected and inferred providers", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		mockUsage({
-			cachedInputNanos: 100_000_000,
-			coverage: "complete",
-			inputNanos: 540_000_000,
-			outputNanos: 600_000_000,
-			providerAttribution: "mixed",
-			totalNanos: 1_240_000_000,
-		});
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-		const section = (await screen.findByText("Usage & cost")).closest(
-			"[data-testid='inspector-section']",
-		) as HTMLElement;
-		await userEvent.hover(within(section).getByRole("button", { name: "About estimated cost" }));
-
-		const tooltip = await screen.findByRole("tooltip");
-		expect(tooltip).toHaveTextContent(/Some billing providers were detected/);
-		expect(tooltip).toHaveTextContent(/others inferred from their models/);
-		expect(tooltip).toHaveTextContent(/actual charges may differ/i);
-	});
-
-	it("presents a partial total as a plain value and discloses the gap in words", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		mockUsage({
-			cachedInputNanos: null,
-			coverage: "partial",
-			inputNanos: 2_000_000,
-			outputNanos: 5_000_000,
-			providerAttribution: "observed",
-			totalNanos: 7_000_000,
-		});
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-
-		const section = (await screen.findByText("Usage & cost")).closest(
-			"[data-testid='inspector-section']",
-		) as HTMLElement;
-		expect(within(section).getAllByText("$0.007").length).toBeGreaterThan(0);
-		expect(section).not.toHaveTextContent(/[≈≥]\$/);
-		expect(section).not.toHaveTextContent(/partial/i);
-
-		await userEvent.hover(within(section).getByRole("button", { name: "About estimated cost" }));
-		const tooltip = await screen.findByRole("tooltip");
-		expect(tooltip).toHaveTextContent(/Some usage could not be priced/);
-	});
-
-	// The column itself carries the "nothing here is priced" case: it disappears
-	// when no row has an estimate, so an install without pricing shows no empty
-	// column at all. Once any row is priced the column earns its place, and the
-	// rows that are not priced say so in words rather than trailing a dash.
-	it("drops the cost column only when no agent has an estimate", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		const totals = tokenTotals(null);
-		mockUsage(null, [
-			{ harness: "codex", totals, models: [{ modelId: "gpt-5.5", totals }] },
-			{ harness: "claude-code", totals, models: [{ modelId: "claude-sonnet-4", totals }] },
-		]);
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-
-		const section = (await screen.findByText("Usage & cost")).closest(
-			"[data-testid='inspector-section']",
-		) as HTMLElement;
-		// The header row's parent is the list container holding every agent row.
-		const agentList = within(section).getByText("Agent").parentElement?.parentElement as HTMLElement;
-		expect(within(agentList).queryByText("Cost")).not.toBeInTheDocument();
-		expect(agentList).not.toHaveTextContent("Unavailable");
-	});
-
-	it("keeps the cost column and marks unpriced agents unavailable", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		const priced = tokenTotals({
-			cachedInputNanos: 100_000_000,
-			coverage: "complete",
-			inputNanos: 540_000_000,
-			outputNanos: 600_000_000,
-			providerAttribution: "observed",
-			totalNanos: 1_240_000_000,
-		});
-		const unpriced = tokenTotals(null);
-		mockUsage(null, [
-			{ harness: "codex", totals: priced, models: [{ modelId: "gpt-5.5", totals: priced }] },
-			{
-				harness: "claude-code",
-				totals: unpriced,
-				models: [{ modelId: "claude-sonnet-4", totals: unpriced }],
-			},
-		]);
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-
-		const section = (await screen.findByText("Usage & cost")).closest(
-			"[data-testid='inspector-section']",
-		) as HTMLElement;
-		// The header row's parent is the list container holding every agent row.
-		const agentList = within(section).getByText("Agent").parentElement?.parentElement as HTMLElement;
-		expect(within(agentList).getByText("Cost")).toBeInTheDocument();
-		expect(within(agentList).getByText("$1.24")).toBeInTheDocument();
-		expect(within(agentList).getByText("Unavailable")).toBeInTheDocument();
-		expect(within(agentList).queryByText("—")).not.toBeInTheDocument();
-	});
-
-	it("shows an unavailable estimate as words rather than a dash", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		mockUsage(null);
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-
-		const section = (await screen.findByText("Usage & cost")).closest(
-			"[data-testid='inspector-section']",
-		) as HTMLElement;
-		expect(within(section).getAllByText("Unavailable").length).toBeGreaterThan(0);
+		expect(screen.queryByText("Activity")).not.toBeInTheDocument();
+		expect(screen.queryByText("Usage & Cost")).not.toBeInTheDocument();
+		expect(getMock).not.toHaveBeenCalledWith("/api/v1/usage/sessions/{sessionId}", expect.anything());
 	});
 });
 
@@ -1665,12 +1400,7 @@ describe("SessionInspector completion controls", () => {
   });
 });
 
-describe("SessionInspector Activity section", () => {
-  const activitySectionElement = () =>
-    screen
-      .getByText("Activity")
-      .closest("[data-testid='inspector-section']") as HTMLElement;
-  const activitySection = () => within(activitySectionElement());
+describe("SessionInspector summary", () => {
 
   it("offers a managed resume only for an exited, nonterminated agent", async () => {
     renderWithQuery(
@@ -1683,7 +1413,7 @@ describe("SessionInspector Activity section", () => {
     );
 
     await userEvent.click(
-      activitySection().getByRole("button", { name: "Resume agent" }),
+      screen.getByRole("button", { name: "Resume agent" }),
     );
 
     await waitFor(() =>
@@ -1708,9 +1438,6 @@ describe("SessionInspector Activity section", () => {
 
     expect(
       screen.queryByRole("button", { name: "Resume agent" }),
-    ).not.toBeInTheDocument();
-    expect(
-      activitySectionElement().querySelector(".mt-3.border-t.pt-3"),
     ).not.toBeInTheDocument();
 
     live.unmount();
@@ -1770,9 +1497,6 @@ describe("SessionInspector Activity section", () => {
     expect(
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();
-    expect(
-      activitySectionElement().querySelector(".mt-3.border-t.pt-3"),
-    ).not.toBeInTheDocument();
   });
 
   it("keeps resume failures visible beside the action", async () => {
@@ -1790,278 +1514,12 @@ describe("SessionInspector Activity section", () => {
     );
 
     await userEvent.click(
-      activitySection().getByRole("button", { name: "Resume agent" }),
+      screen.getByRole("button", { name: "Resume agent" }),
     );
 
     expect(
-      await activitySection().findByText("agent restart failed"),
+      await screen.findByText("agent restart failed"),
     ).toBeInTheDocument();
-  });
-
-  it.each([
-    ["idle", "Idle"],
-    ["active", "Working"],
-    ["waiting_input", "Input Needed"],
-    ["exited", "Exited"],
-  ] as const)("renders %s from raw session activity", (state, label) => {
-    renderWithQuery(
-      <SessionInspector
-        session={session([pr(7, "open")], {
-          status: "review_pending",
-          activity: { state, lastActivityAt: "2026-06-15T10:00:00Z" },
-        })}
-      />,
-    );
-
-    expect(activitySection().getByText(label)).toBeInTheDocument();
-  });
-
-  it("renders unknown activity through the shared activity label", () => {
-    renderWithQuery(
-      <SessionInspector
-        session={session([], {
-          status: "working",
-          activity: {
-            state: "unknown",
-            lastActivityAt: "2026-06-15T10:00:00Z",
-          },
-        })}
-      />,
-    );
-
-    expect(activitySection().getByText("Unknown")).toBeInTheDocument();
-    expect(
-      activitySection().queryByText("Activity Unavailable"),
-    ).not.toBeInTheDocument();
-  });
-
-  it("falls back to unknown when no activity has been reported", () => {
-    renderWithQuery(
-      <SessionInspector session={session([], { status: "working" })} />,
-    );
-
-    expect(activitySection().getByText("Unknown")).toBeInTheDocument();
-  });
-
-  it("keeps the last known activity visible when the daemon reports no signal", () => {
-    renderWithQuery(
-      <SessionInspector
-        session={session([], {
-          status: "no_signal",
-          activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
-        })}
-      />,
-    );
-
-    const activityRow = activitySection()
-      .getByText("Idle")
-      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-    expect(within(activityRow).getByText("No Signal")).toBeInTheDocument();
-  });
-
-  it("does not derive the Activity label from PR-oriented session status", () => {
-    renderWithQuery(
-      <SessionInspector
-        session={session([], {
-          status: "review_pending",
-          activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
-        })}
-      />,
-    );
-
-    expect(activitySection().getByText("Idle")).toBeInTheDocument();
-    expect(
-      activitySection().queryByText("Input Needed"),
-    ).not.toBeInTheDocument();
-  });
-
-  it.each([
-    ["ci_failed", "CI Failed"],
-    ["changes_requested", "Changes Requested"],
-    ["commented", "Commented"],
-  ] as const)(
-    "renders %s as an SCM state in the current Activity row",
-    (status, label) => {
-      renderWithQuery(
-        <SessionInspector
-          session={session([], {
-            status,
-            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
-          })}
-        />,
-      );
-
-      const activityRow = activitySection()
-        .getByText("Idle")
-        .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-      expect(within(activityRow).getByText(label)).toBeInTheDocument();
-    },
-  );
-
-  it("keeps an unresolved, non-blocking review comment visible as Commented feedback while the agent is working (#5765)", () => {
-    renderWithQuery(
-      <SessionInspector
-        session={session(
-          [pr(5765, "open", { review: "review_required", reviewComments: true })],
-          {
-            status: "working",
-            activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" },
-          },
-        )}
-      />,
-    );
-
-    const activityRow = activitySection()
-      .getByText("Working")
-      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-    expect(within(activityRow).getByText("Commented")).toBeInTheDocument();
-    expect(within(activityRow).queryByText("Changes Requested")).not.toBeInTheDocument();
-  });
-
-  it("does not show Commented for a stale unresolved comment on a merged PR", () => {
-    renderWithQuery(
-      <SessionInspector
-        session={session(
-          [pr(5765, "merged", { review: "review_required", reviewComments: true })],
-          {
-            status: "idle",
-            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
-          },
-        )}
-      />,
-    );
-
-    const activityRow = activitySection()
-      .getByText("Idle")
-      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-    expect(within(activityRow).queryByText("Commented")).not.toBeInTheDocument();
-  });
-
-  it("ignores stale failing CI from a merged PR when the open PR is passing", () => {
-    renderWithQuery(
-      <SessionInspector
-        session={session(
-          [pr(5753, "open", { ci: "passing" }), pr(5754, "merged", { ci: "failing" })],
-          {
-            status: "working",
-            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
-          },
-        )}
-      />,
-    );
-
-    const activityRow = activitySection()
-      .getByText("Idle")
-      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-    expect(within(activityRow).queryByText("CI Failed")).not.toBeInTheDocument();
-  });
-
-  it("renders PR conflicts as an SCM state in the current Activity row", () => {
-    renderWithQuery(
-      <SessionInspector
-        session={session([pr(7, "open", { mergeability: "conflicting" })], {
-          status: "working",
-          activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
-        })}
-      />,
-    );
-
-    const activityRow = activitySection()
-      .getByText("Idle")
-      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-    expect(within(activityRow).getByText("Conflict")).toBeInTheDocument();
-  });
-
-  it("timestamps the live Activity state so it participates in chronological ordering", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
-
-    renderWithQuery(
-      <SessionInspector
-        session={session([], {
-          status: "working",
-          updatedAt: "2026-06-15T11:55:00Z",
-          activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" },
-        })}
-      />,
-    );
-
-    const activityRow = activitySection()
-      .getByText("Working")
-      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-    expect(within(activityRow).getByText("2h ago")).toBeInTheDocument();
-  });
-
-  it("renders each Activity event as one row with its time on the right", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
-    renderWithQuery(
-      <SessionInspector
-        session={session([pr(7, "open")], {
-          status: "working",
-          createdAt: "2026-06-15T09:00:00Z",
-          activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
-        })}
-      />,
-    );
-
-    for (const label of [/Created workspace/, "Idle"]) {
-      const row = activitySection()
-        .getByText(label)
-        .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-      expect(row).toHaveClass("flex", "items-center");
-      expect(row.firstElementChild).toHaveClass("rounded-full");
-      expect(row.lastElementChild).toHaveClass("font-mono");
-    }
-    expect(screen.queryByTestId("inspector-timeline-connector")).not.toBeInTheDocument();
-  });
-
-  it("lists the branch's newest commits in Activity", async () => {
-    const respond = commonGetsResponder();
-    getMock.mockImplementation(async (path: string) =>
-      path === "/api/v1/sessions/{sessionId}/workspace/history"
-        ? {
-          data: {
-            sessionId: "sess-1",
-            commits: Array.from({ length: 7 }, (_, index) => ({
-              sha: `c${index}`,
-              subject: `commit ${index}`,
-              author: "ada",
-              timestamp: `2026-06-15T10:0${index}:00Z`,
-              files: [],
-            })),
-          },
-          error: undefined,
-        }
-        : respond(path),
-    );
-    renderWithQuery(<SessionInspector session={session([])} />);
-
-    expect(await activitySection().findByText("commit 0")).toBeInTheDocument();
-    expect(activitySection().getAllByText("Committed")).toHaveLength(5);
-    expect(activitySection().queryByText("commit 5")).not.toBeInTheDocument();
-  });
-
-  it("uses the timeline node as the single live activity indicator", () => {
-    renderWithQuery(
-      <SessionInspector
-        session={session([], {
-          status: "working",
-          activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" },
-        })}
-      />,
-    );
-
-    const activityRow = activitySection()
-      .getByText("Working")
-      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-    const marker = activityRow.querySelector(
-      "span[aria-hidden='true'].rounded-full",
-    ) as HTMLElement;
-    expect(marker).toHaveClass("animate-status-pulse");
-    expect(
-      within(activityRow).getByText("Working").querySelector(".rounded-full"),
-    ).not.toBeInTheDocument();
   });
 
   it("aligns summary section headings on one shared inset", () => {
@@ -2074,7 +1532,7 @@ describe("SessionInspector Activity section", () => {
       />,
     );
 
-    for (const title of ["Pull request", "Session controls", "Activity"]) {
+    for (const title of ["Pull request", "Session controls"]) {
       const heading = screen.getByText(title).parentElement;
       expect(heading?.parentElement).toHaveAttribute(
         "data-testid",
@@ -2088,192 +1546,6 @@ describe("SessionInspector Activity section", () => {
 
 		expect(screen.queryByTestId("execution-context")).not.toBeInTheDocument();
 	});
-
-  it("keeps workspace, PR, and SCM context rows in the Activity timeline", () => {
-    renderWithQuery(
-      <SessionInspector
-        session={session(
-          [pr(7, "open", { ci: "failing", review: "changes_requested" })],
-          {
-            status: "ci_failed",
-            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
-          },
-        )}
-      />,
-    );
-
-    expect(
-      activitySection().getByText(/Created workspace/),
-    ).toBeInTheDocument();
-    expect(activitySection().getByText("Opened")).toBeInTheDocument();
-    expect(activitySection().getByText("PR #7")).toBeInTheDocument();
-    const activityRow = activitySection()
-      .getByText("Idle")
-      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-    expect(within(activityRow).getByText("CI Failed")).toBeInTheDocument();
-    expect(
-      within(activityRow).getByText("Changes Requested"),
-    ).toBeInTheDocument();
-  });
-
-  it("links and timestamps draft, opened, and merged PR milestones from backend lifecycle times", async () => {
-    const minutesAgo = (minutes: number) =>
-      new Date(Date.now() - minutes * 60 * 1000).toISOString();
-    const summaries = [
-      prSummary(8, "draft", {
-        createdAt: minutesAgo(120),
-        stateChangedAt: minutesAgo(120),
-      }),
-      prSummary(7, "open", {
-        createdAt: minutesAgo(60),
-        stateChangedAt: minutesAgo(15),
-      }),
-      prSummary(6, "merged", {
-        createdAt: minutesAgo(180),
-        stateChangedAt: minutesAgo(30),
-      }),
-    ];
-    getMock.mockImplementation(async (path: string) => {
-      if (path === "/api/v1/sessions/{sessionId}/pr") {
-        return {
-          data: { sessionId: "sess-1", prs: summaries },
-          error: undefined,
-        };
-      }
-      return { data: { reviewerHandleId: "", reviews: [] }, error: undefined };
-    });
-
-    renderWithQuery(
-      <SessionInspector
-        session={session(
-          [
-            pr(8, "draft", {
-              url: `https://api.github.com/repos/acme/repo/pulls/8`,
-            }),
-            pr(7, "open", {
-              url: `https://api.github.com/repos/acme/repo/pulls/7`,
-            }),
-            pr(6, "merged", {
-              url: `https://api.github.com/repos/acme/repo/pulls/6`,
-            }),
-          ],
-          {
-            status: "merged",
-            activity: { state: "idle", lastActivityAt: "2026-06-15T11:50:00Z" },
-          },
-        )}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByRole("link", { name: "Draft PR #8" })).toHaveAttribute(
-        "href",
-        "https://github.com/acme/repo/pull/8",
-      );
-    });
-    const draftLink = screen.getByRole("link", { name: "Draft PR #8" });
-    expect(
-      within(
-        draftLink.closest(
-          "[data-testid='inspector-timeline-event']",
-        ) as HTMLElement,
-      ).getByText("2h ago"),
-    ).toBeInTheDocument();
-
-    const openLink = screen.getByRole("link", { name: "Opened PR #7" });
-    expect(
-      within(
-        openLink.closest(
-          "[data-testid='inspector-timeline-event']",
-        ) as HTMLElement,
-      ).getByText("1h ago"),
-    ).toBeInTheDocument();
-
-    const mergedOpenedLink = screen.getByRole("link", { name: "Opened PR #6" });
-    expect(
-      within(
-        mergedOpenedLink.closest(
-          "[data-testid='inspector-timeline-event']",
-        ) as HTMLElement,
-      ).getByText("3h ago"),
-    ).toBeInTheDocument();
-
-    const mergedLink = screen.getByRole("link", { name: "Merged PR #6" });
-    expect(
-      within(
-        mergedLink.closest(
-          "[data-testid='inspector-timeline-event']",
-        ) as HTMLElement,
-      ).getByText("30m ago"),
-    ).toBeInTheDocument();
-    const doneRow = screen
-      .getByText("Done")
-      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-    expect(within(doneRow).getByText("30m ago")).toBeInTheDocument();
-  });
-
-  it("orders Activity timeline rows by timestamp with the latest event on top", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
-    const summaries = [
-      prSummary(42, "draft", {
-        createdAt: "2026-06-15T08:00:00Z",
-        stateChangedAt: "2026-06-15T08:00:00Z",
-      }),
-      prSummary(41, "open", {
-        createdAt: "2026-06-15T11:30:00Z",
-        stateChangedAt: "2026-06-15T11:30:00Z",
-      }),
-      prSummary(40, "merged", {
-        createdAt: "2026-06-15T09:15:00Z",
-        stateChangedAt: "2026-06-15T10:45:00Z",
-      }),
-    ];
-
-    renderWithQuery(
-      <SessionInspector
-        session={session(
-          [
-            pr(42, "draft", {
-              url: `https://api.github.com/repos/acme/repo/pulls/42`,
-            }),
-            pr(41, "open", {
-              url: `https://api.github.com/repos/acme/repo/pulls/41`,
-            }),
-            pr(40, "merged", {
-              url: `https://api.github.com/repos/acme/repo/pulls/40`,
-            }),
-          ],
-          {
-            status: "merged",
-            createdAt: "2026-06-15T09:00:00Z",
-            updatedAt: "2026-06-15T11:55:00Z",
-            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
-          },
-        )}
-      />,
-      undefined,
-      (client) => seedPRSummaries(client, summaries),
-    );
-
-    const section = screen
-      .getByText("Activity")
-      .closest("[data-testid='inspector-section']") as HTMLElement;
-    const rows = Array.from(
-      section.querySelectorAll("[data-testid='inspector-timeline-event']"),
-      (row) => row.textContent?.replace(/\s+/g, " ").trim(),
-    );
-    expect(rows).toEqual([
-      "Opened PR #4130m ago",
-      "Merged PR #401h ago",
-      "Done1h ago",
-      "Idle2h ago",
-      "Opened PR #402h ago",
-      "Created workspace3h ago",
-      "Draft PR #424h ago",
-    ]);
-
-  });
 });
 
 describe("SessionInspector tabs", () => {
@@ -4506,7 +3778,7 @@ describe("SessionInspector summary reviews", () => {
       "true",
     );
     expect(screen.queryByRole("tab", { name: "Reviews" })).not.toBeInTheDocument();
-    expect(screen.getByText("Activity")).toBeInTheDocument();
+    expect(screen.getByRole("tabpanel")).toBeInTheDocument();
     await waitFor(() => expect(onViewChange).toHaveBeenCalledWith("summary"));
   });
 });
