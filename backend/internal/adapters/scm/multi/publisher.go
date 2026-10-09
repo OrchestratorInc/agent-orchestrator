@@ -9,6 +9,7 @@ import (
 
 var _ ports.SCMPullRequestPublisher = (*Provider)(nil)
 
+// ReconcileOrCreatePullRequest delegates publication to the repository's SCM provider.
 func (m *Provider) ReconcileOrCreatePullRequest(ctx context.Context, request ports.SCMPublishRequest) (ports.SCMPublishResult, error) {
 	provider, err := m.resolve(request.Repo.Provider)
 	if err != nil {

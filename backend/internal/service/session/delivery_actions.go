@@ -14,12 +14,14 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
+// DeliveryActionInput identifies the reviewed workspace state and requested safe transition.
 type DeliveryActionInput struct {
 	Action                   DeliveryAction
 	ExpectedWorkspaceVersion string
 	CommitMessage            string
 }
 
+// DeliveryActionResult reports completed stages and the refreshed delivery state.
 type DeliveryActionResult struct {
 	Delivery    DeliveryStatus
 	PullRequest *DeliveryPullRequest
@@ -38,6 +40,7 @@ func (s *Service) deliveryLock(id domain.SessionID) *sync.Mutex {
 	return lock
 }
 
+// AdvanceDelivery performs the currently authorized commit, push, or PR publication transition.
 func (s *Service) AdvanceDelivery(ctx context.Context, id domain.SessionID, input DeliveryActionInput) (DeliveryActionResult, error) {
 	lock := s.deliveryLock(id)
 	if !lock.TryLock() {

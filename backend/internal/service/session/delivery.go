@@ -11,23 +11,34 @@ import (
 type DeliveryState string
 
 const (
-	DeliveryStateEmpty            DeliveryState = "empty"
-	DeliveryStateUncommitted      DeliveryState = "uncommitted"
-	DeliveryStateReadyToPublish   DeliveryState = "ready_to_publish"
+	// DeliveryStateEmpty means the workspace has no local work or associated PR.
+	DeliveryStateEmpty DeliveryState = "empty"
+	// DeliveryStateUncommitted means local file changes must be committed before publication.
+	DeliveryStateUncommitted DeliveryState = "uncommitted"
+	// DeliveryStateReadyToPublish means committed work can be published as a PR.
+	DeliveryStateReadyToPublish DeliveryState = "ready_to_publish"
+	// DeliveryStateUncommittedForPR means local file changes belong to an associated PR.
 	DeliveryStateUncommittedForPR DeliveryState = "uncommitted_for_pr"
-	DeliveryStateAheadOfPR        DeliveryState = "ahead_of_pr"
-	DeliveryStateSynchronized     DeliveryState = "synchronized"
-	DeliveryStateBlocked          DeliveryState = "blocked"
+	// DeliveryStateAheadOfPR means local commits must be pushed to an associated PR.
+	DeliveryStateAheadOfPR DeliveryState = "ahead_of_pr"
+	// DeliveryStateSynchronized means the local branch and associated PR are synchronized.
+	DeliveryStateSynchronized DeliveryState = "synchronized"
+	// DeliveryStateBlocked means AO cannot determine a safe delivery transition.
+	DeliveryStateBlocked DeliveryState = "blocked"
 )
 
 // DeliveryAction is the one mutation AO can safely offer for a delivery state.
 type DeliveryAction string
 
 const (
+	// DeliveryActionCommitAndPublish commits local work before publishing a PR.
 	DeliveryActionCommitAndPublish DeliveryAction = "commit_and_publish_pr"
-	DeliveryActionPublishPR        DeliveryAction = "publish_pr"
-	DeliveryActionCommitAndPush    DeliveryAction = "commit_and_push"
-	DeliveryActionPush             DeliveryAction = "push"
+	// DeliveryActionPublishPR publishes committed work as a PR.
+	DeliveryActionPublishPR DeliveryAction = "publish_pr"
+	// DeliveryActionCommitAndPush commits local work and pushes it to an associated PR.
+	DeliveryActionCommitAndPush DeliveryAction = "commit_and_push"
+	// DeliveryActionPush pushes local commits to an associated PR.
+	DeliveryActionPush DeliveryAction = "push"
 )
 
 // DeliveryPullRequest identifies the exact session-owned target for updates.

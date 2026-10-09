@@ -13,6 +13,7 @@ import (
 
 var _ ports.SCMPullRequestPublisher = (*Provider)(nil)
 
+// ReconcileOrCreatePullRequest returns an existing matching merge request or creates one.
 func (p *Provider) ReconcileOrCreatePullRequest(ctx context.Context, request ports.SCMPublishRequest) (ports.SCMPublishResult, error) {
 	if p == nil || strings.TrimSpace(request.Repo.Owner) == "" || strings.TrimSpace(request.Repo.Name) == "" || strings.TrimSpace(request.SourceBranch) == "" || strings.TrimSpace(request.TargetBranch) == "" || strings.TrimSpace(request.Title) == "" {
 		return ports.SCMPublishResult{}, fmt.Errorf("gitlab scm: invalid publish request")
