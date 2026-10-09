@@ -39,6 +39,14 @@ func validateNativeRestore(ctx context.Context, workspace, id string, env map[st
 	if err := db.QueryRowContext(ctx, "SELECT directory FROM session WHERE id = ? AND time_archived IS NULL", id).Scan(&directory); err != nil {
 		return fmt.Errorf("zcode: exact native session is unavailable: %w", err)
 	}
+	var hasHistory bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM message m JOIN part p ON p.message_id = m.id AND p.session_id = m.session_id
+		WHERE m.session_id = ? AND json_valid(m.data) AND json_valid(p.data)
+		AND json_extract(m.data, '$.role') = 'user'
+	)`, id).Scan(&hasHistory); err != nil || !hasHistory {
+		return fmt.Errorf("zcode: native session history is missing or unreadable")
+	}
 	wanted, err := os.Stat(workspace)
 	if err != nil {
 		return fmt.Errorf("zcode: restore workspace unavailable: %w", err)

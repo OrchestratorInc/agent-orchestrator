@@ -11335,3 +11335,23 @@ func TestSpawn_VisibleComposerCannotOverrideStartupBlocker(t *testing.T) {
 		t.Fatalf("typed task into startup dialog: %#v", msg.msgs)
 	}
 }
+
+// A strict adapter can distinguish the real idle composer from transcript text.
+type strictComposerAgent struct{ readinessAgent }
+
+func (a strictComposerAgent) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
+	if output == "CURRENT COMPOSER: Type a prompt" {
+		return domain.ActivityIdle, true
+	}
+	return "", false
+}
+func TestRequiredComposerRejectsTranscriptReadinessText(t *testing.T) {
+	agent := strictComposerAgent{readinessAgent{afterStartAgent: afterStartAgent{recordingAgent: &recordingAgent{}}, hints: ports.PromptReadinessHints{RequireReady: true, Patterns: []string{"Type a prompt"}, PollInterval: time.Millisecond, Timeout: time.Millisecond}}}
+	for _, output := range []string{"The earlier transcript says Type a prompt", "CURRENT COMPOSER: Type a prompt"} {
+		m := New(Deps{Runtime: &fakeRuntime{outputs: []string{output}}})
+		err := m.waitForPromptReadiness(context.Background(), agent, ports.LaunchConfig{}, ports.RuntimeHandle{})
+		if (err == nil) != (output == "CURRENT COMPOSER: Type a prompt") {
+			t.Fatalf("output %q readiness error=%v", output, err)
+		}
+	}
+}

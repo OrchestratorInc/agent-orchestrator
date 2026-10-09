@@ -6244,7 +6244,14 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 			return fmt.Errorf("prompt readiness: provider startup requires user action")
 		}
 		if err == nil && promptOutputContains(output, hints.Patterns) {
-			return nil
+			ready := true
+			if detector, ok := agent.(ports.TerminalActivityDetector); ok && hints.RequireReady {
+				state, known := detector.DetectTerminalActivity(output)
+				ready = known && state == domain.ActivityIdle
+			}
+			if ready {
+				return nil
+			}
 		}
 		select {
 		case <-ctx.Done():

@@ -22,6 +22,15 @@ func TestNativeRestoreRequiresExactExistingWorkspace(t *testing.T) {
 	if _, err := db.Exec("INSERT INTO session VALUES (?, ?, NULL), (?, ?, 1)", "sess_exact", workspace, "sess_archived", workspace); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(`CREATE TABLE message (id TEXT, session_id TEXT, data TEXT);
+CREATE TABLE part (message_id TEXT, session_id TEXT, data TEXT);
+INSERT INTO message VALUES ('msg_1', 'sess_exact', '{"role":"user"}');
+INSERT INTO part VALUES ('msg_1', 'sess_exact', '{"type":"text","text":"original task"}');`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO session VALUES ('sess_empty', ?, NULL)", workspace); err != nil {
+		t.Fatal(err)
+	}
 	env := map[string]string{"ZCODE_SESSION_DB_PATH": path, "ZCODE_SESSION_DB": ""}
 	for _, tc := range []struct {
 		name, id, workspace string
@@ -30,6 +39,7 @@ func TestNativeRestoreRequiresExactExistingWorkspace(t *testing.T) {
 		{"exact", "sess_exact", workspace, false},
 		{"prefix", "sess_ex", workspace, true},
 		{"missing", "sess_missing", workspace, true},
+		{"lost history", "sess_empty", workspace, true},
 		{"archived", "sess_archived", workspace, true},
 		{"foreign workspace", "sess_exact", t.TempDir(), true},
 		{"absent workspace", "sess_exact", "", true},
