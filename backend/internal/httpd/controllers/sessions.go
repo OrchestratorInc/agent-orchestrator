@@ -186,6 +186,8 @@ type SessionsController struct {
 		Get(context.Context, domain.ProjectID) (projectsvc.GetResult, error)
 	}
 	Activity                 ActivityRecorder
+	NativeSessions           ports.AgentNativeSessionResolver
+	DataDir                  string
 	Usage                    UsageHookRecorder
 	Attachments              *attachmentstore.Store
 	PreviewServer            ManagedPreviewServer
@@ -2177,15 +2179,14 @@ func (c *SessionsController) codewhaleActivity(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	nativeID := capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.Event.ThreadID)))
-	if nativeID == "" {
+	hookThreadID := capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.Event.ThreadID)))
+	if hookThreadID == "" {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "CODEWHALE_THREAD_ID_REQUIRED", "Codewhale lifecycle callbacks require a thread_id", nil)
 		return
 	}
 	signal := ports.ActivitySignal{
 		Timestamp:      in.Event.Timestamp,
 		Event:          capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.Event.Event))),
-		AgentSessionID: nativeID,
 		ProviderTurnID: capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.Event.TurnID))),
 		LaunchID:       launchID,
 	}
@@ -2215,6 +2216,24 @@ func (c *SessionsController) codewhaleActivity(w http.ResponseWriter, r *http.Re
 	default:
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "UNKNOWN_CODEWHALE_LIFECYCLE_EVENT", "Unknown Codewhale lifecycle event", nil)
 		return
+	}
+	// Codewhale's thread_id is a per-process HookExecutor id (sess_*), not the
+	// durable UUID accepted by --resume. Terminal turn/session events run after
+	// Codewhale saves the conversation, so resolve that UUID from the launch's
+	// isolated Runtime store before lifecycle persists a native resume handle.
+	if c.NativeSessions != nil && (signal.Event == "stop" || signal.Event == "session-end") {
+		nativeID, ok, err := c.NativeSessions.ResolveNativeSessionID(r.Context(), ports.NativeSessionResolveConfig{
+			DataDir:   c.DataDir,
+			SessionID: sessionID(r),
+			LaunchID:  launchID,
+		})
+		if err != nil {
+			envelope.WriteError(w, r, err)
+			return
+		}
+		if ok {
+			signal.AgentSessionID = capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(nativeID)))
+		}
 	}
 	if err := c.Activity.ApplyActivitySignal(r.Context(), sessionID(r), signal); err != nil {
 		if errors.Is(err, ports.ErrActivityProjectionContention) {

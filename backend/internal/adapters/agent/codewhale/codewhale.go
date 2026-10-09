@@ -20,7 +20,7 @@ import (
 
 const adapterID = "codewhale"
 
-var nativeSessionIDPattern = regexp.MustCompile(`^sess_[A-Za-z0-9_-]+$`)
+var nativeSessionIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // Plugin launches the user's Codewhale installation without replacing its
 // home directory, credentials, provider configuration, hooks, or sessions.
@@ -38,6 +38,7 @@ var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 var _ ports.AgentBinaryResolver = (*Plugin)(nil)
+var _ ports.AgentNativeSessionResolver = (*Plugin)(nil)
 
 // Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
@@ -90,9 +91,10 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 	}, nil
 }
 
-// GetRestoreCommand resumes exactly the native Codewhale session captured by
-// the lifecycle outbox. Missing identity permits AO's ordinary fresh fallback;
-// malformed identity fails closed instead of selecting a best-match session.
+// GetRestoreCommand resumes exactly the durable Codewhale conversation UUID
+// captured from its saved-session store. Missing identity permits AO's ordinary
+// fresh fallback; malformed identity fails closed instead of selecting a
+// best-match session or mistaking a lifecycle hook id for a conversation id.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err

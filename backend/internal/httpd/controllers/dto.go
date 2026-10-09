@@ -1366,8 +1366,8 @@ type SetActivityResponse struct {
 }
 
 // CodewhaleLifecycleWebhookRequest is Codewhale v0.10's lifecycle webhook
-// envelope. Payload is intentionally omitted: lifecycle state and native
-// identity are fully represented by the bounded envelope fields.
+// envelope. The thread id is process-local correlation, not the durable saved
+// conversation UUID used for restore.
 type CodewhaleLifecycleWebhookRequest struct {
 	At    time.Time               `json:"at,omitempty"`
 	Event CodewhaleLifecycleEvent `json:"event"`

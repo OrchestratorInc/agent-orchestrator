@@ -2,6 +2,7 @@ package codewhale
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -26,6 +27,9 @@ const (
 	standingInstructionsMark = "<!-- agent-orchestrator: managed Codewhale standing instructions; do not edit -->"
 	managedConfigEnv         = "CODEWHALE_MANAGED_CONFIG_PATH"
 	legacyManagedConfigEnv   = "DEEPSEEK_MANAGED_CONFIG_PATH"
+	codewhaleHomeEnv         = "CODEWHALE_HOME"
+	codewhaleRuntimeDirEnv   = "CODEWHALE_RUNTIME_DIR"
+	nativeSessionLocatorName = "native-session.json"
 	minLifecycleVersion      = "0.10.0"
 	commandTimeout           = 10 * time.Second
 )
@@ -121,6 +125,9 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 	if filepath.Base(sessionID) != sessionID || sessionID == "." || sessionID == ".." {
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: unsafe session id %q", sessionID)
 	}
+	if filepath.Base(launchID) != launchID || launchID == "." || launchID == ".." {
+		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: unsafe launch id %q", launchID)
+	}
 	info, err := runfile.Read(runFilePath)
 	if err != nil {
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: read daemon run file: %w", err)
@@ -132,6 +139,23 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 	dir := filepath.Join(dataDir, "agent-runtime", adapterID, "sessions", sessionID)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: create runtime config directory: %w", err)
+	}
+	runtimeDir := filepath.Join(dir, "launches", launchID, "runtime")
+	if err := os.MkdirAll(filepath.Dir(runtimeDir), 0o750); err != nil {
+		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: create launch metadata directory: %w", err)
+	}
+	sessionsDir, err := codewhaleSessionsDir(cfg.WorkspacePath, cfg.Env)
+	if err != nil {
+		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: resolve sessions directory: %w", err)
+	}
+	locator := nativeSessionLocator{SessionsDir: sessionsDir, RuntimeDir: runtimeDir}
+	locatorData, err := json.Marshal(locator)
+	if err != nil {
+		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: encode native session locator: %w", err)
+	}
+	locatorPath := nativeSessionLocatorPath(dataDir, sessionID, launchID)
+	if err := hookutil.AtomicWriteFile(locatorPath, locatorData, 0o600); err != nil {
+		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: write native session locator: %w", err)
 	}
 	outbox := filepath.Join(dir, "lifecycle.jsonl")
 	if err := os.Remove(outbox); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -155,7 +179,158 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: write managed config: %w", err)
 	}
 	cfg.Env[managedConfigEnv] = configPath
+	cfg.Env[codewhaleRuntimeDirEnv] = runtimeDir
 	return nil
+}
+
+type nativeSessionLocator struct {
+	SessionsDir string `json:"sessionsDir"`
+	RuntimeDir  string `json:"runtimeDir"`
+	SessionID   string `json:"sessionId,omitempty"`
+}
+
+type savedSessionIdentity struct {
+	Metadata struct {
+		ID           string `json:"id"`
+		RuntimeStore *struct {
+			DataDir string `json:"data_dir"`
+		} `json:"runtime_store"`
+	} `json:"metadata"`
+}
+
+// ResolveNativeSessionID maps Codewhale's process-local lifecycle identity to
+// the durable UUID accepted by --resume. PrepareRuntimeLaunch gives each AO
+// generation a unique Runtime store; Codewhale records that exact path in the
+// saved conversation, making this lookup deterministic without scraping the
+// TUI or selecting the newest session in a workspace.
+func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSessionResolveConfig) (string, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	dataDir := strings.TrimSpace(cfg.DataDir)
+	sessionID := strings.TrimSpace(string(cfg.SessionID))
+	launchID := strings.TrimSpace(cfg.LaunchID)
+	if dataDir == "" || sessionID == "" || launchID == "" {
+		return "", false, errors.New("codewhale.ResolveNativeSessionID: data dir, session id, and launch id are required")
+	}
+	if filepath.Base(sessionID) != sessionID || sessionID == "." || sessionID == ".." ||
+		filepath.Base(launchID) != launchID || launchID == "." || launchID == ".." {
+		return "", false, errors.New("codewhale.ResolveNativeSessionID: unsafe session or launch id")
+	}
+
+	locatorPath := nativeSessionLocatorPath(dataDir, sessionID, launchID)
+	data, err := os.ReadFile(locatorPath) //nolint:gosec // path is derived from AO-owned ids under AO_DATA_DIR
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("codewhale.ResolveNativeSessionID: read launch locator: %w", err)
+	}
+	var locator nativeSessionLocator
+	if err := json.Unmarshal(data, &locator); err != nil {
+		return "", false, fmt.Errorf("codewhale.ResolveNativeSessionID: decode launch locator: %w", err)
+	}
+	if locator.SessionID != "" {
+		if !nativeSessionIDPattern.MatchString(locator.SessionID) {
+			return "", false, errors.New("codewhale.ResolveNativeSessionID: launch locator contains an invalid saved session id")
+		}
+		return locator.SessionID, true, nil
+	}
+
+	entries, err := os.ReadDir(locator.SessionsDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("codewhale.ResolveNativeSessionID: list saved sessions: %w", err)
+	}
+	var match string
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return "", false, err
+		}
+		if entry.IsDir() || strings.ToLower(filepath.Ext(entry.Name())) != ".json" {
+			continue
+		}
+		candidate := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+		if !nativeSessionIDPattern.MatchString(candidate) {
+			continue
+		}
+		sessionData, readErr := os.ReadFile(filepath.Join(locator.SessionsDir, entry.Name())) //nolint:gosec // validated UUID filename from Codewhale's session directory
+		if readErr != nil {
+			continue
+		}
+		var saved savedSessionIdentity
+		if json.Unmarshal(sessionData, &saved) != nil || saved.Metadata.RuntimeStore == nil ||
+			!sameFilesystemPath(saved.Metadata.RuntimeStore.DataDir, locator.RuntimeDir) {
+			continue
+		}
+		savedID := strings.TrimSpace(saved.Metadata.ID)
+		if savedID != candidate || !nativeSessionIDPattern.MatchString(savedID) {
+			continue
+		}
+		if match != "" && match != savedID {
+			return "", false, errors.New("codewhale.ResolveNativeSessionID: multiple saved sessions claim this launch runtime")
+		}
+		match = savedID
+	}
+	if match == "" {
+		return "", false, nil
+	}
+	locator.SessionID = match
+	updated, err := json.Marshal(locator)
+	if err != nil {
+		return "", false, fmt.Errorf("codewhale.ResolveNativeSessionID: encode resolved launch locator: %w", err)
+	}
+	if err := hookutil.AtomicWriteFile(locatorPath, updated, 0o600); err != nil {
+		return "", false, fmt.Errorf("codewhale.ResolveNativeSessionID: persist resolved launch locator: %w", err)
+	}
+	return match, true, nil
+}
+
+func nativeSessionLocatorPath(dataDir, sessionID, launchID string) string {
+	return filepath.Join(dataDir, "agent-runtime", adapterID, "sessions", sessionID, "launches", launchID, nativeSessionLocatorName)
+}
+
+func codewhaleSessionsDir(workspace string, env map[string]string) (string, error) {
+	home := strings.TrimSpace(env[codewhaleHomeEnv])
+	if home == "" {
+		home = strings.TrimSpace(os.Getenv(codewhaleHomeEnv))
+	}
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if home == "" {
+		home = filepath.Join(userHome, ".codewhale")
+	} else if home == "~" {
+		home = userHome
+	} else if strings.HasPrefix(home, "~/") || strings.HasPrefix(home, `~\`) {
+		home = filepath.Join(userHome, home[2:])
+	} else if !filepath.IsAbs(home) {
+		home = filepath.Join(workspace, home)
+	}
+	home, err = filepath.Abs(home)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "sessions"), nil
+}
+
+func sameFilesystemPath(left, right string) bool {
+	normalize := func(value string) string {
+		value = filepath.Clean(strings.TrimSpace(value))
+		if runtime.GOOS == "windows" {
+			if strings.HasPrefix(value, `\\?\UNC\`) {
+				value = `\\` + strings.TrimPrefix(value, `\\?\UNC\`)
+			} else {
+				value = strings.TrimPrefix(value, `\\?\`)
+			}
+			value = strings.ToLower(value)
+		}
+		return value
+	}
+	return normalize(left) != "" && normalize(left) == normalize(right)
 }
 
 func (p *Plugin) requireLifecycleContract(ctx context.Context, workingDir string, env map[string]string) error {

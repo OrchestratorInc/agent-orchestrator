@@ -58,17 +58,18 @@ func TestPermissionMappings(t *testing.T) {
 
 func TestRestoreCommandUsesExactNativeSession(t *testing.T) {
 	p := &Plugin{resolvedBinary: "/opt/codewhale"}
+	const savedSessionID = "0e9dfb74-4a65-4067-964f-152e432cccb6"
 	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Session: ports.SessionRef{
 			WorkspacePath: "/work/tree",
-			Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: "sess_native-123"},
+			Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: savedSessionID},
 		},
 		Permissions: ports.PermissionModeBypassPermissions,
 	})
 	if err != nil || !ok {
 		t.Fatalf("restore ok=%v err=%v", ok, err)
 	}
-	want := []string{"/opt/codewhale", "--workspace", "/work/tree", "--skip-onboarding", "--yolo", "--resume", "sess_native-123"}
+	want := []string{"/opt/codewhale", "--workspace", "/work/tree", "--skip-onboarding", "--yolo", "--resume", savedSessionID}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("command = %#v, want %#v", cmd, want)
 	}
@@ -79,7 +80,7 @@ func TestRestoreCommandRejectsInvalidNativeSession(t *testing.T) {
 	_, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Session: ports.SessionRef{
 			WorkspacePath: "/work/tree",
-			Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: "latest"},
+			Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: "sess_hook-123"},
 		},
 	})
 	if err == nil || ok {

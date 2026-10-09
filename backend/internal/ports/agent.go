@@ -126,6 +126,22 @@ type AgentRuntimeLaunchEnv interface {
 	AugmentRuntimeLaunchEnv(env map[string]string, dataDir string, sessionID domain.SessionID, launchID string)
 }
 
+// AgentNativeSessionResolver is an optional capability for adapters whose
+// lifecycle protocol reports a process-local correlation id rather than the
+// durable conversation id accepted by their resume command.
+type AgentNativeSessionResolver interface {
+	ResolveNativeSessionID(ctx context.Context, cfg NativeSessionResolveConfig) (sessionID string, ok bool, err error)
+}
+
+// NativeSessionResolveConfig identifies one supervised agent launch. DataDir
+// and the two AO ids locate adapter-owned launch metadata without trusting a
+// provider-supplied path.
+type NativeSessionResolveConfig struct {
+	DataDir   string
+	SessionID domain.SessionID
+	LaunchID  string
+}
+
 // AgentBinaryResolutionInvalidator is an optional capability for adapters that
 // cache the executable path. Install and reinstall flows use it to make the
 // next readiness, model-discovery, or launch operation resolve the current
