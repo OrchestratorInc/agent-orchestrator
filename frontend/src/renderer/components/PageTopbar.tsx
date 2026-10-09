@@ -4,7 +4,6 @@ import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { SHELL_PANEL_SPRING } from "../lib/motion-spring";
 import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
-import { Skeleton } from "./ui/skeleton";
 
 /**
  * The one page topbar. Every center-panel page (board, automations, archive,
@@ -50,7 +49,6 @@ export const topbarTitleClass = "text-brand font-semibold tracking-tight leading
 export function PageTopbar({
 	lead,
 	actions,
-	loading = false,
 	className,
 	...props
 }: Omit<ComponentProps<"header">, "children" | "style"> & {
@@ -58,19 +56,16 @@ export function PageTopbar({
 	lead?: ReactNode;
 	/** High-value page actions, right-aligned. */
 	actions?: ReactNode;
-	/** Renders the lead as a skeleton so the bar keeps its shape while data resolves. */
-	loading?: boolean;
 }) {
 	const paddingLeft = usePageTopbarPaddingLeft();
 	return (
 		<motion.header
-			aria-busy={loading || undefined}
 			className={cn(topbarFrameClass, "workspace-topbar-container center-panel-titlebar relative z-chrome gap-3 border-b border-border-strong pr-3", className)}
 			style={isMac ? dragStyle : { paddingLeft }}
 			{...(props as object)}
 		>
 			<div className="flex min-w-0 flex-1 items-center gap-2.5">
-				{loading ? <PageTopbarLeadSkeleton /> : lead}
+				{lead}
 			</div>
 			{actions ? <PageTopbarActions>{actions}</PageTopbarActions> : null}
 		</motion.header>
@@ -90,10 +85,6 @@ export function PageTopbarTitle({
 			<span className="max-w-content-max truncate">{children}</span>
 		</Component>
 	);
-}
-
-export function PageTopbarLeadSkeleton() {
-	return <Skeleton aria-hidden="true" className="h-4 w-24" data-testid="page-topbar-skeleton" />;
 }
 
 /** Right-aligned action cluster. Controls inside never start a window drag. */

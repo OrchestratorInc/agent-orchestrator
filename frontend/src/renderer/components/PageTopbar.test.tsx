@@ -22,15 +22,6 @@ describe("PageTopbar", () => {
 
 		expect(screen.queryByTestId("workspace-topbar-actions")).not.toBeInTheDocument();
 	});
-
-	it("keeps the bar's shape with a skeleton lead while loading", () => {
-		render(<PageTopbar actions={<button type="button">New task</button>} lead={<span>Project</span>} loading />);
-
-		expect(screen.getByRole("banner")).toHaveAttribute("aria-busy", "true");
-		expect(screen.getByTestId("page-topbar-skeleton")).toBeInTheDocument();
-		expect(screen.queryByText("Project")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "New task" })).toBeInTheDocument();
-	});
 });
 
 describe("SessionTabsTopbar", () => {

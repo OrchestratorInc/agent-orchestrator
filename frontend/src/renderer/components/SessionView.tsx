@@ -41,6 +41,7 @@ import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { SessionTopbarActions } from "./SessionTopbarActions";
+import { PageTopbar } from "./PageTopbar";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TopbarButton } from "./TopbarButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -1946,8 +1947,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			: !remoteBase || remoteCode === "UPSTREAM_UNAVAILABLE" || remoteCode === "HOST_IDENTITY_UNVERIFIED"
 				? "remote.hostOffline" : remoteSessionQuery.isError ? "remote.loadSessionFailed" : "session.notFound") : undefined;
 		return (
-			<div className="grid h-full place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : undefined}>
-				{remoteError ?? t("session.notFound")}
+			<div className="flex h-full min-h-0 flex-col bg-background" data-testid="session-missing">
+				<PageTopbar />
+				<div className="grid min-h-0 flex-1 place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : undefined}>
+					{remoteError ?? t("session.notFound")}
+				</div>
 			</div>
 		);
 	}

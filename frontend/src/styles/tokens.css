@@ -284,9 +284,8 @@
 	--size-topbar-secondary: 36px;
 	--size-topbar-control: 28px;
 	--size-toolbar: var(--size-topbar-primary);
-	/* ShellTopbar (.dashboard-app-header) on Win/Linux — the full-width bar
-	   the sidebar hangs below. Distinct from --size-toolbar (36px) because
-	   the shell header is taller (56px) to accommodate the project crumb. */
+	/* Top offset for the Win/Linux browser and files pop-outs.
+	   Distinct from --size-toolbar (36px). */
 	--size-shell-topbar: 56px;
 	/* Windows custom title bar (.window-titlebar). */
 	--size-window-titlebar: 36px;
