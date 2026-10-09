@@ -691,6 +691,32 @@ function CachedTerminalSlot({
 	return <div className="h-full min-h-0 w-full" data-testid="session-terminal-slot" ref={slotRef} />;
 }
 
+const BOOT_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const BOOT_STATUS_STEPS = [
+	"Preparing the {subject}",
+	"Clearing a workspace",
+	"Warming up the agent",
+	"Untangling worktrees",
+	"Sharpening pencils",
+	"Waking the {subject}",
+	"Almost there",
+];
+
+function TerminalBootStatus({ subject }: { subject: string }) {
+	const [tick, setTick] = useState(0);
+	useEffect(() => {
+		const id = window.setInterval(() => setTick((value) => value + 1), 80);
+		return () => window.clearInterval(id);
+	}, []);
+	const step = Math.min(Math.floor(tick / 22), BOOT_STATUS_STEPS.length - 1);
+	return (
+		<div className="flex items-center gap-2.5 text-terminal-dim" role="status" aria-live="polite">
+			<span aria-hidden="true" className="w-[1ch] text-terminal">{BOOT_SPINNER_FRAMES[tick % BOOT_SPINNER_FRAMES.length]}</span>
+			<span>{BOOT_STATUS_STEPS[step].replace("{subject}", subject)}</span>
+		</div>
+	);
+}
+
 export function TerminalPane({
 	session,
 	terminalGeneration,
@@ -1288,12 +1314,6 @@ function AttachedTerminal({
 		!showEndedStatePreview &&
 		!cloudRevealedRef.current;
 	const showEndedState = showEndedStatePreview && !isBoxComingUp && !session?.cloud;
-	const emptyStateTitle = session ? t("terminal.startingSession") : "Agent Orchestrator";
-	const emptyStateMessage = session
-		? session.kind === "orchestrator"
-			? t("terminal.preparingOrchestrator")
-			: t("terminal.preparingWorker")
-		: t("terminal.noSessionSelected");
 
 	return (
 		<div className="terminal-surface flex h-full min-h-0 flex-col" data-testid="session-terminal">
@@ -1335,10 +1355,14 @@ function AttachedTerminal({
 				/>
 				{showEmptyState && (
 					<div className="terminal-surface absolute inset-0 grid place-items-center font-mono text-control">
-						<div className="text-center">
-							<div className="text-terminal">{emptyStateTitle}</div>
-							<div className="mt-2 text-terminal-dim">{emptyStateMessage}</div>
-						</div>
+						{session ? (
+							<TerminalBootStatus subject={session.kind === "orchestrator" ? "orchestrator" : "agent"} />
+						) : (
+							<div className="text-center">
+								<div className="text-terminal">{"Agent Orchestrator"}</div>
+								<div className="mt-2 text-terminal-dim">{t("terminal.noSessionSelected")}</div>
+							</div>
+						)}
 					</div>
 				)}
 				{isCloudConnecting && (

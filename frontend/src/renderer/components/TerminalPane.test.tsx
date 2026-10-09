@@ -590,12 +590,7 @@ describe("TerminalPane empty states", () => {
 	it("shows a startup message when a selected session has no terminal handle yet", () => {
 		const view = renderPane(worker);
 		try {
-			expect(screen.getByText("Starting session")).toBeInTheDocument();
-			expect(
-				screen.getByText(
-					"Preparing the worker terminal. This can take a moment while AO creates the workspace and starts the agent.",
-				),
-			).toBeInTheDocument();
+			expect(screen.getByRole("status")).toHaveTextContent("Preparing the agent");
 			expect(screen.queryByText("No session selected. Pick a worker to attach its terminal.")).not.toBeInTheDocument();
 		} finally {
 			view.restore();
@@ -605,12 +600,7 @@ describe("TerminalPane empty states", () => {
 	it("shows orchestrator-specific startup copy for a pending orchestrator terminal", () => {
 		const view = renderPane(orchestrator);
 		try {
-			expect(screen.getByText("Starting session")).toBeInTheDocument();
-			expect(
-				screen.getByText(
-					"Preparing the orchestrator terminal. This can take a moment while AO creates the workspace and starts the agent.",
-				),
-			).toBeInTheDocument();
+			expect(screen.getByRole("status")).toHaveTextContent("Preparing the orchestrator");
 			expect(screen.queryByText(/worker terminal/i)).not.toBeInTheDocument();
 		} finally {
 			view.restore();
@@ -798,7 +788,7 @@ describe("TerminalPane replay cover", () => {
 		replaySettled.value = false;
 		const view = renderPane(worker);
 		try {
-			expect(screen.getByText("Starting session")).toBeInTheDocument();
+			expect(screen.getByRole("status")).toBeInTheDocument();
 			expect(screen.queryByTestId("terminal-replay-cover")).not.toBeInTheDocument();
 		} finally {
 			view.restore();

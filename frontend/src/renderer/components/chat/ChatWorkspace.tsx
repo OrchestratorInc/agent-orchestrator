@@ -2343,6 +2343,9 @@ function Timeline({
 	/** A session that is starting, or failed to start, and its setup checklist. */
 	startup?: ComponentProps<typeof SessionStartup> & { openingTurnId?: string };
 }) {
+	const hasTranscript = snapshot.items.length > 0;
+	const startedEmpty = useRef(!hasTranscript);
+	const revealTranscript = startedEmpty.current && hasTranscript;
 	const translateDraft = useChatDraftTranslation();
 	const uiSessionId = draftScope.sessionId;
 	const scroller = useRef<HTMLDivElement>(null);
@@ -3674,7 +3677,7 @@ function Timeline({
 				aria-label="Conversation"
 				style={virtualized ? { overflowAnchor: "none" } : undefined}
 			>
-				<div ref={scrollContent} className="mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5">
+				<div ref={scrollContent} className={cn("mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5", revealTranscript && "chat-transcript-reveal")}>
 					{annotationNavigationError ? <p role="status" className="text-xs text-muted-foreground">{annotationNavigationError}</p> : null}
 					{hasOlder ? (
 						<div className="flex justify-center pb-1">
