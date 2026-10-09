@@ -131,6 +131,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	agentResuming,
 	controllerResumeError,
 	newWorkDisabled,
+	arriving,
 	onConversationWorkChange,
 }: {
 	session: WorkspaceSession;
@@ -183,6 +184,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	controllerResumeError?: string;
 	/** An interface handoff fences new agent work while current-turn decisions remain available. */
 	newWorkDisabled?: boolean;
+	/** A switch from the terminal is under way and the conversation is not readable yet. */
+	arriving?: boolean;
 	/** Reports accepted Chat work that must inform an interface-switch policy choice. */
 	onConversationWorkChange?: (state: ConversationWorkState) => void;
 }) {
@@ -458,7 +461,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		switchPresentation?.lockAgentTerminal && !switchPresentation.allowSourceInput,
 	);
 	const renderShellFallback = Boolean(shellTarget && session);
-	const optimisticChat = session.kind === "orchestrator" && isLoading && !renderShellFallback;
+	// A switch from the terminal shows the chat before the daemon has a
+	// conversation to read, so the starting snapshot stands in until it does.
+	const optimisticArrival = Boolean(arriving) && !snapshot && !renderShellFallback;
+	const optimisticChat = (session.kind === "orchestrator" && isLoading && !renderShellFallback) || optimisticArrival;
 	const renderSnapshot =
 		snapshot ??
 		(optimisticChat ? startingConversationSnapshot(session.id, session.provider) : undefined) ??
@@ -501,7 +507,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// run Chat is a state to explain rather than an error to spin on. A compatible
 	// session may switch interfaces, but retrying this failed controller by itself
 	// cannot change the answer.
-	if (unavailable && !renderShellFallback) {
+	if (unavailable && !renderShellFallback && !optimisticArrival) {
 		return (
 			<Centered>
 				<AlertTriangle aria-hidden="true" className="size-4 text-warning" />
@@ -516,7 +522,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		);
 	}
 
-	if (error || !renderSnapshot) {
+	if ((error && !optimisticArrival) || !renderSnapshot) {
 		return (
 			<Centered>
 				<AlertTriangle aria-hidden="true" className="size-4 text-destructive" />
