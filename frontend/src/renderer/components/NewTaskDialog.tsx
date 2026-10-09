@@ -149,7 +149,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 									) : selectedProjectAvatar ? (
 										<ProjectOwnerAvatar avatar={selectedProjectAvatar} className="size-[1em]" />
 									) : <StickyNote aria-hidden="true" className="size-[1em] shrink-0 text-muted-foreground" />}
-									<span className="min-w-0 truncate">{selectedProjectName}</span>
+									<span className="min-w-0 -translate-y-px truncate">{selectedProjectName}</span>
 								</span>
 							)}
 							renderMenuItem={(option) => {
