@@ -78,7 +78,8 @@ function useRenderTheme(): RenderTheme {
  * storage, or the daemon. It reads the theme from its URL fragment before
  * first paint and restyles from posted messages after, so the src never changes.
  * Both carry the display mode; in fullscreen the page centers a width-capped
- * top-level block and shows its scrollbar.
+ * top-level block and shows its scrollbar. In both modes the frame fits the
+ * page's height; the expanded frame's class caps it at the window.
  */
 function RenderDocument({
 	page,
@@ -103,20 +104,20 @@ function RenderDocument({
 		[baseUrl, page.path, page.frameUrl, displayMode, page.scrollable],
 	);
 	const [contentHeight, setContentHeight] = useState<number>();
-	// The inline frame's width picks its measured first height; read before the
-	// first paint, so the frame opens at that height rather than the agent's.
+	// The frame's width picks its measured first height; read before the first
+	// paint, so the frame opens at that height rather than the agent's.
 	const [width, setWidth] = useState<number>();
 	const { heights } = page;
 	useLayoutEffect(() => {
 		const frame = frameRef.current;
-		if (!frame || displayMode !== "inline" || !heights) return;
+		if (!frame || !heights) return;
 		setWidth(frame.getBoundingClientRect().width);
 		const observer = new ResizeObserver(([entry]) => {
 			if (entry) setWidth(entry.contentRect.width);
 		});
 		observer.observe(frame);
 		return () => observer.disconnect();
-	}, [displayMode, heights]);
+	}, [heights]);
 	const postTheme = () =>
 		frameRef.current?.contentWindow?.postMessage(renderThemeMessage(themeRef.current, displayMode, page.scrollable), "*");
 	useEffect(() => {
@@ -150,16 +151,12 @@ function RenderDocument({
 			loading="lazy"
 			onLoad={postTheme}
 			className={cn("block w-full border-0", className)}
-			style={
-				displayMode === "inline"
-					? {
-							height: Math.min(
-								clampRenderHeight(contentHeight ?? (heights && width ? measuredRenderHeight(heights, width) : page.height)),
-								page.scrollable ? ARTIFACT_FRAME_MAX_HEIGHT : Number.POSITIVE_INFINITY,
-							),
-						}
-					: undefined
-			}
+			style={{
+				height: Math.min(
+					clampRenderHeight(contentHeight ?? (heights && width ? measuredRenderHeight(heights, width) : page.height)),
+					page.scrollable && displayMode === "inline" ? ARTIFACT_FRAME_MAX_HEIGHT : Number.POSITIVE_INFINITY,
+				),
+			}}
 		/>
 	);
 }
@@ -223,7 +220,7 @@ function RenderSource({ path }: { path: string }) {
 	}, [path]);
 	if (source === undefined) {
 		return (
-			<div aria-busy="true" className="flex min-h-0 flex-1 items-center justify-center">
+			<div aria-busy="true" className="flex h-20 items-center justify-center">
 				<Loader2 aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />
 			</div>
 		);
@@ -235,7 +232,9 @@ function RenderSource({ path }: { path: string }) {
 			</p>
 		);
 	}
-	return <pre className="min-h-0 w-full flex-1 overflow-auto px-2 font-mono text-xs whitespace-pre select-text">{source}</pre>;
+	return (
+		<pre className="max-h-[calc(100svh-8rem)] w-full overflow-auto px-2 font-mono text-xs whitespace-pre select-text">{source}</pre>
+	);
 }
 
 /** Opens an artifact in the session's Browser panel, on its own preview origin. */
@@ -255,7 +254,7 @@ function OpenInPanelAction({ sessionId, previewUrl, onOpen }: { sessionId: strin
 	);
 }
 
-/** A render, or an HTML artifact, inline in its turn and expandable to a dialog. */
+/** A render, or an HTML artifact, inline in its turn and expandable to a dialog sized to the page. */
 export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactRef }) {
 	const { t } = useTranslation();
 	const remoteHost = useChatRemoteHost();
@@ -321,7 +320,9 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 			<Dialog open={expanded} onOpenChange={setExpanded}>
 				<DialogContent
 					aria-describedby={undefined}
-					className="z-overlay flex h-[calc(100svh-6rem)] w-[calc(100vw-6rem)] max-w-none flex-col gap-2 p-2 outline-none"
+					// A reading column wide and as tall as the page, up to the window;
+					// borderless, like the inline frame.
+					className="z-overlay w-[min(64rem,calc(100vw-4rem))] max-w-none gap-2 border-0 p-2 outline-none"
 					// Focus the dialog, not its first action: a focused action opens its tooltip.
 					onOpenAutoFocus={(event) => {
 						event.preventDefault();
@@ -370,7 +371,7 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 					{!expanded ? null : showSource ? (
 						<RenderSource path={page.path} />
 					) : (
-						<RenderDocument page={page} displayMode="fullscreen" className="min-h-0 w-full flex-1" />
+						<RenderDocument page={page} displayMode="fullscreen" className="max-h-[calc(100svh-8rem)]" />
 					)}
 				</DialogContent>
 			</Dialog>

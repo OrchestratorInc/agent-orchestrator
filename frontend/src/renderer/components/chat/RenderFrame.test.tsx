@@ -186,7 +186,7 @@ describe("render activity", () => {
 		}
 	});
 
-	it("expands the page across the whole dialog, in fullscreen display mode", async () => {
+	it("expands the page into a borderless dialog sized to it, in fullscreen display mode", async () => {
 		const user = userEvent.setup();
 		render(<ActivityRow activity={renderActivity()} />);
 		const inline = frame();
@@ -194,13 +194,19 @@ describe("render activity", () => {
 		const frames = await screen.findAllByTitle("Turns by day");
 		expect(frames).toHaveLength(2);
 		const expanded = frames.find((f) => f !== inline) as HTMLIFrameElement;
-		// The dialog gives the page its full width; the page centers itself.
-		expect(expanded.parentElement?.getAttribute("role")).toBe("dialog");
+		// The dialog is a reading column wide, with no border and no fixed height;
+		// the frame fits the page, up to the window, and the page centers itself.
+		const dialog = expanded.parentElement!;
+		expect(dialog.getAttribute("role")).toBe("dialog");
+		expect(dialog.className).toContain("w-[min(64rem,calc(100vw-4rem))]");
+		expect(dialog.className).toContain("border-0");
+		expect(dialog.className).not.toMatch(/(^|\s)(border|h-\S+)(\s|$)/);
 		expect(expanded.className).toContain("w-full");
-		expect(expanded.className).toContain("flex-1");
-		expect(expanded.className).not.toContain("max-w");
+		expect(expanded.className).toContain("max-h-[calc(100svh-8rem)]");
 		expect(expanded.style.width).toBe("");
-		expect(expanded.style.height).toBe("");
+		expect(expanded.style.height).toBe("300px");
+		post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 1200 } }, expanded.contentWindow);
+		expect(expanded.style.height).toBe("1200px");
 		expect(fragmentOf(expanded).displayMode).toBe("fullscreen");
 		expect(fragmentOf(inline).displayMode).toBe("inline");
 		expect(inline.isConnected).toBe(true);
@@ -475,6 +481,14 @@ describe("artifact activity", () => {
 			post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height } }, artifactFrame().contentWindow);
 		}
 		expect(artifactFrame().style.height).toBe("640px");
+	});
+
+	it("fits the expanded artifact past 640, leaving the window to cap it", async () => {
+		const { dialog } = await expandArtifact();
+		const expanded = within(dialog).getByTitle("Q3 (final).html") as HTMLIFrameElement;
+		post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 900 } }, expanded.contentWindow);
+		expect(expanded.style.height).toBe("900px");
+		expect(expanded.className).toContain("max-h-[calc(100svh-8rem)]");
 	});
 
 	it("shows the remote-host note instead of a frame", () => {

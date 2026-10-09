@@ -230,7 +230,7 @@ const (
 		`is put into the page: PNG, JPEG, GIF, WebP, AVIF, SVG, BMP, or ICO, up to 10 MiB each.`
 	mcpLayoutGuide = `The frame is borderless on the thread background, as wide as the reply column, and its left edge lines up with your text. ` +
 		`Use a fluid width with no outer padding, card, border, or banner title: the page is part of your reply. ` +
-		`An expanded page gets the full window width, and AO centers a top-level block that has a maximum width. ` +
+		`An expanded page opens in a dialog up to 1024 px wide that fits its height, and AO centers a top-level block that has a maximum width. ` +
 		`Give charts fixed pixel heights. Do not size html or body with 100vh or height: 100%; the frame grows to fit the page, and viewport heights make it grow again. ` +
 		`Scripts run in a sandbox with no access to AO, cookies, or storage. Links open in the user's browser.`
 	mcpThemeGuide = `AO injects its active theme as CSS custom properties on :root, and they follow light/dark mode live: ` +
