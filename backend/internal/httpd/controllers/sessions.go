@@ -38,6 +38,7 @@ import (
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/workspacewatch"
 )
 
@@ -97,7 +98,7 @@ type SessionService interface {
 	RecoverAgentSwitch(ctx context.Context, id domain.SessionID, switchID domain.AgentSwitchID) (domain.AgentSwitch, error)
 	ListAgentSwitches(ctx context.Context, id domain.SessionID) ([]domain.AgentSwitch, error)
 	SubmitAgentHandoff(ctx context.Context, id domain.SessionID, switchID domain.AgentSwitchID, sourceGenerationID domain.AgentGenerationID, handoff json.RawMessage) (domain.AgentSwitch, error)
-	Kill(ctx context.Context, id domain.SessionID) (bool, error)
+	RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error)
 	RollbackSpawn(ctx context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error)
 	Cleanup(ctx context.Context, project domain.ProjectID) (sessionsvc.CleanupOutcome, error)
 	Rename(ctx context.Context, id domain.SessionID, displayName string) error
@@ -186,6 +187,8 @@ type SessionsController struct {
 		Get(context.Context, domain.ProjectID) (projectsvc.GetResult, error)
 	}
 	Activity                 ActivityRecorder
+	NativeSessions           ports.AgentNativeSessionResolver
+	DataDir                  string
 	Usage                    UsageHookRecorder
 	Attachments              *attachmentstore.Store
 	PreviewServer            ManagedPreviewServer
@@ -247,6 +250,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/rollback", c.rollback)
 	r.Post("/sessions/{sessionId}/send", c.send)
 	r.Post("/sessions/{sessionId}/activity", c.activity)
+	r.Post("/sessions/{sessionId}/activity/codewhale", c.codewhaleActivity)
 	r.Post("/sessions/{sessionId}/pin", c.pin)
 	r.Delete("/sessions/{sessionId}/pin", c.unpin)
 	r.Get("/orchestrators", c.listOrchestrators)
@@ -1848,12 +1852,12 @@ func (c *SessionsController) kill(w http.ResponseWriter, r *http.Request) {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/kill")
 		return
 	}
-	freed, err := c.Svc.Kill(r.Context(), sessionID(r))
+	result, err := c.Svc.RequestKill(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, KillSessionResponse{OK: true, SessionID: sessionID(r), Freed: freed})
+	envelope.WriteJSON(w, http.StatusOK, KillSessionResponse{OK: true, SessionID: sessionID(r), Freed: result.Freed, CleanupPending: result.CleanupPending})
 }
 
 // rollback undoes a partially-completed spawn: if the session row is still in
@@ -2181,6 +2185,101 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r), State: in.State})
+}
+
+// codewhaleActivity translates Codewhale's v0.10 lifecycle outbox webhook into
+// AO's provider-neutral activity signal. The launch id lives in the callback
+// URL because Codewhale's event envelope has no supervisor-generation field.
+func (c *SessionsController) codewhaleActivity(w http.ResponseWriter, r *http.Request) {
+	if c.Activity == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/activity/codewhale")
+		return
+	}
+	launchID := capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(r.URL.Query().Get("launchId"))))
+	if launchID == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "LAUNCH_ID_REQUIRED", "Codewhale lifecycle callbacks require a launchId", nil)
+		return
+	}
+	var in CodewhaleLifecycleWebhookRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if in.Event.SchemaVersion != 1 {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "UNSUPPORTED_CODEWHALE_LIFECYCLE_SCHEMA", "Unsupported Codewhale lifecycle schema", nil)
+		return
+	}
+
+	hookThreadID := capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.Event.ThreadID)))
+	if hookThreadID == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "CODEWHALE_THREAD_ID_REQUIRED", "Codewhale lifecycle callbacks require a thread_id", nil)
+		return
+	}
+	signal := ports.ActivitySignal{
+		Timestamp:      in.Event.Timestamp,
+		Event:          capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.Event.Event))),
+		ProviderTurnID: capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.Event.TurnID))),
+		LaunchID:       launchID,
+	}
+	if signal.Timestamp.IsZero() {
+		signal.Timestamp = in.At
+	}
+	switch strings.TrimSpace(in.Event.Kind) {
+	case "session.started":
+		signal.Event = "session-start"
+	case "turn.started":
+		signal.Valid = true
+		signal.State = domain.ActivityActive
+		signal.Event = "user-prompt-submit"
+	case "turn.completed", "turn.failed", "turn.interrupted", "turn.stalled":
+		signal.Valid = true
+		signal.State = domain.ActivityWaitingInput
+		signal.Event = "stop"
+	case "session.ended":
+		signal.Valid = true
+		signal.State = domain.ActivityExited
+		signal.Event = "session-end"
+	case "subagent.spawned", "subagent.completed":
+		// Provider-internal subagents remain opaque activity inside this AO
+		// session until AO has a provider-neutral nested-session model.
+		envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r)})
+		return
+	default:
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "UNKNOWN_CODEWHALE_LIFECYCLE_EVENT", "Unknown Codewhale lifecycle event", nil)
+		return
+	}
+	// Codewhale's thread_id is a per-process HookExecutor id (sess_*), not the
+	// durable UUID accepted by --resume. Terminal turn/session events run after
+	// Codewhale saves the conversation, so resolve that UUID from the launch's
+	// isolated Runtime store before lifecycle persists a native resume handle.
+	if c.NativeSessions != nil && (signal.Event == "stop" || signal.Event == "session-end") {
+		nativeID, ok, err := c.NativeSessions.ResolveNativeSessionID(r.Context(), ports.NativeSessionResolveConfig{
+			DataDir:   c.DataDir,
+			SessionID: sessionID(r),
+			LaunchID:  launchID,
+		})
+		if err != nil {
+			envelope.WriteError(w, r, err)
+			return
+		}
+		if ok {
+			signal.AgentSessionID = capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(nativeID)))
+		}
+	}
+	if err := c.Activity.ApplyActivitySignal(r.Context(), sessionID(r), signal); err != nil {
+		if errors.Is(err, ports.ErrActivityProjectionContention) {
+			w.Header().Set("Retry-After", "1")
+			envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "ACTIVITY_PROJECTION_BUSY", "Concurrent session updates prevented this activity signal from committing", nil)
+			return
+		}
+		if errors.Is(err, ports.ErrSessionNotFound) {
+			envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "SESSION_NOT_FOUND", "Unknown session", nil)
+			return
+		}
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r), State: string(signal.State)})
 }
 
 // capActivityMeta bounds an optional activity correlation string; overlong

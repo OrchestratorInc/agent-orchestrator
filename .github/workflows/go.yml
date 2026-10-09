@@ -180,7 +180,7 @@ jobs:
         run: go test -race -count=1 -run 'Test(OpenPreservesDataDirectoryCharacters|FragmentPathsKeepDatabasesIsolated|OpenRefusesToHideLegacyDatabase|OpenPrefersExistingIntendedDatabase|DatabaseURIPreservesWindowsPaths)$' ./internal/storage/sqlite
 
       - name: Test workspace teardown and session kill
-        run: go test -race -count=1 -v -run 'Destroy|Discard|Sweep|Kill' ./internal/adapters/workspace/... ./internal/session_manager/
+        run: go test -race -count=1 -v -run 'Destroy|Discard|Sweep|Kill|RunPostCreate' ./internal/adapters/workspace/... ./internal/session_manager/
 
       - name: Test Windows Chat environment precedence
         run: go test -race -count=1 ./internal/adapters/chatdriver/processenv/ ./internal/agentlaunch/
@@ -193,8 +193,8 @@ jobs:
 
       - name: Test Windows background agent commands have no console
         run: go test -race -count=1 -run '^TestBackgroundCommandHasNoConsole$' ./internal/adapters/agent/pi ./internal/adapters/agent/omp ./internal/adapters/agent/primeagent
-      - name: Test Windows mobile tunnel subprocesses
-        run: go test -race -count=1 -run 'Cloudflared|Tunnel|Command' ./internal/mobilebridge/ ./internal/process/
+      - name: Test Windows subprocess commands
+        run: go test -race -count=1 -run 'Cloudflared|Tunnel|Command' ./internal/mobilebridge/ ./internal/process/ ./internal/adapters/systemexec/
 
       - name: Test native Goose identity
         run: go test -race -count=1 -timeout=10m ./internal/adapters/agent/binaryutil ./internal/adapters/agent/goose

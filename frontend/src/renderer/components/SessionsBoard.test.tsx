@@ -38,7 +38,7 @@ const {
 	boardActionsInPanelMock: vi.fn(() => false),
 }));
 
-vi.mock("./ShellTopbar", () => ({ ShellTopbar: () => null }));
+vi.mock("./ShellTopbar", async (importOriginal) => ({ ...(await importOriginal<typeof import("./ShellTopbar")>()), ShellTopbar: () => null }));
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
@@ -803,6 +803,25 @@ describe("SessionsBoard", () => {
 		expect(within(card).getByText("Starting Claude Code…")).toBeInTheDocument();
 		expect(within(card).queryByText("Working")).not.toBeInTheDocument();
 		expect(within(card).queryByText("Exited")).not.toBeInTheDocument();
+	});
+
+	it("shows start failure instead of Awaiting PR on a failed card", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({
+				id: "s-setup-failed",
+				title: "failed-setup-task",
+				status: "idle",
+				displayStatus: "Awaiting PR",
+				provisionState: "failed",
+			})])],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+		const card = screen.getByText("failed-setup-task").closest('[data-testid="board-session-card"]') as HTMLElement;
+		expect(within(card).getByTestId("session-status")).toHaveTextContent("Start failed");
+		expect(within(card).queryByText("Awaiting PR")).not.toBeInTheDocument();
 	});
 
 	it("shows switch progress instead of the exited source on a card", () => {

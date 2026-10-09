@@ -12,7 +12,7 @@ ao
 ├── start                         Open the desktop app (download it when needed)
 ├── stop                          Stop the local daemon
 ├── status                        Show daemon health
-├── doctor                        Check the local AO environment
+├── doctor                        Check the local Orchestrator environment
 ├── agent ls                      List built-in agent adapters and readiness
 ├── project                       add, ls, get, set-config, rm
 ├── spawn                         Create a worker or orchestrator session
@@ -27,7 +27,7 @@ ao
 ├── review                         ls, trigger, cancel, submit
 ├── preview                        select/clear a target; start, status, stop a server
 ├── browser                        Control the selected session browser
-├── import                         Import projects from legacy AO data
+├── import                         Import projects from legacy product data
 ├── completion                     Generate shell completions
 └── version                        Print build information
 ```
@@ -48,7 +48,7 @@ For a new installation, download the desktop app from the [installation guide](/
 
 ### `ao stop`
 
-Asks the loopback daemon to shut down after checking that the run file identifies AO.
+Asks the loopback daemon to shut down after checking that the run file identifies Orchestrator.
 
 | Flag | Purpose |
 | --- | --- |
@@ -67,7 +67,7 @@ Use `ao session ls` for sessions.
 
 ### `ao doctor`
 
-Checks AO configuration, the data directory and database, daemon state, Git, GitHub authentication, and the platform runtime (`tmux` on macOS/Linux; ConPTY is built into Windows).
+Checks Orchestrator configuration, the data directory and database, daemon state, Git, GitHub authentication, and the platform runtime (`tmux` on macOS/Linux; ConPTY is built into Windows).
 
 | Flag | Purpose |
 | --- | --- |
@@ -84,13 +84,13 @@ Lists the daemon's built-in agent catalog together with local installation and a
 | `--refresh` | Rerun bounded local install/auth probes. |
 | `--json` | Print the raw inventory response. |
 
-Agent adapters are compiled into AO. There is no plugin marketplace or `ao plugin install` command.
+Agent adapters are compiled into Orchestrator. There is no plugin marketplace or `ao plugin install` command.
 
 ### `ao project`
 
 | Command | Purpose |
 | --- | --- |
-| `ao project add` | Register a local Git repository or multi-repository workspace. Scratch is an AO-managed built-in project. |
+| `ao project add` | Register a local Git repository or multi-repository workspace. Scratch is an Orchestrator-managed built-in project. |
 | `ao project ls` | List registered projects. |
 | `ao project get <id>` | Show one project and its resolved configuration. |
 | `ao project set-config <id>` | Update typed per-project configuration. |
@@ -117,7 +117,7 @@ Important flags include:
 | Flag | Purpose |
 | --- | --- |
 | `--name <name>` | Required sidebar name, at most 100 characters. |
-| `--project <id>` | Project to use. Otherwise AO resolves environment and current directory context. |
+| `--project <id>` | Project to use. Otherwise Orchestrator resolves environment and current directory context. |
 | `--agent`, `--harness <name>` | Override the project's agent. The two names are aliases. |
 | `--kind worker\|orchestrator` | Select the session role. |
 | `--mode chat\|tui` | Select structured Chat or the agent's native terminal UI. |
@@ -131,7 +131,7 @@ Important flags include:
 | `--no-takeover` | Refuse a PR already owned by another active session. |
 | `--skip-agent-check` | Skip only the CLI-side install/auth preflight. |
 
-AO chooses a project in this order: `--project`, `AO_PROJECT_ID`, the project for `AO_SESSION_ID`, then the closest registered project containing the current directory. Before spawning, AO refreshes the selected agent's readiness unless you use `--skip-agent-check`. Readiness is advisory.
+Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the project for `AO_SESSION_ID`, then the closest registered project containing the current directory. Before spawning, Orchestrator refreshes the selected agent's readiness unless you use `--skip-agent-check`. Readiness is advisory.
 
 ### `ao session`
 
@@ -161,7 +161,7 @@ Sends a message through the daemon to a running session.
 ao send --session ao-123 --message "Please address the failing test"
 ```
 
-`--session` and `--message` are required for ordinary sends. When called from a session with `AO_SESSION_ID`, AO prefixes the sender identity.
+`--session` and `--message` are required for ordinary sends. When called from a session with `AO_SESSION_ID`, Orchestrator prefixes the sender identity.
 
 Use `--steer` to steer an active supported Chat turn or submit a normal turn when idle. `--client-message-id` supplies a stable delivery handle. If delivery is uncertain, recover the recorded result without resending:
 
@@ -194,7 +194,7 @@ ao report --done --note "Focused tests passed"
 | `ao pr merge <pr-number>` | Request a merge through the owning SCM provider. |
 | `ao pr resolve-comments <pr-number> [comment-id...]` | Resolve selected or eligible review comments. |
 | `ao review ls [worker-session-id]` | List review state for a worker. Defaults to the calling session. |
-| `ao review trigger [worker-session-id]` | Start AO's reviewer on a worker's PR heads; defaults to the calling session. Fetches the PRs fresh from the provider first; `--pr <url>` reviews only that PR, attaching it if needed. Fails on a head that already has a review unless `--rerun`. `--agent`, `--model`, `--effort` pick the reviewer for one pass; `--no-inject` keeps auto-inject unchanged. Aliases: `execute`, `restart`. |
+| `ao review trigger [worker-session-id]` | Start Orchestrator's reviewer on a worker's PR heads; defaults to the calling session. Fetches the PRs fresh from the provider first; `--pr <url>` reviews only that PR, attaching it if needed. Fails on a head that already has a review unless `--rerun`. `--agent`, `--model`, `--effort` pick the reviewer for one pass; `--no-inject` keeps auto-inject unchanged. Aliases: `execute`, `restart`. |
 | `ao review cancel [worker-session-id]` | Cancel every running reviewer. Defaults to the calling session. Alias: `stop`. |
 | `ao review submit [worker-session-id]` | Submit a reviewer verdict and results. |
 
@@ -204,7 +204,7 @@ Use each subcommand's help for required review-run IDs, verdict values, and file
 
 ### `ao preview [url]`
 
-Selects what the desktop Browser panel displays for the session identified by `AO_SESSION_ID`. With no argument AO looks for a supported static entry point in the session workspace; with a file or `file:`, `http:`, or `https:` target it opens that target.
+Selects what the desktop Browser panel displays for the session identified by `AO_SESSION_ID`. With no argument Orchestrator looks for a supported static entry point in the session workspace; with a file or `file:`, `http:`, or `https:` target it opens that target.
 
 | Command | Purpose |
 | --- | --- |
@@ -213,7 +213,7 @@ Selects what the desktop Browser panel displays for the session identified by `A
 | `ao preview status` | Show the managed preview process and recent bounded logs. |
 | `ao preview stop` | Stop the managed process tree. |
 
-`.ao/launch.json` is optional project configuration. AO does not infer or scaffold development servers, and static files do not require one.
+`.ao/launch.json` is optional project configuration. Orchestrator does not infer or scaffold development servers, and static files do not require one.
 
 ### `ao browser`
 
@@ -221,7 +221,7 @@ Controls the live, session-isolated Electron browser owned by the desktop app. I
 
 Browser commands include status and open, page snapshots, click/drag/fill/type, scrolling, tabs and popups, DevTools, screenshots, console and page errors, and optional network metadata capture. Run `ao browser --help` for the full command list.
 
-An element reference becomes stale when navigation or a frame or tab change replaces the page. Take a new snapshot when AO reports `STALE_REFERENCE`.
+An element reference becomes stale when navigation or a frame or tab change replaces the page. Take a new snapshot when Orchestrator reports `STALE_REFERENCE`.
 
 The first `ao browser snapshot --delta` returns the full page tree. Later calls return only changes; add `--full` to request the full tree again. The `--annotate` option on screenshots labels interactive elements with references.
 
@@ -249,4 +249,4 @@ Network capture is off by default. When enabled, it records bounded metadata onl
 | `AO_SESSION_ID` | unset | Current session context for preview, browser, and in-session calls. |
 | `AO_PROJECT_ID` | unset | Current project context for spawn resolution. |
 
-All current AO application state stays under `~/.ao` unless `AO_DATA_DIR` or `AO_RUN_FILE` overrides it.
+All current Orchestrator application state stays under `~/.ao` unless `AO_DATA_DIR` or `AO_RUN_FILE` overrides it.

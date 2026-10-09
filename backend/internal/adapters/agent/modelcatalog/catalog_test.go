@@ -274,12 +274,59 @@ func TestAiderUsesDocumentedDiscoveryCommand(t *testing.T) {
 	}
 }
 
+func TestCodewhaleResolvedModelMarksCatalogDefault(t *testing.T) {
+	models := []ports.AgentModelInfo{
+		{ID: "deepseek-chat", Label: "DeepSeek Chat"},
+		{ID: "deepseek-flash", Label: "DeepSeek Flash"},
+	}
+	got := applyCodewhaleResolvedModel(models, []byte(
+		"requested: deepseek-flash\nresolved: deepseek-flash\nprovider: deepseek\nused_fallback: false\n"))
+	if len(got) != 2 {
+		t.Fatalf("models len = %d, want 2", len(got))
+	}
+	if !got[1].IsDefault || got[0].IsDefault {
+		t.Fatalf("default flags = [%v, %v], want [false, true]", got[0].IsDefault, got[1].IsDefault)
+	}
+}
+
+func TestCodewhaleResolvedModelOutsideCatalogIsAppended(t *testing.T) {
+	models := []ports.AgentModelInfo{{ID: "deepseek-chat", Label: "DeepSeek Chat"}}
+	got := applyCodewhaleResolvedModel(models, []byte(
+		"requested: deepseek-v4-pro\nresolved: deepseek-v4-pro\nprovider: deepseek\n"))
+	if len(got) != 2 {
+		t.Fatalf("models len = %d, want the resolved model appended", len(got))
+	}
+	appended := got[1]
+	if appended.ID != "deepseek-v4-pro" || !appended.IsDefault || appended.Provider != "deepseek" {
+		t.Fatalf("appended entry = %+v, want deepseek-v4-pro default from deepseek", appended)
+	}
+	if got[0].IsDefault {
+		t.Fatal("the unmatched catalog entry must not be marked default")
+	}
+}
+
+func TestCodewhaleResolveFailureLeavesCatalogUnchanged(t *testing.T) {
+	models := []ports.AgentModelInfo{{ID: "deepseek-chat", Label: "DeepSeek Chat"}}
+	for name, output := range map[string][]byte{
+		"empty":       nil,
+		"unparseable": []byte("provider: deepseek\nmodel: none\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := applyCodewhaleResolvedModel(models, output)
+			if len(got) != 1 || got[0].IsDefault {
+				t.Fatalf("catalog changed on %s: %+v", name, got)
+			}
+		})
+	}
+}
+
 func TestOMPAndHelpBackedAgentsUseDocumentedDiscoveryCommands(t *testing.T) {
 	tests := []struct {
 		agent string
 		want  []string
 	}{
 		{agent: "omp", want: []string{"models", "--json"}},
+		{agent: "codewhale", want: []string{"models", "--json"}},
 		{agent: "copilot", want: []string{"help", "config"}},
 		{agent: "droid", want: []string{"exec", "--help"}},
 		{agent: "crush", want: []string{"models"}},

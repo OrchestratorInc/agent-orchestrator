@@ -908,6 +908,10 @@ func Run() error {
 	if mobilebridge.KeepAwakeSupported() {
 		bs.KeepAwake = mobilebridge.NewKeepAwake(os.Getpid())
 	}
+	var nativeSessions ports.AgentNativeSessionResolver
+	if codewhaleAgent, ok := agents.Agent(domain.HarnessCodewhale); ok {
+		nativeSessions, _ = codewhaleAgent.(ports.AgentNativeSessionResolver)
+	}
 
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
 		Projects:           projectSvc,
@@ -940,6 +944,7 @@ func Run() error {
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
 		Activity:           lcStack.LCM,
+		NativeSessions:     nativeSessions,
 		UsageHooks:         usageCollector,
 		UsageSummary:       usagesvc.NewSummaryReader(store),
 		SessionMemory:      memoryReader,

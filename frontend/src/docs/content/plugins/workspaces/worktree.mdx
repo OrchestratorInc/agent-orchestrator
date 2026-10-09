@@ -12,11 +12,12 @@ ao spawn --project my-repo --name fix-auth
 
 Worktrees keep checked-out files separate while sharing the repository's Git object database.
 
-## How AO chooses the base branch
+<span id="how-ao-chooses-the-base-branch" />
+## How Orchestrator chooses the base branch
 
-AO asks the selected remote for its default branch. If it cannot reach the remote, AO uses that remote's cached `HEAD`. If the remote has no default branch, a fetched branch named in the spawn request can seed the explicitly requested session branch.
+Orchestrator asks the selected remote for its default branch. If it cannot reach the remote, Orchestrator uses that remote's cached `HEAD`. If the remote has no default branch, a fetched branch named in the spawn request can seed the explicitly requested session branch.
 
-AO records the base ref for each repository. Workspace and review diffs use it to recalculate the merge base after a rebase or when the repository default advances, so upstream-only changes do not appear as agent edits.
+Orchestrator records the base ref for each repository. Workspace and review diffs use it to recalculate the merge base after a rebase or when the repository default advances, so upstream-only changes do not appear as agent edits.
 
 ## Typed project settings
 

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, Copy, Download, KeyRound, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
+import { BookOpen, Check, Copy, Download, ExternalLink, KeyRound, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -701,9 +701,11 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 							&& (agents.isPending || readinessAgent?.installation.state === "unknown");
 						const authPlan = agentAuthPlans.get(agentId);
 						const isSetupAction = authPlan?.action === "setup";
+						const isDocumentationAction = isSetupAction && authPlan?.launchMode === "documentation";
 						const authState = authStates[agentId];
 						const authStatus = readinessAgent?.authentication.state;
 						const connectedCredential = authStatus === "authorized" || authStatus === "configured";
+						const showAuthAction = authStatus !== "authorized" && (authStatus !== "configured" || isSetupAction);
 						const installationStatusLabel = t("settings.harness.installed");
 						const showInstallationStatus = connectedCredential
 							|| authStatus === "not_applicable"
@@ -719,7 +721,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						const authSummary = authState?.error
 							? authState.error
 							: authStatus === "configured"
-								? t("settings.harness.loggedIn")
+								? (isSetupAction ? t("settings.harness.configured") : t("settings.harness.loggedIn"))
 								: authStatus === "authorized"
 								? (isSetupAction ? t("settings.harness.configured") : t("settings.harness.loggedIn"))
 								: authPlan && !authPlan.available
@@ -743,10 +745,10 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						) : null;
 						const authControls = authPlan && authPlan.action !== "instructions" ? (
 							<>
-								{!connectedCredential ? (
+								{showAuthAction ? (
 									<Button data-harness-primary-action="" data-terminal-focus-handoff="true" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} size="sm" onClick={() => void startAuth(agentId)}>
 										{authState?.pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-										{authState?.pending ? t("settings.harness.loggingIn") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
+										{authState?.pending ? t("settings.harness.loggingIn") : isDocumentationAction ? t("settings.harness.viewDocumentation") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
 									</Button>
 								) : null}
 							</>
@@ -805,6 +807,10 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 								</div>
 							) : plan?.command ? (
 								<Button size="sm" variant="outline" onClick={() => void copyText(agentId, plan.command!)}>{copiedAgent === agentId ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{copiedAgent === agentId ? t("settings.harness.copied") : t("settings.harness.copyCommand")}</Button>
+							) : plan?.documentationUrl ? (
+								<Button data-harness-primary-action="" size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>
+									<ExternalLink aria-hidden="true" />{t("settings.harness.installGuide")}
+								</Button>
 							) : null;
 					return (
 						<div

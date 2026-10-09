@@ -195,6 +195,7 @@ var shippedMigrations = map[int64]string{
 	190: "0190_session_hibernation.sql",
 	191: "0191_session_branch_state.sql",
 	192: "0192_allow_openhands_harness.sql",
+	193: "0193_allow_codewhale_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

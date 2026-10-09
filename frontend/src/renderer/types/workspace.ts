@@ -109,6 +109,7 @@ export type SessionProvisionStep = {
 export type SessionBranchState = { commits: number; remoteBranch?: string; unpushed: number };
 
 export type WorkspaceSession = {
+	workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
 	id: string;
 	/** Installation ID of the daemon that owns this session; absent for local and Cloud. */
 	hostId?: string;

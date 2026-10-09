@@ -61,6 +61,7 @@ func (f *fakeAgentReadiness) RecheckAgent(agentID string) {
 }
 
 type fakeStore struct {
+	cleanupFacts        map[domain.SessionID]domain.SessionCleanupRecord
 	sessions            map[domain.SessionID]domain.SessionRecord
 	getSessionErr       error
 	activeSwitches      map[domain.SessionID]domain.AgentSwitch
@@ -2541,6 +2542,7 @@ type fakeCommander struct {
 	cleanupProjects  []domain.ProjectID
 	killErr          error
 	retireErr        error
+	retireFunc       func(context.Context, domain.SessionID) error
 	sendErr          error
 	sendFunc         func(domain.SessionID, string) error
 	cleanupErr       error
@@ -2550,6 +2552,7 @@ type fakeCommander struct {
 	spawnCalls       int
 	spawned          bool
 	spawnedCfg       ports.SpawnConfig
+	spawnCtx         context.Context
 	killsAtSpawn     int
 	restoreErr       error
 	restoreResult    sessionmanager.RestoreResult
@@ -2569,7 +2572,8 @@ type backgroundTaskCall struct {
 	prompt       string
 }
 
-func (f *fakeCommander) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+func (f *fakeCommander) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	f.spawnCtx = ctx
 	if f.spawnErr != nil {
 		return domain.SessionRecord{}, 0, 0, f.spawnErr
 	}
@@ -2638,7 +2642,10 @@ func (f *fakeCommander) Kill(_ context.Context, id domain.SessionID) (bool, erro
 	}
 	return true, nil
 }
-func (f *fakeCommander) RetireForReplacement(_ context.Context, id domain.SessionID) error {
+func (f *fakeCommander) RetireForReplacement(ctx context.Context, id domain.SessionID) error {
+	if f.retireFunc != nil {
+		return f.retireFunc(ctx, id)
+	}
 	if f.retireErr != nil {
 		return f.retireErr
 	}
@@ -2857,6 +2864,28 @@ func TestSpawnOrchestratorCleanContinuesWhenRetireNoticeFails(t *testing.T) {
 	}
 	if !fc.spawned {
 		t.Fatal("replacement should still spawn when retire notice delivery fails")
+	}
+}
+
+func TestSpawnOrchestratorCleanPreservesCancellationForReplacement(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fc := &fakeCommander{retireFunc: func(retireCtx context.Context, _ domain.SessionID) error {
+		cancel()
+		if err := retireCtx.Err(); err != nil {
+			t.Fatalf("retirement must finish after request cancellation: %v", err)
+		}
+		return nil
+	}}
+	svc := &Service{manager: fc, store: st}
+	if _, err := svc.SpawnOrchestrator(ctx, "mer", true, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if fc.spawnCtx == nil || !errors.Is(fc.spawnCtx.Err(), context.Canceled) {
+		t.Fatal("replacement spawn must receive the cancelled request context")
 	}
 }
 
@@ -3574,6 +3603,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"Windows command line too long", fmt.Errorf("spawn: %w: escaped command line is 32769 UTF-16 code units", ports.ErrRuntimeCommandLineTooLong), apierr.KindInvalid, "WINDOWS_COMMAND_LINE_TOO_LONG"},
 		{"runtime workspace cwd mismatch", fmt.Errorf("spawn mer-1: runtime: %w: session mer-1 started in \"/deleted/shipit\", want \"/tmp/ws\"", ports.ErrRuntimeWorkspaceCwdMismatch), apierr.KindConflict, "WORKSPACE_CWD_MISMATCH"},
 		{"workspace locked", fmt.Errorf("restore mer-1: %w: \"/tmp/ws\" (branch \"ao/mer-1\") is registered but its directory is missing", ports.ErrWorkspaceLocked), apierr.KindConflict, "WORKSPACE_LOCKED"},
+		{"cleanup script failed", fmt.Errorf("kill mer-1: %w: secret output", sessionmanager.ErrCleanupScript), apierr.KindConflict, "WORKSPACE_CLEANUP_FAILED"},
 		{"unknown harness", fmt.Errorf("spawn: %w: %q", sessionmanager.ErrUnknownHarness, "bogus"), apierr.KindInvalid, "UNKNOWN_HARNESS"},
 		{"missing harness", fmt.Errorf("spawn: %w: configure project worker.agent or pass --harness", sessionmanager.ErrMissingHarness), apierr.KindInvalid, "AGENT_REQUIRED"},
 		{"harness install active", fmt.Errorf("spawn: %w", sessionmanager.ErrHarnessInstallActive), apierr.KindConflict, "HARNESS_INSTALL_ACTIVE"},
@@ -3617,6 +3647,9 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 			var e *apierr.Error
 			if !errors.As(mapped, &e) || e.Kind != tc.wantKind || e.Code != tc.wantCode {
 				t.Fatalf("mapped = %v, want %s %s", mapped, tc.wantCode, e)
+			}
+			if strings.Contains(e.Message, "secret output") {
+				t.Fatalf("mapped message leaked script output: %q", e.Message)
 			}
 		})
 	}
@@ -5732,5 +5765,42 @@ func TestGetReconcilesWhenPersistedArtifactOutputHasNoFilesLeft(t *testing.T) {
 	}
 	if len(reconciler.reconciled) != 1 {
 		t.Fatalf("reconciled = %v, want the removal persisted", reconciler.reconciled)
+	}
+}
+
+func (f *fakeStore) GetSessionCleanupFacts(_ context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error) {
+	rec, ok := f.cleanupFacts[id]
+	return rec, ok, nil
+}
+func (f *fakeCommander) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
+	freed, err := f.Kill(ctx, id)
+	return sessionmanager.KillResult{Freed: freed}, err
+}
+
+func TestSessionReadsExposeOnlyCurrentTerminatedCleanupFacts(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", IsTerminated: true, CleanupGeneration: 2}
+	st.cleanupFacts = map[domain.SessionID]domain.SessionCleanupRecord{
+		"mer-1": {SessionID: "mer-1", SessionGeneration: 2, WorkspaceDisposition: domain.DispositionFailed},
+	}
+	svc := &Service{store: st}
+	for _, tc := range []struct {
+		terminated bool
+		generation int64
+		want       domain.WorkspaceDisposition
+	}{
+		{true, 2, domain.DispositionFailed}, {false, 2, ""}, {true, 3, ""},
+	} {
+		rec := st.sessions["mer-1"]
+		rec.IsTerminated, rec.CleanupGeneration = tc.terminated, tc.generation
+		st.sessions[rec.ID] = rec
+		got, err := svc.Get(context.Background(), rec.ID)
+		if err != nil || got.WorkspaceCleanup != tc.want {
+			t.Fatalf("cleanup=%q want=%q err=%v", got.WorkspaceCleanup, tc.want, err)
+		}
+		list, err := svc.List(context.Background(), ListFilter{})
+		if err != nil || len(list) != 1 || list[0].WorkspaceCleanup != tc.want {
+			t.Fatalf("list=%+v err=%v", list, err)
+		}
 	}
 }

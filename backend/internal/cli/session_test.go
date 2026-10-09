@@ -472,6 +472,29 @@ func TestSessionKill_PreservedWorkspaceNote(t *testing.T) {
 		t.Fatalf("unexpected kill output:\n%s", out)
 	}
 }
+func TestSessionKill_PendingCleanupNote(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/kill" {
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1","freed":false,"cleanupPending":true}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "session", "kill", "demo-1")
+	if err != nil {
+		t.Fatalf("session kill failed: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, "session demo-1 killed (workspace cleanup pending)") {
+		t.Fatalf("unexpected kill output:\n%s", out)
+	}
+}
 
 func TestSessionRestore_SuccessWithProjectScope(t *testing.T) {
 	cfg := setConfigEnv(t)

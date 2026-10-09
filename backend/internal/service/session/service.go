@@ -27,6 +27,7 @@ const maxDisplayNameLen = 100
 
 // Store is the read-only persistence surface needed to assemble controller-facing session read models.
 type Store interface {
+	GetSessionCleanupFacts(ctx context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error)
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 	GetSessionByClientRequestID(ctx context.Context, id string) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
@@ -78,6 +79,7 @@ type commander interface {
 	RestoreWithMode(ctx context.Context, id domain.SessionID) (sessionmanager.RestoreResult, error)
 	ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (sessionmanager.RestoreResult, error)
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
+	RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error)
 	RetireForReplacement(ctx context.Context, id domain.SessionID) error
 	WaitForMessageDeliveryReady(ctx context.Context, id domain.SessionID) error
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
@@ -581,9 +583,10 @@ func (s *Service) SpawnOrchestrator(
 			// authoritative.
 			mode = newestSession(existing).Mode
 		}
+		retireCtx := context.WithoutCancel(ctx)
 		for _, orch := range existing {
-			_ = s.sendRetireNotice(ctx, orch.ID)
-			if err := s.manager.RetireForReplacement(ctx, orch.ID); err != nil {
+			_ = s.sendRetireNotice(retireCtx, orch.ID)
+			if err := s.manager.RetireForReplacement(retireCtx, orch.ID); err != nil {
 				return domain.Session{}, toAPIError(err)
 			}
 		}
@@ -831,6 +834,13 @@ func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	s.cancelTitleRefinement(id)
 	freed, err := s.manager.Kill(ctx, id)
 	return freed, toAPIError(err)
+}
+
+// RequestKill acknowledges terminal intent without waiting for cleanup scripts.
+func (s *Service) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
+	s.cancelTitleRefinement(id)
+	result, err := s.manager.RequestKill(ctx, id)
+	return result, toAPIError(err)
 }
 
 // RollbackSpawn deletes a seed-state session row, or falls back to a Kill if
@@ -1230,9 +1240,21 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 	}); ok {
 		readiness = recovery.SessionStatusReadiness(rec)
 	}
+	var cleanup domain.WorkspaceDisposition
+	if rec.IsTerminated {
+		// ponytail: one read per archived session; batch if archive reads become a bottleneck.
+		facts, ok, err := s.store.GetSessionCleanupFacts(ctx, rec.ID)
+		if err != nil {
+			return domain.Session{}, fmt.Errorf("get workspace cleanup facts: %w", err)
+		}
+		if ok && facts.SessionGeneration == rec.CleanupGeneration {
+			cleanup = facts.WorkspaceDisposition
+		}
+	}
 	return domain.Session{
-		SessionRecord:   rec,
-		StatusReadiness: readiness,
+		SessionRecord:    rec,
+		WorkspaceCleanup: cleanup,
+		StatusReadiness:  readiness,
 		ChatProviderPreserved: rec.Mode == domain.SessionModeChat && !rec.IsTerminated &&
 			s.chatProviderPreserved != nil && s.chatProviderPreserved(rec.ID),
 		Status:           deriveStatus(rec, prs, now, s.harnessSignals(rec.Harness)),
@@ -1421,6 +1443,8 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("WORKSPACE_CWD_MISMATCH", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceLocked):
 		return apierr.Conflict("WORKSPACE_LOCKED", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrCleanupScript):
+		return apierr.Conflict("WORKSPACE_CLEANUP_FAILED", "Workspace cleanup script failed; the worktree was preserved. Fix the script and retry cleanup.", nil)
 	default:
 		return err
 	}

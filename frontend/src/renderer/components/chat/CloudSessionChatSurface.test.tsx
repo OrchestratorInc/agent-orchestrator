@@ -51,6 +51,20 @@ describe("CloudSessionChatSurface", () => {
 			role: "user", origin: "automation", senderLabel: "Worker · Builder", text: "Full prompt",
 		});
 	});
+	it("preserves structured sender metadata for linked automation rendering", () => {
+		const events: CloudCpClientEvent[] = [{
+			sessionId: session.id, sequence: 1, type: "chat.user_message",
+			payload: {
+				text: '[from worker-1] Full prompt', origin: "automation", displayText: "Full prompt",
+				senderSessionId: "worker-1", senderProjectId: "project-1", senderDisplayName: "Backend worker",
+			},
+			createdAt: "2026-10-01T00:00:00Z",
+		}];
+		expect(toSnapshot(session, events).items[0]).toMatchObject({
+			origin: "automation", text: "Full prompt", senderSessionId: "worker-1",
+			senderProjectId: "project-1", senderDisplayName: "Backend worker",
+		});
+	});
 	it("keeps human messages human even when their text resembles a worker report", () => {
 		const events: CloudCpClientEvent[] = [{
 			sessionId: session.id, sequence: 1, type: "chat.user_message",
