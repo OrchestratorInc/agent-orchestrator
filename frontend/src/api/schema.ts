@@ -4087,6 +4087,28 @@ export interface components {
             orchestratorId?: string;
             workerId: string;
         };
+        DeliveryPullRequest: {
+            number: number;
+            url: string;
+        };
+        DeliveryStatus: {
+            /** @enum {string} */
+            action?: "commit_and_publish_pr" | "publish_pr" | "commit_and_push" | "push";
+            additions: number;
+            ahead?: null | number;
+            behind?: null | number;
+            blockedReason?: string;
+            branch?: string;
+            changedFiles: number;
+            commitCount: number;
+            commitSubject?: string;
+            deletions: number;
+            pullRequest?: components["schemas"]["DeliveryPullRequest"];
+            repository?: string;
+            /** @enum {string} */
+            state: "empty" | "uncommitted" | "ready_to_publish" | "uncommitted_for_pr" | "ahead_of_pr" | "synchronized" | "blocked";
+            workspaceVersion: string;
+        };
         DesktopWorkspaceLocationResponse: {
             sessionId: string;
             workspacePath: string;
@@ -4443,6 +4465,7 @@ export interface components {
             compareMode?: "base" | "head_fallback";
             degraded: boolean;
             degradedCode?: string;
+            delivery: components["schemas"]["DeliveryStatus"];
             files: components["schemas"]["WorkspaceFileSummary"][];
             sections: components["schemas"]["WorkspaceFileSections"];
             sessionId: string;

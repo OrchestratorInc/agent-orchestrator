@@ -12071,6 +12071,71 @@ components:
       - ok
       - workerId
       type: object
+    DeliveryPullRequest:
+      properties:
+        number:
+          type: integer
+        url:
+          type: string
+      required:
+      - url
+      - number
+      type: object
+    DeliveryStatus:
+      properties:
+        action:
+          enum:
+          - commit_and_publish_pr
+          - publish_pr
+          - commit_and_push
+          - push
+          type: string
+        additions:
+          type: integer
+        ahead:
+          type:
+          - "null"
+          - integer
+        behind:
+          type:
+          - "null"
+          - integer
+        blockedReason:
+          type: string
+        branch:
+          type: string
+        changedFiles:
+          type: integer
+        commitCount:
+          type: integer
+        commitSubject:
+          type: string
+        deletions:
+          type: integer
+        pullRequest:
+          $ref: '#/components/schemas/DeliveryPullRequest'
+        repository:
+          type: string
+        state:
+          enum:
+          - empty
+          - uncommitted
+          - ready_to_publish
+          - uncommitted_for_pr
+          - ahead_of_pr
+          - synchronized
+          - blocked
+          type: string
+        workspaceVersion:
+          type: string
+      required:
+      - state
+      - workspaceVersion
+      - commitCount
+      - changedFiles
+      - additions
+      - deletions
+      type: object
     DesktopWorkspaceLocationResponse:
       properties:
         sessionId:
@@ -13030,6 +13095,8 @@ components:
           type: boolean
         degradedCode:
           type: string
+        delivery:
+          $ref: '#/components/schemas/DeliveryStatus'
         files:
           items:
             $ref: '#/components/schemas/WorkspaceFileSummary'
@@ -13053,6 +13120,7 @@ components:
       - commits
       - summary
       - degraded
+      - delivery
       type: object
     ListWorkspaceTreeResponse:
       properties:
