@@ -13,13 +13,15 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 func configureProviderProcess(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: windows.CREATE_NO_WINDOW | windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_SUSPENDED,
-		HideWindow:    true,
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_SUSPENDED
 }
 
 // startProviderProcess puts the suspended bridge in a kill-on-close Job Object
@@ -102,11 +104,7 @@ func killProviderProcess(ctx context.Context, cmd *exec.Cmd) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	kill := exec.CommandContext(ctx, "taskkill", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F")
-	kill.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: windows.CREATE_NO_WINDOW,
-		HideWindow:    true,
-	}
+	kill := aoprocess.CommandContext(ctx, "taskkill", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F")
 	if err := kill.Run(); err != nil {
 		return cmd.Process.Kill()
 	}

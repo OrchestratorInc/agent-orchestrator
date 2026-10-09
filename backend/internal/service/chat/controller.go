@@ -225,6 +225,11 @@ type Controller struct {
 	// activeTurn maps a provider turn id to AO's turn id for the turn currently
 	// in flight, so a completion can be attributed without a round trip.
 	pendingTurnID string
+	// dispatchedApproval is the approval mode the latest turn was sent with,
+	// the one its sandbox runs under; settings hold the next turn's. Unset
+	// until this controller sends a turn.
+	dispatchedApproval    ports.PermissionMode
+	hasDispatchedApproval bool
 	// dispatchingTurnID is AO's durable turn row while SendTurn is in flight.
 	// Eager providers can emit turn/started before SendTurn returns with the
 	// provider id; that event must bind this row instead of adopting a duplicate.
@@ -244,7 +249,12 @@ type Controller struct {
 	// turn-started notification arriving. Interrupt needs the distinction: a
 	// provider refuses to cancel a turn it has not acknowledged yet.
 	ackedTurnID string
-	state       ports.ChatControllerState
+	// artifactsShown holds the artifact paths the thread already shows in
+	// provider turn artifactsShownTurn: pages reported there, and renders
+	// kept as artifacts. A new turn replaces the set.
+	artifactsShownTurn string
+	artifactsShown     map[string]bool
+	state              ports.ChatControllerState
 	// settings are the provider choices applied to the next dispatch. Held here as
 	// well as on disk so a dispatch does not need a read, and updated together with
 	// the row so the two cannot drift.
@@ -1770,6 +1780,7 @@ func (c *Controller) dispatch(
 
 	c.mu.Lock()
 	c.dispatchingTurnID = turnID
+	c.dispatchedApproval, c.hasDispatchedApproval = msg.Settings.Approval, true
 	c.mu.Unlock()
 	ref, err := c.conv.SendTurn(ctx, excerptDeliveryMessage(msg))
 	if err != nil {

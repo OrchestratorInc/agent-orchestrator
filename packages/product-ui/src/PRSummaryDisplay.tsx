@@ -68,7 +68,7 @@ export function PRSummaryMeta({
 		return null;
 	}
 	return (
-		<div className={cn("min-w-0 font-mono text-2xs leading-4", className)}>
+		<div className={cn("min-w-0 font-mono text-xs leading-4", className)}>
 			{primary.length > 0 ? (
 				<div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-muted-foreground">
 					{primary.map((part, index) => (
@@ -157,7 +157,7 @@ export function PRCardStatusSummary({
 								<PRCardStatusLink externalLink={externalLink} status={status} />
 							</div>
 							{status.detail || (status.key === "review" && reviewDetailsAction) ? (
-								<div className="mt-0.5 flex min-w-0 items-baseline gap-2 pl-4 text-2xs leading-4">
+								<div className="mt-0.5 flex min-w-0 items-baseline gap-2 pl-4 text-xs leading-4">
 									{status.detail ? <span className="text-muted-foreground">{status.detail}</span> : null}
 									{status.key === "review" && reviewDetailsAction ? reviewDetailsAction : null}
 								</div>
@@ -172,7 +172,7 @@ export function PRCardStatusSummary({
 								<span aria-hidden="true" className="size-dot-sm shrink-0 rounded-full bg-current" />
 								{presentation.readiness.label}
 							</div>
-							<div className="mt-0.5 min-w-0 break-words pl-4 text-2xs leading-4 text-muted-foreground">{presentation.readiness.detail}</div>
+							<div className="mt-0.5 min-w-0 break-words pl-4 text-xs leading-4 text-muted-foreground">{presentation.readiness.detail}</div>
 						</div>
 						{action ? <div className="shrink-0 self-center">{action}</div> : null}
 					</div>
@@ -203,12 +203,12 @@ export function PRCardStatusSummary({
 								<PRCardStatusLink externalLink={externalLink} status={presentation.primary} />
 							</div>
 							{presentation.primary.detail ? (
-								<div className="mt-0.5 min-w-0 break-words text-2xs leading-4 text-muted-foreground">
+								<div className="mt-0.5 min-w-0 break-words text-xs leading-4 text-muted-foreground">
 									{presentation.primary.detail}
 								</div>
 							) : null}
 							{presentation.primary.links.length > 0 ? (
-								<div className="mt-1 flex min-w-0 flex-wrap gap-x-1.5 gap-y-1 font-mono text-2xs">
+								<div className="mt-1 flex min-w-0 flex-wrap gap-x-1.5 gap-y-1 font-mono text-xs">
 									{presentation.primary.links.slice(0, 3).map((link, index) => (
 										<SummaryLink
 											className={toneClass[presentation.primary.tone]}
@@ -224,7 +224,7 @@ export function PRCardStatusSummary({
 					</div>
 					{supporting.length > 0 ? (
 						<div className="min-w-0 pl-4">
-							<div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 font-mono text-2xs">
+							<div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 font-mono text-xs">
 								{supporting.map((status) => (
 									<span
 										className={cn("inline-flex items-center gap-1", toneClass[status.tone])}

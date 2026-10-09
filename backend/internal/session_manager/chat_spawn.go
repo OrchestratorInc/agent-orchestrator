@@ -224,6 +224,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            in.systemPrompt,
 		AdditionalDirectories:   workspaceProjectDirectories(in.workspace.Path, in.workspaceProject),
+		MCPServers:              m.aoMCPServers(in.cfg.Harness, env),
 		ExpectedControllerOwner: in.record.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -306,6 +307,36 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 	}
 
 	return m.getRecord(ctx, id)
+}
+
+// aoMCPServers is the tool server every chat session gets: `ao mcp` from the
+// daemon's own binary, which gives the agent the html_preview and html_render
+// tools. Chat Service keeps it for every later start and resume of the
+// session (edit, rollback, fork). Its env holds only what the CLI needs to
+// reach this daemon for this session, never a credential such as
+// AO_BROWSER_CAPABILITY.
+func (m *Manager) aoMCPServers(harness domain.AgentHarness, env map[string]string) []ports.ChatMCPServerConfig {
+	if harness == domain.HarnessUnreal {
+		// Its driver refuses AO-supplied tool servers; the agent uses `ao render`.
+		return nil
+	}
+	executable, err := m.executable()
+	if err != nil || !filepath.IsAbs(executable) {
+		m.logger.Warn("chat session gets no ao tool server; the agent can still run ao render",
+			"executable", executable, "error", err)
+		return nil
+	}
+	// AO_DATA_DIR too: a harness may start the server with exactly this env, and
+	// without it config.Load needs $HOME to find the data dir.
+	serverEnv := make(map[string]string, 3)
+	for _, key := range []string{EnvSessionID, EnvRunFile, EnvDataDir} {
+		if value := env[key]; value != "" {
+			serverEnv[key] = value
+		}
+	}
+	return []ports.ChatMCPServerConfig{{
+		Name: "ao", Type: "stdio", Command: executable, Args: []string{"mcp"}, Env: serverEnv,
+	}}
 }
 
 func (m *Manager) stopChatAfterSpawnFailure(ctx context.Context, id domain.SessionID) {
@@ -412,7 +443,7 @@ func (m *Manager) resumeChatController(
 
 	// Recomputed rather than persisted, matching the terminal path: a restored
 	// session keeps its standing instructions across the relaunch.
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, true)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
 	}
@@ -460,6 +491,7 @@ func (m *Manager) resumeChatController(
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            systemPrompt,
 		AdditionalDirectories:   additionalDirectories,
+		MCPServers:              m.aoMCPServers(rec.Harness, env),
 		ExpectedControllerOwner: rec.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(

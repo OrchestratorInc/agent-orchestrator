@@ -17,7 +17,31 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
+
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
+
+func TestConfigureProviderProcessPreservesHiddenAttributes(t *testing.T) {
+	cmd := aoprocess.Command("provider.exe")
+
+	configureProviderProcess(cmd)
+
+	if cmd.SysProcAttr == nil {
+		t.Fatal("SysProcAttr = nil, want configured Windows process attributes")
+	}
+	for _, flag := range []uint32{
+		windows.CREATE_NO_WINDOW,
+		windows.CREATE_NEW_PROCESS_GROUP,
+		windows.CREATE_SUSPENDED,
+	} {
+		if got := cmd.SysProcAttr.CreationFlags; got&flag == 0 {
+			t.Fatalf("CreationFlags = %#x, want flag %#x", got, flag)
+		}
+	}
+	if !cmd.SysProcAttr.HideWindow {
+		t.Fatal("HideWindow = false, want hidden attribute preserved")
+	}
+}
 
 func TestWindowsProviderBridge(t *testing.T) {
 	if os.Getenv("AO_WINDOWS_JOB_BRIDGE") != "1" {

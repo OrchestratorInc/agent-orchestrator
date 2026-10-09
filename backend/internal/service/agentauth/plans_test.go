@@ -50,6 +50,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"prime-agent", "Log in to Prime Agent", "prime-agent", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md", "/login\r", ActionLogin, []string{"prime-agent"}},
 		{"omp", "Log in to OMP", "omp", "Select Open login after OMP finishes starting", "https://github.com/can1357/oh-my-pi", "/login\r", ActionLogin, []string{"omp"}},
 		{"fx", "Log in to fx", "fx", "Select Vercel, Codex, or Grok in fx's native login flow", "https://fx.sh/docs", "", ActionLogin, []string{"fx", "login"}},
+		{"unreal-agent", "View Unreal Agent documentation", "", "Configure an OpenAI, OpenRouter, Fireworks, Codex, or Ollama provider for AO's built-in Unreal Agent", "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md", "", ActionSetup, nil},
 		{"deepseek-harness", "Set up DeepSeek", "dsh", "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness", "", ActionSetup, []string{"dsh", "--profile", "web"}},
 		{"openhands", "Set up OpenHands", "openhands", "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start", "", ActionSetup, []string{"openhands"}},
 	}
@@ -64,11 +65,11 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		got := plans[i]
 		wantLaunchMode := LaunchTerminal
 		switch want.id {
-		// Aider is the one harness AO can only document: it configures providers
-		// through files and environment, with no command to drive. DeepSeek
-		// Harness has no login subcommand either, but its web profile serves the
-		// Models page that writes the credential, so its setup is a terminal plan.
-		case "aider":
+		// Aider and Unreal Agent configure providers through files and environment,
+		// with no command to drive. DeepSeek Harness has no login subcommand either,
+		// but its web profile serves the Models page that writes the credential, so
+		// its setup is a terminal plan.
+		case "aider", "unreal-agent":
 			wantLaunchMode = LaunchDocumentation
 		}
 		if seen[got.AgentID] {

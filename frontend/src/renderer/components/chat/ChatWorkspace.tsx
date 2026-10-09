@@ -1613,8 +1613,17 @@ function ChatWorkspaceContent({
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
-						<ChatLinkProvider onLinkOpen={onLinkOpen} onFileOpen={onOpenFile} onSessionLinkOpen={onSessionLinkOpen} remoteHost={Boolean(activeRemoteHostId)} workspacePaths={filePaths}>
-							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)}>
+						<ChatLinkProvider
+							onLinkOpen={onLinkOpen}
+							onFileOpen={onOpenFile}
+							onSessionLinkOpen={onSessionLinkOpen}
+							remoteHost={Boolean(activeRemoteHostId)}
+							sessionLinkHostId={activeRemoteHostId}
+							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
+							workspacePaths={filePaths}
+						>
+							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles}>
+
 								<Timeline
 									annotationNavigationRef={annotationNavigationRef}
 									key={draftScopeKey}

@@ -1135,6 +1135,29 @@ func TestProbeReportsMissingBinary(t *testing.T) {
 }
 
 // Chat must not be quietly stricter than the terminal path for the same setting.
+// AO's own tools that load agent pages ask this before they use the network.
+func TestSandboxAllowsNetworkFollowsTheCodexSandbox(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		readOnly   bool
+		launchMode ports.PermissionMode
+		turnMode   ports.PermissionMode
+		want       bool
+	}{
+		{"full access at launch", false, ports.PermissionModeDefault, "", true},
+		{"accept edits at launch", false, ports.PermissionModeAcceptEdits, "", false},
+		{"auto at launch", false, ports.PermissionModeAuto, "", false},
+		{"turn narrows full access", false, ports.PermissionModeDefault, ports.PermissionModeAcceptEdits, false},
+		{"turn widens accept edits", false, ports.PermissionModeAcceptEdits, ports.PermissionModeDefault, true},
+		{"read-only reviewer", true, ports.PermissionModeAcceptEdits, "", true},
+	} {
+		conv := &conversation{readOnly: tc.readOnly, launchMode: tc.launchMode}
+		if got := conv.SandboxAllowsNetwork(tc.turnMode); got != tc.want {
+			t.Errorf("%s: SandboxAllowsNetwork = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestApprovalSettingsMirrorTUIPosture(t *testing.T) {
 	for _, tc := range []struct {
 		readOnly                  bool
@@ -1654,5 +1677,49 @@ func TestReconnectMissingHostNeverLaunchesProvider(t *testing.T) {
 	})
 	if !errors.Is(err, ports.ErrChatHostNotRunning) {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestStartAndResumePassAOToolServersInThreadConfig(t *testing.T) {
+	servers := []ports.ChatMCPServerConfig{{
+		Name: "ao", Type: "stdio", Command: "/opt/ao/bin/ao", Args: []string{"mcp"},
+		Env: map[string]string{"AO_SESSION_ID": "ao-1"},
+	}, {
+		Name: "docs", Type: "http", URL: "http://127.0.0.1:9/mcp",
+	}}
+	// Only AO's own server is pre-approved.
+	want := `{"mcp_servers":{"ao":{"args":["mcp"],"command":"/opt/ao/bin/ao",` +
+		`"default_tools_approval_mode":"approve","env":{"AO_SESSION_ID":"ao-1"}},` +
+		`"docs":{"url":"http://127.0.0.1:9/mcp"}},"model_reasoning_effort":"high"}`
+	for _, method := range []string{"thread/start", "thread/resume"} {
+		t.Run(method, func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			var conv ports.ChatConversation
+			var err error
+			if method == "thread/start" {
+				conv, err = d.Start(context.Background(), ports.ChatStartConfig{
+					SessionID: "ao-1", WorkspacePath: "/tmp/ws", Effort: "high", MCPServers: servers,
+				})
+			} else {
+				conv, err = d.Resume(context.Background(), ports.ChatResumeConfig{
+					SessionID: "ao-1", ProviderConversationID: "thread-1", WorkspacePath: "/tmp/ws", Effort: "high", MCPServers: servers,
+				})
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", method, err)
+			}
+			defer func() { _ = conv.Close() }()
+
+			f := srv.awaitFrame(func(f frame) bool { return f.Method == method })
+			var params struct {
+				Config json.RawMessage `json:"config"`
+			}
+			if err := json.Unmarshal(f.Params, &params); err != nil {
+				t.Fatal(err)
+			}
+			if string(params.Config) != want {
+				t.Fatalf("config = %s\nwant     %s", params.Config, want)
+			}
+		})
 	}
 }

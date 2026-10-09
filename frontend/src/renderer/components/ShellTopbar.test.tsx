@@ -806,7 +806,9 @@ describe("TopbarArchiveButton", () => {
 			response: { status: 500 },
 		});
 
-		expect(await screen.findByRole("alert")).toHaveTextContent("do the thing: runtime teardown failed");
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("runtime teardown failed");
+		expect(alert).toHaveAttribute("title", "do the thing: runtime teardown failed");
 	});
 
 	it("falls back to the project board when no orchestrator is available", async () => {

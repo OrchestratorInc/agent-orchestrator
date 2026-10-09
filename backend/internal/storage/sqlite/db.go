@@ -2103,10 +2103,11 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsOMP := !strings.Contains(schema, "'omp'")
 	needsGemini := !strings.Contains(schema, "'gemini'")
 	needsUnreal := !strings.Contains(schema, "'unreal-agent'")
+	needsCodewhale := !strings.Contains(schema, "'codewhale'")
 	needsMiMo := !strings.Contains(schema, "'mimo-code'")
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsMiMo && !needsDeepSeek && !needsOpenHands {
+	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2210,6 +2211,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		// 'deepseek-harness', 'openhands', 'fake' in that order.
 		repairs = append(repairs, replacement{"'fake'))", "'openhands', 'fake'))"})
 	}
+	if needsCodewhale {
+		repairs = append(repairs, replacement{"'fake'))", "'codewhale', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2252,6 +2256,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'deepseek-harness'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing DeepSeek Harness and did not match known pre-DeepSeek schema")
+	}
+	if !strings.Contains(schema, "'codewhale'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Codewhale")
 	}
 	if !strings.Contains(schema, "'openhands'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing OpenHands and did not match known pre-OpenHands schema")

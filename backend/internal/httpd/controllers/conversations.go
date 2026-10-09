@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
@@ -22,7 +23,11 @@ import (
 )
 
 // Native chat images are sent to the provider and retained in conversation
-// history. Workspace file attachments use separate, larger spawn limits.
+// history. Workspace file attachments use separate, larger spawn limits. The
+// body limit also fits a 25 MiB render page as a JSON string, but only because
+// the page's HTML source is capped at 1 MiB: json.Marshal writes each <, > and
+// & as a 6-byte escape, so the source can grow sixfold. Inlined images are
+// base64 and do not grow.
 const (
 	maxConversationImageBytes  = 10 << 20
 	maxConversationImagesBytes = 25 << 20
@@ -81,6 +86,8 @@ type chatViewService interface {
 // even by calling these URLs directly. UI visibility is not the boundary.
 type ConversationsController struct {
 	Svc ConversationService
+	// Renders serves agent HTML renders. Nil answers the render route 501.
+	Renders *attachmentstore.Store
 }
 
 // Register mounts the conversation routes under a session.
@@ -109,6 +116,10 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/branches/{branchId}/activate", c.activateBranch)
 	r.Put("/sessions/{sessionId}/conversation/title", c.setTitle)
 	r.Post("/sessions/{sessionId}/conversation/mcp/reload", c.reloadMCPServers)
+	r.Post("/sessions/{sessionId}/renders", c.publishRender)
+	r.Post("/sessions/{sessionId}/renders/check", c.checkRender)
+	r.Get("/sessions/{sessionId}/renders/{renderId}", c.renderFile)
+	r.Post("/sessions/{sessionId}/renders/{renderId}/artifact", c.saveRenderArtifact)
 	r.Get("/reviews/{reviewId}/conversation/models", c.reviewModels)
 	r.Patch("/reviews/{reviewId}/conversation/settings", c.reviewSetSettings)
 	r.Get("/reviews/{reviewId}/conversation", c.reviewSnapshot)

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 func TestCommandContextWrapsBatchShimWithComSpec(t *testing.T) {
@@ -28,10 +30,11 @@ func TestCommandContextWrapsBatchShimWithComSpec(t *testing.T) {
 	if !strings.EqualFold(cmd.Path, comSpec) {
 		t.Fatalf("Path = %q, want ComSpec", cmd.Path)
 	}
-	if cmd.SysProcAttr == nil || !strings.Contains(cmd.SysProcAttr.CmdLine, `"agent tool.cmd" "argument with spaces"`) {
+	wantCommand := quoteWindowsBatchArg(shim) + " " + quoteWindowsBatchArg("argument with spaces")
+	if cmd.SysProcAttr == nil || !strings.Contains(cmd.SysProcAttr.CmdLine, wantCommand) {
 		t.Fatalf("CmdLine = %q, want quoted shim and argument", cmd.SysProcAttr.CmdLine)
 	}
-	configureProcessGroup(cmd)
+	aoprocess.ConfigureTreeCancellation(cmd)
 	if cmd.SysProcAttr.CmdLine == "" {
 		t.Fatal("configureProcessGroup discarded the batch command line")
 	}

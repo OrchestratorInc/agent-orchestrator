@@ -204,6 +204,14 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSetConversationTitleRequest":               "SetConversationTitleRequest",
 	"ControllersSetConversationTitleResponse":              "SetConversationTitleResponse",
 	"ControllersSteerConversationRequest":                  "SteerConversationRequest",
+	"ControllersPublishRenderRequest":                      "PublishRenderRequest",
+	"ControllersPublishRenderResponse":                     "PublishRenderResponse",
+	"ControllersRenderCheckRequest":                        "RenderCheckRequest",
+	"ControllersRenderCheckResponse":                       "RenderCheckResponse",
+	"ControllersRenderCheckScreenshot":                     "RenderCheckScreenshot",
+	"ControllersRenderConsoleMessage":                      "RenderConsoleMessage",
+	"ControllersSaveRenderArtifactRequest":                 "SaveRenderArtifactRequest",
+	"ControllersSaveRenderArtifactResponse":                "SaveRenderArtifactResponse",
 	"ControllersSteerConversationResponse":                 "SteerConversationResponse",
 	"ControllersSteerOrSendConversationResponse":           "SteerOrSendConversationResponse",
 	"ControllersPromoteQueuedTurnResponse":                 "PromoteQueuedTurnResponse",
@@ -363,6 +371,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersListSessionPRsResponse":                   "ListSessionPRsResponse",
 	"ControllersSetActivityRequest":                       "SetActivityRequest",
 	"ControllersSetActivityResponse":                      "SetActivityResponse",
+	"ControllersCodewhaleLifecycleWebhookRequest":         "CodewhaleLifecycleWebhookRequest",
+	"ControllersCodewhaleLifecycleEvent":                  "CodewhaleLifecycleEvent",
 	"ControllersSetReviewActivityRequest":                 "SetReviewActivityRequest",
 	"ControllersSetReviewActivityResponse":                "SetReviewActivityResponse",
 	"ControllersSpawnOrchestratorRequest":                 "SpawnOrchestratorRequest",
@@ -828,6 +838,10 @@ func browserOperations() []operation {
 	}
 }
 
+type renderSourceQuery struct {
+	Source *string `query:"source,omitempty" enum:"1" description:"Set to 1 to read the page as the agent wrote it: the stored bytes as text/plain, without the theme bootstrap."`
+}
+
 type conversationSnapshotQuery struct {
 	BeforeSequence *int64 `query:"beforeSequence,omitempty" minimum:"1" description:"Read items older than this conversation sequence. Omit for the newest page."`
 	Limit          *int64 `query:"limit,omitempty" minimum:"1" maximum:"500" description:"Maximum combined messages and activities to return. Defaults to 200."`
@@ -1160,6 +1174,61 @@ func shellTerminalOperations() []operation {
 			reqBody:    controllers.SteerConversationRequest{},
 			resps: []respUnit{
 				{http.StatusAccepted, controllers.SteerConversationResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/renders", id: "publishSessionRender", tag: "conversations",
+			summary:    "Show an agent's self-contained HTML page inline in its chat thread",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.PublishRenderRequest{},
+			resps: []respUnit{
+				{http.StatusCreated, controllers.PublishRenderResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/renders/check", id: "checkSessionRender", tag: "conversations",
+			summary:    "Screenshot an agent's HTML page in the desktop app before it is published",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.RenderCheckRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.RenderCheckResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusUnprocessableEntity, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/renders/{renderId}", id: "getSessionRender", tag: "conversations",
+			summary:    "Serve a published render as a sandboxed HTML document",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.RenderIDParam{}, renderSourceQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, ""},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+			contentTypes: map[int]string{http.StatusOK: "text/html"},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/renders/{renderId}/artifact", id: "saveSessionRenderArtifact", tag: "conversations",
+			summary:    "Keep a published render as a session artifact",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.RenderIDParam{}},
+			reqBody:    controllers.SaveRenderArtifactRequest{},
+			resps: []respUnit{
+				{http.StatusCreated, controllers.SaveRenderArtifactResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
@@ -2370,6 +2439,18 @@ func sessionOperations() []operation {
 			contentTypes: map[int]string{http.StatusOK: "text/html"},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/artifact-files/*", id: "getSessionArtifactFile", tag: "sessions",
+			summary:    "Serve a session artifact file sandboxed, an HTML page with the render theme bootstrap",
+			pathParams: []any{controllers.SessionIDParam{}, renderSourceQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, ""},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+			contentTypes: map[int]string{http.StatusOK: "text/html"},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/preview/app/*", id: "getSessionPreviewApp", tag: "sessions",
 			summary:      "Proxy the running session-owned application preview",
 			pathParams:   []any{controllers.SessionIDParam{}},
@@ -2895,6 +2976,20 @@ func sessionOperations() []operation {
 				{http.StatusOK, controllers.SetActivityResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/activity/codewhale", id: "setCodewhaleSessionActivity", tag: "sessions",
+			summary:    "Record a Codewhale lifecycle outbox event",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.CodewhaleLifecycleWebhookRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SetActivityResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
