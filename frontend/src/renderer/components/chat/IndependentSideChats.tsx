@@ -491,7 +491,25 @@ export function useIndependentSideChats(
 				return;
 			}
 			if (data?.snapshot) {
-				setSnapshot(data.snapshot);
+				const next = data.snapshot;
+				setSnapshot((current) => {
+					if (!current || current.side.id !== next.side.id) return next;
+					// The latest page moves forward as turns arrive. Retain its
+					// previously loaded tail so it cannot leave a gap above older pages.
+					return {
+						...next,
+						hasMore: current.hasMore,
+						turns: [
+							...new Map([...(current.turns ?? []), ...(next.turns ?? [])].map((turn) => [turn.id, turn])).values(),
+						].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+						messages: [
+							...new Map([...(current.messages ?? []), ...(next.messages ?? [])].map((message) => [message.id, message])).values(),
+						],
+						activities: [
+							...new Map([...(current.activities ?? []), ...(next.activities ?? [])].map((activity) => [activity.id, activity])).values(),
+						],
+					};
+				});
 				setError(undefined);
 			}
 		};
