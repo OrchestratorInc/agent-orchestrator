@@ -300,6 +300,49 @@ describe("side panel navigation and recovery", () => {
 		remove.mockResolvedValue({});
 	});
 
+	it.each([false, true])("retains the page boundary as new turns arrive (older history loaded: %s)", async (loadBeforeRefresh) => {
+		const normalGet = get.getMockImplementation()!;
+		let latest = 100;
+		const timestamp = (number: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, number)).toISOString();
+		get.mockImplementation(async (path, options) => {
+			if (!path.endsWith("/{sideId}")) return normalGet(path, options);
+			const older = Boolean(options?.params?.query?.before);
+			const numbers = Array.from({ length: 50 }, (_, index) => older ? index + 1 : latest - 49 + index);
+			return { data: { snapshot: {
+				side: panelSides[0],
+				turns: numbers.map((number) => ({ id: `turn-${number}`, state: "completed", createdAt: timestamp(number) })),
+				messages: numbers.map((number) => ({
+					id: `message-${number}`, turnId: `turn-${number}`, role: "assistant", sequence: number,
+					text: number === 100 && latest > 100 ? "Updated answer 100" : `Answer ${number}`,
+					revision: latest, streaming: false, createdAt: timestamp(number),
+				})),
+				activities: [], hasMore: !older,
+			} } };
+		});
+		render(<SidePanelHarness />);
+		await screen.findByText("Answer 51");
+		if (loadBeforeRefresh) {
+			await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
+			await screen.findByText("Answer 1");
+		}
+		latest = 101;
+		await screen.findByText("Answer 101", {}, { timeout: 3000 });
+		await screen.findByText("Updated answer 100");
+		expect(screen.getByText("Answer 51")).toBeInTheDocument();
+		expect(screen.getAllByText("Answer 52")).toHaveLength(1);
+		expect(screen.getAllByText("Updated answer 100")).toHaveLength(1);
+		expect(screen.queryByText("Answer 100")).not.toBeInTheDocument();
+		if (!loadBeforeRefresh) {
+			await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
+			await screen.findByText("Answer 1");
+		}
+		expect(get).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+			params: expect.objectContaining({ query: { before: timestamp(51), limit: 50 } }),
+		}));
+		expect(screen.getByText("Answer 50")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Load earlier messages" })).not.toBeInTheDocument();
+	});
+
 	it.each([undefined, "", "   "])("renders a fallback for an absent or blank side label (%s)", async (label) => {
 		const normalGet = get.getMockImplementation()!;
 		get.mockImplementation(async (path, options) => {

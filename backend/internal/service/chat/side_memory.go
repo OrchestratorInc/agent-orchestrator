@@ -415,9 +415,17 @@ func (m *memorySideStore) CompleteSideProviderCleanup(_ context.Context, id stri
 func (m *memorySideStore) SideProviderCleanupPending(_ context.Context) ([]domain.SideProviderCleanup, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	openForks := make(map[string]bool, len(m.sides))
+	for _, side := range m.sides {
+		if side.ClosedAt == nil && side.ProviderForkID != "" {
+			openForks[side.ProviderForkID] = true
+		}
+	}
 	out := make([]domain.SideProviderCleanup, 0, len(m.cleanup))
 	for _, item := range m.cleanup {
-		out = append(out, item)
+		if !openForks[item.ForkID] {
+			out = append(out, item)
+		}
 	}
 	return out, nil
 }

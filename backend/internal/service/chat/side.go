@@ -918,11 +918,24 @@ func (m *sideManager) consumeEvents(ctx context.Context, runtime *sideRuntime) {
 				runtime.mu.Lock()
 				noActiveTurn := runtime.activeTurnID == ""
 				compactionCompleted := noActiveTurn && runtime.compacting
-				if compactionCompleted {
-					runtime.compacting = false
-				}
 				runtime.mu.Unlock()
 				if compactionCompleted {
+					// ACP hosts refuse another prompt until the terminal receipt is
+					// acknowledged, including receipts for compaction-only turns.
+					if acknowledger, ok := runtime.conv.(ports.ChatProviderEventAcknowledger); ok && event.ProviderEventID != "" {
+						ackCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+						err := acknowledger.AcknowledgeProviderEvent(ackCtx, event.ProviderEventID)
+						cancel()
+						if err != nil {
+							runtime.mu.Lock()
+							runtime.dispatchBlocked = true
+							runtime.mu.Unlock()
+							m.failOpen(runtime.side, fmt.Errorf("side provider did not acknowledge compaction; close and reopen the side chat: %w", err))
+						}
+					}
+					runtime.mu.Lock()
+					runtime.compacting = false
+					runtime.mu.Unlock()
 					m.signal()
 				}
 				if noActiveTurn {
