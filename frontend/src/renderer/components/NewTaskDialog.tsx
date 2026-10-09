@@ -158,7 +158,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 									<>
 										<span className="relative flex w-5 shrink-0 items-center justify-center">
 											{option.value === STANDALONE_WORKSPACE_ID ? (
-												<StickyNote aria-hidden="true" className="size-[18px]! text-muted-foreground" />
+												<StickyNote aria-hidden="true" className="size-4! -translate-y-px text-muted-foreground" />
 											) : (
 												<span className="flex items-center -space-x-2">
 													{avatars.slice(0, 2).map((avatar) => (
