@@ -46,7 +46,25 @@ func (e *cleanupStepError) Unwrap() []error { return []error{ErrCleanupScript, e
 func (m *Manager) runPreRemove(projectID domain.ProjectID, workspacePath string) error {
 	// Cleanup belongs to the daemon, not the request or its teardown deadline.
 	// It has no execution timer, but shutdown must still stop it.
-	ctx := m.backgroundContext
+	return m.runPreRemoveContext(m.backgroundContext, projectID, workspacePath)
+}
+
+// runReplacementPreRemove runs cleanup for a forced orchestrator retirement.
+// Replacement holds the project's orchestrator lock and must release the
+// branch, so a slow or failing script is logged instead of blocking or
+// vetoing the forced removal.
+func (m *Manager) runReplacementPreRemove(id domain.SessionID, projectID domain.ProjectID, workspacePath string) {
+	ctx, cancel := context.WithTimeout(m.backgroundContext, replacementCleanupBudget)
+	defer cancel()
+	if err := m.runPreRemoveContext(ctx, projectID, workspacePath); err != nil {
+		m.logger.Warn("retire replacement: workspace cleanup failed; removing workspace anyway", "sessionID", id, "error", err)
+	}
+}
+
+// replacementCleanupBudget bounds cleanup commands during orchestrator replacement.
+var replacementCleanupBudget = killTeardownBudget
+
+func (m *Manager) runPreRemoveContext(ctx context.Context, projectID domain.ProjectID, workspacePath string) error {
 	if workspacePath == "" {
 		return nil
 	}

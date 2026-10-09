@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -244,23 +245,36 @@ func TestWorkspaceStepBoundsOrphanedOutputPipes(t *testing.T) {
 	}
 }
 
-func TestRetireCleanupFailureCanBeRetried(t *testing.T) {
-	m, st, ws, rec := newCleanupFixture(t, "exit 7")
-	rec.Kind = domain.KindOrchestrator
-	st.sessions[rec.ID] = rec
-	st.worktrees[rec.ID] = []domain.SessionWorktreeRecord{{SessionID: rec.ID, RepoName: domain.RootWorkspaceRepoName}}
-	if err := m.RetireForReplacement(context.Background(), rec.ID); !errors.Is(err, ErrCleanupScript) {
-		t.Fatalf("retirement cleanup error = %v", err)
-	}
-	if !st.sessions[rec.ID].IsTerminated || len(st.worktrees[rec.ID]) != 0 || ws.destroyed != 0 {
-		t.Fatal("failed retirement cleanup must leave a terminated, retryable session without a restore marker")
-	}
-	project := st.projects["mer"]
-	project.Config.PreRemove = []string{"echo fixed"}
-	st.projects["mer"] = project
-	result, err := m.Cleanup(context.Background(), rec.ProjectID)
-	if err != nil || len(result.Cleaned) != 1 || ws.destroyed != 1 {
-		t.Fatalf("Retry cleanup cannot reach failed retirement: result=%+v err=%v", result, err)
+func TestRetireForReplacementRemovesWorkspaceWhenCleanupFails(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		command string
+	}{
+		{name: "failing script", command: "exit 7"},
+		{name: "hung script", command: waitingCleanupCommand()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previous := replacementCleanupBudget
+			replacementCleanupBudget = 500 * time.Millisecond
+			t.Cleanup(func() { replacementCleanupBudget = previous })
+			m, st, ws, rec := newCleanupFixture(t, tc.command)
+			rec.Kind = domain.KindOrchestrator
+			st.sessions[rec.ID] = rec
+			st.worktrees[rec.ID] = []domain.SessionWorktreeRecord{{SessionID: rec.ID, RepoName: domain.RootWorkspaceRepoName}}
+			started := time.Now()
+			if err := m.RetireForReplacement(context.Background(), rec.ID); err != nil {
+				t.Fatalf("replacement must not depend on cleanup scripts: %v", err)
+			}
+			if elapsed := time.Since(started); elapsed > 10*time.Second {
+				t.Fatalf("replacement waited %v for cleanup", elapsed)
+			}
+			if !slices.Contains(ws.calls, "ForceDestroy:"+string(rec.ID)) {
+				t.Fatalf("replacement did not force-remove the workspace: %v", ws.calls)
+			}
+			if !st.sessions[rec.ID].IsTerminated || len(st.worktrees[rec.ID]) != 0 {
+				t.Fatal("retired orchestrator must be terminated without a restore marker")
+			}
+		})
 	}
 }
 

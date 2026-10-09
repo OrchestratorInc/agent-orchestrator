@@ -2681,9 +2681,7 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 	if err := m.recordTermination(ctx, rec.ID, true); err != nil {
 		return err
 	}
-	if err := m.runPreRemove(rec.ProjectID, ws.Path); err != nil {
-		return fmt.Errorf("retire replacement %s: %w", id, err)
-	}
+	m.runReplacementPreRemove(rec.ID, rec.ProjectID, ws.Path)
 	ctx, cancelWorkspace := context.WithTimeout(context.WithoutCancel(ctx), killTeardownBudget)
 	defer cancelWorkspace()
 	if err := m.workspace.ForceDestroy(ctx, ws); err != nil {
@@ -2761,9 +2759,7 @@ func (m *Manager) retireWorkspaceProjectForReplacement(ctx context.Context, rec 
 	if err := m.recordTermination(ctx, rec.ID, false); err != nil {
 		return err
 	}
-	if err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath); err != nil {
-		return fmt.Errorf("retire replacement %s: %w", rec.ID, err)
-	}
+	m.runReplacementPreRemove(rec.ID, rec.ProjectID, rec.Metadata.WorkspacePath)
 	ctx, cancelWorkspace := context.WithTimeout(context.WithoutCancel(ctx), killTeardownBudget)
 	defer cancelWorkspace()
 	for i := len(rows) - 1; i >= 0; i-- {

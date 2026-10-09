@@ -112,7 +112,7 @@ Setup steps run in order in separate shells. Each step has its own 10-minute lim
 
 The same command list runs on every platform. Use `sh` syntax on macOS/Linux and `cmd` syntax on Windows. Quoting, variables, and command chaining differ. For a project used on multiple platforms, call a script that supports each platform, such as `node scripts/setup.mjs`.
 
-Cleanup steps use `preRemove`. They run in order after processes stop and before permanent worktree removal. They have no execution time limit. Daemon shutdown cancels them. A failed step preserves the worktree. Save a fix, then use **Retry cleanup** for terminated sessions. Dirty worktrees remain intact. Cleanup does not run on ordinary agent exit or app quit, and it excludes scratch workspaces.
+Cleanup steps use `preRemove`. They run in order after processes stop and before permanent worktree removal. They have no execution time limit. Daemon shutdown cancels them. A failed step preserves the worktree. Save a fix, then use **Retry cleanup** for terminated sessions. Dirty worktrees remain intact. Replacing an orchestrator is the exception: its cleanup gets 90 seconds, and AO removes the old worktree even if a step fails or runs out of time. Cleanup does not run on ordinary agent exit or app quit, and it excludes scratch workspaces.
 
 Use `agentRules` or `agentRulesFile` for worker instructions and `orchestratorRules` for supervision instructions. If both worker fields are set, AO combines the inline rules and file contents.
 

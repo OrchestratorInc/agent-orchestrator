@@ -38,7 +38,7 @@ const {
 	boardActionsInPanelMock: vi.fn(() => false),
 }));
 
-vi.mock("./ShellTopbar", () => ({ ShellTopbar: () => null }));
+vi.mock("./ShellTopbar", async (importOriginal) => ({ ...(await importOriginal<typeof import("./ShellTopbar")>()), ShellTopbar: () => null }));
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
