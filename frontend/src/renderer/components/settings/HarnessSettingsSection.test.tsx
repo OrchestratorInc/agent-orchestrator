@@ -502,7 +502,9 @@ describe("HarnessSettingsSection", () => {
 		const row = await findAgentRow("codex");
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
 		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
-		expect(within(row).queryByText("Connected")).toBeNull();
+		// A configured credential reads as connected; an unknown one claims nothing.
+		if (authentication === "configured") expect(within(row).getByText("Connected")).toBeInTheDocument();
+		else expect(within(row).queryByText("Connected")).toBeNull();
 	});
 
 	it.each(["future_status", ""])("keeps an observed version without claiming an update for status %s", async (status) => {
