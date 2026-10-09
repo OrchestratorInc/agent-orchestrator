@@ -327,6 +327,24 @@ SELECT COUNT(*) FROM (
 	}
 }
 
+func TestMigrateRejectsDatabaseNewerThanEmbeddedMigrations(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 154)
+	if _, err := db.Exec(
+		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (155, 1)`,
+	); err != nil {
+		t.Fatalf("seed newer migration version: %v", err)
+	}
+
+	err := migrate(db)
+	if err == nil {
+		t.Fatal("migrate accepted a database newer than the embedded migrations")
+	}
+	want := "database schema version 155 is newer than this AO binary supports"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("migrate error = %q, want substring %q", err, want)
+	}
+}
+
 // TestSessionListSucceedsOnBurnedMigrationHistory reproduces the #3475/#3476
 // field profile: goose_db_version already records versions 40 through 51
 // (written by a foreign build), so goose silently skips the real
