@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
@@ -216,8 +219,10 @@ type BridgeService struct {
 	//
 	// Lists, not single addresses: the phone races every endpoint, so a machine
 	// on both Wi-Fi and Ethernet must advertise both. Host and TailscaleHost are
-	// derived from the head of each list so the singular fields and the list can
-	// never disagree.
+	// the head of each scan, kept for the existing renderer. The advertised
+	// list's tailnet entry is derived from the same scan but may be the
+	// secure-pairing proxy instead of the address, or absent — see
+	// mobilebridge.Endpoints.
 	PickLANHosts       func() []string
 	PickTailscaleHosts func() []string
 	// Secure-pairing collaborators. All nil in production (daemon.go wires the
@@ -261,6 +266,33 @@ type BridgeService struct {
 	stateMu sync.RWMutex
 	// serveErr records the last Apply/Clear failure for Status.
 	serveErr error
+
+	// tsMu guards the cached tailscale CLI answer below. Like stateMu, no CLI
+	// call runs while it is held: tsFlight is what makes concurrent callers
+	// share one read. tsGen moves on every proxy change. A read that began
+	// before a change is not cached, and nobody who asks after it waits on it.
+	tsMu     sync.Mutex
+	tsGen    uint64
+	tsRead   tailscaleRead
+	tsFlight singleflight.Group
+	// now is the cache's clock. Nil means time.Now; tests set it.
+	now func() time.Time
+}
+
+// tailscaleReadTTL is how long one tailscale CLI answer serves every caller.
+// With secure pairing on, each phone away from the LAN refreshes its
+// endpoints about once a minute and the desktop polls status every two seconds
+// while pairing; without it, each of those requests would run the CLI.
+const tailscaleReadTTL = 5 * time.Second
+
+// tailscaleRead is one answer from the tailscale CLI.
+type tailscaleRead struct {
+	info mobilebridge.TailscaleInfo
+	// target is the port :443 proxies to, read only when withTarget.
+	target     int
+	withTarget bool
+	gen        uint64
+	at         time.Time // zero: nothing has been read
 }
 
 func (b *BridgeService) lanHosts() []string {
@@ -291,26 +323,22 @@ func first(hosts []string) string {
 func (b *BridgeService) Status() MobileStatusResponse {
 	st, _ := mobilebridge.Load(b.ConfigPath)
 	enabled := st.Enabled && b.LAN.Running()
-	lan := b.lanHosts()
-	ts := b.tailscaleHosts()
-	if st.LoopbackOnly {
-		lan, ts = nil, nil
+	sp := b.securePairingStatus(st.SecurePairing && !st.LoopbackOnly, enabled)
+	if st.ServeCleanupPending && sp.Reason == "" {
+		sp.Reason = "clear_failed"
 	}
+	in := b.endpointInputs(st.LoopbackOnly, sp)
 	res := MobileStatusResponse{
 		Enabled:       enabled,
 		LoopbackOnly:  st.LoopbackOnly,
-		Host:          first(lan),
-		TailscaleHost: first(ts),
-		Port:          b.LAN.BoundPort(),
+		Host:          first(in.LANHosts),
+		TailscaleHost: first(in.TailscaleHosts),
+		Port:          in.Port,
 		Warning:       mobileUnencryptedWarning,
-		Endpoints: mobilebridge.Endpoints(mobilebridge.EndpointInputs{
-			LANHosts:       lan,
-			TailscaleHosts: ts,
-			Port:           b.LAN.BoundPort(),
-			Tunnel:         b.tunnelEndpoint(),
-		}),
-		Tunnel: b.tunnelStatus(),
-		HostID: b.HostID,
+		Endpoints:     mobilebridge.Endpoints(in),
+		Tunnel:        b.tunnelStatus(),
+		HostID:        b.HostID,
+		SecurePairing: sp,
 	}
 	// Only surface the password while the bridge is actually enabled. This route
 	// is reachable only on the loopback listener (the LAN listener 404s
@@ -318,28 +346,57 @@ func (b *BridgeService) Status() MobileStatusResponse {
 	if enabled {
 		res.Password = st.Password
 	}
-	res.SecurePairing = b.securePairingStatus(st.SecurePairing, enabled)
-	if st.ServeCleanupPending && res.SecurePairing.Reason == "" {
-		res.SecurePairing.Reason = "clear_failed"
-	}
 	res.KeepAwake = b.keepAwakeStatus(st.KeepAwake)
 	return res
 }
 
 // AdvertisedEndpoints reports how this daemon can currently be reached, for
-// the phone's refresh route. Same list Status carries, so the two cannot drift.
+// the phone's refresh route. Built from the same inputs Status uses, so the
+// list in the pairing code and the list a paired phone refreshes to cannot
+// drift — including the secure-pairing proxy, which is what lets a phone that
+// paired before the proxy existed pick it up on its next connect.
+//
+// With secure pairing on, this needs the same two tailscale CLI reads Status
+// does, and shares them with it through readTailscale: phones refreshing
+// together share one read, and an answer serves every caller for
+// tailscaleReadTTL. With the mode off nothing here touches the CLI.
 func (b *BridgeService) AdvertisedEndpoints() []mobilebridge.Endpoint {
 	st, _ := mobilebridge.Load(b.ConfigPath)
+	enabled := st.Enabled && b.LAN.Running()
+	sp := b.securePairingStatus(st.SecurePairing && !st.LoopbackOnly, enabled)
+	return mobilebridge.Endpoints(b.endpointInputs(st.LoopbackOnly, sp))
+}
+
+// endpointInputs gathers everything the candidate list is built from. The
+// only place that reads the network position, so Status and AdvertisedEndpoints
+// describe the machine identically.
+func (b *BridgeService) endpointInputs(loopbackOnly bool, sp SecurePairingStatus) mobilebridge.EndpointInputs {
 	var lan, ts []string
-	if !st.LoopbackOnly {
+	if !loopbackOnly {
 		lan, ts = b.lanHosts(), b.tailscaleHosts()
 	}
-	return mobilebridge.Endpoints(mobilebridge.EndpointInputs{
+	return mobilebridge.EndpointInputs{
 		LANHosts:       lan,
 		TailscaleHosts: ts,
 		Port:           b.LAN.BoundPort(),
 		Tunnel:         b.tunnelEndpoint(),
-	})
+		SecurePairing:  securePairingState(sp),
+	}
+}
+
+// securePairingState reduces the status block to what the candidate list
+// needs. The proxy's address is passed only while Active, which already folds
+// in the mode being off, a missing CLI, no tailnet certificates, a failed
+// serve, and a proxy pinned to a stale port (securePairingStatus); anything
+// weaker would advertise the MagicDNS name while :443 proxies something else.
+// Enabled is passed separately so the list can tell "mode on, proxy not
+// verified" from "mode off" — the two advertise the tailnet differently.
+func securePairingState(sp SecurePairingStatus) mobilebridge.SecurePairingState {
+	st := mobilebridge.SecurePairingState{Enabled: sp.Enabled}
+	if sp.Active {
+		st.Host, st.Port = sp.Host, sp.Port
+	}
+	return st
 }
 
 // tunnel reads the current connector without resolving one.
@@ -400,6 +457,7 @@ func (b *BridgeService) queryTS() mobilebridge.TailscaleInfo {
 }
 
 func (b *BridgeService) applyServe(port int) error {
+	defer b.forgetTailscaleRead()
 	if b.ApplyServe != nil {
 		return b.ApplyServe(port)
 	}
@@ -407,10 +465,81 @@ func (b *BridgeService) applyServe(port int) error {
 }
 
 func (b *BridgeService) clearServe() error {
+	defer b.forgetTailscaleRead()
 	if b.ClearServe != nil {
 		return b.ClearServe()
 	}
 	return mobilebridge.NewServe().Clear(context.Background())
+}
+
+// forgetTailscaleRead drops the cached CLI answer once the proxy has changed.
+// It runs after the change, not before, so a read that overlapped the change
+// (and may have seen either side of it) stays in the old generation: it is not
+// cached, and the Status a toggle returns does not wait on it.
+func (b *BridgeService) forgetTailscaleRead() {
+	b.tsMu.Lock()
+	defer b.tsMu.Unlock()
+	b.tsGen++
+	b.tsRead = tailscaleRead{}
+}
+
+func (b *BridgeService) clock() time.Time {
+	if b.now != nil {
+		return b.now()
+	}
+	return time.Now()
+}
+
+// readTailscale reports this node's tailscale state and, when wantTarget, the
+// port :443 proxies to. Callers within tailscaleReadTTL of an answer reuse it,
+// and callers that arrive while a read is running wait for that read instead
+// of starting their own, so phones refreshing together run the CLI once.
+func (b *BridgeService) readTailscale(wantTarget bool) tailscaleRead {
+	b.tsMu.Lock()
+	gen, cached := b.tsGen, b.tsRead
+	b.tsMu.Unlock()
+	if !cached.at.IsZero() && b.clock().Sub(cached.at) < tailscaleReadTTL && (cached.withTarget || !wantTarget) {
+		return cached
+	}
+	key := strconv.FormatUint(gen, 10)
+	if wantTarget {
+		key += "+target"
+	}
+	v, _, _ := b.tsFlight.Do(key, func() (any, error) {
+		r := b.readTailscaleNow(wantTarget)
+		r.gen, r.at = gen, b.clock()
+		b.tsMu.Lock()
+		defer b.tsMu.Unlock()
+		if b.tsGen == gen {
+			b.tsRead = r
+		}
+		return r, nil
+	})
+	// Do returns what the function above returns. Were it ever anything else,
+	// the zero value reads as "no CLI", which advertises no tailnet entry.
+	r, _ := v.(tailscaleRead)
+	return r
+}
+
+// readTailscaleNow runs the CLI. The phone gives endpoint refresh five
+// seconds, and each of the two reads has its own three-second limit, so doing
+// them in sequence could time the phone out even when both succeed. They only
+// read local tailscale state and do not depend on each other, so the target
+// read starts alongside the status read rather than after it. That also means
+// it runs when status then reports no CLI or no certificates. It adds no
+// latency, since the two run side by side, and the cache limits it to one per
+// tailscaleReadTTL.
+func (b *BridgeService) readTailscaleNow(wantTarget bool) tailscaleRead {
+	var targetC chan int
+	if wantTarget {
+		targetC = make(chan int, 1)
+		go func() { targetC <- b.serveTarget() }()
+	}
+	r := tailscaleRead{info: b.queryTS(), withTarget: wantTarget}
+	if targetC != nil {
+		r.target = <-targetC
+	}
+	return r
 }
 
 func (b *BridgeService) serveTarget() int {
@@ -446,7 +575,9 @@ func (b *BridgeService) securePairingStatus(on, bridgeUp bool) SecurePairingStat
 		}
 		return sp
 	}
-	info := b.queryTS()
+	// The target only matters once the bridge is up and the proxy applied.
+	ts := b.readTailscale(bridgeUp && serveErr == nil)
+	info := ts.info
 	switch {
 	case info.Name == "":
 		sp.Reason = "no_cli"
@@ -464,7 +595,7 @@ func (b *BridgeService) securePairingStatus(on, bridgeUp bool) SecurePairingStat
 		sp.Reason = "serve_failed"
 		return sp
 	}
-	if b.serveTarget() != b.LAN.BoundPort() {
+	if ts.target != b.LAN.BoundPort() {
 		sp.Reason = "port_mismatch"
 		return sp
 	}

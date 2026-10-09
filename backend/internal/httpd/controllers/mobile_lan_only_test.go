@@ -139,6 +139,36 @@ func TestTunnelOnlyPersistsLoopbackAndAdvertisesOnlyTunnel(t *testing.T) {
 	}
 }
 
+func TestTunnelOnlyNeverAdvertisesOrProbesSecurePairing(t *testing.T) {
+	tunnel := &fakeTunnel{endpoint: &mobilebridge.TunnelEndpoint{Ready: true, Hostname: "test.trycloudflare.com"}}
+	bridge := lanOnlyBridge(t, tunnel)
+	bridge.PickLANHosts = func() []string { return []string{"192.168.1.42"} }
+	bridge.PickTailscaleHosts = func() []string { return []string{"100.72.46.7"} }
+	bridge.QueryTS = func() mobilebridge.TailscaleInfo {
+		t.Fatal("loopback-only status queried Tailscale")
+		return mobilebridge.TailscaleInfo{}
+	}
+	if _, err := bridge.EnableTunnelOnly(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A stale or manually edited config must not turn a loopback listener into
+	// a direct tailnet endpoint. Treat loopback-only as the stronger boundary.
+	state := loadLANOnlyState(t, bridge.ConfigPath)
+	state.SecurePairing = true
+	if err := mobilebridge.Save(bridge.ConfigPath, state); err != nil {
+		t.Fatal(err)
+	}
+
+	status := bridge.Status()
+	if status.SecurePairing.Enabled || len(status.Endpoints) != 1 || status.Endpoints[0].Kind != mobilebridge.KindTunnel {
+		t.Fatalf("loopback-only status advertised a direct endpoint: %+v", status)
+	}
+	if got := bridge.AdvertisedEndpoints(); len(got) != 1 || got[0].Kind != mobilebridge.KindTunnel {
+		t.Fatalf("loopback-only refresh advertised a direct endpoint: %+v", got)
+	}
+}
+
 func TestTunnelOnlyDoesNotClaimExistingLANListenerIsPrivate(t *testing.T) {
 	bridge := lanOnlyBridge(t, &fakeTunnel{})
 	before, err := bridge.EnableLANOnly()
