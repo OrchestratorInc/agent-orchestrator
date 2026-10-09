@@ -551,6 +551,9 @@ func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.Ru
 					}
 				}
 			}
+			if ready != nil && ready.SkipInput {
+				return
+			}
 			if ready == nil {
 				goto wait
 			}

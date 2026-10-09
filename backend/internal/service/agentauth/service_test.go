@@ -187,6 +187,34 @@ func TestPiReadyStatesMatchRenderedPiScreens(t *testing.T) {
 	}
 }
 
+func TestStartOpensKimchiPTYAndAutomaticallyRunsLogin(t *testing.T) {
+	t.Parallel()
+
+	opener := &recordingTerminalOpener{}
+	svc := New(foundExecutable("kimchi"), opener)
+
+	got, err := svc.Start(context.Background(), "kimchi")
+	if err != nil {
+		t.Fatalf("Start(kimchi): %v", err)
+	}
+	wantStates := []shellterm.InitialInputReadyState{
+		{Text: "Select authentication method:", SkipInput: true},
+		{Text: "/ for commands"},
+	}
+	wantInput := shellterm.OpenCommandTerminalInput{
+		Argv:                    []string{"/test/bin/kimchi"},
+		Title:                   "Log in to Kimchi",
+		InitialInput:            "/login",
+		InitialInputReadyStates: wantStates,
+	}
+	if !reflect.DeepEqual(opener.input, wantInput) {
+		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, wantInput)
+	}
+	if got.TerminalInput != "" {
+		t.Fatalf("TerminalInput = %q, want empty because Kimchi login is automatic inside the PTY", got.TerminalInput)
+	}
+}
+
 func TestStartFallsBackToAgentResolvedBinaryOutsidePATH(t *testing.T) {
 	t.Parallel()
 
