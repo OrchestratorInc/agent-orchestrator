@@ -23,7 +23,7 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
-export type InspectorView = "summary" | "reviews" | "browser" | "files";
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files";
 
 export type InspectorTab = {
 	badge?: boolean;
@@ -45,6 +45,7 @@ export function SessionInspectorShellView({
 	ariaLabel,
 	browserPoppedOut,
 	browserView,
+	sideChatView,
 	filesView,
 	headerActions,
 	isVisible = true,
@@ -58,6 +59,7 @@ export function SessionInspectorShellView({
 	ariaLabel: string;
 	browserPoppedOut: boolean;
 	browserView?: ReactNode;
+	sideChatView?: ReactNode;
 	filesView?: ReactNode;
 	headerActions?: ReactNode;
 	isVisible?: boolean;
@@ -199,6 +201,7 @@ export function SessionInspectorShellView({
 				{activeView === "summary" ? summaryView : null}
 				{activeView === "reviews" ? reviewsView : null}
 				{activeView === "browser" ? browserView : null}
+				{activeView === "sideChat" ? sideChatView : null}
 				{activeView === "files" ? filesView : null}
 			</div>
 		</aside>

@@ -313,6 +313,8 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 }
 
 export interface ChatWorkspaceProps {
+	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
+	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
 	snapshot: ConversationSnapshot;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
 	uiSessionId?: string;
@@ -591,6 +593,8 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 }
 
 function ChatWorkspaceContent({
+	onAddToSideChat,
+	annotationNavigationRequest,
 	snapshot,
 	sessionTitle,
 	sessionRole = "worker",
@@ -1109,6 +1113,7 @@ function ChatWorkspaceContent({
 	const navigateToAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
 		annotationNavigationRef.current?.(annotation);
 	}, []);
+	useEffect(() => { if (annotationNavigationRequest) navigateToAnnotation(annotationNavigationRequest); }, [annotationNavigationRequest, navigateToAnnotation]);
 	// Storage failures can be transient, so try again when the user comes back. Only while
 	// the composer is empty: recovering remounts it, which would drop unsaved text.
 	useEffect(() => {
@@ -1670,6 +1675,7 @@ function ChatWorkspaceContent({
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles}>
 
 								<Timeline
+							onAddToSideChat={onAddToSideChat}
 									annotationNavigationRef={annotationNavigationRef}
 									key={draftScopeKey}
 									snapshot={snapshot}
@@ -2325,6 +2331,7 @@ const CHAT_TURN_GAP = 18;
 const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
 
 function Timeline({
+	onAddToSideChat,
 	annotationNavigationRef,
 	snapshot,
 	assetBaseUrl,
@@ -2354,6 +2361,7 @@ function Timeline({
 	startup,
 	arriving = false,
 }: {
+	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	annotationNavigationRef: MutableRefObject<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>;
 	snapshot: ConversationSnapshot;
 	assetBaseUrl?: string;
@@ -3104,6 +3112,7 @@ function Timeline({
 				content: echo.excerpts?.map((excerpt) => ({
 					type: "excerpt",
 					text: excerpt.text,
+					sourceConversationId: excerpt.conversationId,
 					sourceMessageId: excerpt.messageId,
 					sourceRevision: excerpt.revision,
 				})),
@@ -3698,11 +3707,12 @@ function Timeline({
 					ref={selectionButton}
 					style={{ left: selectionPosition?.left ?? 0, top: selectionPosition?.top ?? 0, visibility: selectionPosition?.visible ? "visible" : "hidden" }}
 					onMouseDown={(event) => event.preventDefault()}
-					className={cn(actionMenuContentClass, "absolute min-w-0 w-max max-w-full shadow-lg")}
+					className={cn(actionMenuContentClass, "absolute flex-row min-w-0 w-max max-w-full shadow-lg")}
 				>
 					<button type="button" onClick={() => void addSelectionToChat()} className={cn(actionMenuItemClass, "shrink-0 whitespace-nowrap hover:bg-interactive-hover hover:text-foreground")}>
 						<MessageSquarePlus aria-hidden="true" className="size-3.5" /> Add to chat
 					</button>
+					{onAddToSideChat ? <button type="button" className={cn(actionMenuItemClass, "shrink-0 whitespace-nowrap hover:bg-interactive-hover")} onClick={() => { void onAddToSideChat(selectionAction.excerpt); clearSelectionAction(); window.getSelection()?.removeAllRanges(); }}><MessageSquarePlus aria-hidden="true" className="size-3.5" /> Add to side chat</button> : null}
 				</div>
 			) : null}
 			<div

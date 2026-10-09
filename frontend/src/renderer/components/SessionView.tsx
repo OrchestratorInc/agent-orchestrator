@@ -483,6 +483,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const theme = useResolvedTheme();
 	const browserOnly = Boolean(session && isOrchestratorSession(session));
 	const isInspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, uiSessionId));
+	const [sideChatContainer, setSideChatContainer] = useState<HTMLDivElement | null>(null);
 	const inspectorView = useUiStore((state) => browserOnly ? "browser" : state.inspectorSessions[uiSessionId]?.view ?? "summary");
 	const browserUnseen = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.browserUnseen));
 	const setInspectorOpenForSession = useUiStore((state) => state.setInspectorOpen);
@@ -1882,6 +1883,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							) : showChatSurface ? (
 								<>
 								<SessionChatSurface
+									sideChatContainer={sideChatContainer}
 									key={uiSessionId}
 									assetBaseUrl={remoteBase}
 									hostId={hostId}
@@ -2026,6 +2028,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						splitRef={sessionSplitRef}
 					>
 						<SessionInspector
+							sideChatView={!hostId && session?.mode === "chat" && !session.cloud ? <div ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
 							hostId={hostId}
 							browserOnly={browserOnly}
 							browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}
