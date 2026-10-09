@@ -104,7 +104,46 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
+	if err := p.validateRestoreWorkspace(ctx, cmd[0], id, cfg.Session.WorkspacePath); err != nil {
+		return nil, false, err
+	}
 	return append(cmd, "--session", id), true, nil
+}
+
+// Tau restores its stored cwd even when --cwd is supplied. Check the native
+// metadata through its local CLI before allowing that session to own AO's pane.
+func (p *Plugin) validateRestoreWorkspace(ctx context.Context, binary, id, workspace string) error {
+	output, err := p.probe(ctx, binary, "sessions")
+	if err != nil {
+		return fmt.Errorf("tau: read native session metadata: %w", err)
+	}
+	var nativeWorkspace string
+	matches := 0
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.SplitN(strings.TrimSuffix(line, "\r"), "\t", 4)
+		if len(fields) == 0 || fields[0] != id {
+			continue
+		}
+		matches++
+		if len(fields) == 4 {
+			nativeWorkspace = fields[3]
+		}
+	}
+	if matches != 1 || !filepath.IsAbs(nativeWorkspace) {
+		return fmt.Errorf("tau: exact native session metadata is missing or ambiguous")
+	}
+	expected, err := os.Stat(workspace)
+	if err != nil {
+		return fmt.Errorf("tau: AO workspace is unavailable: %w", err)
+	}
+	actual, err := os.Stat(nativeWorkspace)
+	if err != nil {
+		return fmt.Errorf("tau: native session workspace is unavailable: %w", err)
+	}
+	if !expected.IsDir() || !actual.IsDir() || !os.SameFile(expected, actual) {
+		return fmt.Errorf("tau: native session workspace does not match the AO workspace")
+	}
+	return nil
 }
 
 func (p *Plugin) command(ctx context.Context, workspace string, cfg ports.AgentConfig, permissions ports.PermissionMode, prompt, promptFile string, allowed, denied []string) ([]string, error) {

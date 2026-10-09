@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -54,7 +55,8 @@ func TestRestoreUsesExactNativeIDAndReappliesPrivateInstructions(t *testing.T) {
 	}
 	id := "8bc1a3fbba2142bcb406fe4a4b6fe21b"
 	cfg := ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: work, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}, Permissions: ports.PermissionModeBypassPermissions, SystemPromptFile: instructions, Config: ports.AgentConfig{Model: "openrouter/vendor/model"}}
-	cmd, ok, err := fixturePlugin().GetRestoreCommand(context.Background(), cfg)
+	p := fixtureRestorePlugin(id, work)
+	cmd, ok, err := p.GetRestoreCommand(context.Background(), cfg)
 	if err != nil || !ok {
 		t.Fatalf("restore = %#v, %v, %v", cmd, ok, err)
 	}
@@ -145,5 +147,52 @@ func TestToolRestrictionsAreRejectedOnLaunchAndRestore(t *testing.T) {
 				t.Fatalf("restore restriction = %v, %v", ok, err)
 			}
 		})
+	}
+}
+
+func fixtureRestorePlugin(id, workspace string) *Plugin {
+	p := fixturePlugin()
+	p.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) == 1 && args[0] == "sessions" {
+			return []byte(id + "\tUntitled\tmodel\t" + workspace + "\n"), nil
+		}
+		return []byte("tau 0.4.7\n"), nil
+	}
+	return p
+}
+
+func TestRestoreRejectsMissingOrMismatchedWorkspace(t *testing.T) {
+	const id = "8bc1a3fbba2142bcb406fe4a4b6fe21b"
+	workspace := t.TempDir()
+	for _, tc := range []struct{ name, nativeID, nativeWorkspace string }{
+		{"missing ID", "different", workspace},
+		{"different directory", id, t.TempDir()},
+		{"missing directory", id, filepath.Join(t.TempDir(), "gone")},
+		{"relative directory", id, "relative"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := fixtureRestorePlugin(tc.nativeID, tc.nativeWorkspace)
+			_, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}, Permissions: ports.PermissionModeBypassPermissions})
+			if err == nil || ok {
+				t.Fatalf("restore accepted unowned workspace: %v, %v", ok, err)
+			}
+		})
+	}
+}
+
+func TestRestoreAcceptsSymlinkToSameDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks may require elevated privileges")
+	}
+	const id = "8bc1a3fbba2142bcb406fe4a4b6fe21b"
+	workspace := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(workspace, alias); err != nil {
+		t.Fatal(err)
+	}
+	p := fixtureRestorePlugin(id, alias)
+	_, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}, Permissions: ports.PermissionModeBypassPermissions})
+	if err != nil || !ok {
+		t.Fatalf("same workspace alias rejected: %v, %v", ok, err)
 	}
 }
