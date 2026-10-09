@@ -931,7 +931,7 @@ describe("HarnessSettingsSection", () => {
 		}));
 	});
 
-	it("shows an incompatible OpenCode version reason and keeps installation available", async () => {
+	it("treats a separate OpenCode major as ordinarily not installed", async () => {
 		const reason = 'OpenCode 2 requires OpenCode 2, but "/usr/local/bin/opencode" reports OpenCode 1 (1.18.33); select the matching harness or put OpenCode 2 on PATH';
 		const mismatch = agentReadiness("opencode-v2", "OpenCode 2", {
 			installation: "not_installed",
@@ -964,8 +964,8 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = (await screen.findByText("OpenCode 2")).closest('[data-agent="opencode-v2"]') as HTMLElement;
 		const install = await within(row).findByRole("button", { name: "Install" });
-		expect(row).toHaveTextContent(reason);
-		expect(row.querySelector("p[title]")).toHaveAttribute("title", reason);
+		expect(row).toHaveTextContent("Available via npm");
+		expect(row).not.toHaveTextContent(reason);
 		expect(row).not.toHaveTextContent("Installation status unknown");
 		expect(install).toBeEnabled();
 
