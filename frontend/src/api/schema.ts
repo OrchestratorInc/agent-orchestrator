@@ -5658,6 +5658,7 @@ export interface components {
             workspaceVersion: string;
         };
         WorkspaceRepo: {
+            defaultBranch?: string;
             gitStatus?: string;
             name: string;
             relativePath: string;
