@@ -14,7 +14,7 @@ import (
 )
 
 func previewCommand(name string, args ...string) *exec.Cmd {
-	cmd := exec.Command(name, args...)
+	cmd := aoprocess.Command(name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	return cmd
 }

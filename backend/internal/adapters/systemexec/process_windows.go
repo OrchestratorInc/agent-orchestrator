@@ -8,9 +8,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"golang.org/x/sys/windows/registry"
+
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 func commandContext(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
@@ -20,16 +21,16 @@ func commandContext(ctx context.Context, name string, args ...string) (*exec.Cmd
 	}
 	extension := filepath.Ext(resolved)
 	if !strings.EqualFold(extension, ".cmd") && !strings.EqualFold(extension, ".bat") {
-		return exec.CommandContext(ctx, resolved, args...), nil //nolint:gosec // Callers supply server-owned argv.
+		return aoprocess.CommandContext(ctx, resolved, args...), nil //nolint:gosec // Callers supply server-owned argv.
 	}
 
 	shell := strings.TrimSpace(os.Getenv("ComSpec"))
 	if shell == "" {
 		shell = "cmd.exe"
 	}
-	cmd := exec.CommandContext(ctx, shell) //nolint:gosec // ComSpec is Windows' configured batch interpreter.
+	cmd := aoprocess.CommandContext(ctx, shell) //nolint:gosec // ComSpec is Windows' configured batch interpreter.
 	cmd.Args = nil
-	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: `/d /s /c "` + windowsBatchCommandLine(resolved, args) + `"`}
+	cmd.SysProcAttr.CmdLine = `/d /s /c "` + windowsBatchCommandLine(resolved, args) + `"`
 	return cmd, nil
 }
 
