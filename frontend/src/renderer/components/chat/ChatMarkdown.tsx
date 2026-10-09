@@ -31,6 +31,7 @@ import {
 	Fragment,
 	memo,
 	useContext,
+	useEffect,
 	useMemo,
 	useState,
 	type MouseEvent as ReactMouseEvent,
@@ -43,6 +44,7 @@ import { cn } from "../../lib/utils";
 import { isLoopbackHostname } from "../../lib/loopback";
 import { canonicalLanguage } from "../../lib/code-highlight";
 import { fenceOf } from "../../lib/markdown-fence";
+import { EMOJI_GRAPHEME, rehypeStreamFade } from "../../lib/rehype-stream-fade";
 import { findSessionLinks, isSessionLink, remarkSessionLinks } from "../../lib/session-links";
 import {
 	isPotentialWorkspaceFileLink,
@@ -51,6 +53,7 @@ import {
 	workspaceFilePath,
 } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
+import { SessionLinkPreviewCard } from "../SessionLinkPreviewCard";
 import {
 	explicitWorkspaceFilePath,
 	findWorkspaceFilePath,
@@ -79,6 +82,12 @@ export const ActivityTitle = memo(function ActivityTitle({ text }: { text: strin
 
 /** GitHub-flavoured markdown: tables, strikethrough, task lists, autolinks. */
 const PLUGINS = [remarkGfm, remarkSessionLinks];
+const STREAMING_REHYPE = [rehypeStreamFade];
+// Reduced motion gets plain text, not a span per character that never animates.
+const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+// How long a settled reply keeps its fade spans, so the last characters (and the final
+// flush of buffered text) finish fading in before they are dropped.
+const FADE_SHED_MS = 450;
 
 /**
  * Whether the prose is still arriving, for the fences inside it.
@@ -95,6 +104,8 @@ const OpenChatLink = createContext<{
 	open?: (url: string) => void;
 	openFile?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
+	sessionLinkHostId?: string;
+	sessionLinkSourceKind?: "cloud";
 	openSession?: (url: string) => void;
 	workspacePaths: string[];
 }>({ workspacePaths: [] });
@@ -104,6 +115,8 @@ export function ChatLinkProvider({
 	onLinkOpen,
 	onFileOpen,
 	remoteHost,
+	sessionLinkHostId,
+	sessionLinkSourceKind,
 	onSessionLinkOpen,
 	workspacePaths = EMPTY_WORKSPACE_PATHS,
 	children,
@@ -111,13 +124,15 @@ export function ChatLinkProvider({
 	onLinkOpen?: (url: string) => void;
 	onFileOpen?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
+	sessionLinkHostId?: string;
+	sessionLinkSourceKind?: "cloud";
 	onSessionLinkOpen?: (url: string) => void;
 	workspacePaths?: string[];
 	children: ReactNode;
 }) {
 	const value = useMemo(
-		() => ({ open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, workspacePaths }),
-		[onLinkOpen, onFileOpen, onSessionLinkOpen, remoteHost, workspacePaths],
+		() => ({ open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths }),
+		[onLinkOpen, onFileOpen, onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths],
 	);
 	return <OpenChatLink.Provider value={value}>{children}</OpenChatLink.Provider>;
 }
@@ -161,6 +176,16 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	className?: string;
 	safeOrigin?: boolean;
 }) {
+	// Replies opened from history mount settled and never wrap; live ones keep the fade a
+	// beat past the end of the stream.
+	const [fading, setFading] = useState(streaming);
+	if (streaming && !fading) setFading(true);
+	useEffect(() => {
+		if (streaming) return;
+		const timer = setTimeout(() => setFading(false), FADE_SHED_MS);
+		return () => clearTimeout(timer);
+	}, [streaming]);
+
 	return (
 		<StreamingProse.Provider value={streaming}>
 			<SafeOriginContent.Provider value={safeOrigin}>
@@ -171,7 +196,12 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 					className,
 				)}
 			>
-				<Markdown remarkPlugins={PLUGINS} components={COMPONENTS} urlTransform={chatUrlTransform}>
+				<Markdown
+					remarkPlugins={PLUGINS}
+					rehypePlugins={fading && !prefersReducedMotion() ? STREAMING_REHYPE : undefined}
+					components={COMPONENTS}
+					urlTransform={chatUrlTransform}
+				>
 					{text}
 				</Markdown>
 			</div>
@@ -245,7 +275,6 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 	);
 }
 
-const EMOJI_GRAPHEME = /\p{Extended_Pictographic}|\p{Regional_Indicator}|[#*0-9]\uFE0F?\u20E3/u;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function compactEmoji(children: ReactNode): ReactNode {
@@ -275,7 +304,7 @@ function compactEmoji(children: ReactNode): ReactNode {
 
 function MarkdownLink({ href, children }: { href?: string; children?: ReactNode }) {
 	const safeOriginContent = useContext(SafeOriginContent);
-	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, workspacePaths } = useContext(OpenChatLink);
+	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
 		? workspaceFilePath(href, workspacePaths) ?? findWorkspaceFilePath(href, workspacePaths) ?? explicitWorkspaceFilePath(href)
 		: undefined;
@@ -295,6 +324,7 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 			inAppLink={href ? () => browserLink : undefined}
 			filePath={filePath}
 			onFileOpen={onFileOpen}
+			hoverPreview={sessionLink ? () => <SessionLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} /> : undefined}
 			onClick={(event) => {
 				if (href && sessionLink) {
 					event.preventDefault();

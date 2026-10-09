@@ -9,6 +9,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
@@ -178,6 +180,17 @@ func (s *Store) createConversation(
 					ID:               existing.ID,
 				}); err != nil {
 					return fmt.Errorf("bind project conversation %s to %s: %w", existing.ID, options.session, err)
+				}
+				if existing.CurrentSessionID == nil || *existing.CurrentSessionID != options.session {
+					// The previous owner's reserved provider id dies with that owner.
+					// While the conversation is untouched, release it so the new owner
+					// starts on the same root instead of a child provider boundary.
+					if _, err := q.ReleaseUntouchedConversationProvider(ctx, gen.ReleaseUntouchedConversationProviderParams{
+						SessionID:       &options.session,
+						ProviderScopeID: uuid.NewString(),
+					}); err != nil {
+						return fmt.Errorf("release untouched provider of project conversation %s: %w", existing.ID, err)
+					}
 				}
 				if options.contextReset == nil ||
 					existing.LatestSequence <= 0 ||
@@ -1121,6 +1134,19 @@ func (s *Store) ConversationMessageByClientID(
 		return domain.ConversationMessage{}, false, err
 	}
 	return messageToDomain(row), true, nil
+}
+
+// ConversationMessages returns the durable transcript in sequence order.
+func (s *Store) ConversationMessages(ctx context.Context, conversationID string) ([]domain.ConversationMessage, error) {
+	rows, err := s.qr.SelectConversationMessages(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	messages := make([]domain.ConversationMessage, 0, len(rows))
+	for _, row := range rows {
+		messages = append(messages, messageToDomain(row))
+	}
+	return messages, nil
 }
 
 // AdoptProviderTurn records a turn the provider started that AO never dispatched.

@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="assets/ao-logo.svg" alt="Orchestrator.inc logo" width="144" height="144" />
 
 ### Orchestrator.inc
 
@@ -185,6 +186,9 @@ Orchestrator.inc works with the coding agents and source-control workflow you al
     <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/gemini.svg" alt="Gemini CLI" width="24" height="24" align="middle" /> &nbsp; <b>Gemini CLI</b></td>
     <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/deepseek-harness.svg" alt="DeepSeek" width="24" height="24" align="middle" /> &nbsp; <b>DeepSeek</b></td>
     <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/opencode.svg" alt="OpenCode 2" width="24" height="24" align="middle" /> &nbsp; <b>OpenCode 2</b></td>
+  </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/codewhale.svg" alt="Codewhale" width="24" height="24" align="middle" /> &nbsp; <b>Codewhale</b></td>
   </tr>
 </table>
 

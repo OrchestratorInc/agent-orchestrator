@@ -45,6 +45,8 @@ func TestSeedRecordPreservesAutomationRunIdentity(t *testing.T) {
 }
 
 type fakeStore struct {
+	cleanupMu                          sync.Mutex
+	cleanupFacts                       map[domain.SessionID]domain.SessionCleanupRecord
 	sessions                           map[domain.SessionID]domain.SessionRecord
 	pr                                 map[domain.SessionID]domain.PRFacts
 	projects                           map[string]domain.ProjectRecord
@@ -874,6 +876,19 @@ func (a *nativeTerminatingAgent) TerminateNativeSession(_ context.Context, sessi
 type launchArgvAgent struct {
 	fakeAgent
 	argv []string
+}
+
+type runtimePreparingAgent struct {
+	launchArgvAgent
+	got ports.WorkspaceHookConfig
+}
+
+func (a *runtimePreparingAgent) PrepareRuntimeLaunch(_ context.Context, cfg ports.WorkspaceHookConfig) error {
+	a.got = cfg
+	if cfg.Env != nil {
+		cfg.Env["PROVIDER_RUNTIME_PREPARED"] = "1"
+	}
+	return nil
 }
 
 func (a launchArgvAgent) GetLaunchCommand(context.Context, ports.LaunchConfig) ([]string, error) {
@@ -2087,6 +2102,30 @@ func TestSpawn_WrapsSupervisedAgentAndPersistsGeneration(t *testing.T) {
 	}
 	if rec.Metadata.RuntimeLaunchID != "launch-7" {
 		t.Fatalf("stored launch id = %q, want launch-7", rec.Metadata.RuntimeLaunchID)
+	}
+}
+
+func TestSpawn_PreparesProviderRuntimeAfterAssigningGeneration(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &fakeRuntime{}
+	agent := &runtimePreparingAgent{launchArgvAgent: launchArgvAgent{argv: []string{"agent"}}}
+	m := New(Deps{
+		Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: "/ao-data", RunFilePath: "/ao-data/running.json",
+		LookPath: func(string) (string, error) { return "/bin/true", nil }, NewLaunchID: func() string { return "launch-7" },
+	})
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
+		t.Fatal(err)
+	}
+	if got := agent.got.Env[EnvRuntimeLaunchID]; got != "launch-7" {
+		t.Fatalf("preparer launch id = %q, want launch-7", got)
+	}
+	if agent.got.DataDir != "/ao-data" || agent.got.SessionID != "mer-1" {
+		t.Fatalf("preparer config = %+v", agent.got)
+	}
+	if rt.lastCfg.Env["PROVIDER_RUNTIME_PREPARED"] != "1" {
+		t.Fatalf("runtime did not receive preparer environment: %+v", rt.lastCfg.Env)
 	}
 }
 
@@ -3533,6 +3572,68 @@ func TestKill_TearsDownRuntimeAndWorkspace(t *testing.T) {
 	requireNoPromptDir(t, dataDir, "mer-1")
 }
 
+func TestKillCleanupScriptHasNoTimeLimit(t *testing.T) {
+	m, st, _, ws := newManager()
+	m.killTeardown = 2 * time.Second
+	m.dataDir = t.TempDir()
+	workspace := filepath.Join(m.dataDir, "worktrees", "mer", "mer-1")
+	if err := os.MkdirAll(workspace, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	rec := mkLive("mer-1")
+	rec.Metadata.WorkspacePath = workspace
+	st.sessions[rec.ID] = rec
+	project := st.projects["mer"]
+	command := "sleep 3 && echo finished > cleanup-marker"
+	if runtime.GOOS == "windows" {
+		command = "powershell -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 3\" && echo finished > cleanup-marker"
+	}
+	project.Config.PreRemove = []string{command}
+	st.projects["mer"] = project
+
+	freed, err := m.Kill(ctx, rec.ID)
+	if err != nil || !freed || ws.destroyCtxErr != nil || !st.sessions[rec.ID].IsTerminated {
+		t.Fatalf("long cleanup must finish before workspace removal: freed=%v err=%v workspaceCtx=%v terminated=%v", freed, err, ws.destroyCtxErr, st.sessions[rec.ID].IsTerminated)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "cleanup-marker")); err != nil {
+		t.Fatalf("cleanup command did not finish: %v", err)
+	}
+}
+
+func TestKillCleanupScriptFailurePreservesWorkspaceForRetry(t *testing.T) {
+	m, st, rt, ws := newManager()
+	m.dataDir = t.TempDir()
+	workspace := filepath.Join(m.dataDir, "worktrees", "mer", "mer-1")
+	if err := os.MkdirAll(workspace, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	rec := mkLive("mer-1")
+	rec.Metadata.WorkspacePath = workspace
+	st.sessions[rec.ID] = rec
+	project := st.projects["mer"]
+	project.Path = t.TempDir()
+	project.Config.PreRemove = []string{"echo project-secret && exit 7"}
+	project.Config.Env = map[string]string{"PROJECT_TOKEN": "project-secret"}
+	st.projects["mer"] = project
+
+	freed, err := m.Kill(ctx, rec.ID)
+	if freed || !errors.Is(err, ErrCleanupScript) || strings.Contains(err.Error(), "project-secret") {
+		t.Fatalf("kill freed=%v err=%v", freed, err)
+	}
+	if rt.destroyed != 1 || ws.destroyed != 0 || !st.sessions[rec.ID].IsTerminated {
+		t.Fatalf("failed cleanup must stop runtime, preserve workspace, and terminate session: runtime=%d workspace=%d rec=%+v", rt.destroyed, ws.destroyed, st.sessions[rec.ID])
+	}
+	project.Config.PreRemove = []string{"echo cleaned > cleanup-marker"}
+	st.projects["mer"] = project
+	result, err := m.Cleanup(ctx, "mer")
+	if err != nil || len(result.Cleaned) != 1 || ws.destroyed != 1 {
+		t.Fatalf("retry cleanup result=%+v err=%v destroyed=%d", result, err, ws.destroyed)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "cleanup-marker")); err != nil {
+		t.Fatalf("cleanup script did not run in workspace: %v", err)
+	}
+}
+
 // A caller that gives up must not take the teardown down with it. The REST
 // layer caps a request at cfg.RequestTimeout, and a session whose worktree
 // carries a large ignored tree used to run past that: the request context was
@@ -4273,6 +4374,28 @@ func TestRestore_ScratchAllowsEmptyBranch(t *testing.T) {
 	}
 	if rt.created != 1 {
 		t.Fatalf("runtime created = %d, want 1", rt.created)
+	}
+}
+
+func TestRestoreRecreatedWorkspaceRunsSetupOnce(t *testing.T) {
+	m, _, _, _ := newManager()
+	managed := filepath.Join(t.TempDir(), "workspaces")
+	adapter, err := scratch.New(scratch.Options{ManagedRoot: managed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.workspace = adapter
+	workspace := filepath.Join(managed, "scratch", "workers", "scratch-1")
+	project := domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Path: t.TempDir(), Config: domain.ProjectConfig{PostCreate: []string{"echo setup >> setup-runs"}}}
+	rec := domain.SessionRecord{ID: "scratch-1", ProjectID: "scratch", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: workspace}}
+	for i := 0; i < 2; i++ {
+		if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err != nil {
+			t.Fatalf("restore %d: %v", i+1, err)
+		}
+	}
+	output, err := os.ReadFile(filepath.Join(workspace, "setup-runs"))
+	if err != nil || strings.Count(string(output), "setup") != 1 {
+		t.Fatalf("setup runs = %q, err = %v", output, err)
 	}
 }
 
@@ -5664,8 +5787,22 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
 		}
 	}
-	if words := len(strings.Fields(m.aoSkillPointer())); words > 220 {
-		t.Fatalf("always-on AO skill pointer grew to %d words; keep details in routed command guides:\n%s", words, m.aoSkillPointer())
+	// This orchestrator runs in a terminal, where the html tools and ao render
+	// do not exist, so its prompt does not send it looking for them.
+	if strings.Contains(systemPrompt, "## Showing pages in chat") {
+		t.Fatalf("terminal session prompt names the chat-only html tools:\n%s", systemPrompt)
+	}
+	chatPointer := m.aoSkillPointer(true)
+	for _, want := range []string{
+		"When a chart, table, diagram, or mockup is clearer than text, call `html_preview`, then `html_render`. If you cannot see them, search your tools for them. If you find nothing, read `",
+		"` and use `ao render`. Do not use a built-in visualize skill.",
+	} {
+		if !strings.Contains(chatPointer, want) {
+			t.Fatalf("chat pointer missing %q:\n%s", want, chatPointer)
+		}
+	}
+	if words := len(strings.Fields(chatPointer)); words > 260 {
+		t.Fatalf("always-on AO skill pointer grew to %d words; keep details in routed command guides:\n%s", words, chatPointer)
 	}
 	if strings.Contains(agent.lastLaunch.Prompt, "You are the human-facing orchestrator") {
 		t.Fatalf("coordinator role must not be in the user prompt:\n%s", agent.lastLaunch.Prompt)
@@ -5792,7 +5929,7 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 			lookPath := func(string) (string, error) { return "/bin/true", nil }
 			m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
-			sp, err := m.buildSystemPrompt(ctx, tc.kind, "mer", "mer-1")
+			sp, err := m.buildSystemPrompt(ctx, tc.kind, "mer", "mer-1", false)
 			if err != nil {
 				t.Fatalf("buildSystemPrompt: %v", err)
 			}
@@ -5844,7 +5981,7 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 		LookPath:  lookPath,
 	})
 
-	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7")
+	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", false)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -5866,6 +6003,18 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	}
 	if strings.Contains(sp, "naturally document-shaped") {
 		t.Fatal("system prompt must not require files for ordinary summaries")
+	}
+	// Only a chat session has a thread to show a page in.
+	const inThread = "it does not belong in the workspace at all. In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory."
+	if strings.Contains(sp, "html_render") {
+		t.Fatalf("terminal session prompt names html_render:\n%s", sp)
+	}
+	chatPrompt, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", true)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt chat: %v", err)
+	}
+	if !strings.Contains(chatPrompt, inThread) {
+		t.Fatalf("chat session prompt missing %q", inThread)
 	}
 }
 
@@ -7972,8 +8121,8 @@ func TestRetireForReplacementCapturesAndReleasesWorkspace(t *testing.T) {
 	if stashIdx == -1 || deleteIdx == -1 || forceIdx == -1 {
 		t.Fatalf("missing expected calls in shared log: %v", sharedLog)
 	}
-	if stashIdx >= forceIdx || forceIdx >= deleteIdx {
-		t.Fatalf("replacement retire must capture, force release, then clear restore marker; log=%v", sharedLog)
+	if stashIdx >= deleteIdx || deleteIdx >= forceIdx {
+		t.Fatalf("replacement retire must capture and clear restore intent before workspace release; log=%v", sharedLog)
 	}
 	if len(browser.destroyed) != 1 || browser.destroyed[0] != "mer-orch" {
 		t.Fatalf("browser targets destroyed = %v, want mer-orch", browser.destroyed)
@@ -8243,8 +8392,8 @@ func TestRetireForReplacementStaleWorkspaceSkipsPreserveAndTerminates(t *testing
 	}
 	wantOrder := []string{
 		"StashUncommitted:mer-orch",
-		"ForceDestroy:mer-orch",
 		"DeleteSessionWorktrees:mer-orch",
+		"ForceDestroy:mer-orch",
 	}
 	next := 0
 	for _, call := range sharedLog {
@@ -8257,7 +8406,7 @@ func TestRetireForReplacementStaleWorkspaceSkipsPreserveAndTerminates(t *testing
 	}
 }
 
-func TestRetireForReplacementStaleWorkspaceCleanupFailureLeavesSessionActive(t *testing.T) {
+func TestRetireForReplacementStaleWorkspaceCleanupFailureTerminatesSession(t *testing.T) {
 	m, st, rt, ws := newLifecycleManager()
 	ws.stashErr = ports.ErrWorkspaceStale
 	ws.forceDestroyErr = errors.New("stale cleanup failed")
@@ -8280,11 +8429,11 @@ func TestRetireForReplacementStaleWorkspaceCleanupFailureLeavesSessionActive(t *
 	if err == nil || !strings.Contains(err.Error(), "force destroy") {
 		t.Fatalf("RetireForReplacement err = %v, want force destroy failure", err)
 	}
-	if st.sessions["mer-orch"].IsTerminated {
-		t.Fatal("session must remain active when stale cleanup fails")
+	if !st.sessions["mer-orch"].IsTerminated {
+		t.Fatal("stopped orchestrator must be terminated for cleanup retry")
 	}
-	if rows := st.worktrees["mer-orch"]; len(rows) != 1 {
-		t.Fatalf("restore markers after stale cleanup failure = %v, want retained", rows)
+	if rows := st.worktrees["mer-orch"]; len(rows) != 0 {
+		t.Fatalf("restore markers must be cleared before cleanup: %v", rows)
 	}
 	if rt.destroyed != 1 || rt.destroyedIDs[0] != "orch-handle" {
 		t.Fatalf("runtime destroyed = %d ids=%v, want orch-handle", rt.destroyed, rt.destroyedIDs)
@@ -8464,8 +8613,8 @@ func TestRetireForReplacementWorkspaceProjectForceDestroyFailureKeepsRepoInvento
 	if err == nil || !strings.Contains(err.Error(), "force destroy") {
 		t.Fatalf("RetireForReplacement err = %v, want force destroy failure", err)
 	}
-	if st.sessions["mer-orch"].IsTerminated {
-		t.Fatal("session must remain active when force destroy fails")
+	if !st.sessions["mer-orch"].IsTerminated {
+		t.Fatal("stopped orchestrator must be terminated for cleanup retry")
 	}
 	if rows := st.worktrees["mer-orch"]; len(rows) != 2 {
 		t.Fatalf("workspace repo inventory after force destroy failure = %v, want root and child retained", rows)
@@ -8498,15 +8647,15 @@ func TestRetireForReplacementWorkspaceProjectStaleCleanupFailureKeepsRepoInvento
 	if err == nil || !strings.Contains(err.Error(), "force destroy") {
 		t.Fatalf("RetireForReplacement err = %v, want force destroy failure", err)
 	}
-	if st.sessions["mer-orch"].IsTerminated {
-		t.Fatal("session must remain active when stale repo cleanup fails")
+	if !st.sessions["mer-orch"].IsTerminated {
+		t.Fatal("stopped orchestrator must be terminated for cleanup retry")
 	}
 	if rows := st.worktrees["mer-orch"]; len(rows) != 2 {
 		t.Fatalf("workspace repo inventory after stale cleanup failure = %v, want root and child retained", rows)
 	}
 }
 
-func TestRetireForReplacementForceDestroyFailureLeavesSessionActive(t *testing.T) {
+func TestRetireForReplacementForceDestroyFailureTerminatesSession(t *testing.T) {
 	m, st, rt, ws := newLifecycleManager()
 	ws.forceDestroyErr = errors.New("worktree still registered")
 	ws.stashRef = "refs/ao/preserved/mer-orch"
@@ -8529,8 +8678,8 @@ func TestRetireForReplacementForceDestroyFailureLeavesSessionActive(t *testing.T
 	if err == nil || !strings.Contains(err.Error(), "force destroy") {
 		t.Fatalf("RetireForReplacement err = %v, want force destroy failure", err)
 	}
-	if st.sessions["mer-orch"].IsTerminated {
-		t.Fatal("session must remain active so retry can retire it again")
+	if !st.sessions["mer-orch"].IsTerminated {
+		t.Fatal("stopped orchestrator must be terminated for cleanup retry")
 	}
 	if rt.destroyed != 1 {
 		t.Fatalf("runtime destroyed = %d, want 1 before workspace release", rt.destroyed)
@@ -11051,6 +11200,73 @@ func TestSendRecordsInteractionOnlyForDirectTerminalSender(t *testing.T) {
 			}
 			if counter.calls != tc.want {
 				t.Fatalf("interaction writes=%d want=%d", counter.calls, tc.want)
+			}
+		})
+	}
+}
+
+func (f *fakeStore) UpsertSessionCleanupFacts(_ context.Context, rec domain.SessionCleanupRecord) error {
+	f.cleanupMu.Lock()
+	defer f.cleanupMu.Unlock()
+	if f.cleanupFacts == nil {
+		f.cleanupFacts = make(map[domain.SessionID]domain.SessionCleanupRecord)
+	}
+	f.cleanupFacts[rec.SessionID] = rec
+	return nil
+}
+func (f *fakeStore) GetSessionCleanupFacts(_ context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error) {
+	f.cleanupMu.Lock()
+	defer f.cleanupMu.Unlock()
+	rec, ok := f.cleanupFacts[id]
+	return rec, ok, nil
+}
+
+func TestOrchestratorWorkspaceBranchCollision(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		kind         domain.SessionKind
+		explicit     bool
+		wantFallback bool
+	}{
+		{name: "generated orchestrator branch", kind: domain.KindOrchestrator, wantFallback: true},
+		{name: "explicit orchestrator branch", kind: domain.KindOrchestrator, explicit: true},
+		{name: "worker branch", kind: domain.KindWorker},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _, repo := newGitTaskPreparationManager(t)
+			project := st.projects["mer"]
+			branch := "ao/mer-orchestrator"
+			occupied := filepath.Join(t.TempDir(), "occupied")
+			runManagerGit(t, repo, "worktree", "add", "-b", branch, occupied, "main")
+			runManagerGit(t, repo, "branch", branch+"-2", "main")
+			dirtyPath := filepath.Join(occupied, "README.md")
+			if err := os.WriteFile(dirtyPath, []byte("existing agent work\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg := ports.SpawnConfig{ProjectID: "mer", Kind: tc.kind}
+			if tc.explicit {
+				cfg.Branch = branch
+			}
+			ws, _, err := m.createSessionWorkspace(ctx, project, cfg, "mer-1", branch, nil)
+			if tc.wantFallback {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ws.Branch != branch+"-3" || ws.Path == occupied {
+					t.Fatalf("new workspace = %+v", ws)
+				}
+				reused, _, err := m.createSessionWorkspace(ctx, project, cfg, "mer-2", branch, nil)
+				if err != nil || reused.Path != ws.Path || reused.Branch != ws.Branch {
+					t.Fatalf("reuse workspace = %+v, err = %v", reused, err)
+				}
+			} else if !errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) {
+				t.Fatalf("error = %v, want branch conflict", err)
+			}
+			if got := strings.TrimSpace(runManagerGit(t, occupied, "branch", "--show-current")); got != branch {
+				t.Fatalf("occupied branch changed to %q", got)
+			}
+			if content, err := os.ReadFile(dirtyPath); err != nil || string(content) != "existing agent work\n" {
+				t.Fatalf("existing work changed: %q, %v", content, err)
 			}
 		})
 	}

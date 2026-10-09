@@ -108,11 +108,9 @@ export function ReadOnlyFileView({
 	if (detail.contentTruncated) {
 		return <PanelMessage>{t("files.explorer.tooLarge", { size: formatBytes(detail.size) })}</PanelMessage>;
 	}
-	const activeLine = annotation.target?.surface !== "review" && annotation.target?.path === detail.path && annotation.target.side === "file"
-		? annotation.target.line
-		: undefined;
-	const lineAnnotations: LineAnnotation<"feedback">[] | undefined = activeLine != null
-		? [{ lineNumber: activeLine, metadata: "feedback" }]
+	const activeTargets = annotation.targets.filter((target) => target.surface !== "review" && target.path === detail.path && target.side === "file" && target.line != null);
+	const lineAnnotations: LineAnnotation<"feedback">[] | undefined = activeTargets.length > 0
+		? activeTargets.map((target) => ({ lineNumber: target.line as number, metadata: "feedback" }))
 		: undefined;
 	const file: FileContents = {
 		name: detail.path,
@@ -169,7 +167,10 @@ export function ReadOnlyFileView({
 					tokenizeMaxLineLength: 2_000,
 					unsafeCSS: AO_PIERRE_SURFACE_CSS,
 				}}
-				renderAnnotation={() => <FileAnnotationComposer annotation={annotation} />}
+				renderAnnotation={(line) => {
+					const target = activeTargets.find((open) => open.line === line.lineNumber);
+					return target ? <FileAnnotationComposer annotation={annotation} target={target} /> : null;
+				}}
 				onEditChange={(event) => onEditChange?.(event.file.contents)}
 				onEditComplete={() => "reject"}
 				renderGutterUtility={(getHoveredLine) => (

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -26,6 +27,22 @@ var ErrNoController = errors.New("no live chat controller for session")
 // controller is currently TUI. An explicit interface transition may change that
 // fact later, but callers must route from the persisted mode they read now.
 var ErrNotChatMode = errors.New("session is not in chat mode")
+
+var (
+	// ErrExcerptInvalid reports malformed or unauthorized excerpt references.
+	ErrExcerptInvalid = errors.New("chat excerpt is invalid")
+	// ErrExcerptStale reports excerpt references whose source changed or disappeared.
+	ErrExcerptStale = errors.New("chat excerpt is stale")
+)
+
+const (
+	maxExcerptReferences = 8
+	maxExcerptTextBytes  = 24 * 1024
+	// Each excerpt carries its source turn so a short selection keeps its
+	// meaning. Long turns are truncated so eight excerpts cannot flood the
+	// provider prompt or the durable delivery row.
+	maxExcerptPairedTextBytes = 16 * 1024
+)
 
 // SessionReader is the session-fact surface the service needs. It reads the
 // persisted mode rather than trusting the caller, so a client cannot talk its way
@@ -49,9 +66,16 @@ type Service struct {
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 	// onModelChanged syncs ChatUI's model override (including clearing it) to
 	// session metadata before the next prompt routes or a later TUI rebuild.
-	onModelChanged     func(domain.SessionID, string)
-	stopProviderHost   func(context.Context, domain.SessionID) error
-	reports            *reportsvc.Coordinator
+	onModelChanged   func(domain.SessionID, string)
+	stopProviderHost func(context.Context, domain.SessionID) error
+	reports          *reportsvc.Coordinator
+	renders          RenderFiles
+	dataDir          string
+	reconcileOutput  func(context.Context, domain.SessionID) error
+	renderCheck      RenderCheck
+	renderMeasure    RenderMeasure
+	// renderMeasures tracks background measures, so tests can wait for them.
+	renderMeasures     sync.WaitGroup
 	wakeChat           func(context.Context, domain.SessionID) error
 	hibernationEnabled func() bool
 	viewMu             sync.Mutex
@@ -166,6 +190,14 @@ type Options struct {
 	// StopProviderHost destroys current ownership on explicit teardown or failed hibernation,
 	// even if its daemon attachment already failed. Never used by StopAll.
 	StopProviderHost func(context.Context, domain.SessionID) error
+	// Renders stores agent HTML renders. Nil refuses PublishRender.
+	Renders RenderFiles
+	// DataDir locates a session's artifact directory when its record names
+	// none, for a render kept as an artifact.
+	DataDir string
+	// ReconcileOutputType updates a session's output type at once after a
+	// render is kept as an artifact. Nil leaves it to the artifact observer.
+	ReconcileOutputType func(context.Context, domain.SessionID) error
 	// HibernationEnabled reads the daemon-owned feature gate. Nil is disabled.
 	HibernationEnabled func() bool
 }
@@ -194,6 +226,9 @@ func New(opts Options) *Service {
 		onCodexCapacityChanged: opts.OnCodexCapacityChanged,
 		onModelChanged:         opts.OnModelChanged,
 		stopProviderHost:       opts.StopProviderHost,
+		renders:                opts.Renders,
+		dataDir:                opts.DataDir,
+		reconcileOutput:        opts.ReconcileOutputType,
 		hibernationEnabled:     opts.HibernationEnabled,
 		controllers:            make(map[domain.SessionID]*Controller),
 		ownerControllers:       make(map[domain.ConversationOwner]*Controller),
@@ -687,6 +722,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		conv, err = resume(ctx, ports.ChatResumeConfig{
 			SessionID:              hostID,
 			ProviderConversationID: cfg.ProviderConversationID,
+			FreshIfMissing:         cfg.FreshIfProviderConversationMissing,
 			DataDir:                cfg.DataDir,
 			WorkspacePath:          cfg.WorkspacePath,
 			Env:                    cfg.Env,
@@ -722,18 +758,24 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	if err != nil {
 		return nil, err
 	}
-	if cfg.ProviderConversationID != "" &&
-		conv.ProviderConversationID() != cfg.ProviderConversationID {
-		returned := conv.ProviderConversationID()
-		_ = cleanupUnpublishedConversation(conv, false)
-		return nil, fmt.Errorf(
-			"resumed provider conversation handle %q does not match requested handle %q",
-			returned, cfg.ProviderConversationID,
-		)
-	}
 	liveReconnect := false
 	if reconnected, ok := conv.(ports.ChatLiveReconnector); ok {
 		liveReconnect = reconnected.ReconnectedLive()
+	}
+	freshReplacement := false
+	if cfg.ProviderConversationID != "" &&
+		conv.ProviderConversationID() != cfg.ProviderConversationID {
+		returned := conv.ProviderConversationID()
+		if !cfg.FreshIfProviderConversationMissing || liveReconnect || returned == "" {
+			_ = cleanupUnpublishedConversation(conv, false)
+			return nil, fmt.Errorf(
+				"resumed provider conversation handle %q does not match requested handle %q",
+				returned, cfg.ProviderConversationID,
+			)
+		}
+		// The provider never persisted the requested conversation and started a
+		// fresh one in its place. ControllerReady rebinds the session to it.
+		freshReplacement = true
 	}
 	if (cfg.HistoryMode == ports.ChatHistoryRequired) && liveReconnect {
 		// A TUI handoff needs a fresh, verified native-history admission. A host
@@ -761,6 +803,10 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			_ = cleanupUnpublishedConversation(conv, false)
 			return nil, err
 		}
+	}
+	if freshReplacement {
+		// No native history exists to import; continue as a fresh start.
+		cfg.ProviderConversationID = ""
 	}
 	if !liveReconnect && isOpenCodeHarness(cfg.Harness) && conversation.Settings.OpenCodeMode != "" {
 		if err := restoreOpenCodeMode(ctx, conv, conversation.Settings.OpenCodeMode); err != nil {
@@ -1171,6 +1217,16 @@ func (s *Service) Send(
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
+	if msg.ClientMessageID != "" && len(msg.Excerpts) > 0 {
+		if controller, controllerErr := s.Controller(id); controllerErr == nil {
+			if existing, found, lookupErr := controller.store.ConversationMessageByClientID(ctx, controller.conversation.ID, msg.ClientMessageID); lookupErr != nil {
+				return domain.ConversationTurn{}, fmt.Errorf("read message delivery: %w", lookupErr)
+			} else if found {
+				msg.ClientPayloadHash = existing.ClientPayloadHash
+				return controller.Send(ctx, msg)
+			}
+		}
+	}
 	msg.ClientPayloadHash, err = clientPayloadHash(msg)
 	if err != nil {
 		return domain.ConversationTurn{}, err
@@ -1198,7 +1254,11 @@ func (s *Service) Send(
 				var release func()
 				controller, release, err = s.workingController(ctx, id)
 				if err == nil {
-					turn, err = controller.Send(ctx, msg)
+					if hydrateErr := hydrateExcerptReferences(ctx, controller, &msg); hydrateErr != nil {
+						err = hydrateErr
+					} else {
+						turn, err = controller.Send(ctx, msg)
+					}
 					release()
 				}
 			}
@@ -1211,7 +1271,11 @@ func (s *Service) Send(
 		var release func()
 		controller, release, err = s.workingController(ctx, id)
 		if err == nil {
-			turn, err = controller.Send(ctx, msg)
+			if hydrateErr := hydrateExcerptReferences(ctx, controller, &msg); hydrateErr != nil {
+				err = hydrateErr
+			} else {
+				turn, err = controller.Send(ctx, msg)
+			}
 			release()
 		}
 	}
@@ -1240,7 +1304,117 @@ func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwn
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
+	// A crash-safe retry may arrive after its source message changed. Once this
+	// client id is already durable, the controller's existing idempotency path is
+	// authoritative and must not be blocked by re-validating old selection text.
+	if msg.ClientMessageID != "" && len(msg.Excerpts) > 0 {
+		if existing, found, lookupErr := controller.store.ConversationMessageByClientID(
+			ctx, controller.conversation.ID, msg.ClientMessageID,
+		); lookupErr != nil {
+			return domain.ConversationTurn{}, fmt.Errorf("read message delivery: %w", lookupErr)
+		} else if found {
+			msg.ClientPayloadHash = existing.ClientPayloadHash
+			return controller.Send(ctx, msg)
+		}
+	}
+	if err := hydrateExcerptReferences(ctx, controller, &msg); err != nil {
+		return domain.ConversationTurn{}, err
+	}
 	return controller.Send(ctx, msg)
+}
+
+func hydrateExcerptReferences(ctx context.Context, controller *Controller, msg *ports.ChatUserMessage) error {
+	if len(msg.Excerpts) == 0 {
+		return nil
+	}
+	if err := validateExcerptReferences(msg.Excerpts, controller.conversation.ID); err != nil {
+		return err
+	}
+	messages, err := controller.store.ConversationMessages(ctx, controller.conversation.ID)
+	if err != nil {
+		return fmt.Errorf("read excerpt transcript: %w", err)
+	}
+	for _, excerpt := range msg.Excerpts {
+		text := strings.TrimSpace(excerpt.Text)
+		var source domain.ConversationMessage
+		found := false
+		for _, candidate := range messages {
+			if candidate.ID == excerpt.MessageID {
+				source, found = candidate, true
+				break
+			}
+		}
+		if !found || source.Revision != excerpt.Revision || source.Streaming || source.TurnID == "" || !sourceContainsExcerptSelection(source, text) || (source.Role != domain.MessageRoleUser && source.Role != domain.MessageRoleAssistant) {
+			return fmt.Errorf("%w: source message changed or no longer contains the selection; reselect it", ErrExcerptStale)
+		}
+		turn, err := controller.store.TurnByID(ctx, source.TurnID)
+		if err != nil || turn.ConversationID != controller.conversation.ID || turn.State != domain.TurnStateCompleted || turn.RolledBackAt != nil {
+			return fmt.Errorf("%w: source turn is not complete", ErrExcerptStale)
+		}
+		var userText, assistantText string
+		for _, candidate := range messages {
+			if candidate.TurnID != source.TurnID || candidate.Streaming {
+				continue
+			}
+			switch candidate.Role {
+			case domain.MessageRoleUser:
+				if userText != "" {
+					userText += "\n\n"
+				}
+				userText += candidate.Text
+			case domain.MessageRoleAssistant:
+				if assistantText != "" {
+					assistantText += "\n\n"
+				}
+				assistantText += candidate.Text
+			}
+		}
+		if userText == "" || assistantText == "" {
+			return fmt.Errorf("%w: source turn has no complete user and assistant messages", ErrExcerptStale)
+		}
+		msg.Content = append(msg.Content, ports.ChatContent{
+			Type: "excerpt", URI: ports.ChatExcerptResourceURIPrefix + source.ID,
+			Name: fmt.Sprintf("%s message", source.Role), MIMEType: "text/plain", Text: text,
+			Excerpt: &ports.ChatExcerptContext{
+				Reference: excerpt, SelectedText: text,
+				UserMessage:      truncateExcerptContext(userText),
+				AssistantMessage: truncateExcerptContext(assistantText),
+			},
+		})
+	}
+	msg.Excerpts = nil
+	return nil
+}
+
+// validateExcerptReferences checks what can be checked without the transcript,
+// so a send queued before its controller starts is bounded the same way.
+func validateExcerptReferences(excerpts []ports.ChatExcerptReference, conversationID string) error {
+	if len(excerpts) > maxExcerptReferences {
+		return fmt.Errorf("%w: at most %d excerpts may be attached", ErrExcerptInvalid, maxExcerptReferences)
+	}
+	total := 0
+	for _, excerpt := range excerpts {
+		text := strings.TrimSpace(excerpt.Text)
+		if excerpt.ConversationID != conversationID || excerpt.MessageID == "" || text == "" || excerpt.Revision < 0 {
+			return fmt.Errorf("%w: source conversation, message, revision, and text are required", ErrExcerptInvalid)
+		}
+		total += len(text)
+		if total > maxExcerptTextBytes {
+			return fmt.Errorf("%w: attached excerpts exceed %d bytes", ErrExcerptInvalid, maxExcerptTextBytes)
+		}
+	}
+	return nil
+}
+
+func truncateExcerptContext(text string) string {
+	if len(text) <= maxExcerptPairedTextBytes {
+		return text
+	}
+	cut := maxExcerptPairedTextBytes
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "\n[truncated]"
 }
 
 // Resolve answers a pending approval.
@@ -1618,6 +1792,26 @@ func (s *Service) absentControllerState(record domain.SessionRecord) ports.ChatC
 	return idleControllerState(record)
 }
 
+// withDispatchingTurnRunning reports the turn being dispatched as running. Its row
+// stays queued until the provider binds it, but a client reads queued as "waiting
+// behind other work", which is false for a message sent to an idle agent.
+func withDispatchingTurnRunning(turns []domain.ConversationTurn, dispatching ...string) []domain.ConversationTurn {
+	var out []domain.ConversationTurn
+	for i := range turns {
+		if turns[i].State != domain.TurnStateQueued || !slices.Contains(dispatching, turns[i].ID) {
+			continue
+		}
+		if out == nil {
+			out = append([]domain.ConversationTurn(nil), turns...)
+		}
+		out[i].State = domain.TurnStateRunning
+	}
+	if out == nil {
+		return turns
+	}
+	return out
+}
+
 // Snapshot reads a session's conversation.
 //
 // It does not require a live controller: history must remain readable after the
@@ -1657,7 +1851,9 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 		state = ports.ChatControllerHibernated
 	}
 	var caps ports.ChatCapabilities
+	var dispatching []string
 	if controller, err := s.Controller(id); err == nil {
+		dispatching = controller.DispatchingTurnIDs()
 		if live := controller.State(); (record.HibernatedAt == nil && !waking) || live != ports.ChatControllerStopped {
 			state = live
 			caps = controller.Capabilities()
@@ -1673,7 +1869,7 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 		Harness:                          record.Harness,
 		Mode:                             domain.NormalizeSessionMode(record.Mode),
 		Controller:                       state,
-		Turns:                            rows.Turns,
+		Turns:                            withDispatchingTurnRunning(rows.Turns, dispatching...),
 		Messages:                         rows.Messages,
 		Activities:                       rows.Activities,
 		BranchPoints:                     rows.BranchPoints,
@@ -1718,10 +1914,12 @@ func (s *Service) SnapshotForReview(ctx context.Context, reviewID string) (Snaps
 func (s *Service) snapshotForReviewRows(review domain.Review, rows ConversationRows) Snapshot {
 	state := ports.ChatControllerStopped
 	var caps ports.ChatCapabilities
+	var dispatching []string
 	if controller, err := s.ControllerForOwner(domain.ReviewConversationOwner(review.ID)); err == nil {
 		state, caps = controller.State(), controller.Capabilities()
+		dispatching = controller.DispatchingTurnIDs()
 	}
-	return Snapshot{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, EditFloorSequence: rows.EditFloorSequence, NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence, SessionID: review.SessionID, Harness: domain.AgentHarness(review.Harness), Mode: domain.SessionModeChat, Controller: state, Turns: rows.Turns, Messages: rows.Messages, Activities: rows.Activities, BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage, OldestSequence: rows.OldestSequence, HasMoreBefore: rows.HasMoreBefore, Capabilities: caps, Usage: rows.Conversation.Usage, RateLimits: rows.Conversation.RateLimits}
+	return Snapshot{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, EditFloorSequence: rows.EditFloorSequence, NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence, SessionID: review.SessionID, Harness: domain.AgentHarness(review.Harness), Mode: domain.SessionModeChat, Controller: state, Turns: withDispatchingTurnRunning(rows.Turns, dispatching...), Messages: rows.Messages, Activities: rows.Activities, BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage, OldestSequence: rows.OldestSequence, HasMoreBefore: rows.HasMoreBefore, Capabilities: caps, Usage: rows.Conversation.Usage, RateLimits: rows.Conversation.RateLimits}
 }
 
 // SnapshotPage reads one bounded timeline page. The live conversation metadata
@@ -1758,7 +1956,9 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		state = ports.ChatControllerHibernated
 	}
 	var caps ports.ChatCapabilities
+	var dispatching []string
 	if controller, err := s.Controller(id); err == nil {
+		dispatching = controller.DispatchingTurnIDs()
 		if live := controller.State(); (record.HibernatedAt == nil && !waking) || live != ports.ChatControllerStopped {
 			state = live
 			caps = controller.Capabilities()
@@ -1773,7 +1973,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		Harness:                          record.Harness,
 		Mode:                             domain.NormalizeSessionMode(record.Mode),
 		Controller:                       state,
-		Turns:                            rows.Turns,
+		Turns:                            withDispatchingTurnRunning(rows.Turns, dispatching...),
 		Messages:                         rows.Messages,
 		Activities:                       rows.Activities,
 		BranchPoints:                     rows.BranchPoints,

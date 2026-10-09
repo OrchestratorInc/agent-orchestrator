@@ -3,26 +3,26 @@ title: OpenCode
 description: Built-in Terminal UI and native ACP Chat support for the user's OpenCode installation.
 ---
 
-AO resolves your local `opencode` executable and reuses its authentication. Choose `opencode` for OpenCode 1 or `opencode-v2` for OpenCode 2; both have terminal, Chat, and reviewer adapters. They share the executable name but have distinct AO identities. The v2 adapter validates major version 2, so selecting it with a v1 binary fails preflight.
+Orchestrator resolves your local `opencode` executable and reuses its authentication. Choose `opencode` for OpenCode 1 or `opencode-v2` for OpenCode 2; both have terminal, Chat, and reviewer adapters. They share the executable name but have distinct Orchestrator identities. The v2 adapter validates major version 2, so selecting it with a v1 binary fails preflight.
 
 ```bash
 ao agent ls --refresh
 ao spawn --project my-app --name opencode-task --agent opencode --mode chat
 ```
 
-Use OpenCode in its Terminal UI or in structured Chat through OpenCode's Agent Client Protocol (ACP) interface. AO keeps Chat history and the provider conversation ID so a session can continue across restarts.
+Use OpenCode in its Terminal UI or in structured Chat through OpenCode's Agent Client Protocol (ACP) interface. Orchestrator keeps Chat history and the provider conversation ID so a session can continue across restarts.
 
-AO's permission choices map to OpenCode's rules:
+Orchestrator's permission choices map to OpenCode's rules:
 
-| AO mode | What it allows | Explicit denies |
+| Orchestrator mode | What it allows | Explicit denies |
 | --- | --- | --- |
 | Default approvals | Adds no rules. OpenCode uses your configuration. | Remain in force. |
 | Accept edits | Allows file edits; other actions follow your OpenCode configuration. | Remain in force. |
 | Auto-approve | Approves tool actions that are not explicitly denied, including out-of-worktree actions and repeat-loop checks. | Remain in force. |
 | Bypass permissions | Uses OpenCode's full-access `permission: "allow"` setting. | Do not block actions in this mode, including OpenCode's default `.env` deny. |
 
-AO leaves your rules in place for Default, Accept edits, and Auto-approve. In Terminal UI, Auto uses OpenCode's `--auto` flag. In Chat, AO answers permission requests as that flag would. A denied tool does not raise a request, so Auto leaves it denied whether the rule is in your global config, repository, `.opencode` directory, or organization-managed settings.
+Orchestrator leaves your rules in place for Default, Accept edits, and Auto-approve. In Terminal UI, Auto uses OpenCode's `--auto` flag. In Chat, Orchestrator answers permission requests as that flag would. A denied tool does not raise a request, so Auto leaves it denied whether the rule is in your global config, repository, `.opencode` directory, or organization-managed settings.
 
-The Chat picker switches between AO's agents, so a change applies immediately in either direction, including back to a stricter mode.
+The Chat picker switches between Orchestrator's agents, so a change applies immediately in either direction, including back to a stricter mode.
 
 OpenCode is also a shipped reviewer harness. Reviewer configuration is independent from the worker harness; inspect project settings and `ao review --help` for the current review workflow.

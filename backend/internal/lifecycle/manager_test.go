@@ -2280,11 +2280,17 @@ func TestMarkSpawnedReactivatesUsageAfterLifecycleTransition(t *testing.T) {
 		Activity:     domain.Activity{State: domain.ActivityExited},
 		Metadata:     domain.SessionMetadata{RuntimeLaunchID: "launch-old"},
 	}
+	rec := st.sessions["mer-1"]
+	rec.CleanupGeneration = 7
+	st.sessions[rec.ID] = rec
 	usage := &fakeUsageLifecycle{fakeUsageFinalizer: fakeUsageFinalizer{store: st}}
 	m.SetUsageFinalizer(usage)
 
 	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{RuntimeLaunchID: "launch-new"}); err != nil {
 		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].CleanupGeneration; got != 8 {
+		t.Fatalf("restored cleanup generation = %d, want 8", got)
 	}
 	if usage.reactivateCalls != 1 || usage.reactivateID != "mer-1" ||
 		usage.reactivateLaunch != "launch-new" || !usage.sawLive {

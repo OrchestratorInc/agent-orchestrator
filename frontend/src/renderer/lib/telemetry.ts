@@ -351,7 +351,25 @@ function routeSurface(pathname: string): string {
 		return "project_board";
 	}
 	if (/^\/sessions\/[^/]+$/.test(pathname)) return "session_detail";
+	if (/^\/automations(?:\/|$)/.test(pathname)) return "automations";
 	return "other";
+}
+
+const AUTOMATION_SCHEDULE_PRESET_SET = new Set(["daily", "weekly", "custom"]);
+const AUTOMATION_PROMPT_LENGTH_BUCKET_SET = new Set(["xs", "s", "m", "l", "xl"]);
+
+/**
+ * Coarse size of an automation prompt, never the prompt itself. Measured in
+ * bytes because that is what the daemon's 4096 cap counts; counting UTF-16
+ * units instead would compress the bands for non-Latin prompts.
+ */
+export function automationPromptLengthBucket(prompt: string): string {
+	const length = new TextEncoder().encode(prompt).length;
+	if (length <= 80) return "xs";
+	if (length <= 240) return "s";
+	if (length <= 800) return "m";
+	if (length <= 2000) return "l";
+	return "xl";
 }
 
 async function sha256Hex(raw: string): Promise<string> {
@@ -505,6 +523,23 @@ export async function sanitizeRendererProperties(
 			if (projectIDHash) safe.project_id_hash = projectIDHash;
 			if (typeof properties?.source === "string" && ORCHESTRATOR_SPAWN_SOURCE_SET.has(properties.source)) {
 				safe.source = properties.source;
+			}
+			break;
+		}
+		case "ao.renderer.automation_create_opened":
+			break;
+		case "ao.renderer.automation_create_requested":
+		case "ao.renderer.automation_create_succeeded":
+		case "ao.renderer.automation_create_failed": {
+			// Which kind of automation a prompt describes stays on the machine;
+			// only the schedule shape and a size band ride along.
+			const projectIDHash = await hashedTelemetryID(properties?.project_id);
+			if (projectIDHash) safe.project_id_hash = projectIDHash;
+			if (typeof properties?.schedule_preset === "string" && AUTOMATION_SCHEDULE_PRESET_SET.has(properties.schedule_preset)) {
+				safe.schedule_preset = properties.schedule_preset;
+			}
+			if (typeof properties?.prompt_length_bucket === "string" && AUTOMATION_PROMPT_LENGTH_BUCKET_SET.has(properties.prompt_length_bucket)) {
+				safe.prompt_length_bucket = properties.prompt_length_bucket;
 			}
 			break;
 		}

@@ -60,6 +60,7 @@ type NPMInstallCapabilities struct {
 	NPMVersion     string
 	GlobalPrefix   string
 	PrefixWritable bool
+	RuntimeErr     error
 	Err            error
 }
 
@@ -86,6 +87,12 @@ type InstallCapabilities struct {
 // snapshot so recipe resolution never reruns subprocesses per harness.
 type InstallCapabilityProbe interface {
 	Probe(ctx context.Context) (InstallCapabilities, error)
+}
+
+// PathWritableProbe checks whether an install destination or its nearest
+// existing ancestor is writable by the daemon user.
+type PathWritableProbe interface {
+	PathWritable(ctx context.Context, path string) (bool, error)
 }
 
 // AgentInstallJobRecord is the storage-bound representation of a daemon-owned

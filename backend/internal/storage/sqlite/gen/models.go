@@ -688,6 +688,7 @@ type Session struct {
 	SessionOutputType                string
 	LatestInteractionAt              sql.NullTime
 	HibernatedAt                     sql.NullTime
+	BranchState                      string
 }
 
 type SessionCleanupFact struct {

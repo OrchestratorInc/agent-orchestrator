@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
@@ -22,7 +23,11 @@ import (
 )
 
 // Native chat images are sent to the provider and retained in conversation
-// history. Workspace file attachments use separate, larger spawn limits.
+// history. Workspace file attachments use separate, larger spawn limits. The
+// body limit also fits a 25 MiB render page as a JSON string, but only because
+// the page's HTML source is capped at 1 MiB: json.Marshal writes each <, > and
+// & as a 6-byte escape, so the source can grow sixfold. Inlined images are
+// base64 and do not grow.
 const (
 	maxConversationImageBytes  = 10 << 20
 	maxConversationImagesBytes = 25 << 20
@@ -81,6 +86,8 @@ type chatViewService interface {
 // even by calling these URLs directly. UI visibility is not the boundary.
 type ConversationsController struct {
 	Svc ConversationService
+	// Renders serves agent HTML renders. Nil answers the render route 501.
+	Renders *attachmentstore.Store
 }
 
 // Register mounts the conversation routes under a session.
@@ -109,6 +116,10 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/branches/{branchId}/activate", c.activateBranch)
 	r.Put("/sessions/{sessionId}/conversation/title", c.setTitle)
 	r.Post("/sessions/{sessionId}/conversation/mcp/reload", c.reloadMCPServers)
+	r.Post("/sessions/{sessionId}/renders", c.publishRender)
+	r.Post("/sessions/{sessionId}/renders/check", c.checkRender)
+	r.Get("/sessions/{sessionId}/renders/{renderId}", c.renderFile)
+	r.Post("/sessions/{sessionId}/renders/{renderId}/artifact", c.saveRenderArtifact)
 	r.Get("/reviews/{reviewId}/conversation/models", c.reviewModels)
 	r.Patch("/reviews/{reviewId}/conversation/settings", c.reviewSetSettings)
 	r.Get("/reviews/{reviewId}/conversation", c.reviewSnapshot)
@@ -780,7 +791,7 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	if req.Text == "" && len(req.Attachments) == 0 && len(req.Resources) == 0 {
+	if req.Text == "" && len(req.Attachments) == 0 && len(req.Resources) == 0 && len(req.Excerpts) == 0 {
 		// There is no keystroke concept in Chat mode: an empty body is a client
 		// bug, not a way to nudge the agent.
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
@@ -796,11 +807,23 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 	}
 	text := req.Text
 	if text == "" {
-		text = fmt.Sprintf("Attached %d item(s) for context", len(content))
+		if len(req.Excerpts) > 0 {
+			text = fmt.Sprintf("Use the attached %d chat excerpt(s) as context", len(req.Excerpts))
+		} else {
+			text = fmt.Sprintf("Attached %d item(s) for context", len(content))
+		}
+	}
+	excerpts := make([]ports.ChatExcerptReference, 0, len(req.Excerpts))
+	for _, excerpt := range req.Excerpts {
+		excerpts = append(excerpts, ports.ChatExcerptReference{
+			ConversationID: excerpt.ConversationID, MessageID: excerpt.MessageID,
+			Revision: excerpt.Revision, Text: excerpt.Text,
+		})
 	}
 	turn, err := c.Svc.Send(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), ports.ChatUserMessage{
 		Text:            text,
 		Content:         content,
+		Excerpts:        excerpts,
 		ClientMessageID: req.ClientMessageID,
 		Origin:          domain.MessageOriginHuman,
 	})
@@ -989,6 +1012,14 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 			"CHAT_CONTROLLER_NOT_READY",
 			"the agent controller for this session is not running", nil)
 
+	case errors.Is(err, chatsvc.ErrExcerptInvalid):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"CHAT_EXCERPT_INVALID", err.Error(), nil)
+
+	case errors.Is(err, chatsvc.ErrExcerptStale):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_EXCERPT_STALE", err.Error(), nil)
+
 	case errors.Is(err, chatsvc.ErrControllerHandoff):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_INTERFACE_TRANSITION",
@@ -1175,6 +1206,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			SenderSessionID:   msg.SenderSessionID,
 			SenderProjectID:   msg.SenderProjectID,
 			SenderDisplayName: msg.SenderDisplayName,
+			ClientMessageID:   msg.ClientMessageID,
 			Streaming:         msg.Streaming,
 			CreatedAt:         msg.CreatedAt.UTC().Format(time.RFC3339),
 		}
@@ -1241,9 +1273,27 @@ func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationC
 		if name == "" && block.Type != "image" && block.Type != "resource" && block.Type != "resource_link" {
 			name = block.Type
 		}
-		summaries = append(summaries, ConversationContentSummaryResponse{
-			Type: block.Type, MIMEType: block.MIMEType, URI: block.URI, Name: name,
-		})
+		summary := ConversationContentSummaryResponse{Type: block.Type, MIMEType: block.MIMEType, Name: name}
+		if block.Type == "excerpt" {
+			// Excerpts written by current versions carry verified structured
+			// context. Older durable messages only have the excerpt resource URI
+			// and selected text; keep those navigable without exposing the
+			// internal URI in the public content summary.
+			summary.Name = "Chat excerpt"
+			if block.Excerpt != nil {
+				summary.Text = block.Excerpt.SelectedText
+				summary.SourceMessageID = block.Excerpt.Reference.MessageID
+				summary.SourceRevision = block.Excerpt.Reference.Revision
+			} else {
+				summary.Text = block.Text
+				if strings.HasPrefix(block.URI, ports.ChatExcerptResourceURIPrefix) {
+					summary.SourceMessageID = strings.TrimPrefix(block.URI, ports.ChatExcerptResourceURIPrefix)
+				}
+			}
+		} else {
+			summary.URI = block.URI
+		}
+		summaries = append(summaries, summary)
 	}
 	return summaries, true
 }

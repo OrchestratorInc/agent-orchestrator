@@ -376,4 +376,23 @@ describe("TaskComposerView", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Create as Terminal UI" }));
 		expect(onFallbackAction).toHaveBeenCalledOnce();
 	});
+
+	it("renders a host-provided model notice in place of plain warning text", () => {
+		render(
+			<TaskComposerView
+				{...viewProps({
+					submission: {
+						showFallbackAction: false,
+						isSubmitting: false,
+						modelWarning: <div data-testid="host-notice"><button type="button">Log in</button></div>,
+						onFallbackAction: vi.fn(),
+						onSubmit: vi.fn(),
+					},
+				})}
+			/>,
+		);
+
+		expect(screen.getByTestId("host-notice")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Log in" })).toBeInTheDocument();
+	});
 });

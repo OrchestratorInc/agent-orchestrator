@@ -42,7 +42,7 @@ func TestCodexConversationSettingsUsesLastNativeTurnForBothInterfaces(t *testing
 	if command.Cleanup != nil {
 		defer command.Cleanup()
 	}
-	if !slices.Contains(command.Args, "chat-model") || !slices.Contains(command.Args, "model_reasoning_effort=xhigh") {
+	if !slices.Contains(command.Args, "chat-model") || !slices.Contains(command.Args, `model_reasoning_effort="xhigh"`) {
 		t.Fatalf("interactive resume omitted native settings: %v", command.Args)
 	}
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)

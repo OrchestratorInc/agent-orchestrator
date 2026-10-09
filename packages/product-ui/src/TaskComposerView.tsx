@@ -115,7 +115,9 @@ export type TaskComposerSubmission = {
 	showFallbackAction: boolean;
 	error?: string;
 	isSubmitting: boolean;
-	modelWarning?: string;
+	// A string renders as plain warning text; a node lets the host render its
+	// own notice (for example one with a login action).
+	modelWarning?: ReactNode;
 	onFallbackAction: (prompt: string) => void;
 	onSubmit: (prompt: string) => void;
 };
@@ -400,9 +402,11 @@ export function TaskComposerView({
 							) : null}
 						</div>
 					)}
-					{!submission.error && submission.modelWarning && (
-						<p className="text-caption text-warning" role="status">{submission.modelWarning}</p>
-					)}
+					{!submission.error && submission.modelWarning ? (
+						typeof submission.modelWarning === "string"
+							? <p className="text-caption text-warning" role="status">{submission.modelWarning}</p>
+							: submission.modelWarning
+					) : null}
 				</div>
 			)}
 

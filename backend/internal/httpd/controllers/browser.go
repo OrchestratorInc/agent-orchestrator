@@ -131,8 +131,7 @@ func writeBrowserError(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		captureBrowserFailure(r, apierr.KindUnavailable, "BROWSER_COMMAND_TIMEOUT")
-		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "timeout", "BROWSER_COMMAND_TIMEOUT", "Browser command timed out; retry the action", nil)
+		envelope.WriteAPIError(w, r, http.StatusGatewayTimeout, "timeout", "BROWSER_COMMAND_TIMEOUT", "Browser command timed out waiting for the desktop browser runtime", nil)
 		return
 	}
 	var commandErr browserruntime.CommandError
@@ -147,6 +146,9 @@ func writeBrowserError(w http.ResponseWriter, r *http.Request, err error) {
 		case "STALE_REFERENCE", "TAB_NOT_FOUND", "BROWSER_TARGET_MISMATCH":
 			status = http.StatusConflict
 			typeName = "conflict"
+		case "AGENT_BROWSER_TIMEOUT":
+			status = http.StatusGatewayTimeout
+			typeName = "timeout"
 		case "BROWSER_TARGET_UNAVAILABLE", "BROWSER_AUTOMATION_UNAVAILABLE", "AGENT_BROWSER_NOT_INSTALLED",
 			"AGENT_BROWSER_START_FAILED", "BROWSER_DEVTOOLS_UNAVAILABLE", "BROWSER_RUNTIME_PROTOCOL_ERROR":
 			status = http.StatusServiceUnavailable

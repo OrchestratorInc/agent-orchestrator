@@ -37,6 +37,26 @@ func reqFrom(remoteAddr, auth string) *http.Request {
 	return r
 }
 
+func TestAccountTokenAuthenticatesWithoutReplacingPairingPassword(t *testing.T) {
+	state := &authState{}
+	state.setHash(mobilebridge.HashPassword("password"))
+	state.setAccountHash(mobilebridge.HashPassword("scoped-token"))
+	h := authMiddleware(state, newLockout(time.Now), nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	for _, token := range []string{"password", "scoped-token"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req("Bearer "+token))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s rejected: %d", token, w.Code)
+		}
+	}
+	state.setAccountHash(mobilebridge.HashPassword("replacement"))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req("Bearer scoped-token"))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("retired account token accepted: %d", w.Code)
+	}
+}
+
 func TestAuthLockoutResetsAfterCooldown(t *testing.T) {
 	nowP := time.Now()
 	h, _ := newAuthUnderTest("secret12", func() time.Time { return nowP })

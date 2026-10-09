@@ -3,20 +3,26 @@
 set -euo pipefail
 
 usage() {
-	printf '%s\n' 'Usage: bootstrap-self-hosted.sh [--source-ref BRANCH] [--lan]'
+	printf '%s\n' 'Usage: bootstrap-self-hosted.sh [--nightly | --source-ref BRANCH] [--lan]'
 	printf '%s\n' 'Installs prerequisites, then installs released AO or builds a source branch.'
+	printf '%s\n' 'Downloads stable by default; --nightly installs the newest published nightly.'
 }
 
 source_ref=""
+nightly=false
 tunnel=true
 while (($#)); do
 	case "$1" in
+		--nightly) nightly=true; shift ;;
 		--source-ref) source_ref="${2:?--source-ref needs a branch}"; shift 2 ;;
 		--lan) tunnel=false; shift ;;
 		-h|--help) usage; exit 0 ;;
 		*) usage >&2; exit 2 ;;
 	esac
 done
+if "$nightly" && [[ -n "$source_ref" ]]; then
+	printf '%s\n' '--nightly cannot be combined with --source-ref.' >&2; exit 2
+fi
 
 [[ "$(id -u)" != 0 ]] || { printf '%s\n' 'Run as the host user, not root.' >&2; exit 1; }
 [[ "$(uname -s):$(uname -m)" == Linux:x86_64 ]] || { printf '%s\n' 'This bootstrap supports Ubuntu x64 only.' >&2; exit 1; }
@@ -79,6 +85,7 @@ else
 fi
 
 args=()
+"$nightly" && args+=(--nightly)
 [[ -z "$source_ref" ]] || args+=(--bundle "$bundle")
 if "$tunnel"; then
 	args+=(--tunnel)

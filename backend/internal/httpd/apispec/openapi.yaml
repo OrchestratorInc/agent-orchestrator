@@ -1315,6 +1315,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Gateway Timeout
       summary: Execute a target-scoped command in a session's desktop browser
       tags:
       - browser
@@ -3523,6 +3529,25 @@ paths:
       summary: Unpair this phone from the daemon, removing it from the roster
       tags:
       - push
+  /api/v1/remote-host/account-token:
+    post:
+      operationId: issueRemoteHostAccountToken
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersRemoteHostAccountTokenResponse'
+          description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+      summary: Issue a host-scoped account credential using the pairing password
+      tags:
+      - mobile
   /api/v1/reports:
     get:
       operationId: listReports
@@ -4281,6 +4306,63 @@ paths:
       summary: Report an agent activity-state signal for a session
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/activity/codewhale:
+    post:
+      operationId: setCodewhaleSessionActivity
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodewhaleLifecycleWebhookRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetActivityResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Record a Codewhale lifecycle outbox event
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/agent-switches:
     get:
       operationId: listSessionAgentSwitches
@@ -4434,6 +4516,58 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Retry safe source restoration for an agent switch
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/artifact-files/*:
+    get:
+      operationId: getSessionArtifactFile
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: 'Set to 1 to read the page as the agent wrote it: the stored
+          bytes as text/plain, without the theme bootstrap.'
+        in: query
+        name: source
+        schema:
+          description: 'Set to 1 to read the page as the agent wrote it: the stored
+            bytes as text/plain, without the theme bootstrap.'
+          enum:
+          - "1"
+          type:
+          - "null"
+          - string
+      responses:
+        "200":
+          content:
+            text/html:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Serve a session artifact file sandboxed, an HTML page with the render
+        theme bootstrap
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/attachments:
@@ -7253,6 +7387,248 @@ paths:
         preview
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/renders:
+    post:
+      operationId: publishSessionRender
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishRenderRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishRenderResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Show an agent's self-contained HTML page inline in its chat thread
+      tags:
+      - conversations
+  /api/v1/sessions/{sessionId}/renders/{renderId}:
+    get:
+      operationId: getSessionRender
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Render identifier returned when the page was published.
+        in: path
+        name: renderId
+        required: true
+        schema:
+          description: Render identifier returned when the page was published.
+          type: string
+      - description: 'Set to 1 to read the page as the agent wrote it: the stored
+          bytes as text/plain, without the theme bootstrap.'
+        in: query
+        name: source
+        schema:
+          description: 'Set to 1 to read the page as the agent wrote it: the stored
+            bytes as text/plain, without the theme bootstrap.'
+          enum:
+          - "1"
+          type:
+          - "null"
+          - string
+      responses:
+        "200":
+          content:
+            text/html:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Serve a published render as a sandboxed HTML document
+      tags:
+      - conversations
+  /api/v1/sessions/{sessionId}/renders/{renderId}/artifact:
+    post:
+      operationId: saveSessionRenderArtifact
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Render identifier returned when the page was published.
+        in: path
+        name: renderId
+        required: true
+        schema:
+          description: Render identifier returned when the page was published.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveRenderArtifactRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaveRenderArtifactResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Keep a published render as a session artifact
+      tags:
+      - conversations
+  /api/v1/sessions/{sessionId}/renders/check:
+    post:
+      operationId: checkSessionRender
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenderCheckRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RenderCheckResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Screenshot an agent's HTML page in the desktop app before it is published
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/restore:
     post:
       operationId: restoreSession
@@ -9623,6 +9999,11 @@ components:
           type: string
         warning:
           type: string
+        warningCode:
+          enum:
+          - auth_required
+          - auth_expired
+          type: string
       required:
       - agentId
       - selectionMode
@@ -10142,6 +10523,59 @@ components:
       required:
       - remoteUrl
       - destinationParent
+      type: object
+    CodewhaleLifecycleEvent:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        event:
+          type: string
+        item_id:
+          type:
+          - "null"
+          - string
+        kind:
+          enum:
+          - session.started
+          - turn.started
+          - turn.completed
+          - turn.failed
+          - turn.interrupted
+          - turn.stalled
+          - session.ended
+          - subagent.spawned
+          - subagent.completed
+          type: string
+        payload: {}
+        schema_version:
+          type: integer
+        seq:
+          minimum: 0
+          type: integer
+        thread_id:
+          type: string
+        timestamp:
+          format: date-time
+          type: string
+        turn_id:
+          type: string
+      required:
+      - schema_version
+      - seq
+      - event
+      - kind
+      - thread_id
+      type: object
+    CodewhaleLifecycleWebhookRequest:
+      properties:
+        at:
+          format: date-time
+          type: string
+        event:
+          $ref: '#/components/schemas/CodewhaleLifecycleEvent'
+      required:
+      - event
       type: object
     CodexAccountCapabilitiesResponse:
       properties:
@@ -10680,6 +11114,16 @@ components:
       - active
       - hasBattery
       type: object
+    ControllersRemoteHostAccountTokenResponse:
+      properties:
+        hostId:
+          type: string
+        token:
+          type: string
+      required:
+      - hostId
+      - token
+      type: object
     ControllersRequestRereviewRequest:
       properties:
         pullRequestUrl:
@@ -10776,6 +11220,8 @@ components:
           type: boolean
         branch:
           type: string
+        branchState:
+          $ref: '#/components/schemas/SessionBranchState'
         chatProviderPreserved:
           type: boolean
         createdAt:
@@ -10959,6 +11405,14 @@ components:
           type: boolean
         updatedAt:
           format: date-time
+          type: string
+        workspaceCleanup:
+          enum:
+          - pending
+          - removed
+          - preserved_dirty
+          - failed
+          - not_applicable
           type: string
       required:
       - id
@@ -11202,6 +11656,13 @@ components:
           type: string
         name:
           type: string
+        sourceMessageId:
+          type: string
+        sourceRevision:
+          format: int64
+          type: integer
+        text:
+          type: string
         type:
           type: string
         uri:
@@ -11234,6 +11695,23 @@ components:
       - deletions
       - status
       type: object
+    ConversationExcerptReferenceRequest:
+      properties:
+        conversationId:
+          type: string
+        messageId:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        text:
+          type: string
+      required:
+      - conversationId
+      - messageId
+      - revision
+      - text
+      type: object
     ConversationImageContentRequest:
       properties:
         data:
@@ -11260,6 +11738,8 @@ components:
       type: object
     ConversationMessageResponse:
       properties:
+        clientMessageId:
+          type: string
         content:
           items:
             $ref: '#/components/schemas/ConversationContentSummaryResponse'
@@ -11855,8 +12335,10 @@ components:
           - prime-agent
           - autohand
           - unreal-agent
+          - codewhale
           - mimo-code
           - deepseek-harness
+          - openhands
           - fake
           type: string
         approvalMode:
@@ -12493,8 +12975,10 @@ components:
           - omp
           - fx
           - unreal-agent
+          - codewhale
           - mimo-code
           - deepseek-harness
+          - openhands
           - cloudflared
           type: string
         updatedAt:
@@ -12558,6 +13042,8 @@ components:
       type: object
     KillSessionResponse:
       properties:
+        cleanupPending:
+          type: boolean
         freed:
           type: boolean
         ok:
@@ -13406,6 +13892,10 @@ components:
           items:
             type: string
           type: array
+        preRemove:
+          items:
+            type: string
+          type: array
         reviewers:
           items:
             $ref: '#/components/schemas/DomainReviewerConfig'
@@ -13490,6 +13980,46 @@ components:
       - sourceTurnId
       - providerTurnId
       - activityId
+      type: object
+    PublishRenderRequest:
+      properties:
+        artifact:
+          description: Also keep the page as a session artifact, a deliverable the
+            user keeps.
+          type: boolean
+        height:
+          description: First-paint frame height in CSS pixels, clamped to 80-2000;
+            the frame then fits the page.
+          type: integer
+        html:
+          description: A complete, self-contained HTML document, at most 25 MiB.
+          type: string
+        title:
+          description: Short name for the page.
+          type: string
+      required:
+      - html
+      - title
+      type: object
+    PublishRenderResponse:
+      properties:
+        activityId:
+          type: string
+        artifactError:
+          description: 'With artifact: why the page was not kept. The page is still
+            published.'
+          type: string
+        artifactPath:
+          description: 'With artifact: the absolute path of the kept page.'
+          type: string
+        path:
+          type: string
+        renderId:
+          type: string
+      required:
+      - renderId
+      - activityId
+      - path
       type: object
     PushDeviceEnvelope:
       properties:
@@ -13594,6 +14124,81 @@ components:
       - ok
       - sessionId
       - displayName
+      type: object
+    RenderCheckRequest:
+      properties:
+        html:
+          description: A complete, self-contained HTML document, at most 25 MiB.
+          type: string
+        width:
+          description: Viewport width in CSS pixels, 240-1600. Defaults to 720.
+          type: integer
+      required:
+      - html
+      type: object
+    RenderCheckResponse:
+      properties:
+        consoleMessages:
+          items:
+            $ref: '#/components/schemas/RenderConsoleMessage'
+          type: array
+        contentHeight:
+          description: Height the page needs at this width, in CSS pixels.
+          type: integer
+        network:
+          description: Network the page could use. none when the agent's own sandbox
+            has no network, so remote resources did not load.
+          enum:
+          - public
+          - none
+          type: string
+        screenshot:
+          $ref: '#/components/schemas/RenderCheckScreenshot'
+      required:
+      - screenshot
+      - contentHeight
+      - consoleMessages
+      - network
+      type: object
+    RenderCheckScreenshot:
+      properties:
+        data:
+          description: Base64 PNG.
+          type: string
+        height:
+          description: Page height the screenshot shows, in CSS pixels.
+          type: integer
+        imageHeight:
+          description: PNG height in pixels, when it differs from the page height.
+          type: integer
+        imageWidth:
+          description: PNG width in pixels, when it differs from the page width.
+          type: integer
+        mimeType:
+          type: string
+        width:
+          description: Page width the screenshot shows, in CSS pixels.
+          type: integer
+      required:
+      - mimeType
+      - data
+      - width
+      - height
+      type: object
+    RenderConsoleMessage:
+      properties:
+        level:
+          enum:
+          - debug
+          - log
+          - warning
+          - error
+          type: string
+        text:
+          type: string
+      required:
+      - level
+      - text
       type: object
     ReorderQueuedConversationTurnsRequest:
       properties:
@@ -13901,6 +14506,27 @@ components:
       - ok
       - sessionId
       type: object
+    SaveRenderArtifactRequest:
+      properties:
+        title:
+          description: Name for the file. Characters a file system refuses are replaced.
+          maxLength: 200
+          minLength: 1
+          type: string
+      required:
+      - title
+      type: object
+    SaveRenderArtifactResponse:
+      properties:
+        name:
+          type: string
+        path:
+          description: The file, relative to the session's artifact directory.
+          type: string
+      required:
+      - path
+      - name
+      type: object
     SendConversationMessageRequest:
       properties:
         attachments:
@@ -13909,6 +14535,10 @@ components:
           type: array
         clientMessageId:
           type: string
+        excerpts:
+          items:
+            $ref: '#/components/schemas/ConversationExcerptReferenceRequest'
+          type: array
         resources:
           items:
             $ref: '#/components/schemas/ConversationResourceContentRequest'
@@ -13979,6 +14609,8 @@ components:
       type: object
     SessionArtifact:
       properties:
+        inlineUrl:
+          type: string
         kind:
           enum:
           - html
@@ -14005,6 +14637,18 @@ components:
       - kind
       - size
       - updatedAt
+      type: object
+    SessionBranchState:
+      properties:
+        commits:
+          type: integer
+        remoteBranch:
+          type: string
+        unpushed:
+          type: integer
+      required:
+      - commits
+      - unpushed
       type: object
     SessionInterfaceTransition:
       properties:
@@ -15000,8 +15644,10 @@ components:
           - prime-agent
           - autohand
           - unreal-agent
+          - codewhale
           - mimo-code
           - deepseek-harness
+          - openhands
           type: string
         issueId:
           type: string

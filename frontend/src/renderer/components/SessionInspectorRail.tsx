@@ -97,7 +97,6 @@ export function SessionInspectorRail({
 		return inspectorMaxWidthPx(available, sizing.maxPercent, sizing.chatMinWidth) ?? sizing.defaultWidth;
 	}, [sizing.chatMinWidth, sizing.defaultWidth, sizing.maxPercent, splitRef]);
 	const getResizeTargets = useCallback(() => [gapRef.current, panelRef.current], []);
-	const getBorderElement = useCallback(() => panelRef.current, []);
 	const { onPointerDown, onCollapsedPointerDown, onDoubleClick } = useResizable({
 		cssVar: inspectorWidthVar,
 		getCssTargets: getResizeTargets,
@@ -144,7 +143,7 @@ export function SessionInspectorRail({
 			style={{ width: `var(${inspectorWidthVar}, ${sizing.defaultWidth}px)` }}
 			transition={transition}
 		>
-			<ResizeHandle className={!isOpen ? "hidden" : undefined} data-testid="inspector-resize-handle" getBorderElement={getBorderElement} getObserveElements={getResizeTargets} onDoubleClick={onDoubleClick} onPointerDown={onPointerDown} side="left" style={noDragStyle} />
+			<ResizeHandle className={!isOpen ? "hidden" : undefined} data-testid="inspector-resize-handle" onDoubleClick={onDoubleClick} onPointerDown={onPointerDown} side="left" style={noDragStyle} />
 			<div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">{children}</div>
 		</motion.div>
 		{isOpen || !showCollapsedHandle ? null : <div className="absolute inset-y-0 right-0 z-chrome w-2 cursor-e-resize touch-none" data-slot="inspector-collapsed-rail" data-testid="inspector-collapsed-rail" onPointerDown={onCollapsedPointerDown} style={noDragStyle} />}

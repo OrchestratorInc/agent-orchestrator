@@ -224,6 +224,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            in.systemPrompt,
 		AdditionalDirectories:   workspaceProjectDirectories(in.workspace.Path, in.workspaceProject),
+		MCPServers:              m.aoMCPServers(in.cfg.Harness, env),
 		ExpectedControllerOwner: in.record.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -306,6 +307,36 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 	}
 
 	return m.getRecord(ctx, id)
+}
+
+// aoMCPServers is the tool server every chat session gets: `ao mcp` from the
+// daemon's own binary, which gives the agent the html_preview and html_render
+// tools. Chat Service keeps it for every later start and resume of the
+// session (edit, rollback, fork). Its env holds only what the CLI needs to
+// reach this daemon for this session, never a credential such as
+// AO_BROWSER_CAPABILITY.
+func (m *Manager) aoMCPServers(harness domain.AgentHarness, env map[string]string) []ports.ChatMCPServerConfig {
+	if harness == domain.HarnessUnreal {
+		// Its driver refuses AO-supplied tool servers; the agent uses `ao render`.
+		return nil
+	}
+	executable, err := m.executable()
+	if err != nil || !filepath.IsAbs(executable) {
+		m.logger.Warn("chat session gets no ao tool server; the agent can still run ao render",
+			"executable", executable, "error", err)
+		return nil
+	}
+	// AO_DATA_DIR too: a harness may start the server with exactly this env, and
+	// without it config.Load needs $HOME to find the data dir.
+	serverEnv := make(map[string]string, 3)
+	for _, key := range []string{EnvSessionID, EnvRunFile, EnvDataDir} {
+		if value := env[key]; value != "" {
+			serverEnv[key] = value
+		}
+	}
+	return []ports.ChatMCPServerConfig{{
+		Name: "ao", Type: "stdio", Command: executable, Args: []string{"mcp"}, Env: serverEnv,
+	}}
 }
 
 func (m *Manager) stopChatAfterSpawnFailure(ctx context.Context, id domain.SessionID) {
@@ -412,7 +443,7 @@ func (m *Manager) resumeChatController(
 
 	// Recomputed rather than persisted, matching the terminal path: a restored
 	// session keeps its standing instructions across the relaunch.
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, true)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
 	}
@@ -444,6 +475,7 @@ func (m *Manager) resumeChatController(
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: recover provider ownership: %w", operation, rec.ID, err)
 	}
+	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var completionErr error
 	_, err = m.chat.StartChat(ctx, ChatStart{
 		ReconnectOnly:           reconnectOnly,
@@ -459,6 +491,7 @@ func (m *Manager) resumeChatController(
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            systemPrompt,
 		AdditionalDirectories:   additionalDirectories,
+		MCPServers:              m.aoMCPServers(rec.Harness, env),
 		ExpectedControllerOwner: rec.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -474,8 +507,9 @@ func (m *Manager) resumeChatController(
 			return launchEnv, nil
 		},
 		// The handle that makes this a resume rather than a new conversation.
-		ProviderConversationID: rec.Metadata.ProviderConversationID,
-		ProviderHandoff:        providerHandoff,
+		ProviderConversationID:             rec.Metadata.ProviderConversationID,
+		FreshIfProviderConversationMissing: freshIfMissing,
+		ProviderHandoff:                    providerHandoff,
 		// Ordinary resumes allocate a fresh generation. Switch recovery reuses
 		// the saga's reserved generation until delivery is durably settled so a
 		// second restart can still prove exact target ownership.
@@ -488,6 +522,17 @@ func (m *Manager) resumeChatController(
 			metadata.WorkspaceRepoPath = ws.RepoPath
 			if ws.Branch != "" {
 				metadata.Branch = ws.Branch
+			}
+			if freshIfMissing && started.ProviderConversationID != rec.Metadata.ProviderConversationID {
+				// The provider started fresh in place of a conversation it never
+				// persisted. Move the session and its untouched root together.
+				if err := m.replaceUnpersistedChatProvider(ctx, rec, started.ProviderConversationID); err != nil {
+					completionErr = err
+					return ChatControllerCommit{}, err
+				}
+				// The swap is one-shot: any later call with this id must not retry it.
+				rec.Metadata.ProviderConversationID = started.ProviderConversationID
+				freshIfMissing = false
 			}
 			metadata.ProviderConversationID = started.ProviderConversationID
 			// A fresh generation per launch: events still arriving from the
@@ -529,6 +574,42 @@ func (m *Manager) resumeChatController(
 	// Native continuity: the provider still holds the conversation, so the agent
 	// resumes with its own history rather than a replayed prompt.
 	return RestoreResult{Session: restored, Mode: RestoreModeNative}, nil
+}
+
+type unpersistedChatProviderStore interface {
+	ReplaceUnpersistedChatProvider(ctx context.Context, id domain.SessionID, expectedProviderConversationID, providerConversationID string) error
+}
+
+// providerNeverPersisted reports durable proof that the stored provider
+// conversation was reserved but never started: the adapter finds no persisted
+// history behind the id and AO recorded no conversation activity. Only then may
+// a provider that cannot find the id start fresh in its place.
+func (m *Manager) providerNeverPersisted(ctx context.Context, rec domain.SessionRecord) bool {
+	id := rec.Metadata.ProviderConversationID
+	if id == "" {
+		return false
+	}
+	agent, ok := m.agents.Agent(rec.Harness)
+	if !ok {
+		return false
+	}
+	handoff, ok := agent.(ports.AgentInterfaceHandoff)
+	if !ok {
+		return false
+	}
+	if _, ok := m.store.(unpersistedChatProviderStore); !ok {
+		return false
+	}
+	persisted, err := m.persistedNativeConversationID(ctx, rec, id, handoff)
+	return err == nil && persisted == ""
+}
+
+func (m *Manager) replaceUnpersistedChatProvider(ctx context.Context, rec domain.SessionRecord, providerConversationID string) error {
+	store, ok := m.store.(unpersistedChatProviderStore)
+	if !ok {
+		return errors.New("replace unpersisted Chat provider: storage is unavailable")
+	}
+	return store.ReplaceUnpersistedChatProvider(ctx, rec.ID, rec.Metadata.ProviderConversationID, providerConversationID)
 }
 
 func (m *Manager) markChatControllerSpawned(
