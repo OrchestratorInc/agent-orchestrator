@@ -705,7 +705,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						const authState = authStates[agentId];
 						const authStatus = readinessAgent?.authentication.state;
 						const connectedCredential = authStatus === "authorized" || authStatus === "configured";
-						const showAuthAction = !connectedCredential;
+						const showAuthAction = !connectedCredential || isDocumentationAction;
 						const installationStatusLabel = t("settings.harness.installed");
 						const showInstallationStatus = connectedCredential
 							|| authStatus === "not_applicable"
@@ -754,7 +754,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 							</>
 						) : null;
 						// A connected/configured harness's only action is to re-run its auth flow.
-						const refreshLocal = authPlan && authPlan.action !== "instructions" && connectedCredential ? (
+						const refreshLocal = authPlan && authPlan.action !== "instructions" && !isDocumentationAction && connectedCredential ? (
 							<Button type="button" size="sm" variant="outline" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} onClick={() => void startAuth(agentId)}>
 								{t("settings.harness.refreshLogin")}
 							</Button>
