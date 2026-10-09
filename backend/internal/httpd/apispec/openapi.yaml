@@ -155,6 +155,45 @@ paths:
         harness
       tags:
       - agents
+  /api/v1/agents/{agent}/logout:
+    post:
+      operationId: logoutAgent
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartAgentAuthResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Open the fixed native logout flow for one agent
+      tags:
+      - agents
   /api/v1/agents/{agent}/models:
     get:
       operationId: getAgentModels
@@ -9267,6 +9306,8 @@ components:
           - terminal
           - documentation
           type: string
+        logoutCommand:
+          type: string
         reason:
           type: string
       required:
@@ -9743,6 +9784,8 @@ components:
     AgentUpdateAdvisory:
       properties:
         agentId:
+          type: string
+        binaryPath:
           type: string
         checkedAt:
           format: date-time

@@ -100,7 +100,10 @@ var planByAgentID = func() map[string]Plan {
 }()
 
 func plan(agentID string, action Action, title string, command []string, guidance, docs string) Plan {
+	logout := logoutCommand(agentID)
 	return Plan{
+		LogoutCommand:    strings.Join(logout, " "),
+		logoutCommand:    logout,
 		AgentID:          agentID,
 		Action:           action,
 		LaunchMode:       LaunchTerminal,
@@ -109,5 +112,28 @@ func plan(agentID string, action Action, title string, command []string, guidanc
 		DocumentationURL: docs,
 		command:          command,
 		title:            title,
+	}
+}
+
+// Only documented CLI subcommands belong here. An absent entry explicitly
+// means unsupported; do not infer logout from login or delete credential files.
+func logoutCommand(agentID string) []string {
+	switch agentID {
+	case "claude-code":
+		return []string{"claude", "auth", "logout"}
+	case "codex":
+		return []string{"codex", "logout"}
+	case "cursor":
+		return []string{"cursor-agent", "logout"}
+	case "opencode", "opencode-v2":
+		return []string{"opencode", "auth", "logout"}
+	case "amp":
+		return []string{"amp", "logout"}
+	case "auggie":
+		return []string{"auggie", "logout"}
+	case "devin":
+		return []string{"devin", "auth", "logout"}
+	default:
+		return nil
 	}
 }

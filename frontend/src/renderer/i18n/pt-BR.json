@@ -2611,5 +2611,12 @@
 	"standalone.archive.heading_other": "{{count}} sessões arquivadas",
 	"standalone.archive.newAgent": "Novo agente",
 	"standalone.archive.empty.title": "Nenhum agente independente arquivado",
-	"standalone.archive.empty.body": "Os agentes independentes que você arquivar no Bloco de notas aparecerão aqui. Agentes independentes ativos permanecem na lista do Bloco de notas."
+	"standalone.archive.empty.body": "Os agentes independentes que você arquivar no Bloco de notas aparecerão aqui. Agentes independentes ativos permanecem na lista do Bloco de notas.",
+	"settings.harness.health.executable": "Executável",
+	"settings.harness.logout": "Sair",
+	"settings.harness.logoutInProgress": "Saindo…",
+	"settings.harness.checkingLogout": "Verificando saída…",
+	"settings.harness.logoutConfirmTitle": "Sair de {{agent}}?",
+	"settings.harness.logoutConfirmDescription": "Abre o comando nativo de saída do harness em {{host}}. Sessões em execução podem pedir que você entre novamente. Harnesses com vários provedores podem perguntar qual conta remover. Chaves de API fornecidas por variáveis de ambiente continuam configuradas.",
+	"settings.harness.logoutUnverified": "Não foi possível confirmar a saída. O harness pode ainda ter outra conta ou uma chave de API configurada."
 }

@@ -2578,5 +2578,12 @@
 	"standalone.archive.heading_other": "{{count}} 件のアーカイブ済みセッション",
 	"standalone.archive.newAgent": "新しいエージェント",
 	"standalone.archive.empty.title": "アーカイブ済みのスタンドアロンエージェントはありません",
-	"standalone.archive.empty.body": "スクラッチパッドからアーカイブしたスタンドアロンエージェントがここに表示されます。アクティブなスタンドアロンエージェントはスクラッチパッドの一覧に残ります。"
+	"standalone.archive.empty.body": "スクラッチパッドからアーカイブしたスタンドアロンエージェントがここに表示されます。アクティブなスタンドアロンエージェントはスクラッチパッドの一覧に残ります。",
+	"settings.harness.health.executable": "実行ファイル",
+	"settings.harness.logout": "ログアウト",
+	"settings.harness.logoutInProgress": "ログアウト中…",
+	"settings.harness.checkingLogout": "ログアウトを確認中…",
+	"settings.harness.logoutConfirmTitle": "{{agent}} からログアウトしますか？",
+	"settings.harness.logoutConfirmDescription": "{{host}} でハーネスのログアウトコマンドを開きます。実行中のセッションで再ログインを求められる場合があります。複数のプロバイダーを使うハーネスでは、削除するアカウントの選択が必要な場合があります。環境変数で指定した API キーは設定されたままです。",
+	"settings.harness.logoutUnverified": "ログアウトを確認できませんでした。別のアカウントまたは API キーがまだ設定されている可能性があります。"
 }

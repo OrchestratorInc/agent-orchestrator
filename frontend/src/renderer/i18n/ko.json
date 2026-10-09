@@ -2578,5 +2578,12 @@
 	"standalone.archive.heading_other": "보관된 세션 {{count}}개",
 	"standalone.archive.newAgent": "새 에이전트",
 	"standalone.archive.empty.title": "보관된 독립 실행형 에이전트가 없습니다",
-	"standalone.archive.empty.body": "스크래치패드에서 보관한 독립 실행형 에이전트가 여기에 표시됩니다. 활성 독립 실행형 에이전트는 스크래치패드 목록에 남아 있습니다."
+	"standalone.archive.empty.body": "스크래치패드에서 보관한 독립 실행형 에이전트가 여기에 표시됩니다. 활성 독립 실행형 에이전트는 스크래치패드 목록에 남아 있습니다.",
+	"settings.harness.health.executable": "실행 파일",
+	"settings.harness.logout": "로그아웃",
+	"settings.harness.logoutInProgress": "로그아웃 중…",
+	"settings.harness.checkingLogout": "로그아웃 확인 중…",
+	"settings.harness.logoutConfirmTitle": "{{agent}}에서 로그아웃할까요?",
+	"settings.harness.logoutConfirmDescription": "{{host}}에서 하네스의 기본 로그아웃 명령을 엽니다. 실행 중인 세션에서 다시 로그인하라고 요청할 수 있습니다. 여러 공급자를 사용하는 하네스는 제거할 계정을 물을 수 있습니다. 환경 변수로 제공된 API 키는 계속 설정되어 있습니다.",
+	"settings.harness.logoutUnverified": "로그아웃을 확인하지 못했습니다. 하네스에 다른 계정이나 API 키가 아직 설정되어 있을 수 있습니다."
 }

@@ -53,13 +53,15 @@ vi.mock("../../lib/host-clients", async (importOriginal) => {
 	};
 });
 
-const { terminalFocusRequested, terminalStateCallback } = vi.hoisted(() => ({
+const { terminalFocusRequested, terminalStateCallback, terminalMuxFactory } = vi.hoisted(() => ({
 	terminalFocusRequested: { value: false },
+	terminalMuxFactory: { value: undefined as undefined | (() => unknown) },
 	terminalStateCallback: { value: undefined as ((state: TerminalSessionState) => void) | undefined },
 }));
 
 vi.mock("../TerminalPane", () => ({
-	TerminalPane: ({ focusRequested, onTerminalStateChange }: { focusRequested?: boolean; onTerminalStateChange?: (state: TerminalSessionState) => void }) => {
+	TerminalPane: ({ focusRequested, onTerminalStateChange, createMux }: { focusRequested?: boolean; onTerminalStateChange?: (state: TerminalSessionState) => void; createMux?: () => unknown }) => {
+		terminalMuxFactory.value = createMux;
 		terminalFocusRequested.value = focusRequested === true;
 		terminalStateCallback.value = onTerminalStateChange;
 		return (
@@ -216,10 +218,10 @@ function mockInstalledOperations(savedMethod?: string, readiness = readyCatalog(
 		if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
 		if (path === "/api/v1/agents/installers") return { data: managedPlans } as never;
 		if (path === "/api/v1/agents/install-jobs") return { data: { jobs: operationJobs } } as never;
-		if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "codex", action: "login", launchMode: "terminal", available: true }] } } as never;
+		if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "codex", action: "login", launchMode: "terminal", available: true, logoutCommand: "codex logout" }] } } as never;
 		if (path === "/api/v1/agents/{agent}/update-advisory") {
 			const agentId = (options as { params: { path: { agent: string } } }).params.path.agent;
-			return { data: { agentId, status: agentId === "codex" ? "behind_latest" : "current", currentVersion: "1.2.3", latestVersion: "1.3.0", maintenanceMethod: savedMethod, checkedAt: "2026-10-06T00:00:00Z" } } as never;
+			return { data: { agentId, status: agentId === "codex" ? "behind_latest" : "current", currentVersion: "1.2.3", latestVersion: "1.3.0", binaryPath: "~/.local/bin/codex", maintenanceMethod: savedMethod, checkedAt: "2026-10-06T00:00:00Z" } } as never;
 		}
 		return { data: undefined } as never;
 	});
@@ -348,6 +350,8 @@ describe("HarnessSettingsSection", () => {
 		expect(within(page).getByText("Update available")).toBeInTheDocument();
 		expect(within(page).getByText("npm")).toBeInTheDocument();
 		expect(within(page).getByText("Authentication")).toBeInTheDocument();
+		expect(within(page).getByText("Executable")).toBeInTheDocument();
+		expect(within(page).getByText("~/.local/bin/codex")).toBeInTheDocument();
 		// Health never changes the harness: no install, update, login or uninstall here.
 		for (const name of ["Install", "Update", "Login", "Uninstall"]) expect(within(page).queryByRole("button", { name })).toBeNull();
 		await userEvent.click(within(page).getByRole("button", { name: "Check again" }));
@@ -355,6 +359,51 @@ describe("HarnessSettingsSection", () => {
 		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("Codex health\nInstallation: installed")));
 		expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("Latest version: 1.3.0"));
+	});
+
+	it.each(["unauthorized", "configured"])("confirms logout and rechecks readiness without assuming success: %s", async (authStatus) => {
+		const readiness = readyCatalog();
+		mockInstalledOperations("npm", readiness);
+		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/{agent}/logout") return { data: { agentId: "codex", action: "logout", terminal: { handleId: "logout-codex", title: "Log out of Codex", createdAt: "2026-10-09T00:00:00Z", workingDir: "/tmp" } } } as never;
+			if (path === "/api/v1/agents/{agent}/probe") {
+				readiness.agents.find(agent => agent.id === "codex")!.authentication.state = authStatus;
+				return { data: { agent: { id: "codex", authStatus } } } as never;
+			}
+			return (post as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: {} } as never);
+		renderSection();
+		const page = await findAgentRow("codex");
+		await userEvent.click(within(page).getByRole("button", { name: "Log out" }));
+		const dialog = screen.getByRole("dialog", { name: "Log out of Codex?" });
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/logout", expect.anything());
+		await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/logout", expect.anything());
+		await userEvent.click(within(page).getByRole("button", { name: "Log out" }));
+		await userEvent.click(within(screen.getByRole("dialog", { name: "Log out of Codex?" })).getByRole("button", { name: "Log out" }));
+		expect(await within(page).findByText("Log out of Codex")).toBeInTheDocument();
+		// A short-lived logout must bypass the retained shell cache, which prunes
+		// exited handles before the panel can attach and observe completion.
+		expect(terminalMuxFactory.value).toBeTypeOf("function");
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/logout", { params: { path: { agent: "codex" } } });
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", expect.anything());
+		await userEvent.click(within(page).getByRole("button", { name: "Complete login terminal" }));
+		if (authStatus === "configured") {
+			await within(page).findByText("Logout could not be confirmed. The harness may still have another account or an API key configured.", {}, { timeout: 7000 });
+			expect(within(page).queryByRole("button", { name: "Login" })).toBeNull();
+			return;
+		}
+		await waitFor(() => expect(within(page).queryByTestId("harness-auth-terminal")).toBeNull());
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/probe", { params: { path: { agent: "codex" } } });
+		expect(within(page).getByRole("button", { name: "Login" })).toBeEnabled();
+	}, 10000);
+
+	it("hides logout when the harness has no native logout command", async () => {
+		mockInstalledOperations("npm");
+		renderSection();
+		expect(within(await findAgentRow("cursor")).queryByRole("button", { name: "Log out" })).toBeNull();
 	});
 
 	it("offers to log in again for a signed-in harness", async () => {
@@ -1686,7 +1735,7 @@ describe("HarnessSettingsSection", () => {
 		let probed = false;
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: initial } as never;
-			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "codex", action: "login", launchMode: "terminal", available: true }] } } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "codex", action: "login", launchMode: "terminal", available: true, logoutCommand: "codex logout" }] } } as never;
 			if (path === "/api/v1/agents/installers") return { data: plans } as never;
 			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
 			return { data: undefined } as never;

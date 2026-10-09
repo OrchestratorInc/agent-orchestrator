@@ -2611,5 +2611,12 @@
 	"standalone.archive.heading_other": "{{count}} sesiones archivadas",
 	"standalone.archive.newAgent": "Nuevo agente",
 	"standalone.archive.empty.title": "No hay agentes independientes archivados",
-	"standalone.archive.empty.body": "Los agentes independientes que archives desde el Bloc de notas aparecerán aquí. Los agentes independientes activos permanecen en la lista del Bloc de notas."
+	"standalone.archive.empty.body": "Los agentes independientes que archives desde el Bloc de notas aparecerán aquí. Los agentes independientes activos permanecen en la lista del Bloc de notas.",
+	"settings.harness.health.executable": "Ejecutable",
+	"settings.harness.logout": "Cerrar sesión",
+	"settings.harness.logoutInProgress": "Cerrando sesión…",
+	"settings.harness.checkingLogout": "Comprobando cierre de sesión…",
+	"settings.harness.logoutConfirmTitle": "¿Cerrar sesión en {{agent}}?",
+	"settings.harness.logoutConfirmDescription": "Abre el comando nativo de cierre de sesión del harness en {{host}}. Las sesiones en curso pueden pedirte que vuelvas a iniciar sesión. Los harnesses con varios proveedores pueden preguntar qué cuenta eliminar. Las claves API de las variables de entorno siguen configuradas.",
+	"settings.harness.logoutUnverified": "No se pudo confirmar el cierre de sesión. Puede que el harness aún tenga otra cuenta o una clave API configurada."
 }

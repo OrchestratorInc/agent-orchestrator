@@ -2578,5 +2578,12 @@
 	"standalone.archive.heading_other": "{{count}} archivierte Sitzungen",
 	"standalone.archive.newAgent": "Neuer Agent",
 	"standalone.archive.empty.title": "Keine archivierten eigenständigen Agenten",
-	"standalone.archive.empty.body": "Eigenständige Agenten, die du aus dem Notizblock archivierst, erscheinen hier. Aktive eigenständige Agenten bleiben in der Notizblockliste."
+	"standalone.archive.empty.body": "Eigenständige Agenten, die du aus dem Notizblock archivierst, erscheinen hier. Aktive eigenständige Agenten bleiben in der Notizblockliste.",
+	"settings.harness.health.executable": "Programmdatei",
+	"settings.harness.logout": "Abmelden",
+	"settings.harness.logoutInProgress": "Abmeldung läuft…",
+	"settings.harness.checkingLogout": "Abmeldung wird geprüft…",
+	"settings.harness.logoutConfirmTitle": "Von {{agent}} abmelden?",
+	"settings.harness.logoutConfirmDescription": "Öffnet den nativen Abmeldebefehl des Harness auf {{host}}. Laufende Sitzungen können eine erneute Anmeldung verlangen. Bei mehreren Anbietern kann eine Kontoauswahl erscheinen. API-Schlüssel aus Umgebungsvariablen bleiben konfiguriert.",
+	"settings.harness.logoutUnverified": "Die Abmeldung konnte nicht bestätigt werden. Möglicherweise ist noch ein anderes Konto oder ein API-Schlüssel konfiguriert."
 }

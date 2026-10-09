@@ -1405,6 +1405,17 @@ func agentOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPost, path: "/api/v1/agents/{agent}/logout", id: "logoutAgent", tag: "agents",
+			summary:    "Open the fixed native logout flow for one agent",
+			pathParams: []any{controllers.AgentIDParam{}},
+			resps: []respUnit{
+				{http.StatusCreated, controllers.StartAgentAuthResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/agents", id: "listAgents", tag: "agents",
 			summary: "Return cached supported and locally installed agent adapters",
 			resps: []respUnit{

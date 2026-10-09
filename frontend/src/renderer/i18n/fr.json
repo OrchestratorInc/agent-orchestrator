@@ -2611,5 +2611,12 @@
 	"standalone.archive.heading_other": "{{count}} sessions archivées",
 	"standalone.archive.newAgent": "Nouvel agent",
 	"standalone.archive.empty.title": "Aucun agent autonome archivé",
-	"standalone.archive.empty.body": "Les agents autonomes que vous archivez depuis le bloc-notes apparaîtront ici. Les agents autonomes actifs restent dans la liste du bloc-notes."
+	"standalone.archive.empty.body": "Les agents autonomes que vous archivez depuis le bloc-notes apparaîtront ici. Les agents autonomes actifs restent dans la liste du bloc-notes.",
+	"settings.harness.health.executable": "Exécutable",
+	"settings.harness.logout": "Se déconnecter",
+	"settings.harness.logoutInProgress": "Déconnexion…",
+	"settings.harness.checkingLogout": "Vérification de la déconnexion…",
+	"settings.harness.logoutConfirmTitle": "Se déconnecter de {{agent}} ?",
+	"settings.harness.logoutConfirmDescription": "Ouvre la commande native de déconnexion du harness sur {{host}}. Les sessions en cours peuvent demander une nouvelle connexion. Les harnesses avec plusieurs fournisseurs peuvent demander quel compte supprimer. Les clés API fournies par les variables d’environnement restent configurées.",
+	"settings.harness.logoutUnverified": "La déconnexion n’a pas pu être confirmée. Le harness peut encore avoir un autre compte ou une clé API configurée."
 }

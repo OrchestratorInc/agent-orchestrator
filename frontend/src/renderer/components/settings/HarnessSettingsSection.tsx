@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, ChevronLeft, ChevronRight, Copy, KeyRound, LoaderCircle, LogIn, RefreshCw, Search, Trash2, TriangleAlert, X } from "lucide-react";
+import { BookOpen, Check, ChevronLeft, ChevronRight, Copy, KeyRound, LoaderCircle, LogIn, LogOut, RefreshCw, Search, Trash2, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -23,7 +23,7 @@ import { GitHubTokenField } from "../onboarding/GitHubTokenField";
 import { HarnessUninstallGuide } from "./HarnessUninstallGuide";
 import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPanel";
 import { SettingsRow } from "./SettingsRow";
-import { apiErrorCode, apiErrorMessage } from "../../lib/api-client";
+import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { baseUrlForHost, clientForSessionHost, labelForHost } from "../../lib/host-clients";
 import { useConnectedHosts } from "../../hooks/useHostConnection";
@@ -117,12 +117,12 @@ function diagnosticsText(agentId: AgentId, job: InstallJob): string {
 }
 
 /**
- * What the machine looked like when the diagnostics were copied: an install
- * that dies on a host with no memory left reads very differently from one
- * that dies on an idle laptop. Fetched once on the click rather than polled,
- * and left out entirely where the daemon cannot measure the host. English,
- * like the rest of this report: it is read by whoever fixes the bug.
- */
+	* What the machine looked like when the diagnostics were copied: an install
+	* that dies on a host with no memory left reads very differently from one
+	* that dies on an idle laptop. Fetched once on the click rather than polled,
+	* and left out entirely where the daemon cannot measure the host. English,
+	* like the rest of this report: it is read by whoever fixes the bug.
+	*/
 async function machineText(queryClient: QueryClient, remoteClient?: ReturnType<typeof clientForSessionHost>): Promise<string> {
 	let reading: Pick<Awaited<ReturnType<typeof fetchSessionMemory>>, "app" | "system" | "sessions">;
 	try {
@@ -152,8 +152,8 @@ async function machineText(queryClient: QueryClient, remoteClient?: ReturnType<t
 }
 
 /** A remote install's diagnostics describe that host, so its numbers come
- * from its own daemon. Fetched directly: the shared query and the CPU graph
- * hold this computer's readings only. */
+	* from its own daemon. Fetched directly: the shared query and the CPU graph
+	* hold this computer's readings only. */
 async function fetchRemoteMachine(client: ReturnType<typeof clientForSessionHost>) {
 	const { data, error } = await client.GET("/api/v1/usage/sessions/memory", { params: { query: {} } });
 	if (error) throw error;
@@ -282,6 +282,8 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange }: {
 	const jobs = useQuery({ queryKey: jobsKey, queryFn: () => fetchInstallJobs(hostId), retry: false });
 	const authPlans = useAgentAuthPlans(hostId);
 	const startAgentAuth = useStartAgentAuth(hostId);
+	const startAgentLogout = useStartAgentAuth(hostId, "logout");
+	const [logoutRequest, setLogoutRequest] = useState<AgentId | null>(null);
 	const [authStates, setAuthStates] = useState<AgentAuthStates>({});
 	const [actionErrors, setActionErrors] = useState<Partial<Record<AgentId, string>>>({});
 	const [expandedDiagnostics, setExpandedDiagnostics] = useState<Partial<Record<AgentId, boolean>>>({});
@@ -635,22 +637,23 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange }: {
 		window.setTimeout(() => setCopiedAgent((current) => (current === agentId ? null : current)), 1_500);
 	};
 
-	const startAuth = async (agentId: AgentId) => {
-		if (authWorkflowRef.current || authStartPendingRef.current || pendingActions.current.has(agentId) || isActive(jobMap.get(agentId))) return;
+	const startAuth = async (agentId: AgentId, action: "login" | "logout" = "login"): Promise<boolean> => {
+		if (authWorkflowRef.current || authStartPendingRef.current || pendingActions.current.has(agentId) || isActive(jobMap.get(agentId))) return false;
+		if (action === "logout" && !agentAuthPlans.get(agentId)?.logoutCommand) return false;
 		authStartPendingRef.current = true;
 		updateAuthState(agentId, { pending: true, error: null });
 		try {
 			const plan = agentAuthPlans.get(agentId);
-			if (plan?.launchMode === "documentation") {
+			if (action === "login" && plan?.launchMode === "documentation") {
 				await aoBridge.app.openExternal(plan.documentationUrl);
-				return;
+				return true;
 			}
-			const result = await startAgentAuth.mutateAsync(agentId);
+			const result = await (action === "logout" ? startAgentLogout : startAgentAuth).mutateAsync(agentId);
 			if (!mountedRef.current) {
 				await closeAuthTerminal(result.terminal.handleId, hostId);
 				queryClient.setQueryData<ShellTerminal[]>(shellKey, (current) => current?.filter((terminal) => terminal.handleId !== result.terminal.handleId));
 				void queryClient.invalidateQueries({ queryKey: shellKey });
-				return;
+				return false;
 			}
 			const workflow: AuthTerminalWorkflow = {
 				agentId,
@@ -665,8 +668,10 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange }: {
 			setAuthWorkflow(workflow);
 			revealAgent(agentId);
 			void queryClient.invalidateQueries({ queryKey: shellKey });
+			return true;
 		} catch (error) {
 			if (mountedRef.current) updateAuthState(agentId, { error: error instanceof Error ? error.message : t("settings.harness.authFailed") });
+			return false;
 		} finally {
 			authStartPendingRef.current = false;
 			if (mountedRef.current) updateAuthState(agentId, { pending: false });
@@ -715,19 +720,21 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange }: {
 	}, [hostId, queryClient]);
 
 	const finishAuth = useCallback(async (workflow: AuthTerminalWorkflow) => {
-		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
-		setAuthWorkflow((current) => current?.terminal.handleId === workflow.terminal.handleId ? { ...current, phase: "verifying", reason: undefined } : current);
+		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId || authWorkflowRef.current.phase !== "running") return;
+		authWorkflowRef.current = { ...workflow, phase: "verifying", reason: undefined };
+		setAuthWorkflow(authWorkflowRef.current);
 		// MiMo can confirm a stored provider key locally without validating it upstream.
-		const loggedIn = (candidate: AgentAuthProbeResult | undefined) =>
-			candidate?.agent.authStatus === "authorized" || (workflow.agentId === "mimo-code" && candidate?.agent.authStatus === "configured");
+		const completed = (candidate: AgentAuthProbeResult | undefined) => workflow.action === "logout"
+			? candidate?.agent?.authStatus === "unauthorized"
+			: candidate?.agent?.authStatus === "authorized" || (workflow.agentId === "mimo-code" && candidate?.agent?.authStatus === "configured");
 		let result = await checkAuth(workflow.agentId, { fresh: true });
-		for (let attempt = 1; attempt < AUTH_VERIFY_ATTEMPTS && !loggedIn(result); attempt++) {
+		for (let attempt = 1; attempt < AUTH_VERIFY_ATTEMPTS && !completed(result); attempt++) {
 			await new Promise((resolve) => window.setTimeout(resolve, AUTH_VERIFY_RETRY_MS));
 			if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
 			result = await checkAuth(workflow.agentId, { fresh: true });
 		}
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
-		if (loggedIn(result)) {
+		if (completed(result)) {
 			try {
 				await closeAuthTerminal(workflow.terminal.handleId, hostId);
 			} catch (error) {
@@ -741,8 +748,8 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange }: {
 		}
 		setAuthWorkflow((current) => current?.terminal.handleId === workflow.terminal.handleId ? {
 			...current,
-			phase: result?.agent.authStatus === "unauthorized" ? "unauthorized" : "unverified",
-			reason: result?.agent.authStatus === "unauthorized" ? t("settings.harness.notLoggedIn") : t("settings.harness.loginUnknown"),
+			phase: result?.agent?.authStatus === "unauthorized" ? "unauthorized" : "unverified",
+			reason: workflow.action === "logout" ? t("settings.harness.logoutUnverified") : result?.agent?.authStatus === "unauthorized" ? t("settings.harness.notLoggedIn") : t("settings.harness.loginUnknown"),
 		} : current);
 	}, [checkAuth, hostId, queryClient, shellKey, t]);
 
@@ -769,7 +776,8 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange }: {
 	// instead of leaving a stale "signed out" terminal on screen.
 	useEffect(() => {
 		if (!authWorkflow || (authWorkflow.phase !== "unauthorized" && authWorkflow.phase !== "unverified")) return;
-		if (readinessAgents.get(authWorkflow.agentId)?.authentication.state === "authorized") void closeAuth(authWorkflow);
+		const expected = authWorkflow.action === "logout" ? "unauthorized" : "authorized";
+		if (readinessAgents.get(authWorkflow.agentId)?.authentication.state === expected) void closeAuth(authWorkflow);
 	}, [authWorkflow, readinessAgents, closeAuth]);
 
 	useEffect(() => {
@@ -857,10 +865,10 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange }: {
 			: currentOperation === "uninstall" ? t("settings.harness.uninstalling")
 			: currentOperation === "install" ? t("settings.harness.installing") : t("settings.harness.working");
 		const rowError = actionError ?? authState?.error ?? (jobFailed ? job?.error ?? t("settings.harness.installFailed") : undefined);
-		const authProgress = rowAuthWorkflow?.phase === "verifying" ? t("settings.harness.checkingLogin")
+		const authProgress = rowAuthWorkflow?.phase === "verifying" ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.checkingLogout" : "settings.harness.checkingLogin")
 			: rowAuthWorkflow?.phase === "closing" ? t("settings.harness.authClosing")
 			: rowAuthWorkflow && rowAuthWorkflow.phase !== "running" ? rowAuthWorkflow.reason ?? t("settings.harness.loginUnknown")
-			: t("settings.harness.loginInProgress");
+			: t(rowAuthWorkflow?.action === "logout" ? "settings.harness.logoutInProgress" : "settings.harness.loginInProgress");
 		const statusLabel = isInstalled ? rowError ?? (authBusy ? authProgress : authSummary)
 			: installationPending ? t("settings.harness.installationUnknown")
 			: job?.status === "interrupted" ? t("settings.harness.interrupted")
@@ -876,7 +884,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange }: {
 		const progressAction = <span role="status"><Button type="button" size="sm" variant="outline" className={actionClass} disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{progressLabel}</Button></span>;
 		const authBusyAction = <Button type="button" size="sm" className={actionClass} disabled>
 			{rowAuthWorkflow && !["running", "verifying", "closing"].includes(rowAuthWorkflow.phase) ? null : <LoaderCircle className="animate-spin" aria-hidden="true" />}
-			{rowAuthWorkflow?.phase === "verifying" ? t("settings.harness.checkingLogin") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
+			{rowAuthWorkflow?.phase === "verifying" ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.checkingLogout" : "settings.harness.checkingLogin") : rowAuthWorkflow?.action === "logout" ? t("settings.harness.logout") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
 		</Button>;
 		// Install, update and login each own one row in the Account tab. While a
 		// job or login runs, the row that started it shows progress instead.
@@ -971,8 +979,9 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange }: {
 			{isInstalled && details.updateUnknown && !details.advisoryQuery?.isPending && !details.manualOnly ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.updateCheckUnavailable")}</p> : null}
 
 			{showAccount || rowAuthWorkflow ? <HarnessDetailGroup title={t("settings.harness.account")}>
-				<HarnessDetailRow label={authBusy && rowAuthWorkflow ? t("settings.harness.loginInProgress") : details.authSummary}>
+				<HarnessDetailRow label={authBusy && rowAuthWorkflow ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.logoutInProgress" : "settings.harness.loginInProgress") : details.authSummary}>
 					{details.accountAction}
+					{isInstalled && authPlan?.logoutCommand && authPlan.available && details.authStatus !== "unauthorized" ? <Button type="button" size="sm" variant="outline" disabled={details.busy || Boolean(authWorkflow)} onClick={() => setLogoutRequest(agentId)}><LogOut aria-hidden="true" />{t("settings.harness.logout")}</Button> : null}
 				</HarnessDetailRow>
 			</HarnessDetailGroup> : null}
 			{authPlan?.action === "instructions" && authPlan.documentationUrl ? <div><Button type="button" size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}><BookOpen aria-hidden="true" />{t("settings.harness.instructions")}</Button></div> : null}
@@ -980,7 +989,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange }: {
 				workflow={rowAuthWorkflow}
 				hostId={hostId}
 				onClose={() => void closeAuth(rowAuthWorkflow)}
-				onRetry={() => void closeAuth(rowAuthWorkflow).then((closed) => { if (closed) void startAuth(agentId); })}
+				onRetry={() => void closeAuth(rowAuthWorkflow).then((closed) => { if (closed) { if (rowAuthWorkflow.action === "logout") setLogoutRequest(agentId); else void startAuth(agentId); } })}
 				onTerminalState={(state) => {
 					if (state === "exited" && authWorkflowRef.current?.phase === "running") void finishAuth(rowAuthWorkflow);
 				}}
@@ -1018,6 +1027,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange }: {
 			`Latest version: ${advisory?.latestVersion ?? "unknown"}`,
 			advisory?.status ? `Update status: ${advisory.status}${advisory.reason ? ` (${advisory.reason})` : ""}` : "",
 			`Maintenance method: ${details.methodId || "unverified"}`,
+			details.advisory?.binaryPath ? `Executable: ${details.advisory.binaryPath}` : "",
 		].filter(Boolean).join("\n");
 	};
 
@@ -1044,6 +1054,9 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange }: {
 				</HarnessDetailRow>
 			</HarnessDetailGroup>
 			<HarnessDetailGroup title={t("settings.harness.health.details")}>
+				<HarnessDetailRow label={t("settings.harness.health.executable")}>
+					{advisory?.binaryPath ? <span className="min-w-0 break-all font-mono text-xs text-settings-label">{advisory.binaryPath}</span> : notChecked}
+				</HarnessDetailRow>
 				<HarnessDetailRow label={t(details.versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")}>
 					{isInstalled && details.currentVersion ? <span className="break-all font-mono text-xs text-settings-label">{details.versionText}</span> : notChecked}
 				</HarnessDetailRow>
@@ -1147,6 +1160,18 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange }: {
 					{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
 				</div>
 			)}
+			<ConfirmDialog
+				open={logoutRequest !== null}
+				title={t("settings.harness.logoutConfirmTitle", { agent: logoutRequest ? agentLabel(logoutRequest) : "" })}
+				description={t("settings.harness.logoutConfirmDescription", { host: hostId ? labelForHost(hostId) ?? hostId : t("settings.harness.thisComputer") })}
+				confirmLabel={t("settings.harness.logout")}
+				destructive
+				busy={logoutRequest ? authStates[logoutRequest]?.pending : false}
+				confirmDisabled={!logoutRequest || !agentAuthPlans.get(logoutRequest)?.available || !agentAuthPlans.get(logoutRequest)?.logoutCommand || Boolean(authWorkflow) || (logoutRequest ? pendingAgentIds.has(logoutRequest) || isActive(jobMap.get(logoutRequest)) : false)}
+				error={logoutRequest ? authStates[logoutRequest]?.error : null}
+				onConfirm={() => { if (logoutRequest) void startAuth(logoutRequest, "logout").then((started) => { if (started) setLogoutRequest(null); }); }}
+				onOpenChange={(open) => { if (!open && !authStartPendingRef.current) setLogoutRequest(null); }}
+			/>
 			<ConfirmDialog
 				open={operationRequest !== null}
 				title={t("settings.harness.uninstallConfirmTitle", { agent: operationRequest ? agentLabel(operationRequest.agentId) : "" })}
@@ -1262,11 +1287,11 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 }
 
 /**
- * GitHub personal access token for cloud workers to clone private repositories.
- * Lives on the Harness page's cloud view (the only place cloud credentials are
- * managed) so GitHub connectivity stays reachable once a user is signed into a
- * cloud org. The PAT is personal: stored encrypted and never echoed back.
- */
+	* GitHub personal access token for cloud workers to clone private repositories.
+	* Lives on the Harness page's cloud view (the only place cloud credentials are
+	* managed) so GitHub connectivity stays reachable once a user is signed into a
+	* cloud org. The PAT is personal: stored encrypted and never echoed back.
+	*/
 function CloudGitHubPatRow() {
 	const { t } = useTranslation();
 	const { client } = useCloudCp();
@@ -1346,10 +1371,12 @@ function HarnessAuthTerminalPanel({ workflow, hostId, onClose, onRetry, onTermin
 	const { t } = useTranslation();
 	const theme = useResolvedTheme();
 	const shell = useShellMaybe();
+	// Logout can exit before attachment. Own its mux so a shell-list refresh
+	// cannot prune the retained cache entry before we receive the exit event.
 	const createMux = useCallback(() => {
-		const base = hostId && baseUrlForHost(hostId);
-		if (!base) throw new Error("Remote host disconnected");
-		return createTerminalMux(muxUrlFromApiBase(base));
+		const base = hostId ? baseUrlForHost(hostId) : getApiBaseUrl();
+		if (hostId && !base) throw new Error("Remote host disconnected");
+		return createTerminalMux(muxUrlFromApiBase(base ?? ""));
 	}, [hostId]);
 	const panelRef = useRef<HTMLDivElement>(null);
 	const inputRequestIdRef = useRef(0);
@@ -1371,7 +1398,7 @@ function HarnessAuthTerminalPanel({ workflow, hostId, onClose, onRetry, onTermin
 	// when it tells the user to act outside the terminal (the Open login button).
 	const status = workflow.phase === "running"
 		? workflow.terminalInput ? workflow.guidance : ""
-		: workflow.phase === "verifying" ? t("settings.harness.checkingLogin")
+		: workflow.phase === "verifying" ? t(workflow.action === "logout" ? "settings.harness.checkingLogout" : "settings.harness.checkingLogin")
 			: workflow.phase === "closing" ? t("settings.harness.authClosing")
 				: workflow.reason ?? t("settings.harness.loginUnknown");
 	const retryable = workflow.phase === "unauthorized" || workflow.phase === "unverified" || workflow.phase === "timed_out" || workflow.phase === "cleanup_failed";
@@ -1398,8 +1425,8 @@ function HarnessAuthTerminalPanel({ workflow, hostId, onClose, onRetry, onTermin
 					<button type="button" aria-label={t("settings.close")} className="grid size-7 place-items-center rounded text-settings-muted hover:bg-interactive-hover" disabled={workflow.phase === "closing" || workflow.phase === "verifying"} onClick={onClose}><X className="size-4" aria-hidden="true" /></button>
 				</div>
 			</div>
-			<div className="h-[300px] min-h-0"><TerminalPane createMux={hostId ? createMux : undefined} daemonReady={hostId ? true : shell ? shell.daemonStatus.state === "ready" : true} focusRequested={workflow.phase === "running" && terminalState === "attached"} fontSize={12} inputRequest={inputRequest} onInputRequestResult={handleInputRequestResult} onTerminalStateChange={handleTerminalState} terminalTarget={{ kind: "shell", handleId: workflow.terminal.handleId, generation: workflow.terminal.createdAt, title: workflow.terminal.title }} theme={theme} /></div>
-			{retryable ? <div className="flex items-center justify-end border-t border-(--color-border-settings-input) bg-surface/90 px-3 py-2"><Button type="button" size="sm" variant="outline" onClick={workflow.phase === "cleanup_failed" ? onClose : onRetry}>{workflow.phase === "cleanup_failed" ? t("settings.harness.retry") : workflow.action === "setup" ? t("settings.harness.setup") : t("settings.harness.login")}</Button></div> : null}
+			<div className="h-[300px] min-h-0"><TerminalPane createMux={hostId || workflow.action === "logout" ? createMux : undefined} daemonReady={hostId ? true : shell ? shell.daemonStatus.state === "ready" : true} focusRequested={workflow.phase === "running" && terminalState === "attached"} fontSize={12} inputRequest={inputRequest} onInputRequestResult={handleInputRequestResult} onTerminalStateChange={handleTerminalState} terminalTarget={{ kind: "shell", handleId: workflow.terminal.handleId, generation: workflow.terminal.createdAt, title: workflow.terminal.title }} theme={theme} /></div>
+			{retryable ? <div className="flex items-center justify-end border-t border-(--color-border-settings-input) bg-surface/90 px-3 py-2"><Button type="button" size="sm" variant="outline" onClick={workflow.phase === "cleanup_failed" ? onClose : onRetry}>{workflow.phase === "cleanup_failed" ? t("settings.harness.retry") : workflow.action === "logout" ? t("settings.harness.logout") : workflow.action === "setup" ? t("settings.harness.setup") : t("settings.harness.login")}</Button></div> : null}
 		</div>
 	);
 }

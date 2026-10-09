@@ -2560,5 +2560,12 @@
 	"standalone.archive.heading_other": "{{count}} 个已归档会话",
 	"standalone.archive.newAgent": "新建代理",
 	"standalone.archive.empty.title": "没有已归档的独立代理",
-	"standalone.archive.empty.body": "从草稿区归档的独立代理会显示在这里。活跃的独立代理会保留在草稿区列表中。"
+	"standalone.archive.empty.body": "从草稿区归档的独立代理会显示在这里。活跃的独立代理会保留在草稿区列表中。",
+	"settings.harness.health.executable": "可执行文件",
+	"settings.harness.logout": "退出登录",
+	"settings.harness.logoutInProgress": "正在退出登录…",
+	"settings.harness.checkingLogout": "正在检查退出状态…",
+	"settings.harness.logoutConfirmTitle": "退出 {{agent}}？",
+	"settings.harness.logoutConfirmDescription": "在 {{host}} 上打开该工具的原生退出登录命令。正在运行的会话可能要求重新登录。使用多个提供商的工具可能会询问要移除哪个账户。通过环境变量提供的 API 密钥仍会保留配置。",
+	"settings.harness.logoutUnverified": "无法确认是否已退出登录。该工具可能仍配置了其他账户或 API 密钥。"
 }

@@ -2,7 +2,9 @@ package systeminstall
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -349,5 +351,73 @@ func TestUpdateAdvisoryDisabledSkipsAllLookups(t *testing.T) {
 	}
 	if advisory.Status != UpdateStatusUnknown || advisory.Reason != UpdateReasonDisabled || advisory.AgentID != string(TargetCodex) {
 		t.Fatalf("advisory = %+v", advisory)
+	}
+}
+
+func TestUpdateAdvisoryReportsSessionExecutableEvenWhenProbeFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	for _, tc := range []struct {
+		name, path, want string
+		probeErr         error
+	}{
+		{"home path", filepath.Join(home, ".local", "bin", "codex"), filepath.Join("~", ".local", "bin", "codex"), nil},
+		{"outside home", filepath.Join(home+"-other", "codex"), filepath.Join(home+"-other", "codex"), nil},
+		{"failed probe", filepath.Join(home, "bin", "codex"), filepath.Join("~", "bin", "codex"), errors.New("cannot execute")},
+		{"missing binary", "", "", errors.New("not found")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestService("darwin", "npm")
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				return VerifyResult{ResolvedPath: tc.path, Output: "codex development"}, tc.probeErr
+			})
+			s.officialVersion = func(context.Context, Target) (string, error) {
+				t.Fatal("unparseable version must not fetch releases")
+				return "", nil
+			}
+			got, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire map[string]any
+			if err := json.Unmarshal(data, &wire); err != nil {
+				t.Fatal(err)
+			}
+			path, _ := wire["binaryPath"].(string)
+			if path != tc.want {
+				t.Fatalf("binaryPath = %q, want %q", path, tc.want)
+			}
+		})
+	}
+}
+
+type resolveOnlyAdvisoryVerifier struct {
+	t    *testing.T
+	path string
+}
+
+func (v resolveOnlyAdvisoryVerifier) Resolve(context.Context, Target) (string, error) {
+	return v.path, nil
+}
+func (v resolveOnlyAdvisoryVerifier) Verify(context.Context, Target) (VerifyResult, error) {
+	v.t.Fatal("local path lookup must not execute a version probe")
+	return VerifyResult{}, nil
+}
+func TestUpdateAdvisoryKeepsExecutableWithoutReleaseChecks(t *testing.T) {
+	for _, disabled := range []bool{true, false} {
+		t.Run(fmt.Sprint(disabled), func(t *testing.T) {
+			s := newTestService("darwin")
+			s.updateChecksDisabled = disabled
+			s.verifier = resolveOnlyAdvisoryVerifier{t: t, path: "/opt/bin/codex"}
+			got, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+			if err != nil || got.BinaryPath != "/opt/bin/codex" || got.Status != UpdateStatusUnknown {
+				t.Fatalf("advisory = %+v, err=%v", got, err)
+			}
+		})
 	}
 }

@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -47,6 +50,7 @@ const (
 type UpdateAdvisory struct {
 	AgentID           string              `json:"agentId"`
 	Status            UpdateStatus        `json:"status"`
+	BinaryPath        string              `json:"binaryPath,omitempty"`
 	CurrentVersion    string              `json:"currentVersion,omitempty"`
 	LatestVersion     string              `json:"latestVersion,omitempty"`
 	Source            string              `json:"source,omitempty"`
@@ -75,7 +79,7 @@ func (s *Service) UpdateAdvisory(ctx context.Context, target Target, refresh ...
 	}
 	now := time.Now().UTC()
 	if s.updateChecksDisabled {
-		return UpdateAdvisory{AgentID: string(target), Status: UpdateStatusUnknown, Reason: UpdateReasonDisabled, CheckedAt: now}, nil
+		return UpdateAdvisory{AgentID: string(target), Status: UpdateStatusUnknown, Reason: UpdateReasonDisabled, CheckedAt: now, BinaryPath: s.advisoryBinaryPath(ctx, target)}, nil
 	}
 	s.mu.Lock()
 	if len(refresh) > 0 && refresh[0] {
@@ -159,9 +163,13 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		}
 	}
 	if len(plans) == 0 && s.officialVersion == nil {
+		advisory.BinaryPath = s.advisoryBinaryPath(ctx, target)
 		return advisory, nil
 	}
 	verified, err := s.verifier.Verify(ctx, target)
+	// Keep the adapter-selected path even when its version probe fails. This is
+	// display-only evidence; ownership and commands continue using the raw path.
+	advisory.BinaryPath = displayBinaryPath(verified.ResolvedPath)
 	if err != nil {
 		advisory.Reason = UpdateReasonOwnershipUnconfirmed
 		return advisory, nil //nolint:nilerr // An unverified binary cannot establish update availability.
@@ -308,4 +316,31 @@ func (s *Service) refreshDerivedOwner(ctx context.Context, planner requestPlanne
 	}
 	*source = plan
 	s.setDerivedOwner(target, &owner)
+}
+
+// advisoryBinaryPath preserves local Health details when release checks are
+// disabled or unsupported, without invoking a binary or querying a feed.
+func (s *Service) advisoryBinaryPath(ctx context.Context, target Target) string {
+	resolver, ok := s.verifier.(interface {
+		Resolve(context.Context, Target) (string, error)
+	})
+	if !ok {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, defaultVerifyTimeout)
+	defer cancel()
+	path, err := resolver.Resolve(ctx, target)
+	if err != nil {
+		return ""
+	}
+	return displayBinaryPath(path)
+}
+
+func displayBinaryPath(path string) string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" && path != "" {
+		if rel, err := filepath.Rel(home, path); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return filepath.Join("~", rel)
+		}
+	}
+	return path
 }

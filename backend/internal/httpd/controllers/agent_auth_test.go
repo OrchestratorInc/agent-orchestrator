@@ -140,10 +140,41 @@ func TestAgentAuthNotImplementedWithoutService(t *testing.T) {
 	for _, request := range []struct{ method, path string }{
 		{method: http.MethodGet, path: "/api/v1/agents/auth-plans"},
 		{method: http.MethodPost, path: "/api/v1/agents/codex/auth"},
+		{method: http.MethodPost, path: "/api/v1/agents/codex/logout"},
 	} {
 		body, status, _ := doRequest(t, server, request.method, request.path, "")
 		if status != http.StatusNotImplemented || !strings.Contains(string(body), `"code":"NOT_IMPLEMENTED"`) {
 			t.Fatalf("%s %s = %d, body=%s", request.method, request.path, status, body)
 		}
+	}
+}
+
+func (f *fakeAgentAuthService) Logout(_ context.Context, agentID string) (agentauth.StartResult, error) {
+	f.startCalls++
+	f.startedID = agentID
+	return f.startResult, f.startErr
+}
+
+func TestAgentLogoutRouteIgnoresClientCommandsAndPreservesErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		want   string
+	}{
+		{"success", nil, http.StatusCreated, `"action":"logout"`},
+		{"unsupported", apierr.Invalid("AGENT_LOGOUT_UNSUPPORTED", "unsupported", nil), http.StatusBadRequest, `"code":"AGENT_LOGOUT_UNSUPPORTED"`},
+		{"terminal error", apierr.Internal("TERMINAL_FAILED", "failed"), http.StatusInternalServerError, `"code":"TERMINAL_FAILED"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeAgentAuthService{startResult: agentauth.StartResult{AgentID: "codex", Action: "logout"}, startErr: tc.err}
+			body, status, _ := doRequest(t, newAgentAuthTestServer(t, svc), http.MethodPost, "/api/v1/agents/codex/logout", `{"command":["arbitrary","command"]}`)
+			if status != tc.status || !strings.Contains(string(body), tc.want) || svc.startedID != "codex" || svc.startCalls != 1 {
+				t.Fatalf("status=%d body=%s calls=%d id=%s", status, body, svc.startCalls, svc.startedID)
+			}
+			if tc.err != nil && !strings.Contains(string(body), `"requestId":"`) {
+				t.Fatalf("missing request id: %s", body)
+			}
+		})
 	}
 }

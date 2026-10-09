@@ -716,6 +716,11 @@ describe("TerminalCacheProvider", () => {
 		try {
 			await waitFor(() => expect(terminalSessionOptions.find((options) => options.shellTerminalHandleId === shell.handleId)?.createMux).toBe(createMux));
 			expect(document.querySelector("[data-terminal-cache-key]")).toBeNull();
+			const unmounts = xtermUnmounts.value;
+			act(() => { view.queryClient.setQueryData(shellTerminalsQueryKey, []); });
+			// Transient auth commands may exit before attachment; list pruning must
+			// leave the caller-owned pane mounted to receive the mux exit event.
+			expect(xtermUnmounts.value).toBe(unmounts);
 		} finally {
 			view.restore();
 		}
