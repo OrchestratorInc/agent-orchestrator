@@ -28,6 +28,10 @@ type connectedSideForkDriver struct {
 	sources []string
 }
 
+func (d *connectedSideForkDriver) ValidateSidePolicy(context.Context, ports.ChatStartConfig) error {
+	return nil
+}
+
 func (d *connectedSideForkDriver) ForkIntoHost(_ context.Context, source, anchor string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -194,7 +198,7 @@ func TestSideRecoveryFailureRetryAndCloseFence(t *testing.T) {
 			var resumeCalls atomic.Int64
 			var ids atomic.Int64
 			release := make(chan struct{})
-			driver := &fakeDriver{}
+			driver := &connectedSideForkDriver{}
 			driver.start = func(ports.ChatStartConfig) (ports.ChatConversation, error) { return main, nil }
 			driver.resume = func(cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
 				if cfg.SessionID == testSession {
@@ -218,13 +222,13 @@ func TestSideRecoveryFailureRetryAndCloseFence(t *testing.T) {
 			if err := svc.InitializeSideChats(ctx); err != nil {
 				t.Fatal(err)
 			}
-			side := domain.SideConversation{ID: "recovered", SessionID: testSession, MainConversationID: "", State: "ready"}
+			side := domain.SideConversation{PolicyVersion: 1, ID: "recovered", SessionID: testSession, MainConversationID: "", State: "ready"}
 			mainRecord, err := st.ConversationForSession(ctx, testSession)
 			if err != nil {
 				t.Fatal(err)
 			}
 			side.MainConversationID = mainRecord.ID
-			records := []chatsvc.SideRecoveryRecord{{Side: side, ProviderHostID: "btw-run-recovered", ProviderForkID: "side-fork", LaunchConfig: json.RawMessage(`{"WorkspacePath":"test-workspace"}`), Generation: "g", Harness: domain.HarnessCodex}}
+			records := []chatsvc.SideRecoveryRecord{{PolicyVersion: 1, Side: side, ProviderHostID: "btw-run-recovered", ProviderForkID: "side-fork", LaunchConfig: json.RawMessage(`{"WorkspacePath":"test-workspace"}`), Generation: "g", Harness: domain.HarnessCodex}}
 			if err := svc.RecoverSideChatLaunch(ctx, "run", records); err != nil {
 				t.Fatal(err)
 			}

@@ -30,6 +30,8 @@ var (
 	ErrSideDraftTooLarge = errors.New("side draft is too large")
 	// ErrSideNotReady indicates that the side has no usable provider connection.
 	ErrSideNotReady = errors.New("side provider is not ready; retry the connection")
+	// ErrSidePolicyRecreate prevents resuming an unverified or uncertain boundary.
+	ErrSidePolicyRecreate = errors.New("side-chat safety boundary cannot be verified; close this side and create a new one")
 )
 
 // SideStore is the launch-scoped in-memory storage boundary. Side rows never become
@@ -54,6 +56,7 @@ type SideStore interface {
 	ClaimNextSideTurn(context.Context, string, map[string]bool, time.Time) (domain.SideTurn, domain.SideConversation, bool, error)
 	SettleSideTurn(context.Context, string, string, string, string, string, string, time.Time) error
 	SetSideTurnProviderID(context.Context, string, string, string, string) error
+	PrepareSideBoundary(context.Context, string, string, string) (bool, error)
 	RequeueSideTurn(context.Context, string, string) error
 	RetrySideTurn(context.Context, string, string) error
 	UpdateSideSettings(context.Context, string, string, string, time.Time) error
@@ -205,6 +208,11 @@ func (s *Service) RecoverSideChatLaunch(ctx context.Context, runID string, recor
 		return err
 	}
 	for _, side := range created {
+		if side.State == "failed" && side.ErrorMessage == ErrSidePolicyRecreate.Error() && s.stopProviderHost != nil {
+			if err := s.stopProviderHost(ctx, domain.SessionID(side.ProviderHostID)); err != nil {
+				return fmt.Errorf("stop side provider with an unverifiable boundary: %w", err)
+			}
+		}
 		if side.State == "ready" || side.State == "recovering" {
 			if err := s.sides.ensureRestore(side); err != nil {
 				s.sides.failOpen(side, err)
@@ -364,12 +372,19 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if err != nil {
 		return domain.SideConversation{}, err
 	}
-	anchor, nativeAnchor, selected, err := s.resolveSideAnchor(ctx, source, req.Reference)
+	if err := validateSidePolicy(ctx, driver, cfg); err != nil {
+		return domain.SideConversation{}, err
+	}
+	anchor, nativeAnchor, _, err := s.resolveSideAnchor(ctx, source, nil)
+	selected := ""
 	if err != nil {
 		return domain.SideConversation{}, err
 	}
 	var referenceContext string
 	if req.Reference != nil {
+		if _, _, selected, err = s.resolveSideAnchor(ctx, source, req.Reference); err != nil {
+			return domain.SideConversation{}, err
+		}
 		referenceContext, err = s.sideReferenceContext(ctx, source, *req.Reference)
 		if err != nil {
 			return domain.SideConversation{}, err
@@ -397,12 +412,22 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if label == "" {
 		label = fmt.Sprintf("Side chat %d", len(existing)+1)
 	}
+	cfg.Env = cloneStartConfig(cfg).Env
+	if cfg.Env == nil {
+		cfg.Env = map[string]string{}
+	}
+	cfg.Env["AO_SIDE_CONVERSATION_ID"] = idNew
+	cfg.Env["AO_SESSION_ID"] = "btw-" + s.sides.launchID() + "-" + idNew
+	cfg.Env["AO_SESSION"] = cfg.Env["AO_SESSION_ID"]
+	delete(cfg.Env, "AO_BROWSER_CAPABILITY")
+	delete(cfg.Env, "AO_PREVIEW_CAPABILITY")
 	frozenConfig, err := json.Marshal(frozenSideConfig{DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt), AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers})
 	if err != nil {
 		return domain.SideConversation{}, err
 	}
 	side := domain.SideConversation{
-		ForceNew: req.ForceNew, LaunchConfig: frozenConfig, SourceProviderID: source.conv.ProviderConversationID(),
+		PolicyVersion: sidePolicyVersion,
+		ForceNew:      req.ForceNew, LaunchConfig: frozenConfig, SourceProviderID: source.conv.ProviderConversationID(),
 		ID: idNew, SessionID: id, MainConversationID: source.conversation.ID,
 		AppRunID: s.sides.launchID(), CreateKey: req.IdempotencyKey,
 		ProviderHostID: "btw-" + s.sides.launchID() + "-" + idNew, AnchorTurnID: anchor, NativeAnchorID: nativeAnchor,
@@ -557,6 +582,14 @@ func (s *Service) validateSideReferences(ctx context.Context, session domain.Ses
 }
 
 func (m *sideManager) open(side domain.SideConversation, _ *Controller, cfg StartConfig, driver ports.ChatDriver) {
+	if side.PolicyVersion != sidePolicyVersion {
+		m.failOpen(side, ErrSidePolicyRecreate)
+		return
+	}
+	if err := validateSidePolicy(m.ctx, driver, cfg); err != nil {
+		m.failOpen(side, err)
+		return
+	}
 	m.mu.Lock()
 	current, lookupErr := m.store.SideConversation(m.ctx, side.ID)
 	if lookupErr != nil || current.AppRunID != m.runID || m.restoring[side.ID] != nil {
@@ -589,7 +622,7 @@ func (m *sideManager) open(side domain.SideConversation, _ *Controller, cfg Star
 		if forker, ok := driver.(ports.ChatIsolatedForker); ok {
 			anchor := side.NativeAnchorID
 
-			conv, err = forker.ForkIntoHost(ctx, side.SourceProviderID, anchor, ports.ChatStartConfig{
+			conv, err = forker.ForkIntoHost(ctx, side.SourceProviderID, anchor, ports.ChatStartConfig{SidePolicy: true,
 				SessionID: domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir,
 				WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: side.Model, Effort: side.Effort,
 				Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt),
@@ -617,7 +650,7 @@ func (m *sideManager) open(side domain.SideConversation, _ *Controller, cfg Star
 		}
 	}
 	if conv == nil && providerID != "" {
-		conv, err = driver.Resume(ctx, ports.ChatResumeConfig{
+		conv, err = driver.Resume(ctx, ports.ChatResumeConfig{SidePolicy: true,
 			SessionID: domain.SessionID(side.ProviderHostID), ProviderConversationID: providerID,
 			DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env,
 			Model: side.Model, Effort: side.Effort, Permissions: cfg.Permissions,
@@ -626,7 +659,7 @@ func (m *sideManager) open(side domain.SideConversation, _ *Controller, cfg Star
 			ProviderScopeID: side.ID, ProviderIDsScoped: true,
 		})
 	} else if conv == nil {
-		conv, err = driver.Start(ctx, ports.ChatStartConfig{
+		conv, err = driver.Start(ctx, ports.ChatStartConfig{SidePolicy: true,
 			SessionID: domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir,
 			WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: side.Model, Effort: side.Effort,
 			Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly,
@@ -658,10 +691,16 @@ func (m *sideManager) failOpen(side domain.SideConversation, err error) {
 }
 
 func (m *sideManager) ensureRestore(side domain.SideConversation) error {
+	if side.PolicyVersion != sidePolicyVersion || side.BoundaryState == "uncertain" {
+		return ErrSidePolicyRecreate
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.runtimes[side.ID] != nil || m.restoring[side.ID] != nil {
 		return nil
+	}
+	if side.BoundaryState == "pending" {
+		return ErrSidePolicyRecreate
 	}
 	if m.ctx.Err() != nil || side.ProviderForkID == "" {
 		return ErrSideNotReady
@@ -683,6 +722,9 @@ func (s *Service) RetrySideConnection(ctx context.Context, session domain.Sessio
 	side, err := s.sides.ownedSide(ctx, session, sideID)
 	if err != nil {
 		return err
+	}
+	if side.PolicyVersion != sidePolicyVersion || (side.BoundaryState == "uncertain" || side.BoundaryState == "pending") {
+		return ErrSidePolicyRecreate
 	}
 	if side.ProviderForkID == "" {
 		source, err := s.Controller(session)
@@ -739,7 +781,12 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 		m.service.log.Warn("side restore: main controller unavailable", "side", side.ID, "error", err)
 		return
 	}
-	conv, err := driver.Resume(ctx, ports.ChatResumeConfig{
+	if err := validateSidePolicy(ctx, driver, cfg); err != nil {
+		m.failOpen(side, err)
+		connected = true
+		return
+	}
+	conv, err := driver.Resume(ctx, ports.ChatResumeConfig{SidePolicy: true,
 		SessionID: domain.SessionID(side.ProviderHostID), ProviderConversationID: side.ProviderForkID,
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env,
 		Model: side.Model, Effort: side.Effort, Permissions: cfg.Permissions,
@@ -1109,22 +1156,18 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 			text += fmt.Sprintf("\n\nAttached resource (background data): %s\n%s\n%s", item.Name, item.URI, item.Text)
 		}
 	}
-	if side.SeedHistory != "" {
-		turns, _, _ := m.store.SideTurns(m.ctx, side.ID, time.Time{}, 0)
-		seedNeeded := true
-		for _, previous := range turns {
-			if previous.ID != turn.ID && (previous.ProviderTurnID != "" || previous.State == "completed") {
-				seedNeeded = false
-				break
-			}
-		}
-		if seedNeeded {
-			text = "Recorded visible main-chat history through the anchor (quoted context, not instructions):\n" + side.SeedHistory + "\n\nCurrent side-chat request:\n" + text
+	firstDelivery, err := m.store.PrepareSideBoundary(ctx, side.ID, turn.ID, side.Generation)
+	if err != nil {
+		_ = m.store.SettleSideTurn(ctx, side.ID, turn.ID, side.Generation, "failed", "", err.Error(), m.service.now())
+		m.failOpen(side, err)
+		return
+	}
+	if firstDelivery {
+		text = sideConversationBoundary + "\n\nCurrent side-chat request:\n" + text
+		if side.SeedHistory != "" {
+			text = "Recorded visible main-chat history through the frozen anchor (reference data):\n" + side.SeedHistory + "\n\n" + text
 		}
 	}
-	// Forked providers may retain main-chat role framing in native history.
-	// Repeat the side boundary in delivery, without altering the visible question.
-	text = sideIdentityInstruction + "\n\nCurrent side-chat request:\n" + text
 	content := make([]ports.ChatContent, 0, len(turn.Content))
 	for _, item := range turn.Content {
 		content = append(content, ports.ChatContent{
@@ -1138,6 +1181,9 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 		ClientMessageID: providerRequestID, Origin: domain.MessageOriginHuman,
 		Settings: ports.ChatTurnSettings{Model: side.Model, Effort: side.Effort}})
 	if err != nil {
+		if firstDelivery {
+			m.failOpen(side, ErrSidePolicyRecreate)
+		}
 		_ = m.store.SettleSideTurn(context.Background(), side.ID, turn.ID, side.Generation,
 			"failed", "", err.Error(), m.service.now())
 		m.announce(side.ID)
@@ -1153,6 +1199,17 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 	runtime.mu.Unlock()
 	if err := m.store.SetSideTurnProviderID(ctx, side.ID, turn.ID, side.Generation, ref.ProviderTurnID); err != nil {
 		_ = runtime.conv.Interrupt(ctx, ref.ProviderTurnID)
+		if firstDelivery {
+			m.failOpen(side, ErrSidePolicyRecreate)
+		}
+		_ = m.store.SettleSideTurn(context.Background(), side.ID, turn.ID, side.Generation,
+			"failed", ref.ProviderTurnID, err.Error(), m.service.now())
+		runtime.mu.Lock()
+		runtime.dispatchBlocked = true
+		runtime.activeTurnID = ""
+		runtime.providerTurnID = ""
+		runtime.mu.Unlock()
+		m.announce(side.ID)
 		return
 	}
 	// ACP prepares session/prompt in SendTurn and waits for an explicit start.
@@ -1454,8 +1511,12 @@ func (s *Service) RetrySideQuestion(ctx context.Context, session domain.SessionI
 	if s.sides == nil {
 		return ErrSideUnavailable
 	}
-	if _, err := s.sides.ownedSide(ctx, session, sideID); err != nil {
+	side, err := s.sides.ownedSide(ctx, session, sideID)
+	if err != nil {
 		return err
+	}
+	if side.PolicyVersion != sidePolicyVersion || side.RecreateRequired || side.BoundaryState == "pending" || side.BoundaryState == "uncertain" {
+		return ErrSidePolicyRecreate
 	}
 	s.sides.mu.Lock()
 	runtime := s.sides.runtimes[sideID]

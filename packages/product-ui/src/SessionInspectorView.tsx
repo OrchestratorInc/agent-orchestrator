@@ -190,7 +190,8 @@ export function SessionInspectorShellView({
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && inspectorScrollableBodyClass,
+					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && inspectorScrollableBodyClass,
+					activeView === "sideChat" && "p-0 overflow-hidden",
 					activeView === "browser" &&
 						!browserPoppedOut &&
 						"session-inspector__body--browser p-0 overflow-hidden [&>[role=tabpanel]]:border-0 [&>[role=tabpanel]]:rounded-none",

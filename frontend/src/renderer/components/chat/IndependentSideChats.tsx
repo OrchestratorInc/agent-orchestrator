@@ -6,7 +6,6 @@ import {
 	MessageSquare,
 	MessageSquarePlus,
 	Pencil,
-	PanelRightClose,
 	Plus,
 	Square,
 	X,
@@ -33,6 +32,7 @@ import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
 import { annotationBody, annotationTextRange, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
 import { actionMenuContentClass, actionMenuItemClass } from "../ui/menu-styles";
 import { cn } from "../../lib/utils";
+import { MAX_SESSION_DISPLAY_NAME_LEN } from "../../hooks/useSessionRename";
 
 type Side = components["schemas"]["SideConversation"];
 type Snapshot = components["schemas"]["SideSnapshot"];
@@ -356,7 +356,7 @@ export function useIndependentSideChats(
 	nativeImages: boolean,
 	enabled = true,
 	onNavigate?: (annotation: ChatAnnotationSummaryItem) => void,
-	onHide?: () => void,
+	_onHide?: () => void,
 ) {
 	const { t } = useTranslation();
 	const [sides, setSides] = useState<Side[]>([]);
@@ -372,6 +372,7 @@ export function useIndependentSideChats(
 	const [focusKey, setFocusKey] = useState(0);
 	const [renameText, setRenameText] = useState<string>();
 	const [renameId, setRenameId] = useState<string>();
+	const renameCancelled = useRef(false);
 	const [confirmClose, setConfirmClose] = useState<string>();
 	const [closing, setClosing] = useState(false);
 	const [closeError, setCloseError] = useState<string>();
@@ -1160,53 +1161,57 @@ export function useIndependentSideChats(
 		else if (rect.right > bounds.right) strip.scrollLeft += rect.right - bounds.right;
 	}, [currentActiveId, sides.length]);
 	const beginRename = (side: Side) => {
+		renameCancelled.current = false;
 		setRenameId(side.id);
 		setRenameText(side.label);
 	};
 	const saveRename = async () => {
-		if (!renameId || !renameText?.trim()) return;
+		if (renameCancelled.current || !renameId) return;
+		const id = renameId, label = renameText?.trim();
+		setRenameId(undefined);
+		setRenameText(undefined);
+		if (!label || label === sides.find((side) => side.id === id)?.label) return;
 		const { error: requestError } = await apiClient.PATCH(
 			"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/label",
-			{
-				params: { path: { sessionId, sideId: renameId } },
-				body: { label: renameText.trim() },
-			},
+			{ params: { path: { sessionId, sideId: id } }, body: { label } },
 		);
 		if (requestError) {
 			setError(apiErrorMessage(requestError));
 			return;
 		}
-		setRenameId(undefined);
-		setRenameText(undefined);
 		await refreshList();
 	};
+
 	const tabBar = enabled ? (
 		<header className="flex shrink-0 min-w-0 items-center border-b border-border bg-background">
 			<div
 				ref={tabStripRef}
 				role="tablist"
-				aria-label="Side chat tabs"
+				aria-label={t("sideChat.tabs")}
 				onKeyDown={handleTabListKeyDown}
 				className="flex min-w-0 flex-1 overflow-x-auto"
 			>
-				{sides.map((side) => (
-					<ContextMenu key={side.id}>
-						<ContextMenuTrigger asChild>
-							<div className={cn("browser-panel__tab", side.id === currentActiveId && "browser-panel__tab--active")}>
+				{sides.map((side) => {
+					const tab = (
+						<div key={side.id} className={cn("browser-panel__tab", side.id === currentActiveId && "browser-panel__tab--active")}>
 								{renameId === side.id ? (
 									<input
 										autoFocus
-										aria-label="Rename side chat"
-										className="min-w-0 w-36 rounded border border-border bg-background px-2 text-xs"
-										maxLength={80}
+										aria-label={t("sideChat.renameSideChat")}
+										className="min-w-0 w-36 flex-1 rounded-xs border border-accent bg-background px-1 text-control text-foreground outline-none ring-1 ring-accent"
+										maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
+										onFocus={(event) => event.currentTarget.select()}
+										onBlur={() => void saveRename()}
 										value={renameText ?? ""}
 										onChange={(event) => setRenameText(event.target.value)}
 										onKeyDown={(event) => {
 											if (event.key === "Enter") {
 												event.preventDefault();
-												void saveRename();
+												event.currentTarget.blur();
 											}
 											if (event.key === "Escape") {
+												event.preventDefault();
+												renameCancelled.current = true;
 												setRenameId(undefined);
 												setRenameText(undefined);
 											}
@@ -1219,11 +1224,13 @@ export function useIndependentSideChats(
 										aria-selected={side.id === currentActiveId}
 										tabIndex={side.id === currentActiveId ? 0 : -1}
 										className="browser-panel__tab-select"
-										onClick={() => {
+										onClick={(event) => {
+											if (event.detail > 1) return;
 											setActiveId(side.id);
 											setFocusKey(0);
 										}}
-										onDoubleClick={() => beginRename(side)}
+										aria-keyshortcuts="F2"
+										onDoubleClick={(event) => { event.preventDefault(); beginRename(side); }}
 										onKeyDown={(event) => {
 											if (event.key === "F2") {
 												event.preventDefault();
@@ -1234,14 +1241,15 @@ export function useIndependentSideChats(
 									>
 										<MessageSquare className="browser-panel__tab-icon" aria-hidden="true" />
 										<span className="browser-panel__tab-title">
-											{side.label?.trim() || `Side Chat ${sides.indexOf(side) + 1}`}
+											{side.label?.trim() || "Side Chat"}
 										</span>
 									</button>
 								)}
 								<button
 									type="button"
+									hidden={renameId === side.id}
 									className="browser-panel__tab-close"
-									aria-label={`Close ${side.label}`}
+									aria-label={t("sideChat.closeNamed", { name: side.label })}
 									onClick={() => {
 										setCloseError(undefined);
 										setConfirmClose(side.id);
@@ -1250,24 +1258,20 @@ export function useIndependentSideChats(
 									<X className="size-3.5" aria-hidden="true" />
 								</button>
 							</div>
-						</ContextMenuTrigger>
-						<ContextMenuContent>
-							<ContextMenuItem onSelect={() => beginRename(side)}>
-								<Pencil className="size-3.5" />
-								Rename
-							</ContextMenuItem>
-							<ContextMenuItem
-								onSelect={() => {
-									setCloseError(undefined);
-									setConfirmClose(side.id);
-								}}
-							>
-								<X className="size-3.5" />
-								Close
-							</ContextMenuItem>
-						</ContextMenuContent>
-					</ContextMenu>
-				))}
+					);
+					if (renameId === side.id) return tab;
+					return (
+						<ContextMenu key={side.id}>
+							<ContextMenuTrigger asChild>{tab}</ContextMenuTrigger>
+							<ContextMenuContent className="min-w-44">
+								<ContextMenuItem onSelect={() => beginRename(side)}>
+									<Pencil aria-hidden="true" />
+									{t("sideChat.rename")}
+								</ContextMenuItem>
+							</ContextMenuContent>
+						</ContextMenu>
+					);
+				})}
 			</div>
 			<Button
 				type="button"
@@ -1280,28 +1284,15 @@ export function useIndependentSideChats(
 			>
 				<Plus className="size-3.5" />
 			</Button>
-			<Button
-				type="button"
-				variant="ghost"
-				size="icon-sm"
-				className="shrink-0"
-				aria-label={t("sideChat.hideSideChat")}
-				onClick={() => {
-					if (onHide) onHide();
-					else setVisible(false);
-				}}
-			>
-				<PanelRightClose className="size-3.5" />
-			</Button>
 		</header>
 	) : null;
 	const closeDialog = (
 		<ConfirmDialog
 			open={Boolean(confirmClose)}
-			title={`Close ${sides.find((side) => side.id === confirmClose)?.label ?? "side chat"}?`}
-			description="Closing stops this side chat’s running work and removes its conversation and draft."
-			confirmLabel="Close side chat"
-			cancelLabel="Keep side chat"
+			title={t("sideChat.closeNamedConfirm", { name: sides.find((side) => side.id === confirmClose)?.label ?? t("inspector.sideChat") })}
+			description={t("sideChat.closeExplanation")}
+			confirmLabel={t("sideChat.closeSideChat")}
+			cancelLabel={t("sideChat.keepSideChat")}
 			destructive
 			busy={closing}
 			error={closeError}
@@ -1347,7 +1338,7 @@ export function useIndependentSideChats(
 							}}
 						>
 							<MessageSquarePlus className="size-3.5" />
-							Add to chat
+							{t("sideChat.addToChat")}
 						</button>
 					</div>
 				) : null}
@@ -1384,12 +1375,12 @@ export function useIndependentSideChats(
 									value1: activeNumber,
 								})}
 							>
-								<div ref={timelineContentRef} className="mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-5">
+								<div ref={timelineContentRef} className={cn("mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-5", timeline.length === 0 && !(snapshot.turns ?? []).length && "min-h-full justify-center")}>
 									{timeline.length === 0 && !(snapshot.turns ?? []).length ? (
 										<div className="mx-auto flex max-w-sm flex-col items-center gap-2 py-8 text-center text-sm">
 											<h3 className="font-medium">{t("sideChat.askASideQuestion")}</h3>
 											<p className="text-xs leading-relaxed text-muted-foreground">
-												{t("sideChat.exploreAFollowUpWhileYourMainChatContinues")}
+												{t("sideChat.isolationPolicy")}
 											</p>
 										</div>
 									) : null}
@@ -1574,7 +1565,16 @@ export function useIndependentSideChats(
 								</div>
 							</div>
 						</div>
-						{snapshot.side.state === "failed" ? (
+						{snapshot.side.state === "failed" && snapshot.side.recreateRequired ? (
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								onClick={() => void create(undefined, true).catch(() => undefined)}
+							>
+								{t("sideChat.newSideChat")}
+							</Button>
+						) : snapshot.side.state === "failed" ? (
 							<Button
 								type="button"
 								variant="outline"
@@ -1761,6 +1761,7 @@ export function useIndependentSideChats(
 					<p>
 						{enabled ? "No side chat opened yet" : t("sideChat.sideChatsAreAvailableOnlyForLocalDesktopChatSessions")}
 					</p>
+					{enabled ? <p className="max-w-sm leading-relaxed">{t("sideChat.isolationPolicy")}</p> : null}
 					{error ? <p role="alert">{error}</p> : null}
 				</div>
 			</div>

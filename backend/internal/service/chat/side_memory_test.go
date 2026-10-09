@@ -22,7 +22,7 @@ func TestMemorySideStoreReusesAnchorAcrossConcurrentCreates(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			side, _, err := store.CreateSideConversation(ctx, domain.SideConversation{
+			side, _, err := store.CreateSideConversation(ctx, domain.SideConversation{PolicyVersion: 1,
 				ID: string(rune('a' + n)), SessionID: "session-1", MainConversationID: "main-1",
 				AnchorTurnID: "anchor-1", AppRunID: "launch-1", CreateKey: string(rune('A' + n)), Generation: "g",
 			})
@@ -44,7 +44,7 @@ func TestMemorySideStoreReusesAnchorAcrossConcurrentCreates(t *testing.T) {
 			t.Fatalf("created multiple sides: %q and %q", first, id)
 		}
 	}
-	next, created, err := store.CreateSideConversation(ctx, domain.SideConversation{
+	next, created, err := store.CreateSideConversation(ctx, domain.SideConversation{PolicyVersion: 1,
 		ID: "next-anchor", SessionID: "session-1", MainConversationID: "main-1", AnchorTurnID: "anchor-2", AppRunID: "launch-1",
 	})
 	if err != nil || !created || next.ID != "next-anchor" {
@@ -55,7 +55,7 @@ func TestMemorySideStoreReusesAnchorAcrossConcurrentCreates(t *testing.T) {
 		t.Fatalf("open sides = %#v, %v", listed, err)
 	}
 	for i := 3; i <= 12; i++ {
-		if _, created, err := store.CreateSideConversation(ctx, domain.SideConversation{
+		if _, created, err := store.CreateSideConversation(ctx, domain.SideConversation{PolicyVersion: 1,
 			ID: fmt.Sprintf("side-%d", i), SessionID: "session-1", MainConversationID: "main-1",
 			AnchorTurnID: fmt.Sprintf("anchor-%d", i), AppRunID: "launch-1",
 		}); err != nil || !created {
@@ -69,7 +69,7 @@ func TestMemorySideStoreReusesAnchorAcrossConcurrentCreates(t *testing.T) {
 	if _, err := store.CloseSideConversation(ctx, first, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	other, created, err := store.CreateSideConversation(ctx, domain.SideConversation{ID: "replacement", SessionID: "session-1", MainConversationID: "main-1", AnchorTurnID: "anchor-1", AppRunID: "launch-1"})
+	other, created, err := store.CreateSideConversation(ctx, domain.SideConversation{PolicyVersion: 1, ID: "replacement", SessionID: "session-1", MainConversationID: "main-1", AnchorTurnID: "anchor-1", AppRunID: "launch-1"})
 	if err != nil || !created || other.ID != "replacement" {
 		t.Fatalf("close then create = %#v, %v, %v", other, created, err)
 	}
@@ -81,8 +81,8 @@ func TestMemorySideStoreRecoversMultipleAnchorsForOneMain(t *testing.T) {
 	store := newMemorySideStore()
 	_, _ = store.ClaimSideLaunch(ctx, "launch-1", now)
 	records := []SideRecoveryRecord{
-		{Side: domain.SideConversation{ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AnchorTurnID: "turn-1", State: "ready"}, ProviderHostID: "btw-launch-1-side-1", ProviderForkID: "fork-1", Generation: "generation-1"},
-		{Side: domain.SideConversation{ID: "side-2", SessionID: "session-1", MainConversationID: "main-1", AnchorTurnID: "turn-2", State: "ready"}, ProviderHostID: "btw-launch-1-side-2", ProviderForkID: "fork-2", Generation: "generation-2"},
+		{Side: domain.SideConversation{PolicyVersion: 1, ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AnchorTurnID: "turn-1", State: "ready"}, ProviderHostID: "btw-launch-1-side-1", ProviderForkID: "fork-1", Generation: "generation-1"},
+		{Side: domain.SideConversation{PolicyVersion: 1, ID: "side-2", SessionID: "session-1", MainConversationID: "main-1", AnchorTurnID: "turn-2", State: "ready"}, ProviderHostID: "btw-launch-1-side-2", ProviderForkID: "fork-2", Generation: "generation-2"},
 	}
 	created, err := store.recover("launch-1", records, now)
 	if err != nil || len(created) != 2 {
@@ -99,7 +99,7 @@ func TestMemorySideStoreRecoversInFlightTurnWithoutDurableRows(t *testing.T) {
 	now := time.Now().UTC()
 	before := newMemorySideStore()
 	_, _ = before.ClaimSideLaunch(ctx, "launch-1", now)
-	side := domain.SideConversation{ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AppRunID: "launch-1", ProviderHostID: "btw-launch-1-side-1", ProviderForkID: "provider-1", Generation: "generation-1", State: "ready"}
+	side := domain.SideConversation{PolicyVersion: 1, ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AppRunID: "launch-1", ProviderHostID: "btw-launch-1-side-1", ProviderForkID: "provider-1", Generation: "generation-1", State: "ready"}
 	_, _, _ = before.CreateSideConversation(ctx, side)
 	_, _, _ = before.ReserveSideTurn(ctx, domain.SideTurn{ID: "turn-1", SideID: side.ID, ClientMessageID: "client-1", Text: "question", CreatedAt: now}, "launch-1")
 	_, _, _, _ = before.ClaimNextSideTurn(ctx, "launch-1", nil, now)
@@ -121,7 +121,7 @@ func TestMemorySideStoreRecoveryReplayKeepsLiveSideState(t *testing.T) {
 	now := time.Now().UTC()
 	store := newMemorySideStore()
 	_, _ = store.ClaimSideLaunch(ctx, "launch-1", now)
-	record := SideRecoveryRecord{Side: domain.SideConversation{
+	record := SideRecoveryRecord{PolicyVersion: 1, Side: domain.SideConversation{PolicyVersion: 1,
 		ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", State: "ready",
 	}, ProviderHostID: "btw-launch-1-side-1", ProviderForkID: "fork-1", Generation: "generation-1"}
 	if created, err := store.recover("launch-1", []SideRecoveryRecord{record}, now); err != nil || len(created) != 1 {
@@ -149,7 +149,7 @@ func TestMemorySideStoreFreezesReferencesAndIncrementsMessageRevision(t *testing
 	now := time.Now().UTC()
 	store := newMemorySideStore()
 	_, _ = store.ClaimSideLaunch(ctx, "launch-1", now)
-	_, _, err := store.CreateSideConversation(ctx, domain.SideConversation{ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AppRunID: "launch-1", Generation: "g", State: "ready"})
+	_, _, err := store.CreateSideConversation(ctx, domain.SideConversation{PolicyVersion: 1, ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AppRunID: "launch-1", Generation: "g", State: "ready"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestMemorySideStoreResolvesProjectedUserInput(t *testing.T) {
 	ctx := context.Background()
 	store := newMemorySideStore()
 	_, _ = store.ClaimSideLaunch(ctx, "launch-1", time.Now())
-	_, _, err := store.CreateSideConversation(ctx, domain.SideConversation{
+	_, _, err := store.CreateSideConversation(ctx, domain.SideConversation{PolicyVersion: 1,
 		ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AppRunID: "launch-1", Generation: "g",
 	})
 	if err != nil {
@@ -210,7 +210,7 @@ func TestMemorySideStoreLateActivityDeltaCannotReopenCompletedActivity(t *testin
 	ctx := context.Background()
 	store := newMemorySideStore()
 	_, _ = store.ClaimSideLaunch(ctx, "launch-1", time.Now())
-	_, _, err := store.CreateSideConversation(ctx, domain.SideConversation{
+	_, _, err := store.CreateSideConversation(ctx, domain.SideConversation{PolicyVersion: 1,
 		ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AppRunID: "launch-1", Generation: "g",
 	})
 	if err != nil {
@@ -236,8 +236,8 @@ func TestMemorySideStoreKeepsInterruptedOpeningVisibleAfterRecovery(t *testing.T
 	now := time.Now().UTC()
 	store := newMemorySideStore()
 	_, _ = store.ClaimSideLaunch(context.Background(), "launch-1", now)
-	record := SideRecoveryRecord{
-		Side:           domain.SideConversation{ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", State: "opening"},
+	record := SideRecoveryRecord{PolicyVersion: 1,
+		Side:           domain.SideConversation{PolicyVersion: 1, ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", State: "opening"},
 		ProviderHostID: "btw-launch-1-side-1", Draft: "unfinished question",
 	}
 	recovered, err := store.recover("launch-1", []SideRecoveryRecord{record}, now)
@@ -255,7 +255,7 @@ func TestMemorySideStoreHasNoTurnLimitAndNewLaunchClearsSides(t *testing.T) {
 	now := time.Now().UTC()
 	store := newMemorySideStore()
 	_, _ = store.ClaimSideLaunch(ctx, "launch-1", now)
-	side := domain.SideConversation{ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AppRunID: "launch-1", State: "ready"}
+	side := domain.SideConversation{PolicyVersion: 1, ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AppRunID: "launch-1", State: "ready"}
 	_, _, _ = store.CreateSideConversation(ctx, side)
 	for i := 0; i < 60; i++ {
 		turn := domain.SideTurn{ID: string(rune(1000 + i)), SideID: side.ID, ClientMessageID: string(rune(2000 + i)), Text: "question", CreatedAt: now.Add(time.Duration(i) * time.Second)}
@@ -290,7 +290,7 @@ func TestClosedSideRejectsLateProviderEvents(t *testing.T) {
 	now := time.Now().UTC()
 	store := newMemorySideStore()
 	_, _ = store.ClaimSideLaunch(ctx, "launch-1", now)
-	_, _, _ = store.CreateSideConversation(ctx, domain.SideConversation{ID: "side-1", MainConversationID: "main-1", AppRunID: "launch-1", Generation: "generation-1"})
+	_, _, _ = store.CreateSideConversation(ctx, domain.SideConversation{PolicyVersion: 1, ID: "side-1", MainConversationID: "main-1", AppRunID: "launch-1", Generation: "generation-1"})
 	_, _ = store.CloseSideConversation(ctx, "side-1", now)
 	if err := store.UpsertSideMessage(ctx, domain.SideMessage{ID: "late", SideID: "side-1"}, "generation-1"); !errors.Is(err, ErrSideClosed) {
 		t.Fatalf("late message err=%v", err)
@@ -305,7 +305,7 @@ func TestSideReservationUsesOnlySubmittedReferences(t *testing.T) {
 	now := time.Now()
 	store := newMemorySideStore()
 	_, _ = store.ClaimSideLaunch(ctx, "run", now)
-	_, _, _ = store.CreateSideConversation(ctx, domain.SideConversation{ID: "side", AppRunID: "run", State: "ready", Generation: "g", SelectedText: "removed sun", ReferenceContext: "removed context", ReferencePending: true})
+	_, _, _ = store.CreateSideConversation(ctx, domain.SideConversation{PolicyVersion: 1, ID: "side", AppRunID: "run", State: "ready", Generation: "g", SelectedText: "removed sun", ReferenceContext: "removed context", ReferencePending: true})
 	turn, _, err := store.ReserveSideTurn(ctx, domain.SideTurn{ID: "t", SideID: "side", ClientMessageID: "c", Text: "question"}, "run")
 	if err != nil {
 		t.Fatal(err)
@@ -329,7 +329,7 @@ func TestSideClaimsAreIndependentAndOrdered(t *testing.T) {
 	store := newMemorySideStore()
 	_, _ = store.ClaimSideLaunch(ctx, "run", now)
 	for _, id := range []string{"a", "b"} {
-		_, _, _ = store.CreateSideConversation(ctx, domain.SideConversation{ID: id, MainConversationID: id, AppRunID: "run", State: "ready", Generation: "g"})
+		_, _, _ = store.CreateSideConversation(ctx, domain.SideConversation{PolicyVersion: 1, ID: id, MainConversationID: id, AppRunID: "run", State: "ready", Generation: "g"})
 	}
 	for i, id := range []string{"a", "a", "b"} {
 		_, _, err := store.ReserveSideTurn(ctx, domain.SideTurn{ID: fmt.Sprint(i), SideID: id, ClientMessageID: fmt.Sprint(i), Text: "q", CreatedAt: now.Add(time.Duration(i) * time.Second)}, "run")
@@ -360,7 +360,7 @@ func TestSideRetryRetainsReceiptAndUsesANewProviderAttempt(t *testing.T) {
 	now := time.Now()
 	st := newMemorySideStore()
 	_, _ = st.ClaimSideLaunch(ctx, "run", now)
-	_, _, _ = st.CreateSideConversation(ctx, domain.SideConversation{ID: "side", AppRunID: "run", State: "ready", Generation: "g"})
+	_, _, _ = st.CreateSideConversation(ctx, domain.SideConversation{PolicyVersion: 1, ID: "side", AppRunID: "run", State: "ready", Generation: "g"})
 	original, _, err := st.ReserveSideTurn(ctx, domain.SideTurn{ID: "turn", SideID: "side", ClientMessageID: "receipt", Text: "it", CreatedAt: now}, "run")
 	if err != nil {
 		t.Fatal(err)
@@ -384,7 +384,7 @@ func TestSideRecoveryDoesNotResurrectClosedConversation(t *testing.T) {
 	now := time.Now()
 	st := newMemorySideStore()
 	_, _ = st.ClaimSideLaunch(ctx, "run", now)
-	_, _, _ = st.CreateSideConversation(ctx, domain.SideConversation{ID: "side", MainConversationID: "main", AppRunID: "run", State: "opening", Generation: "g", ProviderHostID: "btw-run-side"})
+	_, _, _ = st.CreateSideConversation(ctx, domain.SideConversation{PolicyVersion: 1, ID: "side", MainConversationID: "main", AppRunID: "run", State: "opening", Generation: "g", ProviderHostID: "btw-run-side"})
 	records := st.export("run")
 	_, _ = st.CloseSideConversation(ctx, "side", now)
 	recovered, err := st.recover("run", records, now)
@@ -394,5 +394,48 @@ func TestSideRecoveryDoesNotResurrectClosedConversation(t *testing.T) {
 	sides, _ := st.ListSideConversations(ctx, "", "run")
 	if len(sides) != 0 {
 		t.Fatalf("closed side resurrected: %+v", sides)
+	}
+}
+
+func TestSideNamesUseLargestCurrentlyOpenNumber(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		labels    []string
+		closeLast bool
+		want      string
+		limit     bool
+	}{
+		{name: "empty", want: "Side Chat"},
+		{name: "first counts as one", labels: []string{"Side Chat"}, want: "Side Chat 2"},
+		{name: "highest stays open", labels: []string{"Side Chat 3", "Side Chat 4"}, want: "Side Chat 5"},
+		{name: "highest closed", labels: []string{"Side Chat 3", "Side Chat 4"}, closeLast: true, want: "Side Chat 4"},
+		{name: "custom title", labels: []string{"Investigation"}, want: "Side Chat 2"},
+		{name: "last permitted number", labels: []string{"Side Chat 98"}, want: "Side Chat 99"},
+		{name: "limit", labels: []string{"Side Chat 99"}, limit: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, now := context.Background(), time.Now()
+			st := newMemorySideStore()
+			_, _ = st.ClaimSideLaunch(ctx, "run", now)
+			for i, label := range tc.labels {
+				id := fmt.Sprint(i)
+				st.sides[id] = domain.SideConversation{ID: id, SessionID: "session", MainConversationID: "main", AppRunID: "run", Label: label}
+				if tc.closeLast && i == len(tc.labels)-1 {
+					_, _ = st.CloseSideConversation(ctx, id, now)
+				}
+			}
+			// An unrelated parent session must not reserve this session's numbers.
+			st.sides["other"] = domain.SideConversation{SessionID: "other", Label: "Side Chat 99"}
+			side, _, err := st.CreateSideConversation(ctx, domain.SideConversation{ID: "new", SessionID: "session", MainConversationID: "main", AppRunID: "run", ForceNew: true})
+			if tc.limit {
+				if !errors.Is(err, ErrSideNameLimit) {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err != nil || side.Label != tc.want {
+				t.Fatalf("name=%q want=%q err=%v", side.Label, tc.want, err)
+			}
+		})
 	}
 }
